@@ -116,7 +116,7 @@ binary shapes:
 
 | Module | Responsibility |
 |---|---|
-| `evidence_store` | SQLCipher-backed encrypted store for raw bodies, content-hash dedup, append-only ingestion |
+| `evidence_store` | SQLCipher-backed encrypted store; size-threshold inline/body-table routing; content-hash dedup for large bodies; ring buffer for noise; append-only ingestion |
 | `observation_engine` | Lexicon classifiers + XLM-R + SLM-assisted extraction; produces observation rows |
 | `memory_manager` | Decay state machine, retention scoring, stage promotion, retrieval-trigger updates |
 | `concept_graph` | Sparse typed graph (nodes, edges, scopes), supersession, contradiction tracking |
@@ -135,9 +135,26 @@ binary shapes:
   written to encrypted append-only segments with per-epoch
   XChaCha20-Poly1305 keys; epoch keys are rotated on a schedule
   and destroyed when the epoch is forgotten.
-- **Content-hash dedup** — every body is BLAKE3-hashed; duplicate
-  hashes share a single body row referenced by multiple
-  observation rows.
+- **Content-aware storage routing** — bodies are routed through
+  a size-threshold strategy:
+  - **Inline path (≤ 512 bytes):** short text messages are stored
+    inline in the evidence row itself. BLAKE3 hash is computed
+    for integrity framing but no dedup index lookup is performed.
+    This eliminates JOIN overhead for the common case (chat messages).
+  - **Body-table path (> 512 bytes):** files, document chunks,
+    transcripts, and large bodies are stored in a separate body
+    table with BLAKE3 content-hash deduplication. Duplicate hashes
+    share a single body row referenced by multiple observation rows.
+  - **Ring-buffer path (noise class):** messages classified as
+    noise by the importance tagger are stored in a fixed-size
+    circular buffer (configurable, default 5 MB) that overwrites
+    on FIFO. These are available for the current synthesis window
+    but never persist beyond it.
+- **Semantic near-dedup at the observation plane** — XLM-R
+  embeddings detect semantically equivalent observations extracted
+  from different messages. Deduplication of meaning happens at the
+  observation layer, not the evidence layer, catching cases where
+  the same fact is stated in different words across channels.
 
 ### 2.3 Cross-platform FFI
 
@@ -526,8 +543,14 @@ memory, and battery.
 
 - **Tiered storage** — hot SQLCipher database for recent /
   pinned objects; cold encrypted segments for the long tail.
-- **Aggressive content-hash dedup** — bodies are stored once
-  per content hash; observation rows reference the body row.
+- **Content-aware storage routing** — inline storage for small
+  bodies (≤ 512 B, no dedup index lookup); separate body table
+  with BLAKE3 content-hash dedup for large bodies (> 512 B);
+  ring buffer for noise-class messages (FIFO overwrite, no
+  persistence beyond synthesis window).
+- **Semantic near-dedup** — XLM-R detects semantically equivalent
+  observations at the observation plane, deduplicating meaning
+  rather than bytes for text content.
 - **Hard caps** — configurable per device, with sane defaults
   (250 MB substrate footprint on mobile without SLM resident,
   1 GB+ on desktop with SLM resident).

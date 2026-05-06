@@ -224,12 +224,14 @@ The system is built to behave well on the device the user actually
 owns, not the device the engineer used to develop it. Three axes
 are continuously monitored and actively shape behaviour:
 
-- **Storage.** Tiered storage — hot SQLCipher database for
-  recent / pinned objects, cold encrypted segments
-  (XChaCha20-Poly1305 + per-epoch keys) for the long tail.
-  Aggressive content-hash deduplication. Caps are configurable
-  per tier (250 MB safety on mobile, 1 GB+ on desktop with SLM
-  loaded).
+- **Storage.** Content-aware storage routing — short text messages
+  (≤ 512 B) stored inline in evidence rows; large bodies (files,
+  chunks, transcripts) stored in a deduplicated body table with
+  BLAKE3 content-hash dedup; noise-class messages held in a
+  fixed-size ring buffer that auto-expires. Cold encrypted segments
+  (XChaCha20-Poly1305 + per-epoch keys) for the long tail. Caps
+  are configurable per tier (250 MB safety on mobile, 1 GB+ on
+  desktop with SLM loaded).
 - **Memory.** Models are mmap'd; the SLM unloads after 60 s idle;
   at most one heavy model resident on mobile at a time. Hard
   caps: 250 MB on mobile (without SLM resident), 1 GB on desktop
