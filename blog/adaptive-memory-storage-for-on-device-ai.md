@@ -1,20 +1,36 @@
-# Adaptive Memory Storage for On-Device AI: How We Keep Knowledge Fresh Without Blowing Up Your Phone
+# Adaptive Memory for AI Assistants: Keeping Knowledge Fresh Across On-Device Data and Connected Documents
 
-On-device AI is having a moment. The pitch: your model runs
-locally, your data never leaves your device, sub-second
-responses without paying for inference. The reality, once you
-start building, is uglier. A useful AI assistant needs *memory*
-— facts, decisions, deadlines, the slow accretion of context
-that turns a chatbot into something that actually knows you.
-Memory has to live somewhere. And phones, even nice ones, are
-not laptops.
+AI assistants are having a moment. The pitch: a model that
+knows your team — what you decided last quarter, who owns the
+launch, what the budget actually is — and answers in
+sub-seconds without forcing the user to dig through chat
+scrollback, Drive folders, and Jira tickets. The reality,
+once you start building, is uglier. A useful AI assistant
+needs *memory* — facts, decisions, deadlines, the slow
+accretion of context that turns a chatbot into something
+that actually knows your work.
 
-This post is about how we designed the memory layer for an
-on-device AI substrate so it stays small, stays useful, and
-forgets the right things at the right time. The short version:
-naive approaches break, and the fix is to treat memory as a
-*hierarchy of layers with different rules*, not a single
-undifferentiated store.
+That memory has to come from somewhere, and "somewhere" is
+plural. Some of it lives close to the user: messages in
+channels, files attached to threads, voice notes,
+screenshots — often handled on-device on phones and
+laptops, where storage is tight and privacy matters most.
+A lot more lives in the systems your team already uses —
+Google Drive, OneDrive, Notion, Jira, Confluence, Figma,
+HubSpot — linked to a channel or domain by a connector. A
+useful assistant has to read across all of it without
+making the user pick which surface "owns" a fact, and
+without piling 8 GB of duplicated content onto the user's
+phone.
+
+This post is about how we designed the memory layer for
+that substrate so it stays small, stays useful, and forgets
+the right things at the right time — across both on-device
+data and external documents linked through connectors. The
+short version: naive approaches break, and the fix is to
+treat memory as a *hierarchy of layers with different
+rules*, fed by the same pipeline regardless of whether the
+source is a chat message or a Confluence page.
 
 ---
 
@@ -41,6 +57,17 @@ A thoughtful AI assistant should be able to answer:
 scrolled past oblivion, even when you ask in a different channel.
 And it should do this *without* eating 8 GB of phone storage and
 without grinding the device to a halt every time you open the app.
+
+And the message in `#product-launch` is just one surface. By
+the time the launch ships, the same facts also live in a
+Notion page Priya wrote ("Q1 Launch Plan"), a Jira epic with
+acceptance criteria, a Confluence runbook, a Figma file with
+the rollout flow, a HubSpot deal record, and a Google Drive
+folder of decks and spreadsheets. These are linked to the
+same channel or domain through connectors. The assistant
+needs to read across *all* of them — without forcing the
+user to remember which system the answer is in, and without
+piling every file onto the device for offline copies.
 
 The naive approaches fail in predictable ways:
 
@@ -78,10 +105,10 @@ So we route bodies through a **size threshold**:
 ```mermaid
 flowchart TD
     A[Incoming body] --> B{Importance class}
-    B -->|Noise: greetings, emoji, "thanks"| C[Ring buffer<br/>FIFO, ~5 MB cap<br/>auto-overwrites]
+    B -->|Noise: greetings, emoji, thanks| C[Ring buffer<br/>FIFO, ~5 MB cap<br/>auto-overwrites]
     B -->|Signal| D{Body size}
     D -->|≤ 512 bytes| E[Inline path<br/>stored directly in<br/>evidence row]
-    D -->|> 512 bytes| F[Body-table path<br/>BLAKE3 content hash<br/>dedup across channels]
+    D -->|large, over 512 bytes| F[Body-table path<br/>BLAKE3 content hash<br/>dedup across channels]
     E --> G[Observation extraction]
     F --> G
     C --> H[Available for current<br/>synthesis window only]
@@ -113,6 +140,18 @@ them a permanent home is a tax you pay forever for no benefit.
 Giving them a *temporary* home for a few hours is the right
 tradeoff: they can still influence current synthesis without
 bloating long-term storage.
+
+The same routing applies to documents pulled in from
+connectors. When a Google Drive file, OneDrive document,
+Notion page, Jira ticket, Confluence wiki, Figma file, or
+HubSpot record is linked to a channel or domain, the
+connector hands the content to the same ingest pipeline. A
+200-byte Jira summary takes the inline path. A 50 KB
+Confluence article takes the body-table path, where its
+BLAKE3 hash naturally deduplicates against the same article
+shared into a second channel. The connector attaches the
+document to the relevant channel/domain scope and the rest
+of the substrate stays unchanged.
 
 ---
 
@@ -156,6 +195,18 @@ backing it. The LLM doesn't get confused by triplicated context.
 Storage stays bounded. And contradiction detection (someone says
 the launch is now April 1) becomes a graph operation on top of
 this collapsed structure, not a fuzzy search across raw text.
+
+This collapse is **source-agnostic**. The launch date stated
+in a Slack message and the same date written in a Notion
+"Launch Plan" page produce two pieces of evidence — but one
+observation, with both as backing provenance. A Jira ticket
+logging the same decision, a Confluence runbook quoting it,
+or a HubSpot note from sales repeating it all merge into the
+same row. So when a user asks "what's the launch date?", the
+assistant doesn't see duplicate facts pulled from chat,
+Drive, and Jira fighting each other for context window
+space. It sees one corroborated fact with a link list back
+to every source that vouched for it.
 
 ---
 
@@ -242,7 +293,8 @@ The memory hierarchy looks like this:
 ```mermaid
 flowchart TD
     R[Raw messages<br/>~200 B each<br/>thousands per channel] --> CS[Channel summary<br/>~2 KB per channel<br/>updated each synthesis window]
-    CS --> DS[Domain memory<br/>~5 KB per domain<br/>e.g. "launch", "hiring"]
+    EXT[External documents<br/>Drive, OneDrive, Notion,<br/>Jira, Confluence, Figma, HubSpot<br/>linked to channel/domain] --> CS
+    CS --> DS["Domain memory<br/>~5 KB per domain<br/>e.g. launch, hiring"]
     DS --> TS[Tenant / user memory<br/>~10 KB per scope<br/>top-level facts and preferences]
 ```
 
@@ -254,11 +306,73 @@ question: which markets ship first."* The SLM produces this
 summary asynchronously during quiet periods, then queries hit
 the summary instead of re-reading 500 messages.
 
+Channel summaries don't just consume chat messages. They
+consume *anything linked to the channel* — a Drive folder of
+design decks, a Notion page tracking the rollout, a Jira
+epic with subtasks, the Figma flow, the HubSpot deal,
+relevant Confluence pages — and the same hierarchy applies,
+scoped to the channel or domain the connector attached them
+to. A `product-launch` channel summary built on 500 messages
+*plus* twelve linked Drive/Notion/Jira/Figma artifacts is
+still ~2 KB, because the summary captures decisions and
+ownership, not content. A `hiring` domain memory built
+across multiple channels and a Confluence wiki of role
+descriptions is still ~5 KB, for the same reason. External
+documents are not a parallel hierarchy; they feed the same
+one.
+
 The contract is **synthesis flows up the hierarchy, never down**.
 Higher layers never ingest higher layers as input. That keeps
 the data-flow graph acyclic, prevents "telephone-game"
 degradation where summaries summarize summaries, and lets us
 delete or rebuild any single layer without poisoning the others.
+
+---
+
+## Insight 6: Connectors Are Just Another Evidence Source
+
+External systems plug into the substrate through
+**connectors**. A connector is a small adapter (Google
+Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot,
+…) that does three things:
+
+1. **Link a document to a channel or domain.** A Notion
+   page linked to `#product-launch` is scoped to that
+   channel; a Jira project linked to the `engineering`
+   domain is scoped there. The user (or an admin policy)
+   decides what gets linked. Nothing is ingested globally
+   by accident.
+2. **Sync ACLs from the source system.** If the user can't
+   read the underlying Confluence page in Confluence, they
+   can't reach observations derived from it through the
+   substrate either. Permission changes upstream propagate
+   into reachability checks downstream, so revoking a Drive
+   share also clamps what the assistant will say about that
+   document.
+3. **Push content + change events into the ingest
+   pipeline.** When a Notion page is created or updated, the
+   connector emits a delta. The substrate runs the same
+   ingest steps it runs for a chat message: importance
+   classification, storage routing (inline vs body-table vs
+   ring buffer), observation extraction, semantic dedup,
+   decay class assignment, channel/domain summary update.
+
+Crucially, the rest of the system doesn't know or care that
+the source was a Confluence page rather than a chat message.
+The same memory hierarchy — evidence → observation →
+semantic concept → reasoning trace → exported summary —
+applies regardless of source. The benefits compound: a fact
+asserted both in a Slack message and a Notion page is
+single-deduped at the observation layer (Insight 2), shares
+a single graph node in the retrieval cascade (Insight 4),
+and shows up exactly once in the channel summary (Insight 5)
+— with provenance pointing back to both sources.
+
+The substrate is the cognitive layer; connectors decide
+*what* gets attached and *who* can see it. That separation
+is what lets the same memory model run on a phone with
+zero connectors and on a desktop with a dozen of them, with
+the storage and retrieval rules unchanged in either case.
 
 ---
 
@@ -320,12 +434,21 @@ forgetting are how we make "we can't keep everything" stop being
 a bug and start being a feature.
 
 The thing we keep coming back to: *useful* memory is not
-*complete* memory. It's the right facts, at the right grain, with
-the right provenance, in the right hierarchy — small enough to
-fit on the device the user owns, fresh enough that the assistant
-doesn't feel stuck in last quarter, and honest enough about what
-it has forgotten that you can trust what it tells you.
+*complete* memory. It's the right facts, at the right grain,
+with the right provenance, in the right hierarchy — small
+enough to fit on the device the user owns, fresh enough that
+the assistant doesn't feel stuck in last quarter, and honest
+enough about what it has forgotten that you can trust what
+it tells you. And it has to hold *across surfaces*: a fact
+mentioned in chat, written down in a Notion page, tracked in
+a Jira ticket, drawn in a Figma file, or logged in HubSpot
+is one fact, not five — backed by the provenance of every
+source that vouched for it.
 
 That's a different mental model than "store everything and
-search later." It's also the only one we've found that actually
-works on a phone.
+search later," and a different mental model than "the
+assistant lives only on your phone." It's a single
+deduplicated memory that works across local messages and
+external shared documents — small enough to ride along on
+a phone, deep enough to reach into the systems where the
+work actually happens, and consistent across both.
