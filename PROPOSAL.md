@@ -125,10 +125,24 @@ flowchart TB
 ### 3.1 Evidence plane
 
 Raw encrypted messages, files, chunks, transcripts, and tool
-outputs. Append-only, scope-bound, content-hash deduplicated.
-Bodies are encrypted with per-scope, per-epoch keys
+outputs. Append-only, scope-bound, with content-aware storage
+routing:
+
+- **Inline (≤ 512 bytes):** body stored directly in the evidence
+  row. BLAKE3 hash computed for integrity framing; no dedup index
+  lookup. Optimized for the common case of short text messages.
+- **Body table (> 512 bytes):** body stored in a separate
+  content-hash-deduplicated table. Duplicate BLAKE3 hashes share
+  a single body row. Optimized for files, document chunks,
+  transcripts, and forwarded/cross-posted content.
+- **Ring buffer (noise class):** messages classified as noise at
+  ingest are stored in a fixed-size FIFO ring buffer available
+  for the current synthesis window only. No epoch key needed for
+  disposal — content is simply overwritten.
+
+All paths use per-scope, per-epoch encryption
 (XChaCha20-Poly1305 + BLAKE3 framing); rows hold scope id,
-content hash, source connector ref, and ACL pointer only.
+content hash, source connector ref, and ACL pointer.
 
 ### 3.2 Observation plane
 
