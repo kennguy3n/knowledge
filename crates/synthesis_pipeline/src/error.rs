@@ -41,6 +41,12 @@ pub enum PipelineError {
     /// Underlying serialisation failed (publish / consume).
     #[error("synthesis object serialisation failed: {0}")]
     Serialisation(&'static str),
+
+    /// A synthesis-hierarchy rule was violated (`PROPOSAL.md` §6.3 —
+    /// e.g. a domain window was offered raw evidence, or a tenant
+    /// window was offered a channel object).
+    #[error("synthesis hierarchy violation: {0}")]
+    HierarchyViolation(String),
 }
 
 /// Convenience result alias.

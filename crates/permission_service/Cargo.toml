@@ -1,0 +1,18 @@
+[package]
+name = "permission_service"
+description = "Zanzibar-style permission service for the Knowledge substrate: relation tuples, namespace configs, and reachability checks over the relation graph."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+[lints]
+workspace = true

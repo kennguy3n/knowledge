@@ -1,13 +1,17 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/audit_service",
     "crates/concept_graph",
     "crates/crypto",
     "crates/evidence_store",
     "crates/memory_manager",
     "crates/observation_engine",
+    "crates/permission_service",
     "crates/sync_engine",
+    "crates/synthesis_engine",
     "crates/synthesis_pipeline",
+    "crates/tenant_service",
 ]
 
 [workspace.package]

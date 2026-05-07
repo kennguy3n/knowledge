@@ -38,9 +38,21 @@ window_id, object_id)` AAD binding, channel-scoped promotion
 policy, a synthesizer-election skeleton (tier / battery /
 heartbeat eligibility), the typed `concept_graph`, an add-wins
 observed-remove CRDT in `sync_engine`, and the `ProvenanceBundle`
-PROV data model. The platform bindings, the SLM-backed importance
-classifier, MLS group keying, and the ML-DSA-65 signer are tracked
-in [PROGRESS.md](./PROGRESS.md) but not yet shipped.
+PROV data model. Phase 3 adds the domain- and tenant-tier memory
+planes plus the server-side surface around them: a
+`DomainMemoryObject` and a `TenantMemoryObject` (the latter with
+*no* passive decay — only explicit deprecation), a Zanzibar-style
+`permission_service` with reachability over inheritance chains, a
+`tenant_service` with the tenant lifecycle / member provisioning /
+per-tenant key references, a `synthesis_engine` skeleton with the
+`SynthesisEngine` trait + `ManagedEndpointSynthesizer` stub, an
+append-only `audit_service`, type-system-enforced hierarchy
+(`DomainSynthesisInput` / `TenantSynthesisInput` / `ApprovedDocument`
+in `synthesis_pipeline::hierarchy`), and SQLCipher persistence for
+the `concept_graph`. The platform bindings, the SLM-backed
+importance classifier, MLS group keying, the ML-DSA-65 signer, and
+the Go-side gateway in front of `synthesis_engine` are tracked in
+[PROGRESS.md](./PROGRESS.md) but not yet shipped.
 
 ### Prerequisites
 
@@ -66,10 +78,14 @@ cargo test --all
 ```
 
 This runs the inline unit tests inside each crate and the integration
-test files under `crates/*/tests/`. The Phase-2 crates
-(`concept_graph`, `synthesis_pipeline`, `sync_engine`) and the
-extended Phase-1 crates (`memory_manager`, `observation_engine`,
-`crypto`) are all covered by `cargo test --all`.
+test files under `crates/*/tests/`. The Phase-3 crates
+(`permission_service`, `tenant_service`, `synthesis_engine`,
+`audit_service`), the Phase-2 crates (`concept_graph`,
+`synthesis_pipeline`, `sync_engine`), and the extended Phase-1
+crates (`memory_manager`, `observation_engine`, `crypto`) are all
+covered by `cargo test --all`. The end-to-end channel → domain →
+tenant synthesis chain is exercised by
+`crates/synthesis_engine/tests/hierarchy_e2e.rs`.
 
 ### Lint
 
@@ -98,7 +114,11 @@ knowledge/
 │   │                          #   retention scoring, working memory, user-memory
 │   │                          #   CRUD, privacy-strip invariant + Phase 2
 │   │                          #   ChannelMemoryObject (recap / decisions /
-│   │                          #   open questions / active tasks)
+│   │                          #   open questions / active tasks) + Phase 3
+│   │                          #   DomainMemoryObject (workstreams /
+│   │                          #   dependencies / risks / procedures) and
+│   │                          #   TenantMemoryObject (canonical policies /
+│   │                          #   product taxonomy / no-passive-decay)
 │   ├── observation_engine/    # observation extractor + lexicon-first pipeline
 │   │                          #   (entities / tasks / decisions / facts /
 │   │                          #   questions; Phase 2 URL / email / date /
@@ -106,13 +126,36 @@ knowledge/
 │   ├── concept_graph/         # Phase 2 sparse typed concept graph (nodes,
 │   │                          #   7 typed edges, scope-binding, supersession,
 │   │                          #   contradiction tracking, typed traversal)
+│   │                          #   + Phase 3 PersistentConceptGraph: SQLCipher
+│   │                          #   schema, scope-filtered queries, AEAD-encrypted
+│   │                          #   node / edge round-trip
 │   ├── synthesis_pipeline/    # Phase 2 synthesis: window manager, typed
 │   │                          #   SynthesisObject, GBNF schema types, no-op
 │   │                          #   synthesizer, encrypted publish / consume,
-│   │                          #   synthesizer-role election
-│   └── sync_engine/           # Phase 2 CRDT delta sync: AddWinsSet
-│                              #   observed-remove set + append-only OpLog
-│                              #   with merge_logs / supersede
+│   │                          #   synthesizer-role election + Phase 3
+│   │                          #   hierarchy module (DomainSynthesisInput /
+│   │                          #   TenantSynthesisInput / ApprovedDocument /
+│   │                          #   WindowScopeTier; type-system enforcement of
+│   │                          #   the channel → domain → tenant flow rules)
+│   ├── synthesis_engine/      # Phase 3 server-side synthesis-engine skeleton:
+│   │                          #   SynthesisEngine trait, ManagedEndpointSynthesizer
+│   │                          #   stub, end-to-end channel → domain → tenant test
+│   ├── sync_engine/           # Phase 2 CRDT delta sync: AddWinsSet
+│   │                          #   observed-remove set + append-only OpLog
+│   │                          #   with merge_logs / supersede
+│   ├── permission_service/    # Phase 3 Zanzibar-style relation tuples (10 object
+│   │                          #   types, 7 relations with default inheritance),
+│   │                          #   in-memory TupleStore, check_permission
+│   │                          #   reachability query over userset rewrites
+│   ├── tenant_service/        # Phase 3 tenant lifecycle (Active / Suspended /
+│   │                          #   Deleted), per-tenant encryption key references,
+│   │                          #   member provisioning, config validation
+│   └── audit_service/         # Phase 3 append-only audit log: AuditEntryBuilder,
+│                              #   AuditQuery (scope / action / actor / time),
+│                              #   8 AuditActionTypes (canonical promotion,
+│                              #   export, agent proposal, policy change,
+│                              #   member provisioned / removed, tenant
+│                              #   lifecycle, key destruction)
 ├── .github/workflows/ci.yml   # fmt + clippy + build + test on push / PR
 ├── PROPOSAL.md                # product thesis
 ├── ARCHITECTURE.md            # system architecture

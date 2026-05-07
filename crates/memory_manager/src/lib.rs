@@ -26,11 +26,13 @@
 
 pub mod channel_memory;
 pub mod decay;
+pub mod domain_memory;
 pub mod error;
 pub mod object;
 pub mod privacy_strip;
 pub mod retention;
 pub mod state;
+pub mod tenant_memory;
 pub mod transitions;
 pub mod user_memory;
 pub mod working_memory;
@@ -40,11 +42,19 @@ pub use channel_memory::{
     DEFAULT_COMPLETED_TASK_TTL_DAYS, DEFAULT_RESOLVED_QUESTION_TTL_DAYS,
 };
 pub use decay::{decay_sweep, DecaySweepReport};
+pub use domain_memory::{
+    Dependency, DomainDecayReport, DomainMemoryObject, Procedure, Risk, Workstream,
+    DEFAULT_COMPLETED_WORKSTREAM_TTL_DAYS, DEFAULT_RESOLVED_RISK_TTL_DAYS,
+};
 pub use error::{MemoryError, Result};
 pub use object::{MemoryObject, SensitivityClass};
 pub use privacy_strip::{ComputeLocation, PrivacyStrip, PrivacyStripBuilder, SynthesisOutput};
 pub use retention::{compute_retention_score, RetentionScore, RetentionWeights};
 pub use state::MemoryState;
+pub use tenant_memory::{
+    ApprovedDocumentRef, CanonicalPolicy, ProductTaxonomyEntry, StableOrgKnowledge,
+    TenantMemoryError, TenantMemoryObject,
+};
 pub use transitions::MemoryStateMachine;
 pub use user_memory::{MemoryFilter, UserMemoryObject};
 pub use working_memory::{WorkingMemory, WorkingMemoryEntry};

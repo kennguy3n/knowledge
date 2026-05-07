@@ -7,7 +7,7 @@ use crate::edge::EdgeId;
 use crate::node::NodeId;
 
 /// Errors surfaced by the concept graph.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error)]
 pub enum GraphError {
     /// The requested node id is not present in the graph.
     #[error("concept node not found: {0}")]
@@ -32,6 +32,37 @@ pub enum GraphError {
     /// `mark_contradiction` was called with the same id for both arguments.
     #[error("a node cannot contradict itself: {0}")]
     SelfContradiction(Uuid),
+
+    /// A persistence-layer invariant was violated.
+    #[error("concept-graph persistence error: {0}")]
+    Persistence(&'static str),
+
+    /// The underlying SQLCipher driver surfaced an error.
+    #[error("concept-graph sqlite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+
+    /// The underlying [`crypto`] crate surfaced an error.
+    #[error(transparent)]
+    Crypto(#[from] crypto::CryptoError),
+}
+
+impl PartialEq for GraphError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::NodeNotFound(a), Self::NodeNotFound(b)) => a == b,
+            (Self::EdgeNotFound(a), Self::EdgeNotFound(b)) => a == b,
+            (Self::DuplicateNode(a), Self::DuplicateNode(b)) => a == b,
+            (Self::DanglingEdge(a), Self::DanglingEdge(b)) => a == b,
+            (Self::SelfSupersession(a), Self::SelfSupersession(b)) => a == b,
+            (Self::SelfContradiction(a), Self::SelfContradiction(b)) => a == b,
+            (Self::Persistence(a), Self::Persistence(b)) => a == b,
+            // SQLite + crypto errors carry opaque inner state — we
+            // intentionally treat them as never structurally equal so
+            // existing tests that compare hot-path variants keep
+            // working without relying on driver-specific equality.
+            _ => false,
+        }
+    }
 }
 
 impl GraphError {

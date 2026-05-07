@@ -27,6 +27,10 @@ Knowledge System
 │   ├── Memory Manager (decay state machine)
 │   ├── Concept Graph (sparse semantic layer)
 │   ├── Synthesis Pipeline
+│   ├── Synthesis Engine (server-side)
+│   ├── Permission Service (Zanzibar-style)
+│   ├── Tenant Service
+│   ├── Audit Service
 │   ├── Crypto Layer (post-quantum)
 │   └── Sync Engine (CRDT + MLS)
 ├── On-Device Inference
@@ -60,6 +64,10 @@ flowchart TB
         MM["memory_manager"]
         CG["concept_graph"]
         SP["synthesis_pipeline"]
+        SY["synthesis_engine"]
+        PSV["permission_service"]
+        TSV["tenant_service"]
+        AUS["audit_service"]
         CR["crypto"]
         SE["sync_engine"]
     end
@@ -125,6 +133,13 @@ binary shapes:
 | `sync_engine` | CRDT-based delta sync of synthesis objects; MLS group keying; selective evidence sync where policy permits. Phase 2: add-wins observed-remove CRDT (`AddWinsSet<T>`), append-only operation log (`OpLog<T>`) with `Add` / `Remove` / `Supersede` ops, deterministic `merge_logs` producing consistent merged state. |
 | `observation_engine (Phase 2)` | Channel-scoped promotion policy (`ChannelPromotionPolicy`: min importance class, min corroboration count, max noise ratio); extractor hardening — URL detection, email detection, date / time references, numeric references, question detection. |
 | `memory_manager (Phase 2)` | `ChannelMemoryObject` (recap, decisions, open questions, active tasks); reuses `MemoryObject` for individual items; archive-on-decay sweep. |
+| `memory_manager (Phase 3)` | `DomainMemoryObject` (cross-channel workstreams, dependencies, risks, procedures; registered channel scopes; archive-on-decay sweep) and `TenantMemoryObject` (canonical policies, product taxonomy, stable org knowledge, admitted approved-document refs); tenant memory items default to `SensitivityClass::Critical` with no passive decay — only explicit deprecation per `PROPOSAL.md` §4.3. |
+| `synthesis_pipeline (Phase 3)` | `hierarchy` module: `ChannelOutput` / `DomainOutput` (constructible only from the matching `SynthesisObject` variants), `DomainSynthesisInput` (only constructible from `ChannelOutput`s registered on a `DomainMemoryObject`), `TenantSynthesisInput` (only constructible from `DomainOutput`s registered on a `TenantMemoryObject` plus `ApprovedDocument`s admitted to that tenant), `WindowScopeTier` (`Channel / Domain / Tenant`), and a `HierarchyEnforcedWindowManager` blanket impl on `SynthesisWindowManager` whose `validate_domain_input` / `validate_tenant_input` reject cross-tier admission at the type level. |
+| `concept_graph (Phase 3)` | `PersistentConceptGraph`: SQLCipher-backed wrapper over the Phase-2 in-memory adjacency list; `concept_nodes` + `concept_edges` schema with plaintext lifecycle / relation tags for scope-filtered queries; per-scope AEAD encryption (`scope:{uuid}:concept:v1` HKDF context) of the JSON-encoded payloads with `(scope_id, id)` bound into the AAD. |
+| `permission_service (Phase 3)` | Zanzibar-style relation tuples (`ObjectRef`, `Relation`, `SubjectRef`) for the ten object types from §6, the seven-relation namespace with default inheritance (`owner ⇒ admin ⇒ editor ⇒ member ⇒ viewer`), an in-memory `TupleStore`, and a `check_permission` reachability query that walks both direct tuples and userset rewrites. |
+| `tenant_service (Phase 3)` | `Tenant` / `TenantConfig` / `TenantMember` data model, the `Active / Suspended / Deleted` lifecycle state machine with key-destruction reference on delete, role-based member provisioning, and config validation (storage caps, sub-minute synthesis windows). |
+| `synthesis_engine (Phase 3)` | Rust side of the server-side synthesis service: `SynthesisEngine` trait (`synthesize_domain`, `synthesize_tenant`), `ManagedEndpointSynthesizer` deterministic stub that the future managed-AI endpoint will replace, end-to-end channel → domain → tenant integration test under `tests/hierarchy_e2e.rs`. The Go gateway in front of this engine is intentionally still pending. |
+| `audit_service (Phase 3)` | Append-only `AuditLog` per §4.1; `AuditEntryBuilder`; `AuditQuery` filters (scope / action / actor / time-range); the eight `AuditActionType`s (`CanonicalPromotion`, `Export`, `AgentProposal`, `PolicyChange`, `MemberProvisioned`, `MemberRemoved`, `TenantLifecycle`, `KeyDestruction`); no mutation / deletion APIs — append-only is enforced at the type level. |
 
 ### 2.2 Local store
 

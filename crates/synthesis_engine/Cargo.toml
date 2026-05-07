@@ -1,0 +1,29 @@
+[package]
+name = "synthesis_engine"
+description = "Server-side synthesis engine skeleton for the Knowledge substrate. Wraps a SynthesisWindowManager with hierarchy-enforced inputs (channel -> domain -> tenant) and exposes a stub managed-endpoint synthesizer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+crypto = { path = "../crypto" }
+evidence_store = { path = "../evidence_store" }
+memory_manager = { path = "../memory_manager" }
+synthesis_pipeline = { path = "../synthesis_pipeline" }
+
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+concept_graph = { path = "../concept_graph" }
+permission_service = { path = "../permission_service" }
+audit_service = { path = "../audit_service" }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

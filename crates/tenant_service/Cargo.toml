@@ -1,6 +1,6 @@
 [package]
-name = "synthesis_pipeline"
-description = "Channel / domain / tenant synthesis windows, encrypted synthesis objects, GBNF-shaped schema types, elected-device synthesizer election."
+name = "tenant_service"
+description = "Tenant service for the Knowledge substrate: tenant lifecycle (create/activate/suspend/delete), per-tenant configuration, and member provisioning."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,15 +9,13 @@ repository.workspace = true
 
 [dependencies]
 crypto = { path = "../crypto" }
-evidence_store = { path = "../evidence_store" }
-memory_manager = { path = "../memory_manager" }
+permission_service = { path = "../permission_service" }
 
 thiserror = { workspace = true }
 uuid = { workspace = true }
-chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-rand = { workspace = true }
+chrono = { workspace = true }
 
 [lints]
 workspace = true
