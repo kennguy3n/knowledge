@@ -179,30 +179,69 @@ impl PersistentConceptGraph {
     }
 
     /// Insert `node` into the graph and persist it.
+    ///
+    /// The mutation is applied to the in-memory graph first because
+    /// validation lives there (duplicate-id rejection). The mirror
+    /// persist call is the only operation that can fail at the I/O
+    /// boundary; if it does, the in-memory insert is rolled back so
+    /// the in-memory graph and the database stay in lockstep.
     pub fn add_node(&mut self, node: ConceptNode) -> Result<NodeId> {
         let id = self.graph.add_node(node.clone())?;
-        self.persist_node(&node)?;
+        if let Err(e) = self.persist_node(&node) {
+            // The in-memory graph just accepted this node, so
+            // `remove_node` is guaranteed to find it. The
+            // `let _ =` is defensive: even if a future change
+            // could make this fallible, the original persist
+            // error is the one the caller wants.
+            let _ = self.graph.remove_node(id);
+            return Err(e);
+        }
         Ok(id)
     }
 
     /// Insert `edge` into the graph and persist it.
+    ///
+    /// As with [`Self::add_node`], in-memory validation runs first
+    /// (dangling-endpoint rejection) and the in-memory mutation is
+    /// rolled back if the persist call fails.
     pub fn add_edge(&mut self, edge: ConceptEdge) -> Result<EdgeId> {
         let id = self.graph.add_edge(edge.clone())?;
-        self.persist_edge(&edge)?;
+        if let Err(e) = self.persist_edge(&edge) {
+            let _ = self.graph.remove_edge(id);
+            return Err(e);
+        }
         Ok(id)
     }
 
     /// Mark `predecessor` as superseded by `successor`. Persists the
     /// updated `superseded_by` pointer on the predecessor and the
     /// new `supersedes` edge.
+    ///
+    /// The two persistence writes (predecessor + edge) are wrapped
+    /// in a single `BEGIN IMMEDIATE` / `COMMIT` SQLite transaction
+    /// so they land atomically: either both rows make it to disk
+    /// or neither does. If the transaction is rolled back, the
+    /// in-memory mutation is also reversed (predecessor restored to
+    /// its pre-supersession state, the new edge dropped) so the
+    /// caller sees a no-op on failure rather than a half-applied
+    /// supersession.
     pub fn supersede_node(&mut self, predecessor: NodeId, successor: NodeId) -> Result<EdgeId> {
-        let edge_id = self.graph.supersede_node(predecessor, successor)?;
-        let pred = self
+        // Snapshot the predecessor *before* we let the in-memory
+        // graph stamp `state = Superseded` / `superseded_by = ...`
+        // / `updated_at = now()` on it. This snapshot is the
+        // rollback target if the transaction fails below.
+        let pred_before = self
             .graph
             .get_node(predecessor)
             .cloned()
             .ok_or_else(|| GraphError::node_not_found(predecessor))?;
-        self.persist_node(&pred)?;
+
+        let edge_id = self.graph.supersede_node(predecessor, successor)?;
+        let pred_after = self
+            .graph
+            .get_node(predecessor)
+            .cloned()
+            .ok_or_else(|| GraphError::node_not_found(predecessor))?;
         let edge = self
             .graph
             .get_edges(predecessor)
@@ -210,8 +249,54 @@ impl PersistentConceptGraph {
             .find(|e| e.id == edge_id)
             .cloned()
             .ok_or_else(|| GraphError::Persistence("expected supersedes edge to be present"))?;
-        self.persist_edge(&edge)?;
+
+        if let Err(e) = self.persist_pair_in_tx(&pred_after, &edge) {
+            // Roll the in-memory mutation back: drop the new edge
+            // first, then restore the predecessor's pre-supersession
+            // snapshot. Both operations are guaranteed to find their
+            // targets because we just inserted them above.
+            let _ = self.graph.remove_edge(edge_id);
+            if let Some(slot) = self.graph.get_node_mut(predecessor) {
+                *slot = pred_before;
+            }
+            return Err(e);
+        }
         Ok(edge_id)
+    }
+
+    /// Persist `node` and `edge` inside a single SQLite transaction.
+    /// On any failure the transaction is rolled back so the database
+    /// state is unchanged.
+    fn persist_pair_in_tx(&mut self, node: &ConceptNode, edge: &ConceptEdge) -> Result<()> {
+        // `BEGIN IMMEDIATE` acquires a RESERVED lock up front so
+        // concurrent writers cannot interleave between the two
+        // statements. We use raw `execute_batch` rather than
+        // `Connection::transaction` because `persist_node` /
+        // `persist_edge` take `&mut self` and re-borrowing
+        // `self.conn` to construct a `Transaction` would conflict.
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(GraphError::Sqlite)?;
+        let result: Result<()> = match self.persist_node(node) {
+            Ok(()) => self.persist_edge(edge),
+            Err(e) => Err(e),
+        };
+        match result {
+            Ok(()) => {
+                self.conn
+                    .execute_batch("COMMIT")
+                    .map_err(GraphError::Sqlite)?;
+                Ok(())
+            }
+            Err(e) => {
+                // Best-effort rollback. If `ROLLBACK` itself fails
+                // (e.g. the connection is poisoned) the transaction
+                // is already in an inconsistent state — surface the
+                // *original* persist error rather than masking it.
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
     }
 
     /// Persist any node already present in the in-memory graph (by

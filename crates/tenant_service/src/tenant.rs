@@ -160,6 +160,15 @@ impl TenantRegistry {
     /// `crate::lifecycle::TenantStatus::Suspended`, and `Deleted`
     /// tenants reject everything because the root key reference has
     /// been destroyed.
+    ///
+    /// A user whose previous membership row is `Removed` may be
+    /// re-provisioned: the audit row is overwritten with a fresh
+    /// membership starting at the current wall-clock time. (The
+    /// audit log keeps the historical removal entry, so this does
+    /// not erase the audit trail — it just reopens the surface for
+    /// employees who leave and return.) A user whose membership row
+    /// is currently `Active` is rejected with
+    /// [`TenantError::MemberAlreadyProvisioned`].
     pub fn add_member(
         &mut self,
         tenant_id: TenantId,
@@ -168,8 +177,10 @@ impl TenantRegistry {
     ) -> Result<TenantMember> {
         self.require_active(tenant_id)?;
         let key = (tenant_id, user_id);
-        if self.members.contains_key(&key) {
-            return Err(TenantError::MemberAlreadyProvisioned(user_id));
+        if let Some(existing) = self.members.get(&key) {
+            if existing.status != TenantMemberStatus::Removed {
+                return Err(TenantError::MemberAlreadyProvisioned(user_id));
+            }
         }
         let member = TenantMember::new(tenant_id.0, user_id, role);
         self.members.insert(key, member.clone());

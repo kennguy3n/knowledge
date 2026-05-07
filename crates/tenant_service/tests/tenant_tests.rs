@@ -188,6 +188,39 @@ fn removed_members_are_immutable_audit_artefacts() {
 }
 
 #[test]
+fn removed_member_can_be_reprovisioned() {
+    // Per the docs on `add_member`, an employee who left (status =
+    // Removed) and returned should be re-provisionable via
+    // `add_member`. The audit log keeps the original removal entry,
+    // so this does not erase history — it just reopens the surface.
+    let mut reg = TenantRegistry::new();
+    let id = reg.create("Acme Corp", TenantConfig::new()).unwrap();
+    let user = Uuid::new_v4();
+
+    let first = reg.add_member(id, user, Relation::Admin).unwrap();
+    reg.remove_member(id, user).unwrap();
+    assert_eq!(
+        reg.get_member(id, user).unwrap().status,
+        TenantMemberStatus::Removed
+    );
+
+    let second = reg.add_member(id, user, Relation::Member).unwrap();
+    assert_eq!(second.role, Relation::Member);
+    assert_eq!(second.status, TenantMemberStatus::Active);
+    // The fresh row replaces the audit artefact in the registry —
+    // status / role / provisioned_at all reflect the re-provisioning.
+    let row = reg.get_member(id, user).unwrap();
+    assert_eq!(row.status, TenantMemberStatus::Active);
+    assert_eq!(row.role, Relation::Member);
+    // ...and a still-active member cannot be re-provisioned.
+    let err = reg.add_member(id, user, Relation::Editor).unwrap_err();
+    assert_eq!(err, TenantError::MemberAlreadyProvisioned(user));
+    // Sanity: the original `add_member` did successfully run before
+    // the removal cycle.
+    assert_eq!(first.role, Relation::Admin);
+}
+
+#[test]
 fn list_members_filters_by_tenant() {
     let mut reg = TenantRegistry::new();
     let a = reg.create("A", TenantConfig::new()).unwrap();
