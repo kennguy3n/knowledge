@@ -28,8 +28,10 @@ pub mod edge;
 pub mod error;
 pub mod graph;
 pub mod node;
+pub mod persist;
 
 pub use edge::{ConceptEdge, EdgeId, RelationType};
 pub use error::{GraphError, Result};
 pub use graph::ConceptGraph;
 pub use node::{ConceptNode, NodeId, NodeState};
+pub use persist::PersistentConceptGraph;

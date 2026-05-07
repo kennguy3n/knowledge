@@ -107,6 +107,33 @@ impl ConceptGraph {
         Ok(node)
     }
 
+    /// Remove a single edge by id without touching either endpoint.
+    ///
+    /// Used by [`crate::PersistentConceptGraph`] to roll back an
+    /// in-memory `add_edge` whose mirror persistence call failed.
+    /// Callers that want to drop a node's *incident* edges should
+    /// use [`Self::remove_node`] instead — that variant is the
+    /// usual "delete this node and everything pointing at it"
+    /// operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphError::EdgeNotFound`] if no edge with that id
+    /// exists.
+    pub fn remove_edge(&mut self, id: EdgeId) -> Result<ConceptEdge> {
+        let edge = self
+            .edges
+            .remove(&id)
+            .ok_or_else(|| GraphError::edge_not_found(id))?;
+        if let Some(v) = self.outgoing.get_mut(&edge.from) {
+            v.retain(|e| *e != id);
+        }
+        if let Some(v) = self.incoming.get_mut(&edge.to) {
+            v.retain(|e| *e != id);
+        }
+        Ok(edge)
+    }
+
     /// Borrow a node by id.
     pub fn get_node(&self, id: NodeId) -> Option<&ConceptNode> {
         self.nodes.get(&id)

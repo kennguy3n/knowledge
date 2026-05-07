@@ -10,7 +10,7 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::object::MemoryObject;
+use crate::object::{MemoryObject, SensitivityClass};
 use crate::retention::compute_retention_score;
 use crate::state::MemoryState;
 use crate::transitions::MemoryStateMachine;
@@ -76,10 +76,19 @@ pub fn decay_sweep_with(
 
         // Match guards can't mutate the bound place, so we destructure
         // the state into local flags first and apply the transition
-        // outside the match.
+        // outside the match. Critical-class items are exempt from
+        // passive decay per `PROPOSAL.md` §4.3 — they only leave the
+        // active set via explicit deprecation / supersession.
+        let is_critical = obj.sensitivity_class == SensitivityClass::Critical;
         let (try_archive_candidate, try_archive_superseded) = match obj.state {
-            MemoryState::Candidate => (score.total < candidate_archive_threshold, false),
-            MemoryState::Superseded => (false, (now - obj.last_accessed_at) >= superseded_ttl),
+            MemoryState::Candidate => (
+                !is_critical && score.total < candidate_archive_threshold,
+                false,
+            ),
+            MemoryState::Superseded => (
+                false,
+                !is_critical && (now - obj.last_accessed_at) >= superseded_ttl,
+            ),
             _ => (false, false),
         };
         if try_archive_candidate && sm.archive_candidate(obj).is_ok() {

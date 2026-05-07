@@ -35,6 +35,7 @@
 
 pub mod election;
 pub mod error;
+pub mod hierarchy;
 pub mod object;
 pub mod pipeline;
 pub mod publish;
@@ -46,6 +47,11 @@ pub use election::{
     DEFAULT_HEARTBEAT_TTL_SECS,
 };
 pub use error::{PipelineError, Result};
+pub use hierarchy::{
+    build_domain_summary_object, build_tenant_summary_object, open_domain_window,
+    open_tenant_window, ApprovedDocument, ChannelOutput, DomainOutput, DomainSynthesisInput,
+    HierarchyEnforcedWindowManager, TenantSynthesisInput, TieredWindowHandle, WindowScopeTier,
+};
 pub use object::{ObjectId, SynthesisObject, SynthesisObjectType};
 pub use pipeline::{NoOpSynthesizer, SynthesisInputs, SynthesisPipeline};
 pub use publish::{consume_synthesis_object, publish_synthesis_object, EncryptedSynthesisObject};

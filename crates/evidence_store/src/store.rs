@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crypto::{
     content_hash, decrypt_aead, derive_key, encrypt_aead, AeadKey, AeadNonce, ContentHash,
@@ -148,13 +148,19 @@ impl EvidenceStore {
         // key. This is the deterministic HKDF wrap-around — see
         // ARCHITECTURE.md §2.2.
         let mut page_key = derive_key(master_key, b"sqlcipher:store:v1")?;
-        let key_hex = hex_encode(&page_key);
+        // `Zeroizing<String>` zeroes the heap-allocated bytes when
+        // dropped — without this wrapper the hex-encoded SQLCipher
+        // page key would linger in freed heap memory after `String`'s
+        // default `Drop`. The same wrap is applied to the
+        // `format!("x'…'")` SQL pragma value below.
+        let key_hex: Zeroizing<String> = Zeroizing::new(hex_encode(&page_key));
         page_key.zeroize();
 
         // Apply SQLCipher PRAGMAs. `cipher_page_size = 4096` and
         // `kdf_iter = 256000` are the SQLCipher 4.x defaults; we set
         // them explicitly so the schema is portable across versions.
-        conn.pragma_update(None, "key", format!("x'{key_hex}'"))?;
+        let key_pragma: Zeroizing<String> = Zeroizing::new(format!("x'{}'", &*key_hex));
+        conn.pragma_update(None, "key", key_pragma.as_str())?;
         conn.pragma_update(None, "cipher_page_size", 4096_i64)?;
         conn.pragma_update(None, "kdf_iter", 256_000_i64)?;
         // Foreign keys are off by default; we don't use FK constraints
