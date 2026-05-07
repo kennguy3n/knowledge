@@ -41,7 +41,11 @@ pub struct DecaySweepReport {
 /// * Transitions any `Candidate` whose score is below
 ///   [`DEFAULT_CANDIDATE_ARCHIVE_THRESHOLD`] to `Archived`.
 /// * Transitions any `Superseded` whose time-since-supersession
-///   exceeds [`DEFAULT_SUPERSEDED_TTL_DAYS`] to `Archived`.
+///   exceeds [`DEFAULT_SUPERSEDED_TTL_DAYS`] to `Archived`. The
+///   sweep uses `last_accessed_at` as the supersession reference
+///   point; [`crate::transitions::MemoryStateMachine::supersede`]
+///   stamps it on the transition specifically so this comparison
+///   is correct.
 ///
 /// Returns counters describing what changed. Objects in any other
 /// state are left untouched (the rest of the state machine is
@@ -141,6 +145,38 @@ mod tests {
         let mut objs = vec![obj];
         let report = decay_sweep(&mut objs, Utc::now());
         assert_eq!(report.superseded_archived, 0);
+        assert_eq!(objs[0].state, MemoryState::Superseded);
+    }
+
+    /// Regression — a Canonical row that hadn't been read in a long
+    /// time (>> the Superseded TTL) used to be archived on the very
+    /// next sweep after supersession because the TTL was measured
+    /// from `last_accessed_at` instead of from the supersession
+    /// timestamp. `MemoryStateMachine::supersede` now stamps
+    /// `last_accessed_at` on the transition so the 90-day grace
+    /// period actually applies.
+    #[test]
+    fn supersede_resets_supersession_clock_so_ttl_grace_applies() {
+        use crate::transitions::MemoryStateMachine;
+
+        let mut obj = fresh();
+        // Walk it to Canonical and backdate `last_accessed_at` by
+        // far longer than the Superseded TTL.
+        let sm = MemoryStateMachine::new();
+        sm.reinforce(&mut obj).unwrap();
+        sm.consolidate(&mut obj).unwrap();
+        sm.canonicalize(&mut obj).unwrap();
+        obj.last_accessed_at = Utc::now() - Duration::days(365);
+        // Then supersede.
+        sm.supersede(&mut obj, uuid::Uuid::new_v4()).unwrap();
+
+        let mut objs = vec![obj];
+        let report = decay_sweep(&mut objs, Utc::now());
+        assert_eq!(
+            report.superseded_archived, 0,
+            "supersede() must stamp last_accessed_at so the Superseded TTL counts \
+             from the supersession instant, not from the row's last read"
+        );
         assert_eq!(objs[0].state, MemoryState::Superseded);
     }
 }

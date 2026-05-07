@@ -71,6 +71,27 @@ fn declarative_sentences_become_facts() {
         .any(|o| o.observation_type == ObservationType::Fact));
 }
 
+/// Regression — `"follow up"` / `"follow-up"` used to live on the
+/// imperative-verb list, where `starts_with_imperative` could never
+/// match them (it compares the first alphabetic-only token only).
+/// They now live on the keyword list, which uses substring
+/// matching, so the lexicon actually fires on these phrasings.
+#[test]
+fn follow_up_phrasings_are_detected_as_tasks() {
+    let scope = ScopeId::new_v4();
+    for line in [
+        "follow up with @Sara about the launch",
+        "follow-up: ping the design review",
+    ] {
+        let obs = ext().extract(line, scope);
+        assert!(
+            obs.iter()
+                .any(|o| o.observation_type == ObservationType::Task),
+            "lexicon must surface a task for: {line:?}",
+        );
+    }
+}
+
 #[test]
 fn fresh_observations_are_candidate_state() {
     let scope = ScopeId::new_v4();

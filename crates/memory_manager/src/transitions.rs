@@ -40,6 +40,11 @@ impl MemoryStateMachine {
     }
 
     /// `Canonical -> Superseded` (newer canonical claim).
+    ///
+    /// Stamps `last_accessed_at` with the current time so the
+    /// downstream decay sweep can use it as the "supersession time"
+    /// reference point — the Superseded TTL counts forward from
+    /// supersession, not from the row's last read.
     pub fn supersede(
         &self,
         obj: &mut MemoryObject,
@@ -47,6 +52,7 @@ impl MemoryStateMachine {
     ) -> Result<MemoryState> {
         let new_state = Self::expect(obj, &[MemoryState::Canonical], MemoryState::Superseded)?;
         obj.superseded_by = Some(superseded_by);
+        obj.last_accessed_at = chrono::Utc::now();
         Ok(new_state)
     }
 

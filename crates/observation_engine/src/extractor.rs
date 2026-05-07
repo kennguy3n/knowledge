@@ -82,7 +82,20 @@ impl LexiconExtractor {
                 "go-live approved",
                 "rejected",
             ],
-            vec!["todo", "action", "task", "please", "fyi action"],
+            // Multi-word entries belong here (lower_contains_any does
+            // substring matching) — `starts_with_imperative` only
+            // compares the first alphabetic-only token of a sentence
+            // against the imperative-verb list, so multi-word verbs
+            // would otherwise be unreachable.
+            vec![
+                "todo",
+                "action",
+                "task",
+                "please",
+                "fyi action",
+                "follow up",
+                "follow-up",
+            ],
             vec![
                 "draft",
                 "send",
@@ -93,8 +106,6 @@ impl LexiconExtractor {
                 "deploy",
                 "ship",
                 "investigate",
-                "follow up",
-                "follow-up",
                 "prepare",
                 "update",
                 "merge",
