@@ -156,8 +156,15 @@ pub struct PortableConceptProfile {
     pub reasoning_traces: Vec<ReasoningRef>,
     /// Wall-clock creation time.
     pub created_at: DateTime<Utc>,
-    /// Optional profile expiry. Once expired the policy engine
-    /// rejects every render.
+    /// Optional profile expiry. Once expired,
+    /// [`crate::simulator::PolicySimulator::simulate`] returns an
+    /// empty preview (every concept lands in `excluded_concepts`
+    /// with reason `"profile expired"`) and surfaces a warning.
+    /// Profile-level expiry is *not* enforced by
+    /// [`crate::policy::PolicyEngine::evaluate`] \u2014 the engine
+    /// receives a flat `&[ApprovedConcept]` and has no profile
+    /// context. Callers that bypass the simulator must check
+    /// [`Self::is_expired`] themselves.
     pub expires_at: Option<DateTime<Utc>>,
     /// Substrate scope that owns this profile (used for audit-log
     /// scoping).

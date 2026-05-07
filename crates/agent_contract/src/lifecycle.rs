@@ -95,14 +95,18 @@ pub struct AutoPromotionPolicy {
 impl Default for AutoPromotionPolicy {
     /// Default deny-by-default policy: nothing is auto-promotable.
     ///
-    /// `min_confidence` is set to [`f64::INFINITY`] rather than a
-    /// magic-number sentinel like `1.1` so the value is honestly
-    /// unreachable for any finite confidence in `[0.0, 1.0]` and
-    /// the intent ("nothing matches") is explicit at the type
-    /// level.
+    /// `min_confidence` is set to [`f64::MAX`] rather than a
+    /// magic-number sentinel like `1.1`. [`f64::MAX`] is honestly
+    /// unreachable for any finite confidence in `[0.0, 1.0]`, makes
+    /// the intent ("nothing matches") explicit at the type level,
+    /// and — unlike [`f64::INFINITY`] — is a finite IEEE-754 value
+    /// that round-trips cleanly through JSON. The struct derives
+    /// [`Serialize`]/[`Deserialize`], so any non-finite default
+    /// would silently break `serde_json::to_string` for callers
+    /// persisting the policy to config or surfacing it via API.
     fn default() -> Self {
         Self {
-            min_confidence: f64::INFINITY,
+            min_confidence: f64::MAX,
             min_corroboration: u32::MAX,
             max_sensitivity: SensitivityClass::Noise,
             require_human_for_critical: true,

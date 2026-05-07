@@ -77,10 +77,45 @@ impl<'a> PolicySimulator<'a> {
     }
 
     /// Simulate `profile` and return what the export would contain.
+    ///
+    /// Profile-level expiry is enforced here — the simulator owns
+    /// the profile pointer, while the underlying [`PolicyEngine`]
+    /// only sees a flat `&[ApprovedConcept]` and therefore cannot
+    /// observe whether the parent profile is still active. If
+    /// [`PortableConceptProfile::is_expired`] is true at the
+    /// current wall clock, every concept is moved to
+    /// `excluded_concepts` with a stable reason, no engine pass is
+    /// performed, and a warning is surfaced on the result. Callers
+    /// that bypass the simulator and invoke [`PolicyEngine::evaluate`]
+    /// directly are responsible for performing the same check.
     pub fn simulate(&self, profile: &PortableConceptProfile) -> SimulationResult {
         let now = Utc::now();
         let mut included_concepts = Vec::new();
         let mut excluded_concepts = Vec::new();
+
+        // Profile-expiry guard — honours the contract documented on
+        // `PortableConceptProfile::expires_at`. An expired profile
+        // produces an empty preview: every concept lands in
+        // `excluded_concepts` and the simulator skips the engine
+        // pass entirely so callers do not waste cycles evaluating
+        // policy on a profile that is structurally inactive.
+        if profile.is_expired(now) {
+            for c in &profile.concepts {
+                excluded_concepts.push(SimulatedExclusion {
+                    entity_id: c.concept_id,
+                    reason: "profile expired".into(),
+                });
+            }
+            return SimulationResult {
+                included_concepts,
+                excluded_concepts,
+                included_summaries: Vec::new(),
+                excluded_summaries: Vec::new(),
+                would_include_evidence: false,
+                total_export_size_estimate: 0,
+                warnings: vec!["profile expired \u{2014} simulator returning empty preview".into()],
+            };
+        }
 
         // Pre-filter via the registry.
         let mut policy_candidates = Vec::new();
@@ -403,6 +438,45 @@ mod tests {
         assert_eq!(result.included_summaries.len(), 1);
         assert!(result.excluded_summaries.is_empty());
         assert!(!result.warnings.iter().any(|w| w.contains("max_summaries")));
+    }
+
+    #[test]
+    fn simulator_returns_empty_preview_when_profile_expired() {
+        // Regression for N-2: `PortableConceptProfile::expires_at` is
+        // documented as enforced before the engine pass. The
+        // simulator now honours that contract by short-circuiting
+        // when the profile is expired — every concept lands in
+        // `excluded_concepts` with a stable reason, no summaries
+        // are surfaced, evidence is denied, and a warning is
+        // recorded.
+        let (mut profile, _scope) = fixture_profile(2);
+        profile.expires_at = Some(Utc::now() - chrono::Duration::seconds(60));
+
+        let policy = ExportPolicy::default();
+        let mut registry = ExportControlRegistry::new();
+        for c in &profile.concepts {
+            registry
+                .insert_concept(ConceptExportControl::new(c.concept_id))
+                .expect("insert");
+        }
+
+        let sim = PolicySimulator::new(&policy, &registry);
+        let result = sim.simulate(&profile);
+
+        assert!(result.included_concepts.is_empty());
+        assert_eq!(result.excluded_concepts.len(), profile.concepts.len());
+        assert!(result
+            .excluded_concepts
+            .iter()
+            .all(|e| e.reason == "profile expired"));
+        assert!(result.included_summaries.is_empty());
+        assert!(result.excluded_summaries.is_empty());
+        assert!(!result.would_include_evidence);
+        assert_eq!(result.total_export_size_estimate, 0);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("profile expired")));
     }
 
     #[test]
