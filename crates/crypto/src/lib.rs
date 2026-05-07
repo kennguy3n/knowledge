@@ -30,6 +30,7 @@ pub mod hash;
 pub mod hybrid_kem;
 pub mod kdf;
 pub mod kem;
+pub mod provenance;
 
 pub use aead::{
     decrypt_aead, encrypt_aead, AeadCiphertext, AeadKey, AeadNonce, AEAD_KEY_LEN, AEAD_NONCE_LEN,
@@ -46,4 +47,8 @@ pub use kem::{
     KemBackend, KemCiphertext, KemPublicKey, KemSecretKey, KemSharedSecret, MlKem768Backend,
     StubKemBackend, KEM_CIPHERTEXT_LEN, KEM_PUBLIC_KEY_LEN, KEM_SECRET_KEY_LEN,
     KEM_SHARED_SECRET_LEN,
+};
+pub use provenance::{
+    AgentKind, EvidenceRef, ProvenanceAgent, ProvenanceBundle, ProvenanceSignature,
+    ProvenanceSigner, SignedBundle, SynthesisActivity, TestSigner, TEST_SIGNER_KEY_LEN,
 };

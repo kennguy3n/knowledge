@@ -30,4 +30,11 @@ pub enum CryptoError {
     /// The hybrid KEM combiner rejected its inputs.
     #[error("hybrid KEM combiner failed: {0}")]
     HybridCombiner(&'static str),
+    /// Provenance bundle (de)serialization failed.
+    #[error("provenance bundle serialisation failed: {0}")]
+    ProvenanceSerialisation(&'static str),
+    /// Provenance bundle signature verification failed (wrong key,
+    /// tampered bundle, or wrong signing algorithm).
+    #[error("provenance signature verification failed")]
+    ProvenanceVerification,
 }

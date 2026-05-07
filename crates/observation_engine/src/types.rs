@@ -26,6 +26,10 @@ pub enum ObservationType {
     Decision,
     /// A claim that hasn't been corroborated yet.
     Claim,
+    /// A question — sentences ending in `?` or starting with
+    /// interrogative words. Surfaces as channel-memory open
+    /// questions.
+    Question,
 }
 
 impl ObservationType {
@@ -38,6 +42,7 @@ impl ObservationType {
             Self::Task => "task",
             Self::Decision => "decision",
             Self::Claim => "claim",
+            Self::Question => "question",
         }
     }
 }

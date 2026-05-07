@@ -21,9 +21,11 @@
 pub mod error;
 pub mod extractor;
 pub mod pipeline;
+pub mod promotion;
 pub mod types;
 
 pub use error::{ObservationError, Result};
 pub use extractor::{LexiconExtractor, ObservationExtractor};
 pub use pipeline::ObservationPipeline;
+pub use promotion::{should_promote, ChannelPromotionPolicy, PromotionReason, PromotionResult};
 pub use types::{Observation, ObservationType};

@@ -29,10 +29,18 @@ The shared core is a Cargo workspace targeting **Rust 1.75+ (stable)**.
 Phase 0 ships the encrypted evidence plane and the post-quantum
 crypto primitives; Phase 1 adds the on-device personal-memory plane
 (decay state machine, retention scoring, working memory, lexicon
-observation extraction, and FTS5 + recency hybrid retrieval). The
-platform bindings, the SLM-backed importance classifier, and the
-XLM-R / SLM stages of the observation pipeline are tracked in
-[PROGRESS.md](./PROGRESS.md) but not yet shipped.
+observation extraction, and FTS5 + recency hybrid retrieval). Phase
+2 adds the channel-memory plane: a `ChannelMemoryObject` with
+recap / decisions / open-questions / active-tasks, the
+`synthesis_pipeline` window manager + typed synthesis objects +
+GBNF schema types, encrypted publish / consume with `(scope_id,
+window_id, object_id)` AAD binding, channel-scoped promotion
+policy, a synthesizer-election skeleton (tier / battery /
+heartbeat eligibility), the typed `concept_graph`, an add-wins
+observed-remove CRDT in `sync_engine`, and the `ProvenanceBundle`
+PROV data model. The platform bindings, the SLM-backed importance
+classifier, MLS group keying, and the ML-DSA-65 signer are tracked
+in [PROGRESS.md](./PROGRESS.md) but not yet shipped.
 
 ### Prerequisites
 
@@ -58,7 +66,10 @@ cargo test --all
 ```
 
 This runs the inline unit tests inside each crate and the integration
-test files under `crates/*/tests/`.
+test files under `crates/*/tests/`. The Phase-2 crates
+(`concept_graph`, `synthesis_pipeline`, `sync_engine`) and the
+extended Phase-1 crates (`memory_manager`, `observation_engine`,
+`crypto`) are all covered by `cargo test --all`.
 
 ### Lint
 
@@ -78,16 +89,30 @@ knowledge/
 ├── rustfmt.toml               # repo-wide formatting config
 ├── crates/
 │   ├── crypto/                # post-quantum primitives (BLAKE3, XChaCha20-Poly1305,
-│   │                          #   HKDF-SHA256, hybrid X25519 + ML-KEM-768 KEM)
+│   │                          #   HKDF-SHA256, hybrid X25519 + ML-KEM-768 KEM,
+│   │                          #   Phase 2 ProvenanceBundle + HMAC TestSigner)
 │   ├── evidence_store/        # SQLCipher-backed encrypted evidence plane
 │   │                          #   (ingest, dedup, ring buffer, FTS5, classifier,
 │   │                          #   hybrid FTS + recency retrieval)
-│   ├── memory_manager/        # Phase 1 personal-memory plane: decay state machine,
+│   ├── memory_manager/        # personal-memory plane: decay state machine,
 │   │                          #   retention scoring, working memory, user-memory
-│   │                          #   CRUD, privacy-strip invariant
-│   ├── observation_engine/    # Phase 1 observation extractor + lexicon-first
-│   │                          #   pipeline (entities / tasks / decisions / facts)
-│   └── sync_engine/           # CRDT delta sync — Phase 2 stub for now
+│   │                          #   CRUD, privacy-strip invariant + Phase 2
+│   │                          #   ChannelMemoryObject (recap / decisions /
+│   │                          #   open questions / active tasks)
+│   ├── observation_engine/    # observation extractor + lexicon-first pipeline
+│   │                          #   (entities / tasks / decisions / facts /
+│   │                          #   questions; Phase 2 URL / email / date /
+│   │                          #   numeric extraction; ChannelPromotionPolicy)
+│   ├── concept_graph/         # Phase 2 sparse typed concept graph (nodes,
+│   │                          #   7 typed edges, scope-binding, supersession,
+│   │                          #   contradiction tracking, typed traversal)
+│   ├── synthesis_pipeline/    # Phase 2 synthesis: window manager, typed
+│   │                          #   SynthesisObject, GBNF schema types, no-op
+│   │                          #   synthesizer, encrypted publish / consume,
+│   │                          #   synthesizer-role election
+│   └── sync_engine/           # Phase 2 CRDT delta sync: AddWinsSet
+│                              #   observed-remove set + append-only OpLog
+│                              #   with merge_logs / supersede
 ├── .github/workflows/ci.yml   # fmt + clippy + build + test on push / PR
 ├── PROPOSAL.md                # product thesis
 ├── ARCHITECTURE.md            # system architecture

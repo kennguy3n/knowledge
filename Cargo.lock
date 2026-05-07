@@ -156,6 +156,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "concept_graph"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "crypto",
+ "evidence_store",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -191,12 +204,17 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "chacha20poly1305",
+ "chrono",
  "hkdf",
+ "hmac",
  "ml-kem",
  "rand",
  "rand_core",
+ "serde",
+ "serde_json",
  "sha2",
  "thiserror",
+ "uuid",
  "x25519-dalek",
  "zeroize",
 ]
@@ -901,6 +919,23 @@ dependencies = [
 name = "sync_engine"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "synthesis_pipeline"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "crypto",
+ "evidence_store",
+ "rand",
+ "serde",
+ "serde_json",
  "thiserror",
  "uuid",
 ]

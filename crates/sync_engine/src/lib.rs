@@ -1,69 +1,149 @@
-//! `knowledge_sync_engine` — CRDT-based delta sync of synthesis objects.
+//! `sync_engine` — CRDT-based delta sync of synthesis objects.
 //!
-//! This crate is a minimal stub for Phase 0. Real CRDT operation logs,
-//! MLS group keying, and selective evidence-ref sync are scheduled for
-//! Phase 2 (see `PHASES.md`). The public surface here exists so the
-//! workspace compiles and downstream callers can already type their
-//! integration against the real names.
+//! Per `PROPOSAL.md` §3.2 and `PHASES.md` Phase 2: every replica
+//! holds an [`AddWinsSet`] of synthesis-object ids per scope, plus an
+//! append-only [`OpLog`] of [`SyncOp`] entries. Replicas exchange
+//! their op logs out-of-band; [`merge_logs`] / [`OpLog::merge`]
+//! produce a deterministic merged state regardless of arrival order.
+//!
+//! The high-level [`SyncEngine`] wires the two: `add` / `remove` /
+//! `supersede` operations are recorded on the local op log and
+//! replayed into the in-memory [`AddWinsSet`] by [`SyncEngine::state`].
+//!
+//! Cross-references:
+//!
+//! * `PROPOSAL.md` §3.2 — CRDT delta protocol
+//! * `ARCHITECTURE.md` §2.1 — sync engine module
+//! * `PHASES.md` Phase 2 — concrete deliverables
 
 #![deny(missing_docs)]
 
-use thiserror::Error;
+pub mod crdt;
+pub mod error;
+pub mod op_log;
+
+use std::hash::Hash;
+
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Identifier for a sync scope (channel / domain / tenant memory object).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SyncScopeId(pub Uuid);
+pub use crdt::AddWinsSet;
+pub use error::{Result, SyncError};
+pub use op_log::{merge_logs, OpLog, SyncOp, SyncOpKind};
 
-/// Errors surfaced by the sync engine stub.
-#[derive(Debug, Error)]
-pub enum SyncError {
-    /// The sync engine is not yet implemented for this code path.
-    #[error("sync engine stub: {0}")]
-    NotYetImplemented(&'static str),
-}
+/// Identifier for a sync scope (channel / domain / tenant memory
+/// object).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SyncScopeId(
+    /// Underlying UUID.
+    pub Uuid,
+);
 
-/// Placeholder for a CRDT delta over synthesis objects.
-#[derive(Debug, Clone, Default)]
+/// Placeholder for a CRDT delta over synthesis objects. Phase 2
+/// keeps the type opaque so the wire format can evolve without
+/// breaking callers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CrdtDelta {
-    /// Opaque payload — the real shape lands in Phase 2.
+    /// Opaque payload — e.g. a serialised `OpLog<Uuid>` slice.
     pub payload: Vec<u8>,
 }
 
 /// CRDT-based delta sync engine.
 ///
-/// Phase 0: this is a deliberate stub. Methods return
-/// [`SyncError::NotYetImplemented`] so callers can wire the integration
-/// surface without blocking on the full Phase 2 implementation.
-#[derive(Debug, Default)]
-pub struct SyncEngine;
+/// Phase 2: backed by a per-scope [`OpLog<T>`] and on-demand replay
+/// into an [`AddWinsSet<T>`]. The element type `T` is parameterised
+/// so callers can sync ids, evidence refs, or full synthesis-object
+/// blobs.
+#[derive(Debug)]
+pub struct SyncEngine<T = Uuid>
+where
+    T: Eq + Hash + Clone,
+{
+    /// Replica id (UUID v4).
+    replica_id: Uuid,
+    log: OpLog<T>,
+}
 
-impl SyncEngine {
-    /// Construct a fresh sync engine instance.
+impl<T> SyncEngine<T>
+where
+    T: Eq + Hash + Clone,
+{
+    /// Construct a fresh sync engine instance with a new replica id.
     pub fn new() -> Self {
-        Self
+        let replica_id = Uuid::new_v4();
+        Self {
+            replica_id,
+            log: OpLog::new(replica_id),
+        }
     }
 
-    /// Apply an inbound CRDT delta to a sync scope. Stubbed.
-    pub fn apply_delta(&self, _scope: SyncScopeId, _delta: &CrdtDelta) -> Result<(), SyncError> {
-        Err(SyncError::NotYetImplemented("apply_delta"))
+    /// Construct a sync engine bound to a specific replica id —
+    /// useful in tests.
+    pub fn with_replica_id(replica_id: Uuid) -> Self {
+        Self {
+            replica_id,
+            log: OpLog::new(replica_id),
+        }
     }
 
-    /// Produce the next outbound CRDT delta for a sync scope. Stubbed.
-    pub fn next_delta(&self, _scope: SyncScopeId) -> Result<CrdtDelta, SyncError> {
-        Err(SyncError::NotYetImplemented("next_delta"))
+    /// Replica id.
+    pub fn replica_id(&self) -> Uuid {
+        self.replica_id
+    }
+
+    /// Borrow the underlying op log.
+    pub fn op_log(&self) -> &OpLog<T> {
+        &self.log
+    }
+
+    /// Mutably borrow the underlying op log.
+    pub fn op_log_mut(&mut self) -> &mut OpLog<T> {
+        &mut self.log
+    }
+
+    /// Record an `Add(value)` op.
+    pub fn add(&mut self, value: T) -> Uuid {
+        self.log.record_add(value)
+    }
+
+    /// Record a `Remove(value)` op observing all currently-visible
+    /// tags for the value.
+    pub fn remove(&mut self, value: T) {
+        // Replay the log to find the observed tags so the remove is
+        // an "observed" remove (necessary for add-wins).
+        let Ok((set, _)) = self.log.replay() else {
+            return;
+        };
+        let observed = set.tags_for(&value);
+        self.log.record_remove(value, observed);
+    }
+
+    /// Record a `Supersede(value, successor)` op observing all
+    /// currently-visible tags for the value.
+    pub fn supersede(&mut self, value: T, successor: T) {
+        let Ok((set, _)) = self.log.replay() else {
+            return;
+        };
+        let observed = set.tags_for(&value);
+        self.log.record_supersede(value, successor, observed);
+    }
+
+    /// Replay the op log and return the current materialised state.
+    pub fn state(&self) -> Result<(AddWinsSet<T>, Vec<(T, T)>)> {
+        self.log.replay()
+    }
+
+    /// Merge another engine's op log into this one. Idempotent.
+    pub fn merge(&mut self, other: &Self) {
+        self.log.merge(&other.log);
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stub_methods_return_not_yet_implemented() {
-        let engine = SyncEngine::new();
-        let scope = SyncScopeId(Uuid::nil());
-        assert!(engine.apply_delta(scope, &CrdtDelta::default()).is_err());
-        assert!(engine.next_delta(scope).is_err());
+impl<T> Default for SyncEngine<T>
+where
+    T: Eq + Hash + Clone,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
