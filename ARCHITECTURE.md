@@ -31,6 +31,8 @@ Knowledge System
 │   ├── Permission Service (Zanzibar-style)
 │   ├── Tenant Service
 │   ├── Audit Service
+│   ├── Agent Contract (proposal-only writes)
+│   ├── Export Plane (portable concept profiles)
 │   ├── Crypto Layer (post-quantum)
 │   └── Sync Engine (CRDT + MLS)
 ├── On-Device Inference
@@ -68,6 +70,8 @@ flowchart TB
         PSV["permission_service"]
         TSV["tenant_service"]
         AUS["audit_service"]
+        AC["agent_contract"]
+        EP["export_plane"]
         CR["crypto"]
         SE["sync_engine"]
     end
@@ -140,6 +144,9 @@ binary shapes:
 | `tenant_service (Phase 3)` | `Tenant` / `TenantConfig` / `TenantMember` data model, the `Active / Suspended / Deleted` lifecycle state machine with key-destruction reference on delete, role-based member provisioning, and config validation (storage caps, sub-minute synthesis windows). |
 | `synthesis_engine (Phase 3)` | Rust side of the server-side synthesis service: `SynthesisEngine` trait (`synthesize_domain`, `synthesize_tenant`), `ManagedEndpointSynthesizer` deterministic stub that the future managed-AI endpoint will replace, end-to-end channel → domain → tenant integration test under `tests/hierarchy_e2e.rs`. The Go gateway in front of this engine is intentionally still pending. |
 | `audit_service (Phase 3)` | Append-only `AuditLog` per §4.1; `AuditEntryBuilder`; `AuditQuery` filters (scope / action / actor / time-range); the eight `AuditActionType`s (`CanonicalPromotion`, `Export`, `AgentProposal`, `PolicyChange`, `MemberProvisioned`, `MemberRemoved`, `TenantLifecycle`, `KeyDestruction`); no mutation / deletion APIs — append-only is enforced at the type level. |
+| `agent_contract (Phase 5)` | Agent write contract per `PROPOSAL.md` §7.3: `AgentProposal<T>` carrier with four typed payloads (`ObservationProposal` / `ConceptProposal` / `RelationProposal` / `SummaryProposal`), `AgentIdentity` (agent_id, name, model_name, model_version, optional skill_id + recipe_id), strict reuse of `crypto::ProvenanceBundle` and `memory_manager::SensitivityClass`, schema validation in `schema.rs` (confidence ∈ [0.0, 1.0], ≥1 evidence ref, non-nil scope, non-empty agent identity, TTL > 0 if present), the four-state lifecycle machine `Proposed → UnderReview → Promoted/Rejected` in `lifecycle.rs` with `AutoPromotionPolicy` (min_confidence, min_corroboration, max_sensitivity, require_human_for_critical), in-memory `ProposalStore`, and `promote_to_canonical` returning `CanonicalArtifact::{Observation,Concept,Relation,Summary}` ready for substrate insertion. Agents have only `proposer` rights — they can never write canonical state directly. |
+| `export_plane (Phase 5)` | Export plane per `PROPOSAL.md` §3.5 / §4.1: `PortableConceptProfile`, `ApprovedConcept`, `ApprovedSummary`, `ExportView` (`ConceptsOnly` / `WithSummaries` / `WithEvidencePack`), `EvidencePack`, `ReasoningRef`, and `ExportConstraint::{MaxConcepts, MaxAge, ScopeRestriction, SensitivityCeiling}` in `profile.rs`. `ExportPolicy` + `PolicyEngine` in `policy.rs` enforce least-privilege defaults: `allow_raw_evidence` is opt-in and is *additionally* blocked whenever any concept is `Critical`; provenance is required by default; sensitivity ceiling, scope whitelist, max_concepts, and time_window are checked per concept. `ExportControlRegistry` in `controls.rs` is deny-by-default per concept / summary / workflow with time-bound and scope-bound enforcement. `PolicySimulator` in `simulator.rs` is read-only — `simulate(profile)` returns `SimulationResult { included_concepts, excluded_concepts, included_summaries, excluded_summaries, would_include_evidence, total_export_size_estimate, warnings }` without mutating any input or producing a real export. `ConceptApprovalWorkflow` in `approval.rs` bridges `concept_graph` canonical nodes to `ApprovedConcept`s — only nodes whose state is `NodeState::Canonical` and whose registry entry has `exportable: true` may be approved. |
+| `audit_service (Phase 5)` | Extended with five Phase-5 `AuditActionType`s (`ExportRendered`, `ExportSimulated`, `AgentProposalSubmitted`, `AgentProposalPromoted`, `AgentProposalRejected`) and an `ExportProfile` `TargetType` variant; new `helpers` module exposes `log_export`, `log_export_simulated`, `log_proposal_submitted`, `log_proposal_promoted`, `log_proposal_rejected` so every export and every proposal lifecycle event produces an audit entry without callers needing to hand-build the metadata payload. |
 
 ### 2.2 Local store
 

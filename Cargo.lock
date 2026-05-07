@@ -13,6 +13,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent_contract"
+version = "0.1.0"
+dependencies = [
+ "audit_service",
+ "chrono",
+ "crypto",
+ "evidence_store",
+ "memory_manager",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -315,6 +330,23 @@ dependencies = [
  "thiserror",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "export_plane"
+version = "0.1.0"
+dependencies = [
+ "agent_contract",
+ "audit_service",
+ "chrono",
+ "concept_graph",
+ "crypto",
+ "evidence_store",
+ "memory_manager",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]

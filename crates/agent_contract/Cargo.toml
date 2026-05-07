@@ -1,0 +1,25 @@
+[package]
+name = "agent_contract"
+description = "Agent write contract — proposal-only API for software agents writing into the Knowledge substrate. Implements PROPOSAL.md §7.3."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+crypto = { path = "../crypto", package = "crypto" }
+memory_manager = { path = "../memory_manager" }
+evidence_store = { path = "../evidence_store" }
+
+thiserror = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+audit_service = { path = "../audit_service" }
+
+[lints]
+workspace = true

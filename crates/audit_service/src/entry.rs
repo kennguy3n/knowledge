@@ -22,15 +22,20 @@ impl AuditEntryId {
 }
 
 /// Audit-action types per `ARCHITECTURE.md` §4.1 + Phase 3 lifecycle
-/// events.
+/// events + Phase 5 export plane / agent write contract events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditActionType {
     /// A memory object was promoted to canonical.
     CanonicalPromotion,
-    /// Data was exported under an export profile.
+    /// Data was exported under an export profile (legacy alias kept
+    /// for backwards compatibility — Phase 5 emits
+    /// [`Self::ExportRendered`] for actual renders).
     Export,
-    /// An agent proposed a synthesis or memory change.
+    /// An agent proposed a synthesis or memory change (legacy alias
+    /// kept for backwards compatibility — Phase 5 emits
+    /// [`Self::AgentProposalSubmitted`] / [`Self::AgentProposalPromoted`] /
+    /// [`Self::AgentProposalRejected`] for the lifecycle transitions).
     AgentProposal,
     /// A canonical policy was changed.
     PolicyChange,
@@ -43,6 +48,16 @@ pub enum AuditActionType {
     TenantLifecycle,
     /// A tenant root key was destroyed (cryptographic forgetting).
     KeyDestruction,
+    /// Phase 5: an export view was rendered.
+    ExportRendered,
+    /// Phase 5: an export profile was simulated (no actual emission).
+    ExportSimulated,
+    /// Phase 5: an agent proposal was submitted.
+    AgentProposalSubmitted,
+    /// Phase 5: an agent proposal was promoted to canonical.
+    AgentProposalPromoted,
+    /// Phase 5: an agent proposal was rejected.
+    AgentProposalRejected,
 }
 
 impl AuditActionType {
@@ -57,6 +72,11 @@ impl AuditActionType {
             Self::MemberRemoved => "member_removed",
             Self::TenantLifecycle => "tenant_lifecycle",
             Self::KeyDestruction => "key_destruction",
+            Self::ExportRendered => "export_rendered",
+            Self::ExportSimulated => "export_simulated",
+            Self::AgentProposalSubmitted => "agent_proposal_submitted",
+            Self::AgentProposalPromoted => "agent_proposal_promoted",
+            Self::AgentProposalRejected => "agent_proposal_rejected",
         }
     }
 }
