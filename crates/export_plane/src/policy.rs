@@ -107,8 +107,11 @@ pub struct ExportPolicy {
     pub sensitivity_ceiling: SensitivityClass,
     /// Optional explicit scope whitelist. `None` means "any scope".
     pub scope_whitelist: Option<Vec<Uuid>>,
-    /// Optional time window. Concepts approved more than `time_window`
-    /// ago are filtered out.
+    /// Optional time window. Concepts whose approval age is **strictly
+    /// greater than** `time_window` (relative to the current wall
+    /// clock) are filtered out — a concept whose approval age is
+    /// exactly equal to `time_window` is still admitted. The boundary
+    /// is therefore inclusive on the "still valid" side.
     pub time_window: Option<Duration>,
     /// Whether a populated `provenance` field is mandatory.
     pub require_provenance: bool,

@@ -267,18 +267,10 @@ fn expired_ttl_proposal_auto_rejected_with_audit() {
     let id = store.submit_observation(proposal).expect("submit");
     log_proposal_submitted(&mut audit, id, identity.agent_id, scope).expect("audit submit");
 
-    // Backdate so the TTL is already past.
-    {
-        // Use the public API by reaching back through the store; the
-        // store's `record_corroboration` is a convenient pointless
-        // mutation, but we need to manually expire. Use a separate
-        // store to exercise the TTL path naturally.
-    }
-
-    // Manually expire via a hand-rolled store substitute: rather than
-    // touch private fields, sleep is unsafe in CI — so we use a TTL
-    // of 0 by reconstructing.
-    // We re-test the TTL path using a 0s TTL in a separate proposal.
+    // The original `proposal` above carries a 1s TTL but isn't the
+    // one we exercise the expiry path on — we drive that path with a
+    // separate, near-zero TTL proposal below so the test does not
+    // depend on real-time waits longer than a few milliseconds.
     let zero = AgentProposal::new(
         ProposalKind::Observation,
         scope,

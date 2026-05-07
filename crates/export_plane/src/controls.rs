@@ -48,6 +48,18 @@ impl ConceptExportControl {
     }
 
     /// Whether this control still authorises export at `now`.
+    ///
+    /// When [`time_bound`] is set the control is active for
+    /// `[created_at, created_at + time_bound)` — i.e. the boundary
+    /// instant `created_at + time_bound` is **inactive** (the
+    /// half-open interval). This matches
+    /// [`crate::profile::ApprovedConcept::is_expired`], which treats
+    /// `now == expires_at` as expired (boundary inclusive on the
+    /// "no longer valid" side). Both `is_expired` / `is_active`
+    /// therefore agree: the boundary instant is in the
+    /// no-longer-valid bucket.
+    ///
+    /// [`time_bound`]: ConceptExportControl::time_bound
     pub fn is_active(&self, now: DateTime<Utc>) -> bool {
         if !self.exportable {
             return false;
@@ -58,7 +70,7 @@ impl ConceptExportControl {
         let Ok(elapsed) = now.signed_duration_since(self.created_at).to_std() else {
             return true;
         };
-        elapsed <= bound
+        elapsed < bound
     }
 
     /// Whether `profile_id` is permitted by this control's

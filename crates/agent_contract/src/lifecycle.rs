@@ -94,9 +94,15 @@ pub struct AutoPromotionPolicy {
 
 impl Default for AutoPromotionPolicy {
     /// Default deny-by-default policy: nothing is auto-promotable.
+    ///
+    /// `min_confidence` is set to [`f64::INFINITY`] rather than a
+    /// magic-number sentinel like `1.1` so the value is honestly
+    /// unreachable for any finite confidence in `[0.0, 1.0]` and
+    /// the intent ("nothing matches") is explicit at the type
+    /// level.
     fn default() -> Self {
         Self {
-            min_confidence: 1.1, // unreachable upper bound — default = no auto-promotion
+            min_confidence: f64::INFINITY,
             min_corroboration: u32::MAX,
             max_sensitivity: SensitivityClass::Noise,
             require_human_for_critical: true,

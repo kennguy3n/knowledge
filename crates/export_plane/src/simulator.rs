@@ -121,11 +121,26 @@ impl<'a> PolicySimulator<'a> {
         // would emit; any summaries dropped by the cap are surfaced
         // both in `excluded_summaries` (with a stable reason) and as
         // a non-fatal warning on the `SimulationResult`.
-        let mut included_summaries: Vec<Uuid> = Vec::new();
-        let mut excluded_summaries: Vec<SimulatedExclusion> = self
+        //
+        // The registry's underlying iterator is a `HashMap` iterator
+        // and therefore non-deterministic. Two simulations of the
+        // same profile under the same policy must surface the same
+        // included/excluded summary ids, otherwise the preview is
+        // unauditable. Both buckets are sorted by `summary_id` before
+        // the cap is applied so the cut is stable across runs.
+        let mut exportable: Vec<&crate::controls::SummaryExportControl> =
+            self.controls.summaries().filter(|c| c.exportable).collect();
+        exportable.sort_by_key(|c| c.summary_id);
+        let mut blocked: Vec<&crate::controls::SummaryExportControl> = self
             .controls
             .summaries()
             .filter(|c| !c.exportable)
+            .collect();
+        blocked.sort_by_key(|c| c.summary_id);
+
+        let mut included_summaries: Vec<Uuid> = Vec::new();
+        let mut excluded_summaries: Vec<SimulatedExclusion> = blocked
+            .into_iter()
             .map(|c| SimulatedExclusion {
                 entity_id: c.summary_id,
                 reason: "summary control marked non-exportable".into(),
@@ -133,7 +148,7 @@ impl<'a> PolicySimulator<'a> {
             .collect();
         let mut warnings = decision.warnings;
         let mut capped = 0usize;
-        for c in self.controls.summaries().filter(|c| c.exportable) {
+        for c in exportable {
             if included_summaries.len() < self.policy.max_summaries {
                 included_summaries.push(c.summary_id);
             } else {
