@@ -160,6 +160,34 @@ fn member_mutations_rejected_on_suspended_tenant() {
 }
 
 #[test]
+fn removed_members_are_immutable_audit_artefacts() {
+    // Per the docs on `remove_member`, a removed membership row is
+    // kept around as an audit artefact. It must not be re-removed
+    // (so the removal timestamp stays single-valued) and its role
+    // must not be mutable (so the role history is monotonic). Both
+    // operations should error with `MemberAlreadyRemoved`.
+    let mut reg = TenantRegistry::new();
+    let id = reg.create("Acme Corp", TenantConfig::new()).unwrap();
+    let user = Uuid::new_v4();
+    reg.add_member(id, user, Relation::Admin).unwrap();
+    reg.remove_member(id, user).unwrap();
+    assert_eq!(
+        reg.get_member(id, user).unwrap().status,
+        TenantMemberStatus::Removed
+    );
+
+    let err = reg.update_role(id, user, Relation::Member).unwrap_err();
+    assert_eq!(err, TenantError::MemberAlreadyRemoved(user));
+
+    let err = reg.remove_member(id, user).unwrap_err();
+    assert_eq!(err, TenantError::MemberAlreadyRemoved(user));
+
+    // The role on the audit row is whatever it was at removal time,
+    // not the role we just tried to set.
+    assert_eq!(reg.get_member(id, user).unwrap().role, Relation::Admin);
+}
+
+#[test]
 fn list_members_filters_by_tenant() {
     let mut reg = TenantRegistry::new();
     let a = reg.create("A", TenantConfig::new()).unwrap();

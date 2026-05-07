@@ -36,6 +36,11 @@ pub enum TenantError {
     /// A user is not provisioned to this tenant.
     #[error("member not provisioned: {0}")]
     MemberNotProvisioned(Uuid),
+
+    /// The membership row exists but has already been removed; it
+    /// is kept around as an audit artefact and must not be mutated.
+    #[error("member already removed: {0}")]
+    MemberAlreadyRemoved(Uuid),
 }
 
 /// Convenience result alias.

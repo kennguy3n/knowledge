@@ -87,10 +87,17 @@ const SCHEMA_VERSION: i32 = 1;
 
 /// SQLCipher-backed persistence wrapper over [`ConceptGraph`].
 ///
-/// Every mutation (`add_node`, `add_edge`, `supersede_node`,
-/// `mark_contradiction`, `remove_node`) is mirrored to the database;
-/// [`PersistentConceptGraph::load_scope`] rehydrates the in-memory
+/// The following mutations are mirrored to the database via the
+/// typed wrappers on this struct: [`Self::add_node`],
+/// [`Self::add_edge`], [`Self::supersede_node`], and
+/// [`Self::save_node`]. [`Self::load_scope`] rehydrates the in-memory
 /// graph from disk, filtered by scope.
+///
+/// Other [`ConceptGraph`] mutations (e.g. `mark_contradiction`,
+/// `remove_node`) are reachable only through [`Self::graph_mut`] and
+/// are **not** mirrored to disk; callers that need such changes to
+/// survive a restart must follow up with [`Self::save_node`] or
+/// equivalent persistence calls.
 pub struct PersistentConceptGraph {
     graph: ConceptGraph,
     conn: Connection,

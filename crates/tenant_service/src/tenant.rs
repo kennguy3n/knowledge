@@ -179,7 +179,10 @@ impl TenantRegistry {
     /// Remove a member from `tenant_id`. The membership row is kept
     /// around with `status = Removed` so the audit log can prove the
     /// removal. Only `Active` tenants accept membership mutations —
-    /// see the docs on [`TenantRegistry::add_member`].
+    /// see the docs on [`TenantRegistry::add_member`]. Re-removing a
+    /// member that is already `Removed` is rejected with
+    /// [`TenantError::MemberAlreadyRemoved`] so the audit trail keeps
+    /// a single removal timestamp.
     pub fn remove_member(&mut self, tenant_id: TenantId, user_id: Uuid) -> Result<()> {
         self.require_active(tenant_id)?;
         let key = (tenant_id, user_id);
@@ -187,6 +190,9 @@ impl TenantRegistry {
             .members
             .get_mut(&key)
             .ok_or(TenantError::MemberNotProvisioned(user_id))?;
+        if member.status == TenantMemberStatus::Removed {
+            return Err(TenantError::MemberAlreadyRemoved(user_id));
+        }
         member.status = TenantMemberStatus::Removed;
         member.updated_at = Utc::now();
         Ok(())
@@ -194,7 +200,10 @@ impl TenantRegistry {
 
     /// Update a member's role. Only `Active` tenants accept
     /// membership mutations — see the docs on
-    /// [`TenantRegistry::add_member`].
+    /// [`TenantRegistry::add_member`]. Members whose status is
+    /// `Removed` are kept as audit artefacts only and cannot be
+    /// re-roled; calling [`TenantRegistry::update_role`] on them
+    /// returns [`TenantError::MemberAlreadyRemoved`].
     pub fn update_role(
         &mut self,
         tenant_id: TenantId,
@@ -207,6 +216,9 @@ impl TenantRegistry {
             .members
             .get_mut(&key)
             .ok_or(TenantError::MemberNotProvisioned(user_id))?;
+        if member.status == TenantMemberStatus::Removed {
+            return Err(TenantError::MemberAlreadyRemoved(user_id));
+        }
         member.role = role;
         member.updated_at = Utc::now();
         Ok(())
