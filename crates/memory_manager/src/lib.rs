@@ -24,6 +24,7 @@
 
 #![deny(missing_docs)]
 
+pub mod channel_memory;
 pub mod decay;
 pub mod error;
 pub mod object;
@@ -34,6 +35,10 @@ pub mod transitions;
 pub mod user_memory;
 pub mod working_memory;
 
+pub use channel_memory::{
+    ActiveTask, ChannelDecayReport, ChannelMemoryObject, Decision, OpenQuestion,
+    DEFAULT_COMPLETED_TASK_TTL_DAYS, DEFAULT_RESOLVED_QUESTION_TTL_DAYS,
+};
 pub use decay::{decay_sweep, DecaySweepReport};
 pub use error::{MemoryError, Result};
 pub use object::{MemoryObject, SensitivityClass};

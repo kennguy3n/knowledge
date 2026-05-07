@@ -135,7 +135,15 @@ impl LexiconExtractor {
     }
 }
 
-fn split_sentences(text: &str) -> Vec<&str> {
+/// One sentence and the punctuation that ended it (`'.'`, `'!'`,
+/// `'?'`, or `'\n'`).
+#[derive(Debug, Clone, Copy)]
+struct SentenceSlice<'a> {
+    text: &'a str,
+    terminator: Option<u8>,
+}
+
+fn split_sentences_with_terminator(text: &str) -> Vec<SentenceSlice<'_>> {
     let mut out = Vec::new();
     let mut start = 0;
     let bytes = text.as_bytes();
@@ -143,14 +151,272 @@ fn split_sentences(text: &str) -> Vec<&str> {
         if matches!(b, b'.' | b'!' | b'?' | b'\n') {
             let s = text[start..i].trim();
             if !s.is_empty() {
-                out.push(s);
+                out.push(SentenceSlice {
+                    text: s,
+                    terminator: Some(*b),
+                });
             }
             start = i + 1;
         }
     }
     let tail = text[start..].trim();
     if !tail.is_empty() {
-        out.push(tail);
+        out.push(SentenceSlice {
+            text: tail,
+            terminator: None,
+        });
+    }
+    out
+}
+
+/// Interrogative words that mark a sentence as a question even
+/// without a `?` terminator.
+const INTERROGATIVES: &[&str] = &[
+    "who", "what", "when", "where", "why", "how", "which", "whose", "whom",
+];
+
+fn looks_like_question(sentence: &str, terminator: Option<u8>) -> bool {
+    if terminator == Some(b'?') {
+        return true;
+    }
+    let lower = sentence.trim().to_lowercase();
+    let first = lower
+        .split(|c: char| !c.is_alphabetic())
+        .find(|s| !s.is_empty())
+        .unwrap_or("");
+    INTERROGATIVES.contains(&first)
+}
+
+fn extract_urls(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut idx = 0;
+    while idx < text.len() {
+        let rest = &text[idx..];
+        let candidate_offset = ["http://", "https://"]
+            .iter()
+            .filter_map(|prefix| rest.find(prefix).map(|p| (p, prefix.len())))
+            .min_by_key(|(p, _)| *p);
+        let Some((rel, _prefix_len)) = candidate_offset else {
+            break;
+        };
+        let abs_start = idx + rel;
+        let after = &text[abs_start..];
+        let url_end = after
+            .find(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ')' || c == ']')
+            .map_or(after.len(), |e| e);
+        let mut url = &after[..url_end];
+        // Trim trailing punctuation that is unlikely to be part of
+        // the URL (`.` / `!` / `?` / `\"` / `'`).
+        while let Some(last) = url.chars().last() {
+            if matches!(last, '.' | '!' | '?' | '"' | '\'') {
+                url = &url[..url.len() - last.len_utf8()];
+            } else {
+                break;
+            }
+        }
+        if url.len() > 8 {
+            out.push(url.to_string());
+        }
+        idx = abs_start + url_end;
+    }
+    out
+}
+
+fn extract_emails(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for token in
+        text.split(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == '<' || c == '>')
+    {
+        let token =
+            token.trim_matches(|c: char| matches!(c, '.' | '!' | '?' | '"' | '\'' | '(' | ')'));
+        let Some(at) = token.find('@') else { continue };
+        if at == 0 || at == token.len() - 1 {
+            continue;
+        }
+        let local = &token[..at];
+        let domain = &token[at + 1..];
+        if !local
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'))
+        {
+            continue;
+        }
+        if !domain.contains('.') {
+            continue;
+        }
+        if !domain
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        {
+            continue;
+        }
+        out.push(token.to_string());
+    }
+    out
+}
+
+const MONTH_TOKENS: &[&str] = &[
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "sept",
+    "oct",
+    "nov",
+    "dec",
+];
+
+const DAY_TOKENS: &[&str] = &[
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    "today",
+    "tomorrow",
+    "yesterday",
+];
+
+const RELATIVE_DATE_PHRASES: &[&str] = &[
+    "next week",
+    "last week",
+    "next month",
+    "last month",
+    "next quarter",
+];
+
+fn extract_date_refs(text: &str) -> Vec<String> {
+    let lower = text.to_lowercase();
+    let mut out = Vec::new();
+
+    // Multi-word relative phrases first.
+    for phrase in RELATIVE_DATE_PHRASES {
+        if let Some(idx) = lower.find(phrase) {
+            let original = &text[idx..idx + phrase.len()];
+            out.push(original.to_string());
+        }
+    }
+
+    // "by Friday", "on Monday", etc.
+    for token in lower.split(|c: char| !c.is_alphanumeric()) {
+        if DAY_TOKENS.contains(&token) {
+            // Re-extract with original casing by searching.
+            if let Some(idx) = lower.find(token) {
+                out.push(text[idx..idx + token.len()].to_string());
+            }
+        }
+        if MONTH_TOKENS.contains(&token) {
+            if let Some(idx) = lower.find(token) {
+                out.push(text[idx..idx + token.len()].to_string());
+            }
+        }
+    }
+
+    // "Q3 2026" / "Q1 2027" style.
+    let mut i = 0;
+    let bytes = lower.as_bytes();
+    while i + 2 <= bytes.len() {
+        if (bytes[i] == b'q') && bytes[i + 1].is_ascii_digit() {
+            let q_digit = bytes[i + 1];
+            if matches!(q_digit, b'1' | b'2' | b'3' | b'4') {
+                let mut j = i + 2;
+                while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                    j += 1;
+                }
+                let mut k = j;
+                while k < bytes.len() && bytes[k].is_ascii_digit() {
+                    k += 1;
+                }
+                if k - j == 4 {
+                    out.push(text[i..k].to_string());
+                    i = k;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn extract_numeric_refs(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // `$5M`, `$50,000`, `$2.5B`.
+        if bytes[i] == b'$' {
+            let mut j = i + 1;
+            while j < bytes.len()
+                && (bytes[j].is_ascii_digit() || bytes[j] == b',' || bytes[j] == b'.')
+            {
+                j += 1;
+            }
+            if j < bytes.len() && matches!(bytes[j], b'k' | b'K' | b'm' | b'M' | b'b' | b'B') {
+                j += 1;
+            }
+            if j > i + 1 {
+                out.push(text[i..j].to_string());
+            }
+            i = j;
+            continue;
+        }
+        // Numeric + unit (`3 sprints`, `2 weeks`, `48h`).
+        if bytes[i].is_ascii_digit() {
+            let mut j = i;
+            while j < bytes.len()
+                && (bytes[j].is_ascii_digit() || bytes[j] == b',' || bytes[j] == b'.')
+            {
+                j += 1;
+            }
+            // Optional whitespace then a unit word.
+            let after_num = j;
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            let mut k = j;
+            while k < bytes.len() && bytes[k].is_ascii_alphabetic() {
+                k += 1;
+            }
+            if k > j && (k - j) >= 1 {
+                let unit = text[j..k].to_lowercase();
+                let units = [
+                    "sprint", "sprints", "week", "weeks", "day", "days", "month", "months",
+                    "quarter", "quarters", "hour", "hours", "minute", "minutes", "h", "min",
+                    "users", "people", "tickets", "issues", "pr", "prs", "%", "percent",
+                ];
+                if units.iter().any(|u| u == &unit.as_str()) {
+                    out.push(text[i..k].to_string());
+                    i = k;
+                    continue;
+                }
+            }
+            // Lone number like `42`. Skip — too noisy.
+            i = after_num;
+            continue;
+        }
+        i += 1;
     }
     out
 }
@@ -209,17 +475,19 @@ fn extract_capitalised_words(text: &str, stop_words: &[String]) -> Vec<String> {
 impl ObservationExtractor for LexiconExtractor {
     fn extract(&self, text: &str, scope: ScopeId) -> Vec<Observation> {
         let mut out = Vec::new();
+        let mut seen_entities: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // Entity extraction over the entire input.
         for mention in extract_at_mentions(text) {
-            out.push(Observation::new_candidate(
-                ObservationType::Entity,
-                mention,
-                scope,
-                0.85,
-            ));
+            if seen_entities.insert(mention.clone()) {
+                out.push(Observation::new_candidate(
+                    ObservationType::Entity,
+                    mention,
+                    scope,
+                    0.85,
+                ));
+            }
         }
-        let mut seen_entities = std::collections::HashSet::new();
         for word in extract_capitalised_words(text, &self.stop_words) {
             if seen_entities.insert(word.clone()) {
                 out.push(Observation::new_candidate(
@@ -230,9 +498,51 @@ impl ObservationExtractor for LexiconExtractor {
                 ));
             }
         }
+        for url in extract_urls(text) {
+            if seen_entities.insert(url.clone()) {
+                out.push(Observation::new_candidate(
+                    ObservationType::Entity,
+                    url,
+                    scope,
+                    0.9,
+                ));
+            }
+        }
+        for email in extract_emails(text) {
+            if seen_entities.insert(email.clone()) {
+                out.push(Observation::new_candidate(
+                    ObservationType::Entity,
+                    email,
+                    scope,
+                    0.9,
+                ));
+            }
+        }
+        for date_ref in extract_date_refs(text) {
+            if seen_entities.insert(date_ref.clone()) {
+                out.push(Observation::new_candidate(
+                    ObservationType::Entity,
+                    date_ref,
+                    scope,
+                    0.6,
+                ));
+            }
+        }
+        for numeric in extract_numeric_refs(text) {
+            if seen_entities.insert(numeric.clone()) {
+                out.push(Observation::new_candidate(
+                    ObservationType::Entity,
+                    numeric,
+                    scope,
+                    0.7,
+                ));
+            }
+        }
 
-        // Sentence-level extraction for tasks / decisions / facts.
-        for sentence in split_sentences(text) {
+        // Sentence-level extraction for tasks / decisions / questions
+        // / facts.
+        for slice in split_sentences_with_terminator(text) {
+            let sentence = slice.text;
             let lower = sentence.to_lowercase();
             if lower_contains_any(&lower, &self.decision_keywords) {
                 out.push(Observation::new_candidate(
@@ -254,8 +564,18 @@ impl ObservationExtractor for LexiconExtractor {
                 ));
                 continue;
             }
+            if looks_like_question(sentence, slice.terminator) {
+                out.push(Observation::new_candidate(
+                    ObservationType::Question,
+                    sentence.to_string(),
+                    scope,
+                    0.7,
+                ));
+                continue;
+            }
             // Anything sentence-shaped (>= 6 chars, contains a space) and
-            // not picked up as a task / decision is a Fact candidate.
+            // not picked up as a task / decision / question is a Fact
+            // candidate.
             if sentence.len() >= 6 && sentence.contains(' ') {
                 out.push(Observation::new_candidate(
                     ObservationType::Fact,

@@ -30,9 +30,14 @@ fn extracts_capitalised_entities_dropping_stopwords() {
         .collect();
     assert!(entities.contains(&"Migration"));
     assert!(entities.contains(&"Acme"));
-    // "The" / "Friday" are stop-words and must not surface as entities.
+    // "The" is a capitalised-token stop-word and must not surface as
+    // an entity.
     assert!(!entities.contains(&"The"));
-    assert!(!entities.contains(&"Friday"));
+    // "Friday" is intentionally surfaced as a *date-ref* entity by
+    // the Phase-2 hardening — the capitalised-token stop-word list
+    // still filters it out of the capitalised-token pass, but
+    // [`extract_date_refs`] picks it up.
+    assert!(entities.contains(&"Friday"));
 }
 
 #[test]
@@ -90,6 +95,183 @@ fn follow_up_phrasings_are_detected_as_tasks() {
             "lexicon must surface a task for: {line:?}",
         );
     }
+}
+
+#[test]
+fn empty_input_yields_no_observations() {
+    let scope = ScopeId::new_v4();
+    assert!(ext().extract("", scope).is_empty());
+}
+
+#[test]
+fn whitespace_only_input_yields_no_observations() {
+    let scope = ScopeId::new_v4();
+    assert!(ext().extract("   \t\n  ", scope).is_empty());
+}
+
+#[test]
+fn leading_and_trailing_whitespace_is_handled() {
+    let scope = ScopeId::new_v4();
+    let obs = ext().extract("\n\n   The Migration ships Friday.\n\n", scope);
+    assert!(obs.iter().any(|o| o.content == "Migration"));
+}
+
+#[test]
+fn very_long_input_is_processed_without_panic() {
+    let scope = ScopeId::new_v4();
+    let mut text = String::new();
+    for _ in 0..400 {
+        text.push_str("The Project ships next Friday with Acme. ");
+    }
+    assert!(text.len() > 10_000);
+    let obs = ext().extract(&text, scope);
+    assert!(!obs.is_empty());
+}
+
+#[test]
+fn input_with_only_urls_extracts_url_entities() {
+    let scope = ScopeId::new_v4();
+    let obs = ext().extract(
+        "https://example.com/path/to/doc and http://acme.io/post.",
+        scope,
+    );
+    let urls: Vec<_> = obs
+        .iter()
+        .filter(|o| o.observation_type == ObservationType::Entity)
+        .filter(|o| o.content.starts_with("http"))
+        .map(|o| o.content.clone())
+        .collect();
+    assert!(urls.iter().any(|u| u.starts_with("https://example.com")));
+    assert!(urls.iter().any(|u| u.starts_with("http://acme.io")));
+}
+
+#[test]
+fn email_addresses_are_extracted_as_entities() {
+    let scope = ScopeId::new_v4();
+    let obs = ext().extract(
+        "Reach out to alice@example.com or bob.jones+foo@acme.co",
+        scope,
+    );
+    let emails: Vec<_> = obs
+        .iter()
+        .filter(|o| o.observation_type == ObservationType::Entity)
+        .filter(|o| o.content.contains('@') && !o.content.starts_with('@'))
+        .map(|o| o.content.clone())
+        .collect();
+    assert!(emails.iter().any(|e| e == "alice@example.com"));
+    assert!(emails.iter().any(|e| e == "bob.jones+foo@acme.co"));
+}
+
+#[test]
+fn input_with_only_at_mentions_extracts_mention_entities() {
+    let scope = ScopeId::new_v4();
+    let obs = ext().extract("@alice @bob @charlie", scope);
+    let mentions: Vec<_> = obs
+        .iter()
+        .filter(|o| o.content.starts_with('@'))
+        .map(|o| o.content.clone())
+        .collect();
+    assert!(mentions.contains(&"@alice".to_string()));
+    assert!(mentions.contains(&"@bob".to_string()));
+    assert!(mentions.contains(&"@charlie".to_string()));
+}
+
+#[test]
+fn date_time_references_are_picked_up() {
+    let scope = ScopeId::new_v4();
+    let obs = ext().extract("Ship by Friday or sometime in Q3 2026 next month.", scope);
+    let dates: Vec<_> = obs
+        .iter()
+        .filter(|o| o.observation_type == ObservationType::Entity)
+        .map(|o| o.content.as_str())
+        .collect();
+    assert!(dates.contains(&"Friday"));
+    assert!(dates.iter().any(|d| d.starts_with("Q3")));
+    assert!(dates.iter().any(|d| d.contains("month")));
+}
+
+#[test]
+fn numeric_references_with_units_are_extracted() {
+    let scope = ScopeId::new_v4();
+    let obs = ext().extract("Need a $5M budget over 3 sprints; review 48h later.", scope);
+    let numerics: Vec<_> = obs
+        .iter()
+        .filter(|o| o.observation_type == ObservationType::Entity)
+        .map(|o| o.content.as_str())
+        .collect();
+    assert!(numerics.iter().any(|n| n.starts_with("$5")));
+    assert!(numerics.iter().any(|n| n.contains("sprints")));
+}
+
+#[test]
+fn questions_are_detected_via_question_mark() {
+    let scope = ScopeId::new_v4();
+    let obs = ext().extract("Who owns the API rollout?", scope);
+    assert!(obs
+        .iter()
+        .any(|o| o.observation_type == ObservationType::Question));
+}
+
+#[test]
+fn questions_are_detected_via_interrogative_word() {
+    let scope = ScopeId::new_v4();
+    let obs = ext().extract("How do we ship the migration", scope);
+    assert!(obs
+        .iter()
+        .any(|o| o.observation_type == ObservationType::Question));
+}
+
+#[test]
+fn multiline_input_emits_per_line_observations() {
+    let scope = ScopeId::new_v4();
+    let obs = ext().extract(
+        "TODO: draft the RFC\nWe approved the new policy\nWho owns the rollout?",
+        scope,
+    );
+    assert!(obs
+        .iter()
+        .any(|o| o.observation_type == ObservationType::Task));
+    assert!(obs
+        .iter()
+        .any(|o| o.observation_type == ObservationType::Decision));
+    assert!(obs
+        .iter()
+        .any(|o| o.observation_type == ObservationType::Question));
+}
+
+#[test]
+fn unicode_and_emoji_input_does_not_panic() {
+    let scope = ScopeId::new_v4();
+    let obs = ext().extract(
+        "We agreed 🚀 to ship Friday.\nSchedule a review with Аня.",
+        scope,
+    );
+    // We don't assert specifics — only that the extractor returns
+    // without panicking and produces *some* observations.
+    assert!(!obs.is_empty());
+}
+
+#[test]
+fn mixed_case_keywords_still_match() {
+    let scope = ScopeId::new_v4();
+    let obs = ext().extract("WE DECIDED to ship. ToDo: update the docs.", scope);
+    assert!(obs
+        .iter()
+        .any(|o| o.observation_type == ObservationType::Decision));
+    assert!(obs
+        .iter()
+        .any(|o| o.observation_type == ObservationType::Task));
+}
+
+#[test]
+fn duplicate_entities_are_deduplicated_within_a_pass() {
+    let scope = ScopeId::new_v4();
+    let obs = ext().extract("Acme. Acme. Acme.", scope);
+    let acme_count = obs
+        .iter()
+        .filter(|o| o.observation_type == ObservationType::Entity && o.content == "Acme")
+        .count();
+    assert_eq!(acme_count, 1);
 }
 
 #[test]
