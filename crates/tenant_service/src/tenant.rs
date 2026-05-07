@@ -154,24 +154,19 @@ impl TenantRegistry {
         Ok(())
     }
 
-    /// Provision a member for `tenant_id` with `role`.
+    /// Provision a member for `tenant_id` with `role`. Only `Active`
+    /// tenants accept membership mutations — `Suspended` tenants
+    /// freeze membership per the lifecycle docs at
+    /// `crate::lifecycle::TenantStatus::Suspended`, and `Deleted`
+    /// tenants reject everything because the root key reference has
+    /// been destroyed.
     pub fn add_member(
         &mut self,
         tenant_id: TenantId,
         user_id: Uuid,
         role: Relation,
     ) -> Result<TenantMember> {
-        // Reject if tenant is unknown / deleted.
-        let tenant = self
-            .tenants
-            .get(&tenant_id)
-            .ok_or(TenantError::NotFound(tenant_id.0))?;
-        if tenant.status == TenantStatus::Deleted {
-            return Err(TenantError::InvalidLifecycleTransition {
-                from: TenantStatus::Deleted,
-                to: TenantStatus::Active,
-            });
-        }
+        self.require_active(tenant_id)?;
         let key = (tenant_id, user_id);
         if self.members.contains_key(&key) {
             return Err(TenantError::MemberAlreadyProvisioned(user_id));
@@ -183,8 +178,10 @@ impl TenantRegistry {
 
     /// Remove a member from `tenant_id`. The membership row is kept
     /// around with `status = Removed` so the audit log can prove the
-    /// removal.
+    /// removal. Only `Active` tenants accept membership mutations —
+    /// see the docs on [`TenantRegistry::add_member`].
     pub fn remove_member(&mut self, tenant_id: TenantId, user_id: Uuid) -> Result<()> {
+        self.require_active(tenant_id)?;
         let key = (tenant_id, user_id);
         let member = self
             .members
@@ -195,13 +192,16 @@ impl TenantRegistry {
         Ok(())
     }
 
-    /// Update a member's role.
+    /// Update a member's role. Only `Active` tenants accept
+    /// membership mutations — see the docs on
+    /// [`TenantRegistry::add_member`].
     pub fn update_role(
         &mut self,
         tenant_id: TenantId,
         user_id: Uuid,
         role: Relation,
     ) -> Result<()> {
+        self.require_active(tenant_id)?;
         let key = (tenant_id, user_id);
         let member = self
             .members
@@ -209,6 +209,23 @@ impl TenantRegistry {
             .ok_or(TenantError::MemberNotProvisioned(user_id))?;
         member.role = role;
         member.updated_at = Utc::now();
+        Ok(())
+    }
+
+    /// Helper: look up `tenant_id` and reject anything that is not
+    /// [`TenantStatus::Active`]. Reused by every membership mutator
+    /// so the lifecycle check stays in one place.
+    fn require_active(&self, tenant_id: TenantId) -> Result<()> {
+        let tenant = self
+            .tenants
+            .get(&tenant_id)
+            .ok_or(TenantError::NotFound(tenant_id.0))?;
+        if tenant.status != TenantStatus::Active {
+            return Err(TenantError::InvalidLifecycleTransition {
+                from: tenant.status,
+                to: TenantStatus::Active,
+            });
+        }
         Ok(())
     }
 

@@ -123,6 +123,43 @@ fn add_member_to_deleted_tenant_is_rejected() {
 }
 
 #[test]
+fn member_mutations_rejected_on_suspended_tenant() {
+    // Per `TenantStatus::Suspended` docs ("no synthesis, no member
+    // changes, no connector traffic"), every membership mutator must
+    // refuse while the tenant is suspended.
+    let mut reg = TenantRegistry::new();
+    let id = reg.create("Acme Corp", TenantConfig::new()).unwrap();
+    let user = Uuid::new_v4();
+    reg.add_member(id, user, Relation::Admin).unwrap();
+    reg.suspend(id).unwrap();
+
+    let err = reg
+        .add_member(id, Uuid::new_v4(), Relation::Member)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        TenantError::InvalidLifecycleTransition { .. }
+    ));
+
+    let err = reg.update_role(id, user, Relation::Member).unwrap_err();
+    assert!(matches!(
+        err,
+        TenantError::InvalidLifecycleTransition { .. }
+    ));
+
+    let err = reg.remove_member(id, user).unwrap_err();
+    assert!(matches!(
+        err,
+        TenantError::InvalidLifecycleTransition { .. }
+    ));
+
+    // Reactivation re-opens the membership surface.
+    reg.activate(id).unwrap();
+    reg.update_role(id, user, Relation::Member).unwrap();
+    reg.remove_member(id, user).unwrap();
+}
+
+#[test]
 fn list_members_filters_by_tenant() {
     let mut reg = TenantRegistry::new();
     let a = reg.create("A", TenantConfig::new()).unwrap();

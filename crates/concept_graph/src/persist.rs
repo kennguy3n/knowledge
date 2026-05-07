@@ -131,18 +131,23 @@ impl PersistentConceptGraph {
             .query_row("SELECT 1", [], |row| row.get(0))
             .map_err(|_| GraphError::Persistence("SQLCipher key did not unlock the database"))?;
 
-        conn.execute_batch(SCHEMA_SQL).map_err(GraphError::Sqlite)?;
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)
-            .map_err(GraphError::Sqlite)?;
-
-        let version: i32 = conn
+        // Read the existing version *before* applying the schema or
+        // stamping a new version. A `user_version` of `0` is the
+        // SQLite default for a fresh database and means "no schema
+        // applied yet"; anything non-zero must match `SCHEMA_VERSION`
+        // exactly or we refuse to open.
+        let existing_version: i32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
-            .unwrap_or(SCHEMA_VERSION);
-        if version != SCHEMA_VERSION {
+            .unwrap_or(0);
+        if existing_version != 0 && existing_version != SCHEMA_VERSION {
             return Err(GraphError::Persistence(
                 "schema version mismatch — refusing to open",
             ));
         }
+
+        conn.execute_batch(SCHEMA_SQL).map_err(GraphError::Sqlite)?;
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+            .map_err(GraphError::Sqlite)?;
 
         Ok(Self {
             graph: ConceptGraph::new(),
