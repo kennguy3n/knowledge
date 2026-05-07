@@ -196,17 +196,28 @@ impl ConceptGraph {
         if a == b {
             return Err(GraphError::SelfContradiction(a.0));
         }
+        // Validate both endpoints exist *before* mutating either —
+        // mirrors the pattern in [`Self::supersede_node`]. Without
+        // this check, a missing `b` would leave `a` partially
+        // mutated (state = Contradicted, dangling `superseded_by`
+        // pointer) before the error is surfaced to the caller.
+        if !self.nodes.contains_key(&a) {
+            return Err(GraphError::node_not_found(a));
+        }
+        if !self.nodes.contains_key(&b) {
+            return Err(GraphError::node_not_found(b));
+        }
         let (a_scope, b_scope) = {
             let na = self
                 .nodes
                 .get_mut(&a)
-                .ok_or(GraphError::node_not_found(a))?;
+                .expect("checked above with contains_key");
             na.mark_contradicted_by(b);
             let a_scope = na.scope_id;
             let nb = self
                 .nodes
                 .get_mut(&b)
-                .ok_or(GraphError::node_not_found(b))?;
+                .expect("checked above with contains_key");
             nb.mark_contradicted_by(a);
             (a_scope, nb.scope_id)
         };
