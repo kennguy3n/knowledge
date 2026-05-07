@@ -474,13 +474,38 @@ impl ProposalStore {
     ///
     /// Used by tests and by upstream connectors to record that an
     /// independent evidence source produced the same claim.
+    ///
+    /// Like [`Self::review`], this method refuses to mutate a
+    /// proposal that has already reached a terminal state
+    /// ([`ProposalState::Promoted`] or [`ProposalState::Rejected`])
+    /// or whose TTL has elapsed. A call against an expired proposal
+    /// flips it to [`ProposalState::Rejected`] (with reason
+    /// `"ttl_expired"`) and returns [`LifecycleError::Expired`] —
+    /// matching the behaviour of [`Self::review`] so the substrate
+    /// can never end up with a corroboration count silently bumped
+    /// after the TTL has passed or after the proposal has already
+    /// been promoted/rejected.
     pub fn record_corroboration(&mut self, id: Uuid) -> Result<(), LifecycleError> {
+        let now = Utc::now();
         let p = self
             .proposals
             .get_mut(&id)
             .ok_or(LifecycleError::NotFound(id))?;
+        if p.state.is_terminal() {
+            return Err(LifecycleError::InvalidTransition {
+                id,
+                from: p.state.as_str(),
+                to: "corroborated",
+            });
+        }
+        if p.is_expired(now) {
+            p.state = ProposalState::Rejected;
+            p.updated_at = now;
+            p.rejection_reason = Some("ttl_expired".into());
+            return Err(LifecycleError::Expired(id));
+        }
         p.corroboration_count = p.corroboration_count.saturating_add(1);
-        p.updated_at = Utc::now();
+        p.updated_at = now;
         Ok(())
     }
 
@@ -562,6 +587,26 @@ impl ProposalStore {
 
     /// Reject a proposal. Allowed from either
     /// [`ProposalState::Proposed`] or [`ProposalState::UnderReview`].
+    ///
+    /// The documented "happy path" is
+    /// `Proposed → UnderReview → Rejected`, but this method also
+    /// accepts a direct `Proposed → Rejected` transition. Two
+    /// real-world callers depend on that:
+    ///
+    /// 1. **Operator override** — a human reviewer triages a freshly
+    ///    submitted proposal as obvious spam / duplicate / out-of-scope
+    ///    without spending a `review` call on it first. Forcing them
+    ///    through `UnderReview` would generate a meaningless audit row.
+    /// 2. **TTL-expiry path** — [`Self::review`] and
+    ///    [`Self::record_corroboration`] both mark expired proposals
+    ///    `Rejected` directly from `Proposed`; matching that here
+    ///    keeps the state-machine boundary the same regardless of
+    ///    which mutation method first observes the expiry.
+    ///
+    /// Terminal states ([`ProposalState::Promoted`] /
+    /// [`ProposalState::Rejected`]) are still rejected — the guard
+    /// only widens the *valid* incoming states, not the terminal
+    /// invariant.
     pub fn reject(&mut self, id: Uuid, reason: impl Into<String>) -> Result<(), LifecycleError> {
         let p = self
             .proposals
@@ -1072,6 +1117,54 @@ mod tests {
         // Terminal state must be preserved.
         assert_eq!(store.get(id).unwrap().state, ProposalState::Promoted);
         assert!(store.get(id).unwrap().rejection_reason.is_none());
+    }
+
+    #[test]
+    fn record_corroboration_does_not_bump_after_ttl_expires() {
+        // Regression for F-10: an expired proposal could previously
+        // have its corroboration count silently bumped because
+        // `record_corroboration` had no TTL guard. The mutation path
+        // now mirrors `review` — expiry flips the proposal to
+        // `Rejected` (with reason `"ttl_expired"`) and the call
+        // returns `LifecycleError::Expired` without touching the
+        // count.
+        let mut store = ProposalStore::new();
+        let mut p = fixture_observation(0.9, SensitivityClass::Useful);
+        p.ttl = Some(Duration::from_secs(1));
+        let id = store.submit_observation(p).expect("submit");
+        let count_before = store.get(id).unwrap().corroboration_count;
+
+        // Pre-date so the TTL has already elapsed.
+        store.proposals.get_mut(&id).unwrap().submitted_at =
+            Utc::now() - chrono::Duration::seconds(60);
+
+        let err = store.record_corroboration(id).unwrap_err();
+        assert_eq!(err, LifecycleError::Expired(id));
+        let stored = store.get(id).unwrap();
+        assert_eq!(stored.state, ProposalState::Rejected);
+        assert_eq!(stored.corroboration_count, count_before);
+        assert_eq!(stored.rejection_reason.as_deref(), Some("ttl_expired"));
+    }
+
+    #[test]
+    fn record_corroboration_does_not_mutate_terminal_state() {
+        // Regression for F-10: terminal proposals (`Promoted` /
+        // `Rejected`) are inviolable on the corroboration path too,
+        // so a stale connector replay cannot bump the count of an
+        // already-promoted proposal or an already-rejected one.
+        let mut store = ProposalStore::new();
+        let id = store
+            .submit_observation(fixture_observation(0.9, SensitivityClass::Useful))
+            .expect("submit");
+        store.review(id, &permissive_policy()).expect("review");
+        assert_eq!(store.get(id).unwrap().state, ProposalState::Promoted);
+        let count_before = store.get(id).unwrap().corroboration_count;
+
+        let err = store.record_corroboration(id).unwrap_err();
+        assert!(matches!(err, LifecycleError::InvalidTransition { .. }));
+        let stored = store.get(id).unwrap();
+        assert_eq!(stored.state, ProposalState::Promoted);
+        assert_eq!(stored.corroboration_count, count_before);
     }
 
     #[test]
