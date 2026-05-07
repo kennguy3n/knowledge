@@ -1,0 +1,27 @@
+[package]
+name = "evidence_store"
+description = "SQLCipher-backed encrypted evidence store with content-hash deduplication, ring buffer, and lexicon-only importance classifier."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+crypto = { path = "../crypto" }
+
+thiserror = { workspace = true }
+uuid = { workspace = true }
+rusqlite = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }
+rand = { workspace = true }
+rand_core = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

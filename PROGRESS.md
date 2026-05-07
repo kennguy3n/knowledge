@@ -1,6 +1,6 @@
 # Knowledge — Progress Tracker
 
-Last updated: 2026-05-06
+Last updated: 2026-05-07
 
 This tracker captures per-phase deliverable status and a
 chronological changelog for the Knowledge substrate. Phase scope
@@ -8,8 +8,12 @@ is defined in [PHASES.md](./PHASES.md); architectural detail
 lives in [ARCHITECTURE.md](./ARCHITECTURE.md); the product thesis
 lives in [PROPOSAL.md](./PROPOSAL.md).
 
-This is the initial project setup. Development begins with
-Phase 0 — no implementation work has shipped yet.
+Phase 0 implementation has begun. The Rust workspace skeleton, the
+post-quantum `crypto` crate, the SQLCipher-backed `evidence_store`,
+the lexicon-only importance classifier, the unit + integration test
+suite, and the CI pipeline are in place; what remains in Phase 0
+is the SLM-backed importance classifier (Bonsai-1.7B) and the
+iOS / Android / macOS / Windows platform bindings.
 
 ---
 
@@ -17,7 +21,7 @@ Phase 0 — no implementation work has shipped yet.
 
 | Phase | Status | Progress |
 |-------|--------|----------|
-| Phase 0: Foundation | Not started | 0% |
+| Phase 0: Foundation | In progress | ~64% (7 of 11) |
 | Phase 1: Personal Memory (on-device) | Not started | 0% |
 | Phase 2: Channel Memory (on-device + shared) | Not started | 0% |
 | Phase 3: Domain & Tenant Memory (B2B server) | Not started | 0% |
@@ -30,17 +34,17 @@ Phase 0 — no implementation work has shipped yet.
 
 ## Phase 0 — Foundation
 
-- [ ] Rust shared core skeleton — `evidence_store`, `crypto`, `sync_engine` modules
-- [ ] SQLCipher local store with post-quantum key derivation (hybrid X25519 + ML-KEM-768 unwrap)
-- [ ] Evidence plane — append-only encrypted message / file / chunk ingestion
-- [ ] Content-hash deduplication (BLAKE3)
+- [x] Rust shared core skeleton — `evidence_store`, `crypto`, `sync_engine` modules
+- [x] SQLCipher local store with post-quantum key derivation (hybrid X25519 + ML-KEM-768 unwrap)
+- [x] Evidence plane — append-only encrypted message / file / chunk ingestion
+- [x] Content-hash deduplication (BLAKE3)
 - [ ] Basic on-device importance classifier via Bonsai-1.7B + the shared `llama-server` from the PrismML [`kennguy3n/llama.cpp@prism`](https://github.com/kennguy3n/llama.cpp/tree/prism) fork
-- [ ] Lexicon-only fallback when the SLM is not available
+- [x] Lexicon-only fallback when the SLM is not available
 - [ ] iOS framework binding (UniFFI `.xcframework`)
 - [ ] Android JNI binding (`.so` per ABI)
 - [ ] macOS / Windows N-API addon binding
-- [ ] Unit test suite covering `evidence_store`, `crypto`, importance classifier
-- [ ] CI: lint + unit tests + multi-target build
+- [x] Unit test suite covering `evidence_store`, `crypto`, importance classifier
+- [x] CI: lint + unit tests + multi-target build
 
 ---
 
@@ -152,4 +156,5 @@ Phase 0 — no implementation work has shipped yet.
 
 | Date | Change |
 |------|--------|
+| 2026-05-07 | **Phase 0 — Foundation, first delivery.** Landed the Cargo workspace at the repo root with three library crates (`crates/crypto`, `crates/evidence_store`, `crates/sync_engine`). Implemented the post-quantum `crypto` crate: BLAKE3 content hashing, XChaCha20-Poly1305 AEAD, HKDF-SHA256 key derivation, and a hybrid X25519 + ML-KEM-768 KEM with a concatenate-then-KDF combiner — both halves real, ML-KEM-768 via the RustCrypto `ml-kem` crate behind a swappable `KemBackend` trait. Implemented the SQLCipher-backed `evidence_store` crate: schema with `evidence` (append-only via triggers), `body_store` (BLAKE3-keyed dedup with `ref_count`), `ring_buffer` (FIFO eviction at a configurable cap, default 5 MB), and an `evidence_fts` FTS5 virtual table with the substrate-canonical `unicode61 remove_diacritics 2` tokenizer. Built the size-threshold storage router (inline `≤ 512 B`, body-table `> 512 B`, ring-buffer for noise) and the per-scope-keyed AEAD ingestion pipeline. Added a lexicon-only `ImportanceClassifier` trait + `LexiconClassifier` Phase-0 fallback with a configurable lexicon (default English chat lexicon). Added a 53-test suite covering hashing, AEAD round-trip + tamper-detection, KDF determinism, hybrid KEM round-trip, schema bootstrap, ingestion round-trip on every storage path, content-hash dedup ref-count, ring-buffer FIFO eviction + size-cap enforcement, FTS5 indexing + search, classifier behaviour, and the append-only invariant on `evidence`. Added `.github/workflows/ci.yml` running `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo build --all-targets`, and `cargo test --all` with cargo caching. Remaining Phase 0 items (SLM-backed importance classifier via Bonsai-1.7B, iOS / Android / macOS / Windows platform bindings) are out of scope for this delivery and tracked above. |
 | 2026-05-06 | **Initial project setup.** Replaced the empty `README.md` and added `PROPOSAL.md`, `ARCHITECTURE.md`, `PHASES.md`, and `PROGRESS.md`. Documents define the privacy-first continual knowledge / context substrate (B2C + B2B over one platform), the layered six-plane substrate (evidence → observation → semantic → reasoning → export → action), the six-stage memory model with decay state machine, the strict knowledge hierarchy (`user → community → channel` for B2C, `user → domain → channel` per tenant for B2B), the on-device model strategy referencing [`kennguy3n/slm-chat-demo`](https://github.com/kennguy3n/slm-chat-demo) (Bonsai-1.7B + XLM-R + device tiering), the modified llama.cpp inference runtime via [`kennguy3n/llama.cpp@prism`](https://github.com/kennguy3n/llama.cpp/tree/prism), the post-quantum crypto layer (hybrid X25519 + ML-KEM-768 KEM, ML-DSA-65 + SPHINCS+ signatures, post-quantum MLS), the connector inventory (Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, email), the three deployment modes (local-only / enterprise server-side / confidential-compute hybrid), the Zanzibar-style relation graph + cryptographic capability permission model with proposal-only agent writes, and the seven-phase delivery plan with a 30 / 60 / 90-day implementation timeline targeting Phases 0 → 2. No implementation work has shipped yet — development begins with Phase 0. |

@@ -23,6 +23,74 @@ see [PROPOSAL.md](./PROPOSAL.md), [ARCHITECTURE.md](./ARCHITECTURE.md),
 
 ---
 
+## Quick start
+
+The shared core is a Cargo workspace targeting **Rust 1.75+ (stable)**.
+Phase 0 ships the encrypted evidence plane and the post-quantum
+crypto primitives; the platform bindings and the SLM-backed importance
+classifier are tracked under Phase 0 in [PROGRESS.md](./PROGRESS.md)
+but not yet shipped.
+
+### Prerequisites
+
+- A stable Rust toolchain (`rustup install stable` and
+  `rustup component add clippy rustfmt`).
+- A C toolchain that can build the bundled SQLCipher + OpenSSL
+  sources used by `rusqlite`'s `bundled-sqlcipher-vendored-openssl`
+  feature (on Debian / Ubuntu: `sudo apt install build-essential`).
+
+### Build
+
+```bash
+cargo build --all-targets
+```
+
+The first build compiles `openssl-src` and SQLCipher and is therefore
+slow (a few minutes); incremental rebuilds are fast.
+
+### Test
+
+```bash
+cargo test --all
+```
+
+This runs the inline unit tests inside each crate and the integration
+test files under `crates/*/tests/`.
+
+### Lint
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+The CI pipeline (see `.github/workflows/ci.yml`) runs the same four
+commands on every push and pull request.
+
+## Project structure
+
+```
+knowledge/
+├── Cargo.toml                 # workspace manifest (Rust 1.75+, edition 2021)
+├── rustfmt.toml               # repo-wide formatting config
+├── crates/
+│   ├── crypto/                # post-quantum primitives (BLAKE3, XChaCha20-Poly1305,
+│   │                          #   HKDF-SHA256, hybrid X25519 + ML-KEM-768 KEM)
+│   ├── evidence_store/        # SQLCipher-backed encrypted evidence plane
+│   │                          #   (ingest, dedup, ring buffer, FTS5, classifier)
+│   └── sync_engine/           # CRDT delta sync — Phase 2 stub for now
+├── .github/workflows/ci.yml   # fmt + clippy + build + test on push / PR
+├── PROPOSAL.md                # product thesis
+├── ARCHITECTURE.md            # system architecture
+├── PHASES.md                  # phase 0 → 7 delivery plan
+└── PROGRESS.md                # per-phase checklist + changelog
+```
+
+Each crate's public API is documented in its `src/lib.rs`. Run
+`cargo doc --no-deps --open` to browse the rendered docs locally.
+
+---
+
 ## Two surfaces, one substrate
 
 Knowledge runs as two cooperating surfaces over a single shared
