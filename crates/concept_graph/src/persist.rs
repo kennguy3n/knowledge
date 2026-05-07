@@ -45,7 +45,7 @@ use std::path::Path;
 
 use rand::RngCore;
 use rusqlite::{params, Connection};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crypto::{decrypt_aead, derive_key, encrypt_aead, AeadKey, MasterKey, AEAD_NONCE_LEN};
 use evidence_store::ScopeId;
@@ -123,10 +123,16 @@ impl PersistentConceptGraph {
         let conn = Connection::open(path).map_err(GraphError::Sqlite)?;
 
         let mut page_key = derive_key(master_key, b"sqlcipher:concepts:v1")?;
-        let key_hex = hex_encode(&page_key);
+        // `Zeroizing<String>` zeroes the heap-allocated bytes when
+        // dropped — without this wrapper the hex-encoded SQLCipher
+        // page key would linger in freed heap memory after `String`'s
+        // default `Drop`. The same wrap is applied to the
+        // `format!("x'…'")` SQL pragma value below.
+        let key_hex: Zeroizing<String> = Zeroizing::new(hex_encode(&page_key));
         page_key.zeroize();
 
-        conn.pragma_update(None, "key", format!("x'{key_hex}'"))
+        let key_pragma: Zeroizing<String> = Zeroizing::new(format!("x'{}'", &*key_hex));
+        conn.pragma_update(None, "key", key_pragma.as_str())
             .map_err(GraphError::Sqlite)?;
         conn.pragma_update(None, "cipher_page_size", 4096_i64)
             .map_err(GraphError::Sqlite)?;
