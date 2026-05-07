@@ -148,6 +148,49 @@ fn persisted_counts_track_inserts() {
 }
 
 #[test]
+fn rescoped_node_save_lands_in_new_scope() {
+    // Regression for the `ON CONFLICT DO UPDATE SET` bug where the
+    // plaintext `scope_id` column lagged behind the AEAD payload.
+    // Mutating a node's `scope_id` through `graph_mut()` and then
+    // flushing via `save_node` re-encrypts the payload with the new
+    // scope's key and AAD; without `scope_id = excluded.scope_id` in
+    // the update set the row would have stayed under the old scope
+    // and become permanently unreadable.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("concepts.db");
+    let key = fixture_master_key();
+
+    let scope_a = ScopeId::new_v4();
+    let scope_b = ScopeId::new_v4();
+
+    let node_id = {
+        let mut g = PersistentConceptGraph::open(&path, &key).unwrap();
+        let id = g
+            .add_node(ConceptNode::new_candidate("rescope-me", "x", scope_a))
+            .unwrap();
+        // Mutate through `graph_mut()` (explicitly *not* mirrored)
+        // and then flush via `save_node` (the documented escape
+        // hatch). This is exactly the path that used to leave the
+        // row stranded under `scope_a`.
+        g.graph_mut().get_node_mut(id).unwrap().scope_id = scope_b;
+        g.save_node(id).unwrap();
+        id
+    };
+
+    let mut g = PersistentConceptGraph::open(&path, &key).unwrap();
+    let (n_b, _) = g.load_scope(scope_b).unwrap();
+    assert_eq!(n_b, 1, "node must be reachable under its new scope");
+    assert!(g.graph().get_node(node_id).is_some());
+
+    let mut g = PersistentConceptGraph::open(&path, &key).unwrap();
+    let (n_a, _) = g.load_scope(scope_a).unwrap();
+    assert_eq!(
+        n_a, 0,
+        "node must no longer be reachable under its old scope"
+    );
+}
+
+#[test]
 fn raw_sqlite_view_is_encrypted() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("concepts.db");

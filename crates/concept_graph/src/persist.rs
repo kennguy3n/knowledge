@@ -441,12 +441,21 @@ impl PersistentConceptGraph {
         let aad = node_aad(node.scope_id, node.id);
         let ct = encrypt_aead(&key, &nonce, &payload, &aad)?;
 
+        // `scope_id` is included in the update set because it is
+        // bound into the AEAD key and the AAD: if a caller mutates a
+        // node's `scope_id` through `graph_mut()` and then flushes
+        // via `save_node`, the row's `payload` and `nonce` are
+        // re-encrypted under the new scope's key + AAD. The plaintext
+        // `scope_id` column therefore has to follow the payload to the
+        // new scope, otherwise scope-filtered queries find the row
+        // under the old scope and fail to decrypt it.
         self.conn
             .execute(
                 "INSERT INTO concept_nodes
                   (id, scope_id, state, superseded_by, created_at, updated_at, nonce, payload)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(id) DO UPDATE SET
+                   scope_id = excluded.scope_id,
                    state = excluded.state,
                    superseded_by = excluded.superseded_by,
                    updated_at = excluded.updated_at,
@@ -475,12 +484,21 @@ impl PersistentConceptGraph {
         let aad = edge_aad(edge.scope_id, edge.id);
         let ct = encrypt_aead(&key, &nonce, &payload, &aad)?;
 
+        // Same rationale as `persist_node`: `scope_id` rides the AEAD
+        // key + AAD, so the plaintext column must follow the payload
+        // on update. `from_node` and `to_node` are the indexed
+        // traversal columns; if a caller mutates them via
+        // `graph_mut()` and re-saves, the indexes have to track the
+        // new endpoints or `get_edges` returns stale rows.
         self.conn
             .execute(
                 "INSERT INTO concept_edges
                   (id, scope_id, from_node, to_node, relation, created_at, nonce, payload)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(id) DO UPDATE SET
+                   scope_id = excluded.scope_id,
+                   from_node = excluded.from_node,
+                   to_node = excluded.to_node,
                    relation = excluded.relation,
                    nonce = excluded.nonce,
                    payload = excluded.payload",
