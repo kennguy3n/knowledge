@@ -11,12 +11,25 @@ use uuid::Uuid;
 
 use synthesis_pipeline::{
     build_domain_summary_object, build_tenant_summary_object, DomainSynthesisInput,
-    HierarchyEnforcedWindowManager, SynthesisWindowManager, TenantSynthesisInput,
+    HierarchyEnforcedWindowManager, PipelineError, SynthesisWindowManager, TenantSynthesisInput,
     TieredWindowHandle,
 };
 
 use crate::engine::{DomainSynthesisResult, SynthesisEngine, TenantSynthesisResult};
 use crate::error::{EngineError, Result};
+
+/// Map a [`PipelineError`] surfaced by hierarchy validation onto an
+/// [`EngineError`]. Only [`PipelineError::HierarchyViolation`] becomes
+/// [`EngineError::Hierarchy`]; every other variant (e.g.
+/// `WindowNotFound`, `InvalidWindowTransition`) is preserved as
+/// [`EngineError::Pipeline`] so downstream error matching stays
+/// consistent with the rest of the engine.
+fn map_validation_error(e: PipelineError) -> EngineError {
+    match e {
+        PipelineError::HierarchyViolation(msg) => EngineError::Hierarchy(msg),
+        other => EngineError::Pipeline(other),
+    }
+}
 
 /// Stub managed-endpoint synthesizer.
 #[derive(Debug, Clone, Default)]
@@ -43,7 +56,7 @@ impl SynthesisEngine for ManagedEndpointSynthesizer {
     ) -> Result<DomainSynthesisResult> {
         windows
             .validate_domain_input(&handle, &input)
-            .map_err(|e| EngineError::Hierarchy(format!("{e}")))?;
+            .map_err(map_validation_error)?;
         windows.mark_in_progress(handle.window_id)?;
 
         // Deterministic stub payload: `domain:` prefix + concatenated
@@ -74,7 +87,7 @@ impl SynthesisEngine for ManagedEndpointSynthesizer {
     ) -> Result<TenantSynthesisResult> {
         windows
             .validate_tenant_input(&handle, &input)
-            .map_err(|e| EngineError::Hierarchy(format!("{e}")))?;
+            .map_err(map_validation_error)?;
         windows.mark_in_progress(handle.window_id)?;
 
         let mut payload = b"tenant:".to_vec();
