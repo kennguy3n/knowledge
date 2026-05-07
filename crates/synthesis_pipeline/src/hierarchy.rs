@@ -375,6 +375,16 @@ impl HierarchyEnforcedWindowManager for SynthesisWindowManager {
         let window = self
             .get(handle.window_id)
             .ok_or(PipelineError::WindowNotFound(handle.window_id.0))?;
+        // Cross-check: `TieredWindowHandle` has public fields, so a
+        // caller can build (or mutate) a handle whose `window_id`
+        // points at scope S1 while `scope_id` claims S2. Refuse before
+        // the synthesis engine touches the wrong window's lifecycle.
+        if window.scope_id != handle.scope_id {
+            return Err(PipelineError::HierarchyViolation(format!(
+                "window {} belongs to scope {} but handle claims scope {}",
+                handle.window_id.0, window.scope_id, handle.scope_id,
+            )));
+        }
         if window.status == WindowStatus::Complete {
             return Err(PipelineError::InvalidWindowTransition);
         }
@@ -401,6 +411,14 @@ impl HierarchyEnforcedWindowManager for SynthesisWindowManager {
         let window = self
             .get(handle.window_id)
             .ok_or(PipelineError::WindowNotFound(handle.window_id.0))?;
+        // See `validate_domain_input` for the rationale; the same
+        // public-field smuggling concern applies at tenant tier.
+        if window.scope_id != handle.scope_id {
+            return Err(PipelineError::HierarchyViolation(format!(
+                "window {} belongs to scope {} but handle claims scope {}",
+                handle.window_id.0, window.scope_id, handle.scope_id,
+            )));
+        }
         if window.status == WindowStatus::Complete {
             return Err(PipelineError::InvalidWindowTransition);
         }
@@ -534,6 +552,43 @@ mod tests {
         let scope = ScopeId::new_v4();
         let channel_mem = ChannelMemoryObject::new(scope);
         let err = DomainSynthesisInput::reject_raw_channel_memory(&channel_mem).unwrap_err();
+        assert!(matches!(err, PipelineError::HierarchyViolation(_)));
+    }
+
+    #[test]
+    fn validate_domain_input_rejects_handle_pointing_at_other_scope_window() {
+        // `TieredWindowHandle` has public fields; a caller could
+        // build a handle whose `window_id` points at scope S1 while
+        // `scope_id` claims S2 (matching `input.domain_scope`). The
+        // validator must cross-check the underlying window's scope.
+        let domain_a = ScopeId::new_v4();
+        let domain_b = ScopeId::new_v4();
+        let mut mgr = SynthesisWindowManager::new();
+        let now = Utc::now();
+        let handle_b = mgr
+            .open_tiered_window(
+                domain_b,
+                WindowScopeTier::Domain,
+                now - chrono::Duration::seconds(60),
+                now,
+            )
+            .unwrap();
+
+        // Smuggled handle: window_id from B's window, scope_id forged
+        // to A. `input` also targets A so the existing
+        // handle.scope_id == input.domain_scope check passes.
+        let smuggled = TieredWindowHandle {
+            window_id: handle_b.window_id,
+            scope_id: domain_a,
+            tier: WindowScopeTier::Domain,
+        };
+        let mut domain_a_obj = DomainMemoryObject::new(domain_a);
+        let channel = ScopeId::new_v4();
+        domain_a_obj.attach_channel_scope(channel);
+        let chan_out = ChannelOutput::from_channel_object(channel_recap_object(channel)).unwrap();
+        let input = DomainSynthesisInput::new(&domain_a_obj, vec![chan_out]).unwrap();
+
+        let err = mgr.validate_domain_input(&smuggled, &input).unwrap_err();
         assert!(matches!(err, PipelineError::HierarchyViolation(_)));
     }
 }
