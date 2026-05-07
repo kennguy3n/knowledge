@@ -194,7 +194,7 @@ impl ConceptGraph {
     /// reciprocal pair of `contradicts` edges.
     pub fn mark_contradiction(&mut self, a: NodeId, b: NodeId) -> Result<(EdgeId, EdgeId)> {
         if a == b {
-            return Err(GraphError::SelfSupersession(a.0));
+            return Err(GraphError::SelfContradiction(a.0));
         }
         let (a_scope, b_scope) = {
             let na = self

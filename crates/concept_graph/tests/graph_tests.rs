@@ -95,6 +95,26 @@ fn supersession_rejects_self_pointer() {
 }
 
 #[test]
+fn mark_contradiction_rejects_self_with_dedicated_variant() {
+    // Regression test for the PR #6 review finding: previously
+    // `mark_contradiction(n, n)` returned `GraphError::SelfSupersession`,
+    // which is misleading for callers pattern-matching on the error
+    // variant.
+    let scope = ScopeId::new_v4();
+    let (mut g, ids) = build(scope, 1);
+    let err = g.mark_contradiction(ids[0], ids[0]).unwrap_err();
+    assert!(
+        matches!(err, GraphError::SelfContradiction(_)),
+        "expected SelfContradiction, got {err:?}"
+    );
+    // And it must NOT be the supersession variant.
+    assert!(
+        !matches!(err, GraphError::SelfSupersession(_)),
+        "must not reuse SelfSupersession for contradiction failures"
+    );
+}
+
+#[test]
 fn mark_contradiction_creates_reciprocal_edges() {
     let scope = ScopeId::new_v4();
     let (mut g, ids) = build(scope, 2);

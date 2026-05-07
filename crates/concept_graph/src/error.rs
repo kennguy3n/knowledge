@@ -28,6 +28,10 @@ pub enum GraphError {
     /// `supersede_node` was called with the same id for both arguments.
     #[error("a node cannot supersede itself: {0}")]
     SelfSupersession(Uuid),
+
+    /// `mark_contradiction` was called with the same id for both arguments.
+    #[error("a node cannot contradict itself: {0}")]
+    SelfContradiction(Uuid),
 }
 
 impl GraphError {
