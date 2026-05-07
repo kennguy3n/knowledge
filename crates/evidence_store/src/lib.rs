@@ -23,6 +23,7 @@
 pub mod error;
 pub mod ids;
 pub mod importance;
+pub mod retrieval;
 pub mod routing;
 pub mod schema;
 pub mod store;
@@ -31,6 +32,7 @@ pub use crypto::{ContentHash, MasterKey, MASTER_KEY_LEN};
 pub use error::{EvidenceError, Result};
 pub use ids::{EvidenceId, ScopeId};
 pub use importance::{ImportanceClass, ImportanceClassifier, Lexicon, LexiconClassifier};
+pub use retrieval::{HybridRetriever, HybridWeights, RetrievalResult};
 pub use routing::{
     route_storage, route_storage_with_threshold, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES,
 };

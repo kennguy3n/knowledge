@@ -116,9 +116,9 @@ binary shapes:
 
 | Module | Responsibility |
 |---|---|
-| `evidence_store` | SQLCipher-backed encrypted store; size-threshold inline/body-table routing; content-hash dedup for large bodies; ring buffer for noise; append-only ingestion |
-| `observation_engine` | Lexicon classifiers + XLM-R + SLM-assisted extraction; produces observation rows |
-| `memory_manager` | Decay state machine, retention scoring, stage promotion, retrieval-trigger updates |
+| `evidence_store` | SQLCipher-backed encrypted store; size-threshold inline/body-table routing; content-hash dedup for large bodies; ring buffer for noise; append-only ingestion. Houses the `HybridRetriever` (FTS5 lexical + recency decay; semantic-vector slot stubbed at `0.0` until XLM-R lands). |
+| `observation_engine` | `ObservationExtractor` trait + Phase-1 `LexiconExtractor` baseline (capitalised words / `@mentions` / `#tags` for entities, action verbs / `TODO` / `ACTION` / `TASK` for tasks, `decided` / `agreed` / `approved` for decisions, declarative sentences for facts). `ObservationPipeline` chains extraction → reuse of the evidence-plane `ImportanceClassifier` → Candidate observation creation. XLM-R + SLM-assisted stages reserved for Phase 1's later milestones. |
+| `memory_manager` | Decay state machine (Candidate → Reinforced → Consolidated → Canonical → Superseded → Archived → Deleted), retention scoring, stage promotion, retrieval-trigger updates. Hosts `WorkingMemory` (bounded TTL-evicting context window), `UserMemoryObject` (read / pin / unpin / forget / list / decay sweep), and the `PrivacyStrip` + `SynthesisOutput<T>` invariant pair. |
 | `concept_graph` | Sparse typed graph (nodes, edges, scopes), supersession, contradiction tracking |
 | `synthesis_pipeline` | Channel / domain / tenant synthesis windows; published encrypted synthesis objects |
 | `crypto` | Post-quantum primitives; hybrid X25519 + ML-KEM-768 KEM (Phase 0 via RustCrypto `ml-kem`; Phase 7 via `liboqs` behind the same `KemBackend` trait); HKDF-SHA256; XChaCha20-Poly1305; BLAKE3; ML-DSA-65 + SPHINCS+ in Phase 7 |

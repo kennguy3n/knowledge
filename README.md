@@ -27,9 +27,12 @@ see [PROPOSAL.md](./PROPOSAL.md), [ARCHITECTURE.md](./ARCHITECTURE.md),
 
 The shared core is a Cargo workspace targeting **Rust 1.75+ (stable)**.
 Phase 0 ships the encrypted evidence plane and the post-quantum
-crypto primitives; the platform bindings and the SLM-backed importance
-classifier are tracked under Phase 0 in [PROGRESS.md](./PROGRESS.md)
-but not yet shipped.
+crypto primitives; Phase 1 adds the on-device personal-memory plane
+(decay state machine, retention scoring, working memory, lexicon
+observation extraction, and FTS5 + recency hybrid retrieval). The
+platform bindings, the SLM-backed importance classifier, and the
+XLM-R / SLM stages of the observation pipeline are tracked in
+[PROGRESS.md](./PROGRESS.md) but not yet shipped.
 
 ### Prerequisites
 
@@ -77,7 +80,13 @@ knowledge/
 │   ├── crypto/                # post-quantum primitives (BLAKE3, XChaCha20-Poly1305,
 │   │                          #   HKDF-SHA256, hybrid X25519 + ML-KEM-768 KEM)
 │   ├── evidence_store/        # SQLCipher-backed encrypted evidence plane
-│   │                          #   (ingest, dedup, ring buffer, FTS5, classifier)
+│   │                          #   (ingest, dedup, ring buffer, FTS5, classifier,
+│   │                          #   hybrid FTS + recency retrieval)
+│   ├── memory_manager/        # Phase 1 personal-memory plane: decay state machine,
+│   │                          #   retention scoring, working memory, user-memory
+│   │                          #   CRUD, privacy-strip invariant
+│   ├── observation_engine/    # Phase 1 observation extractor + lexicon-first
+│   │                          #   pipeline (entities / tasks / decisions / facts)
 │   └── sync_engine/           # CRDT delta sync — Phase 2 stub for now
 ├── .github/workflows/ci.yml   # fmt + clippy + build + test on push / PR
 ├── PROPOSAL.md                # product thesis
