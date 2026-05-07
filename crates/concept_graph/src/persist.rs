@@ -289,9 +289,20 @@ impl PersistentConceptGraph {
         };
         match result {
             Ok(()) => {
-                self.conn
+                // Per the SQLite docs, a failed `COMMIT` leaves the
+                // transaction open on the connection — every later
+                // write on `self.conn` would silently land in the
+                // stale, uncommitted transaction. Fall through to a
+                // best-effort `ROLLBACK` so the connection is clean,
+                // then surface the original commit error.
+                if let Err(e) = self
+                    .conn
                     .execute_batch("COMMIT")
-                    .map_err(GraphError::Sqlite)?;
+                    .map_err(GraphError::Sqlite)
+                {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    return Err(e);
+                }
                 Ok(())
             }
             Err(e) => {
