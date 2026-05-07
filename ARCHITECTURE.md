@@ -121,7 +121,7 @@ binary shapes:
 | `memory_manager` | Decay state machine, retention scoring, stage promotion, retrieval-trigger updates |
 | `concept_graph` | Sparse typed graph (nodes, edges, scopes), supersession, contradiction tracking |
 | `synthesis_pipeline` | Channel / domain / tenant synthesis windows; published encrypted synthesis objects |
-| `crypto` | Post-quantum primitives via `liboqs` bindings; hybrid X25519 + ML-KEM-768; ML-DSA-65; SPHINCS+; XChaCha20-Poly1305; BLAKE3 |
+| `crypto` | Post-quantum primitives; hybrid X25519 + ML-KEM-768 KEM (Phase 0 via RustCrypto `ml-kem`; Phase 7 via `liboqs` behind the same `KemBackend` trait); HKDF-SHA256; XChaCha20-Poly1305; BLAKE3; ML-DSA-65 + SPHINCS+ in Phase 7 |
 | `sync_engine` | CRDT-based delta sync of synthesis objects; MLS group keying; selective evidence sync where policy permits |
 
 ### 2.2 Local store
@@ -179,12 +179,30 @@ binary shapes:
 
 ### 2.5 Post-quantum primitives via `liboqs`
 
-The `crypto` crate wraps `liboqs` for ML-KEM-768, ML-DSA-65, and
-SPHINCS+, plus `RustCrypto` primitives (BLAKE3,
-XChaCha20-Poly1305, X25519). The wrappers expose a single
-high-level API (`hybrid_kem_encap`, `hybrid_kem_decap`,
-`sign_provenance`, `verify_provenance`) so the rest of the core
-never touches raw cryptographic state.
+The `crypto` crate ([`crates/crypto/`](./crates/crypto/)) wraps the
+post-quantum and classical primitives that the rest of the substrate
+consumes through a small high-level API:
+`content_hash`, `encrypt_aead` / `decrypt_aead`, `derive_key`,
+`hybrid_kem_encap` / `hybrid_kem_decap`, and (in later phases)
+`sign_provenance` / `verify_provenance`. The rest of the core never
+touches raw cryptographic state.
+
+Phase 0 ships:
+
+- **BLAKE3** content hashing (`blake3` crate).
+- **XChaCha20-Poly1305 AEAD** for per-scope, per-epoch symmetric
+  encryption (`chacha20poly1305` from RustCrypto).
+- **HKDF-SHA256** key derivation (`hkdf` + `sha2` from RustCrypto).
+- **Hybrid X25519 + ML-KEM-768 KEM** with a concatenate-then-KDF
+  combiner (HKDF-SHA256 over the concatenation of the X25519 DH
+  output and the ML-KEM-768 shared secret). X25519 is provided by
+  `x25519-dalek`; ML-KEM-768 is provided by the RustCrypto `ml-kem`
+  crate. The ML-KEM-768 side sits behind a `KemBackend` trait so
+  the implementation can be swapped for an FFI-backed `liboqs`
+  build in Phase 7 without touching the rest of the substrate.
+
+ML-DSA-65, SPHINCS+, and the `liboqs` FFI backend land in Phase 7
+(`PHASES.md` §Phase 7).
 
 ---
 

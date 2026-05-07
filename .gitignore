@@ -1,0 +1,23 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+*.sqlite
+*.sqlite-journal
+*.sqlite3
+*.db
+
+# Local env
+.env
+.env.local

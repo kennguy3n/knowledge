@@ -1,0 +1,15 @@
+[package]
+name = "sync_engine"
+description = "CRDT-based delta sync of synthesis objects (stub for Phase 0)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true
