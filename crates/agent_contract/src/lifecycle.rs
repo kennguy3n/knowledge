@@ -482,6 +482,16 @@ impl ProposalStore {
     /// [`ProposalState::UnderReview`] and run the auto-promotion
     /// policy. If the policy matches, the proposal is auto-promoted
     /// in the same call.
+    ///
+    /// Terminal states ([`ProposalState::Promoted`] and
+    /// [`ProposalState::Rejected`]) are inviolable: re-invoking
+    /// `review` on a proposal that has already reached a terminal
+    /// state always returns
+    /// [`LifecycleError::InvalidTransition`], even if the
+    /// proposal's TTL has elapsed in the meantime. Without this
+    /// guard, an expired-TTL check before the state check could
+    /// silently flip an already-`Promoted` proposal to `Rejected`
+    /// and lose canonical data.
     pub fn review(
         &mut self,
         id: Uuid,
@@ -492,6 +502,13 @@ impl ProposalStore {
             .proposals
             .get_mut(&id)
             .ok_or(LifecycleError::NotFound(id))?;
+        if p.state.is_terminal() {
+            return Err(LifecycleError::InvalidTransition {
+                id,
+                from: p.state.as_str(),
+                to: ProposalState::UnderReview.as_str(),
+            });
+        }
         if p.is_expired(now) {
             // Expired proposals get auto-rejected.
             p.state = ProposalState::Rejected;
@@ -1023,5 +1040,54 @@ mod tests {
         assert!(ProposalState::Rejected.is_terminal());
         assert!(!ProposalState::Proposed.is_terminal());
         assert!(!ProposalState::UnderReview.is_terminal());
+    }
+
+    #[test]
+    fn review_does_not_overwrite_promoted_terminal_state_when_ttl_elapses() {
+        // Regression: `review` used to check TTL expiry *before*
+        // checking the proposal's current state, so calling it on an
+        // already-promoted proposal whose TTL had elapsed silently
+        // flipped the state to `Rejected` and lost canonical data.
+        // The terminal-state guard now kicks in first and returns
+        // `InvalidTransition` without mutating the stored proposal.
+        let mut store = ProposalStore::new();
+        let mut p = fixture_observation(0.9, SensitivityClass::Useful);
+        p.ttl = Some(Duration::from_secs(1));
+        let id = store.submit_observation(p).expect("submit");
+        store.review(id, &permissive_policy()).expect("review");
+        assert_eq!(store.get(id).unwrap().state, ProposalState::Promoted);
+
+        // Pre-date the proposal so its TTL has elapsed by `now`.
+        store.proposals.get_mut(&id).unwrap().submitted_at =
+            Utc::now() - chrono::Duration::seconds(60);
+
+        let err = store.review(id, &permissive_policy()).unwrap_err();
+        assert!(matches!(err, LifecycleError::InvalidTransition { .. }));
+        // Terminal state must be preserved.
+        assert_eq!(store.get(id).unwrap().state, ProposalState::Promoted);
+        assert!(store.get(id).unwrap().rejection_reason.is_none());
+    }
+
+    #[test]
+    fn review_does_not_overwrite_rejected_terminal_state_when_ttl_elapses() {
+        // Mirror of the `Promoted` regression test for the
+        // `Rejected` terminal state.
+        let mut store = ProposalStore::new();
+        let mut p = fixture_observation(0.5, SensitivityClass::Useful);
+        p.ttl = Some(Duration::from_secs(1));
+        let id = store.submit_observation(p).expect("submit");
+        store.reject(id, "policy_decision").expect("reject");
+        assert_eq!(store.get(id).unwrap().state, ProposalState::Rejected);
+        let original_reason = store.get(id).unwrap().rejection_reason.clone();
+
+        store.proposals.get_mut(&id).unwrap().submitted_at =
+            Utc::now() - chrono::Duration::seconds(60);
+
+        let err = store.review(id, &permissive_policy()).unwrap_err();
+        assert!(matches!(err, LifecycleError::InvalidTransition { .. }));
+        // Terminal state and original rejection reason must be
+        // preserved — the TTL handler must not overwrite either.
+        assert_eq!(store.get(id).unwrap().state, ProposalState::Rejected);
+        assert_eq!(store.get(id).unwrap().rejection_reason, original_reason);
     }
 }

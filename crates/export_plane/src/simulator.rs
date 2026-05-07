@@ -116,13 +116,13 @@ impl<'a> PolicySimulator<'a> {
         // the policy engine itself only gates concepts. The
         // [`crate::controls::SummaryExportControl`] registry is
         // consulted directly; no separate engine pass is required.
-        let included_summaries: Vec<Uuid> = self
-            .controls
-            .summaries()
-            .filter(|c| c.exportable)
-            .map(|c| c.summary_id)
-            .collect();
-        let excluded_summaries: Vec<SimulatedExclusion> = self
+        // Exportable summaries are capped at `policy.max_summaries`
+        // so the preview faithfully reflects what an actual export
+        // would emit; any summaries dropped by the cap are surfaced
+        // both in `excluded_summaries` (with a stable reason) and as
+        // a non-fatal warning on the `SimulationResult`.
+        let mut included_summaries: Vec<Uuid> = Vec::new();
+        let mut excluded_summaries: Vec<SimulatedExclusion> = self
             .controls
             .summaries()
             .filter(|c| !c.exportable)
@@ -131,6 +131,24 @@ impl<'a> PolicySimulator<'a> {
                 reason: "summary control marked non-exportable".into(),
             })
             .collect();
+        let mut warnings = decision.warnings;
+        let mut capped = 0usize;
+        for c in self.controls.summaries().filter(|c| c.exportable) {
+            if included_summaries.len() < self.policy.max_summaries {
+                included_summaries.push(c.summary_id);
+            } else {
+                capped += 1;
+                excluded_summaries.push(SimulatedExclusion {
+                    entity_id: c.summary_id,
+                    reason: "policy max_summaries cap reached".into(),
+                });
+            }
+        }
+        if capped > 0 {
+            warnings.push(format!(
+                "policy max_summaries cap reached: {capped} summary/-ies dropped from preview"
+            ));
+        }
 
         let would_include_evidence = decision.allow_raw_evidence;
         let total_export_size_estimate = estimate_size(profile, &included_concepts);
@@ -142,7 +160,7 @@ impl<'a> PolicySimulator<'a> {
             excluded_summaries,
             would_include_evidence,
             total_export_size_estimate,
-            warnings: decision.warnings,
+            warnings,
         }
     }
 }
@@ -318,6 +336,58 @@ mod tests {
         assert_eq!(result.included_summaries, vec![s1]);
         assert_eq!(result.excluded_summaries.len(), 1);
         assert_eq!(result.excluded_summaries[0].entity_id, s2);
+    }
+
+    #[test]
+    fn simulator_caps_summaries_via_max_summaries_policy() {
+        // Five exportable summaries are registered but the policy
+        // permits only two — the simulator must report exactly two
+        // included, three excluded with the `max_summaries` reason,
+        // and surface a non-fatal warning describing the cap so the
+        // preview matches the actual export shape.
+        let (profile, _scope) = fixture_profile(0);
+        let policy = ExportPolicy {
+            max_summaries: 2,
+            ..ExportPolicy::default()
+        };
+        let mut registry = ExportControlRegistry::new();
+        for _ in 0..5 {
+            registry
+                .insert_summary(SummaryExportControl::new(
+                    Uuid::new_v4(),
+                    RedactionLevel::None,
+                ))
+                .expect("insert");
+        }
+        let sim = PolicySimulator::new(&policy, &registry);
+        let result = sim.simulate(&profile);
+        assert_eq!(result.included_summaries.len(), 2);
+        assert_eq!(result.excluded_summaries.len(), 3);
+        assert!(result
+            .excluded_summaries
+            .iter()
+            .all(|e| e.reason.contains("max_summaries")));
+        assert!(result.warnings.iter().any(|w| w.contains("max_summaries")));
+    }
+
+    #[test]
+    fn simulator_does_not_warn_when_summary_count_under_cap() {
+        // No cap hit means no warning — sanity check on the inverse
+        // of `simulator_caps_summaries_via_max_summaries_policy`.
+        let (profile, _scope) = fixture_profile(0);
+        let policy = ExportPolicy::default();
+        let mut registry = ExportControlRegistry::new();
+        registry
+            .insert_summary(SummaryExportControl::new(
+                Uuid::new_v4(),
+                RedactionLevel::None,
+            ))
+            .expect("insert");
+        let sim = PolicySimulator::new(&policy, &registry);
+        let result = sim.simulate(&profile);
+        assert_eq!(result.included_summaries.len(), 1);
+        assert!(result.excluded_summaries.is_empty());
+        assert!(!result.warnings.iter().any(|w| w.contains("max_summaries")));
     }
 
     #[test]
