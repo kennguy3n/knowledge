@@ -21,6 +21,7 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use crypto::ProvenanceBundle;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -44,8 +45,16 @@ pub enum ExportRejectionReason {
         /// Concept's scope id.
         scope_id: Uuid,
     },
-    /// Concept lacks a provenance bundle (or provenance enforcement
-    /// said it was insufficient).
+    /// Concept's provenance bundle does not satisfy the policy.
+    ///
+    /// Returned when `require_provenance` is true and the bundle's
+    /// `entity_id` is nil or its `activity` is unpopulated (empty
+    /// agent identity / empty model version). An empty `derivations`
+    /// list is **not** by itself a rejection reason — the workflow
+    /// that produced the bundle (e.g.
+    /// `crate::approval::ConceptApprovalWorkflow`) is itself a
+    /// synthesis activity, so administratively approved concepts
+    /// have no upstream derivations.
     MissingProvenance,
     /// Concept approval has expired.
     Expired,
@@ -192,9 +201,16 @@ impl PolicyEngine {
             }
             // Provenance — gated by `require_provenance`. The
             // [`crypto::ProvenanceBundle`] type does not have a "null"
-            // form, so the requirement reduces to "did the caller
-            // build a bundle with a non-empty derivations list?"
-            if policy.require_provenance && c.provenance.derivations.is_empty() {
+            // form, so the requirement is structural: the bundle must
+            // identify the entity it is attached to (`entity_id` not
+            // nil) and carry a populated synthesis activity (non-empty
+            // `agent_identity` and `model_version`). An empty
+            // `derivations` list is **legal** — administratively
+            // approved concepts produced by
+            // [`crate::approval::ConceptApprovalWorkflow`] are
+            // themselves the synthesis activity and have no upstream
+            // derivations.
+            if policy.require_provenance && !is_provenance_populated(&c.provenance) {
                 rejected.push(ExportRejection {
                     concept_id: c.concept_id,
                     reason: ExportRejectionReason::MissingProvenance,
@@ -241,6 +257,23 @@ impl PolicyEngine {
             allow_raw_evidence,
         }
     }
+}
+
+/// True iff `bundle` carries enough structure to satisfy
+/// `require_provenance: true`.
+///
+/// The check is intentionally narrow: we require the bundle to
+/// identify the entity it is attached to (`entity_id` not nil) and
+/// to carry a populated [`crypto::SynthesisActivity`] (non-empty
+/// `agent_identity` and `model_version`). The
+/// [`ProvenanceBundle::derivations`] field is **not** required to be
+/// populated — administratively approved concepts produced by
+/// [`crate::approval::ConceptApprovalWorkflow`] are themselves the
+/// synthesis activity and have no upstream derivations.
+fn is_provenance_populated(bundle: &ProvenanceBundle) -> bool {
+    !bundle.entity_id.is_nil()
+        && !bundle.activity.agent_identity.is_empty()
+        && !bundle.activity.model_version.is_empty()
 }
 
 fn rank(class: SensitivityClass) -> u8 {
@@ -309,14 +342,44 @@ mod tests {
             .all(|r| matches!(r.reason, ExportRejectionReason::SensitivityExceeded { .. })));
     }
 
+    /// Build a bundle whose `derivations` is empty but whose
+    /// `entity_id` and `activity` are populated. This is the shape
+    /// `ConceptApprovalWorkflow` produces and the policy engine must
+    /// admit it under `require_provenance: true`.
+    fn workflow_provenance() -> ProvenanceBundle {
+        ProvenanceBundle::new(
+            Uuid::new_v4(),
+            SynthesisActivity::new("workflow", "model", "prompt", Uuid::new_v4()),
+            ProvenanceAgent::software("workflow"),
+            Vec::new(),
+        )
+    }
+
     #[test]
-    fn missing_provenance_rejected_when_required() {
+    fn empty_derivations_with_populated_activity_passes_provenance_check() {
+        // The approval workflow attaches a bundle with empty
+        // derivations because the workflow itself is the synthesis
+        // activity. The default policy must admit it.
         let scope = ScopeId::new_v4();
         let mut c = fixture(scope, SensitivityClass::Useful);
-        c.provenance = provenance(true);
+        c.provenance = workflow_provenance();
+        let decision = PolicyEngine::new().evaluate(&ExportPolicy::default(), &[c]);
+        assert_eq!(decision.approved.len(), 1);
+        assert!(decision.rejected.is_empty());
+    }
+
+    #[test]
+    fn nil_entity_id_rejected_when_provenance_required() {
+        let scope = ScopeId::new_v4();
+        let mut c = fixture(scope, SensitivityClass::Useful);
+        c.provenance = ProvenanceBundle::new(
+            Uuid::nil(),
+            SynthesisActivity::new("agent", "model", "prompt", Uuid::new_v4()),
+            ProvenanceAgent::software("test"),
+            Vec::new(),
+        );
         let decision = PolicyEngine::new().evaluate(&ExportPolicy::default(), &[c]);
         assert_eq!(decision.approved.len(), 0);
-        assert_eq!(decision.rejected.len(), 1);
         assert!(matches!(
             decision.rejected[0].reason,
             ExportRejectionReason::MissingProvenance
@@ -324,15 +387,68 @@ mod tests {
     }
 
     #[test]
-    fn missing_provenance_allowed_when_disabled() {
+    fn empty_activity_agent_rejected_when_provenance_required() {
         let scope = ScopeId::new_v4();
         let mut c = fixture(scope, SensitivityClass::Useful);
-        c.provenance = provenance(true);
+        c.provenance = ProvenanceBundle::new(
+            Uuid::new_v4(),
+            SynthesisActivity::new("", "model", "prompt", Uuid::new_v4()),
+            ProvenanceAgent::software("test"),
+            Vec::new(),
+        );
+        let decision = PolicyEngine::new().evaluate(&ExportPolicy::default(), &[c]);
+        assert_eq!(decision.approved.len(), 0);
+        assert!(matches!(
+            decision.rejected[0].reason,
+            ExportRejectionReason::MissingProvenance
+        ));
+    }
+
+    #[test]
+    fn empty_activity_model_rejected_when_provenance_required() {
+        let scope = ScopeId::new_v4();
+        let mut c = fixture(scope, SensitivityClass::Useful);
+        c.provenance = ProvenanceBundle::new(
+            Uuid::new_v4(),
+            SynthesisActivity::new("agent", "", "prompt", Uuid::new_v4()),
+            ProvenanceAgent::software("test"),
+            Vec::new(),
+        );
+        let decision = PolicyEngine::new().evaluate(&ExportPolicy::default(), &[c]);
+        assert_eq!(decision.approved.len(), 0);
+        assert!(matches!(
+            decision.rejected[0].reason,
+            ExportRejectionReason::MissingProvenance
+        ));
+    }
+
+    #[test]
+    fn unpopulated_provenance_admitted_when_disabled() {
+        // With `require_provenance: false`, even a structurally empty
+        // bundle is admitted.
+        let scope = ScopeId::new_v4();
+        let mut c = fixture(scope, SensitivityClass::Useful);
+        c.provenance = ProvenanceBundle::new(
+            Uuid::nil(),
+            SynthesisActivity::new("", "", "", Uuid::new_v4()),
+            ProvenanceAgent::software(""),
+            Vec::new(),
+        );
         let p = ExportPolicy {
             require_provenance: false,
             ..ExportPolicy::default()
         };
         let decision = PolicyEngine::new().evaluate(&p, &[c]);
+        assert_eq!(decision.approved.len(), 1);
+    }
+
+    #[test]
+    fn populated_provenance_with_derivations_still_passes() {
+        // Sanity: bundles with derivations remain admissible.
+        let scope = ScopeId::new_v4();
+        let mut c = fixture(scope, SensitivityClass::Useful);
+        c.provenance = provenance(false);
+        let decision = PolicyEngine::new().evaluate(&ExportPolicy::default(), &[c]);
         assert_eq!(decision.approved.len(), 1);
     }
 

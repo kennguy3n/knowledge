@@ -23,11 +23,20 @@ use crate::controls::ExportControlRegistry;
 use crate::policy::{ExportPolicy, ExportRejectionReason, PolicyEngine};
 use crate::profile::PortableConceptProfile;
 
-/// One excluded concept in a [`SimulationResult`].
+/// One excluded entity in a [`SimulationResult`].
+///
+/// The struct is reused for both concept and summary exclusions —
+/// `entity_id` therefore refers to whichever id is appropriate for
+/// the field that holds the [`SimulatedExclusion`]:
+///
+/// * [`SimulationResult::excluded_concepts`] — `entity_id` is the
+///   excluded concept's id.
+/// * [`SimulationResult::excluded_summaries`] — `entity_id` is the
+///   excluded summary's id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SimulatedExclusion {
-    /// Excluded concept id.
-    pub concept_id: Uuid,
+    /// Id of the excluded concept or summary.
+    pub entity_id: Uuid,
     /// Stable string reason. The simulator promotes
     /// [`ExportRejectionReason`] into a stable user-readable
     /// string so it can also surface deny-by-default rejections
@@ -81,7 +90,7 @@ impl<'a> PolicySimulator<'a> {
                 .allows_concept(c.concept_id, profile.id, profile.scope_id.0, now)
             {
                 excluded_concepts.push(SimulatedExclusion {
-                    concept_id: c.concept_id,
+                    entity_id: c.concept_id,
                     reason: "deny-by-default: concept not authorised by export control registry"
                         .into(),
                 });
@@ -97,7 +106,7 @@ impl<'a> PolicySimulator<'a> {
         }
         for r in &decision.rejected {
             excluded_concepts.push(SimulatedExclusion {
-                concept_id: r.concept_id,
+                entity_id: r.concept_id,
                 reason: rejection_reason_label(&r.reason),
             });
         }
@@ -118,7 +127,7 @@ impl<'a> PolicySimulator<'a> {
             .summaries()
             .filter(|c| !c.exportable)
             .map(|c| SimulatedExclusion {
-                concept_id: c.summary_id,
+                entity_id: c.summary_id,
                 reason: "summary control marked non-exportable".into(),
             })
             .collect();
@@ -308,7 +317,7 @@ mod tests {
         let result = sim.simulate(&profile);
         assert_eq!(result.included_summaries, vec![s1]);
         assert_eq!(result.excluded_summaries.len(), 1);
-        assert_eq!(result.excluded_summaries[0].concept_id, s2);
+        assert_eq!(result.excluded_summaries[0].entity_id, s2);
     }
 
     #[test]

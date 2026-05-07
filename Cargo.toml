@@ -28,7 +28,7 @@ repository = "https://github.com/kennguy3n/knowledge"
 thiserror = "1"
 
 # IDs
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 
 # Hashing / AEAD / KDF / MAC
 blake3 = "1"

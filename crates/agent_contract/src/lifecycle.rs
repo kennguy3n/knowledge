@@ -560,6 +560,15 @@ impl ProposalStore {
     /// Render the canonical artifact for a proposal that is in
     /// [`ProposalState::Promoted`]. The returned artifact is ready to
     /// be inserted into the substrate's downstream crates.
+    ///
+    /// The artifact id is derived deterministically from the proposal
+    /// id and the artifact kind via [`Uuid::new_v5`] against a stable
+    /// per-kind namespace (see [`canonical_namespace`]). Calling this
+    /// method twice on the same promoted proposal therefore returns
+    /// identical [`CanonicalArtifact::id`] values — the substrate
+    /// cannot end up with duplicate canonical objects from a single
+    /// promoted proposal even if the caller invokes the method more
+    /// than once.
     pub fn promote_to_canonical(&self, id: Uuid) -> Result<CanonicalArtifact, LifecycleError> {
         let p = self
             .proposals
@@ -574,7 +583,7 @@ impl ProposalStore {
         }
         Ok(match &p.payload {
             AnyPayload::Observation(o) => CanonicalArtifact::Observation(CanonicalObservation {
-                id: Uuid::new_v4(),
+                id: derive_canonical_id(ProposalKind::Observation, p.id),
                 scope_id: p.scope_id,
                 proposal_id: p.id,
                 claim: o.claim.clone(),
@@ -583,7 +592,7 @@ impl ProposalStore {
                 evidence_refs: p.evidence_refs.clone(),
             }),
             AnyPayload::Concept(c) => CanonicalArtifact::Concept(CanonicalConcept {
-                id: Uuid::new_v4(),
+                id: derive_canonical_id(ProposalKind::Concept, p.id),
                 scope_id: p.scope_id,
                 proposal_id: p.id,
                 label: c.label.clone(),
@@ -591,7 +600,7 @@ impl ProposalStore {
                 sensitivity_class: p.sensitivity_class,
             }),
             AnyPayload::Relation(r) => CanonicalArtifact::Relation(CanonicalRelation {
-                id: Uuid::new_v4(),
+                id: derive_canonical_id(ProposalKind::Relation, p.id),
                 scope_id: p.scope_id,
                 proposal_id: p.id,
                 src: r.src,
@@ -599,7 +608,7 @@ impl ProposalStore {
                 relation: r.relation.clone(),
             }),
             AnyPayload::Summary(s) => CanonicalArtifact::Summary(CanonicalSummary {
-                id: Uuid::new_v4(),
+                id: derive_canonical_id(ProposalKind::Summary, p.id),
                 scope_id: p.scope_id,
                 proposal_id: p.id,
                 text: s.text.clone(),
@@ -613,6 +622,34 @@ impl ProposalStore {
     pub fn ids(&self) -> impl Iterator<Item = Uuid> + '_ {
         self.proposals.keys().copied()
     }
+}
+
+/// Per-kind UUID v5 namespace used by [`derive_canonical_id`].
+///
+/// The namespaces are fixed constants — they do not need to be
+/// secret, just stable, since their only role is to keep the four
+/// canonical-artifact id streams disjoint when they are derived from
+/// the same proposal id.
+const NAMESPACE_OBSERVATION: Uuid = Uuid::from_u128(0x6f627365_7276_356e_8000_000000000001);
+const NAMESPACE_CONCEPT: Uuid = Uuid::from_u128(0x636f6e63_6570_3574_8000_000000000002);
+const NAMESPACE_RELATION: Uuid = Uuid::from_u128(0x72656c61_7469_6f6e_8000_000000000003);
+const NAMESPACE_SUMMARY: Uuid = Uuid::from_u128(0x73756d6d_6172_3579_8000_000000000004);
+
+/// Stable namespace UUID for `kind`.
+pub const fn canonical_namespace(kind: ProposalKind) -> Uuid {
+    match kind {
+        ProposalKind::Observation => NAMESPACE_OBSERVATION,
+        ProposalKind::Concept => NAMESPACE_CONCEPT,
+        ProposalKind::Relation => NAMESPACE_RELATION,
+        ProposalKind::Summary => NAMESPACE_SUMMARY,
+    }
+}
+
+/// Derive the canonical artifact id for `(kind, proposal_id)` via
+/// [`Uuid::new_v5`]. The function is pure — repeated calls with the
+/// same inputs always return the same id.
+pub fn derive_canonical_id(kind: ProposalKind, proposal_id: Uuid) -> Uuid {
+    Uuid::new_v5(&canonical_namespace(kind), proposal_id.as_bytes())
 }
 
 fn stored_from_envelope<T, F: FnOnce(T) -> AnyPayload>(
@@ -861,6 +898,46 @@ mod tests {
                 assert_eq!(s.text, "recap text");
             }
             _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn promote_to_canonical_is_deterministic() {
+        let mut store = ProposalStore::new();
+        let id = store
+            .submit_observation(fixture_observation(0.9, SensitivityClass::Useful))
+            .expect("submit");
+        store.review(id, &permissive_policy()).expect("review");
+
+        let first = store.promote_to_canonical(id).expect("first");
+        let second = store.promote_to_canonical(id).expect("second");
+
+        // Repeated promotions of the same proposal must yield the
+        // same canonical id — the substrate cannot end up with two
+        // canonical objects from one promoted proposal even if the
+        // caller invokes `promote_to_canonical` more than once.
+        assert_eq!(first.id(), second.id());
+        assert_eq!(
+            first.id(),
+            derive_canonical_id(ProposalKind::Observation, id)
+        );
+    }
+
+    #[test]
+    fn derive_canonical_id_is_kind_disjoint() {
+        // The same proposal id under different kinds must produce
+        // disjoint canonical ids, so a relation's canonical row can
+        // never collide with an observation's row.
+        let pid = Uuid::new_v4();
+        let obs = derive_canonical_id(ProposalKind::Observation, pid);
+        let con = derive_canonical_id(ProposalKind::Concept, pid);
+        let rel = derive_canonical_id(ProposalKind::Relation, pid);
+        let sum = derive_canonical_id(ProposalKind::Summary, pid);
+        let all = [obs, con, rel, sum];
+        for i in 0..all.len() {
+            for j in (i + 1)..all.len() {
+                assert_ne!(all[i], all[j]);
+            }
         }
     }
 

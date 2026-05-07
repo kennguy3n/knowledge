@@ -97,16 +97,14 @@ fn full_export_pipeline_emits_concepts_only_view_and_audit_trail() {
     profile.push_concept(approved);
     profile.push_constraint(ExportConstraint::MaxConcepts(10));
 
-    // 4. Simulate the export. The approval workflow attaches its own
-    //    provenance bundle attesting to the approval; the bundle's
-    //    `derivations` list is empty by design (the workflow itself is
-    //    the synthesis activity), so the policy must be told that
-    //    provenance enforcement isn't required for this particular
-    //    profile.
-    let policy = ExportPolicy {
-        require_provenance: false,
-        ..ExportPolicy::default()
-    };
+    // 4. Simulate the export under the default (most-restrictive)
+    //    policy. The approval workflow attaches its own populated
+    //    provenance bundle attesting to the approval — the bundle's
+    //    `derivations` list is empty by design (the workflow itself
+    //    is the synthesis activity), and the policy engine treats
+    //    that as legitimate provenance, so `require_provenance: true`
+    //    (the default) is left in place.
+    let policy = ExportPolicy::default();
     let mut audit = AuditLog::new();
     let admin = Uuid::new_v4();
     let sim = PolicySimulator::new(&policy, &registry);
@@ -376,13 +374,12 @@ fn cross_crate_proposal_to_export_pipeline() {
     profile.id = profile_id;
     profile.push_concept(approved);
 
-    // The approval workflow's provenance bundle has empty derivations
-    // (the workflow itself is the synthesis); disable provenance
-    // enforcement for the cross-crate pipeline.
-    let export_policy = ExportPolicy {
-        require_provenance: false,
-        ..ExportPolicy::default()
-    };
+    // The approval workflow attaches a populated provenance bundle
+    // whose `derivations` list is empty (the workflow itself is the
+    // synthesis activity). The policy engine treats that as
+    // legitimate provenance, so the cross-crate pipeline runs under
+    // the default `require_provenance: true` policy.
+    let export_policy = ExportPolicy::default();
     let sim = PolicySimulator::new(&export_policy, &registry);
     let result = sim.simulate(&profile);
     assert_eq!(result.included_concepts, vec![canonical_concept_id]);
