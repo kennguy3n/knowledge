@@ -116,17 +116,63 @@ fn content_hash_dedup_shares_one_body_row() {
     assert_eq!(store.body_store_count().unwrap(), 1);
     assert_eq!(store.body_ref_count(&res1.content_hash).unwrap(), Some(3));
 
-    // BUT: scope keys differ, so reading must use the right scope's
-    // key — verify both scopes can recover the plaintext.
+    // The body_store row is encrypted with the scope-independent
+    // body-store key; reading must succeed from evidence rows in
+    // either scope (Task 1 — cross-scope body dedup decryption).
     assert_eq!(store.read_body(res1.evidence_id).unwrap(), body);
-    // res2 was ingested under scope_b — but the body itself is keyed
-    // by the FIRST scope to have inserted it. This is the documented
-    // dedup contract: bodies are per-content-hash, not per-scope. We
-    // assert that the raw plaintext is recoverable through
-    // scope_a-side reads (the canonical case for cross-device sync
-    // would re-derive scope_b's key from the master key on the
-    // recipient device).
+    assert_eq!(store.read_body(res2.evidence_id).unwrap(), body);
     assert_eq!(store.read_body(res3.evidence_id).unwrap(), body);
+}
+
+#[test]
+fn cross_scope_body_dedup_reads_succeed_from_both_scopes() {
+    // Task 1: ingest the same large (>512 byte) body from two
+    // different scopes, then verify both scopes' evidence ids can
+    // decrypt the plaintext. This is the regression test for the
+    // cross-scope body dedup decryption bug.
+    let (_dir, mut store) = fresh_store();
+    let scope_a = ScopeId::new_v4();
+    let scope_b = ScopeId::new_v4();
+    let body = vec![b'Z'; DEFAULT_INLINE_THRESHOLD_BYTES * 2 + 7];
+
+    let res_a = store
+        .ingest(scope_a, &body, None, ImportanceClass::Useful)
+        .unwrap();
+    let res_b = store
+        .ingest(scope_b, &body, None, ImportanceClass::Useful)
+        .unwrap();
+
+    // Both evidence rows share a single body-store row.
+    assert_eq!(res_a.content_hash, res_b.content_hash);
+    assert_eq!(store.body_store_count().unwrap(), 1);
+    assert_eq!(store.body_ref_count(&res_a.content_hash).unwrap(), Some(2));
+
+    let pt_a = store.read_body(res_a.evidence_id).unwrap();
+    let pt_b = store.read_body(res_b.evidence_id).unwrap();
+    assert_eq!(pt_a, body);
+    assert_eq!(pt_b, body);
+    assert_eq!(pt_a, pt_b);
+}
+
+#[test]
+fn ring_buffer_created_at_is_unix_epoch_seconds() {
+    // Task 2: `RingBufferEntry.created_at` must be Unix epoch seconds,
+    // matching the documented type and the `evidence` table's
+    // `created_at` column.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    store.ring_buffer_insert(scope, b"a noise body").unwrap();
+    let entries = store.ring_buffer_read_window(scope).unwrap();
+    assert_eq!(entries.len(), 1);
+    let ts = entries[0].created_at;
+    // 1_700_000_000 ≈ 2023-11-14; 2_000_000_000 ≈ 2033-05-18. A
+    // microsecond timestamp from the same wall-clock instant would be
+    // ~1e15, well outside this band, so this assertion catches the
+    // unit mismatch.
+    assert!(
+        (1_700_000_000..=2_000_000_000).contains(&ts),
+        "ring buffer created_at {ts} is not a Unix epoch second"
+    );
 }
 
 #[test]

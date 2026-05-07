@@ -96,6 +96,13 @@ pub struct EvidenceStore {
     /// Cached per-scope AEAD key derivations. Re-derived from the
     /// master key + scope context label.
     scope_keys: std::collections::HashMap<ScopeId, AeadKey>,
+    /// Scope-independent AEAD key for the deduplicated `body_store`
+    /// table. Bodies in `body_store` are content-hash-keyed and may be
+    /// referenced from evidence rows in different scopes, so the body
+    /// table must use a key that does *not* depend on `scope_id`.
+    /// Derived once from the master key with context
+    /// `b"body_store:v1"` — see `ARCHITECTURE.md` §2.2.
+    body_store_key: AeadKey,
     /// Master key — wiped on drop.
     master_key: MasterKey,
 }
@@ -103,6 +110,7 @@ pub struct EvidenceStore {
 impl Drop for EvidenceStore {
     fn drop(&mut self) {
         self.master_key.zeroize();
+        self.body_store_key.zeroize();
         for (_id, key) in self.scope_keys.iter_mut() {
             key.zeroize();
         }
@@ -165,10 +173,18 @@ impl EvidenceStore {
         conn.execute_batch(SCHEMA_SQL)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
 
+        // Derive the scope-independent body-store AEAD key. This is
+        // the key under which deduplicated bodies in the `body_store`
+        // table are encrypted; using a per-scope key here would break
+        // cross-scope deduplication because the body row is shared by
+        // evidence rows from multiple scopes.
+        let body_store_key = derive_key(master_key, b"body_store:v1")?;
+
         let mut store = Self {
             conn,
             config,
             scope_keys: std::collections::HashMap::new(),
+            body_store_key,
             master_key: *master_key,
         };
         // No-op for now, but keeps the borrow checker happy if we add
@@ -301,7 +317,6 @@ impl EvidenceStore {
         hash: ContentHash,
     ) -> Result<IngestResult> {
         let evidence_id = EvidenceId::new_v4();
-        let key = self.scope_key(scope_id)?;
 
         let tx = self.conn.transaction()?;
         // Dedup index lookup.
@@ -322,9 +337,12 @@ impl EvidenceStore {
             let nonce = random_nonce();
             // AAD for body-table rows binds the content hash itself —
             // an attacker cannot relabel a body across scopes without
-            // rewriting the cipher.
+            // rewriting the cipher. The encryption key is the
+            // scope-independent body-store key so the same row can be
+            // decrypted from evidence rows in any scope that
+            // references this content hash.
             let aad = body_table_aad(&hash);
-            let ciphertext = encrypt_aead(&key, &nonce, body, &aad)?;
+            let ciphertext = encrypt_aead(&self.body_store_key, &nonce, body, &aad)?;
             tx.execute(
                 "INSERT INTO body_store (content_hash, body, nonce, ref_count)
                  VALUES (?1, ?2, ?3, 1)",
@@ -420,10 +438,10 @@ impl EvidenceStore {
             return Err(EvidenceError::Schema("content_hash column has wrong width"));
         }
         content_hash_arr.copy_from_slice(&hash_bytes);
-        let key = self.scope_key(scope_id)?;
 
         match path_tag {
             t if t == StoragePath::Inline as i64 => {
+                let key = self.scope_key(scope_id)?;
                 let body =
                     inline_body.ok_or(EvidenceError::Schema("inline row missing body column"))?;
                 if nonce_bytes.len() != AEAD_NONCE_LEN {
@@ -455,7 +473,9 @@ impl EvidenceStore {
                 let mut nonce = [0u8; AEAD_NONCE_LEN];
                 nonce.copy_from_slice(&nonce_bytes);
                 let aad = body_table_aad(&content_hash_arr);
-                let pt = decrypt_aead(&key, &nonce, &ct, &aad)?;
+                // Decrypt with the scope-independent body-store key —
+                // see Task 1 / `body_store_key` field.
+                let pt = decrypt_aead(&self.body_store_key, &nonce, &ct, &aad)?;
                 Ok(pt)
             }
             _ => Err(EvidenceError::Schema(
@@ -568,7 +588,10 @@ impl EvidenceStore {
         let aad = ring_buffer_aad(scope_id);
         let ciphertext = encrypt_aead(&key, &nonce, body, &aad)?;
         let payload_size = (ciphertext.len() + nonce.len()) as i64;
-        let now = Utc::now().timestamp_micros();
+        // Unix epoch *seconds*, matching the documented type of
+        // [`RingBufferEntry::created_at`] and the `evidence` table's
+        // `created_at` column.
+        let now = Utc::now().timestamp();
 
         let tx = self.conn.transaction()?;
         tx.execute(
