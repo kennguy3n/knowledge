@@ -339,10 +339,13 @@ fn cross_crate_proposal_to_export_pipeline() {
     let proposal_id = store.submit_concept(proposal).expect("submit");
     log_proposal_submitted(&mut audit, proposal_id, agent_id, scope).expect("audit submit");
 
-    // 2. Auto-promote.
+    // 2. Auto-promote. Auto-promotion via `AutoPromotionPolicy` is
+    //    system-driven (no human in the loop), so the audit entry is
+    //    logged with `Actor::System` rather than a meaningless
+    //    `Actor::User(<random uuid>)`.
     let policy = AutoPromotionPolicy::new(0.5, 0, SensitivityClass::Important, false);
     store.review(proposal_id, &policy).expect("review");
-    log_proposal_promoted(&mut audit, proposal_id, agent_id, scope).expect("audit promote");
+    log_proposal_promoted(&mut audit, proposal_id, Actor::System, scope).expect("audit promote");
     let canonical = store.promote_to_canonical(proposal_id).expect("canonical");
 
     // 3. Render canonical -> ConceptGraph (concept_id matches the

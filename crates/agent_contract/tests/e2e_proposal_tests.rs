@@ -22,7 +22,8 @@ use agent_contract::{
     RelationType, SummaryProposal,
 };
 use audit_service::{
-    log_proposal_promoted, log_proposal_rejected, log_proposal_submitted, AuditActionType, AuditLog,
+    log_proposal_promoted, log_proposal_rejected, log_proposal_submitted, Actor, AuditActionType,
+    AuditLog,
 };
 use crypto::EvidenceRef;
 use evidence_store::ScopeId;
@@ -69,9 +70,12 @@ fn observation_proposal_full_lifecycle_with_audit() {
     assert_eq!(decision, ProposalDecision::AutoPromoted);
     assert_eq!(store.get(id).unwrap().state, ProposalState::Promoted);
 
-    // 4. Audit the promotion (system-driven, but recorded).
-    let promoter = Uuid::new_v4();
-    log_proposal_promoted(&mut audit, id, promoter, scope).expect("audit promote");
+    // 4. Audit the promotion. Auto-promotion is system-driven, so the
+    //    audit entry is logged with `Actor::System` rather than a
+    //    meaningless `Actor::User(<random uuid>)` — the audit trail
+    //    must accurately distinguish human-driven promotions from
+    //    substrate-driven ones.
+    log_proposal_promoted(&mut audit, id, Actor::System, scope).expect("audit promote");
 
     // 5. Render the canonical artifact and verify it round-trips.
     let canonical = store.promote_to_canonical(id).expect("canonical");
@@ -295,8 +299,10 @@ fn expired_ttl_proposal_auto_rejected_with_audit() {
     assert!(err.to_string().contains("expired"));
     assert_eq!(store.get(zid).unwrap().state, ProposalState::Rejected);
 
-    // Audit the rejection.
-    log_proposal_rejected(&mut audit, zid, Uuid::new_v4(), scope, "ttl_expired")
+    // Audit the rejection. TTL-expiry rejection is substrate-driven
+    // (no human in the loop), so the audit entry is logged with
+    // `Actor::System`.
+    log_proposal_rejected(&mut audit, zid, Actor::System, scope, "ttl_expired")
         .expect("audit reject");
     assert!(audit
         .entries()
@@ -325,8 +331,14 @@ fn rejection_records_reason_and_audit_entry() {
 
     let rejector = Uuid::new_v4();
     store.reject(id, "duplicate of canonical").expect("reject");
-    log_proposal_rejected(&mut audit, id, rejector, scope, "duplicate of canonical")
-        .expect("audit reject");
+    log_proposal_rejected(
+        &mut audit,
+        id,
+        Actor::User(rejector),
+        scope,
+        "duplicate of canonical",
+    )
+    .expect("audit reject");
 
     let stored = store.get(id).unwrap();
     assert_eq!(stored.state, ProposalState::Rejected);

@@ -94,43 +94,50 @@ pub fn log_proposal_submitted(
 /// Append an [`AuditActionType::AgentProposalPromoted`] entry.
 ///
 /// Records that a previously-submitted proposal has been promoted to
-/// canonical.
+/// canonical. `actor` is supplied by the caller so that human-driven
+/// promotions (`Actor::User`) and substrate-driven promotions
+/// (`Actor::System` — e.g. an [`agent_contract::AutoPromotionPolicy`]
+/// match) record the correct actor kind in the audit trail. Mirrors
+/// the [`log_export`] / [`log_export_simulated`] convention; the
+/// actor's id is carried by the entry's [`crate::Actor`] field, so
+/// the `details` payload no longer duplicates it.
 pub fn log_proposal_promoted(
     log: &mut AuditLog,
     proposal_id: Uuid,
-    promoter_id: Uuid,
+    actor: Actor,
     scope_id: ScopeId,
 ) -> Result<AuditEntryId> {
     let entry = AuditEntryBuilder::new()
-        .actor(Actor::User(promoter_id))
+        .actor(actor)
         .action(AuditActionType::AgentProposalPromoted)
         .target(TargetRef::new(TargetType::MemoryObject, proposal_id))
         .scope(scope_id)
-        .details(json!({
-            "promoter_id": promoter_id,
-        }))
+        .details(json!({}))
         .build()?;
     Ok(log.append(entry))
 }
 
 /// Append an [`AuditActionType::AgentProposalRejected`] entry.
 ///
-/// `reason` is a free-form human-readable string captured into the
-/// entry's `details` field.
+/// `actor` is supplied by the caller so that human-driven rejections
+/// (`Actor::User`) and substrate-driven rejections (`Actor::System` —
+/// e.g. TTL-expiry rejection from
+/// [`agent_contract::ProposalStore::review`]) record the correct
+/// actor kind in the audit trail. `reason` is a free-form
+/// human-readable string captured into the entry's `details` field.
 pub fn log_proposal_rejected(
     log: &mut AuditLog,
     proposal_id: Uuid,
-    rejector_id: Uuid,
+    actor: Actor,
     scope_id: ScopeId,
     reason: &str,
 ) -> Result<AuditEntryId> {
     let entry = AuditEntryBuilder::new()
-        .actor(Actor::User(rejector_id))
+        .actor(actor)
         .action(AuditActionType::AgentProposalRejected)
         .target(TargetRef::new(TargetType::MemoryObject, proposal_id))
         .scope(scope_id)
         .details(json!({
-            "rejector_id": rejector_id,
             "reason": reason,
         }))
         .build()?;
@@ -210,7 +217,8 @@ mod tests {
         let mut log = AuditLog::new();
         let proposal = Uuid::new_v4();
         let user = Uuid::new_v4();
-        let id = log_proposal_promoted(&mut log, proposal, user, fixture_scope()).expect("log");
+        let id = log_proposal_promoted(&mut log, proposal, Actor::User(user), fixture_scope())
+            .expect("log");
         let entry = log.get(id).expect("present");
         assert_eq!(entry.action_type, AuditActionType::AgentProposalPromoted);
         match entry.actor {
@@ -220,12 +228,32 @@ mod tests {
     }
 
     #[test]
+    fn log_proposal_promoted_records_system_actor_for_auto_promotion() {
+        // Auto-promotion via AutoPromotionPolicy is system-driven; the
+        // helper must surface that as Actor::System rather than
+        // hardcoding Actor::User with a meaningless UUID.
+        let mut log = AuditLog::new();
+        let proposal = Uuid::new_v4();
+        let id =
+            log_proposal_promoted(&mut log, proposal, Actor::System, fixture_scope()).expect("log");
+        let entry = log.get(id).expect("present");
+        assert_eq!(entry.action_type, AuditActionType::AgentProposalPromoted);
+        assert!(matches!(entry.actor, Actor::System));
+    }
+
+    #[test]
     fn log_proposal_rejected_records_reason() {
         let mut log = AuditLog::new();
         let proposal = Uuid::new_v4();
         let user = Uuid::new_v4();
-        let id = log_proposal_rejected(&mut log, proposal, user, fixture_scope(), "duplicate")
-            .expect("log");
+        let id = log_proposal_rejected(
+            &mut log,
+            proposal,
+            Actor::User(user),
+            fixture_scope(),
+            "duplicate",
+        )
+        .expect("log");
         let entry = log.get(id).expect("present");
         assert_eq!(entry.action_type, AuditActionType::AgentProposalRejected);
         assert_eq!(
@@ -234,6 +262,36 @@ mod tests {
                 .get("reason")
                 .and_then(serde_json::Value::as_str),
             Some("duplicate")
+        );
+        match entry.actor {
+            Actor::User(id) => assert_eq!(id, user),
+            other => panic!("expected User actor, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn log_proposal_rejected_records_system_actor_for_ttl_expiry() {
+        // TTL-expiry rejection is system-driven; surface that as
+        // Actor::System rather than hardcoding Actor::User.
+        let mut log = AuditLog::new();
+        let proposal = Uuid::new_v4();
+        let id = log_proposal_rejected(
+            &mut log,
+            proposal,
+            Actor::System,
+            fixture_scope(),
+            "ttl_expired",
+        )
+        .expect("log");
+        let entry = log.get(id).expect("present");
+        assert_eq!(entry.action_type, AuditActionType::AgentProposalRejected);
+        assert!(matches!(entry.actor, Actor::System));
+        assert_eq!(
+            entry
+                .details
+                .get("reason")
+                .and_then(serde_json::Value::as_str),
+            Some("ttl_expired")
         );
     }
 
@@ -244,7 +302,7 @@ mod tests {
         let _ = log_export(&mut log, Uuid::new_v4(), scope, Actor::System, &[]).expect("ok");
         let _ =
             log_proposal_submitted(&mut log, Uuid::new_v4(), Uuid::new_v4(), scope).expect("ok");
-        let _ = log_proposal_promoted(&mut log, Uuid::new_v4(), Uuid::new_v4(), scope).expect("ok");
+        let _ = log_proposal_promoted(&mut log, Uuid::new_v4(), Actor::System, scope).expect("ok");
         let seqs: Vec<u64> = log.entries().iter().map(|e| e.sequence).collect();
         assert_eq!(seqs, vec![0, 1, 2]);
     }
