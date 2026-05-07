@@ -72,11 +72,38 @@ where
     /// semantics: only the *currently-observed* tags get
     /// tombstoned). Concurrent adds with fresh tags are unaffected
     /// — this is the "add wins" property.
+    ///
+    /// In-process callers (e.g. unit tests, the synthesis pipeline
+    /// before any cross-replica merge) use this convenience form,
+    /// which snapshots whatever tags are currently observed locally
+    /// and tombstones exactly those. For replay across an [`OpLog`]
+    /// — where the original `Remove` op carries the tags that the
+    /// authoring replica had observed — use [`Self::remove_tags`]
+    /// instead so that tags added concurrently by another replica
+    /// (and merged into the log out of order) are not tombstoned by
+    /// mistake.
+    ///
+    /// [`OpLog`]: crate::op_log::OpLog
     pub fn remove(&mut self, value: &T) {
         if let Some(tags) = self.elements.get(value).cloned() {
             for tag in tags {
                 self.tombstones.insert(tag);
             }
+        }
+    }
+
+    /// Tombstone *exactly* the supplied tags for `value`. Tags not
+    /// listed in `tags` are left observable, which preserves the
+    /// add-wins property even when ops from concurrent replicas have
+    /// been merged into the log in arbitrary order.
+    ///
+    /// Used by [`OpLog::replay`] to honour the `observed_tags`
+    /// snapshot recorded on each `Remove` / `Supersede` op.
+    ///
+    /// [`OpLog::replay`]: crate::op_log::OpLog::replay
+    pub fn remove_tags(&mut self, _value: &T, tags: &[Uuid]) {
+        for tag in tags {
+            self.tombstones.insert(*tag);
         }
     }
 

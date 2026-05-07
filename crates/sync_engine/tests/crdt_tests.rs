@@ -167,3 +167,74 @@ fn supersession_via_engine_records_pair() {
     assert!(set.contains(&"v2".to_string()));
     assert_eq!(supers, vec![("v1".to_string(), "v2".to_string())]);
 }
+
+#[test]
+fn cross_replica_add_wins_after_merge_replay() {
+    // Regression test for the CRDT-replay bug surfaced in PR #6
+    // review: replica B's concurrent `Add(x, T2)` must survive
+    // replica A's `Remove(x)` even when ops are merged into a single
+    // log and replayed in any order. Specifically, the `Remove` op
+    // carries the tags A had observed (just `T1`) and must NOT
+    // tombstone `T2`.
+    let mut a = SyncEngine::<String>::new();
+    let mut b = SyncEngine::<String>::new();
+
+    // 1. A.add("x") allocates T1 in A's log only.
+    let _t1 = a.add("x".into());
+
+    // 2. B.add("x") concurrently allocates T2 in B's log only —
+    //    A has not observed T2 yet.
+    let _t2 = b.add("x".into());
+
+    // 3. A.remove("x") — A only observes T1 at this point, so the
+    //    op records `observed_tags = [T1]`.
+    a.remove("x".into());
+
+    // 4. Merge both ways (commutative + idempotent).
+    a.merge(&b);
+    b.merge(&a);
+
+    // 5. After replay, "x" must still be present on both replicas
+    //    because T2 is not in any `observed_tags` snapshot.
+    let (state_a, _) = a.state().unwrap();
+    let (state_b, _) = b.state().unwrap();
+    assert!(
+        state_a.contains(&"x".to_string()),
+        "add wins on A: T2 must not have been tombstoned"
+    );
+    assert!(
+        state_b.contains(&"x".to_string()),
+        "add wins on B: T2 must not have been tombstoned"
+    );
+}
+
+#[test]
+fn cross_replica_supersede_preserves_concurrent_add() {
+    // Same property as `cross_replica_add_wins_after_merge_replay`
+    // but exercising the `Supersede` arm of replay: a concurrent
+    // `Add` of the *superseded* element on another replica must not
+    // be tombstoned by the supersession op.
+    let mut a = SyncEngine::<String>::new();
+    let mut b = SyncEngine::<String>::new();
+
+    a.add("v1".into()); // T1 on A
+    b.add("v1".into()); // T2 on B (concurrent)
+
+    a.supersede("v1".into(), "v2".into()); // observes only T1
+    a.add("v2".into());
+
+    a.merge(&b);
+    b.merge(&a);
+
+    let (state_a, supers_a) = a.state().unwrap();
+    let (state_b, supers_b) = b.state().unwrap();
+
+    // v1 survives the supersession because B's T2 is not
+    // tombstoned, and v2 is also live (the successor was added).
+    assert!(state_a.contains(&"v1".to_string()));
+    assert!(state_a.contains(&"v2".to_string()));
+    assert!(state_b.contains(&"v1".to_string()));
+    assert!(state_b.contains(&"v2".to_string()));
+    assert_eq!(supers_a, vec![("v1".to_string(), "v2".to_string())]);
+    assert_eq!(supers_b, vec![("v1".to_string(), "v2".to_string())]);
+}

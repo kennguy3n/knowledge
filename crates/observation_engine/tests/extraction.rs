@@ -191,6 +191,57 @@ fn date_time_references_are_picked_up() {
 }
 
 #[test]
+fn date_refs_handle_unicode_with_length_changing_lowercase() {
+    // Regression test for the Unicode byte-offset bug surfaced in
+    // PR #6 review: `İ` U+0130 lowercases to `i\u{307}` (2 → 3
+    // bytes), so any extractor that lowercases the input and then
+    // indexes the original `text` with byte offsets from the
+    // lowercased view will either slice the wrong substring or
+    // panic mid-codepoint. Both cases that appear in the
+    // `extract_date_refs` paths — multi-word phrases and
+    // single-token day / month names — are exercised here.
+    let scope = ScopeId::new_v4();
+
+    // Multi-word phrase, preceded by a length-changing Unicode
+    // char.
+    let obs = ext().extract("İstanbul team meets next week.", scope);
+    let entities: Vec<_> = obs
+        .iter()
+        .filter(|o| o.observation_type == ObservationType::Entity)
+        .map(|o| o.content.as_str())
+        .collect();
+    assert!(
+        entities.iter().any(|e| e.eq_ignore_ascii_case("next week")),
+        "got entities {entities:?}"
+    );
+
+    // Single-token day name preceded by a length-changing Unicode
+    // char.
+    let obs2 = ext().extract("İcebreaker on Friday with Acme.", scope);
+    let entities2: Vec<_> = obs2
+        .iter()
+        .filter(|o| o.observation_type == ObservationType::Entity)
+        .map(|o| o.content.as_str())
+        .collect();
+    assert!(entities2.contains(&"Friday"), "got entities {entities2:?}");
+
+    // Q-pattern preceded by a length-changing Unicode char (the
+    // `Q3 2026` pattern itself is ASCII so byte alignment is
+    // straightforward, but the bug also affected the Q-pattern
+    // when scanning the lowercased mirror).
+    let obs3 = ext().extract("İ-team plan: Q3 2026 review.", scope);
+    let entities3: Vec<_> = obs3
+        .iter()
+        .filter(|o| o.observation_type == ObservationType::Entity)
+        .map(|o| o.content.as_str())
+        .collect();
+    assert!(
+        entities3.iter().any(|d| d.starts_with("Q3")),
+        "got entities {entities3:?}"
+    );
+}
+
+#[test]
 fn numeric_references_with_units_are_extracted() {
     let scope = ScopeId::new_v4();
     let obs = ext().extract("Need a $5M budget over 3 sprints; review 48h later.", scope);

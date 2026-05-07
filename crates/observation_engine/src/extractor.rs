@@ -303,38 +303,86 @@ const RELATIVE_DATE_PHRASES: &[&str] = &[
     "next quarter",
 ];
 
+/// Case-insensitive (ASCII-fold) substring search returning the
+/// `(start_byte, end_byte)` span of the first match in `haystack`,
+/// or `None`. Operates over `char_indices` so the returned byte
+/// offsets are always at valid UTF-8 boundaries even when
+/// lowercasing would otherwise change byte length (e.g. Turkish
+/// `İ` U+0130 → `i\u{307}`).
+fn ci_find(haystack: &str, needle: &str) -> Option<(usize, usize)> {
+    if needle.is_empty() {
+        return Some((0, 0));
+    }
+    let needle_chars: Vec<char> = needle.chars().map(|c| c.to_ascii_lowercase()).collect();
+    let h_chars: Vec<(usize, char)> = haystack.char_indices().collect();
+    if needle_chars.len() > h_chars.len() {
+        return None;
+    }
+    for start in 0..=(h_chars.len() - needle_chars.len()) {
+        let hits = needle_chars
+            .iter()
+            .enumerate()
+            .all(|(i, &n)| h_chars[start + i].1.to_ascii_lowercase() == n);
+        if hits {
+            let start_byte = h_chars[start].0;
+            let end_byte = if start + needle_chars.len() < h_chars.len() {
+                h_chars[start + needle_chars.len()].0
+            } else {
+                haystack.len()
+            };
+            return Some((start_byte, end_byte));
+        }
+    }
+    None
+}
+
 fn extract_date_refs(text: &str) -> Vec<String> {
-    let lower = text.to_lowercase();
     let mut out = Vec::new();
 
-    // Multi-word relative phrases first.
+    // Multi-word relative phrases. We scan `text` directly with
+    // [`ci_find`] so the matched byte span aligns with valid UTF-8
+    // boundaries even when the input contains characters whose
+    // lowercase form has a different byte length than the original.
     for phrase in RELATIVE_DATE_PHRASES {
-        if let Some(idx) = lower.find(phrase) {
-            let original = &text[idx..idx + phrase.len()];
-            out.push(original.to_string());
+        if let Some((start, end)) = ci_find(text, phrase) {
+            out.push(text[start..end].to_string());
         }
     }
 
-    // "by Friday", "on Monday", etc.
-    for token in lower.split(|c: char| !c.is_alphanumeric()) {
-        if DAY_TOKENS.contains(&token) {
-            // Re-extract with original casing by searching.
-            if let Some(idx) = lower.find(token) {
-                out.push(text[idx..idx + token.len()].to_string());
+    // Day / month tokens — walk the *original* text by char so the
+    // emitted span preserves casing without ever indexing through a
+    // length-changed lowercase view.
+    let mut start: Option<usize> = None;
+    let mut last_end = 0usize;
+    for (i, c) in text.char_indices() {
+        if c.is_alphanumeric() {
+            if start.is_none() {
+                start = Some(i);
+            }
+        } else if let Some(s) = start.take() {
+            let token = &text[s..i];
+            let lower = token.to_ascii_lowercase();
+            if DAY_TOKENS.contains(&lower.as_str()) || MONTH_TOKENS.contains(&lower.as_str()) {
+                out.push(token.to_string());
             }
         }
-        if MONTH_TOKENS.contains(&token) {
-            if let Some(idx) = lower.find(token) {
-                out.push(text[idx..idx + token.len()].to_string());
-            }
+        last_end = i + c.len_utf8();
+    }
+    if let Some(s) = start.take() {
+        let token = &text[s..last_end];
+        let lower = token.to_ascii_lowercase();
+        if DAY_TOKENS.contains(&lower.as_str()) || MONTH_TOKENS.contains(&lower.as_str()) {
+            out.push(token.to_string());
         }
     }
 
-    // "Q3 2026" / "Q1 2027" style.
+    // `Q3 2026` / `Q1 2027` style. The pattern is pure ASCII —
+    // `q` / `Q`, an ASCII digit, optional ASCII whitespace, four
+    // ASCII digits — so byte indices are always char boundaries.
+    let bytes = text.as_bytes();
     let mut i = 0;
-    let bytes = lower.as_bytes();
     while i + 2 <= bytes.len() {
-        if (bytes[i] == b'q') && bytes[i + 1].is_ascii_digit() {
+        if bytes[i].eq_ignore_ascii_case(&b'q') && bytes[i + 1].is_ascii_digit() {
             let q_digit = bytes[i + 1];
             if matches!(q_digit, b'1' | b'2' | b'3' | b'4') {
                 let mut j = i + 2;

@@ -149,8 +149,19 @@ where
     }
 
     /// Replay the entire log into a fresh [`AddWinsSet`].
-    /// `Supersede` ops are treated as `Remove(value)` on the
-    /// add-wins set; the successor relationship is preserved
+    ///
+    /// `Remove` and `Supersede` ops tombstone **only** the
+    /// `observed_tags` snapshot recorded on the op at the time it
+    /// was authored — never the full set of tags currently in the
+    /// replayed view. This is what preserves the add-wins property
+    /// across replicas: if replica B adds `x` with a fresh tag `T2`
+    /// concurrently with replica A removing `x` having only
+    /// observed `T1`, then after `merge` + `replay` the op order is
+    /// arbitrary but `T2` is never in any `observed_tags` list and
+    /// therefore never tombstoned.
+    ///
+    /// `Supersede` ops are additionally surfaced in the returned
+    /// supersessions list; the successor element is preserved
     /// implicitly by the subsequent `Add(successor)` op (which
     /// callers must emit alongside).
     pub fn replay(&self) -> Result<(AddWinsSet<T>, Vec<(T, T)>)> {
@@ -161,14 +172,14 @@ where
                 SyncOpKind::Add { value, tag } => set.add_with_tag(value.clone(), *tag),
                 SyncOpKind::Remove {
                     value,
-                    observed_tags: _,
-                } => set.remove(value),
+                    observed_tags,
+                } => set.remove_tags(value, observed_tags),
                 SyncOpKind::Supersede {
                     value,
                     successor,
-                    observed_tags: _,
+                    observed_tags,
                 } => {
-                    set.remove(value);
+                    set.remove_tags(value, observed_tags);
                     supersessions.push((value.clone(), successor.clone()));
                 }
             }
