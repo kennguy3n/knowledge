@@ -388,7 +388,8 @@ pub fn run(
         PHASE,
         "TTL-elapsed proposal lands in Rejected with reason `ttl_expired`",
         store.get(ttl_id).is_some_and(|p| {
-            p.state == ProposalState::Rejected && p.rejection_reason.as_deref() == Some("ttl_expired")
+            p.state == ProposalState::Rejected
+                && p.rejection_reason.as_deref() == Some("ttl_expired")
         }),
     );
 
