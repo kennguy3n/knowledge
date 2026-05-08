@@ -19,19 +19,29 @@
 
 #![deny(missing_docs)]
 
+pub mod community;
 pub mod contradiction;
 pub mod drift;
 pub mod error;
+pub mod graph_of_thought;
 pub mod planner;
 pub mod traversal;
 pub mod workflow;
 
+pub use community::{
+    Community, CommunityDetector, CommunityHierarchy, CommunityId, CommunityQueryRouter,
+    CommunitySummary, CommunitySummaryGenerator,
+};
 pub use contradiction::{
     AdjudicationOutcome, AdjudicationState, AdjudicationWorkflow, ContradictionDetector,
     ContradictionEdge,
 };
 pub use drift::{DriftDetector, DriftMarker, DriftReason};
 pub use error::{ReasoningError, Result};
+pub use graph_of_thought::{
+    Expander, GoTError, GoTExecutor, GoTPlan, GoTQuery, GoTResult, GoTStrategy, GraphExpander,
+    ScoredPath, StaticExpander, ThoughtEdge, ThoughtGraph, ThoughtId, ThoughtNode, ThoughtType,
+};
 pub use planner::{
     PlanExecutionResult, PlannerHeuristics, QueryClass, QueryClassifier, QueryPlan, QueryPlanner,
     RetrievalMode, RetrievalStep, StepOutcome,

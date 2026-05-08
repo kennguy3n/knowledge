@@ -65,9 +65,16 @@ pub trait Connector {
         callback_url: &str,
     ) -> Result<WebhookSubscription>;
 
-    /// Translate one provider-side webhook payload into a
-    /// substrate-side event.
-    fn handle_webhook_event(&self, body: &[u8]) -> Result<ConnectorEvent>;
+    /// Translate one provider-side webhook payload into the
+    /// substrate-side events it carries.
+    ///
+    /// Most providers (HubSpot, Microsoft Graph, Confluence, …)
+    /// deliver **batched** payloads — a single HTTP POST may carry
+    /// several independent change notifications. Implementors must
+    /// emit every event present in `body`; returning only the first
+    /// one silently drops the rest. Single-event providers should
+    /// return a one-element [`Vec`].
+    fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>>;
 }
 
 #[cfg(test)]
@@ -138,8 +145,8 @@ mod tests {
             ))
         }
 
-        fn handle_webhook_event(&self, body: &[u8]) -> Result<ConnectorEvent> {
-            parse_webhook_event(body)
+        fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
+            Ok(vec![parse_webhook_event(body)?])
         }
     }
 
@@ -171,10 +178,11 @@ mod tests {
             "occurred_at": Utc::now(),
         });
         let body = serde_json::to_vec(&payload).unwrap();
-        let ev = connector.handle_webhook_event(&body).unwrap();
-        match ev {
+        let evs = connector.handle_webhook_event(&body).unwrap();
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
             ConnectorEvent::DocumentUpdated { document_id, .. } => {
-                assert_eq!(document_id, SourceDocumentId::new("x-1"));
+                assert_eq!(*document_id, SourceDocumentId::new("x-1"));
             }
             other => panic!("unexpected variant: {other:?}"),
         }

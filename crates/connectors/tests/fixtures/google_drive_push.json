@@ -1,0 +1,7 @@
+{
+  "resourceId": "drive:file:1",
+  "resourceState": "permission_change",
+  "userId": "drive:user:42",
+  "newRole": "writer",
+  "occurredAt": "2026-05-04T09:00:00Z"
+}

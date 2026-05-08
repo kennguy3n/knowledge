@@ -1,0 +1,22 @@
+{
+  "value": [
+    {
+      "id": "onedrive:item:1",
+      "name": "Onboarding.docx",
+      "webUrl": "https://contoso.sharepoint.com/Onboarding.docx",
+      "lastModifiedDateTime": "2026-05-01T10:00:00Z",
+      "createdDateTime": "2026-05-01T10:00:00Z",
+      "deleted": null
+    },
+    {
+      "id": "onedrive:item:2",
+      "name": "Hiring Plan.xlsx",
+      "webUrl": "https://contoso.sharepoint.com/Hiring%20Plan.xlsx",
+      "lastModifiedDateTime": "2026-05-02T08:00:00Z",
+      "createdDateTime": "2026-05-02T08:00:00Z",
+      "deleted": null
+    }
+  ],
+  "@odata.nextLink": null,
+  "@odata.deltaLink": "graph:delta:42"
+}

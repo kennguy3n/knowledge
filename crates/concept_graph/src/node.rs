@@ -8,7 +8,7 @@ use evidence_store::ScopeId;
 
 /// Identifier for a [`ConceptNode`] (UUID v4 newtype, mirroring
 /// `EvidenceId` / `ScopeId`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct NodeId(pub Uuid);
 

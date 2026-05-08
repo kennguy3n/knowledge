@@ -5,6 +5,7 @@ members = [
     "crates/audit_service",
     "crates/concept_graph",
     "crates/connector_framework",
+    "crates/connectors",
     "crates/crypto",
     "crates/evidence_store",
     "crates/export_plane",

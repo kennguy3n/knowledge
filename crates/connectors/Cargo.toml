@@ -1,6 +1,6 @@
 [package]
-name = "reasoning_engine"
-description = "Reasoning engine for the Knowledge substrate: contradiction & drift detection, multi-hop graph traversal, query planning, and workflow memory."
+name = "connectors"
+description = "Vendor-specific connector implementations for the Knowledge substrate (Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,10 +8,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-concept_graph = { path = "../concept_graph" }
+connector_framework = { path = "../connector_framework" }
+crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }
-memory_manager = { path = "../memory_manager" }
-permission_service = { path = "../permission_service" }
+observation_engine = { path = "../observation_engine" }
 
 thiserror = { workspace = true }
 uuid = { workspace = true }

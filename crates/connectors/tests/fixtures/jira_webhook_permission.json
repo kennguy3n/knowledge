@@ -1,0 +1,7 @@
+{
+  "webhookEvent": "permissionscheme_updated",
+  "issueKey": "PROJ-101",
+  "accountId": "jira:user:42",
+  "new_role": "administrators",
+  "timestamp": 1746374500000
+}

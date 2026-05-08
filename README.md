@@ -76,17 +76,33 @@ with `ContradictionDetector` + `DriftDetector` +
 `AdjudicationWorkflow`, typed-edge `GraphTraversal` over the
 concept graph with budgets and path scoring, a `QueryPlanner`
 that routes between `Summary / Fts / SemanticVector /
-GraphTraversal / RawEvidence` retrieval modes, and a
+GraphTraversal / RawEvidence` retrieval modes, a
 `WorkflowMemory` that stores reasoning traces and matches
-patterns; `concept_graph` is extended with an
+patterns, a `GoTExecutor` for Graph-of-Thought reasoning
+(`ThoughtNode` / `ThoughtEdge` / `ThoughtGraph` / `GoTQuery` /
+`GoTStrategy::{BreadthFirst, DepthFirst, BestFirst, Iterative}` /
+`Expander` trait + `StaticExpander` / `GraphExpander` that grounds
+in the concept graph), and a GraphRAG-style community summary
+pipeline (`CommunityDetector` over scope-filtered subgraphs,
+`CommunityHierarchy` for multi-level aggregation,
+`CommunitySummaryGenerator` for structured summaries, and
+`CommunityQueryRouter` with `permission_service` visibility
+filter); `concept_graph` is extended with an
 `IncrementalUpdateEngine` that recomputes only touched branches
-on promotion / supersession / contradiction. The platform
-bindings, the SLM-backed importance classifier, MLS group keying,
-the ML-DSA-65 signer, the seven Phase-4 vendor connectors
-(Google Drive / OneDrive / Notion / Jira / Confluence / Figma /
-HubSpot), the concept-graph visualization, and Graph-of-Thought
-reasoning are tracked in [PROGRESS.md](./PROGRESS.md) but not yet
-shipped.
+on promotion / supersession / contradiction. Phase 4's seven
+vendor connectors live in the new `connectors` crate
+(`GoogleDriveConnector`, `OneDriveConnector`, `NotionConnector`,
+`JiraConnector`, `ConfluenceConnector`, `FigmaConnector`,
+`HubSpotConnector`) — each implements the `Connector` trait from
+`connector_framework` against fixture-backed pages and ships
+connector-specific integration tests under
+`crates/connectors/tests/` exercising the full
+`authenticate → initial_sync → incremental_sync →
+subscribe_webhook → handle_webhook_event` cycle plus error paths.
+The platform bindings, the SLM-backed importance classifier, MLS
+group keying, the ML-DSA-65 signer, and the concept-graph
+visualization are tracked in [PROGRESS.md](./PROGRESS.md) but not
+yet shipped.
 
 ### Prerequisites
 
@@ -121,8 +137,8 @@ test files under `crates/*/tests/`. The Phase-4 + Phase-6 crates
 `audit_service`), the Phase-2 crates (`concept_graph`,
 `synthesis_pipeline`, `sync_engine`), and the extended Phase-1
 crates (`memory_manager`, `observation_engine`, `crypto`) are all
-covered by `cargo test --all` (609 tests passing as of the
-Phase-4 + Phase-6 first delivery). The end-to-end channel →
+covered by `cargo test --all` (697 tests passing as of the
+Phase-4 connector + Phase-6 GoT / Community delivery). The end-to-end channel →
 domain → tenant synthesis chain is exercised by
 `crates/synthesis_engine/tests/hierarchy_e2e.rs`; the agent
 proposal lifecycle and the export plane pipeline are exercised by
@@ -227,6 +243,20 @@ knowledge/
 │   │                          #   AttachmentRegistry (one-connector-per-source),
 │   │                          #   AclSyncEngine + PermissionMapping into
 │   │                          #   permission_service relation tuples
+│   ├── connectors/            # Phase 4 vendor connector implementations:
+│   │                          #   GoogleDriveConnector (files.list +
+│   │                          #   Changes API + push notification channels),
+│   │                          #   OneDriveConnector (Graph /drive/root/delta +
+│   │                          #   subscriptions), NotionConnector (search +
+│   │                          #   databases.query, polling-only), JiraConnector
+│   │                          #   (JQL search + webhooks), ConfluenceConnector
+│   │                          #   (content + body.storage + webhooks),
+│   │                          #   FigmaConnector (files + components + version
+│   │                          #   cursor + FILE_UPDATE webhooks), HubSpotConnector
+│   │                          #   (CRM v3 contacts / companies / deals / notes +
+│   │                          #   subscriptionType webhooks); each implements
+│   │                          #   Connector against fixture-backed pages with
+│   │                          #   integration tests under tests/fixtures/
 │   └── reasoning_engine/      # Phase 6 reasoning plane: ContradictionDetector
 │                              #   + AdjudicationWorkflow (Detected → UnderReview
 │                              #   → Resolved), DriftDetector + DriftMarker,
@@ -237,7 +267,13 @@ knowledge/
 │                              #   GraphTraversal / RawEvidence; QueryClassifier;
 │                              #   PlannerHeuristics; PlanExecutionResult),
 │                              #   WorkflowMemory (WorkflowTrace, WorkflowPattern,
-│                              #   PatternMatcher, TraceRecorder)
+│                              #   PatternMatcher, TraceRecorder), GoTExecutor
+│                              #   (Graph-of-Thought: ThoughtGraph + ThoughtNode +
+│                              #   ThoughtEdge + GoTStrategy + Expander + plan/
+│                              #   expand/evaluate/execute + record_trace),
+│                              #   CommunityDetector + CommunityHierarchy +
+│                              #   CommunitySummaryGenerator + CommunityQueryRouter
+│                              #   (GraphRAG-style scope-aware summaries)
 ├── .github/workflows/ci.yml   # fmt + clippy + build + test on push / PR
 ├── PROPOSAL.md                # product thesis
 ├── ARCHITECTURE.md            # system architecture

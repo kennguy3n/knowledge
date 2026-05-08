@@ -1,0 +1,27 @@
+{
+  "changes": [
+    {
+      "fileId": "drive:file:1",
+      "kind": "file",
+      "removed": false,
+      "file": {
+        "id": "drive:file:1",
+        "name": "Architecture.gdoc",
+        "mimeType": "application/vnd.google-apps.document",
+        "trashed": false,
+        "modifiedTime": "2026-05-03T09:00:00Z",
+        "createdTime": "2026-05-01T10:00:00Z"
+      },
+      "time": "2026-05-03T09:00:00Z"
+    },
+    {
+      "fileId": "drive:file:9",
+      "kind": "file",
+      "removed": true,
+      "file": null,
+      "time": "2026-05-03T09:05:00Z"
+    }
+  ],
+  "nextPageToken": null,
+  "newStartPageToken": "drive:start:99"
+}

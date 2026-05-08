@@ -217,6 +217,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "connectors"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "connector_framework",
+ "crypto",
+ "evidence_store",
+ "observation_engine",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -852,6 +867,7 @@ dependencies = [
  "concept_graph",
  "evidence_store",
  "memory_manager",
+ "permission_service",
  "serde",
  "serde_json",
  "thiserror",

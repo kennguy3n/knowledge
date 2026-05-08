@@ -1,0 +1,22 @@
+{
+  "files": [
+    {
+      "id": "drive:file:1",
+      "name": "Architecture.gdoc",
+      "mimeType": "application/vnd.google-apps.document",
+      "trashed": false,
+      "modifiedTime": "2026-05-01T10:00:00Z",
+      "createdTime": "2026-05-01T10:00:00Z"
+    },
+    {
+      "id": "drive:file:2",
+      "name": "Q2 Roadmap.gsheet",
+      "mimeType": "application/vnd.google-apps.spreadsheet",
+      "trashed": false,
+      "modifiedTime": "2026-05-02T11:30:00Z",
+      "createdTime": "2026-05-02T11:30:00Z"
+    }
+  ],
+  "nextPageToken": null,
+  "newStartPageToken": "drive:start:42"
+}

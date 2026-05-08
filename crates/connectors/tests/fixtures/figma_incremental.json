@@ -1,0 +1,18 @@
+{
+  "file": {
+    "key": "F-DESIGN-1",
+    "name": "Knowledge UI",
+    "version": "200",
+    "last_modified": "2026-05-05T14:00:00Z",
+    "thumbnail_url": "https://figma.example/thumb/F-DESIGN-1.png"
+  },
+  "components": [
+    {
+      "key": "comp-button-primary",
+      "name": "Button / Primary",
+      "description": "Primary button (revamped)",
+      "created_at": "2026-05-01T10:00:00Z",
+      "updated_at": "2026-05-05T14:00:00Z"
+    }
+  ]
+}

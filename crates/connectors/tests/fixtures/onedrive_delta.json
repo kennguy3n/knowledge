@@ -1,0 +1,19 @@
+{
+  "value": [
+    {
+      "id": "onedrive:item:1",
+      "name": "Onboarding.docx",
+      "createdDateTime": "2026-05-01T10:00:00Z",
+      "lastModifiedDateTime": "2026-05-04T12:00:00Z",
+      "deleted": null
+    },
+    {
+      "id": "onedrive:item:9",
+      "name": "Old.docx",
+      "createdDateTime": "2026-04-01T08:00:00Z",
+      "lastModifiedDateTime": "2026-05-04T12:30:00Z",
+      "deleted": { "state": "deleted" }
+    }
+  ],
+  "@odata.deltaLink": "graph:delta:99"
+}

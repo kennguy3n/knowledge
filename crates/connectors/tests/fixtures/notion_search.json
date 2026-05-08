@@ -1,0 +1,20 @@
+{
+  "results": [
+    {
+      "id": "notion:page:1",
+      "object": "page",
+      "created_time": "2026-05-01T10:00:00Z",
+      "last_edited_time": "2026-05-01T10:00:00Z",
+      "archived": false
+    },
+    {
+      "id": "notion:db:1",
+      "object": "database",
+      "created_time": "2026-05-01T11:00:00Z",
+      "last_edited_time": "2026-05-02T09:00:00Z",
+      "archived": false
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false
+}
