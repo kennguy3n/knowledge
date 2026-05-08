@@ -32,8 +32,14 @@
 
 pub mod engine;
 pub mod error;
+pub mod managed_endpoint;
 pub mod stub;
 
 pub use engine::{DomainSynthesisResult, SynthesisEngine, TenantSynthesisResult};
 pub use error::{EngineError, Result};
+pub use managed_endpoint::{
+    EndpointConfig, EndpointError, HttpClient, HttpManagedEndpointSynthesizer, InputObjectRef,
+    MockHttpClient, SynthesisRequest, SynthesisResponse, DEFAULT_DOMAIN_PROMPT, DEFAULT_MAX_TOKENS,
+    DEFAULT_TENANT_PROMPT, DEFAULT_TIMEOUT,
+};
 pub use stub::ManagedEndpointSynthesizer;

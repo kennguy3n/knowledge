@@ -21,6 +21,7 @@ uuid = { workspace = true }
 zeroize = { workspace = true }
 x25519-dalek = { workspace = true }
 ml-kem = { workspace = true }
+ml-dsa = { workspace = true }
 rand_core = { workspace = true }
 rand = { workspace = true }
 

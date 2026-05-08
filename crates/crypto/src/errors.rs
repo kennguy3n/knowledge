@@ -37,4 +37,14 @@ pub enum CryptoError {
     /// tampered bundle, or wrong signing algorithm).
     #[error("provenance signature verification failed")]
     ProvenanceVerification,
+    /// A key-exchange operation violated the active hybrid policy
+    /// (e.g. classical-only when [`HybridMode::HybridTransition`] is
+    /// enforced).
+    #[error("hybrid policy violation: expected {expected}, got {got}")]
+    HybridPolicyViolation {
+        /// Primitive(s) the policy required.
+        expected: &'static str,
+        /// Primitive(s) the operation actually used.
+        got: &'static str,
+    },
 }

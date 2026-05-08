@@ -14,6 +14,13 @@ pub enum EngineError {
     /// The underlying [`synthesis_pipeline`] surfaced an error.
     #[error(transparent)]
     Pipeline(#[from] PipelineError),
+
+    /// The remote managed-endpoint adapter surfaced an error
+    /// (timeout, rate limit, malformed response, ...). The string
+    /// payload preserves the original adapter-side error message so
+    /// the audit log can attribute the failure.
+    #[error("managed endpoint error: {0}")]
+    Endpoint(String),
 }
 
 /// Convenience result alias.
