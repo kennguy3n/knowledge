@@ -30,6 +30,7 @@ pub mod graph;
 pub mod incremental;
 pub mod node;
 pub mod persist;
+pub mod visualization;
 
 pub use edge::{ConceptEdge, EdgeId, RelationType};
 pub use error::{GraphError, Result};
@@ -39,3 +40,8 @@ pub use incremental::{
 };
 pub use node::{ConceptNode, NodeId, NodeState};
 pub use persist::PersistentConceptGraph;
+pub use visualization::{
+    explore_from, neighborhood, search_nodes, subgraph_for_scope, AllowAllScopes, AllowedScopeSet,
+    EdgeVisual, GraphView, NodeVisual, PositionHint, ScopeAccess, TruncationReason, ViewFilter,
+    DEFAULT_MAX_NODES,
+};

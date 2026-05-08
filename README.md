@@ -89,20 +89,54 @@ pipeline (`CommunityDetector` over scope-filtered subgraphs,
 `CommunityQueryRouter` with `permission_service` visibility
 filter); `concept_graph` is extended with an
 `IncrementalUpdateEngine` that recomputes only touched branches
-on promotion / supersession / contradiction. Phase 4's seven
-vendor connectors live in the new `connectors` crate
-(`GoogleDriveConnector`, `OneDriveConnector`, `NotionConnector`,
-`JiraConnector`, `ConfluenceConnector`, `FigmaConnector`,
-`HubSpotConnector`) — each implements the `Connector` trait from
-`connector_framework` against fixture-backed pages and ships
-connector-specific integration tests under
-`crates/connectors/tests/` exercising the full
-`authenticate → initial_sync → incremental_sync →
+on promotion / supersession / contradiction, plus a
+`visualization` module (Kanvas-style `GraphView` / `ViewFilter` /
+`NodeVisual` / `EdgeVisual` exploration with `ScopeAccess`
+permission gating). Phase 4's seven vendor connectors live in the
+new `connectors` crate (`GoogleDriveConnector`,
+`OneDriveConnector`, `NotionConnector`, `JiraConnector`,
+`ConfluenceConnector`, `FigmaConnector`, `HubSpotConnector`) —
+each implements the `Connector` trait from `connector_framework`
+against fixture-backed pages and ships connector-specific
+integration tests under `crates/connectors/tests/` exercising the
+full `authenticate → initial_sync → incremental_sync →
 subscribe_webhook → handle_webhook_event` cycle plus error paths.
-The platform bindings, the SLM-backed importance classifier, MLS
-group keying, the ML-DSA-65 signer, and the concept-graph
-visualization are tracked in [PROGRESS.md](./PROGRESS.md) but not
-yet shipped.
+Phase 7 ships the post-quantum hardening surface: an `MlDsa65Signer`
+/ `MlDsa65Verifier` (`crates/crypto/src/signer_backend.rs`) using
+the RustCrypto `ml-dsa` (FIPS 204) crate behind the existing
+`ProvenanceSigner` trait plus a new `SignerBackend` trait, a
+cryptographic-forgetting module (`crates/crypto/src/forgetting.rs`)
+with `ScopeDek` / `EpochDek` zeroizing on drop, a `DekRegistry`
+that preserves tombstones, `KeyDestructionEvent` audit fan-out,
+and a policy-driven `EpochManager` (time / size / forced
+rotation), a hybrid-enforcement module
+(`crates/crypto/src/hybrid_enforcement.rs`) with
+`HybridMode::{ClassicalOnly, HybridTransition, PostQuantumOnly}`
+and a `KeyExchangeAudit` trail wrapping every encap / decap, an
+attestation module (`crates/crypto/src/attestation.rs`) with
+`AttestationReport` / `AttestationBinding` /
+`AttestationAuditEntry` and `TeePlatform::{IntelTdx, AmdSevSnp,
+NitroEnclaves, Mock}` flows, a memory-quality-metrics module
+(`crates/memory_manager/src/metrics.rs`) with
+`RetentionPrecisionTracker` / `ContradictionDetectionRate` /
+`DecayTuningMetrics` / `MemoryQualityReport` / `MetricsCollector`,
+and a red-team test surface
+(`crates/evidence_store/tests/privacy_redteam.rs` + 11 tests,
+`crates/synthesis_pipeline/tests/privacy_redteam.rs` + 10 tests).
+Phase 2 closes its remaining MLS line item with a skeletal
+`crates/crypto/src/mls.rs` (group state, hybrid leaf KEMs,
+ML-DSA-65-signed commits, key schedule), with the full RFC 9420
+wire protocol delegated to the upstream
+[`kennguy3n/openmls`](https://github.com/kennguy3n/openmls). Phase 3
+closes the managed-endpoint slot with
+`HttpManagedEndpointSynthesizer`
+(`crates/synthesis_engine/src/managed_endpoint.rs`): trait-based
+`HttpClient`, grammar-constrained request building, response
+validation, and full timeout / rate-limit / empty-response error
+handling. The platform bindings, the SLM-backed importance
+classifier, the full RFC 9420 / SPHINCS+ MLS extensions, and the
+concrete confidential-compute TEE worker are tracked in
+[PROGRESS.md](./PROGRESS.md) but not yet shipped.
 
 ### Prerequisites
 
@@ -128,18 +162,27 @@ cargo test --all
 ```
 
 This runs the inline unit tests inside each crate and the integration
-test files under `crates/*/tests/`. The Phase-4 + Phase-6 crates
-(`connector_framework`, `reasoning_engine`) and extensions
-(`observation_engine` document + citation modules,
+test files under `crates/*/tests/`. The Phase-7 crypto modules
+(`crypto::signer_backend`, `crypto::forgetting`,
+`crypto::hybrid_enforcement`, `crypto::attestation`,
+`crypto::mls`), the Phase-7 quality metrics
+(`memory_manager::metrics`), the Phase-6 visualization module
+(`concept_graph::visualization`), the Phase-3 managed endpoint
+(`synthesis_engine::managed_endpoint`), the red-team test surface
+(`evidence_store/tests/privacy_redteam.rs`,
+`synthesis_pipeline/tests/privacy_redteam.rs`), the Phase-4 +
+Phase-6 crates (`connector_framework`, `reasoning_engine`) and
+extensions (`observation_engine` document + citation modules,
 `concept_graph` incremental updates), the Phase-5 crates
 (`agent_contract`, `export_plane`), the Phase-3 crates
 (`permission_service`, `tenant_service`, `synthesis_engine`,
 `audit_service`), the Phase-2 crates (`concept_graph`,
 `synthesis_pipeline`, `sync_engine`), and the extended Phase-1
 crates (`memory_manager`, `observation_engine`, `crypto`) are all
-covered by `cargo test --all` (697 tests passing as of the
-Phase-4 connector + Phase-6 GoT / Community delivery). The end-to-end channel →
-domain → tenant synthesis chain is exercised by
+covered by `cargo test --all` (829 tests passing as of the Phase-7
+PQ hardening + Phase-2 MLS + Phase-3 managed endpoint + Phase-6
+visualization delivery, up from 706 on `main`). The end-to-end
+channel → domain → tenant synthesis chain is exercised by
 `crates/synthesis_engine/tests/hierarchy_e2e.rs`; the agent
 proposal lifecycle and the export plane pipeline are exercised by
 `crates/agent_contract/tests/e2e_proposal_tests.rs` and

@@ -28,6 +28,7 @@ pub mod channel_memory;
 pub mod decay;
 pub mod domain_memory;
 pub mod error;
+pub mod metrics;
 pub mod object;
 pub mod privacy_strip;
 pub mod retention;
