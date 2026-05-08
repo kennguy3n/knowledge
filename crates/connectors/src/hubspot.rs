@@ -7,7 +7,7 @@
 //! * `subscribe_webhook` registers a HubSpot webhook subscription via
 //!   `/webhooks/v3/{appId}/subscriptions` for object lifecycle events.
 //! * `handle_webhook_event` parses HubSpot's batched webhook payload
-//!   — first event in the batch is materialised as a substrate event.
+//!   — every event in the batch is materialised as a substrate event.
 
 use chrono::{DateTime, Duration, Utc};
 use connector_framework::{

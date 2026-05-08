@@ -200,14 +200,21 @@ impl CommunityDetector {
             if members.is_empty() {
                 continue;
             }
-            let label = members
-                .iter()
-                .find_map(|id| node_label.get(id).cloned())
-                .unwrap_or_else(|| {
-                    let id = CommunityId::new_v4();
-                    format!("community-{}", &id.to_string()[..8])
-                });
-            communities.push(Community::leaf(members, scopes).with_label(label));
+            let community = Community::leaf(members.clone(), scopes);
+            let community =
+                if let Some(label) = members.iter().find_map(|id| node_label.get(id).cloned()) {
+                    community.with_label(label)
+                } else {
+                    // Fall through to `Community::leaf`'s default label,
+                    // which is built from the community's own id — see
+                    // `Community::leaf`. The previous fallback path
+                    // generated a brand-new `CommunityId` solely to
+                    // synthesise a label string, then threw it away, so
+                    // the rendered "community-XXXXXXXX" prefix did not
+                    // match the community's actual id.
+                    community
+                };
+            communities.push(community);
         }
         communities.sort_by(|a, b| {
             a.member_node_ids

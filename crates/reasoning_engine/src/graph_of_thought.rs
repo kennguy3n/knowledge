@@ -757,7 +757,7 @@ impl GoTExecutor {
         graph: &ThoughtGraph,
     ) -> Option<(ThoughtId, usize)> {
         match strategy {
-            GoTStrategy::BreadthFirst | GoTStrategy::Iterative => frontier.pop_front(),
+            GoTStrategy::BreadthFirst => frontier.pop_front(),
             GoTStrategy::DepthFirst => frontier.pop_back(),
             GoTStrategy::BestFirst => {
                 if frontier.is_empty() {
@@ -774,6 +774,38 @@ impl GoTExecutor {
                     }
                 }
                 frontier.remove(best_idx)
+            }
+            GoTStrategy::Iterative => {
+                // Best-of-K layer pruning: stay at the shallowest
+                // depth currently in the frontier (BFS-style depth
+                // priority) but, within that layer, always pop the
+                // highest-confidence node. Combined with
+                // `query.max_branches` capping per-expansion children,
+                // this gives the documented "single BFS pass at every
+                // depth, but cap the number of branches kept after
+                // each layer (best-of-K)" semantics — without the
+                // pure-BFS / best-first degeneracies.
+                if frontier.is_empty() {
+                    return None;
+                }
+                let min_depth = frontier
+                    .iter()
+                    .map(|(_, depth)| *depth)
+                    .min()
+                    .expect("non-empty frontier has a min depth");
+                let mut best_idx = None;
+                let mut best_conf = f64::NEG_INFINITY;
+                for (i, (id, depth)) in frontier.iter().enumerate() {
+                    if *depth != min_depth {
+                        continue;
+                    }
+                    let conf = graph.get(*id).map_or(f64::NEG_INFINITY, |n| n.confidence);
+                    if best_idx.is_none() || conf > best_conf {
+                        best_conf = conf;
+                        best_idx = Some(i);
+                    }
+                }
+                best_idx.and_then(|i| frontier.remove(i))
             }
         }
     }
@@ -1026,7 +1058,21 @@ mod tests {
                 ThoughtEdge::Derives,
             )],
         );
-        let (_g, result) = exec.execute(&q, &expander).unwrap();
+        // Reuse the graph + plan we already constructed instead of
+        // calling `execute`, which would build a fresh graph with a
+        // brand-new root id and silently bypass every entry the
+        // `StaticExpander` registered against `plan.root`. See
+        // `execute_from_plan` for the rationale.
+        let result = exec
+            .execute_from_plan(&mut graph, &plan, &q, &expander)
+            .unwrap();
+        assert!(
+            result
+                .best_path
+                .last()
+                .is_some_and(|t| matches!(t.thought_type, ThoughtType::Conclusion)),
+            "expected expansion to actually run and surface the registered conclusion in best_path",
+        );
         let mut mem = WorkflowMemory::new();
         let id = exec.record_trace(&mut mem, &q, &result);
         assert!(mem.get_trace(id).is_ok());

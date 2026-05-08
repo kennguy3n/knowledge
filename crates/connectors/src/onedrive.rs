@@ -10,7 +10,7 @@
 //!   targeting `callback_url` (max ~3-day TTL).
 //! * `handle_webhook_event` parses Graph's
 //!   [`changeNotificationCollection`](https://learn.microsoft.com/en-us/graph/api/resources/changenotification)
-//!   payload — the first notification in the batch is materialised
+//!   payload — every notification in the batch is materialised
 //!   into a substrate event.
 
 use chrono::{DateTime, Duration, Utc};
