@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use evidence_store::ScopeId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -104,6 +105,14 @@ pub enum RedactionLevel {
 pub struct SummaryExportControl {
     /// Substrate summary id.
     pub summary_id: Uuid,
+    /// Substrate scope this summary lives in. The simulator filters
+    /// summaries whose `scope_id` does not match the parent
+    /// [`crate::profile::PortableConceptProfile::scope_id`] so a
+    /// profile rooted in scope A cannot silently surface summaries
+    /// from scope B. The field is mandatory for the same reason
+    /// [`ConceptExportControl::scope_bound`] is consulted on the
+    /// concept side: deny-by-default cross-scope leakage.
+    pub scope_id: ScopeId,
     /// Master switch.
     pub exportable: bool,
     /// Required redaction level for the summary body.
@@ -112,9 +121,10 @@ pub struct SummaryExportControl {
 
 impl SummaryExportControl {
     /// Construct a fresh control row.
-    pub fn new(summary_id: Uuid, redaction_level: RedactionLevel) -> Self {
+    pub fn new(summary_id: Uuid, scope_id: ScopeId, redaction_level: RedactionLevel) -> Self {
         Self {
             summary_id,
+            scope_id,
             exportable: true,
             redaction_level,
         }
@@ -422,8 +432,12 @@ mod tests {
     fn summary_registered_allowed() {
         let mut r = ExportControlRegistry::new();
         let id = Uuid::new_v4();
-        r.insert_summary(SummaryExportControl::new(id, RedactionLevel::None))
-            .expect("ok");
+        r.insert_summary(SummaryExportControl::new(
+            id,
+            ScopeId::new_v4(),
+            RedactionLevel::None,
+        ))
+        .expect("ok");
         assert!(r.allows_summary(id));
     }
 
@@ -431,8 +445,12 @@ mod tests {
     fn summary_redaction_level_round_trip() {
         let mut r = ExportControlRegistry::new();
         let id = Uuid::new_v4();
-        r.insert_summary(SummaryExportControl::new(id, RedactionLevel::Partial))
-            .expect("ok");
+        r.insert_summary(SummaryExportControl::new(
+            id,
+            ScopeId::new_v4(),
+            RedactionLevel::Partial,
+        ))
+        .expect("ok");
         assert_eq!(
             r.get_summary(id).unwrap().redaction_level,
             RedactionLevel::Partial

@@ -166,30 +166,57 @@ impl<'a> PolicySimulator<'a> {
         // both in `excluded_summaries` (with a stable reason) and as
         // a non-fatal warning on the `SimulationResult`.
         //
+        // F-12 — summaries whose [`crate::controls::SummaryExportControl::scope_id`]
+        // does not match the parent profile's `scope_id` are excluded
+        // up-front with a stable reason. Without this filter a
+        // profile rooted in scope A could silently surface summaries
+        // registered in scope B (the registry is keyed only by
+        // summary id), bypassing the substrate's scope boundary.
+        // Cross-scope exclusions are reported regardless of the
+        // summary's `exportable` flag so callers can spot misrouted
+        // controls in the preview.
+        //
         // The registry's underlying iterator is a `HashMap` iterator
         // and therefore non-deterministic. Two simulations of the
         // same profile under the same policy must surface the same
         // included/excluded summary ids, otherwise the preview is
         // unauditable. Both buckets are sorted by `summary_id` before
         // the cap is applied so the cut is stable across runs.
-        let mut exportable: Vec<&crate::controls::SummaryExportControl> =
-            self.controls.summaries().filter(|c| c.exportable).collect();
+        let mut included_summaries: Vec<Uuid> = Vec::new();
+        let mut excluded_summaries: Vec<SimulatedExclusion> = Vec::new();
+
+        let mut cross_scope: Vec<&crate::controls::SummaryExportControl> = self
+            .controls
+            .summaries()
+            .filter(|c| c.scope_id != profile.scope_id)
+            .collect();
+        cross_scope.sort_by_key(|c| c.summary_id);
+        for c in cross_scope {
+            excluded_summaries.push(SimulatedExclusion {
+                entity_id: c.summary_id,
+                reason: "summary scope does not match profile scope".into(),
+            });
+        }
+
+        let mut exportable: Vec<&crate::controls::SummaryExportControl> = self
+            .controls
+            .summaries()
+            .filter(|c| c.scope_id == profile.scope_id && c.exportable)
+            .collect();
         exportable.sort_by_key(|c| c.summary_id);
         let mut blocked: Vec<&crate::controls::SummaryExportControl> = self
             .controls
             .summaries()
-            .filter(|c| !c.exportable)
+            .filter(|c| c.scope_id == profile.scope_id && !c.exportable)
             .collect();
         blocked.sort_by_key(|c| c.summary_id);
 
-        let mut included_summaries: Vec<Uuid> = Vec::new();
-        let mut excluded_summaries: Vec<SimulatedExclusion> = blocked
-            .into_iter()
-            .map(|c| SimulatedExclusion {
+        for c in blocked {
+            excluded_summaries.push(SimulatedExclusion {
                 entity_id: c.summary_id,
                 reason: "summary control marked non-exportable".into(),
-            })
-            .collect();
+            });
+        }
         let mut warnings = decision.warnings;
         let mut capped = 0usize;
         for c in exportable {
@@ -380,15 +407,15 @@ mod tests {
 
     #[test]
     fn simulator_surfaces_summaries() {
-        let (profile, _scope) = fixture_profile(0);
+        let (profile, scope) = fixture_profile(0);
         let policy = ExportPolicy::default();
         let mut registry = ExportControlRegistry::new();
         let s1 = Uuid::new_v4();
         let s2 = Uuid::new_v4();
         registry
-            .insert_summary(SummaryExportControl::new(s1, RedactionLevel::None))
+            .insert_summary(SummaryExportControl::new(s1, scope, RedactionLevel::None))
             .expect("ok");
-        let mut blocked = SummaryExportControl::new(s2, RedactionLevel::Full);
+        let mut blocked = SummaryExportControl::new(s2, scope, RedactionLevel::Full);
         blocked.exportable = false;
         registry.insert_summary(blocked).expect("ok");
         let sim = PolicySimulator::new(&policy, &registry);
@@ -405,7 +432,7 @@ mod tests {
         // included, three excluded with the `max_summaries` reason,
         // and surface a non-fatal warning describing the cap so the
         // preview matches the actual export shape.
-        let (profile, _scope) = fixture_profile(0);
+        let (profile, scope) = fixture_profile(0);
         let policy = ExportPolicy {
             max_summaries: 2,
             ..ExportPolicy::default()
@@ -415,6 +442,7 @@ mod tests {
             registry
                 .insert_summary(SummaryExportControl::new(
                     Uuid::new_v4(),
+                    scope,
                     RedactionLevel::None,
                 ))
                 .expect("insert");
@@ -434,12 +462,13 @@ mod tests {
     fn simulator_does_not_warn_when_summary_count_under_cap() {
         // No cap hit means no warning — sanity check on the inverse
         // of `simulator_caps_summaries_via_max_summaries_policy`.
-        let (profile, _scope) = fixture_profile(0);
+        let (profile, scope) = fixture_profile(0);
         let policy = ExportPolicy::default();
         let mut registry = ExportControlRegistry::new();
         registry
             .insert_summary(SummaryExportControl::new(
                 Uuid::new_v4(),
+                scope,
                 RedactionLevel::None,
             ))
             .expect("insert");
@@ -448,6 +477,99 @@ mod tests {
         assert_eq!(result.included_summaries.len(), 1);
         assert!(result.excluded_summaries.is_empty());
         assert!(!result.warnings.iter().any(|w| w.contains("max_summaries")));
+    }
+
+    #[test]
+    fn simulator_excludes_summary_from_other_scope() {
+        // F-12 regression — a profile rooted in scope A must not
+        // surface a summary whose [`SummaryExportControl::scope_id`]
+        // is scope B, even when the summary is otherwise exportable.
+        // The mismatched summary lands in `excluded_summaries` with
+        // a stable reason; the scope-A summary is included normally.
+        let (profile, scope_a) = fixture_profile(0);
+        let scope_b = ScopeId::new_v4();
+        assert_ne!(scope_a, scope_b);
+
+        let in_scope = Uuid::new_v4();
+        let out_of_scope = Uuid::new_v4();
+        let mut registry = ExportControlRegistry::new();
+        registry
+            .insert_summary(SummaryExportControl::new(
+                in_scope,
+                scope_a,
+                RedactionLevel::None,
+            ))
+            .expect("insert in-scope");
+        registry
+            .insert_summary(SummaryExportControl::new(
+                out_of_scope,
+                scope_b,
+                RedactionLevel::None,
+            ))
+            .expect("insert out-of-scope");
+
+        let policy = ExportPolicy::default();
+        let sim = PolicySimulator::new(&policy, &registry);
+        let result = sim.simulate(&profile);
+
+        assert_eq!(result.included_summaries, vec![in_scope]);
+        assert_eq!(result.excluded_summaries.len(), 1);
+        assert_eq!(result.excluded_summaries[0].entity_id, out_of_scope);
+        assert!(result.excluded_summaries[0]
+            .reason
+            .contains("summary scope does not match profile scope"));
+    }
+
+    #[test]
+    fn simulator_cross_scope_summary_excluded_even_when_exportable() {
+        // Cross-scope summaries must be filtered before the cap is
+        // applied — otherwise the cap could be "used up" by
+        // illegitimate cross-scope candidates and starve legitimate
+        // in-scope summaries. We register `max_summaries` in-scope
+        // entries plus one cross-scope entry; the in-scope ones must
+        // all be included and the cross-scope one must be excluded
+        // with the scope-mismatch reason (not the `max_summaries`
+        // reason).
+        let (profile, scope_a) = fixture_profile(0);
+        let scope_b = ScopeId::new_v4();
+
+        let policy = ExportPolicy {
+            max_summaries: 2,
+            ..ExportPolicy::default()
+        };
+
+        let mut registry = ExportControlRegistry::new();
+        for _ in 0..2 {
+            registry
+                .insert_summary(SummaryExportControl::new(
+                    Uuid::new_v4(),
+                    scope_a,
+                    RedactionLevel::None,
+                ))
+                .expect("insert in-scope");
+        }
+        let leaked = Uuid::new_v4();
+        registry
+            .insert_summary(SummaryExportControl::new(
+                leaked,
+                scope_b,
+                RedactionLevel::None,
+            ))
+            .expect("insert leaked");
+
+        let sim = PolicySimulator::new(&policy, &registry);
+        let result = sim.simulate(&profile);
+
+        assert_eq!(result.included_summaries.len(), 2);
+        assert!(!result.included_summaries.contains(&leaked));
+        let leaked_excl = result
+            .excluded_summaries
+            .iter()
+            .find(|e| e.entity_id == leaked)
+            .expect("leaked summary must be excluded");
+        assert!(leaked_excl
+            .reason
+            .contains("summary scope does not match profile scope"));
     }
 
     #[test]

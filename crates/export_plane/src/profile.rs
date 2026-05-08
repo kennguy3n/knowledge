@@ -307,6 +307,12 @@ impl ExportViewContent {
 pub struct ApprovedSummary {
     /// Substrate summary id.
     pub summary_id: Uuid,
+    /// Substrate scope this summary belongs to. Mirrors
+    /// [`ApprovedConcept::scope_id`] so consumers of the rendered
+    /// [`ExportView`] can attribute each surfaced summary back to a
+    /// scope without having to cross-reference the
+    /// [`crate::controls::ExportControlRegistry`].
+    pub scope_id: ScopeId,
     /// Summary body (post-redaction; see
     /// [`crate::controls::SummaryExportControl::redaction_level`]).
     pub body: String,
@@ -417,6 +423,7 @@ mod tests {
         );
         let summary = ApprovedSummary {
             summary_id: Uuid::new_v4(),
+            scope_id: scope,
             body: "body".into(),
         };
         let pack = EvidencePack {
