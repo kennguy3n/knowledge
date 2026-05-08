@@ -82,7 +82,14 @@ fn full_export_pipeline_emits_concepts_only_view_and_audit_trail() {
     let mut workflow = ConceptApprovalWorkflow::new();
     let profile_id = Uuid::new_v4();
     let approved = workflow
-        .approve_for_export(concept_id, scope, profile_id, &graph, &registry)
+        .approve_for_export(
+            concept_id,
+            scope,
+            profile_id,
+            SensitivityClass::Useful,
+            &graph,
+            &registry,
+        )
         .expect("approve");
     assert_eq!(approved.concept_id, concept_id);
 
@@ -257,7 +264,14 @@ fn concept_in_candidate_state_cannot_be_approved() {
     };
     let mut wf = ConceptApprovalWorkflow::new();
     let err = wf
-        .approve_for_export(id.0, scope, Uuid::new_v4(), &graph, &registry)
+        .approve_for_export(
+            id.0,
+            scope,
+            Uuid::new_v4(),
+            SensitivityClass::Useful,
+            &graph,
+            &registry,
+        )
         .expect_err("not canonical");
     assert_eq!(err, ApprovalError::NotCanonical(id.0));
 }
@@ -268,7 +282,14 @@ fn revocation_removes_concept_from_approved_set() {
     let (graph, registry, concept_id) = graph_with_canonical_concept("Atlas", "definition", scope);
     let mut wf = ConceptApprovalWorkflow::new();
     let approved = wf
-        .approve_for_export(concept_id, scope, Uuid::new_v4(), &graph, &registry)
+        .approve_for_export(
+            concept_id,
+            scope,
+            Uuid::new_v4(),
+            SensitivityClass::Useful,
+            &graph,
+            &registry,
+        )
         .expect("approve");
     assert_eq!(wf.list_approved(scope).len(), 1);
     wf.revoke_approval(approved.concept_id).expect("revoke");
@@ -368,7 +389,14 @@ fn cross_crate_proposal_to_export_pipeline() {
     let mut wf = ConceptApprovalWorkflow::new();
     let profile_id = Uuid::new_v4();
     let approved = wf
-        .approve_for_export(canonical_concept_id, scope, profile_id, &graph, &registry)
+        .approve_for_export(
+            canonical_concept_id,
+            scope,
+            profile_id,
+            SensitivityClass::Useful,
+            &graph,
+            &registry,
+        )
         .expect("approve");
 
     // 5. Build profile + simulate + render.

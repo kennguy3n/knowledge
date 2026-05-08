@@ -62,11 +62,23 @@ impl ConceptApprovalWorkflow {
     ///   export (`exportable == true`, time-bound not exceeded).
     /// * `profile_id` is consulted against the control's
     ///   `allowed_profiles` whitelist.
+    /// * `sensitivity` is the [`SensitivityClass`] to attach to the
+    ///   resulting [`ApprovedConcept`]. Callers must derive this
+    ///   value from authoritative substrate state (e.g. the
+    ///   most-sensitive supporting evidence row, an operator
+    ///   override, or a downgrade decision logged in the audit
+    ///   trail) and pass it explicitly. The export plane's
+    ///   sensitivity ceiling can only meaningfully gate concepts
+    ///   when the workflow refuses to invent a default — a hardcoded
+    ///   `Useful` would silently lift `Important` and `Critical`
+    ///   concepts past any policy ceiling stricter than `Useful`,
+    ///   which is exactly the leak the ceiling exists to prevent.
     pub fn approve_for_export(
         &mut self,
         concept_id: Uuid,
         scope: ScopeId,
         profile_id: Uuid,
+        sensitivity: SensitivityClass,
         graph: &ConceptGraph,
         controls: &ExportControlRegistry,
     ) -> Result<ApprovedConcept, ApprovalError> {
@@ -105,7 +117,7 @@ impl ConceptApprovalWorkflow {
             node.definition.clone(),
             scope,
             provenance,
-            sensitivity_for_concept(node),
+            sensitivity,
         );
         self.approved.insert(concept_id, approved.clone());
         Ok(approved)
@@ -139,16 +151,6 @@ impl ConceptApprovalWorkflow {
     }
 }
 
-/// The substrate's [`concept_graph::ConceptNode`] does not (yet)
-/// carry a `SensitivityClass` field — concept sensitivity is
-/// inherited from the most-sensitive supporting evidence row.
-/// Phase 5's export plane treats canonical concepts as `Useful`
-/// by default; future phases will let callers override this when
-/// they hand the concept to the approval workflow.
-fn sensitivity_for_concept(_node: &concept_graph::ConceptNode) -> SensitivityClass {
-    SensitivityClass::Useful
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,10 +180,51 @@ mod tests {
         let registry = registry_with(id);
         let mut wf = ConceptApprovalWorkflow::new();
         let approved = wf
-            .approve_for_export(id, ScopeId::new_v4(), Uuid::new_v4(), &graph, &registry)
+            .approve_for_export(
+                id,
+                ScopeId::new_v4(),
+                Uuid::new_v4(),
+                SensitivityClass::Useful,
+                &graph,
+                &registry,
+            )
             .expect("approve");
         assert_eq!(approved.concept_id, id);
         assert!(wf.get(id).is_some());
+    }
+
+    #[test]
+    fn approve_propagates_caller_supplied_sensitivity_class() {
+        // F-8 — `approve_for_export` must record the
+        // `SensitivityClass` the caller passed in, *not* a hardcoded
+        // default. This regression test exercises every variant so a
+        // future change that re-introduces a hardcoded value is
+        // caught immediately.
+        let cases = [
+            SensitivityClass::Noise,
+            SensitivityClass::Useful,
+            SensitivityClass::Important,
+            SensitivityClass::Critical,
+        ];
+        for class in cases {
+            let (graph, id) = graph_with_concept(NodeState::Canonical);
+            let registry = registry_with(id);
+            let mut wf = ConceptApprovalWorkflow::new();
+            let approved = wf
+                .approve_for_export(
+                    id,
+                    ScopeId::new_v4(),
+                    Uuid::new_v4(),
+                    class,
+                    &graph,
+                    &registry,
+                )
+                .expect("approve");
+            assert_eq!(
+                approved.sensitivity_class, class,
+                "sensitivity {class:?} must round-trip through approve_for_export"
+            );
+        }
     }
 
     #[test]
@@ -191,7 +234,14 @@ mod tests {
         let mut wf = ConceptApprovalWorkflow::new();
         let id = Uuid::new_v4();
         let err = wf
-            .approve_for_export(id, ScopeId::new_v4(), Uuid::new_v4(), &graph, &registry)
+            .approve_for_export(
+                id,
+                ScopeId::new_v4(),
+                Uuid::new_v4(),
+                SensitivityClass::Useful,
+                &graph,
+                &registry,
+            )
             .expect_err("unknown");
         assert_eq!(err, ApprovalError::NotFound(id));
     }
@@ -202,7 +252,14 @@ mod tests {
         let registry = registry_with(id);
         let mut wf = ConceptApprovalWorkflow::new();
         let err = wf
-            .approve_for_export(id, ScopeId::new_v4(), Uuid::new_v4(), &graph, &registry)
+            .approve_for_export(
+                id,
+                ScopeId::new_v4(),
+                Uuid::new_v4(),
+                SensitivityClass::Useful,
+                &graph,
+                &registry,
+            )
             .expect_err("not canonical");
         assert_eq!(err, ApprovalError::NotCanonical(id));
     }
@@ -213,7 +270,14 @@ mod tests {
         let registry = ExportControlRegistry::new();
         let mut wf = ConceptApprovalWorkflow::new();
         let err = wf
-            .approve_for_export(id, ScopeId::new_v4(), Uuid::new_v4(), &graph, &registry)
+            .approve_for_export(
+                id,
+                ScopeId::new_v4(),
+                Uuid::new_v4(),
+                SensitivityClass::Useful,
+                &graph,
+                &registry,
+            )
             .expect_err("not exportable");
         assert_eq!(err, ApprovalError::NotExportable(id));
     }
@@ -227,7 +291,14 @@ mod tests {
         registry.insert_concept(control).expect("insert");
         let mut wf = ConceptApprovalWorkflow::new();
         let err = wf
-            .approve_for_export(id, ScopeId::new_v4(), Uuid::new_v4(), &graph, &registry)
+            .approve_for_export(
+                id,
+                ScopeId::new_v4(),
+                Uuid::new_v4(),
+                SensitivityClass::Useful,
+                &graph,
+                &registry,
+            )
             .expect_err("not exportable");
         assert_eq!(err, ApprovalError::NotExportable(id));
     }
@@ -239,10 +310,24 @@ mod tests {
         let mut wf = ConceptApprovalWorkflow::new();
         let scope = ScopeId::new_v4();
         let profile = Uuid::new_v4();
-        wf.approve_for_export(id, scope, profile, &graph, &registry)
-            .expect("first");
+        wf.approve_for_export(
+            id,
+            scope,
+            profile,
+            SensitivityClass::Useful,
+            &graph,
+            &registry,
+        )
+        .expect("first");
         let err = wf
-            .approve_for_export(id, scope, profile, &graph, &registry)
+            .approve_for_export(
+                id,
+                scope,
+                profile,
+                SensitivityClass::Useful,
+                &graph,
+                &registry,
+            )
             .expect_err("duplicate");
         assert_eq!(err, ApprovalError::AlreadyApproved(id));
     }
@@ -252,8 +337,15 @@ mod tests {
         let (graph, id) = graph_with_concept(NodeState::Canonical);
         let registry = registry_with(id);
         let mut wf = ConceptApprovalWorkflow::new();
-        wf.approve_for_export(id, ScopeId::new_v4(), Uuid::new_v4(), &graph, &registry)
-            .expect("approve");
+        wf.approve_for_export(
+            id,
+            ScopeId::new_v4(),
+            Uuid::new_v4(),
+            SensitivityClass::Useful,
+            &graph,
+            &registry,
+        )
+        .expect("approve");
         wf.revoke_approval(id).expect("revoke");
         assert!(wf.get(id).is_none());
     }
@@ -282,10 +374,24 @@ mod tests {
             .expect("b");
 
         let mut wf = ConceptApprovalWorkflow::new();
-        wf.approve_for_export(id_a, scope_a, Uuid::new_v4(), &graph_a, &registry)
-            .expect("a");
-        wf.approve_for_export(id_b, scope_b, Uuid::new_v4(), &graph_b, &registry)
-            .expect("b");
+        wf.approve_for_export(
+            id_a,
+            scope_a,
+            Uuid::new_v4(),
+            SensitivityClass::Useful,
+            &graph_a,
+            &registry,
+        )
+        .expect("a");
+        wf.approve_for_export(
+            id_b,
+            scope_b,
+            Uuid::new_v4(),
+            SensitivityClass::Useful,
+            &graph_b,
+            &registry,
+        )
+        .expect("b");
 
         let list_a = wf.list_approved(scope_a);
         assert_eq!(list_a.len(), 1);
