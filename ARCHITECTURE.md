@@ -40,7 +40,8 @@ Knowledge System
 │   ├── Sync Engine (CRDT + MLS)
 │   ├── Inference Router (MLX → LlamaCpp → Fallback adapters, device-tier gating)
 │   ├── FFI (UniFFI for iOS / Android)
-│   └── N-API Addon (macOS / Windows Electron)
+│   ├── N-API Addon (macOS / Windows Electron)
+│   └── Demo (`crates/demo/` — full Phase 1 → Phase 12 end-to-end pipeline driver, results renderer, integration harness)
 ├── On-Device Inference
 │   ├── llama-server (PrismML fork, Bonsai-1.7B)
 │   ├── MLX runtime (Apple Silicon)

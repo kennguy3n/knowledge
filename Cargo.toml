@@ -7,6 +7,7 @@ members = [
     "crates/connector_framework",
     "crates/connectors",
     "crates/crypto",
+    "crates/demo",
     "crates/evidence_store",
     "crates/export_plane",
     "crates/ffi",

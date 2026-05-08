@@ -3,7 +3,7 @@
 //!
 //! Per `PROPOSAL.md` §10.2 and `PHASES.md` Phase 4, the substrate
 //! ingests evidence from external systems through the
-//! [`connector_framework`] trait. This crate ships seven concrete
+//! [`connector_framework`] trait. This crate ships nine concrete
 //! connectors against the most common B2B sources:
 //!
 //! * [`google_drive::GoogleDriveConnector`] — Google Drive API v3
@@ -19,6 +19,12 @@
 //!   `/files/{key}/components`, file-update webhooks).
 //! * [`hubspot::HubSpotConnector`] — HubSpot CRM v3
 //!   (`/crm/v3/objects/{type}`, webhook subscriptions).
+//! * [`slack::SlackConnector`] — Slack Web API (`conversations.list` /
+//!   `conversations.history`) plus the Events API for `message`,
+//!   `file_shared`, and `channel_archive` push events.
+//! * [`email::EmailConnector`] — Gmail API (`messages.list` + Cloud
+//!   Pub/Sub push) and Microsoft Graph (`/me/messages` +
+//!   `/subscriptions`) under a shared `EmailProvider` enum.
 //!
 //! Each connector models the vendor's REST contract as plain serde
 //! types and parses fixture JSON into [`ConnectorEvent`]s. The
