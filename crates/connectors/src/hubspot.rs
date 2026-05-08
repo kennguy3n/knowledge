@@ -141,24 +141,34 @@ impl HubSpotConnector {
     }
 }
 
-fn object_to_event(obj: &HubSpotObject) -> ConnectorEvent {
+/// Which sync pass produced this object — we use this instead of
+/// comparing `created_at == updated_at` because HubSpot may set
+/// the two timestamps to slightly different millisecond instants
+/// even on creation, which would silently misclassify the event.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum SyncMode {
+    Initial,
+    Incremental,
+}
+
+fn object_to_event(obj: &HubSpotObject, mode: SyncMode) -> ConnectorEvent {
     let occurred_at = obj.updated_at.or(obj.created_at).unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(format!("{}:{}", kind_str(obj.kind), obj.id));
     if obj.archived {
-        ConnectorEvent::DocumentDeleted {
+        return ConnectorEvent::DocumentDeleted {
             document_id: id,
             occurred_at,
-        }
-    } else if obj.updated_at == obj.created_at {
-        ConnectorEvent::DocumentCreated {
+        };
+    }
+    match mode {
+        SyncMode::Initial => ConnectorEvent::DocumentCreated {
             document_id: id,
             occurred_at,
-        }
-    } else {
-        ConnectorEvent::DocumentUpdated {
+        },
+        SyncMode::Incremental => ConnectorEvent::DocumentUpdated {
             document_id: id,
             occurred_at,
-        }
+        },
     }
 }
 
@@ -237,7 +247,7 @@ impl Connector for HubSpotConnector {
         let mut watermark: Option<DateTime<Utc>> = None;
         for page in &self.initial_pages {
             for obj in &page.results {
-                events.push(object_to_event(obj));
+                events.push(object_to_event(obj, SyncMode::Initial));
                 if let Some(t) = obj.updated_at.or(obj.created_at) {
                     watermark = Some(watermark.map_or(t, |w| w.max(t)));
                 }
@@ -260,7 +270,7 @@ impl Connector for HubSpotConnector {
         let mut events: Vec<ConnectorEvent> = Vec::new();
         let mut watermark: Option<DateTime<Utc>> = None;
         for obj in &page.results {
-            events.push(object_to_event(obj));
+            events.push(object_to_event(obj, SyncMode::Incremental));
             if let Some(t) = obj.updated_at.or(obj.created_at) {
                 watermark = Some(watermark.map_or(t, |w| w.max(t)));
             }
@@ -292,25 +302,34 @@ impl Connector for HubSpotConnector {
         ))
     }
 
-    fn handle_webhook_event(&self, body: &[u8]) -> Result<ConnectorEvent> {
+    fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
+        // HubSpot delivers webhooks as a JSON array — a single POST
+        // can carry many independent subscription events. Every
+        // entry must surface; previously we returned only the
+        // first, which silently dropped the rest.
         let batch: Vec<HubSpotWebhookEvent> = serde_json::from_slice(body)?;
-        let e = batch
-            .into_iter()
-            .next()
-            .ok_or_else(|| ConnectorError::Webhook("empty HubSpot webhook batch".to_string()))?;
-        let occurred_at = e
-            .occurred_at_ms
-            .and_then(DateTime::<Utc>::from_timestamp_millis)
-            .unwrap_or_else(Utc::now);
-        subscription_to_event(
-            &e.subscription_type,
-            e.object_id,
-            occurred_at,
-            e.user_id,
-            // HubSpot encodes the new role in `propertyValue` for the
-            // `permissionChange` subscription.
-            e.property_value.as_deref(),
-        )
+        if batch.is_empty() {
+            return Err(ConnectorError::Webhook(
+                "empty HubSpot webhook batch".to_string(),
+            ));
+        }
+        let mut events: Vec<ConnectorEvent> = Vec::with_capacity(batch.len());
+        for e in batch {
+            let occurred_at = e
+                .occurred_at_ms
+                .and_then(DateTime::<Utc>::from_timestamp_millis)
+                .unwrap_or_else(Utc::now);
+            events.push(subscription_to_event(
+                &e.subscription_type,
+                e.object_id,
+                occurred_at,
+                e.user_id,
+                // HubSpot encodes the new role in `propertyValue`
+                // for the `permissionChange` subscription.
+                e.property_value.as_deref(),
+            )?);
+        }
+        Ok(events)
     }
 }
 
@@ -387,10 +406,11 @@ mod tests {
             }
         ]);
         let c = HubSpotConnector::new(ConnectorInstanceId::new_v4());
-        let ev = c
+        let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
-        match ev {
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
             ConnectorEvent::DocumentCreated { document_id, .. } => {
                 assert_eq!(document_id.as_str(), "contact:1234");
             }
@@ -410,17 +430,18 @@ mod tests {
             }
         ]);
         let c = HubSpotConnector::new(ConnectorInstanceId::new_v4());
-        let ev = c
+        let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
-        match ev {
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
             ConnectorEvent::PermissionChanged {
                 document_id,
                 new_level,
                 ..
             } => {
                 assert_eq!(document_id.as_str(), "company:42");
-                assert_eq!(new_level, Some(SourcePermissionLevel::Write));
+                assert_eq!(*new_level, Some(SourcePermissionLevel::Write));
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -446,5 +467,64 @@ mod tests {
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    #[test]
+    fn webhook_emits_every_event_in_batched_payload() {
+        // Regression test: HubSpot ships subscription events in a
+        // JSON array — one POST can carry many. Earlier revisions
+        // dropped everything past index 0.
+        let body = serde_json::json!([
+            {
+                "subscriptionType": "contact.creation",
+                "objectId": 1,
+                "occurredAt": Utc::now().timestamp_millis(),
+            },
+            {
+                "subscriptionType": "contact.propertyChange",
+                "objectId": 1,
+                "occurredAt": Utc::now().timestamp_millis(),
+            },
+            {
+                "subscriptionType": "deal.deletion",
+                "objectId": 9,
+                "occurredAt": Utc::now().timestamp_millis(),
+            }
+        ]);
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4());
+        let evs = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap();
+        assert_eq!(evs.len(), 3, "every batched HubSpot event must surface");
+        assert!(matches!(evs[0], ConnectorEvent::DocumentCreated { .. }));
+        assert!(matches!(evs[1], ConnectorEvent::DocumentUpdated { .. }));
+        assert!(matches!(evs[2], ConnectorEvent::DocumentDeleted { .. }));
+    }
+
+    #[test]
+    fn initial_sync_classifies_objects_as_created_regardless_of_timestamps() {
+        // Regression test: earlier revisions used `created_at ==
+        // updated_at` to decide DocumentCreated vs DocumentUpdated,
+        // which silently misclassified real-world payloads where
+        // the two values differ by a few milliseconds even on
+        // first creation.
+        let now = Utc::now();
+        let pages = vec![HubSpotListResponse {
+            results: vec![HubSpotObject {
+                id: "77".into(),
+                kind: HubSpotObjectKind::Contact,
+                created_at: Some(now),
+                updated_at: Some(now + Duration::milliseconds(7)),
+                archived: false,
+            }],
+            paging: None,
+        }];
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4()).with_initial_pages(pages);
+        let tok = c.authenticate(&cfg()).unwrap();
+        let res = c.initial_sync(&cfg(), &tok).unwrap();
+        assert!(
+            matches!(res.events[0], ConnectorEvent::DocumentCreated { .. }),
+            "initial_sync must always emit DocumentCreated, not depend on timestamp equality",
+        );
     }
 }

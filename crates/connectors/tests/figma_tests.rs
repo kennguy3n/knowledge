@@ -64,10 +64,11 @@ fn full_lifecycle_against_fixture_data() {
         .expect("subscribe_webhook");
     assert_eq!(sub.connector, connector.instance);
 
-    let event = connector
+    let events = connector
         .handle_webhook_event(WEBHOOK_FIXTURE.as_bytes())
         .expect("handle_webhook_event");
-    assert!(matches!(event, ConnectorEvent::DocumentUpdated { .. }));
+    assert_eq!(events.len(), 1, "Figma posts one event per request");
+    assert!(matches!(events[0], ConnectorEvent::DocumentUpdated { .. }));
 }
 
 #[test]

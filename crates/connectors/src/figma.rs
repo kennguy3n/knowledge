@@ -269,22 +269,23 @@ impl Connector for FigmaConnector {
         ))
     }
 
-    fn handle_webhook_event(&self, body: &[u8]) -> Result<ConnectorEvent> {
+    fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
+        // Figma posts one event per HTTP request.
         let p: FigmaWebhookPayload = serde_json::from_slice(body)?;
         let occurred_at = p.timestamp.unwrap_or_else(Utc::now);
         let document_id = SourceDocumentId::new(p.file_key);
-        match p.event_type.as_str() {
+        let event = match p.event_type.as_str() {
             "FILE_UPDATE" | "FILE_VERSION_UPDATE" | "LIBRARY_PUBLISH" => {
-                Ok(ConnectorEvent::DocumentUpdated {
+                ConnectorEvent::DocumentUpdated {
                     document_id,
                     occurred_at,
-                })
+                }
             }
-            "FILE_DELETE" => Ok(ConnectorEvent::DocumentDeleted {
+            "FILE_DELETE" => ConnectorEvent::DocumentDeleted {
                 document_id,
                 occurred_at,
-            }),
-            "FILE_PERMISSION_UPDATE" => Ok(ConnectorEvent::PermissionChanged {
+            },
+            "FILE_PERMISSION_UPDATE" => ConnectorEvent::PermissionChanged {
                 document_id,
                 user_id: SourceUserId::new(
                     p.triggered_by
@@ -293,11 +294,14 @@ impl Connector for FigmaConnector {
                 ),
                 new_level: p.new_role.as_deref().and_then(parse_role),
                 occurred_at,
-            }),
-            other => Err(ConnectorError::Webhook(format!(
-                "unknown Figma event_type: {other}"
-            ))),
-        }
+            },
+            other => {
+                return Err(ConnectorError::Webhook(format!(
+                    "unknown Figma event_type: {other}"
+                )))
+            }
+        };
+        Ok(vec![event])
     }
 }
 
@@ -412,10 +416,11 @@ mod tests {
             "timestamp": Utc::now(),
         });
         let c = FigmaConnector::new(ConnectorInstanceId::new_v4());
-        let ev = c
+        let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
-        assert!(matches!(ev, ConnectorEvent::DocumentDeleted { .. }));
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(evs[0], ConnectorEvent::DocumentDeleted { .. }));
     }
 
     #[test]
@@ -428,12 +433,13 @@ mod tests {
             "timestamp": Utc::now(),
         });
         let c = FigmaConnector::new(ConnectorInstanceId::new_v4());
-        let ev = c
+        let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
-        match ev {
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
             ConnectorEvent::PermissionChanged { new_level, .. } => {
-                assert_eq!(new_level, Some(SourcePermissionLevel::Write));
+                assert_eq!(*new_level, Some(SourcePermissionLevel::Write));
             }
             other => panic!("unexpected: {other:?}"),
         }

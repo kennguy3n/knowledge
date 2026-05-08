@@ -286,39 +286,40 @@ impl Connector for ConfluenceConnector {
         ))
     }
 
-    fn handle_webhook_event(&self, body: &[u8]) -> Result<ConnectorEvent> {
+    fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
+        // Confluence posts one event per HTTP request.
         let p: ConfluenceWebhookPayload = serde_json::from_slice(body)?;
         let occurred_at = p
             .timestamp
             .and_then(DateTime::<Utc>::from_timestamp_millis)
             .unwrap_or_else(Utc::now);
-        match p.webhook_event.as_str() {
+        let event = match p.webhook_event.as_str() {
             "page_created" => {
                 let c = p
                     .page
                     .ok_or_else(|| ConnectorError::Webhook("missing page body".into()))?;
-                Ok(ConnectorEvent::DocumentCreated {
+                ConnectorEvent::DocumentCreated {
                     document_id: SourceDocumentId::new(c.id),
                     occurred_at,
-                })
+                }
             }
             "page_updated" => {
                 let c = p
                     .page
                     .ok_or_else(|| ConnectorError::Webhook("missing page body".into()))?;
-                Ok(ConnectorEvent::DocumentUpdated {
+                ConnectorEvent::DocumentUpdated {
                     document_id: SourceDocumentId::new(c.id),
                     occurred_at,
-                })
+                }
             }
             "page_removed" | "page_trashed" => {
                 let c = p
                     .page
                     .ok_or_else(|| ConnectorError::Webhook("missing page body".into()))?;
-                Ok(ConnectorEvent::DocumentDeleted {
+                ConnectorEvent::DocumentDeleted {
                     document_id: SourceDocumentId::new(c.id),
                     occurred_at,
-                })
+                }
             }
             "space_permissions_updated" => {
                 let id = p
@@ -329,17 +330,20 @@ impl Connector for ConfluenceConnector {
                             "permission event missing contentId / page.id".into(),
                         )
                     })?;
-                Ok(ConnectorEvent::PermissionChanged {
+                ConnectorEvent::PermissionChanged {
                     document_id: SourceDocumentId::new(id),
                     user_id: SourceUserId::new(p.account_id.unwrap_or_default()),
                     new_level: p.new_role.as_deref().and_then(parse_role),
                     occurred_at,
-                })
+                }
             }
-            other => Err(ConnectorError::Webhook(format!(
-                "unknown Confluence webhookEvent: {other}"
-            ))),
-        }
+            other => {
+                return Err(ConnectorError::Webhook(format!(
+                    "unknown Confluence webhookEvent: {other}"
+                )))
+            }
+        };
+        Ok(vec![event])
     }
 }
 
@@ -424,10 +428,11 @@ mod tests {
             "page": page("c9", 5, Utc::now()),
         });
         let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4());
-        let ev = c
+        let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
-        assert!(matches!(ev, ConnectorEvent::DocumentDeleted { .. }));
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(evs[0], ConnectorEvent::DocumentDeleted { .. }));
     }
 
     #[test]
@@ -440,12 +445,13 @@ mod tests {
             "new_role": "edit",
         });
         let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4());
-        let ev = c
+        let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
-        match ev {
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
             ConnectorEvent::PermissionChanged { new_level, .. } => {
-                assert_eq!(new_level, Some(SourcePermissionLevel::Write));
+                assert_eq!(*new_level, Some(SourcePermissionLevel::Write));
             }
             other => panic!("unexpected: {other:?}"),
         }

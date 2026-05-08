@@ -104,17 +104,18 @@ fn full_lifecycle_against_fixture_data() {
     assert!(sub.expires_at.is_some(), "Drive channels carry a TTL");
 
     // 5. Handle webhook event — permission change fixture.
-    let event = connector
+    let events = connector
         .handle_webhook_event(PUSH_FIXTURE.as_bytes())
         .expect("handle_webhook_event");
-    match event {
+    assert_eq!(events.len(), 1, "Drive push notifications carry one event");
+    match &events[0] {
         ConnectorEvent::PermissionChanged {
             document_id,
             new_level,
             ..
         } => {
             assert_eq!(document_id.as_str(), "drive:file:1");
-            assert_eq!(new_level, Some(SourcePermissionLevel::Write));
+            assert_eq!(*new_level, Some(SourcePermissionLevel::Write));
         }
         other => panic!("expected permission change, got {other:?}"),
     }

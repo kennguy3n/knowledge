@@ -263,23 +263,46 @@ impl CommunityHierarchy {
                 break;
             }
 
-            // Group communities by overlapping scope sets.
-            let mut groups: Vec<Vec<&Community>> = Vec::new();
-            for c in &current {
-                let mut placed = false;
-                for g in groups.iter_mut() {
-                    if g.iter()
-                        .any(|other| c.scope_ids.iter().any(|s| other.scope_ids.contains(s)))
-                    {
-                        g.push(c);
-                        placed = true;
-                        break;
-                    }
+            // Group communities by overlapping scope sets using a
+            // union-find pass. A greedy single-pass grouping
+            // misses *transitive* merges: if A overlaps B and B
+            // overlaps C, but A does not directly overlap C, the
+            // earlier algorithm could place A+B in one group and C
+            // alone (depending on iteration order). Union-find
+            // collapses A, B and C into a single component.
+            let n = current.len();
+            let mut parent: Vec<usize> = (0..n).collect();
+            fn find(parent: &mut [usize], mut i: usize) -> usize {
+                while parent[i] != i {
+                    parent[i] = parent[parent[i]];
+                    i = parent[i];
                 }
-                if !placed {
-                    groups.push(vec![c]);
+                i
+            }
+            fn union(parent: &mut [usize], a: usize, b: usize) {
+                let ra = find(parent, a);
+                let rb = find(parent, b);
+                if ra != rb {
+                    parent[ra] = rb;
                 }
             }
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let overlap = current[i]
+                        .scope_ids
+                        .iter()
+                        .any(|s| current[j].scope_ids.contains(s));
+                    if overlap {
+                        union(&mut parent, i, j);
+                    }
+                }
+            }
+            let mut by_root: BTreeMap<usize, Vec<&Community>> = BTreeMap::new();
+            for (i, c) in current.iter().enumerate() {
+                let r = find(&mut parent, i);
+                by_root.entry(r).or_default().push(*c);
+            }
+            let groups: Vec<Vec<&Community>> = by_root.into_values().collect();
 
             // Stop merging if no group merged anything.
             if groups.len() == current.len() {

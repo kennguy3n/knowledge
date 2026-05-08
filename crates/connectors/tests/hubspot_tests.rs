@@ -69,10 +69,11 @@ fn full_lifecycle_against_fixture_data() {
         .expect("subscribe_webhook");
     assert_eq!(sub.connector, connector.instance);
 
-    let event = connector
+    let events = connector
         .handle_webhook_event(WEBHOOK_FIXTURE.as_bytes())
         .expect("handle_webhook_event");
-    match event {
+    assert_eq!(events.len(), 1, "fixture carries one subscription event");
+    match &events[0] {
         ConnectorEvent::DocumentCreated { document_id, .. } => {
             assert_eq!(
                 document_id.as_str(),
@@ -82,6 +83,39 @@ fn full_lifecycle_against_fixture_data() {
         }
         other => panic!("expected DocumentCreated, got {other:?}"),
     }
+}
+
+#[test]
+fn batched_webhook_emits_every_subscription_event() {
+    // Regression test for the Devin Review finding that
+    // `HubSpotConnector::handle_webhook_event` used to drop every
+    // entry past index 0 of the batched JSON array. HubSpot
+    // routinely posts many subscription events in one request.
+    let connector = build_connector();
+    let body = serde_json::json!([
+        {
+            "subscriptionType": "contact.creation",
+            "objectId": 1,
+            "occurredAt": 1746374700000_i64,
+        },
+        {
+            "subscriptionType": "deal.propertyChange",
+            "objectId": 2,
+            "occurredAt": 1746374701000_i64,
+        },
+        {
+            "subscriptionType": "company.deletion",
+            "objectId": 3,
+            "occurredAt": 1746374702000_i64,
+        }
+    ]);
+    let events = connector
+        .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+        .expect("handle_webhook_event");
+    assert_eq!(events.len(), 3, "every subscription event must surface");
+    assert!(matches!(events[0], ConnectorEvent::DocumentCreated { .. }));
+    assert!(matches!(events[1], ConnectorEvent::DocumentUpdated { .. }));
+    assert!(matches!(events[2], ConnectorEvent::DocumentDeleted { .. }));
 }
 
 #[test]

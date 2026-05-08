@@ -266,33 +266,38 @@ impl Connector for GoogleDriveConnector {
         ))
     }
 
-    fn handle_webhook_event(&self, body: &[u8]) -> Result<ConnectorEvent> {
+    fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
+        // Google Drive push notifications carry a single change
+        // per HTTP POST — the channel API does not batch.
         let push: GoogleDrivePushNotification = serde_json::from_slice(body)?;
         let occurred_at = push.occurred_at.unwrap_or_else(Utc::now);
         let document_id = SourceDocumentId::new(push.resource_id);
-        match push.resource_state.as_str() {
-            "add" | "create" => Ok(ConnectorEvent::DocumentCreated {
+        let event = match push.resource_state.as_str() {
+            "add" | "create" => ConnectorEvent::DocumentCreated {
                 document_id,
                 occurred_at,
-            }),
-            "update" | "change" => Ok(ConnectorEvent::DocumentUpdated {
+            },
+            "update" | "change" => ConnectorEvent::DocumentUpdated {
                 document_id,
                 occurred_at,
-            }),
-            "remove" | "trash" => Ok(ConnectorEvent::DocumentDeleted {
+            },
+            "remove" | "trash" => ConnectorEvent::DocumentDeleted {
                 document_id,
                 occurred_at,
-            }),
-            "permission_change" => Ok(ConnectorEvent::PermissionChanged {
+            },
+            "permission_change" => ConnectorEvent::PermissionChanged {
                 document_id,
                 user_id: SourceUserId::new(push.user_id.unwrap_or_default()),
                 new_level: push.new_role.as_deref().and_then(parse_role),
                 occurred_at,
-            }),
-            other => Err(ConnectorError::Webhook(format!(
-                "unknown drive resource state: {other}"
-            ))),
-        }
+            },
+            other => {
+                return Err(ConnectorError::Webhook(format!(
+                    "unknown drive resource state: {other}"
+                )))
+            }
+        };
+        Ok(vec![event])
     }
 }
 
@@ -379,12 +384,13 @@ mod tests {
             "occurredAt": Utc::now(),
         });
         let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4());
-        let ev = c
+        let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
-        match ev {
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
             ConnectorEvent::PermissionChanged { new_level, .. } => {
-                assert_eq!(new_level, Some(SourcePermissionLevel::Write));
+                assert_eq!(*new_level, Some(SourcePermissionLevel::Write));
             }
             other => panic!("unexpected variant: {other:?}"),
         }

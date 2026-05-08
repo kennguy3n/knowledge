@@ -579,6 +579,15 @@ impl GoTExecutor {
 
     /// Run the full pipeline: plan, repeatedly expand under
     /// `query`'s strategy and budgets, then evaluate.
+    ///
+    /// This convenience entry point creates a fresh
+    /// [`ThoughtGraph`] internally — convenient for ad-hoc
+    /// reasoning, but unusable with a [`StaticExpander`] (or any
+    /// other expander whose children reference pre-existing
+    /// [`ThoughtId`]s) because the caller can never see those
+    /// ids in advance. For that workflow build the graph and the
+    /// [`GoTPlan`] yourself, register expansions against the now
+    /// known root id, then call [`Self::execute_from_plan`].
     pub fn execute<E: Expander>(
         &self,
         query: &GoTQuery,
@@ -590,6 +599,27 @@ impl GoTExecutor {
         let mut result = self.evaluate(&graph)?;
         result.budget_exhausted = budget_exhausted;
         Ok((graph, result))
+    }
+
+    /// Run the expand → evaluate pipeline against a graph and plan
+    /// the caller already constructed. Use this when expansion is
+    /// driven by something whose children must reference
+    /// pre-existing [`ThoughtId`]s, e.g. [`StaticExpander`]: the
+    /// caller wires up `expander` to the root and sub-question ids
+    /// returned by [`Self::plan`] / [`Self::plan_with_subquestions`]
+    /// before calling here, which is impossible if `execute`
+    /// constructs the graph internally.
+    pub fn execute_from_plan<E: Expander>(
+        &self,
+        graph: &mut ThoughtGraph,
+        plan: &GoTPlan,
+        query: &GoTQuery,
+        expander: &E,
+    ) -> Result<GoTResult, GoTError> {
+        let budget_exhausted = self.expand_all(graph, plan, query, expander);
+        let mut result = self.evaluate(graph)?;
+        result.budget_exhausted = budget_exhausted;
+        Ok(result)
     }
 
     /// Run an expansion pass on `graph` rooted at `plan` under

@@ -104,27 +104,38 @@ impl NotionConnector {
     }
 }
 
-fn object_to_event(obj: &NotionObject) -> ConnectorEvent {
+/// Which sync pass produced this object — we use this instead of
+/// comparing `created_time == last_edited_time` because Notion may
+/// stamp the two fields at slightly different millisecond instants
+/// even on creation, which would silently misclassify an event as
+/// `DocumentUpdated`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum SyncMode {
+    Initial,
+    Incremental,
+}
+
+fn object_to_event(obj: &NotionObject, mode: SyncMode) -> ConnectorEvent {
     let occurred_at = obj
         .last_edited_time
         .or(obj.created_time)
         .unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(obj.id.clone());
     if obj.archived {
-        ConnectorEvent::DocumentDeleted {
+        return ConnectorEvent::DocumentDeleted {
             document_id: id,
             occurred_at,
-        }
-    } else if obj.created_time == obj.last_edited_time {
-        ConnectorEvent::DocumentCreated {
+        };
+    }
+    match mode {
+        SyncMode::Initial => ConnectorEvent::DocumentCreated {
             document_id: id,
             occurred_at,
-        }
-    } else {
-        ConnectorEvent::DocumentUpdated {
+        },
+        SyncMode::Incremental => ConnectorEvent::DocumentUpdated {
             document_id: id,
             occurred_at,
-        }
+        },
     }
 }
 
@@ -147,7 +158,7 @@ impl Connector for NotionConnector {
         let mut watermark: Option<DateTime<Utc>> = None;
         for page in &self.initial_pages {
             for obj in &page.results {
-                events.push(object_to_event(obj));
+                events.push(object_to_event(obj, SyncMode::Initial));
                 if let Some(t) = obj.last_edited_time {
                     watermark = Some(watermark.map_or(t, |w| w.max(t)));
                 }
@@ -170,7 +181,7 @@ impl Connector for NotionConnector {
         let mut events: Vec<ConnectorEvent> = Vec::new();
         let mut watermark: Option<DateTime<Utc>> = None;
         for obj in &page.results {
-            events.push(object_to_event(obj));
+            events.push(object_to_event(obj, SyncMode::Incremental));
             if let Some(t) = obj.last_edited_time {
                 watermark = Some(watermark.map_or(t, |w| w.max(t)));
             }
@@ -197,7 +208,7 @@ impl Connector for NotionConnector {
         ))
     }
 
-    fn handle_webhook_event(&self, _body: &[u8]) -> Result<ConnectorEvent> {
+    fn handle_webhook_event(&self, _body: &[u8]) -> Result<Vec<ConnectorEvent>> {
         Err(ConnectorError::Webhook(
             "polling-only mode: Notion does not deliver webhooks; use incremental_sync".to_string(),
         ))
@@ -284,5 +295,33 @@ mod tests {
         let c = NotionConnector::new(ConnectorInstanceId::new_v4());
         let err = c.handle_webhook_event(b"{}").unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    #[test]
+    fn initial_sync_classifies_objects_as_created_regardless_of_timestamps() {
+        // Regression test: earlier revisions used `created_time ==
+        // last_edited_time` to decide DocumentCreated vs
+        // DocumentUpdated, which silently misclassified real-world
+        // payloads where Notion stamps the two values a few
+        // milliseconds apart even on first creation.
+        let now = Utc::now();
+        let pages = vec![NotionSearchResponse {
+            results: vec![NotionObject {
+                id: "page-uuid".into(),
+                object: NotionObjectKind::Page,
+                created_time: Some(now),
+                last_edited_time: Some(now + Duration::milliseconds(7)),
+                archived: false,
+            }],
+            next_cursor: None,
+            has_more: false,
+        }];
+        let c = NotionConnector::new(ConnectorInstanceId::new_v4()).with_initial_pages(pages);
+        let tok = c.authenticate(&cfg()).unwrap();
+        let res = c.initial_sync(&cfg(), &tok).unwrap();
+        assert!(
+            matches!(res.events[0], ConnectorEvent::DocumentCreated { .. }),
+            "initial_sync must always emit DocumentCreated, not depend on timestamp equality",
+        );
     }
 }

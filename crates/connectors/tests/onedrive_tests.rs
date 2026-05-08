@@ -69,20 +69,57 @@ fn full_lifecycle_against_fixture_data() {
     assert_eq!(sub.connector, connector.instance);
     assert!(sub.expires_at.is_some(), "Graph subs cap at ~3 days");
 
-    let event = connector
+    let events = connector
         .handle_webhook_event(WEBHOOK_FIXTURE.as_bytes())
         .expect("handle_webhook_event");
-    match event {
+    assert_eq!(events.len(), 1, "fixture carries one notification");
+    match &events[0] {
         ConnectorEvent::PermissionChanged {
             document_id,
             new_level,
             ..
         } => {
             assert_eq!(document_id.as_str(), "onedrive:item:1");
-            assert_eq!(new_level, Some(SourcePermissionLevel::Write));
+            assert_eq!(*new_level, Some(SourcePermissionLevel::Write));
         }
         other => panic!("expected permission change, got {other:?}"),
     }
+}
+
+#[test]
+fn batched_webhook_emits_every_notification() {
+    // Regression test for the Devin Review finding that
+    // `OneDriveConnector::handle_webhook_event` used to drop
+    // every entry past index 0 of the Graph
+    // `changeNotification` batch. A single Graph subscription
+    // POST routinely carries multiple notifications.
+    let connector = build_connector();
+    let body = serde_json::json!({
+        "value": [
+            {
+                "resource": "drive/items/file-a",
+                "changeType": "created",
+                "subscriptionId": "sub-1",
+            },
+            {
+                "resource": "drive/items/file-b",
+                "changeType": "updated",
+                "subscriptionId": "sub-1",
+            },
+            {
+                "resource": "drive/items/file-c",
+                "changeType": "deleted",
+                "subscriptionId": "sub-1",
+            }
+        ]
+    });
+    let events = connector
+        .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+        .expect("handle_webhook_event");
+    assert_eq!(events.len(), 3, "every notification must surface");
+    assert!(matches!(events[0], ConnectorEvent::DocumentCreated { .. }));
+    assert!(matches!(events[1], ConnectorEvent::DocumentUpdated { .. }));
+    assert!(matches!(events[2], ConnectorEvent::DocumentDeleted { .. }));
 }
 
 #[test]

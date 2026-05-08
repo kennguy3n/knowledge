@@ -243,26 +243,27 @@ impl Connector for JiraConnector {
         ))
     }
 
-    fn handle_webhook_event(&self, body: &[u8]) -> Result<ConnectorEvent> {
+    fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
+        // Jira posts one webhook event per HTTP request.
         let p: JiraWebhookPayload = serde_json::from_slice(body)?;
-        match p.webhook_event.as_str() {
+        let event = match p.webhook_event.as_str() {
             "jira:issue_created" => {
                 let issue = p
                     .issue
                     .ok_or_else(|| ConnectorError::Webhook("missing issue body".into()))?;
-                Ok(issue_to_event(&issue, "create"))
+                issue_to_event(&issue, "create")
             }
             "jira:issue_updated" => {
                 let issue = p
                     .issue
                     .ok_or_else(|| ConnectorError::Webhook("missing issue body".into()))?;
-                Ok(issue_to_event(&issue, "update"))
+                issue_to_event(&issue, "update")
             }
             "jira:issue_deleted" => {
                 let issue = p
                     .issue
                     .ok_or_else(|| ConnectorError::Webhook("missing issue body".into()))?;
-                Ok(issue_to_event(&issue, "delete"))
+                issue_to_event(&issue, "delete")
             }
             "permissionscheme_updated" => {
                 let key = p
@@ -277,17 +278,20 @@ impl Connector for JiraConnector {
                     .timestamp
                     .and_then(DateTime::<Utc>::from_timestamp_millis)
                     .unwrap_or_else(Utc::now);
-                Ok(ConnectorEvent::PermissionChanged {
+                ConnectorEvent::PermissionChanged {
                     document_id: SourceDocumentId::new(key),
                     user_id: SourceUserId::new(p.account_id.unwrap_or_default()),
                     new_level: p.new_role.as_deref().and_then(parse_role),
                     occurred_at,
-                })
+                }
             }
-            other => Err(ConnectorError::Webhook(format!(
-                "unknown Jira webhookEvent: {other}"
-            ))),
-        }
+            other => {
+                return Err(ConnectorError::Webhook(format!(
+                    "unknown Jira webhookEvent: {other}"
+                )))
+            }
+        };
+        Ok(vec![event])
     }
 }
 
@@ -376,10 +380,11 @@ mod tests {
             }
         });
         let c = JiraConnector::new(ConnectorInstanceId::new_v4());
-        let ev = c
+        let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
-        assert!(matches!(ev, ConnectorEvent::DocumentCreated { .. }));
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(evs[0], ConnectorEvent::DocumentCreated { .. }));
     }
 
     #[test]
@@ -392,12 +397,13 @@ mod tests {
             "timestamp": Utc::now().timestamp_millis(),
         });
         let c = JiraConnector::new(ConnectorInstanceId::new_v4());
-        let ev = c
+        let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
-        match ev {
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
             ConnectorEvent::PermissionChanged { new_level, .. } => {
-                assert_eq!(new_level, Some(SourcePermissionLevel::Admin));
+                assert_eq!(*new_level, Some(SourcePermissionLevel::Admin));
             }
             other => panic!("unexpected: {other:?}"),
         }

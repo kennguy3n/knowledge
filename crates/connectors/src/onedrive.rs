@@ -241,42 +241,55 @@ impl Connector for OneDriveConnector {
         ))
     }
 
-    fn handle_webhook_event(&self, body: &[u8]) -> Result<ConnectorEvent> {
+    fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
+        // Microsoft Graph delivers batched `changeNotification`
+        // payloads under a top-level `value` array. Every entry
+        // must be materialised — returning only the first one
+        // would silently drop concurrent file changes.
         let batch: ChangeNotificationCollection = serde_json::from_slice(body)?;
-        let n = batch.value.into_iter().next().ok_or_else(|| {
-            ConnectorError::Webhook("empty Graph changeNotification batch".to_string())
-        })?;
-        let occurred_at = n.event_time.unwrap_or_else(Utc::now);
-        let document_id = SourceDocumentId::new(
-            n.resource
-                .rsplit('/')
-                .next()
-                .unwrap_or(&n.resource)
-                .to_string(),
-        );
-        match n.change_type.as_str() {
-            "created" => Ok(ConnectorEvent::DocumentCreated {
-                document_id,
-                occurred_at,
-            }),
-            "updated" => Ok(ConnectorEvent::DocumentUpdated {
-                document_id,
-                occurred_at,
-            }),
-            "deleted" => Ok(ConnectorEvent::DocumentDeleted {
-                document_id,
-                occurred_at,
-            }),
-            "shared" | "permission_changed" => Ok(ConnectorEvent::PermissionChanged {
-                document_id,
-                user_id: SourceUserId::new(n.user_id.unwrap_or_default()),
-                new_level: n.new_role.as_deref().and_then(parse_role),
-                occurred_at,
-            }),
-            other => Err(ConnectorError::Webhook(format!(
-                "unknown Graph changeType: {other}"
-            ))),
+        if batch.value.is_empty() {
+            return Err(ConnectorError::Webhook(
+                "empty Graph changeNotification batch".to_string(),
+            ));
         }
+        let mut events: Vec<ConnectorEvent> = Vec::with_capacity(batch.value.len());
+        for n in batch.value {
+            let occurred_at = n.event_time.unwrap_or_else(Utc::now);
+            let document_id = SourceDocumentId::new(
+                n.resource
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&n.resource)
+                    .to_string(),
+            );
+            let event = match n.change_type.as_str() {
+                "created" => ConnectorEvent::DocumentCreated {
+                    document_id,
+                    occurred_at,
+                },
+                "updated" => ConnectorEvent::DocumentUpdated {
+                    document_id,
+                    occurred_at,
+                },
+                "deleted" => ConnectorEvent::DocumentDeleted {
+                    document_id,
+                    occurred_at,
+                },
+                "shared" | "permission_changed" => ConnectorEvent::PermissionChanged {
+                    document_id,
+                    user_id: SourceUserId::new(n.user_id.unwrap_or_default()),
+                    new_level: n.new_role.as_deref().and_then(parse_role),
+                    occurred_at,
+                },
+                other => {
+                    return Err(ConnectorError::Webhook(format!(
+                        "unknown Graph changeType: {other}"
+                    )))
+                }
+            };
+            events.push(event);
+        }
+        Ok(events)
     }
 }
 
@@ -360,17 +373,18 @@ mod tests {
             }]
         });
         let c = OneDriveConnector::new(ConnectorInstanceId::new_v4());
-        let ev = c
+        let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
-        match ev {
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
             ConnectorEvent::PermissionChanged {
                 document_id,
                 new_level,
                 ..
             } => {
                 assert_eq!(document_id.as_str(), "item-7");
-                assert_eq!(new_level, Some(SourcePermissionLevel::Write));
+                assert_eq!(*new_level, Some(SourcePermissionLevel::Write));
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -384,5 +398,42 @@ mod tests {
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    #[test]
+    fn webhook_emits_every_event_in_batched_payload() {
+        // Regression test: Microsoft Graph batches multiple
+        // `changeNotification`s into one POST. Earlier revisions
+        // dropped everything past index 0.
+        let body = serde_json::json!({
+            "value": [
+                {
+                    "resource": "drive/items/file-a",
+                    "changeType": "created",
+                    "subscriptionId": "sub-1",
+                    "eventTime": Utc::now(),
+                },
+                {
+                    "resource": "drive/items/file-b",
+                    "changeType": "updated",
+                    "subscriptionId": "sub-1",
+                    "eventTime": Utc::now(),
+                },
+                {
+                    "resource": "drive/items/file-c",
+                    "changeType": "deleted",
+                    "subscriptionId": "sub-1",
+                    "eventTime": Utc::now(),
+                }
+            ]
+        });
+        let c = OneDriveConnector::new(ConnectorInstanceId::new_v4());
+        let evs = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap();
+        assert_eq!(evs.len(), 3, "every changeNotification must surface");
+        assert!(matches!(evs[0], ConnectorEvent::DocumentCreated { .. }));
+        assert!(matches!(evs[1], ConnectorEvent::DocumentUpdated { .. }));
+        assert!(matches!(evs[2], ConnectorEvent::DocumentDeleted { .. }));
     }
 }

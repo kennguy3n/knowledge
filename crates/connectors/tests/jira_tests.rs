@@ -66,7 +66,8 @@ fn full_lifecycle_against_fixture_data() {
     let created = connector
         .handle_webhook_event(WEBHOOK_CREATED_FIXTURE.as_bytes())
         .expect("handle_webhook_event created");
-    match created {
+    assert_eq!(created.len(), 1, "Jira posts one event per request");
+    match &created[0] {
         ConnectorEvent::DocumentCreated { document_id, .. } => {
             assert_eq!(document_id.as_str(), "PROJ-103");
         }
@@ -76,14 +77,15 @@ fn full_lifecycle_against_fixture_data() {
     let permission = connector
         .handle_webhook_event(WEBHOOK_PERMISSION_FIXTURE.as_bytes())
         .expect("handle_webhook_event permission");
-    match permission {
+    assert_eq!(permission.len(), 1, "Jira posts one event per request");
+    match &permission[0] {
         ConnectorEvent::PermissionChanged {
             document_id,
             new_level,
             ..
         } => {
             assert_eq!(document_id.as_str(), "PROJ-101");
-            assert_eq!(new_level, Some(SourcePermissionLevel::Admin));
+            assert_eq!(*new_level, Some(SourcePermissionLevel::Admin));
         }
         other => panic!("expected PermissionChanged, got {other:?}"),
     }

@@ -69,7 +69,8 @@ fn full_lifecycle_against_fixture_data() {
     let removed = connector
         .handle_webhook_event(WEBHOOK_REMOVED_FIXTURE.as_bytes())
         .expect("handle_webhook_event removed");
-    match removed {
+    assert_eq!(removed.len(), 1, "Confluence posts one event per request");
+    match &removed[0] {
         ConnectorEvent::DocumentDeleted { document_id, .. } => {
             assert_eq!(document_id.as_str(), "confluence:page:9");
         }
