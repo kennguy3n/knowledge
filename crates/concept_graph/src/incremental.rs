@@ -334,10 +334,16 @@ impl IncrementalUpdateEngine {
     ///   [`ConceptGraph::supersede_node`].
     /// * `NodeContradicted` → invokes
     ///   [`ConceptGraph::mark_contradiction`].
-    /// * `EdgeAdded` / `EdgeRemoved` → bookkeeping only;
-    ///   adding/removing edges is the caller's job. These
-    ///   variants exist so callers can still record the change
-    ///   in [`UpdatePropagation`].
+    /// * `EdgeAdded` → bookkeeping only; adding edges is the
+    ///   caller's job. The variant exists so callers can record
+    ///   the change in [`UpdatePropagation`] without a separate
+    ///   call.
+    /// * `EdgeRemoved` → invokes
+    ///   [`ConceptGraph::remove_edge`] for the named edge and
+    ///   records it in [`UpdatePropagation::removed_edges`] on
+    ///   success. Callers should *not* remove the edge first —
+    ///   if the edge has already been dropped, the propagation
+    ///   silently no-ops the removal step.
     ///
     /// In all cases the affected-subgraph walk runs first so
     /// the caller gets a consistent view of what was touched.

@@ -80,7 +80,6 @@ pub struct TraceRecorder {
     scope: ScopeId,
     steps: Vec<RecordedStep>,
     answered_by: Option<RetrievalMode>,
-    started_at: DateTime<Utc>,
     accumulated_ms: u64,
 }
 
@@ -93,7 +92,6 @@ impl TraceRecorder {
             scope,
             steps: Vec::new(),
             answered_by: None,
-            started_at: Utc::now(),
             accumulated_ms: 0,
         }
     }
@@ -128,7 +126,7 @@ impl TraceRecorder {
             answered_by: self.answered_by,
             total_elapsed_ms: self.accumulated_ms,
             scope: self.scope,
-            recorded_at: self.started_at,
+            recorded_at: Utc::now(),
         }
     }
 }
