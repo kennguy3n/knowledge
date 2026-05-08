@@ -178,6 +178,8 @@ shared documents using the same memory hierarchy as on-device.
   tokens, comments)
 - HubSpot connector — CRM context (contacts, companies,
   deals, notes)
+- Slack connector — channels, threads, files via Events API
+- Email connector — IMAP / Gmail / Microsoft Graph
 - Channel-scoped connector attachment (same pattern as
   slm-chat-demo Phase 5)
 - ACL sync from source systems into the substrate's relation

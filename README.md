@@ -26,7 +26,7 @@ see [PROPOSAL.md](./PROPOSAL.md), [ARCHITECTURE.md](./ARCHITECTURE.md),
 ## Quick start
 
 The shared core is a Cargo workspace targeting **Rust 1.75+ (stable)**.
-It ships 19 crates covering the full substrate: encrypted evidence
+It ships 20 crates covering the full substrate: encrypted evidence
 storage, observation extraction, memory management with decay,
 concept graph, synthesis pipeline, server-side synthesis engine,
 Zanzibar-style permissions, tenant lifecycle, audit logging, agent
@@ -35,9 +35,11 @@ connectors (Google Drive, OneDrive, Notion, Jira, Confluence, Figma,
 HubSpot, Slack, Email), reasoning engine (contradiction detection,
 Graph-of-Thought, community summaries), inference router (MLX →
 LlamaCpp → Fallback), post-quantum crypto (ML-KEM-768, ML-DSA-65,
-SPHINCS+, TEE worker), CRDT sync, and platform bindings (UniFFI for
-iOS / Android, N-API for macOS / Windows). All phases (0 → 7) are
-complete with 1072 tests passing.
+SPHINCS+, TEE worker), CRDT sync, platform bindings (UniFFI for
+iOS / Android, N-API for macOS / Windows), and a public-API-only
+end-to-end demo crate that exercises all twelve pipeline phases
+against a realistic dataset. All phases (0 → 7) are complete with
+1077 tests passing.
 
 ### Prerequisites
 
@@ -63,8 +65,8 @@ cargo test --all
 ```
 
 This runs the inline unit tests inside each crate and the integration
-test files under `crates/*/tests/`. **1072 tests pass** across all 19
-crates as of the substrate-hardening drop (up from 1036), spanning
+test files under `crates/*/tests/`. **1077 tests pass** across all 20
+crates as of the end-to-end demo drop (up from 1072), spanning
 the Phase 0 evidence plane and inference router, the Phase 1
 personal-memory plane (decay, observation, episodic, embeddings,
 hybrid retrieval), the Phase 2 channel-memory plane (synthesis
@@ -73,18 +75,71 @@ surface (synthesis engine, permission service, tenant service,
 audit service, managed endpoint), the Phase 4 connector substrate
 (framework + nine vendor connectors), the Phase 5 agent contract
 and export plane, the Phase 6 reasoning plane (contradictions,
-Graph-of-Thought, community summaries, visualization), and the
-Phase 7 post-quantum hardening surface (ML-DSA-65, SPHINCS+,
-hybrid enforcement, attestation, TEE worker, cryptographic
-forgetting, quality metrics, red-team tests).
+Graph-of-Thought, community summaries, visualization), the Phase 7
+post-quantum hardening surface (ML-DSA-65, SPHINCS+, hybrid
+enforcement, attestation, TEE worker, cryptographic forgetting,
+quality metrics, red-team tests), and the Phase 4-onwards
+public-API-only end-to-end demo (`crates/demo/tests/end_to_end.rs`)
+that re-runs the binary, parses `results/demo_results.md`, and
+reconciles every per-phase section, assertion table, and timing
+row against the printed substrate output.
 
 End-to-end coverage: the channel → domain → tenant synthesis chain
 is exercised by `crates/synthesis_engine/tests/hierarchy_e2e.rs`;
 the agent proposal lifecycle and the export plane pipeline by
 `crates/agent_contract/tests/e2e_proposal_tests.rs` and
 `crates/export_plane/tests/e2e_export_tests.rs`; the FFI surface by
-`crates/ffi/tests/ffi_integration_tests.rs`; and the inference
-router by `crates/inference_router/tests/router_integration_tests.rs`.
+`crates/ffi/tests/ffi_integration_tests.rs`; the inference router
+by `crates/inference_router/tests/router_integration_tests.rs`; and
+the full Phase 1 → Phase 12 substrate pipeline (evidence →
+observation → memory → concept graph → synthesis → permissions →
+crypto → export → agent → reasoning → connectors → audit) by
+`crates/demo/tests/end_to_end.rs`, which spawns the demo binary,
+asserts every phase heading, assertion-pass count, and timing
+entry written into `results/demo_results.md`.
+
+### Demo
+
+The `demo` crate at `crates/demo/` is a public-API-only end-to-end
+driver of the full Knowledge substrate. It seeds a realistic
+multi-scope dataset (~50+ messages spanning user, channel, domain,
+and tenant scopes) and walks every advertised phase using only the
+public APIs of each substrate crate — no test-only shims, no
+short-circuiting, no internal back doors.
+
+Run it from the workspace root:
+
+```bash
+cargo run -p demo --release
+```
+
+When the binary completes it writes a fully reconciled report to
+`results/demo_results.md` with:
+
+- A run timestamp and per-phase summary statistics (evidence rows
+  ingested across all three storage paths, observations extracted,
+  memory objects per decay state, concept nodes / edges, synthesis
+  outputs at channel / domain / tenant tier, permission tuples,
+  crypto operations, exports rendered, agent proposals, reasoning
+  artifacts, connector events, audit entries).
+- One section per phase (`### Phase 1: Evidence Ingestion` →
+  `### Phase 12: Audit Service`) with assertion pass / fail tables.
+- A wall-clock timing table per phase plus a per-operation
+  benchmark section (evidence ingest per message, observation
+  extraction per message, concept-graph operations, synthesis
+  pipeline, export rendering).
+- An overall pass-rate summary that the integration test under
+  `crates/demo/tests/end_to_end.rs` re-parses to validate the
+  contract end-to-end.
+
+The demo's integration test re-spawns the same binary and verifies
+that all twelve phase headings are present, every assertion row is
+accounted for, and that the timing table is well-formed. To run
+only the demo's tests:
+
+```bash
+cargo test -p demo --release
+```
 
 ### Lint
 
@@ -102,6 +157,8 @@ commands on every push and pull request.
 knowledge/
 ├── Cargo.toml                 # workspace manifest (Rust 1.75+, edition 2021)
 ├── rustfmt.toml               # repo-wide formatting config
+├── results/                   # generated reports written by the demo binary
+│   └── demo_results.md        # full Phase 1 → Phase 12 end-to-end run output
 ├── crates/
 │   ├── crypto/                # post-quantum primitives (BLAKE3, XChaCha20-Poly1305,
 │   │                          #   HKDF-SHA256, hybrid X25519 + ML-KEM-768 KEM,
@@ -220,23 +277,34 @@ knowledge/
 │   ├── napi/                  # Phase 0 N-API addon skeleton for macOS / Windows:
 │   │                          #   same surface as ffi + init(config_json) + N-API
 │   │                          #   exception mapping
-│   └── reasoning_engine/      # Phase 6 reasoning plane: ContradictionDetector
-│                              #   + AdjudicationWorkflow (Detected → UnderReview
-│                              #   → Resolved), DriftDetector + DriftMarker,
-│                              #   GraphTraversal (typed-edge BFS with
-│                              #   TraversalBudget + TraversalQuery + PathScorer,
-│                              #   targeted + exploratory modes), QueryPlanner
-│                              #   (RetrievalMode: Summary / Fts / SemanticVector /
-│                              #   GraphTraversal / RawEvidence; QueryClassifier;
-│                              #   PlannerHeuristics; PlanExecutionResult),
-│                              #   WorkflowMemory (WorkflowTrace, WorkflowPattern,
-│                              #   PatternMatcher, TraceRecorder), GoTExecutor
-│                              #   (Graph-of-Thought: ThoughtGraph + ThoughtNode +
-│                              #   ThoughtEdge + GoTStrategy + Expander + plan/
-│                              #   expand/evaluate/execute + record_trace),
-│                              #   CommunityDetector + CommunityHierarchy +
-│                              #   CommunitySummaryGenerator + CommunityQueryRouter
-│                              #   (GraphRAG-style scope-aware summaries)
+│   ├── reasoning_engine/      # Phase 6 reasoning plane: ContradictionDetector
+│   │                          #   + AdjudicationWorkflow (Detected → UnderReview
+│   │                          #   → Resolved), DriftDetector + DriftMarker,
+│   │                          #   GraphTraversal (typed-edge BFS with
+│   │                          #   TraversalBudget + TraversalQuery + PathScorer,
+│   │                          #   targeted + exploratory modes), QueryPlanner
+│   │                          #   (RetrievalMode: Summary / Fts / SemanticVector /
+│   │                          #   GraphTraversal / RawEvidence; QueryClassifier;
+│   │                          #   PlannerHeuristics; PlanExecutionResult),
+│   │                          #   WorkflowMemory (WorkflowTrace, WorkflowPattern,
+│   │                          #   PatternMatcher, TraceRecorder), GoTExecutor
+│   │                          #   (Graph-of-Thought: ThoughtGraph + ThoughtNode +
+│   │                          #   ThoughtEdge + GoTStrategy + Expander + plan/
+│   │                          #   expand/evaluate/execute + record_trace),
+│   │                          #   CommunityDetector + CommunityHierarchy +
+│   │                          #   CommunitySummaryGenerator + CommunityQueryRouter
+│   │                          #   (GraphRAG-style scope-aware summaries)
+│   └── demo/                  # public-API-only end-to-end driver: realistic
+│                              #   multi-scope dataset, twelve phase modules
+│                              #   (evidence → observation → memory → concept
+│                              #   graph → synthesis → permissions → crypto →
+│                              #   export → agent → reasoning → connectors →
+│                              #   audit), assertion harness, timing benchmarks,
+│                              #   results renderer that writes
+│                              #   results/demo_results.md, and an integration
+│                              #   test (tests/end_to_end.rs) that re-spawns
+│                              #   the binary and validates every section,
+│                              #   assertion count, and timing entry
 ├── .github/workflows/ci.yml   # fmt + clippy + build + test on push / PR
 ├── PROPOSAL.md                # product thesis
 ├── ARCHITECTURE.md            # system architecture
