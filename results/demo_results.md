@@ -1,7 +1,7 @@
 # Knowledge Substrate End-to-End Demo Results
 
-- Run started: 2026-05-08T15:37:04.019251195+00:00
-- Total wall-clock: 138.744ms
+- Run started: 2026-05-08T15:55:12.655708052+00:00
+- Total wall-clock: 136.951ms
 - Synthetic messages: 51
 - Assertions: 196 passed / 0 failed (pass rate 100.0%)
 
@@ -11,7 +11,7 @@
 |---|---|
 | aead_round_trips | 1 |
 | audit.action_types | 10 |
-| audit.entries | 23 |
+| audit.entries | 19 |
 | channel_recap_objects | 2 |
 | concept_canonical_seeds | 7 |
 | concept_contradicted_total | 2 |
@@ -67,7 +67,7 @@
 
 ## Phases
 
-### Phase 1: Evidence Ingestion (26.541ms)
+### Phase 1: Evidence Ingestion (26.016ms)
 
 | Stat | Value |
 |---|---|
@@ -82,9 +82,9 @@
 | class_noise | 12 |
 | class_useful | 15 |
 
-- Stored evidence at /tmp/.tmpZbB8G0/evidence.sqlcipher (encrypted SQLCipher, master key derived in-process)
+- Stored evidence at /tmp/.tmpwJkbK9/evidence.sqlcipher (encrypted SQLCipher, master key derived in-process)
 
-### Phase 2: Observation Extraction (1.100ms)
+### Phase 2: Observation Extraction (1.097ms)
 
 | Stat | Value |
 |---|---|
@@ -103,7 +103,7 @@
 
 - LexiconExtractor (english_default) -> ChannelPromotionPolicy::default; corroboration scored against the full ingested batch.
 
-### Phase 3: Memory Manager (75.294ms)
+### Phase 3: Memory Manager (75.245ms)
 
 | Stat | Value |
 |---|---|
@@ -124,7 +124,7 @@
 
 - MemoryStateMachine + decay_sweep + UserMemoryObject CRUD + WorkingMemory (50ms TTL) + EpisodicMemory(StubSummarizer + SessionDetector::default).
 
-### Phase 4: Concept Graph (24.773ms)
+### Phase 4: Concept Graph (23.801ms)
 
 | Stat | Value |
 |---|---|
@@ -166,7 +166,7 @@
 - PersistentConceptGraph (SQLCipher) + IncrementalUpdateEngine + all 7 RelationTypes + visualization façade.
 - Substrate-level canonical concepts persisted in tenant scope; per-scope intra-scope IsA clusters added so every dataset scope's load_scope round-trip is non-empty and scope-cohesive.
 
-### Phase 5: Synthesis Pipeline (292.6µs)
+### Phase 5: Synthesis Pipeline (241.4µs)
 
 | Stat | Value |
 |---|---|
@@ -183,7 +183,7 @@
 
 - Channel (NoOpSynthesizer) -> Domain (ManagedEndpointSynthesizer) -> Tenant (ManagedEndpointSynthesizer) with AEAD publish/consume + four hierarchy-enforcement negative tests.
 
-### Phase 6: Permission Service (55.1µs)
+### Phase 6: Permission Service (51.6µs)
 
 | Stat | Value |
 |---|---|
@@ -196,7 +196,7 @@
 
 - Tenant→Domain→Channel hierarchy with two userset rewrites (domain#editor⇐tenant#admin, channel#viewer⇐domain#member) and the default Owner⇒Admin⇒Editor⇒Member⇒Viewer namespace chain. Verified positive paths, negative paths, outsider rejection, duplicate-insert, phantom-remove, upsert idempotence, and scope-local revocation.
 
-### Phase 7: Crypto (709.9µs)
+### Phase 7: Crypto (647.1µs)
 
 | Stat | Value |
 |---|---|
@@ -212,7 +212,7 @@
 
 - Exercises TestSigner provenance round-trips (positive + wrong-key + tampered), hybrid X25519+ML-KEM-768 encap/decap (positive + wrong-recipient), XChaCha20-Poly1305 AEAD (positive + wrong-key + wrong-AAD + tampered), scope DEK destruction with cryptographic forgetting, single-epoch DEK destruction with tombstoning, and EpochManager rotation via force / size triggers.
 
-### Phase 8: Export Plane (1.206ms)
+### Phase 8: Export Plane (1.105ms)
 
 | Stat | Value |
 |---|---|
@@ -230,7 +230,7 @@
 
 - Deny-by-default ExportControlRegistry + PolicyEngine + PolicySimulator + ConceptApprovalWorkflow + ExportView render pipeline driven by Phase 4's canonical concepts.
 
-### Phase 9: Agent Contract (5.125ms)
+### Phase 9: Agent Contract (5.136ms)
 
 | Stat | Value |
 |---|---|
@@ -243,7 +243,7 @@
 
 - AgentProposal lifecycle exercised end-to-end: submission, duplicate-id refusal, corroboration bump, AutoPromotionPolicy match + miss, manual promote/reject, deterministic canonical artifact derivation, and TTL-expiry rejection.
 
-### Phase 10: Reasoning Engine (3.044ms)
+### Phase 10: Reasoning Engine (3.109ms)
 
 | Stat | Value |
 |---|---|
@@ -263,7 +263,7 @@
 | plan_execute_succeeded | 5 |
 
 
-### Phase 11: Connector Framework (124.7µs)
+### Phase 11: Connector Framework (133.2µs)
 
 | Stat | Value |
 |---|---|
@@ -291,7 +291,7 @@
 | connectors.events_total | 28 |
 
 
-### Phase 12: Audit Service (13.7µs)
+### Phase 12: Audit Service (13.5µs)
 
 | Stat | Value |
 |---|---|
@@ -301,78 +301,78 @@
 | by_action.key_destruction | 2 |
 | by_action.export_rendered | 1 |
 | by_action.export_simulated | 1 |
-| by_action.agent_proposal_submitted | 8 |
+| by_action.agent_proposal_submitted | 4 |
 | by_action.agent_proposal_promoted | 3 |
 | by_action.agent_proposal_rejected | 2 |
 | by_action.tenant_lifecycle | 1 |
 | scope_query.tenant.hits | 6 |
 | action_query.agent_proposal_promoted.hits | 3 |
 | time_query.since_lifecycle.hits | 1 |
-| time_query.until_lifecycle.hits | 23 |
+| time_query.until_lifecycle.hits | 19 |
 | actor_query.user.hits | 1 |
 | composite_query.lifecycle.hits | 1 |
-| audit_log.entries | 23 |
+| audit_log.entries | 19 |
 | audit_log.action_types | 10 |
 | queries.executed | 5 |
 
-- audit log carries 23 entries spanning 10 distinct action types
-- demo-run-completed lifecycle entry id = 1da89647-92ed-4ca3-adc7-9daabc0e8e34
-- demo run completed at 2026-05-08T15:37:04.157989909+00:00 UTC
+- audit log carries 19 entries spanning 10 distinct action types
+- demo-run-completed lifecycle entry id = 6f52204d-f4c3-4d08-af10-9de287ab4625
+- demo run completed at 2026-05-08T15:55:12.792653998+00:00 UTC
 
 ## Benchmarks (per-operation timings)
 
 | Operation | N | Total | Per-op |
 |---|---|---|---|
-| evidence_ingest_per_message | 51 | 22.460ms | 440.4µs |
-| observation_extract_per_row | 39 | 1.090ms | 27.9µs |
-| memory_state_machine_ops | 66 | 75.281ms | 1.141ms |
-| concept_graph_propagations | 5 | 1.025ms | 205.0µs |
-| synthesis_channel_tier | 2 | 125.6µs | 62.8µs |
-| synthesis_domain_tier | 1 | 2.5µs | 2.5µs |
-| synthesis_tenant_tier | 1 | 1.9µs | 1.9µs |
-| permission_reachability_checks | 19 | 36.4µs | 1.9µs |
-| provenance_sign_then_verify | 8 | 51.1µs | 6.4µs |
-| hybrid_kem_encap_decap | 1 | 387.2µs | 387.2µs |
-| aead_encrypt_decrypt | 1 | 5.0µs | 5.0µs |
-| export_registry_inserts | 9 | 3.3µs | 0.4µs |
-| export_concept_approvals | 9 | 18.3µs | 2.0µs |
-| export_engine_evaluate | 1 | 2.3µs | 2.3µs |
-| export_render_concepts_only | 1 | 3.0µs | 3.0µs |
-| export_render_with_summaries | 1 | 4.5µs | 4.5µs |
-| export_policy_simulate | 1 | 11.7µs | 11.7µs |
-| export_audit_writes | 2 | 3.5µs | 1.7µs |
-| agent_proposal_submits | 5 | 13.1µs | 2.6µs |
-| agent_review_calls | 4 | 2.1µs | 0.5µs |
-| agent_canonical_derivations | 4 | 2.0µs | 0.5µs |
-| agent_audit_writes | 5 | 8.3µs | 1.7µs |
-| phase10.contradiction.scan | 1 | 280.8µs | 280.8µs |
-| phase10.contradiction.adjudicate | 1 | 6.8µs | 6.8µs |
-| phase10.traversal | 2 | 22.0µs | 11.0µs |
-| phase10.got.execute | 5 | 15.9µs | 3.2µs |
-| phase10.community.detect_summarise | 44 | 214.6µs | 4.9µs |
-| phase10.community.route | 1 | 62.4µs | 62.4µs |
+| evidence_ingest_per_message | 51 | 21.948ms | 430.4µs |
+| observation_extract_per_row | 39 | 1.086ms | 27.9µs |
+| memory_state_machine_ops | 66 | 75.236ms | 1.140ms |
+| concept_graph_propagations | 5 | 863.2µs | 172.6µs |
+| synthesis_channel_tier | 2 | 87.8µs | 43.9µs |
+| synthesis_domain_tier | 1 | 2.2µs | 2.2µs |
+| synthesis_tenant_tier | 1 | 1.8µs | 1.8µs |
+| permission_reachability_checks | 19 | 34.7µs | 1.8µs |
+| provenance_sign_then_verify | 8 | 50.2µs | 6.3µs |
+| hybrid_kem_encap_decap | 1 | 372.1µs | 372.1µs |
+| aead_encrypt_decrypt | 1 | 4.5µs | 4.5µs |
+| export_registry_inserts | 9 | 2.3µs | 0.3µs |
+| export_concept_approvals | 9 | 17.0µs | 1.9µs |
+| export_engine_evaluate | 1 | 2.2µs | 2.2µs |
+| export_render_concepts_only | 1 | 4.5µs | 4.5µs |
+| export_render_with_summaries | 1 | 4.1µs | 4.1µs |
+| export_policy_simulate | 1 | 11.0µs | 11.0µs |
+| export_audit_writes | 2 | 3.4µs | 1.7µs |
+| agent_proposal_submits | 5 | 12.0µs | 2.4µs |
+| agent_review_calls | 4 | 2.0µs | 0.5µs |
+| agent_canonical_derivations | 4 | 1.7µs | 0.4µs |
+| agent_audit_writes | 5 | 10.7µs | 2.1µs |
+| phase10.contradiction.scan | 1 | 257.1µs | 257.1µs |
+| phase10.contradiction.adjudicate | 1 | 5.8µs | 5.8µs |
+| phase10.traversal | 2 | 20.6µs | 10.3µs |
+| phase10.got.execute | 5 | 16.0µs | 3.2µs |
+| phase10.community.detect_summarise | 44 | 226.1µs | 5.1µs |
+| phase10.community.route | 1 | 60.5µs | 60.5µs |
 | phase10.planner.plan | 5 | 3.7µs | 0.7µs |
 | phase10.planner.execute | 5 | 1.0µs | 0.2µs |
-| phase11.google_drive.initial_sync | 3 | 0.6µs | 0.2µs |
-| phase11.google_drive.incremental_sync | 2 | 1.0µs | 0.5µs |
-| phase11.google_drive.webhook | 1 | 11.3µs | 11.3µs |
-| phase11.jira.initial_sync | 3 | 1.3µs | 0.4µs |
+| phase11.google_drive.initial_sync | 3 | 0.5µs | 0.2µs |
+| phase11.google_drive.incremental_sync | 2 | 0.9µs | 0.4µs |
+| phase11.google_drive.webhook | 1 | 15.6µs | 15.6µs |
+| phase11.jira.initial_sync | 3 | 0.9µs | 0.3µs |
 | phase11.jira.incremental_sync | 2 | 1.1µs | 0.5µs |
-| phase11.jira.webhook | 2 | 19.5µs | 9.7µs |
-| phase11.slack.initial_sync | 3 | 2.8µs | 0.9µs |
-| phase11.slack.incremental_sync | 2 | 2.0µs | 1.0µs |
-| phase11.slack.webhook | 1 | 5.0µs | 5.0µs |
+| phase11.jira.webhook | 2 | 9.0µs | 4.5µs |
+| phase11.slack.initial_sync | 3 | 3.1µs | 1.0µs |
+| phase11.slack.incremental_sync | 2 | 2.4µs | 1.2µs |
+| phase11.slack.webhook | 1 | 5.1µs | 5.1µs |
 | phase11.email.gmail.initial_sync | 2 | 1.1µs | 0.5µs |
 | phase11.email.gmail.incremental_sync | 1 | 1.1µs | 1.1µs |
 | phase11.email.gmail.webhook | 2 | 2.8µs | 1.4µs |
-| phase11.email.graph.initial_sync | 2 | 0.6µs | 0.3µs |
-| phase11.email.graph.incremental_sync | 1 | 0.6µs | 0.6µs |
-| phase11.email.graph.webhook | 1 | 5.3µs | 5.3µs |
-| phase12.audit.query_by_scope | 6 | 0.8µs | 0.1µs |
-| phase12.audit.query_by_action | 3 | 0.3µs | 0.1µs |
-| phase12.audit.query_by_time_range | 24 | 0.2µs | 0.0µs |
+| phase11.email.graph.initial_sync | 2 | 0.5µs | 0.2µs |
+| phase11.email.graph.incremental_sync | 1 | 0.7µs | 0.7µs |
+| phase11.email.graph.webhook | 1 | 5.2µs | 5.2µs |
+| phase12.audit.query_by_scope | 6 | 0.4µs | 0.1µs |
+| phase12.audit.query_by_action | 3 | 0.2µs | 0.1µs |
+| phase12.audit.query_by_time_range | 20 | 0.2µs | 0.0µs |
 | phase12.audit.query_by_actor | 1 | 0.2µs | 0.2µs |
-| phase12.audit.composite_query | 1 | 0.3µs | 0.3µs |
+| phase12.audit.composite_query | 1 | 0.2µs | 0.2µs |
 
 ## Assertions
 

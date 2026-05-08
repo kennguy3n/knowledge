@@ -12,7 +12,6 @@
 
 use std::time::Instant;
 
-use audit_service::{Actor, AuditActionType, AuditEntryBuilder, TargetRef, TargetType};
 use chrono::{Duration, Utc};
 use connector_framework::{
     AuthKind, Connector, ConnectorConfig, ConnectorEvent, ConnectorInstanceId, ConnectorKind,
@@ -34,7 +33,6 @@ use connectors::{
     },
 };
 use evidence_store::ScopeId;
-use serde_json::json;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
@@ -46,7 +44,6 @@ const PHASE_LABEL: &str = "Phase 11: Connector Framework";
 /// Per-connector metrics rolled up into the phase report.
 struct ConnectorMetrics {
     name: &'static str,
-    instance: ConnectorInstanceId,
     initial_events: u64,
     incremental_events: u64,
     webhook_events: u64,
@@ -132,24 +129,14 @@ pub fn run(
     state.connector_webhooks_parsed = total_webhook;
     state.connector_subscriptions = total_subscriptions;
 
-    let scope = primary_scope_id(dataset);
-    for c in connectors.iter() {
-        let entry = AuditEntryBuilder::new()
-            .actor(Actor::System)
-            .action(AuditActionType::AgentProposalSubmitted)
-            .target(TargetRef::new(TargetType::Agent, c.instance.0))
-            .scope(scope)
-            .details(json!({
-                "connector": c.name,
-                "initial_events": c.initial_events,
-                "incremental_events": c.incremental_events,
-                "webhook_events": c.webhook_events,
-                "subscriptions": c.subscriptions,
-            }))
-            .build()
-            .expect("build audit entry");
-        state.audit_log.append(entry);
-    }
+    // Connector sync events are intentionally not appended to the
+    // audit log — `audit_service::AuditActionType` is a closed enum
+    // covering canonical promotions, exports, agent proposals, member
+    // provisioning, key destruction, policy changes, and tenant
+    // lifecycle (per the Phase 12 / Audit Service contract). Connector
+    // exercise metrics are surfaced via `report.count(...)` and the
+    // phase stats above without polluting the audit trail's semantic
+    // contract.
 
     phase.timing = phase_started.elapsed();
     report.add_phase(phase);
@@ -321,7 +308,6 @@ fn exercise_google_drive(
 
     ConnectorMetrics {
         name: "google_drive",
-        instance,
         initial_events: initial.events.len() as u64,
         incremental_events: incremental.events.len() as u64,
         webhook_events: webhook_events.len() as u64,
@@ -502,7 +488,6 @@ fn exercise_jira(
 
     ConnectorMetrics {
         name: "jira",
-        instance,
         initial_events: initial.events.len() as u64,
         incremental_events: incremental.events.len() as u64,
         webhook_events: webhook_total,
@@ -683,7 +668,6 @@ fn exercise_slack(
 
     ConnectorMetrics {
         name: "slack",
-        instance,
         initial_events: initial.events.len() as u64,
         incremental_events: incremental.events.len() as u64,
         webhook_events: webhook_events.len() as u64,
@@ -919,15 +903,10 @@ fn exercise_email(
 
     ConnectorMetrics {
         name: "email",
-        instance,
         initial_events: (gmail_initial.events.len() + graph_initial.events.len()) as u64,
         incremental_events: (gmail_incremental.events.len() + graph_incremental.events.len())
             as u64,
         webhook_events: (gmail_webhook_events.len() + graph_webhook_events.len()) as u64,
         subscriptions: 2,
     }
-}
-
-fn primary_scope_id(dataset: &Dataset) -> ScopeId {
-    dataset.user_scope.id
 }

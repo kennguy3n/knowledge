@@ -47,7 +47,11 @@ impl BenchmarkRow {
         if self.n == 0 {
             Duration::ZERO
         } else {
-            self.total / self.n as u32
+            // div_f64 keeps full u64 precision for `n`; a u32 cast
+            // here would silently truncate when `n` exceeds 2^32 and
+            // could even bypass the `n == 0` guard above for
+            // multiples of 2^32.
+            self.total.div_f64(self.n as f64)
         }
     }
 }
