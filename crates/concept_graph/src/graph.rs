@@ -42,6 +42,20 @@ impl ConceptGraph {
         self.edges.len()
     }
 
+    /// Iterate every node in the graph in unspecified order.
+    ///
+    /// Order is *not* guaranteed (the underlying storage is a
+    /// `HashMap`); callers that need a stable order must sort the
+    /// result explicitly.
+    pub fn iter_nodes(&self) -> impl Iterator<Item = &ConceptNode> {
+        self.nodes.values()
+    }
+
+    /// Iterate every edge in the graph in unspecified order.
+    pub fn iter_edges(&self) -> impl Iterator<Item = &ConceptEdge> {
+        self.edges.values()
+    }
+
     /// Insert `node` into the graph. Returns the node id.
     ///
     /// # Errors

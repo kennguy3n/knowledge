@@ -18,12 +18,22 @@
 
 #![deny(missing_docs)]
 
+pub mod citation;
+pub mod document;
 pub mod error;
 pub mod extractor;
 pub mod pipeline;
 pub mod promotion;
 pub mod types;
 
+pub use citation::{
+    Citation, CitationFormat, CitationRegistry, CitationRenderer, CitationSourceType,
+};
+pub use document::{
+    default_document_pipeline, ChunkMetadata, DocumentChunk, DocumentChunker,
+    DocumentExtractionResult, DocumentKind, DocumentObservationPipeline, DocumentRef,
+    ObservationCitation, SlidingWindowChunker,
+};
 pub use error::{ObservationError, Result};
 pub use extractor::{LexiconExtractor, ObservationExtractor};
 pub use pipeline::ObservationPipeline;
