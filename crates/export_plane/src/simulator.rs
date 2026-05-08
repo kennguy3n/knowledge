@@ -193,7 +193,7 @@ impl<'a> PolicySimulator<'a> {
         let mut warnings = decision.warnings;
         let mut capped = 0usize;
         for c in exportable {
-            if included_summaries.len() < self.policy.max_summaries {
+            if included_summaries.len() < effective_policy.max_summaries {
                 included_summaries.push(c.summary_id);
             } else {
                 capped += 1;
