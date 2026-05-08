@@ -1,10 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/agent_contract",
     "crates/audit_service",
     "crates/concept_graph",
     "crates/crypto",
     "crates/evidence_store",
+    "crates/export_plane",
     "crates/memory_manager",
     "crates/observation_engine",
     "crates/permission_service",
@@ -26,7 +28,7 @@ repository = "https://github.com/kennguy3n/knowledge"
 thiserror = "1"
 
 # IDs
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 
 # Hashing / AEAD / KDF / MAC
 blake3 = "1"

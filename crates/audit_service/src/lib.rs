@@ -16,10 +16,15 @@
 
 pub mod entry;
 pub mod error;
+pub mod helpers;
 pub mod log;
 
 pub use entry::{
     Actor, AuditActionType, AuditEntry, AuditEntryBuilder, AuditEntryId, TargetRef, TargetType,
 };
 pub use error::{AuditError, Result};
+pub use helpers::{
+    log_export, log_export_simulated, log_proposal_promoted, log_proposal_rejected,
+    log_proposal_submitted,
+};
 pub use log::{AuditLog, AuditQuery};

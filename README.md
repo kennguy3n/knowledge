@@ -49,10 +49,22 @@ per-tenant key references, a `synthesis_engine` skeleton with the
 append-only `audit_service`, type-system-enforced hierarchy
 (`DomainSynthesisInput` / `TenantSynthesisInput` / `ApprovedDocument`
 in `synthesis_pipeline::hierarchy`), and SQLCipher persistence for
-the `concept_graph`. The platform bindings, the SLM-backed
-importance classifier, MLS group keying, the ML-DSA-65 signer, and
-the Go-side gateway in front of `synthesis_engine` are tracked in
-[PROGRESS.md](./PROGRESS.md) but not yet shipped.
+the `concept_graph`. Phase 5 adds the agent write contract and the
+export plane: the `agent_contract` crate (proposal-only API—
+`AgentProposal<T>` + four typed payloads + `AgentIdentity` + the
+`Proposed → UnderReview → Promoted/Rejected` lifecycle with an
+`AutoPromotionPolicy`), and the `export_plane` crate (portable
+concept profiles, `ExportPolicy` + `PolicyEngine`, deny-by-default
+`ExportControlRegistry`, a read-only `PolicySimulator`, and a
+`ConceptApprovalWorkflow` that bridges canonical `concept_graph`
+nodes into approved exports). `audit_service` is extended with the
+five Phase-5 action types (`ExportRendered`, `ExportSimulated`,
+`AgentProposalSubmitted`, `AgentProposalPromoted`,
+`AgentProposalRejected`) and helper logging functions. The platform
+bindings, the SLM-backed importance classifier, MLS group keying,
+the ML-DSA-65 signer, and the Go-side gateway in front of
+`synthesis_engine` are tracked in [PROGRESS.md](./PROGRESS.md) but
+not yet shipped.
 
 ### Prerequisites
 
@@ -78,14 +90,19 @@ cargo test --all
 ```
 
 This runs the inline unit tests inside each crate and the integration
-test files under `crates/*/tests/`. The Phase-3 crates
+test files under `crates/*/tests/`. The Phase-5 crates
+(`agent_contract`, `export_plane`), the Phase-3 crates
 (`permission_service`, `tenant_service`, `synthesis_engine`,
 `audit_service`), the Phase-2 crates (`concept_graph`,
 `synthesis_pipeline`, `sync_engine`), and the extended Phase-1
 crates (`memory_manager`, `observation_engine`, `crypto`) are all
-covered by `cargo test --all`. The end-to-end channel → domain →
-tenant synthesis chain is exercised by
-`crates/synthesis_engine/tests/hierarchy_e2e.rs`.
+covered by `cargo test --all` (464 tests passing as of the Phase-5
+delivery). The end-to-end channel → domain → tenant synthesis chain
+is exercised by
+`crates/synthesis_engine/tests/hierarchy_e2e.rs`; the agent
+proposal lifecycle and the export plane pipeline are exercised by
+`crates/agent_contract/tests/e2e_proposal_tests.rs` and
+`crates/export_plane/tests/e2e_export_tests.rs`.
 
 ### Lint
 
@@ -150,12 +167,29 @@ knowledge/
 │   ├── tenant_service/        # Phase 3 tenant lifecycle (Active / Suspended /
 │   │                          #   Deleted), per-tenant encryption key references,
 │   │                          #   member provisioning, config validation
-│   └── audit_service/         # Phase 3 append-only audit log: AuditEntryBuilder,
-│                              #   AuditQuery (scope / action / actor / time),
-│                              #   8 AuditActionTypes (canonical promotion,
-│                              #   export, agent proposal, policy change,
-│                              #   member provisioned / removed, tenant
-│                              #   lifecycle, key destruction)
+│   ├── audit_service/         # Phase 3 append-only audit log: AuditEntryBuilder,
+│   │                          #   AuditQuery (scope / action / actor / time),
+│   │                          #   AuditActionTypes (canonical promotion,
+│   │                          #   export, agent proposal, policy change,
+│   │                          #   member provisioned / removed, tenant
+│   │                          #   lifecycle, key destruction; Phase 5 adds
+│   │                          #   ExportRendered / ExportSimulated /
+│   │                          #   AgentProposalSubmitted / AgentProposalPromoted /
+│   │                          #   AgentProposalRejected + helpers)
+│   ├── agent_contract/        # Phase 5 agent write contract: AgentProposal<T>,
+│   │                          #   ObservationProposal / ConceptProposal /
+│   │                          #   RelationProposal / SummaryProposal,
+│   │                          #   AgentIdentity, schema validation,
+│   │                          #   Proposed → UnderReview → Promoted/Rejected
+│   │                          #   lifecycle, AutoPromotionPolicy, ProposalStore,
+│   │                          #   promote_to_canonical → CanonicalArtifact
+│   └── export_plane/          # Phase 5 export plane: PortableConceptProfile,
+│                              #   ApprovedConcept, ExportView (ConceptsOnly /
+│                              #   WithSummaries / WithEvidencePack), EvidencePack,
+│                              #   ExportPolicy + PolicyEngine (least-privilege),
+│                              #   ExportControlRegistry (deny-by-default per
+│                              #   concept / summary / workflow), PolicySimulator
+│                              #   (read-only preview), ConceptApprovalWorkflow
 ├── .github/workflows/ci.yml   # fmt + clippy + build + test on push / PR
 ├── PROPOSAL.md                # product thesis
 ├── ARCHITECTURE.md            # system architecture
