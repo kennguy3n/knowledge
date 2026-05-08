@@ -127,11 +127,25 @@ impl<'a> PolicySimulator<'a> {
         let effective_policy = self.policy.clone().with_constraints(&profile.constraints);
 
         // Pre-filter via the registry.
+        //
+        // N-6 — the scope passed to `allows_concept` is the
+        // *concept's* scope (`c.scope_id.0`), not the *profile's*
+        // scope (`profile.scope_id.0`). [`crate::approval::
+        // ConceptApprovalWorkflow::approve_for_export`] checks the
+        // registry against the concept's own scope before admitting
+        // it, so the simulator must do the same — otherwise a
+        // multi-scope profile rooted in scope_B but holding a
+        // concept originally approved at scope_A whose
+        // [`crate::controls::ConceptExportControl::scope_bound`] is
+        // `[scope_A]` is silently dropped from the preview even
+        // though `approve_for_export` admitted it. The two checks
+        // must use the same scope so simulator output mirrors the
+        // engine's output.
         let mut policy_candidates = Vec::new();
         for c in &profile.concepts {
             if !self
                 .controls
-                .allows_concept(c.concept_id, profile.id, profile.scope_id.0, now)
+                .allows_concept(c.concept_id, profile.id, c.scope_id.0, now)
             {
                 excluded_concepts.push(SimulatedExclusion {
                     entity_id: c.concept_id,
@@ -756,6 +770,58 @@ mod tests {
             .excluded_concepts
             .iter()
             .any(|e| e.reason.contains("whitelist")));
+    }
+
+    #[test]
+    fn simulator_uses_concept_scope_for_registry_check_in_multi_scope_profile() {
+        // N-6 regression — `PolicySimulator::simulate` must pass the
+        // *concept's* scope to `controls.allows_concept`, not the
+        // *profile's* scope. Otherwise a profile rooted at scope_B
+        // that holds a concept originally approved at scope_A whose
+        // `ConceptExportControl::scope_bound = [scope_A]` is
+        // silently dropped by the preview, even though
+        // `ConceptApprovalWorkflow::approve_for_export` admits it
+        // (it always passes the concept's own scope).
+        let scope_a = ScopeId::new_v4();
+        let scope_b = ScopeId::new_v4();
+        let mut profile = PortableConceptProfile::new(
+            "multi-scope",
+            "profile rooted at scope_b holding a concept from scope_a",
+            "downstream-tool",
+            scope_b,
+        );
+        let concept_id = Uuid::new_v4();
+        profile.push_concept(ApprovedConcept::new(
+            concept_id,
+            "label",
+            "definition",
+            scope_a,
+            provenance(),
+            SensitivityClass::Useful,
+        ));
+        let mut control = ConceptExportControl::new(concept_id);
+        control.scope_bound = vec![scope_a.0];
+        let mut registry = ExportControlRegistry::new();
+        registry.insert_concept(control).expect("insert");
+
+        // Policy must not also impose its own scope whitelist —
+        // otherwise the engine's `scope_not_whitelisted` rejection
+        // would mask the registry-level bug we are guarding against.
+        let policy = ExportPolicy::default();
+
+        let sim = PolicySimulator::new(&policy, &registry);
+        let result = sim.simulate(&profile);
+
+        assert_eq!(
+            result.included_concepts,
+            vec![concept_id],
+            "concept registered with scope_bound=[scope_a] must be admitted when held by a profile rooted at scope_b — simulator must use the concept's own scope (matching ConceptApprovalWorkflow::approve_for_export)"
+        );
+        assert!(
+            result.excluded_concepts.is_empty(),
+            "no concept should be excluded; got {:?}",
+            result.excluded_concepts
+        );
     }
 
     #[test]
