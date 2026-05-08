@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use memory_manager::SensitivityClass;
 
-use crate::profile::ApprovedConcept;
+use crate::profile::{ApprovedConcept, ExportConstraint};
 
 /// Reason a candidate concept was rejected by the policy.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -144,6 +144,67 @@ impl ExportPolicy {
             time_window: None,
             require_provenance: true,
         }
+    }
+
+    /// Fold the constraints attached to a profile into a stricter
+    /// effective policy. Profile constraints can only *tighten* the
+    /// policy — they never relax it — so an export emitted under the
+    /// resulting policy is at least as restrictive as one emitted
+    /// under the bare policy alone.
+    ///
+    /// Folding rules:
+    ///
+    /// * [`ExportConstraint::MaxConcepts(n)`] —
+    ///   `effective.max_concepts = min(self.max_concepts, n)`.
+    /// * [`ExportConstraint::MaxAge(d)`] — tightens
+    ///   [`Self::time_window`]: `None` (no window) becomes
+    ///   `Some(d)`, and `Some(existing)` becomes
+    ///   `Some(min(existing, d))`.
+    /// * [`ExportConstraint::ScopeRestriction(scopes)`] — tightens
+    ///   [`Self::scope_whitelist`] by set intersection. `None` (any
+    ///   scope) becomes `Some(scopes)`; `Some(existing)` becomes
+    ///   the intersection of `existing` and `scopes`. An empty
+    ///   intersection means "no scopes admitted".
+    /// * [`ExportConstraint::SensitivityCeiling(class)`] — tightens
+    ///   [`Self::sensitivity_ceiling`] to whichever of `self` and
+    ///   `class` has the lower [`rank`] (lower rank = more
+    ///   restrictive).
+    ///
+    /// Multiple constraints of the same kind on a single profile
+    /// are folded left-to-right; each successive constraint
+    /// tightens further. The original policy is consumed and the
+    /// stricter copy is returned, so callers can chain
+    /// `policy.with_constraints(&profile.constraints)` without
+    /// cloning explicitly.
+    pub fn with_constraints(mut self, constraints: &[ExportConstraint]) -> Self {
+        for c in constraints {
+            match c {
+                ExportConstraint::MaxConcepts(n) => {
+                    self.max_concepts = self.max_concepts.min(*n);
+                }
+                ExportConstraint::MaxAge(d) => {
+                    self.time_window = Some(match self.time_window {
+                        Some(existing) => existing.min(*d),
+                        None => *d,
+                    });
+                }
+                ExportConstraint::ScopeRestriction(scopes) => {
+                    self.scope_whitelist = Some(match self.scope_whitelist.take() {
+                        Some(existing) => existing
+                            .into_iter()
+                            .filter(|s| scopes.contains(s))
+                            .collect(),
+                        None => scopes.clone(),
+                    });
+                }
+                ExportConstraint::SensitivityCeiling(class) => {
+                    if rank(*class) < rank(self.sensitivity_ceiling) {
+                        self.sensitivity_ceiling = *class;
+                    }
+                }
+            }
+        }
+        self
     }
 }
 
@@ -556,5 +617,180 @@ mod tests {
         let p = ExportPolicy::default();
         let decision = PolicyEngine::new().evaluate(&p, &[c]);
         assert!(!decision.allow_raw_evidence);
+    }
+
+    // F-7 — profile constraints become effective via
+    // `ExportPolicy::with_constraints`.
+
+    #[test]
+    fn with_constraints_max_concepts_tightens() {
+        let p = ExportPolicy {
+            max_concepts: 10,
+            ..ExportPolicy::default()
+        };
+        let folded = p.with_constraints(&[ExportConstraint::MaxConcepts(5)]);
+        assert_eq!(folded.max_concepts, 5);
+    }
+
+    #[test]
+    fn with_constraints_max_concepts_does_not_loosen() {
+        let p = ExportPolicy {
+            max_concepts: 5,
+            ..ExportPolicy::default()
+        };
+        let folded = p.with_constraints(&[ExportConstraint::MaxConcepts(10)]);
+        assert_eq!(folded.max_concepts, 5);
+    }
+
+    #[test]
+    fn with_constraints_max_age_replaces_none() {
+        let p = ExportPolicy {
+            time_window: None,
+            ..ExportPolicy::default()
+        };
+        let folded = p.with_constraints(&[ExportConstraint::MaxAge(Duration::from_secs(3600))]);
+        assert_eq!(folded.time_window, Some(Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn with_constraints_max_age_tightens_existing() {
+        let p = ExportPolicy {
+            time_window: Some(Duration::from_secs(86_400)),
+            ..ExportPolicy::default()
+        };
+        let folded = p.with_constraints(&[ExportConstraint::MaxAge(Duration::from_secs(3600))]);
+        assert_eq!(folded.time_window, Some(Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn with_constraints_max_age_does_not_loosen_existing() {
+        let p = ExportPolicy {
+            time_window: Some(Duration::from_secs(3600)),
+            ..ExportPolicy::default()
+        };
+        let folded = p.with_constraints(&[ExportConstraint::MaxAge(Duration::from_secs(86_400))]);
+        assert_eq!(folded.time_window, Some(Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn with_constraints_scope_restriction_replaces_none() {
+        let scope_a = Uuid::new_v4();
+        let scope_b = Uuid::new_v4();
+        let policy = ExportPolicy {
+            scope_whitelist: None,
+            ..ExportPolicy::default()
+        };
+        let folded =
+            policy.with_constraints(&[ExportConstraint::ScopeRestriction(vec![scope_a, scope_b])]);
+        assert_eq!(folded.scope_whitelist, Some(vec![scope_a, scope_b]));
+    }
+
+    #[test]
+    fn with_constraints_scope_restriction_intersects_existing() {
+        let scope_a = Uuid::new_v4();
+        let scope_b = Uuid::new_v4();
+        let scope_c = Uuid::new_v4();
+        let scope_d = Uuid::new_v4();
+        let policy = ExportPolicy {
+            scope_whitelist: Some(vec![scope_a, scope_b, scope_c]),
+            ..ExportPolicy::default()
+        };
+        let folded = policy.with_constraints(&[ExportConstraint::ScopeRestriction(vec![
+            scope_b, scope_c, scope_d,
+        ])]);
+        // Order is preserved from `existing`; intersection is
+        // `[scope_b, scope_c]`.
+        assert_eq!(folded.scope_whitelist, Some(vec![scope_b, scope_c]));
+    }
+
+    #[test]
+    fn with_constraints_scope_restriction_disjoint_yields_empty_whitelist() {
+        let scope_a = Uuid::new_v4();
+        let scope_b = Uuid::new_v4();
+        let policy = ExportPolicy {
+            scope_whitelist: Some(vec![scope_a]),
+            ..ExportPolicy::default()
+        };
+        let folded = policy.with_constraints(&[ExportConstraint::ScopeRestriction(vec![scope_b])]);
+        assert_eq!(folded.scope_whitelist, Some(Vec::<Uuid>::new()));
+    }
+
+    #[test]
+    fn with_constraints_sensitivity_ceiling_tightens() {
+        let p = ExportPolicy {
+            sensitivity_ceiling: SensitivityClass::Important,
+            ..ExportPolicy::default()
+        };
+        let folded = p.with_constraints(&[ExportConstraint::SensitivityCeiling(
+            SensitivityClass::Useful,
+        )]);
+        assert_eq!(folded.sensitivity_ceiling, SensitivityClass::Useful);
+    }
+
+    #[test]
+    fn with_constraints_sensitivity_ceiling_does_not_loosen() {
+        let p = ExportPolicy {
+            sensitivity_ceiling: SensitivityClass::Useful,
+            ..ExportPolicy::default()
+        };
+        let folded = p.with_constraints(&[ExportConstraint::SensitivityCeiling(
+            SensitivityClass::Important,
+        )]);
+        assert_eq!(folded.sensitivity_ceiling, SensitivityClass::Useful);
+    }
+
+    #[test]
+    fn with_constraints_multiple_same_kind_fold_left_to_right() {
+        let p = ExportPolicy {
+            max_concepts: 100,
+            ..ExportPolicy::default()
+        };
+        let folded = p.with_constraints(&[
+            ExportConstraint::MaxConcepts(50),
+            ExportConstraint::MaxConcepts(20),
+            ExportConstraint::MaxConcepts(80),
+        ]);
+        // Each successive constraint can only tighten; the floor is
+        // the strictest one seen so far.
+        assert_eq!(folded.max_concepts, 20);
+    }
+
+    #[test]
+    fn with_constraints_all_kinds_compose() {
+        let scope = Uuid::new_v4();
+        let p = ExportPolicy {
+            max_concepts: 100,
+            time_window: Some(Duration::from_secs(86_400)),
+            sensitivity_ceiling: SensitivityClass::Critical,
+            scope_whitelist: None,
+            ..ExportPolicy::default()
+        };
+        let folded = p.with_constraints(&[
+            ExportConstraint::MaxConcepts(10),
+            ExportConstraint::MaxAge(Duration::from_secs(3600)),
+            ExportConstraint::SensitivityCeiling(SensitivityClass::Useful),
+            ExportConstraint::ScopeRestriction(vec![scope]),
+        ]);
+        assert_eq!(folded.max_concepts, 10);
+        assert_eq!(folded.time_window, Some(Duration::from_secs(3600)));
+        assert_eq!(folded.sensitivity_ceiling, SensitivityClass::Useful);
+        assert_eq!(folded.scope_whitelist, Some(vec![scope]));
+    }
+
+    #[test]
+    fn with_constraints_empty_list_is_identity() {
+        let p = ExportPolicy {
+            max_concepts: 7,
+            time_window: Some(Duration::from_secs(900)),
+            sensitivity_ceiling: SensitivityClass::Important,
+            scope_whitelist: Some(vec![Uuid::new_v4()]),
+            ..ExportPolicy::default()
+        };
+        let original = p.clone();
+        let folded = p.with_constraints(&[]);
+        assert_eq!(folded.max_concepts, original.max_concepts);
+        assert_eq!(folded.time_window, original.time_window);
+        assert_eq!(folded.sensitivity_ceiling, original.sensitivity_ceiling);
+        assert_eq!(folded.scope_whitelist, original.scope_whitelist);
     }
 }

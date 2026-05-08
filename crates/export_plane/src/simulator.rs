@@ -117,6 +117,15 @@ impl<'a> PolicySimulator<'a> {
             };
         }
 
+        // Profile-constraint fold — F-7. Profile-attached
+        // [`crate::profile::ExportConstraint`]s only become effective
+        // if they are folded into the policy that the engine
+        // actually evaluates. The simulator computes a stricter
+        // copy via [`ExportPolicy::with_constraints`] and uses it
+        // for both the engine pass and the `max_summaries` cap;
+        // `self.policy` itself is not mutated.
+        let effective_policy = self.policy.clone().with_constraints(&profile.constraints);
+
         // Pre-filter via the registry.
         let mut policy_candidates = Vec::new();
         for c in &profile.concepts {
@@ -135,7 +144,7 @@ impl<'a> PolicySimulator<'a> {
         }
 
         // Engine pass.
-        let decision = PolicyEngine::new().evaluate(self.policy, &policy_candidates);
+        let decision = PolicyEngine::new().evaluate(&effective_policy, &policy_candidates);
         for c in &decision.approved {
             included_concepts.push(c.concept_id);
         }
@@ -251,6 +260,7 @@ mod tests {
     use crypto::{EvidenceRef, ProvenanceAgent, ProvenanceBundle, SynthesisActivity};
     use evidence_store::ScopeId;
     use memory_manager::SensitivityClass;
+    use std::time::Duration;
 
     fn provenance() -> ProvenanceBundle {
         ProvenanceBundle::new(
@@ -477,6 +487,153 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.contains("profile expired")));
+    }
+
+    // F-7 — profile-attached `ExportConstraint`s are folded into
+    // the effective policy used for the engine pass and the
+    // `max_summaries` cap. These integration tests exercise each
+    // constraint variant end-to-end through the simulator.
+
+    #[test]
+    fn simulator_applies_profile_max_concepts_constraint() {
+        // Bare policy admits 100 concepts; profile constraint cuts
+        // that down to 2. Five concepts in the profile, three should
+        // be rejected with `max_concepts` reason.
+        let (mut profile, _scope) = fixture_profile(5);
+        profile
+            .constraints
+            .push(crate::profile::ExportConstraint::MaxConcepts(2));
+        let policy = ExportPolicy {
+            max_concepts: 100,
+            ..ExportPolicy::default()
+        };
+        let mut registry = ExportControlRegistry::new();
+        for c in &profile.concepts {
+            registry
+                .insert_concept(ConceptExportControl::new(c.concept_id))
+                .expect("insert");
+        }
+        let sim = PolicySimulator::new(&policy, &registry);
+        let result = sim.simulate(&profile);
+        assert_eq!(result.included_concepts.len(), 2);
+        assert!(result
+            .excluded_concepts
+            .iter()
+            .any(|e| e.reason.contains("max_concepts")));
+    }
+
+    #[test]
+    fn simulator_applies_profile_max_age_constraint() {
+        // Bare policy has no time window; profile constraint
+        // restricts to last 60s. One concept approved 2h ago — must
+        // be filtered with `time_window` reason.
+        let scope = ScopeId::new_v4();
+        let mut profile =
+            PortableConceptProfile::new("demo", "demo profile", "downstream-tool", scope);
+        let mut old = ApprovedConcept::new(
+            Uuid::new_v4(),
+            "label",
+            "definition",
+            scope,
+            provenance(),
+            SensitivityClass::Useful,
+        );
+        old.approved_at = Utc::now() - chrono::Duration::seconds(7200);
+        profile.push_concept(old);
+        profile
+            .constraints
+            .push(crate::profile::ExportConstraint::MaxAge(
+                Duration::from_secs(60),
+            ));
+        let policy = ExportPolicy::default();
+        let mut registry = ExportControlRegistry::new();
+        for c in &profile.concepts {
+            registry
+                .insert_concept(ConceptExportControl::new(c.concept_id))
+                .expect("insert");
+        }
+        let sim = PolicySimulator::new(&policy, &registry);
+        let result = sim.simulate(&profile);
+        assert!(result.included_concepts.is_empty());
+        assert!(result
+            .excluded_concepts
+            .iter()
+            .any(|e| e.reason.contains("time window")));
+    }
+
+    #[test]
+    fn simulator_applies_profile_sensitivity_ceiling_constraint() {
+        // Bare policy ceiling is `Critical`; profile constraint
+        // tightens to `Useful`. An `Important` concept must be
+        // filtered with `sensitivity_ceiling` reason.
+        let scope = ScopeId::new_v4();
+        let mut profile =
+            PortableConceptProfile::new("demo", "demo profile", "downstream-tool", scope);
+        profile.push_concept(ApprovedConcept::new(
+            Uuid::new_v4(),
+            "label",
+            "definition",
+            scope,
+            provenance(),
+            SensitivityClass::Important,
+        ));
+        profile
+            .constraints
+            .push(crate::profile::ExportConstraint::SensitivityCeiling(
+                SensitivityClass::Useful,
+            ));
+        let policy = ExportPolicy::permissive(SensitivityClass::Critical);
+        let mut registry = ExportControlRegistry::new();
+        for c in &profile.concepts {
+            registry
+                .insert_concept(ConceptExportControl::new(c.concept_id))
+                .expect("insert");
+        }
+        let sim = PolicySimulator::new(&policy, &registry);
+        let result = sim.simulate(&profile);
+        assert!(result.included_concepts.is_empty());
+        assert!(result
+            .excluded_concepts
+            .iter()
+            .any(|e| e.reason.contains("sensitivity") && e.reason.contains("ceiling")));
+    }
+
+    #[test]
+    fn simulator_applies_profile_scope_restriction_constraint() {
+        // Bare policy has no scope whitelist; profile constraint
+        // pins to a single scope distinct from the concept's. The
+        // concept must be rejected with `scope_not_whitelisted`.
+        let scope = ScopeId::new_v4();
+        let other_scope = ScopeId::new_v4();
+        let mut profile =
+            PortableConceptProfile::new("demo", "demo profile", "downstream-tool", scope);
+        profile.push_concept(ApprovedConcept::new(
+            Uuid::new_v4(),
+            "label",
+            "definition",
+            scope,
+            provenance(),
+            SensitivityClass::Useful,
+        ));
+        profile
+            .constraints
+            .push(crate::profile::ExportConstraint::ScopeRestriction(vec![
+                other_scope.0,
+            ]));
+        let policy = ExportPolicy::default();
+        let mut registry = ExportControlRegistry::new();
+        for c in &profile.concepts {
+            registry
+                .insert_concept(ConceptExportControl::new(c.concept_id))
+                .expect("insert");
+        }
+        let sim = PolicySimulator::new(&policy, &registry);
+        let result = sim.simulate(&profile);
+        assert!(result.included_concepts.is_empty());
+        assert!(result
+            .excluded_concepts
+            .iter()
+            .any(|e| e.reason.contains("whitelist")));
     }
 
     #[test]
