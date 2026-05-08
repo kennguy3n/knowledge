@@ -335,7 +335,14 @@ pub struct ExportView {
 
 impl ExportView {
     /// Construct a fresh view stamped at `now`.
-    pub fn new(profile_id: Uuid, scope_id: ScopeId, content: ExportViewContent) -> Self {
+    ///
+    /// This constructor is `pub(crate)` so callers outside the
+    /// crate cannot bypass the policy engine. The supported public
+    /// entry point is [`Self::from_decision`] in
+    /// [`crate::policy`], which accepts an
+    /// [`crate::policy::ExportDecision`] and uses *its* approved
+    /// concept set as the canonical source of truth.
+    pub(crate) fn new(profile_id: Uuid, scope_id: ScopeId, content: ExportViewContent) -> Self {
         Self {
             id: Uuid::new_v4(),
             profile_id,

@@ -29,9 +29,10 @@ use concept_graph::{ConceptGraph, ConceptNode, NodeId, NodeState};
 use crypto::{EvidenceRef, ProvenanceAgent, ProvenanceBundle, SynthesisActivity};
 use evidence_store::ScopeId;
 use export_plane::{
-    ApprovalError, ApprovedConcept, ConceptApprovalWorkflow, ConceptExportControl,
-    ExportConstraint, ExportControlRegistry, ExportPolicy, ExportRejectionReason, ExportView,
-    ExportViewContent, PolicyEngine, PolicySimulator, PortableConceptProfile,
+    ApprovalError, ApprovedConcept, ApprovedSummary, ConceptApprovalWorkflow, ConceptExportControl,
+    EvidencePack, ExportConstraint, ExportControlRegistry, ExportPolicy, ExportRejectionReason,
+    ExportView, ExportViewError, ExportViewRequest, PolicyEngine, PolicySimulator,
+    PortableConceptProfile,
 };
 use memory_manager::SensitivityClass;
 
@@ -129,16 +130,19 @@ fn full_export_pipeline_emits_concepts_only_view_and_audit_trail() {
     )
     .expect("audit simulate");
 
-    // 5. Render the export view via the engine.
+    // 5. Render the export view via the engine. The view is built
+    //    via [`ExportView::from_decision`] — the only public way to
+    //    mint a view, which guarantees the rendered concept set is
+    //    exactly the engine's `approved` list.
     let decision = PolicyEngine::new().evaluate(&policy, &profile.concepts);
     assert_eq!(decision.approved.len(), 1);
-    let view = ExportView::new(
+    let view = ExportView::from_decision(
+        &decision,
         profile.id,
         scope,
-        ExportViewContent::ConceptsOnly {
-            concepts: decision.approved.clone(),
-        },
-    );
+        ExportViewRequest::ConceptsOnly,
+    )
+    .expect("render concepts-only view");
 
     // 6. Verify no raw evidence leaked into the rendered view.
     assert!(view.content.evidence_pack().is_none());
@@ -221,6 +225,131 @@ fn critical_sensitivity_concept_is_blocked_by_default_policy() {
     assert!(result.excluded_concepts[0]
         .reason
         .contains("exceeds policy ceiling"));
+}
+
+#[test]
+fn export_view_from_decision_rejects_unauthorised_evidence_pack() {
+    // F-13 regression — `ExportView::from_decision` is the only
+    // public way to mint a view, and it must refuse a
+    // `WithEvidencePack` request when the supplied decision did not
+    // authorise raw evidence. Without this guard a caller could
+    // hand-build an `ExportView` containing evidence the engine
+    // refused to permit.
+    let scope = ScopeId::new_v4();
+    let concept_id = Uuid::new_v4();
+    let approved = ApprovedConcept::new(
+        concept_id,
+        "Atlas",
+        "definition",
+        scope,
+        provenance_for(concept_id),
+        SensitivityClass::Useful,
+    );
+    // Default policy has `allow_raw_evidence: false` — the engine
+    // therefore clears `decision.allow_raw_evidence`.
+    let decision = PolicyEngine::new().evaluate(&ExportPolicy::default(), &[approved]);
+    assert!(!decision.allow_raw_evidence);
+
+    let mut pack = EvidencePack::new();
+    pack.evidence_refs
+        .push(EvidenceRef::from_uuid(Uuid::new_v4()));
+    let err = ExportView::from_decision(
+        &decision,
+        Uuid::new_v4(),
+        scope,
+        ExportViewRequest::WithEvidencePack {
+            summaries: Vec::new(),
+            evidence_pack: pack,
+        },
+    )
+    .expect_err("evidence pack must be refused");
+    assert_eq!(err, ExportViewError::RawEvidenceNotAuthorised);
+}
+
+#[test]
+fn export_view_from_decision_admits_evidence_pack_when_authorised() {
+    // F-13 happy-path — when `decision.allow_raw_evidence` is true,
+    // a `WithEvidencePack` request renders successfully and the
+    // resulting view carries the evidence pack verbatim.
+    let scope = ScopeId::new_v4();
+    let concept_id = Uuid::new_v4();
+    let approved = ApprovedConcept::new(
+        concept_id,
+        "Atlas",
+        "definition",
+        scope,
+        provenance_for(concept_id),
+        SensitivityClass::Useful,
+    );
+    let policy = ExportPolicy {
+        allow_raw_evidence: true,
+        ..ExportPolicy::default()
+    };
+    let decision = PolicyEngine::new().evaluate(&policy, std::slice::from_ref(&approved));
+    assert!(decision.allow_raw_evidence);
+
+    let evidence_id = Uuid::new_v4();
+    let mut pack = EvidencePack::new();
+    pack.evidence_refs.push(EvidenceRef::from_uuid(evidence_id));
+    let view = ExportView::from_decision(
+        &decision,
+        Uuid::new_v4(),
+        scope,
+        ExportViewRequest::WithEvidencePack {
+            summaries: vec![ApprovedSummary {
+                summary_id: Uuid::new_v4(),
+                scope_id: scope,
+                body: "summary".into(),
+            }],
+            evidence_pack: pack,
+        },
+    )
+    .expect("render with-evidence-pack view");
+
+    let pack = view.content.evidence_pack().expect("evidence pack present");
+    assert_eq!(pack.evidence_refs.len(), 1);
+    assert_eq!(view.content.concepts().len(), 1);
+    assert_eq!(view.content.summaries().len(), 1);
+}
+
+#[test]
+fn export_view_from_decision_uses_decision_approved_set_verbatim() {
+    // F-13 invariant — the rendered view's concept set is exactly
+    // `decision.approved`. A caller cannot smuggle in extra
+    // concepts because the `ExportViewRequest` enum has no way to
+    // override the concept list.
+    let scope = ScopeId::new_v4();
+    let smuggled = ApprovedConcept::new(
+        Uuid::new_v4(),
+        "Smuggled",
+        "should not appear",
+        scope,
+        provenance_for(Uuid::new_v4()),
+        SensitivityClass::Useful,
+    );
+    let admitted = ApprovedConcept::new(
+        Uuid::new_v4(),
+        "Atlas",
+        "definition",
+        scope,
+        provenance_for(Uuid::new_v4()),
+        SensitivityClass::Useful,
+    );
+    let decision =
+        PolicyEngine::new().evaluate(&ExportPolicy::default(), std::slice::from_ref(&admitted));
+    assert_eq!(decision.approved.len(), 1);
+    let _ = smuggled; // The struct exists, but the request enum
+                      // gives the caller no place to attach it.
+
+    let view = ExportView::from_decision(
+        &decision,
+        Uuid::new_v4(),
+        scope,
+        ExportViewRequest::ConceptsOnly,
+    )
+    .expect("render");
+    assert_eq!(view.content.concepts().len(), 1);
+    assert_eq!(view.content.concepts()[0].concept_id, admitted.concept_id);
 }
 
 #[test]
@@ -425,13 +554,13 @@ fn cross_crate_proposal_to_export_pipeline() {
     .expect("audit simulate");
 
     let decision = PolicyEngine::new().evaluate(&export_policy, &profile.concepts);
-    let view = ExportView::new(
+    let view = ExportView::from_decision(
+        &decision,
         profile.id,
         scope,
-        ExportViewContent::ConceptsOnly {
-            concepts: decision.approved.clone(),
-        },
-    );
+        ExportViewRequest::ConceptsOnly,
+    )
+    .expect("render concepts-only view");
     assert!(view.content.evidence_pack().is_none());
     log_export(
         &mut audit,

@@ -36,10 +36,11 @@ pub use controls::{
     SummaryExportControl, WorkflowExportControl,
 };
 pub use policy::{
-    ExportDecision, ExportPolicy, ExportRejection, ExportRejectionReason, PolicyEngine,
+    ExportDecision, ExportPolicy, ExportRejection, ExportRejectionReason, ExportViewError,
+    ExportViewRequest, PolicyEngine,
 };
 pub use profile::{
-    ApprovedConcept, EvidencePack, ExportConstraint, ExportView, ExportViewContent,
-    PortableConceptProfile, ReasoningRef,
+    ApprovedConcept, ApprovedSummary, EvidencePack, ExportConstraint, ExportView,
+    ExportViewContent, PortableConceptProfile, ReasoningRef,
 };
 pub use simulator::{PolicySimulator, SimulationResult};

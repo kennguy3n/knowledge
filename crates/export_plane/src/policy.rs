@@ -22,12 +22,16 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use crypto::ProvenanceBundle;
+use evidence_store::ScopeId;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use uuid::Uuid;
 
 use memory_manager::SensitivityClass;
 
-use crate::profile::{ApprovedConcept, ExportConstraint};
+use crate::profile::{
+    ApprovedConcept, ApprovedSummary, EvidencePack, ExportConstraint, ExportView, ExportViewContent,
+};
 
 /// Reason a candidate concept was rejected by the policy.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -205,6 +209,92 @@ impl ExportPolicy {
             }
         }
         self
+    }
+}
+
+/// Content-variant selector for [`ExportView::from_decision`].
+///
+/// The variants mirror [`ExportViewContent`], but the concept set is
+/// elided — the policy decision's `approved` list is the canonical
+/// source of truth for which concepts the rendered view surfaces.
+#[derive(Debug, Clone, Default)]
+pub enum ExportViewRequest {
+    /// Render only the engine-approved concepts.
+    #[default]
+    ConceptsOnly,
+    /// Render concepts plus the supplied approved summaries.
+    WithSummaries {
+        /// Summaries to surface alongside the concept set.
+        summaries: Vec<ApprovedSummary>,
+    },
+    /// Render concepts plus summaries plus a raw evidence pack.
+    /// Allowed only when [`ExportDecision::allow_raw_evidence`] is
+    /// `true`. The engine ANDs `policy.allow_raw_evidence` with the
+    /// absence of any `Critical` concept in the approved set, so
+    /// this guard prevents callers from rendering evidence the
+    /// policy refused to permit.
+    WithEvidencePack {
+        /// Summaries to surface alongside the concept set.
+        summaries: Vec<ApprovedSummary>,
+        /// Raw evidence pack — only included when
+        /// `decision.allow_raw_evidence` is true.
+        evidence_pack: EvidencePack,
+    },
+}
+
+/// Errors returned by [`ExportView::from_decision`].
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ExportViewError {
+    /// Caller asked for [`ExportViewRequest::WithEvidencePack`] but
+    /// the supplied [`ExportDecision::allow_raw_evidence`] is
+    /// `false` — either the policy refused raw evidence outright,
+    /// or the engine suppressed it because the approved set
+    /// contains a `Critical` concept.
+    #[error("raw evidence requested but decision.allow_raw_evidence is false")]
+    RawEvidenceNotAuthorised,
+}
+
+impl ExportView {
+    /// Construct an [`ExportView`] from an [`ExportDecision`].
+    ///
+    /// This is the only public way to mint an [`ExportView`]. The
+    /// raw [`ExportView::new`] constructor is `pub(crate)` so
+    /// callers outside this crate cannot fabricate views whose
+    /// concepts bypass [`PolicyEngine::evaluate`]. The view's
+    /// concepts are always `decision.approved` — the engine's
+    /// approved set is the canonical source of truth.
+    ///
+    /// A [`ExportViewRequest::WithEvidencePack`] request whose
+    /// decision did not authorise raw evidence is rejected with
+    /// [`ExportViewError::RawEvidenceNotAuthorised`].
+    pub fn from_decision(
+        decision: &ExportDecision,
+        profile_id: Uuid,
+        scope_id: ScopeId,
+        request: ExportViewRequest,
+    ) -> Result<Self, ExportViewError> {
+        let concepts = decision.approved.clone();
+        let content = match request {
+            ExportViewRequest::ConceptsOnly => ExportViewContent::ConceptsOnly { concepts },
+            ExportViewRequest::WithSummaries { summaries } => ExportViewContent::WithSummaries {
+                concepts,
+                summaries,
+            },
+            ExportViewRequest::WithEvidencePack {
+                summaries,
+                evidence_pack,
+            } => {
+                if !decision.allow_raw_evidence {
+                    return Err(ExportViewError::RawEvidenceNotAuthorised);
+                }
+                ExportViewContent::WithEvidencePack {
+                    concepts,
+                    summaries,
+                    evidence_pack,
+                }
+            }
+        };
+        Ok(Self::new(profile_id, scope_id, content))
     }
 }
 
