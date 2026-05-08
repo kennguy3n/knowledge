@@ -27,6 +27,10 @@ pub enum ConnectorKind {
     GitHub,
     /// Slack workspace.
     Slack,
+    /// Figma design files.
+    Figma,
+    /// HubSpot CRM.
+    HubSpot,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -43,6 +47,8 @@ impl ConnectorKind {
             Self::Confluence => "confluence",
             Self::GitHub => "github",
             Self::Slack => "slack",
+            Self::Figma => "figma",
+            Self::HubSpot => "hubspot",
             Self::GenericWebhook => "generic_webhook",
         }
     }

@@ -1,0 +1,23 @@
+[package]
+name = "connectors"
+description = "Vendor-specific connector implementations for the Knowledge substrate (Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+connector_framework = { path = "../connector_framework" }
+crypto = { path = "../crypto" }
+evidence_store = { path = "../evidence_store" }
+observation_engine = { path = "../observation_engine" }
+
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
