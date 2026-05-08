@@ -1,0 +1,19 @@
+[package]
+name = "inference_router"
+description = "On-device SLM inference routing for the Knowledge substrate (MLX → llama.cpp → fallback)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+crypto = { path = "../crypto" }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

@@ -133,10 +133,32 @@ closes the managed-endpoint slot with
 (`crates/synthesis_engine/src/managed_endpoint.rs`): trait-based
 `HttpClient`, grammar-constrained request building, response
 validation, and full timeout / rate-limit / empty-response error
-handling. The platform bindings, the SLM-backed importance
-classifier, the full RFC 9420 / SPHINCS+ MLS extensions, and the
-concrete confidential-compute TEE worker are tracked in
-[PROGRESS.md](./PROGRESS.md) but not yet shipped.
+handling. Phase 0 closes its remaining four line items: the new
+`crates/inference_router/` crate (`InferenceAdapter` trait +
+`InferenceRouter` + `MlxAdapter` / `LlamaCppAdapter` /
+`FallbackAdapter` skeletons + `DeviceTier::{Low, Medium, High}`
++ warm-up + 60s idle-unload), the new SLM-backed importance
+classifier (`SlmClassifier` + `CompositeClassifier` in
+`crates/evidence_store/src/classifier.rs`), the new `crates/ffi/`
+crate (UniFFI surface for iOS / Android), and the new
+`crates/napi/` crate (N-API addon skeleton for macOS / Windows).
+Phase 1 closes its remaining two line items: the new
+`crates/memory_manager/src/episodic.rs` (`EpisodicSummary` /
+`SessionBoundary` / `SessionDetector` / `Summarizer` trait +
+`SlmSummarizer` / `StubSummarizer` / `EpisodicStore`) and the
+new `crates/evidence_store/src/embeddings.rs` (`EmbeddingModel`
+trait + `OnnxEmbeddingAdapter` skeleton + `StubEmbeddingModel`
++ `cosine_distance` wired into `HybridRetriever`). Phase 4
+closes the Slack + email connectors
+(`crates/connectors/src/slack.rs` and
+`crates/connectors/src/email.rs` with `EmailProvider::{Gmail,
+MicrosoftGraph}`). Phase 7 closes its last two line items: the
+new `crates/crypto/src/sphincs.rs` (`SphincsPlusSigner` /
+`SphincsPlusVerifier` + `CoSigner` for dual ML-DSA-65 + SPHINCS+
+signatures) and the new `crates/synthesis_engine/src/tee_worker.rs`
+(`TeeWorker` / `TeeWorkerLifecycle` / `MockTeeRuntime` for the
+full attest → synthesize → verify lifecycle). With this drop
+every Phase 0 → Phase 7 line item is shipped.
 
 ### Prerequisites
 
@@ -179,9 +201,10 @@ extensions (`observation_engine` document + citation modules,
 `audit_service`), the Phase-2 crates (`concept_graph`,
 `synthesis_pipeline`, `sync_engine`), and the extended Phase-1
 crates (`memory_manager`, `observation_engine`, `crypto`) are all
-covered by `cargo test --all` (829 tests passing as of the Phase-7
-PQ hardening + Phase-2 MLS + Phase-3 managed endpoint + Phase-6
-visualization delivery, up from 706 on `main`). The end-to-end
+covered by `cargo test --all` (1036 tests passing as of the
+Phase 0 SLM classifier + platform bindings + Phase 1 episodic +
+embeddings + Phase 4 Slack + email + Phase 7 SPHINCS+ + TEE worker
+drop, up from 829). The end-to-end
 channel → domain → tenant synthesis chain is exercised by
 `crates/synthesis_engine/tests/hierarchy_e2e.rs`; the agent
 proposal lifecycle and the export plane pipeline are exercised by
@@ -207,7 +230,9 @@ knowledge/
 ├── crates/
 │   ├── crypto/                # post-quantum primitives (BLAKE3, XChaCha20-Poly1305,
 │   │                          #   HKDF-SHA256, hybrid X25519 + ML-KEM-768 KEM,
-│   │                          #   Phase 2 ProvenanceBundle + HMAC TestSigner)
+│   │                          #   Phase 2 ProvenanceBundle + HMAC TestSigner;
+│   │                          #   Phase 7 SPHINCS+ co-signer for archival /
+│   │                          #   high-assurance dual signatures)
 │   ├── evidence_store/        # SQLCipher-backed encrypted evidence plane
 │   │                          #   (ingest, dedup, ring buffer, FTS5, classifier,
 │   │                          #   hybrid FTS + recency retrieval)
@@ -297,9 +322,29 @@ knowledge/
 │   │                          #   FigmaConnector (files + components + version
 │   │                          #   cursor + FILE_UPDATE webhooks), HubSpotConnector
 │   │                          #   (CRM v3 contacts / companies / deals / notes +
-│   │                          #   subscriptionType webhooks); each implements
+│   │                          #   subscriptionType webhooks), SlackConnector
+│   │                          #   (conversations.list + conversations.history +
+│   │                          #   Events API), EmailConnector (Gmail +
+│   │                          #   Microsoft Graph providers); each implements
 │   │                          #   Connector against fixture-backed pages with
 │   │                          #   integration tests under tests/fixtures/
+│   ├── inference_router/      # Phase 0 on-device inference router: InferenceAdapter
+│   │                          #   trait, InferenceTask + GBNF grammars,
+│   │                          #   InferenceRouter (MLX → LlamaCpp → Fallback priority,
+│   │                          #   warm-up + 60s idle-unload), MlxAdapter /
+│   │                          #   LlamaCppAdapter / FallbackAdapter skeletons,
+│   │                          #   DeviceTier::{Low, Medium, High}, RouterConfig,
+│   │                          #   RouterError
+│   ├── ffi/                   # Phase 0 UniFFI surface for iOS / Android: evidence
+│   │                          #   (ingest_message / query / get_evidence), memory
+│   │                          #   manager (get_user_memory / pin / unpin / forget /
+│   │                          #   list_memories / run_decay_sweep), synthesis
+│   │                          #   (get_channel_memory / trigger_synthesis), crypto
+│   │                          #   (generate_keypair / encrypt / decrypt) +
+│   │                          #   uniffi.toml configuration
+│   ├── napi/                  # Phase 0 N-API addon skeleton for macOS / Windows:
+│   │                          #   same surface as ffi + init(config_json) + N-API
+│   │                          #   exception mapping
 │   └── reasoning_engine/      # Phase 6 reasoning plane: ContradictionDetector
 │                              #   + AdjudicationWorkflow (Detected → UnderReview
 │                              #   → Resolved), DriftDetector + DriftMarker,
@@ -367,7 +412,8 @@ domains and channels:
 - Confluence
 - Figma
 - HubSpot
-- Slack, email (later phases)
+- Slack (`crates/connectors/src/slack.rs`)
+- Email — Gmail + Microsoft Graph (`crates/connectors/src/email.rs`)
 
 Each connector follows the same `connector → evidence plane →
 observation plane → semantic plane` pipeline as the on-device

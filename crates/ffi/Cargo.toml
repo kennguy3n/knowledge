@@ -1,0 +1,22 @@
+[package]
+name = "ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "UniFFI bindings surface for iOS / Android platform integration."
+
+[dependencies]
+crypto = { path = "../crypto" }
+evidence_store = { path = "../evidence_store" }
+memory_manager = { path = "../memory_manager" }
+synthesis_pipeline = { path = "../synthesis_pipeline" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true
