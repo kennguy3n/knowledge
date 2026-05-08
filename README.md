@@ -26,139 +26,18 @@ see [PROPOSAL.md](./PROPOSAL.md), [ARCHITECTURE.md](./ARCHITECTURE.md),
 ## Quick start
 
 The shared core is a Cargo workspace targeting **Rust 1.75+ (stable)**.
-Phase 0 ships the encrypted evidence plane and the post-quantum
-crypto primitives; Phase 1 adds the on-device personal-memory plane
-(decay state machine, retention scoring, working memory, lexicon
-observation extraction, and FTS5 + recency hybrid retrieval). Phase
-2 adds the channel-memory plane: a `ChannelMemoryObject` with
-recap / decisions / open-questions / active-tasks, the
-`synthesis_pipeline` window manager + typed synthesis objects +
-GBNF schema types, encrypted publish / consume with `(scope_id,
-window_id, object_id)` AAD binding, channel-scoped promotion
-policy, a synthesizer-election skeleton (tier / battery /
-heartbeat eligibility), the typed `concept_graph`, an add-wins
-observed-remove CRDT in `sync_engine`, and the `ProvenanceBundle`
-PROV data model. Phase 3 adds the domain- and tenant-tier memory
-planes plus the server-side surface around them: a
-`DomainMemoryObject` and a `TenantMemoryObject` (the latter with
-*no* passive decay — only explicit deprecation), a Zanzibar-style
-`permission_service` with reachability over inheritance chains, a
-`tenant_service` with the tenant lifecycle / member provisioning /
-per-tenant key references, a `synthesis_engine` skeleton with the
-`SynthesisEngine` trait + `ManagedEndpointSynthesizer` stub, an
-append-only `audit_service`, type-system-enforced hierarchy
-(`DomainSynthesisInput` / `TenantSynthesisInput` / `ApprovedDocument`
-in `synthesis_pipeline::hierarchy`), and SQLCipher persistence for
-the `concept_graph`. Phase 5 adds the agent write contract and the
-export plane: the `agent_contract` crate (proposal-only API—
-`AgentProposal<T>` + four typed payloads + `AgentIdentity` + the
-`Proposed → UnderReview → Promoted/Rejected` lifecycle with an
-`AutoPromotionPolicy`), and the `export_plane` crate (portable
-concept profiles, `ExportPolicy` + `PolicyEngine`, deny-by-default
-`ExportControlRegistry`, a read-only `PolicySimulator`, and a
-`ConceptApprovalWorkflow` that bridges canonical `concept_graph`
-nodes into approved exports). `audit_service` is extended with the
-five Phase-5 action types (`ExportRendered`, `ExportSimulated`,
-`AgentProposalSubmitted`, `AgentProposalPromoted`,
-`AgentProposalRejected`) and helper logging functions. Phase 4
-adds the on-server connector substrate: a new
-`connector_framework` crate (the `Connector` trait,
-`OAuth2TokenVault` + `TokenRefresher`, `SyncState` /
-`WebhookSubscription` / `ConnectorEvent`, channel-scoped
-`AttachmentRegistry` integrated with `permission_service`, and an
-`AclSyncEngine` that maps source-system permissions onto
-substrate relation tuples), plus document-pipeline + citation
-support in `observation_engine` (`DocumentChunker` /
-`SlidingWindowChunker`, `DocumentObservationPipeline`, and a
-`Citation` / `CitationRegistry` / `CitationRenderer` surface).
-Phase 6 adds the reasoning plane: a new `reasoning_engine` crate
-with `ContradictionDetector` + `DriftDetector` +
-`AdjudicationWorkflow`, typed-edge `GraphTraversal` over the
-concept graph with budgets and path scoring, a `QueryPlanner`
-that routes between `Summary / Fts / SemanticVector /
-GraphTraversal / RawEvidence` retrieval modes, a
-`WorkflowMemory` that stores reasoning traces and matches
-patterns, a `GoTExecutor` for Graph-of-Thought reasoning
-(`ThoughtNode` / `ThoughtEdge` / `ThoughtGraph` / `GoTQuery` /
-`GoTStrategy::{BreadthFirst, DepthFirst, BestFirst, Iterative}` /
-`Expander` trait + `StaticExpander` / `GraphExpander` that grounds
-in the concept graph), and a GraphRAG-style community summary
-pipeline (`CommunityDetector` over scope-filtered subgraphs,
-`CommunityHierarchy` for multi-level aggregation,
-`CommunitySummaryGenerator` for structured summaries, and
-`CommunityQueryRouter` with `permission_service` visibility
-filter); `concept_graph` is extended with an
-`IncrementalUpdateEngine` that recomputes only touched branches
-on promotion / supersession / contradiction, plus a
-`visualization` module (Kanvas-style `GraphView` / `ViewFilter` /
-`NodeVisual` / `EdgeVisual` exploration with `ScopeAccess`
-permission gating). Phase 4's seven vendor connectors live in the
-new `connectors` crate (`GoogleDriveConnector`,
-`OneDriveConnector`, `NotionConnector`, `JiraConnector`,
-`ConfluenceConnector`, `FigmaConnector`, `HubSpotConnector`) —
-each implements the `Connector` trait from `connector_framework`
-against fixture-backed pages and ships connector-specific
-integration tests under `crates/connectors/tests/` exercising the
-full `authenticate → initial_sync → incremental_sync →
-subscribe_webhook → handle_webhook_event` cycle plus error paths.
-Phase 7 ships the post-quantum hardening surface: an `MlDsa65Signer`
-/ `MlDsa65Verifier` (`crates/crypto/src/signer_backend.rs`) using
-the RustCrypto `ml-dsa` (FIPS 204) crate behind the existing
-`ProvenanceSigner` trait plus a new `SignerBackend` trait, a
-cryptographic-forgetting module (`crates/crypto/src/forgetting.rs`)
-with `ScopeDek` / `EpochDek` zeroizing on drop, a `DekRegistry`
-that preserves tombstones, `KeyDestructionEvent` audit fan-out,
-and a policy-driven `EpochManager` (time / size / forced
-rotation), a hybrid-enforcement module
-(`crates/crypto/src/hybrid_enforcement.rs`) with
-`HybridMode::{ClassicalOnly, HybridTransition, PostQuantumOnly}`
-and a `KeyExchangeAudit` trail wrapping every encap / decap, an
-attestation module (`crates/crypto/src/attestation.rs`) with
-`AttestationReport` / `AttestationBinding` /
-`AttestationAuditEntry` and `TeePlatform::{IntelTdx, AmdSevSnp,
-NitroEnclaves, Mock}` flows, a memory-quality-metrics module
-(`crates/memory_manager/src/metrics.rs`) with
-`RetentionPrecisionTracker` / `ContradictionDetectionRate` /
-`DecayTuningMetrics` / `MemoryQualityReport` / `MetricsCollector`,
-and a red-team test surface
-(`crates/evidence_store/tests/privacy_redteam.rs` + 11 tests,
-`crates/synthesis_pipeline/tests/privacy_redteam.rs` + 10 tests).
-Phase 2 closes its remaining MLS line item with a skeletal
-`crates/crypto/src/mls.rs` (group state, hybrid leaf KEMs,
-ML-DSA-65-signed commits, key schedule), with the full RFC 9420
-wire protocol delegated to the upstream
-[`kennguy3n/openmls`](https://github.com/kennguy3n/openmls). Phase 3
-closes the managed-endpoint slot with
-`HttpManagedEndpointSynthesizer`
-(`crates/synthesis_engine/src/managed_endpoint.rs`): trait-based
-`HttpClient`, grammar-constrained request building, response
-validation, and full timeout / rate-limit / empty-response error
-handling. Phase 0 closes its remaining four line items: the new
-`crates/inference_router/` crate (`InferenceAdapter` trait +
-`InferenceRouter` + `MlxAdapter` / `LlamaCppAdapter` /
-`FallbackAdapter` skeletons + `DeviceTier::{Low, Medium, High}`
-+ warm-up + 60s idle-unload), the new SLM-backed importance
-classifier (`SlmClassifier` + `CompositeClassifier` in
-`crates/evidence_store/src/classifier.rs`), the new `crates/ffi/`
-crate (UniFFI surface for iOS / Android), and the new
-`crates/napi/` crate (N-API addon skeleton for macOS / Windows).
-Phase 1 closes its remaining two line items: the new
-`crates/memory_manager/src/episodic.rs` (`EpisodicSummary` /
-`SessionBoundary` / `SessionDetector` / `Summarizer` trait +
-`SlmSummarizer` / `StubSummarizer` / `EpisodicStore`) and the
-new `crates/evidence_store/src/embeddings.rs` (`EmbeddingModel`
-trait + `OnnxEmbeddingAdapter` skeleton + `StubEmbeddingModel`
-+ `cosine_distance` wired into `HybridRetriever`). Phase 4
-closes the Slack + email connectors
-(`crates/connectors/src/slack.rs` and
-`crates/connectors/src/email.rs` with `EmailProvider::{Gmail,
-MicrosoftGraph}`). Phase 7 closes its last two line items: the
-new `crates/crypto/src/sphincs.rs` (`SphincsPlusSigner` /
-`SphincsPlusVerifier` + `CoSigner` for dual ML-DSA-65 + SPHINCS+
-signatures) and the new `crates/synthesis_engine/src/tee_worker.rs`
-(`TeeWorker` / `TeeWorkerLifecycle` / `MockTeeRuntime` for the
-full attest → synthesize → verify lifecycle). With this drop
-every Phase 0 → Phase 7 line item is shipped.
+It ships 19 crates covering the full substrate: encrypted evidence
+storage, observation extraction, memory management with decay,
+concept graph, synthesis pipeline, server-side synthesis engine,
+Zanzibar-style permissions, tenant lifecycle, audit logging, agent
+write contract, export plane, connector framework with nine vendor
+connectors (Google Drive, OneDrive, Notion, Jira, Confluence, Figma,
+HubSpot, Slack, Email), reasoning engine (contradiction detection,
+Graph-of-Thought, community summaries), inference router (MLX →
+LlamaCpp → Fallback), post-quantum crypto (ML-KEM-768, ML-DSA-65,
+SPHINCS+, TEE worker), CRDT sync, and platform bindings (UniFFI for
+iOS / Android, N-API for macOS / Windows). All phases (0 → 7) are
+complete with 1072 tests passing.
 
 ### Prerequisites
 
@@ -184,38 +63,28 @@ cargo test --all
 ```
 
 This runs the inline unit tests inside each crate and the integration
-test files under `crates/*/tests/`. The Phase-7 crypto modules
-(`crypto::signer_backend`, `crypto::forgetting`,
-`crypto::hybrid_enforcement`, `crypto::attestation`,
-`crypto::mls`), the Phase-7 quality metrics
-(`memory_manager::metrics`), the Phase-6 visualization module
-(`concept_graph::visualization`), the Phase-3 managed endpoint
-(`synthesis_engine::managed_endpoint`), the red-team test surface
-(`evidence_store/tests/privacy_redteam.rs`,
-`synthesis_pipeline/tests/privacy_redteam.rs`), the Phase-4 +
-Phase-6 crates (`connector_framework`, `reasoning_engine`) and
-extensions (`observation_engine` document + citation modules,
-`concept_graph` incremental updates), the Phase-5 crates
-(`agent_contract`, `export_plane`), the Phase-3 crates
-(`permission_service`, `tenant_service`, `synthesis_engine`,
-`audit_service`), the Phase-2 crates (`concept_graph`,
-`synthesis_pipeline`, `sync_engine`), and the extended Phase-1
-crates (`memory_manager`, `observation_engine`, `crypto`) are all
-covered by `cargo test --all` (1072 tests passing as of the
-substrate-hardening drop — six production bug fixes plus six
-inline regression tests, the new
-`crates/ffi/tests/ffi_integration_tests.rs` integration suite for
-the UniFFI surface, and the new
-`crates/inference_router/tests/router_integration_tests.rs`
-integration suite covering adapter priority, `DeviceTier` gating,
-warm-up + 60s idle-unload lifecycle, every `InferenceTask` variant
-routing, `FallbackAdapter` semantics, and every `RouterError`
-variant; up from 1036). The end-to-end
-channel → domain → tenant synthesis chain is exercised by
-`crates/synthesis_engine/tests/hierarchy_e2e.rs`; the agent
-proposal lifecycle and the export plane pipeline are exercised by
+test files under `crates/*/tests/`. **1072 tests pass** across all 19
+crates as of the substrate-hardening drop (up from 1036), spanning
+the Phase 0 evidence plane and inference router, the Phase 1
+personal-memory plane (decay, observation, episodic, embeddings,
+hybrid retrieval), the Phase 2 channel-memory plane (synthesis
+pipeline, concept graph, CRDT sync, MLS), the Phase 3 server-side
+surface (synthesis engine, permission service, tenant service,
+audit service, managed endpoint), the Phase 4 connector substrate
+(framework + nine vendor connectors), the Phase 5 agent contract
+and export plane, the Phase 6 reasoning plane (contradictions,
+Graph-of-Thought, community summaries, visualization), and the
+Phase 7 post-quantum hardening surface (ML-DSA-65, SPHINCS+,
+hybrid enforcement, attestation, TEE worker, cryptographic
+forgetting, quality metrics, red-team tests).
+
+End-to-end coverage: the channel → domain → tenant synthesis chain
+is exercised by `crates/synthesis_engine/tests/hierarchy_e2e.rs`;
+the agent proposal lifecycle and the export plane pipeline by
 `crates/agent_contract/tests/e2e_proposal_tests.rs` and
-`crates/export_plane/tests/e2e_export_tests.rs`.
+`crates/export_plane/tests/e2e_export_tests.rs`; the FFI surface by
+`crates/ffi/tests/ffi_integration_tests.rs`; and the inference
+router by `crates/inference_router/tests/router_integration_tests.rs`.
 
 ### Lint
 

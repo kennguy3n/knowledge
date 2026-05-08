@@ -1,6 +1,6 @@
 # Knowledge — Progress Tracker
 
-Last updated: 2026-05-08 (substrate hardening drop — 6 production bug fixes, 6 regression tests, FFI integration suite, inference-router integration suite)
+Last updated: 2026-05-08 (substrate hardening drop — 6 bug fixes, FFI + inference-router integration suites)
 
 This tracker captures per-phase deliverable status and a
 chronological changelog for the Knowledge substrate. Phase scope
@@ -8,23 +8,14 @@ is defined in [PHASES.md](./PHASES.md); architectural detail
 lives in [ARCHITECTURE.md](./ARCHITECTURE.md); the product thesis
 lives in [PROPOSAL.md](./PROPOSAL.md).
 
-Phase 0 is largely in place (Rust workspace skeleton, the
-post-quantum `crypto` crate, the SQLCipher-backed `evidence_store`,
-the lexicon-only importance classifier, the unit + integration test
-suite, and the CI pipeline). What remains in Phase 0 is the
-SLM-backed importance classifier (Bonsai-1.7B) and the
-iOS / Android / macOS / Windows platform bindings.
-
-Phase 1 is in active development. The on-device personal-memory
-plane has landed: the `memory_manager` crate (decay state machine,
-retention scoring, working memory, user-memory CRUD, privacy-strip
-invariant), the `observation_engine` crate (lexicon-first
-extractor + importance pipeline), and a hybrid retrieval module
-in `evidence_store` (FTS5 + recency + stub vector). The two
-remaining Phase 1 items — episodic summarisation via Bonsai-1.7B
-and XLM-R embeddings via a shared ONNX artifact — depend on the
-SLM / ONNX runtime work tracked under Phase 0 and a separate model
-deliverable.
+All eight phases (0 through 7) are complete. The substrate ships
+19 Rust crates covering the evidence plane, observation engine,
+memory manager, concept graph, synthesis pipeline, synthesis
+engine, permission service, tenant service, audit service, agent
+contract, export plane, connector framework, nine vendor
+connectors, reasoning engine, inference router, crypto layer,
+sync engine, FFI bindings, and N-API addon. 1072 tests pass
+across unit, integration, and red-team suites.
 
 ---
 
