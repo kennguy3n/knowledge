@@ -388,7 +388,13 @@ pub fn subgraph_for_scope(
         .collect();
     edge_keys.sort_by_key(|e| e.id);
     for edge in edge_keys {
-        if !edge_passes(edge, filter, access) {
+        // Edges have already been pre-filtered to `e.scope_id ==
+        // scope_id`, so we deliberately skip `filter.allows_scope`
+        // here — `subgraph_for_scope` narrows the scope filter to
+        // `scope_id` regardless of what the caller put in
+        // `filter.scope_ids`. Mirrors the node loop above which also
+        // bypasses `filter.scope_ids`.
+        if !filter.allows_relation(edge.relation) || !access.can_view(edge.scope_id) {
             continue;
         }
         if !included_ids.contains(&edge.from) || !included_ids.contains(&edge.to) {
@@ -777,6 +783,37 @@ mod tests {
         assert_eq!(ids, HashSet::from([a, b]));
         // The cross-scope edge is dropped because `c` isn't in the view.
         assert_eq!(v.edges.len(), 1);
+        let connections: std::collections::HashMap<_, _> = v
+            .nodes
+            .iter()
+            .map(|n| (n.id, n.connections_count))
+            .collect();
+        assert_eq!(connections[&a], 1);
+        assert_eq!(connections[&b], 1);
+    }
+
+    #[test]
+    fn subgraph_for_scope_ignores_caller_supplied_scope_filter() {
+        // Regression: `subgraph_for_scope` documents that it narrows
+        // `filter.scope_ids` to the target scope, so a caller passing
+        // an unrelated scope in the filter must not silently drop the
+        // edges in the requested scope.
+        let s1 = ScopeId::new_v4();
+        let s2 = ScopeId::new_v4();
+        let mut g = ConceptGraph::new();
+        let a = g.add_node(promote(mk_node(s1, "A"))).unwrap();
+        let b = g.add_node(promote(mk_node(s1, "B"))).unwrap();
+        g.add_edge(ConceptEdge::new(a, b, RelationType::IsA, s1))
+            .unwrap();
+        let filter = ViewFilter {
+            scope_ids: vec![s2],
+            ..Default::default()
+        };
+        let v = subgraph_for_scope(&g, s1, &filter, &AllowAllScopes);
+        let ids: HashSet<_> = v.nodes.iter().map(|n| n.id).collect();
+        assert_eq!(ids, HashSet::from([a, b]));
+        assert_eq!(v.edges.len(), 1);
+        assert_eq!(v.scope_filter, vec![s1]);
         let connections: std::collections::HashMap<_, _> = v
             .nodes
             .iter()
