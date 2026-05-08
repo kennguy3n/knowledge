@@ -419,10 +419,11 @@ fn render_preview(payload: &[u8], max_chars: usize) -> String {
         // Hex-encode the first `limit` bytes — useful for
         // binary blobs in tests.
         let head = &payload[..payload.len().min(limit)];
-        head.iter().fold(String::with_capacity(head.len() * 2), |mut acc, b| {
-            let _ = write!(acc, "{b:02x}");
-            acc
-        })
+        head.iter()
+            .fold(String::with_capacity(head.len() * 2), |mut acc, b| {
+                let _ = write!(acc, "{b:02x}");
+                acc
+            })
     }
 }
 
