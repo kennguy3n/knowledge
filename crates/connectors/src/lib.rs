@@ -30,17 +30,21 @@
 #![deny(missing_docs)]
 
 pub mod confluence;
+pub mod email;
 pub mod figma;
 pub mod google_drive;
 pub mod hubspot;
 pub mod jira;
 pub mod notion;
 pub mod onedrive;
+pub mod slack;
 
 pub use confluence::ConfluenceConnector;
+pub use email::EmailConnector;
 pub use figma::FigmaConnector;
 pub use google_drive::GoogleDriveConnector;
 pub use hubspot::HubSpotConnector;
 pub use jira::JiraConnector;
 pub use notion::NotionConnector;
 pub use onedrive::OneDriveConnector;
+pub use slack::SlackConnector;

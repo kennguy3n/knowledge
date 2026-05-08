@@ -27,6 +27,7 @@
 pub mod channel_memory;
 pub mod decay;
 pub mod domain_memory;
+pub mod episodic;
 pub mod error;
 pub mod metrics;
 pub mod object;

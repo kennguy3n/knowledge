@@ -20,6 +20,8 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(missing_docs)]
 
+pub mod classifier;
+pub mod embeddings;
 pub mod error;
 pub mod ids;
 pub mod importance;

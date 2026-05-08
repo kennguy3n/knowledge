@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 crypto = { path = "../crypto" }
+inference_router = { path = "../inference_router" }
 
 thiserror = { workspace = true }
 uuid = { workspace = true }

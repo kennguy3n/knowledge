@@ -27,6 +27,11 @@ pub enum MemoryError {
     /// must never persist a non-finite score.
     #[error("retention score is non-finite (likely NaN or infinity)")]
     NonFiniteRetentionScore,
+
+    /// Caller-side validation failure (e.g. summarising an empty
+    /// session, ingesting an out-of-order observation stream).
+    #[error("validation error: {0}")]
+    Validation(String),
 }
 
 /// Convenience result alias.

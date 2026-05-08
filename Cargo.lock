@@ -376,6 +376,7 @@ dependencies = [
  "agent_contract",
  "chrono",
  "crypto",
+ "inference_router",
  "memory_manager",
  "permission_service",
  "rand",
@@ -423,6 +424,20 @@ name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
+
+[[package]]
+name = "ffi"
+version = "0.1.0"
+dependencies = [
+ "crypto",
+ "evidence_store",
+ "memory_manager",
+ "serde",
+ "serde_json",
+ "synthesis_pipeline",
+ "thiserror",
+ "uuid",
+]
 
 [[package]]
 name = "fiat-crypto"
@@ -618,6 +633,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "inference_router"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "crypto",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "inout"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -712,6 +739,7 @@ dependencies = [
  "chrono",
  "crypto",
  "evidence_store",
+ "inference_router",
  "serde",
  "serde_json",
  "thiserror",
@@ -743,6 +771,21 @@ dependencies = [
  "kem",
  "rand_core",
  "sha3",
+]
+
+[[package]]
+name = "napi_addon"
+version = "0.1.0"
+dependencies = [
+ "crypto",
+ "evidence_store",
+ "ffi",
+ "memory_manager",
+ "serde",
+ "serde_json",
+ "synthesis_pipeline",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]

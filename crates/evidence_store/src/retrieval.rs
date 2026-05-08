@@ -12,6 +12,7 @@
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+use crate::embeddings::{cosine_similarity, similarity_to_score, EmbeddingModel};
 use crate::error::{EvidenceError, Result};
 use crate::ids::{EvidenceId, ScopeId};
 use crate::store::EvidenceStore;
@@ -55,8 +56,11 @@ impl Default for HybridWeights {
     }
 }
 
-/// Hybrid retriever — combines FTS5 + recency + (stub) vector
-/// similarity over the encrypted evidence plane.
+/// Hybrid retriever — combines FTS5 + recency + semantic vector
+/// similarity over the encrypted evidence plane. The semantic
+/// component is plumbed via an [`EmbeddingModel`]; when none is
+/// supplied the retriever degrades to the pre-Phase-1 behaviour
+/// (vector_score = 0.0).
 pub struct HybridRetriever<'a> {
     store: &'a EvidenceStore,
     weights: HybridWeights,
@@ -64,6 +68,7 @@ pub struct HybridRetriever<'a> {
     /// days; smaller values bias toward "what just happened", larger
     /// values produce a flatter recency curve.
     recency_half_life_seconds: f64,
+    embedding_model: Option<Box<dyn EmbeddingModel>>,
 }
 
 impl<'a> HybridRetriever<'a> {
@@ -74,6 +79,7 @@ impl<'a> HybridRetriever<'a> {
             store,
             weights: HybridWeights::default(),
             recency_half_life_seconds: 7.0 * 86_400.0,
+            embedding_model: None,
         }
     }
 
@@ -87,6 +93,20 @@ impl<'a> HybridRetriever<'a> {
     pub fn with_recency_half_life_seconds(mut self, seconds: f64) -> Self {
         self.recency_half_life_seconds = seconds;
         self
+    }
+
+    /// Plumb an [`EmbeddingModel`] in for the semantic-vector
+    /// component of the hybrid score. Calling [`Self::search_hybrid`]
+    /// after this will compute cosine similarity between the query
+    /// embedding and the per-row stored embedding (when present).
+    pub fn with_embedding_model<M: EmbeddingModel + 'static>(mut self, model: M) -> Self {
+        self.embedding_model = Some(Box::new(model));
+        self
+    }
+
+    /// `true` iff the retriever has been wired to an embedding model.
+    pub fn has_embedding_model(&self) -> bool {
+        self.embedding_model.is_some()
     }
 
     /// Lexical search via SQLite FTS5.
@@ -164,6 +184,55 @@ impl<'a> HybridRetriever<'a> {
                 vector_score: 0.0,
             });
         }
+        Ok(out)
+    }
+
+    /// Re-rank an existing set of candidates by semantic similarity
+    /// to `query`. Each candidate is `(EvidenceId, body_text)` — the
+    /// caller is responsible for decrypting bodies via
+    /// [`EvidenceStore::read_body`] (the retriever borrows the store
+    /// immutably and so cannot read bodies itself).
+    ///
+    /// Returns the candidates with `vector_score` populated and the
+    /// final `score` re-computed from the configured weights.
+    pub fn rerank_with_embeddings(
+        &self,
+        query: &str,
+        candidates: Vec<RetrievalResult>,
+        bodies: &[(EvidenceId, String)],
+    ) -> Result<Vec<RetrievalResult>> {
+        let Some(model) = self.embedding_model.as_ref() else {
+            return Ok(candidates);
+        };
+        let query_vec = model.embed(query).map_err(|e| {
+            EvidenceError::Schema(Box::leak(
+                format!("embedding query failed: {e}").into_boxed_str(),
+            ))
+        })?;
+        let body_lookup: std::collections::HashMap<EvidenceId, &str> = bodies
+            .iter()
+            .map(|(id, body)| (*id, body.as_str()))
+            .collect();
+        let mut out = Vec::with_capacity(candidates.len());
+        for mut hit in candidates {
+            let vector_score = match body_lookup.get(&hit.evidence_id) {
+                Some(body) => match model.embed(body) {
+                    Ok(v) => similarity_to_score(cosine_similarity(&query_vec, &v)),
+                    Err(_) => 0.0,
+                },
+                None => 0.0,
+            };
+            hit.vector_score = vector_score;
+            hit.score = self.weights.fts * hit.fts_score
+                + self.weights.recency * hit.recency_score
+                + self.weights.vector * hit.vector_score;
+            out.push(hit);
+        }
+        out.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Ok(out)
     }
 

@@ -34,6 +34,7 @@ pub mod engine;
 pub mod error;
 pub mod managed_endpoint;
 pub mod stub;
+pub mod tee_worker;
 
 pub use engine::{DomainSynthesisResult, SynthesisEngine, TenantSynthesisResult};
 pub use error::{EngineError, Result};

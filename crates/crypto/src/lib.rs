@@ -36,6 +36,7 @@ pub mod kem;
 pub mod mls;
 pub mod provenance;
 pub mod signer_backend;
+pub mod sphincs;
 
 pub use aead::{
     decrypt_aead, encrypt_aead, AeadCiphertext, AeadKey, AeadNonce, AEAD_KEY_LEN, AEAD_NONCE_LEN,
