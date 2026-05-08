@@ -144,18 +144,18 @@ impl Connector for NotionConnector {
         _token: &OAuth2Token,
     ) -> Result<SyncRunResult> {
         let mut events: Vec<ConnectorEvent> = Vec::new();
-        let mut last_cursor: Option<String> = None;
+        let mut watermark: Option<DateTime<Utc>> = None;
         for page in &self.initial_pages {
             for obj in &page.results {
                 events.push(object_to_event(obj));
                 if let Some(t) = obj.last_edited_time {
-                    last_cursor = Some(t.to_rfc3339());
+                    watermark = Some(watermark.map_or(t, |w| w.max(t)));
                 }
             }
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: last_cursor,
+            next_cursor: watermark.map(|t| t.to_rfc3339()),
         })
     }
 
@@ -168,17 +168,17 @@ impl Connector for NotionConnector {
         let idx = Self::page_index(state.cursor.as_deref());
         let page = self.incremental_pages.get(idx).cloned().unwrap_or_default();
         let mut events: Vec<ConnectorEvent> = Vec::new();
-        let mut watermark: Option<String> = None;
+        let mut watermark: Option<DateTime<Utc>> = None;
         for obj in &page.results {
             events.push(object_to_event(obj));
             if let Some(t) = obj.last_edited_time {
-                watermark = Some(t.to_rfc3339());
+                watermark = Some(watermark.map_or(t, |w| w.max(t)));
             }
         }
         let next_cursor = if idx + 1 < self.incremental_pages.len() {
             Some(format!("page-{}", idx + 2))
         } else {
-            watermark
+            watermark.map(|t| t.to_rfc3339())
         };
         Ok(SyncRunResult {
             events,

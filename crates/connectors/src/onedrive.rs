@@ -155,7 +155,10 @@ fn item_to_event(item: &DriveItem) -> ConnectorEvent {
             document_id: id,
             occurred_at,
         }
-    } else if item.created_date_time.is_some() && item.last_modified_date_time.is_none() {
+    } else if item.last_modified_date_time.is_none()
+        || (item.created_date_time.is_some()
+            && item.created_date_time == item.last_modified_date_time)
+    {
         ConnectorEvent::DocumentCreated {
             document_id: id,
             occurred_at,

@@ -542,7 +542,7 @@ fn is_visible(
     registry: &NamespaceRegistry,
 ) -> bool {
     if scopes.is_empty() {
-        return true;
+        return false;
     }
     for scope in scopes {
         let object = ObjectRef::new(SCOPE_OBJECT_TYPE, scope.0);

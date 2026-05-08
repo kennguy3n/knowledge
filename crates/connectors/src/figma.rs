@@ -155,6 +155,23 @@ fn parse_role(role: &str) -> Option<SourcePermissionLevel> {
     }
 }
 
+/// Return `true` iff `version` represents the same point in
+/// history as `cursor` or earlier.
+///
+/// Figma serialises file versions as monotonically-increasing
+/// integers ("1", "2", …, "10", "11", …) — so a naïve
+/// lexicographic comparison would consider `"10" <= "9"` true
+/// and silently skip a real update. Parse both sides as `u64`
+/// when possible and fall back to a string compare only when
+/// either side fails to parse (e.g. the API returns a non-integer
+/// version tag).
+fn version_at_or_before(version: &str, cursor: &str) -> bool {
+    match (version.parse::<u64>(), cursor.parse::<u64>()) {
+        (Ok(v), Ok(c)) => v <= c,
+        _ => version <= cursor,
+    }
+}
+
 impl Connector for FigmaConnector {
     fn authenticate(&self, _config: &ConnectorConfig) -> Result<OAuth2Token> {
         Ok(OAuth2Token::new(
@@ -209,7 +226,7 @@ impl Connector for FigmaConnector {
         for resp in &self.incremental_files {
             if let Some(file) = &resp.file {
                 if cursor.as_ref().is_some_and(|c| {
-                    !file.version.is_empty() && file.version.as_str() <= c.as_str()
+                    !file.version.is_empty() && version_at_or_before(&file.version, c)
                 }) {
                     continue;
                 }
@@ -343,6 +360,48 @@ mod tests {
         state.cursor = Some("100".into());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert!(res.events.is_empty());
+    }
+
+    #[test]
+    fn incremental_sync_compares_versions_numerically() {
+        // Regression test: lexicographic comparison would treat
+        // "10" as <= "9" and silently skip a real update from
+        // version 9 to version 10. The numeric comparison must
+        // emit the update.
+        let resp = FigmaFileResponse {
+            file: Some(file("F1", "10")),
+            components: vec![],
+        };
+        let c =
+            FigmaConnector::new(ConnectorInstanceId::new_v4()).with_incremental_files(vec![resp]);
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some("9".into());
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        assert_eq!(
+            res.events.len(),
+            1,
+            "version 10 must be treated as newer than cursor 9",
+        );
+        assert!(matches!(
+            res.events[0],
+            ConnectorEvent::DocumentUpdated { .. }
+        ));
+        assert_eq!(res.next_cursor.as_deref(), Some("10"));
+    }
+
+    #[test]
+    fn version_at_or_before_handles_numeric_and_string_versions() {
+        // Numeric comparison wins.
+        assert!(version_at_or_before("9", "10"));
+        assert!(!version_at_or_before("10", "9"));
+        assert!(version_at_or_before("100", "100"));
+
+        // Falls back to string compare when either side cannot
+        // parse as u64 — keeps callers usable on non-integer
+        // version tags.
+        assert!(version_at_or_before("v1.0", "v1.1"));
+        assert!(!version_at_or_before("v2", "v1"));
     }
 
     #[test]
