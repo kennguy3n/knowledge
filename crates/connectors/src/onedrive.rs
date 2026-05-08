@@ -144,30 +144,40 @@ fn parse_role(role: &str) -> Option<SourcePermissionLevel> {
     }
 }
 
-fn item_to_event(item: &DriveItem) -> ConnectorEvent {
+/// Which sync pass produced this item — we use this instead of
+/// comparing `createdDateTime == lastModifiedDateTime` because
+/// during `initial_sync` the substrate is seeing every non-deleted
+/// item for the first time and must classify it as
+/// `DocumentCreated` regardless of whether the file has been edited
+/// upstream. Mirror of the `SyncMode` enum in the Notion and
+/// HubSpot connectors.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum SyncMode {
+    Initial,
+    Incremental,
+}
+
+fn item_to_event(item: &DriveItem, mode: SyncMode) -> ConnectorEvent {
     let occurred_at = item
         .last_modified_date_time
         .or(item.created_date_time)
         .unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(item.id.clone());
     if item.deleted.is_some() {
-        ConnectorEvent::DocumentDeleted {
+        return ConnectorEvent::DocumentDeleted {
             document_id: id,
             occurred_at,
-        }
-    } else if item.last_modified_date_time.is_none()
-        || (item.created_date_time.is_some()
-            && item.created_date_time == item.last_modified_date_time)
-    {
-        ConnectorEvent::DocumentCreated {
+        };
+    }
+    match mode {
+        SyncMode::Initial => ConnectorEvent::DocumentCreated {
             document_id: id,
             occurred_at,
-        }
-    } else {
-        ConnectorEvent::DocumentUpdated {
+        },
+        SyncMode::Incremental => ConnectorEvent::DocumentUpdated {
             document_id: id,
             occurred_at,
-        }
+        },
     }
 }
 
@@ -190,7 +200,7 @@ impl Connector for OneDriveConnector {
         let mut delta_link: Option<String> = None;
         for page in &self.initial_pages {
             for item in &page.value {
-                events.push(item_to_event(item));
+                events.push(item_to_event(item, SyncMode::Initial));
             }
             if page.delta_link.is_some() {
                 delta_link.clone_from(&page.delta_link);
@@ -212,7 +222,7 @@ impl Connector for OneDriveConnector {
         let page = self.incremental_pages.get(idx).cloned().unwrap_or_default();
         let mut events: Vec<ConnectorEvent> = Vec::new();
         for item in &page.value {
-            events.push(item_to_event(item));
+            events.push(item_to_event(item, SyncMode::Incremental));
         }
         let next_cursor = if idx + 1 < self.incremental_pages.len() {
             Some(format!("page-{}", idx + 2))
@@ -398,6 +408,50 @@ mod tests {
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    #[test]
+    fn initial_sync_classifies_items_as_created_regardless_of_timestamps() {
+        // Regression test for the Devin Review finding that
+        // OneDrive's `item_to_event` previously distinguished
+        // `DocumentCreated` from `DocumentUpdated` by comparing
+        // `createdDateTime == lastModifiedDateTime`. Real-world
+        // files routinely have those timestamps differ even though
+        // the substrate is seeing the file for the first time —
+        // every non-deleted item in `initial_sync` must surface as
+        // `DocumentCreated`.
+        let created = Utc::now() - Duration::days(7);
+        let modified = Utc::now();
+        let pages = vec![DeltaResponse {
+            value: vec![
+                DriveItem {
+                    id: "item-edited".into(),
+                    name: "Edited.docx".into(),
+                    created_date_time: Some(created),
+                    last_modified_date_time: Some(modified),
+                    deleted: None,
+                },
+                DriveItem {
+                    id: "item-untouched".into(),
+                    name: "Untouched.docx".into(),
+                    created_date_time: Some(created),
+                    last_modified_date_time: Some(created),
+                    deleted: None,
+                },
+            ],
+            next_link: None,
+            delta_link: Some("delta-token-2".into()),
+        }];
+        let c = OneDriveConnector::new(ConnectorInstanceId::new_v4()).with_initial_pages(pages);
+        let tok = c.authenticate(&cfg()).unwrap();
+        let res = c.initial_sync(&cfg(), &tok).unwrap();
+        assert_eq!(res.events.len(), 2);
+        for ev in &res.events {
+            assert!(
+                matches!(ev, ConnectorEvent::DocumentCreated { .. }),
+                "initial_sync must emit DocumentCreated for every non-deleted item, got {ev:?}"
+            );
+        }
     }
 
     #[test]
