@@ -140,17 +140,42 @@ fn empty_notification_batch_returns_webhook_error() {
 }
 
 #[test]
-fn unknown_change_type_returns_webhook_error() {
+fn unknown_change_type_is_skipped_not_errored() {
+    // Regression: an unrecognised `changeType` previously bubbled
+    // out of `handle_webhook_event` as `Err` from the `other =>`
+    // arm, which discarded every valid notification already queued
+    // earlier in the same Graph batch. The handler must skip the
+    // unknown entry and keep processing the remainder so a future
+    // Graph lifecycle string cannot cause repeated data loss on
+    // retries.
     let connector = build_connector();
     let body = serde_json::json!({
-        "value": [{
-            "resource": "drive/items/abc",
-            "changeType": "weird-state",
-            "subscriptionId": "sub-1",
-        }]
+        "value": [
+            {
+                "resource": "drive/items/file-a",
+                "changeType": "created",
+                "subscriptionId": "sub-1",
+            },
+            {
+                "resource": "drive/items/abc",
+                "changeType": "weird-state",
+                "subscriptionId": "sub-1",
+            },
+            {
+                "resource": "drive/items/file-c",
+                "changeType": "deleted",
+                "subscriptionId": "sub-1",
+            }
+        ]
     });
-    let err = connector
+    let events = connector
         .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
-        .unwrap_err();
-    assert!(matches!(err, ConnectorError::Webhook(_)));
+        .expect("handle_webhook_event");
+    assert_eq!(
+        events.len(),
+        2,
+        "valid notifications on either side of an unknown changeType must still surface",
+    );
+    assert!(matches!(events[0], ConnectorEvent::DocumentCreated { .. }));
+    assert!(matches!(events[1], ConnectorEvent::DocumentDeleted { .. }));
 }

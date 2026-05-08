@@ -253,9 +253,15 @@ impl Connector for OneDriveConnector {
 
     fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
         // Microsoft Graph delivers batched `changeNotification`
-        // payloads under a top-level `value` array. Every entry
-        // must be materialised — returning only the first one
+        // payloads under a top-level `value` array. Every recognised
+        // entry must be materialised — returning only the first one
         // would silently drop concurrent file changes.
+        //
+        // Unknown `changeType`s are skipped rather than aborting the
+        // whole batch — when Graph adds a new lifecycle string we
+        // cannot retroactively discard every well-formed event that
+        // happened to be queued behind it. Mirrors the HubSpot
+        // handler's policy on unknown subscription types.
         let batch: ChangeNotificationCollection = serde_json::from_slice(body)?;
         if batch.value.is_empty() {
             return Err(ConnectorError::Webhook(
@@ -291,11 +297,7 @@ impl Connector for OneDriveConnector {
                     new_level: n.new_role.as_deref().and_then(parse_role),
                     occurred_at,
                 },
-                other => {
-                    return Err(ConnectorError::Webhook(format!(
-                        "unknown Graph changeType: {other}"
-                    )))
-                }
+                _ => continue,
             };
             events.push(event);
         }
@@ -452,6 +454,50 @@ mod tests {
                 "initial_sync must emit DocumentCreated for every non-deleted item, got {ev:?}"
             );
         }
+    }
+
+    #[test]
+    fn webhook_unknown_change_type_is_skipped_not_errored() {
+        // Regression: previously the `other =>` arm in
+        // `handle_webhook_event` returned `Err` for any unrecognised
+        // `changeType`, which discarded every valid event already
+        // queued earlier in the same batch. The handler must skip
+        // the unknown entry and keep processing the remainder so
+        // that adding a new Graph lifecycle string upstream cannot
+        // cause repeated data loss on retries.
+        let body = serde_json::json!({
+            "value": [
+                {
+                    "resource": "drive/items/file-a",
+                    "changeType": "created",
+                    "subscriptionId": "sub-1",
+                    "eventTime": Utc::now(),
+                },
+                {
+                    "resource": "drive/items/file-b",
+                    "changeType": "undocumented_future_event",
+                    "subscriptionId": "sub-1",
+                    "eventTime": Utc::now(),
+                },
+                {
+                    "resource": "drive/items/file-c",
+                    "changeType": "deleted",
+                    "subscriptionId": "sub-1",
+                    "eventTime": Utc::now(),
+                }
+            ]
+        });
+        let c = OneDriveConnector::new(ConnectorInstanceId::new_v4());
+        let evs = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap();
+        assert_eq!(
+            evs.len(),
+            2,
+            "valid notifications on either side of an unknown changeType must still surface",
+        );
+        assert!(matches!(evs[0], ConnectorEvent::DocumentCreated { .. }));
+        assert!(matches!(evs[1], ConnectorEvent::DocumentDeleted { .. }));
     }
 
     #[test]

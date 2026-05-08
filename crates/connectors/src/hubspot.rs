@@ -190,41 +190,45 @@ fn parse_role(role: &str) -> Option<SourcePermissionLevel> {
     }
 }
 
+/// Map a HubSpot `subscriptionType` to a substrate event.
+///
+/// Returns `None` for subscription types we don't understand so the
+/// caller can skip them without aborting the rest of the batch — see
+/// `handle_webhook_event` for why an unknown entry must not discard
+/// already-processed valid events.
 fn subscription_to_event(
     sub: &str,
     object_id: i64,
     occurred_at: DateTime<Utc>,
     user_id: Option<String>,
     new_role: Option<&str>,
-) -> Result<ConnectorEvent> {
+) -> Option<ConnectorEvent> {
     let kind = sub.split_once('.').map_or("", |(prefix, _)| prefix);
     let id = SourceDocumentId::new(format!("{kind}:{object_id}"));
     if sub.ends_with(".creation") {
-        Ok(ConnectorEvent::DocumentCreated {
+        Some(ConnectorEvent::DocumentCreated {
             document_id: id,
             occurred_at,
         })
     } else if sub.ends_with(".propertyChange") || sub.ends_with(".update") {
-        Ok(ConnectorEvent::DocumentUpdated {
+        Some(ConnectorEvent::DocumentUpdated {
             document_id: id,
             occurred_at,
         })
     } else if sub.ends_with(".deletion") {
-        Ok(ConnectorEvent::DocumentDeleted {
+        Some(ConnectorEvent::DocumentDeleted {
             document_id: id,
             occurred_at,
         })
     } else if sub.ends_with(".permissionChange") {
-        Ok(ConnectorEvent::PermissionChanged {
+        Some(ConnectorEvent::PermissionChanged {
             document_id: id,
             user_id: SourceUserId::new(user_id.unwrap_or_default()),
             new_level: new_role.and_then(parse_role),
             occurred_at,
         })
     } else {
-        Err(ConnectorError::Webhook(format!(
-            "unknown HubSpot subscriptionType: {sub}"
-        )))
+        None
     }
 }
 
@@ -305,8 +309,14 @@ impl Connector for HubSpotConnector {
     fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
         // HubSpot delivers webhooks as a JSON array — a single POST
         // can carry many independent subscription events. Every
-        // entry must surface; previously we returned only the
-        // first, which silently dropped the rest.
+        // recognised entry must surface; previously we returned only
+        // the first, which silently dropped the rest.
+        //
+        // Unknown subscription types are skipped rather than
+        // aborting the whole batch — when HubSpot adds a new event
+        // family we cannot retroactively discard every well-formed
+        // event that was queued behind it. Mirrors the OneDrive
+        // handler's policy on unknown `changeType`s.
         let batch: Vec<HubSpotWebhookEvent> = serde_json::from_slice(body)?;
         if batch.is_empty() {
             return Err(ConnectorError::Webhook(
@@ -319,7 +329,7 @@ impl Connector for HubSpotConnector {
                 .occurred_at_ms
                 .and_then(DateTime::<Utc>::from_timestamp_millis)
                 .unwrap_or_else(Utc::now);
-            events.push(subscription_to_event(
+            if let Some(ev) = subscription_to_event(
                 &e.subscription_type,
                 e.object_id,
                 occurred_at,
@@ -327,7 +337,9 @@ impl Connector for HubSpotConnector {
                 // HubSpot encodes the new role in `propertyValue`
                 // for the `permissionChange` subscription.
                 e.property_value.as_deref(),
-            )?);
+            ) {
+                events.push(ev);
+            }
         }
         Ok(events)
     }
@@ -458,15 +470,41 @@ mod tests {
     }
 
     #[test]
-    fn webhook_unknown_subscription_errors() {
+    fn webhook_unknown_subscription_is_skipped_not_errored() {
+        // Regression: an unknown `subscriptionType` previously
+        // bubbled up as `Err` from `subscription_to_event` via the
+        // `?` operator inside `handle_webhook_event`, which would
+        // have discarded every valid event already queued earlier in
+        // the same batch. The handler must now skip the unknown
+        // entry and continue processing the remainder.
         let body = serde_json::json!([
-            {"subscriptionType": "foo.weird", "objectId": 1, "occurredAt": 0}
+            {
+                "subscriptionType": "contact.creation",
+                "objectId": 1,
+                "occurredAt": Utc::now().timestamp_millis(),
+            },
+            {
+                "subscriptionType": "foo.weird",
+                "objectId": 2,
+                "occurredAt": Utc::now().timestamp_millis(),
+            },
+            {
+                "subscriptionType": "deal.deletion",
+                "objectId": 9,
+                "occurredAt": Utc::now().timestamp_millis(),
+            }
         ]);
         let c = HubSpotConnector::new(ConnectorInstanceId::new_v4());
-        let err = c
+        let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
-            .unwrap_err();
-        assert!(matches!(err, ConnectorError::Webhook(_)));
+            .unwrap();
+        assert_eq!(
+            evs.len(),
+            2,
+            "valid events on either side of an unknown subscriptionType must still surface",
+        );
+        assert!(matches!(evs[0], ConnectorEvent::DocumentCreated { .. }));
+        assert!(matches!(evs[1], ConnectorEvent::DocumentDeleted { .. }));
     }
 
     #[test]

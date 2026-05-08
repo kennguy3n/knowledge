@@ -136,17 +136,40 @@ fn empty_webhook_batch_returns_webhook_error() {
 }
 
 #[test]
-fn unknown_subscription_type_returns_webhook_error() {
+fn unknown_subscription_type_is_skipped_not_errored() {
+    // Regression: an unrecognised `subscriptionType` previously
+    // bubbled out of `handle_webhook_event` as `Err` via the `?`
+    // operator, which discarded every valid event already queued
+    // earlier in the same batch. The handler must now skip the
+    // unknown entry and keep processing the remainder so a future
+    // HubSpot subscription type cannot cause repeated data loss
+    // on retries.
     let connector = build_connector();
     let body = serde_json::json!([
         {
-            "subscriptionType": "weird.event.type",
+            "subscriptionType": "contact.creation",
             "objectId": 1,
             "occurredAt": 1746374700000_i64,
+        },
+        {
+            "subscriptionType": "weird.event.type",
+            "objectId": 2,
+            "occurredAt": 1746374701000_i64,
+        },
+        {
+            "subscriptionType": "deal.deletion",
+            "objectId": 9,
+            "occurredAt": 1746374702000_i64,
         }
     ]);
-    let err = connector
+    let events = connector
         .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
-        .unwrap_err();
-    assert!(matches!(err, ConnectorError::Webhook(_)));
+        .expect("handle_webhook_event");
+    assert_eq!(
+        events.len(),
+        2,
+        "valid events on either side of an unknown subscriptionType must still surface",
+    );
+    assert!(matches!(events[0], ConnectorEvent::DocumentCreated { .. }));
+    assert!(matches!(events[1], ConnectorEvent::DocumentDeleted { .. }));
 }
