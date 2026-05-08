@@ -424,9 +424,7 @@ impl SessionDetector {
         let started_at = observations
             .first()
             .map_or_else(Utc::now, |o| o.occurred_at);
-        let ended_at = observations
-            .last()
-            .map_or(started_at, |o| o.occurred_at);
+        let ended_at = observations.last().map_or(started_at, |o| o.occurred_at);
         let scope_id = observations
             .first()
             .map_or_else(ScopeId::new_v4, |o| o.scope_id);
