@@ -1,0 +1,182 @@
+//! The [`Connector`] trait and supporting sync result types.
+//!
+//! Per `PROPOSAL.md` §10.2 a connector is the boundary between the
+//! substrate and one external source system. The trait is kept
+//! deliberately small and synchronous so it can be unit-tested
+//! against in-memory fakes; the production runtime wraps each
+//! method in async tasks.
+
+use crate::config::ConnectorConfig;
+use crate::error::Result;
+use crate::event::ConnectorEvent;
+use crate::sync::SyncState;
+use crate::token_vault::OAuth2Token;
+use crate::webhook::WebhookSubscription;
+
+/// Result of an `initial_sync` / `incremental_sync` call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncRunResult {
+    /// Events emitted by the run, in source order.
+    pub events: Vec<ConnectorEvent>,
+    /// New cursor to persist into [`SyncState::cursor`]. `None`
+    /// means "no further pages".
+    pub next_cursor: Option<String>,
+}
+
+/// A connector — the substrate's boundary against one source system.
+///
+/// Implementors are expected to:
+///
+/// * `authenticate` — perform the auth handshake (OAuth2 code
+///   exchange, API key validation, …) and return the bearer token
+///   to store in the [`crate::token_vault::OAuth2TokenVault`].
+/// * `initial_sync` — full pull when the connector first comes up.
+/// * `incremental_sync` — steady-state pull keyed off the
+///   [`SyncState`] cursor.
+/// * `subscribe_webhook` — install a push subscription with the
+///   provider so the substrate can react to changes without
+///   polling.
+/// * `handle_webhook_event` — translate one provider-side webhook
+///   payload into a substrate-side [`ConnectorEvent`].
+///
+/// Phase 4 of the substrate ships only the trait + framework; the
+/// individual connectors land in later phases.
+pub trait Connector {
+    /// Run the auth handshake and return a fresh bearer token.
+    fn authenticate(&self, config: &ConnectorConfig) -> Result<OAuth2Token>;
+
+    /// First-time pull — walk the entire source surface.
+    fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult>;
+
+    /// Steady-state pull — read the cursor from `state`.
+    fn incremental_sync(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        state: &SyncState,
+    ) -> Result<SyncRunResult>;
+
+    /// Install a push subscription with the provider. The returned
+    /// [`WebhookSubscription`] should be persisted by the runtime.
+    fn subscribe_webhook(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        callback_url: &str,
+    ) -> Result<WebhookSubscription>;
+
+    /// Translate one provider-side webhook payload into a
+    /// substrate-side event.
+    fn handle_webhook_event(&self, body: &[u8]) -> Result<ConnectorEvent>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AuthKind, ConnectorKind};
+    use crate::event::SourceDocumentId;
+    use crate::token_vault::ConnectorInstanceId;
+    use crate::webhook::{
+        parse_webhook_event, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    };
+    use chrono::{Duration, Utc};
+    use evidence_store::ScopeId;
+
+    /// Fake connector used to exercise the trait surface in tests.
+    struct FakeConnector {
+        instance: ConnectorInstanceId,
+    }
+
+    impl Connector for FakeConnector {
+        fn authenticate(&self, _config: &ConnectorConfig) -> Result<OAuth2Token> {
+            Ok(OAuth2Token::new(
+                "access",
+                "refresh",
+                Utc::now() + Duration::hours(1),
+                "scope.read",
+            ))
+        }
+
+        fn initial_sync(
+            &self,
+            _config: &ConnectorConfig,
+            _token: &OAuth2Token,
+        ) -> Result<SyncRunResult> {
+            Ok(SyncRunResult {
+                events: vec![ConnectorEvent::DocumentCreated {
+                    document_id: SourceDocumentId::new("doc-1"),
+                    occurred_at: Utc::now(),
+                }],
+                next_cursor: Some("page-2".into()),
+            })
+        }
+
+        fn incremental_sync(
+            &self,
+            _config: &ConnectorConfig,
+            _token: &OAuth2Token,
+            _state: &SyncState,
+        ) -> Result<SyncRunResult> {
+            Ok(SyncRunResult {
+                events: vec![],
+                next_cursor: None,
+            })
+        }
+
+        fn subscribe_webhook(
+            &self,
+            _config: &ConnectorConfig,
+            _token: &OAuth2Token,
+            callback_url: &str,
+        ) -> Result<WebhookSubscription> {
+            Ok(WebhookSubscription::new(
+                self.instance,
+                callback_url,
+                WebhookSecret::new("fake-secret"),
+                WebhookEventTypes::all(),
+                None,
+            ))
+        }
+
+        fn handle_webhook_event(&self, body: &[u8]) -> Result<ConnectorEvent> {
+            parse_webhook_event(body)
+        }
+    }
+
+    #[test]
+    fn trait_surface_is_callable() {
+        let inst = ConnectorInstanceId::new_v4();
+        let connector = FakeConnector { instance: inst };
+        let cfg = ConnectorConfig::new(ConnectorKind::Notion, AuthKind::OAuth2, ScopeId::new_v4());
+        let tok = connector.authenticate(&cfg).unwrap();
+        let sync = connector.initial_sync(&cfg, &tok).unwrap();
+        assert_eq!(sync.events.len(), 1);
+        assert_eq!(sync.next_cursor.as_deref(), Some("page-2"));
+        let st = SyncState::new(inst);
+        let inc = connector.incremental_sync(&cfg, &tok, &st).unwrap();
+        assert!(inc.events.is_empty());
+        let sub = connector
+            .subscribe_webhook(&cfg, &tok, "https://substrate.example/webhook")
+            .unwrap();
+        assert_eq!(sub.connector, inst);
+    }
+
+    #[test]
+    fn webhook_handler_round_trips() {
+        let inst = ConnectorInstanceId::new_v4();
+        let connector = FakeConnector { instance: inst };
+        let payload = serde_json::json!({
+            "type": "document_updated",
+            "document_id": "x-1",
+            "occurred_at": Utc::now(),
+        });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let ev = connector.handle_webhook_event(&body).unwrap();
+        match ev {
+            ConnectorEvent::DocumentUpdated { document_id, .. } => {
+                assert_eq!(document_id, SourceDocumentId::new("x-1"));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+}

@@ -60,11 +60,33 @@ concept profiles, `ExportPolicy` + `PolicyEngine`, deny-by-default
 nodes into approved exports). `audit_service` is extended with the
 five Phase-5 action types (`ExportRendered`, `ExportSimulated`,
 `AgentProposalSubmitted`, `AgentProposalPromoted`,
-`AgentProposalRejected`) and helper logging functions. The platform
+`AgentProposalRejected`) and helper logging functions. Phase 4
+adds the on-server connector substrate: a new
+`connector_framework` crate (the `Connector` trait,
+`OAuth2TokenVault` + `TokenRefresher`, `SyncState` /
+`WebhookSubscription` / `ConnectorEvent`, channel-scoped
+`AttachmentRegistry` integrated with `permission_service`, and an
+`AclSyncEngine` that maps source-system permissions onto
+substrate relation tuples), plus document-pipeline + citation
+support in `observation_engine` (`DocumentChunker` /
+`SlidingWindowChunker`, `DocumentObservationPipeline`, and a
+`Citation` / `CitationRegistry` / `CitationRenderer` surface).
+Phase 6 adds the reasoning plane: a new `reasoning_engine` crate
+with `ContradictionDetector` + `DriftDetector` +
+`AdjudicationWorkflow`, typed-edge `GraphTraversal` over the
+concept graph with budgets and path scoring, a `QueryPlanner`
+that routes between `Summary / Fts / SemanticVector /
+GraphTraversal / RawEvidence` retrieval modes, and a
+`WorkflowMemory` that stores reasoning traces and matches
+patterns; `concept_graph` is extended with an
+`IncrementalUpdateEngine` that recomputes only touched branches
+on promotion / supersession / contradiction. The platform
 bindings, the SLM-backed importance classifier, MLS group keying,
-the ML-DSA-65 signer, and the Go-side gateway in front of
-`synthesis_engine` are tracked in [PROGRESS.md](./PROGRESS.md) but
-not yet shipped.
+the ML-DSA-65 signer, the seven Phase-4 vendor connectors
+(Google Drive / OneDrive / Notion / Jira / Confluence / Figma /
+HubSpot), the concept-graph visualization, and Graph-of-Thought
+reasoning are tracked in [PROGRESS.md](./PROGRESS.md) but not yet
+shipped.
 
 ### Prerequisites
 
@@ -90,15 +112,18 @@ cargo test --all
 ```
 
 This runs the inline unit tests inside each crate and the integration
-test files under `crates/*/tests/`. The Phase-5 crates
+test files under `crates/*/tests/`. The Phase-4 + Phase-6 crates
+(`connector_framework`, `reasoning_engine`) and extensions
+(`observation_engine` document + citation modules,
+`concept_graph` incremental updates), the Phase-5 crates
 (`agent_contract`, `export_plane`), the Phase-3 crates
 (`permission_service`, `tenant_service`, `synthesis_engine`,
 `audit_service`), the Phase-2 crates (`concept_graph`,
 `synthesis_pipeline`, `sync_engine`), and the extended Phase-1
 crates (`memory_manager`, `observation_engine`, `crypto`) are all
-covered by `cargo test --all` (464 tests passing as of the Phase-5
-delivery). The end-to-end channel → domain → tenant synthesis chain
-is exercised by
+covered by `cargo test --all` (609 tests passing as of the
+Phase-4 + Phase-6 first delivery). The end-to-end channel →
+domain → tenant synthesis chain is exercised by
 `crates/synthesis_engine/tests/hierarchy_e2e.rs`; the agent
 proposal lifecycle and the export plane pipeline are exercised by
 `crates/agent_contract/tests/e2e_proposal_tests.rs` and
@@ -183,13 +208,36 @@ knowledge/
 │   │                          #   Proposed → UnderReview → Promoted/Rejected
 │   │                          #   lifecycle, AutoPromotionPolicy, ProposalStore,
 │   │                          #   promote_to_canonical → CanonicalArtifact
-│   └── export_plane/          # Phase 5 export plane: PortableConceptProfile,
-│                              #   ApprovedConcept, ExportView (ConceptsOnly /
-│                              #   WithSummaries / WithEvidencePack), EvidencePack,
-│                              #   ExportPolicy + PolicyEngine (least-privilege),
-│                              #   ExportControlRegistry (deny-by-default per
-│                              #   concept / summary / workflow), PolicySimulator
-│                              #   (read-only preview), ConceptApprovalWorkflow
+│   ├── export_plane/          # Phase 5 export plane: PortableConceptProfile,
+│   │                          #   ApprovedConcept, ExportView (ConceptsOnly /
+│   │                          #   WithSummaries / WithEvidencePack), EvidencePack,
+│   │                          #   ExportPolicy + PolicyEngine (least-privilege),
+│   │                          #   ExportControlRegistry (deny-by-default per
+│   │                          #   concept / summary / workflow), PolicySimulator
+│   │                          #   (read-only preview), ConceptApprovalWorkflow
+│   ├── connector_framework/   # Phase 4 connector substrate: Connector trait
+│   │                          #   (authenticate / initial_sync / incremental_sync /
+│   │                          #   subscribe_webhook / handle_webhook_event),
+│   │                          #   OAuth2TokenVault + TokenRefresher with HKDF
+│   │                          #   SecretToken wrappers, SyncState (Full/Incremental),
+│   │                          #   WebhookSubscription + HMAC-SHA256 verifier,
+│   │                          #   ConnectorConfig / ConnectorInstance / ConnectorEvent
+│   │                          #   (DocumentCreated / Updated / Deleted /
+│   │                          #   PermissionChanged), channel-scoped
+│   │                          #   AttachmentRegistry (one-connector-per-source),
+│   │                          #   AclSyncEngine + PermissionMapping into
+│   │                          #   permission_service relation tuples
+│   └── reasoning_engine/      # Phase 6 reasoning plane: ContradictionDetector
+│                              #   + AdjudicationWorkflow (Detected → UnderReview
+│                              #   → Resolved), DriftDetector + DriftMarker,
+│                              #   GraphTraversal (typed-edge BFS with
+│                              #   TraversalBudget + TraversalQuery + PathScorer,
+│                              #   targeted + exploratory modes), QueryPlanner
+│                              #   (RetrievalMode: Summary / Fts / SemanticVector /
+│                              #   GraphTraversal / RawEvidence; QueryClassifier;
+│                              #   PlannerHeuristics; PlanExecutionResult),
+│                              #   WorkflowMemory (WorkflowTrace, WorkflowPattern,
+│                              #   PatternMatcher, TraceRecorder)
 ├── .github/workflows/ci.yml   # fmt + clippy + build + test on push / PR
 ├── PROPOSAL.md                # product thesis
 ├── ARCHITECTURE.md            # system architecture

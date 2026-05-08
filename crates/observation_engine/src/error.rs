@@ -12,6 +12,12 @@ pub enum ObservationError {
     /// An underlying memory-manager call failed.
     #[error(transparent)]
     Memory(#[from] memory_manager::MemoryError),
+
+    /// Internal pipeline / registry failure (citation lookup
+    /// missed, JSON serialisation failed, etc.). Carries a
+    /// human-readable diagnostic.
+    #[error("observation engine internal error: {0}")]
+    Internal(String),
 }
 
 /// Convenience result alias.

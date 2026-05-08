@@ -1,0 +1,24 @@
+[package]
+name = "connector_framework"
+description = "Connector framework for the Knowledge substrate: OAuth2 token vault, sync state, webhook subscriptions, channel-scoped attachments, and ACL sync from external source systems."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+crypto = { path = "../crypto" }
+evidence_store = { path = "../evidence_store" }
+observation_engine = { path = "../observation_engine" }
+permission_service = { path = "../permission_service" }
+
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }
+
+[lints]
+workspace = true
