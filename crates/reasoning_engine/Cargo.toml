@@ -11,6 +11,7 @@ repository.workspace = true
 concept_graph = { path = "../concept_graph" }
 evidence_store = { path = "../evidence_store" }
 memory_manager = { path = "../memory_manager" }
+permission_service = { path = "../permission_service" }
 
 thiserror = { workspace = true }
 uuid = { workspace = true }

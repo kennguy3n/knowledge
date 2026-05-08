@@ -100,8 +100,7 @@ impl NotionConnector {
         cursor
             .and_then(|c| c.strip_prefix("page-"))
             .and_then(|n| n.parse::<usize>().ok())
-            .map(|n| n.saturating_sub(1))
-            .unwrap_or(0)
+            .map_or(0, |n| n.saturating_sub(1))
     }
 }
 
@@ -200,8 +199,7 @@ impl Connector for NotionConnector {
 
     fn handle_webhook_event(&self, _body: &[u8]) -> Result<ConnectorEvent> {
         Err(ConnectorError::Webhook(
-            "polling-only mode: Notion does not deliver webhooks; use incremental_sync"
-                .to_string(),
+            "polling-only mode: Notion does not deliver webhooks; use incremental_sync".to_string(),
         ))
     }
 }
@@ -213,11 +211,7 @@ mod tests {
     use evidence_store::ScopeId;
 
     fn cfg() -> ConnectorConfig {
-        ConnectorConfig::new(
-            ConnectorKind::Notion,
-            AuthKind::OAuth2,
-            ScopeId::new_v4(),
-        )
+        ConnectorConfig::new(ConnectorKind::Notion, AuthKind::OAuth2, ScopeId::new_v4())
     }
 
     #[test]
@@ -245,7 +239,10 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert!(matches!(res.events[0], ConnectorEvent::DocumentCreated { .. }));
+        assert!(matches!(
+            res.events[0],
+            ConnectorEvent::DocumentCreated { .. }
+        ));
         assert!(res.next_cursor.is_some());
     }
 
@@ -266,7 +263,10 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let state = SyncState::new(c.instance);
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert!(matches!(res.events[0], ConnectorEvent::DocumentDeleted { .. }));
+        assert!(matches!(
+            res.events[0],
+            ConnectorEvent::DocumentDeleted { .. }
+        ));
     }
 
     #[test]

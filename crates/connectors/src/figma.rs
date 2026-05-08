@@ -208,10 +208,9 @@ impl Connector for FigmaConnector {
         let mut last_version: Option<String> = None;
         for resp in &self.incremental_files {
             if let Some(file) = &resp.file {
-                if cursor
-                    .as_ref()
-                    .is_some_and(|c| !file.version.is_empty() && file.version.as_str() <= c.as_str())
-                {
+                if cursor.as_ref().is_some_and(|c| {
+                    !file.version.is_empty() && file.version.as_str() <= c.as_str()
+                }) {
                     continue;
                 }
                 let occurred_at = file.last_modified.unwrap_or_else(Utc::now);
@@ -271,7 +270,9 @@ impl Connector for FigmaConnector {
             "FILE_PERMISSION_UPDATE" => Ok(ConnectorEvent::PermissionChanged {
                 document_id,
                 user_id: SourceUserId::new(
-                    p.triggered_by.as_ref().map_or_else(String::new, |u| u.id.clone()),
+                    p.triggered_by
+                        .as_ref()
+                        .map_or_else(String::new, |u| u.id.clone()),
                 ),
                 new_level: p.new_role.as_deref().and_then(parse_role),
                 occurred_at,
@@ -322,8 +323,7 @@ mod tests {
                 updated_at: Some(Utc::now()),
             }],
         };
-        let c = FigmaConnector::new(ConnectorInstanceId::new_v4())
-            .with_initial_files(vec![resp]);
+        let c = FigmaConnector::new(ConnectorInstanceId::new_v4()).with_initial_files(vec![resp]);
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 2);
@@ -336,8 +336,8 @@ mod tests {
             file: Some(file("F1", "100")),
             components: vec![],
         };
-        let c = FigmaConnector::new(ConnectorInstanceId::new_v4())
-            .with_incremental_files(vec![resp]);
+        let c =
+            FigmaConnector::new(ConnectorInstanceId::new_v4()).with_incremental_files(vec![resp]);
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
         state.cursor = Some("100".into());

@@ -161,8 +161,7 @@ impl GoogleDriveConnector {
         cursor
             .and_then(|c| c.strip_prefix("page-"))
             .and_then(|n| n.parse::<usize>().ok())
-            .map(|n| n.saturating_sub(1))
-            .unwrap_or(0)
+            .map_or(0, |n| n.saturating_sub(1))
     }
 }
 
@@ -207,7 +206,7 @@ impl Connector for GoogleDriveConnector {
                 }
             }
             if page.new_start_page_token.is_some() {
-                seed_token = page.new_start_page_token.clone();
+                seed_token.clone_from(&page.new_start_page_token);
             }
         }
         Ok(SyncRunResult {
@@ -336,7 +335,10 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert!(matches!(res.events[0], ConnectorEvent::DocumentCreated { .. }));
+        assert!(matches!(
+            res.events[0],
+            ConnectorEvent::DocumentCreated { .. }
+        ));
         assert_eq!(res.next_cursor.as_deref(), Some("seed-1"));
     }
 
@@ -353,14 +355,17 @@ mod tests {
             next_page_token: None,
             new_start_page_token: Some("seed-2".into()),
         }];
-        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4())
-            .with_incremental_pages(pages);
+        let c =
+            GoogleDriveConnector::new(ConnectorInstanceId::new_v4()).with_incremental_pages(pages);
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
         state.cursor = None;
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert!(matches!(res.events[0], ConnectorEvent::DocumentDeleted { .. }));
+        assert!(matches!(
+            res.events[0],
+            ConnectorEvent::DocumentDeleted { .. }
+        ));
         assert_eq!(res.next_cursor.as_deref(), Some("seed-2"));
     }
 

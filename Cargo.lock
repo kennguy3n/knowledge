@@ -867,6 +867,7 @@ dependencies = [
  "concept_graph",
  "evidence_store",
  "memory_manager",
+ "permission_service",
  "serde",
  "serde_json",
  "thiserror",

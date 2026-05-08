@@ -131,8 +131,7 @@ impl OneDriveConnector {
         cursor
             .and_then(|c| c.strip_prefix("page-"))
             .and_then(|n| n.parse::<usize>().ok())
-            .map(|n| n.saturating_sub(1))
-            .unwrap_or(0)
+            .map_or(0, |n| n.saturating_sub(1))
     }
 }
 
@@ -156,9 +155,7 @@ fn item_to_event(item: &DriveItem) -> ConnectorEvent {
             document_id: id,
             occurred_at,
         }
-    } else if item.created_date_time.is_some()
-        && item.last_modified_date_time.is_none()
-    {
+    } else if item.created_date_time.is_some() && item.last_modified_date_time.is_none() {
         ConnectorEvent::DocumentCreated {
             document_id: id,
             occurred_at,
@@ -193,7 +190,7 @@ impl Connector for OneDriveConnector {
                 events.push(item_to_event(item));
             }
             if page.delta_link.is_some() {
-                delta_link = page.delta_link.clone();
+                delta_link.clone_from(&page.delta_link);
             }
         }
         Ok(SyncRunResult {
@@ -287,11 +284,7 @@ mod tests {
     use evidence_store::ScopeId;
 
     fn cfg() -> ConnectorConfig {
-        ConnectorConfig::new(
-            ConnectorKind::OneDrive,
-            AuthKind::OAuth2,
-            ScopeId::new_v4(),
-        )
+        ConnectorConfig::new(ConnectorKind::OneDrive, AuthKind::OAuth2, ScopeId::new_v4())
     }
 
     #[test]
@@ -318,7 +311,10 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert!(matches!(res.events[0], ConnectorEvent::DocumentCreated { .. }));
+        assert!(matches!(
+            res.events[0],
+            ConnectorEvent::DocumentCreated { .. }
+        ));
         assert_eq!(res.next_cursor.as_deref(), Some("delta-token-1"));
     }
 
@@ -337,13 +333,15 @@ mod tests {
             next_link: None,
             delta_link: Some("delta-2".into()),
         }];
-        let c = OneDriveConnector::new(ConnectorInstanceId::new_v4())
-            .with_incremental_pages(pages);
+        let c = OneDriveConnector::new(ConnectorInstanceId::new_v4()).with_incremental_pages(pages);
         let tok = c.authenticate(&cfg()).unwrap();
         let state = SyncState::new(c.instance);
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert!(matches!(res.events[0], ConnectorEvent::DocumentDeleted { .. }));
+        assert!(matches!(
+            res.events[0],
+            ConnectorEvent::DocumentDeleted { .. }
+        ));
     }
 
     #[test]

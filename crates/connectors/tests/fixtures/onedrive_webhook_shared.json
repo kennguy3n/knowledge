@@ -1,0 +1,12 @@
+{
+  "value": [
+    {
+      "resource": "drive/items/onedrive:item:1",
+      "changeType": "shared",
+      "subscriptionId": "graph-sub-1",
+      "eventTime": "2026-05-04T13:00:00Z",
+      "user_id": "graph:user:42",
+      "new_role": "write"
+    }
+  ]
+}

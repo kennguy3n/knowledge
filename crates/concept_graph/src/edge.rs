@@ -9,7 +9,7 @@ use evidence_store::ScopeId;
 use crate::node::NodeId;
 
 /// Identifier for a [`ConceptEdge`] (UUID v4 newtype).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct EdgeId(pub Uuid);
 
@@ -42,7 +42,7 @@ impl std::fmt::Display for EdgeId {
 /// graph is intentionally sparse — most observations never enter the
 /// graph; only high-value, reinforced, cross-source claims do — so
 /// the relation taxonomy is small and stable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RelationType {
     /// Subtype / instance-of relation (`Atlas is_a Project`).

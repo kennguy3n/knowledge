@@ -1,0 +1,12 @@
+{
+  "webhookEvent": "page_removed",
+  "timestamp": 1746374600000,
+  "page": {
+    "id": "confluence:page:9",
+    "type": "page",
+    "title": "Old quarterly retro",
+    "status": "trashed",
+    "version": { "number": 5, "when": "2026-05-04T17:30:00Z" },
+    "history": { "createdDate": "2026-04-01T08:00:00Z" }
+  }
+}

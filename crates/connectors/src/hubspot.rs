@@ -137,16 +137,12 @@ impl HubSpotConnector {
         cursor
             .and_then(|c| c.strip_prefix("page-"))
             .and_then(|n| n.parse::<usize>().ok())
-            .map(|n| n.saturating_sub(1))
-            .unwrap_or(0)
+            .map_or(0, |n| n.saturating_sub(1))
     }
 }
 
 fn object_to_event(obj: &HubSpotObject) -> ConnectorEvent {
-    let occurred_at = obj
-        .updated_at
-        .or(obj.created_at)
-        .unwrap_or_else(Utc::now);
+    let occurred_at = obj.updated_at.or(obj.created_at).unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(format!("{}:{}", kind_str(obj.kind), obj.id));
     if obj.archived {
         ConnectorEvent::DocumentDeleted {
@@ -191,7 +187,7 @@ fn subscription_to_event(
     user_id: Option<String>,
     new_role: Option<&str>,
 ) -> Result<ConnectorEvent> {
-    let kind = sub.split_once('.').map(|(prefix, _)| prefix).unwrap_or("");
+    let kind = sub.split_once('.').map_or("", |(prefix, _)| prefix);
     let id = SourceDocumentId::new(format!("{kind}:{object_id}"));
     if sub.ends_with(".creation") {
         Ok(ConnectorEvent::DocumentCreated {
@@ -352,7 +348,10 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert!(matches!(res.events[0], ConnectorEvent::DocumentCreated { .. }));
+        assert!(matches!(
+            res.events[0],
+            ConnectorEvent::DocumentCreated { .. }
+        ));
     }
 
     #[test]
@@ -372,7 +371,10 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let state = SyncState::new(c.instance);
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert!(matches!(res.events[0], ConnectorEvent::DocumentUpdated { .. }));
+        assert!(matches!(
+            res.events[0],
+            ConnectorEvent::DocumentUpdated { .. }
+        ));
     }
 
     #[test]

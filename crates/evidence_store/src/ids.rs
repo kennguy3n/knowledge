@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Identifier for a single evidence row (UUID v4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct EvidenceId(pub Uuid);
 
@@ -35,7 +35,7 @@ impl std::fmt::Display for EvidenceId {
 /// Per `PROPOSAL.md` §3.1 every storage path is keyed by a
 /// `(scope_id, epoch)` pair; the scope id is the unit of
 /// cryptographic forgetting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ScopeId(pub Uuid);
 

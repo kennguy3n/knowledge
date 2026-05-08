@@ -162,8 +162,7 @@ impl ConfluenceConnector {
         cursor
             .and_then(|c| c.strip_prefix("page-"))
             .and_then(|n| n.parse::<usize>().ok())
-            .map(|n| n.saturating_sub(1))
-            .unwrap_or(0)
+            .map_or(0, |n| n.saturating_sub(1))
     }
 }
 
@@ -391,7 +390,10 @@ mod tests {
         let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4()).with_initial_pages(pages);
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
-        assert!(matches!(res.events[0], ConnectorEvent::DocumentCreated { .. }));
+        assert!(matches!(
+            res.events[0],
+            ConnectorEvent::DocumentCreated { .. }
+        ));
     }
 
     #[test]
@@ -403,12 +405,15 @@ mod tests {
             limit: 25,
             size: 1,
         }];
-        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4())
-            .with_incremental_pages(pages);
+        let c =
+            ConfluenceConnector::new(ConnectorInstanceId::new_v4()).with_incremental_pages(pages);
         let tok = c.authenticate(&cfg()).unwrap();
         let state = SyncState::new(c.instance);
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert!(matches!(res.events[0], ConnectorEvent::DocumentUpdated { .. }));
+        assert!(matches!(
+            res.events[0],
+            ConnectorEvent::DocumentUpdated { .. }
+        ));
     }
 
     #[test]
