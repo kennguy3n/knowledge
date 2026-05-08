@@ -401,17 +401,23 @@ impl MlsGroup {
         if !verifier.verify_bytes(&payload, &commit.signature)? {
             return Err(CryptoError::ProvenanceVerification);
         }
-        if commit.epoch != self.epoch.next()
-            && !matches!(commit.operation, CommitOperation::Create { .. })
-        {
+        // `Create` commits are consumed by [`MlsGroup::create`] and
+        // must never be replayed against an existing group. Accepting
+        // them here would silently advance the epoch to whatever the
+        // (signed) commit claimed, desynchronising the key schedule
+        // from every other member.
+        if matches!(commit.operation, CommitOperation::Create { .. }) {
+            return Err(CryptoError::ProvenanceSerialisation(
+                "Create commits cannot be processed on an existing group",
+            ));
+        }
+        if commit.epoch != self.epoch.next() {
             return Err(CryptoError::ProvenanceSerialisation(
                 "commit epoch out of order",
             ));
         }
         match &commit.operation {
-            CommitOperation::Create { .. } => {
-                // No-op — `Create` is consumed by [`MlsGroup::create`].
-            }
+            CommitOperation::Create { .. } => unreachable!("Create rejected above"),
             CommitOperation::Add { added } => {
                 if self.members.contains_key(added) {
                     return Err(CryptoError::ProvenanceSerialisation(
@@ -632,6 +638,28 @@ mod tests {
     fn epoch_zero_and_next_round_trip() {
         assert_eq!(MlsEpoch::zero().0, 0);
         assert_eq!(MlsEpoch::zero().next().0, 1);
+    }
+
+    #[test]
+    fn process_commit_rejects_create_on_existing_group() {
+        // Regression: a signed `Create` commit replayed against an
+        // already-established group must be rejected, not silently
+        // jump the epoch and re-derive the key schedule.
+        let s = signer();
+        let creator = MlsMemberId::new_v4();
+        let (mut group, genesis) =
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_seed()).unwrap();
+        // Re-process the genesis Create commit on the live group.
+        let err = group.process_commit(&genesis, &s).unwrap_err();
+        assert!(matches!(
+            err,
+            CryptoError::ProvenanceSerialisation(
+                "Create commits cannot be processed on an existing group"
+            )
+        ));
+        // State is unchanged.
+        assert_eq!(group.epoch, MlsEpoch::zero());
+        assert_eq!(group.members.len(), 1);
     }
 
     #[test]
