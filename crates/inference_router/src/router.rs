@@ -484,4 +484,159 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, RouterError::Unavailable { .. }));
     }
+
+    /// Apple-Silicon MLX has higher priority than llama.cpp at the
+    /// router level. With both available and supporting the task,
+    /// the router must dispatch to MLX *first*.
+    #[test]
+    fn integration_mlx_wins_when_both_mlx_and_llama_available_high_tier() {
+        use crate::adapters::llama_cpp::MockLlamaServerClient;
+        let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
+        // Mocked adapters in priority order.
+        let mlx = MockAdapter::new(
+            AdapterKind::Mlx,
+            true,
+            vec![InferenceTask::TagImportance, InferenceTask::SynthSummary],
+            Ok("from-mlx".into()),
+        );
+        let llama_inner = MockLlamaServerClient::ok(r#"{"class":"useful"}"#);
+        let llama = LlamaCppAdapter::new(cfg.clone(), Box::new(llama_inner));
+        let fallback = FallbackAdapter::new();
+        let router = InferenceRouter::new(
+            cfg,
+            vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
+        );
+        router.bootstrap();
+        let out = router
+            .dispatch(InferenceTask::TagImportance, "msg")
+            .unwrap();
+        assert_eq!(out, "from-mlx");
+    }
+
+    /// Low tier — both real adapters refuse to load and refuse to
+    /// support tasks. Classification still resolves via the
+    /// `FallbackAdapter`; synthesis returns `Unavailable`.
+    #[test]
+    fn low_tier_blocks_real_slm_adapters_but_fallback_serves_classification() {
+        use crate::adapters::llama_cpp::MockLlamaServerClient;
+        use crate::adapters::mlx::MlxAdapter;
+        let cfg = RouterConfig::default().with_device_tier(DeviceTier::Low);
+        let mlx = MlxAdapter::with_platform_override(cfg.clone(), true);
+        let llama = LlamaCppAdapter::new(cfg.clone(), Box::new(MockLlamaServerClient::ok("y")));
+        let fallback = FallbackAdapter::new();
+        let router = InferenceRouter::new(
+            cfg,
+            vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
+        );
+        router.bootstrap();
+        // Classification must work via FallbackAdapter (lexicon).
+        let out = router
+            .dispatch(InferenceTask::TagImportance, "deadline tomorrow")
+            .unwrap();
+        assert!(
+            !out.is_empty(),
+            "fallback adapter should serve classification"
+        );
+        // Synthesis must be Unavailable on a Low tier device — no
+        // adapter supports it.
+        let err = router
+            .dispatch(InferenceTask::SynthSummary, "session body")
+            .unwrap_err();
+        assert!(matches!(err, RouterError::Unavailable { .. }));
+    }
+
+    /// Medium tier allows classification on the real SLM adapters
+    /// but gates synthesis. With both MLX (off — non-Apple test
+    /// host) and llama.cpp (Medium) reachable, classification routes
+    /// to llama.cpp and synthesis returns `Unavailable`.
+    #[test]
+    fn medium_tier_allows_classification_but_gates_synthesis() {
+        use crate::adapters::llama_cpp::MockLlamaServerClient;
+        use crate::adapters::mlx::MlxAdapter;
+        let cfg = RouterConfig::default().with_device_tier(DeviceTier::Medium);
+        let mlx = MlxAdapter::with_platform_override(cfg.clone(), false);
+        let llama = LlamaCppAdapter::new(
+            cfg.clone(),
+            Box::new(MockLlamaServerClient::ok(
+                r#"{"class":"useful","confidence":0.6}"#,
+            )),
+        );
+        let fallback = FallbackAdapter::new();
+        let router = InferenceRouter::new(
+            cfg,
+            vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
+        );
+        router.bootstrap();
+        // Classification supported on Medium → llama.cpp serves it.
+        let out = router
+            .dispatch(InferenceTask::TagImportance, "anything")
+            .unwrap();
+        assert!(out.contains("useful"));
+        // Synthesis is gated off the SLM at Medium and the
+        // `FallbackAdapter` does not support it either.
+        let err = router
+            .dispatch(InferenceTask::SynthSummary, "session body")
+            .unwrap_err();
+        assert!(matches!(err, RouterError::Unavailable { .. }));
+    }
+
+    /// `warm_up` is a no-op (`None`) when no adapter is available
+    /// (e.g. probe failed everywhere). The router must not panic
+    /// or set the warmed flag.
+    #[test]
+    fn warm_up_returns_none_when_no_adapter_is_available() {
+        let adapter = MockAdapter::new(
+            AdapterKind::LlamaCpp,
+            false,
+            vec![InferenceTask::TagImportance],
+            Ok("never".into()),
+        );
+        let router = router_with(vec![Box::new(adapter)]);
+        router.bootstrap();
+        assert!(router.warm_up().is_none());
+        assert!(!router.is_warmed());
+        assert!(!router.is_adapter_loaded(AdapterKind::LlamaCpp));
+    }
+
+    /// Idle sweep is a no-op for adapters that haven't been
+    /// dispatched / warmed up — they were never loaded.
+    #[test]
+    fn idle_sweep_does_not_unload_never_loaded_adapter() {
+        let adapter = MockAdapter::new(
+            AdapterKind::LlamaCpp,
+            true,
+            vec![InferenceTask::TagImportance],
+            Ok("ok".into()),
+        );
+        let router = router_with(vec![Box::new(adapter)]);
+        router.bootstrap();
+        // No dispatch / warm-up — adapter was never loaded.
+        let later = Instant::now() + Duration::from_secs(3600);
+        let unloaded = router.sweep_idle_adapters_at(later);
+        assert!(unloaded.is_empty());
+    }
+
+    /// Dispatch refreshes the activity clock on the serving
+    /// adapter, so an idle sweep that lands within the timeout
+    /// must not unload it.
+    #[test]
+    fn dispatch_refreshes_activity_clock_so_inside_timeout_is_not_unloaded() {
+        let cfg = RouterConfig::default()
+            .with_device_tier(DeviceTier::High)
+            .with_idle_timeout(60);
+        let adapter = MockAdapter::new(
+            AdapterKind::LlamaCpp,
+            true,
+            vec![InferenceTask::TagImportance],
+            Ok("ok".into()),
+        );
+        let router = InferenceRouter::new(cfg, vec![Box::new(adapter)]);
+        router.bootstrap();
+        router.dispatch(InferenceTask::TagImportance, "x").unwrap();
+        // 30 seconds < 60 second idle timeout — must NOT be unloaded.
+        let inside = Instant::now() + Duration::from_secs(30);
+        let unloaded = router.sweep_idle_adapters_at(inside);
+        assert!(unloaded.is_empty());
+        assert!(router.is_adapter_loaded(AdapterKind::LlamaCpp));
+    }
 }

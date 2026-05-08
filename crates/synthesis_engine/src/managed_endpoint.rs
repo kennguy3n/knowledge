@@ -217,7 +217,7 @@ pub struct SynthesisResponse {
 }
 
 /// Errors raised by the [`HttpClient`] / managed-endpoint adapter.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum EndpointError {
     /// The request exceeded the configured timeout.
     #[error("synthesis request timed out after {0:?}")]
@@ -299,9 +299,11 @@ impl Clone for MockBehaviour {
         match self {
             Self::EchoInputs => Self::EchoInputs,
             Self::Fixed(r) => Self::Fixed(r.clone()),
-            Self::Error(e) => {
-                Self::Error(EndpointError::Endpoint(format!("(cloned mock error) {e}")))
-            }
+            // `EndpointError` derives `Clone`, so the cloned mock
+            // preserves the original error variant — important for
+            // tests that match on `EndpointError::Timeout(_)` and
+            // friends.
+            Self::Error(e) => Self::Error(e.clone()),
             Self::Sequence(s) => Self::Sequence(s.clone()),
         }
     }
@@ -570,7 +572,17 @@ impl<C: HttpClient> SynthesisEngine for HttpManagedEndpointSynthesizer<C> {
             .as_deref()
             .unwrap_or(DEFAULT_DOMAIN_PROMPT);
         let req = self.build_request(WindowScopeTier::Domain, input.domain_scope, inputs, prompt);
-        let resp = self.dispatch(&req)?;
+        // Dispatch may fail (timeout, rate-limit, malformed response).
+        // We must transition the window out of `InProgress` *before*
+        // propagating, otherwise the window stays stuck and blocks
+        // subsequent retries forever.
+        let resp = match self.dispatch(&req) {
+            Ok(resp) => resp,
+            Err(e) => {
+                let _ = windows.mark_failed(handle.window_id);
+                return Err(e);
+            }
+        };
 
         let object = build_domain_summary_object(
             input.domain_scope,
@@ -625,7 +637,15 @@ impl<C: HttpClient> SynthesisEngine for HttpManagedEndpointSynthesizer<C> {
             .as_deref()
             .unwrap_or(DEFAULT_TENANT_PROMPT);
         let req = self.build_request(WindowScopeTier::Tenant, input.tenant_scope, inputs, prompt);
-        let resp = self.dispatch(&req)?;
+        // See `synthesize_domain` for why we mark the window failed
+        // before propagating the dispatch error.
+        let resp = match self.dispatch(&req) {
+            Ok(resp) => resp,
+            Err(e) => {
+                let _ = windows.mark_failed(handle.window_id);
+                return Err(e);
+            }
+        };
 
         let object = build_tenant_summary_object(
             input.tenant_scope,
@@ -935,5 +955,187 @@ mod tests {
         let bin = [0x00u8, 0xff, 0xab, 0xcd];
         let p = render_preview(&bin, 8);
         assert_eq!(p, "00ffabcd");
+    }
+
+    // ───── Bug 5 regression: window must transition out of `InProgress`
+    //       on dispatch failure. Pre-fix the `?` in `synthesize_domain`
+    //       and `synthesize_tenant` short-circuited the error after
+    //       `mark_in_progress`, leaving the window stuck forever and
+    //       blocking every subsequent retry. Post-fix the dispatch
+    //       error path explicitly calls `mark_failed` before
+    //       propagating, so the retry loop in the gateway can
+    //       reclaim the window.
+
+    /// Domain-tier dispatch failure must move the window from
+    /// `InProgress` → `Failed` (retry-able) before the error
+    /// propagates.
+    #[test]
+    fn bug5_domain_dispatch_failure_marks_window_failed_not_stuck() {
+        let domain_scope = ScopeId::new_v4();
+        let channel = ScopeId::new_v4();
+        let mut domain = DomainMemoryObject::new(domain_scope);
+        domain.attach_channel_scope(channel);
+        let outputs =
+            vec![ChannelOutput::from_channel_object(channel_recap(channel, b"x")).unwrap()];
+        let input = DomainSynthesisInput::new(&domain, outputs).unwrap();
+        let mut mgr = SynthesisWindowManager::new();
+        let handle = open_domain_window(&mut mgr, domain_scope);
+        let window_id = handle.window_id;
+
+        let mock = MockHttpClient::failing(EndpointError::Timeout(Duration::from_secs(5)));
+        let synth = HttpManagedEndpointSynthesizer::new(cfg(), mock);
+        let err = synth
+            .synthesize_domain(&mut mgr, handle, input)
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Endpoint(_)));
+
+        let status = mgr.get(window_id).expect("window still present").status;
+        assert_eq!(
+            status,
+            synthesis_pipeline::WindowStatus::Failed,
+            "dispatch failure must transition window to Failed, not leave it stuck \
+             InProgress; status was {status:?}"
+        );
+        // And `mark_in_progress` works again — the window is
+        // genuinely retry-able.
+        mgr.mark_in_progress(window_id)
+            .expect("Failed window must accept another mark_in_progress");
+    }
+
+    /// Tenant-tier dispatch failure must also move the window from
+    /// `InProgress` → `Failed`. Bug 5 had the same shape in
+    /// `synthesize_tenant` as in `synthesize_domain`.
+    #[test]
+    fn bug5_tenant_dispatch_failure_marks_window_failed_not_stuck() {
+        let tenant_scope = ScopeId::new_v4();
+        let domain_a = ScopeId::new_v4();
+        let mut tenant = TenantMemoryObject::new(tenant_scope);
+        tenant.attach_domain_scope(domain_a);
+        let outputs =
+            vec![DomainOutput::from_domain_object(domain_summary(domain_a, b"a")).unwrap()];
+        let input = TenantSynthesisInput::new(&tenant, outputs, Vec::new()).unwrap();
+        let mut mgr = SynthesisWindowManager::new();
+        let handle = open_tenant_window(&mut mgr, tenant_scope);
+        let window_id = handle.window_id;
+
+        let mock = MockHttpClient::failing(EndpointError::Endpoint("upstream 502".into()));
+        let synth = HttpManagedEndpointSynthesizer::new(cfg(), mock);
+        let err = synth
+            .synthesize_tenant(&mut mgr, handle, input)
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Endpoint(_)));
+
+        let status = mgr.get(window_id).expect("window still present").status;
+        assert_eq!(
+            status,
+            synthesis_pipeline::WindowStatus::Failed,
+            "tenant dispatch failure must transition window to Failed, not leave \
+             it stuck InProgress; status was {status:?}"
+        );
+        mgr.mark_in_progress(window_id)
+            .expect("Failed window must accept another mark_in_progress");
+    }
+
+    // ───── Bug 6 regression: `MockHttpClient`'s `send` clones the
+    //       behaviour out of the mutex on every call, so the `Clone`
+    //       impl on `MockBehaviour::Error` runs on every invocation.
+    //       Pre-fix that arm wrapped the error in `EndpointError::Endpoint`
+    //       on clone, losing the original variant. Tests asserting
+    //       `matches!(err, EndpointError::Timeout(_))` and friends
+    //       therefore failed. Post-fix `EndpointError` derives `Clone`
+    //       and the `MockBehaviour` Clone impl forwards `e.clone()`.
+
+    /// `MockHttpClient::failing(EndpointError::Timeout(_))` must
+    /// surface a `Timeout` variant — not the generic `Endpoint`
+    /// wrapper that the broken clone produced.
+    #[test]
+    fn bug6_mock_failing_preserves_timeout_variant_through_clone() {
+        let cfg = cfg();
+        let mock = MockHttpClient::failing(EndpointError::Timeout(Duration::from_secs(7)));
+        let req = SynthesisRequest {
+            scope_tier: WindowScopeTier::Channel,
+            target_scope: ScopeId::new_v4(),
+            input_objects: Vec::new(),
+            prompt_template: String::new(),
+            grammar: None,
+            max_tokens: 1,
+            model_id: "m".into(),
+        };
+
+        let err = mock.send(&cfg, &req).unwrap_err();
+        assert!(
+            matches!(err, EndpointError::Timeout(d) if d == Duration::from_secs(7)),
+            "expected EndpointError::Timeout(7s), got {err:?}"
+        );
+
+        // Call a second time — `send` clones the behaviour again, so
+        // we exercise the `Clone` impl twice.
+        let err2 = mock.send(&cfg, &req).unwrap_err();
+        assert!(
+            matches!(err2, EndpointError::Timeout(_)),
+            "expected EndpointError::Timeout on second call, got {err2:?}"
+        );
+    }
+
+    /// Same regression, exercised via the rate-limited variant —
+    /// preserves the inner diagnostic string across clones.
+    #[test]
+    fn bug6_mock_failing_preserves_rate_limited_variant_through_clone() {
+        let cfg = cfg();
+        let mock = MockHttpClient::failing(EndpointError::RateLimited("retry-after 11s".into()));
+        let req = SynthesisRequest {
+            scope_tier: WindowScopeTier::Channel,
+            target_scope: ScopeId::new_v4(),
+            input_objects: Vec::new(),
+            prompt_template: String::new(),
+            grammar: None,
+            max_tokens: 1,
+            model_id: "m".into(),
+        };
+
+        let err = mock.send(&cfg, &req).unwrap_err();
+        match err {
+            EndpointError::RateLimited(msg) => assert_eq!(msg, "retry-after 11s"),
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+    }
+
+    /// Cover every error variant in one sweep so any future arm
+    /// added to `MockBehaviour::Error` keeps the variant on clone.
+    #[test]
+    fn bug6_mock_failing_preserves_every_error_variant_through_clone() {
+        let cfg = cfg();
+        let req = SynthesisRequest {
+            scope_tier: WindowScopeTier::Channel,
+            target_scope: ScopeId::new_v4(),
+            input_objects: Vec::new(),
+            prompt_template: String::new(),
+            grammar: None,
+            max_tokens: 1,
+            model_id: "m".into(),
+        };
+        let cases = vec![
+            EndpointError::Timeout(Duration::from_millis(123)),
+            EndpointError::RateLimited("limited".into()),
+            EndpointError::InvalidResponse("bad".into()),
+            EndpointError::Endpoint("502".into()),
+            EndpointError::InvalidRequest("missing field".into()),
+            EndpointError::Transport("tls handshake".into()),
+        ];
+        for original in cases {
+            let mock = MockHttpClient::failing(original.clone());
+            let err = mock.send(&cfg, &req).unwrap_err();
+            // Variant discriminant must match — checked by
+            // `std::mem::discriminant`. Pre-fix everything would
+            // collapse to `Endpoint`.
+            assert_eq!(
+                std::mem::discriminant(&err),
+                std::mem::discriminant(&original),
+                "clone collapsed variant: original={original:?}, got={err:?}"
+            );
+            // Display string must also survive — covers the inner
+            // payload preservation (durations / messages).
+            assert_eq!(err.to_string(), original.to_string());
+        }
     }
 }

@@ -205,6 +205,17 @@ enum Lifecycle {
         attested_at: DateTime<Utc>,
         active: bool,
     },
+    /// Transient post-synthesis state. The worker just finished a
+    /// synthesis call but has not yet been observed via
+    /// [`TeeWorker::idle_check`] (or driven into a new dispatch).
+    /// Maps to [`TeeWorkerLifecycle::Idle`].
+    Idle {
+        #[allow(dead_code)]
+        report: AttestationReport,
+        #[allow(dead_code)]
+        binding: AttestationBinding,
+        attested_at: DateTime<Utc>,
+    },
 }
 
 impl Lifecycle {
@@ -214,6 +225,7 @@ impl Lifecycle {
             Self::Attesting => TeeWorkerLifecycle::Attesting,
             Self::Attested { active: true, .. } => TeeWorkerLifecycle::Synthesizing,
             Self::Attested { active: false, .. } => TeeWorkerLifecycle::Attested,
+            Self::Idle { .. } => TeeWorkerLifecycle::Idle,
         }
     }
 }
@@ -338,26 +350,66 @@ impl<R: TeeRuntime> TeeWorker<R> {
     fn enter_synthesizing(&self, scope_id: Uuid) -> Result<()> {
         self.assert_scope_allowed(scope_id)?;
         let mut state = self.state.lock().expect("tee state mutex");
-        match &mut state.lifecycle {
+        let prev = std::mem::replace(&mut state.lifecycle, Lifecycle::Unattested);
+        match prev {
             Lifecycle::Attested {
+                report,
+                binding,
                 attested_at,
                 active,
-                ..
             } => {
-                let elapsed = Utc::now().signed_duration_since(*attested_at);
+                let elapsed = Utc::now().signed_duration_since(attested_at);
                 if elapsed > self.config.attestation_ttl {
                     state.lifecycle = Lifecycle::Unattested;
                     return Err(EngineError::engine("tee: attestation expired"));
                 }
-                if *active {
+                if active {
+                    state.lifecycle = Lifecycle::Attested {
+                        report,
+                        binding,
+                        attested_at,
+                        active,
+                    };
                     return Err(EngineError::engine(
                         "tee: worker is already inside a synthesis call",
                     ));
                 }
-                *active = true;
+                state.lifecycle = Lifecycle::Attested {
+                    report,
+                    binding,
+                    attested_at,
+                    active: true,
+                };
                 Ok(())
             }
-            Lifecycle::Attesting | Lifecycle::Unattested => {
+            // The worker just finished a synthesis call and is sitting
+            // in `Idle`. Coming back into `enter_synthesizing` re-uses
+            // the same attestation (if still inside the TTL) and
+            // promotes the lifecycle straight to `Synthesizing`.
+            Lifecycle::Idle {
+                report,
+                binding,
+                attested_at,
+            } => {
+                let elapsed = Utc::now().signed_duration_since(attested_at);
+                if elapsed > self.config.attestation_ttl {
+                    state.lifecycle = Lifecycle::Unattested;
+                    return Err(EngineError::engine("tee: attestation expired"));
+                }
+                state.lifecycle = Lifecycle::Attested {
+                    report,
+                    binding,
+                    attested_at,
+                    active: true,
+                };
+                Ok(())
+            }
+            Lifecycle::Attesting => {
+                state.lifecycle = Lifecycle::Attesting;
+                Err(EngineError::engine("tee: worker is not attested"))
+            }
+            Lifecycle::Unattested => {
+                state.lifecycle = Lifecycle::Unattested;
                 Err(EngineError::engine("tee: worker is not attested"))
             }
         }
@@ -365,9 +417,52 @@ impl<R: TeeRuntime> TeeWorker<R> {
 
     fn exit_synthesizing(&self) {
         let mut state = self.state.lock().expect("tee state mutex");
-        if let Lifecycle::Attested { active, .. } = &mut state.lifecycle {
-            *active = false;
-        }
+        let prev = std::mem::replace(&mut state.lifecycle, Lifecycle::Unattested);
+        state.lifecycle = match prev {
+            Lifecycle::Attested {
+                report,
+                binding,
+                attested_at,
+                active: true,
+            } => Lifecycle::Idle {
+                report,
+                binding,
+                attested_at,
+            },
+            other => other,
+        };
+    }
+
+    /// Drive a transient [`TeeWorkerLifecycle::Idle`] back to
+    /// [`TeeWorkerLifecycle::Attested`]. Callers run this after a
+    /// synthesis to mark the worker as ready for the next dispatch
+    /// (the public state machine documents this transition; without
+    /// this method `Idle` would be unobservable). No-op on any other
+    /// state. If the cached attestation has expired the worker is
+    /// demoted to [`TeeWorkerLifecycle::Unattested`].
+    pub fn idle_check(&self) {
+        let mut state = self.state.lock().expect("tee state mutex");
+        let prev = std::mem::replace(&mut state.lifecycle, Lifecycle::Unattested);
+        state.lifecycle = match prev {
+            Lifecycle::Idle {
+                report,
+                binding,
+                attested_at,
+            } => {
+                let elapsed = Utc::now().signed_duration_since(attested_at);
+                if elapsed > self.config.attestation_ttl {
+                    Lifecycle::Unattested
+                } else {
+                    Lifecycle::Attested {
+                        report,
+                        binding,
+                        attested_at,
+                        active: false,
+                    }
+                }
+            }
+            other => other,
+        };
     }
 }
 
@@ -636,5 +731,152 @@ mod tests {
     fn config_default_ttl_is_one_hour() {
         let config = fixture_config();
         assert_eq!(config.attestation_ttl, Duration::hours(1));
+    }
+
+    // ───── Bug 3 regression: `TeeWorkerLifecycle::Idle` reachable. ─────
+    //
+    // Pre-fix `Lifecycle::as_public` had no `Idle` arm, so the public
+    // enum's `Idle` variant was unreachable — `exit_synthesizing` set
+    // `active = false` which mapped straight back to
+    // `TeeWorkerLifecycle::Attested`. The state-machine docstring on
+    // `TeeWorkerLifecycle` advertises a `Synthesizing → Idle →
+    // Attested` transition, so this is a real bug. Post-fix:
+    //
+    //   1. The internal `Lifecycle::Idle` variant exists and is
+    //      reached from `exit_synthesizing`.
+    //   2. `TeeWorker::idle_check()` drives it back to `Attested`
+    //      (or to `Unattested` if the cached attestation expired).
+    //   3. A subsequent `enter_synthesizing` from the `Idle` state
+    //      transitions cleanly to `Synthesizing` without re-attesting.
+
+    /// After a synthesis completes, the worker must surface
+    /// `TeeWorkerLifecycle::Idle` — not `Attested` — so the public
+    /// state machine can be observed.
+    #[test]
+    fn lifecycle_is_idle_after_synthesize_completes() {
+        let config = fixture_config();
+        let scope = config.scope_bindings[0];
+        let worker = TeeWorker::new(MockTeeRuntime, config);
+        worker.attest().expect("attest");
+        worker.enter_synthesizing(scope).expect("enter");
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Synthesizing);
+        worker.exit_synthesizing();
+        assert_eq!(
+            worker.lifecycle(),
+            TeeWorkerLifecycle::Idle,
+            "Idle must be reachable after a completed synthesis"
+        );
+    }
+
+    /// `idle_check()` is the post-synthesis sweep that drives `Idle`
+    /// back to `Attested` while the attestation is still fresh.
+    #[test]
+    fn idle_check_promotes_idle_back_to_attested_within_ttl() {
+        let config = fixture_config();
+        let scope = config.scope_bindings[0];
+        let worker = TeeWorker::new(MockTeeRuntime, config);
+        worker.attest().expect("attest");
+        worker.enter_synthesizing(scope).expect("enter");
+        worker.exit_synthesizing();
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Idle);
+
+        worker.idle_check();
+        assert_eq!(
+            worker.lifecycle(),
+            TeeWorkerLifecycle::Attested,
+            "idle_check must promote Idle -> Attested within TTL"
+        );
+    }
+
+    /// If the cached attestation expires while sitting in `Idle`,
+    /// `idle_check()` must demote to `Unattested` — the worker is no
+    /// longer cleared to dispatch.
+    #[test]
+    fn idle_check_demotes_to_unattested_when_attestation_expired() {
+        let mut config = fixture_config();
+        // TTL must be long enough for attest -> enter -> exit to
+        // complete, but short enough that the post-exit sleep below
+        // pushes us past expiry. 50ms is comfortable on every CI
+        // runner we ship to (vs. 1ns, which already expired before
+        // `enter_synthesizing` ran).
+        config.attestation_ttl = Duration::milliseconds(50);
+        let scope = config.scope_bindings[0];
+        let worker = TeeWorker::new(MockTeeRuntime, config);
+        worker.attest().expect("attest");
+        worker.enter_synthesizing(scope).expect("enter");
+        worker.exit_synthesizing();
+        // Force the TTL to expire while we're in Idle.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        worker.idle_check();
+        assert_eq!(
+            worker.lifecycle(),
+            TeeWorkerLifecycle::Unattested,
+            "Idle past TTL must demote to Unattested"
+        );
+    }
+
+    /// `idle_check()` is a no-op when the worker is not actually in
+    /// `Idle` — covers the `match other => other` arm.
+    #[test]
+    fn idle_check_is_noop_in_other_states() {
+        let worker = TeeWorker::new(MockTeeRuntime, fixture_config());
+        // Unattested -> Unattested.
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Unattested);
+        worker.idle_check();
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Unattested);
+
+        worker.attest().expect("attest");
+        // Attested -> Attested (no Idle to drive).
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Attested);
+        worker.idle_check();
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Attested);
+    }
+
+    /// Coming back into `enter_synthesizing` from the `Idle` state
+    /// must re-use the cached attestation (within TTL) and transition
+    /// straight to `Synthesizing`.
+    #[test]
+    fn enter_synthesizing_from_idle_reuses_cached_attestation() {
+        let config = fixture_config();
+        let scope = config.scope_bindings[0];
+        let worker = TeeWorker::new(MockTeeRuntime, config);
+        worker.attest().expect("attest");
+        worker.enter_synthesizing(scope).expect("enter once");
+        worker.exit_synthesizing();
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Idle);
+
+        // Re-entering directly from Idle (no idle_check, no re-attest)
+        // must succeed and bump us back to Synthesizing.
+        worker
+            .enter_synthesizing(scope)
+            .expect("re-enter from Idle within TTL");
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Synthesizing);
+        worker.exit_synthesizing();
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Idle);
+    }
+
+    /// If the attestation expired while sitting in `Idle`,
+    /// `enter_synthesizing` must refuse and demote to `Unattested`
+    /// (forcing the caller to `attest()` again).
+    #[test]
+    fn enter_synthesizing_from_idle_refuses_after_ttl_expiry() {
+        let mut config = fixture_config();
+        // See `idle_check_demotes_to_unattested_when_attestation_expired`
+        // for why we use 50ms rather than 1ns here.
+        config.attestation_ttl = Duration::milliseconds(50);
+        let scope = config.scope_bindings[0];
+        let worker = TeeWorker::new(MockTeeRuntime, config);
+        worker.attest().expect("attest");
+        worker.enter_synthesizing(scope).expect("enter");
+        worker.exit_synthesizing();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let err = worker
+            .enter_synthesizing(scope)
+            .expect_err("expected ttl expiry");
+        match err {
+            EngineError::Engine(s) => assert!(s.contains("attestation expired")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Unattested);
     }
 }

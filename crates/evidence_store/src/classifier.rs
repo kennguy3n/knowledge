@@ -424,6 +424,69 @@ mod tests {
     }
 
     #[test]
+    fn slm_classifier_parses_noise_verdict() {
+        let router = router_with(Box::new(ConstAdapter::ok(
+            r#"{"class":"noise","confidence":0.95}"#,
+        )));
+        let c = SlmClassifier::new(router);
+        // SLM owns the verdict for arbitrary text.
+        assert_eq!(
+            c.classify("filler text with no signal"),
+            ImportanceClass::Noise
+        );
+    }
+
+    #[test]
+    fn slm_classifier_parses_important_verdict() {
+        let router = router_with(Box::new(ConstAdapter::ok(
+            r#"{"class":"important","confidence":0.8}"#,
+        )));
+        let c = SlmClassifier::new(router);
+        assert_eq!(
+            c.classify("any random body without keywords"),
+            ImportanceClass::Important
+        );
+    }
+
+    #[test]
+    fn slm_classifier_with_custom_fallback_uses_that_lexicon() {
+        use crate::importance::Lexicon;
+        // Router is unavailable so the fallback path must fire.
+        let router = router_with(Box::new(ConstAdapter::err(RouterError::Unavailable {
+            task: "tag_importance",
+        })));
+        // Custom lexicon: pretend only the literal word "boom" is
+        // critical. This proves `with_fallback` plumbs the provided
+        // lexicon through, instead of silently using the default.
+        let lex = LexiconClassifier::new(Lexicon::new(vec![], vec![], vec!["boom"], vec![], 1));
+        let c = SlmClassifier::with_fallback(router, lex);
+        assert_eq!(c.classify("boom"), ImportanceClass::Critical);
+        // Default lexicon's "compliance" should NOT trigger here
+        // because we replaced the lexicon.
+        assert_ne!(
+            c.classify("compliance review needed"),
+            ImportanceClass::Critical,
+        );
+    }
+
+    #[test]
+    fn composite_uses_slm_downgrade_on_lexicon_useful() {
+        // Lexicon would say Useful; SLM says Noise. Composite must
+        // honour the SLM decision (downgrade).
+        let router = router_with(Box::new(ConstAdapter::ok(
+            r#"{"class":"noise","confidence":0.6}"#,
+        )));
+        let comp = CompositeClassifier::new(
+            LexiconClassifier::english_default(),
+            SlmClassifier::new(router),
+        );
+        assert_eq!(
+            comp.classify("let's revisit the dashboard tomorrow"),
+            ImportanceClass::Noise
+        );
+    }
+
+    #[test]
     fn slm_classifier_integration_with_real_fallback_adapter() {
         // The real FallbackAdapter returns
         // `{"class":"useful","confidence":0.5}` for tag_importance —

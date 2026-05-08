@@ -42,6 +42,12 @@ pub enum EvidenceError {
     /// UTF-8 decoding failed when reading a stored text body.
     #[error("invalid utf-8 in stored body")]
     InvalidUtf8,
+
+    /// An embedding model call failed (query embedding, per-row
+    /// embedding, …). Carries an owned message so dynamic context can
+    /// flow through without leaking memory via `Box::leak`.
+    #[error("embedding error: {0}")]
+    Embedding(String),
 }
 
 /// Convenience result alias.

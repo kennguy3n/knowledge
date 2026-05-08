@@ -381,7 +381,6 @@ impl SessionDetector {
         let mut sessions = Vec::new();
         let mut current: Vec<Observation> = vec![observations[0].clone()];
         let mut last_time = observations[0].occurred_at;
-        let mut close_reason: Option<SessionBoundary> = None;
 
         for obs in observations.iter().skip(1) {
             // Different scopes always force a new session — episodic
@@ -402,7 +401,6 @@ impl SessionDetector {
                     (true, _, _) => SessionBoundary::TopicShift,
                     _ => SessionBoundary::TimeGap,
                 };
-                close_reason = Some(boundary);
                 sessions.push(Self::close(&mut current, boundary));
                 current.push(obs.clone());
                 last_time = obs.occurred_at;
@@ -413,9 +411,14 @@ impl SessionDetector {
             current.push(obs.clone());
         }
 
-        // Close the trailing session.
-        let final_boundary = close_reason.unwrap_or(SessionBoundary::TimeGap);
-        sessions.push(Self::close(&mut current, final_boundary));
+        // Close the trailing session. The final session by definition
+        // was not split by an explicit marker or scope change — the
+        // stream just ended — so attribute it to `TimeGap` rather
+        // than reusing the *previous* session's close reason. (Bug:
+        // before this fix the trailing session inherited the prior
+        // close reason, e.g. `ExplicitAction`, even though the prior
+        // marker has nothing to do with this session.)
+        sessions.push(Self::close(&mut current, SessionBoundary::TimeGap));
         sessions
     }
 
@@ -548,6 +551,10 @@ mod tests {
 
     #[test]
     fn detector_splits_on_explicit_marker() {
+        // The first session contains the explicit marker and is
+        // therefore closed with `ExplicitAction`. The trailing
+        // session is by definition closed by end-of-stream and
+        // carries `TimeGap` (see Bug 2 regression suite below).
         let scope = ScopeId::new_v4();
         let t0 = Utc::now();
         let stream = vec![
@@ -556,11 +563,14 @@ mod tests {
         ];
         let sessions = SessionDetector::default().detect(&stream);
         assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[1].boundary, SessionBoundary::ExplicitAction);
+        assert_eq!(sessions[0].boundary, SessionBoundary::ExplicitAction);
+        assert_eq!(sessions[1].boundary, SessionBoundary::TimeGap);
     }
 
     #[test]
     fn detector_splits_on_scope_change() {
+        // First session closes on `TopicShift` (scope flipped); the
+        // trailing session is end-of-stream and carries `TimeGap`.
         let s1 = ScopeId::new_v4();
         let s2 = ScopeId::new_v4();
         let t0 = Utc::now();
@@ -570,7 +580,8 @@ mod tests {
         ];
         let sessions = SessionDetector::default().detect(&stream);
         assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[1].boundary, SessionBoundary::TopicShift);
+        assert_eq!(sessions[0].boundary, SessionBoundary::TopicShift);
+        assert_eq!(sessions[1].boundary, SessionBoundary::TimeGap);
     }
 
     #[test]
@@ -806,5 +817,234 @@ mod tests {
         assert_eq!(SessionBoundary::TimeGap.as_str(), "time_gap");
         assert_eq!(SessionBoundary::ExplicitAction.as_str(), "explicit_action");
         assert_eq!(SessionBoundary::TopicShift.as_str(), "topic_shift");
+    }
+
+    /// Bug 2 regression: when the *prior* split was an
+    /// `ExplicitAction`, the trailing session must NOT inherit that
+    /// reason — it never had an explicit marker, the stream just
+    /// ended. Pre-fix this asserted `ExplicitAction`; post-fix it
+    /// must be `TimeGap`.
+    #[test]
+    fn detector_trailing_session_after_explicit_marker_is_time_gap_not_inherited() {
+        let scope = ScopeId::new_v4();
+        let t0 = Utc::now();
+        let stream = vec![
+            obs(scope, t0, "morning standup"),
+            obs(scope, t0 + Duration::minutes(2), "let's wrap up"),
+            // Same scope, within the gap, no marker — just trailing.
+            obs(scope, t0 + Duration::minutes(4), "quick aside"),
+            obs(scope, t0 + Duration::minutes(5), "another quick aside"),
+        ];
+        let sessions = SessionDetector::default().detect(&stream);
+        assert_eq!(sessions.len(), 2, "{sessions:#?}");
+        assert_eq!(
+            sessions[0].boundary,
+            SessionBoundary::ExplicitAction,
+            "first split is the explicit marker"
+        );
+        assert_eq!(
+            sessions[1].boundary,
+            SessionBoundary::TimeGap,
+            "trailing session must not inherit the previous close_reason; \
+             it never saw an explicit marker, the stream just ended"
+        );
+    }
+
+    /// Bug 2 regression: same property holds when the prior split is
+    /// a topic shift (scope change).
+    #[test]
+    fn detector_trailing_session_after_scope_change_is_time_gap_not_inherited() {
+        let scope_a = ScopeId::new_v4();
+        let scope_b = ScopeId::new_v4();
+        let t0 = Utc::now();
+        let stream = vec![
+            obs(scope_a, t0, "scope A"),
+            obs(scope_b, t0 + Duration::minutes(1), "scope B"),
+            obs(scope_b, t0 + Duration::minutes(2), "still scope B"),
+        ];
+        let sessions = SessionDetector::default().detect(&stream);
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[1].boundary, SessionBoundary::TimeGap);
+    }
+
+    /// `SessionDetector::detect` over time gaps strictly larger than
+    /// the configured `gap` (here the default 30 min) splits, but a
+    /// gap exactly *at* `gap` also splits (boundary is `>=`).
+    #[test]
+    fn detector_splits_strictly_above_gap_and_groups_below() {
+        let scope = ScopeId::new_v4();
+        let t0 = Utc::now();
+        // 29 min < gap (30 min) → grouped.
+        let s1 = SessionDetector::default().detect(&[
+            obs(scope, t0, "a"),
+            obs(scope, t0 + Duration::minutes(29), "b"),
+        ]);
+        assert_eq!(s1.len(), 1);
+        // 30 min >= gap → split.
+        let s2 = SessionDetector::default().detect(&[
+            obs(scope, t0, "a"),
+            obs(scope, t0 + Duration::minutes(30), "b"),
+        ]);
+        assert_eq!(s2.len(), 2);
+        assert_eq!(s2[1].boundary, SessionBoundary::TimeGap);
+    }
+
+    /// Custom `SessionDetector` knobs — small gap, custom marker.
+    #[test]
+    fn detector_with_custom_gap_and_markers() {
+        let scope = ScopeId::new_v4();
+        let t0 = Utc::now();
+        let det = SessionDetector::new(Duration::seconds(30), vec!["bye for now".into()]);
+        let stream = vec![
+            obs(scope, t0, "a"),
+            obs(scope, t0 + Duration::seconds(15), "bye for now"),
+            obs(scope, t0 + Duration::seconds(20), "actually one more thing"),
+        ];
+        let sessions = det.detect(&stream);
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].boundary, SessionBoundary::ExplicitAction);
+        // Trailing session must use `TimeGap` regardless of prior
+        // close reason — Bug 2 invariant.
+        assert_eq!(sessions[1].boundary, SessionBoundary::TimeGap);
+    }
+
+    /// `EpisodicStore::list_by_scope` only returns rows for that
+    /// scope — cross-scope rows are ignored. (CRUD coverage.)
+    #[test]
+    fn store_lists_by_scope_filters_other_scopes() {
+        let mut store = EpisodicStore::new();
+        let s_a = ScopeId::new_v4();
+        let s_b = ScopeId::new_v4();
+        let t = Utc::now();
+        store.insert(EpisodicSummary::new_candidate(
+            s_a,
+            Uuid::new_v4(),
+            "scope-a",
+            vec![],
+            t,
+            t,
+        ));
+        store.insert(EpisodicSummary::new_candidate(
+            s_b,
+            Uuid::new_v4(),
+            "scope-b",
+            vec![],
+            t,
+            t,
+        ));
+        let listed = store.list_by_scope(s_a);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].summary_text, "scope-a");
+    }
+
+    /// `record_retrieval` is idempotent state-wise (already
+    /// `Reinforced` stays `Reinforced`) but keeps bumping the
+    /// retention score (capped at 1.0).
+    #[test]
+    fn store_record_retrieval_is_idempotent_state_but_caps_score() {
+        let scope = ScopeId::new_v4();
+        let t = Utc::now();
+        let mut store = EpisodicStore::new();
+        let id = store.insert(EpisodicSummary::new_candidate(
+            scope,
+            Uuid::new_v4(),
+            "x",
+            vec![],
+            t,
+            t,
+        ));
+        // Apply many retrievals — score must stay <= 1.0 and state
+        // must end up at Reinforced.
+        for _ in 0..50 {
+            store.record_retrieval(&id).unwrap();
+        }
+        let after = store.get(&id).unwrap();
+        assert_eq!(after.state, MemoryState::Reinforced);
+        assert!(after.retention_score <= 1.0);
+        assert!(after.retention_score >= 0.99);
+    }
+
+    /// `EpisodicStore::record_retrieval` on a missing id returns the
+    /// typed `MemoryError::NotFound` — the same shape callers see for
+    /// other not-found CRUD paths.
+    #[test]
+    fn store_record_retrieval_unknown_id_returns_not_found() {
+        let mut store = EpisodicStore::new();
+        let id = Uuid::new_v4();
+        assert!(matches!(
+            store.record_retrieval(&id).unwrap_err(),
+            MemoryError::NotFound { .. }
+        ));
+    }
+
+    /// Decay-sweep integration: after the episodic pipeline produces
+    /// summaries, the decay sweep over the *memory plane* (which
+    /// holds the durable `MemoryObject`s, not episodic summaries
+    /// themselves) is unaffected. This test wires both halves
+    /// together to assert there is no panic / cross-contamination
+    /// between the two stores.
+    #[test]
+    fn episodic_store_coexists_with_decay_sweep_on_memory_plane() {
+        use crate::decay::decay_sweep;
+        use crate::object::{MemoryObject, SensitivityClass};
+
+        let scope = ScopeId::new_v4();
+        let t0 = Utc::now();
+
+        // Run the episodic pipeline.
+        let observations = vec![
+            obs(scope, t0, "started kickoff meeting"),
+            obs(scope, t0 + Duration::minutes(5), "agreed on scope"),
+        ];
+        let mut episodic = EpisodicMemory::new(StubSummarizer::new(), SessionDetector::default());
+        let summaries = episodic.ingest(&observations).unwrap();
+        assert_eq!(summaries.len(), 1);
+
+        // Stash a long-lived candidate memory object whose retention
+        // score should decay enough to archive on the next sweep.
+        let mut obj = MemoryObject::new_candidate(scope, SensitivityClass::Useful);
+        obj.created_at = Utc::now() - Duration::days(365 * 5);
+        obj.last_accessed_at = obj.created_at;
+        let mut objects = vec![obj];
+
+        let report = decay_sweep(&mut objects, Utc::now());
+        assert_eq!(report.candidates_archived, 1);
+
+        // The episodic store retains its summary independently of
+        // the memory-plane sweep — the two collections are not
+        // cross-coupled.
+        assert_eq!(episodic.store().len(), 1);
+    }
+
+    /// `record_retrieval` on the episodic store does *not* touch the
+    /// memory-plane decay sweep. Regression for "only retrievals on
+    /// the same plane should affect that plane's retention".
+    #[test]
+    fn episodic_record_retrieval_does_not_affect_memory_plane_objects() {
+        use crate::decay::decay_sweep;
+        use crate::object::{MemoryObject, SensitivityClass};
+
+        let scope = ScopeId::new_v4();
+        let mut store = EpisodicStore::new();
+        let t = Utc::now();
+        let id = store.insert(EpisodicSummary::new_candidate(
+            scope,
+            Uuid::new_v4(),
+            "summary",
+            vec![],
+            t,
+            t,
+        ));
+        store.record_retrieval(&id).unwrap();
+
+        let mut obj = MemoryObject::new_candidate(scope, SensitivityClass::Useful);
+        obj.created_at = Utc::now() - Duration::days(365 * 5);
+        obj.last_accessed_at = obj.created_at;
+        let mut objects = vec![obj];
+        let report = decay_sweep(&mut objects, Utc::now());
+        assert_eq!(
+            report.candidates_archived, 1,
+            "memory-plane decay must be independent of episodic retrieval bumps"
+        );
     }
 }

@@ -201,10 +201,11 @@ extensions (`observation_engine` document + citation modules,
 `audit_service`), the Phase-2 crates (`concept_graph`,
 `synthesis_pipeline`, `sync_engine`), and the extended Phase-1
 crates (`memory_manager`, `observation_engine`, `crypto`) are all
-covered by `cargo test --all` (1036 tests passing as of the
-Phase 0 SLM classifier + platform bindings + Phase 1 episodic +
-embeddings + Phase 4 Slack + email + Phase 7 SPHINCS+ + TEE worker
-drop, up from 829). The end-to-end
+covered by `cargo test --all` (1082 tests passing as of the
+post-Phase-7 bug-fix + test-coverage drop, up from 1036; the
+delta covers six bugs surfaced by Devin Review on PRs #12 / #13
+plus four targeted test suites — see the `2026-05-08
+post-Phase-7 hardening` row in [PROGRESS.md](./PROGRESS.md)). The end-to-end
 channel → domain → tenant synthesis chain is exercised by
 `crates/synthesis_engine/tests/hierarchy_e2e.rs`; the agent
 proposal lifecycle and the export plane pipeline are exercised by

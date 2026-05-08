@@ -96,9 +96,16 @@ impl<'a> HybridRetriever<'a> {
     }
 
     /// Plumb an [`EmbeddingModel`] in for the semantic-vector
-    /// component of the hybrid score. Calling [`Self::search_hybrid`]
-    /// after this will compute cosine similarity between the query
-    /// embedding and the per-row stored embedding (when present).
+    /// component of the hybrid score.
+    ///
+    /// Note: only [`Self::rerank_with_embeddings`] consults this
+    /// model — it requires per-candidate plaintext bodies which the
+    /// retriever cannot decrypt itself (it borrows the store
+    /// immutably). [`Self::search_hybrid`] does **not** invoke the
+    /// model and leaves `vector_score` at `0.0`; callers that want a
+    /// semantic component should call `search_hybrid` first and then
+    /// pass the candidates plus their decrypted bodies through
+    /// `rerank_with_embeddings`.
     pub fn with_embedding_model<M: EmbeddingModel + 'static>(mut self, model: M) -> Self {
         self.embedding_model = Some(Box::new(model));
         self
@@ -204,11 +211,9 @@ impl<'a> HybridRetriever<'a> {
         let Some(model) = self.embedding_model.as_ref() else {
             return Ok(candidates);
         };
-        let query_vec = model.embed(query).map_err(|e| {
-            EvidenceError::Schema(Box::leak(
-                format!("embedding query failed: {e}").into_boxed_str(),
-            ))
-        })?;
+        let query_vec = model
+            .embed(query)
+            .map_err(|e| EvidenceError::Embedding(format!("embedding query failed: {e}")))?;
         let body_lookup: std::collections::HashMap<EvidenceId, &str> = bodies
             .iter()
             .map(|(id, body)| (*id, body.as_str()))
@@ -274,7 +279,11 @@ impl<'a> HybridRetriever<'a> {
                     entry.recency_score = score;
                 }
             }
-            // Vector similarity is stubbed at 0.0 until XLM-R ships.
+            // Vector similarity stays at 0.0 here because
+            // `search_hybrid` only sees evidence ids, not decrypted
+            // bodies. Callers that want a semantic component should
+            // chain through `rerank_with_embeddings` after loading
+            // bodies via `EvidenceStore::read_body`.
             entry.vector_score = 0.0;
             entry.score = self.weights.fts * entry.fts_score
                 + self.weights.recency * entry.recency_score
