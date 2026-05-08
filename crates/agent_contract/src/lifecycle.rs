@@ -197,6 +197,14 @@ pub enum LifecycleError {
     /// The proposal had a TTL and the TTL has elapsed.
     #[error("proposal {0} has expired")]
     Expired(Uuid),
+    /// A proposal with the supplied id was already in the store. The
+    /// `submit_*` family refuses to overwrite an existing record
+    /// because [`AgentProposal::id`] is `pub` — a caller that
+    /// re-uses an existing id would otherwise silently flip a
+    /// terminal-state proposal back to [`ProposalState::Proposed`]
+    /// and discard its canonical artifact.
+    #[error("proposal {0} already exists")]
+    DuplicateProposal(Uuid),
 }
 
 /// Type-erased proposal payload.
@@ -427,48 +435,72 @@ impl ProposalStore {
     }
 
     /// Submit an observation proposal. Returns the assigned id.
+    ///
+    /// Refuses to overwrite an existing proposal with the same id —
+    /// see [`LifecycleError::DuplicateProposal`].
     pub fn submit_observation(
         &mut self,
         proposal: AgentProposal<ObservationProposal>,
     ) -> Result<Uuid, LifecycleError> {
         validate_proposal(&proposal)?;
         let id = proposal.id;
+        if self.proposals.contains_key(&id) {
+            return Err(LifecycleError::DuplicateProposal(id));
+        }
         let stored = stored_from_envelope(proposal, AnyPayload::Observation);
         self.proposals.insert(id, stored);
         Ok(id)
     }
 
     /// Submit a concept proposal. Returns the assigned id.
+    ///
+    /// Refuses to overwrite an existing proposal with the same id —
+    /// see [`LifecycleError::DuplicateProposal`].
     pub fn submit_concept(
         &mut self,
         proposal: AgentProposal<ConceptProposal>,
     ) -> Result<Uuid, LifecycleError> {
         validate_proposal(&proposal)?;
         let id = proposal.id;
+        if self.proposals.contains_key(&id) {
+            return Err(LifecycleError::DuplicateProposal(id));
+        }
         let stored = stored_from_envelope(proposal, AnyPayload::Concept);
         self.proposals.insert(id, stored);
         Ok(id)
     }
 
     /// Submit a relation proposal. Returns the assigned id.
+    ///
+    /// Refuses to overwrite an existing proposal with the same id —
+    /// see [`LifecycleError::DuplicateProposal`].
     pub fn submit_relation(
         &mut self,
         proposal: AgentProposal<RelationProposal>,
     ) -> Result<Uuid, LifecycleError> {
         validate_proposal(&proposal)?;
         let id = proposal.id;
+        if self.proposals.contains_key(&id) {
+            return Err(LifecycleError::DuplicateProposal(id));
+        }
         let stored = stored_from_envelope(proposal, AnyPayload::Relation);
         self.proposals.insert(id, stored);
         Ok(id)
     }
 
     /// Submit a summary proposal. Returns the assigned id.
+    ///
+    /// Refuses to overwrite an existing proposal with the same id —
+    /// see [`LifecycleError::DuplicateProposal`].
     pub fn submit_summary(
         &mut self,
         proposal: AgentProposal<SummaryProposal>,
     ) -> Result<Uuid, LifecycleError> {
         validate_proposal(&proposal)?;
         let id = proposal.id;
+        if self.proposals.contains_key(&id) {
+            return Err(LifecycleError::DuplicateProposal(id));
+        }
         let stored = stored_from_envelope(proposal, AnyPayload::Summary);
         self.proposals.insert(id, stored);
         Ok(id)
@@ -1169,6 +1201,86 @@ mod tests {
         let stored = store.get(id).unwrap();
         assert_eq!(stored.state, ProposalState::Promoted);
         assert_eq!(stored.corroboration_count, count_before);
+    }
+
+    #[test]
+    fn submit_observation_refuses_duplicate_id() {
+        // N-5 — `submit_*` must not silently overwrite an existing
+        // proposal. `AgentProposal::id` is `pub`, so a caller that
+        // re-uses an existing id would otherwise flip a terminal
+        // proposal back to `Proposed` and lose canonical data.
+        let mut store = ProposalStore::new();
+        let mut p = fixture_observation(0.9, SensitivityClass::Useful);
+        let id = p.id;
+        store.submit_observation(p.clone()).expect("first");
+
+        // Promote so the duplicate would otherwise discard a
+        // terminal-state record.
+        store.review(id, &permissive_policy()).expect("review");
+        assert_eq!(store.get(id).unwrap().state, ProposalState::Promoted);
+
+        // Same id, fresh payload — must be rejected, must not mutate
+        // the existing record.
+        p.payload.claim = "different claim".into();
+        let err = store.submit_observation(p).unwrap_err();
+        assert_eq!(err, LifecycleError::DuplicateProposal(id));
+        assert_eq!(store.get(id).unwrap().state, ProposalState::Promoted);
+    }
+
+    #[test]
+    fn submit_concept_refuses_duplicate_id() {
+        let mut store = ProposalStore::new();
+        let p = AgentProposal::new(
+            ProposalKind::Concept,
+            ScopeId::new_v4(),
+            ConceptProposal::new("Atlas", "Q3 launch"),
+            vec![EvidenceRef::from_uuid(Uuid::new_v4())],
+            0.9,
+            SensitivityClass::Useful,
+            fixture_identity(),
+        );
+        let id = p.id;
+        store.submit_concept(p.clone()).expect("first");
+        let err = store.submit_concept(p).unwrap_err();
+        assert_eq!(err, LifecycleError::DuplicateProposal(id));
+    }
+
+    #[test]
+    fn submit_relation_refuses_duplicate_id() {
+        let mut store = ProposalStore::new();
+        let src = Uuid::new_v4();
+        let dst = Uuid::new_v4();
+        let p = AgentProposal::new(
+            ProposalKind::Relation,
+            ScopeId::new_v4(),
+            RelationProposal::new(src, dst, RelationType::new("part_of")),
+            vec![EvidenceRef::from_uuid(Uuid::new_v4())],
+            0.9,
+            SensitivityClass::Useful,
+            fixture_identity(),
+        );
+        let id = p.id;
+        store.submit_relation(p.clone()).expect("first");
+        let err = store.submit_relation(p).unwrap_err();
+        assert_eq!(err, LifecycleError::DuplicateProposal(id));
+    }
+
+    #[test]
+    fn submit_summary_refuses_duplicate_id() {
+        let mut store = ProposalStore::new();
+        let p = AgentProposal::new(
+            ProposalKind::Summary,
+            ScopeId::new_v4(),
+            SummaryProposal::new("recap text", "channel"),
+            vec![EvidenceRef::from_uuid(Uuid::new_v4())],
+            0.9,
+            SensitivityClass::Useful,
+            fixture_identity(),
+        );
+        let id = p.id;
+        store.submit_summary(p.clone()).expect("first");
+        let err = store.submit_summary(p).unwrap_err();
+        assert_eq!(err, LifecycleError::DuplicateProposal(id));
     }
 
     #[test]

@@ -37,7 +37,7 @@ deliverable.
 | Phase 2: Channel Memory (on-device + shared) | In progress | ~78% (7 of 9) |
 | Phase 3: Domain & Tenant Memory (B2B server) | In progress | ~90% (9 of 10) |
 | Phase 4: Connector Integration (on-server) | Not started | 0% |
-| Phase 5: Portable Concept Profiles & Export | In progress | ~88% (7 of 8) |
+| Phase 5: Portable Concept Profiles & Export | Complete | 100% (8 of 8) |
 | Phase 6: Graph UX & Advanced Reasoning | Not started | 0% |
 | Phase 7: Post-Quantum Hardening & Confidential Compute | Not started | 0% |
 
