@@ -740,7 +740,13 @@ const NAMESPACE_RELATION: Uuid = Uuid::from_u128(0x72656c61_7469_6f6e_8000_00000
 const NAMESPACE_SUMMARY: Uuid = Uuid::from_u128(0x73756d6d_6172_3579_8000_000000000004);
 
 /// Stable namespace UUID for `kind`.
-pub const fn canonical_namespace(kind: ProposalKind) -> Uuid {
+///
+/// `pub(crate)` because the namespace constants are an
+/// implementation detail of [`derive_canonical_id`] — callers
+/// outside this crate must not reach into the namespace constants
+/// or compute their own canonical ids, otherwise a future change
+/// to the canonicalisation scheme would silently break them.
+pub(crate) const fn canonical_namespace(kind: ProposalKind) -> Uuid {
     match kind {
         ProposalKind::Observation => NAMESPACE_OBSERVATION,
         ProposalKind::Concept => NAMESPACE_CONCEPT,
@@ -752,7 +758,16 @@ pub const fn canonical_namespace(kind: ProposalKind) -> Uuid {
 /// Derive the canonical artifact id for `(kind, proposal_id)` via
 /// [`Uuid::new_v5`]. The function is pure — repeated calls with the
 /// same inputs always return the same id.
-pub fn derive_canonical_id(kind: ProposalKind, proposal_id: Uuid) -> Uuid {
+///
+/// `pub(crate)` because canonical-id derivation is an
+/// implementation detail of
+/// [`ProposalStore::promote_to_canonical`]. External callers should
+/// observe canonical ids via [`CanonicalArtifact::id`] on the value
+/// returned by `promote_to_canonical`, not by calling this helper
+/// directly. Hiding the helper lets us evolve the canonicalisation
+/// scheme (e.g. swap UUID v5 for a content-addressed scheme) without
+/// a breaking API change downstream.
+pub(crate) fn derive_canonical_id(kind: ProposalKind, proposal_id: Uuid) -> Uuid {
     Uuid::new_v5(&canonical_namespace(kind), proposal_id.as_bytes())
 }
 
