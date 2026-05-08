@@ -245,6 +245,16 @@ impl Drop for GroupKeySchedule {
     }
 }
 
+impl Drop for MlsGroup {
+    fn drop(&mut self) {
+        // The seed is the root from which every epoch secret is
+        // HKDF-derived; wiping it on drop matches the behaviour of
+        // [`GroupKeySchedule`] and the per-scope/per-epoch DEKs in
+        // [`crate::forgetting`].
+        self.seed.zeroize();
+    }
+}
+
 /// Derive a [`GroupKeySchedule`] from a 32-byte epoch root secret.
 fn derive_schedule(
     group_id: MlsGroupId,
