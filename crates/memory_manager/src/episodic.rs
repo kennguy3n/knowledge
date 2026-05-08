@@ -413,8 +413,15 @@ impl SessionDetector {
             current.push(obs.clone());
         }
 
-        // Close the trailing session.
-        let final_boundary = close_reason.unwrap_or(SessionBoundary::TimeGap);
+        // Close the trailing session. The last buffered session was
+        // never explicitly ended by any event in the input stream —
+        // we only fell off the end of the iterator — so its boundary
+        // is always `TimeGap`, not whatever caused the *previous*
+        // session to close. Inheriting `close_reason` here mis-tagged
+        // the trailing session as e.g. `ExplicitAction` when nothing
+        // explicit ended it.
+        let _ = close_reason; // retained for readability; intentionally unused.
+        let final_boundary = SessionBoundary::TimeGap;
         sessions.push(Self::close(&mut current, final_boundary));
         sessions
     }
@@ -556,7 +563,11 @@ mod tests {
         ];
         let sessions = SessionDetector::default().detect(&stream);
         assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[1].boundary, SessionBoundary::ExplicitAction);
+        // The explicit marker closed session 0, so its boundary records
+        // the trigger. The trailing session was never explicitly ended
+        // and so always falls back to `TimeGap`.
+        assert_eq!(sessions[0].boundary, SessionBoundary::ExplicitAction);
+        assert_eq!(sessions[1].boundary, SessionBoundary::TimeGap);
     }
 
     #[test]
@@ -570,7 +581,11 @@ mod tests {
         ];
         let sessions = SessionDetector::default().detect(&stream);
         assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[1].boundary, SessionBoundary::TopicShift);
+        // Scope change closed session 0 with `TopicShift`. Session 1
+        // (the trailing session under a new scope) was never
+        // explicitly ended, so its boundary is always `TimeGap`.
+        assert_eq!(sessions[0].boundary, SessionBoundary::TopicShift);
+        assert_eq!(sessions[1].boundary, SessionBoundary::TimeGap);
     }
 
     #[test]
@@ -799,6 +814,35 @@ mod tests {
         let mut episodic = EpisodicMemory::new(StubSummarizer::new(), SessionDetector::default());
         let summaries = episodic.ingest(&observations).unwrap();
         assert!(summaries.is_empty());
+    }
+
+    /// Regression test for the 2026-05-08 trailing-session fix.
+    ///
+    /// Before the fix, a stream that started with an explicit-end
+    /// marker would leak that marker's boundary onto the *trailing*
+    /// session that followed the gap. The trailing session was never
+    /// explicitly ended, so its boundary should always be `TimeGap`.
+    #[test]
+    fn trailing_session_boundary_is_always_time_gap_after_explicit_close() {
+        let scope = ScopeId::new_v4();
+        let t0 = Utc::now();
+        let stream = vec![
+            // First session ends with an explicit marker.
+            obs(scope, t0, "starting work"),
+            obs(scope, t0 + Duration::minutes(1), "/end"),
+            // Second session starts after a gap and is never
+            // explicitly ended — its boundary must be TimeGap.
+            obs(scope, t0 + Duration::minutes(45), "after gap"),
+            obs(scope, t0 + Duration::minutes(46), "still after gap"),
+        ];
+        let sessions = SessionDetector::default().detect(&stream);
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].boundary, SessionBoundary::ExplicitAction);
+        assert_eq!(
+            sessions[1].boundary,
+            SessionBoundary::TimeGap,
+            "trailing session must default to TimeGap, not inherit prior close reason"
+        );
     }
 
     #[test]

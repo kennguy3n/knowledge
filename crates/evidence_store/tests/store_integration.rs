@@ -338,8 +338,7 @@ fn data_persists_across_reopen() {
         res.evidence_id
     };
 
-    let mut store =
-        EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
     assert_eq!(store.read_body(evidence_id).unwrap(), body);
 }
 

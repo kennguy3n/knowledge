@@ -94,8 +94,11 @@ pub struct EvidenceStore {
     conn: Connection,
     config: EvidenceStoreConfig,
     /// Cached per-scope AEAD key derivations. Re-derived from the
-    /// master key + scope context label.
-    scope_keys: std::collections::HashMap<ScopeId, AeadKey>,
+    /// master key + scope context label. Wrapped in `RefCell` so the
+    /// read paths (e.g. [`Self::read_body`]) can populate the cache
+    /// while only borrowing `&self`, which lets the hybrid retriever
+    /// fan-in semantic similarity over an immutable store handle.
+    scope_keys: std::cell::RefCell<std::collections::HashMap<ScopeId, AeadKey>>,
     /// Scope-independent AEAD key for the deduplicated `body_store`
     /// table. Bodies in `body_store` are content-hash-keyed and may be
     /// referenced from evidence rows in different scopes, so the body
@@ -111,7 +114,7 @@ impl Drop for EvidenceStore {
     fn drop(&mut self) {
         self.master_key.zeroize();
         self.body_store_key.zeroize();
-        for (_id, key) in self.scope_keys.iter_mut() {
+        for (_id, key) in self.scope_keys.get_mut().iter_mut() {
             key.zeroize();
         }
     }
@@ -189,7 +192,7 @@ impl EvidenceStore {
         let mut store = Self {
             conn,
             config,
-            scope_keys: std::collections::HashMap::new(),
+            scope_keys: std::cell::RefCell::new(std::collections::HashMap::new()),
             body_store_key,
             master_key: *master_key,
         };
@@ -215,13 +218,17 @@ impl EvidenceStore {
     }
 
     /// Get-or-derive the AEAD key for the given scope.
-    fn scope_key(&mut self, scope_id: ScopeId) -> Result<AeadKey> {
-        if let Some(k) = self.scope_keys.get(&scope_id) {
+    ///
+    /// Takes `&self` so the read paths (e.g. [`Self::read_body`]) can
+    /// populate the per-scope key cache without an exclusive borrow.
+    /// The cache lives behind a [`std::cell::RefCell`].
+    fn scope_key(&self, scope_id: ScopeId) -> Result<AeadKey> {
+        if let Some(k) = self.scope_keys.borrow().get(&scope_id) {
             return Ok(*k);
         }
         let label = format!("scope:{}:body:v1", scope_id.as_uuid());
         let key = derive_key(&self.master_key, label.as_bytes())?;
-        self.scope_keys.insert(scope_id, key);
+        self.scope_keys.borrow_mut().insert(scope_id, key);
         Ok(key)
     }
 
@@ -407,7 +414,7 @@ impl EvidenceStore {
     }
 
     /// Read the plaintext body of an evidence row.
-    pub fn read_body(&mut self, evidence_id: EvidenceId) -> Result<Vec<u8>> {
+    pub fn read_body(&self, evidence_id: EvidenceId) -> Result<Vec<u8>> {
         let row: Option<(
             Vec<u8>,
             Vec<u8>,

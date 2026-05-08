@@ -1,9 +1,13 @@
 //! Hybrid retrieval over the evidence plane.
 //!
 //! Per `PHASES.md` Phase 1: "Hybrid retrieval — FTS5 + semantic
-//! vector + recency". This module implements the FTS5 (lexical) and
-//! recency components and stubs the semantic vector component
-//! (returns `0.0`) until the XLM-R ONNX path lands.
+//! vector + recency". This module implements all three components:
+//! the FTS5 (lexical) and recency lanes draw straight from the
+//! evidence schema, and the semantic-vector lane is wired through
+//! whichever [`EmbeddingModel`] the caller plumbed in via
+//! [`HybridRetriever::with_embedding_model`]. When no model is
+//! present the vector component contributes `0.0` and the retriever
+//! degrades to FTS + recency only.
 //!
 //! The fan-in scoring is intentionally simple: each component
 //! produces a `0.0 ..= 1.0` score, and the final score is a weighted
@@ -28,7 +32,9 @@ pub struct RetrievalResult {
     pub fts_score: f64,
     /// Recency score in `0.0 ..= 1.0`.
     pub recency_score: f64,
-    /// Semantic-vector score — stubbed at `0.0` for Phase 1.
+    /// Semantic-vector score in `0.0 ..= 1.0`. Computed from the
+    /// configured [`EmbeddingModel`] when one is plumbed in;
+    /// otherwise contributes `0.0`.
     pub vector_score: f64,
 }
 
@@ -45,9 +51,10 @@ pub struct HybridWeights {
 
 impl Default for HybridWeights {
     fn default() -> Self {
-        // 0.6 + 0.3 + 0.1 = 1.0; vector weight is reserved for the
-        // XLM-R rollout but contributes nothing today (the score is
-        // hard-stubbed to 0.0).
+        // 0.6 + 0.3 + 0.1 = 1.0. The vector component contributes
+        // when an [`EmbeddingModel`] is plumbed into the retriever
+        // and otherwise stays at zero, leaving FTS + recency as the
+        // only signals.
         Self {
             fts: 0.6,
             recency: 0.3,
@@ -204,11 +211,9 @@ impl<'a> HybridRetriever<'a> {
         let Some(model) = self.embedding_model.as_ref() else {
             return Ok(candidates);
         };
-        let query_vec = model.embed(query).map_err(|e| {
-            EvidenceError::Schema(Box::leak(
-                format!("embedding query failed: {e}").into_boxed_str(),
-            ))
-        })?;
+        let query_vec = model
+            .embed(query)
+            .map_err(|e| EvidenceError::Embedding(format!("embedding query failed: {e}")))?;
         let body_lookup: std::collections::HashMap<EvidenceId, &str> = bodies
             .iter()
             .map(|(id, body)| (*id, body.as_str()))
@@ -236,8 +241,16 @@ impl<'a> HybridRetriever<'a> {
         Ok(out)
     }
 
-    /// Hybrid search — fan-in over FTS5 + recency + (stub) semantic
+    /// Hybrid search — fan-in over FTS5 + recency + semantic
     /// vector. Returns the top `limit` rows by combined score.
+    ///
+    /// When an [`EmbeddingModel`] is wired in via
+    /// [`Self::with_embedding_model`], every fan-in candidate has its
+    /// `vector_score` populated by embedding the candidate's body
+    /// text and projecting `cosine_similarity(query, body)` into
+    /// `[0.0, 1.0]` via [`crate::embeddings::similarity_to_score`].
+    /// When no model is plumbed in (or the query embed itself fails)
+    /// the vector component falls through to `0.0`.
     pub fn search_hybrid(
         &self,
         scope_id: ScopeId,
@@ -274,8 +287,34 @@ impl<'a> HybridRetriever<'a> {
                     entry.recency_score = score;
                 }
             }
-            // Vector similarity is stubbed at 0.0 until XLM-R ships.
-            entry.vector_score = 0.0;
+        }
+
+        // Compute the semantic-vector lane when an embedding model is
+        // plumbed in. We embed the query once, then walk every
+        // candidate, decrypt its body, and embed that. Failures are
+        // localised: if the query embed fails we skip the lane
+        // wholesale (vector_score = 0.0); per-row failures (missing
+        // body, runtime hiccup) just leave that single row at 0.0.
+        let query_vec = self
+            .embedding_model
+            .as_ref()
+            .and_then(|model| model.embed(query).ok());
+        if let (Some(model), Some(query_vec)) = (self.embedding_model.as_ref(), query_vec) {
+            for entry in by_id.values_mut() {
+                let Some(body) = self.lookup_body_text(entry.evidence_id)? else {
+                    continue;
+                };
+                if let Ok(body_vec) = model.embed(&body) {
+                    entry.vector_score =
+                        similarity_to_score(cosine_similarity(&query_vec, &body_vec));
+                }
+            }
+        }
+
+        // Final fan-in score uses whatever per-component scores the
+        // lanes above produced (with `vector_score` defaulting to
+        // `0.0` when no embedding model is wired in).
+        for entry in by_id.values_mut() {
             entry.score = self.weights.fts * entry.fts_score
                 + self.weights.recency * entry.recency_score
                 + self.weights.vector * entry.vector_score;
@@ -289,6 +328,24 @@ impl<'a> HybridRetriever<'a> {
         });
         results.truncate(limit);
         Ok(results)
+    }
+
+    /// Decrypt and decode the text body for `id`. Returns `None`
+    /// when the row has no body, or when the body is binary (rather
+    /// than failing the whole search). Surfaces hard SQL / crypto
+    /// errors as [`EvidenceError`].
+    fn lookup_body_text(&self, id: EvidenceId) -> Result<Option<String>> {
+        match self.store.read_body(id) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(text) if !text.is_empty() => Ok(Some(text)),
+                // Empty plaintext or a binary body just means we
+                // cannot embed this row; skip it rather than failing
+                // the whole search.
+                Ok(_) | Err(_) => Ok(None),
+            },
+            Err(EvidenceError::NotFound(_) | EvidenceError::DanglingBodyRef) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     fn lookup_recency(&self, id: EvidenceId) -> Result<Option<f64>> {

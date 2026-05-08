@@ -205,6 +205,18 @@ enum Lifecycle {
         attested_at: DateTime<Utc>,
         active: bool,
     },
+    /// The worker has finished a synthesis call but is still inside
+    /// the attestation TTL. The cached report/binding are retained
+    /// so the next `enter_synthesizing` call (or an explicit
+    /// [`TeeWorker::settle_idle`]) can rejoin the `Attested` ring
+    /// without re-attesting.
+    Idle {
+        #[allow(dead_code)]
+        report: AttestationReport,
+        #[allow(dead_code)]
+        binding: AttestationBinding,
+        attested_at: DateTime<Utc>,
+    },
 }
 
 impl Lifecycle {
@@ -214,6 +226,7 @@ impl Lifecycle {
             Self::Attesting => TeeWorkerLifecycle::Attesting,
             Self::Attested { active: true, .. } => TeeWorkerLifecycle::Synthesizing,
             Self::Attested { active: false, .. } => TeeWorkerLifecycle::Attested,
+            Self::Idle { .. } => TeeWorkerLifecycle::Idle,
         }
     }
 }
@@ -338,6 +351,28 @@ impl<R: TeeRuntime> TeeWorker<R> {
     fn enter_synthesizing(&self, scope_id: Uuid) -> Result<()> {
         self.assert_scope_allowed(scope_id)?;
         let mut state = self.state.lock().expect("tee state mutex");
+
+        // Settle `Idle` back into `Attested` before checking whether
+        // we're allowed to synthesise again. This is the "next
+        // dispatch check" transition described in the lifecycle
+        // diagram at the top of this module.
+        if matches!(state.lifecycle, Lifecycle::Idle { .. }) {
+            let prior = std::mem::replace(&mut state.lifecycle, Lifecycle::Unattested);
+            if let Lifecycle::Idle {
+                report,
+                binding,
+                attested_at,
+            } = prior
+            {
+                state.lifecycle = Lifecycle::Attested {
+                    report,
+                    binding,
+                    attested_at,
+                    active: false,
+                };
+            }
+        }
+
         match &mut state.lifecycle {
             Lifecycle::Attested {
                 attested_at,
@@ -357,6 +392,7 @@ impl<R: TeeRuntime> TeeWorker<R> {
                 *active = true;
                 Ok(())
             }
+            Lifecycle::Idle { .. } => unreachable!("settled above"),
             Lifecycle::Attesting | Lifecycle::Unattested => {
                 Err(EngineError::engine("tee: worker is not attested"))
             }
@@ -365,9 +401,47 @@ impl<R: TeeRuntime> TeeWorker<R> {
 
     fn exit_synthesizing(&self) {
         let mut state = self.state.lock().expect("tee state mutex");
-        if let Lifecycle::Attested { active, .. } = &mut state.lifecycle {
-            *active = false;
-        }
+        // Take ownership of the `Attested { active: true, .. }`
+        // payload so we can fold it into the `Idle` variant. Using
+        // `std::mem::replace` avoids cloning the (large) attestation
+        // report.
+        let prior = std::mem::replace(&mut state.lifecycle, Lifecycle::Unattested);
+        state.lifecycle = match prior {
+            Lifecycle::Attested {
+                report,
+                binding,
+                attested_at,
+                active: true,
+            } => Lifecycle::Idle {
+                report,
+                binding,
+                attested_at,
+            },
+            other => other,
+        };
+    }
+
+    /// Settle an [`Lifecycle::Idle`] worker back into the `Attested`
+    /// ring. Useful for tests and for callers that want to drive the
+    /// transition explicitly (e.g. on a wall-clock timer rather than
+    /// piggy-backing on the next dispatch). No-op when the worker is
+    /// in any other state.
+    pub fn settle_idle(&self) {
+        let mut state = self.state.lock().expect("tee state mutex");
+        let prior = std::mem::replace(&mut state.lifecycle, Lifecycle::Unattested);
+        state.lifecycle = match prior {
+            Lifecycle::Idle {
+                report,
+                binding,
+                attested_at,
+            } => Lifecycle::Attested {
+                report,
+                binding,
+                attested_at,
+                active: false,
+            },
+            other => other,
+        };
     }
 }
 
@@ -621,6 +695,48 @@ mod tests {
         let trail2 = worker2.audit_trail();
         assert_eq!(trail2.len(), 1);
         assert!(trail2[0].verified);
+    }
+
+    /// Regression test for the 2026-05-08 lifecycle fix.
+    ///
+    /// Before the fix, `exit_synthesizing` only flipped
+    /// `Attested.active = false`, so `lifecycle()` jumped straight
+    /// from `Synthesizing` back to `Attested` and the `Idle` variant
+    /// of [`TeeWorkerLifecycle`] was unreachable. The fix lands the
+    /// worker in `Idle` after a synthesis call; the next dispatch
+    /// (or an explicit [`TeeWorker::settle_idle`]) folds it back into
+    /// `Attested` without re-attesting.
+    #[test]
+    fn exit_synthesizing_lands_in_idle_then_settles_back_to_attested() {
+        let config = fixture_config();
+        let scope = config.scope_bindings[0];
+        let worker = TeeWorker::new(MockTeeRuntime, config);
+        worker.attest().expect("attest");
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Attested);
+
+        worker.enter_synthesizing(scope).expect("enter");
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Synthesizing);
+
+        worker.exit_synthesizing();
+        assert_eq!(
+            worker.lifecycle(),
+            TeeWorkerLifecycle::Idle,
+            "after exit_synthesizing the worker must be Idle (not Attested)"
+        );
+
+        // The worker can rejoin the Attested ring without re-attesting.
+        worker.settle_idle();
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Attested);
+
+        // And the next enter_synthesizing settles Idle on its own.
+        worker.enter_synthesizing(scope).expect("re-enter");
+        worker.exit_synthesizing();
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Idle);
+        worker
+            .enter_synthesizing(scope)
+            .expect("dispatch settles idle");
+        assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Synthesizing);
+        worker.exit_synthesizing();
     }
 
     #[test]
