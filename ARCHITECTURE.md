@@ -598,6 +598,9 @@ Android, macOS, and Windows. See
 tiered SQLCipher storage routing, working-set caps, decay-sweep
 throttling, ANR-class watchdogs, idle-window observation processing,
 background-fetch policies, and the per-platform FFI / N-API shims.
+
+---
+
 ## Cross-references
 
 - [README.md](./README.md) — overview and quick start

@@ -6,8 +6,8 @@ core. Split out of [`ARCHITECTURE.md`](../ARCHITECTURE.md) §9 and §10.
 
 ## 9. Device optimization
 
-The substrate's behaviour adapts to three signals: storage,
-memory, and battery.
+The substrate's behaviour adapts to four signals: storage,
+memory, battery, and network.
 
 ### 9.1 Storage
 
