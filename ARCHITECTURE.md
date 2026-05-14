@@ -14,50 +14,11 @@ For phasing and progress see [PHASES.md](./PHASES.md) and
 
 ## 1. System overview
 
-```
-Knowledge System
-├── On-Device Surface
-│   ├── iOS (Swift native)
-│   ├── Android (Kotlin native)
-│   ├── macOS (Electron + React + Swift N-API)
-│   └── Windows (Electron + React + C++ N-API)
-├── Shared Core (Rust)
-│   ├── Evidence Store (SQLCipher)
-│   ├── Observation Engine
-│   ├── Memory Manager (decay state machine)
-│   ├── Concept Graph (sparse semantic layer + incremental updates)
-│   ├── Synthesis Pipeline
-│   ├── Synthesis Engine (server-side)
-│   ├── Permission Service (Zanzibar-style)
-│   ├── Tenant Service
-│   ├── Audit Service
-│   ├── Agent Contract (proposal-only writes)
-│   ├── Export Plane (portable concept profiles)
-│   ├── Connector Framework (OAuth2 vault, sync, webhooks, ACL sync)
-│   ├── Connectors (Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email)
-│   ├── Reasoning Engine (contradiction, drift, traversal, planner, workflow memory, GoT, community summaries)
-│   ├── Crypto Layer (post-quantum: ML-KEM-768, ML-DSA-65, SPHINCS+ co-signer, hybrid X25519, attestation)
-│   ├── Sync Engine (CRDT + MLS)
-│   ├── Inference Router (MLX → LlamaCpp → Fallback adapters, device-tier gating)
-│   ├── FFI (UniFFI for iOS / Android)
-│   ├── N-API Addon (macOS / Windows Electron)
-│   └── Demo (`crates/demo/` — full Phase 1 → Phase 12 end-to-end pipeline driver, results renderer, integration harness)
-├── On-Device Inference
-│   ├── llama-server (PrismML fork, Bonsai-1.7B)
-│   ├── MLX runtime (Apple Silicon)
-│   ├── ONNX Runtime (XLM-R embeddings)
-│   └── Inference Router
-├── Server Surface (Go + Rust)
-│   ├── API Gateway
-│   ├── Connector Service
-│   ├── Synthesis Service
-│   ├── Permission Service (Zanzibar-style)
-│   ├── Tenant Service
-│   └── Export Service
-└── Server Inference
-    ├── Confidential Compute (TEE Worker — attest → synthesize → verify lifecycle)
-    └── Managed AI Endpoint
-```
+Knowledge is split into three cooperating surfaces — an on-device
+surface that runs on every form factor a user owns, a server
+surface that runs the connector pipeline and cross-tenant
+synthesis, and an inference layer that serves both. They all
+consume the same Rust shared core.
 
 ```mermaid
 flowchart TB
@@ -144,22 +105,27 @@ binary shapes:
 
 | Module | Responsibility |
 |---|---|
-| `evidence_store` | SQLCipher-backed encrypted store; size-threshold inline/body-table routing; content-hash dedup for large bodies; ring buffer for noise; append-only ingestion. Houses the `HybridRetriever` (FTS5 lexical + recency decay; semantic-vector slot is now wired through the `EmbeddingModel` trait — `search_hybrid` embeds the query and each candidate body and uses `cosine_distance` to compute the score, falling back to `0.0` when no embedder is configured or one errors out). |
-| `observation_engine` | `ObservationExtractor` trait + Phase-1 `LexiconExtractor` baseline (capitalised words / `@mentions` / `#tags` for entities, action verbs / `TODO` / `ACTION` / `TASK` for tasks, `decided` / `agreed` / `approved` for decisions, declarative sentences for facts). `ObservationPipeline` chains extraction → reuse of the evidence-plane `ImportanceClassifier` → Candidate observation creation. XLM-R + SLM-assisted stages reserved for Phase 1's later milestones. |
-| `memory_manager` | Decay state machine (Candidate → Reinforced → Consolidated → Canonical → Superseded → Archived → Deleted), retention scoring, stage promotion, retrieval-trigger updates. Hosts `WorkingMemory` (bounded TTL-evicting context window), `UserMemoryObject` (read / pin / unpin / forget / list / decay sweep), and the `PrivacyStrip` + `SynthesisOutput<T>` invariant pair. |
-| `concept_graph` | Sparse typed graph (nodes, edges, scopes), supersession, contradiction tracking. Phase 2: typed nodes, edges (`IsA`, `PartOf`, `DecidedBy`, `Supersedes`, `Contradicts`, `DerivedFrom`, `AssignedTo`), scopes, supersession, contradiction tracking — in-memory adjacency. |
-| `synthesis_pipeline` | Channel / domain / tenant synthesis windows; published encrypted synthesis objects. Phase 2: window manager, synthesis-object types, GBNF schema types, elected-device election (tier / battery / heartbeat eligibility), encrypted publish / consume with `(scope_id, window_id, object_id)` AAD binding. |
-| `crypto` | Post-quantum primitives; hybrid X25519 + ML-KEM-768 KEM (Phase 0 via RustCrypto `ml-kem`; Phase 7 via `liboqs` behind the same `KemBackend` trait); HKDF-SHA256; XChaCha20-Poly1305; BLAKE3; Phase 2 `ProvenanceBundle` PROV data model + HMAC-SHA256 `TestSigner`; ML-DSA-65 + SPHINCS+ in Phase 7 |
-| `sync_engine` | CRDT-based delta sync of synthesis objects; MLS group keying; selective evidence sync where policy permits. Phase 2: add-wins observed-remove CRDT (`AddWinsSet<T>`), append-only operation log (`OpLog<T>`) with `Add` / `Remove` / `Supersede` ops, deterministic `merge_logs` producing consistent merged state. |
+| `evidence_store` | Encrypted, append-only evidence plane with content-aware storage routing (inline / body-table / ring buffer) and the hybrid lexical + semantic + recency retriever. |
+| `observation_engine` | Extracts entities, facts, tasks, and decisions from raw evidence and feeds them through the importance classifier into the observation plane. |
+| `memory_manager` | Owns the decay state machine, retention scoring, working memory, and the user / channel / domain / tenant memory objects. |
+| `concept_graph` | Sparse typed concept graph with supersession, contradiction edges, and incremental subgraph updates. |
+| `synthesis_pipeline` | Manages scope-window synthesis (channel / domain / tenant), grammar-constrained outputs, elected-device election, and encrypted publication. |
+| `crypto` | All cryptographic primitives the substrate consumes — hybrid X25519 + ML-KEM-768 KEM, ML-DSA-65 and SPHINCS+ signatures, XChaCha20-Poly1305, BLAKE3, and the provenance bundle. |
+| `sync_engine` | CRDT-based delta sync of synthesis objects, MLS group keying, and policy-gated evidence sync. |
+| `permission_service` | Zanzibar-style relation graph with reachability checks. |
+| `tenant_service` | Tenant lifecycle, per-tenant keys, and member provisioning. |
+| `audit_service` | Append-only audit log of canonical promotions, exports, agent proposals, and policy changes. |
+| `agent_contract` | Proposal-only write contract for agents — typed proposals, lifecycle, and promotion to canonical. |
+| `export_plane` | Portable concept profiles, export policy, and the read-only policy simulator. |
+| `connector_framework` | OAuth2 vault, incremental + webhook sync state, channel-scoped attachment, and ACL sync. |
+| `connectors` | Vendor connector implementations (Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email). |
+| `inference_router` | On-device inference routing across MLX, llama.cpp, and a fallback adapter, with device-tier gating. |
+| `reasoning_engine` | Contradiction and drift detection, multi-hop traversal, query planning, workflow memory, Graph-of-Thought, and community summaries. |
+| `ffi` | UniFFI surface consumed by iOS and Android. |
+| `napi` | N-API addon consumed by macOS and Windows Electron shells. |
 
-Every module gains further responsibilities across Phases 1–7
-(channel / domain / tenant memory objects, the persistent concept
-graph, the hierarchy-enforced synthesis pipeline, the Zanzibar
-permission service, the inference router and SLM/embedding
-adapters, the FFI / N-API surfaces, the SPHINCS+ co-signer, and the
-TEE-worker synthesis engine). The full per-phase responsibility
-catalogue is in
-[`docs/MODULE_EVOLUTION.md`](docs/MODULE_EVOLUTION.md).
+See [`docs/MODULE_EVOLUTION.md`](docs/MODULE_EVOLUTION.md) for the
+per-phase evolution of each module.
 
 ### 2.2 Local store
 
@@ -214,32 +180,30 @@ catalogue is in
   objects, observation rows, and (with explicit policy) selected
   evidence body refs.
 
-### 2.5 Post-quantum primitives via `liboqs`
+### 2.5 Post-quantum primitives
 
-The `crypto` crate ([`crates/crypto/`](./crates/crypto/)) wraps the
-post-quantum and classical primitives that the rest of the substrate
-consumes through a small high-level API:
-`content_hash`, `encrypt_aead` / `decrypt_aead`, `derive_key`,
-`hybrid_kem_encap` / `hybrid_kem_decap`, and (in later phases)
-`sign_provenance` / `verify_provenance`. The rest of the core never
-touches raw cryptographic state.
+The `crypto` crate wraps the post-quantum and classical primitives
+that the rest of the substrate consumes through a small high-level
+API: content hashing, AEAD encryption / decryption, key derivation,
+hybrid KEM encap / decap, and provenance signing / verification.
+The rest of the core never touches raw cryptographic state.
 
-Phase 0 ships:
+The primitive inventory is:
 
-- **BLAKE3** content hashing (`blake3` crate).
+- **BLAKE3** content hashing.
 - **XChaCha20-Poly1305 AEAD** for per-scope, per-epoch symmetric
-  encryption (`chacha20poly1305` from RustCrypto).
-- **HKDF-SHA256** key derivation (`hkdf` + `sha2` from RustCrypto).
+  encryption.
+- **HKDF-SHA256** key derivation.
 - **Hybrid X25519 + ML-KEM-768 KEM** with a concatenate-then-KDF
   combiner (HKDF-SHA256 over the concatenation of the X25519 DH
-  output and the ML-KEM-768 shared secret). X25519 is provided by
-  `x25519-dalek`; ML-KEM-768 is provided by the RustCrypto `ml-kem`
-  crate. The ML-KEM-768 side sits behind a `KemBackend` trait so
-  the implementation can be swapped for an FFI-backed `liboqs`
-  build in Phase 7 without touching the rest of the substrate.
-
-ML-DSA-65, SPHINCS+, and the `liboqs` FFI backend land in Phase 7
-(`PHASES.md` §Phase 7).
+  output and the ML-KEM-768 shared secret). The ML-KEM-768 side
+  sits behind a `KemBackend` trait so the implementation can be
+  swapped for an FFI-backed `liboqs` build without touching the
+  rest of the substrate.
+- **ML-DSA-65 (Dilithium)** for provenance signatures on every
+  synthesis output and every export bundle.
+- **SPHINCS+** as a stateless backup signer, available as a
+  co-signer alongside ML-DSA-65 for archival group operations.
 
 ---
 

@@ -24,24 +24,20 @@ bindings on all four target platforms.
 
 **Deliverables:**
 
-- Rust shared core skeleton — `evidence_store`, `crypto`,
-  `sync_engine` modules
-- SQLCipher local store with post-quantum key derivation
-  (hybrid X25519 + ML-KEM-768 unwrap of the per-user master
-  key)
-- Evidence plane — append-only encrypted message / file / chunk
-  ingestion, content-hash deduplication
-- Basic on-device importance classifier — Bonsai-1.7B
-  via the shared `llama-server` from the PrismML
-  [`kennguy3n/llama.cpp@prism`](https://github.com/kennguy3n/llama.cpp/tree/prism)
-  fork, with a lexicon-only fallback when the SLM is not
-  available
-- Platform bindings:
-  - iOS framework (UniFFI `.xcframework`)
-  - Android JNI (`.so` per ABI)
-  - macOS / Windows N-API addon
-- Unit test suite covering `evidence_store`, `crypto`, and
-  the importance classifier
+- Rust shared core skeleton with the evidence store, crypto, and
+  sync engine modules in place
+- SQLCipher local store with post-quantum key derivation (hybrid
+  X25519 + ML-KEM-768 unwrap of the per-user master key)
+- Evidence plane — append-only encrypted ingestion with
+  content-hash deduplication
+- On-device importance classifier backed by Bonsai-1.7B via the
+  shared [PrismML `llama-server`](https://github.com/kennguy3n/llama.cpp/tree/prism),
+  with a lexicon-only fallback when the SLM is not available
+- Platform bindings on all four targets (iOS UniFFI framework,
+  Android JNI per-ABI shared libraries, macOS / Windows N-API
+  addon)
+- Unit test suite covering the evidence store, crypto primitives,
+  and the importance classifier
 - CI: lint, unit tests, multi-target build
 
 **Exit criteria:** A user on any of the four supported platforms
@@ -58,27 +54,25 @@ episodic summaries, and basic retrieval.
 
 **Deliverables:**
 
-- Memory manager with the full decay state machine
-  (candidate → reinforced → consolidated → canonical →
-  superseded / archived / deleted)
-- Observation engine — entity extraction, fact extraction,
-  task / decision detection, lexicon + XLM-R + SLM-assisted
-  pipeline
+- Memory manager with the full decay state machine (candidate →
+  reinforced → consolidated → canonical → superseded / archived /
+  deleted)
+- Observation engine — entity, fact, task, and decision extraction
+  through a lexicon + XLM-R + SLM-assisted pipeline
 - Episodic memory — session / thread summaries via on-device
   Bonsai-1.7B
-- Working memory — current context window management with
-  TTL eviction
-- XLM-R embeddings via shared ONNX artifact (INT8 ~107 MB / INT4
-  ~55 MB; same artifact as `slm-guardrail` and
-  `chat-storage-search`)
-- Hybrid retrieval — lexical (FTS5) + semantic (vector) +
-  recency, fan-in scoring
-- Retention scoring — pinning, retrieval frequency, age,
-  non-use
-- User Memory Object CRUD (read / pin / unpin / forget) over
-  the FFI surface
-- Privacy strip rendered on every synthesis output (compute
-  location, model, egress)
+- Working memory — current context window management with TTL
+  eviction
+- XLM-R embeddings via a shared ONNX artifact (INT8 ~107 MB / INT4
+  ~55 MB), reused across `slm-guardrail` and `chat-storage-search`
+- Hybrid retrieval combining FTS5 lexical, semantic-vector, and
+  recency components with fan-in scoring
+- Retention scoring driven by pinning, retrieval frequency, age,
+  and non-use
+- User Memory Object CRUD (read / pin / unpin / forget) on the FFI
+  surface
+- Privacy strip on every synthesis output (compute location, model,
+  egress)
 - Unit + integration tests covering the decay state machine,
   observation pipeline, and retrieval
 
@@ -99,18 +93,17 @@ objects, multi-device sync, and provenance bundles.
 
 - Channel Memory Object — recaps, decisions, open questions,
   active tasks
-- Synthesis pipeline — recursive summarization per channel
-  window with grammar-constrained decoding
-- MLS group keying for shared channel memory — leaf key
-  packages carry hybrid X25519 + ML-KEM-768 KEM
-- Encrypted synthesis object publication — synthesizer
-  publishes once per scope window; other members consume
-- Channel-scoped importance tagging — promote only high-value
+- Synthesis pipeline — recursive per-channel-window summarization
+  with grammar-constrained decoding
+- MLS group keying for shared channel memory, with hybrid
+  X25519 + ML-KEM-768 leaf key packages
+- Encrypted synthesis object publication — one synthesizer per
+  scope window, all other members consume
+- Channel-scoped importance tagging that promotes only high-value
   observations into channel memory
-- Synthesizer role — elected member device path for small
-  groups
-- Multi-device sync via CRDT for synthesis objects, with
-  add-wins + supersession + contradictions
+- Elected-member-device synthesizer for small groups
+- Multi-device CRDT sync of synthesis objects with add-wins,
+  supersession, and contradiction semantics
 - Provenance bundles signed with ML-DSA-65 on every synthesis
   output
 - End-to-end tests for the elected-device synthesis path
@@ -130,28 +123,27 @@ running.
 
 **Deliverables:**
 
-- Domain Memory Object — cross-channel workstreams,
-  dependencies, risks, procedures
+- Domain Memory Object — cross-channel workstreams, dependencies,
+  risks, procedures
 - Tenant Memory Object — canonical policy, product taxonomy,
   stable org knowledge
 - Server-side synthesis service (Go gateway + Rust synthesis
   engine)
-- Domain synthesis consumes channel memory objects only (not
-  raw messages) — strict hierarchy enforced cryptographically
-- Tenant synthesis consumes domain objects + approved official
-  docs
-- Sparse concept graph — typed relations (`is_a`, `part_of`,
-  `decided_by`, `supersedes`, `contradicts`,
-  `derived_from`, `assigned_to`, …), contradictions, drift
-  markers
+- Strict hierarchy: domain synthesis consumes channel outputs
+  only and tenant synthesis consumes domain outputs plus approved
+  official docs only — enforced cryptographically and at the type
+  level
+- Sparse concept graph with typed relations (is-a, part-of,
+  decided-by, supersedes, contradicts, derived-from, assigned-to),
+  contradictions, and drift markers
 - Permission service (Zanzibar-style relation graph) with
   reachability checks
-- Managed AI endpoint as synthesizer for B2B channels /
+- Managed AI endpoint as the synthesizer for B2B channels /
   domains
-- Tenant service: tenant lifecycle, per-tenant encryption
-  keys, member provisioning
-- End-to-end tests for the channel → domain → tenant
-  synthesis chain
+- Tenant service — lifecycle, per-tenant encryption keys, and
+  member provisioning
+- End-to-end tests for the channel → domain → tenant synthesis
+  chain
 
 **Exit criteria:** B2B tenants have domain-level consolidated
 knowledge that compounds decisions, concepts, and workflows
@@ -167,27 +159,25 @@ shared documents using the same memory hierarchy as on-device.
 
 **Deliverables:**
 
-- Connector framework — OAuth2 token vault, refresh flow,
-  incremental delta sync, webhook subscription
+- Connector framework with OAuth2 token vault, refresh flow,
+  incremental delta sync, and webhook subscription
 - Google Drive connector
 - OneDrive connector
 - Notion connector
 - Jira connector
 - Confluence connector
-- Figma connector — design system extraction (components,
-  tokens, comments)
-- HubSpot connector — CRM context (contacts, companies,
-  deals, notes)
-- Slack connector — channels, threads, files via Events API
+- Figma connector — design-system extraction (components, tokens,
+  comments)
+- HubSpot connector — CRM context (contacts, companies, deals,
+  notes)
+- Slack connector — channels, threads, and files via the Events
+  API
 - Email connector — IMAP / Gmail / Microsoft Graph
-- Channel-scoped connector attachment (same pattern as
-  slm-chat-demo Phase 5)
-- ACL sync from source systems into the substrate's relation
-  graph
-- Observation extraction pipeline for documents — chunking,
-  importance tagging, entity / topic extraction
-- Citation rendering with stable links back to source
-  documents
+- Channel-scoped connector attachment
+- ACL sync from source systems into the relation graph
+- Document observation pipeline — chunking, importance tagging,
+  entity / topic extraction
+- Citation rendering with stable links back to source documents
 - Connector-specific integration tests against vendor fixtures
 
 **Exit criteria:** The server surface can ingest from all listed
@@ -204,24 +194,21 @@ agents, with a strict proposal-only agent write contract.
 **Deliverables:**
 
 - Portable concept profile — approved concepts, constraints,
-  reasoning for a specific external tool / context
-- Export plane — least-privilege views; no raw document export
-  by default
-- Agent write contract — proposal-only API
-  (`propose_observation`, `propose_concept`,
-  `propose_relation`, `propose_summary`)
-- Agent proposal schema — scope, provenance bundle,
-  evidence refs, confidence, sensitivity, TTL,
-  `supersedes` / `contradicts` links, agent identity + model
-  version, skill / recipe id
-- Export controls per concept / summary / workflow with
-  policy preview
-- Audit trail for all exports + agent proposals + canonical
-  promotions
-- Policy simulator — preview what an export would contain
-  without producing the export
-- End-to-end tests for the export plane and the agent
-  proposal lifecycle
+  reasoning for a specific external tool or context
+- Export plane with least-privilege views and no raw-document
+  export by default
+- Agent write contract — proposal-only API for observations,
+  concepts, relations, and summaries
+- Agent proposal schema covering scope, provenance bundle,
+  evidence refs, confidence, sensitivity, TTL, supersession /
+  contradiction links, agent identity, and skill / recipe id
+- Per-concept / -summary / -workflow export controls with policy
+  preview
+- Audit trail for every export, agent proposal, and canonical
+  promotion
+- Policy simulator — preview an export without producing it
+- End-to-end tests for the export plane and the agent proposal
+  lifecycle
 
 **Exit criteria:** External tools receive approved concept
 profiles only, agents can propose but not directly write
@@ -237,23 +224,22 @@ workflow memory — pay for the graph where it earns its cost.
 
 **Deliverables:**
 
-- Concept graph visualization (Kanvas-style exploration with
-  scope filters)
-- Contradiction and drift detection — explicit `contradicts`
-  edges with adjudication workflows
-- Multi-hop reasoning over the concept graph — typed-edge
-  traversal with budgets
+- Concept graph visualization with scope-filtered exploration
+- Contradiction and drift detection with explicit contradiction
+  edges and an adjudication workflow
+- Multi-hop reasoning over the concept graph with typed-edge
+  traversal and explicit budgets
 - Workflow memory — successful reasoning traces and tool-use
-  patterns saved to the reasoning plane
+  patterns persisted to the reasoning plane
 - Graph-of-Thought reasoning for complex queries
-- Query planner — route to the cheapest mode (summary →
+- Query planner that routes to the cheapest viable mode (summary →
   graph → raw evidence) with explicit fallbacks
-- Community summaries (GraphRAG-style bottom-up across
-  scopes the user has reachable)
-- Incremental graph updates — recompute only touched
-  branches when an observation is promoted or superseded
-- Tests covering query planning, contradiction adjudication,
-  and incremental recompute
+- Community summaries (GraphRAG-style bottom-up across reachable
+  scopes)
+- Incremental graph updates that recompute only touched branches
+  when an observation is promoted or superseded
+- Tests covering query planning, contradiction adjudication, and
+  incremental recompute
 
 **Exit criteria:** Users can explore knowledge visually, the
 substrate detects contradictions, and complex queries use graph
@@ -270,20 +256,20 @@ group data.
 
 **Deliverables:**
 
-- ML-KEM-768 (Kyber) for all key exchanges (substrate-wide)
+- ML-KEM-768 (Kyber) for all key exchanges across the substrate
 - ML-DSA-65 (Dilithium) for provenance signatures on every
   synthesis output and every export bundle
 - Hybrid classical + PQ during the transition window
-- Post-quantum MLS extensions (hybrid leaf KEMs, ML-DSA-65
-  commit signatures, optional SPHINCS+ co-signatures for
-  archival group ops)
-- Confidential compute worker — attested TEE (Intel TDX / AMD
-  SEV-SNP / Nitro Enclaves) for shared synthesis
-- Attestation reports bound to synthesizer keys, with
-  audit-trail linkage
-- Cryptographic forgetting — per-scope and per-epoch DEK
-  destroy paths, with policy-driven epoch rotation
-- Red-team privacy and prompt-injection tests
+- Post-quantum MLS extensions (hybrid leaf KEMs, ML-DSA-65 commit
+  signatures, optional SPHINCS+ co-signatures for archival group
+  ops)
+- Confidential compute worker on an attested TEE (Intel TDX, AMD
+  SEV-SNP, Nitro Enclaves) for shared synthesis
+- Attestation reports bound to synthesizer keys with audit-trail
+  linkage
+- Cryptographic forgetting via per-scope and per-epoch DEK destroy
+  paths, with policy-driven epoch rotation
+- Red-team privacy and prompt-injection test suites
 - Memory quality metrics — retention precision, contradiction
   detection rate, decay-tuning experiments
 
@@ -302,41 +288,37 @@ follow once the substrate's foundations are in place.
 
 ### First 30 days
 
-- Rust core skeleton (`evidence_store`, `crypto`,
-  `sync_engine` modules)
+- Rust core skeleton (evidence store, crypto, sync engine)
 - SQLCipher local store with hybrid X25519 + ML-KEM-768 key
   derivation
 - Evidence plane — append-only encrypted ingestion +
   content-hash dedup
-- Basic importance tagging via the shared `llama-server`
-  (PrismML `kennguy3n/llama.cpp@prism` fork) running
-  Bonsai-1.7B
-- Platform bindings — iOS UniFFI framework, Android JNI,
-  macOS / Windows N-API addon
+- Importance tagging via the shared
+  [PrismML `llama-server`](https://github.com/kennguy3n/llama.cpp/tree/prism)
+  running Bonsai-1.7B
+- Platform bindings on all four targets (iOS UniFFI, Android JNI,
+  macOS / Windows N-API addon)
 - CI: lint + unit tests + multi-target build
 
 ### Days 31 – 60
 
-- Memory manager — decay state machine
-  (candidate → reinforced → consolidated → canonical →
-  superseded / archived / deleted)
+- Memory manager — full decay state machine
 - Observation engine — entities, facts, tasks, decisions
 - Episodic summaries via on-device Bonsai-1.7B
-- XLM-R embeddings (INT8 / INT4) wired through the shared
-  ONNX artifact
+- XLM-R embeddings (INT8 / INT4) wired through the shared ONNX
+  artifact
 - Hybrid retrieval — FTS5 + vector + recency
 - User Memory Object CRUD over the FFI surface
 - Privacy strip on every synthesis output
 
 ### Days 61 – 90
 
-- Channel Memory Object — recaps, decisions, open questions,
-  tasks
+- Channel Memory Object — recaps, decisions, open questions, tasks
 - MLS group keying for shared channel memory (hybrid leaf KEMs)
 - Synthesis pipeline — channel-scope window synthesis with
   grammar-constrained decoding
 - Multi-device CRDT sync for encrypted synthesis objects
-- Elected-device synthesizer role for small groups
+- Elected-device synthesizer for small groups
 - Provenance bundles signed with ML-DSA-65
 - End-to-end tests across the channel synthesis flow
 
