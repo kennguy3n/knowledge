@@ -17,7 +17,11 @@ audit_service = { path = "../audit_service" }
 concept_graph = { path = "../concept_graph" }
 connector_framework = { path = "../connector_framework" }
 connectors = { path = "../connectors" }
-crypto = { path = "../crypto" }
+# The demo is explicitly a test / scaffolding driver — it directly
+# constructs `TestSigner` and `NoOpSynthesizer`, so it enables the
+# `test-support` features that expose them. Production binaries that
+# do not need these mocks omit the feature.
+crypto = { path = "../crypto", features = ["test-support"] }
 evidence_store = { path = "../evidence_store" }
 export_plane = { path = "../export_plane" }
 inference_router = { path = "../inference_router" }
@@ -25,8 +29,8 @@ memory_manager = { path = "../memory_manager" }
 observation_engine = { path = "../observation_engine" }
 permission_service = { path = "../permission_service" }
 reasoning_engine = { path = "../reasoning_engine" }
-synthesis_engine = { path = "../synthesis_engine" }
-synthesis_pipeline = { path = "../synthesis_pipeline" }
+synthesis_engine = { path = "../synthesis_engine", features = ["test-support"] }
+synthesis_pipeline = { path = "../synthesis_pipeline", features = ["test-support"] }
 tenant_service = { path = "../tenant_service" }
 
 chrono = { workspace = true }

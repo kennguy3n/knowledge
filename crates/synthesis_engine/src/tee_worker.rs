@@ -35,9 +35,11 @@ use std::sync::Mutex;
 use chrono::{DateTime, Duration, Utc};
 use uuid::Uuid;
 
+#[cfg(any(test, feature = "test-support"))]
+use crypto::attestation::mock_attestation_report;
 use crypto::attestation::{
-    bind_synthesizer_key, mock_attestation_report, verify_attestation, AttestationAuditEntry,
-    AttestationBinding, AttestationReport, TeePlatform,
+    bind_synthesizer_key, verify_attestation, AttestationAuditEntry, AttestationBinding,
+    AttestationReport, TeePlatform,
 };
 use crypto::hash::{content_hash, ContentHash};
 use synthesis_pipeline::{
@@ -158,9 +160,16 @@ pub trait TeeRuntime: Send + Sync {
 /// [`mock_attestation_report`]. Used by the lifecycle tests below and
 /// by downstream consumers that want to exercise the worker without
 /// pinning a real TEE platform.
+///
+/// Gated behind `#[cfg(any(test, feature = "test-support"))]` so it
+/// does not ship in default `cargo build` artifacts. Production
+/// `TeeRuntime` implementations talk to a real platform SDK (Intel
+/// TDX quote, AMD SEV-SNP attestation, Nitro Enclaves attest doc).
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Default, Debug, Clone, Copy)]
 pub struct MockTeeRuntime;
 
+#[cfg(any(test, feature = "test-support"))]
 impl TeeRuntime for MockTeeRuntime {
     fn quote(&self, enclave_image: &[u8], nonce: &[u8]) -> AttestationReport {
         mock_attestation_report(enclave_image, nonce)

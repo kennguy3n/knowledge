@@ -14,10 +14,14 @@
 //! GBNF-constrained) lands when the SLM adapters are wired through
 //! the inference router (`ARCHITECTURE.md` §3.2).
 
+#[cfg(any(test, feature = "test-support"))]
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::object::{SynthesisObject, SynthesisObjectType};
+use crate::object::SynthesisObject;
+#[cfg(any(test, feature = "test-support"))]
+use crate::object::SynthesisObjectType;
+#[cfg(any(test, feature = "test-support"))]
 use crate::schema::SummaryBundle;
 use crate::window::SynthesisWindow;
 
@@ -65,6 +69,12 @@ pub trait SynthesisPipeline {
 /// Emits a [`SynthesisObject`] of type [`SynthesisObjectType::ChannelRecap`]
 /// whose payload is a JSON-encoded [`SummaryBundle`] with the recap
 /// seed copied verbatim and empty decision / question / task lists.
+///
+/// Gated behind `#[cfg(any(test, feature = "test-support"))]` so it
+/// does not ship in default `cargo build` artifacts. The real
+/// SLM-backed synthesizer lands when the on-device Bonsai-1.7B
+/// adapter is wired through the inference router.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Default, Clone)]
 pub struct NoOpSynthesizer {
     /// Object type to emit. Defaults to [`SynthesisObjectType::ChannelRecap`].
@@ -74,6 +84,7 @@ pub struct NoOpSynthesizer {
     pub provenance_ref: Uuid,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl NoOpSynthesizer {
     /// Construct a fresh no-op synthesizer.
     pub fn new() -> Self {
@@ -81,6 +92,7 @@ impl NoOpSynthesizer {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl SynthesisPipeline for NoOpSynthesizer {
     fn synthesize(
         &self,

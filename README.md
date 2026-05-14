@@ -129,6 +129,14 @@ holds:
 | macOS | Electron + React | Rust core via Swift N-API addon; MLX preferred runtime |
 | Windows | Electron + React | Rust core via C++ N-API addon; DirectML EP + CPU EP |
 
+> **Status:** the platform bindings (UniFFI for iOS, JNI for
+> Android, N-API for macOS / Windows) are **interface skeletons**
+> — the FFI build pipeline produces the artifacts and every
+> exported function returns `Unimplemented`. Wiring the host UI
+> against the real Rust substrate lands in a later phase. See
+> [`PROGRESS.md`](./PROGRESS.md) and
+> [`docs/MODULE_STATUS.md`](./docs/MODULE_STATUS.md) for details.
+
 The on-device surface ingests the streams a user already
 generates and continuously builds an always-fresh knowledge
 object scoped to the user, the channels they participate in,
@@ -190,19 +198,23 @@ hierarchy is enforced cryptographically — see
 
 ## Tech stack
 
-| Layer | Stack |
-|---|---|
-| iOS shell | Swift native UI; Rust core via UniFFI |
-| Android shell | Kotlin native UI; Rust core via JNI |
-| macOS shell | Electron 31 + React renderer; Rust core via Swift N-API addon |
-| Windows shell | Electron 31 + React renderer; Rust core via C++ N-API addon |
-| Shared core | Rust library compiled to iOS framework, Android `.so`, macOS / Windows N-API addon |
-| Local store | SQLCipher (AES-256-GCM) + SQLite FTS5 + content-hash dedup |
-| On-device inference | `llama-server` (PrismML `kennguy3n/llama.cpp@prism` fork) for Bonsai-1.7B; MLX runtime on Apple Silicon; ONNX Runtime for XLM-R embeddings |
-| Server services | Go (API gateway, connector service, permission service, tenant service, export service, audit) + Rust (synthesis engine, crypto, vector store) |
-| Server storage | PostgreSQL (relational + provenance), pgvector (embeddings), MinIO / S3 (objects), NATS JetStream (async) |
-| Sync | CRDT-based delta sync; MLS group keying for shared encrypted memory objects |
-| Crypto | Hybrid X25519 + ML-KEM-768 (Kyber) KEM, ML-DSA-65 (Dilithium) signatures, BLAKE3 hashing, XChaCha20-Poly1305 segments, SPHINCS+ as stateless backup |
+Status legend: ✅ runtime-ready in this repo · 🟡 contract /
+skeleton (types ship, implementation pending) · 🔴 stub /
+placeholder.
+
+| Layer | Stack | Status |
+|---|---|---|
+| iOS shell | Swift native UI; Rust core via UniFFI | 🟡 FFI returns `Unimplemented` |
+| Android shell | Kotlin native UI; Rust core via JNI | 🟡 FFI returns `Unimplemented` |
+| macOS shell | Electron 31 + React renderer; Rust core via Swift N-API addon | 🟡 N-API forwards to unimplemented FFI |
+| Windows shell | Electron 31 + React renderer; Rust core via C++ N-API addon | 🟡 N-API forwards to unimplemented FFI |
+| Shared core | Rust library compiled to iOS framework, Android `.so`, macOS / Windows N-API addon | ✅ |
+| Local store | SQLCipher (AES-256-CBC with HMAC-SHA512 per-page) + SQLite FTS5 + content-hash dedup | ✅ SQLCipher real; FTS5 plaintext index is not erased by DEK destruction (see [`crates/evidence_store/tests/forgetting_fts.rs`](./crates/evidence_store/tests/forgetting_fts.rs)) |
+| On-device inference | `llama-server` (PrismML `kennguy3n/llama.cpp@prism` fork) for Bonsai-1.7B; MLX runtime on Apple Silicon; ONNX Runtime for XLM-R embeddings | 🟡 router exists, real adapters not wired |
+| Server services | Go (API gateway, connector service, permission service, tenant service, export service, audit) + Rust (synthesis engine, crypto, vector store) | 🟡 Rust permission / tenant / audit are real; synthesis engine is a skeleton; Go gateway lives outside this repo |
+| Server storage | PostgreSQL (relational + provenance), pgvector (embeddings), MinIO / S3 (objects), NATS JetStream (async) | 🟡 wiring lives outside this repo |
+| Sync | CRDT-based delta sync; MLS group keying for shared encrypted memory objects | ✅ MLS keying real; 🟡 `sync_engine` is a deliberate stub until Phase 2 multi-device lands |
+| Crypto | Hybrid X25519 + ML-KEM-768 (Kyber) KEM, ML-DSA-65 (Dilithium) signatures, BLAKE3 hashing, XChaCha20-Poly1305 segments, SPHINCS+ as stateless backup | ✅ ML-KEM-768 + ML-DSA-65 real (RustCrypto); 🔴 SPHINCS+ is a BLAKE3-keyed placeholder, not a real lattice signer |
 
 The Rust shared core is the single source of truth for the
 evidence store, the observation engine, the memory state machine,
@@ -271,7 +283,12 @@ construction:
 2. **Cryptographic forgetting via key destruction.** True deletion
    is enforced by destroying the per-scope or per-epoch keys —
    not by best-effort row deletes. A scope is gone the moment its
-   key is gone.
+   key is gone. **Known gap:** the SQLite FTS5 plaintext index
+   keeps tokenized terms outside the AEAD envelope; destroying a
+   scope's DEK makes the row bodies undecryptable but does *not*
+   erase the FTS5 terms. See
+   [`crates/evidence_store/tests/forgetting_fts.rs`](./crates/evidence_store/tests/forgetting_fts.rs)
+   for the test that documents this.
 3. **Post-quantum thinking from day one.** All new key exchanges
    use a hybrid X25519 + ML-KEM-768 (Kyber) construction;
    provenance and manifest signing use ML-DSA-65 (Dilithium); a

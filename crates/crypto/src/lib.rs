@@ -49,12 +49,15 @@ pub use hybrid_kem::{
     HybridPublicKey, HybridSecretKey, HybridSharedSecret,
 };
 pub use kdf::{derive_key, DerivedKey, MasterKey, MASTER_KEY_LEN};
+#[cfg(any(test, feature = "test-support"))]
+pub use kem::StubKemBackend;
 pub use kem::{
     KemBackend, KemCiphertext, KemPublicKey, KemSecretKey, KemSharedSecret, MlKem768Backend,
-    StubKemBackend, KEM_CIPHERTEXT_LEN, KEM_PUBLIC_KEY_LEN, KEM_SECRET_KEY_LEN,
-    KEM_SHARED_SECRET_LEN,
+    KEM_CIPHERTEXT_LEN, KEM_PUBLIC_KEY_LEN, KEM_SECRET_KEY_LEN, KEM_SHARED_SECRET_LEN,
 };
 pub use provenance::{
     AgentKind, EvidenceRef, ProvenanceAgent, ProvenanceBundle, ProvenanceSignature,
-    ProvenanceSigner, SignedBundle, SynthesisActivity, TestSigner, TEST_SIGNER_KEY_LEN,
+    ProvenanceSigner, SignedBundle, SynthesisActivity,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use provenance::{TestSigner, TEST_SIGNER_KEY_LEN};

@@ -26,6 +26,11 @@ tempfile = { workspace = true }
 permission_service = { path = "../permission_service" }
 agent_contract = { path = "../agent_contract" }
 memory_manager = { path = "../memory_manager" }
+# Integration tests under `tests/` exercise the substrate end-to-end
+# using `crypto::TestSigner` (an HMAC-SHA256 mock signer). Enable the
+# `test-support` feature on `crypto` so the gated mock types are
+# visible while compiling the test binaries.
+crypto = { path = "../crypto", features = ["test-support"] }
 
 [lints]
 workspace = true

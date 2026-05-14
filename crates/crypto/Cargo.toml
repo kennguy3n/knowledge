@@ -7,6 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# Enables `StubKemBackend`, `TestSigner`, and `TEST_SIGNER_KEY_LEN`.
+# These are mock implementations of `KemBackend` / `ProvenanceSigner`
+# used by tests, benches, and demos. They are gated out of default
+# builds so production binaries do not ship them.
+test-support = []
+
 [dependencies]
 blake3 = { workspace = true }
 chacha20poly1305 = { workspace = true }
