@@ -1,24 +1,14 @@
 # Knowledge — Privacy-First Continual Knowledge System
 
-Knowledge is a continual updating, always-fresh knowledge / context
-system for AI that puts privacy at the center and incorporates
-post-quantum cryptographic thinking from day one. It is the shared
-cognitive substrate behind the KChat platform — a single layered
-memory system that serves both the consumer surface (B2C) and the
+Knowledge is a continual, always-fresh knowledge and context
+substrate for AI that puts privacy at the center and adopts
+post-quantum cryptography from day one. It is the shared
+cognitive substrate behind the KChat platform — one layered
+memory system serving both the consumer surface (B2C) and the
 enterprise surface (B2B) without forking the substrate.
 
-The system observes the streams a user (or a tenant) already
-generates — chat messages, files, media, document-management
-content, design files, tickets, CRM records — and continuously
-synthesizes them into structured, decaying, scoped memory:
-observations, concepts, summaries, decisions, workflows. Raw
-evidence stays where it should (on the device or inside the
-tenant's perimeter); only consented, derived knowledge flows
-outward, and it flows out as portable concept profiles, not as
-copies of the underlying documents.
-
-For the deeper product thesis, system design, phasing, and progress
-see [PROPOSAL.md](./PROPOSAL.md), [ARCHITECTURE.md](./ARCHITECTURE.md),
+For the product thesis, system design, and phase plan see
+[PROPOSAL.md](./PROPOSAL.md), [ARCHITECTURE.md](./ARCHITECTURE.md),
 [PHASES.md](./PHASES.md), and [PROGRESS.md](./PROGRESS.md).
 
 ---
@@ -26,20 +16,6 @@ see [PROPOSAL.md](./PROPOSAL.md), [ARCHITECTURE.md](./ARCHITECTURE.md),
 ## Quick start
 
 The shared core is a Cargo workspace targeting **Rust 1.75+ (stable)**.
-It ships 20 crates covering the full substrate: encrypted evidence
-storage, observation extraction, memory management with decay,
-concept graph, synthesis pipeline, server-side synthesis engine,
-Zanzibar-style permissions, tenant lifecycle, audit logging, agent
-write contract, export plane, connector framework with nine vendor
-connectors (Google Drive, OneDrive, Notion, Jira, Confluence, Figma,
-HubSpot, Slack, Email), reasoning engine (contradiction detection,
-Graph-of-Thought, community summaries), inference router (MLX →
-LlamaCpp → Fallback), post-quantum crypto (ML-KEM-768, ML-DSA-65,
-SPHINCS+, TEE worker), CRDT sync, platform bindings (UniFFI for
-iOS / Android, N-API for macOS / Windows), and a public-API-only
-end-to-end demo crate that exercises all twelve pipeline phases
-against a realistic dataset. All phases (0 → 7) are complete with
-1077 tests passing.
 
 ### Prerequisites
 
@@ -55,8 +31,8 @@ against a realistic dataset. All phases (0 → 7) are complete with
 cargo build --all-targets
 ```
 
-The first build compiles `openssl-src` and SQLCipher and is therefore
-slow (a few minutes); incremental rebuilds are fast.
+The first build compiles `openssl-src` and SQLCipher and is
+therefore slow (a few minutes); incremental rebuilds are fast.
 
 ### Test
 
@@ -64,81 +40,13 @@ slow (a few minutes); incremental rebuilds are fast.
 cargo test --all
 ```
 
-This runs the inline unit tests inside each crate and the integration
-test files under `crates/*/tests/`. **1077 tests pass** across all 20
-crates as of the end-to-end demo drop (up from 1072), spanning
-the Phase 0 evidence plane and inference router, the Phase 1
-personal-memory plane (decay, observation, episodic, embeddings,
-hybrid retrieval), the Phase 2 channel-memory plane (synthesis
-pipeline, concept graph, CRDT sync, MLS), the Phase 3 server-side
-surface (synthesis engine, permission service, tenant service,
-audit service, managed endpoint), the Phase 4 connector substrate
-(framework + nine vendor connectors), the Phase 5 agent contract
-and export plane, the Phase 6 reasoning plane (contradictions,
-Graph-of-Thought, community summaries, visualization), the Phase 7
-post-quantum hardening surface (ML-DSA-65, SPHINCS+, hybrid
-enforcement, attestation, TEE worker, cryptographic forgetting,
-quality metrics, red-team tests), and the Phase 4-onwards
-public-API-only end-to-end demo (`crates/demo/tests/end_to_end.rs`)
-that re-runs the binary, parses `results/demo_results.md`, and
-reconciles every per-phase section, assertion table, and timing
-row against the printed substrate output.
-
-End-to-end coverage: the channel → domain → tenant synthesis chain
-is exercised by `crates/synthesis_engine/tests/hierarchy_e2e.rs`;
-the agent proposal lifecycle and the export plane pipeline by
-`crates/agent_contract/tests/e2e_proposal_tests.rs` and
-`crates/export_plane/tests/e2e_export_tests.rs`; the FFI surface by
-`crates/ffi/tests/ffi_integration_tests.rs`; the inference router
-by `crates/inference_router/tests/router_integration_tests.rs`; and
-the full Phase 1 → Phase 12 substrate pipeline (evidence →
-observation → memory → concept graph → synthesis → permissions →
-crypto → export → agent → reasoning → connectors → audit) by
-`crates/demo/tests/end_to_end.rs`, which spawns the demo binary,
-asserts every phase heading, assertion-pass count, and timing
-entry written into `results/demo_results.md`.
+The test suite covers every crate including unit, integration,
+and end-to-end tests against the full substrate pipeline.
 
 ### Demo
 
-The `demo` crate at `crates/demo/` is a public-API-only end-to-end
-driver of the full Knowledge substrate. It seeds a realistic
-multi-scope dataset (~50+ messages spanning user, channel, domain,
-and tenant scopes) and walks every advertised phase using only the
-public APIs of each substrate crate — no test-only shims, no
-short-circuiting, no internal back doors.
-
-Run it from the workspace root:
-
 ```bash
 cargo run -p demo --release
-```
-
-When the binary completes it writes a fully reconciled report to
-`results/demo_results.md` with:
-
-- A run timestamp and per-phase summary statistics (evidence rows
-  ingested across all three storage paths, observations extracted,
-  memory objects per decay state, concept nodes / edges, synthesis
-  outputs at channel / domain / tenant tier, permission tuples,
-  crypto operations, exports rendered, agent proposals, reasoning
-  artifacts, connector events, audit entries).
-- One section per phase (`### Phase 1: Evidence Ingestion` →
-  `### Phase 12: Audit Service`) with assertion pass / fail tables.
-- A wall-clock timing table per phase plus a per-operation
-  benchmark section (evidence ingest per message, observation
-  extraction per message, concept-graph operations, synthesis
-  pipeline, export rendering).
-- An overall pass-rate summary that the integration test under
-  `crates/demo/tests/end_to_end.rs` re-parses to validate the
-  contract end-to-end.
-
-The demo's integration test re-spawns the same binary and verifies
-that all twelve phase headings are present, every assertion row is
-accounted for, and that the timing table is well-formed. To run
-only the demo's tests:
-
-```bash
-cargo test -p demo --release
 ```
 
 ### Lint
@@ -148,168 +56,54 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-The CI pipeline (see `.github/workflows/ci.yml`) runs the same four
-commands on every push and pull request.
+CI runs the same four commands on every push and pull request.
+
+---
+
+## Demo
+
+The `demo` crate is a public-API-only end-to-end driver of the
+full Knowledge substrate. It seeds a realistic multi-scope dataset
+and walks every advertised phase using only the public APIs of
+each substrate crate. The binary writes a reconciled report to
+[`results/demo_results.md`](./results/demo_results.md) and an
+integration test re-spawns it to validate the contract.
+
+---
 
 ## Project structure
 
 ```
 knowledge/
-├── Cargo.toml                 # workspace manifest (Rust 1.75+, edition 2021)
+├── Cargo.toml                 # workspace manifest
 ├── rustfmt.toml               # repo-wide formatting config
-├── results/                   # generated reports written by the demo binary
-│   └── demo_results.md        # full Phase 1 → Phase 12 end-to-end run output
+├── results/                   # generated demo reports
 ├── crates/
-│   ├── crypto/                # post-quantum primitives (BLAKE3, XChaCha20-Poly1305,
-│   │                          #   HKDF-SHA256, hybrid X25519 + ML-KEM-768 KEM,
-│   │                          #   Phase 2 ProvenanceBundle + HMAC TestSigner;
-│   │                          #   Phase 7 SPHINCS+ co-signer for archival /
-│   │                          #   high-assurance dual signatures)
-│   ├── evidence_store/        # SQLCipher-backed encrypted evidence plane
-│   │                          #   (ingest, dedup, ring buffer, FTS5, classifier,
-│   │                          #   hybrid FTS + recency retrieval)
-│   ├── memory_manager/        # personal-memory plane: decay state machine,
-│   │                          #   retention scoring, working memory, user-memory
-│   │                          #   CRUD, privacy-strip invariant + Phase 2
-│   │                          #   ChannelMemoryObject (recap / decisions /
-│   │                          #   open questions / active tasks) + Phase 3
-│   │                          #   DomainMemoryObject (workstreams /
-│   │                          #   dependencies / risks / procedures) and
-│   │                          #   TenantMemoryObject (canonical policies /
-│   │                          #   product taxonomy / no-passive-decay)
-│   ├── observation_engine/    # observation extractor + lexicon-first pipeline
-│   │                          #   (entities / tasks / decisions / facts /
-│   │                          #   questions; Phase 2 URL / email / date /
-│   │                          #   numeric extraction; ChannelPromotionPolicy)
-│   ├── concept_graph/         # Phase 2 sparse typed concept graph (nodes,
-│   │                          #   7 typed edges, scope-binding, supersession,
-│   │                          #   contradiction tracking, typed traversal)
-│   │                          #   + Phase 3 PersistentConceptGraph: SQLCipher
-│   │                          #   schema, scope-filtered queries, AEAD-encrypted
-│   │                          #   node / edge round-trip
-│   ├── synthesis_pipeline/    # Phase 2 synthesis: window manager, typed
-│   │                          #   SynthesisObject, GBNF schema types, no-op
-│   │                          #   synthesizer, encrypted publish / consume,
-│   │                          #   synthesizer-role election + Phase 3
-│   │                          #   hierarchy module (DomainSynthesisInput /
-│   │                          #   TenantSynthesisInput / ApprovedDocument /
-│   │                          #   WindowScopeTier; type-system enforcement of
-│   │                          #   the channel → domain → tenant flow rules)
-│   ├── synthesis_engine/      # Phase 3 server-side synthesis-engine skeleton:
-│   │                          #   SynthesisEngine trait, ManagedEndpointSynthesizer
-│   │                          #   stub, end-to-end channel → domain → tenant test
-│   ├── sync_engine/           # Phase 2 CRDT delta sync: AddWinsSet
-│   │                          #   observed-remove set + append-only OpLog
-│   │                          #   with merge_logs / supersede
-│   ├── permission_service/    # Phase 3 Zanzibar-style relation tuples (10 object
-│   │                          #   types, 7 relations with default inheritance),
-│   │                          #   in-memory TupleStore, check_permission
-│   │                          #   reachability query over userset rewrites
-│   ├── tenant_service/        # Phase 3 tenant lifecycle (Active / Suspended /
-│   │                          #   Deleted), per-tenant encryption key references,
-│   │                          #   member provisioning, config validation
-│   ├── audit_service/         # Phase 3 append-only audit log: AuditEntryBuilder,
-│   │                          #   AuditQuery (scope / action / actor / time),
-│   │                          #   AuditActionTypes (canonical promotion,
-│   │                          #   export, agent proposal, policy change,
-│   │                          #   member provisioned / removed, tenant
-│   │                          #   lifecycle, key destruction; Phase 5 adds
-│   │                          #   ExportRendered / ExportSimulated /
-│   │                          #   AgentProposalSubmitted / AgentProposalPromoted /
-│   │                          #   AgentProposalRejected + helpers)
-│   ├── agent_contract/        # Phase 5 agent write contract: AgentProposal<T>,
-│   │                          #   ObservationProposal / ConceptProposal /
-│   │                          #   RelationProposal / SummaryProposal,
-│   │                          #   AgentIdentity, schema validation,
-│   │                          #   Proposed → UnderReview → Promoted/Rejected
-│   │                          #   lifecycle, AutoPromotionPolicy, ProposalStore,
-│   │                          #   promote_to_canonical → CanonicalArtifact
-│   ├── export_plane/          # Phase 5 export plane: PortableConceptProfile,
-│   │                          #   ApprovedConcept, ExportView (ConceptsOnly /
-│   │                          #   WithSummaries / WithEvidencePack), EvidencePack,
-│   │                          #   ExportPolicy + PolicyEngine (least-privilege),
-│   │                          #   ExportControlRegistry (deny-by-default per
-│   │                          #   concept / summary / workflow), PolicySimulator
-│   │                          #   (read-only preview), ConceptApprovalWorkflow
-│   ├── connector_framework/   # Phase 4 connector substrate: Connector trait
-│   │                          #   (authenticate / initial_sync / incremental_sync /
-│   │                          #   subscribe_webhook / handle_webhook_event),
-│   │                          #   OAuth2TokenVault + TokenRefresher with HKDF
-│   │                          #   SecretToken wrappers, SyncState (Full/Incremental),
-│   │                          #   WebhookSubscription + HMAC-SHA256 verifier,
-│   │                          #   ConnectorConfig / ConnectorInstance / ConnectorEvent
-│   │                          #   (DocumentCreated / Updated / Deleted /
-│   │                          #   PermissionChanged), channel-scoped
-│   │                          #   AttachmentRegistry (one-connector-per-source),
-│   │                          #   AclSyncEngine + PermissionMapping into
-│   │                          #   permission_service relation tuples
-│   ├── connectors/            # Phase 4 vendor connector implementations:
-│   │                          #   GoogleDriveConnector (files.list +
-│   │                          #   Changes API + push notification channels),
-│   │                          #   OneDriveConnector (Graph /drive/root/delta +
-│   │                          #   subscriptions), NotionConnector (search +
-│   │                          #   databases.query, polling-only), JiraConnector
-│   │                          #   (JQL search + webhooks), ConfluenceConnector
-│   │                          #   (content + body.storage + webhooks),
-│   │                          #   FigmaConnector (files + components + version
-│   │                          #   cursor + FILE_UPDATE webhooks), HubSpotConnector
-│   │                          #   (CRM v3 contacts / companies / deals / notes +
-│   │                          #   subscriptionType webhooks), SlackConnector
-│   │                          #   (conversations.list + conversations.history +
-│   │                          #   Events API), EmailConnector (Gmail +
-│   │                          #   Microsoft Graph providers); each implements
-│   │                          #   Connector against fixture-backed pages with
-│   │                          #   integration tests under tests/fixtures/
-│   ├── inference_router/      # Phase 0 on-device inference router: InferenceAdapter
-│   │                          #   trait, InferenceTask + GBNF grammars,
-│   │                          #   InferenceRouter (MLX → LlamaCpp → Fallback priority,
-│   │                          #   warm-up + 60s idle-unload), MlxAdapter /
-│   │                          #   LlamaCppAdapter / FallbackAdapter skeletons,
-│   │                          #   DeviceTier::{Low, Medium, High}, RouterConfig,
-│   │                          #   RouterError
-│   ├── ffi/                   # Phase 0 UniFFI surface for iOS / Android: evidence
-│   │                          #   (ingest_message / query / get_evidence), memory
-│   │                          #   manager (get_user_memory / pin / unpin / forget /
-│   │                          #   list_memories / run_decay_sweep), synthesis
-│   │                          #   (get_channel_memory / trigger_synthesis), crypto
-│   │                          #   (generate_keypair / encrypt / decrypt) +
-│   │                          #   uniffi.toml configuration
-│   ├── napi/                  # Phase 0 N-API addon skeleton for macOS / Windows:
-│   │                          #   same surface as ffi + init(config_json) + N-API
-│   │                          #   exception mapping
-│   ├── reasoning_engine/      # Phase 6 reasoning plane: ContradictionDetector
-│   │                          #   + AdjudicationWorkflow (Detected → UnderReview
-│   │                          #   → Resolved), DriftDetector + DriftMarker,
-│   │                          #   GraphTraversal (typed-edge BFS with
-│   │                          #   TraversalBudget + TraversalQuery + PathScorer,
-│   │                          #   targeted + exploratory modes), QueryPlanner
-│   │                          #   (RetrievalMode: Summary / Fts / SemanticVector /
-│   │                          #   GraphTraversal / RawEvidence; QueryClassifier;
-│   │                          #   PlannerHeuristics; PlanExecutionResult),
-│   │                          #   WorkflowMemory (WorkflowTrace, WorkflowPattern,
-│   │                          #   PatternMatcher, TraceRecorder), GoTExecutor
-│   │                          #   (Graph-of-Thought: ThoughtGraph + ThoughtNode +
-│   │                          #   ThoughtEdge + GoTStrategy + Expander + plan/
-│   │                          #   expand/evaluate/execute + record_trace),
-│   │                          #   CommunityDetector + CommunityHierarchy +
-│   │                          #   CommunitySummaryGenerator + CommunityQueryRouter
-│   │                          #   (GraphRAG-style scope-aware summaries)
-│   └── demo/                  # public-API-only end-to-end driver: realistic
-│                              #   multi-scope dataset, twelve phase modules
-│                              #   (evidence → observation → memory → concept
-│                              #   graph → synthesis → permissions → crypto →
-│                              #   export → agent → reasoning → connectors →
-│                              #   audit), assertion harness, timing benchmarks,
-│                              #   results renderer that writes
-│                              #   results/demo_results.md, and an integration
-│                              #   test (tests/end_to_end.rs) that re-spawns
-│                              #   the binary and validates every section,
-│                              #   assertion count, and timing entry
-├── .github/workflows/ci.yml   # fmt + clippy + build + test on push / PR
+│   ├── crypto/                # post-quantum and classical primitives
+│   ├── evidence_store/        # encrypted evidence plane + hybrid retrieval
+│   ├── memory_manager/        # decay state machine and memory objects
+│   ├── observation_engine/    # observation extraction and pipelines
+│   ├── concept_graph/         # sparse typed concept graph
+│   ├── synthesis_pipeline/    # scope-window synthesis and publication
+│   ├── synthesis_engine/      # server-side synthesis (engine + TEE worker)
+│   ├── sync_engine/           # CRDT delta sync of synthesis objects
+│   ├── permission_service/    # Zanzibar-style relations and reachability
+│   ├── tenant_service/        # tenant lifecycle and member provisioning
+│   ├── audit_service/         # append-only audit log
+│   ├── agent_contract/        # proposal-only agent write contract
+│   ├── export_plane/          # portable concept profiles and policies
+│   ├── connector_framework/   # OAuth2, sync, webhooks, ACL sync
+│   ├── connectors/            # vendor connector implementations
+│   ├── inference_router/      # on-device inference routing and adapters
+│   ├── reasoning_engine/      # contradictions, traversal, GoT, summaries
+│   ├── ffi/                   # UniFFI surface for iOS and Android
+│   ├── napi/                  # N-API addon for macOS and Windows
+│   └── demo/                  # public-API-only end-to-end driver
+├── .github/workflows/ci.yml   # fmt + clippy + build + test
 ├── PROPOSAL.md                # product thesis
 ├── ARCHITECTURE.md            # system architecture
-├── PHASES.md                  # phase 0 → 7 delivery plan
-└── PROGRESS.md                # per-phase checklist + changelog
+├── PHASES.md                  # phased delivery plan
+└── PROGRESS.md                # per-phase deliverable status
 ```
 
 Each crate's public API is documented in its `src/lib.rs`. Run
@@ -323,7 +117,7 @@ Knowledge runs as two cooperating surfaces over a single shared
 substrate, so the same memory model and the same synthesis rules
 apply whether a fact came from a local DM or a SharePoint document.
 
-### 1. On-device surface
+### On-device surface
 
 Native or near-native clients on every form factor a user actually
 holds:
@@ -335,28 +129,19 @@ holds:
 | macOS | Electron + React | Rust core via Swift N-API addon; MLX preferred runtime |
 | Windows | Electron + React | Rust core via C++ N-API addon; DirectML EP + CPU EP |
 
-The on-device surface accesses and updates information the user
-already has on the device — chat messages, free-form text, files,
-media — and continuously builds an always-fresh on-device knowledge
-/ context object scoped to the user, the channels they participate
-in, and (optionally) the communities they belong to.
+The on-device surface ingests the streams a user already
+generates and continuously builds an always-fresh knowledge
+object scoped to the user, the channels they participate in,
+and (optionally) the communities they belong to.
 
-### 2. On-server surface
+### On-server surface
 
 A server-side surface that authenticates against shared document
 management and collaboration systems and continuously builds an
-always-fresh knowledge / context object scoped to a tenant's
-domains and channels:
-
-- Google Drive
-- OneDrive
-- Notion
-- Jira
-- Confluence
-- Figma
-- HubSpot
-- Slack (`crates/connectors/src/slack.rs`)
-- Email — Gmail + Microsoft Graph (`crates/connectors/src/email.rs`)
+always-fresh knowledge object scoped to a tenant's domains and
+channels. Connectors cover Google Drive, OneDrive, Notion, Jira,
+Confluence, Figma, HubSpot, Slack, and Email (Gmail + Microsoft
+Graph).
 
 Each connector follows the same `connector → evidence plane →
 observation plane → semantic plane` pipeline as the on-device
@@ -450,35 +235,22 @@ SLM). The shared `llama-server` sidecar handles both transparently.
 
 The on-device model strategy is shared across the KChat platform —
 this repo references the canonical model selection document in
-`slm-chat-demo`:
-
-- **`kennguy3n/slm-chat-demo`** —
-  [`docs/kchat-on-device-model-strategy.md`](https://github.com/kennguy3n/slm-chat-demo/blob/main/docs/kchat-on-device-model-strategy.md)
-  is the cross-repo reference for model inventory, platform
-  packaging, device tiering, and delivery phases.
-
+[`slm-chat-demo`](https://github.com/kennguy3n/slm-chat-demo/blob/main/docs/kchat-on-device-model-strategy.md).
 The headline picks for the Knowledge substrate:
 
-| Role | Model | Format | On-disk | Notes |
-|---|---|---|---|---|
-| Synthesizer SLM (channel / episodic / domain) | Bonsai-1.7B (Qwen3-derived) | GGUF Q4_K_M | ~237 MB | Served by the shared `llama-server` from the PrismML `kennguy3n/llama.cpp@prism` fork — see [§3 in ARCHITECTURE.md](./ARCHITECTURE.md#3-on-device-inference-architecture). |
-| Synthesizer SLM (Apple Silicon) | Bonsai-1.7B | MLX 2-bit | ~248 MB | Preferred runtime on iOS / macOS via Apple MLX. |
-| Embeddings + classification | XLM-R | INT8 ONNX (~107 MB) / INT4 ONNX (~55 MB) | <110 MB | Multilingual encoder used for retrieval, importance tagging, entity extraction, and contradiction detection. Same artifact is shared with `slm-guardrail` and `chat-storage-search` to eliminate redundant weights. |
+| Role | Model | Format | Notes |
+|---|---|---|---|
+| Synthesizer SLM (channel / episodic / domain) | Bonsai-1.7B (Qwen3-derived) | GGUF Q4_K_M (~237 MB) | Served by the shared `llama-server` from the PrismML fork — see [ARCHITECTURE.md §3](./ARCHITECTURE.md#3-on-device-inference-architecture). |
+| Synthesizer SLM (Apple Silicon) | Bonsai-1.7B | MLX 2-bit (~248 MB) | Preferred runtime on iOS / macOS. |
+| Embeddings + classification | XLM-R | INT8 ONNX (~107 MB) / INT4 ONNX (~55 MB) | Multilingual encoder used for retrieval, importance tagging, entity extraction, and contradiction detection. Shared with `slm-guardrail` and `chat-storage-search` to eliminate redundant weights. |
 
-The runtime is deliberately a *fork* — `kennguy3n/llama.cpp@prism`
-on the `prism` branch — because it ships SIMD repack kernels for
-the `Q1_0_g128` ternary format used in Bonsai derivatives across
-CUDA, Metal, Vulkan, AVX-512 VNNI, AVX-VNNI, AVX2, and ARM NEON.
-That fork is the only on-device SLM runtime the substrate
-ships with. See
-[`kennguy3n/llama.cpp@prism`](https://github.com/kennguy3n/llama.cpp/tree/prism)
-for the kernel implementations and dispatcher.
-
-A shared `llama-server` sidecar pattern (`--parallel 2`, mmap
-weights, 60 s idle-unload, warm-up at boot) is used so that
-multiple subsystems (Knowledge synthesis, KChat skills, CV-Guard
-SLM consultation, slm-guardrail when SLM-promoted) share a single
-loaded model rather than each holding their own copy.
+The runtime is a fork — `kennguy3n/llama.cpp@prism` — because it
+ships SIMD repack kernels for the `Q1_0_g128` ternary format used
+in Bonsai derivatives across CUDA, Metal, Vulkan, AVX-512 VNNI,
+AVX-VNNI, AVX2, and ARM NEON. A shared `llama-server` sidecar
+pattern (`--parallel 2`, mmap weights, 60 s idle-unload, warm-up at
+boot) lets multiple subsystems share a single loaded model rather
+than each holding their own copy.
 
 Thinking is disabled on the synthesizer model (a closed
 `<think>\n</think>\n` pair is prepended to the prompt) — Knowledge
@@ -520,23 +292,22 @@ owns, not the device the engineer used to develop it. Three axes
 are continuously monitored and actively shape behaviour:
 
 - **Storage.** Content-aware storage routing — short text messages
-  (≤ 512 B) stored inline in evidence rows; large bodies (files,
-  chunks, transcripts) stored in a deduplicated body table with
-  BLAKE3 content-hash dedup; noise-class messages held in a
-  fixed-size ring buffer that auto-expires. Cold encrypted segments
-  (XChaCha20-Poly1305 + per-epoch keys) for the long tail. Caps
-  are configurable per tier (250 MB safety on mobile, 1 GB+ on
-  desktop with SLM loaded).
+  (≤ 512 B) stored inline in evidence rows; large bodies stored in
+  a deduplicated body table with BLAKE3 content-hash dedup;
+  noise-class messages held in a fixed-size ring buffer that
+  auto-expires. Cold encrypted segments (XChaCha20-Poly1305 +
+  per-epoch keys) for the long tail. Caps are configurable per
+  tier (250 MB safety on mobile, 1 GB+ on desktop with SLM loaded).
 - **Memory.** Models are mmap'd; the SLM unloads after 60 s idle;
   at most one heavy model resident on mobile at a time. Hard
   caps: 250 MB on mobile (without SLM resident), 1 GB on desktop
   with SLM resident.
 - **Battery.** Below 20% the synthesis pipeline skips heavy work
   (channel / domain synthesis is deferred), only sensory
-  observations + lexicon-based importance tagging continue.
-  Sync becomes batch-only and waits for AC + Wi-Fi.
+  observations + lexicon-based importance tagging continue. Sync
+  becomes batch-only and waits for AC + Wi-Fi.
 
-Graceful degradation is the rule: low tier devices never enter the
+Graceful degradation is the rule: low-tier devices never enter the
 SLM path; medium-tier devices gate the SLM behind heat / battery /
 RAM checks; the substrate always remains queryable on lexicon +
 XLM-R retrieval even when the SLM is unavailable.
@@ -547,10 +318,12 @@ XLM-R retrieval even when the SLM is unavailable.
 
 | Document | Purpose |
 |---|---|
-| [PROPOSAL.md](./PROPOSAL.md) | Product thesis, strategic principles, layered substrate, memory + decay, model strategy, hierarchy, permissions, deployment modes, post-quantum cryptography, integration surface |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | System overview, Rust shared core, on-device inference, server architecture, data flow, permissions, decay state machine, post-quantum crypto layer, device optimization, platform-specific notes |
-| [PHASES.md](./PHASES.md) | Phase 0 → Phase 7 delivery plan with goals, deliverables, exit criteria, and a 30 / 60 / 90-day implementation timeline |
-| [PROGRESS.md](./PROGRESS.md) | Per-phase deliverable checklist, overall status table, and changelog |
+| [PROPOSAL.md](./PROPOSAL.md) | Product thesis, strategic principles, layered substrate, memory and decay, model strategy, hierarchy, permissions, deployment modes, post-quantum cryptography, integration surface |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | System overview, Rust shared core, on-device inference, server architecture, data flow, permissions, decay state machine, post-quantum crypto layer |
+| [PHASES.md](./PHASES.md) | Phased delivery plan with goals, deliverables, exit criteria, and a 90-day timeline |
+| [PROGRESS.md](./PROGRESS.md) | Per-phase deliverable status, with a link to the curated [development changelog](./docs/DEVELOPMENT_LOG.md) |
+| [`docs/MODULE_EVOLUTION.md`](./docs/MODULE_EVOLUTION.md) | Per-module evolution catalogue across phases |
+| [`docs/PLATFORMS.md`](./docs/PLATFORMS.md) | Device-optimization and per-platform integration notes |
 
 ---
 
@@ -558,8 +331,8 @@ XLM-R retrieval even when the SLM is unavailable.
 
 | Repo | Role |
 |---|---|
-| [`kennguy3n/slm-chat-demo`](https://github.com/kennguy3n/slm-chat-demo) | Reference for model selection, device thinking, and the cross-repo on-device model strategy ([`docs/kchat-on-device-model-strategy.md`](https://github.com/kennguy3n/slm-chat-demo/blob/main/docs/kchat-on-device-model-strategy.md)). |
+| [`kennguy3n/slm-chat-demo`](https://github.com/kennguy3n/slm-chat-demo) | Reference for model selection, device tiering, and the cross-repo on-device model strategy ([`docs/kchat-on-device-model-strategy.md`](https://github.com/kennguy3n/slm-chat-demo/blob/main/docs/kchat-on-device-model-strategy.md)). |
 | [`kennguy3n/llama.cpp@prism`](https://github.com/kennguy3n/llama.cpp/tree/prism) | Modified llama.cpp inference runtime (PrismML `prism` branch) used as the on-device SLM serving layer for Bonsai-1.7B. Ships SIMD repack kernels for the `Q1_0_g128` ternary format across CUDA, Metal, Vulkan, AVX-512 VNNI, AVX-VNNI, AVX2, and ARM NEON. |
 
 These are the two upstreams Knowledge depends on; everything else
-in the substrate is implemented in this repo's planned phases.
+in the substrate is implemented in this repo.

@@ -59,15 +59,14 @@ And it should do this *without* eating 8 GB of phone storage and
 without grinding the device to a halt every time you open the app.
 
 And the message in `#product-launch` is just one surface. By
-the time the launch ships, the same facts also live in a
-Notion page Priya wrote ("Q1 Launch Plan"), a Jira epic with
-acceptance criteria, a Confluence runbook, a Figma file with
-the rollout flow, a HubSpot deal record, and a Google Drive
-folder of decks and spreadsheets. These are linked to the
-same channel or domain through connectors. The assistant
-needs to read across *all* of them — without forcing the
-user to remember which system the answer is in, and without
-piling every file onto the device for offline copies.
+the time the launch ships, the same facts also live in
+planning pages, ticket epics, runbooks, design flows, CRM
+records, and shared drives of decks and spreadsheets, linked
+to the same channel or domain through connectors. The
+assistant needs to read across *all* of them — without
+forcing the user to remember which system the answer is in,
+and without piling every file onto the device for offline
+copies.
 
 The naive approaches fail in predictable ways:
 
@@ -142,16 +141,14 @@ tradeoff: they can still influence current synthesis without
 bloating long-term storage.
 
 The same routing applies to documents pulled in from
-connectors. When a Google Drive file, OneDrive document,
-Notion page, Jira ticket, Confluence wiki, Figma file, or
-HubSpot record is linked to a channel or domain, the
-connector hands the content to the same ingest pipeline. A
-200-byte Jira summary takes the inline path. A 50 KB
-Confluence article takes the body-table path, where its
-BLAKE3 hash naturally deduplicates against the same article
-shared into a second channel. The connector attaches the
-document to the relevant channel/domain scope and the rest
-of the substrate stays unchanged.
+connected systems. When an external document is linked to a
+channel or domain, the connector hands the content to the
+same ingest pipeline. A 200-byte ticket summary takes the
+inline path. A 50 KB wiki article takes the body-table path,
+where its BLAKE3 hash naturally deduplicates against the
+same article shared into a second channel. The connector
+attaches the document to the relevant channel or domain
+scope and the rest of the substrate stays unchanged.
 
 ---
 
@@ -197,16 +194,14 @@ the launch is now April 1) becomes a graph operation on top of
 this collapsed structure, not a fuzzy search across raw text.
 
 This collapse is **source-agnostic**. The launch date stated
-in a Slack message and the same date written in a Notion
-"Launch Plan" page produce two pieces of evidence — but one
-observation, with both as backing provenance. A Jira ticket
-logging the same decision, a Confluence runbook quoting it,
-or a HubSpot note from sales repeating it all merge into the
-same row. So when a user asks "what's the launch date?", the
-assistant doesn't see duplicate facts pulled from chat,
-Drive, and Jira fighting each other for context window
-space. It sees one corroborated fact with a link list back
-to every source that vouched for it.
+in a chat message and the same date written in a wiki page,
+logged in a ticket, quoted in a runbook, or repeated in a
+CRM note all merge into one observation, with each source
+attached as backing provenance. So when a user asks "what's
+the launch date?", the assistant doesn't see duplicate facts
+pulled from chat and connected systems fighting each other
+for context window space. It sees one corroborated fact with
+a link list back to every source that vouched for it.
 
 ---
 
@@ -293,7 +288,7 @@ The memory hierarchy looks like this:
 ```mermaid
 flowchart TD
     R[Raw messages<br/>~200 B each<br/>thousands per channel] --> CS[Channel summary<br/>~2 KB per channel<br/>updated each synthesis window]
-    EXT[External documents<br/>Drive, OneDrive, Notion,<br/>Jira, Confluence, Figma, HubSpot<br/>linked to channel/domain] --> CS
+    EXT[External documents<br/>linked to channel or domain] --> CS
     CS --> DS["Domain memory<br/>~5 KB per domain<br/>e.g. launch, hiring"]
     DS --> TS[Tenant / user memory<br/>~10 KB per scope<br/>top-level facts and preferences]
 ```
@@ -307,19 +302,17 @@ summary asynchronously during quiet periods, then queries hit
 the summary instead of re-reading 500 messages.
 
 Channel summaries don't just consume chat messages. They
-consume *anything linked to the channel* — a Drive folder of
-design decks, a Notion page tracking the rollout, a Jira
-epic with subtasks, the Figma flow, the HubSpot deal,
-relevant Confluence pages — and the same hierarchy applies,
-scoped to the channel or domain the connector attached them
-to. A `product-launch` channel summary built on 500 messages
-*plus* twelve linked Drive/Notion/Jira/Figma artifacts is
-still ~2 KB, because the summary captures decisions and
-ownership, not content. A `hiring` domain memory built
-across multiple channels and a Confluence wiki of role
-descriptions is still ~5 KB, for the same reason. External
-documents are not a parallel hierarchy; they feed the same
-one.
+consume *anything linked to the channel* — design decks,
+planning pages, ticket epics, flow diagrams, deal records,
+relevant wiki pages — and the same hierarchy applies, scoped
+to the channel or domain the connector attached them to. A
+`product-launch` channel summary built on 500 messages
+*plus* twelve linked external documents is still ~2 KB,
+because the summary captures decisions and ownership, not
+content. A `hiring` domain memory built across multiple
+channels and a wiki of role descriptions is still ~5 KB,
+for the same reason. External documents are not a parallel
+hierarchy; they feed the same one.
 
 The contract is **synthesis flows up the hierarchy, never down**.
 Higher layers never ingest higher layers as input. That keeps
@@ -332,9 +325,9 @@ delete or rebuild any single layer without poisoning the others.
 ## Insight 6: Connectors Are Just Another Evidence Source
 
 External systems plug into the substrate through
-**connectors**. A connector is a small adapter (Google
-Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot,
-…) that does three things:
+**connectors**. A connector is a small adapter for a single
+upstream system (file storage, knowledge bases, ticketing,
+design tools, CRM, chat, email) that does three things:
 
 1. **Link a document to a channel or domain.** A Notion
    page linked to `#product-launch` is scoped to that
@@ -357,12 +350,12 @@ Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot,
    ring buffer), observation extraction, semantic dedup,
    decay class assignment, channel/domain summary update.
 
-Crucially, the rest of the system doesn't know or care that
-the source was a Confluence page rather than a chat message.
-The same memory hierarchy — evidence → observation →
-semantic concept → reasoning trace → exported summary —
-applies regardless of source. The benefits compound: a fact
-asserted both in a Slack message and a Notion page is
+Crucially, the rest of the system doesn't know or care
+whether the source was a wiki page or a chat message. The
+same memory hierarchy — evidence → observation → semantic
+concept → reasoning trace → exported summary — applies
+regardless of source. The benefits compound: a fact asserted
+in chat *and* in a linked external document is
 single-deduped at the observation layer (Insight 2), shares
 a single graph node in the retrieval cascade (Insight 4),
 and shows up exactly once in the channel summary (Insight 5)
@@ -440,10 +433,9 @@ enough to fit on the device the user owns, fresh enough that
 the assistant doesn't feel stuck in last quarter, and honest
 enough about what it has forgotten that you can trust what
 it tells you. And it has to hold *across surfaces*: a fact
-mentioned in chat, written down in a Notion page, tracked in
-a Jira ticket, drawn in a Figma file, or logged in HubSpot
-is one fact, not five — backed by the provenance of every
-source that vouched for it.
+mentioned in chat and the same fact written down in a
+linked external document is one fact, not several — backed
+by the provenance of every source that vouched for it.
 
 That's a different mental model than "store everything and
 search later," and a different mental model than "the

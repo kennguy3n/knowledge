@@ -263,9 +263,9 @@ the substrate considers truly final, and it is the contract the
 
 ## 5. On-device model strategy
 
-The on-device model strategy is shared across the KChat platform
-and is documented in detail in
-[`kennguy3n/slm-chat-demo/docs/kchat-on-device-model-strategy.md`](https://github.com/kennguy3n/slm-chat-demo/blob/main/docs/kchat-on-device-model-strategy.md).
+The on-device model strategy is shared across the KChat platform;
+the canonical model-selection document is
+[`kchat-on-device-model-strategy.md`](https://github.com/kennguy3n/slm-chat-demo/blob/main/docs/kchat-on-device-model-strategy.md).
 This section captures the model picks the Knowledge substrate
 relies on directly.
 
@@ -625,10 +625,9 @@ Every connector implements the same contract:
    the configured ACL; subsequent runs pull deltas only.
 3. **Real-time updates via webhooks** when the source supports
    them; polled fallback otherwise.
-4. **Channel-scoped attachment** — the same pattern as the
-   slm-chat-demo Phase 5 connector framework: a connector is
-   attached to a specific channel / domain, and observations
-   derived from it inherit that scope.
+4. **Channel-scoped attachment** — a connector is attached to a
+   specific channel or domain, and observations derived from it
+   inherit that scope. Nothing is ingested globally by accident.
 5. **ACL sync** — the source system's permissions are mirrored
    into the substrate's relation graph. A document only
    produces observations visible to users who are allowed to

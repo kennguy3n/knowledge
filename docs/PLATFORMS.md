@@ -1,15 +1,17 @@
 # Device & Platform Notes
 
-On-device tuning (storage, memory, battery, network) and per-platform
-integration notes (iOS, Android, macOS, Windows) for the Rust shared
-core. Split out of [`ARCHITECTURE.md`](../ARCHITECTURE.md) §9 and §10.
+This document collects the on-device tuning behaviour of the
+Knowledge substrate (storage, memory, battery, network) and the
+per-platform integration notes for iOS, Android, macOS, and
+Windows. For the system-level architecture see
+[`ARCHITECTURE.md`](../ARCHITECTURE.md).
 
-## 9. Device optimization
+## Device Optimization
 
 The substrate's behaviour adapts to four signals: storage,
 memory, battery, and network.
 
-### 9.1 Storage
+### Storage
 
 - **Tiered storage** — hot SQLCipher database for recent /
   pinned objects; cold encrypted segments for the long tail.
@@ -25,7 +27,7 @@ memory, battery, and network.
   (250 MB substrate footprint on mobile without SLM resident,
   1 GB+ on desktop with SLM resident).
 
-### 9.2 Memory
+### Memory
 
 - **mmap** for all weight files so the OS can evict cleanly
   under pressure.
@@ -35,7 +37,7 @@ memory, battery, and network.
   at a time; on desktop, the SLM and the embedding model can
   coexist.
 
-### 9.3 Battery
+### Battery
 
 - **< 20% battery** — heavy synthesis (channel / domain
   windows) is skipped; only sensory observations + lexicon
@@ -45,7 +47,7 @@ memory, battery, and network.
 - **Batch sync** — sync uplink waits for AC + Wi-Fi by default;
   override per-tenant policy is allowed.
 
-### 9.4 Network
+### Network
 
 - **Delta sync only** — full re-sync is reserved for first run
   and explicit recovery.
@@ -58,9 +60,9 @@ memory, battery, and network.
 
 ---
 
-## 10. Platform-specific notes
+## Platform Notes
 
-### 10.1 iOS
+### iOS
 
 - **UI**: Swift native (SwiftUI + UIKit).
 - **Rust core** via **UniFFI** (`.xcframework`).
@@ -70,7 +72,7 @@ memory, battery, and network.
 - **Background work** — synthesis windows scheduled via BGTask
   scheduler; respects Low Power Mode.
 
-### 10.2 Android
+### Android
 
 - **UI**: Kotlin native (Jetpack Compose).
 - **Rust core** via **JNI**.
@@ -81,7 +83,7 @@ memory, battery, and network.
 - **Background work** — WorkManager constraints (charging,
   unmetered, idle); synthesis windows are deferrable.
 
-### 10.3 macOS
+### macOS
 
 - **UI**: Electron 31 + React renderer.
 - **Native bridge**: Swift N-API addon for Rust core +
@@ -91,7 +93,7 @@ memory, battery, and network.
 - **Embeddings**: Core ML for XLM-R via Swift bridge; ONNX
   Runtime fallback.
 
-### 10.4 Windows
+### Windows
 
 - **UI**: Electron 31 + React renderer.
 - **Native bridge**: C++ N-API addon for Rust core.
