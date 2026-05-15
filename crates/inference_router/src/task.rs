@@ -301,9 +301,7 @@ mod tests {
         let questions_idx = json.find("\"open_questions\"").unwrap();
         let tasks_idx = json.find("\"active_tasks\"").unwrap();
         assert!(
-            recap_idx < decisions_idx
-                && decisions_idx < questions_idx
-                && questions_idx < tasks_idx,
+            recap_idx < decisions_idx && decisions_idx < questions_idx && questions_idx < tasks_idx,
             "SummaryBundle serialisation drifted from GBNF field order; got: {json}"
         );
         assert!(

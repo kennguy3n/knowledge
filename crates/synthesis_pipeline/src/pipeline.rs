@@ -124,6 +124,28 @@ impl SynthesisPipeline for NoOpSynthesizer {
 /// JSON that round-trips through [`SummaryBundle`]'s `serde`
 /// derive.
 ///
+/// # All summary tiers share the [`InferenceTask::SynthSummary`] task
+///
+/// [`Self::with_object_type`] lets the caller tag the emitted
+/// [`SynthesisObject`] as `ChannelRecap`, `EpisodicSummary`,
+/// `DomainSummary`, or `TenantSummary`, but every tier dispatches
+/// the **same** [`InferenceTask::SynthSummary`] under the hood — and
+/// therefore the same prompt template and the same GBNF grammar.
+/// The four tiers currently share one [`SummaryBundle`] output
+/// shape, so a single task is the right design today; the
+/// `object_type` field is purely an output-side annotation that
+/// downstream consumers use to route the bundle into the
+/// appropriate scope.
+///
+/// If a future tier needs a different prompt or grammar (e.g. a
+/// tenant rollup that wants per-domain breakdowns) the right shape
+/// is a new [`InferenceTask`] variant
+/// (`SynthDomainSummary` / `SynthTenantSummary`) plus a per-tier
+/// dispatch table here, **not** a runtime fork inside the prompt
+/// template. Don't introduce that split until a concrete tier
+/// actually diverges — `InferenceTask` is part of the cross-crate
+/// contract.
+///
 /// On any router-level failure (no adapter available, adapter
 /// crash, JSON parse error after the grammar constraint somehow
 /// failed) we surface
