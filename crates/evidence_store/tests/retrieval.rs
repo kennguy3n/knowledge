@@ -387,6 +387,246 @@ fn search_hybrid_falls_back_to_live_embed_on_dim_mismatch() {
     );
 }
 
+/// Regression test for the Phase-B review finding "candidate_embedding
+/// propagates cache errors via `?`, aborting entire search on a single
+/// corrupted embedding row". We seed an evidence row, then corrupt its
+/// cached embedding to a length that is not a multiple of 4 (the
+/// blob-deserialisation invariant). The retriever must still return a
+/// result for that row by falling back to live-embedding the body —
+/// not surface `EvidenceError::Schema` from the underlying cache read.
+#[test]
+fn search_hybrid_treats_corrupted_cache_row_as_miss() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(scope, b"deadline reminder", None, ImportanceClass::Useful)
+        .unwrap();
+
+    // Corrupt the cached embedding for `r.evidence_id` to an odd
+    // length (3 bytes). `bytes_to_embedding` would reject this with
+    // `EvidenceError::Schema(...)` if `?`-propagated.
+    store
+        .raw_conn()
+        .execute(
+            "INSERT OR REPLACE INTO evidence_embeddings
+                 (evidence_id, embedding, model_tag, created_at)
+             VALUES (?1, X'00FF00', 'corrupt-tag', 0)",
+            rusqlite::params![r.evidence_id.as_uuid().as_bytes().as_slice()],
+        )
+        .unwrap();
+
+    let hits = HybridRetriever::new(&store)
+        .with_embedding_model(ConstUnitEmbeddingModel)
+        .search_hybrid(scope, "deadline", 5)
+        .expect("search_hybrid must not propagate a per-row cache error");
+    assert!(
+        hits.iter().any(|h| h.evidence_id == r.evidence_id),
+        "row with corrupted cache row should still appear in results: {hits:?}"
+    );
+}
+
+/// Regression test for the Phase-B review finding "embedding cache is
+/// not populated for body-table dedup hits — embedding work is
+/// repeated for deduped bodies". We ingest the same large body twice
+/// and assert both rows share the cached vector and that the embed
+/// model was only invoked once.
+#[test]
+fn dedup_hit_copies_embedding_instead_of_re_embedding() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct CountingEmbedding {
+        calls: Arc<AtomicUsize>,
+    }
+    impl EmbeddingModel for CountingEmbedding {
+        fn embed(&self, _text: &str) -> evidence_store::embeddings::Result<Vec<f32>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![1.0, 2.0, 3.0, 4.0])
+        }
+        fn dimension(&self) -> usize {
+            4
+        }
+        fn probe(&self) -> EmbeddingProbe {
+            EmbeddingProbe::Available
+        }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let model = CountingEmbedding {
+        calls: Arc::clone(&calls),
+    };
+
+    let (_dir, mut store) = open_store_with_model(model, "count-v1");
+    let scope = ScopeId::new_v4();
+    // The body-table path triggers above the inline threshold
+    // (default 4096 bytes). Use a printable body so the FTS lane is
+    // also exercised on both ingests — both should hit the dedup
+    // path on the second insert.
+    let body = "x".repeat(4097);
+
+    let first = store
+        .ingest(scope, body.as_bytes(), None, ImportanceClass::Useful)
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "first ingest embeds once");
+
+    let second = store
+        .ingest(scope, body.as_bytes(), None, ImportanceClass::Useful)
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "second ingest must reuse the cached embedding, not re-embed"
+    );
+
+    let first_vec = store.get_embedding(first.evidence_id).unwrap().unwrap();
+    let second_vec = store.get_embedding(second.evidence_id).unwrap().unwrap();
+    assert_eq!(
+        first_vec, second_vec,
+        "dedup-copied embedding must be byte-identical to the source"
+    );
+}
+
+/// Regression test for the Phase-B review finding "schema migration
+/// (v1→v2) has no migration path". We construct a v1-shaped database
+/// (no `evidence_embeddings` table, `user_version = 1`) and assert
+/// that `EvidenceStore::open` forward-ports it to v2 by creating the
+/// missing table and stamping the version, without losing existing
+/// rows.
+#[test]
+fn schema_migration_forward_ports_legacy_v1_database() {
+    use rusqlite::Connection;
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    // Build a v1-shaped database by hand: open with the SQLCipher
+    // PRAGMA dance, create only the subset of tables that existed at
+    // v1, and stamp `user_version = 1`. We can't easily reach into
+    // `derive_key` from the integration test crate, so we mirror what
+    // `EvidenceStore::open` does, but stop after the legacy subset.
+    {
+        let raw = Connection::open(&path).unwrap();
+        // `EvidenceStore::open` derives the SQLCipher page key from
+        // the master key with HKDF; we need to mirror that so the
+        // hand-built v1 database is openable by the production code.
+        let page_key = crypto::derive_key(&MASTER_KEY, b"sqlcipher:store:v1").unwrap();
+        let key_pragma = format!("x'{}'", hex_encode_local(&page_key));
+        raw.pragma_update(None, "key", &key_pragma).unwrap();
+        raw.pragma_update(None, "cipher_page_size", 4096_i64)
+            .unwrap();
+        raw.pragma_update(None, "kdf_iter", 256_000_i64).unwrap();
+        // v1 subset: evidence, body_store, ring_buffer, evidence_fts.
+        // No evidence_embeddings.
+        raw.execute_batch(
+            r#"
+            CREATE TABLE evidence (
+                id BLOB PRIMARY KEY, scope_id BLOB NOT NULL,
+                content_hash BLOB NOT NULL, body BLOB, body_ref BLOB,
+                nonce BLOB, source_ref TEXT, acl_pointer TEXT,
+                importance INTEGER NOT NULL, storage_path INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX idx_evidence_scope_created
+                ON evidence (scope_id, created_at DESC);
+            CREATE INDEX idx_evidence_content_hash
+                ON evidence (content_hash);
+            CREATE TABLE body_store (
+                content_hash BLOB PRIMARY KEY, body BLOB NOT NULL,
+                nonce BLOB NOT NULL, ref_count INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE ring_buffer (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, scope_id BLOB NOT NULL,
+                body BLOB NOT NULL, nonce BLOB NOT NULL,
+                payload_size INTEGER NOT NULL, created_at INTEGER NOT NULL
+            );
+            CREATE INDEX idx_ring_buffer_scope_created
+                ON ring_buffer (scope_id, created_at DESC);
+            CREATE VIRTUAL TABLE evidence_fts USING fts5(
+                content, evidence_id UNINDEXED, scope_id UNINDEXED,
+                tokenize = 'unicode61 remove_diacritics 2'
+            );
+            "#,
+        )
+        .unwrap();
+        raw.pragma_update(None, "user_version", 1_i32).unwrap();
+    }
+
+    // Now open with the real entrypoint. The migration must succeed
+    // and create `evidence_embeddings`.
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("open must migrate a legacy v1 database in place");
+
+    // The new table must exist now.
+    let table_exists: bool = store
+        .raw_conn()
+        .query_row(
+            "SELECT 1 FROM sqlite_master \
+                 WHERE type = 'table' AND name = 'evidence_embeddings'",
+            [],
+            |r| r.get::<_, i32>(0),
+        )
+        .is_ok();
+    assert!(
+        table_exists,
+        "evidence_embeddings table must exist after v1→v2 migration"
+    );
+
+    // And the version must be stamped to current.
+    let version: i32 = store
+        .raw_conn()
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2, "user_version must be stamped to SCHEMA_VERSION");
+}
+
+/// Regression test for the Phase-B review finding "schema migration
+/// allows opening a future database silently". A database stamped
+/// `user_version = 99` (a hypothetical future version) must be
+/// rejected up-front rather than silently downgraded to the current
+/// `SCHEMA_VERSION`.
+#[test]
+fn schema_migration_refuses_future_version_database() {
+    use rusqlite::Connection;
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    {
+        let raw = Connection::open(&path).unwrap();
+        let page_key = crypto::derive_key(&MASTER_KEY, b"sqlcipher:store:v1").unwrap();
+        let key_pragma = format!("x'{}'", hex_encode_local(&page_key));
+        raw.pragma_update(None, "key", &key_pragma).unwrap();
+        raw.pragma_update(None, "cipher_page_size", 4096_i64)
+            .unwrap();
+        raw.pragma_update(None, "kdf_iter", 256_000_i64).unwrap();
+        raw.execute_batch("CREATE TABLE evidence (id BLOB);")
+            .unwrap();
+        raw.pragma_update(None, "user_version", 99_i32).unwrap();
+    }
+
+    let result = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default());
+    match result {
+        Ok(_) => panic!("opening a future-version database must fail"),
+        Err(EvidenceError::Schema(_)) => {}
+        Err(other) => {
+            panic!("future-version rejection must surface as EvidenceError::Schema, got {other:?}")
+        }
+    }
+}
+
+/// Lowercase hex encoder used by the schema-migration tests, which
+/// need to drive SQLCipher's `PRAGMA key = X'…'` directly without
+/// pulling in `hex` as a dev-dependency.
+fn hex_encode_local(bytes: &[u8]) -> String {
+    const CHARS: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(CHARS[(b >> 4) as usize] as char);
+        s.push(CHARS[(b & 0x0f) as usize] as char);
+    }
+    s
+}
+
 fn open_store_with_model<M>(model: M, tag: &str) -> (tempfile::TempDir, EvidenceStore)
 where
     M: EmbeddingModel + 'static,
