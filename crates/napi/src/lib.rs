@@ -49,6 +49,26 @@ pub fn init(config_json: &str) -> NapiResult<()> {
     Ok(())
 }
 
+/// Open the SQLCipher-backed evidence store at `path` using the
+/// 32-byte master key encoded as `master_key_hex` (64 lower-case hex
+/// chars). Mirrors [`ffi::open_store`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::open_store`] errors as [`NapiError`].
+pub fn open_store(path: String, master_key_hex: String) -> NapiResult<()> {
+    ffi::open_store(path, master_key_hex).map_err(NapiError::from)
+}
+
+/// Drop the open evidence store. Mirrors [`ffi::close_store`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::close_store`] errors as [`NapiError`].
+pub fn close_store() -> NapiResult<()> {
+    ffi::close_store().map_err(NapiError::from)
+}
+
 /// Ingest a chat / document message through the encrypted evidence
 /// plane. Mirrors [`ffi::ingest_message`].
 ///
@@ -274,14 +294,17 @@ mod tests {
     }
 
     #[test]
-    fn ingest_message_forwards_unimplemented_from_ffi() {
+    fn ingest_message_forwards_invalid_id_for_malformed_scope() {
+        // The FFI surface parses `scope_id` as a UUID. Hosts that
+        // forget to validate the JS-side string should get a
+        // structured `InvalidId` back rather than a panic.
         let req = IngestRequest {
             scope_id: "scope".into(),
             body: "hi".into(),
             source: SourceKind::Slack,
         };
         let err = ingest_message(req).unwrap_err();
-        assert_eq!(err.kind(), "Unimplemented");
+        assert_eq!(err.kind(), "InvalidId");
     }
 
     #[test]
@@ -297,22 +320,33 @@ mod tests {
     }
 
     #[test]
-    fn query_forwards_unimplemented_from_ffi() {
+    fn query_forwards_invalid_id_for_malformed_scope() {
         let req = QueryRequest {
             scope_id: "scope".into(),
             query_text: "q".into(),
             limit: 10,
         };
         let err = query(req).unwrap_err();
-        assert_eq!(err.kind(), "Unimplemented");
+        assert_eq!(err.kind(), "InvalidId");
     }
 
     #[test]
-    fn pin_unpin_forget_forward_unimplemented_from_ffi() {
-        for f in [pin, unpin, forget] {
+    fn pin_unpin_forward_unimplemented_from_ffi() {
+        // pin / unpin remain Unimplemented until the memory-manager
+        // surface is wired through the runtime (Phase B).
+        for f in [pin, unpin] {
             let err = f("id".into()).unwrap_err();
             assert_eq!(err.kind(), "Unimplemented");
         }
+    }
+
+    #[test]
+    fn forget_forwards_invalid_id_for_malformed_id() {
+        // `forget` is wired in Phase A: it validates the id is a
+        // UUID before touching the runtime, so malformed ids surface
+        // as `InvalidId`.
+        let err = forget("id".into()).unwrap_err();
+        assert_eq!(err.kind(), "InvalidId");
     }
 
     #[test]
@@ -343,13 +377,25 @@ mod tests {
     }
 
     #[test]
-    fn crypto_endpoints_forward_unimplemented_from_ffi() {
-        assert_eq!(generate_keypair().unwrap_err().kind(), "Unimplemented");
-        // empty payload still routes through the b64 codec
+    fn generate_keypair_returns_ml_dsa_65_envelope() {
+        // Wired in Phase A. The N-API layer just forwards the
+        // structured envelope; assert the envelope shape is
+        // preserved across the bridge.
+        let kp = generate_keypair().expect("generate_keypair");
+        assert_eq!(kp.algorithm, "ml-dsa-65");
+        assert!(!kp.public_key.is_empty());
+        assert!(!kp.private_key.is_empty());
+    }
+
+    #[test]
+    fn encrypt_decrypt_forward_invalid_id_for_malformed_scope() {
+        // The N-API layer base64-decodes the payload and forwards to
+        // FFI. With a malformed scope string FFI rejects with
+        // InvalidId before any crypto work happens.
         let err = encrypt("scope".into(), encode_b64(&[1, 2, 3])).unwrap_err();
-        assert_eq!(err.kind(), "Unimplemented");
+        assert_eq!(err.kind(), "InvalidId");
         let err = decrypt("scope".into(), encode_b64(&[1, 2, 3])).unwrap_err();
-        assert_eq!(err.kind(), "Unimplemented");
+        assert_eq!(err.kind(), "InvalidId");
     }
 
     #[test]

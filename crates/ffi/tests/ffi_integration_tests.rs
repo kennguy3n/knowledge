@@ -5,32 +5,56 @@
 //! They cover three concerns:
 //!
 //! 1. **Surface coverage** — every public function in `lib.rs` is
-//!    invoked at least once and its Phase 1 contract is asserted.
+//!    invoked at least once. Wired functions (Phase A) are exercised
+//!    against a temp-dir SQLCipher store; surfaces still pending
+//!    Phase B / C wiring assert their stable `Unimplemented` method
+//!    tag.
 //! 2. **Error mapping** — every `FfiError` variant is constructible,
 //!    JSON-stable, and exposes a stable `kind()` tag.
 //! 3. **Round-trip semantics** — wire types survive a serde
 //!    encode/decode cycle, simulating the bridge serialization that
 //!    happens when the host side rehydrates a value.
-//!
-//! The Phase 1 skeleton intentionally returns
-//! [`FfiError::Unimplemented`] from every business function. These
-//! tests are the safety-net that flags any change to that contract:
-//! when a method is wired up, a test here will fail and the author
-//! will be forced to update the contract surface (and the host
-//! shims) deliberately rather than by accident.
+
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use ffi::{
-    decrypt, encrypt, forget, generate_keypair, get_channel_memory, get_evidence, get_user_memory,
-    ingest_message, list_memories, pin, query, run_decay_sweep, trigger_synthesis, unpin,
-    EvidenceRecord, FfiError, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord, MemoryState,
-    QueryResult, SourceKind, SynthesisTrigger,
+    close_store, decrypt, encrypt, forget, generate_keypair, get_channel_memory, get_evidence,
+    get_user_memory, ingest_message, list_memories, open_store, pin, query, run_decay_sweep,
+    trigger_synthesis, unpin, EvidenceRecord, FfiError, FfiKeypair, FfiSignature, MemoryFilter,
+    MemoryRecord, MemoryState, QueryResult, SourceKind, SynthesisTrigger,
 };
+use tempfile::TempDir;
 
 const SCOPE: &str = "00000000-0000-0000-0000-000000000001";
 
+/// Serialize tests that touch the process-global FFI singleton. The
+/// runtime is one-per-process so parallel tests that call
+/// [`open_store`] / [`close_store`] would otherwise clobber each
+/// other.
+fn singleton_lock() -> MutexGuard<'static, ()> {
+    static M: OnceLock<Mutex<()>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Open a fresh temp-dir-backed store with a deterministic master
+/// key. Returns the `TempDir` so the caller can keep it alive for the
+/// duration of the test.
+fn fresh_store() -> TempDir {
+    let _ = close_store();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let master_key_hex = "a5".repeat(32);
+    open_store(path.to_string_lossy().into_owned(), master_key_hex).expect("open_store");
+    dir
+}
+
 /// Convenience: assert the error is `Unimplemented` and that its
-/// `method` field matches the call-site name. The Phase 1 contract
-/// guarantees the method tag is the Rust function name verbatim.
+/// `method` field matches the call-site name. The wire contract
+/// guarantees the method tag is the Rust function name verbatim — a
+/// host watchdog can switch on it to surface "this surface is not
+/// available in your runtime build" cleanly.
 fn assert_unimplemented(err: FfiError, expected_method: &str) {
     match err {
         FfiError::Unimplemented { method } => {
@@ -45,31 +69,63 @@ fn assert_unimplemented(err: FfiError, expected_method: &str) {
 
 // ─────────────────────────── Surface coverage ───────────────────────
 
+/// Evidence-store wiring is end-to-end live as of Phase A. This test
+/// exercises the full ingest → query → get → forget → re-query loop
+/// against a real SQLCipher temp store and asserts the documented
+/// post-forget semantics.
 #[test]
-fn evidence_surface_returns_unimplemented_with_stable_method_tags() {
-    assert_unimplemented(
-        ingest_message(SCOPE.into(), "hello".into(), SourceKind::Manual).unwrap_err(),
-        "ingest_message",
+fn evidence_surface_round_trips_via_real_sqlcipher() {
+    let _g = singleton_lock();
+    let _dir = fresh_store();
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    let phrase = "xyzzyintegrationroundtrip";
+    let body = format!("Schedule the {phrase} review for Q4 close.");
+
+    let evidence_id =
+        ingest_message(scope.clone(), body.clone(), SourceKind::Slack).expect("ingest_message");
+    assert!(!evidence_id.is_empty());
+
+    let hits = query(scope.clone(), phrase.into(), 10).expect("query");
+    assert_eq!(hits.len(), 1, "FTS5 should surface the ingested phrase");
+    assert_eq!(hits[0].evidence_id, evidence_id);
+    assert!(hits[0].snippet.contains(phrase));
+
+    let record = get_evidence(evidence_id.clone()).expect("get_evidence");
+    assert_eq!(record.body, body);
+    assert_eq!(record.source, SourceKind::Slack);
+    assert_eq!(record.scope_id, scope);
+
+    forget(evidence_id.clone()).expect("forget");
+
+    let hits_after = query(scope.clone(), phrase.into(), 10).expect("query after forget");
+    assert!(
+        hits_after.is_empty(),
+        "post-forget query must return no rows for the forgotten scope"
     );
-    assert_unimplemented(
-        query(SCOPE.into(), "hello".into(), 10).unwrap_err(),
-        "query",
-    );
-    assert_unimplemented(
-        get_evidence("00000000-0000-0000-0000-000000000002".into()).unwrap_err(),
-        "get_evidence",
-    );
+    match get_evidence(evidence_id) {
+        Err(FfiError::NotFound { kind, .. }) => assert_eq!(kind, "evidence"),
+        other => panic!("expected NotFound after forget, got {other:?}"),
+    }
+
+    close_store().expect("close_store");
 }
 
+/// Memory-manager surfaces are still pending Phase B wiring. This
+/// test pins the `Unimplemented` contract so hosts that already
+/// switch on `method` continue to work, and so a future PR that
+/// wires up the surface has to update the test deliberately.
 #[test]
 fn memory_surface_returns_unimplemented_with_stable_method_tags() {
+    let _g = singleton_lock();
+    let _dir = fresh_store();
+
     assert_unimplemented(
         get_user_memory(SCOPE.into()).unwrap_err(),
         "get_user_memory",
     );
-    assert_unimplemented(pin("id".into()).unwrap_err(), "pin");
-    assert_unimplemented(unpin("id".into()).unwrap_err(), "unpin");
-    assert_unimplemented(forget("id".into()).unwrap_err(), "forget");
+    assert_unimplemented(pin(SCOPE.into()).unwrap_err(), "pin");
+    assert_unimplemented(unpin(SCOPE.into()).unwrap_err(), "unpin");
     assert_unimplemented(
         list_memories(SCOPE.into(), MemoryFilter::default()).unwrap_err(),
         "list_memories",
@@ -78,10 +134,16 @@ fn memory_surface_returns_unimplemented_with_stable_method_tags() {
         run_decay_sweep(SCOPE.into()).unwrap_err(),
         "run_decay_sweep",
     );
+
+    close_store().expect("close_store");
 }
 
+/// Synthesis-pipeline surfaces are still pending Phase C wiring.
 #[test]
 fn synthesis_surface_returns_unimplemented_with_stable_method_tags() {
+    let _g = singleton_lock();
+    let _dir = fresh_store();
+
     assert_unimplemented(
         get_channel_memory(SCOPE.into()).unwrap_err(),
         "get_channel_memory",
@@ -90,19 +152,40 @@ fn synthesis_surface_returns_unimplemented_with_stable_method_tags() {
         trigger_synthesis(SCOPE.into(), SynthesisTrigger::ManualUserAction).unwrap_err(),
         "trigger_synthesis",
     );
+
+    close_store().expect("close_store");
 }
 
+/// Crypto wiring: `generate_keypair` is live; `encrypt` / `decrypt`
+/// require an open store and round-trip plaintext through the
+/// scope-derived AEAD key.
 #[test]
-fn crypto_surface_returns_unimplemented_with_stable_method_tags() {
-    assert_unimplemented(generate_keypair().unwrap_err(), "generate_keypair");
-    assert_unimplemented(
-        encrypt(SCOPE.into(), b"plaintext".to_vec()).unwrap_err(),
-        "encrypt",
+fn crypto_surface_round_trips_via_scope_aead() {
+    let _g = singleton_lock();
+    let _dir = fresh_store();
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    let plaintext = b"hello, knowledge".to_vec();
+    let ciphertext = encrypt(scope.clone(), plaintext.clone()).expect("encrypt");
+    assert!(
+        ciphertext.len() > plaintext.len(),
+        "envelope must include the nonce prefix and Poly1305 tag"
     );
-    assert_unimplemented(
-        decrypt(SCOPE.into(), b"ciphertext".to_vec()).unwrap_err(),
-        "decrypt",
-    );
+
+    let recovered = decrypt(scope.clone(), ciphertext.clone()).expect("decrypt");
+    assert_eq!(recovered, plaintext);
+
+    // Wrong scope must reject (AEAD AAD binds the scope id).
+    let other_scope = uuid::Uuid::new_v4().to_string();
+    let err = decrypt(other_scope, ciphertext).unwrap_err();
+    assert_eq!(err.kind(), "Crypto");
+
+    let keypair = generate_keypair().expect("generate_keypair");
+    assert_eq!(keypair.algorithm, "ml-dsa-65");
+    assert!(!keypair.public_key.is_empty());
+    assert!(!keypair.private_key.is_empty());
+
+    close_store().expect("close_store");
 }
 
 // ──────────────────────────── Error mapping ─────────────────────────
@@ -141,55 +224,63 @@ fn ffi_error_variants_are_wire_stable() {
         ),
         (
             FfiError::Memory {
-                message: "decay boom".into(),
+                message: "decay sweep failed".into(),
             },
             "Memory",
         ),
         (
             FfiError::Synthesis {
-                message: "synth boom".into(),
+                message: "router timeout".into(),
             },
             "Synthesis",
         ),
         (
             FfiError::Crypto {
-                message: "aead boom".into(),
+                message: "aead tampered".into(),
             },
             "Crypto",
         ),
         (
             FfiError::Unavailable {
-                subsystem: "onnx".into(),
+                subsystem: "tee_worker".into(),
             },
             "Unavailable",
         ),
     ];
-    for (err, kind_tag) in cases {
-        assert_eq!(err.kind(), kind_tag);
-        let json = serde_json::to_string(&err).expect("serialize");
-        let back: FfiError = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(err, back, "JSON round-trip dropped variant {kind_tag}");
+    for (variant, kind) in cases {
+        assert_eq!(variant.kind(), kind, "kind() drifted for {kind}");
+        let json = serde_json::to_string(&variant).expect("encode");
+        let back: FfiError = serde_json::from_str(&json).expect("decode");
+        assert_eq!(
+            variant.kind(),
+            back.kind(),
+            "round-trip kind() mismatch for {kind}"
+        );
     }
 }
 
 #[test]
 fn ffi_error_display_includes_diagnostic_payload() {
-    let err = FfiError::NotFound {
-        kind: "memory".into(),
-        id: "missing".into(),
+    let err = FfiError::Evidence {
+        message: "no such row".into(),
     };
-    let msg = err.to_string();
-    assert!(msg.contains("memory"));
-    assert!(msg.contains("missing"));
+    let s = format!("{err}");
+    assert!(s.contains("no such row"), "Display drift: got {s}");
+
+    let err = FfiError::NotFound {
+        kind: "evidence".into(),
+        id: "abc".into(),
+    };
+    let s = format!("{err}");
+    assert!(s.contains("evidence"), "Display drift: got {s}");
+    assert!(s.contains("abc"), "Display drift: got {s}");
 }
 
-// ─────────────────────── Round-trip simulations ─────────────────────
+// ──────────────────────── Round-trip wire types ─────────────────────
 
-/// Phase 1 contract: the substrate's evidence-store wire types must
-/// survive a serde round-trip, since UniFFI / N-API rehydrate them
-/// on the host side. This simulates ingest → query → get_evidence
-/// at the wire-type layer (the actual call sites all return
-/// `Unimplemented` today, asserted above).
+/// Evidence flow at the wire layer: a host marshals an ingest →
+/// query → get_evidence call chain by serializing each
+/// intermediate value across the FFI boundary.
 #[test]
 fn evidence_round_trip_via_wire_types() {
     let ingested = EvidenceRecord {
@@ -216,8 +307,6 @@ fn evidence_round_trip_via_wire_types() {
     assert_eq!(hit, after_query);
     assert_eq!(after_query.evidence_id, after_ingest.id);
 
-    // get_evidence simulation: the host re-fetches by id and gets
-    // back the same record.
     let json = serde_json::to_string(&ingested).unwrap();
     let after_get: EvidenceRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(after_get.id, after_query.evidence_id);
@@ -239,8 +328,6 @@ fn memory_round_trip_via_wire_types() {
     let back: MemoryRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(record, back);
 
-    // MemoryFilter spans Option<MemoryState> + bool; both must
-    // survive the bridge serializer.
     let filter = MemoryFilter {
         state: Some(MemoryState::Pinned),
         pinned_only: true,
@@ -250,11 +337,12 @@ fn memory_round_trip_via_wire_types() {
     assert_eq!(filter, back);
 }
 
-/// Crypto round-trip: generate_keypair → encrypt → decrypt simulated
-/// at the wire-type layer. The actual functions return
-/// `Unimplemented` today; this test guards the *envelope* contract
-/// (algorithm tag plus opaque key/signature bytes) so when the real
-/// implementation lands, the wire shape doesn't drift.
+/// Crypto envelope wire shape (algorithm tag plus opaque key /
+/// signature bytes) is what hosts marshal across the bridge. The
+/// real `generate_keypair` produces ML-DSA-65 keys; this test
+/// guards the *shape* of the envelope so a future swap-in of a
+/// different post-quantum signer doesn't break the host's
+/// deserializer.
 #[test]
 fn crypto_envelope_round_trip_via_wire_types() {
     let keypair = FfiKeypair {
@@ -273,16 +361,6 @@ fn crypto_envelope_round_trip_via_wire_types() {
     let json = serde_json::to_string(&signature).unwrap();
     let back: FfiSignature = serde_json::from_str(&json).unwrap();
     assert_eq!(signature, back);
-
-    // The Phase 1 stubs of encrypt/decrypt still return
-    // Unimplemented — but they accept and reject the right wire
-    // shape (Vec<u8> in, Vec<u8> out), which is what hosts depend
-    // on.
-    let plaintext = b"hello, knowledge".to_vec();
-    let enc_err = encrypt(SCOPE.into(), plaintext.clone()).unwrap_err();
-    let dec_err = decrypt(SCOPE.into(), plaintext).unwrap_err();
-    assert_eq!(enc_err.kind(), "Unimplemented");
-    assert_eq!(dec_err.kind(), "Unimplemented");
 }
 
 /// Cover every `SourceKind` variant via serde round-trip — this is

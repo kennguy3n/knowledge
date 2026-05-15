@@ -460,11 +460,14 @@ dependencies = [
  "crypto",
  "evidence_store",
  "memory_manager",
+ "rand",
  "serde",
  "serde_json",
  "synthesis_pipeline",
+ "tempfile",
  "thiserror",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
