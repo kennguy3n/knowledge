@@ -76,6 +76,13 @@ pub struct HybridRetriever<'a> {
     /// values produce a flatter recency curve.
     recency_half_life_seconds: f64,
     embedding_model: Option<Box<dyn EmbeddingModel>>,
+    /// Free-form tag (e.g. `"xlm-r-v1"`) identifying the active
+    /// embedding model. Empty when no model is wired in. Mirrors
+    /// [`EvidenceStore`]'s `embedding_model_tag` so the read path can
+    /// scope `evidence_embeddings` lookups by `model_tag` and avoid
+    /// returning stale rows produced by a previous, dimension-matching
+    /// model.
+    embedding_model_tag: String,
 }
 
 impl<'a> HybridRetriever<'a> {
@@ -87,6 +94,7 @@ impl<'a> HybridRetriever<'a> {
             weights: HybridWeights::default(),
             recency_half_life_seconds: 7.0 * 86_400.0,
             embedding_model: None,
+            embedding_model_tag: String::new(),
         }
     }
 
@@ -106,8 +114,20 @@ impl<'a> HybridRetriever<'a> {
     /// component of the hybrid score. Calling [`Self::search_hybrid`]
     /// after this will compute cosine similarity between the query
     /// embedding and the per-row stored embedding (when present).
-    pub fn with_embedding_model<M: EmbeddingModel + 'static>(mut self, model: M) -> Self {
+    ///
+    /// `model_tag` must match the tag the [`EvidenceStore`] was
+    /// configured with when the rows were ingested — the retriever
+    /// only consumes cache rows whose `model_tag` equals this string,
+    /// so a stale row produced by a previous model (even one with the
+    /// same output dimension) falls through to the live-embed path
+    /// rather than producing a semantically meaningless cosine score.
+    pub fn with_embedding_model<M: EmbeddingModel + 'static>(
+        mut self,
+        model: M,
+        model_tag: impl Into<String>,
+    ) -> Self {
         self.embedding_model = Some(Box::new(model));
+        self.embedding_model_tag = model_tag.into();
         self
     }
 
@@ -355,15 +375,23 @@ impl<'a> HybridRetriever<'a> {
     /// semantic-vector lane.
     ///
     /// Order of preference:
-    ///   1. The cached row in `evidence_embeddings`, when its length
-    ///      matches the query embedding's dimension.
+    ///   1. The cached row in `evidence_embeddings` *that was produced
+    ///      by the active `model_tag`*, when its length matches the
+    ///      query embedding's dimension. The `model_tag` filter is
+    ///      load-bearing: without it, a row written by a previous
+    ///      model that happens to share an output dimension with the
+    ///      active model would silently be scored as if it had been
+    ///      produced by the active model, yielding a meaningless
+    ///      cosine score.
     ///   2. Re-embed the plaintext body via `model`.
     ///
     /// Returns `None` when neither path produces a usable vector
     /// (e.g. the row has no body, the body is binary, the model
-    /// errored, the cache row is corrupted, or every available vector
-    /// mismatches `query_dim`). The stored-cache hit short-circuits
-    /// before reading the body, which is the Phase-B perf win.
+    /// errored, the cache row is corrupted, the active `model_tag`
+    /// has no cached row for this evidence id, or every available
+    /// vector mismatches `query_dim`). The stored-cache hit
+    /// short-circuits before reading the body, which is the Phase-B
+    /// perf win.
     ///
     /// Cache-load failures (`EvidenceError::Schema` from a corrupted
     /// blob, `EvidenceError::Sqlite` from a transient SQL hiccup) are
@@ -379,12 +407,16 @@ impl<'a> HybridRetriever<'a> {
         query_dim: usize,
         model: &dyn EmbeddingModel,
     ) -> Result<Option<Vec<f32>>> {
-        match self.store.get_embedding(id) {
+        match self
+            .store
+            .get_embedding_for_model(id, &self.embedding_model_tag)
+        {
             Ok(Some(stored)) if stored.len() == query_dim => return Ok(Some(stored)),
-            // Dimension mismatch (stored vector is from a different
-            // model) or no cached row at all → fall through to the
-            // live-embed path so the score is still useful for this
-            // query.
+            // Dimension mismatch (defensive — should not happen when
+            // `model_tag` matches, since a single tag implies a single
+            // dimension) or no cached row at all → fall through to
+            // the live-embed path so the score is still useful for
+            // this query.
             Ok(_) => {}
             // A corrupted cache row or transient SQL error must not
             // abort the whole search. Treat it as a cache miss and

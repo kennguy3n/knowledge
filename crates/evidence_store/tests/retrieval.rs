@@ -200,7 +200,8 @@ fn rerank_with_failing_model_returns_embedding_error_not_schema() {
     }];
     let bodies = vec![(r1.evidence_id, "hello world".to_string())];
 
-    let retriever = HybridRetriever::new(&store).with_embedding_model(FailingEmbeddingModel);
+    let retriever =
+        HybridRetriever::new(&store).with_embedding_model(FailingEmbeddingModel, "failing-v1");
     let err = retriever
         .rerank_with_embeddings("hello", candidates, &bodies)
         .expect_err("expected embedding error");
@@ -227,7 +228,8 @@ fn search_hybrid_with_embedding_model_produces_nonzero_vector_score() {
         )
         .unwrap();
 
-    let retriever = HybridRetriever::new(&store).with_embedding_model(ConstUnitEmbeddingModel);
+    let retriever =
+        HybridRetriever::new(&store).with_embedding_model(ConstUnitEmbeddingModel, "const-v1");
     let hits = retriever.search_hybrid(scope, "deadline", 5).unwrap();
     assert!(!hits.is_empty(), "expected at least one hit");
     // Cosine similarity between two identical unit vectors is 1.0,
@@ -344,9 +346,11 @@ fn search_hybrid_uses_cached_embeddings_when_present() {
         .ingest(scope, body, None, ImportanceClass::Useful)
         .unwrap();
 
-    // Sanity-check the cache was populated.
+    // Sanity-check the cache was populated. The retriever uses the
+    // same `model_tag` the store ingested under, so `model_tag`-aware
+    // `get_embedding_for_model` returns the cached vector.
     let hits = HybridRetriever::new(&store)
-        .with_embedding_model(LenEmbeddingModel)
+        .with_embedding_model(LenEmbeddingModel, "len-v1")
         .search_hybrid(scope, "deadline", 5)
         .unwrap();
     assert!(!hits.is_empty());
@@ -370,13 +374,16 @@ fn search_hybrid_falls_back_to_live_embed_on_dim_mismatch() {
     let r = store
         .ingest(scope, b"deadline reminder", None, ImportanceClass::Useful)
         .unwrap();
-    // Seed a stale 8-d embedding; the retriever's model is 4-d.
+    // Seed a stale 8-d embedding; the retriever's model is 4-d. Use
+    // the same `model_tag` the retriever will pass so the cache row is
+    // visible by tag and the dimension-mismatch branch is the one
+    // that triggers the fallback (not the tag-mismatch branch).
     store
         .store_embedding(r.evidence_id, &[1.0; 8], "stale-v0")
         .unwrap();
 
     let hits = HybridRetriever::new(&store)
-        .with_embedding_model(ConstUnitEmbeddingModel)
+        .with_embedding_model(ConstUnitEmbeddingModel, "stale-v0")
         .search_hybrid(scope, "deadline", 5)
         .unwrap();
     assert!(
@@ -404,7 +411,11 @@ fn search_hybrid_treats_corrupted_cache_row_as_miss() {
 
     // Corrupt the cached embedding for `r.evidence_id` to an odd
     // length (3 bytes). `bytes_to_embedding` would reject this with
-    // `EvidenceError::Schema(...)` if `?`-propagated.
+    // `EvidenceError::Schema(...)` if `?`-propagated. Tag the row with
+    // the same `model_tag` the retriever uses so the `model_tag`-aware
+    // read actually surfaces this row (otherwise the tag filter would
+    // mask the corruption before deserialisation ever runs and we
+    // wouldn't exercise the Schema-error branch we care about).
     store
         .raw_conn()
         .execute(
@@ -416,7 +427,7 @@ fn search_hybrid_treats_corrupted_cache_row_as_miss() {
         .unwrap();
 
     let hits = HybridRetriever::new(&store)
-        .with_embedding_model(ConstUnitEmbeddingModel)
+        .with_embedding_model(ConstUnitEmbeddingModel, "corrupt-tag")
         .search_hybrid(scope, "deadline", 5)
         .expect("search_hybrid must not propagate a per-row cache error");
     assert!(
@@ -484,6 +495,113 @@ fn dedup_hit_copies_embedding_instead_of_re_embedding() {
     assert_eq!(
         first_vec, second_vec,
         "dedup-copied embedding must be byte-identical to the source"
+    );
+}
+
+/// Regression test for the Phase-B review finding "embedding cache
+/// read path ignores `model_tag`, returning stale vectors on a
+/// same-dimension model swap".
+///
+/// The write side ([`EvidenceStore::index_embedding_or_copy_dedup`])
+/// already stamps every cached row with the active `model_tag` and
+/// filters dedup-copies by it. The read side
+/// ([`EvidenceStore::get_embedding_for_model`] called from
+/// [`HybridRetriever::candidate_embedding`]) must enforce the same
+/// invariant — otherwise a row written by a previous model that
+/// happens to share the new model's output dimension would silently
+/// be returned and scored as if it had been produced by the active
+/// model, yielding a meaningless cosine similarity.
+///
+/// We seed the cache for an evidence row under `model_tag = "model-a"`
+/// with a vector that differs from what `model-b` would produce, then
+/// drive the retriever with `model-b` and assert that:
+///   1. The cache row from `model-a` does not short-circuit the
+///      live-embed path (counted invocations include the body embed),
+///      and
+///   2. The resulting `vector_score` matches what live-embedding the
+///      body under `model-b` would produce, not what the stale
+///      `model-a` row would score against `model-b`'s query embed.
+#[test]
+fn candidate_embedding_skips_cache_row_with_mismatched_model_tag() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// Deterministic 4-d model whose every output is the unit vector
+    /// `[1.0, 0.0, 0.0, 0.0]`. Counts every `embed` invocation so the
+    /// test can distinguish "cache hit, no live embed" from "cache
+    /// miss, live embed ran".
+    #[derive(Clone)]
+    struct CountingOnesModel {
+        calls: Arc<AtomicUsize>,
+    }
+    impl EmbeddingModel for CountingOnesModel {
+        fn embed(&self, _text: &str) -> evidence_store::embeddings::Result<Vec<f32>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![1.0, 0.0, 0.0, 0.0])
+        }
+        fn dimension(&self) -> usize {
+            4
+        }
+        fn probe(&self) -> EmbeddingProbe {
+            EmbeddingProbe::Available
+        }
+    }
+
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(scope, b"deadline reminder", None, ImportanceClass::Useful)
+        .unwrap();
+
+    // Seed the cache row under `model_tag = "model-a"` with a vector
+    // that is orthogonal to `CountingOnesModel`'s output. If the read
+    // path ignored `model_tag` and returned this row to a retriever
+    // tagged `"model-b"`, the cosine similarity against the query
+    // embed `[1, 0, 0, 0]` would be 0.0 → similarity_to_score(0) =
+    // 0.5, which is detectably different from the 1.0 the live-embed
+    // path produces.
+    store
+        .store_embedding(r.evidence_id, &[0.0, 1.0, 0.0, 0.0], "model-a")
+        .unwrap();
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let model = CountingOnesModel {
+        calls: Arc::clone(&calls),
+    };
+
+    // Retriever runs as `model-b`. The cache row's `model_tag` is
+    // `model-a`, so `get_embedding_for_model` must return `None` and
+    // force the live-embed fallback.
+    let hits = HybridRetriever::new(&store)
+        .with_embedding_model(model, "model-b")
+        .search_hybrid(scope, "deadline", 5)
+        .expect("search_hybrid must not propagate any error");
+
+    // Two embed calls expected: one for the query, one for the body
+    // (the fallback path). A cache hit on the stale `model-a` row
+    // would have skipped the body embed, leaving the count at 1.
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "model_tag filter must force live-embed fallback when the \
+         cache row was produced by a different model_tag; observed \
+         only {} embed call(s), which means the stale `model-a` row \
+         was silently returned to a `model-b` retriever",
+        calls.load(Ordering::SeqCst),
+    );
+
+    // Confirm the score reflects the live-embed path, not the stale
+    // cache row. cosine([1,0,0,0], [1,0,0,0]) = 1.0 → score = 1.0.
+    let hit = hits
+        .iter()
+        .find(|h| h.evidence_id == r.evidence_id)
+        .expect("ingested row must appear in hits");
+    assert!(
+        (hit.vector_score - 1.0).abs() < 1e-6,
+        "vector_score must reflect the live `model-b` embed (1.0), \
+         not the stale `model-a` cache row scored against `model-b`'s \
+         query embed (0.5); got {}",
+        hit.vector_score,
     );
 }
 

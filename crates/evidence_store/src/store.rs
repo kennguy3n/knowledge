@@ -1020,19 +1020,66 @@ impl EvidenceStore {
         Ok(())
     }
 
-    /// Read a persisted embedding for `evidence_id`. Returns `None`
-    /// when the row has no cached embedding yet (e.g. ingested before
-    /// any model was wired in, or the model returned an error).
+    /// Read a persisted embedding for `evidence_id` without filtering by
+    /// `model_tag`. Intended for tests, batch back-fill jobs, and admin
+    /// tooling that needs to inspect whatever vector is currently
+    /// cached regardless of which model produced it.
     ///
-    /// Errors with [`EvidenceError::Schema`] when the stored BLOB has a
-    /// length that is not a multiple of 4 (i.e. the row was corrupted
-    /// or written by a future schema).
+    /// Production retrieval code MUST NOT use this — a stale row from a
+    /// previous model that happens to share an output dimension with
+    /// the active model would be returned and scored as if it had been
+    /// produced by the active model, leading to semantically
+    /// meaningless cosine similarities. The hybrid retriever uses
+    /// [`Self::get_embedding_for_model`] instead, which enforces the
+    /// same `model_tag` invariant the write side applies on dedup.
+    ///
+    /// Returns `None` when the row has no cached embedding yet (e.g.
+    /// ingested before any model was wired in, or the model returned
+    /// an error). Errors with [`EvidenceError::Schema`] when the stored
+    /// BLOB has a length that is not a multiple of 4 (i.e. the row was
+    /// corrupted or written by a future schema).
     pub fn get_embedding(&self, evidence_id: EvidenceId) -> Result<Option<Vec<f32>>> {
         let bytes: Option<Vec<u8>> = self
             .conn
             .query_row(
                 "SELECT embedding FROM evidence_embeddings WHERE evidence_id = ?1",
                 params![evidence_id.as_uuid().as_bytes().as_slice()],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .optional()?;
+        match bytes {
+            None => Ok(None),
+            Some(b) => bytes_to_embedding(&b).map(Some),
+        }
+    }
+
+    /// Read a persisted embedding for `evidence_id` only when it was
+    /// produced by `model_tag`. This is the production read path used
+    /// by the hybrid retriever and mirrors the `model_tag`-aware write
+    /// invariant in [`Self::index_embedding_or_copy_dedup`].
+    ///
+    /// Returns `None` when:
+    ///   * The row has no cached embedding yet, OR
+    ///   * The cached row's `model_tag` does not match the active model
+    ///     (e.g. the model was swapped to a different version that
+    ///     happens to share an output dimension — without this filter
+    ///     the stale bytes would be returned and scored as if they had
+    ///     been produced by the new model, which is silently incorrect).
+    ///
+    /// Errors with [`EvidenceError::Schema`] when the stored BLOB has a
+    /// length that is not a multiple of 4 (i.e. the row was corrupted
+    /// or written by a future schema).
+    pub fn get_embedding_for_model(
+        &self,
+        evidence_id: EvidenceId,
+        model_tag: &str,
+    ) -> Result<Option<Vec<f32>>> {
+        let bytes: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT embedding FROM evidence_embeddings
+                 WHERE evidence_id = ?1 AND model_tag = ?2",
+                params![evidence_id.as_uuid().as_bytes().as_slice(), model_tag],
                 |r| r.get::<_, Vec<u8>>(0),
             )
             .optional()?;
