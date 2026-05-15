@@ -87,10 +87,25 @@ impl FfiRuntime {
         &self.master_key
     }
 
+    /// Borrow the per-scope user memory if one has already been
+    /// allocated. Returns `None` for scopes that have never had a
+    /// memory object ingested or sweep run against them.
+    ///
+    /// Read-only FFI paths (`get_user_memory`, `list_memories`)
+    /// use this accessor instead of [`Self::user_memory_mut`] so a
+    /// query for an unknown scope does not permanently allocate an
+    /// empty `UserMemoryObject` in the per-process map.
+    pub(crate) fn user_memory(&self, scope: ScopeId) -> Option<&UserMemoryObject> {
+        self.user_memories.get(&scope)
+    }
+
     /// Borrow the per-scope user memory, creating an empty one if it
     /// does not yet exist. The runtime treats `scope_id` as the
     /// owning user id for now (Phase A.5 has no separate user-id
     /// surface); Phase 2 will make this a separate handle.
+    ///
+    /// Prefer [`Self::user_memory`] for read-only paths to avoid
+    /// growing the per-scope map on benign lookups.
     pub(crate) fn user_memory_mut(&mut self, scope: ScopeId) -> &mut UserMemoryObject {
         self.user_memories
             .entry(scope)
@@ -104,6 +119,13 @@ impl FfiRuntime {
 
     /// Borrow the per-scope channel memory, creating an empty one if
     /// it does not yet exist.
+    ///
+    /// Currently unused on the FFI surface — `trigger_synthesis`
+    /// returns `Unavailable` without allocating, and a real
+    /// allocation only happens once the SLM-driven synthesizer
+    /// lands (Phase C). Kept here so the call-site doesn't need to
+    /// re-derive map manipulation logic when that wiring arrives.
+    #[allow(dead_code)]
     pub(crate) fn channel_memory_mut(&mut self, scope: ScopeId) -> &mut ChannelMemoryObject {
         self.channel_memories
             .entry(scope)

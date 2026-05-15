@@ -319,7 +319,9 @@ pub fn get_user_memory(scope_id: ScopeIdString) -> FfiResult<Vec<MemoryRecord>> 
         if rt.is_scope_forgotten(scope) {
             return Ok(Vec::new());
         }
-        let umo = rt.user_memory_mut(scope);
+        let Some(umo) = rt.user_memory(scope) else {
+            return Ok(Vec::new());
+        };
         Ok(umo.objects.iter().map(memory_object_to_record).collect())
     })
 }
@@ -331,27 +333,40 @@ pub fn get_user_memory(scope_id: ScopeIdString) -> FfiResult<Vec<MemoryRecord>> 
 /// this is `O(scopes * objects-per-scope)` in the worst case, which
 /// is fine for the Phase A.5 working set sizes.
 ///
+/// If the owning scope has been cryptographically forgotten (Gap 4
+/// tombstone in `forgotten_scopes`), the pin is rejected with
+/// `NotFound { kind: "memory" }` — the same shape every read path
+/// (`get_user_memory`, `list_memories`) presents for that scope.
+/// Mutating an object whose owning DEK has been destroyed would
+/// leave host caches in an observably inconsistent state.
+///
 /// # Errors
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `id` is not a valid UUID.
 /// * [`FfiError::NotFound`] if no memory object has that id in any
-///   open scope.
+///   open scope, or if the owning scope has been forgotten.
 /// * [`FfiError::Memory`] if the underlying state-machine transition
 ///   rejects the pin (e.g. the object is in a terminal state).
 pub fn pin(id: String) -> FfiResult<()> {
     let uuid = parse_uuid(&id)?;
     with_runtime(|rt| {
-        for umo in rt.user_memories.values_mut() {
-            if umo.read(&uuid).is_some() {
-                return umo.pin(&uuid).map_err(|e| FfiError::Memory {
-                    message: e.to_string(),
-                });
-            }
-        }
-        Err(FfiError::NotFound {
+        let owning_scope = locate_owning_scope(rt, &uuid).ok_or_else(|| FfiError::NotFound {
             kind: "memory".into(),
             id: id.clone(),
+        })?;
+        if rt.is_scope_forgotten(owning_scope) {
+            return Err(FfiError::NotFound {
+                kind: "memory".into(),
+                id: id.clone(),
+            });
+        }
+        let umo = rt
+            .user_memories
+            .get_mut(&owning_scope)
+            .expect("owning scope located above must still exist");
+        umo.pin(&uuid).map_err(|e| FfiError::Memory {
+            message: e.to_string(),
         })
     })
 }
@@ -359,26 +374,36 @@ pub fn pin(id: String) -> FfiResult<()> {
 /// Lift a previously-applied pin so the row resumes ageing under the
 /// decay state machine.
 ///
+/// If the owning scope has been cryptographically forgotten (Gap 4
+/// tombstone in `forgotten_scopes`), the unpin is rejected with
+/// `NotFound { kind: "memory" }` — see [`pin`] for the rationale.
+///
 /// # Errors
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `id` is not a valid UUID.
 /// * [`FfiError::NotFound`] if no memory object has that id in any
-///   open scope.
+///   open scope, or if the owning scope has been forgotten.
 /// * [`FfiError::Memory`] if the underlying state-machine rejects.
 pub fn unpin(id: String) -> FfiResult<()> {
     let uuid = parse_uuid(&id)?;
     with_runtime(|rt| {
-        for umo in rt.user_memories.values_mut() {
-            if umo.read(&uuid).is_some() {
-                return umo.unpin(&uuid).map_err(|e| FfiError::Memory {
-                    message: e.to_string(),
-                });
-            }
-        }
-        Err(FfiError::NotFound {
+        let owning_scope = locate_owning_scope(rt, &uuid).ok_or_else(|| FfiError::NotFound {
             kind: "memory".into(),
             id: id.clone(),
+        })?;
+        if rt.is_scope_forgotten(owning_scope) {
+            return Err(FfiError::NotFound {
+                kind: "memory".into(),
+                id: id.clone(),
+            });
+        }
+        let umo = rt
+            .user_memories
+            .get_mut(&owning_scope)
+            .expect("owning scope located above must still exist");
+        umo.unpin(&uuid).map_err(|e| FfiError::Memory {
+            message: e.to_string(),
         })
     })
 }
@@ -478,13 +503,22 @@ pub fn list_memories(
         if rt.is_scope_forgotten(scope) {
             return Ok(Vec::new());
         }
-        let umo = rt.user_memory_mut(scope);
+        let Some(umo) = rt.user_memory(scope) else {
+            return Ok(Vec::new());
+        };
         let mm_filter = ffi_filter_to_memory_filter(&filter, scope);
-        let pinned_only = filter.pinned_only;
+        // `MemoryState::Pinned` has no native internal state — it is
+        // a pin-count predicate layered on top of the underlying
+        // state machine. The call-site filter must apply whenever
+        // the caller asked for pinned rows either through the
+        // explicit `pinned_only` flag *or* by selecting the
+        // `Pinned` state. Gating only on `pinned_only` silently
+        // dropped the `state = Some(Pinned)` filter.
+        let require_pinned = filter.pinned_only || filter.state == Some(MemoryState::Pinned);
         let out: Vec<MemoryRecord> = umo
             .list(mm_filter)
             .into_iter()
-            .filter(|o| !pinned_only || o.pin_count > 0)
+            .filter(|o| !require_pinned || o.pin_count > 0)
             .map(memory_object_to_record)
             .collect();
         Ok(out)
@@ -577,9 +611,11 @@ pub fn trigger_synthesis(scope_id: ScopeIdString, _trigger: SynthesisTrigger) ->
                 id: scope_id.clone(),
             });
         }
-        // Touch the channel memory so future calls observe a stable
-        // identity even before a real synthesizer runs.
-        let _ = rt.channel_memory_mut(scope);
+        // No `ChannelMemoryObject` allocation here — until a real
+        // synthesizer runs, allocating one would attach observable
+        // state to a call that never produces a recap. The
+        // allocation moves into the synthesizer's success path
+        // once the SLM router is wired through (Phase C).
         Err(FfiError::Unavailable {
             subsystem: "synthesis".into(),
         })
@@ -697,6 +733,22 @@ fn parse_uuid(s: &str) -> FfiResult<uuid::Uuid> {
     uuid::Uuid::parse_str(s).map_err(|e| FfiError::InvalidId {
         message: format!("id: {e}"),
     })
+}
+
+/// Locate the scope whose [`UserMemoryObject`](memory_manager::UserMemoryObject)
+/// owns a memory object with the given UUID. Returns `None` if no
+/// scope currently holds that memory object.
+///
+/// Memory-object UUIDs are globally unique (`Uuid::new_v4()`), so at
+/// most one scope can match. The split between this immutable
+/// lookup and the subsequent mutable mutation in [`pin`] / [`unpin`]
+/// is what lets the forgotten-scope check sit between the two
+/// without violating Rust's aliasing rules.
+fn locate_owning_scope(rt: &runtime::FfiRuntime, uuid: &uuid::Uuid) -> Option<ScopeId> {
+    rt.user_memories
+        .iter()
+        .find(|(_, umo)| umo.read(uuid).is_some())
+        .map(|(scope, _)| *scope)
 }
 
 /// Map an internal [`memory_manager::MemoryObject`] to the wire-flat
@@ -1212,6 +1264,157 @@ mod tests {
         )
         .expect("list reinforced");
         assert!(reinforced.is_empty());
+        teardown();
+    }
+
+    /// Regression: `list_memories` with `state = Some(Pinned)` must
+    /// return only objects whose `pin_count > 0`, even when the
+    /// caller leaves `pinned_only` at its default `false`.
+    ///
+    /// Previously the `Pinned` state arm of `ffi_filter_to_memory_filter`
+    /// emitted an empty internal `states` vec (matching every internal
+    /// state), and the call-site predicate was gated on
+    /// `filter.pinned_only` instead of the `state` selector — so a
+    /// caller asking for `state = Some(Pinned), pinned_only = false`
+    /// got every object in the scope back, including unpinned ones.
+    #[test]
+    fn list_memories_state_pinned_returns_only_pinned() {
+        let _g = test_lock();
+        let _dir = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        // Seed two observations, pin one of them.
+        let pinned_id = runtime::with_runtime(|rt| {
+            let s = parse_scope_id(&scope)?;
+            let umo = rt.user_memory_mut(s);
+            let pinned =
+                umo.add_observation("pinned", "kept", memory_manager::SensitivityClass::Useful);
+            let _unpinned =
+                umo.add_observation("loose", "decays", memory_manager::SensitivityClass::Useful);
+            Ok(pinned)
+        })
+        .expect("seed");
+        pin(pinned_id.to_string()).expect("pin");
+
+        let only_pinned = list_memories(
+            scope.clone(),
+            MemoryFilter {
+                state: Some(MemoryState::Pinned),
+                pinned_only: false,
+            },
+        )
+        .expect("list pinned");
+        assert_eq!(
+            only_pinned.len(),
+            1,
+            "state = Some(Pinned) must filter out unpinned rows even when pinned_only is false"
+        );
+        assert_eq!(only_pinned[0].id, pinned_id.to_string());
+        assert_eq!(only_pinned[0].state, MemoryState::Pinned);
+
+        teardown();
+    }
+
+    /// Regression: `pin` / `unpin` must reject mutations against
+    /// objects whose owning scope has been cryptographically
+    /// forgotten. The Gap 4 tombstone destroys the per-scope DEK,
+    /// but the in-memory `UserMemoryObject` survives — a host that
+    /// cached the memory id before `forget()` would otherwise be
+    /// able to mutate an object that every read surface
+    /// (`get_user_memory`, `list_memories`) reports as invisible.
+    #[test]
+    fn pin_after_forget_returns_not_found() {
+        let _g = test_lock();
+        let _dir = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+
+        // Seed one evidence row (so `forget` has a row to resolve to
+        // a scope) and one memory object in the same scope.
+        let evidence_id = ingest_message(
+            scope.clone(),
+            "pin-after-forget-seed-body".into(),
+            SourceKind::Manual,
+        )
+        .expect("ingest");
+        let mem_id = runtime::with_runtime(|rt| {
+            let s = parse_scope_id(&scope)?;
+            let umo = rt.user_memory_mut(s);
+            Ok(umo.add_observation(
+                "pinnable",
+                "cache before forget",
+                memory_manager::SensitivityClass::Useful,
+            ))
+        })
+        .expect("seed memory");
+
+        forget(evidence_id).expect("forget");
+
+        // Pin must now return NotFound { kind: "memory" } — the same
+        // shape the read surfaces present for the forgotten scope.
+        let pin_err = pin(mem_id.to_string()).unwrap_err();
+        assert!(
+            matches!(pin_err, FfiError::NotFound { ref kind, .. } if kind == "memory"),
+            "pin after forget must return NotFound {{ kind: memory }}, got {pin_err:?}"
+        );
+
+        // Same contract for unpin.
+        let unpin_err = unpin(mem_id.to_string()).unwrap_err();
+        assert!(
+            matches!(unpin_err, FfiError::NotFound { ref kind, .. } if kind == "memory"),
+            "unpin after forget must return NotFound {{ kind: memory }}, got {unpin_err:?}"
+        );
+
+        teardown();
+    }
+
+    /// Regression for the design follow-up: `get_user_memory` and
+    /// `list_memories` must not lazily allocate a `UserMemoryObject`
+    /// for scopes they observe but never mutate. A read for an
+    /// unknown scope returns an empty bundle and leaves the
+    /// per-scope `user_memories` map at its previous size.
+    #[test]
+    fn read_paths_do_not_allocate_user_memory_for_unknown_scope() {
+        let _g = test_lock();
+        let _dir = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+
+        // Snapshot the map size before any read.
+        let before = runtime::with_runtime(|rt| Ok(rt.user_memories.len())).expect("len before");
+
+        let bundle = get_user_memory(scope.clone()).expect("get_user_memory");
+        assert!(bundle.is_empty());
+        let listed = list_memories(scope, MemoryFilter::default()).expect("list_memories");
+        assert!(listed.is_empty());
+
+        let after = runtime::with_runtime(|rt| Ok(rt.user_memories.len())).expect("len after");
+        assert_eq!(
+            before, after,
+            "read paths must not allocate per-scope user_memory entries"
+        );
+        teardown();
+    }
+
+    /// Regression for the design follow-up: `trigger_synthesis` must
+    /// not allocate a `ChannelMemoryObject` when returning
+    /// `Unavailable`. Allocating one attaches observable state to a
+    /// call that never produces a recap.
+    #[test]
+    fn trigger_synthesis_unavailable_does_not_allocate_channel_memory() {
+        let _g = test_lock();
+        let _dir = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+
+        let before = runtime::with_runtime(|rt| Ok(rt.channel_memories.len())).expect("len before");
+
+        match trigger_synthesis(scope, SynthesisTrigger::ManualUserAction) {
+            Err(FfiError::Unavailable { subsystem }) => assert_eq!(subsystem, "synthesis"),
+            other => panic!("expected Unavailable {{ subsystem: synthesis }}, got {other:?}"),
+        }
+
+        let after = runtime::with_runtime(|rt| Ok(rt.channel_memories.len())).expect("len after");
+        assert_eq!(
+            before, after,
+            "trigger_synthesis must not allocate channel memory when returning Unavailable"
+        );
         teardown();
     }
 
