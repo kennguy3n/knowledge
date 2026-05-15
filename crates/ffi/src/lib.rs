@@ -33,6 +33,37 @@
 //! All wired functions require a prior successful call to [`open_store`].
 //! Calling any other function first returns
 //! [`FfiError::Unavailable { subsystem: "evidence_store" }`].
+//!
+//! # Known Phase A simplifications
+//!
+//! These are deliberate to keep the unblocker PR small. Each one is
+//! a clean follow-up:
+//!
+//! * **Cryptographic forgetting is session-scoped.** The
+//!   [`forget`] tombstones live in an in-memory
+//!   [`crypto::forgetting::DekRegistry`] that is dropped by
+//!   [`close_store`]. A durable on-disk DEK registry lands with the
+//!   broader forgetting work; until then, hosts that need durability
+//!   across process restarts must layer their own persistence on
+//!   top.
+//! * **`forget` resolves a scope via an evidence id.** There is no
+//!   way to forget a scope that has only ever been used via
+//!   [`encrypt`] / [`decrypt`] without ingest. A `forget_scope` API
+//!   is tracked for the post-Phase-A surface.
+//! * **Ingest hardcodes `ImportanceClass::Important`.** The
+//!   evidence store supports `Important` / `Useful` / `Noise` (with
+//!   different storage routing, including the noise ring buffer);
+//!   exposing that knob through the FFI surface is a follow-up.
+//! * **`query` forwards `query_text` verbatim to SQLite FTS5.**
+//!   FTS5 has its own query grammar (`AND` / `OR` / `NOT` / `NEAR` /
+//!   column filters). Hosts that want to treat user input as an
+//!   opaque phrase must quote / escape it before calling here.
+//!   Malformed expressions surface as [`FfiError::Evidence`].
+//! * **Scores are ordering-only.** `score` and `fts_score` on
+//!   [`QueryResult`] are a monotone position in `[0, 1]` over the
+//!   actual result set, not a calibrated relevance signal.
+//!   `recency_score` and `vector_score` stay at `0.0` until
+//!   Phase B.
 
 #![deny(missing_docs)]
 
@@ -65,6 +96,14 @@ use runtime::with_runtime;
 /// is the connector tag (`"Slack"`, `"Email"`, `"Manual"`, …).
 ///
 /// Returns the new evidence row's UUID as a string on success.
+///
+/// # Phase A simplification
+///
+/// Every ingest is currently routed at `ImportanceClass::Important`.
+/// The underlying [`EvidenceStore`](evidence_store::EvidenceStore)
+/// supports `Useful` and `Noise` (the latter goes to the ring
+/// buffer), but exposing that knob through the FFI is tracked as a
+/// follow-up — see the crate-level docs.
 ///
 /// # Errors
 ///
@@ -106,11 +145,30 @@ pub fn ingest_message(
 ///
 /// Returns up to `limit` rows ordered by FTS5 rank.
 ///
+/// # Query syntax
+///
+/// `query_text` is forwarded verbatim to SQLite FTS5's `MATCH`
+/// operator (via a parameterised query, so SQL injection is not a
+/// concern). FTS5 has its own query grammar — `AND` / `OR` / `NOT` /
+/// `NEAR` / column filters / phrase quoting / prefix matching. Hosts
+/// that want to treat untrusted user input as a single opaque phrase
+/// **must** quote it (`"…"`) and escape embedded quotes themselves
+/// before calling here. Malformed expressions surface as
+/// [`FfiError::Evidence`].
+///
+/// # Scoring
+///
+/// `score` and `fts_score` are a monotone position in `[0, 1]` over
+/// the actual returned set, not calibrated relevance. `recency_score`
+/// and `vector_score` stay at `0.0` until Phase B wires the
+/// `HybridRetriever` through this surface.
+///
 /// # Errors
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
-/// * [`FfiError::Evidence`] if the underlying search fails.
+/// * [`FfiError::Evidence`] if the underlying search fails (this
+///   covers malformed FTS5 query syntax).
 ///
 /// Returns an empty vector if `scope_id` has been forgotten — this is
 /// a deliberate "soft" semantic so callers can treat forgotten scopes
@@ -131,7 +189,14 @@ pub fn query(
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
-        let mut out = Vec::with_capacity(hits.len());
+        // Capture the actual hit count up front so the score
+        // denominator reflects the result set (not the requested
+        // ceiling). Otherwise small result sets cluster near 1.0 —
+        // e.g. 3 hits with limit=100 would yield 1.0 / 0.99 / 0.98
+        // rather than 1.0 / 0.67 / 0.33.
+        let hits_len = hits.len();
+        let mut out = Vec::with_capacity(hits_len);
+        let denom = hits_len.max(1) as f64;
         for (rank, evidence_id) in hits.into_iter().enumerate() {
             let snippet = rt
                 .store()
@@ -147,7 +212,7 @@ pub fn query(
             // vector components at 0.0 until Phase B (real ONNX
             // embeddings) and the dedicated `HybridRetriever` are
             // wired through this surface.
-            let fts_score = 1.0 - (rank as f64 / hits_len_for_score(limit) as f64).min(1.0);
+            let fts_score = 1.0 - (rank as f64 / denom).min(1.0);
             out.push(QueryResult {
                 evidence_id: evidence_id.to_string(),
                 score: fts_score,
@@ -159,10 +224,6 @@ pub fn query(
         }
         Ok(out)
     })
-}
-
-fn hits_len_for_score(limit: u32) -> u32 {
-    limit.max(1)
 }
 
 fn snippet_clip(body: &str, max_chars: usize) -> String {
@@ -273,16 +334,31 @@ pub fn unpin(_id: String) -> FfiResult<()> {
 /// After this call, every subsequent [`query`] / [`get_evidence`] /
 /// [`ingest_message`] / [`encrypt`] / [`decrypt`] for the same scope
 /// short-circuits with [`FfiError::NotFound`] (or an empty result, in
-/// the case of [`query`]). The bytes on disk are **not** wiped — that
-/// requires per-scope SQLCipher rekeying and a redesign of the FTS5
-/// secondary index, both tracked separately under
+/// the case of [`query`]).
+///
+/// # Durability — Phase A semantics
+///
+/// The tombstone lives in an **in-memory** registry that is dropped
+/// by [`close_store`] and recreated empty on the next [`open_store`].
+/// In Phase A this is equivalent to a session-scoped soft delete:
+/// after a `close_store` / `open_store` cycle, the on-disk evidence
+/// row is queryable again. Hosts that need durable forgetting must
+/// layer their own persistence (e.g. record the tombstone in a host
+/// keychain and replay it through a future `forget_scope` API) until
+/// the durable DEK-registry plane lands.
+///
+/// Likewise, the **bytes on disk are not wiped** — that requires
+/// per-scope SQLCipher rekeying and a redesign of the FTS5 secondary
+/// index, both tracked separately under
 /// `crates/evidence_store/tests/forgetting_fts.rs`.
 ///
 /// # Errors
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `id` is not a valid UUID.
-/// * [`FfiError::NotFound`] if no evidence row has that id.
+/// * [`FfiError::NotFound`] if no evidence row has that id (e.g. if
+///   the caller passed a *scope* UUID directly — there is no
+///   `forget_scope` surface yet).
 pub fn forget(id: String) -> FfiResult<()> {
     let evidence_id = parse_evidence_id(&id)?;
     with_runtime(|rt| {
@@ -500,13 +576,13 @@ fn scope_aad(scope: ScopeId) -> Vec<u8> {
 // `crypto`-specific knowledge (HKDF context labels, AEAD nonce
 // length) stays co-located with the public functions that use them.
 impl runtime::FfiRuntime {
+    /// Derive the scope-specific AEAD key used by [`encrypt`] /
+    /// [`decrypt`]. Callers **must** check
+    /// [`Self::is_scope_forgotten`] before invoking this — the
+    /// forgotten-scope short-circuit lives at the public-function
+    /// layer so the error mapping (`NotFound { kind: "scope" }`)
+    /// stays consistent across the surface.
     fn scope_encrypt_key(&self, scope: ScopeId) -> FfiResult<crypto::AeadKey> {
-        if self.is_scope_forgotten(scope) {
-            return Err(FfiError::NotFound {
-                kind: "scope".into(),
-                id: scope.to_string(),
-            });
-        }
         let label = format!("scope:{}:ffi-encrypt:v1", scope.as_uuid());
         derive_key(self.master_key(), label.as_bytes()).map_err(|e| FfiError::Crypto {
             message: e.to_string(),
