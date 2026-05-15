@@ -253,3 +253,148 @@ fn empty_limit_returns_empty() {
         .unwrap()
         .is_empty());
 }
+
+// ---------------------------------------------------------------------
+// Phase B regression tests — the on-write embedding cache.
+// ---------------------------------------------------------------------
+
+/// Returns a vector whose first slot is the byte length of the input
+/// text. Two different bodies get different cached embeddings, so a
+/// stored-cache hit is visibly distinct from a re-embedding of some
+/// other text.
+struct LenEmbeddingModel;
+
+impl EmbeddingModel for LenEmbeddingModel {
+    fn embed(&self, text: &str) -> evidence_store::embeddings::Result<Vec<f32>> {
+        Ok(vec![text.len() as f32, 0.0, 0.0, 0.0])
+    }
+    fn dimension(&self) -> usize {
+        4
+    }
+    fn probe(&self) -> EmbeddingProbe {
+        EmbeddingProbe::Available
+    }
+}
+
+#[test]
+fn ingest_with_model_persists_embedding_round_trip() {
+    let (_dir, mut store) = open_store_with_model(LenEmbeddingModel, "len-v1");
+    let scope = ScopeId::new_v4();
+    let body = b"deadline reminder body text";
+    let r = store
+        .ingest(scope, body, None, ImportanceClass::Useful)
+        .unwrap();
+
+    let stored = store
+        .get_embedding(r.evidence_id)
+        .expect("get_embedding")
+        .expect("expected a cached embedding for ingested row");
+    assert_eq!(stored, vec![body.len() as f32, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn ingest_without_model_leaves_embedding_cache_empty() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(scope, b"hello world", None, ImportanceClass::Useful)
+        .unwrap();
+    assert!(store.get_embedding(r.evidence_id).unwrap().is_none());
+}
+
+#[test]
+fn store_embedding_round_trip_independent_of_ingest() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(scope, b"some body", None, ImportanceClass::Useful)
+        .unwrap();
+
+    let written = vec![0.1_f32, -0.2, 0.3, 0.4, -0.5];
+    store
+        .store_embedding(r.evidence_id, &written, "test-tag")
+        .expect("store_embedding");
+    let read = store
+        .get_embedding(r.evidence_id)
+        .expect("get_embedding")
+        .expect("expected stored embedding");
+    assert_eq!(read, written);
+}
+
+#[test]
+fn get_embedding_returns_none_for_unknown_row() {
+    let (_dir, store) = fresh_store();
+    let id = evidence_store::EvidenceId::new_v4();
+    assert!(store.get_embedding(id).unwrap().is_none());
+}
+
+/// When the store has cached embeddings, the hybrid retriever uses
+/// them instead of re-embedding bodies on each search. We assert this
+/// by wiring an embedding model into the *store* (so the cache is
+/// populated on ingest) but using a *different* model on the
+/// retriever side that would produce a different score if it were
+/// asked to re-embed. The retriever should use the cached vector and
+/// score it against its own query embedding.
+#[test]
+fn search_hybrid_uses_cached_embeddings_when_present() {
+    let (_dir, mut store) = open_store_with_model(LenEmbeddingModel, "len-v1");
+    let scope = ScopeId::new_v4();
+    let body = b"deadline reminder";
+    let _r = store
+        .ingest(scope, body, None, ImportanceClass::Useful)
+        .unwrap();
+
+    // Sanity-check the cache was populated.
+    let hits = HybridRetriever::new(&store)
+        .with_embedding_model(LenEmbeddingModel)
+        .search_hybrid(scope, "deadline", 5)
+        .unwrap();
+    assert!(!hits.is_empty());
+    // The cached vector is `[body.len(), 0, 0, 0]`; the query embed is
+    // `[len("deadline"), 0, 0, 0]`. Both align on the same basis
+    // vector so cosine similarity is 1.0 → similarity_to_score = 1.0.
+    assert!(
+        hits.iter().any(|h| (h.vector_score - 1.0).abs() < 1e-6),
+        "expected a cached-hit vector_score of 1.0, got {hits:?}"
+    );
+}
+
+/// If the cached embedding has a different dimension than the query
+/// embedding (e.g. a stale model swap), the retriever must fall back
+/// to re-embedding the body rather than emitting a misleading 0.5
+/// score from `cosine_similarity` on mismatched lengths.
+#[test]
+fn search_hybrid_falls_back_to_live_embed_on_dim_mismatch() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(scope, b"deadline reminder", None, ImportanceClass::Useful)
+        .unwrap();
+    // Seed a stale 8-d embedding; the retriever's model is 4-d.
+    store
+        .store_embedding(r.evidence_id, &[1.0; 8], "stale-v0")
+        .unwrap();
+
+    let hits = HybridRetriever::new(&store)
+        .with_embedding_model(ConstUnitEmbeddingModel)
+        .search_hybrid(scope, "deadline", 5)
+        .unwrap();
+    assert!(
+        hits.iter().any(|h| h.vector_score > 0.0),
+        "expected the fallback live-embed path to produce a non-zero \
+         vector_score even though the cache row has the wrong width: \
+         got {hits:?}"
+    );
+}
+
+fn open_store_with_model<M>(model: M, tag: &str) -> (tempfile::TempDir, EvidenceStore)
+where
+    M: EmbeddingModel + 'static,
+{
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("open store")
+        .with_embedding_model(model, tag);
+    (dir, store)
+}

@@ -13,6 +13,7 @@ use crypto::{
     MasterKey, AEAD_NONCE_LEN, MASTER_KEY_LEN,
 };
 
+use crate::embeddings::EmbeddingModel;
 use crate::error::{EvidenceError, Result};
 use crate::ids::{EvidenceId, ScopeId};
 use crate::importance::ImportanceClass;
@@ -108,6 +109,15 @@ pub struct EvidenceStore {
     body_store_key: AeadKey,
     /// Master key — wiped on drop.
     master_key: MasterKey,
+    /// Optional [`EmbeddingModel`] used by the ingest path to populate
+    /// the `evidence_embeddings` cache (Phase B). When `None` no
+    /// embedding is persisted on write — the hybrid retriever then
+    /// falls back to re-embedding the body on each search.
+    embedding_model: Option<Box<dyn EmbeddingModel>>,
+    /// Free-form tag (e.g. `"xlm-r-v1"`) stamped alongside every row
+    /// inserted into `evidence_embeddings`. Used to invalidate the
+    /// cache when the model is swapped.
+    embedding_model_tag: String,
 }
 
 impl Drop for EvidenceStore {
@@ -195,6 +205,8 @@ impl EvidenceStore {
             scope_keys: std::cell::RefCell::new(std::collections::HashMap::new()),
             body_store_key,
             master_key: *master_key,
+            embedding_model: None,
+            embedding_model_tag: String::new(),
         };
         // No-op for now, but keeps the borrow checker happy if we add
         // post-open prepared statements.
@@ -312,6 +324,14 @@ impl EvidenceStore {
             ],
         )?;
         Self::index_fts(&tx, evidence_id, scope_id, body)?;
+        Self::index_embedding(
+            &tx,
+            evidence_id,
+            body,
+            self.embedding_model.as_deref(),
+            &self.embedding_model_tag,
+            now,
+        )?;
         tx.commit()?;
 
         Ok(IngestResult {
@@ -382,6 +402,14 @@ impl EvidenceStore {
             ],
         )?;
         Self::index_fts(&tx, evidence_id, scope_id, body)?;
+        Self::index_embedding(
+            &tx,
+            evidence_id,
+            body,
+            self.embedding_model.as_deref(),
+            &self.embedding_model_tag,
+            now,
+        )?;
         tx.commit()?;
 
         Ok(IngestResult {
@@ -410,6 +438,47 @@ impl EvidenceStore {
                 ],
             )?;
         }
+        Ok(())
+    }
+
+    /// Populate the `evidence_embeddings` cache for `evidence_id`.
+    /// No-op when no model is wired in, when `body` is not valid UTF-8,
+    /// or when the model returns an error — the hybrid retriever falls
+    /// back to re-embedding on the read side in those cases. The
+    /// embedding is serialised as little-endian raw `f32` bytes.
+    fn index_embedding(
+        tx: &rusqlite::Transaction<'_>,
+        evidence_id: EvidenceId,
+        body: &[u8],
+        model: Option<&dyn EmbeddingModel>,
+        model_tag: &str,
+        created_at: i64,
+    ) -> Result<()> {
+        let Some(model) = model else { return Ok(()) };
+        let Ok(text) = std::str::from_utf8(body) else {
+            return Ok(());
+        };
+        if text.is_empty() {
+            return Ok(());
+        }
+        // A model failure should not block ingestion — the row is
+        // still recoverable via FTS and the retriever's re-embedding
+        // fallback.
+        let Ok(vec) = model.embed(text) else {
+            return Ok(());
+        };
+        let bytes = embedding_to_bytes(&vec);
+        tx.execute(
+            "INSERT OR REPLACE INTO evidence_embeddings
+                 (evidence_id, embedding, model_tag, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                evidence_id.as_uuid().as_bytes().as_slice(),
+                bytes,
+                model_tag,
+                created_at,
+            ],
+        )?;
         Ok(())
     }
 
@@ -747,6 +816,128 @@ impl EvidenceStore {
     pub fn raw_conn(&self) -> &Connection {
         &self.conn
     }
+
+    /// Wire an [`EmbeddingModel`] into the store so subsequent
+    /// [`Self::ingest`] calls populate the `evidence_embeddings`
+    /// cache (Phase B). `model_tag` is stamped on every persisted
+    /// row so the cache can be invalidated when the model changes.
+    ///
+    /// Consumes `self` and returns the same store \u2014 callers can
+    /// chain it directly onto [`Self::open`]:
+    ///
+    /// ```ignore
+    /// let store = EvidenceStore::open(&path, &key, cfg)?
+    ///     .with_embedding_model(my_model, "xlm-r-v1");
+    /// ```
+    pub fn with_embedding_model<M: EmbeddingModel + 'static>(
+        mut self,
+        model: M,
+        model_tag: impl Into<String>,
+    ) -> Self {
+        self.embedding_model = Some(Box::new(model));
+        self.embedding_model_tag = model_tag.into();
+        self
+    }
+
+    /// Same as [`Self::with_embedding_model`] but takes `&mut self`
+    /// for callers that already own a `&mut` handle to the store.
+    pub fn set_embedding_model<M: EmbeddingModel + 'static>(
+        &mut self,
+        model: M,
+        model_tag: impl Into<String>,
+    ) {
+        self.embedding_model = Some(Box::new(model));
+        self.embedding_model_tag = model_tag.into();
+    }
+
+    /// `true` when an [`EmbeddingModel`] is wired in. Useful for tests
+    /// and for the retriever's fallback logic.
+    pub fn has_embedding_model(&self) -> bool {
+        self.embedding_model.is_some()
+    }
+
+    /// Borrow the wired-in [`EmbeddingModel`], if any. Exposed so the
+    /// hybrid retriever can share the store's model on the query side
+    /// instead of asking callers to wire it in twice.
+    pub fn embedding_model(&self) -> Option<&dyn EmbeddingModel> {
+        self.embedding_model.as_deref()
+    }
+
+    /// Direct write into `evidence_embeddings`. Bypasses the ingest
+    /// path \u2014 useful for tests, batch back-fill jobs, and callers
+    /// that compute embeddings asynchronously after ingest.
+    ///
+    /// The embedding is serialised as little-endian raw `f32` bytes.
+    pub fn store_embedding(
+        &mut self,
+        evidence_id: EvidenceId,
+        embedding: &[f32],
+        model_tag: &str,
+    ) -> Result<()> {
+        let bytes = embedding_to_bytes(embedding);
+        let now = Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO evidence_embeddings
+                 (evidence_id, embedding, model_tag, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                evidence_id.as_uuid().as_bytes().as_slice(),
+                bytes,
+                model_tag,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Read a persisted embedding for `evidence_id`. Returns `None`
+    /// when the row has no cached embedding yet (e.g. ingested before
+    /// any model was wired in, or the model returned an error).
+    ///
+    /// Errors with [`EvidenceError::Schema`] when the stored BLOB has a
+    /// length that is not a multiple of 4 (i.e. the row was corrupted
+    /// or written by a future schema).
+    pub fn get_embedding(&self, evidence_id: EvidenceId) -> Result<Option<Vec<f32>>> {
+        let bytes: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT embedding FROM evidence_embeddings WHERE evidence_id = ?1",
+                params![evidence_id.as_uuid().as_bytes().as_slice()],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .optional()?;
+        match bytes {
+            None => Ok(None),
+            Some(b) => bytes_to_embedding(&b).map(Some),
+        }
+    }
+}
+
+/// Serialise an `f32` slice as little-endian raw bytes.
+fn embedding_to_bytes(emb: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(emb.len() * 4);
+    for f in emb {
+        bytes.extend_from_slice(&f.to_le_bytes());
+    }
+    bytes
+}
+
+/// Deserialise a little-endian raw-bytes embedding produced by
+/// [`embedding_to_bytes`]. Errors if `bytes.len()` is not a multiple
+/// of 4 (a corrupted row, since `f32` is 4 bytes wide).
+fn bytes_to_embedding(bytes: &[u8]) -> Result<Vec<f32>> {
+    if bytes.len() % 4 != 0 {
+        return Err(EvidenceError::Schema(
+            "evidence_embeddings.embedding has length not a multiple of 4",
+        ));
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4);
+    for chunk in bytes.chunks_exact(4) {
+        let mut buf = [0u8; 4];
+        buf.copy_from_slice(chunk);
+        out.push(f32::from_le_bytes(buf));
+    }
+    Ok(out)
 }
 
 fn random_nonce() -> AeadNonce {

@@ -291,20 +291,23 @@ impl<'a> HybridRetriever<'a> {
 
         // Compute the semantic-vector lane when an embedding model is
         // plumbed in. We embed the query once, then walk every
-        // candidate, decrypt its body, and embed that. Failures are
-        // localised: if the query embed fails we skip the lane
-        // wholesale (vector_score = 0.0); per-row failures (missing
-        // body, runtime hiccup) just leave that single row at 0.0.
+        // candidate. The candidate body vector is sourced from the
+        // store's `evidence_embeddings` cache when present (Phase B);
+        // otherwise we fall back to decrypting + re-embedding the body
+        // on the fly. Failures are localised: if the query embed
+        // fails we skip the lane wholesale (vector_score = 0.0);
+        // per-row failures (missing body, runtime hiccup, dimension
+        // mismatch with a stale cached row) just leave that single
+        // row at 0.0.
         let query_vec = self
             .embedding_model
             .as_ref()
             .and_then(|model| model.embed(query).ok());
         if let (Some(model), Some(query_vec)) = (self.embedding_model.as_ref(), query_vec) {
             for entry in by_id.values_mut() {
-                let Some(body) = self.lookup_body_text(entry.evidence_id)? else {
-                    continue;
-                };
-                if let Ok(body_vec) = model.embed(&body) {
+                let body_vec =
+                    self.candidate_embedding(entry.evidence_id, query_vec.len(), model.as_ref())?;
+                if let Some(body_vec) = body_vec {
                     entry.vector_score =
                         similarity_to_score(cosine_similarity(&query_vec, &body_vec));
                 }
@@ -346,6 +349,39 @@ impl<'a> HybridRetriever<'a> {
             Err(EvidenceError::NotFound(_) | EvidenceError::DanglingBodyRef) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    /// Source the per-candidate embedding vector for the
+    /// semantic-vector lane.
+    ///
+    /// Order of preference:
+    ///   1. The cached row in `evidence_embeddings`, when its length
+    ///      matches the query embedding's dimension.
+    ///   2. Re-embed the plaintext body via `model`.
+    ///
+    /// Returns `None` when neither path produces a usable vector
+    /// (e.g. the row has no body, the body is binary, the model
+    /// errored, or every available vector mismatches `query_dim`).
+    /// The stored-cache hit short-circuits before reading the body,
+    /// which is the Phase-B perf win.
+    fn candidate_embedding(
+        &self,
+        id: EvidenceId,
+        query_dim: usize,
+        model: &dyn EmbeddingModel,
+    ) -> Result<Option<Vec<f32>>> {
+        if let Some(stored) = self.store.get_embedding(id)? {
+            if stored.len() == query_dim {
+                return Ok(Some(stored));
+            }
+            // Dimension mismatch: stored vector is from a different
+            // model. Fall through to the live-embed path so the score
+            // is still useful for this query.
+        }
+        let Some(body) = self.lookup_body_text(id)? else {
+            return Ok(None);
+        };
+        Ok(model.embed(&body).ok())
     }
 
     fn lookup_recency(&self, id: EvidenceId) -> Result<Option<f64>> {
