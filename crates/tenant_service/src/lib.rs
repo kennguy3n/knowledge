@@ -1,7 +1,7 @@
 //! `tenant_service` — tenant lifecycle and member-provisioning data
 //! model.
 //!
-//! Per `ARCHITECTURE.md` §4.1 and `PHASES.md` Phase 3, the tenant
+//! Per `ARCHITECTURE.md` §4.1 and `docs/internal/PHASES.md` Phase 3, the tenant
 //! service owns:
 //!
 //! * **Tenant lifecycle.** A [`Tenant`] moves through

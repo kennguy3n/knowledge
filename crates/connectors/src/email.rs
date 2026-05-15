@@ -1,6 +1,6 @@
 //! Email connector — Gmail (Google Workspace) + Microsoft Graph (Outlook).
 //!
-//! Per `PROPOSAL.md` §10.1 the substrate ingests business email as
+//! Per `docs/DESIGN.md` §10.1 the substrate ingests business email as
 //! observation evidence. This connector multiplexes the two
 //! production providers behind a single [`Connector`] surface:
 //!

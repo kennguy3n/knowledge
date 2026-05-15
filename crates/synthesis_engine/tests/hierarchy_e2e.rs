@@ -1,7 +1,7 @@
 //! Phase 3 end-to-end test for the channel → domain → tenant
 //! synthesis chain.
 //!
-//! Per `PHASES.md` Phase 3 exit criteria, the channel → domain →
+//! Per `docs/internal/PHASES.md` Phase 3 exit criteria, the channel → domain →
 //! tenant synthesis chain must be exercised end-to-end. This test
 //! wires together every Phase 3 crate that participates in that
 //! chain:

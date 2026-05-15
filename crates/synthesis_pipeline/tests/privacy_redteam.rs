@@ -1,6 +1,6 @@
 //! Red-team privacy tests for `synthesis_pipeline`.
 //!
-//! Per `PROPOSAL.md` §10 the substrate's threat model assumes that an
+//! Per `docs/DESIGN.md` §10 the substrate's threat model assumes that an
 //! attacker controls the on-disk evidence store and the network. This
 //! test suite encodes the attacker's playbook against the synthesis
 //! plane and asserts that the substrate refuses or drops the attack:

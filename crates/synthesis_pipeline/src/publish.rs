@@ -1,6 +1,6 @@
 //! Encrypted synthesis-object publish / consume.
 //!
-//! Per `PROPOSAL.md` §6.4 and `PHASES.md` Phase 2, "the synthesis
+//! Per `docs/DESIGN.md` §6.4 and `docs/internal/PHASES.md` Phase 2, "the synthesis
 //! output is published as an encrypted synthesis object back into the
 //! scope; other members consume it instead of re-synthesizing".
 //!

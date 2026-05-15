@@ -1,8 +1,10 @@
-# Development Log
+# Changelog
 
-A curated, reverse-chronological view of major milestones in the
-Knowledge substrate. For the live phase-status summary and the
-per-phase deliverable checklist see [`PROGRESS.md`](../PROGRESS.md).
+Curated, reverse-chronological view of major milestones in the
+Knowledge substrate. This file is part of the **internal**
+engineering trackers; for the public surface see the README and
+`docs/DESIGN.md`. For the live phase-status summary and the
+per-phase deliverable checklist see [PROGRESS.md](./PROGRESS.md).
 
 ## 2026-05-08 — End-to-end demo and substrate hardening
 

@@ -1,6 +1,6 @@
 //! `synthesis_engine` — server-side synthesis engine skeleton.
 //!
-//! Per `PHASES.md` Phase 3, the substrate ships a server-side
+//! Per `docs/internal/PHASES.md` Phase 3, the substrate ships a server-side
 //! synthesis service composed of a Go gateway and a Rust synthesis
 //! engine. This crate is the **Rust side**; the Go gateway lands in a
 //! later phase.

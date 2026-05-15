@@ -1,6 +1,6 @@
 //! Channel-scoped connector attachments.
 //!
-//! Per `PROPOSAL.md` §10.2 (point 4) every connector instance is
+//! Per `docs/DESIGN.md` §10.2 (point 4) every connector instance is
 //! attached to exactly one substrate scope (channel / domain). The
 //! attachment binding is the source of truth for:
 //!

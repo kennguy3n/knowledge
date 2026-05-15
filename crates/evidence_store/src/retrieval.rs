@@ -1,6 +1,6 @@
 //! Hybrid retrieval over the evidence plane.
 //!
-//! Per `PHASES.md` Phase 1: "Hybrid retrieval — FTS5 + semantic
+//! Per `docs/internal/PHASES.md` Phase 1: "Hybrid retrieval — FTS5 + semantic
 //! vector + recency". This module implements all three components:
 //! the FTS5 (lexical) and recency lanes draw straight from the
 //! evidence schema, and the semantic-vector lane is wired through

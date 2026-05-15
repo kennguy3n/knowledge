@@ -1,6 +1,6 @@
 //! Memory-quality metrics (Phase 7).
 //!
-//! `PROPOSAL.md` §11 calls for substrate-level memory quality
+//! `docs/DESIGN.md` §11 calls for substrate-level memory quality
 //! tracking. This module supplies three primary metrics, an
 //! aggregate report, and a [`MetricsCollector`] that the decay
 //! sweep / retrieval paths can hook into:
@@ -23,7 +23,7 @@
 //!
 //! Cross-references:
 //!
-//! * Phase 7 deliverables: `PHASES.md` Phase 7.
+//! * Phase 7 deliverables: `docs/internal/PHASES.md` Phase 7.
 //! * Decay sweep: [`crate::decay::decay_sweep`].
 //! * Retention scoring: [`crate::retention`].
 //! * Module map: `ARCHITECTURE.md` §2.1 (`memory_manager`).

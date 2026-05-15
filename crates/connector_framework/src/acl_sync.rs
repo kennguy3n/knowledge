@@ -1,7 +1,7 @@
 //! ACL sync — projects source-system permissions into the
 //! substrate's `permission_service` relation graph.
 //!
-//! Per `PROPOSAL.md` §10.2 point 5, every connector is responsible
+//! Per `docs/DESIGN.md` §10.2 point 5, every connector is responsible
 //! for keeping the substrate's view of *who can read what* in sync
 //! with the source. The substrate models this with relation tuples
 //! over the source-mirrored object (typically `Concept`, but in

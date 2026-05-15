@@ -1,7 +1,7 @@
 //! `observation_engine` — lexicon-first extraction of structured
 //! observations from raw evidence text.
 //!
-//! Per `PROPOSAL.md` §3.2 / `ARCHITECTURE.md` §2.1 / `PHASES.md` Phase
+//! Per `docs/DESIGN.md` §3.2 / `ARCHITECTURE.md` §2.1 / `docs/internal/PHASES.md` Phase
 //! 1, the observation engine turns raw text into a small number of
 //! typed observations (entities, facts, tasks, decisions, claims).
 //! The Phase 1 baseline is a **lexicon extractor** — regex / keyword
@@ -11,10 +11,10 @@
 //!
 //! Cross-references:
 //!
-//! * Lexicon-first approach: `PROPOSAL.md` §3.2 (cheap classifiers
+//! * Lexicon-first approach: `docs/DESIGN.md` §3.2 (cheap classifiers
 //!   first, only candidates that clear the cheap classifier go to
 //!   more expensive stages).
-//! * Phase 1 deliverables: `PHASES.md` Phase 1.
+//! * Phase 1 deliverables: `docs/internal/PHASES.md` Phase 1.
 
 #![deny(missing_docs)]
 

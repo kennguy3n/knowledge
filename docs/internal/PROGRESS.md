@@ -2,17 +2,16 @@
 
 This tracker captures per-phase deliverable status for the
 Knowledge substrate. The phase scope itself lives in
-[PHASES.md](./PHASES.md); see [README.md](./README.md) for an
-overview of the system, and
-[`docs/MODULE_STATUS.md`](./docs/MODULE_STATUS.md) for a per-crate
-classification.
+[PHASES.md](./PHASES.md); see [README.md](../../README.md) for an
+overview of the system, and [MODULE_STATUS.md](./MODULE_STATUS.md)
+for a per-crate classification.
 
 Every phase has *some* deliverables that are real and others that
 are still contract-level skeletons. The status taxonomy below is
 applied uniformly so it is clear which is which.
 
 For a curated chronological view of major milestones see
-[`docs/DEVELOPMENT_LOG.md`](./docs/DEVELOPMENT_LOG.md).
+[CHANGELOG.md](./CHANGELOG.md).
 
 ---
 
@@ -33,7 +32,7 @@ Each deliverable is tagged with one of the following:
   have shipped to a live integration, passed an external security
   review, and have operational monitoring. Nothing in this
   tracker is at this tier.
-- **Not started** — no code, only a placeholder in PHASES.md.
+- **Not started** — no code, only a placeholder in `PHASES.md`.
 
 The intent is to be honest about which pieces are real and which
 are skeletons. "Runtime complete" does not imply production
@@ -56,7 +55,7 @@ data instead of fixtures.
 | Phase 7: PQ Hardening & Confidential Compute | Mixed | Runtime: ML-KEM-768, ML-DSA-65, hybrid enforcement audit trail, scope / epoch DEK destroy. Contract: confidential compute worker (uses `MockTeeRuntime`). Stub: SPHINCS+ (BLAKE3-keyed placeholder, not a real lattice signer). Not started: red-team test suite, memory quality metrics. |
 
 For a per-crate breakdown see
-[`docs/MODULE_STATUS.md`](./docs/MODULE_STATUS.md).
+[MODULE_STATUS.md](./MODULE_STATUS.md).
 
 ---
 

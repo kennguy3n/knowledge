@@ -2,7 +2,7 @@
 //!
 //! Builds a Zanzibar-style relation graph for the
 //! tenant → domain → channel hierarchy used in earlier phases and
-//! exercises [`check_permission`] against it. Per `PROPOSAL.md` §7.1
+//! exercises [`check_permission`] against it. Per `docs/DESIGN.md` §7.1
 //! and `ARCHITECTURE.md` §6, every access decision in the substrate
 //! is a reachability query over a graph of relation tuples; this
 //! phase plants the graph and runs the queries.

@@ -1,7 +1,7 @@
 //! HKDF-SHA256 key derivation.
 //!
 //! Per `ARCHITECTURE.md` §2.2 the SQLCipher master key is derived from a
-//! per-user master key via HKDF + hybrid KEM unwrap, and per `PROPOSAL.md`
+//! per-user master key via HKDF + hybrid KEM unwrap, and per `docs/DESIGN.md`
 //! §3.1 every storage path uses per-scope, per-epoch keys. This module
 //! exposes a single deterministic [`derive_key`] function so all
 //! sub-key derivations across the substrate share one well-defined

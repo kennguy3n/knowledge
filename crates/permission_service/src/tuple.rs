@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Object types per `ARCHITECTURE.md` §6 / `PROPOSAL.md` §7.1.
+/// Object types per `ARCHITECTURE.md` §6 / `docs/DESIGN.md` §7.1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectType {
@@ -62,7 +62,7 @@ impl ObjectType {
 pub type SubjectType = ObjectType;
 
 /// The relations the substrate distinguishes per `ARCHITECTURE.md`
-/// §6 / `PROPOSAL.md` §7.1. The default inheritance chain (see
+/// §6 / `docs/DESIGN.md` §7.1. The default inheritance chain (see
 /// [`crate::namespace`]) is:
 ///
 /// `Owner ⇒ Admin ⇒ Editor ⇒ Member ⇒ Viewer`

@@ -1,7 +1,7 @@
 //! `knowledge_ffi` — UniFFI surface for iOS / Android platform bindings.
 //!
 //! Per `ARCHITECTURE.md` §3 ("Platform integration plane") and
-//! `PROPOSAL.md` §2 ("On-device runtime"), the knowledge substrate
+//! `docs/DESIGN.md` §2 ("On-device runtime"), the knowledge substrate
 //! ships as a Rust core with two foreign-language adapters:
 //!
 //! * **UniFFI** (this crate) — Swift on iOS, Kotlin on Android.
@@ -436,7 +436,7 @@ pub fn trigger_synthesis(
 /// Generate a fresh ML-DSA-65 (FIPS 204) signing keypair.
 ///
 /// The substrate's canonical post-quantum signature primitive — see
-/// `crypto::signer_backend::MlDsa65Signer` and `PHASES.md` Phase 7.
+/// `crypto::signer_backend::MlDsa65Signer` and `docs/internal/PHASES.md` Phase 7.
 ///
 /// # Errors
 ///

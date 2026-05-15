@@ -1,7 +1,7 @@
 //! Workflow memory — record successful reasoning traces and
 //! abstract them into reusable patterns.
 //!
-//! Per `PROPOSAL.md` §3.4 (reasoning plane) and `PHASES.md`
+//! Per `docs/DESIGN.md` §3.4 (reasoning plane) and `docs/internal/PHASES.md`
 //! Phase 6, the substrate keeps a small library of *workflow
 //! traces* — ordered records of (query, plan, steps, outcome)
 //! — and abstracts repeated traces into [`WorkflowPattern`]s

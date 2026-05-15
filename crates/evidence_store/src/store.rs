@@ -20,7 +20,7 @@ use crate::importance::ImportanceClass;
 use crate::routing::{route_storage_with_threshold, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES};
 use crate::schema::{SCHEMA_SQL, SCHEMA_VERSION};
 
-/// Default ring-buffer size cap (`PROPOSAL.md` §3.1, `ARCHITECTURE.md`
+/// Default ring-buffer size cap (`docs/DESIGN.md` §3.1, `ARCHITECTURE.md`
 /// §9.1).
 pub const DEFAULT_RING_BUFFER_MAX_BYTES: usize = 5 * 1024 * 1024;
 
@@ -309,7 +309,7 @@ impl EvidenceStore {
 
     /// Append-only ingest a fresh evidence row.
     ///
-    /// Per `PROPOSAL.md` §3.1 / §4.3:
+    /// Per `docs/DESIGN.md` §3.1 / §4.3:
     ///
     /// * If `importance == Noise`, the body is written to the ring
     ///   buffer and **no** evidence row is created.

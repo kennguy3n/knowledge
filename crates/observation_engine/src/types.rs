@@ -9,7 +9,7 @@ use memory_manager::MemoryState;
 
 /// The five observation types that the substrate models in Phase 1.
 ///
-/// Per `PROPOSAL.md` §3.2: "Normalized facts, claims, entities,
+/// Per `docs/DESIGN.md` §3.2: "Normalized facts, claims, entities,
 /// tasks, decisions extracted from evidence." The `Claim` type
 /// covers structured assertions that are not yet corroborated; once
 /// they are, the memory manager promotes them through `Reinforced ->

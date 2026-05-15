@@ -8,7 +8,7 @@ use evidence_store::{EvidenceId, ScopeId};
 
 use crate::state::MemoryState;
 
-/// Sensitivity / criticality class from `PROPOSAL.md` §4.3 — drives
+/// Sensitivity / criticality class from `docs/DESIGN.md` §4.3 — drives
 /// the per-object decay schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SensitivityClass {
@@ -42,7 +42,7 @@ impl SensitivityClass {
 /// canonical / superseded / archived / deleted observation living in
 /// some scope.
 ///
-/// Per `PROPOSAL.md` §4 and `ARCHITECTURE.md` §7. The fields are kept
+/// Per `docs/DESIGN.md` §4 and `ARCHITECTURE.md` §7. The fields are kept
 /// deliberately small so `MemoryObject` is cheap to clone in tests and
 /// in the in-memory [`crate::user_memory::UserMemoryObject`] CRUD layer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -66,7 +66,7 @@ pub struct MemoryObject {
     /// answered query.
     pub retrieval_count: u32,
     /// Number of pins (user / admin). Pins are the strongest
-    /// retention signal (`PROPOSAL.md` §4.2).
+    /// retention signal (`docs/DESIGN.md` §4.2).
     pub pin_count: u32,
     /// Number of independent evidence sources backing the same
     /// observation (cross-source corroboration).

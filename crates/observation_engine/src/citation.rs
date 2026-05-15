@@ -1,6 +1,6 @@
 //! Citation rendering — stable links back to source documents.
 //!
-//! Per `PROPOSAL.md` §10.3, every observation derived from a
+//! Per `docs/DESIGN.md` §10.3, every observation derived from a
 //! connector must trace back to a stable source URL so the UI
 //! can render a citation chip and so periodic verification can
 //! detect when the source changes underneath the substrate.
@@ -176,7 +176,7 @@ fn render_inline(c: &Citation) -> String {
 }
 
 /// Maintains the stable mapping `observation_id → Citation` per
-/// `PROPOSAL.md` §10.3. The registry stays storage-agnostic so
+/// `docs/DESIGN.md` §10.3. The registry stays storage-agnostic so
 /// callers can persist it however they like (today: in-memory;
 /// production: SQLite alongside `observations`).
 #[derive(Debug, Clone, Default)]

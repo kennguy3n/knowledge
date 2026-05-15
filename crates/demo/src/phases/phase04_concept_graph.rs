@@ -1,10 +1,10 @@
 //! Phase 4 — Concept Graph.
 //!
-//! Exercises every public surface called out by `PHASES.md` Phase 2
+//! Exercises every public surface called out by `docs/internal/PHASES.md` Phase 2
 //! and Phase 6:
 //!
 //! * Typed nodes ([`ConceptNode`]) and the seven typed relations from
-//!   `PROPOSAL.md` §3.3 (`IsA`, `PartOf`, `DecidedBy`, `Supersedes`,
+//!   `docs/DESIGN.md` §3.3 (`IsA`, `PartOf`, `DecidedBy`, `Supersedes`,
 //!   `Contradicts`, `DerivedFrom`, `AssignedTo`).
 //! * Encrypted persistence via [`PersistentConceptGraph`] (SQLCipher
 //!   round-trip via `add_node` / `add_edge` / `supersede_node` and

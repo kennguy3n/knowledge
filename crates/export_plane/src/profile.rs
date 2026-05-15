@@ -1,6 +1,6 @@
 //! Portable concept profile data model.
 //!
-//! Per `PROPOSAL.md` §3.5 the export plane "renders" curated knowledge
+//! Per `docs/DESIGN.md` §3.5 the export plane "renders" curated knowledge
 //! as a *portable concept profile* — a narrow, policy-gated, JSON-style
 //! object that downstream tools can consume without ever touching raw
 //! evidence. Every profile is anchored in a substrate scope, carries
@@ -222,7 +222,7 @@ impl PortableConceptProfile {
 
 /// Evidence pack surfaced inside an export view.
 ///
-/// Per `PROPOSAL.md` §3.5 the export plane *never* emits raw evidence
+/// Per `docs/DESIGN.md` §3.5 the export plane *never* emits raw evidence
 /// unless the [`crate::policy::ExportPolicy::allow_raw_evidence`] flag
 /// is explicitly true *and* every concept covered by the pack has a
 /// sensitivity strictly below [`SensitivityClass::Critical`].

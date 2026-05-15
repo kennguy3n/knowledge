@@ -55,7 +55,7 @@ impl std::fmt::Display for SourceUserId {
 
 /// One change event from a connector / webhook.
 ///
-/// Per `PROPOSAL.md` §10.2 connectors emit `(document, action,
+/// Per `docs/DESIGN.md` §10.2 connectors emit `(document, action,
 /// permission)` deltas; this enum is the substrate's normalised
 /// shape for those deltas.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

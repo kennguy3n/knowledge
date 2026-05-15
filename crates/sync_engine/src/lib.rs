@@ -1,6 +1,6 @@
 //! `sync_engine` — CRDT-based delta sync of synthesis objects.
 //!
-//! Per `PROPOSAL.md` §3.2 and `PHASES.md` Phase 2: every replica
+//! Per `docs/DESIGN.md` §3.2 and `docs/internal/PHASES.md` Phase 2: every replica
 //! holds an [`AddWinsSet`] of synthesis-object ids per scope, plus an
 //! append-only [`OpLog`] of [`SyncOp`] entries. Replicas exchange
 //! their op logs out-of-band; [`merge_logs`] / [`OpLog::merge`]
@@ -12,9 +12,9 @@
 //!
 //! Cross-references:
 //!
-//! * `PROPOSAL.md` §3.2 — CRDT delta protocol
+//! * `docs/DESIGN.md` §3.2 — CRDT delta protocol
 //! * `ARCHITECTURE.md` §2.1 — sync engine module
-//! * `PHASES.md` Phase 2 — concrete deliverables
+//! * `docs/internal/PHASES.md` Phase 2 — concrete deliverables
 
 #![deny(missing_docs)]
 

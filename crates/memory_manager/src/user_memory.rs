@@ -1,6 +1,6 @@
 //! User Memory Object — CRUD over a user's personal memory scope.
 //!
-//! Per `PHASES.md` Phase 1: "User Memory Object CRUD (read / pin /
+//! Per `docs/internal/PHASES.md` Phase 1: "User Memory Object CRUD (read / pin /
 //! unpin / forget) over the FFI surface".
 //!
 //! This module owns the in-process Rust API; the FFI bindings (UniFFI

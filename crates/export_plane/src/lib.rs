@@ -1,7 +1,7 @@
 //! `export_plane` — portable concept profiles, export policies,
 //! controls, and policy simulator for the Knowledge substrate.
 //!
-//! Per `PROPOSAL.md` §3.5 (Export plane) and `ARCHITECTURE.md` §4.1
+//! Per `docs/DESIGN.md` §3.5 (Export plane) and `ARCHITECTURE.md` §4.1
 //! (Export Service), the substrate exposes a *narrow*, policy-gated
 //! interface for moving curated knowledge out of the substrate into
 //! external surfaces (LLM tools, downstream apps, integration

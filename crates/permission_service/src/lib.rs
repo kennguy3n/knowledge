@@ -1,7 +1,7 @@
 //! `permission_service` — Zanzibar-style permission service for the
 //! Knowledge substrate.
 //!
-//! Per `ARCHITECTURE.md` §6 and `PROPOSAL.md` §7.1, every access
+//! Per `ARCHITECTURE.md` §6 and `docs/DESIGN.md` §7.1, every access
 //! decision in the substrate is a reachability query over a graph of
 //! **relation tuples**:
 //!
@@ -31,8 +31,8 @@
 //! Cross-references:
 //!
 //! * Module map: `ARCHITECTURE.md` §2.1.
-//! * Permission model: `PROPOSAL.md` §7.1.
-//! * Phase 3 deliverables: `PHASES.md` Phase 3.
+//! * Permission model: `docs/DESIGN.md` §7.1.
+//! * Phase 3 deliverables: `docs/internal/PHASES.md` Phase 3.
 
 #![deny(missing_docs)]
 

@@ -1,6 +1,6 @@
 //! Contradiction detection and adjudication workflow.
 //!
-//! Per `PROPOSAL.md` §11.1 and `PHASES.md` Phase 6, the substrate
+//! Per `docs/DESIGN.md` §11.1 and `docs/internal/PHASES.md` Phase 6, the substrate
 //! materialises *opposing claims* in the concept graph and runs a
 //! lightweight adjudication state machine on top.
 //!

@@ -1,6 +1,6 @@
 //! The [`Connector`] trait and supporting sync result types.
 //!
-//! Per `PROPOSAL.md` §10.2 a connector is the boundary between the
+//! Per `docs/DESIGN.md` §10.2 a connector is the boundary between the
 //! substrate and one external source system. The trait is kept
 //! deliberately small and synchronous so it can be unit-tested
 //! against in-memory fakes; the production runtime wraps each

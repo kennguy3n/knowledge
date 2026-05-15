@@ -1,7 +1,7 @@
 //! Integration test that surfaces the cryptographic-forgetting gap in
 //! the FTS5 secondary index.
 //!
-//! Per the PROPOSAL.md §3.1 / `PROGRESS.md` Phase 0 contract, the
+//! Per the docs/DESIGN.md §3.1 / `docs/internal/PROGRESS.md` Phase 0 contract, the
 //! substrate promises that "the scope id is the unit of cryptographic
 //! forgetting." In practice the *body* of every evidence row is
 //! encrypted under a scope-derived AEAD key (`scope:{uuid}:body:v1`),
@@ -143,7 +143,7 @@ fn fts_index_retains_plaintext_after_scope_dek_destruction() {
 //      store — bodies, metadata, AND FTS index — unrecoverable.
 //      Coarse-grained but bullet-proof.
 //
-// Until one of those lands, `PROGRESS.md` (Phase 0 forgetting line)
-// and `docs/MODULE_STATUS.md` ("Known security debt") must continue
+// Until one of those lands, `docs/internal/PROGRESS.md` (Phase 0 forgetting line)
+// and `docs/internal/MODULE_STATUS.md` ("Known security debt") must continue
 // to call this gap out explicitly so consumers do not rely on
 // per-scope cryptographic forgetting that does not yet exist.

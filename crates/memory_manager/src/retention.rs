@@ -1,4 +1,4 @@
-//! Retention scoring per `PROPOSAL.md` §4.2.
+//! Retention scoring per `docs/DESIGN.md` §4.2.
 //!
 //! The retention score is a `0.0 ..= 1.0` value computed from six
 //! weighted inputs:
@@ -137,7 +137,7 @@ pub fn compute_with_weights(
         + weights.contradiction * contradiction
         + weights.age * age
         + weights.non_use * non_use;
-    // Pinning is the strongest retention signal (`PROPOSAL.md` §4.2):
+    // Pinning is the strongest retention signal (`docs/DESIGN.md` §4.2):
     // a single pin must keep the object retrievable indefinitely.
     // Enforce a hard floor of 0.9 when pinned, regardless of age /
     // non-use decay.
@@ -158,7 +158,7 @@ pub fn compute_with_weights(
     }
 }
 
-/// Per-class half-life on the age component (`PROPOSAL.md` §4.3).
+/// Per-class half-life on the age component (`docs/DESIGN.md` §4.3).
 fn half_life_seconds_for_class(obj: &MemoryObject) -> f64 {
     use crate::object::SensitivityClass;
     let days = match obj.sensitivity_class {

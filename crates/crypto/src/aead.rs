@@ -1,6 +1,6 @@
 //! XChaCha20-Poly1305 AEAD wrapper.
 //!
-//! Per `PROPOSAL.md` §3.1 and §9 and `ARCHITECTURE.md` §2.2 / §8.4, every
+//! Per `docs/DESIGN.md` §3.1 and §9 and `ARCHITECTURE.md` §2.2 / §8.4, every
 //! evidence body and every cold archive segment is encrypted with
 //! XChaCha20-Poly1305 using a per-scope, per-epoch symmetric key. This
 //! module exposes the small, opinionated `encrypt_aead` /

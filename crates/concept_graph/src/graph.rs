@@ -2,7 +2,7 @@
 //!
 //! The Phase 2 implementation is a pure in-memory `HashMap` adjacency
 //! list. Persistence to the encrypted store and CRDT delta sync land
-//! later — see `PHASES.md` Phase 2/3.
+//! later — see `docs/internal/PHASES.md` Phase 2/3.
 
 use std::collections::{HashMap, HashSet};
 
@@ -203,7 +203,7 @@ impl ConceptGraph {
     /// Mark `predecessor` as superseded by `successor` and add an
     /// explicit `predecessor -[supersedes]-> successor` edge.
     ///
-    /// Per `PROPOSAL.md` §4: "supersession preferred over deletion".
+    /// Per `docs/DESIGN.md` §4: "supersession preferred over deletion".
     /// The predecessor is preserved with its `superseded_by` pointer
     /// set so audit and contradiction tracking can find it.
     pub fn supersede_node(&mut self, predecessor: NodeId, successor: NodeId) -> Result<EdgeId> {

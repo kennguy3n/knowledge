@@ -1,6 +1,6 @@
 //! Signer-backend trait + the post-quantum [`MlDsa65Signer`] backend.
 //!
-//! Per `PHASES.md` Phase 7 the substrate must lift the
+//! Per `docs/internal/PHASES.md` Phase 7 the substrate must lift the
 //! provenance-signature algorithm from HMAC-SHA256
 //! ([`crate::provenance::TestSigner`]) to the FIPS 204 ML-DSA-65
 //! lattice signature. This module ships:

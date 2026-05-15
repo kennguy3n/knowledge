@@ -10,9 +10,9 @@ Each phase has a goal, a list of deliverables, and explicit exit
 criteria. The implementation priority timeline at the end of the
 document maps the first 90 days of work onto Phases 0 → 2.
 
-For the substrate design see [PROPOSAL.md](./PROPOSAL.md) and
-[ARCHITECTURE.md](./ARCHITECTURE.md). Per-phase deliverable status
-lives in [PROGRESS.md](./PROGRESS.md).
+For the substrate design see [DESIGN.md](../DESIGN.md) and
+[ARCHITECTURE.md](../../ARCHITECTURE.md). Per-phase deliverable
+status lives in [PROGRESS.md](./PROGRESS.md).
 
 ---
 
@@ -326,9 +326,9 @@ follow once the substrate's foundations are in place.
 
 ## Cross-references
 
-- [README.md](./README.md) — overview and surfaces
-- [PROPOSAL.md](./PROPOSAL.md) — product thesis and substrate
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — system design
+- [README.md](../../README.md) — overview and surfaces
+- [DESIGN.md](../DESIGN.md) — product thesis and substrate
+- [ARCHITECTURE.md](../../ARCHITECTURE.md) — system design
 - [PROGRESS.md](./PROGRESS.md) — per-phase status and changelog
 - [`kennguy3n/slm-chat-demo`](https://github.com/kennguy3n/slm-chat-demo) — on-device model strategy reference
 - [`kennguy3n/llama.cpp@prism`](https://github.com/kennguy3n/llama.cpp/tree/prism) — modified llama.cpp inference runtime

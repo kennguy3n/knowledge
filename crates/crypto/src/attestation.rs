@@ -1,6 +1,6 @@
 //! Attestation reports bound to synthesizer keys (Phase 7).
 //!
-//! Per `PROPOSAL.md` §10 every synthesis run in confidential-compute
+//! Per `docs/DESIGN.md` §10 every synthesis run in confidential-compute
 //! mode produces an attestation report that binds the synthesizer's
 //! public key to a TEE measurement. This module provides:
 //!

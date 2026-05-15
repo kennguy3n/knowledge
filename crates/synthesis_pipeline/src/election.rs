@@ -1,7 +1,7 @@
 //! Synthesizer role election — small-group "elected member device"
 //! protocol skeleton.
 //!
-//! Per `PROPOSAL.md` §6.4 and `PHASES.md` Phase 2: "for small groups
+//! Per `docs/DESIGN.md` §6.4 and `docs/internal/PHASES.md` Phase 2: "for small groups
 //! (≤ ~12 members), the elected member device runs the synthesis;
 //! the managed AI endpoint or a confidential-compute worker runs it
 //! for everything else". The Phase 2 deliverable here is the
@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::error::{PipelineError, Result};
 
 /// Default battery floor below which a device is considered
-/// ineligible to be elected (per `PROPOSAL.md` §6.4: "battery > 20%").
+/// ineligible to be elected (per `docs/DESIGN.md` §6.4: "battery > 20%").
 pub const DEFAULT_BATTERY_FLOOR: u8 = 20;
 
 /// Default heartbeat TTL — a device that has not heart-beated within
