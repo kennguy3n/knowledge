@@ -605,6 +605,285 @@ fn candidate_embedding_skips_cache_row_with_mismatched_model_tag() {
     );
 }
 
+/// Regression test for the Phase-B review finding "`evidence_embeddings`
+/// PRIMARY KEY is `evidence_id` only — single model tag per row" (Flag
+/// #5). Under the v3 composite PK `(evidence_id, model_tag)` the cache
+/// must be able to hold multiple cached vectors for the same evidence
+/// row when the active embedding model is swapped, so old retrievers
+/// still get warm cache hits while new retrievers backfill in parallel.
+///
+/// We:
+///   1. Ingest a single evidence row.
+///   2. Write two cached vectors for the same `evidence_id` under two
+///      different `model_tag`s (`alpha` and `beta`) via
+///      `store_embedding`. With the old single-column PK the second
+///      INSERT OR REPLACE would clobber the first row entirely.
+///   3. Assert that `get_embedding_for_model` returns the correct
+///      vector for *both* tags — both rows must coexist.
+///   4. Assert the raw row count for that evidence_id is exactly 2.
+///   5. Re-issue a write under `alpha` with a different vector and
+///      assert it REPLACES the alpha row (not the beta row) — i.e. the
+///      composite PK semantics are honoured by `INSERT OR REPLACE`.
+#[test]
+fn evidence_embeddings_holds_one_row_per_model_tag_for_same_evidence_id() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(scope, b"deadline reminder", None, ImportanceClass::Useful)
+        .unwrap();
+
+    let alpha_v1 = vec![1.0_f32, 0.0, 0.0, 0.0];
+    let beta_v1 = vec![0.0_f32, 1.0, 0.0, 0.0];
+
+    // Two writes for the same evidence_id under two different model
+    // tags. Under v2 (single-column PK) the second write would
+    // overwrite the first; under v3 (composite PK) both rows coexist.
+    store
+        .store_embedding(r.evidence_id, &alpha_v1, "alpha")
+        .expect("store alpha v1");
+    store
+        .store_embedding(r.evidence_id, &beta_v1, "beta")
+        .expect("store beta v1");
+
+    // Both rows must be visible by their respective tags.
+    let alpha_read = store
+        .get_embedding_for_model(r.evidence_id, "alpha")
+        .expect("get alpha")
+        .expect("alpha row must exist");
+    let beta_read = store
+        .get_embedding_for_model(r.evidence_id, "beta")
+        .expect("get beta")
+        .expect("beta row must exist");
+    assert_eq!(alpha_read, alpha_v1, "alpha row must hold the alpha vector");
+    assert_eq!(beta_read, beta_v1, "beta row must hold the beta vector");
+
+    // The raw row count for this evidence_id must be exactly 2 — one
+    // per `model_tag`. Under the old single-column PK the count would
+    // be 1.
+    let row_count: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_embeddings WHERE evidence_id = ?1",
+            rusqlite::params![r.evidence_id.as_uuid().as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        row_count, 2,
+        "composite PK must let two `model_tag`s coexist for the same evidence_id"
+    );
+
+    // Now re-issue a write under `alpha` with a different vector. The
+    // composite PK means this targets the (id, "alpha") row only,
+    // replacing it and leaving the (id, "beta") row intact.
+    let alpha_v2 = vec![0.0_f32, 0.0, 1.0, 0.0];
+    store
+        .store_embedding(r.evidence_id, &alpha_v2, "alpha")
+        .expect("re-write alpha");
+
+    let alpha_after = store
+        .get_embedding_for_model(r.evidence_id, "alpha")
+        .expect("get alpha after rewrite")
+        .expect("alpha row must still exist");
+    let beta_after = store
+        .get_embedding_for_model(r.evidence_id, "beta")
+        .expect("get beta after alpha rewrite")
+        .expect("beta row must still exist");
+    assert_eq!(
+        alpha_after, alpha_v2,
+        "alpha row must have been replaced by the v2 vector"
+    );
+    assert_eq!(
+        beta_after, beta_v1,
+        "beta row must NOT have been touched by the alpha rewrite — \
+         composite PK semantics scope INSERT OR REPLACE to the exact tag"
+    );
+}
+
+/// Regression test for the v2 → v3 destructive migration. We construct
+/// a v2-shaped database by hand (single-column PK on
+/// `evidence_embeddings`, `user_version = 2`), seed two cached rows
+/// for *different* evidence_ids (one row each — the old PK forbids
+/// multiple rows per id), then re-open with the production code and
+/// assert:
+///
+///   1. The schema migration succeeds and stamps `user_version = 3`.
+///   2. Both seeded rows survive the table rewrite byte-for-byte.
+///   3. The migrated table accepts a *second* row for the same
+///      evidence_id under a different `model_tag` — proving the
+///      composite PK is in effect — and a duplicate (id, tag) is still
+///      rejected (or replaced via `INSERT OR REPLACE`, which is what
+///      the production write paths use).
+#[test]
+fn schema_migration_v2_to_v3_widens_pk_and_preserves_rows() {
+    use rusqlite::Connection;
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    // Build a v2-shaped database by hand. We need to seed the
+    // *legacy* (single-PK) `evidence_embeddings` shape and stamp
+    // user_version = 2 so production `open()` reads
+    // `detected_version = 2` and runs `apply_migration(3)`.
+    let seeded_id_a = evidence_store::EvidenceId::new_v4();
+    let seeded_id_b = evidence_store::EvidenceId::new_v4();
+    let seeded_emb_a: Vec<u8> = 0.5_f32.to_le_bytes().repeat(4); // 4 × f32
+    let seeded_emb_b: Vec<u8> = (-0.25_f32).to_le_bytes().repeat(4);
+
+    {
+        let raw = Connection::open(&path).unwrap();
+        let page_key = crypto::derive_key(&MASTER_KEY, b"sqlcipher:store:v1").unwrap();
+        let key_pragma = format!("x'{}'", hex_encode_local(&page_key));
+        raw.pragma_update(None, "key", &key_pragma).unwrap();
+        raw.pragma_update(None, "cipher_page_size", 4096_i64)
+            .unwrap();
+        raw.pragma_update(None, "kdf_iter", 256_000_i64).unwrap();
+
+        // Full v2 schema (v1 subset + the legacy single-PK
+        // evidence_embeddings table).
+        raw.execute_batch(
+            r#"
+            CREATE TABLE evidence (
+                id BLOB PRIMARY KEY, scope_id BLOB NOT NULL,
+                content_hash BLOB NOT NULL, body BLOB, body_ref BLOB,
+                nonce BLOB, source_ref TEXT, acl_pointer TEXT,
+                importance INTEGER NOT NULL, storage_path INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX idx_evidence_scope_created
+                ON evidence (scope_id, created_at DESC);
+            CREATE INDEX idx_evidence_content_hash
+                ON evidence (content_hash);
+            CREATE TABLE body_store (
+                content_hash BLOB PRIMARY KEY, body BLOB NOT NULL,
+                nonce BLOB NOT NULL, ref_count INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE ring_buffer (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, scope_id BLOB NOT NULL,
+                body BLOB NOT NULL, nonce BLOB NOT NULL,
+                payload_size INTEGER NOT NULL, created_at INTEGER NOT NULL
+            );
+            CREATE INDEX idx_ring_buffer_scope_created
+                ON ring_buffer (scope_id, created_at DESC);
+            CREATE VIRTUAL TABLE evidence_fts USING fts5(
+                content, evidence_id UNINDEXED, scope_id UNINDEXED,
+                tokenize = 'unicode61 remove_diacritics 2'
+            );
+            -- Legacy v2 evidence_embeddings: single-column PK on
+            -- evidence_id. This is the shape the migration must
+            -- rewrite.
+            CREATE TABLE evidence_embeddings (
+                evidence_id BLOB PRIMARY KEY,
+                embedding BLOB NOT NULL,
+                model_tag TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+
+        // Seed two rows, one per evidence_id (the single-column PK
+        // forbids two rows for the same id — that's the whole point
+        // of the migration).
+        raw.execute(
+            "INSERT INTO evidence_embeddings
+                 (evidence_id, embedding, model_tag, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                seeded_id_a.as_uuid().as_bytes().as_slice(),
+                seeded_emb_a.clone(),
+                "legacy-v2-tag",
+                1_700_000_000_i64,
+            ],
+        )
+        .unwrap();
+        raw.execute(
+            "INSERT INTO evidence_embeddings
+                 (evidence_id, embedding, model_tag, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                seeded_id_b.as_uuid().as_bytes().as_slice(),
+                seeded_emb_b.clone(),
+                "legacy-v2-tag",
+                1_700_000_001_i64,
+            ],
+        )
+        .unwrap();
+
+        // Stamp v2 so production `open()` sees `detected_version = 2`.
+        raw.pragma_update(None, "user_version", 2_i32).unwrap();
+    }
+
+    // Now open with the production entrypoint. The v2 → v3 migration
+    // must run and rewrite the table without losing rows.
+    let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("open must migrate a v2 database to v3 in place");
+
+    // 1. Version must now be v3.
+    let version: i32 = store
+        .raw_conn()
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        version,
+        evidence_store::schema::SCHEMA_VERSION,
+        "user_version must be stamped to SCHEMA_VERSION after v2 → v3 migration"
+    );
+    assert_eq!(version, 3);
+
+    // 2. Both seeded rows must survive byte-for-byte.
+    let read_a = store
+        .get_embedding_for_model(seeded_id_a, "legacy-v2-tag")
+        .expect("read seeded row A")
+        .expect("row A must survive the migration");
+    let read_b = store
+        .get_embedding_for_model(seeded_id_b, "legacy-v2-tag")
+        .expect("read seeded row B")
+        .expect("row B must survive the migration");
+    let expected_a: Vec<f32> = (0..4).map(|_| 0.5_f32).collect();
+    let expected_b: Vec<f32> = (0..4).map(|_| -0.25_f32).collect();
+    assert_eq!(read_a, expected_a, "row A vector must round-trip");
+    assert_eq!(read_b, expected_b, "row B vector must round-trip");
+
+    // 3. The migrated table must have the composite PK in effect. We
+    //    prove this by adding a second row for the SAME evidence_id
+    //    under a different model_tag. Under v2's single-PK this would
+    //    have collapsed onto the existing row via INSERT OR REPLACE;
+    //    under v3's composite PK both rows coexist.
+    store
+        .store_embedding(seeded_id_a, &[0.1, 0.2, 0.3, 0.4], "fresh-v3-tag")
+        .expect("second tag for the same evidence_id must succeed under v3 composite PK");
+
+    let row_count: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_embeddings WHERE evidence_id = ?1",
+            rusqlite::params![seeded_id_a.as_uuid().as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        row_count, 2,
+        "post-migration table must allow two rows for the same evidence_id \
+         under different `model_tag`s; got {row_count}"
+    );
+
+    // Verify the PK arity directly via PRAGMA so the assertion is not
+    // purely behavioural. Two non-zero `pk` columns ⇒ composite PK.
+    let pk_arity: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('evidence_embeddings') WHERE pk > 0",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        pk_arity, 2,
+        "evidence_embeddings must have a 2-column primary key after v2 → v3"
+    );
+}
+
 /// Regression test for the Phase-B review finding "schema migration
 /// (v1→v2) has no migration path". We construct a v1-shaped database
 /// (no `evidence_embeddings` table, `user_version = 1`) and assert
