@@ -13,10 +13,15 @@ evidence_store = { path = "../evidence_store" }
 memory_manager = { path = "../memory_manager" }
 synthesis_pipeline = { path = "../synthesis_pipeline" }
 
+rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
