@@ -223,13 +223,20 @@ impl EvidenceStore {
         // `evidence_embeddings` to an existing v1 store).
         conn.execute_batch(SCHEMA_SQL)?;
 
-        // Per-version migration deltas. Today every increment is
-        // additive and already handled by the idempotent SCHEMA_SQL
-        // above, so this loop is a no-op. It exists so any future
-        // destructive migration (column drop, type change, data
-        // backfill) has a single, obvious place to live — and so the
-        // `preflight()` invariant below ("version is current") has
-        // teeth instead of being satisfied by an unconditional write.
+        // Per-version migration deltas. Additive bumps (v1, v2) are
+        // already handled by the idempotent SCHEMA_SQL above and the
+        // corresponding `apply_migration` arms are no-ops. Destructive
+        // bumps (v3: widen `evidence_embeddings` PK from single to
+        // composite) cannot be expressed with `CREATE * IF NOT EXISTS`
+        // and must rewrite an existing table; they live in
+        // `apply_migration`. Each migration delta is idempotent and
+        // detects "already in target shape" — a fresh database whose
+        // SCHEMA_SQL bootstrap already produced the v3 shape will pass
+        // through the v3 migration as a no-op.
+        //
+        // This loop exists so the `preflight()` invariant below
+        // ("version is current") has teeth instead of being satisfied
+        // by an unconditional write.
         for v in (detected_version.max(0) + 1)..=SCHEMA_VERSION {
             apply_migration(&conn, v)?;
         }
@@ -1059,11 +1066,23 @@ impl EvidenceStore {
     /// an error). Errors with [`EvidenceError::Schema`] when the stored
     /// BLOB has a length that is not a multiple of 4 (i.e. the row was
     /// corrupted or written by a future schema).
+    ///
+    /// Under the v3 composite primary key (`evidence_id`, `model_tag`)
+    /// multiple rows can exist for the same `evidence_id` (one per
+    /// model the row has ever been embedded under). This method picks
+    /// the most recently inserted such row (highest `created_at`) so
+    /// the return value is deterministic; if more than one row shares
+    /// the same `created_at` the SQLite query planner chooses the
+    /// tiebreaker. Callers that need a specific tag must use
+    /// [`Self::get_embedding_for_model`].
     pub fn get_embedding(&self, evidence_id: EvidenceId) -> Result<Option<Vec<f32>>> {
         let bytes: Option<Vec<u8>> = self
             .conn
             .query_row(
-                "SELECT embedding FROM evidence_embeddings WHERE evidence_id = ?1",
+                "SELECT embedding FROM evidence_embeddings
+                 WHERE evidence_id = ?1
+                 ORDER BY created_at DESC
+                 LIMIT 1",
                 params![evidence_id.as_uuid().as_bytes().as_slice()],
                 |r| r.get::<_, Vec<u8>>(0),
             )
@@ -1145,15 +1164,112 @@ fn bytes_to_embedding(bytes: &[u8]) -> Result<Vec<f32>> {
 /// open, so additive bumps need no work here. This function exists for
 /// migrations that cannot be expressed as `CREATE * IF NOT EXISTS` —
 /// e.g. dropping or renaming a column, changing a column's storage
-/// type, or back-filling derived data from existing rows. Today every
-/// bump (v1 → v2) is additive, so the body is empty.
-fn apply_migration(_conn: &Connection, target: i32) -> Result<()> {
+/// type, or back-filling derived data from existing rows.
+///
+/// Each delta MUST be idempotent: when an in-loop migration runs over
+/// a database whose `SCHEMA_SQL` bootstrap already produced the
+/// target shape (the fresh-DB case), it must detect "already there"
+/// and return `Ok(())` without doing destructive work.
+fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
     match target {
         // v1: initial schema; nothing to do (handled by SCHEMA_SQL).
         // v2: add `evidence_embeddings`; handled by SCHEMA_SQL.
         1 | 2 => Ok(()),
+        // v3: widen `evidence_embeddings` PK from single column
+        // (`evidence_id`) to composite (`evidence_id`, `model_tag`).
+        // See `migrate_evidence_embeddings_to_composite_pk` for the
+        // shape-detection + table-swap logic.
+        3 => migrate_evidence_embeddings_to_composite_pk(conn),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
+        )),
+    }
+}
+
+/// v2 -> v3 destructive migration for `evidence_embeddings`.
+///
+/// SQLite cannot change a table's primary key in place — the only
+/// supported recipe (`https://sqlite.org/lang_altertable.html`
+/// §7.2) is to create a new table with the desired shape, copy rows
+/// into it, drop the old table, and rename the new one. This function
+/// implements that recipe wrapped in an `unchecked_transaction` so the
+/// whole rewrite is atomic (a crash mid-migration leaves the old v2
+/// table intact and the next open retries from `detected_version=2`).
+///
+/// Idempotency: the function first inspects the live table's primary
+/// key via `PRAGMA table_info`. When it already has the v3 composite
+/// shape (two columns with `pk > 0`) the function returns `Ok(())`
+/// without doing any work. This is what makes the migration safe to
+/// re-run over a fresh database whose `SCHEMA_SQL` bootstrap already
+/// produced the v3 shape directly.
+fn migrate_evidence_embeddings_to_composite_pk(conn: &Connection) -> Result<()> {
+    // `PRAGMA table_info(name)` returns one row per column. The `pk`
+    // column is 0 for non-PK columns and 1..=N for PK columns in
+    // declaration order. Counting non-zero `pk` values gives the PK
+    // arity — 1 means the legacy single-PK shape, 2 means the v3
+    // composite shape, 0 means the table is missing entirely (which
+    // should be impossible after SCHEMA_SQL has run but we handle it
+    // defensively).
+    let mut stmt = conn.prepare("PRAGMA table_info(evidence_embeddings)")?;
+    let mut pk_arity: i32 = 0;
+    {
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            // Column 5 of `PRAGMA table_info` is `pk`.
+            let pk: i32 = row.get(5)?;
+            if pk > 0 {
+                pk_arity += 1;
+            }
+        }
+    }
+    drop(stmt);
+
+    match pk_arity {
+        2 => {
+            // Already v3 shape (fresh DB whose SCHEMA_SQL produced
+            // the composite PK directly). Nothing to do.
+            Ok(())
+        }
+        0 => Err(EvidenceError::Schema(
+            "v3 migration: evidence_embeddings table is missing after schema bootstrap",
+        )),
+        1 => {
+            // Legacy single-PK v2 shape. Rewrite the table atomically:
+            //   1. Create `evidence_embeddings_v3` with the composite
+            //      PK directly (no `IF NOT EXISTS` — the table must
+            //      not exist before this point; if it does we have a
+            //      half-applied migration from a previous crash and
+            //      bailing out is safer than blindly overwriting it).
+            //   2. Copy every row across. With the old PK every
+            //      `evidence_id` appears at most once, so the copy
+            //      cannot violate the new composite PK uniqueness
+            //      constraint.
+            //   3. Drop the old table and rename the new one in place.
+            //
+            // All inside `unchecked_transaction` so a crash anywhere
+            // in the sequence rolls back to the v2 shape.
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE evidence_embeddings_v3 (
+                     evidence_id     BLOB    NOT NULL,
+                     embedding       BLOB    NOT NULL,
+                     model_tag       TEXT    NOT NULL,
+                     created_at      INTEGER NOT NULL,
+                     PRIMARY KEY (evidence_id, model_tag)
+                 );
+                 INSERT INTO evidence_embeddings_v3
+                     (evidence_id, embedding, model_tag, created_at)
+                 SELECT evidence_id, embedding, model_tag, created_at
+                 FROM evidence_embeddings;
+                 DROP TABLE evidence_embeddings;
+                 ALTER TABLE evidence_embeddings_v3
+                     RENAME TO evidence_embeddings;",
+            )?;
+            tx.commit()?;
+            Ok(())
+        }
+        _ => Err(EvidenceError::Schema(
+            "v3 migration: evidence_embeddings has an unexpected primary key arity",
         )),
     }
 }
