@@ -70,7 +70,7 @@ impl NodeState {
 
 /// One typed node in the concept graph.
 ///
-/// Per `PROPOSAL.md` §3.3 each node is "scope-aware: bound to a scope
+/// Per `docs/DESIGN.md` §3.3 each node is "scope-aware: bound to a scope
 /// (user, channel, domain, tenant) and inherits its access policy".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConceptNode {

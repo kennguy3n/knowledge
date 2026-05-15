@@ -1,7 +1,7 @@
 //! `connector_framework` — Phase 4 connector boundary for the
 //! Knowledge substrate.
 //!
-//! Per `PROPOSAL.md` §10.2 and `ARCHITECTURE.md` §4.1 every external
+//! Per `docs/DESIGN.md` §10.2 and `ARCHITECTURE.md` §4.1 every external
 //! source system the substrate ingests from sits behind one
 //! [`Connector`] instance:
 //!

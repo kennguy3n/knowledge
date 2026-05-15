@@ -1,6 +1,6 @@
 //! Phase 8 — Export Plane.
 //!
-//! Per `PROPOSAL.md` §3.5 the substrate exposes a *narrow*,
+//! Per `docs/DESIGN.md` §3.5 the substrate exposes a *narrow*,
 //! policy-gated interface for moving curated knowledge out of the
 //! substrate into external surfaces. The demo wires up the full
 //! export-plane pipeline against the canonical concepts produced by

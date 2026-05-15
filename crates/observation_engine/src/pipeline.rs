@@ -9,7 +9,7 @@ use crate::types::Observation;
 
 /// One pass of the Phase-1 observation pipeline.
 ///
-/// Per `PHASES.md` Phase 1: "Lexicon → XLM-R → SLM-assisted
+/// Per `docs/internal/PHASES.md` Phase 1: "Lexicon → XLM-R → SLM-assisted
 /// observation pipeline". Phase 1 ships the lexicon stage; the
 /// XLM-R + SLM stages stub through the [`ImportanceClassifier`]
 /// (today the lexicon-only fallback in `evidence_store`) without

@@ -1,4 +1,4 @@
-//! Provenance bundle — the PROV data model from `PROPOSAL.md` §7.2.
+//! Provenance bundle — the PROV data model from `docs/DESIGN.md` §7.2.
 //!
 //! Every observation and every synthesis output carries a PROV bundle:
 //! the **entity** (the row itself), the **activity** (the synthesis run
@@ -69,7 +69,7 @@ impl EvidenceRef {
 }
 
 /// Whether the agent that performed the activity is a human or a
-/// piece of software (per `PROPOSAL.md` §7.2: "the human or software
+/// piece of software (per `docs/DESIGN.md` §7.2: "the human or software
 /// agent responsible").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -93,7 +93,7 @@ impl AgentKind {
 }
 
 /// The PROV-Activity describing the synthesis run that produced the
-/// bundle's entity (per `PROPOSAL.md` §7.2: "agent identity, model
+/// bundle's entity (per `docs/DESIGN.md` §7.2: "agent identity, model
 /// version, prompt id, run id").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SynthesisActivity {
@@ -154,7 +154,7 @@ impl ProvenanceAgent {
 
 /// PROV bundle — the unsigned shape.
 ///
-/// Per `PROPOSAL.md` §7.2 every observation / summary / concept carries
+/// Per `docs/DESIGN.md` §7.2 every observation / summary / concept carries
 /// one of these. Phase 2 ships the data model; Phase 7 swaps the
 /// underlying [`ProvenanceSigner`] from [`TestSigner`] to an ML-DSA-65
 /// implementation.

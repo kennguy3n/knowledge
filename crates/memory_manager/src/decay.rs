@@ -21,7 +21,7 @@ pub const DEFAULT_CANDIDATE_ARCHIVE_THRESHOLD: f64 = 0.15;
 
 /// Default TTL after which a [`MemoryState::Superseded`] object is
 /// archived. 90 days mirrors the substrate's "supersession preferred
-/// over deletion" stance from `PROPOSAL.md` §4.
+/// over deletion" stance from `docs/DESIGN.md` §4.
 pub const DEFAULT_SUPERSEDED_TTL_DAYS: i64 = 90;
 
 /// Counters returned by [`decay_sweep`].
@@ -77,7 +77,7 @@ pub fn decay_sweep_with(
         // Match guards can't mutate the bound place, so we destructure
         // the state into local flags first and apply the transition
         // outside the match. Critical-class items are exempt from
-        // passive decay per `PROPOSAL.md` §4.3 — they only leave the
+        // passive decay per `docs/DESIGN.md` §4.3 — they only leave the
         // active set via explicit deprecation / supersession.
         let is_critical = obj.sensitivity_class == SensitivityClass::Critical;
         let (try_archive_candidate, try_archive_superseded) = match obj.state {

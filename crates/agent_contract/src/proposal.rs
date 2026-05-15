@@ -1,6 +1,6 @@
 //! Proposal data model for the agent write contract.
 //!
-//! Per `PROPOSAL.md` §7.3 every agent proposal carries:
+//! Per `docs/DESIGN.md` §7.3 every agent proposal carries:
 //!
 //! * Scope (user / channel / domain / tenant).
 //! * PROV bundle (signed by the synthesiser key — re-used from
@@ -25,7 +25,7 @@ use memory_manager::SensitivityClass;
 
 /// Identity of the agent that produced a proposal.
 ///
-/// Per `PROPOSAL.md` §7.3 every proposal carries the agent identity,
+/// Per `docs/DESIGN.md` §7.3 every proposal carries the agent identity,
 /// the model name + version, and the skill / recipe id. Skill /
 /// recipe ids are optional because some integrations (e.g. raw
 /// connector pipelines) do not have an associated skill or recipe.
@@ -254,7 +254,7 @@ impl ConceptProposal {
 
 /// Relation type tag for [`RelationProposal`].
 ///
-/// Mirrors the typed-edge taxonomy from `PROPOSAL.md` §3.3. Kept as
+/// Mirrors the typed-edge taxonomy from `docs/DESIGN.md` §3.3. Kept as
 /// a free-form `String` is intentional — agents may propose
 /// substrate-extending relation types and the eventual review step
 /// validates against the substrate's accepted set.

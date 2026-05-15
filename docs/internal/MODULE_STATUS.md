@@ -4,7 +4,8 @@ This file is the single source of truth for **what is actually
 implemented vs. what is a contract, mock, or test harness** in the
 Knowledge substrate workspace. It is intentionally honest: if you
 need to ship something, read the **Status** and **Notes** columns
-before quoting any line from `PROGRESS.md` or `README.md`.
+before quoting any line from [PROGRESS.md](./PROGRESS.md) or
+the public-facing [README.md](../../README.md).
 
 The three categories are:
 
@@ -14,11 +15,10 @@ The three categories are:
 | **Contract/spec** | Types, traits, and tests exist and the public API is stable, but the runtime path delegates to a stub, a skeleton, or a fixture parser.         |
 | **Mock/test/demo**| The crate exists only to exercise other crates — tests, the `demo` driver, fixture harnesses, etc.                                              |
 
-Status indicators in column headers follow the same convention as the
-README tech-stack table. The body of the table below uses plain text
-labels (`Runtime-ready` / `Contract/spec` / `Mock/test/demo`) for
-grep-ability so reviewers can `rg 'Contract/spec' docs/MODULE_STATUS.md`
-without worrying about Unicode glyphs in their terminal font.
+The body of the table below uses plain text labels (`Runtime-ready` /
+`Contract/spec` / `Mock/test/demo`) for grep-ability so reviewers can
+`rg 'Contract/spec' docs/internal/MODULE_STATUS.md` without worrying
+about Unicode glyphs in their terminal font.
 
 ---
 
@@ -147,8 +147,9 @@ silently re-marketed as "complete":
 
 * When a crate's status changes (e.g. a real SLM adapter lands in
   `inference_router`), update **both** the per-crate row above
-  **and** the corresponding section in `PROGRESS.md`. A PR that
-  changes one without the other should be blocked in review.
+  **and** the corresponding section in [PROGRESS.md](./PROGRESS.md).
+  A PR that changes one without the other should be blocked in
+  review.
 * When adding a new mock / stub / fixture-only construct, gate it
   behind `cfg(any(test, feature = "test-support"))` and document
   the gate in the per-crate `Notes` column.

@@ -1,6 +1,6 @@
 //! Schema validation for agent proposals.
 //!
-//! Per `PROPOSAL.md` §7.3 every proposal must:
+//! Per `docs/DESIGN.md` §7.3 every proposal must:
 //!
 //! * Carry a non-nil [`evidence_store::ScopeId`].
 //! * Have at least one evidence reference.

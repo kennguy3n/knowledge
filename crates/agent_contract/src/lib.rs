@@ -1,7 +1,7 @@
 //! `agent_contract` — agent proposal-only write contract for the
 //! Knowledge substrate.
 //!
-//! Per `PROPOSAL.md` §7.3, software agents (LLM-driven workflows,
+//! Per `docs/DESIGN.md` §7.3, software agents (LLM-driven workflows,
 //! integrations, AI employees) **never** write canonical memory
 //! directly. Instead they speak to the substrate through a
 //! proposal-only API:
@@ -31,9 +31,9 @@
 //!
 //! Cross-references:
 //!
-//! * `PROPOSAL.md` §3.6 (Action plane), §7.3 (Agent write contract).
+//! * `docs/DESIGN.md` §3.6 (Action plane), §7.3 (Agent write contract).
 //! * `ARCHITECTURE.md` §6 (Permission model — `proposer` relation).
-//! * `PHASES.md` Phase 5 (Agent contracts + export plane).
+//! * `docs/internal/PHASES.md` Phase 5 (Agent contracts + export plane).
 
 #![deny(missing_docs)]
 

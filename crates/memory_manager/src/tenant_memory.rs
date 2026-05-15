@@ -1,10 +1,10 @@
 //! Tenant Memory Object — institutional memory for the highest scope
 //! in the B2B hierarchy.
 //!
-//! Per `PROPOSAL.md` §4.3 and §6.2, tenant / institutional memory
+//! Per `docs/DESIGN.md` §4.3 and §6.2, tenant / institutional memory
 //! captures the **canonical policy, product taxonomy, and stable org
 //! knowledge** that defines the tenant. Items default to
-//! [`SensitivityClass::Critical`] which has, per `PROPOSAL.md` §4.3,
+//! [`SensitivityClass::Critical`] which has, per `docs/DESIGN.md` §4.3,
 //! "**no ordinary decay — only explicit deprecation**".
 //!
 //! That rule is enforced at the type level here: every constructor
@@ -17,7 +17,7 @@
 //! `Superseded` rows.
 //!
 //! Tenant synthesis consumes domain outputs + **approved official
-//! docs** only (see [`ApprovedDocumentRef`] and `PROPOSAL.md` §6.3
+//! docs** only (see [`ApprovedDocumentRef`] and `docs/DESIGN.md` §6.3
 //! rule 3). The list of source domain scopes and the list of
 //! approved-document refs are tracked here so the tenant memory
 //! object enumerates its legal input contract for the synthesis
@@ -168,7 +168,7 @@ impl StableOrgKnowledge {
 }
 
 /// Reference to an "approved official document" that has been
-/// explicitly admitted to feed tenant synthesis. Per `PROPOSAL.md`
+/// explicitly admitted to feed tenant synthesis. Per `docs/DESIGN.md`
 /// §6.3 rule 3, **tenant synthesis consumes domain objects + approved
 /// official docs only**; raw evidence and channel objects are out of
 /// contract. The synthesis pipeline uses the [`ApprovedDocumentRef`]

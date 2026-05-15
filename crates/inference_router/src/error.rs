@@ -25,7 +25,7 @@ pub enum RouterError {
     },
     /// The underlying SLM call failed (network, timeout, model error,
     /// JSON-grammar violation). The substrate should fall back to the
-    /// classifier ladder per `PROPOSAL.md` §6.
+    /// classifier ladder per `docs/DESIGN.md` §6.
     #[error("inference call failed: {0}")]
     InferenceFailure(String),
     /// The adapter has not been probed yet — the router refuses to

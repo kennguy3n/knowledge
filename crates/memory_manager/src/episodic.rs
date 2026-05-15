@@ -1,6 +1,6 @@
 //! Episodic memory — session / thread summaries.
 //!
-//! Phase 1 deliverable from `PHASES.md`: "Episodic memory — session /
+//! Phase 1 deliverable from `docs/internal/PHASES.md`: "Episodic memory — session /
 //! thread summaries via on-device Bonsai-1.7B." Each session collapses
 //! a window of [`Observation`]s into one [`EpisodicSummary`], which
 //! lives in the decay state machine like every other

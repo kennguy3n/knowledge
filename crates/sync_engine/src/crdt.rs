@@ -1,6 +1,6 @@
 //! Add-Wins Observed-Remove Set (`AddWinsSet<T>`).
 //!
-//! Per `PROPOSAL.md` §3.2 and `PHASES.md` Phase 2: synthesis objects
+//! Per `docs/DESIGN.md` §3.2 and `docs/internal/PHASES.md` Phase 2: synthesis objects
 //! that are *added* concurrently with a *remove* must remain in the
 //! merged set — "add wins". This is implemented as the standard
 //! observed-remove set: each `add` allocates a fresh tag (UUID v4),

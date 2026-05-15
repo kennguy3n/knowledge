@@ -2,13 +2,14 @@
 
 This document is the system architecture for the Knowledge
 substrate. It builds on the layered six-plane substrate from
-[PROPOSAL.md](./PROPOSAL.md) and turns it into a concrete
+[docs/DESIGN.md](./docs/DESIGN.md) and turns it into a concrete
 component map, data flow, permission model, decay state machine,
 crypto layer, device-optimization strategy, and platform-specific
 implementation notes.
 
-For phasing and progress see [PHASES.md](./PHASES.md) and
-[PROGRESS.md](./PROGRESS.md).
+For the product thesis, the strategic principles, and the
+per-class decay policies behind these mechanics, read DESIGN.md.
+For per-platform tuning, read [docs/PLATFORMS.md](./docs/PLATFORMS.md).
 
 ---
 
@@ -110,6 +111,7 @@ binary shapes:
 | `memory_manager` | Owns the decay state machine, retention scoring, working memory, and the user / channel / domain / tenant memory objects. |
 | `concept_graph` | Sparse typed concept graph with supersession, contradiction edges, and incremental subgraph updates. |
 | `synthesis_pipeline` | Manages scope-window synthesis (channel / domain / tenant), grammar-constrained outputs, elected-device election, and encrypted publication. |
+| `synthesis_engine` | Server-side synthesis service (Rust skeleton + stub managed-endpoint synthesizer) and the confidential-compute TEE worker. |
 | `crypto` | All cryptographic primitives the substrate consumes — hybrid X25519 + ML-KEM-768 KEM, ML-DSA-65 and SPHINCS+ signatures, XChaCha20-Poly1305, BLAKE3, and the provenance bundle. |
 | `sync_engine` | CRDT-based delta sync of synthesis objects, MLS group keying, and policy-gated evidence sync. |
 | `permission_service` | Zanzibar-style relation graph with reachability checks. |
@@ -124,40 +126,43 @@ binary shapes:
 | `ffi` | UniFFI surface consumed by iOS and Android. |
 | `napi` | N-API addon consumed by macOS and Windows Electron shells. |
 
-See [`docs/MODULE_EVOLUTION.md`](docs/MODULE_EVOLUTION.md) for the
-per-phase evolution of each module.
+This table is the canonical module index for the substrate. The
+per-phase scope of each module is tracked in
+[`docs/internal/PROGRESS.md`](./docs/internal/PROGRESS.md).
 
 ### 2.2 Local store
 
-- **SQLCipher** for the relational store (AES-256-GCM page
-  encryption; key derived from a per-user master key via HKDF +
-  hybrid KEM unwrap).
+- **SQLCipher** for the relational store (AES-256-CBC per-page +
+  HMAC-SHA512; the per-database master key is unwrapped via the
+  hybrid X25519 + ML-KEM-768 KEM from §8 below).
 - **SQLite FTS5** with `unicode61 remove_diacritics 2` for
   lexical / hybrid retrieval.
 - **Cold segments** — content older than the hot window is
   written to encrypted append-only segments with per-epoch
   XChaCha20-Poly1305 keys; epoch keys are rotated on a schedule
   and destroyed when the epoch is forgotten.
-- **Content-aware storage routing** — bodies are routed through
-  a size-threshold strategy:
+- **Content-aware storage routing.** Bodies are routed through a
+  size-threshold strategy:
   - **Inline path (≤ 512 bytes):** short text messages are stored
-    inline in the evidence row itself. BLAKE3 hash is computed
-    for integrity framing but no dedup index lookup is performed.
-    This eliminates JOIN overhead for the common case (chat messages).
+    inline in the evidence row; a BLAKE3 hash is computed for
+    integrity framing, but no dedup index lookup is performed.
+    This eliminates JOIN overhead for the chat-message common case.
   - **Body-table path (> 512 bytes):** files, document chunks,
     transcripts, and large bodies are stored in a separate body
-    table with BLAKE3 content-hash deduplication. Duplicate hashes
-    share a single body row referenced by multiple observation rows.
+    table with BLAKE3 content-hash deduplication. Duplicate
+    hashes share a single body row referenced by multiple
+    observation rows.
   - **Ring-buffer path (noise class):** messages classified as
     noise by the importance tagger are stored in a fixed-size
     circular buffer (configurable, default 5 MB) that overwrites
-    on FIFO. These are available for the current synthesis window
+    on FIFO. They are available for the current synthesis window
     but never persist beyond it.
 - **Semantic near-dedup at the observation plane** — XLM-R
-  embeddings detect semantically equivalent observations extracted
-  from different messages. Deduplication of meaning happens at the
-  observation layer, not the evidence layer, catching cases where
-  the same fact is stated in different words across channels.
+  embeddings detect semantically equivalent observations
+  extracted from different messages. Deduplication of *meaning*
+  happens at the observation layer, not the evidence layer,
+  catching cases where the same fact is stated in different words
+  across channels.
 
 ### 2.3 Cross-platform FFI
 
@@ -174,36 +179,20 @@ per-phase evolution of each module.
 
 - Per-scope **operation logs** are CRDT-merged across devices.
 - Synthesis objects use **add-wins** semantics with explicit
-  supersession markers; conflicts produce `contradicts`
-  edges in the concept graph rather than silent overwrites.
+  supersession markers; conflicts produce `contradicts` edges in
+  the concept graph rather than silent overwrites.
 - Raw evidence does **not** sync by default; only synthesis
   objects, observation rows, and (with explicit policy) selected
   evidence body refs.
 
-### 2.5 Post-quantum primitives
+### 2.5 Post-quantum primitives summary
 
 The `crypto` crate wraps the post-quantum and classical primitives
-that the rest of the substrate consumes through a small high-level
-API: content hashing, AEAD encryption / decryption, key derivation,
-hybrid KEM encap / decap, and provenance signing / verification.
-The rest of the core never touches raw cryptographic state.
-
-The primitive inventory is:
-
-- **BLAKE3** content hashing.
-- **XChaCha20-Poly1305 AEAD** for per-scope, per-epoch symmetric
-  encryption.
-- **HKDF-SHA256** key derivation.
-- **Hybrid X25519 + ML-KEM-768 KEM** with a concatenate-then-KDF
-  combiner (HKDF-SHA256 over the concatenation of the X25519 DH
-  output and the ML-KEM-768 shared secret). The ML-KEM-768 side
-  sits behind a `KemBackend` trait so the implementation can be
-  swapped for an FFI-backed `liboqs` build without touching the
-  rest of the substrate.
-- **ML-DSA-65 (Dilithium)** for provenance signatures on every
-  synthesis output and every export bundle.
-- **SPHINCS+** as a stateless backup signer, available as a
-  co-signer alongside ML-DSA-65 for archival group operations.
+the rest of the substrate consumes through a small high-level API:
+content hashing, AEAD, key derivation, hybrid KEM encap / decap,
+and provenance signing / verification. The cryptographic design
+and the threat model live in DESIGN.md §9; the concrete primitive
+inventory and key layout are in §8 below.
 
 ---
 
@@ -220,20 +209,10 @@ Knowledge ships with the
 [`kennguy3n/llama.cpp@prism`](https://github.com/kennguy3n/llama.cpp/tree/prism)
 fork as its on-device SLM serving layer. The fork is the only
 runtime that supports the `Q1_0_g128` ternary repack format used
-in Bonsai derivatives across:
-
-- **CUDA** (NVIDIA discrete GPUs)
-- **Metal** (Apple Silicon GPUs)
-- **Vulkan** (cross-vendor desktop / mobile GPUs)
-- **AVX-512 VNNI** (recent Intel server / desktop CPUs)
-- **AVX-VNNI** (Intel client CPUs from Alder Lake onwards)
-- **AVX2** (baseline desktop CPUs, with cross-arch validation
-  via Intel SDE on x86 hosts)
-- **ARM NEON / dotprod** (mobile + Apple Silicon CPUs)
-
-The dispatcher under `ggml/` selects the best kernel for the
-host at runtime; the substrate does not need to know which
-backend won.
+in Bonsai derivatives across CUDA, Metal, Vulkan, AVX-512 VNNI,
+AVX-VNNI, AVX2, and ARM NEON / dotprod. The dispatcher under
+`ggml/` selects the best kernel for the host at runtime; the
+substrate does not need to know which backend won.
 
 ### 3.2 Adapter bootstrap priority
 
@@ -246,8 +225,8 @@ MLXAdapter  →  LlamaCppAdapter  →  fallback (no SLM, encoder-only)
 
 - **`MLXAdapter`** — Apple Silicon only (iOS, macOS). Loads the
   Bonsai-1.7B MLX 2-bit weight via the system MLX runtime. This
-  is the preferred path on Apple Silicon because of weight-size
-  and memory-bandwidth wins.
+  is the preferred path on Apple Silicon for weight-size and
+  memory-bandwidth wins.
 - **`LlamaCppAdapter`** — POSIX + Windows. Talks to a
   `llama-server` instance from the PrismML fork over loopback
   HTTP / SSE. The Bonsai-1.7B GGUF is the canonical artifact.
@@ -272,15 +251,11 @@ template, the grammar, and the budget:
 ### 3.4 Shared sidecar pattern
 
 A single `llama-server` instance is shared across all KChat
-subsystems on the device:
-
-- Knowledge synthesis (this repo)
-- KChat chat AI surfaces (`slm-chat-demo`)
-- CV-Guard SLM consultation
-- slm-guardrail when SLM-promoted
-
-Server runs with `--parallel 2` so two inference slots can
-overlap, mmap'd weights, 60 s idle-unload, warm-up at boot.
+subsystems on the device (Knowledge synthesis, KChat chat AI
+surfaces, CV-Guard SLM consultation, slm-guardrail when
+SLM-promoted). The server runs with `--parallel 2` so two
+inference slots can overlap, mmap'd weights, 60 s idle-unload,
+and warm-up at boot.
 
 ### 3.5 Grammar-constrained decoding
 
@@ -295,8 +270,8 @@ guarantees the output schema.
 A closed `<think>\n</think>\n` pair is prepended to every
 synthesizer prompt to suppress in-model chain-of-thought.
 Reasoning traces — when needed — are produced by the **reasoning
-plane** with explicit Graph-of-Thought scaffolding so they
-remain auditable and citable.
+plane** with explicit Graph-of-Thought scaffolding so they remain
+auditable and citable.
 
 ---
 
@@ -310,7 +285,7 @@ synthesis service, the permission graph, and the export plane.
 | Service | Responsibility |
 |---|---|
 | **API Gateway** | OAuth2 token verification, rate-limiting, fan-out to internal services, NDJSON / SSE streaming |
-| **Connector Service** | Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, email connectors; OAuth2 token refresh; webhook subscription; incremental delta sync |
+| **Connector Service** | Drive / OneDrive / Notion / Jira / Confluence / Figma / HubSpot / Slack / Email connectors; OAuth2 token refresh; webhook subscription; incremental delta sync |
 | **Permission Service** | Zanzibar-style relation graph: tuples, namespace configs, reachability checks, ACL sync from connectors |
 | **Tenant Service** | Tenant lifecycle, per-tenant encryption keys, storage configuration, member provisioning (SCIM v2) |
 | **Export Service** | Portable concept profile rendering, summary view rendering, evidence pack rendering with policy enforcement |
@@ -368,7 +343,7 @@ flowchart LR
 ## 5. Data flow
 
 The data flow is the same shape on the device and on the server,
-because they share the substrate planes from PROPOSAL.md §3.
+because they share the substrate planes from DESIGN.md §3.
 
 ### 5.1 On-device
 
@@ -419,8 +394,6 @@ flowchart LR
 
 ## 6. Permission model
 
-### 6.1 Object types
-
 | Object | Hierarchy / role |
 |---|---|
 | Tenant | Top of the B2B hierarchy; owns domains, channels, users |
@@ -434,8 +407,6 @@ flowchart LR
 | Export-Profile | A portable concept profile recipe |
 | Agent | A software agent allowed to propose memory writes |
 
-### 6.2 Relations
-
 | Relation | Meaning |
 |---|---|
 | `owner` | Has full control, including delete and key destruction |
@@ -447,14 +418,15 @@ flowchart LR
 | `proposer` | Agents only; can propose, never promote |
 
 Relations are stored in a Zanzibar-style tuple store; permission
-checks are reachability queries over the relation graph.
+checks are reachability queries over the relation graph. The
+substrate-level rationale for this model is in DESIGN.md §7.
 
-### 6.3 Cryptographic capabilities
+### 6.1 Cryptographic capabilities
 
 - Each scope has a **DEK** (Data Encryption Key).
-- Granting a relation that grants read access produces a
-  **delegation token** binding the user / device's public key to
-  the scope DEK via hybrid KEM unwrap.
+- Granting a read-bearing relation produces a **delegation token**
+  binding the user / device's public key to the scope DEK via
+  hybrid KEM unwrap.
 - Revoking the relation is enforced at two layers:
   - The relation tuple is removed (Zanzibar).
   - The scope DEK is rotated and previously delegated tokens are
@@ -462,13 +434,12 @@ checks are reachability queries over the relation graph.
     destroyed and a new one is generated for remaining members
     via MLS commit.
 
-### 6.4 Export boundary
+### 6.2 Export boundary
 
 By default, exports produce **portable concept profiles only** —
 typed, scoped, time-bounded concepts with provenance. Raw
 evidence and full-fidelity summaries are an opt-in escalation
-gated by an explicit export policy and a fresh audit-trail
-entry.
+gated by an explicit export policy and a fresh audit-trail entry.
 
 ---
 
@@ -487,23 +458,16 @@ stateDiagram-v2
     archived --> deleted: scope key destroyed
 ```
 
-The transitions are driven by:
+The transitions are driven by retrieval count, cross-source
+corroboration, time since last access, contradiction detection
+(supersession is preferred over silent deletion; contradictions
+become explicit edges in the concept graph), and explicit human
+action (pinning, promotion, deprecation, forgetting).
 
-- **Retrieval count** — how many times the object has answered a
-  query.
-- **Cross-source corroboration** — independent sources backing
-  the same observation.
-- **Time since last access** — used in retention scoring and
-  decay sweeps.
-- **Contradiction detection** — supersession is preferred over
-  silent deletion; contradictions become explicit edges in the
-  concept graph.
-- **Explicit human action** — pinning, promotion, deprecation,
-  forgetting.
-
-Per-class decay policies (PROPOSAL.md §4.3) are enforced by the
-memory manager. Cryptographic forgetting destroys the scope DEK
-or the archive epoch key, depending on the scope of the delete.
+Per-class decay policies are enforced by the memory manager and
+specified in DESIGN.md §4.3. Cryptographic forgetting destroys
+the scope DEK or the archive epoch key, depending on the scope of
+the delete.
 
 ---
 
@@ -557,19 +521,18 @@ longer recoverable.
 
 The substrate adapts to four signals (storage, memory, battery,
 network) and ships platform-specific integration notes for iOS,
-Android, macOS, and Windows. See
-[`docs/PLATFORMS.md`](docs/PLATFORMS.md) for the full catalogue —
-tiered SQLCipher storage routing, working-set caps, decay-sweep
-throttling, ANR-class watchdogs, idle-window observation processing,
-background-fetch policies, and the per-platform FFI / N-API shims.
+Android, macOS, and Windows. The full catalogue —
+SQLCipher storage routing, working-set caps, decay-sweep
+throttling, ANR-class watchdogs, idle-window observation
+processing, background-fetch policies, and the per-platform FFI /
+N-API shims — lives in [`docs/PLATFORMS.md`](./docs/PLATFORMS.md).
 
 ---
 
 ## Cross-references
 
 - [README.md](./README.md) — overview and quick start
-- [PROPOSAL.md](./PROPOSAL.md) — product thesis and substrate
-- [PHASES.md](./PHASES.md) — phased delivery plan
-- [PROGRESS.md](./PROGRESS.md) — per-phase status and changelog
+- [docs/DESIGN.md](./docs/DESIGN.md) — product thesis and substrate
+- [docs/PLATFORMS.md](./docs/PLATFORMS.md) — device-tuning and per-platform integration notes
 - [`kennguy3n/slm-chat-demo`](https://github.com/kennguy3n/slm-chat-demo) — model strategy reference
 - [`kennguy3n/llama.cpp@prism`](https://github.com/kennguy3n/llama.cpp/tree/prism) — modified llama.cpp inference runtime

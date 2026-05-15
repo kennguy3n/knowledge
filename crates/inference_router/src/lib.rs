@@ -1,7 +1,7 @@
 //! `inference_router` — on-device SLM inference routing for the
 //! Knowledge substrate.
 //!
-//! Per `ARCHITECTURE.md` §3 and `PROPOSAL.md` §6, every classification
+//! Per `ARCHITECTURE.md` §3 and `docs/DESIGN.md` §6, every classification
 //! / extraction / synthesis call into a Small Language Model goes
 //! through one place: the [`InferenceRouter`]. The router holds an
 //! ordered list of [`InferenceAdapter`]s — currently `MLX → llama.cpp

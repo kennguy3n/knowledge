@@ -1,6 +1,6 @@
 //! SPHINCS+ stateless backup signer — Phase 7 deliverable.
 //!
-//! Per `PROPOSAL.md` §9.1 ("Post-quantum signatures"), the substrate
+//! Per `docs/DESIGN.md` §9.1 ("Post-quantum signatures"), the substrate
 //! ships **two** quantum-resistant signers side-by-side:
 //!
 //! 1. **ML-DSA-65** ([`crate::signer_backend::MlDsa65Signer`]) — the

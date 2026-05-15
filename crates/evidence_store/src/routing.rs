@@ -1,7 +1,7 @@
 //! Storage routing — pick the storage path for an incoming evidence
 //! body based on size and importance class.
 //!
-//! Per `ARCHITECTURE.md` §2.2 / §9.1 and `PROPOSAL.md` §3.1:
+//! Per `ARCHITECTURE.md` §2.2 / §9.1 and `docs/DESIGN.md` §3.1:
 //!
 //! * `Noise` always goes to the ring buffer regardless of size.
 //! * Bodies with `len ≤ 512 B` go inline in the evidence row (no
@@ -12,7 +12,7 @@
 use crate::importance::ImportanceClass;
 
 /// Default size threshold (bytes) below which a non-noise body is
-/// stored inline. Per `ARCHITECTURE.md` §2.2 and `PROPOSAL.md` §3.1.
+/// stored inline. Per `ARCHITECTURE.md` §2.2 and `docs/DESIGN.md` §3.1.
 pub const DEFAULT_INLINE_THRESHOLD_BYTES: usize = 512;
 
 /// The three storage paths a body can take through the evidence plane.

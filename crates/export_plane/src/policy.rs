@@ -1,6 +1,6 @@
 //! Export policy + policy engine.
 //!
-//! Per `PROPOSAL.md` §3.5 every export emission is policy-gated. The
+//! Per `docs/DESIGN.md` §3.5 every export emission is policy-gated. The
 //! policy is a small declarative struct ([`ExportPolicy`]); the
 //! engine ([`PolicyEngine`]) takes a list of candidate
 //! [`crate::profile::ApprovedConcept`]s and returns an

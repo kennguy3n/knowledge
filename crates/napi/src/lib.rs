@@ -2,7 +2,7 @@
 //! Electron desktop integration.
 //!
 //! Per `ARCHITECTURE.md` §3 ("Platform integration plane") and
-//! `PROPOSAL.md` §2 ("On-device runtime"), the desktop bridge ships
+//! `docs/DESIGN.md` §2 ("On-device runtime"), the desktop bridge ships
 //! as a Node.js native addon that mirrors the iOS / Android UniFFI
 //! surface (see the sibling `ffi` crate) but speaks JSON-over-N-API
 //! instead of typed object handles.

@@ -1,6 +1,6 @@
 //! Phase 10 — Reasoning Engine.
 //!
-//! Per `PROPOSAL.md` §11.1 and `PHASES.md` Phase 6, this phase
+//! Per `docs/DESIGN.md` §11.1 and `docs/internal/PHASES.md` Phase 6, this phase
 //! exercises the substrate's reasoning plane on top of the concept
 //! graph that Phase 4 persisted. It runs every public surface that
 //! Part 1 §10 of the demo prompt calls out:

@@ -1,15 +1,17 @@
-# Knowledge — Proposal
+# Knowledge — Design
 
-This proposal captures the product thesis, strategic principles,
-layered substrate, memory model, on-device model strategy,
-hierarchy, permissions, deployment modes, post-quantum cryptography,
-and integration surface for the Knowledge platform.
+This is the design document for the Knowledge substrate. It
+captures the product thesis, the strategic principles, the layered
+substrate, the memory model, the on-device model strategy, the
+scope hierarchy, the permission model, the deployment modes, the
+post-quantum cryptography, and the integration surface.
 
 The platform is the privacy-first continual knowledge / context
 substrate behind KChat. It serves both the consumer surface (B2C)
-and the enterprise surface (B2B) over the same memory model — see
-[README.md](./README.md) for an overview, and
-[ARCHITECTURE.md](./ARCHITECTURE.md) for the system design.
+and the enterprise surface (B2B) over the same memory model. See
+[README.md](../README.md) for an overview and
+[ARCHITECTURE.md](../ARCHITECTURE.md) for the system design that
+realises this document.
 
 ---
 
@@ -696,9 +698,8 @@ earns its cost.
 
 ## Cross-references
 
-- [README.md](./README.md) — overview, surfaces, hierarchy, tech stack
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — system design, modules, data flow, crypto layer
-- [PHASES.md](./PHASES.md) — phased delivery plan with exit criteria
-- [PROGRESS.md](./PROGRESS.md) — per-phase deliverable status + changelog
+- [README.md](../README.md) — overview, surfaces, hierarchy, tech stack
+- [ARCHITECTURE.md](../ARCHITECTURE.md) — system design, modules, data flow, crypto layer
+- [docs/PLATFORMS.md](./PLATFORMS.md) — device-tuning and per-platform integration notes
 - [`kennguy3n/slm-chat-demo`](https://github.com/kennguy3n/slm-chat-demo) — reference implementation for on-device model selection and device tiering
 - [`kennguy3n/llama.cpp@prism`](https://github.com/kennguy3n/llama.cpp/tree/prism) — modified llama.cpp inference runtime

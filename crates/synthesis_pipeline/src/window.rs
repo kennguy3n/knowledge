@@ -1,6 +1,6 @@
 //! [`SynthesisWindow`] — per-scope synthesis window abstraction.
 //!
-//! Per `ARCHITECTURE.md` §2.1 and `PROPOSAL.md` §6.4, "heavy
+//! Per `ARCHITECTURE.md` §2.1 and `docs/DESIGN.md` §6.4, "heavy
 //! synthesis runs once per scope window, not once per device". The
 //! window manager tracks open / in-progress / complete / failed
 //! windows for each scope so the elected synthesizer (or the

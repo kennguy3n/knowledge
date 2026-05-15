@@ -1,6 +1,6 @@
 //! Domain Memory Object — the per-domain synthesis-output home.
 //!
-//! Per `PROPOSAL.md` §6.2 and `PHASES.md` Phase 3: the Domain Memory
+//! Per `docs/DESIGN.md` §6.2 and `docs/internal/PHASES.md` Phase 3: the Domain Memory
 //! Object captures **cross-channel workstreams, dependencies, risks,
 //! procedures** for a logical work area within a B2B tenant. It is
 //! the second tier of the synthesis hierarchy:
@@ -242,7 +242,7 @@ impl DomainMemoryObject {
     }
 
     /// Register a channel scope that feeds into this domain. The
-    /// substrate's hierarchy rule (`PROPOSAL.md` §6.3) is that domain
+    /// substrate's hierarchy rule (`docs/DESIGN.md` §6.3) is that domain
     /// synthesis only consumes channel outputs, so the registered
     /// channels enumerate the legal sources.
     pub fn attach_channel_scope(&mut self, channel: ScopeId) {
@@ -373,7 +373,7 @@ impl DomainMemoryObject {
     /// per-class TTL. Procedures are *never* archived by this sweep —
     /// they only leave the list via [`Self::deprecate_procedure`],
     /// matching the `Critical`-class "no passive decay" rule from
-    /// `PROPOSAL.md` §4.3.
+    /// `docs/DESIGN.md` §4.3.
     pub fn decay_sweep(&mut self, now: DateTime<Utc>) -> DomainDecayReport {
         self.decay_sweep_with(
             now,

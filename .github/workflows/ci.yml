@@ -57,8 +57,8 @@ jobs:
       # currently pins). The fix lands in `ml-dsa >= 0.1.0-rc.3`,
       # which is a substantial API bump that has to be sequenced with
       # the wider provenance overhaul. The acknowledged debt is
-      # tracked in `PROGRESS.md` (Phase 7) and
-      # `docs/MODULE_STATUS.md` ("Known security debt"). The ignore
+      # tracked in `docs/internal/PROGRESS.md` (Phase 7) and
+      # `docs/internal/MODULE_STATUS.md` ("Known security debt"). The ignore
       # is recorded explicitly on the command line — not in a config
       # file that cargo-audit 0.22 silently does not read from the
       # repo root — so it shows up in CI logs every run.

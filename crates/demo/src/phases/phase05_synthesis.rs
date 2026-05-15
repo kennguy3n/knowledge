@@ -1,7 +1,7 @@
 //! Phase 5 — Synthesis Pipeline.
 //!
 //! Drives the full channel → domain → tenant synthesis chain
-//! described in `PROPOSAL.md` §6 and `PHASES.md` Phase 2/3.
+//! described in `docs/DESIGN.md` §6 and `docs/internal/PHASES.md` Phase 2/3.
 //!
 //! * **Channel tier** — opens a [`SynthesisWindowManager`] window per
 //!   channel scope, runs the [`NoOpSynthesizer`] to emit a

@@ -1,6 +1,6 @@
 //! [`SynthesisObject`] — typed encrypted output of one synthesis run.
 //!
-//! Per `PROPOSAL.md` §6.4: "the synthesis output is published as an
+//! Per `docs/DESIGN.md` §6.4: "the synthesis output is published as an
 //! encrypted synthesis object back into the scope; other members
 //! consume it instead of re-synthesizing".
 
@@ -41,7 +41,7 @@ impl std::fmt::Display for ObjectId {
 }
 
 /// Typed payload kind. The four kinds map directly onto the
-/// hierarchy from `PROPOSAL.md` §6 (User → Channel → Domain →
+/// hierarchy from `docs/DESIGN.md` §6 (User → Channel → Domain →
 /// Tenant).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,7 +94,7 @@ pub struct SynthesisObject {
     /// Wall-clock creation time.
     pub created_at: DateTime<Utc>,
     /// If this object supersedes an earlier object, the earlier
-    /// object's id (per `PROPOSAL.md` §4 — "supersession preferred
+    /// object's id (per `docs/DESIGN.md` §4 — "supersession preferred
     /// over deletion"). The CRDT layer turns the absence of a
     /// supersedes pointer into an add; the presence into a
     /// supersession marker.

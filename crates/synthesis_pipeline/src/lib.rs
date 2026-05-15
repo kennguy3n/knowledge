@@ -1,7 +1,7 @@
 //! `synthesis_pipeline` — channel / domain / tenant synthesis windows
 //! and the encrypted synthesis-object publication contract.
 //!
-//! Per `ARCHITECTURE.md` §2.1 and `PHASES.md` Phase 2, the synthesis
+//! Per `ARCHITECTURE.md` §2.1 and `docs/internal/PHASES.md` Phase 2, the synthesis
 //! pipeline owns:
 //!
 //! * **Synthesis windows** — per-scope `(start, end)` pairs the
@@ -28,8 +28,8 @@
 //! Cross-references:
 //!
 //! * Module map: `ARCHITECTURE.md` §2.1.
-//! * Synthesis hierarchy: `PROPOSAL.md` §6.
-//! * Phase 2 deliverables: `PHASES.md` Phase 2.
+//! * Synthesis hierarchy: `docs/DESIGN.md` §6.
+//! * Phase 2 deliverables: `docs/internal/PHASES.md` Phase 2.
 
 #![deny(missing_docs)]
 

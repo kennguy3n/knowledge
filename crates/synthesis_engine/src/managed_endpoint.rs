@@ -31,7 +31,7 @@
 //!
 //! Cross-references:
 //!
-//! * Phase 3 deliverables: `PHASES.md` Phase 3.
+//! * Phase 3 deliverables: `docs/internal/PHASES.md` Phase 3.
 //! * Hierarchy contract: `synthesis_pipeline::hierarchy`.
 //! * Module map: `ARCHITECTURE.md` §2.1 (`synthesis_engine`).
 

@@ -27,7 +27,7 @@ pub trait ObservationExtractor {
     fn extract(&self, text: &str, scope: ScopeId) -> Vec<Observation>;
 }
 
-/// Phase-1 lexicon extractor (`PROPOSAL.md` §3.2 first pass).
+/// Phase-1 lexicon extractor (`docs/DESIGN.md` §3.2 first pass).
 #[derive(Debug, Clone)]
 pub struct LexiconExtractor {
     decision_keywords: Vec<String>,

@@ -1,7 +1,7 @@
 //! [`PersistentConceptGraph`] — SQLCipher-backed persistence wrapper
 //! over the in-memory [`crate::ConceptGraph`].
 //!
-//! Per `PHASES.md` Phase 3 task 7, the Phase 2 in-memory adjacency
+//! Per `docs/internal/PHASES.md` Phase 3 task 7, the Phase 2 in-memory adjacency
 //! list is wrapped with a thin store that mirrors every node/edge to
 //! a SQLCipher database. The encrypted store reuses the same per-user
 //! master key as `evidence_store` (see `ARCHITECTURE.md` §2.2): a
@@ -570,7 +570,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 // callers can run scope-filtered queries without first decrypting
 // every row. The plaintext columns are reduced to short tags so they
 // don't leak more than the lifecycle / typed-relation taxonomy that
-// is already in `PROPOSAL.md`.
+// is already in `docs/DESIGN.md`.
 impl NodeState {
     fn from_tag(s: &str) -> Option<Self> {
         match s {

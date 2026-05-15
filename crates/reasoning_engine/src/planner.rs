@@ -2,7 +2,7 @@
 //! retrieval mode.
 //!
 //! Per `ARCHITECTURE.md` §2.1 ("cheapest retrieval mode first")
-//! and `PHASES.md` Phase 6, the planner classifies an incoming
+//! and `docs/internal/PHASES.md` Phase 6, the planner classifies an incoming
 //! query, picks an ordered chain of retrieval modes, and records
 //! which steps were tried and which produced the answer.
 //!

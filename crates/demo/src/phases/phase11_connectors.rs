@@ -5,7 +5,7 @@
 //! Drive, Jira, Slack, and Microsoft Graph e-mail. Each connector is
 //! authenticated, full-synced, incrementally synced, and walked
 //! through a webhook subscription + payload round-trip — exactly the
-//! state machine `PROPOSAL.md` §10.2 and `PHASES.md` Phase 4 specify
+//! state machine `docs/DESIGN.md` §10.2 and `docs/internal/PHASES.md` Phase 4 specify
 //! for production deployments. Counts and timings are accumulated
 //! into [`RuntimeState`] / the demo report so the final markdown
 //! summary captures the connector-side surface.
