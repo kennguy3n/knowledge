@@ -8,8 +8,9 @@ crypto layer, device-optimization strategy, and platform-specific
 implementation notes.
 
 For the product thesis, the strategic principles, and the
-per-class decay policies behind these mechanics, read DESIGN.md.
-For per-platform tuning, read [docs/PLATFORMS.md](./docs/PLATFORMS.md).
+per-class decay policies behind these mechanics, read
+[docs/DESIGN.md](./docs/DESIGN.md). For per-platform tuning, read
+[docs/PLATFORMS.md](./docs/PLATFORMS.md).
 
 ---
 
@@ -191,8 +192,8 @@ The `crypto` crate wraps the post-quantum and classical primitives
 the rest of the substrate consumes through a small high-level API:
 content hashing, AEAD, key derivation, hybrid KEM encap / decap,
 and provenance signing / verification. The cryptographic design
-and the threat model live in DESIGN.md §9; the concrete primitive
-inventory and key layout are in §8 below.
+and the threat model live in [docs/DESIGN.md](./docs/DESIGN.md) §9;
+the concrete primitive inventory and key layout are in §8 below.
 
 ---
 
@@ -343,7 +344,8 @@ flowchart LR
 ## 5. Data flow
 
 The data flow is the same shape on the device and on the server,
-because they share the substrate planes from DESIGN.md §3.
+because they share the substrate planes from
+[docs/DESIGN.md](./docs/DESIGN.md) §3.
 
 ### 5.1 On-device
 
@@ -419,7 +421,8 @@ flowchart LR
 
 Relations are stored in a Zanzibar-style tuple store; permission
 checks are reachability queries over the relation graph. The
-substrate-level rationale for this model is in DESIGN.md §7.
+substrate-level rationale for this model is in
+[docs/DESIGN.md](./docs/DESIGN.md) §7.
 
 ### 6.1 Cryptographic capabilities
 
@@ -465,7 +468,8 @@ become explicit edges in the concept graph), and explicit human
 action (pinning, promotion, deprecation, forgetting).
 
 Per-class decay policies are enforced by the memory manager and
-specified in DESIGN.md §4.3. Cryptographic forgetting destroys
+specified in [docs/DESIGN.md](./docs/DESIGN.md) §4.3.
+Cryptographic forgetting destroys
 the scope DEK or the archive epoch key, depending on the scope of
 the delete.
 
