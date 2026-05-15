@@ -343,6 +343,25 @@ mod ort_runtime_impl {
         session: OnceLock<Mutex<Session>>,
         tokenizer: OnceLock<Tokenizer>,
         tokenizer_path: Option<String>,
+        /// Serialises the expensive section of [`Self::load`] (Session
+        /// build + tokenizer-JSON read) so that concurrent callers
+        /// don't both pay the cost only to throw one result away.
+        /// Without this guard two racing `load()` calls would each
+        /// build a Session and parse the tokenizer, then the loser
+        /// would discard the work when `OnceLock::set` rejected it.
+        /// Holding the lock across the whole load section means only
+        /// the first thread does the work; subsequent threads observe
+        /// `session.get().is_some()` after acquiring the lock and
+        /// return the documented "single-shot" error without
+        /// re-loading.
+        load_lock: Mutex<()>,
+        /// Cached availability probe result. The first call to
+        /// [`Self::is_available`] runs a cheap `Session::builder()`
+        /// against the dynamic library; subsequent calls return the
+        /// cached answer. Probing once and caching avoids both the
+        /// false positive of unconditionally returning `true` and the
+        /// cost of re-probing on every `OnnxEmbeddingAdapter::probe`.
+        availability_probe: OnceLock<bool>,
     }
 
     impl OrtOnnxRuntime {
@@ -354,6 +373,8 @@ mod ort_runtime_impl {
                 session: OnceLock::new(),
                 tokenizer: OnceLock::new(),
                 tokenizer_path: None,
+                load_lock: Mutex::new(()),
+                availability_probe: OnceLock::new(),
             }
         }
 
@@ -392,12 +413,27 @@ mod ort_runtime_impl {
         /// Single-shot loader: once an [`OrtOnnxRuntime`] has been
         /// populated, subsequent `load()` calls are rejected up-front
         /// rather than silently discarding fresh work. `OnceLock` only
-        /// allows a single successful `set` call, so the previous
+        /// allows a single successful `set` call, so a previous
         /// implementation paid the full cost of building a Session and
         /// reading the tokenizer JSON from disk before throwing the
         /// result away on `set` error. Callers that need to swap
         /// models must construct a new `OrtOnnxRuntime` instance.
+        ///
+        /// Concurrent `load()` calls are serialised by `load_lock` so
+        /// that exactly one thread runs the expensive Session +
+        /// tokenizer build for any given runtime instance. The first
+        /// thread populates the `OnceLock`s under the lock; every
+        /// subsequent thread acquires the lock, sees that the load
+        /// already happened, and returns the documented single-shot
+        /// error without doing any wasted work.
         fn load(&self, path: &str) -> Result<()> {
+            let _guard = self
+                .load_lock
+                .lock()
+                .map_err(|e| EmbeddingError::ModelLoad {
+                    path: path.into(),
+                    reason: format!("OrtOnnxRuntime load_lock poisoned: {e}"),
+                })?;
             if self.session.get().is_some() || self.tokenizer.get().is_some() {
                 return Err(EmbeddingError::ModelLoad {
                     path: path.into(),
@@ -426,23 +462,31 @@ mod ort_runtime_impl {
                     reason: format!("Tokenizer::from_file failed: {e}"),
                 })?;
 
-            // The guard above means `set` cannot logically fail here
-            // outside of a concurrent racing `load()`. If two threads
-            // do race, the second loser surfaces the same error as a
-            // serialised second call — predictable rather than
-            // silently winning.
+            // Both `set`s are infallible under the load_lock: the
+            // single-shot guard above already proved both OnceLocks
+            // are empty, and the lock prevents any concurrent setter
+            // from racing in between. An `expect` here is correctness,
+            // not defensiveness.
             self.session
                 .set(Mutex::new(session))
                 .map_err(|_| EmbeddingError::ModelLoad {
                     path: path.into(),
-                    reason: "concurrent OrtOnnxRuntime::load lost the session race".into(),
+                    reason: "OrtOnnxRuntime::session OnceLock unexpectedly populated under \
+                             load_lock"
+                        .into(),
                 })?;
             self.tokenizer
                 .set(tokenizer)
                 .map_err(|_| EmbeddingError::ModelLoad {
                     path: path.into(),
-                    reason: "concurrent OrtOnnxRuntime::load lost the tokenizer race".into(),
+                    reason: "OrtOnnxRuntime::tokenizer OnceLock unexpectedly populated under \
+                             load_lock"
+                        .into(),
                 })?;
+            // Treat a successful load as definitive evidence that the
+            // dylib is available, so subsequent `is_available` calls
+            // can short-circuit without re-probing.
+            let _ = self.availability_probe.set(true);
             Ok(())
         }
 
@@ -550,12 +594,44 @@ mod ort_runtime_impl {
         }
 
         fn is_available(&self) -> bool {
-            // With `load-dynamic`, the dylib lookup happens lazily on
-            // the first ort API call. Probing here without consuming a
-            // global init is awkward; return `true` and let `load`
-            // surface the real `ModelLoad` error if the dylib is
-            // absent.
-            true
+            // With `load-dynamic`, the ort dylib is not resolved at
+            // link time — the lookup happens lazily on the first ort
+            // API call. Unconditionally returning `true` (the
+            // previous behaviour) means callers using `probe()` as a
+            // cheap availability check see a false positive on hosts
+            // with no ort dylib: `OnnxEmbeddingAdapter::probe()`
+            // reports `Available`, and the real error only surfaces
+            // once `load()` reaches `Session::builder()`.
+            //
+            // Run the probe ourselves once and cache the result. The
+            // cheapest API touch that exercises the dynamic loader is
+            // `Session::builder()` — it builds an empty session-config
+            // object (no model committed) and the ort crate triggers
+            // dylib resolution as a side effect. The wrinkle is that
+            // `ort` *panics* (not errors) when the dylib is missing
+            // (see `run_before_load_does_not_panic_when_dylib_missing`
+            // for context), so we wrap the probe in `catch_unwind` to
+            // convert that panic into a clean `false` result.
+            //
+            // The builder is dropped immediately; this probe is
+            // side-effect-free beyond the one-time dylib lookup the
+            // runtime would do on first use anyway.
+            if let Some(&cached) = self.availability_probe.get() {
+                return cached;
+            }
+            // If a Session has already been built (e.g. `load` ran
+            // successfully on this instance), the dylib is by
+            // definition present — skip the probe.
+            if self.session.get().is_some() {
+                let _ = self.availability_probe.set(true);
+                return true;
+            }
+            let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Session::builder().is_ok()
+            }))
+            .unwrap_or(false);
+            let _ = self.availability_probe.set(ok);
+            ok
         }
     }
 }
@@ -814,12 +890,27 @@ mod ort_runtime_tests {
     use super::OnnxRuntime;
 
     #[test]
-    fn new_constructs_runtime_with_is_available_true() {
+    fn is_available_reflects_dylib_presence_via_cached_probe() {
+        // `is_available` runs a `Session::builder()` probe wrapped in
+        // `catch_unwind` and caches the result so callers using
+        // `probe()` get an honest answer instead of an unconditional
+        // `true`. The probe must:
+        //   1. Not panic when the dylib is missing (catch_unwind
+        //      converts the ort panic into a clean `false`).
+        //   2. Be cached across calls so we don't repeatedly trigger
+        //      the dylib lookup.
+        //   3. Reflect the actual host state: `true` when the dylib is
+        //      loadable, `false` otherwise.
         let rt = OrtOnnxRuntime::new();
-        // `load-dynamic` defers dylib discovery to the first ort API
-        // call, so the constructor reports "available" until proven
-        // otherwise (see the docstring on `is_available`).
-        assert!(rt.is_available());
+        let first = rt.is_available();
+        // Second call must return the cached value (no re-probe). We
+        // can't directly inspect the OnceLock from here, but calling
+        // again should be a pure get — the result must match.
+        let second = rt.is_available();
+        assert_eq!(
+            first, second,
+            "is_available must be cached across calls; got first={first} second={second}",
+        );
     }
 
     #[test]

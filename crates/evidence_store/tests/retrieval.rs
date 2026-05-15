@@ -436,6 +436,83 @@ fn search_hybrid_treats_corrupted_cache_row_as_miss() {
     );
 }
 
+/// Regression test for the Phase-B follow-up finding
+/// "candidate_embedding propagates body-decryption errors via `?`,
+/// aborting `search_hybrid` on a single corrupted body row" (Flag #3
+/// in the evidence_store hygiene PR). The previous shape of the
+/// function used `?` on `self.lookup_body_text(id)`, so any AEAD /
+/// crypto failure on one row cascaded up through the retriever and
+/// failed the whole search.
+///
+/// We seed two rows that match the FTS query, route one through the
+/// `body_store` table (above the inline threshold) and corrupt the
+/// stored ciphertext post-hoc. `lookup_body_text` will then surface
+/// `EvidenceError::Crypto(_)` for that row. After the fix the
+/// retriever demotes that error to a per-row miss (`vector_score`
+/// 0.0) and the healthy row still scores normally.
+#[test]
+fn search_hybrid_treats_corrupted_body_row_as_miss() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+
+    // Healthy row — small body, stored inline. Live-embed path will
+    // succeed and produce a non-zero `vector_score`.
+    let healthy = store
+        .ingest(
+            scope,
+            b"deadline reminder for the migration",
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+
+    // Corrupted row — body large enough to route through `body_store`
+    // so we can rewrite the ciphertext without tripping the
+    // append-only triggers on `evidence`.
+    let mut large = String::from("deadline meeting agenda ");
+    large.push_str(&"x".repeat(5_000));
+    let corrupted = store
+        .ingest(scope, large.as_bytes(), None, ImportanceClass::Useful)
+        .unwrap();
+
+    // Overwrite the ciphertext in `body_store` so AEAD decryption
+    // fails on read. The `body_store` table is not append-only —
+    // `ref_count` updates require it to be mutable — so a raw UPDATE
+    // is fine here.
+    store
+        .raw_conn()
+        .execute(
+            "UPDATE body_store SET body = X'DEADBEEFDEADBEEF' WHERE content_hash = ?1",
+            rusqlite::params![corrupted.content_hash.as_slice()],
+        )
+        .unwrap();
+
+    // Before the fix this `search_hybrid` would propagate
+    // `EvidenceError::Crypto(_)` and the whole call would error out.
+    let hits = HybridRetriever::new(&store)
+        .with_embedding_model(ConstUnitEmbeddingModel, "v1")
+        .search_hybrid(scope, "deadline", 5)
+        .expect("search_hybrid must not propagate per-row body-decryption errors");
+
+    let healthy_hit = hits
+        .iter()
+        .find(|h| h.evidence_id == healthy.evidence_id)
+        .expect("healthy row must still appear in results");
+    assert!(
+        healthy_hit.vector_score > 0.0,
+        "healthy row should score via the live-embed path: {hits:?}"
+    );
+
+    let corrupted_hit = hits
+        .iter()
+        .find(|h| h.evidence_id == corrupted.evidence_id)
+        .expect("corrupted row must still appear (FTS-matched), just with a zero vector_score");
+    assert_eq!(
+        corrupted_hit.vector_score, 0.0,
+        "corrupted row's vector lane must be demoted to 0.0, not error: {hits:?}"
+    );
+}
+
 /// Regression test for the Phase-B review finding "embedding cache is
 /// not populated for body-table dedup hits — embedding work is
 /// repeated for deduped bodies". We ingest the same large body twice

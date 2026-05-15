@@ -397,10 +397,13 @@ impl<'a> HybridRetriever<'a> {
     /// blob, `EvidenceError::Sqlite` from a transient SQL hiccup) are
     /// **not** propagated — the embedding cache is a pure
     /// optimisation, so per-row read errors are demoted to "cache
-    /// miss" and the live-embed path runs instead. This mirrors the
+    /// miss" and the live-embed path runs instead. Body-decryption
+    /// errors (crypto failures, missing body rows, SQL hiccups when
+    /// reading the body) are likewise demoted to a per-row miss with
+    /// a `tracing::warn!`: a single corrupted body row must not abort
+    /// the entire `search_hybrid` call. This mirrors the
     /// localised-failure contract documented in
-    /// [`Self::search_hybrid`] and the read-side robustness of
-    /// [`Self::lookup_body_text`].
+    /// [`Self::search_hybrid`].
     fn candidate_embedding(
         &self,
         id: EvidenceId,
@@ -422,10 +425,43 @@ impl<'a> HybridRetriever<'a> {
             // abort the whole search. Treat it as a cache miss and
             // let the live-embed path try.
             Err(EvidenceError::Schema(_) | EvidenceError::Sqlite(_)) => {}
-            Err(other) => return Err(other),
+            // `get_embedding_for_model` only constructs `Sqlite` (from
+            // the `query_row` call) and `Schema` (from
+            // `bytes_to_embedding`). The remaining `EvidenceError`
+            // variants are listed explicitly so the compiler errors
+            // out if someone adds a new variant: the demotion-to-miss
+            // contract above is deliberately narrow, and any new
+            // error path needs a conscious decision about whether to
+            // demote or propagate.
+            Err(
+                err @ (EvidenceError::Crypto(_)
+                | EvidenceError::Io(_)
+                | EvidenceError::AppendOnlyViolation(_)
+                | EvidenceError::NotFound(_)
+                | EvidenceError::DanglingBodyRef
+                | EvidenceError::InvalidConfig(_)
+                | EvidenceError::InvalidUtf8
+                | EvidenceError::Embedding(_)),
+            ) => return Err(err),
         }
-        let Some(body) = self.lookup_body_text(id)? else {
-            return Ok(None);
+        // Body decryption errors are demoted to a per-row miss: a
+        // single row with a corrupted body / crypto failure must not
+        // take down the rest of the search. The warning is emitted at
+        // `warn` level (not `debug`) because such an error indicates
+        // real on-disk corruption operators will want to see, but the
+        // result is the same as a cache miss — score 0.0 for this
+        // row, continue with the remaining candidates.
+        let body = match self.lookup_body_text(id) {
+            Ok(Some(text)) => text,
+            Ok(None) => return Ok(None),
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    evidence_id = %id.as_uuid(),
+                    "candidate_embedding: body lookup failed; scoring row at 0.0 and continuing"
+                );
+                return Ok(None);
+            }
         };
         Ok(model.embed(&body).ok())
     }
