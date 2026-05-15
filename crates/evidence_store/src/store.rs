@@ -13,6 +13,7 @@ use crypto::{
     MasterKey, AEAD_NONCE_LEN, MASTER_KEY_LEN,
 };
 
+use crate::embeddings::EmbeddingModel;
 use crate::error::{EvidenceError, Result};
 use crate::ids::{EvidenceId, ScopeId};
 use crate::importance::ImportanceClass;
@@ -108,6 +109,15 @@ pub struct EvidenceStore {
     body_store_key: AeadKey,
     /// Master key — wiped on drop.
     master_key: MasterKey,
+    /// Optional [`EmbeddingModel`] used by the ingest path to populate
+    /// the `evidence_embeddings` cache (Phase B). When `None` no
+    /// embedding is persisted on write — the hybrid retriever then
+    /// falls back to re-embedding the body on each search.
+    embedding_model: Option<Box<dyn EmbeddingModel>>,
+    /// Free-form tag (e.g. `"xlm-r-v1"`) stamped alongside every row
+    /// inserted into `evidence_embeddings`. Used to invalidate the
+    /// cache when the model is swapped.
+    embedding_model_tag: String,
 }
 
 impl Drop for EvidenceStore {
@@ -178,8 +188,52 @@ impl EvidenceStore {
                 .map_err(|_| EvidenceError::Schema("SQLCipher key did not unlock the database"))?;
         }
 
-        // Run the schema bootstrap.
+        // Schema migration. Read the existing `user_version` BEFORE
+        // running the bootstrap SQL so we can detect three states:
+        //
+        //   * `user_version == 0`  → fresh database, run the full
+        //                            bootstrap and stamp the version.
+        //   * `user_version <  SCHEMA_VERSION` → legacy database; the
+        //                            additive `CREATE * IF NOT EXISTS`
+        //                            statements in [`SCHEMA_SQL`]
+        //                            forward-port the schema, and any
+        //                            version-specific deltas are
+        //                            applied by [`apply_migration`].
+        //   * `user_version >  SCHEMA_VERSION` → database written by a
+        //                            newer build; refuse to open
+        //                            rather than corrupt it.
+        //
+        // The previous implementation always wrote `SCHEMA_VERSION`
+        // before `preflight()` read it back, which made the "refuse
+        // to open against a future version" check tautological. This
+        // structure puts the rejection ahead of any writes.
+        let detected_version: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap_or(0);
+        if detected_version > SCHEMA_VERSION {
+            return Err(EvidenceError::Schema(
+                "evidence_store database was written by a newer schema version",
+            ));
+        }
+
+        // Run the schema bootstrap. Every statement is
+        // `CREATE * IF NOT EXISTS`, which makes it safe to re-run
+        // against an already-initialised database — that is exactly
+        // what the v1 → v2 upgrade relies on (adding
+        // `evidence_embeddings` to an existing v1 store).
         conn.execute_batch(SCHEMA_SQL)?;
+
+        // Per-version migration deltas. Today every increment is
+        // additive and already handled by the idempotent SCHEMA_SQL
+        // above, so this loop is a no-op. It exists so any future
+        // destructive migration (column drop, type change, data
+        // backfill) has a single, obvious place to live — and so the
+        // `preflight()` invariant below ("version is current") has
+        // teeth instead of being satisfied by an unconditional write.
+        for v in (detected_version.max(0) + 1)..=SCHEMA_VERSION {
+            apply_migration(&conn, v)?;
+        }
+
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
 
         // Derive the scope-independent body-store AEAD key. This is
@@ -195,6 +249,8 @@ impl EvidenceStore {
             scope_keys: std::cell::RefCell::new(std::collections::HashMap::new()),
             body_store_key,
             master_key: *master_key,
+            embedding_model: None,
+            embedding_model_tag: String::new(),
         };
         // No-op for now, but keeps the borrow checker happy if we add
         // post-open prepared statements.
@@ -202,16 +258,17 @@ impl EvidenceStore {
         Ok(store)
     }
 
+    /// Post-bootstrap sanity check: after [`Self::open`] runs the
+    /// migration sequence the on-disk schema version must equal
+    /// [`SCHEMA_VERSION`]. A mismatch here is a bug in the migration
+    /// logic, not a user-recoverable condition.
     fn preflight(&mut self) -> Result<()> {
         let version: i32 = self
             .conn
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .unwrap_or(SCHEMA_VERSION);
+            .pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version != SCHEMA_VERSION {
-            // Future migrations would run here. For Phase 0 the schema
-            // is fresh; refuse to open against a future version.
             return Err(EvidenceError::Schema(
-                "schema version mismatch — refusing to open",
+                "post-migration user_version does not match SCHEMA_VERSION",
             ));
         }
         Ok(())
@@ -312,6 +369,14 @@ impl EvidenceStore {
             ],
         )?;
         Self::index_fts(&tx, evidence_id, scope_id, body)?;
+        Self::index_embedding(
+            &tx,
+            evidence_id,
+            body,
+            self.embedding_model.as_deref(),
+            &self.embedding_model_tag,
+            now,
+        );
         tx.commit()?;
 
         Ok(IngestResult {
@@ -382,6 +447,21 @@ impl EvidenceStore {
             ],
         )?;
         Self::index_fts(&tx, evidence_id, scope_id, body)?;
+        // On a content-hash dedup hit, prefer copying an existing
+        // embedding (same content_hash + same model_tag) rather than
+        // paying the on-device inference cost again. The bytes are
+        // identical by definition, so the copy is semantically free.
+        // Falls through to a fresh embed when there is no prior cache
+        // row for this content + model.
+        Self::index_embedding_or_copy_dedup(
+            &tx,
+            evidence_id,
+            &hash,
+            body,
+            self.embedding_model.as_deref(),
+            &self.embedding_model_tag,
+            now,
+        );
         tx.commit()?;
 
         Ok(IngestResult {
@@ -411,6 +491,125 @@ impl EvidenceStore {
             )?;
         }
         Ok(())
+    }
+
+    /// Populate the `evidence_embeddings` cache for `evidence_id`.
+    /// No-op when no model is wired in, when `body` is not valid UTF-8,
+    /// or when the model returns an error — the hybrid retriever falls
+    /// back to re-embedding on the read side in those cases. The
+    /// embedding is serialised as little-endian raw `f32` bytes.
+    ///
+    /// SQL-level failures from the cache `INSERT` are also swallowed
+    /// for the same reason: the cache row is a performance hint, not
+    /// load-bearing data. An out-of-disk / I/O error here would
+    /// otherwise abort the surrounding `ingest_*` transaction and
+    /// take down the evidence row itself, which has no functional
+    /// dependency on the cache.
+    fn index_embedding(
+        tx: &rusqlite::Transaction<'_>,
+        evidence_id: EvidenceId,
+        body: &[u8],
+        model: Option<&dyn EmbeddingModel>,
+        model_tag: &str,
+        created_at: i64,
+    ) {
+        let Some(model) = model else { return };
+        let Ok(text) = std::str::from_utf8(body) else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        // A model failure should not block ingestion — the row is
+        // still recoverable via FTS and the retriever's re-embedding
+        // fallback.
+        let Ok(vec) = model.embed(text) else {
+            return;
+        };
+        let bytes = embedding_to_bytes(&vec);
+        // Best-effort write. See the doc-comment above for the
+        // rationale — propagating this error would abort the
+        // `ingest_*` transaction and lose the evidence row over a
+        // cache-table hiccup.
+        let _ = tx.execute(
+            "INSERT OR REPLACE INTO evidence_embeddings
+                 (evidence_id, embedding, model_tag, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                evidence_id.as_uuid().as_bytes().as_slice(),
+                bytes,
+                model_tag,
+                created_at,
+            ],
+        );
+    }
+
+    /// Body-table variant of [`Self::index_embedding`] that takes
+    /// advantage of dedup: when an existing evidence row references
+    /// the same `content_hash` and was embedded under the same
+    /// `model_tag`, the cached vector is byte-for-byte identical to
+    /// what re-embedding would produce, so we copy it directly and
+    /// skip the model invocation entirely. This is the key win for
+    /// high-dedup workloads (e.g. mailing-list threads, replayed
+    /// payloads) where re-running the ONNX runtime over identical
+    /// content would otherwise be pure waste.
+    ///
+    /// Falls back to [`Self::index_embedding`] (a fresh embed) when
+    /// no prior row matches both the content hash and the active
+    /// model tag, or when no model is wired in.
+    ///
+    /// Like the underlying helper, the cache INSERT is best-effort
+    /// and never fails the surrounding ingest transaction.
+    fn index_embedding_or_copy_dedup(
+        tx: &rusqlite::Transaction<'_>,
+        evidence_id: EvidenceId,
+        hash: &ContentHash,
+        body: &[u8],
+        model: Option<&dyn EmbeddingModel>,
+        model_tag: &str,
+        created_at: i64,
+    ) {
+        if model.is_none() {
+            return;
+        }
+
+        // Look for any prior evidence row with the same content hash
+        // whose cached embedding was produced by the active model.
+        // The join filters out rows from older model tags so we never
+        // copy a stale vector that the retriever would have rejected
+        // on dimension mismatch.
+        let copied: Option<Vec<u8>> = tx
+            .query_row(
+                "SELECT ee.embedding
+                 FROM evidence_embeddings ee
+                 JOIN evidence e ON e.id = ee.evidence_id
+                 WHERE e.content_hash = ?1 AND ee.model_tag = ?2
+                 LIMIT 1",
+                params![hash.as_slice(), model_tag],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()
+            .unwrap_or(None);
+
+        if let Some(bytes) = copied {
+            // Same content + same model ⇒ identical vector. Reuse.
+            let _ = tx.execute(
+                "INSERT OR REPLACE INTO evidence_embeddings
+                     (evidence_id, embedding, model_tag, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    evidence_id.as_uuid().as_bytes().as_slice(),
+                    bytes,
+                    model_tag,
+                    created_at,
+                ],
+            );
+            return;
+        }
+
+        // No prior embedding to copy from — fall through to a fresh
+        // embed via the standard helper.
+        Self::index_embedding(tx, evidence_id, body, model, model_tag, created_at);
     }
 
     /// Read the plaintext body of an evidence row.
@@ -746,6 +945,195 @@ impl EvidenceStore {
     /// for tests verifying append-only behaviour through raw SQL).
     pub fn raw_conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Wire an [`EmbeddingModel`] into the store so subsequent
+    /// [`Self::ingest`] calls populate the `evidence_embeddings`
+    /// cache (Phase B). `model_tag` is stamped on every persisted
+    /// row so the cache can be invalidated when the model changes.
+    ///
+    /// Consumes `self` and returns the same store \u2014 callers can
+    /// chain it directly onto [`Self::open`]:
+    ///
+    /// ```ignore
+    /// let store = EvidenceStore::open(&path, &key, cfg)?
+    ///     .with_embedding_model(my_model, "xlm-r-v1");
+    /// ```
+    pub fn with_embedding_model<M: EmbeddingModel + 'static>(
+        mut self,
+        model: M,
+        model_tag: impl Into<String>,
+    ) -> Self {
+        self.embedding_model = Some(Box::new(model));
+        self.embedding_model_tag = model_tag.into();
+        self
+    }
+
+    /// Same as [`Self::with_embedding_model`] but takes `&mut self`
+    /// for callers that already own a `&mut` handle to the store.
+    pub fn set_embedding_model<M: EmbeddingModel + 'static>(
+        &mut self,
+        model: M,
+        model_tag: impl Into<String>,
+    ) {
+        self.embedding_model = Some(Box::new(model));
+        self.embedding_model_tag = model_tag.into();
+    }
+
+    /// `true` when an [`EmbeddingModel`] is wired in. Useful for tests
+    /// and for the retriever's fallback logic.
+    pub fn has_embedding_model(&self) -> bool {
+        self.embedding_model.is_some()
+    }
+
+    /// Borrow the wired-in [`EmbeddingModel`], if any. Exposed so the
+    /// hybrid retriever can share the store's model on the query side
+    /// instead of asking callers to wire it in twice.
+    pub fn embedding_model(&self) -> Option<&dyn EmbeddingModel> {
+        self.embedding_model.as_deref()
+    }
+
+    /// Direct write into `evidence_embeddings`. Bypasses the ingest
+    /// path \u2014 useful for tests, batch back-fill jobs, and callers
+    /// that compute embeddings asynchronously after ingest.
+    ///
+    /// The embedding is serialised as little-endian raw `f32` bytes.
+    pub fn store_embedding(
+        &mut self,
+        evidence_id: EvidenceId,
+        embedding: &[f32],
+        model_tag: &str,
+    ) -> Result<()> {
+        let bytes = embedding_to_bytes(embedding);
+        let now = Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO evidence_embeddings
+                 (evidence_id, embedding, model_tag, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                evidence_id.as_uuid().as_bytes().as_slice(),
+                bytes,
+                model_tag,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Read a persisted embedding for `evidence_id` without filtering by
+    /// `model_tag`. Intended for tests, batch back-fill jobs, and admin
+    /// tooling that needs to inspect whatever vector is currently
+    /// cached regardless of which model produced it.
+    ///
+    /// Production retrieval code MUST NOT use this — a stale row from a
+    /// previous model that happens to share an output dimension with
+    /// the active model would be returned and scored as if it had been
+    /// produced by the active model, leading to semantically
+    /// meaningless cosine similarities. The hybrid retriever uses
+    /// [`Self::get_embedding_for_model`] instead, which enforces the
+    /// same `model_tag` invariant the write side applies on dedup.
+    ///
+    /// Returns `None` when the row has no cached embedding yet (e.g.
+    /// ingested before any model was wired in, or the model returned
+    /// an error). Errors with [`EvidenceError::Schema`] when the stored
+    /// BLOB has a length that is not a multiple of 4 (i.e. the row was
+    /// corrupted or written by a future schema).
+    pub fn get_embedding(&self, evidence_id: EvidenceId) -> Result<Option<Vec<f32>>> {
+        let bytes: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT embedding FROM evidence_embeddings WHERE evidence_id = ?1",
+                params![evidence_id.as_uuid().as_bytes().as_slice()],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .optional()?;
+        match bytes {
+            None => Ok(None),
+            Some(b) => bytes_to_embedding(&b).map(Some),
+        }
+    }
+
+    /// Read a persisted embedding for `evidence_id` only when it was
+    /// produced by `model_tag`. This is the production read path used
+    /// by the hybrid retriever and mirrors the `model_tag`-aware write
+    /// invariant in [`Self::index_embedding_or_copy_dedup`].
+    ///
+    /// Returns `None` when:
+    ///   * The row has no cached embedding yet, OR
+    ///   * The cached row's `model_tag` does not match the active model
+    ///     (e.g. the model was swapped to a different version that
+    ///     happens to share an output dimension — without this filter
+    ///     the stale bytes would be returned and scored as if they had
+    ///     been produced by the new model, which is silently incorrect).
+    ///
+    /// Errors with [`EvidenceError::Schema`] when the stored BLOB has a
+    /// length that is not a multiple of 4 (i.e. the row was corrupted
+    /// or written by a future schema).
+    pub fn get_embedding_for_model(
+        &self,
+        evidence_id: EvidenceId,
+        model_tag: &str,
+    ) -> Result<Option<Vec<f32>>> {
+        let bytes: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT embedding FROM evidence_embeddings
+                 WHERE evidence_id = ?1 AND model_tag = ?2",
+                params![evidence_id.as_uuid().as_bytes().as_slice(), model_tag],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .optional()?;
+        match bytes {
+            None => Ok(None),
+            Some(b) => bytes_to_embedding(&b).map(Some),
+        }
+    }
+}
+
+/// Serialise an `f32` slice as little-endian raw bytes.
+fn embedding_to_bytes(emb: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(emb.len() * 4);
+    for f in emb {
+        bytes.extend_from_slice(&f.to_le_bytes());
+    }
+    bytes
+}
+
+/// Deserialise a little-endian raw-bytes embedding produced by
+/// [`embedding_to_bytes`]. Errors if `bytes.len()` is not a multiple
+/// of 4 (a corrupted row, since `f32` is 4 bytes wide).
+fn bytes_to_embedding(bytes: &[u8]) -> Result<Vec<f32>> {
+    if bytes.len() % 4 != 0 {
+        return Err(EvidenceError::Schema(
+            "evidence_embeddings.embedding has length not a multiple of 4",
+        ));
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4);
+    for chunk in bytes.chunks_exact(4) {
+        let mut buf = [0u8; 4];
+        buf.copy_from_slice(chunk);
+        out.push(f32::from_le_bytes(buf));
+    }
+    Ok(out)
+}
+
+/// Apply the version-`target`-specific migration delta against `conn`.
+///
+/// `SCHEMA_SQL` carries every additive change (tables, indexes,
+/// triggers, FTS virtual tables) and is re-run idempotently on every
+/// open, so additive bumps need no work here. This function exists for
+/// migrations that cannot be expressed as `CREATE * IF NOT EXISTS` —
+/// e.g. dropping or renaming a column, changing a column's storage
+/// type, or back-filling derived data from existing rows. Today every
+/// bump (v1 → v2) is additive, so the body is empty.
+fn apply_migration(_conn: &Connection, target: i32) -> Result<()> {
+    match target {
+        // v1: initial schema; nothing to do (handled by SCHEMA_SQL).
+        // v2: add `evidence_embeddings`; handled by SCHEMA_SQL.
+        1 | 2 => Ok(()),
+        _ => Err(EvidenceError::Schema(
+            "no migration registered for the requested schema version",
+        )),
     }
 }
 

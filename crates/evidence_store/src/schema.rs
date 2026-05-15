@@ -7,7 +7,13 @@
 
 /// Schema version stamped into `PRAGMA user_version`. Bumped on every
 /// breaking schema change.
-pub const SCHEMA_VERSION: i32 = 1;
+///
+/// History:
+/// - v1: initial evidence / body_store / ring_buffer / evidence_fts.
+/// - v2 (Phase B): added `evidence_embeddings` for the on-device ONNX
+///   embedding cache used by the hybrid retriever's semantic-vector
+///   lane.
+pub const SCHEMA_VERSION: i32 = 2;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -76,5 +82,17 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(
     evidence_id UNINDEXED,
     scope_id    UNINDEXED,
     tokenize    = 'unicode61 remove_diacritics 2'
+);
+
+-- Embedding cache used by the hybrid retriever's semantic-vector
+-- lane (Phase B). Populated on write when an `EmbeddingModel` has
+-- been wired into the store; queried by `HybridRetriever` instead of
+-- re-embedding the plaintext body on every search. The `embedding`
+-- column stores the `f32` vector as little-endian raw bytes.
+CREATE TABLE IF NOT EXISTS evidence_embeddings (
+    evidence_id     BLOB    PRIMARY KEY,
+    embedding       BLOB    NOT NULL,
+    model_tag       TEXT    NOT NULL,
+    created_at      INTEGER NOT NULL
 );
 "#;

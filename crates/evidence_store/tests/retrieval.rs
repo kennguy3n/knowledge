@@ -200,7 +200,8 @@ fn rerank_with_failing_model_returns_embedding_error_not_schema() {
     }];
     let bodies = vec![(r1.evidence_id, "hello world".to_string())];
 
-    let retriever = HybridRetriever::new(&store).with_embedding_model(FailingEmbeddingModel);
+    let retriever =
+        HybridRetriever::new(&store).with_embedding_model(FailingEmbeddingModel, "failing-v1");
     let err = retriever
         .rerank_with_embeddings("hello", candidates, &bodies)
         .expect_err("expected embedding error");
@@ -227,7 +228,8 @@ fn search_hybrid_with_embedding_model_produces_nonzero_vector_score() {
         )
         .unwrap();
 
-    let retriever = HybridRetriever::new(&store).with_embedding_model(ConstUnitEmbeddingModel);
+    let retriever =
+        HybridRetriever::new(&store).with_embedding_model(ConstUnitEmbeddingModel, "const-v1");
     let hits = retriever.search_hybrid(scope, "deadline", 5).unwrap();
     assert!(!hits.is_empty(), "expected at least one hit");
     // Cosine similarity between two identical unit vectors is 1.0,
@@ -252,4 +254,505 @@ fn empty_limit_returns_empty() {
         .search_hybrid(scope, "anything", 0)
         .unwrap()
         .is_empty());
+}
+
+// ---------------------------------------------------------------------
+// Phase B regression tests — the on-write embedding cache.
+// ---------------------------------------------------------------------
+
+/// Returns a vector whose first slot is the byte length of the input
+/// text. Two different bodies get different cached embeddings, so a
+/// stored-cache hit is visibly distinct from a re-embedding of some
+/// other text.
+struct LenEmbeddingModel;
+
+impl EmbeddingModel for LenEmbeddingModel {
+    fn embed(&self, text: &str) -> evidence_store::embeddings::Result<Vec<f32>> {
+        Ok(vec![text.len() as f32, 0.0, 0.0, 0.0])
+    }
+    fn dimension(&self) -> usize {
+        4
+    }
+    fn probe(&self) -> EmbeddingProbe {
+        EmbeddingProbe::Available
+    }
+}
+
+#[test]
+fn ingest_with_model_persists_embedding_round_trip() {
+    let (_dir, mut store) = open_store_with_model(LenEmbeddingModel, "len-v1");
+    let scope = ScopeId::new_v4();
+    let body = b"deadline reminder body text";
+    let r = store
+        .ingest(scope, body, None, ImportanceClass::Useful)
+        .unwrap();
+
+    let stored = store
+        .get_embedding(r.evidence_id)
+        .expect("get_embedding")
+        .expect("expected a cached embedding for ingested row");
+    assert_eq!(stored, vec![body.len() as f32, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn ingest_without_model_leaves_embedding_cache_empty() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(scope, b"hello world", None, ImportanceClass::Useful)
+        .unwrap();
+    assert!(store.get_embedding(r.evidence_id).unwrap().is_none());
+}
+
+#[test]
+fn store_embedding_round_trip_independent_of_ingest() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(scope, b"some body", None, ImportanceClass::Useful)
+        .unwrap();
+
+    let written = vec![0.1_f32, -0.2, 0.3, 0.4, -0.5];
+    store
+        .store_embedding(r.evidence_id, &written, "test-tag")
+        .expect("store_embedding");
+    let read = store
+        .get_embedding(r.evidence_id)
+        .expect("get_embedding")
+        .expect("expected stored embedding");
+    assert_eq!(read, written);
+}
+
+#[test]
+fn get_embedding_returns_none_for_unknown_row() {
+    let (_dir, store) = fresh_store();
+    let id = evidence_store::EvidenceId::new_v4();
+    assert!(store.get_embedding(id).unwrap().is_none());
+}
+
+/// When the store has cached embeddings, the hybrid retriever uses
+/// them instead of re-embedding bodies on each search. We assert this
+/// by wiring an embedding model into the *store* (so the cache is
+/// populated on ingest) but using a *different* model on the
+/// retriever side that would produce a different score if it were
+/// asked to re-embed. The retriever should use the cached vector and
+/// score it against its own query embedding.
+#[test]
+fn search_hybrid_uses_cached_embeddings_when_present() {
+    let (_dir, mut store) = open_store_with_model(LenEmbeddingModel, "len-v1");
+    let scope = ScopeId::new_v4();
+    let body = b"deadline reminder";
+    let _r = store
+        .ingest(scope, body, None, ImportanceClass::Useful)
+        .unwrap();
+
+    // Sanity-check the cache was populated. The retriever uses the
+    // same `model_tag` the store ingested under, so `model_tag`-aware
+    // `get_embedding_for_model` returns the cached vector.
+    let hits = HybridRetriever::new(&store)
+        .with_embedding_model(LenEmbeddingModel, "len-v1")
+        .search_hybrid(scope, "deadline", 5)
+        .unwrap();
+    assert!(!hits.is_empty());
+    // The cached vector is `[body.len(), 0, 0, 0]`; the query embed is
+    // `[len("deadline"), 0, 0, 0]`. Both align on the same basis
+    // vector so cosine similarity is 1.0 → similarity_to_score = 1.0.
+    assert!(
+        hits.iter().any(|h| (h.vector_score - 1.0).abs() < 1e-6),
+        "expected a cached-hit vector_score of 1.0, got {hits:?}"
+    );
+}
+
+/// If the cached embedding has a different dimension than the query
+/// embedding (e.g. a stale model swap), the retriever must fall back
+/// to re-embedding the body rather than emitting a misleading 0.5
+/// score from `cosine_similarity` on mismatched lengths.
+#[test]
+fn search_hybrid_falls_back_to_live_embed_on_dim_mismatch() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(scope, b"deadline reminder", None, ImportanceClass::Useful)
+        .unwrap();
+    // Seed a stale 8-d embedding; the retriever's model is 4-d. Use
+    // the same `model_tag` the retriever will pass so the cache row is
+    // visible by tag and the dimension-mismatch branch is the one
+    // that triggers the fallback (not the tag-mismatch branch).
+    store
+        .store_embedding(r.evidence_id, &[1.0; 8], "stale-v0")
+        .unwrap();
+
+    let hits = HybridRetriever::new(&store)
+        .with_embedding_model(ConstUnitEmbeddingModel, "stale-v0")
+        .search_hybrid(scope, "deadline", 5)
+        .unwrap();
+    assert!(
+        hits.iter().any(|h| h.vector_score > 0.0),
+        "expected the fallback live-embed path to produce a non-zero \
+         vector_score even though the cache row has the wrong width: \
+         got {hits:?}"
+    );
+}
+
+/// Regression test for the Phase-B review finding "candidate_embedding
+/// propagates cache errors via `?`, aborting entire search on a single
+/// corrupted embedding row". We seed an evidence row, then corrupt its
+/// cached embedding to a length that is not a multiple of 4 (the
+/// blob-deserialisation invariant). The retriever must still return a
+/// result for that row by falling back to live-embedding the body —
+/// not surface `EvidenceError::Schema` from the underlying cache read.
+#[test]
+fn search_hybrid_treats_corrupted_cache_row_as_miss() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(scope, b"deadline reminder", None, ImportanceClass::Useful)
+        .unwrap();
+
+    // Corrupt the cached embedding for `r.evidence_id` to an odd
+    // length (3 bytes). `bytes_to_embedding` would reject this with
+    // `EvidenceError::Schema(...)` if `?`-propagated. Tag the row with
+    // the same `model_tag` the retriever uses so the `model_tag`-aware
+    // read actually surfaces this row (otherwise the tag filter would
+    // mask the corruption before deserialisation ever runs and we
+    // wouldn't exercise the Schema-error branch we care about).
+    store
+        .raw_conn()
+        .execute(
+            "INSERT OR REPLACE INTO evidence_embeddings
+                 (evidence_id, embedding, model_tag, created_at)
+             VALUES (?1, X'00FF00', 'corrupt-tag', 0)",
+            rusqlite::params![r.evidence_id.as_uuid().as_bytes().as_slice()],
+        )
+        .unwrap();
+
+    let hits = HybridRetriever::new(&store)
+        .with_embedding_model(ConstUnitEmbeddingModel, "corrupt-tag")
+        .search_hybrid(scope, "deadline", 5)
+        .expect("search_hybrid must not propagate a per-row cache error");
+    assert!(
+        hits.iter().any(|h| h.evidence_id == r.evidence_id),
+        "row with corrupted cache row should still appear in results: {hits:?}"
+    );
+}
+
+/// Regression test for the Phase-B review finding "embedding cache is
+/// not populated for body-table dedup hits — embedding work is
+/// repeated for deduped bodies". We ingest the same large body twice
+/// and assert both rows share the cached vector and that the embed
+/// model was only invoked once.
+#[test]
+fn dedup_hit_copies_embedding_instead_of_re_embedding() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct CountingEmbedding {
+        calls: Arc<AtomicUsize>,
+    }
+    impl EmbeddingModel for CountingEmbedding {
+        fn embed(&self, _text: &str) -> evidence_store::embeddings::Result<Vec<f32>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![1.0, 2.0, 3.0, 4.0])
+        }
+        fn dimension(&self) -> usize {
+            4
+        }
+        fn probe(&self) -> EmbeddingProbe {
+            EmbeddingProbe::Available
+        }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let model = CountingEmbedding {
+        calls: Arc::clone(&calls),
+    };
+
+    let (_dir, mut store) = open_store_with_model(model, "count-v1");
+    let scope = ScopeId::new_v4();
+    // The body-table path triggers above the inline threshold
+    // (default 4096 bytes). Use a printable body so the FTS lane is
+    // also exercised on both ingests — both should hit the dedup
+    // path on the second insert.
+    let body = "x".repeat(4097);
+
+    let first = store
+        .ingest(scope, body.as_bytes(), None, ImportanceClass::Useful)
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "first ingest embeds once");
+
+    let second = store
+        .ingest(scope, body.as_bytes(), None, ImportanceClass::Useful)
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "second ingest must reuse the cached embedding, not re-embed"
+    );
+
+    let first_vec = store.get_embedding(first.evidence_id).unwrap().unwrap();
+    let second_vec = store.get_embedding(second.evidence_id).unwrap().unwrap();
+    assert_eq!(
+        first_vec, second_vec,
+        "dedup-copied embedding must be byte-identical to the source"
+    );
+}
+
+/// Regression test for the Phase-B review finding "embedding cache
+/// read path ignores `model_tag`, returning stale vectors on a
+/// same-dimension model swap".
+///
+/// The write side ([`EvidenceStore::index_embedding_or_copy_dedup`])
+/// already stamps every cached row with the active `model_tag` and
+/// filters dedup-copies by it. The read side
+/// ([`EvidenceStore::get_embedding_for_model`] called from
+/// [`HybridRetriever::candidate_embedding`]) must enforce the same
+/// invariant — otherwise a row written by a previous model that
+/// happens to share the new model's output dimension would silently
+/// be returned and scored as if it had been produced by the active
+/// model, yielding a meaningless cosine similarity.
+///
+/// We seed the cache for an evidence row under `model_tag = "model-a"`
+/// with a vector that differs from what `model-b` would produce, then
+/// drive the retriever with `model-b` and assert that:
+///   1. The cache row from `model-a` does not short-circuit the
+///      live-embed path (counted invocations include the body embed),
+///      and
+///   2. The resulting `vector_score` matches what live-embedding the
+///      body under `model-b` would produce, not what the stale
+///      `model-a` row would score against `model-b`'s query embed.
+#[test]
+fn candidate_embedding_skips_cache_row_with_mismatched_model_tag() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// Deterministic 4-d model whose every output is the unit vector
+    /// `[1.0, 0.0, 0.0, 0.0]`. Counts every `embed` invocation so the
+    /// test can distinguish "cache hit, no live embed" from "cache
+    /// miss, live embed ran".
+    #[derive(Clone)]
+    struct CountingOnesModel {
+        calls: Arc<AtomicUsize>,
+    }
+    impl EmbeddingModel for CountingOnesModel {
+        fn embed(&self, _text: &str) -> evidence_store::embeddings::Result<Vec<f32>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![1.0, 0.0, 0.0, 0.0])
+        }
+        fn dimension(&self) -> usize {
+            4
+        }
+        fn probe(&self) -> EmbeddingProbe {
+            EmbeddingProbe::Available
+        }
+    }
+
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(scope, b"deadline reminder", None, ImportanceClass::Useful)
+        .unwrap();
+
+    // Seed the cache row under `model_tag = "model-a"` with a vector
+    // that is orthogonal to `CountingOnesModel`'s output. If the read
+    // path ignored `model_tag` and returned this row to a retriever
+    // tagged `"model-b"`, the cosine similarity against the query
+    // embed `[1, 0, 0, 0]` would be 0.0 → similarity_to_score(0) =
+    // 0.5, which is detectably different from the 1.0 the live-embed
+    // path produces.
+    store
+        .store_embedding(r.evidence_id, &[0.0, 1.0, 0.0, 0.0], "model-a")
+        .unwrap();
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let model = CountingOnesModel {
+        calls: Arc::clone(&calls),
+    };
+
+    // Retriever runs as `model-b`. The cache row's `model_tag` is
+    // `model-a`, so `get_embedding_for_model` must return `None` and
+    // force the live-embed fallback.
+    let hits = HybridRetriever::new(&store)
+        .with_embedding_model(model, "model-b")
+        .search_hybrid(scope, "deadline", 5)
+        .expect("search_hybrid must not propagate any error");
+
+    // Two embed calls expected: one for the query, one for the body
+    // (the fallback path). A cache hit on the stale `model-a` row
+    // would have skipped the body embed, leaving the count at 1.
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "model_tag filter must force live-embed fallback when the \
+         cache row was produced by a different model_tag; observed \
+         only {} embed call(s), which means the stale `model-a` row \
+         was silently returned to a `model-b` retriever",
+        calls.load(Ordering::SeqCst),
+    );
+
+    // Confirm the score reflects the live-embed path, not the stale
+    // cache row. cosine([1,0,0,0], [1,0,0,0]) = 1.0 → score = 1.0.
+    let hit = hits
+        .iter()
+        .find(|h| h.evidence_id == r.evidence_id)
+        .expect("ingested row must appear in hits");
+    assert!(
+        (hit.vector_score - 1.0).abs() < 1e-6,
+        "vector_score must reflect the live `model-b` embed (1.0), \
+         not the stale `model-a` cache row scored against `model-b`'s \
+         query embed (0.5); got {}",
+        hit.vector_score,
+    );
+}
+
+/// Regression test for the Phase-B review finding "schema migration
+/// (v1→v2) has no migration path". We construct a v1-shaped database
+/// (no `evidence_embeddings` table, `user_version = 1`) and assert
+/// that `EvidenceStore::open` forward-ports it to v2 by creating the
+/// missing table and stamping the version, without losing existing
+/// rows.
+#[test]
+fn schema_migration_forward_ports_legacy_v1_database() {
+    use rusqlite::Connection;
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    // Build a v1-shaped database by hand: open with the SQLCipher
+    // PRAGMA dance, create only the subset of tables that existed at
+    // v1, and stamp `user_version = 1`. We can't easily reach into
+    // `derive_key` from the integration test crate, so we mirror what
+    // `EvidenceStore::open` does, but stop after the legacy subset.
+    {
+        let raw = Connection::open(&path).unwrap();
+        // `EvidenceStore::open` derives the SQLCipher page key from
+        // the master key with HKDF; we need to mirror that so the
+        // hand-built v1 database is openable by the production code.
+        let page_key = crypto::derive_key(&MASTER_KEY, b"sqlcipher:store:v1").unwrap();
+        let key_pragma = format!("x'{}'", hex_encode_local(&page_key));
+        raw.pragma_update(None, "key", &key_pragma).unwrap();
+        raw.pragma_update(None, "cipher_page_size", 4096_i64)
+            .unwrap();
+        raw.pragma_update(None, "kdf_iter", 256_000_i64).unwrap();
+        // v1 subset: evidence, body_store, ring_buffer, evidence_fts.
+        // No evidence_embeddings.
+        raw.execute_batch(
+            r#"
+            CREATE TABLE evidence (
+                id BLOB PRIMARY KEY, scope_id BLOB NOT NULL,
+                content_hash BLOB NOT NULL, body BLOB, body_ref BLOB,
+                nonce BLOB, source_ref TEXT, acl_pointer TEXT,
+                importance INTEGER NOT NULL, storage_path INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX idx_evidence_scope_created
+                ON evidence (scope_id, created_at DESC);
+            CREATE INDEX idx_evidence_content_hash
+                ON evidence (content_hash);
+            CREATE TABLE body_store (
+                content_hash BLOB PRIMARY KEY, body BLOB NOT NULL,
+                nonce BLOB NOT NULL, ref_count INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE ring_buffer (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, scope_id BLOB NOT NULL,
+                body BLOB NOT NULL, nonce BLOB NOT NULL,
+                payload_size INTEGER NOT NULL, created_at INTEGER NOT NULL
+            );
+            CREATE INDEX idx_ring_buffer_scope_created
+                ON ring_buffer (scope_id, created_at DESC);
+            CREATE VIRTUAL TABLE evidence_fts USING fts5(
+                content, evidence_id UNINDEXED, scope_id UNINDEXED,
+                tokenize = 'unicode61 remove_diacritics 2'
+            );
+            "#,
+        )
+        .unwrap();
+        raw.pragma_update(None, "user_version", 1_i32).unwrap();
+    }
+
+    // Now open with the real entrypoint. The migration must succeed
+    // and create `evidence_embeddings`.
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("open must migrate a legacy v1 database in place");
+
+    // The new table must exist now.
+    let table_exists: bool = store
+        .raw_conn()
+        .query_row(
+            "SELECT 1 FROM sqlite_master \
+                 WHERE type = 'table' AND name = 'evidence_embeddings'",
+            [],
+            |r| r.get::<_, i32>(0),
+        )
+        .is_ok();
+    assert!(
+        table_exists,
+        "evidence_embeddings table must exist after v1→v2 migration"
+    );
+
+    // And the version must be stamped to current.
+    let version: i32 = store
+        .raw_conn()
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2, "user_version must be stamped to SCHEMA_VERSION");
+}
+
+/// Regression test for the Phase-B review finding "schema migration
+/// allows opening a future database silently". A database stamped
+/// `user_version = 99` (a hypothetical future version) must be
+/// rejected up-front rather than silently downgraded to the current
+/// `SCHEMA_VERSION`.
+#[test]
+fn schema_migration_refuses_future_version_database() {
+    use rusqlite::Connection;
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    {
+        let raw = Connection::open(&path).unwrap();
+        let page_key = crypto::derive_key(&MASTER_KEY, b"sqlcipher:store:v1").unwrap();
+        let key_pragma = format!("x'{}'", hex_encode_local(&page_key));
+        raw.pragma_update(None, "key", &key_pragma).unwrap();
+        raw.pragma_update(None, "cipher_page_size", 4096_i64)
+            .unwrap();
+        raw.pragma_update(None, "kdf_iter", 256_000_i64).unwrap();
+        raw.execute_batch("CREATE TABLE evidence (id BLOB);")
+            .unwrap();
+        raw.pragma_update(None, "user_version", 99_i32).unwrap();
+    }
+
+    let result = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default());
+    match result {
+        Ok(_) => panic!("opening a future-version database must fail"),
+        Err(EvidenceError::Schema(_)) => {}
+        Err(other) => {
+            panic!("future-version rejection must surface as EvidenceError::Schema, got {other:?}")
+        }
+    }
+}
+
+/// Lowercase hex encoder used by the schema-migration tests, which
+/// need to drive SQLCipher's `PRAGMA key = X'…'` directly without
+/// pulling in `hex` as a dev-dependency.
+fn hex_encode_local(bytes: &[u8]) -> String {
+    const CHARS: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(CHARS[(b >> 4) as usize] as char);
+        s.push(CHARS[(b & 0x0f) as usize] as char);
+    }
+    s
+}
+
+fn open_store_with_model<M>(model: M, tag: &str) -> (tempfile::TempDir, EvidenceStore)
+where
+    M: EmbeddingModel + 'static,
+{
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("open store")
+        .with_embedding_model(model, tag);
+    (dir, store)
 }

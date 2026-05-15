@@ -7,6 +7,16 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# Real ONNX Runtime + HuggingFace tokenizer backend for
+# `embeddings::OrtOnnxRuntime`. With `load-dynamic` the build pulls in
+# the `ort` crate without linking against `onnxruntime`; the native
+# library is loaded at runtime (callers set `ORT_DYLIB_PATH` or the
+# system search paths). Without this feature the crate builds with no
+# ONNX dependency and only the stub / mock runtimes are available.
+onnx-runtime = ["dep:ort", "dep:tokenizers"]
+
 [dependencies]
 crypto = { path = "../crypto" }
 inference_router = { path = "../inference_router" }
@@ -20,6 +30,16 @@ serde_json = { workspace = true }
 zeroize = { workspace = true }
 rand = { workspace = true }
 rand_core = { workspace = true }
+
+# Optional ONNX Runtime backend (enabled via `onnx-runtime` feature).
+# Pinned to `=2.0.0-rc.10`: rc.9 fails to compile on stable Rust and
+# rc.12's `vitis` execution provider references a field that does not
+# exist on the bundled `OrtApi` struct, so the build breaks under
+# `cargo build --all-features`.
+ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["load-dynamic", "ndarray"] }
+# `fancy-regex` is the pure-Rust regex backend; the default `onig`
+# backend pulls in a C library (libonig) that isn't part of CI.
+tokenizers = { version = "0.21", optional = true, default-features = false, features = ["fancy-regex"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

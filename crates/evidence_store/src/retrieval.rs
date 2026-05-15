@@ -76,6 +76,13 @@ pub struct HybridRetriever<'a> {
     /// values produce a flatter recency curve.
     recency_half_life_seconds: f64,
     embedding_model: Option<Box<dyn EmbeddingModel>>,
+    /// Free-form tag (e.g. `"xlm-r-v1"`) identifying the active
+    /// embedding model. Empty when no model is wired in. Mirrors
+    /// [`EvidenceStore`]'s `embedding_model_tag` so the read path can
+    /// scope `evidence_embeddings` lookups by `model_tag` and avoid
+    /// returning stale rows produced by a previous, dimension-matching
+    /// model.
+    embedding_model_tag: String,
 }
 
 impl<'a> HybridRetriever<'a> {
@@ -87,6 +94,7 @@ impl<'a> HybridRetriever<'a> {
             weights: HybridWeights::default(),
             recency_half_life_seconds: 7.0 * 86_400.0,
             embedding_model: None,
+            embedding_model_tag: String::new(),
         }
     }
 
@@ -106,8 +114,20 @@ impl<'a> HybridRetriever<'a> {
     /// component of the hybrid score. Calling [`Self::search_hybrid`]
     /// after this will compute cosine similarity between the query
     /// embedding and the per-row stored embedding (when present).
-    pub fn with_embedding_model<M: EmbeddingModel + 'static>(mut self, model: M) -> Self {
+    ///
+    /// `model_tag` must match the tag the [`EvidenceStore`] was
+    /// configured with when the rows were ingested — the retriever
+    /// only consumes cache rows whose `model_tag` equals this string,
+    /// so a stale row produced by a previous model (even one with the
+    /// same output dimension) falls through to the live-embed path
+    /// rather than producing a semantically meaningless cosine score.
+    pub fn with_embedding_model<M: EmbeddingModel + 'static>(
+        mut self,
+        model: M,
+        model_tag: impl Into<String>,
+    ) -> Self {
         self.embedding_model = Some(Box::new(model));
+        self.embedding_model_tag = model_tag.into();
         self
     }
 
@@ -291,20 +311,23 @@ impl<'a> HybridRetriever<'a> {
 
         // Compute the semantic-vector lane when an embedding model is
         // plumbed in. We embed the query once, then walk every
-        // candidate, decrypt its body, and embed that. Failures are
-        // localised: if the query embed fails we skip the lane
-        // wholesale (vector_score = 0.0); per-row failures (missing
-        // body, runtime hiccup) just leave that single row at 0.0.
+        // candidate. The candidate body vector is sourced from the
+        // store's `evidence_embeddings` cache when present (Phase B);
+        // otherwise we fall back to decrypting + re-embedding the body
+        // on the fly. Failures are localised: if the query embed
+        // fails we skip the lane wholesale (vector_score = 0.0);
+        // per-row failures (missing body, runtime hiccup, dimension
+        // mismatch with a stale cached row) just leave that single
+        // row at 0.0.
         let query_vec = self
             .embedding_model
             .as_ref()
             .and_then(|model| model.embed(query).ok());
         if let (Some(model), Some(query_vec)) = (self.embedding_model.as_ref(), query_vec) {
             for entry in by_id.values_mut() {
-                let Some(body) = self.lookup_body_text(entry.evidence_id)? else {
-                    continue;
-                };
-                if let Ok(body_vec) = model.embed(&body) {
+                let body_vec =
+                    self.candidate_embedding(entry.evidence_id, query_vec.len(), model.as_ref())?;
+                if let Some(body_vec) = body_vec {
                     entry.vector_score =
                         similarity_to_score(cosine_similarity(&query_vec, &body_vec));
                 }
@@ -346,6 +369,65 @@ impl<'a> HybridRetriever<'a> {
             Err(EvidenceError::NotFound(_) | EvidenceError::DanglingBodyRef) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    /// Source the per-candidate embedding vector for the
+    /// semantic-vector lane.
+    ///
+    /// Order of preference:
+    ///   1. The cached row in `evidence_embeddings` *that was produced
+    ///      by the active `model_tag`*, when its length matches the
+    ///      query embedding's dimension. The `model_tag` filter is
+    ///      load-bearing: without it, a row written by a previous
+    ///      model that happens to share an output dimension with the
+    ///      active model would silently be scored as if it had been
+    ///      produced by the active model, yielding a meaningless
+    ///      cosine score.
+    ///   2. Re-embed the plaintext body via `model`.
+    ///
+    /// Returns `None` when neither path produces a usable vector
+    /// (e.g. the row has no body, the body is binary, the model
+    /// errored, the cache row is corrupted, the active `model_tag`
+    /// has no cached row for this evidence id, or every available
+    /// vector mismatches `query_dim`). The stored-cache hit
+    /// short-circuits before reading the body, which is the Phase-B
+    /// perf win.
+    ///
+    /// Cache-load failures (`EvidenceError::Schema` from a corrupted
+    /// blob, `EvidenceError::Sqlite` from a transient SQL hiccup) are
+    /// **not** propagated — the embedding cache is a pure
+    /// optimisation, so per-row read errors are demoted to "cache
+    /// miss" and the live-embed path runs instead. This mirrors the
+    /// localised-failure contract documented in
+    /// [`Self::search_hybrid`] and the read-side robustness of
+    /// [`Self::lookup_body_text`].
+    fn candidate_embedding(
+        &self,
+        id: EvidenceId,
+        query_dim: usize,
+        model: &dyn EmbeddingModel,
+    ) -> Result<Option<Vec<f32>>> {
+        match self
+            .store
+            .get_embedding_for_model(id, &self.embedding_model_tag)
+        {
+            Ok(Some(stored)) if stored.len() == query_dim => return Ok(Some(stored)),
+            // Dimension mismatch (defensive — should not happen when
+            // `model_tag` matches, since a single tag implies a single
+            // dimension) or no cached row at all → fall through to
+            // the live-embed path so the score is still useful for
+            // this query.
+            Ok(_) => {}
+            // A corrupted cache row or transient SQL error must not
+            // abort the whole search. Treat it as a cache miss and
+            // let the live-embed path try.
+            Err(EvidenceError::Schema(_) | EvidenceError::Sqlite(_)) => {}
+            Err(other) => return Err(other),
+        }
+        let Some(body) = self.lookup_body_text(id)? else {
+            return Ok(None);
+        };
+        Ok(model.embed(&body).ok())
     }
 
     fn lookup_recency(&self, id: EvidenceId) -> Result<Option<f64>> {
