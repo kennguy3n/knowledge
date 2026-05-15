@@ -30,4 +30,4 @@ pub use adapters::{FallbackAdapter, LlamaCppAdapter, LlamaServerClient, MlxAdapt
 pub use config::{DeviceTier, RouterConfig, IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PROMPT};
 pub use error::RouterError;
 pub use router::InferenceRouter;
-pub use task::{InferenceTask, TaskTag};
+pub use task::{InferenceTask, SummaryBundle, TaskTag};

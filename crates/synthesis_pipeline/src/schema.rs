@@ -133,17 +133,16 @@ pub struct ObservationRow {
 
 /// Output shape for `synth.summary` — channel / episodic / domain /
 /// tenant summary bundle.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct SummaryBundle {
-    /// Free-text recap (the headline).
-    pub recap: String,
-    /// Decisions captured during the window.
-    pub decisions: Vec<String>,
-    /// Open questions captured during the window.
-    pub open_questions: Vec<String>,
-    /// Active tasks captured during the window.
-    pub active_tasks: Vec<String>,
-}
+///
+/// The canonical definition lives in
+/// [`inference_router::task::SummaryBundle`] so that both the
+/// synthesiser (`LlamaCppSynthesizer` in this crate) and the
+/// episodic-memory consumer
+/// (`memory_manager::episodic::SlmSummarizer`) share a single type
+/// without `memory_manager` having to depend on this crate. Re-exported
+/// here so existing consumers that imported it from
+/// `synthesis_pipeline::schema` keep compiling.
+pub use inference_router::SummaryBundle;
 
 #[cfg(test)]
 mod tests {

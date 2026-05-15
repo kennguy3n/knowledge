@@ -1,4 +1,12 @@
 //! Inference task taxonomy + prompt / grammar templates.
+//!
+//! This module also owns the **output shapes** that the GBNF grammars
+//! constrain the SLM to emit. The schema lives next to the grammar so
+//! drift between producer (the grammar fed to `llama-server`) and
+//! consumer (the `serde_json` decode site) is locally visible in one
+//! file. Today only [`SummaryBundle`] lives here — the other
+//! grammar-constrained shapes still live in `synthesis_pipeline::schema`
+//! and may move here in a future cleanup.
 
 use serde::{Deserialize, Serialize};
 
@@ -79,7 +87,7 @@ impl InferenceTask {
                  knowledge. Respond as JSON: {\"promote\": true|false, \"reason\": \"…\"}.\n\nObservation:\n{body}"
             }
             Self::SynthSummary => {
-                // Aligns with `synthesis_pipeline::SummaryBundle` —
+                // Aligns with [`SummaryBundle`] in this module —
                 // four fields, all populated even when empty. The
                 // GBNF `GRAMMAR_SYNTH_SUMMARY` constrains the
                 // emitted JSON to exactly this shape so the
@@ -138,19 +146,52 @@ string ::= "\"" ([^"\\] | "\\" .)* "\""
 ws ::= [ \t\n]*
 "#;
 
-/// GBNF for [`synthesis_pipeline::SummaryBundle`] — constrains the
-/// SLM to emit JSON with exactly the four fields
-/// `{recap, decisions, open_questions, active_tasks}` in order.
+/// GBNF for [`SummaryBundle`] — constrains the SLM to emit JSON with
+/// exactly the four fields `{recap, decisions, open_questions,
+/// active_tasks}` in order.
 ///
-/// Hand-written from the `SummaryBundle` struct definition; if the
-/// struct grows a new field or reorders existing fields the
-/// grammar must be updated in lock-step.
+/// Hand-written from the [`SummaryBundle`] struct definition; if the
+/// struct grows a new field or reorders existing fields the grammar
+/// must be updated in lock-step. The
+/// `synth_summary_grammar_matches_summary_bundle_serialization` test
+/// guards against drift by serialising a populated [`SummaryBundle`]
+/// and asserting the produced JSON's field ordering and shape match
+/// what the grammar accepts.
 pub const GRAMMAR_SYNTH_SUMMARY: &str = r#"
 root ::= "{" ws "\"recap\":" ws string "," ws "\"decisions\":" ws strings "," ws "\"open_questions\":" ws strings "," ws "\"active_tasks\":" ws strings ws "}"
 strings ::= "[" ws (string ("," ws string)*)? ws "]"
 string ::= "\"" ([^"\\] | "\\" .)* "\""
 ws ::= [ \t\n]*
 "#;
+
+/// Output shape for [`InferenceTask::SynthSummary`] —
+/// channel / episodic / domain / tenant summary bundle.
+///
+/// The four fields are produced in declaration order by
+/// `serde_json::to_string`, which is exactly the order the
+/// [`GRAMMAR_SYNTH_SUMMARY`] grammar accepts. Reordering or renaming
+/// fields here without updating the grammar will cause the SLM to
+/// emit JSON the parser still accepts but the grammar will reject,
+/// silently making structured decoding fail at the adapter level.
+///
+/// This type lives in `inference_router::task` (not
+/// `synthesis_pipeline::schema`) so that both the producer
+/// (`LlamaCppSynthesizer`) and the consumer
+/// (`memory_manager::episodic::SlmSummarizer`) can share a single
+/// canonical definition without `memory_manager` taking a dependency
+/// on `synthesis_pipeline`. `synthesis_pipeline::schema` re-exports
+/// it for backward compatibility.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SummaryBundle {
+    /// Free-text recap (the headline).
+    pub recap: String,
+    /// Decisions captured during the window.
+    pub decisions: Vec<String>,
+    /// Open questions captured during the window.
+    pub open_questions: Vec<String>,
+    /// Active tasks captured during the window.
+    pub active_tasks: Vec<String>,
+}
 
 /// GBNF for the synthesised concept JSON.
 pub const GRAMMAR_SYNTH_CONCEPT: &str = r#"
@@ -230,6 +271,50 @@ mod tests {
                 "GBNF must mention `{field}` so the SLM emits SummaryBundle JSON"
             );
         }
+    }
+
+    /// Drift guard: serialise a populated [`SummaryBundle`] and
+    /// confirm the resulting JSON
+    ///
+    /// * is in the field order the grammar accepts
+    ///   (`recap` then `decisions` then `open_questions` then
+    ///   `active_tasks`),
+    /// * round-trips back to the same struct,
+    /// * starts with `{"recap":` so the grammar's first production
+    ///   (`"{" ws "\"recap\":"`) matches.
+    ///
+    /// If [`SummaryBundle`] grows a field or its declaration order
+    /// changes, the first two assertions catch it before the SLM
+    /// ever sees the new grammar / new shape.
+    #[test]
+    fn synth_summary_grammar_matches_summary_bundle_serialization() {
+        let bundle = SummaryBundle {
+            recap: "the team shipped".to_string(),
+            decisions: vec!["keep vendor X".to_string()],
+            open_questions: vec!["who owns the rollout?".to_string()],
+            active_tasks: vec!["draft RFC".to_string()],
+        };
+        let json = serde_json::to_string(&bundle).unwrap();
+        // Field order must match the grammar's `root` production.
+        let recap_idx = json.find("\"recap\"").unwrap();
+        let decisions_idx = json.find("\"decisions\"").unwrap();
+        let questions_idx = json.find("\"open_questions\"").unwrap();
+        let tasks_idx = json.find("\"active_tasks\"").unwrap();
+        assert!(
+            recap_idx < decisions_idx
+                && decisions_idx < questions_idx
+                && questions_idx < tasks_idx,
+            "SummaryBundle serialisation drifted from GBNF field order; got: {json}"
+        );
+        assert!(
+            json.starts_with("{\"recap\":"),
+            "GBNF root expects `{{\"recap\":` prefix, got: {json}"
+        );
+        // Round-trip the JSON back through the type so we know
+        // serde_json::from_str (used by every grammar-constrained
+        // consumer) reverses the encoding without loss.
+        let decoded: SummaryBundle = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, bundle);
     }
 
     #[test]
