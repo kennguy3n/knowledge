@@ -695,7 +695,11 @@ fn schema_migration_forward_ports_legacy_v1_database() {
         .raw_conn()
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 2, "user_version must be stamped to SCHEMA_VERSION");
+    assert_eq!(
+        version,
+        evidence_store::schema::SCHEMA_VERSION,
+        "user_version must be stamped to SCHEMA_VERSION"
+    );
 }
 
 /// Regression test for the Phase-B review finding "schema migration

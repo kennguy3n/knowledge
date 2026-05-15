@@ -13,7 +13,16 @@
 /// - v2 (Phase B): added `evidence_embeddings` for the on-device ONNX
 ///   embedding cache used by the hybrid retriever's semantic-vector
 ///   lane.
-pub const SCHEMA_VERSION: i32 = 2;
+/// - v3 (Phase B follow-up): widened the `evidence_embeddings`
+///   primary key from `evidence_id` alone to the composite
+///   `(evidence_id, model_tag)`. This lets multiple cached vectors
+///   coexist for the same evidence row when the embedding model is
+///   swapped — a model upgrade keeps the old rows warm for any
+///   retriever still running under the previous tag instead of
+///   destroying them via `INSERT OR REPLACE`. The upgrade is
+///   destructive (cannot be expressed with `CREATE * IF NOT EXISTS`)
+///   so the migration is implemented in `apply_migration(3)`.
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -89,10 +98,20 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(
 -- been wired into the store; queried by `HybridRetriever` instead of
 -- re-embedding the plaintext body on every search. The `embedding`
 -- column stores the `f32` vector as little-endian raw bytes.
+--
+-- The primary key is the composite (`evidence_id`, `model_tag`) so a
+-- single evidence row can have multiple cached vectors — one per
+-- model the store has been wired into. This is the v3 shape (Phase B
+-- follow-up); the destructive v2 -> v3 migration that rewrites a
+-- pre-existing single-PK table into this shape lives in
+-- `apply_migration` in `store.rs`. For an already-v3 database this
+-- statement is a no-op via `IF NOT EXISTS`; for a fresh database it
+-- creates the v3 shape directly.
 CREATE TABLE IF NOT EXISTS evidence_embeddings (
-    evidence_id     BLOB    PRIMARY KEY,
+    evidence_id     BLOB    NOT NULL,
     embedding       BLOB    NOT NULL,
     model_tag       TEXT    NOT NULL,
-    created_at      INTEGER NOT NULL
+    created_at      INTEGER NOT NULL,
+    PRIMARY KEY (evidence_id, model_tag)
 );
 "#;
