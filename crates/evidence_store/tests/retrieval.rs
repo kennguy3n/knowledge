@@ -896,7 +896,10 @@ fn schema_migration_v2_to_v3_widens_pk_and_preserves_rows() {
     let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
         .expect("open must migrate a v2 database to v3 in place");
 
-    // 1. Version must now be v3.
+    // 1. Version must now match the current `SCHEMA_VERSION`. We
+    //    asserted v3 here historically; Gap 4 added a purely-additive
+    //    v4 (`forgotten_scopes`) which the migration runner walks
+    //    through unconditionally, so a v2 database opens at v4.
     let version: i32 = store
         .raw_conn()
         .pragma_query_value(None, "user_version", |row| row.get(0))
@@ -906,7 +909,7 @@ fn schema_migration_v2_to_v3_widens_pk_and_preserves_rows() {
         evidence_store::schema::SCHEMA_VERSION,
         "user_version must be stamped to SCHEMA_VERSION after v2 → v3 migration"
     );
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
 
     // 2. Both seeded rows must survive byte-for-byte.
     let read_a = store

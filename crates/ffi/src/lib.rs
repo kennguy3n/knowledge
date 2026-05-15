@@ -336,21 +336,22 @@ pub fn unpin(_id: String) -> FfiResult<()> {
 /// short-circuits with [`FfiError::NotFound`] (or an empty result, in
 /// the case of [`query`]).
 ///
-/// # Durability — Phase A semantics
+/// # Durability — Phase A.5 semantics
 ///
-/// The tombstone lives in an **in-memory** registry that is dropped
-/// by [`close_store`] and recreated empty on the next [`open_store`].
-/// In Phase A this is equivalent to a session-scoped soft delete:
-/// after a `close_store` / `open_store` cycle, the on-disk evidence
-/// row is queryable again. Hosts that need durable forgetting must
-/// layer their own persistence (e.g. record the tombstone in a host
-/// keychain and replay it through a future `forget_scope` API) until
-/// the durable DEK-registry plane lands.
+/// As of Phase A.5 (Gap 4) the tombstone is **persisted** to the
+/// `forgotten_scopes` table on the encrypted evidence database, and
+/// the FTS5 / embedding secondary indexes are purged inline. On the
+/// next [`open_store`], the runtime replays every persisted
+/// tombstone into a fresh in-memory `DekRegistry`, so subsequent
+/// calls for the same scope continue to short-circuit with
+/// [`FfiError::NotFound`].
 ///
-/// Likewise, the **bytes on disk are not wiped** — that requires
-/// per-scope SQLCipher rekeying and a redesign of the FTS5 secondary
-/// index, both tracked separately under
-/// `crates/evidence_store/tests/forgetting_fts.rs`.
+/// The encrypted **bodies** in `evidence` / `body_store` are
+/// intentionally not deleted — the append-only trigger on
+/// `evidence` forbids it, and without the per-scope DEK the
+/// ciphertexts are unrecoverable anyway. Hosts that need to drop
+/// the physical bytes must perform a VACUUM-style rebuild at a
+/// higher layer.
 ///
 /// # Errors
 ///
@@ -359,6 +360,11 @@ pub fn unpin(_id: String) -> FfiResult<()> {
 /// * [`FfiError::NotFound`] if no evidence row has that id (e.g. if
 ///   the caller passed a *scope* UUID directly — there is no
 ///   `forget_scope` surface yet).
+/// * [`FfiError::Evidence`] if persisting the tombstone or purging
+///   the FTS / embedding indexes fails. The in-memory DEK
+///   destruction is still effective in this case, but the next
+///   `open_store` will not see the tombstone and the FTS index may
+///   still contain plaintext for the affected scope.
 pub fn forget(id: String) -> FfiResult<()> {
     let evidence_id = parse_evidence_id(&id)?;
     with_runtime(|rt| {
@@ -372,7 +378,23 @@ pub fn forget(id: String) -> FfiResult<()> {
                 kind: "evidence".into(),
                 id: id.clone(),
             })?;
-        rt.forget_scope(row.scope_id);
+        let scope = row.scope_id;
+        // 1. In-memory DEK destruction (immediate effect on this
+        //    process). 2. Persist the tombstone so a process
+        //    restart still rejects the scope. 3. Purge the FTS5 /
+        //    embedding indexes so plaintext-derived secondary
+        //    payloads cannot be recovered post-forget.
+        rt.forget_scope(scope);
+        rt.store_mut()
+            .record_forgotten_scope(scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        rt.store_mut()
+            .purge_fts_for_scope(scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
         Ok(())
     })
 }
@@ -818,5 +840,51 @@ mod tests {
         assert!(
             matches!(err, FfiError::Unavailable { ref subsystem } if subsystem == "evidence_store")
         );
+    }
+
+    /// Phase A.5 (Gap 4) — durable cryptographic-forgetting tombstones
+    /// must survive a `close_store` / `open_store` cycle. We ingest
+    /// into a scope, forget it, close the store, re-open the same DB
+    /// with the same master key, and assert that the scope still
+    /// short-circuits with `NotFound { kind: "scope" }`.
+    #[test]
+    fn forget_survives_close_and_reopen() {
+        let _g = test_lock();
+        let _ = close_store();
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let key_hex = "a5".repeat(32);
+        let scope = uuid::Uuid::new_v4().to_string();
+
+        open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open_store");
+
+        let evidence_id = ingest_message(
+            scope.clone(),
+            "the persistent forgetting test body".into(),
+            SourceKind::Manual,
+        )
+        .expect("ingest_message");
+        forget(evidence_id).expect("forget");
+
+        // Round-trip the singleton. The in-memory `DekRegistry` is
+        // dropped here; the next `open_store` must rebuild it from
+        // the persisted `forgotten_scopes` table.
+        close_store().expect("close_store");
+        open_store(path.to_string_lossy().into_owned(), key_hex).expect("re-open_store");
+
+        // The scope must still be rejected. We probe via
+        // `ingest_message` because that's the canonical
+        // `is_scope_forgotten` short-circuit path that hosts hit
+        // first after a restart.
+        match ingest_message(
+            scope,
+            "second message after restart".into(),
+            SourceKind::Manual,
+        ) {
+            Err(FfiError::NotFound { kind, .. }) => assert_eq!(kind, "scope"),
+            other => panic!("expected NotFound {{ kind: \"scope\" }} after restart, got {other:?}"),
+        }
+        teardown();
     }
 }

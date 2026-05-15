@@ -356,3 +356,68 @@ fn wrong_master_key_fails_to_open() {
     let result = EvidenceStore::open(&path, &bad, EvidenceStoreConfig::default());
     assert!(result.is_err(), "wrong master key must refuse to open");
 }
+
+// ---------------------------------------------------------------------
+// Phase A.5 (Gap 4) — durable cryptographic-forgetting tombstones.
+//
+// `record_forgotten_scope` writes a row into `forgotten_scopes`, and
+// `load_forgotten_scopes` returns the full set. The substrate uses these
+// two methods to make the FFI runtime's per-process `DekRegistry` survive
+// a process restart: every persisted tombstone is replayed into a fresh
+// in-memory registry on `open_store`.
+// ---------------------------------------------------------------------
+
+#[test]
+fn forgotten_scopes_persist_across_reopen() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    let scope_a = ScopeId::new_v4();
+    let scope_b = ScopeId::new_v4();
+
+    {
+        let mut store =
+            EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
+        // No tombstones on a fresh DB.
+        assert!(
+            store.load_forgotten_scopes().unwrap().is_empty(),
+            "fresh store must have no forgotten scopes"
+        );
+
+        store.record_forgotten_scope(scope_a).unwrap();
+        store.record_forgotten_scope(scope_b).unwrap();
+
+        let mut loaded = store.load_forgotten_scopes().unwrap();
+        loaded.sort_by_key(|s| *s.as_uuid().as_bytes());
+        let mut expected = vec![scope_a, scope_b];
+        expected.sort_by_key(|s| *s.as_uuid().as_bytes());
+        assert_eq!(loaded, expected);
+    }
+
+    // Re-open with the same master key — the tombstones must still be
+    // there. This is the durability contract Gap 4 introduces.
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
+    let mut loaded = store.load_forgotten_scopes().unwrap();
+    loaded.sort_by_key(|s| *s.as_uuid().as_bytes());
+    let mut expected = vec![scope_a, scope_b];
+    expected.sort_by_key(|s| *s.as_uuid().as_bytes());
+    assert_eq!(
+        loaded, expected,
+        "forgotten scopes must survive a process restart"
+    );
+}
+
+#[test]
+fn record_forgotten_scope_is_idempotent() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+
+    store.record_forgotten_scope(scope).unwrap();
+    // INSERT OR IGNORE — re-recording the same scope must succeed and
+    // not produce a duplicate row.
+    store.record_forgotten_scope(scope).unwrap();
+    store.record_forgotten_scope(scope).unwrap();
+
+    let loaded = store.load_forgotten_scopes().unwrap();
+    assert_eq!(loaded, vec![scope]);
+}

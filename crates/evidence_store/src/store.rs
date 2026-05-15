@@ -986,6 +986,122 @@ impl EvidenceStore {
         &self.conn
     }
 
+    /// Record a durable cryptographic-forgetting tombstone for
+    /// `scope_id`.
+    ///
+    /// Inserts into the `forgotten_scopes` table with `forgotten_at`
+    /// set to the current wall-clock (Unix epoch seconds). `INSERT
+    /// OR IGNORE` makes the operation idempotent — re-recording an
+    /// already-forgotten scope is a no-op rather than a failure, so
+    /// callers can replay this from a host-side persisted log
+    /// without special-casing duplicates.
+    ///
+    /// This **only** persists the tombstone; the in-memory
+    /// [`crypto::forgetting::DekRegistry`] zeroize and the FTS
+    /// purge are separate concerns owned by the FFI runtime and
+    /// [`Self::purge_fts_for_scope`] respectively.
+    pub fn record_forgotten_scope(&mut self, scope_id: ScopeId) -> Result<()> {
+        let now = Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT OR IGNORE INTO forgotten_scopes (scope_id, forgotten_at) VALUES (?1, ?2)",
+            params![scope_id.as_uuid().as_bytes().as_slice(), now],
+        )?;
+        Ok(())
+    }
+
+    /// Load every persisted cryptographic-forgetting tombstone.
+    ///
+    /// The FFI runtime calls this once on `open_store` and replays
+    /// every returned [`ScopeId`] through
+    /// [`crypto::forgetting::destroy_scope_dek`] so that the
+    /// in-memory `DekRegistry` matches the on-disk record. The
+    /// resulting registry is what every `is_scope_forgotten` check
+    /// short-circuits on.
+    ///
+    /// The returned ordering is unspecified; callers must not rely
+    /// on it.
+    pub fn load_forgotten_scopes(&self) -> Result<Vec<ScopeId>> {
+        let mut stmt = self.conn.prepare("SELECT scope_id FROM forgotten_scopes")?;
+        let rows = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let bytes = row?;
+            out.push(ScopeId::from_uuid(slice_to_uuid(&bytes)?));
+        }
+        Ok(out)
+    }
+
+    /// Purge every secondary-index row that retains plaintext for
+    /// `scope_id`.
+    ///
+    /// The `evidence` table itself is append-only (UPDATE / DELETE
+    /// are rejected by triggers in `SCHEMA_SQL`), and the row body
+    /// is keyed off the scope DEK that the FFI runtime already
+    /// destroyed via [`crypto::forgetting::destroy_scope_dek`]. The
+    /// remaining surface that survives DEK destruction is the
+    /// secondary indexes:
+    ///
+    /// * `evidence_fts` — the FTS5 shadow tables retain tokenised
+    ///   *plaintext* of every body, regardless of the row's AEAD
+    ///   key. This is the gap pinned by
+    ///   `crates/evidence_store/tests/forgetting_fts.rs`.
+    /// * `evidence_embeddings` — cached `f32` vectors derived from
+    ///   the plaintext body via an on-device embedding model. They
+    ///   are not strictly plaintext but are still
+    ///   semantically-derivable evidence and so must go.
+    ///
+    /// This method runs a single transaction:
+    ///
+    /// 1. Look up every `evidence_id` belonging to `scope_id`.
+    /// 2. `DELETE FROM evidence_fts WHERE evidence_id IN (...)` —
+    ///    FTS5 supports `DELETE` on the virtual table (it does NOT
+    ///    have the append-only trigger that protects `evidence`).
+    /// 3. `DELETE FROM evidence_embeddings WHERE evidence_id IN (...)`.
+    ///
+    /// The `evidence` rows themselves are intentionally left in
+    /// place — the append-only trigger forbids removing them, and
+    /// without the scope DEK the encrypted bodies in `body_store`
+    /// / inline `evidence.body` are unrecoverable anyway. Hosts
+    /// that need to drop the physical bytes must perform a
+    /// VACUUM-style rebuild at a higher layer.
+    pub fn purge_fts_for_scope(&mut self, scope_id: ScopeId) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        let evidence_ids: Vec<Vec<u8>> = {
+            let mut stmt = tx.prepare("SELECT id FROM evidence WHERE scope_id = ?1")?;
+            let rows = stmt
+                .query_map(params![scope_id.as_uuid().as_bytes().as_slice()], |row| {
+                    row.get::<_, Vec<u8>>(0)
+                })?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            out
+        };
+
+        // Issue the DELETEs in batches so we never build a single
+        // `IN (?, ?, ...)` clause that exceeds SQLite's parameter
+        // cap. `SQLITE_MAX_VARIABLE_NUMBER` is 999 on the default
+        // build; we stay well under it.
+        const BATCH: usize = 256;
+        for chunk in evidence_ids.chunks(BATCH) {
+            let placeholders = (0..chunk.len())
+                .map(|i| format!("?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let fts_sql = format!("DELETE FROM evidence_fts WHERE evidence_id IN ({placeholders})");
+            let emb_sql =
+                format!("DELETE FROM evidence_embeddings WHERE evidence_id IN ({placeholders})");
+            let params: Vec<&dyn rusqlite::ToSql> =
+                chunk.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+            tx.execute(&fts_sql, rusqlite::params_from_iter(params.iter().copied()))?;
+            tx.execute(&emb_sql, rusqlite::params_from_iter(params.iter().copied()))?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Wire an [`EmbeddingModel`] into the store so subsequent
     /// [`Self::ingest`] calls populate the `evidence_embeddings`
     /// cache (Phase B). `model_tag` is stamped on every persisted
@@ -1191,6 +1307,11 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // See `migrate_evidence_embeddings_to_composite_pk` for the
         // shape-detection + table-swap logic.
         3 => migrate_evidence_embeddings_to_composite_pk(conn),
+        // v4 (Phase A.5 Gap 4): add `forgotten_scopes`. Purely
+        // additive; the idempotent `CREATE TABLE IF NOT EXISTS` in
+        // `SCHEMA_SQL` handles both the fresh-DB and forward-port
+        // paths, so this arm is a no-op.
+        4 => Ok(()),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
         )),
