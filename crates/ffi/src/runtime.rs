@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use crypto::forgetting::DekRegistry;
+use crypto::forgetting::{self, DekRegistry};
 use crypto::MasterKey;
 use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
 use memory_manager::{ChannelMemoryObject, UserMemoryObject};
@@ -166,10 +166,36 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
                 message: e.to_string(),
             }
         })?;
+
+    // Phase A.5 Gap 4 — durable cryptographic-forgetting tombstones.
+    // The on-disk `forgotten_scopes` table is the authoritative
+    // record of every scope whose DEK has been destroyed. Replay
+    // it into a fresh in-memory `DekRegistry` so post-restart
+    // calls for those scopes continue to short-circuit with
+    // `NotFound { kind: "scope" }` — the in-memory short-circuit
+    // is what every public `is_scope_forgotten` check reads.
+    let mut registry = DekRegistry::new();
+    let tombstones = store
+        .load_forgotten_scopes()
+        .map_err(|e| FfiError::Evidence {
+            message: e.to_string(),
+        })?;
+    for scope in tombstones {
+        let registry_scope = forgetting::ScopeId(scope.as_uuid());
+        // The return value is the list of `KeyDestructionEvent`s
+        // produced by the destroy call; we intentionally drop it
+        // here. The destruction itself is what re-establishes
+        // the registry invariant, and audit-trail emission for
+        // *re-loaded* tombstones is not required by the spec —
+        // each tombstone was already audited on its original
+        // forget() call.
+        let _ = forgetting::destroy_scope_dek(&mut registry, registry_scope);
+    }
+
     *guard = Some(FfiRuntime {
         master_key,
         store,
-        registry: DekRegistry::new(),
+        registry,
         user_memories: HashMap::new(),
         channel_memories: HashMap::new(),
     });

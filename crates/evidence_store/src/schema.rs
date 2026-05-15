@@ -22,7 +22,11 @@
 ///   destroying them via `INSERT OR REPLACE`. The upgrade is
 ///   destructive (cannot be expressed with `CREATE * IF NOT EXISTS`)
 ///   so the migration is implemented in `apply_migration(3)`.
-pub const SCHEMA_VERSION: i32 = 3;
+/// - v4 (Phase A.5 Gap 4): added `forgotten_scopes` tombstone table
+///   so cryptographic-forgetting tombstones survive process restarts
+///   — the in-memory `DekRegistry` is rebuilt from this table on
+///   `open_store`. Purely additive.
+pub const SCHEMA_VERSION: i32 = 4;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -113,5 +117,23 @@ CREATE TABLE IF NOT EXISTS evidence_embeddings (
     model_tag       TEXT    NOT NULL,
     created_at      INTEGER NOT NULL,
     PRIMARY KEY (evidence_id, model_tag)
+);
+
+-- Phase A.5 (Gap 4) — durable cryptographic-forgetting tombstones.
+-- Each row records that the runtime destroyed the per-scope DEK for
+-- `scope_id` at `forgotten_at` (Unix epoch seconds). The substrate
+-- replays these rows into the in-process `DekRegistry` on every
+-- `open_store` so post-restart calls for the same scope continue
+-- to short-circuit with `NotFound { kind: "scope" }`.
+--
+-- This table is the *only* mutable store of forgetting state. The
+-- `evidence` table itself is append-only — destroying the per-scope
+-- DEK (the unit of forgetting in `docs/DESIGN.md` §3.1) makes its
+-- bodies unrecoverable; the tombstone here makes that decision
+-- durable across process restarts. Re-inserts for an already-
+-- forgotten scope are no-ops by way of `INSERT OR IGNORE`.
+CREATE TABLE IF NOT EXISTS forgotten_scopes (
+    scope_id        BLOB    PRIMARY KEY,
+    forgotten_at    INTEGER NOT NULL
 );
 "#;

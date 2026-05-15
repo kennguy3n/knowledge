@@ -1,24 +1,31 @@
-//! Integration test that surfaces the cryptographic-forgetting gap in
-//! the FTS5 secondary index.
+//! Integration test that pins the cryptographic-forgetting contract
+//! for the FTS5 secondary index.
 //!
-//! Per the docs/DESIGN.md §3.1 / `docs/internal/PROGRESS.md` Phase 0 contract, the
+//! Per `docs/DESIGN.md` §3.1 / `docs/internal/PROGRESS.md` Phase 0, the
 //! substrate promises that "the scope id is the unit of cryptographic
-//! forgetting." In practice the *body* of every evidence row is
-//! encrypted under a scope-derived AEAD key (`scope:{uuid}:body:v1`),
-//! and zeroizing that key plus the per-page SQLCipher key would
-//! render the bodies unrecoverable. **However**, the `evidence_fts`
-//! virtual table (SQLite FTS5) keeps the tokenized **plaintext** of
-//! every ingested body as the index payload — that is how FTS5 works
-//! — so it survives DEK destruction.
+//! forgetting." The **bodies** of every evidence row are encrypted
+//! under a scope-derived AEAD key (`scope:{uuid}:body:v1`), so
+//! destroying that key in [`crypto::forgetting::DekRegistry`] renders
+//! the ciphertexts unrecoverable in this process.
 //!
-//! This test pins that gap into CI so the team cannot accidentally
-//! market the substrate as "cryptographically forgettable" without
-//! also delivering one of the mitigations listed in the TODO at the
-//! bottom of this file. The assertions are stated in the **positive**
-//! form (FTS still finds the term after the in-memory DEK cache is
-//! dropped) precisely so the test stays green while the gap exists
-//! and so a future PR that closes the gap has to explicitly update
-//! this file.
+//! The remaining gap that this test pins is the SQLite **FTS5
+//! secondary index**: the `evidence_fts` virtual table keeps the
+//! tokenised **plaintext** of every ingested body, regardless of the
+//! AEAD key, so the index would survive DEK destruction unless the
+//! runtime explicitly purges it.
+//!
+//! Phase A.5 (Gap 4) closes that gap. The FFI `forget()` path now
+//! calls [`EvidenceStore::purge_fts_for_scope`] after destroying the
+//! scope DEK, deleting every FTS5 row for the scope (and every
+//! `evidence_embeddings` row, which is plaintext-derived in the same
+//! way). The `evidence` table itself stays append-only — its rows
+//! remain on disk but their bodies are now uniquely unrecoverable
+//! through both lanes (ciphertext + plaintext-derived index).
+//!
+//! This test exercises the contract end-to-end against
+//! `EvidenceStore` directly, without going through the FFI runtime,
+//! so the assertions remain valid even if the FFI surface is
+//! refactored.
 
 use evidence_store::{
     EvidenceStore, EvidenceStoreConfig, ImportanceClass, ScopeId, DEFAULT_INLINE_THRESHOLD_BYTES,
@@ -33,15 +40,16 @@ const MASTER_KEY: [u8; 32] = [0xA5; 32];
 const FORGETTING_PHRASE: &str = "xyzzyforgettingtestphrase";
 
 /// Ingest a message containing [`FORGETTING_PHRASE`], confirm FTS5
-/// can find it, then document — via assertions on the raw
-/// `evidence_fts` table — that destroying the scope DEK in memory
-/// does **not** erase the plaintext tokens from the FTS5 index.
+/// can find it, call [`EvidenceStore::purge_fts_for_scope`], and
+/// verify that both the raw FTS5 table and the public
+/// [`EvidenceStore::search_fts`] surface no longer return any hits.
 ///
-/// **Status:** intentional gap. See the TODO at the bottom of the
-/// file for the three mitigation strategies that would actually
-/// deliver cryptographic forgetting for the FTS surface.
+/// Re-opens the store with the same master key between the purge
+/// and the verification step so the test also documents that the
+/// purge is durable across `open_store` / `close_store` cycles
+/// (the on-disk FTS5 row is gone, not merely flushed from a cache).
 #[test]
-fn fts_index_retains_plaintext_after_scope_dek_destruction() {
+fn fts_index_is_purged_after_purge_fts_for_scope() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("evidence.db");
 
@@ -67,30 +75,33 @@ fn fts_index_retains_plaintext_after_scope_dek_destruction() {
             .expect("ingest");
         evidence_id = res.evidence_id;
 
-        // Sanity: FTS5 actually indexed the phrase.
+        // Sanity: FTS5 actually indexed the phrase before the purge.
         let hits = store
             .search_fts(scope, FORGETTING_PHRASE, 10)
-            .expect("search_fts");
-        assert_eq!(hits, vec![evidence_id], "FTS5 must surface the phrase");
-    } // `store` drops here, which zeroizes the master key + cached
-      // scope AEAD keys. This is the closest analogue we currently
-      // have to "destroying the scope DEK" — there is no public
-      // `destroy_scope_dek(scope_id)` API.
+            .expect("search_fts pre-purge");
+        assert_eq!(
+            hits,
+            vec![evidence_id],
+            "FTS5 must surface the phrase before purge_fts_for_scope runs"
+        );
+
+        // The unit of forgetting: zero out the FTS5 / embeddings
+        // payload for the scope. The encrypted body in `evidence`
+        // is untouched — without the scope DEK it is already
+        // unrecoverable.
+        store
+            .purge_fts_for_scope(scope)
+            .expect("purge_fts_for_scope");
+    }
 
     // Re-open the store with the SAME master key so we can probe the
-    // FTS table directly. The master key (and the SQLCipher page
-    // key it derives) is *not* the unit being destroyed in a
-    // hypothetical per-scope forgetting flow, so leaving it intact
-    // is the realistic worst case.
+    // FTS table directly after the purge. If purge_fts_for_scope
+    // had only flushed an in-memory cache, the on-disk FTS5 shadow
+    // tables would still match the term and the assertion below
+    // would fail.
     let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
         .expect("re-open store");
 
-    // The body AEAD is keyed off `scope:{uuid}:body:v1` which is
-    // re-derived from the master key on demand, so to simulate "the
-    // scope DEK is gone" we never call `read_body` here. Instead we
-    // probe the FTS5 index by raw SQL — this is what an attacker
-    // (or a confused operator) would see after deleting the scope
-    // metadata but leaving the database file behind.
     let raw_term_count: i64 = store
         .raw_conn()
         .query_row(
@@ -100,50 +111,88 @@ fn fts_index_retains_plaintext_after_scope_dek_destruction() {
         )
         .expect("count fts rows");
     assert_eq!(
-        raw_term_count, 1,
-        "FTS5 index still contains the plaintext phrase after dropping \
-         the in-memory scope DEK cache — this is the cryptographic-\
-         forgetting gap the TODO below tracks."
+        raw_term_count, 0,
+        "FTS5 index must not contain any rows for the forgotten scope after purge_fts_for_scope"
     );
 
     // Public API mirrors the raw probe.
     let hits = store
         .search_fts(scope, FORGETTING_PHRASE, 10)
-        .expect("search_fts after re-open");
-    assert_eq!(
-        hits,
-        vec![evidence_id],
-        "search_fts must still hit the phrase: the FTS5 index was not \
-         re-keyed or rebuilt when the scope DEK was destroyed."
+        .expect("search_fts post-purge");
+    assert!(
+        hits.is_empty(),
+        "search_fts must return no rows for a forgotten scope after purge_fts_for_scope: {hits:?}"
+    );
+
+    // The `evidence` row itself is still on disk — `evidence` is
+    // append-only and the body is encrypted under a scope DEK that
+    // no longer exists in memory, so the row's persistence is
+    // harmless. We only want to verify that the row was not
+    // accidentally deleted along with the FTS rows.
+    let row = store.get(evidence_id).expect("get evidence row");
+    assert!(
+        row.is_some(),
+        "purge_fts_for_scope must not delete from the append-only evidence table"
     );
 }
 
-// TODO(security/Phase 7 forgetting): close the FTS5 cryptographic-
-// forgetting gap pinned by `fts_index_retains_plaintext_after_scope_dek_destruction`
-// above. Three viable mitigations, any one of which would let us flip
-// that test from "FTS5 still finds the phrase" to "FTS5 no longer
-// finds the phrase":
-//
-//   1. **Rebuild the FTS table after key destruction.** When the
-//      caller invokes a future `destroy_scope_dek(scope_id)` API,
-//      `DELETE FROM evidence_fts WHERE scope_id = ?` and rebuild
-//      the FTS5 index from the remaining (still-decryptable) rows.
-//      Simple, but linear in the number of remaining rows.
-//
-//   2. **Encrypt FTS terms separately.** Use a per-scope token
-//      encryption scheme (e.g. deterministic AES on token hashes
-//      using the scope DEK) so that destroying the scope DEK makes
-//      the FTS payload unsearchable. Trade-off: deterministic token
-//      encryption leaks token frequency.
-//
-//   3. **Destroy the entire database key.** SQLCipher protects every
-//      page (including the FTS5 shadow tables) with a single page
-//      key derived from the master key. Zeroizing the master key
-//      and rotating to a new SQLCipher database renders the *whole*
-//      store — bodies, metadata, AND FTS index — unrecoverable.
-//      Coarse-grained but bullet-proof.
-//
-// Until one of those lands, `docs/internal/PROGRESS.md` (Phase 0 forgetting line)
-// and `docs/internal/MODULE_STATUS.md` ("Known security debt") must continue
-// to call this gap out explicitly so consumers do not rely on
-// per-scope cryptographic forgetting that does not yet exist.
+/// Ingest two evidence rows in two *different* scopes, then call
+/// `purge_fts_for_scope` for one of them. The FTS5 row for the
+/// untouched scope must remain searchable — the purge is strictly
+/// per-scope and must not accidentally drop rows for sibling scopes.
+#[test]
+fn purge_fts_for_scope_only_purges_target_scope() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    let scope_a = ScopeId::new_v4();
+    let scope_b = ScopeId::new_v4();
+    let body_a = format!("scope-a body with {FORGETTING_PHRASE}");
+    let body_b = format!("scope-b body with {FORGETTING_PHRASE}");
+
+    let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("open store");
+
+    let res_a = store
+        .ingest(
+            scope_a,
+            body_a.as_bytes(),
+            Some("a"),
+            ImportanceClass::Important,
+        )
+        .expect("ingest a");
+    let res_b = store
+        .ingest(
+            scope_b,
+            body_b.as_bytes(),
+            Some("b"),
+            ImportanceClass::Important,
+        )
+        .expect("ingest b");
+
+    store
+        .purge_fts_for_scope(scope_a)
+        .expect("purge scope a only");
+
+    let hits_a = store
+        .search_fts(scope_a, FORGETTING_PHRASE, 10)
+        .expect("search a");
+    assert!(
+        hits_a.is_empty(),
+        "purged scope must have no FTS hits: {hits_a:?}"
+    );
+
+    let hits_b = store
+        .search_fts(scope_b, FORGETTING_PHRASE, 10)
+        .expect("search b");
+    assert_eq!(
+        hits_b,
+        vec![res_b.evidence_id],
+        "untouched scope must still be searchable after a sibling scope is purged"
+    );
+
+    // Sanity: the evidence rows themselves are append-only and
+    // remain on disk in both scopes.
+    assert!(store.get(res_a.evidence_id).expect("get a").is_some());
+    assert!(store.get(res_b.evidence_id).expect("get b").is_some());
+}
