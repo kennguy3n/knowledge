@@ -389,7 +389,24 @@ mod ort_runtime_impl {
     }
 
     impl OnnxRuntime for OrtOnnxRuntime {
+        /// Single-shot loader: once an [`OrtOnnxRuntime`] has been
+        /// populated, subsequent `load()` calls are rejected up-front
+        /// rather than silently discarding fresh work. `OnceLock` only
+        /// allows a single successful `set` call, so the previous
+        /// implementation paid the full cost of building a Session and
+        /// reading the tokenizer JSON from disk before throwing the
+        /// result away on `set` error. Callers that need to swap
+        /// models must construct a new `OrtOnnxRuntime` instance.
         fn load(&self, path: &str) -> Result<()> {
+            if self.session.get().is_some() || self.tokenizer.get().is_some() {
+                return Err(EmbeddingError::ModelLoad {
+                    path: path.into(),
+                    reason: "OrtOnnxRuntime is single-shot; construct a new instance to load \
+                             a different model"
+                        .into(),
+                });
+            }
+
             let builder = Session::builder().map_err(|e| EmbeddingError::ModelLoad {
                 path: path.into(),
                 reason: format!("Session::builder failed: {e}"),
@@ -401,7 +418,6 @@ mod ort_runtime_impl {
                         path: path.into(),
                         reason: format!("commit_from_file failed: {e}"),
                     })?;
-            let _ = self.session.set(Mutex::new(session));
 
             let tokenizer_path = self.resolve_tokenizer_path(path);
             let tokenizer =
@@ -409,7 +425,24 @@ mod ort_runtime_impl {
                     path: tokenizer_path.clone(),
                     reason: format!("Tokenizer::from_file failed: {e}"),
                 })?;
-            let _ = self.tokenizer.set(tokenizer);
+
+            // The guard above means `set` cannot logically fail here
+            // outside of a concurrent racing `load()`. If two threads
+            // do race, the second loser surfaces the same error as a
+            // serialised second call — predictable rather than
+            // silently winning.
+            self.session
+                .set(Mutex::new(session))
+                .map_err(|_| EmbeddingError::ModelLoad {
+                    path: path.into(),
+                    reason: "concurrent OrtOnnxRuntime::load lost the session race".into(),
+                })?;
+            self.tokenizer
+                .set(tokenizer)
+                .map_err(|_| EmbeddingError::ModelLoad {
+                    path: path.into(),
+                    reason: "concurrent OrtOnnxRuntime::load lost the tokenizer race".into(),
+                })?;
             Ok(())
         }
 
@@ -826,7 +859,14 @@ mod ort_runtime_tests {
     // NOTE: A live `load → run` round-trip against a real `.onnx`
     // fixture is *intentionally* omitted from this in-crate suite. It
     // would require both the `libonnxruntime` dylib on the test host
-    // (the `load-dynamic` feature of `ort` panics when it is absent)
-    // and a checked-in model file. The Phase D integration suite
-    // covers that path against a downloaded fixture.
+    // (the `load-dynamic` feature of `ort` panics — not errors — when
+    // it is absent, see `run_before_load_does_not_panic_when_dylib_missing`
+    // for the workaround) and a checked-in model file. The Phase D
+    // integration suite covers that path against a downloaded
+    // fixture. That same suite is the right place to assert the
+    // *successful* single-shot contract added in Phase B (a second
+    // successful `load()` returns `ModelLoad` with the "single-shot"
+    // reason rather than silently discarding a fresh Session and
+    // Tokenizer), because verifying it from a unit test would require
+    // an in-process ONNX model fixture and the dylib loaded.
 }
