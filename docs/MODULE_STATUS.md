@@ -51,21 +51,40 @@ without worrying about Unicode glyphs in their terminal font.
 
 ## Feature-gating contract
 
-Two cargo features track the mock/stub split:
+Three cargo features track the mock/stub split:
 
 * `crypto/test-support` — exposes `StubKemBackend`, `TestSigner`,
   `TEST_SIGNER_KEY_LEN`.
 * `synthesis_pipeline/test-support` — exposes `NoOpSynthesizer`.
 * `synthesis_engine/test-support` — exposes `MockTeeRuntime`.
 
-These are *always* enabled under `cfg(test)`, so unit and integration
-tests in the gated crates compile without the consumer turning the
-feature on. Downstream crates (`evidence_store/tests/`,
-`synthesis_engine/tests/`, `demo`) that need the gated types from
-*another* crate enable that crate's `test-support` feature explicitly
-in `[dev-dependencies]` or in their own `[dependencies]` block; this
-keeps the workspace `cargo build` (no features) free of mock types in
-the lib output.
+**Important Cargo build-model detail:** `cfg(test)` is only set on the
+crate being compiled *as a test target* (unit tests inside `src/` or
+the integration-test binary itself). It is **not** set on library
+dependencies of the test binary. This means an integration test in
+`crates/crypto/tests/provenance.rs` that imports `TestSigner` from the
+`crypto` library will fail unless the library is compiled with
+`feature = "test-support"`.
+
+To handle this, each crate that has integration tests using its own
+gated types carries a **self-referential dev-dependency** that enables
+the feature during `cargo test`:
+
+```toml
+# crates/crypto/Cargo.toml
+[dev-dependencies]
+crypto = { path = ".", features = ["test-support"] }
+```
+
+This is the same pattern used by `tokio`, `serde`, and `clap`. It
+ensures that `cargo test -p crypto` (without `--all-features`) compiles
+correctly.
+
+Downstream crates (`evidence_store/tests/`, `synthesis_engine/tests/`,
+`demo`) that need gated types from *another* crate enable that crate's
+`test-support` feature explicitly in their `[dev-dependencies]` or
+`[dependencies]` block; this keeps the workspace `cargo build` (no
+features) free of mock types in the lib output.
 
 `cargo test --all --all-features` (the CI command) activates every
 `test-support` feature in the workspace via cargo's feature
