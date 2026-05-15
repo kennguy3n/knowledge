@@ -14,10 +14,17 @@ default = []
 # default `cargo build` artifacts so production binaries do not ship
 # the no-op synthesizer.
 test-support = []
+# Propagates `inference_router`'s `http-client` feature so the real
+# `HttpLlamaServerClient` is reachable from the integration test
+# (`tests/llama_cpp_integration.rs`). The test itself is also gated
+# on the `LLAMA_SERVER_BINARY` / `LLAMA_SERVER_MODEL` env vars so it
+# becomes a no-op when those are not set (e.g. default CI).
+http-client = ["inference_router/http-client"]
 
 [dependencies]
 crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }
+inference_router = { path = "../inference_router" }
 memory_manager = { path = "../memory_manager" }
 
 thiserror = { workspace = true }

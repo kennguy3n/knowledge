@@ -530,8 +530,11 @@ impl EvidenceStore {
         // Best-effort write. See the doc-comment above for the
         // rationale — propagating this error would abort the
         // `ingest_*` transaction and lose the evidence row over a
-        // cache-table hiccup.
-        let _ = tx.execute(
+        // cache-table hiccup. We log on `Err` so operators running
+        // with `RUST_LOG=evidence_store=debug` can spot a degraded
+        // cache (out-of-disk, schema drift, SQLite I/O hiccup)
+        // instead of having the failure stay completely invisible.
+        if let Err(err) = tx.execute(
             "INSERT OR REPLACE INTO evidence_embeddings
                  (evidence_id, embedding, model_tag, created_at)
              VALUES (?1, ?2, ?3, ?4)",
@@ -541,7 +544,14 @@ impl EvidenceStore {
                 model_tag,
                 created_at,
             ],
-        );
+        ) {
+            tracing::debug!(
+                evidence_id = %evidence_id.as_uuid(),
+                model_tag,
+                error = %err,
+                "evidence_embeddings INSERT swallowed; the row is still recoverable via FTS + the retriever re-embed fallback",
+            );
+        }
     }
 
     /// Body-table variant of [`Self::index_embedding`] that takes
@@ -593,7 +603,11 @@ impl EvidenceStore {
 
         if let Some(bytes) = copied {
             // Same content + same model ⇒ identical vector. Reuse.
-            let _ = tx.execute(
+            // Same swallow-and-log discipline as `index_embedding`:
+            // the cache row is non-load-bearing data so an INSERT
+            // failure must not abort the surrounding transaction,
+            // but it should at least show up under `RUST_LOG=debug`.
+            if let Err(err) = tx.execute(
                 "INSERT OR REPLACE INTO evidence_embeddings
                      (evidence_id, embedding, model_tag, created_at)
                  VALUES (?1, ?2, ?3, ?4)",
@@ -603,7 +617,14 @@ impl EvidenceStore {
                     model_tag,
                     created_at,
                 ],
-            );
+            ) {
+                tracing::debug!(
+                    evidence_id = %evidence_id.as_uuid(),
+                    model_tag,
+                    error = %err,
+                    "evidence_embeddings dedup-copy INSERT swallowed; the row is still recoverable via FTS + the retriever re-embed fallback",
+                );
+            }
             return;
         }
 
