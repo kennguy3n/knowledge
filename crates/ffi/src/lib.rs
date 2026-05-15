@@ -1480,4 +1480,118 @@ mod tests {
         }
         teardown();
     }
+
+    /// Phase A.5 (Gap 4 follow-up) — the FFI `forget()` path persists
+    /// the tombstone *before* purging the FTS5 / embedding indexes.
+    /// If the process crashes between those two steps the tombstone
+    /// survives but the plaintext FTS terms persist on disk. Re-opening
+    /// the store must re-run the per-scope FTS purge so the
+    /// cryptographic-forgetting contract holds across crashes.
+    ///
+    /// We simulate the crash by writing the tombstone directly via the
+    /// store handle (the public `forget()` would also purge FTS) and
+    /// then closing / reopening through the FFI.
+    #[test]
+    fn open_store_repurges_fts_for_persisted_tombstones() {
+        const PHRASE: &str = "openstoreftsrepurgeregressionphrase";
+
+        let _g = test_lock();
+        let _ = close_store();
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let key_hex = "a5".repeat(32);
+        let scope_str = uuid::Uuid::new_v4().to_string();
+
+        open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open_store");
+
+        let evidence_id = ingest_message(scope_str.clone(), PHRASE.into(), SourceKind::Manual)
+            .expect("ingest_message");
+        assert!(!evidence_id.is_empty());
+
+        // Sanity: FTS5 surfaces the phrase before any forgetting.
+        let hits = query(scope_str.clone(), PHRASE.into(), 10).expect("query pre-forget");
+        assert_eq!(hits.len(), 1, "FTS5 must surface the seeded phrase");
+
+        // Simulate the crash window: persist the tombstone *without*
+        // running `purge_fts_for_scope`. The public `forget()` would
+        // do both — we reach into the store directly to model a crash
+        // between steps 2 and 3.
+        runtime::with_runtime(|rt| {
+            let scope = parse_scope_id(&scope_str)?;
+            rt.store_mut()
+                .record_forgotten_scope(scope)
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            Ok(())
+        })
+        .expect("seed tombstone without FTS purge");
+
+        // Verify the crash state: the FTS index still contains the
+        // phrase even though the tombstone is now on disk. This is
+        // the security gap the re-purge closes.
+        runtime::with_runtime(|rt| {
+            let scope = parse_scope_id(&scope_str)?;
+            let raw_term_count: i64 = rt
+                .store()
+                .raw_conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1 AND scope_id = ?2",
+                    rusqlite::params![PHRASE, scope.as_uuid().as_bytes().as_slice()],
+                    |row| row.get(0),
+                )
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            assert_eq!(
+                raw_term_count, 1,
+                "pre-condition: FTS row must survive a tombstone-only forget so the test exercises the re-purge"
+            );
+            Ok(())
+        })
+        .expect("probe pre-reopen fts");
+
+        // Restart cycle. The next `open_store` is where the re-purge
+        // runs.
+        close_store().expect("close_store");
+        open_store(path.to_string_lossy().into_owned(), key_hex).expect("re-open_store");
+
+        // After the re-purge, the raw FTS5 shadow tables must
+        // contain no rows for the forgotten scope. We probe the raw
+        // table directly so a future `search_fts` short-circuit on
+        // the forgotten scope cannot hide a missing on-disk
+        // delete.
+        runtime::with_runtime(|rt| {
+            let scope = parse_scope_id(&scope_str)?;
+            let raw_term_count: i64 = rt
+                .store()
+                .raw_conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1 AND scope_id = ?2",
+                    rusqlite::params![PHRASE, scope.as_uuid().as_bytes().as_slice()],
+                    |row| row.get(0),
+                )
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            assert_eq!(
+                raw_term_count, 0,
+                "open_store must re-purge FTS rows for every persisted tombstone"
+            );
+            Ok(())
+        })
+        .expect("probe post-reopen fts");
+
+        // Public query surface mirrors the raw probe — the canonical
+        // host-visible signal that the cryptographic-forgetting
+        // contract is now intact across crashes.
+        let hits_after = query(scope_str.clone(), PHRASE.into(), 10).expect("query post-reopen");
+        assert!(
+            hits_after.is_empty(),
+            "post-reopen query must return no rows for the previously-tombstoned scope"
+        );
+
+        teardown();
+    }
 }

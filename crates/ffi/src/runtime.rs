@@ -182,11 +182,9 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
             message: "evidence store is already open; call close_store first".into(),
         });
     }
-    let store =
-        EvidenceStore::open(&path, &master_key, EvidenceStoreConfig::default()).map_err(|e| {
-            FfiError::Evidence {
-                message: e.to_string(),
-            }
+    let mut store = EvidenceStore::open(&path, &master_key, EvidenceStoreConfig::default())
+        .map_err(|e| FfiError::Evidence {
+            message: e.to_string(),
         })?;
 
     // Phase A.5 Gap 4 — durable cryptographic-forgetting tombstones.
@@ -202,7 +200,7 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
         .map_err(|e| FfiError::Evidence {
             message: e.to_string(),
         })?;
-    for scope in tombstones {
+    for scope in &tombstones {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
         // The return value is the list of `KeyDestructionEvent`s
         // produced by the destroy call; we intentionally drop it
@@ -212,6 +210,34 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
         // each tombstone was already audited on its original
         // forget() call.
         let _ = forgetting::destroy_scope_dek(&mut registry, registry_scope);
+    }
+
+    // Phase A.5 Gap 4 follow-up — re-purge the FTS5 / embedding
+    // secondary indexes for every replayed tombstone.
+    //
+    // `forget()` performs three steps in order: (1) destroy the
+    // in-memory DEK, (2) persist the tombstone via
+    // `record_forgotten_scope`, (3) purge the FTS / embedding rows
+    // via `purge_fts_for_scope`. If the process crashes between
+    // steps 2 and 3, the tombstone survives but the plaintext-
+    // derived FTS terms persist on disk indefinitely — accessible
+    // via raw SQLite without the per-scope DEK and so escaping the
+    // cryptographic-forgetting contract. Re-running the purge on
+    // every `open_store` closes that window. The purge is
+    // idempotent: dropping already-deleted FTS rows is a no-op.
+    //
+    // A purge failure here surfaces as an `Evidence` error rather
+    // than being swallowed — mirroring the `forget()` path's
+    // error handling and matching what `record_forgotten_scope`
+    // already does for the same conditions. A host that hits this
+    // path on startup has a corrupt or unreadable secondary index
+    // and needs to know about it.
+    for scope in &tombstones {
+        store
+            .purge_fts_for_scope(*scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
     }
 
     *guard = Some(FfiRuntime {
