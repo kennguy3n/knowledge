@@ -27,18 +27,25 @@
 //! consumed by the ML-DSA-65 signer in Phase 7.
 
 use chrono::{DateTime, Utc};
+#[cfg(any(test, feature = "test-support"))]
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+#[cfg(any(test, feature = "test-support"))]
 use sha2::Sha256;
 use uuid::Uuid;
 
 use crate::errors::CryptoError;
 
+#[cfg(any(test, feature = "test-support"))]
 type HmacSha256 = Hmac<Sha256>;
 
 /// Length of the [`TestSigner`] HMAC key (matches the underlying
 /// SHA-256 block size; HMAC accepts arbitrary lengths but a 32-byte
 /// key is the substrate's standard symmetric-key size).
+///
+/// Gated behind `#[cfg(any(test, feature = "test-support"))]`
+/// alongside [`TestSigner`].
+#[cfg(any(test, feature = "test-support"))]
 pub const TEST_SIGNER_KEY_LEN: usize = 32;
 
 /// Reference to one evidence row that a provenance bundle was derived
@@ -241,11 +248,17 @@ pub trait ProvenanceSigner {
 /// **Not post-quantum, not for production.** This exists so the
 /// [`ProvenanceSigner`] trait can be exercised by tests and callers
 /// can wire the integration surface before Phase 7 lands ML-DSA-65.
+///
+/// Gated behind `#[cfg(any(test, feature = "test-support"))]` so it
+/// does not ship in default `cargo build` artifacts. Real production
+/// signers live behind [`crate::signer_backend`].
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone)]
 pub struct TestSigner {
     key: [u8; TEST_SIGNER_KEY_LEN],
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl TestSigner {
     /// Construct a test signer from a fixed key.
     pub fn new(key: [u8; TEST_SIGNER_KEY_LEN]) -> Self {
@@ -259,6 +272,7 @@ impl TestSigner {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl ProvenanceSigner for TestSigner {
     fn sign(&self, bundle: ProvenanceBundle) -> Result<SignedBundle, CryptoError> {
         let canonical = bundle.canonical_bytes()?;

@@ -148,9 +148,14 @@ impl KemBackend for MlKem768Backend {
 /// Outputs are well-typed but **not** cryptographically meaningful —
 /// shared secrets are derived purely from a BLAKE3 digest of the public
 /// key and ciphertext. Never use this in production.
+///
+/// Gated behind `#[cfg(any(test, feature = "test-support"))]` so it does
+/// not ship in default `cargo build` artifacts.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StubKemBackend;
 
+#[cfg(any(test, feature = "test-support"))]
 impl KemBackend for StubKemBackend {
     fn keypair(&self) -> Result<(KemPublicKey, KemSecretKey), CryptoError> {
         use rand::RngCore;
@@ -190,6 +195,7 @@ impl KemBackend for StubKemBackend {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn stub_shared_secret(pk: &KemPublicKey, ct: &KemCiphertext) -> KemSharedSecret {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"knowledge-stub-kem-v1");

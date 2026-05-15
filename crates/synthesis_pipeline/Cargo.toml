@@ -7,6 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# Enables `NoOpSynthesizer` — a deterministic no-op implementation of
+# the `SynthesisPipeline` trait used by tests and demos. Gated out of
+# default `cargo build` artifacts so production binaries do not ship
+# the no-op synthesizer.
+test-support = []
+
 [dependencies]
 crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }
@@ -18,6 +26,15 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rand = { workspace = true }
+
+[dev-dependencies]
+# Self-referential dev-dep: enables the `test-support` feature when
+# compiling integration tests under `tests/`. Cargo's `cfg(test)` flag
+# is only set on the test binary, NOT on the library it links against,
+# so without this override `cargo test -p synthesis_pipeline` would
+# fail to resolve `NoOpSynthesizer` in the integration test crates.
+# This is the same pattern tokio / serde use.
+synthesis_pipeline = { path = ".", features = ["test-support"] }
 
 [lints]
 workspace = true

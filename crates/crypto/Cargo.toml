@@ -7,6 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# Enables `StubKemBackend`, `TestSigner`, and `TEST_SIGNER_KEY_LEN`.
+# These are mock implementations of `KemBackend` / `ProvenanceSigner`
+# used by tests, benches, and demos. They are gated out of default
+# builds so production binaries do not ship them.
+test-support = []
+
 [dependencies]
 blake3 = { workspace = true }
 chacha20poly1305 = { workspace = true }
@@ -28,6 +36,13 @@ rand = { workspace = true }
 [dev-dependencies]
 blake3 = { workspace = true }
 serde_json = { workspace = true }
+# Self-referential dev-dep: enables the `test-support` feature when
+# compiling integration tests under `tests/`. Cargo's `cfg(test)` flag
+# is only set on the test binary, NOT on the library it links against,
+# so without this override `cargo test -p crypto` would fail to resolve
+# `TestSigner` / `TEST_SIGNER_KEY_LEN` / `StubKemBackend` in the
+# integration test crates. This is the same pattern tokio / serde use.
+crypto = { path = ".", features = ["test-support"] }
 
 [lints]
 workspace = true

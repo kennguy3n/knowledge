@@ -53,7 +53,9 @@ pub use hierarchy::{
     HierarchyEnforcedWindowManager, TenantSynthesisInput, TieredWindowHandle, WindowScopeTier,
 };
 pub use object::{ObjectId, SynthesisObject, SynthesisObjectType};
-pub use pipeline::{NoOpSynthesizer, SynthesisInputs, SynthesisPipeline};
+#[cfg(any(test, feature = "test-support"))]
+pub use pipeline::NoOpSynthesizer;
+pub use pipeline::{SynthesisInputs, SynthesisPipeline};
 pub use publish::{consume_synthesis_object, publish_synthesis_object, EncryptedSynthesisObject};
 pub use schema::{
     EntityList, EntityRecord, EntityType, ImportanceTag, ImportanceTagClass, ObservationRow,

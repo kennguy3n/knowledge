@@ -7,6 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# Enables `MockTeeRuntime` — a deterministic mock implementation of
+# the `TeeRuntime` trait used by tests and demos. Gated out of
+# default `cargo build` artifacts so production binaries do not ship
+# the mock TEE runtime.
+test-support = []
+
 [dependencies]
 crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }
@@ -24,6 +32,15 @@ concept_graph = { path = "../concept_graph" }
 permission_service = { path = "../permission_service" }
 audit_service = { path = "../audit_service" }
 tempfile = { workspace = true }
+# Integration tests under `tests/` drive the engine end-to-end using
+# `synthesis_pipeline::NoOpSynthesizer` and `crypto::TestSigner` /
+# `crypto::TEST_SIGNER_KEY_LEN`. Enable the `test-support` feature on
+# both crates so the gated mock types are visible while compiling the
+# test binaries. (cfg(test) on the test binary does NOT propagate to
+# library dependencies — only `--all-features` or explicit feature
+# overrides activate the gates.)
+synthesis_pipeline = { path = "../synthesis_pipeline", features = ["test-support"] }
+crypto = { path = "../crypto", features = ["test-support"] }
 
 [lints]
 workspace = true
