@@ -331,12 +331,14 @@ mod tests {
     }
 
     #[test]
-    fn pin_unpin_forward_unimplemented_from_ffi() {
-        // pin / unpin remain Unimplemented until the memory-manager
-        // surface is wired through the runtime (Phase B).
+    fn pin_unpin_forward_invalid_id_for_malformed_id() {
+        // `pin` / `unpin` validate the id as a UUID before walking
+        // the memory layer, so malformed strings surface as
+        // structured `InvalidId` rather than panicking through the
+        // FFI bridge.
         for f in [pin, unpin] {
             let err = f("id".into()).unwrap_err();
-            assert_eq!(err.kind(), "Unimplemented");
+            assert_eq!(err.kind(), "InvalidId");
         }
     }
 
@@ -350,7 +352,10 @@ mod tests {
     }
 
     #[test]
-    fn list_memories_forwards_unimplemented_from_ffi() {
+    fn list_memories_forwards_invalid_id_for_malformed_scope() {
+        // `list_memories` is wired in Phase A.5 — the surface
+        // validates the scope id is a UUID before reaching the
+        // memory layer.
         let err = list_memories(
             "scope".into(),
             MemoryFilter {
@@ -359,20 +364,23 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert_eq!(err.kind(), "Unimplemented");
+        assert_eq!(err.kind(), "InvalidId");
     }
 
     #[test]
-    fn synthesis_endpoints_forward_unimplemented_from_ffi() {
+    fn synthesis_endpoints_forward_invalid_id_for_malformed_scope() {
+        // `get_channel_memory` is wired; `trigger_synthesis` parses
+        // the scope id before returning the Phase-A.5 `Unavailable`
+        // marker. Both should report InvalidId for a malformed id.
         assert_eq!(
             get_channel_memory("scope".into()).unwrap_err().kind(),
-            "Unimplemented"
+            "InvalidId"
         );
         assert_eq!(
             trigger_synthesis("scope".into(), SynthesisTrigger::ManualUserAction)
                 .unwrap_err()
                 .kind(),
-            "Unimplemented"
+            "InvalidId"
         );
     }
 

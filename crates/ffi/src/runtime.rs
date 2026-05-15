@@ -20,11 +20,13 @@
 //! finer-grained concurrency (e.g. multi-shard ingest), this is the
 //! single seam to replace.
 
+use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crypto::forgetting::{self, DekRegistry};
 use crypto::MasterKey;
-use evidence_store::{EvidenceStore, EvidenceStoreConfig};
+use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
+use memory_manager::{ChannelMemoryObject, UserMemoryObject};
 use zeroize::Zeroize;
 
 use crate::error::{FfiError, FfiResult};
@@ -43,6 +45,13 @@ pub struct FfiRuntime {
     pub(crate) master_key: MasterKey,
     pub(crate) store: EvidenceStore,
     pub(crate) registry: DekRegistry,
+    /// Per-scope user-memory CRUD layer. Phase A.5 keeps this in
+    /// process memory only — persistence to the encrypted evidence
+    /// plane lands with Phase 2.
+    pub(crate) user_memories: HashMap<ScopeId, UserMemoryObject>,
+    /// Per-scope channel-memory recap home. Phase A.5 also keeps
+    /// this in process memory only.
+    pub(crate) channel_memories: HashMap<ScopeId, ChannelMemoryObject>,
 }
 
 impl Drop for FfiRuntime {
@@ -76,6 +85,29 @@ impl FfiRuntime {
     /// cannot leak it across the FFI boundary.
     pub(crate) fn master_key(&self) -> &MasterKey {
         &self.master_key
+    }
+
+    /// Borrow the per-scope user memory, creating an empty one if it
+    /// does not yet exist. The runtime treats `scope_id` as the
+    /// owning user id for now (Phase A.5 has no separate user-id
+    /// surface); Phase 2 will make this a separate handle.
+    pub(crate) fn user_memory_mut(&mut self, scope: ScopeId) -> &mut UserMemoryObject {
+        self.user_memories
+            .entry(scope)
+            .or_insert_with(|| UserMemoryObject::new(scope.as_uuid(), scope))
+    }
+
+    /// Borrow the per-scope channel memory, if one exists.
+    pub(crate) fn channel_memory(&self, scope: ScopeId) -> Option<&ChannelMemoryObject> {
+        self.channel_memories.get(&scope)
+    }
+
+    /// Borrow the per-scope channel memory, creating an empty one if
+    /// it does not yet exist.
+    pub(crate) fn channel_memory_mut(&mut self, scope: ScopeId) -> &mut ChannelMemoryObject {
+        self.channel_memories
+            .entry(scope)
+            .or_insert_with(|| ChannelMemoryObject::new(scope))
     }
 }
 
@@ -164,6 +196,8 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
         master_key,
         store,
         registry,
+        user_memories: HashMap::new(),
+        channel_memories: HashMap::new(),
     });
     Ok(())
 }

@@ -50,23 +50,6 @@ fn fresh_store() -> TempDir {
     dir
 }
 
-/// Convenience: assert the error is `Unimplemented` and that its
-/// `method` field matches the call-site name. The wire contract
-/// guarantees the method tag is the Rust function name verbatim — a
-/// host watchdog can switch on it to surface "this surface is not
-/// available in your runtime build" cleanly.
-fn assert_unimplemented(err: FfiError, expected_method: &str) {
-    match err {
-        FfiError::Unimplemented { method } => {
-            assert_eq!(
-                method, expected_method,
-                "Unimplemented method tag drifted: got {method:?}, expected {expected_method:?}"
-            );
-        }
-        other => panic!("expected FfiError::Unimplemented, got {other:?}"),
-    }
-}
-
 // ─────────────────────────── Surface coverage ───────────────────────
 
 /// Evidence-store wiring is end-to-end live as of Phase A. This test
@@ -111,47 +94,67 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
     close_store().expect("close_store");
 }
 
-/// Memory-manager surfaces are still pending Phase B wiring. This
-/// test pins the `Unimplemented` contract so hosts that already
-/// switch on `method` continue to work, and so a future PR that
-/// wires up the surface has to update the test deliberately.
+/// Memory-manager surfaces are wired through to the in-process
+/// `UserMemoryObject` CRUD layer as of Phase A.5. This integration
+/// test exercises the **empty-state** contract every host depends
+/// on: a fresh scope must return empty bundles (not `Unimplemented`
+/// and not error), so callers can render an empty memory pane
+/// without special-casing the runtime version.
 #[test]
-fn memory_surface_returns_unimplemented_with_stable_method_tags() {
+fn memory_surface_returns_empty_for_fresh_scope() {
     let _g = singleton_lock();
     let _dir = fresh_store();
 
-    assert_unimplemented(
-        get_user_memory(SCOPE.into()).unwrap_err(),
-        "get_user_memory",
-    );
-    assert_unimplemented(pin(SCOPE.into()).unwrap_err(), "pin");
-    assert_unimplemented(unpin(SCOPE.into()).unwrap_err(), "unpin");
-    assert_unimplemented(
-        list_memories(SCOPE.into(), MemoryFilter::default()).unwrap_err(),
-        "list_memories",
-    );
-    assert_unimplemented(
-        run_decay_sweep(SCOPE.into()).unwrap_err(),
-        "run_decay_sweep",
-    );
+    let scope = uuid::Uuid::new_v4().to_string();
+    let bundle = get_user_memory(scope.clone()).expect("get_user_memory");
+    assert!(bundle.is_empty(), "fresh scope must have no memory rows");
+
+    let listed = list_memories(scope.clone(), MemoryFilter::default()).expect("list_memories");
+    assert!(listed.is_empty(), "fresh scope must have no memory rows");
+
+    let sweep = run_decay_sweep(scope.clone()).expect("run_decay_sweep");
+    assert_eq!(sweep, 0, "fresh scope sweep must transition nothing");
+
+    // `pin` / `unpin` on a random id should report a structured
+    // NotFound — this is the contract hosts switch on when the user
+    // attempts to pin a row that the server-side memory layer has
+    // already evicted.
+    let bogus = uuid::Uuid::new_v4().to_string();
+    match pin(bogus.clone()) {
+        Err(FfiError::NotFound { kind, .. }) => assert_eq!(kind, "memory"),
+        other => panic!("expected NotFound for unknown pin id, got {other:?}"),
+    }
+    match unpin(bogus) {
+        Err(FfiError::NotFound { kind, .. }) => assert_eq!(kind, "memory"),
+        other => panic!("expected NotFound for unknown unpin id, got {other:?}"),
+    }
 
     close_store().expect("close_store");
 }
 
-/// Synthesis-pipeline surfaces are still pending Phase C wiring.
+/// Synthesis-pipeline surfaces are partially wired: the recap
+/// fetcher returns `None` until a real synthesis has run, and
+/// `trigger_synthesis` returns `Unavailable { subsystem: "synthesis" }`
+/// until the on-device SLM router is wired through (Phase C). The
+/// stable method-string contract for `Unimplemented` is gone — hosts
+/// now switch on `kind` instead, so this test pins the new
+/// `Unavailable` shape.
 #[test]
-fn synthesis_surface_returns_unimplemented_with_stable_method_tags() {
+fn synthesis_surface_returns_stable_partial_implementation() {
     let _g = singleton_lock();
     let _dir = fresh_store();
 
-    assert_unimplemented(
-        get_channel_memory(SCOPE.into()).unwrap_err(),
-        "get_channel_memory",
+    let scope = uuid::Uuid::new_v4().to_string();
+    let recap = get_channel_memory(scope.clone()).expect("get_channel_memory");
+    assert!(
+        recap.is_none(),
+        "channel recap must be None before synthesis runs"
     );
-    assert_unimplemented(
-        trigger_synthesis(SCOPE.into(), SynthesisTrigger::ManualUserAction).unwrap_err(),
-        "trigger_synthesis",
-    );
+
+    match trigger_synthesis(scope, SynthesisTrigger::ManualUserAction) {
+        Err(FfiError::Unavailable { subsystem }) => assert_eq!(subsystem, "synthesis"),
+        other => panic!("expected Unavailable {{ subsystem: synthesis }}, got {other:?}"),
+    }
 
     close_store().expect("close_store");
 }

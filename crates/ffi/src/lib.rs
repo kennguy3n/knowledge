@@ -20,15 +20,21 @@
 //!    [`trigger_synthesis`].
 //! 5. **Crypto** — [`generate_keypair`], [`encrypt`], [`decrypt`].
 //!
-//! # Status (Phase A wiring, this PR)
+//! # Status (Phase A.5 wiring, this PR)
 //!
 //! * [`open_store`] / [`close_store`] / [`ingest_message`] / [`query`] /
 //!   [`get_evidence`] / [`forget`] / [`encrypt`] / [`decrypt`] /
 //!   [`generate_keypair`] are **wired through to the underlying internal
 //!   crates** (`evidence_store`, `crypto`).
-//! * Memory-manager and synthesis-pipeline calls still return
-//!   [`FfiError::Unimplemented`] — they are unblocked by Phase B / C
-//!   work (real ONNX embeddings + real on-device synthesis).
+//! * [`get_user_memory`] / [`pin`] / [`unpin`] / [`list_memories`] /
+//!   [`run_decay_sweep`] / [`get_channel_memory`] are wired through to
+//!   the in-process [`memory_manager::UserMemoryObject`] /
+//!   [`memory_manager::ChannelMemoryObject`] CRUD layer. The memory
+//!   plane is in-memory only in Phase A.5 — persistence to the
+//!   encrypted evidence plane lands with Phase 2.
+//! * [`trigger_synthesis`] returns [`FfiError::Unavailable`] with
+//!   `subsystem = "synthesis"` until the on-device SLM router is
+//!   wired through this surface in Phase C.
 //!
 //! All wired functions require a prior successful call to [`open_store`].
 //! Calling any other function first returns
@@ -285,29 +291,68 @@ pub fn get_evidence(evidence_id: String) -> FfiResult<EvidenceRecord> {
 
 // ───────────────────────── Memory manager ─────────────────────────
 //
-// These calls remain `Unimplemented` until Phase B / C wire the
-// `memory_manager` crate through the FFI runtime.
+// Wired through to the in-process `UserMemoryObject` / `ChannelMemoryObject`
+// CRUD layer in the `memory_manager` crate. Persistence to the
+// encrypted evidence plane is Phase 2 work; the contract surfaced
+// here is stable across the upcoming persistence work.
 
 /// Fetch the per-user memory bundle for `scope_id`.
 ///
+/// Returns the per-scope [`UserMemoryObject`](memory_manager::UserMemoryObject)'s
+/// owned memory objects as wire-flat [`MemoryRecord`]s, ordered by
+/// insertion. Returns an empty vector if the scope has been
+/// cryptographically forgotten via [`forget`].
+///
+/// # Phase A.5 simplification
+///
+/// The user memory layer is in-process only — `open_store` /
+/// `close_store` cycles drop it. Persistence to the encrypted
+/// evidence plane is tracked under Phase 2.
+///
 /// # Errors
 ///
-/// Returns [`FfiError::Unimplemented`] — the memory-manager surface
-/// is not yet wired to the runtime; see Phase B.
-pub fn get_user_memory(_scope_id: ScopeIdString) -> FfiResult<Vec<MemoryRecord>> {
-    Err(FfiError::Unimplemented {
-        method: "get_user_memory".into(),
+/// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
+/// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+pub fn get_user_memory(scope_id: ScopeIdString) -> FfiResult<Vec<MemoryRecord>> {
+    let scope = parse_scope_id(&scope_id)?;
+    with_runtime(|rt| {
+        if rt.is_scope_forgotten(scope) {
+            return Ok(Vec::new());
+        }
+        let umo = rt.user_memory_mut(scope);
+        Ok(umo.objects.iter().map(memory_object_to_record).collect())
     })
 }
 
 /// Mark a memory record as `Pinned` (decay-immune) by its id.
 ///
+/// The runtime walks every per-scope [`UserMemoryObject`] to find
+/// the owning scope; the memory layer keeps an in-process index so
+/// this is `O(scopes * objects-per-scope)` in the worst case, which
+/// is fine for the Phase A.5 working set sizes.
+///
 /// # Errors
 ///
-/// Returns [`FfiError::Unimplemented`] — pending Phase B wiring.
-pub fn pin(_id: String) -> FfiResult<()> {
-    Err(FfiError::Unimplemented {
-        method: "pin".into(),
+/// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
+/// * [`FfiError::InvalidId`] if `id` is not a valid UUID.
+/// * [`FfiError::NotFound`] if no memory object has that id in any
+///   open scope.
+/// * [`FfiError::Memory`] if the underlying state-machine transition
+///   rejects the pin (e.g. the object is in a terminal state).
+pub fn pin(id: String) -> FfiResult<()> {
+    let uuid = parse_uuid(&id)?;
+    with_runtime(|rt| {
+        for umo in rt.user_memories.values_mut() {
+            if umo.read(&uuid).is_some() {
+                return umo.pin(&uuid).map_err(|e| FfiError::Memory {
+                    message: e.to_string(),
+                });
+            }
+        }
+        Err(FfiError::NotFound {
+            kind: "memory".into(),
+            id: id.clone(),
+        })
     })
 }
 
@@ -316,10 +361,25 @@ pub fn pin(_id: String) -> FfiResult<()> {
 ///
 /// # Errors
 ///
-/// Returns [`FfiError::Unimplemented`] — pending Phase B wiring.
-pub fn unpin(_id: String) -> FfiResult<()> {
-    Err(FfiError::Unimplemented {
-        method: "unpin".into(),
+/// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
+/// * [`FfiError::InvalidId`] if `id` is not a valid UUID.
+/// * [`FfiError::NotFound`] if no memory object has that id in any
+///   open scope.
+/// * [`FfiError::Memory`] if the underlying state-machine rejects.
+pub fn unpin(id: String) -> FfiResult<()> {
+    let uuid = parse_uuid(&id)?;
+    with_runtime(|rt| {
+        for umo in rt.user_memories.values_mut() {
+            if umo.read(&uuid).is_some() {
+                return umo.unpin(&uuid).map_err(|e| FfiError::Memory {
+                    message: e.to_string(),
+                });
+            }
+        }
+        Err(FfiError::NotFound {
+            kind: "memory".into(),
+            id: id.clone(),
+        })
     })
 }
 
@@ -401,28 +461,53 @@ pub fn forget(id: String) -> FfiResult<()> {
 
 /// List memory records for a scope, optionally filtered by state.
 ///
+/// Returns rows from the per-scope [`UserMemoryObject`] matching
+/// the supplied [`MemoryFilter`]. Returns an empty vector if the
+/// scope has been cryptographically forgotten.
+///
 /// # Errors
 ///
-/// Returns [`FfiError::Unimplemented`] — pending Phase B wiring.
+/// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
+/// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 pub fn list_memories(
-    _scope_id: ScopeIdString,
-    _filter: MemoryFilter,
+    scope_id: ScopeIdString,
+    filter: MemoryFilter,
 ) -> FfiResult<Vec<MemoryRecord>> {
-    Err(FfiError::Unimplemented {
-        method: "list_memories".into(),
+    let scope = parse_scope_id(&scope_id)?;
+    with_runtime(|rt| {
+        if rt.is_scope_forgotten(scope) {
+            return Ok(Vec::new());
+        }
+        let umo = rt.user_memory_mut(scope);
+        let mm_filter = ffi_filter_to_memory_filter(&filter, scope);
+        let pinned_only = filter.pinned_only;
+        let out: Vec<MemoryRecord> = umo
+            .list(mm_filter)
+            .into_iter()
+            .filter(|o| !pinned_only || o.pin_count > 0)
+            .map(memory_object_to_record)
+            .collect();
+        Ok(out)
     })
 }
 
 /// Run a decay sweep over `scope_id`. Returns the count of rows
-/// transitioned (Candidate → Reinforced, Reinforced → Decaying,
-/// Decaying → Archived) by this sweep.
+/// transitioned to `Archived` (Candidate → Archived plus
+/// Superseded → Archived) by this sweep.
 ///
 /// # Errors
 ///
-/// Returns [`FfiError::Unimplemented`] — pending Phase B wiring.
-pub fn run_decay_sweep(_scope_id: ScopeIdString) -> FfiResult<u32> {
-    Err(FfiError::Unimplemented {
-        method: "run_decay_sweep".into(),
+/// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
+/// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+pub fn run_decay_sweep(scope_id: ScopeIdString) -> FfiResult<u32> {
+    let scope = parse_scope_id(&scope_id)?;
+    with_runtime(|rt| {
+        if rt.is_scope_forgotten(scope) {
+            return Ok(0);
+        }
+        let umo = rt.user_memory_mut(scope);
+        let report = umo.decay_sweep(chrono::Utc::now());
+        Ok((report.candidates_archived + report.superseded_archived) as u32)
     })
 }
 
@@ -430,26 +515,74 @@ pub fn run_decay_sweep(_scope_id: ScopeIdString) -> FfiResult<u32> {
 
 /// Fetch the channel-level synthesis memory for `scope_id`.
 ///
+/// Returns the latest channel recap (as a [`MemoryRecord`]) if any
+/// has been produced for this scope, or `None` if synthesis has
+/// never run.
+///
 /// # Errors
 ///
-/// Returns [`FfiError::Unimplemented`] — pending Phase C wiring.
-pub fn get_channel_memory(_scope_id: ScopeIdString) -> FfiResult<Option<MemoryRecord>> {
-    Err(FfiError::Unimplemented {
-        method: "get_channel_memory".into(),
+/// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
+/// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+pub fn get_channel_memory(scope_id: ScopeIdString) -> FfiResult<Option<MemoryRecord>> {
+    let scope = parse_scope_id(&scope_id)?;
+    with_runtime(|rt| {
+        if rt.is_scope_forgotten(scope) {
+            return Ok(None);
+        }
+        let Some(cmo) = rt.channel_memory(scope) else {
+            return Ok(None);
+        };
+        if cmo.recap.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(MemoryRecord {
+            id: cmo.id.to_string(),
+            scope_id: cmo.scope_id.to_string(),
+            summary: cmo.recap.clone(),
+            state: MemoryState::Reinforced,
+            retention_score: 1.0,
+            created_at: cmo.created_at.timestamp(),
+            last_reinforced_at: cmo.updated_at.timestamp(),
+        }))
     })
 }
 
 /// Trigger synthesis on `scope_id` with the given trigger reason.
 ///
+/// # Phase A.5 status
+///
+/// The synthesis pipeline requires an on-device SLM (the
+/// `inference_router` + a `llama-server` adapter or equivalent).
+/// The FFI runtime does not yet hold an `InferenceRouter` handle,
+/// so this call currently returns
+/// [`FfiError::Unavailable`] with `subsystem = "synthesis"`. The
+/// wiring lands together with the on-device SLM bring-up — see
+/// `docs/internal/PHASES.md` Phase C. The function signature and
+/// validation behaviour (UUID parsing, forgotten-scope handling)
+/// are stable; only the underlying call dispatch is deferred.
+///
 /// # Errors
 ///
-/// Returns [`FfiError::Unimplemented`] — pending Phase C wiring.
-pub fn trigger_synthesis(
-    _scope_id: ScopeIdString,
-    _trigger: SynthesisTrigger,
-) -> FfiResult<String> {
-    Err(FfiError::Unimplemented {
-        method: "trigger_synthesis".into(),
+/// * [`FfiError::Unavailable`] if [`open_store`] has not been called,
+///   or if the synthesis subsystem has not been wired through this
+///   build (the Phase A.5 default).
+/// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+/// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
+pub fn trigger_synthesis(scope_id: ScopeIdString, _trigger: SynthesisTrigger) -> FfiResult<String> {
+    let scope = parse_scope_id(&scope_id)?;
+    with_runtime(|rt| {
+        if rt.is_scope_forgotten(scope) {
+            return Err(FfiError::NotFound {
+                kind: "scope".into(),
+                id: scope_id.clone(),
+            });
+        }
+        // Touch the channel memory so future calls observe a stable
+        // identity even before a real synthesizer runs.
+        let _ = rt.channel_memory_mut(scope);
+        Err(FfiError::Unavailable {
+            subsystem: "synthesis".into(),
+        })
     })
 }
 
@@ -558,6 +691,100 @@ fn parse_evidence_id(s: &str) -> FfiResult<EvidenceId> {
         message: format!("evidence_id: {e}"),
     })?;
     Ok(EvidenceId(uuid))
+}
+
+fn parse_uuid(s: &str) -> FfiResult<uuid::Uuid> {
+    uuid::Uuid::parse_str(s).map_err(|e| FfiError::InvalidId {
+        message: format!("id: {e}"),
+    })
+}
+
+/// Map an internal [`memory_manager::MemoryObject`] to the wire-flat
+/// [`MemoryRecord`] surfaced through the FFI.
+///
+/// State mapping (internal → FFI):
+///
+/// * `Candidate` → `Candidate`
+/// * `Reinforced` / `Consolidated` / `Canonical` → `Reinforced`
+/// * `Superseded` → `Decaying`
+/// * `Archived` / `Deleted` → `Archived`
+/// * any object with `pin_count > 0` → `Pinned` (takes precedence
+///   over the above so the host can render the pin lock icon
+///   regardless of underlying state)
+fn memory_object_to_record(obj: &memory_manager::MemoryObject) -> MemoryRecord {
+    let state = if obj.pin_count > 0 {
+        MemoryState::Pinned
+    } else {
+        match obj.state {
+            memory_manager::MemoryState::Candidate => MemoryState::Candidate,
+            memory_manager::MemoryState::Reinforced
+            | memory_manager::MemoryState::Consolidated
+            | memory_manager::MemoryState::Canonical => MemoryState::Reinforced,
+            memory_manager::MemoryState::Superseded => MemoryState::Decaying,
+            memory_manager::MemoryState::Archived | memory_manager::MemoryState::Deleted => {
+                MemoryState::Archived
+            }
+        }
+    };
+    let summary = obj
+        .metadata
+        .get("content")
+        .and_then(|v| v.as_str())
+        .map_or_else(
+            || {
+                if obj.metadata.is_null() {
+                    String::new()
+                } else {
+                    obj.metadata.to_string()
+                }
+            },
+            str::to_string,
+        );
+    MemoryRecord {
+        id: obj.id.to_string(),
+        scope_id: obj.scope_id.to_string(),
+        summary,
+        state,
+        retention_score: obj.retention_score,
+        created_at: obj.created_at.timestamp(),
+        last_reinforced_at: obj.last_accessed_at.timestamp(),
+    }
+}
+
+/// Convert the FFI-side [`MemoryFilter`] into the internal
+/// [`memory_manager::MemoryFilter`] shape. `pinned_only` is applied
+/// at the call site because the internal filter has no native pin
+/// predicate.
+fn ffi_filter_to_memory_filter(
+    filter: &MemoryFilter,
+    scope: ScopeId,
+) -> memory_manager::MemoryFilter {
+    let mut mm = memory_manager::MemoryFilter::any().with_scope(scope);
+    if let Some(state) = filter.state {
+        match state {
+            MemoryState::Candidate => {
+                mm.states.push(memory_manager::MemoryState::Candidate);
+            }
+            MemoryState::Reinforced => {
+                mm.states.push(memory_manager::MemoryState::Reinforced);
+                mm.states.push(memory_manager::MemoryState::Consolidated);
+                mm.states.push(memory_manager::MemoryState::Canonical);
+            }
+            MemoryState::Decaying => {
+                mm.states.push(memory_manager::MemoryState::Superseded);
+            }
+            MemoryState::Archived => {
+                mm.states.push(memory_manager::MemoryState::Archived);
+                mm.states.push(memory_manager::MemoryState::Deleted);
+            }
+            MemoryState::Pinned => {
+                // No direct internal state — the call-site filter on
+                // `pin_count > 0` handles this. Leave states empty
+                // so the internal filter does not over-restrict.
+            }
+        }
+    }
+    mm
 }
 
 fn source_kind_tag(source: SourceKind) -> &'static str {
@@ -790,38 +1017,201 @@ mod tests {
     }
 
     #[test]
-    fn unwired_surfaces_still_return_unimplemented() {
+    fn get_user_memory_is_empty_for_fresh_scope() {
         let _g = test_lock();
         let _dir = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
-        assert!(matches!(
-            get_user_memory(scope.clone()).unwrap_err(),
-            FfiError::Unimplemented { .. }
-        ));
-        assert!(matches!(
-            pin("00000000-0000-0000-0000-000000000000".into()).unwrap_err(),
-            FfiError::Unimplemented { .. }
-        ));
-        assert!(matches!(
-            unpin("00000000-0000-0000-0000-000000000000".into()).unwrap_err(),
-            FfiError::Unimplemented { .. }
-        ));
-        assert!(matches!(
-            list_memories(scope.clone(), MemoryFilter::default()).unwrap_err(),
-            FfiError::Unimplemented { .. }
-        ));
-        assert!(matches!(
-            run_decay_sweep(scope.clone()).unwrap_err(),
-            FfiError::Unimplemented { .. }
-        ));
-        assert!(matches!(
-            get_channel_memory(scope.clone()).unwrap_err(),
-            FfiError::Unimplemented { .. }
-        ));
-        assert!(matches!(
-            trigger_synthesis(scope, SynthesisTrigger::ManualUserAction).unwrap_err(),
-            FfiError::Unimplemented { .. }
-        ));
+        let records = get_user_memory(scope).expect("get_user_memory");
+        assert!(records.is_empty());
+        teardown();
+    }
+
+    #[test]
+    fn list_memories_is_empty_for_fresh_scope() {
+        let _g = test_lock();
+        let _dir = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        let records = list_memories(scope.clone(), MemoryFilter::default()).expect("list_memories");
+        assert!(records.is_empty());
+
+        // Filtering by state on a fresh scope is also empty.
+        let candidates = list_memories(
+            scope,
+            MemoryFilter {
+                state: Some(MemoryState::Candidate),
+                pinned_only: false,
+            },
+        )
+        .expect("list_memories candidate filter");
+        assert!(candidates.is_empty());
+        teardown();
+    }
+
+    #[test]
+    fn run_decay_sweep_is_zero_for_fresh_scope() {
+        let _g = test_lock();
+        let _dir = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        let n = run_decay_sweep(scope).expect("run_decay_sweep");
+        assert_eq!(n, 0);
+        teardown();
+    }
+
+    #[test]
+    fn get_channel_memory_is_none_until_synthesis_runs() {
+        let _g = test_lock();
+        let _dir = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        let cm = get_channel_memory(scope).expect("get_channel_memory");
+        assert!(cm.is_none());
+        teardown();
+    }
+
+    #[test]
+    fn trigger_synthesis_reports_unavailable_until_slm_is_wired() {
+        let _g = test_lock();
+        let _dir = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        let err = trigger_synthesis(scope, SynthesisTrigger::ManualUserAction).unwrap_err();
+        assert!(
+            matches!(err, FfiError::Unavailable { ref subsystem } if subsystem == "synthesis"),
+            "expected Unavailable {{ subsystem: synthesis }}, got {err:?}"
+        );
+        teardown();
+    }
+
+    #[test]
+    fn pin_and_unpin_round_trip_through_user_memory() {
+        let _g = test_lock();
+        let _dir = fresh_store();
+        let scope_uuid = uuid::Uuid::new_v4();
+        let scope_str = scope_uuid.to_string();
+        // The pin / unpin surface needs an existing memory object;
+        // there is no public FFI to seed one in Phase A.5 (Phase 2
+        // adds observation ingest through the FFI). Seed one
+        // directly via the in-crate runtime hook so we still cover
+        // the round-trip.
+        let mem_id = runtime::with_runtime(|rt| {
+            let scope = parse_scope_id(&scope_str)?;
+            let umo = rt.user_memory_mut(scope);
+            Ok(umo.add_observation(
+                "fact",
+                "Sara owns the rollout",
+                memory_manager::SensitivityClass::Useful,
+            ))
+        })
+        .expect("seed memory object");
+
+        let records = get_user_memory(scope_str.clone()).expect("get_user_memory");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, mem_id.to_string());
+        assert_eq!(records[0].state, MemoryState::Candidate);
+        assert_eq!(records[0].summary, "Sara owns the rollout");
+
+        pin(mem_id.to_string()).expect("pin");
+        let pinned = get_user_memory(scope_str.clone()).expect("get_user_memory after pin");
+        assert_eq!(pinned[0].state, MemoryState::Pinned);
+
+        unpin(mem_id.to_string()).expect("unpin");
+        let after_unpin = get_user_memory(scope_str).expect("get_user_memory after unpin");
+        // pin_count back to 0 means the underlying state machine
+        // controls the wire state again. The decay-state-machine
+        // promotion in `pin()` lifted the object to Reinforced, so
+        // the FFI mapping should now surface `Reinforced`.
+        assert_eq!(after_unpin[0].state, MemoryState::Reinforced);
+        teardown();
+    }
+
+    #[test]
+    fn pin_unknown_id_reports_not_found() {
+        let _g = test_lock();
+        let _dir = fresh_store();
+        let bogus = uuid::Uuid::new_v4().to_string();
+        let err = pin(bogus).unwrap_err();
+        assert!(
+            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "memory"),
+            "expected NotFound {{ kind: memory }}, got {err:?}"
+        );
+        teardown();
+    }
+
+    #[test]
+    fn pin_rejects_malformed_id() {
+        let _g = test_lock();
+        let _dir = fresh_store();
+        let err = pin("not-a-uuid".into()).unwrap_err();
+        assert!(matches!(err, FfiError::InvalidId { .. }));
+        teardown();
+    }
+
+    #[test]
+    fn get_user_memory_returns_empty_after_forget() {
+        let _g = test_lock();
+        let _dir = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        let phrase = "memorymanagerforgetphrase";
+        let evidence_id =
+            ingest_message(scope.clone(), phrase.into(), SourceKind::Manual).expect("ingest");
+
+        // Seed a memory object into the same scope so we can prove
+        // forget elides it.
+        runtime::with_runtime(|rt| {
+            let s = parse_scope_id(&scope)?;
+            let umo = rt.user_memory_mut(s);
+            let _ = umo.add_observation(
+                "note",
+                "tombstone candidate",
+                memory_manager::SensitivityClass::Useful,
+            );
+            Ok(())
+        })
+        .expect("seed");
+
+        assert_eq!(get_user_memory(scope.clone()).expect("pre-forget").len(), 1);
+
+        forget(evidence_id).expect("forget");
+        assert!(get_user_memory(scope).expect("post-forget").is_empty());
+        teardown();
+    }
+
+    #[test]
+    fn list_memories_filters_by_state() {
+        let _g = test_lock();
+        let _dir = fresh_store();
+        let scope = uuid::Uuid::new_v4().to_string();
+        // Seed three candidate observations.
+        runtime::with_runtime(|rt| {
+            let s = parse_scope_id(&scope)?;
+            let umo = rt.user_memory_mut(s);
+            let _ = umo.add_observation("a", "one", memory_manager::SensitivityClass::Useful);
+            let _ = umo.add_observation("b", "two", memory_manager::SensitivityClass::Useful);
+            let _ = umo.add_observation("c", "three", memory_manager::SensitivityClass::Useful);
+            Ok(())
+        })
+        .expect("seed");
+
+        let all = list_memories(scope.clone(), MemoryFilter::default()).expect("list all");
+        assert_eq!(all.len(), 3);
+
+        let candidates = list_memories(
+            scope.clone(),
+            MemoryFilter {
+                state: Some(MemoryState::Candidate),
+                pinned_only: false,
+            },
+        )
+        .expect("list candidates");
+        assert_eq!(candidates.len(), 3);
+
+        let reinforced = list_memories(
+            scope,
+            MemoryFilter {
+                state: Some(MemoryState::Reinforced),
+                pinned_only: false,
+            },
+        )
+        .expect("list reinforced");
+        assert!(reinforced.is_empty());
         teardown();
     }
 
