@@ -230,15 +230,26 @@ impl EvidenceStore {
         // composite) cannot be expressed with `CREATE * IF NOT EXISTS`
         // and must rewrite an existing table; they live in
         // `apply_migration`. Each migration delta is idempotent and
-        // detects "already in target shape" — a fresh database whose
-        // SCHEMA_SQL bootstrap already produced the v3 shape will pass
-        // through the v3 migration as a no-op.
+        // detects "already in target shape".
         //
-        // This loop exists so the `preflight()` invariant below
+        // For a fresh database (`detected_version == 0`) the
+        // SCHEMA_SQL bootstrap above has already produced the current
+        // schema directly, so every per-version delta would either be
+        // an explicit no-op (v1, v2) or detect-and-skip (v3). Running
+        // the loop in that case is harmless but pure overhead —
+        // including an unnecessary `PRAGMA table_info` round-trip on
+        // every open. Skip the loop entirely on the fresh-DB path and
+        // only iterate when migrating an existing on-disk database
+        // forward from an older `user_version`.
+        //
+        // The loop still exists so the `preflight()` invariant below
         // ("version is current") has teeth instead of being satisfied
-        // by an unconditional write.
-        for v in (detected_version.max(0) + 1)..=SCHEMA_VERSION {
-            apply_migration(&conn, v)?;
+        // by an unconditional write — every legacy database is walked
+        // through every required delta.
+        if detected_version > 0 {
+            for v in (detected_version + 1)..=SCHEMA_VERSION {
+                apply_migration(&conn, v)?;
+            }
         }
 
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
