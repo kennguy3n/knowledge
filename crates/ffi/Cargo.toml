@@ -13,6 +13,7 @@ evidence_store = { path = "../evidence_store" }
 memory_manager = { path = "../memory_manager" }
 synthesis_pipeline = { path = "../synthesis_pipeline" }
 
+chrono = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
