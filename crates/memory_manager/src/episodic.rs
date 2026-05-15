@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
 use evidence_store::{EvidenceId, ScopeId};
-use inference_router::{InferenceRouter, InferenceTask, RouterError};
+use inference_router::{InferenceRouter, InferenceTask, RouterError, SummaryBundle};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -257,10 +257,31 @@ impl SlmSummarizer {
 }
 
 impl Summarizer for SlmSummarizer {
+    /// Dispatches the session through
+    /// [`InferenceTask::SynthSummary`], which is grammar-constrained
+    /// to emit a JSON [`SummaryBundle`] (see
+    /// `inference_router::task::GRAMMAR_SYNTH_SUMMARY`). Episodic
+    /// summaries are stored as **plaintext** in
+    /// [`EpisodicSummary::summary_text`], so we parse the bundle and
+    /// keep only the `recap` field; the structured `decisions`,
+    /// `open_questions`, and `active_tasks` arrays are produced by
+    /// the SLM but not yet plumbed into the episodic schema and are
+    /// dropped here. When the synthesiser-tier consumer needs them
+    /// it parses the raw bundle directly via
+    /// `synthesis_pipeline::LlamaCppSynthesizer`.
+    ///
+    /// A parse failure means the SLM (or, more likely, a
+    /// non-grammar-constrained adapter such as the stub) emitted
+    /// something other than [`SummaryBundle`]-shaped JSON. In that
+    /// case we fall back to [`StubSummarizer`] rather than returning
+    /// raw JSON to consumers that expect prose.
     fn summarize(&self, session: &Session) -> Result<String> {
         let prompt = Self::render_prompt(session);
         match self.router.dispatch(InferenceTask::SynthSummary, &prompt) {
-            Ok(text) => Ok(text),
+            Ok(text) => match serde_json::from_str::<SummaryBundle>(text.trim()) {
+                Ok(bundle) => Ok(bundle.recap),
+                Err(_) => self.fallback.summarize(session),
+            },
             Err(err) if err.is_fallback() => self.fallback.summarize(session),
             Err(RouterError::InferenceFailure(_)) => self.fallback.summarize(session),
             Err(err) => Err(MemoryError::Validation(format!(
@@ -668,7 +689,52 @@ mod tests {
     }
 
     #[test]
-    fn slm_summarizer_returns_router_text_on_success() {
+    fn slm_summarizer_extracts_recap_from_summary_bundle_json() {
+        // SlmSummarizer dispatches the grammar-constrained
+        // `SynthSummary` task, which produces SummaryBundle JSON
+        // (`inference_router::task::GRAMMAR_SYNTH_SUMMARY`). The
+        // episodic store records summaries as **plaintext** in
+        // `EpisodicSummary::summary_text`, so the summariser must
+        // unwrap the JSON and store only `bundle.recap`. This
+        // regression test guards against the bug where raw JSON
+        // (`{"recap":"…","decisions":[],…}`) leaks into a field
+        // documented as prose.
+        let scope = ScopeId::new_v4();
+        let t0 = Utc::now();
+        let session = Session {
+            id: Uuid::new_v4(),
+            scope_id: scope,
+            started_at: t0,
+            ended_at: t0,
+            boundary: SessionBoundary::TimeGap,
+            observations: vec![obs(scope, t0, "alpha"), obs(scope, t0, "beta")],
+        };
+        let bundle_json = serde_json::to_string(&SummaryBundle {
+            recap: "the team did alpha and beta".to_string(),
+            decisions: vec!["proceed".to_string()],
+            open_questions: vec!["who owns it?".to_string()],
+            active_tasks: vec!["draft RFC".to_string()],
+        })
+        .unwrap();
+        let s = SlmSummarizer::new(router(Box::new(ConstAdapter::ok(&bundle_json))));
+        let out = s.summarize(&session).unwrap();
+        // Must be the recap field, not the raw JSON.
+        assert_eq!(out, "the team did alpha and beta");
+        // Defensive: the raw JSON would have started with `{` and
+        // contained `"recap"`; the plaintext must not.
+        assert!(
+            !out.contains('{') && !out.contains("\"recap\""),
+            "summary_text leaked raw JSON: {out}"
+        );
+    }
+
+    #[test]
+    fn slm_summarizer_falls_back_when_router_output_is_not_json() {
+        // Non-JSON SLM output (e.g. a non-grammar-constrained
+        // adapter such as the stub-mock used here) must not be
+        // surfaced verbatim as `summary_text` — that would put
+        // unparseable noise in a field documented as plaintext.
+        // We fall back to `StubSummarizer` instead.
         let scope = ScopeId::new_v4();
         let t0 = Utc::now();
         let session = Session {
@@ -683,7 +749,8 @@ mod tests {
             "the team did alpha and beta",
         ))));
         let out = s.summarize(&session).unwrap();
-        assert!(out.contains("alpha"));
+        // StubSummarizer concatenates observation bodies.
+        assert_eq!(out, "alpha / beta");
     }
 
     #[test]
