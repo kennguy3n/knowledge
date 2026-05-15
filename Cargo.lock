@@ -679,6 +679,7 @@ dependencies = [
  "evidence_store",
  "memory_manager",
  "rand 0.8.6",
+ "rusqlite",
  "serde",
  "serde_json",
  "synthesis_pipeline",
