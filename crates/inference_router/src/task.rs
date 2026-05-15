@@ -79,8 +79,15 @@ impl InferenceTask {
                  knowledge. Respond as JSON: {\"promote\": true|false, \"reason\": \"…\"}.\n\nObservation:\n{body}"
             }
             Self::SynthSummary => {
-                "Summarise the following session into 2-4 sentences. Capture key actions, \
-                 decisions, and open questions.\n\nSession:\n{body}"
+                // Aligns with `synthesis_pipeline::SummaryBundle` —
+                // four fields, all populated even when empty. The
+                // GBNF `GRAMMAR_SYNTH_SUMMARY` constrains the
+                // emitted JSON to exactly this shape so the
+                // synthesiser never has to repair output.
+                "Summarise the following session as a JSON object with this exact shape: \
+                 {\"recap\": \"…\", \"decisions\": [\"…\"], \"open_questions\": [\"…\"], \"active_tasks\": [\"…\"]}. \
+                 The recap field is a 2-4 sentence headline; the other fields each list zero or more strings.\n\n\
+                 Session:\n{body}"
             }
             Self::SynthConcept => {
                 "Synthesise a concept from the following observations. Output a JSON object: \
@@ -101,8 +108,7 @@ impl InferenceTask {
             Self::TagImportance => GRAMMAR_TAG_IMPORTANCE,
             Self::ExtractEntities => GRAMMAR_EXTRACT_ENTITIES,
             Self::PromoteObservation => GRAMMAR_PROMOTE_OBSERVATION,
-            // Synthesis tasks emit free-form prose; no grammar.
-            Self::SynthSummary => "",
+            Self::SynthSummary => GRAMMAR_SYNTH_SUMMARY,
             Self::SynthConcept => GRAMMAR_SYNTH_CONCEPT,
             Self::AdjudicateContradiction => GRAMMAR_ADJUDICATE,
         }
@@ -128,6 +134,20 @@ ws ::= [ \t\n]*
 /// GBNF for `{"promote": bool, "reason": "…"}`.
 pub const GRAMMAR_PROMOTE_OBSERVATION: &str = r#"
 root ::= "{" ws "\"promote\":" ws ("true" | "false") "," ws "\"reason\":" ws string ws "}"
+string ::= "\"" ([^"\\] | "\\" .)* "\""
+ws ::= [ \t\n]*
+"#;
+
+/// GBNF for [`synthesis_pipeline::SummaryBundle`] — constrains the
+/// SLM to emit JSON with exactly the four fields
+/// `{recap, decisions, open_questions, active_tasks}` in order.
+///
+/// Hand-written from the `SummaryBundle` struct definition; if the
+/// struct grows a new field or reorders existing fields the
+/// grammar must be updated in lock-step.
+pub const GRAMMAR_SYNTH_SUMMARY: &str = r#"
+root ::= "{" ws "\"recap\":" ws string "," ws "\"decisions\":" ws strings "," ws "\"open_questions\":" ws strings "," ws "\"active_tasks\":" ws strings ws "}"
+strings ::= "[" ws (string ("," ws string)*)? ws "]"
 string ::= "\"" ([^"\\] | "\\" .)* "\""
 ws ::= [ \t\n]*
 "#;
@@ -201,8 +221,15 @@ mod tests {
     }
 
     #[test]
-    fn synth_summary_has_no_grammar() {
-        assert_eq!(InferenceTask::SynthSummary.grammar(), "");
+    fn synth_summary_grammar_constrains_summary_bundle_shape() {
+        let g = InferenceTask::SynthSummary.grammar();
+        assert!(!g.is_empty(), "synth_summary must constrain output");
+        for field in ["recap", "decisions", "open_questions", "active_tasks"] {
+            assert!(
+                g.contains(field),
+                "GBNF must mention `{field}` so the SLM emits SummaryBundle JSON"
+            );
+        }
     }
 
     #[test]

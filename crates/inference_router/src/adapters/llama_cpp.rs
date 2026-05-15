@@ -158,6 +158,184 @@ impl LlamaServerClient for MockLlamaServerClient {
     }
 }
 
+#[cfg(feature = "http-client")]
+pub use http_client::HttpLlamaServerClient;
+
+#[cfg(feature = "http-client")]
+mod http_client {
+    //! Real HTTP transport for the llama.cpp loopback server.
+    //!
+    //! Wraps `reqwest::blocking::Client` so the synchronous router
+    //! can dispatch SLM calls without dragging tokio into the
+    //! inference path. The endpoint shape is the upstream
+    //! `llama-server` HTTP API:
+    //!
+    //! * `GET  /health`     — liveness; `200 OK` = reachable.
+    //! * `POST /completion` — body `{prompt, grammar, n_predict,
+    //!   temperature}`; response `{"content": "<text>", …}`.
+    //!
+    //! Build-gated behind the `http-client` feature so substrate
+    //! unit tests stay free of network deps.
+    use std::time::Duration;
+
+    use super::LlamaServerClient;
+
+    /// Default request timeout for `/completion`. Synthesis prompts
+    /// can take tens of seconds on a CPU-only `llama-server`, so the
+    /// ceiling is intentionally generous; tune via
+    /// [`HttpLlamaServerClient::with_timeout`].
+    pub const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 120;
+
+    /// Default `n_predict` cap. Sized for one [`SummaryBundle`]
+    /// payload — 512 tokens is comfortably above the GBNF-shaped
+    /// JSON output.
+    pub const DEFAULT_N_PREDICT: u32 = 512;
+
+    /// Default sampling temperature. Synthesis is closer to
+    /// extraction than to creative generation, so we keep it low.
+    pub const DEFAULT_TEMPERATURE: f32 = 0.1;
+
+    /// Real HTTP client for the llama.cpp loopback server.
+    ///
+    /// Constructed at startup by the platform shell once the
+    /// `llama-server` sidecar is up; passed to
+    /// [`crate::LlamaCppAdapter::new`] in place of the in-memory
+    /// fake.
+    pub struct HttpLlamaServerClient {
+        server_url: String,
+        client: reqwest::blocking::Client,
+    }
+
+    impl HttpLlamaServerClient {
+        /// Build a client targeting the loopback `llama-server` at
+        /// `server_url` (e.g. `http://127.0.0.1:8080`). Trailing
+        /// slash on `server_url` is tolerated — `/health` and
+        /// `/completion` are appended directly.
+        ///
+        /// # Errors
+        ///
+        /// Returns `Err` if the underlying `reqwest::blocking::Client`
+        /// builder rejects the timeout configuration.
+        pub fn new(server_url: impl Into<String>) -> Result<Self, String> {
+            Self::with_timeout(server_url, Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS))
+        }
+
+        /// Build a client with a custom request timeout.
+        ///
+        /// # Errors
+        ///
+        /// Returns `Err` if the underlying `reqwest::blocking::Client`
+        /// builder rejects the timeout configuration.
+        pub fn with_timeout(
+            server_url: impl Into<String>,
+            timeout: Duration,
+        ) -> Result<Self, String> {
+            let server_url = normalise_url(server_url.into());
+            let client = reqwest::blocking::Client::builder()
+                .timeout(timeout)
+                .build()
+                .map_err(|e| format!("reqwest client build failed: {e}"))?;
+            Ok(Self { server_url, client })
+        }
+
+        /// Borrow the resolved server URL (no trailing slash).
+        pub fn server_url(&self) -> &str {
+            &self.server_url
+        }
+    }
+
+    impl LlamaServerClient for HttpLlamaServerClient {
+        fn ping(&self) -> bool {
+            // `/health` returns 200 once the model is loaded. We
+            // treat anything other than a clean 2xx as unreachable
+            // so a half-up server (loading, busy) doesn't slip into
+            // the available pool.
+            let url = format!("{}/health", self.server_url);
+            match self.client.get(&url).send() {
+                Ok(resp) => resp.status().is_success(),
+                Err(_) => false,
+            }
+        }
+
+        fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String> {
+            let url = format!("{}/completion", self.server_url);
+            let mut body = serde_json::json!({
+                "prompt": prompt,
+                "n_predict": DEFAULT_N_PREDICT,
+                "temperature": DEFAULT_TEMPERATURE,
+                // Stream off — the blocking client consumes the
+                // whole response in one shot.
+                "stream": false,
+            });
+            if !grammar.is_empty() {
+                body["grammar"] = serde_json::Value::String(grammar.to_string());
+            }
+
+            let resp = self
+                .client
+                .post(&url)
+                .json(&body)
+                .send()
+                .map_err(|e| format!("POST {url} failed: {e}"))?;
+            let status = resp.status();
+            if !status.is_success() {
+                let detail = resp.text().unwrap_or_default();
+                return Err(format!(
+                    "llama-server returned {status} from {url}: {detail}"
+                ));
+            }
+            let json: serde_json::Value = resp
+                .json()
+                .map_err(|e| format!("llama-server response was not JSON: {e}"))?;
+            let content = json
+                .get("content")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("llama-server response missing string `content`: {json}"))?;
+            Ok(content.to_string())
+        }
+    }
+
+    /// Strip a single trailing `/` so `format!("{}/health", url)`
+    /// stays correct whether the caller passes `http://x:8080` or
+    /// `http://x:8080/`.
+    fn normalise_url(mut s: String) -> String {
+        if s.ends_with('/') {
+            s.pop();
+        }
+        s
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn normalise_url_strips_trailing_slash() {
+            assert_eq!(normalise_url("http://x:8080/".into()), "http://x:8080");
+            assert_eq!(normalise_url("http://x:8080".into()), "http://x:8080");
+        }
+
+        #[test]
+        fn http_client_constructs_with_default_timeout() {
+            let c =
+                HttpLlamaServerClient::new("http://127.0.0.1:8080/").expect("client should build");
+            assert_eq!(c.server_url(), "http://127.0.0.1:8080");
+        }
+
+        #[test]
+        fn ping_against_unreachable_host_returns_false() {
+            // Pick a port that nothing in CI should be listening on.
+            // `reqwest` returns `Err` -> our `ping` returns `false`.
+            let c = HttpLlamaServerClient::with_timeout(
+                "http://127.0.0.1:1",
+                Duration::from_millis(50),
+            )
+            .expect("client should build");
+            assert!(!c.ping());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

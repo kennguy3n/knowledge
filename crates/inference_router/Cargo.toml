@@ -7,9 +7,20 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# Enables the real HTTP transport for the llama.cpp loopback server
+# (`HttpLlamaServerClient` in `adapters::llama_cpp`). Pulls in
+# `reqwest` with the blocking client. Gated behind a feature so the
+# substrate's unit-test suite stays free of network deps and so the
+# crate can compile on hosts without the `reqwest` build chain
+# (e.g. CI shells that don't link OpenSSL / rustls).
+http-client = ["dep:reqwest"]
+
 [dependencies]
 crypto = { path = "../crypto" }
 chrono = { workspace = true }
+reqwest = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

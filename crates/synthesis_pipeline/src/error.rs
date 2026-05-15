@@ -47,6 +47,16 @@ pub enum PipelineError {
     /// window was offered a channel object).
     #[error("synthesis hierarchy violation: {0}")]
     HierarchyViolation(String),
+
+    /// The on-device SLM synthesiser failed to produce a valid
+    /// [`crate::schema::SummaryBundle`]. Wraps the underlying
+    /// [`inference_router::RouterError`] (router unavailable,
+    /// adapter failure, grammar violation surfacing as a JSON
+    /// parse error, …). The substrate is expected to fall back to
+    /// the deterministic [`crate::pipeline::NoOpSynthesizer`] when
+    /// this fires, per `ARCHITECTURE.md` §3.
+    #[error("on-device synthesis failed: {0}")]
+    SynthesisFailed(String),
 }
 
 /// Convenience result alias.
