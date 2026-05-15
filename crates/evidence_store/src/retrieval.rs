@@ -361,22 +361,36 @@ impl<'a> HybridRetriever<'a> {
     ///
     /// Returns `None` when neither path produces a usable vector
     /// (e.g. the row has no body, the body is binary, the model
-    /// errored, or every available vector mismatches `query_dim`).
-    /// The stored-cache hit short-circuits before reading the body,
-    /// which is the Phase-B perf win.
+    /// errored, the cache row is corrupted, or every available vector
+    /// mismatches `query_dim`). The stored-cache hit short-circuits
+    /// before reading the body, which is the Phase-B perf win.
+    ///
+    /// Cache-load failures (`EvidenceError::Schema` from a corrupted
+    /// blob, `EvidenceError::Sqlite` from a transient SQL hiccup) are
+    /// **not** propagated — the embedding cache is a pure
+    /// optimisation, so per-row read errors are demoted to "cache
+    /// miss" and the live-embed path runs instead. This mirrors the
+    /// localised-failure contract documented in
+    /// [`Self::search_hybrid`] and the read-side robustness of
+    /// [`Self::lookup_body_text`].
     fn candidate_embedding(
         &self,
         id: EvidenceId,
         query_dim: usize,
         model: &dyn EmbeddingModel,
     ) -> Result<Option<Vec<f32>>> {
-        if let Some(stored) = self.store.get_embedding(id)? {
-            if stored.len() == query_dim {
-                return Ok(Some(stored));
-            }
-            // Dimension mismatch: stored vector is from a different
-            // model. Fall through to the live-embed path so the score
-            // is still useful for this query.
+        match self.store.get_embedding(id) {
+            Ok(Some(stored)) if stored.len() == query_dim => return Ok(Some(stored)),
+            // Dimension mismatch (stored vector is from a different
+            // model) or no cached row at all → fall through to the
+            // live-embed path so the score is still useful for this
+            // query.
+            Ok(_) => {}
+            // A corrupted cache row or transient SQL error must not
+            // abort the whole search. Treat it as a cache miss and
+            // let the live-embed path try.
+            Err(EvidenceError::Schema(_) | EvidenceError::Sqlite(_)) => {}
+            Err(other) => return Err(other),
         }
         let Some(body) = self.lookup_body_text(id)? else {
             return Ok(None);
