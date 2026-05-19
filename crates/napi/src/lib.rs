@@ -136,6 +136,23 @@ pub fn forget(id: String) -> NapiResult<()> {
     ffi::forget(id).map_err(NapiError::from)
 }
 
+/// Destroy all cryptographic material for `scope_id` so its evidence
+/// and body-table data become permanently unrecoverable. Mirrors
+/// [`ffi::forget_scope`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::forget_scope`] errors as [`NapiError`].
+pub fn forget_scope(scope_id: ScopeIdString) -> NapiResult<()> {
+    ffi::forget_scope(scope_id).map_err(NapiError::from)
+}
+
+/// Escape a user-supplied string for safe use inside an FTS5 query.
+/// Mirrors [`ffi::escape_fts_query`].
+pub fn escape_fts_query(input: String) -> String {
+    ffi::escape_fts_query(input)
+}
+
 /// List memory records for a scope, optionally filtered.
 ///
 /// # Errors
@@ -356,6 +373,18 @@ mod tests {
         // as `InvalidId`.
         let err = forget("id".into()).unwrap_err();
         assert_eq!(err.kind(), "InvalidId");
+    }
+
+    #[test]
+    fn forget_scope_forwards_invalid_id_for_malformed_scope() {
+        let err = forget_scope("not-a-uuid".into()).unwrap_err();
+        assert_eq!(err.kind(), "InvalidId");
+    }
+
+    #[test]
+    fn escape_fts_query_wraps_in_quotes() {
+        let escaped = escape_fts_query(r#"hello "world""#.into());
+        assert_eq!(escaped, r#""hello ""world""""#);
     }
 
     #[test]

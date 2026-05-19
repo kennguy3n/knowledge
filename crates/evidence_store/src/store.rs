@@ -1350,11 +1350,17 @@ impl EvidenceStore {
             let scope_ids: Vec<Vec<u8>> = {
                 let mut s = tx.prepare(
                     "SELECT DISTINCT scope_id FROM evidence \
-                     WHERE content_hash = ?1 AND storage_path = 1",
+                     WHERE content_hash = ?1 AND storage_path = ?2",
                 )?;
-                let rows =
-                    s.query_map(params![hash_bytes.as_slice()], |r| r.get::<_, Vec<u8>>(0))?;
-                rows.filter_map(Result::ok).collect()
+                let rows = s.query_map(
+                    params![hash_bytes.as_slice(), StoragePath::BodyTable as i64],
+                    |r| r.get::<_, Vec<u8>>(0),
+                )?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row?);
+                }
+                out
             };
 
             for scope_bytes in &scope_ids {
