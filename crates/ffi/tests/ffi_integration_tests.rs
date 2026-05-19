@@ -174,6 +174,15 @@ fn crypto_surface_round_trips_via_scope_aead() {
     let _dir = fresh_store();
 
     let scope = uuid::Uuid::new_v4().to_string();
+    // Ingesting a message registers the scope DEK (v6 schema) so
+    // encrypt/decrypt can find the per-scope key.
+    let _ = ingest_message(
+        scope.clone(),
+        "setup".into(),
+        SourceKind::Slack,
+        FfiImportanceClass::Important,
+    )
+    .expect("ingest to register scope");
     let plaintext = b"hello, knowledge".to_vec();
     let ciphertext = encrypt(scope.clone(), plaintext.clone()).expect("encrypt");
     assert!(
@@ -184,10 +193,16 @@ fn crypto_surface_round_trips_via_scope_aead() {
     let recovered = decrypt(scope.clone(), ciphertext.clone()).expect("decrypt");
     assert_eq!(recovered, plaintext);
 
-    // Wrong scope must reject (AEAD AAD binds the scope id).
+    // Wrong scope must reject — with independently-generated DEKs
+    // (v6 schema) the unregistered scope has no DEK, so this returns
+    // `NotFound { kind: "scope" }` rather than `Crypto`.
     let other_scope = uuid::Uuid::new_v4().to_string();
     let err = decrypt(other_scope, ciphertext).unwrap_err();
-    assert_eq!(err.kind(), "Crypto");
+    assert!(
+        err.kind() == "Crypto" || err.kind() == "NotFound",
+        "expected Crypto or NotFound, got {}",
+        err.kind()
+    );
 
     let keypair = generate_keypair().expect("generate_keypair");
     assert_eq!(keypair.algorithm, "ml-dsa-65");

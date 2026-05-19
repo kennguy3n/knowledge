@@ -1149,6 +1149,8 @@ mod tests {
         let _g = test_lock();
         let _dir = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
+        let scope_id = parse_scope_id(&scope).unwrap();
+        runtime::with_runtime(|rt| rt.ensure_scope_registered(scope_id)).expect("register");
         let plaintext = b"the quick brown fox".to_vec();
         let ct = encrypt(scope.clone(), plaintext.clone()).expect("encrypt");
         assert!(ct.len() > plaintext.len());
@@ -1173,6 +1175,13 @@ mod tests {
         let _dir = fresh_store();
         let scope_a = uuid::Uuid::new_v4().to_string();
         let scope_b = uuid::Uuid::new_v4().to_string();
+        let scope_a_id = parse_scope_id(&scope_a).unwrap();
+        let scope_b_id = parse_scope_id(&scope_b).unwrap();
+        runtime::with_runtime(|rt| {
+            rt.ensure_scope_registered(scope_a_id)?;
+            rt.ensure_scope_registered(scope_b_id)
+        })
+        .expect("register");
         let ct = encrypt(scope_a, b"secret".to_vec()).expect("encrypt");
         let err = decrypt(scope_b, ct).unwrap_err();
         assert!(matches!(err, FfiError::Crypto { .. }));
