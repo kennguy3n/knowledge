@@ -526,7 +526,7 @@ mod tests {
     fn fixed_seed() -> [u8; AEAD_KEY_LEN] {
         let mut seed = [0u8; AEAD_KEY_LEN];
         for (i, b) in seed.iter_mut().enumerate() {
-            *b = i as u8;
+            *b = u8::try_from(i).expect("AEAD_KEY_LEN fits in u8");
         }
         seed
     }

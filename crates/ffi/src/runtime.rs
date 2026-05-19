@@ -286,18 +286,15 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
     // the scope key without re-deriving. Tombstoned scopes are
     // skipped — their DEK rows should already have been deleted by
     // `forget()`, but the filter is defense-in-depth.
-    let scope_deks = store
-        .load_scope_deks()
-        .map_err(|e| FfiError::Evidence {
-            message: e.to_string(),
-        })?;
+    let scope_deks = store.load_scope_deks().map_err(|e| FfiError::Evidence {
+        message: e.to_string(),
+    })?;
     for (scope, key) in &scope_deks {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
         if registry.is_scope_forgotten(registry_scope) {
             continue;
         }
-        let dek =
-            forgetting::ScopeDek::new(registry_scope, forgetting::EpochId::zero(), *key);
+        let dek = forgetting::ScopeDek::new(registry_scope, forgetting::EpochId::zero(), *key);
         registry.insert_scope_dek(dek);
     }
 
@@ -315,11 +312,12 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
         if tombstones.contains(&scope) {
             continue;
         }
-        if let Some(blob) = store
-            .load_memory_blob(scope, "user_memory")
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?
+        if let Some(blob) =
+            store
+                .load_memory_blob(scope, "user_memory")
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?
         {
             if let Ok(umo) = serde_json::from_slice::<UserMemoryObject>(&blob) {
                 user_memories.insert(scope, umo);
@@ -328,11 +326,12 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
     }
 
     let mut channel_memories = HashMap::new();
-    let channel_scopes = store
-        .list_memory_scopes("channel_memory")
-        .map_err(|e| FfiError::Evidence {
-            message: e.to_string(),
-        })?;
+    let channel_scopes =
+        store
+            .list_memory_scopes("channel_memory")
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
     for scope in channel_scopes {
         if tombstones.contains(&scope) {
             continue;

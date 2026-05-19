@@ -215,9 +215,8 @@ fn fts5_optimize_compacts_shadow_tables_after_purge() {
     );
 
     {
-        let mut store =
-            EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
-                .expect("open store");
+        let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+            .expect("open store");
 
         store
             .ingest(
@@ -241,9 +240,8 @@ fn fts5_optimize_compacts_shadow_tables_after_purge() {
     }
 
     // Re-open so we're reading only the on-disk state.
-    let store =
-        EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
-            .expect("re-open store");
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("re-open store");
 
     // After OPTIMIZE, querying the FTS table must return nothing.
     let hits = store

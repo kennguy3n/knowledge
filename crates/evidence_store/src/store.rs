@@ -1331,11 +1331,7 @@ impl EvidenceStore {
 
     /// Load a previously-persisted memory blob for `(scope_id, kind)`.
     /// Returns `None` if no row exists.
-    pub fn load_memory_blob(
-        &self,
-        scope_id: ScopeId,
-        kind: &str,
-    ) -> Result<Option<Vec<u8>>> {
+    pub fn load_memory_blob(&self, scope_id: ScopeId, kind: &str) -> Result<Option<Vec<u8>>> {
         let row: Option<(Vec<u8>, Vec<u8>)> = self
             .conn
             .query_row(
@@ -1377,9 +1373,9 @@ impl EvidenceStore {
     /// List all scope IDs that have persisted memory blobs of the
     /// given `kind`. Used at startup to rehydrate the in-memory maps.
     pub fn list_memory_scopes(&self, kind: &str) -> Result<Vec<ScopeId>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT scope_id FROM memory_objects WHERE kind = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT scope_id FROM memory_objects WHERE kind = ?1")?;
         let rows = stmt.query_map(params![kind], |row| row.get::<_, Vec<u8>>(0))?;
         let mut out = Vec::new();
         for row in rows {

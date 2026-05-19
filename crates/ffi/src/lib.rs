@@ -987,12 +987,13 @@ impl runtime::FfiRuntime {
     /// stays consistent across the surface.
     fn scope_encrypt_key(&self, scope: ScopeId) -> FfiResult<crypto::AeadKey> {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
-        let dek = self.registry().get_scope_dek(registry_scope).ok_or_else(|| {
-            FfiError::NotFound {
+        let dek = self
+            .registry()
+            .get_scope_dek(registry_scope)
+            .ok_or_else(|| FfiError::NotFound {
                 kind: "scope".into(),
                 id: scope.as_uuid().to_string(),
-            }
-        })?;
+            })?;
         let key = dek.key().ok_or_else(|| FfiError::Crypto {
             message: "scope DEK has been destroyed".into(),
         })?;
@@ -1781,8 +1782,8 @@ mod tests {
         .expect("insert + pin");
 
         // Verify we can see the memory object before closing.
-        let before_close = list_memories(scope_str.clone(), MemoryFilter::default())
-            .expect("list before close");
+        let before_close =
+            list_memories(scope_str.clone(), MemoryFilter::default()).expect("list before close");
         assert_eq!(before_close.len(), 1, "one memory object before close");
         // Check pin count via the internal MemoryObject (not exposed
         // on the FFI MemoryRecord wire type).
@@ -1799,15 +1800,17 @@ mod tests {
         open_store(path.to_string_lossy().into_owned(), key_hex).expect("open 2");
 
         // Memory object must be rehydrated from disk.
-        let after_reopen = list_memories(scope_str.clone(), MemoryFilter::default())
-            .expect("list after reopen");
+        let after_reopen =
+            list_memories(scope_str.clone(), MemoryFilter::default()).expect("list after reopen");
         assert_eq!(
             after_reopen.len(),
             1,
             "memory object must survive close/open cycle"
         );
         runtime::with_runtime(|rt| {
-            let umo = rt.user_memory(scope).expect("scope must exist after reopen");
+            let umo = rt
+                .user_memory(scope)
+                .expect("scope must exist after reopen");
             assert_eq!(
                 umo.objects[0].pin_count, 1,
                 "pin count must survive close/open cycle"
