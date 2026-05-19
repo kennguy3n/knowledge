@@ -275,7 +275,7 @@ pub fn run(
         state.audit_log.len() >= total_entries,
     );
 
-    // ---- Wrap up the phase report. ----
+    // ---- Wrap up the stage report. ----
     phase.stat("audit_log.entries", state.audit_log.len().to_string());
     phase.stat("audit_log.action_types", action_types.len().to_string());
     phase.stat("queries.executed", "5".to_string());

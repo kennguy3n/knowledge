@@ -484,6 +484,6 @@ pub fn run(
     report.add_benchmark("export_audit_writes", 2, audit_elapsed);
 
     // Drop the persistent graph handle now that we are done; later
-    // phases that need the graph open it again from disk.
+    // stages that need the graph open it again from disk.
     drop(pgraph);
 }

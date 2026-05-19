@@ -140,7 +140,7 @@ pub fn run(
         .add_node(right)
         .expect("seed right contradiction concept");
 
-    // Add a regular IsA edge so the traversal phase has something to
+    // Add a regular IsA edge so the traversal stage has something to
     // hop through that is *not* the contradiction edge.
     let traversal_anchor_label = "tenant.acme";
     let traversal_anchor = pgraph

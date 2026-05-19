@@ -123,7 +123,7 @@ pub fn run(
         channel_scope,
         ConceptProposal::new(
             "Knowledge Substrate Demo",
-            "End-to-end demo run exercising every Knowledge substrate phase",
+            "End-to-end demo run exercising every Knowledge substrate stage",
         ),
         evidence_refs.clone(),
         0.55,

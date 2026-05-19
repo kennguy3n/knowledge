@@ -59,7 +59,7 @@ pub fn run(
     // Use the substrate's default chain (Owner ⇒ Admin ⇒ Editor ⇒
     // Member ⇒ Viewer) and add an explicit `Agent` namespace so the
     // managed-endpoint synthesizer can be granted Synthesizer rights
-    // on the tenant in later phases.
+    // on the tenant in later stages.
     let mut namespaces = NamespaceRegistry::with_defaults();
     let agent_namespace = NamespaceConfig::new(ObjectType::Agent)
         .imply(Relation::Owner, &[Relation::Admin])
@@ -79,7 +79,7 @@ pub fn run(
     let synthesis_agent = Uuid::from_u128(0x4711_0000_0000_0000_0000_0000_0000_0099);
 
     // Reuse the dataset scope ids so reachability checks are tied to
-    // the same hierarchy that Phases 1–5 ingested into.
+    // the same hierarchy that stages 1–5 ingested into.
     let tenant_obj = ObjectRef::new(ObjectType::Tenant, dataset.tenant_scope.id.0);
     let domain_obj = ObjectRef::new(ObjectType::Domain, dataset.domain_scope.id.0);
     let channel_obj = ObjectRef::new(ObjectType::Channel, dataset.channel_scope.id.0);

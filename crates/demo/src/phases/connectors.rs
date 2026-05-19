@@ -135,7 +135,7 @@ pub fn run(
     // provisioning, key destruction, policy changes, and tenant
     // lifecycle (per the Audit Service contract). Connector
     // exercise metrics are surfaced via `report.count(...)` and the
-    // phase stats above without polluting the audit trail's semantic
+    // stage stats above without polluting the audit trail's semantic
     // contract.
 
     phase.timing = phase_started.elapsed();
