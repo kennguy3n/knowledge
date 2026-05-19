@@ -1284,11 +1284,20 @@ impl EvidenceStore {
     /// master-derived wrapping key can no longer reconstruct it
     /// because the wrapped material has been deleted.
     pub fn delete_scope_dek(&mut self, scope_id: ScopeId) -> Result<()> {
+        self.delete_scope_dek_row(scope_id)?;
+        self.scope_keys.write().unwrap().remove(&scope_id);
+        Ok(())
+    }
+
+    /// Delete just the `scope_deks` DB row for `scope_id` without
+    /// touching the in-memory cache. Takes `&self` so it can be
+    /// called during `open_store` iteration where the cache is
+    /// managed separately via [`Self::evict_cached_scope_key`].
+    pub fn delete_scope_dek_row(&self, scope_id: ScopeId) -> Result<()> {
         self.conn.execute(
             "DELETE FROM scope_deks WHERE scope_id = ?1",
             params![scope_id.as_uuid().as_bytes().as_slice()],
         )?;
-        self.scope_keys.write().unwrap().remove(&scope_id);
         Ok(())
     }
 

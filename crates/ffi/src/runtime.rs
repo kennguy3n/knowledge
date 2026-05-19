@@ -287,12 +287,20 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
     // Defense-in-depth: if `delete_scope_dek` failed during a prior
     // `forget()`, the wrapped DEK may still sit in `scope_deks` and
     // `load_scope_deks` will have loaded it into the store's cache.
-    // Evict forgotten keys from the store cache so that no code path
-    // (even a direct `scope_key()` call) can recover the key.
+    // Evict forgotten keys from the cache AND delete the dangling
+    // `scope_deks` row from disk so the wrapped DEK does not persist
+    // across restarts.
     for (scope, key) in &store.cached_scope_keys() {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
         if registry.is_scope_forgotten(registry_scope) {
             store.evict_cached_scope_key(*scope);
+            // Best-effort: delete the dangling wrapped DEK from disk.
+            if let Err(e) = store.delete_scope_dek_row(*scope) {
+                eprintln!(
+                    "warning: failed to clean up dangling scope_deks row for {}: {e}",
+                    scope.as_uuid()
+                );
+            }
             continue;
         }
         let dek = forgetting::ScopeDek::new(registry_scope, forgetting::EpochId::zero(), *key);

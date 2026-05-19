@@ -496,12 +496,24 @@ pub fn forget(id: String) -> FfiResult<()> {
         //    restart still rejects the scope. 3. Purge the FTS5 /
         //    embedding indexes so plaintext-derived secondary
         //    payloads cannot be recovered post-forget.
-        rt.forget_scope(scope)?;
+        rt.forget_scope(scope);
+        // Tombstone first — this is the durable gate that prevents
+        // the scope from being accessible on restart.
         rt.store_mut()
             .record_forgotten_scope(scope)
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
+        // Best-effort DEK deletion: if this fails the tombstone
+        // still blocks access and open_store's recovery path will
+        // retry the deletion on next startup.
+        if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
+            eprintln!(
+                "warning: failed to delete scope DEK for {}: {e}; \
+                 will retry on next open_store",
+                scope.as_uuid()
+            );
+        }
         rt.store_mut()
             .purge_fts_for_scope(scope)
             .map_err(|e| FfiError::Evidence {
@@ -546,12 +558,21 @@ pub fn forget(id: String) -> FfiResult<()> {
 pub fn forget_scope(scope_id: String) -> FfiResult<()> {
     let scope = parse_scope_id(&scope_id)?;
     with_runtime(|rt| {
-        rt.forget_scope(scope)?;
+        rt.forget_scope(scope);
+        // Tombstone first — durable gate.
         rt.store_mut()
             .record_forgotten_scope(scope)
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
+        // Best-effort DEK deletion (see forget() for rationale).
+        if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
+            eprintln!(
+                "warning: failed to delete scope DEK for {}: {e}; \
+                 will retry on next open_store",
+                scope.as_uuid()
+            );
+        }
         rt.store_mut()
             .purge_fts_for_scope(scope)
             .map_err(|e| FfiError::Evidence {
@@ -1064,16 +1085,9 @@ impl runtime::FfiRuntime {
         Ok(())
     }
 
-    fn forget_scope(&mut self, scope: ScopeId) -> FfiResult<()> {
+    fn forget_scope(&mut self, scope: ScopeId) {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
         let _ = forgetting::destroy_scope_dek(self.registry_mut(), registry_scope);
-        // Delete the wrapped DEK from durable storage so the scope
-        // key is truly unrecoverable even with the master key.
-        self.store_mut()
-            .delete_scope_dek(scope)
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })
     }
 
     fn is_scope_forgotten(&self, scope: ScopeId) -> bool {
