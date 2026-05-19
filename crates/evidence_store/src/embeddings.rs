@@ -308,7 +308,7 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f64 {
 /// `[0.0, 1.0]` retrieval-friendly score where higher = more
 /// similar.
 pub fn similarity_to_score(similarity: f64) -> f64 {
-    ((similarity + 1.0) / 2.0).clamp(0.0, 1.0)
+    f64::midpoint(similarity, 1.0).clamp(0.0, 1.0)
 }
 
 #[cfg(feature = "onnx-runtime")]
