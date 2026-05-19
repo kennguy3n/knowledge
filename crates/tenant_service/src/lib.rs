@@ -1,8 +1,7 @@
 //! `tenant_service` — tenant lifecycle and member-provisioning data
 //! model.
 //!
-//! Per `ARCHITECTURE.md` §4.1 and `docs/internal/PHASES.md` Phase 3, the tenant
-//! service owns:
+//! Per `ARCHITECTURE.md` §4.1, the tenant service owns:
 //!
 //! * **Tenant lifecycle.** A [`Tenant`] moves through
 //!   `Active → Suspended → Deleted`. Deletion records a reference to
@@ -17,10 +16,10 @@
 //!   users belong to a tenant, with what [`permission_service::Relation`]
 //!   role.
 //!
-//! The Phase 3 implementation is in-memory and is wired into the
-//! Phase 3 server-side synthesis engine + permission service.
-//! Persistence (Postgres for the tenant catalog, key store for the
-//! root keys) lands in later phases.
+//! The current implementation is in-memory and is wired into the
+//! server-side synthesis engine + permission service. Persistence
+//! (Postgres for the tenant catalog, key store for the root keys)
+//! is not yet implemented.
 
 #![deny(missing_docs)]
 

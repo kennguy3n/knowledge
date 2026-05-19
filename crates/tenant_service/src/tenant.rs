@@ -74,7 +74,7 @@ impl Tenant {
 }
 
 /// In-memory tenant catalog. Persistence (Postgres + key store) lands
-/// in later phases.
+/// in a future update.
 #[derive(Debug, Clone, Default)]
 pub struct TenantRegistry {
     tenants: HashMap<TenantId, Tenant>,

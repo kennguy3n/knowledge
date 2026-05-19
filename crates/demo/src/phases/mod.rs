@@ -1,16 +1,16 @@
-//! Per-phase implementations of the end-to-end demo pipeline.
+//! Stage implementations of the end-to-end demo pipeline.
 
 pub mod runtime;
 
-pub mod phase01_evidence;
-pub mod phase02_observation;
-pub mod phase03_memory;
-pub mod phase04_concept_graph;
-pub mod phase05_synthesis;
-pub mod phase06_permissions;
-pub mod phase07_crypto;
-pub mod phase08_export;
-pub mod phase09_agent;
-pub mod phase10_reasoning;
-pub mod phase11_connectors;
-pub mod phase12_audit;
+pub mod agent;
+pub mod audit;
+pub mod concept_graph;
+pub mod connectors;
+pub mod crypto;
+pub mod evidence;
+pub mod export;
+pub mod memory;
+pub mod observation;
+pub mod permissions;
+pub mod reasoning;
+pub mod synthesis;

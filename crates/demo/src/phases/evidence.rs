@@ -1,4 +1,4 @@
-//! Phase 1 — Evidence Ingestion.
+//! Stage 1 — Evidence Ingestion.
 //!
 //! Opens an [`EvidenceStore`] backed by a temporary SQLCipher file,
 //! classifies each synthetic message with the
@@ -24,7 +24,7 @@ use crate::dataset::{Dataset, ScopeTier, SyntheticMessage};
 use crate::phases::runtime::{IngestedRow, RuntimeState};
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE: &str = "phase01_evidence";
+const PHASE: &str = "evidence";
 
 pub fn run(
     dataset: &Dataset,
@@ -33,7 +33,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Phase 1: Evidence Ingestion");
+    let mut phase = PhaseReport::new("Stage 1: Evidence Ingestion");
 
     let temp = TempDir::new().expect("create demo evidence tempdir");
     let db_path = temp.path().join("evidence.sqlcipher");

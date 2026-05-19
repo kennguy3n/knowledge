@@ -9,7 +9,7 @@
 //! default — it operates on canonical concepts and policy-approved
 //! summaries, with an explicit audit trail for every render.
 //!
-//! Phase 5 ships:
+//! This module ships:
 //!
 //! * Data model — [`profile`] module: [`profile::PortableConceptProfile`],
 //!   [`profile::ApprovedConcept`], [`profile::ExportView`],

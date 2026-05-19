@@ -1,6 +1,6 @@
-//! Concept graph visualization query API (Phase 6 / Kanvas).
+//! Concept graph visualization query API (Kanvas).
 //!
-//! Per `docs/DESIGN.md` §10.2 and `docs/internal/PHASES.md` Phase 6, the substrate
+//! Per `docs/DESIGN.md` §10.2, the substrate
 //! ships a "Kanvas-style" exploration model on top of the concept
 //! graph: graphs of nodes with typed edges that the front-end can
 //! render with scope-aware filtering. This module provides the
@@ -27,7 +27,7 @@
 //! Cross-references:
 //!
 //! * Module map: `ARCHITECTURE.md` §2.1.
-//! * Phase 6 deliverables: `docs/internal/PHASES.md` Phase 6.
+//! * Visualization deliverables: `docs/DESIGN.md` §10.2.
 //! * Permission model: `docs/DESIGN.md` §7.1 and the
 //!   `permission_service` crate.
 

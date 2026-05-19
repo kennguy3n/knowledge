@@ -1,6 +1,6 @@
 //! Hybrid retrieval over the evidence plane.
 //!
-//! Per `docs/internal/PHASES.md` Phase 1: "Hybrid retrieval — FTS5 + semantic
+//! Per `docs/DESIGN.md` §3.2: "Hybrid retrieval — FTS5 + semantic
 //! vector + recency". This module implements all three components:
 //! the FTS5 (lexical) and recency lanes draw straight from the
 //! evidence schema, and the semantic-vector lane is wired through
@@ -66,7 +66,7 @@ impl Default for HybridWeights {
 /// Hybrid retriever — combines FTS5 + recency + semantic vector
 /// similarity over the encrypted evidence plane. The semantic
 /// component is plumbed via an [`EmbeddingModel`]; when none is
-/// supplied the retriever degrades to the pre-Phase-1 behaviour
+/// supplied the retriever degrades to the FTS5-only behaviour
 /// (vector_score = 0.0).
 pub struct HybridRetriever<'a> {
     store: &'a EvidenceStore,
@@ -312,7 +312,7 @@ impl<'a> HybridRetriever<'a> {
         // Compute the semantic-vector lane when an embedding model is
         // plumbed in. We embed the query once, then walk every
         // candidate. The candidate body vector is sourced from the
-        // store's `evidence_embeddings` cache when present (Phase B);
+        // store's `evidence_embeddings` cache when present;
         // otherwise we fall back to decrypting + re-embedding the body
         // on the fly. Failures are localised: if the query embed
         // fails we skip the lane wholesale (vector_score = 0.0);
@@ -390,7 +390,7 @@ impl<'a> HybridRetriever<'a> {
     /// errored, the cache row is corrupted, the active `model_tag`
     /// has no cached row for this evidence id, or every available
     /// vector mismatches `query_dim`). The stored-cache hit
-    /// short-circuits before reading the body, which is the Phase-B
+    /// short-circuits before reading the body, which is the embedding-cache
     /// perf win.
     ///
     /// Cache-load failures (`EvidenceError::Schema` from a corrupted

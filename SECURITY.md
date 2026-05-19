@@ -36,8 +36,7 @@ personal device. The threat model assumes:
 
 ## Known Security Limitations
 
-The following are honest gaps tracked in
-[`docs/internal/MODULE_STATUS.md`](./docs/internal/MODULE_STATUS.md):
+The following are honest gaps:
 
 1. **FTS5 plaintext index purge is best-effort.** `forget()` and
    `forget_scope()` purge FTS5 tokens via `purge_fts_for_scope`, and

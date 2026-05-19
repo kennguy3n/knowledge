@@ -5,12 +5,12 @@
 //! proposals, policy changes**, plus tenant-lifecycle events
 //! (provisioning, deletion, key destruction).
 //!
-//! The Phase 3 implementation is a deterministic in-memory log keyed
+//! The current implementation is a deterministic in-memory log keyed
 //! by [`AuditEntryId`] and ordered by [`AuditEntry::sequence`]. The
 //! log is *append-only* — there is no public mutate / delete API; the
 //! type system enforces that an inserted entry cannot be modified or
 //! removed. Persistence (Postgres / object-store) lands in later
-//! phases.
+//! milestones.
 
 #![deny(missing_docs)]
 

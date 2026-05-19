@@ -1,6 +1,6 @@
 //! Channel Memory Object — the per-channel synthesis-output home.
 //!
-//! Per `docs/DESIGN.md` §6.2 and `docs/internal/PHASES.md` Phase 2: "channel memory =
+//! Per `docs/DESIGN.md` §6.2: "channel memory =
 //! recap, decisions, open questions, active tasks". Each channel has
 //! a single [`ChannelMemoryObject`] that the synthesis pipeline
 //! updates on every window. Decisions, open questions, and active

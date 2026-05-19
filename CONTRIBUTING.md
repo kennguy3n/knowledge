@@ -48,9 +48,6 @@ cargo clippy --all-targets --all-features -- -D warnings
    cargo deny check
    ```
 4. **Update documentation** when you change behaviour:
-   - If a crate's status changes, update
-     [`docs/internal/MODULE_STATUS.md`](./docs/internal/MODULE_STATUS.md)
-     **and** [`docs/internal/PROGRESS.md`](./docs/internal/PROGRESS.md).
    - If you add or change a public FFI function, update the README's
      "What is partially wired" list.
 5. **Do not commit secrets**, `.env` files, or credentials.

@@ -1,7 +1,7 @@
 //! GraphRAG-style community detection and summarisation.
 //!
-//! Per `docs/DESIGN.md` §11.1 (reasoning plane) and `docs/internal/PHASES.md`
-//! Phase 6, the substrate detects clusters ("communities") in the
+//! Per `docs/DESIGN.md` §11.1 (reasoning plane), the substrate
+//! detects clusters ("communities") in the
 //! sparse concept graph and pre-computes a structured summary for
 //! each one. Subsequent queries are routed through a
 //! [`CommunityQueryRouter`] that picks the most-relevant

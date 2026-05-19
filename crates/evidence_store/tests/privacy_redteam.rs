@@ -1,6 +1,6 @@
 //! Red-team privacy tests for the evidence plane.
 //!
-//! Per Phase 7 (`docs/internal/PHASES.md`), the substrate must withstand a battery
+//! Per `docs/DESIGN.md` §9, the substrate must withstand a battery
 //! of adversarial scenarios that probe the encrypted store's
 //! confidentiality, scope-isolation, and tamper-resistance
 //! properties. Each test in this file documents the attack vector it

@@ -1,6 +1,6 @@
-//! XLM-R embedding adapter — Phase 1 deliverable.
+//! XLM-R embedding adapter.
 //!
-//! Per `docs/internal/PHASES.md`: "XLM-R embeddings via shared ONNX artifact". This
+//! Per `docs/DESIGN.md` §3.2: "XLM-R embeddings via shared ONNX artifact". This
 //! module provides a trait-based skeleton so the production substrate
 //! can run XLM-R via ONNX Runtime on macOS / iOS / Android without
 //! the rest of the crate caring about runtime details. Tests run
@@ -16,7 +16,7 @@
 //! 3. `HybridRetriever` calls `embed(query)` once per query and
 //!    cosine-distance-scores the candidate evidence rows.
 //!
-//! Phase B: a real [`OrtOnnxRuntime`] backed by the `ort` crate and
+//! A real [`OrtOnnxRuntime`] backed by the `ort` crate and
 //! HuggingFace `tokenizers` is gated behind the `onnx-runtime` cargo
 //! feature. The default build still only carries the stub / mock
 //! runtimes.
@@ -238,7 +238,7 @@ impl EmbeddingModel for OnnxEmbeddingAdapter {
 
 /// Stub embedding model — returns zero vectors of the configured
 /// dimension. Used when the ONNX runtime is unavailable; mirrors the
-/// current Phase 0 "vector_score = 0.0" behaviour.
+/// current "vector_score = 0.0" behaviour.
 #[derive(Debug, Clone, Copy)]
 pub struct StubEmbeddingModel {
     dimension: usize,
@@ -882,7 +882,7 @@ mod tests {
 /// surface that *does not* require a live ONNX session: constructor +
 /// `is_available` + the error path when `load` is asked to read a
 /// non-existent file. The full `load → run` round-trip is covered by
-/// the (separately-flagged) integration suite in Phase D, which boots
+/// the (separately-flagged) integration suite, which boots
 /// against a real model fixture.
 #[cfg(all(test, feature = "onnx-runtime"))]
 mod ort_runtime_tests {
@@ -937,7 +937,7 @@ mod ort_runtime_tests {
 
     #[test]
     fn run_before_load_does_not_panic_when_dylib_missing() {
-        // Phase B regression: ensure the trait surface stays
+        // Regression: ensure the trait surface stays
         // panic-free even when the `libonnxruntime` dylib is absent
         // (the `load-dynamic` ort feature *will* panic on the first
         // session-builder call, but `run` short-circuits on the
@@ -952,10 +952,10 @@ mod ort_runtime_tests {
     // would require both the `libonnxruntime` dylib on the test host
     // (the `load-dynamic` feature of `ort` panics — not errors — when
     // it is absent, see `run_before_load_does_not_panic_when_dylib_missing`
-    // for the workaround) and a checked-in model file. The Phase D
+    // for the workaround) and a checked-in model file. The ONNX integration
     // integration suite covers that path against a downloaded
     // fixture. That same suite is the right place to assert the
-    // *successful* single-shot contract added in Phase B (a second
+    // *successful* single-shot contract added for embeddings (a second
     // successful `load()` returns `ModelLoad` with the "single-shot"
     // reason rather than silently discarding a fresh Session and
     // Tokenizer), because verifying it from a unit test would require

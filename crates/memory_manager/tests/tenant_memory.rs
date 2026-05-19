@@ -1,4 +1,4 @@
-//! Integration tests for the Phase 3 [`TenantMemoryObject`].
+//! Integration tests for [`TenantMemoryObject`].
 //!
 //! Per `docs/DESIGN.md` §4.3, tenant / institutional memory has "no
 //! ordinary decay — only explicit deprecation". The tests below

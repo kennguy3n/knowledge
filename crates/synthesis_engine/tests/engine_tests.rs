@@ -1,4 +1,4 @@
-//! Integration tests for the Phase 3 synthesis engine.
+//! Integration tests for the synthesis engine.
 
 use chrono::{Duration, Utc};
 use uuid::Uuid;

@@ -1,4 +1,4 @@
-//! SPHINCS+ stateless backup signer — Phase 7 deliverable.
+//! SPHINCS+ stateless backup signer.
 //!
 //! # ⚠ WARNING: STUB IMPLEMENTATION
 //!
@@ -28,7 +28,7 @@
 //!
 //! # Crate-dependency status
 //!
-//! The Phase 1 deliverable ships a **stub** implementation that uses
+//! The current deliverable ships a **stub** implementation that uses
 //! BLAKE3 (already a workspace dep) as the keyed hash core. The
 //! upstream `pqcrypto-sphincsplus` and `sphincsplus` crates pin to
 //! pre-1.0 RustCrypto / liboqs-bindings versions whose ABI has not
@@ -61,7 +61,7 @@ pub const SPHINCS_PLUS_PUBLIC_KEY_LEN: usize = 32;
 pub const SPHINCS_PLUS_SECRET_KEY_LEN: usize = 64;
 
 /// SPHINCS+-SHAKE256-128f-simple **signature** length, in bytes.
-/// The real algorithm produces 17 088-byte signatures. The Phase 1
+/// The real algorithm produces 17 088-byte signatures. The current
 /// stub emits a fixed 32-byte BLAKE3 keyed hash so tests can exercise
 /// the trait surface without a 17 kB allocation per signature.
 ///
@@ -473,7 +473,7 @@ mod tests {
     #[test]
     fn signer_backend_trait_round_trips() {
         let signer = SphincsPlusSigner::generate();
-        let msg = b"phase 7 sphincs+ probe";
+        let msg = b"sphincs+ probe";
         let sig = signer.sign_bytes(msg).expect("sign");
         assert!(signer.verify_bytes(msg, &sig).expect("verify"));
         assert!(!signer.verify_bytes(b"different", &sig).expect("verify"));

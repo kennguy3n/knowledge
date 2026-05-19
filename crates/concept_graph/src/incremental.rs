@@ -1,6 +1,6 @@
 //! Incremental concept-graph updates.
 //!
-//! Per `docs/internal/PHASES.md` Phase 6, when an observation is promoted or
+//! When an observation is promoted or
 //! superseded the substrate must recompute *only the touched
 //! branch* of the concept graph rather than re-running synthesis
 //! end-to-end. This module models that behaviour as three small
@@ -23,7 +23,7 @@
 //! change it, and reports back.
 //!
 //! Intentionally in-memory only — persistence and CRDT delta
-//! sync land in later phases (`docs/internal/PHASES.md` Phase 6 / Phase 3).
+//! sync are not yet wired.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 

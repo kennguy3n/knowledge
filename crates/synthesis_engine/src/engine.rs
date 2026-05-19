@@ -25,7 +25,7 @@ pub struct TenantSynthesisResult {
     pub object: SynthesisObject,
 }
 
-/// Server-side synthesis engine. Phase 3 ships
+/// Server-side synthesis engine. Currently ships
 /// [`crate::ManagedEndpointSynthesizer`] as a stub implementation.
 pub trait SynthesisEngine {
     /// Synthesise a [`synthesis_pipeline::SynthesisObjectType::DomainSummary`]

@@ -1,4 +1,4 @@
-//! Lexicon-only importance classifier (Phase 0 fallback).
+//! Lexicon-only importance classifier (baseline fallback).
 //!
 //! Per `docs/DESIGN.md` §4.3 and `ARCHITECTURE.md` §3.3 the substrate has
 //! four importance classes: **Critical**, **Important**, **Useful**,
@@ -181,7 +181,7 @@ impl Default for Lexicon {
     }
 }
 
-/// Phase-0 lexicon-only classifier.
+/// Lexicon-only classifier.
 ///
 /// The classifier never panics, never allocates per call beyond the
 /// usual lower-casing buffer, and is safe to call concurrently from

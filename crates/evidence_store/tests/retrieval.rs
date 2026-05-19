@@ -33,7 +33,7 @@ impl EmbeddingModel for FailingEmbeddingModel {
 /// Returns a fixed unit vector for any input. Picked so cosine
 /// similarity with itself is `1.0` and `similarity_to_score` projects
 /// it into a non-zero `vector_score`. Used to assert `search_hybrid`
-/// actually runs the embedding lane (the Phase-0 regression target).
+/// actually runs the embedding lane (the regression target).
 struct ConstUnitEmbeddingModel;
 
 impl EmbeddingModel for ConstUnitEmbeddingModel {
@@ -257,7 +257,7 @@ fn empty_limit_returns_empty() {
 }
 
 // ---------------------------------------------------------------------
-// Phase B regression tests — the on-write embedding cache.
+// Regression tests — the on-write embedding cache.
 // ---------------------------------------------------------------------
 
 /// Returns a vector whose first slot is the byte length of the input
@@ -394,7 +394,7 @@ fn search_hybrid_falls_back_to_live_embed_on_dim_mismatch() {
     );
 }
 
-/// Regression test for the Phase-B review finding "candidate_embedding
+/// Regression test for the review finding "candidate_embedding
 /// propagates cache errors via `?`, aborting entire search on a single
 /// corrupted embedding row". We seed an evidence row, then corrupt its
 /// cached embedding to a length that is not a multiple of 4 (the
@@ -436,7 +436,7 @@ fn search_hybrid_treats_corrupted_cache_row_as_miss() {
     );
 }
 
-/// Regression test for the Phase-B follow-up finding
+/// Regression test for the follow-up finding
 /// "candidate_embedding propagates body-decryption errors via `?`,
 /// aborting `search_hybrid` on a single corrupted body row" (Flag #3
 /// in the evidence_store hygiene PR). The previous shape of the
@@ -513,7 +513,7 @@ fn search_hybrid_treats_corrupted_body_row_as_miss() {
     );
 }
 
-/// Regression test for the Phase-B review finding "embedding cache is
+/// Regression test for the review finding "embedding cache is
 /// not populated for body-table dedup hits — embedding work is
 /// repeated for deduped bodies". We ingest the same large body twice
 /// and assert both rows share the cached vector and that the embed
@@ -575,7 +575,7 @@ fn dedup_hit_copies_embedding_instead_of_re_embedding() {
     );
 }
 
-/// Regression test for the Phase-B review finding "embedding cache
+/// Regression test for the review finding "embedding cache
 /// read path ignores `model_tag`, returning stale vectors on a
 /// same-dimension model swap".
 ///
@@ -682,7 +682,7 @@ fn candidate_embedding_skips_cache_row_with_mismatched_model_tag() {
     );
 }
 
-/// Regression test for the Phase-B review finding "`evidence_embeddings`
+/// Regression test for the review finding "`evidence_embeddings`
 /// PRIMARY KEY is `evidence_id` only — single model tag per row" (Flag
 /// #5). Under the v3 composite PK `(evidence_id, model_tag)` the cache
 /// must be able to hold multiple cached vectors for the same evidence
@@ -964,7 +964,7 @@ fn schema_migration_v2_to_v3_widens_pk_and_preserves_rows() {
     );
 }
 
-/// Regression test for the Phase-B review finding "schema migration
+/// Regression test for the review finding "schema migration
 /// (v1→v2) has no migration path". We construct a v1-shaped database
 /// (no `evidence_embeddings` table, `user_version = 1`) and assert
 /// that `EvidenceStore::open` forward-ports it to v2 by creating the
@@ -1061,7 +1061,7 @@ fn schema_migration_forward_ports_legacy_v1_database() {
     );
 }
 
-/// Regression test for the Phase-B review finding "schema migration
+/// Regression test for the review finding "schema migration
 /// allows opening a future database silently". A database stamped
 /// `user_version = 99` (a hypothetical future version) must be
 /// rejected up-front rather than silently downgraded to the current

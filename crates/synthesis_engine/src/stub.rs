@@ -1,10 +1,10 @@
 //! Stub managed-endpoint synthesizer.
 //!
-//! Phase 3 deliverable. Deterministically concatenates the input
+//! Deterministically concatenates the input
 //! payloads (channel-output bytes for domain synthesis, domain-output
 //! and approved-doc bytes for tenant synthesis) into a single payload
 //! prefixed with a hierarchy-tier marker. Useful for end-to-end tests
-//! and for the Phase 3 server-skeleton wiring; the real managed-AI
+//! and for the server-skeleton wiring; the real managed-AI
 //! endpoint adapter lands when the SLM gateway is wired through.
 
 use uuid::Uuid;

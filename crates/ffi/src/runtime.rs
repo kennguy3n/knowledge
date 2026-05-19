@@ -16,7 +16,7 @@
 //! Concurrency: every public FFI function acquires the singleton's
 //! `Mutex` for the duration of one call. The substrate's per-call
 //! workloads are short (single SQL statement, single AEAD seal) so
-//! coarse-grained locking is acceptable. If a future phase needs
+//! coarse-grained locking is acceptable. If a future update needs
 //! finer-grained concurrency (e.g. multi-shard ingest), this is the
 //! single seam to replace.
 
@@ -45,12 +45,12 @@ pub struct FfiRuntime {
     pub(crate) master_key: MasterKey,
     pub(crate) store: EvidenceStore,
     pub(crate) registry: DekRegistry,
-    /// Per-scope user-memory CRUD layer. Phase A.5 keeps this in
-    /// process memory only — persistence to the encrypted evidence
-    /// plane lands with Phase 2.
+    /// Per-scope user-memory CRUD layer. Kept in process memory
+    /// only — persistence to the encrypted evidence plane is not yet
+    /// wired.
     pub(crate) user_memories: HashMap<ScopeId, UserMemoryObject>,
-    /// Per-scope channel-memory recap home. Phase A.5 also keeps
-    /// this in process memory only.
+    /// Per-scope channel-memory recap home. Also kept in process
+    /// memory only.
     pub(crate) channel_memories: HashMap<ScopeId, ChannelMemoryObject>,
 }
 
@@ -101,8 +101,8 @@ impl FfiRuntime {
 
     /// Borrow the per-scope user memory, creating an empty one if it
     /// does not yet exist. The runtime treats `scope_id` as the
-    /// owning user id for now (Phase A.5 has no separate user-id
-    /// surface); Phase 2 will make this a separate handle.
+    /// owning user id for now (no separate user-id surface yet);
+    /// a future release will make this a separate handle.
     ///
     /// Prefer [`Self::user_memory`] for read-only paths to avoid
     /// growing the per-scope map on benign lookups.
@@ -123,7 +123,7 @@ impl FfiRuntime {
     /// Currently unused on the FFI surface — `trigger_synthesis`
     /// returns `Unavailable` without allocating, and a real
     /// allocation only happens once the SLM-driven synthesizer
-    /// lands (Phase C). Kept here so the call-site doesn't need to
+    /// lands. Kept here so the call-site doesn't need to
     /// re-derive map manipulation logic when that wiring arrives.
     #[allow(dead_code)]
     pub(crate) fn channel_memory_mut(&mut self, scope: ScopeId) -> &mut ChannelMemoryObject {
@@ -187,7 +187,7 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
             message: e.to_string(),
         })?;
 
-    // Phase A.5 Gap 4 — durable cryptographic-forgetting tombstones.
+    // Durable cryptographic-forgetting tombstones.
     // The on-disk `forgotten_scopes` table is the authoritative
     // record of every scope whose DEK has been destroyed. Replay
     // it into a fresh in-memory `DekRegistry` so post-restart
@@ -212,7 +212,7 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
         let _ = forgetting::destroy_scope_dek(&mut registry, registry_scope);
     }
 
-    // Phase A.5 Gap 4 follow-up — re-purge the FTS5 / embedding
+    // Follow-up — re-purge the FTS5 / embedding
     // secondary indexes for every replayed tombstone.
     //
     // `forget()` performs three steps in order: (1) destroy the

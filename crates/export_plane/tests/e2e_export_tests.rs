@@ -1,6 +1,6 @@
-//! End-to-end Phase 5 export-plane tests.
+//! End-to-end export-plane tests.
 //!
-//! Exercises the full Phase 5 export pipeline:
+//! Exercises the full export pipeline:
 //!
 //! ```text
 //! concept_graph.canonical → approval workflow → control registry →

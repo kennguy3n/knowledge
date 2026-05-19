@@ -44,7 +44,7 @@ runs the same fmt / clippy / build / test sequence on every push
 and pull request.
 
 The `demo` crate is a public-API-only end-to-end driver that seeds
-a multi-scope dataset and walks every advertised phase of the
+a multi-scope dataset and walks every advertised stage of the
 substrate using only the public APIs of each crate. It writes a
 reconciled report to `results/demo_results.md` and an integration
 test re-spawns it to validate the contract.
@@ -74,8 +74,8 @@ short version:
   AEAD publish / consume path. An on-device inference router
   with an HTTP `llama-server` adapter ships and is exercised by
   an integration test.
-- **What is partially wired.** The platform FFI surface (Phase
-  A.5) wires the core evidence store, cryptography, and memory
+- **What is partially wired.** The platform FFI surface wires
+  the core evidence store, cryptography, and memory
   management: `open_store`, `close_store`, `ingest_message`,
   `query`, `get_evidence`, `forget`, `forget_scope`, `encrypt`,
   `decrypt`, `generate_keypair`, `get_user_memory`, `pin`,
@@ -107,11 +107,10 @@ claims:
   BLAKE3-keyed placeholder so the substrate can keep its
   co-signing call sites; a real SPHINCS+ backend has not been
   wired.
-- **Platform shells are partially wired.** The Rust FFI core is
-  at Phase A.5 — evidence, crypto, and memory management are
-  wired; synthesis remains `Unavailable`. Host UI integration
-  is tracked in later phases. For the honest per-crate status,
-  see [`docs/internal/MODULE_STATUS.md`](./docs/internal/MODULE_STATUS.md).
+- **Platform shells are partially wired.** The Rust FFI core
+  covers evidence, crypto, and memory management; synthesis
+  remains `Unavailable`. Wiring the host UIs
+  is not yet implemented.
 
 ---
 
@@ -148,7 +147,6 @@ knowledge/
 ├── docs/
 │   ├── DESIGN.md              # product thesis and substrate design
 │   ├── PLATFORMS.md           # per-platform integration notes
-│   └── internal/              # engineering trackers (phases, progress)
 └── blog/                      # long-form write-ups
 ```
 
@@ -309,11 +307,6 @@ for the cryptographic details.
   Windows.
 - [blog/adaptive-memory-storage-for-on-device-ai.md](./blog/adaptive-memory-storage-for-on-device-ai.md)
   — long-form write-up of the adaptive on-device memory model.
-
-Engineering trackers (phased delivery plan, per-deliverable
-status, per-crate honest status, changelog) live under
-[`docs/internal/`](./docs/internal/) for contributors. They are
-not part of the public documentation surface.
 
 ---
 

@@ -24,15 +24,15 @@
 //! `(D, d-9) # editor @ (Tenant, t-1) # admin` resolves by recursing
 //! into `(Tenant, t-1) # admin @ ?`.
 //!
-//! Persistence is intentionally deferred — the Phase 3 implementation
+//! Persistence is intentionally deferred — the current implementation
 //! is an in-memory [`TupleStore`] suitable for unit / e2e tests and
-//! for Phase 3 server-skeleton work. The on-disk variant lands later.
+//! for server-skeleton work. The on-disk variant is not yet
+//! implemented.
 //!
 //! Cross-references:
 //!
 //! * Module map: `ARCHITECTURE.md` §2.1.
 //! * Permission model: `docs/DESIGN.md` §7.1.
-//! * Phase 3 deliverables: `docs/internal/PHASES.md` Phase 3.
 
 #![deny(missing_docs)]
 

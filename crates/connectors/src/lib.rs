@@ -1,7 +1,7 @@
 //! `connectors` — vendor-specific [`Connector`](connector_framework::Connector)
 //! implementations for the Knowledge substrate.
 //!
-//! Per `docs/DESIGN.md` §10.2 and `docs/internal/PHASES.md` Phase 4, the substrate
+//! Per `docs/DESIGN.md` §10.2 and `ARCHITECTURE.md` §4.1, the substrate
 //! ingests evidence from external systems through the
 //! [`connector_framework`] trait. This crate ships nine concrete
 //! connectors against the most common B2B sources:

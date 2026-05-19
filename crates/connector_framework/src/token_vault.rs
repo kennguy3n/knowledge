@@ -3,7 +3,7 @@
 //! Stores per-connector-instance OAuth2 tokens (access + refresh +
 //! expiry) and exposes a refresh flow. Tokens at rest are wrapped in
 //! [`SecretToken`] which zeroises on drop; the in-memory vault is
-//! the Phase 4 baseline (the production substrate will swap in an
+//! the baseline (the production substrate will swap in an
 //! SQLCipher-backed table behind the same surface).
 
 use std::collections::HashMap;

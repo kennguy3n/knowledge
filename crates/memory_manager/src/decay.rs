@@ -4,8 +4,8 @@
 //!
 //! The sweep is intentionally cheap and side-effect free outside of
 //! the supplied `objects` slice and the returned [`DecaySweepReport`].
-//! The substrate calls it on a wall-clock cadence (Phase 1 will run
-//! it on idle from the FFI surface).
+//! The substrate calls it on a wall-clock cadence (run on idle from
+//! the FFI surface).
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};

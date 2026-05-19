@@ -1,11 +1,11 @@
-//! Phase 11 — Connector Framework.
+//! Stage 11 — Connector Framework.
 //!
 //! Drives real `connector_framework::Connector` implementations from
 //! the `connectors` crate against synthesised fixture data: Google
 //! Drive, Jira, Slack, and Microsoft Graph e-mail. Each connector is
 //! authenticated, full-synced, incrementally synced, and walked
 //! through a webhook subscription + payload round-trip — exactly the
-//! state machine `docs/DESIGN.md` §10.2 and `docs/internal/PHASES.md` Phase 4 specify
+//! state machine `docs/DESIGN.md` §10.2 specifies
 //! for production deployments. Counts and timings are accumulated
 //! into [`RuntimeState`] / the demo report so the final markdown
 //! summary captures the connector-side surface.
@@ -39,7 +39,7 @@ use crate::dataset::Dataset;
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE_LABEL: &str = "Phase 11: Connector Framework";
+const PHASE_LABEL: &str = "Stage 11: Connector Framework";
 
 /// Per-connector metrics rolled up into the phase report.
 struct ConnectorMetrics {
@@ -133,7 +133,7 @@ pub fn run(
     // audit log — `audit_service::AuditActionType` is a closed enum
     // covering canonical promotions, exports, agent proposals, member
     // provisioning, key destruction, policy changes, and tenant
-    // lifecycle (per the Phase 12 / Audit Service contract). Connector
+    // lifecycle (per the Audit Service contract). Connector
     // exercise metrics are surfaced via `report.count(...)` and the
     // phase stats above without polluting the audit trail's semantic
     // contract.

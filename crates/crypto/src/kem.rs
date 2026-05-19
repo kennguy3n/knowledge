@@ -1,8 +1,8 @@
 //! ML-KEM-768 (Kyber) post-quantum KEM with a swappable backend trait.
 //!
 //! The substrate eventually wants to call into `liboqs` for a formally
-//! audited ML-KEM-768 implementation (per `ARCHITECTURE.md` §2.5). For
-//! this Phase 0 batch we provide:
+//! audited ML-KEM-768 implementation (per `ARCHITECTURE.md` §2.5).
+//! Currently we provide:
 //!
 //! * [`MlKem768Backend`] — a real implementation backed by the
 //!   pure-Rust `ml-kem` crate from RustCrypto. This is the default

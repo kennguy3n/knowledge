@@ -16,7 +16,7 @@
 //! auto-promotes proposals matching specific criteria (high
 //! confidence, high cross-source corroboration, low sensitivity).
 //!
-//! Phase 5 ships:
+//! This module ships:
 //!
 //! * The proposal data model — [`AgentProposal`], [`AgentIdentity`],
 //!   and the four payload types ([`ObservationProposal`],
@@ -33,7 +33,7 @@
 //!
 //! * `docs/DESIGN.md` §3.6 (Action plane), §7.3 (Agent write contract).
 //! * `ARCHITECTURE.md` §6 (Permission model — `proposer` relation).
-//! * `docs/internal/PHASES.md` Phase 5 (Agent contracts + export plane).
+//! * `docs/DESIGN.md` §3.6 (Agent contracts + export plane).
 
 #![deny(missing_docs)]
 

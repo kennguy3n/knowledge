@@ -20,7 +20,7 @@
 //!    [`trigger_synthesis`].
 //! 5. **Crypto** — [`generate_keypair`], [`encrypt`], [`decrypt`].
 //!
-//! # Status (Phase A.5 wiring, this PR)
+//! # Status
 //!
 //! * [`open_store`] / [`close_store`] / [`ingest_message`] / [`query`] /
 //!   [`get_evidence`] / [`forget`] / [`encrypt`] / [`decrypt`] /
@@ -30,17 +30,17 @@
 //!   [`run_decay_sweep`] / [`get_channel_memory`] are wired through to
 //!   the in-process [`memory_manager::UserMemoryObject`] /
 //!   [`memory_manager::ChannelMemoryObject`] CRUD layer. The memory
-//!   plane is in-memory only in Phase A.5 — persistence to the
-//!   encrypted evidence plane lands with Phase 2.
+//!   plane is in-memory only — persistence to the encrypted
+//!   evidence plane is not yet wired.
 //! * [`trigger_synthesis`] returns [`FfiError::Unavailable`] with
 //!   `subsystem = "synthesis"` until the on-device SLM router is
-//!   wired through this surface in Phase C.
+//!   wired through this surface.
 //!
 //! All wired functions require a prior successful call to [`open_store`].
 //! Calling any other function first returns
 //! [`FfiError::Unavailable { subsystem: "evidence_store" }`].
 //!
-//! # Known Phase A simplifications
+//! # Known simplifications
 //!
 //! These are deliberate to keep the unblocker PR small. Each one is
 //! a clean follow-up:
@@ -55,7 +55,7 @@
 //! * **`forget` resolves a scope via an evidence id.** There is no
 //!   way to forget a scope that has only ever been used via
 //!   [`encrypt`] / [`decrypt`] without ingest. A `forget_scope` API
-//!   is tracked for the post-Phase-A surface.
+//!   is tracked as a follow-up.
 //! * **Ingest hardcodes `ImportanceClass::Important`.** The
 //!   evidence store supports `Important` / `Useful` / `Noise` (with
 //!   different storage routing, including the noise ring buffer);
@@ -68,8 +68,8 @@
 //! * **Scores are ordering-only.** `score` and `fts_score` on
 //!   [`QueryResult`] are a monotone position in `[0, 1]` over the
 //!   actual result set, not a calibrated relevance signal.
-//!   `recency_score` and `vector_score` stay at `0.0` until
-//!   Phase B.
+//!   `recency_score` and `vector_score` stay at `0.0` until the
+//!   embedding pipeline is wired.
 
 #![deny(missing_docs)]
 
@@ -161,7 +161,7 @@ pub fn ingest_message(
 ///
 /// `score` and `fts_score` are a monotone position in `[0, 1]` over
 /// the actual returned set, not calibrated relevance. `recency_score`
-/// and `vector_score` stay at `0.0` until Phase B wires the
+/// and `vector_score` stay at `0.0` until the embedding pipeline wires
 /// `HybridRetriever` through this surface.
 ///
 /// # Errors
@@ -210,7 +210,7 @@ pub fn query(
             // currently expose ranking weights here — surface the
             // monotone position in [0, 1] as `fts_score` for callers
             // that only need ordering, and leave the recency /
-            // vector components at 0.0 until Phase B (real ONNX
+            // vector components at 0.0 until the embedding pipeline (real ONNX
             // embeddings) and the dedicated `HybridRetriever` are
             // wired through this surface.
             let fts_score = 1.0 - (rank as f64 / denom).min(1.0);
@@ -316,7 +316,7 @@ pub fn get_evidence(evidence_id: String) -> FfiResult<EvidenceRecord> {
 //
 // Wired through to the in-process `UserMemoryObject` / `ChannelMemoryObject`
 // CRUD layer in the `memory_manager` crate. Persistence to the
-// encrypted evidence plane is Phase 2 work; the contract surfaced
+// encrypted evidence plane is not yet wired; the contract surfaced
 // here is stable across the upcoming persistence work.
 
 /// Fetch the per-user memory bundle for `scope_id`.
@@ -326,11 +326,11 @@ pub fn get_evidence(evidence_id: String) -> FfiResult<EvidenceRecord> {
 /// insertion. Returns an empty vector if the scope has been
 /// cryptographically forgotten via [`forget`].
 ///
-/// # Phase A.5 simplification
+/// # Current simplification
 ///
 /// The user memory layer is in-process only — `open_store` /
 /// `close_store` cycles drop it. Persistence to the encrypted
-/// evidence plane is tracked under Phase 2.
+/// evidence plane is not yet wired.
 ///
 /// # Errors
 ///
@@ -354,7 +354,7 @@ pub fn get_user_memory(scope_id: ScopeIdString) -> FfiResult<Vec<MemoryRecord>> 
 /// The runtime walks every per-scope [`UserMemoryObject`] to find
 /// the owning scope; the memory layer keeps an in-process index so
 /// this is `O(scopes * objects-per-scope)` in the worst case, which
-/// is fine for the Phase A.5 working set sizes.
+/// is fine for current working set sizes.
 ///
 /// If the owning scope has been cryptographically forgotten (Gap 4
 /// tombstone in `forgotten_scopes`), the pin is rejected with
@@ -444,9 +444,9 @@ pub fn unpin(id: String) -> FfiResult<()> {
 /// short-circuits with [`FfiError::NotFound`] (or an empty result, in
 /// the case of [`query`]).
 ///
-/// # Durability — Phase A.5 semantics
+/// # Durability
 ///
-/// As of Phase A.5 (Gap 4) the tombstone is **persisted** to the
+/// The tombstone is **persisted** to the
 /// `forgotten_scopes` table on the encrypted evidence database, and
 /// the FTS5 / embedding secondary indexes are purged inline. On the
 /// next [`open_store`], the runtime replays every persisted
@@ -654,15 +654,14 @@ pub fn get_channel_memory(scope_id: ScopeIdString) -> FfiResult<Option<MemoryRec
 
 /// Trigger synthesis on `scope_id` with the given trigger reason.
 ///
-/// # Phase A.5 status
+/// # Status
 ///
 /// The synthesis pipeline requires an on-device SLM (the
 /// `inference_router` + a `llama-server` adapter or equivalent).
 /// The FFI runtime does not yet hold an `InferenceRouter` handle,
 /// so this call currently returns
 /// [`FfiError::Unavailable`] with `subsystem = "synthesis"`. The
-/// wiring lands together with the on-device SLM bring-up — see
-/// `docs/internal/PHASES.md` Phase C. The function signature and
+/// wiring lands together with the on-device SLM bring-up. The function signature and
 /// validation behaviour (UUID parsing, forgotten-scope handling)
 /// are stable; only the underlying call dispatch is deferred.
 ///
@@ -670,7 +669,7 @@ pub fn get_channel_memory(scope_id: ScopeIdString) -> FfiResult<Option<MemoryRec
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called,
 ///   or if the synthesis subsystem has not been wired through this
-///   build (the Phase A.5 default).
+///   build (the current default).
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
 pub fn trigger_synthesis(scope_id: ScopeIdString, _trigger: SynthesisTrigger) -> FfiResult<String> {
@@ -686,7 +685,7 @@ pub fn trigger_synthesis(scope_id: ScopeIdString, _trigger: SynthesisTrigger) ->
         // synthesizer runs, allocating one would attach observable
         // state to a call that never produces a recap. The
         // allocation moves into the synthesizer's success path
-        // once the SLM router is wired through (Phase C).
+        // once the SLM router is wired through.
         Err(FfiError::Unavailable {
             subsystem: "synthesis".into(),
         })
@@ -698,7 +697,7 @@ pub fn trigger_synthesis(scope_id: ScopeIdString, _trigger: SynthesisTrigger) ->
 /// Generate a fresh ML-DSA-65 (FIPS 204) signing keypair.
 ///
 /// The substrate's canonical post-quantum signature primitive — see
-/// `crypto::signer_backend::MlDsa65Signer` and `docs/internal/PHASES.md` Phase 7.
+/// `crypto::signer_backend::MlDsa65Signer`.
 ///
 /// # Errors
 ///
@@ -1228,8 +1227,8 @@ mod tests {
         let scope_uuid = uuid::Uuid::new_v4();
         let scope_str = scope_uuid.to_string();
         // The pin / unpin surface needs an existing memory object;
-        // there is no public FFI to seed one in Phase A.5 (Phase 2
-        // adds observation ingest through the FFI). Seed one
+        // there is no public FFI to seed one yet (observation
+        // ingest through the FFI is not yet wired). Seed one
         // directly via the in-crate runtime hook so we still cover
         // the round-trip.
         let mem_id = runtime::with_runtime(|rt| {
@@ -1531,7 +1530,7 @@ mod tests {
         );
     }
 
-    /// Phase A.5 (Gap 4) — durable cryptographic-forgetting tombstones
+    /// Durable cryptographic-forgetting tombstones
     /// must survive a `close_store` / `open_store` cycle. We ingest
     /// into a scope, forget it, close the store, re-open the same DB
     /// with the same master key, and assert that the scope still
@@ -1579,7 +1578,7 @@ mod tests {
         teardown();
     }
 
-    /// Phase A.5 (Gap 4 follow-up) — the FFI `forget()` path persists
+    /// The FFI `forget()` path persists
     /// the tombstone *before* purging the FTS5 / embedding indexes.
     /// If the process crashes between those two steps the tombstone
     /// survives but the plaintext FTS terms persist on disk. Re-opening

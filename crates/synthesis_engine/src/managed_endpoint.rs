@@ -1,6 +1,6 @@
-//! Managed AI endpoint synthesizer (Phase 3 / 4).
+//! Managed AI endpoint synthesizer.
 //!
-//! The Phase 3 [`crate::stub::ManagedEndpointSynthesizer`] is a
+//! The [`crate::stub::ManagedEndpointSynthesizer`] is a
 //! deterministic byte-concatenator useful for end-to-end tests but
 //! not for real synthesis. This module fleshes out the real adapter
 //! surface that the Go gateway will sit in front of:
@@ -31,7 +31,6 @@
 //!
 //! Cross-references:
 //!
-//! * Phase 3 deliverables: `docs/internal/PHASES.md` Phase 3.
 //! * Hierarchy contract: `synthesis_pipeline::hierarchy`.
 //! * Module map: `ARCHITECTURE.md` §2.1 (`synthesis_engine`).
 
@@ -85,7 +84,7 @@ pub struct EndpointConfig {
     #[serde(default, with = "duration_millis_opt")]
     pub timeout: Option<Duration>,
     /// Default GBNF / structured-output grammar to attach to every
-    /// request. Phase 3 keeps this freeform; the real adapter will
+    /// request. Currently kept freeform; the real adapter will
     /// compile it into the model-specific schema slot.
     #[serde(default)]
     pub default_grammar: Option<String>,
@@ -171,7 +170,7 @@ pub struct InputObjectRef {
     /// Tier tag.
     pub tier: WindowScopeTier,
     /// First N bytes of the payload, redacted of obvious binary
-    /// noise. Phase 3 lifts the bytes verbatim; the real adapter
+    /// noise. Lifts the bytes verbatim for now; the real adapter
     /// will redact PII.
     pub payload_preview: String,
 }

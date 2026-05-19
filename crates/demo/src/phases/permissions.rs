@@ -1,4 +1,4 @@
-//! Phase 6 — Permission Service.
+//! Stage 6 — Permission Service.
 //!
 //! Builds a Zanzibar-style relation graph for the
 //! tenant → domain → channel hierarchy used in earlier phases and
@@ -44,7 +44,7 @@ use crate::dataset::Dataset;
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE: &str = "phase06_permissions";
+const PHASE: &str = "permissions";
 
 pub fn run(
     dataset: &Dataset,
@@ -53,7 +53,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Phase 6: Permission Service");
+    let mut phase = PhaseReport::new("Stage 6: Permission Service");
 
     // -------- Namespaces --------------------------------------------
     // Use the substrate's default chain (Owner ⇒ Admin ⇒ Editor ⇒

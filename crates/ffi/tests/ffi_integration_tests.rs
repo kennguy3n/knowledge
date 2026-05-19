@@ -5,9 +5,9 @@
 //! They cover three concerns:
 //!
 //! 1. **Surface coverage** — every public function in `lib.rs` is
-//!    invoked at least once. Wired functions (Phase A) are exercised
+//!    invoked at least once. Wired functions are exercised
 //!    against a temp-dir SQLCipher store; surfaces still pending
-//!    Phase B / C wiring assert their stable `Unimplemented` method
+//!    Not-yet-wired functions assert their stable `Unimplemented` method
 //!    tag.
 //! 2. **Error mapping** — every `FfiError` variant is constructible,
 //!    JSON-stable, and exposes a stable `kind()` tag.
@@ -53,7 +53,7 @@ fn fresh_store() -> TempDir {
 
 // ─────────────────────────── Surface coverage ───────────────────────
 
-/// Evidence-store wiring is end-to-end live as of Phase A. This test
+/// Evidence-store wiring is end-to-end live. This test
 /// exercises the full ingest → query → get → forget → re-query loop
 /// against a real SQLCipher temp store and asserts the documented
 /// post-forget semantics.
@@ -101,7 +101,7 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
 }
 
 /// Memory-manager surfaces are wired through to the in-process
-/// `UserMemoryObject` CRUD layer as of Phase A.5. This integration
+/// `UserMemoryObject` CRUD layer. This integration
 /// test exercises the **empty-state** contract every host depends
 /// on: a fresh scope must return empty bundles (not `Unimplemented`
 /// and not error), so callers can render an empty memory pane
@@ -141,7 +141,7 @@ fn memory_surface_returns_empty_for_fresh_scope() {
 /// Synthesis-pipeline surfaces are partially wired: the recap
 /// fetcher returns `None` until a real synthesis has run, and
 /// `trigger_synthesis` returns `Unavailable { subsystem: "synthesis" }`
-/// until the on-device SLM router is wired through (Phase C). The
+/// until the on-device SLM router is wired through. The
 /// stable method-string contract for `Unimplemented` is gone — hosts
 /// now switch on `kind` instead, so this test pins the new
 /// `Unavailable` shape.

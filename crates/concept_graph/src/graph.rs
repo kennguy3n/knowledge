@@ -1,8 +1,7 @@
 //! [`ConceptGraph`] — in-memory adjacency-backed concept graph.
 //!
-//! The Phase 2 implementation is a pure in-memory `HashMap` adjacency
-//! list. Persistence to the encrypted store and CRDT delta sync land
-//! later — see `docs/internal/PHASES.md` Phase 2/3.
+//! A pure in-memory `HashMap` adjacency list. Persistence to the
+//! encrypted store and CRDT delta sync are not yet wired.
 
 use std::collections::{HashMap, HashSet};
 

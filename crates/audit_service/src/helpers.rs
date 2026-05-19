@@ -1,7 +1,7 @@
-//! Phase 5 audit-event helpers.
+//! Audit-event helpers.
 //!
 //! These helpers wrap [`crate::AuditEntryBuilder`] for the common
-//! Phase 5 / Phase 3 lifecycle events so callers don't have to
+//! lifecycle events so callers don't have to
 //! re-implement the same builder boilerplate at each call-site. They
 //! return the [`crate::AuditEntryId`] of the appended entry so the
 //! caller can correlate further actions back to the audit row.
@@ -46,7 +46,7 @@ pub fn log_export(
 
 /// Append an [`AuditActionType::ExportSimulated`] entry.
 ///
-/// Phase 5 produces an audit entry every time
+/// The export plane produces an audit entry every time
 /// [`PolicySimulator::simulate`](https://docs.rs/) is run so operators
 /// can prove a simulation occurred without producing a real export.
 pub fn log_export_simulated(

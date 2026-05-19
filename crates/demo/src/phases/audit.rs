@@ -1,4 +1,4 @@
-//! Phase 12 — Audit Service.
+//! Stage 12 — Audit Service.
 //!
 //! Drives the [`audit_service::AuditLog`] populated by phases 5 / 6 /
 //! 7 / 8 / 9 / 10 / 11 and exercises the production query API
@@ -6,7 +6,7 @@
 //! phase that performs an audit-worthy action (synthesis emission,
 //! permission grant, key destruction, export render / simulate, agent
 //! proposal lifecycle, contradiction detection, connector exercise)
-//! has already appended into [`RuntimeState::audit_log`]; Phase 12
+//! has already appended into [`RuntimeState::audit_log`]; this stage
 //! now seals the run by:
 //!
 //! 1. Appending a tenant-lifecycle "demo-run-completed" entry so the
@@ -33,7 +33,7 @@ use crate::dataset::Dataset;
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE_LABEL: &str = "phase12_audit";
+const PHASE_LABEL: &str = "audit";
 
 pub fn run(
     dataset: &Dataset,
@@ -42,7 +42,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let start = Instant::now();
-    let mut phase = PhaseReport::new("Phase 12: Audit Service");
+    let mut phase = PhaseReport::new("Stage 12: Audit Service");
 
     // 1. Append a tenant-lifecycle "demo-run-completed" entry so the
     //    final audit row is the substrate-level provenance of the
@@ -129,7 +129,7 @@ pub fn run(
     );
 
     // 4b. Action-filtered query — narrow to canonical-promotion
-    //     entries (Phase 9 / 10 emit these via
+    //     entries (agent / reasoning stages emit these via
     //     `log_proposal_promoted`).
     let promoted_query = AuditQuery::new().with_action(AuditActionType::AgentProposalPromoted);
     let promoted_q_started = Instant::now();
@@ -230,7 +230,7 @@ pub fn run(
             actor_q_elapsed,
         );
     } else {
-        // Phase 9 always emits a User-actor entry, so this branch is
+        // The agent stage always emits a User-actor entry, so this branch is
         // a safety net for future refactors. We still record the
         // assertion so it's surfaced rather than silently skipped.
         log.record(

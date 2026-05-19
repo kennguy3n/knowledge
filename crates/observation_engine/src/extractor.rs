@@ -1,6 +1,6 @@
 //! Lexicon-first observation extraction.
 //!
-//! The Phase-1 baseline. No model required; produces
+//! The lexicon baseline. No model required; produces
 //! [`crate::types::Observation`]s by scanning the input text for:
 //!
 //! * **Entities** — capitalised tokens (people / projects), `@`-mentions,
@@ -13,7 +13,7 @@
 //!   decisions, or pure entity mentions.
 //!
 //! Confidence values are intentionally fixed per type; the next
-//! pipeline stage (XLM-R + SLM-assisted extraction in later phases)
+//! pipeline stage (XLM-R + SLM-assisted extraction)
 //! refines them.
 
 use evidence_store::ScopeId;
@@ -27,7 +27,7 @@ pub trait ObservationExtractor {
     fn extract(&self, text: &str, scope: ScopeId) -> Vec<Observation>;
 }
 
-/// Phase-1 lexicon extractor (`docs/DESIGN.md` §3.2 first pass).
+/// Lexicon extractor (`docs/DESIGN.md` §3.2 first pass).
 #[derive(Debug, Clone)]
 pub struct LexiconExtractor {
     decision_keywords: Vec<String>,

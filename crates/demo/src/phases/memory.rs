@@ -1,6 +1,6 @@
-//! Phase 3 — Memory Manager.
+//! Stage 3 — Memory Manager.
 //!
-//! Exercises the full Phase-1 deliverable surface from
+//! Exercises the full memory-manager surface from
 //! [`memory_manager`]:
 //!
 //! * Decay state machine (`Candidate -> Reinforced -> Consolidated ->
@@ -15,7 +15,7 @@
 //! * [`memory_manager::episodic::EpisodicMemory`] +
 //!   [`memory_manager::episodic::SessionDetector`] +
 //!   [`memory_manager::episodic::StubSummarizer`] — every observation
-//!   from Phase 2 is folded into per-session episodic summaries.
+//!   from the observation stage is folded into per-session episodic summaries.
 
 use std::time::Instant;
 
@@ -34,7 +34,7 @@ use crate::dataset::Dataset;
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE: &str = "phase03_memory";
+const PHASE: &str = "memory";
 
 pub fn run(
     _dataset: &Dataset,
@@ -43,14 +43,14 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Phase 3: Memory Manager");
+    let mut phase = PhaseReport::new("Stage 3: Memory Manager");
 
-    // -- Build a UserMemoryObject and seed it from the Phase-2 batch.
+    // -- Build a UserMemoryObject and seed it from the observation batch.
     let scope = state
         .ingested_rows
         .first()
         .map(|r| r.scope_id)
-        .expect("phase 1 must have ingested at least one row before phase 3 runs");
+        .expect("evidence stage must have ingested at least one row before memory stage runs");
     let mut user = UserMemoryObject::new(Uuid::new_v4(), scope);
 
     let bench_started = Instant::now();

@@ -1,10 +1,10 @@
-//! Confidential-compute (TEE) worker — Phase 7 deliverable.
+//! Confidential-compute (TEE) worker.
 //!
 //! Per `docs/DESIGN.md` §10 ("Confidential synthesis") and `ARCHITECTURE.md`
 //! §3.3 ("Server-side synthesis"), tenant-tier and domain-tier
 //! synthesis runs in a Trusted Execution Environment so the operator
 //! cannot read plaintext evidence even with full host access. This
-//! module ships the **Phase 7 skeleton** of that worker:
+//! module ships the **skeleton** of that worker:
 //!
 //! 1. [`TeeWorkerLifecycle`] state machine (`Unattested` → `Attesting`
 //!    → `Attested` → `Synthesizing` → `Idle`).
@@ -23,7 +23,7 @@
 //!    platform quote-generation step (`quote(enclave_image, nonce) ->
 //!    AttestationReport`). The mock implementation uses
 //!    [`crypto::attestation::mock_attestation_report`] verbatim, which
-//!    is exactly what the Phase 7 attestation tests already exercise.
+//!    is exactly what the attestation tests already exercise.
 //!
 //! Once a real `intel-tdx` / `amd-sev-snp` / `nitro-enclaves` quote
 //! library is pinned, only [`TeeRuntime::quote`] needs to grow a real

@@ -1,9 +1,8 @@
 //! `synthesis_engine` — server-side synthesis engine skeleton.
 //!
-//! Per `docs/internal/PHASES.md` Phase 3, the substrate ships a server-side
-//! synthesis service composed of a Go gateway and a Rust synthesis
-//! engine. This crate is the **Rust side**; the Go gateway lands in a
-//! later phase.
+//! The substrate ships a server-side synthesis service composed of a
+//! Go gateway and a Rust synthesis engine. This crate is the **Rust
+//! side**; the Go gateway is not yet implemented.
 //!
 //! The engine exposes two methods:
 //!
@@ -23,10 +22,9 @@
 //! [`synthesis_pipeline::TenantSynthesisInput`] arguments and refuse
 //! to operate on raw evidence rows or cross-scope objects.
 //!
-//! Phase 3 ships a [`ManagedEndpointSynthesizer`] stub that
-//! deterministically concatenates the input payloads. The real
-//! managed-AI endpoint adapter lands when the SLM gateway is wired
-//! through.
+//! Ships a [`ManagedEndpointSynthesizer`] stub that deterministically
+//! concatenates the input payloads. The real managed-AI endpoint
+//! adapter lands when the SLM gateway is wired through.
 
 #![deny(missing_docs)]
 

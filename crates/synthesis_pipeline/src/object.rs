@@ -82,7 +82,7 @@ pub struct SynthesisObject {
     pub window_id: WindowId,
     /// Typed payload kind.
     pub object_type: SynthesisObjectType,
-    /// Encrypted (or plaintext, in tests) payload bytes. Phase 2's
+    /// Encrypted (or plaintext, in tests) payload bytes. The
     /// `publish_synthesis_object` round-trip in
     /// [`crate::publish`] wraps these bytes in an
     /// [`crate::publish::EncryptedSynthesisObject`] before

@@ -1,13 +1,13 @@
 //! Contradiction detection and adjudication workflow.
 //!
-//! Per `docs/DESIGN.md` §11.1 and `docs/internal/PHASES.md` Phase 6, the substrate
+//! Per `docs/DESIGN.md` §11.1, the substrate
 //! materialises *opposing claims* in the concept graph and runs a
 //! lightweight adjudication state machine on top.
 //!
 //! `ContradictionDetector::scan` walks every pair of `Canonical`
 //! nodes whose normalised content is *opposing* (a configurable
 //! oracle, defaulting to a content-prefix-based heuristic for the
-//! lexicon-only Phase 6 baseline) and returns a list of
+//! lexicon-only baseline) and returns a list of
 //! [`ContradictionEdge`] candidates that the caller can persist
 //! into the graph as `Contradicts` edges.
 

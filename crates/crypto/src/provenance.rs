@@ -8,23 +8,23 @@
 //! key so a consumer can verify authenticity even when the synthesizer
 //! is untrusted.
 //!
-//! Phase 2 ships:
+//! This module ships:
 //!
 //! * The PROV data model ([`ProvenanceBundle`], [`SynthesisActivity`],
 //!   [`ProvenanceAgent`], [`AgentKind`]).
 //! * A [`ProvenanceSigner`] trait with `sign` / `verify` so the
-//!   ML-DSA-65 implementation in Phase 7 can drop in without touching
-//!   the rest of the substrate.
+//!   ML-DSA-65 implementation can drop in without touching the rest
+//!   of the substrate.
 //! * A [`TestSigner`] HMAC-SHA256 implementation for tests and
 //!   bring-up. **This signer is not post-quantum and must not be used
 //!   in production** — it is only here to exercise the trait surface
-//!   while ML-DSA-65 lands behind the same trait in Phase 7.
+//!   while ML-DSA-65 lands behind the same trait.
 //!
 //! The signed envelope ([`SignedBundle`]) is a JSON-canonicalised
 //! representation of the bundle plus a detached signature. The
 //! canonicalisation is intentionally simple (`serde_json` over a
-//! struct with stable field ordering); the same shape will be
-//! consumed by the ML-DSA-65 signer in Phase 7.
+//! struct with stable field ordering); the same shape is consumed by
+//! the ML-DSA-65 signer.
 
 use chrono::{DateTime, Utc};
 #[cfg(any(test, feature = "test-support"))]
@@ -155,9 +155,8 @@ impl ProvenanceAgent {
 /// PROV bundle — the unsigned shape.
 ///
 /// Per `docs/DESIGN.md` §7.2 every observation / summary / concept carries
-/// one of these. Phase 2 ships the data model; Phase 7 swaps the
-/// underlying [`ProvenanceSigner`] from [`TestSigner`] to an ML-DSA-65
-/// implementation.
+/// one of these. The ML-DSA-65 [`ProvenanceSigner`] is the production
+/// implementation; [`TestSigner`] is used for tests.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProvenanceBundle {
     /// Identifier of the entity (observation / summary / concept) the
@@ -191,10 +190,9 @@ impl ProvenanceBundle {
     }
 
     /// Canonical byte representation used as the message under
-    /// signature. The Phase 2 implementation uses `serde_json` with a
-    /// fixed field order (the struct field order). Phase 7's ML-DSA-65
-    /// signer will adopt the same canonicalisation so existing
-    /// signatures remain verifiable.
+    /// signature. Uses `serde_json` with a fixed field order (the
+    /// struct field order). The ML-DSA-65 signer adopts the same
+    /// canonicalisation so existing signatures remain verifiable.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, CryptoError> {
         serde_json::to_vec(self)
             .map_err(|_| CryptoError::ProvenanceSerialisation("serde_json::to_vec failed"))
@@ -204,8 +202,8 @@ impl ProvenanceBundle {
 /// Detached signature emitted by [`ProvenanceSigner::sign`] and
 /// consumed by [`ProvenanceSigner::verify`]. The byte layout is opaque
 /// to consumers — only the matching signer can verify a signature it
-/// produced. Phase 2 uses HMAC-SHA256 (32 bytes); Phase 7 swaps in
-/// ML-DSA-65 (~3 KB).
+/// produced. The test signer uses HMAC-SHA256 (32 bytes); the
+/// production signer uses ML-DSA-65 (~3 KB).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProvenanceSignature(pub Vec<u8>);
 
@@ -228,9 +226,9 @@ pub struct SignedBundle {
 
 /// Produce / verify provenance signatures.
 ///
-/// Phase 2's [`TestSigner`] uses HMAC-SHA256. Phase 7 will land an
-/// ML-DSA-65 implementation behind this same trait so the rest of the
-/// substrate does not change.
+/// The [`TestSigner`] uses HMAC-SHA256. The ML-DSA-65 implementation
+/// sits behind this same trait so the rest of the substrate does not
+/// change.
 pub trait ProvenanceSigner {
     /// Sign `bundle` and return the [`SignedBundle`] envelope.
     fn sign(&self, bundle: ProvenanceBundle) -> Result<SignedBundle, CryptoError>;
@@ -247,7 +245,7 @@ pub trait ProvenanceSigner {
 ///
 /// **Not post-quantum, not for production.** This exists so the
 /// [`ProvenanceSigner`] trait can be exercised by tests and callers
-/// can wire the integration surface before Phase 7 lands ML-DSA-65.
+/// can wire the integration surface before ML-DSA-65 is adopted.
 ///
 /// Gated behind `#[cfg(any(test, feature = "test-support"))]` so it
 /// does not ship in default `cargo build` artifacts. Real production

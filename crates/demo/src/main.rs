@@ -33,18 +33,18 @@ fn main() -> std::io::Result<()> {
     let dataset = dataset::build_dataset();
     report.dataset_size = dataset.messages.len();
 
-    phases::phase01_evidence::run(&dataset, &mut state, &mut report, &mut log);
-    phases::phase02_observation::run(&dataset, &mut state, &mut report, &mut log);
-    phases::phase03_memory::run(&dataset, &mut state, &mut report, &mut log);
-    phases::phase04_concept_graph::run(&dataset, &mut state, &mut report, &mut log);
-    phases::phase05_synthesis::run(&dataset, &mut state, &mut report, &mut log);
-    phases::phase06_permissions::run(&dataset, &mut state, &mut report, &mut log);
-    phases::phase07_crypto::run(&dataset, &mut state, &mut report, &mut log);
-    phases::phase08_export::run(&dataset, &mut state, &mut report, &mut log);
-    phases::phase09_agent::run(&dataset, &mut state, &mut report, &mut log);
-    phases::phase10_reasoning::run(&dataset, &mut state, &mut report, &mut log);
-    phases::phase11_connectors::run(&dataset, &mut state, &mut report, &mut log);
-    phases::phase12_audit::run(&dataset, &mut state, &mut report, &mut log);
+    phases::evidence::run(&dataset, &mut state, &mut report, &mut log);
+    phases::observation::run(&dataset, &mut state, &mut report, &mut log);
+    phases::memory::run(&dataset, &mut state, &mut report, &mut log);
+    phases::concept_graph::run(&dataset, &mut state, &mut report, &mut log);
+    phases::synthesis::run(&dataset, &mut state, &mut report, &mut log);
+    phases::permissions::run(&dataset, &mut state, &mut report, &mut log);
+    phases::crypto::run(&dataset, &mut state, &mut report, &mut log);
+    phases::export::run(&dataset, &mut state, &mut report, &mut log);
+    phases::agent::run(&dataset, &mut state, &mut report, &mut log);
+    phases::reasoning::run(&dataset, &mut state, &mut report, &mut log);
+    phases::connectors::run(&dataset, &mut state, &mut report, &mut log);
+    phases::audit::run(&dataset, &mut state, &mut report, &mut log);
 
     report.total_wall_clock = started.elapsed();
     report.attach_assertions(&log);

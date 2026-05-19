@@ -1,6 +1,6 @@
 //! `sync_engine` — CRDT-based delta sync of synthesis objects.
 //!
-//! Per `docs/DESIGN.md` §3.2 and `docs/internal/PHASES.md` Phase 2: every replica
+//! Per `docs/DESIGN.md` §3.2: every replica
 //! holds an [`AddWinsSet`] of synthesis-object ids per scope, plus an
 //! append-only [`OpLog`] of [`SyncOp`] entries. Replicas exchange
 //! their op logs out-of-band; [`merge_logs`] / [`OpLog::merge`]
@@ -14,7 +14,7 @@
 //!
 //! * `docs/DESIGN.md` §3.2 — CRDT delta protocol
 //! * `ARCHITECTURE.md` §2.1 — sync engine module
-//! * `docs/internal/PHASES.md` Phase 2 — concrete deliverables
+//! * `docs/DESIGN.md` §3.2 — CRDT delta protocol (deliverables)
 
 #![deny(missing_docs)]
 
@@ -39,8 +39,8 @@ pub struct SyncScopeId(
     pub Uuid,
 );
 
-/// Placeholder for a CRDT delta over synthesis objects. Phase 2
-/// keeps the type opaque so the wire format can evolve without
+/// Placeholder for a CRDT delta over synthesis objects. The type
+/// is kept opaque so the wire format can evolve without
 /// breaking callers.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CrdtDelta {
@@ -50,7 +50,7 @@ pub struct CrdtDelta {
 
 /// CRDT-based delta sync engine.
 ///
-/// Phase 2: backed by a per-scope [`OpLog<T>`] and on-demand replay
+/// Backed by a per-scope [`OpLog<T>`] and on-demand replay
 /// into an [`AddWinsSet<T>`]. The element type `T` is parameterised
 /// so callers can sync ids, evidence refs, or full synthesis-object
 /// blobs.

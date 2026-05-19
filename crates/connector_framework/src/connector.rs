@@ -39,8 +39,8 @@ pub struct SyncRunResult {
 /// * `handle_webhook_event` — translate one provider-side webhook
 ///   payload into a substrate-side [`ConnectorEvent`].
 ///
-/// Phase 4 of the substrate ships only the trait + framework; the
-/// individual connectors land in later phases.
+/// Ships only the trait + framework; the individual connectors
+/// live in their own crates.
 pub trait Connector {
     /// Run the auth handshake and return a fresh bearer token.
     fn authenticate(&self, config: &ConnectorConfig) -> Result<OAuth2Token>;

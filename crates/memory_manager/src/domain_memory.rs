@@ -1,6 +1,6 @@
 //! Domain Memory Object — the per-domain synthesis-output home.
 //!
-//! Per `docs/DESIGN.md` §6.2 and `docs/internal/PHASES.md` Phase 3: the Domain Memory
+//! Per `docs/DESIGN.md` §6.2: the Domain Memory
 //! Object captures **cross-channel workstreams, dependencies, risks,
 //! procedures** for a logical work area within a B2B tenant. It is
 //! the second tier of the synthesis hierarchy:
