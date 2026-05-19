@@ -95,7 +95,16 @@ const _: () = assert!(SPHINCS_PLUS_SIGNATURE_LEN == 17_088);
 
 /// SPHINCS+ algorithm tag carried in [`crate::provenance::SynthesisActivity`]
 /// and audit-log envelopes.
-pub const SPHINCS_PLUS_ALGORITHM_TAG: &str = "sphincs-plus-shake256-128f-simple";
+///
+/// Uses the canonical PQClean / NIST round-3 final naming
+/// (`sphincs-shake-128f-simple`) for the variant — the older form
+/// `sphincs-shake256-128f-simple` referred to the same parameter set
+/// but was deprecated when PQClean dropped the redundant `256` (the
+/// only SHAKE variant SPHINCS+ uses is SHAKE-256 as a variable-output
+/// XOF, so naming it explicitly carried no information). The `plus`
+/// prefix is retained so downstream consumers can disambiguate this
+/// from non-SPHINCS+ SHAKE-based signatures.
+pub const SPHINCS_PLUS_ALGORITHM_TAG: &str = "sphincs-plus-shake-128f-simple";
 
 /// SPHINCS+ signing key + verifying key (real PQClean-backed).
 ///
@@ -554,10 +563,7 @@ mod tests {
 
     #[test]
     fn algorithm_tag_is_pinned() {
-        assert_eq!(
-            SPHINCS_PLUS_ALGORITHM_TAG,
-            "sphincs-plus-shake256-128f-simple"
-        );
+        assert_eq!(SPHINCS_PLUS_ALGORITHM_TAG, "sphincs-plus-shake-128f-simple");
     }
 
     #[test]
