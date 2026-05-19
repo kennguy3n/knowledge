@@ -1,0 +1,31 @@
+[package]
+name = "crypto-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+crypto = { path = "..", features = ["test-support"] }
+
+# Prevent this crate from interfering with workspace-level build
+# commands. cargo-fuzz invokes it via its own manifest path.
+[workspace]
+
+[[bin]]
+name = "fuzz_aead_roundtrip"
+path = "fuzz_targets/fuzz_aead_roundtrip.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_hkdf_derive"
+path = "fuzz_targets/fuzz_hkdf_derive.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_sphincs_sign_verify"
+path = "fuzz_targets/fuzz_sphincs_sign_verify.rs"
+doc = false
