@@ -74,15 +74,20 @@ short version:
   AEAD publish / consume path. An on-device inference router
   with an HTTP `llama-server` adapter ships and is exercised by
   an integration test.
-- **What is contract-only.** The platform FFI surfaces (UniFFI
-  for iOS, JNI for Android, N-API for macOS / Windows) build
-  real artifacts but every exported function returns
-  `Unimplemented`. Connectors (Drive, OneDrive, Notion, Jira,
-  Confluence, Figma, HubSpot, Slack, Email) are fixture parsers
-  with no live OAuth2 transport. The server-side synthesis
-  service is a Rust skeleton; the Go gateway lives outside this
-  repo. SPHINCS+ is a BLAKE3-keyed placeholder, not a real
-  lattice signer.
+- **What is partially wired.** The platform FFI surface (Phase
+  A.5) wires the core evidence store, cryptography, and memory
+  management: `open_store`, `close_store`, `ingest_message`,
+  `query`, `get_evidence`, `forget`, `forget_scope`, `encrypt`,
+  `decrypt`, `generate_keypair`, `get_user_memory`, `pin`,
+  `unpin`, `list_memories`, `run_decay_sweep`,
+  `get_channel_memory`, `escape_fts_query` are live.
+  `trigger_synthesis` returns `Unavailable`.
+- **What is contract-only.** Connectors (Drive, OneDrive,
+  Notion, Jira, Confluence, Figma, HubSpot, Slack, Email) are
+  fixture parsers with no live OAuth2 transport. The server-side
+  synthesis service is a Rust skeleton; the Go gateway lives
+  outside this repo. SPHINCS+ is a BLAKE3-keyed placeholder, not
+  a real lattice signer.
 - **What it is not.** Not a chat-with-your-files product, not a
   vector database with a UI bolted on top, not a production
   release. It is a substrate for surfaces, not a surface itself.
@@ -92,23 +97,21 @@ short version:
 The most important honesty caveats for anyone evaluating privacy
 claims:
 
-- **FTS5 plaintext index is not erased by DEK destruction.**
-  SQLCipher encrypts every page, but the SQLite FTS5 index keeps
-  tokenized terms outside the AEAD envelope. Destroying a
-  scope's data-encryption key makes the row bodies undecryptable,
-  but it does *not* remove tokens from the FTS5 index. See
-  [`crates/evidence_store/tests/forgetting_fts.rs`](./crates/evidence_store/tests/forgetting_fts.rs)
-  for the test that documents this.
+- **FTS5 plaintext index purge is best-effort.** `forget()` and
+  `forget_scope()` now call `purge_fts_for_scope()` to delete
+  FTS5 tokens for the forgotten scope, and persisted tombstones
+  ensure the purge survives a crash / restart. However, SQLite
+  FTS5 `DELETE` may leave residual data in shadow tables until
+  `OPTIMIZE` or `REBUILD` is run.
 - **SPHINCS+ is a stub.** `crates/crypto/src/sphincs.rs` is a
   BLAKE3-keyed placeholder so the substrate can keep its
   co-signing call sites; a real SPHINCS+ backend has not been
   wired.
-- **Platform shells are skeletons.** The Rust core is the real
-  substrate; the iOS / Android / macOS / Windows shells are
-  build-pipeline artifacts whose exports all return
-  `Unimplemented` today. Wiring the host UIs lands in a later
-  phase. For the honest per-crate status, see
-  [`docs/internal/MODULE_STATUS.md`](./docs/internal/MODULE_STATUS.md).
+- **Platform shells are partially wired.** The Rust FFI core is
+  at Phase A.5 — evidence, crypto, and memory management are
+  wired; synthesis remains `Unavailable`. Host UI integration
+  is tracked in later phases. For the honest per-crate status,
+  see [`docs/internal/MODULE_STATUS.md`](./docs/internal/MODULE_STATUS.md).
 
 ---
 

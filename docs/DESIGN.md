@@ -142,9 +142,16 @@ routing:
   for the current synthesis window only. No epoch key needed for
   disposal — content is simply overwritten.
 
-All paths use per-scope, per-epoch encryption
-(XChaCha20-Poly1305 + BLAKE3 framing); rows hold scope id,
-content hash, source connector ref, and ACL pointer.
+Inline rows (body <= 512 bytes) use per-scope AEAD
+(XChaCha20-Poly1305). Body-table rows (body > 512 bytes) are
+encrypted under a random Content Encryption Key (CEK);
+per-scope CEK wraps in the `body_store_key_wraps` table ensure
+deduplication while maintaining cryptographic forgetting:
+deleting a scope's wraps makes the body unrecoverable once no
+wraps remain. FTS5 tokens are purged via `purge_fts_for_scope`
+on forget, with tombstone replay on `open_store` closing the
+crash-gap. Rows hold scope id, content hash, source connector
+ref, and ACL pointer.
 
 ### 3.2 Observation plane
 

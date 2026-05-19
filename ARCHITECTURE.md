@@ -150,9 +150,12 @@ per-phase scope of each module is tracked in
     This eliminates JOIN overhead for the chat-message common case.
   - **Body-table path (> 512 bytes):** files, document chunks,
     transcripts, and large bodies are stored in a separate body
-    table with BLAKE3 content-hash deduplication. Duplicate
-    hashes share a single body row referenced by multiple
-    observation rows.
+    table with BLAKE3 content-hash deduplication. Each body row
+    is encrypted under a random Content Encryption Key (CEK);
+    per-scope CEK wraps in `body_store_key_wraps` let multiple
+    scopes share the same body while preserving cryptographic
+    forgetting: deleting a scope's wraps makes the body
+    unrecoverable once no wraps remain.
   - **Ring-buffer path (noise class):** messages classified as
     noise by the importance tagger are stored in a fixed-size
     circular buffer (configurable, default 5 MB) that overwrites
@@ -175,6 +178,13 @@ per-phase scope of each module is tracked in
 - **N-API** for macOS / Windows. Electron's main process loads
   the `.node` addon and exposes an IPC surface to the React
   renderer.
+
+The FFI surface is at **Phase A.5**: core evidence store,
+cryptography, and memory management functions are wired and
+tested. `trigger_synthesis` returns `Unavailable` until the
+on-device SLM inference path lands. See
+[`docs/internal/MODULE_STATUS.md`](./docs/internal/MODULE_STATUS.md)
+for the full wired-vs-unavailable export list.
 
 ### 2.4 CRDT-based sync
 
@@ -514,6 +524,11 @@ longer recoverable.
 ### 8.5 Cryptographic forgetting
 
 - **Per-scope DEK destroy** forgets the entire scope at once.
+  Body-table dedup rows are protected by per-scope CEK wraps
+  (`body_store_key_wraps`): deleting a scope's wraps makes the
+  shared body unrecoverable once no wraps remain. FTS5 tokens
+  are purged via `purge_fts_for_scope`; tombstone replay on
+  `open_store` closes the crash-gap.
 - **Per-epoch DEK destroy** forgets a time slice of the cold
   archive.
 - **Per-row DEK** (used for very-high-sensitivity rows) gives
