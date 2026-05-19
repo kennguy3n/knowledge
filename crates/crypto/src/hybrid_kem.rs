@@ -19,7 +19,7 @@
 //! Both halves are real on encap and decap; there is no fall-back path
 //! that silently drops the PQ side. The PQ side is selected through the
 //! [`KemBackend`] trait so it can be swapped (RustCrypto → `liboqs`) in
-//! a future phase.
+//! a future update.
 
 use hkdf::Hkdf;
 use rand::rngs::OsRng;

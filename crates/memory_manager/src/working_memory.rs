@@ -1,7 +1,6 @@
 //! Working memory — a bounded, TTL-evicting context window.
 //!
-//! Per `docs/internal/PHASES.md` Phase 1: "Working memory — current context window
-//! management with TTL eviction".
+//! Provides bounded, TTL-evicting context window management.
 //!
 //! The working memory is intentionally an in-RAM, single-process data
 //! structure. Synthesis pipelines push entries as they extract context

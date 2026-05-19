@@ -1,4 +1,4 @@
-//! Synthesis-hierarchy enforcement (Phase 3).
+//! Synthesis-hierarchy enforcement.
 //!
 //! Per `docs/DESIGN.md` §6.3 the substrate has three rules about what
 //! each synthesis tier may consume:
@@ -11,7 +11,7 @@
 //! 3. **Tenant synthesis consumes domain objects + approved official
 //!    docs.** No back-channel access to raw evidence at tenant scope.
 //!
-//! Phase 3 lifts those rules into the type system. The
+//! The hierarchy lifts those rules into the type system. The
 //! [`DomainSynthesisInput`] type can only be constructed from
 //! [`memory_manager::ChannelMemoryObject`] outputs (and their derived
 //! [`SynthesisObject`]s); the [`TenantSynthesisInput`] type can only
@@ -173,15 +173,15 @@ impl DomainSynthesisInput {
 }
 
 /// One approved official document admitted as a tenant-synthesis
-/// input. The Phase 3 contract is "approved-doc reference + opaque
+/// input. The contract is "approved-doc reference + opaque
 /// blob"; downstream code carries the blob through into the
 /// synthesizer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApprovedDocument {
     /// Reference (id, label, approver, approved_at).
     pub reference: ApprovedDocumentRef,
-    /// Opaque payload bytes (PDF, markdown, ...). Phase 3 keeps this
-    /// opaque; the SLM adapter will parse it later.
+    /// Opaque payload bytes (PDF, markdown, ...). Kept opaque; the
+    /// SLM adapter will parse it later.
     pub payload: Vec<u8>,
 }
 
@@ -291,7 +291,7 @@ pub enum WindowScopeTier {
 
 /// Hierarchy-aware extension trait on [`SynthesisWindowManager`].
 ///
-/// Phase 3 keeps the underlying [`SynthesisWindowManager`] storage
+/// Keeps the underlying [`SynthesisWindowManager`] storage
 /// untouched; the `_tiered` methods on this trait wrap the existing
 /// open/lifecycle methods with a scope-tier tag. Domain windows
 /// require a [`DomainSynthesisInput`] to be marked complete; tenant

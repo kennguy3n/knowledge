@@ -1,4 +1,4 @@
-//! Integration tests for the Phase 3 permission service.
+//! Integration tests for the permission service.
 
 use uuid::Uuid;
 

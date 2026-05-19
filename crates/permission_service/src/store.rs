@@ -12,9 +12,8 @@ use crate::tuple::{ObjectRef, Relation, RelationTuple};
 /// detect double-write bugs (use [`Self::upsert`] for the
 /// best-effort flavour).
 ///
-/// Persistence is intentionally deferred — Phase 3 ships the
-/// in-memory variant and the on-disk SQLCipher-backed variant lands
-/// in a later phase.
+/// Persistence is intentionally deferred — ships the in-memory
+/// variant; the on-disk SQLCipher-backed variant is not yet wired.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TupleStore {
     tuples: HashSet<RelationTuple>,

@@ -1,7 +1,7 @@
-//! Phase 5 — Synthesis Pipeline.
+//! Stage 5 — Synthesis Pipeline.
 //!
 //! Drives the full channel → domain → tenant synthesis chain
-//! described in `docs/DESIGN.md` §6 and `docs/internal/PHASES.md` Phase 2/3.
+//! described in `docs/DESIGN.md` §6.
 //!
 //! * **Channel tier** — opens a [`SynthesisWindowManager`] window per
 //!   channel scope, runs the [`NoOpSynthesizer`] to emit a
@@ -43,7 +43,7 @@ use crate::dataset::{Dataset, ScopeTier};
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE: &str = "phase05_synthesis";
+const PHASE: &str = "synthesis";
 
 pub fn run(
     dataset: &Dataset,
@@ -52,7 +52,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Phase 5: Synthesis Pipeline");
+    let mut phase = PhaseReport::new("Stage 5: Synthesis Pipeline");
 
     let now = Utc::now();
     let mut windows = SynthesisWindowManager::new();
@@ -77,7 +77,7 @@ pub fn run(
             .mark_in_progress(window_id)
             .expect("channel window -> in_progress");
 
-        // Build a recap seed from every Phase-1 row that landed in
+        // Build a recap seed from every evidence-stage row that landed in
         // this channel scope. Real recap content -- the synthesizer
         // (NoOp) just copies it through.
         let recap_seed: String = state

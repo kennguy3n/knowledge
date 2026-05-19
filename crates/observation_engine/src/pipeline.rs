@@ -7,10 +7,10 @@ use crate::error::{ObservationError, Result};
 use crate::extractor::{LexiconExtractor, ObservationExtractor};
 use crate::types::Observation;
 
-/// One pass of the Phase-1 observation pipeline.
+/// One pass of the observation pipeline.
 ///
-/// Per `docs/internal/PHASES.md` Phase 1: "Lexicon → XLM-R → SLM-assisted
-/// observation pipeline". Phase 1 ships the lexicon stage; the
+/// Implements the "Lexicon → XLM-R → SLM-assisted observation
+/// pipeline". Currently ships the lexicon stage; the
 /// XLM-R + SLM stages stub through the [`ImportanceClassifier`]
 /// (today the lexicon-only fallback in `evidence_store`) without
 /// changing this surface.
@@ -69,7 +69,7 @@ where
     }
 }
 
-/// Convenience constructor — Phase-1 default pipeline (lexicon
+/// Convenience constructor — default pipeline (lexicon
 /// extractor + lexicon-only importance classifier).
 pub fn default_pipeline() -> ObservationPipeline<LexiconExtractor, evidence_store::LexiconClassifier>
 {

@@ -1,6 +1,6 @@
 //! Append-only operation log for the sync engine.
 //!
-//! Per `docs/DESIGN.md` §3.2 and `docs/internal/PHASES.md` Phase 2: every replica
+//! Per `docs/DESIGN.md` §3.2: every replica
 //! records its CRDT mutations in an append-only [`OpLog`] indexed by
 //! a monotonic logical clock. Replicas exchange [`SyncOp`] entries;
 //! [`merge_logs`] folds two logs into a consistent merged state.

@@ -1,7 +1,7 @@
-//! `reasoning_engine` — Phase 6 reasoning surface for the Knowledge
+//! `reasoning_engine` — reasoning surface for the Knowledge
 //! substrate.
 //!
-//! Per `docs/DESIGN.md` §11.1 and `docs/internal/PHASES.md` Phase 6, the reasoning
+//! Per `docs/DESIGN.md` §11.1, the reasoning
 //! engine layers four capabilities on top of the concept graph:
 //!
 //! * Contradiction and drift detection — `[contradiction]` /

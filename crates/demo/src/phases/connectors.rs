@@ -1,11 +1,11 @@
-//! Phase 11 — Connector Framework.
+//! Stage 11 — Connector Framework.
 //!
 //! Drives real `connector_framework::Connector` implementations from
 //! the `connectors` crate against synthesised fixture data: Google
 //! Drive, Jira, Slack, and Microsoft Graph e-mail. Each connector is
 //! authenticated, full-synced, incrementally synced, and walked
 //! through a webhook subscription + payload round-trip — exactly the
-//! state machine `docs/DESIGN.md` §10.2 and `docs/internal/PHASES.md` Phase 4 specify
+//! state machine `docs/DESIGN.md` §10.2 specifies
 //! for production deployments. Counts and timings are accumulated
 //! into [`RuntimeState`] / the demo report so the final markdown
 //! summary captures the connector-side surface.
@@ -39,9 +39,9 @@ use crate::dataset::Dataset;
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE_LABEL: &str = "Phase 11: Connector Framework";
+const PHASE: &str = "connectors";
 
-/// Per-connector metrics rolled up into the phase report.
+/// Per-connector metrics rolled up into the stage report.
 struct ConnectorMetrics {
     name: &'static str,
     initial_events: u64,
@@ -57,7 +57,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let phase_started = Instant::now();
-    let mut phase = PhaseReport::new(PHASE_LABEL);
+    let mut phase = PhaseReport::new("Stage 11: Connector Framework");
 
     let drive = exercise_google_drive(dataset, log, report);
     let jira = exercise_jira(dataset, log, report);
@@ -112,14 +112,14 @@ pub fn run(
     report.count("connectors.webhook_events", total_webhook);
 
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "all four connectors emit at least one event",
         connectors
             .iter()
             .all(|c| c.initial_events + c.incremental_events + c.webhook_events > 0),
     );
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "every connector registered at least one webhook subscription",
         connectors.iter().all(|c| c.subscriptions >= 1),
     );
@@ -133,9 +133,9 @@ pub fn run(
     // audit log — `audit_service::AuditActionType` is a closed enum
     // covering canonical promotions, exports, agent proposals, member
     // provisioning, key destruction, policy changes, and tenant
-    // lifecycle (per the Phase 12 / Audit Service contract). Connector
+    // lifecycle (per the Audit Service contract). Connector
     // exercise metrics are surfaced via `report.count(...)` and the
-    // phase stats above without polluting the audit trail's semantic
+    // stage stats above without polluting the audit trail's semantic
     // contract.
 
     phase.timing = phase_started.elapsed();
@@ -223,7 +223,7 @@ fn exercise_google_drive(
 
     let token = connector.authenticate(&cfg).expect("drive auth");
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "google_drive.authenticate returns drive scope",
         token.scope.contains("drive"),
     );
@@ -233,17 +233,17 @@ fn exercise_google_drive(
         .initial_sync(&cfg, &token)
         .expect("drive initial_sync");
     report.add_benchmark(
-        "phase11.google_drive.initial_sync",
+        "connectors.google_drive.initial_sync",
         initial.events.len() as u64,
         initial_started.elapsed(),
     );
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "google_drive.initial_sync emits one event per file",
         initial.events.len() == 3,
     );
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "google_drive.initial_sync seeds new_start_page_token",
         initial.next_cursor.as_deref() == Some("changes-token-1"),
     );
@@ -258,7 +258,7 @@ fn exercise_google_drive(
         .incremental_sync(&cfg, &token, &sync_state)
         .expect("drive incremental_sync");
     report.add_benchmark(
-        "phase11.google_drive.incremental_sync",
+        "connectors.google_drive.incremental_sync",
         incremental.events.len() as u64,
         inc_started.elapsed(),
     );
@@ -267,7 +267,7 @@ fn exercise_google_drive(
         .iter()
         .any(|e| matches!(e, ConnectorEvent::DocumentDeleted { .. }));
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "google_drive.incremental_sync surfaces removed change as DocumentDeleted",
         inc_has_delete,
     );
@@ -276,7 +276,7 @@ fn exercise_google_drive(
         .subscribe_webhook(&cfg, &token, "https://demo.example/webhooks/drive")
         .expect("drive webhook subscribe");
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "google_drive.subscribe_webhook bound to instance",
         subscription.connector == instance,
     );
@@ -293,7 +293,7 @@ fn exercise_google_drive(
         .handle_webhook_event(&serde_json::to_vec(&push_payload).unwrap())
         .expect("drive webhook decode");
     report.add_benchmark(
-        "phase11.google_drive.webhook",
+        "connectors.google_drive.webhook",
         webhook_events.len() as u64,
         webhook_started.elapsed(),
     );
@@ -301,7 +301,7 @@ fn exercise_google_drive(
         .iter()
         .any(|e| matches!(e, ConnectorEvent::PermissionChanged { .. }));
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "google_drive.handle_webhook_event surfaces permission change",
         webhook_is_perm,
     );
@@ -381,7 +381,7 @@ fn exercise_jira(
 
     let token = connector.authenticate(&cfg).expect("jira auth");
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "jira.authenticate returns jira-work scope",
         token.scope.contains("jira-work"),
     );
@@ -391,12 +391,12 @@ fn exercise_jira(
         .initial_sync(&cfg, &token)
         .expect("jira initial_sync");
     report.add_benchmark(
-        "phase11.jira.initial_sync",
+        "connectors.jira.initial_sync",
         initial.events.len() as u64,
         initial_started.elapsed(),
     );
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "jira.initial_sync emits one DocumentCreated per issue",
         initial.events.len() == 3
             && initial
@@ -415,12 +415,12 @@ fn exercise_jira(
         .incremental_sync(&cfg, &token, &sync_state)
         .expect("jira incremental_sync");
     report.add_benchmark(
-        "phase11.jira.incremental_sync",
+        "connectors.jira.incremental_sync",
         incremental.events.len() as u64,
         inc_started.elapsed(),
     );
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "jira.incremental_sync emits at least one DocumentUpdated",
         incremental
             .events
@@ -432,7 +432,7 @@ fn exercise_jira(
         .subscribe_webhook(&cfg, &token, "https://demo.example/webhooks/jira")
         .expect("jira webhook subscribe");
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "jira.subscribe_webhook returns subscription bound to instance",
         subscription.connector == instance,
     );
@@ -457,7 +457,7 @@ fn exercise_jira(
         .expect("jira created webhook");
     webhook_total += evs.len() as u64;
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "jira.handle_webhook_event(jira:issue_created) yields DocumentCreated",
         evs.iter()
             .any(|e| matches!(e, ConnectorEvent::DocumentCreated { .. })),
@@ -474,14 +474,14 @@ fn exercise_jira(
         .expect("jira permission webhook");
     webhook_total += perm_evs.len() as u64;
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "jira.handle_webhook_event(permissionscheme_updated) yields PermissionChanged",
         perm_evs
             .iter()
             .any(|e| matches!(e, ConnectorEvent::PermissionChanged { .. })),
     );
     report.add_benchmark(
-        "phase11.jira.webhook",
+        "connectors.jira.webhook",
         webhook_total,
         webhook_started.elapsed(),
     );
@@ -577,7 +577,7 @@ fn exercise_slack(
 
     let token = connector.authenticate(&cfg).expect("slack auth");
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "slack.authenticate returns channels:history scope",
         token.scope.contains("channels:history"),
     );
@@ -587,12 +587,12 @@ fn exercise_slack(
         .initial_sync(&cfg, &token)
         .expect("slack initial_sync");
     report.add_benchmark(
-        "phase11.slack.initial_sync",
+        "connectors.slack.initial_sync",
         initial.events.len() as u64,
         initial_started.elapsed(),
     );
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "slack.initial_sync emits one DocumentCreated per message",
         initial.events.len() == 3
             && initial
@@ -611,7 +611,7 @@ fn exercise_slack(
         .incremental_sync(&cfg, &token, &sync_state)
         .expect("slack incremental_sync");
     report.add_benchmark(
-        "phase11.slack.incremental_sync",
+        "connectors.slack.incremental_sync",
         incremental.events.len() as u64,
         inc_started.elapsed(),
     );
@@ -624,7 +624,7 @@ fn exercise_slack(
         .iter()
         .any(|e| matches!(e, ConnectorEvent::DocumentDeleted { .. }));
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "slack.incremental_sync surfaces both update and delete",
         inc_has_update && inc_has_delete,
     );
@@ -633,7 +633,7 @@ fn exercise_slack(
         .subscribe_webhook(&cfg, &token, "https://demo.example/webhooks/slack")
         .expect("slack webhook subscribe");
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "slack.subscribe_webhook returns subscription bound to instance",
         subscription.connector == instance,
     );
@@ -654,12 +654,12 @@ fn exercise_slack(
         .handle_webhook_event(&serde_json::to_vec(&event_payload).unwrap())
         .expect("slack webhook decode");
     report.add_benchmark(
-        "phase11.slack.webhook",
+        "connectors.slack.webhook",
         webhook_events.len() as u64,
         webhook_started.elapsed(),
     );
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "slack.handle_webhook_event(message) yields DocumentCreated",
         webhook_events
             .iter()
@@ -719,7 +719,7 @@ fn exercise_email(
 
     let token = gmail.authenticate(&cfg).expect("gmail auth");
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "email[gmail].authenticate returns gmail.readonly scope",
         token.scope.contains("gmail.readonly"),
     );
@@ -729,12 +729,12 @@ fn exercise_email(
         .initial_sync(&cfg, &token)
         .expect("gmail initial_sync");
     report.add_benchmark(
-        "phase11.email.gmail.initial_sync",
+        "connectors.email.gmail.initial_sync",
         gmail_initial.events.len() as u64,
         gmail_initial_started.elapsed(),
     );
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "email[gmail].initial_sync emits one DocumentCreated per message",
         gmail_initial.events.len() == 2
             && gmail_initial
@@ -752,12 +752,12 @@ fn exercise_email(
         .incremental_sync(&cfg, &token, &gmail_state)
         .expect("gmail incremental_sync");
     report.add_benchmark(
-        "phase11.email.gmail.incremental_sync",
+        "connectors.email.gmail.incremental_sync",
         gmail_incremental.events.len() as u64,
         gmail_inc_started.elapsed(),
     );
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "email[gmail].incremental_sync emits at least one event",
         !gmail_incremental.events.is_empty(),
     );
@@ -766,7 +766,7 @@ fn exercise_email(
         .subscribe_webhook(&cfg, &token, "https://demo.example/webhooks/gmail")
         .expect("gmail webhook subscribe");
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "email[gmail].subscribe_webhook bound to instance",
         gmail_subscription.connector == instance,
     );
@@ -781,12 +781,12 @@ fn exercise_email(
         .handle_webhook_event(&serde_json::to_vec(&gmail_webhook_payload).unwrap())
         .expect("gmail webhook decode");
     report.add_benchmark(
-        "phase11.email.gmail.webhook",
+        "connectors.email.gmail.webhook",
         gmail_webhook_events.len() as u64,
         gmail_webhook_started.elapsed(),
     );
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "email[gmail].handle_webhook_event emits one event per messageId",
         gmail_webhook_events.len() == 2,
     );
@@ -827,7 +827,7 @@ fn exercise_email(
 
     let graph_token = graph.authenticate(&cfg).expect("graph auth");
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "email[graph].authenticate returns Mail.Read scope",
         graph_token.scope.contains("Mail.Read"),
     );
@@ -837,12 +837,12 @@ fn exercise_email(
         .initial_sync(&cfg, &graph_token)
         .expect("graph initial_sync");
     report.add_benchmark(
-        "phase11.email.graph.initial_sync",
+        "connectors.email.graph.initial_sync",
         graph_initial.events.len() as u64,
         graph_initial_started.elapsed(),
     );
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "email[graph].initial_sync seeds delta-link cursor",
         graph_initial.next_cursor.as_deref() == Some("delta-token-1"),
     );
@@ -856,12 +856,12 @@ fn exercise_email(
         .incremental_sync(&cfg, &graph_token, &graph_state)
         .expect("graph incremental_sync");
     report.add_benchmark(
-        "phase11.email.graph.incremental_sync",
+        "connectors.email.graph.incremental_sync",
         graph_incremental.events.len() as u64,
         graph_inc_started.elapsed(),
     );
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "email[graph].incremental_sync emits at least one event",
         !graph_incremental.events.is_empty(),
     );
@@ -870,7 +870,7 @@ fn exercise_email(
         .subscribe_webhook(&cfg, &graph_token, "https://demo.example/webhooks/graph")
         .expect("graph webhook subscribe");
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "email[graph].subscribe_webhook bound to instance",
         graph_subscription.connector == graph_instance,
     );
@@ -889,12 +889,12 @@ fn exercise_email(
         .handle_webhook_event(&serde_json::to_vec(&graph_webhook_payload).unwrap())
         .expect("graph webhook decode");
     report.add_benchmark(
-        "phase11.email.graph.webhook",
+        "connectors.email.graph.webhook",
         graph_webhook_events.len() as u64,
         graph_webhook_started.elapsed(),
     );
     log.record(
-        PHASE_LABEL,
+        PHASE,
         "email[graph].handle_webhook_event emits DocumentCreated for created notifications",
         graph_webhook_events
             .iter()

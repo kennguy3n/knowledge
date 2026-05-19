@@ -1,4 +1,4 @@
-//! Phase 9 — Agent Contract.
+//! Stage 9 — Agent Contract.
 //!
 //! Per `docs/DESIGN.md` §7.3 and `ARCHITECTURE.md` §6, software agents
 //! never write canonical memory directly — they go through a
@@ -12,11 +12,11 @@
 //! 2. Submit one proposal of every payload type
 //!    ([`ObservationProposal`], [`ConceptProposal`],
 //!    [`RelationProposal`], [`SummaryProposal`]) into a real
-//!    [`ProposalStore`]. Evidence refs are pulled from Phase 1's
+//!    [`ProposalStore`]. Evidence refs are pulled from the evidence stage's
 //!    [`crate::phases::runtime::IngestedRow`]s, scope ids are taken
 //!    from the dataset, and the supersedes / contradicts links use
-//!    canonical concept ids minted by Phase 4 — every value the
-//!    agent contract carries is sourced from real prior phases.
+//!    canonical concept ids minted by the concept-graph stage — every value the
+//!    agent contract carries is sourced from real prior stages.
 //! 3. Run [`ProposalStore::review`] under a permissive
 //!    [`AutoPromotionPolicy`] (auto-promotes the high-confidence
 //!    observation), under the deny-by-default
@@ -57,7 +57,7 @@ use crate::dataset::Dataset;
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE: &str = "phase09_agent";
+const PHASE: &str = "agent";
 
 pub fn run(
     dataset: &Dataset,
@@ -66,7 +66,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Phase 9: Agent Contract");
+    let mut phase = PhaseReport::new("Stage 9: Agent Contract");
 
     // -------- Agent identity + scopes ----------------------------
     let agent_uuid = Uuid::new_v4();
@@ -82,7 +82,7 @@ pub fn run(
     let channel_scope = dataset.channel_scope.id;
     let domain_scope = dataset.domain_scope.id;
 
-    // Pull two real evidence refs from Phase 1.
+    // Pull two real evidence refs from the evidence stage.
     let evidence_refs: Vec<EvidenceRef> = state
         .ingested_rows
         .iter()
@@ -91,7 +91,7 @@ pub fn run(
         .collect();
     log.check(
         PHASE,
-        "Phase 1 surfaced enough evidence rows to back agent proposals",
+        "evidence stage surfaced enough evidence rows to back agent proposals",
         evidence_refs.len() >= 2,
     );
 
@@ -123,7 +123,7 @@ pub fn run(
         channel_scope,
         ConceptProposal::new(
             "Knowledge Substrate Demo",
-            "End-to-end demo run exercising every Knowledge substrate phase",
+            "End-to-end demo run exercising every Knowledge substrate stage",
         ),
         evidence_refs.clone(),
         0.55,

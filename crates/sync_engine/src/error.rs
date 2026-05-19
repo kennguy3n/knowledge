@@ -6,7 +6,7 @@ use uuid::Uuid;
 /// Errors surfaced by the sync engine.
 #[derive(Debug, Error)]
 pub enum SyncError {
-    /// A sync code path that is not yet implemented (Phase 7+).
+    /// A sync code path that is not yet implemented.
     #[error("sync engine: {0}")]
     NotYetImplemented(&'static str),
 

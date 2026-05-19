@@ -1,20 +1,19 @@
 //! `observation_engine` — lexicon-first extraction of structured
 //! observations from raw evidence text.
 //!
-//! Per `docs/DESIGN.md` §3.2 / `ARCHITECTURE.md` §2.1 / `docs/internal/PHASES.md` Phase
-//! 1, the observation engine turns raw text into a small number of
-//! typed observations (entities, facts, tasks, decisions, claims).
-//! The Phase 1 baseline is a **lexicon extractor** — regex / keyword
-//! / capitalised-word heuristics that need no model — and is used as
-//! the cheap first stage before XLM-R + SLM-assisted extraction in
-//! later phases.
+//! Per `docs/DESIGN.md` §3.2 / `ARCHITECTURE.md` §2.1, the observation
+//! engine turns raw text into a small number of typed observations
+//! (entities, facts, tasks, decisions, claims). The baseline is a
+//! **lexicon extractor** — regex / keyword / capitalised-word
+//! heuristics that need no model — and is used as the cheap first
+//! stage before XLM-R + SLM-assisted extraction.
 //!
 //! Cross-references:
 //!
 //! * Lexicon-first approach: `docs/DESIGN.md` §3.2 (cheap classifiers
 //!   first, only candidates that clear the cheap classifier go to
 //!   more expensive stages).
-//! * Phase 1 deliverables: `docs/internal/PHASES.md` Phase 1.
+//! * Observation deliverables: `docs/DESIGN.md` §3.2.
 
 #![deny(missing_docs)]
 

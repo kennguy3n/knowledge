@@ -127,9 +127,7 @@ binary shapes:
 | `ffi` | UniFFI surface consumed by iOS and Android. |
 | `napi` | N-API addon consumed by macOS and Windows Electron shells. |
 
-This table is the canonical module index for the substrate. The
-per-phase scope of each module is tracked in
-[`docs/internal/PROGRESS.md`](./docs/internal/PROGRESS.md).
+This table is the canonical module index for the substrate.
 
 ### 2.2 Local store
 
@@ -179,12 +177,9 @@ per-phase scope of each module is tracked in
   the `.node` addon and exposes an IPC surface to the React
   renderer.
 
-The FFI surface is at **Phase A.5**: core evidence store,
-cryptography, and memory management functions are wired and
-tested. `trigger_synthesis` returns `Unavailable` until the
-on-device SLM inference path lands. See
-[`docs/internal/MODULE_STATUS.md`](./docs/internal/MODULE_STATUS.md)
-for the full wired-vs-unavailable export list.
+The FFI surface covers core evidence store, cryptography, and
+memory management functions — all wired and tested. `trigger_synthesis` returns `Unavailable` until the
+on-device SLM inference path lands.
 
 ### 2.4 CRDT-based sync
 

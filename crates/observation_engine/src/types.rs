@@ -7,7 +7,7 @@ use uuid::Uuid;
 use evidence_store::{EvidenceId, ScopeId};
 use memory_manager::MemoryState;
 
-/// The five observation types that the substrate models in Phase 1.
+/// The five observation types that the substrate models.
 ///
 /// Per `docs/DESIGN.md` §3.2: "Normalized facts, claims, entities,
 /// tasks, decisions extracted from evidence." The `Claim` type
@@ -57,8 +57,8 @@ pub struct Observation {
     /// Free-form content (the canonical surface form of the
     /// observation).
     pub content: String,
-    /// Confidence score in `0.0 ..= 1.0`. The Phase 1 lexicon
-    /// extractor uses fixed per-type confidences (see
+    /// Confidence score in `0.0 ..= 1.0`. The lexicon extractor
+    /// uses fixed per-type confidences (see
     /// [`crate::extractor::LexiconExtractor`]).
     pub confidence: f64,
     /// Evidence rows this observation was extracted from.

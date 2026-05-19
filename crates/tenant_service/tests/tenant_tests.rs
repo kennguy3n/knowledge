@@ -1,4 +1,4 @@
-//! Integration tests for the Phase 3 tenant service.
+//! Integration tests for the tenant service.
 
 use uuid::Uuid;
 

@@ -169,7 +169,7 @@ impl<'a> PolicySimulator<'a> {
             });
         }
 
-        // Summary handling — Phase 5 surfaces summaries in the
+        // Summary handling — the export plane surfaces summaries in the
         // simulation result so callers can wire them through, but
         // the policy engine itself only gates concepts. The
         // [`crate::controls::SummaryExportControl`] registry is

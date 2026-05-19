@@ -1,12 +1,12 @@
-//! Phase 8 — Export Plane.
+//! Stage 8 — Export Plane.
 //!
 //! Per `docs/DESIGN.md` §3.5 the substrate exposes a *narrow*,
 //! policy-gated interface for moving curated knowledge out of the
 //! substrate into external surfaces. The demo wires up the full
 //! export-plane pipeline against the canonical concepts produced by
-//! Phase 4:
+//! the concept-graph stage:
 //!
-//! 1. Re-open the SQLCipher concept graph from Phase 4 so we operate
+//! 1. Re-open the SQLCipher concept graph from the concept-graph stage so we operate
 //!    on real canonical nodes (no fixtures, no fakes).
 //! 2. Build a deny-by-default [`ExportControlRegistry`]. A curated
 //!    majority of canonical concepts get [`ConceptExportControl`]
@@ -48,7 +48,7 @@ use crate::dataset::Dataset;
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE: &str = "phase08_export";
+const PHASE: &str = "export";
 
 pub fn run(
     dataset: &Dataset,
@@ -57,20 +57,19 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Phase 8: Export Plane");
+    let mut phase = PhaseReport::new("Stage 8: Export Plane");
 
     // -------- Re-open the persistent concept graph -----------------
     //
-    // Phase 4 persisted every substrate-level canonical concept under
-    // the tenant scope (see the "Scope-cohesion contract" docs in
-    // `phase04_concept_graph.rs`); reopening the SQLCipher database
+    // The concept-graph stage persisted every substrate-level canonical
+    // concept under the tenant scope (see the "Scope-cohesion contract"
+    // docs in `concept_graph.rs`); reopening the SQLCipher database
     // does not rehydrate the in-memory graph automatically, so we
     // explicitly drive [`PersistentConceptGraph::load_scope`] to
-    // restore the canonical set produced by Phase 4.
-    let db_path = state
-        .graph_db_path
-        .clone()
-        .expect("Phase 4 must run before Phase 8 to materialise the concept graph");
+    // restore the canonical set produced by the concept-graph stage.
+    let db_path = state.graph_db_path.clone().expect(
+        "concept-graph stage must run before export stage to materialise the concept graph",
+    );
     let mut pgraph = PersistentConceptGraph::open(&db_path, &state.master_key)
         .expect("re-open the persistent concept graph");
     pgraph
@@ -78,14 +77,14 @@ pub fn run(
         .expect("rehydrate tenant scope from disk");
     let graph = pgraph.graph();
 
-    // Resolve the canonical concept ids from in-memory state — Phase 4
+    // Resolve the canonical concept ids from in-memory state — concept-graph stage
     // populates them after promotion. They are real graph nodes, not
     // fixtures.
     let canonical_ids: Vec<Uuid> = state.canonical_concept_ids.clone();
     let canonical_total = canonical_ids.len();
     log.check(
         PHASE,
-        "Phase 4 surfaced at least 3 canonical concepts to export",
+        "concept-graph stage surfaced at least 3 canonical concepts to export",
         canonical_total >= 3,
     );
 
@@ -133,7 +132,7 @@ pub fn run(
 
     // Register a summary control so the simulator can surface a
     // non-empty summary path. The summary id is synthesised here
-    // (memory-manager summaries aren't propagated through to Phase 8
+    // (memory-manager summaries aren't propagated through to the export stage
     // in the demo's simplified state); registering it lets the demo
     // exercise [`PolicySimulator::simulate`]'s summary code path
     // against a real registry.
@@ -223,7 +222,7 @@ pub fn run(
     // -------- Profile + constraints -------------------------------
     let mut profile = PortableConceptProfile::new(
         "demo-export-profile",
-        "Phase 8 demo profile rendering canonical concepts to a downstream tool",
+        "Export demo profile rendering canonical concepts to a downstream tool",
         "demo-downstream-tool",
         scope_for_export,
     );
@@ -236,7 +235,7 @@ pub fn run(
         profile.push_concept(approved);
     }
     // The cap is set well above the substrate-level canonical
-    // concept count produced by Phase 4 so the demo policy admits
+    // concept count produced by the concept-graph stage so the demo policy admits
     // every approved concept; the cap-tightening contract itself
     // is exercised by `with_constraints_max_concepts_tightens` in
     // `crates/export_plane/src/policy.rs`.
@@ -313,7 +312,7 @@ pub fn run(
     let summary_payload = ApprovedSummary {
         summary_id,
         scope_id: scope_for_export,
-        body: "Demo channel summary surfaced via Phase 8 export plane.".into(),
+        body: "Demo channel summary surfaced via the export plane.".into(),
     };
     let with_summaries = ExportView::from_decision(
         &decision,
@@ -459,7 +458,7 @@ pub fn run(
     );
     phase.note(
         "Deny-by-default ExportControlRegistry + PolicyEngine + PolicySimulator + \
-         ConceptApprovalWorkflow + ExportView render pipeline driven by Phase 4's \
+         ConceptApprovalWorkflow + ExportView render pipeline driven by the concept-graph stage's \
          canonical concepts.",
     );
 
@@ -485,6 +484,6 @@ pub fn run(
     report.add_benchmark("export_audit_writes", 2, audit_elapsed);
 
     // Drop the persistent graph handle now that we are done; later
-    // phases that need the graph open it again from disk.
+    // stages that need the graph open it again from disk.
     drop(pgraph);
 }

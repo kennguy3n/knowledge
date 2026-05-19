@@ -1,13 +1,12 @@
 //! Synthesizer role election — small-group "elected member device"
 //! protocol skeleton.
 //!
-//! Per `docs/DESIGN.md` §6.4 and `docs/internal/PHASES.md` Phase 2: "for small groups
-//! (≤ ~12 members), the elected member device runs the synthesis;
-//! the managed AI endpoint or a confidential-compute worker runs it
-//! for everything else". The Phase 2 deliverable here is the
-//! protocol *skeleton*: candidate registration, eligibility
-//! filtering, election, heartbeat / step-down, and the corresponding
-//! [`SynthesizerRole`] enum.
+//! Per `docs/DESIGN.md` §6.4: "for small groups (≤ ~12 members),
+//! the elected member device runs the synthesis; the managed AI
+//! endpoint or a confidential-compute worker runs it for everything
+//! else". This module provides the protocol *skeleton*: candidate
+//! registration, eligibility filtering, election, heartbeat /
+//! step-down, and the corresponding [`SynthesizerRole`] enum.
 
 use std::collections::HashMap;
 

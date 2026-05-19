@@ -1,4 +1,4 @@
-//! `connector_framework` — Phase 4 connector boundary for the
+//! `connector_framework` — connector boundary for the
 //! Knowledge substrate.
 //!
 //! Per `docs/DESIGN.md` §10.2 and `ARCHITECTURE.md` §4.1 every external
@@ -19,9 +19,9 @@
 //! * Source-system ACLs are projected into the substrate's
 //!   relation graph by [`AclSyncEngine`].
 //!
-//! Phase 4 ships only the framework — the individual connectors
-//! (Google Drive, OneDrive, Notion, Jira, …) land in later phases
-//! via their own crates implementing [`Connector`].
+//! Ships only the framework — the individual connectors (Google
+//! Drive, OneDrive, Notion, Jira, …) live in their own crates
+//! implementing [`Connector`].
 
 #![deny(missing_docs)]
 

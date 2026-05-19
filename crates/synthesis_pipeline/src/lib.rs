@@ -1,8 +1,7 @@
 //! `synthesis_pipeline` — channel / domain / tenant synthesis windows
 //! and the encrypted synthesis-object publication contract.
 //!
-//! Per `ARCHITECTURE.md` §2.1 and `docs/internal/PHASES.md` Phase 2, the synthesis
-//! pipeline owns:
+//! Per `ARCHITECTURE.md` §2.1, the synthesis pipeline owns:
 //!
 //! * **Synthesis windows** — per-scope `(start, end)` pairs the
 //!   synthesizer aggregates over (`Pending` / `InProgress` /
@@ -15,9 +14,9 @@
 //!   the SLM is constrained to produce (importance tag, entity list,
 //!   observation row, summary bundle).
 //! * **`SynthesisPipeline` trait** — the synthesizer interface.
-//!   Phase 2 ships a `NoOpSynthesizer` test implementation; the
-//!   on-device Bonsai-1.7B implementation lands when the SLM
-//!   adapters are wired up.
+//!   Ships a `NoOpSynthesizer` test implementation; the on-device
+//!   Bonsai-1.7B implementation lands when the SLM adapters are
+//!   wired up.
 //! * **Elected-device role** — the small-group synthesizer protocol
 //!   skeleton (`SynthesizerElection`, `SynthesizerRole`).
 //! * **Encrypted publish/consume** — the `publish_synthesis_object`
@@ -29,7 +28,6 @@
 //!
 //! * Module map: `ARCHITECTURE.md` §2.1.
 //! * Synthesis hierarchy: `docs/DESIGN.md` §6.
-//! * Phase 2 deliverables: `docs/internal/PHASES.md` Phase 2.
 
 #![deny(missing_docs)]
 

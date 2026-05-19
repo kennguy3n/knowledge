@@ -1,7 +1,6 @@
-//! Phase 4 — Concept Graph.
+//! Stage 4 — Concept Graph.
 //!
-//! Exercises every public surface called out by `docs/internal/PHASES.md` Phase 2
-//! and Phase 6:
+//! Exercises every public surface of the concept graph:
 //!
 //! * Typed nodes ([`ConceptNode`]) and the seven typed relations from
 //!   `docs/DESIGN.md` §3.3 (`IsA`, `PartOf`, `DecidedBy`, `Supersedes`,
@@ -25,7 +24,7 @@
 //! not in the loaded subset. The same contract is exercised
 //! end-to-end by `crates/concept_graph/tests/persist_tests.rs`.
 //!
-//! Concretely: every persisted edge in this phase has both endpoints
+//! Concretely: every persisted edge in this stage has both endpoints
 //! in the same scope as the edge itself. The "logical hierarchy"
 //! (channel → domain → tenant) is realised in two layers:
 //!
@@ -62,12 +61,12 @@ use crate::dataset::{Dataset, NamedScope, ScopeTier};
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE: &str = "phase04_concept_graph";
+const PHASE: &str = "concept_graph";
 
-/// Canonical concept anchors that Phase 4 seeds into the persistent
+/// Canonical concept anchors that this stage seeds into the persistent
 /// graph. Picked so they cover every scope tier and resolve to terms
 /// that actually appear in the synthetic dataset (so the visualization
-/// search query in this phase has a real hit to find).
+/// search query in this stage has a real hit to find).
 struct ConceptSeed {
     label: &'static str,
     definition: &'static str,
@@ -173,7 +172,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Phase 4: Concept Graph");
+    let mut phase = PhaseReport::new("Stage 4: Concept Graph");
 
     // -- Open an encrypted, persistent concept graph in a fresh temp dir.
     let temp = TempDir::new().expect("tempdir for concept graph");
@@ -300,7 +299,7 @@ pub fn run(
         );
     }
 
-    // DerivedFrom: every Phase-1 evidence row gets a tombstone node
+    // DerivedFrom: every evidence-stage row gets a tombstone node
     // and a `concept --derived_from--> evidence` edge. The tombstone
     // node lives in the tenant scope (so the DerivedFrom edge stays
     // scope-cohesive); the original evidence row's scope is captured
@@ -408,14 +407,14 @@ pub fn run(
     // persistence wrapper. Capture the persisted baseline (counts
     // and the substrate-level canonical id-set) here so the
     // rehydration assertion can compare against the exact subset
-    // of state that survived to disk and Phase 8 only sees ids
+    // of state that survived to disk and the export stage only sees ids
     // the rehydrated graph actually contains.
     //
     // The substrate-level canonical id-set is exactly
     // `canonical_ids` (seeds + decider + assignee + successor) —
-    // the Phase-1 evidence shims are also persisted as Canonical
+    // the evidence-stage shims are also persisted as Canonical
     // nodes but they are provenance fixtures, not exportable
-    // concepts, so Phase 8 must not see them in
+    // concepts, so the export stage must not see them in
     // `state.canonical_concept_ids`.
     let persisted_node_count = pgraph.graph().node_count() as u64;
     let persisted_edge_count = pgraph.graph().edge_count() as u64;
@@ -567,14 +566,14 @@ pub fn run(
     state.concept_node_count = in_memory_node_count;
     state.concept_edge_count = in_memory_edge_count;
     state.canonical_concept_count = canonical_seed_count;
-    // Phase 8 reopens the SQLCipher graph and rehydrates a single
+    // The export stage reopens the SQLCipher graph and rehydrates a single
     // scope (the tenant scope, where every cross-tier substrate
     // concept lives — see the "Scope-cohesion contract" docs above).
     // Surface only the *persisted* tenant-scope canonical ids
     // (snapshotted before the engine-only supersession pair was
-    // added) so Phase 8's approval workflow always sees concepts
+    // added) so the export stage's approval workflow always sees concepts
     // the rehydrated graph actually contains; the per-scope
-    // mini-clusters are still visible to Phase 4's local
+    // mini-clusters are still visible to this stage's local
     // visualization assertions.
     state.canonical_concept_ids = persisted_tenant_canonical_ids;
 

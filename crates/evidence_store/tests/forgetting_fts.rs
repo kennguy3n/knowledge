@@ -1,7 +1,7 @@
 //! Integration test that pins the cryptographic-forgetting contract
 //! for the FTS5 secondary index.
 //!
-//! Per `docs/DESIGN.md` §3.1 / `docs/internal/PROGRESS.md` Phase 0, the
+//! Per `docs/DESIGN.md` §3.1, the
 //! substrate promises that "the scope id is the unit of cryptographic
 //! forgetting." The **bodies** of every evidence row are encrypted
 //! under a scope-derived AEAD key (`scope:{uuid}:body:v1`), so
@@ -14,7 +14,7 @@
 //! AEAD key, so the index would survive DEK destruction unless the
 //! runtime explicitly purges it.
 //!
-//! Phase A.5 (Gap 4) closes that gap. The FFI `forget()` path now
+//! The durable-tombstone work closes that gap. The FFI `forget()` path now
 //! calls [`EvidenceStore::purge_fts_for_scope`] after destroying the
 //! scope DEK, deleting every FTS5 row for the scope (and every
 //! `evidence_embeddings` row, which is plaintext-derived in the same

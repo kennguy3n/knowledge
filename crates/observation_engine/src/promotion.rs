@@ -1,7 +1,7 @@
 //! Channel-scoped promotion policy — should an extracted observation
 //! actually be promoted into channel memory?
 //!
-//! Per `docs/DESIGN.md` §4 / §6.2 and `docs/internal/PHASES.md` Phase 2: not every
+//! Per `docs/DESIGN.md` §4 / §6.2: not every
 //! observation extracted from raw evidence belongs in channel
 //! memory. The promotion policy gates promotion on:
 //!
@@ -10,7 +10,7 @@
 //! * a maximum noise ratio (defensive: keep noisy extractions out
 //!   even if a single high-importance observation slipped through).
 //!
-//! The Phase-2 surface here is a small struct + a pure
+//! The surface here is a small struct + a pure
 //! [`should_promote`] function so callers can swap in tenant-specific
 //! policies.
 

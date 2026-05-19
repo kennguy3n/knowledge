@@ -1,8 +1,8 @@
-//! Phase 10 — Reasoning Engine.
+//! Stage 10 — Reasoning Engine.
 //!
-//! Per `docs/DESIGN.md` §11.1 and `docs/internal/PHASES.md` Phase 6, this phase
-//! exercises the substrate's reasoning plane on top of the concept
-//! graph that Phase 4 persisted. It runs every public surface that
+//! Per `docs/DESIGN.md` §11.1, this stage exercises the substrate's
+//! reasoning plane on top of the concept graph that the concept-graph
+//! stage persisted. It runs every public surface that
 //! Part 1 §10 of the demo prompt calls out:
 //!
 //! * [`ContradictionDetector`] over canonical claims using
@@ -53,7 +53,7 @@ use crate::dataset::Dataset;
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE: &str = "phase10_reasoning";
+const PHASE: &str = "reasoning";
 
 pub fn run(
     dataset: &Dataset,
@@ -62,21 +62,21 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Phase 10: Reasoning Engine");
+    let mut phase = PhaseReport::new("Stage 10: Reasoning Engine");
 
     let db_path = state
         .graph_db_path
         .as_ref()
-        .expect("Phase 4 must run before Phase 10")
+        .expect("concept-graph stage must run before reasoning stage")
         .clone();
     let mut pgraph = PersistentConceptGraph::open(&db_path, &state.master_key)
-        .expect("re-open SQLCipher concept graph from Phase 4");
+        .expect("re-open SQLCipher concept graph from concept-graph stage");
 
     // `PersistentConceptGraph::open` returns an empty in-memory
     // graph — only the SQLCipher tables are touched on `open`.
     // Each `load_scope` call replaces the in-memory graph with
     // exactly the rows tagged for that scope, so to surface the
-    // full canonical fabric to Phase 10's reasoning operators
+    // full canonical fabric to the reasoning stage's operators
     // (contradiction detector, traversal, GoT executor, community
     // detector) we walk every dataset scope, accumulate the
     // visited rows in a separate map, and rebuild the in-memory
@@ -123,7 +123,7 @@ pub fn run(
     let tenant_scope = dataset.tenant_scope.id;
     let mut left = ConceptNode::new_candidate(
         "contradiction-claim",
-        "Phase 10 left side of opposing pair.",
+        "Reasoning stage left side of opposing pair.",
         tenant_scope,
     );
     left.mark_canonical();
@@ -132,7 +132,7 @@ pub fn run(
         .expect("seed left contradiction concept");
     let mut right = ConceptNode::new_candidate(
         "not contradiction-claim",
-        "Phase 10 right side of opposing pair (negation prefix).",
+        "Reasoning stage right side of opposing pair (negation prefix).",
         tenant_scope,
     );
     right.mark_canonical();
@@ -140,7 +140,7 @@ pub fn run(
         .add_node(right)
         .expect("seed right contradiction concept");
 
-    // Add a regular IsA edge so the traversal phase has something to
+    // Add a regular IsA edge so the traversal stage has something to
     // hop through that is *not* the contradiction edge.
     let traversal_anchor_label = "tenant.acme";
     let traversal_anchor = pgraph
@@ -503,7 +503,7 @@ pub fn run(
     );
 
     // ---------------------------------------------------------------
-    // Persist into the audit log so Phase 12 can query it.
+    // Persist into the audit log so the audit stage can query it.
     // ---------------------------------------------------------------
     let actor = audit_service::Actor::User(demo_user);
     let entry = audit_service::AuditEntryBuilder::new()
@@ -521,7 +521,7 @@ pub fn run(
             "got_best_path_confidence": got_result.confidence,
         }))
         .build()
-        .expect("Phase 10 audit entry");
+        .expect("reasoning stage audit entry");
     state.audit_log.append(entry);
 
     // ---------------------------------------------------------------
@@ -553,30 +553,30 @@ pub fn run(
     // Benchmarks.
     let n_edges = edges.len() as u64;
     report.add_benchmark(
-        "phase10.contradiction.scan",
+        "reasoning.contradiction.scan",
         n_edges.max(1),
         bench_contradiction_scan,
     );
     report.add_benchmark(
-        "phase10.contradiction.adjudicate",
+        "reasoning.contradiction.adjudicate",
         detected.max(1) as u64,
         bench_adjudication,
     );
-    report.add_benchmark("phase10.traversal", 2, bench_traversal);
+    report.add_benchmark("reasoning.traversal", 2, bench_traversal);
     report.add_benchmark(
-        "phase10.got.execute",
+        "reasoning.got.execute",
         got_result.reasoning_trace.len().max(1) as u64,
         bench_got,
     );
     report.add_benchmark(
-        "phase10.community.detect_summarise",
+        "reasoning.community.detect_summarise",
         hierarchy.communities.len().max(1) as u64,
         bench_communities,
     );
-    report.add_benchmark("phase10.community.route", 1, bench_route);
-    report.add_benchmark("phase10.planner.plan", plans.len() as u64, bench_plan);
+    report.add_benchmark("reasoning.community.route", 1, bench_route);
+    report.add_benchmark("reasoning.planner.plan", plans.len() as u64, bench_plan);
     report.add_benchmark(
-        "phase10.planner.execute",
+        "reasoning.planner.execute",
         executions.len() as u64,
         bench_execute,
     );

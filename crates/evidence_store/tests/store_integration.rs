@@ -368,7 +368,7 @@ fn wrong_master_key_fails_to_open() {
 }
 
 // ---------------------------------------------------------------------
-// Phase A.5 (Gap 4) — durable cryptographic-forgetting tombstones.
+// Durable cryptographic-forgetting tombstones.
 //
 // `record_forgotten_scope` writes a row into `forgotten_scopes`, and
 // `load_forgotten_scopes` returns the full set. The substrate uses these

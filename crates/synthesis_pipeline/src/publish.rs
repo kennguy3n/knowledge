@@ -1,10 +1,10 @@
 //! Encrypted synthesis-object publish / consume.
 //!
-//! Per `docs/DESIGN.md` §6.4 and `docs/internal/PHASES.md` Phase 2, "the synthesis
+//! Per `docs/DESIGN.md` §6.4, "the synthesis
 //! output is published as an encrypted synthesis object back into the
 //! scope; other members consume it instead of re-synthesizing".
 //!
-//! The Phase 2 implementation:
+//! The current implementation:
 //!
 //! * Serialises the [`crate::SynthesisObject`] with `serde_json` (the
 //!   same canonicalisation used by [`crypto::ProvenanceBundle`]).

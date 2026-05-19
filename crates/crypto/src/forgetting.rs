@@ -1,6 +1,6 @@
 //! Cryptographic forgetting + policy-driven epoch rotation.
 //!
-//! Per `docs/DESIGN.md` §3.6 and `docs/internal/PHASES.md` Phase 7, the substrate must
+//! Per `docs/DESIGN.md` §3.6, the substrate must
 //! be able to **destroy** the data-encryption key (DEK) for a scope or
 //! a single epoch. Once a DEK is destroyed, every ciphertext encrypted
 //! under that key becomes permanently undecryptable — that is the
@@ -31,7 +31,7 @@
 //!
 //! The registry is intentionally ephemeral / in-memory. Persistent
 //! storage of forgetting metadata (tombstones, audit cross-references)
-//! lands in a future phase alongside the `evidence_store` rewrite.
+//! lands in a future update alongside the `evidence_store` rewrite.
 
 use std::collections::BTreeMap;
 
@@ -447,8 +447,8 @@ pub struct EpochRotationPolicy {
 }
 
 impl EpochRotationPolicy {
-    /// Default Phase 7 policy: 24 hours OR 16 GiB, whichever first.
-    pub fn default_phase_7() -> Self {
+    /// Default policy: 24 hours OR 16 GiB, whichever first.
+    pub fn default_policy() -> Self {
         Self {
             max_epoch_duration: Duration::hours(24),
             max_epoch_size_bytes: 16 * 1024 * 1024 * 1024,
@@ -466,7 +466,7 @@ impl EpochRotationPolicy {
 
 impl Default for EpochRotationPolicy {
     fn default() -> Self {
-        Self::default_phase_7()
+        Self::default_policy()
     }
 }
 
@@ -814,7 +814,7 @@ mod tests {
     fn epoch_manager_force_rotates_to_new_epoch() {
         let mut registry = DekRegistry::new();
         let mut mgr = EpochManager::new(
-            EpochRotationPolicy::default_phase_7(),
+            EpochRotationPolicy::default_policy(),
             DeterministicEpochKeySource,
         );
         let scope = ScopeId::new_v4();
@@ -861,7 +861,7 @@ mod tests {
     fn epoch_manager_lists_every_epoch() {
         let mut registry = DekRegistry::new();
         let mut mgr = EpochManager::new(
-            EpochRotationPolicy::default_phase_7(),
+            EpochRotationPolicy::default_policy(),
             DeterministicEpochKeySource,
         );
         let scope = ScopeId::new_v4();

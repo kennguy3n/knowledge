@@ -34,7 +34,7 @@ fn extracts_capitalised_entities_dropping_stopwords() {
     // an entity.
     assert!(!entities.contains(&"The"));
     // "Friday" is intentionally surfaced as a *date-ref* entity by
-    // the Phase-2 hardening — the capitalised-token stop-word list
+    // the hardening — the capitalised-token stop-word list
     // still filters it out of the capitalised-token pass, but
     // [`extract_date_refs`] picks it up.
     assert!(entities.contains(&"Friday"));

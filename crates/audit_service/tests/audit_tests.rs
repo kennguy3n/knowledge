@@ -1,4 +1,4 @@
-//! Integration tests for the Phase 3 audit service.
+//! Integration tests for the audit service.
 
 use chrono::{Duration, Utc};
 use uuid::Uuid;

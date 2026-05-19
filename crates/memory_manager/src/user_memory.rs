@@ -1,7 +1,7 @@
 //! User Memory Object — CRUD over a user's personal memory scope.
 //!
-//! Per `docs/internal/PHASES.md` Phase 1: "User Memory Object CRUD (read / pin /
-//! unpin / forget) over the FFI surface".
+//! Provides user memory object CRUD (read / pin / unpin / forget)
+//! over the FFI surface.
 //!
 //! This module owns the in-process Rust API; the FFI bindings (UniFFI
 //! / JNI / N-API) wrap it without re-implementing the lifecycle
@@ -84,8 +84,8 @@ impl MemoryFilter {
 /// In-process User Memory Object.
 ///
 /// This is a vec-backed CRUD layer; persistence to the encrypted
-/// evidence store is the caller's responsibility (Phase 1 keeps the
-/// memory plane in-memory; persistence + sync land in Phase 2).
+/// evidence store is the caller's responsibility (the memory plane
+/// is currently in-memory; persistence + sync are not yet wired).
 #[derive(Debug, Clone)]
 pub struct UserMemoryObject {
     /// Identifier of the owning user.

@@ -1,6 +1,6 @@
 //! N-API error type — JSON-stable wrapper around [`ffi::FfiError`].
 //!
-//! When the Phase 2 work introduces real `#[napi]` proc-macros, this
+//! When the real `#[napi]` proc-macros are introduced, this
 //! type's `From<ffi::FfiError>` impl is the single conversion point
 //! that maps Rust errors into Node `Error` instances.
 

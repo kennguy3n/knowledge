@@ -1,13 +1,13 @@
-//! Phase 2 — Observation Extraction.
+//! Stage 2 — Observation Extraction.
 //!
 //! Runs the [`observation_engine::LexiconExtractor`] over every
-//! evidence row that Phase 1 stored on the inline / body-table paths
+//! evidence row that the evidence stage stored on the inline / body-table paths
 //! (ring-buffer rows are noise and intentionally don't extract). Each
 //! extracted [`observation_engine::Observation`] is also scored
 //! against the channel-scope
 //! [`observation_engine::ChannelPromotionPolicy`] using the public
 //! [`observation_engine::should_promote`] entry point so the demo
-//! exercises the Phase-2 promotion gate, not just the raw extractor.
+//! exercises the promotion gate, not just the raw extractor.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -23,7 +23,7 @@ use crate::dataset::Dataset;
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE: &str = "phase02_observation";
+const PHASE: &str = "observation";
 
 pub fn run(
     _dataset: &Dataset,
@@ -32,7 +32,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Phase 2: Observation Extraction");
+    let mut phase = PhaseReport::new("Stage 2: Observation Extraction");
 
     let extractor = LexiconExtractor::english_default();
     let classifier = LexiconClassifier::english_default();

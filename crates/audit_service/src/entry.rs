@@ -21,19 +21,19 @@ impl AuditEntryId {
     }
 }
 
-/// Audit-action types per `ARCHITECTURE.md` §4.1 + Phase 3 lifecycle
-/// events + Phase 5 export plane / agent write contract events.
+/// Audit-action types per `ARCHITECTURE.md` §4.1 — lifecycle events,
+/// export plane, and agent write contract events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditActionType {
     /// A memory object was promoted to canonical.
     CanonicalPromotion,
     /// Data was exported under an export profile (legacy alias kept
-    /// for backwards compatibility — Phase 5 emits
+    /// for backwards compatibility — the export plane emits
     /// [`Self::ExportRendered`] for actual renders).
     Export,
     /// An agent proposed a synthesis or memory change (legacy alias
-    /// kept for backwards compatibility — Phase 5 emits
+    /// kept for backwards compatibility — the agent contract emits
     /// [`Self::AgentProposalSubmitted`] / [`Self::AgentProposalPromoted`] /
     /// [`Self::AgentProposalRejected`] for the lifecycle transitions).
     AgentProposal,
@@ -48,15 +48,15 @@ pub enum AuditActionType {
     TenantLifecycle,
     /// A tenant root key was destroyed (cryptographic forgetting).
     KeyDestruction,
-    /// Phase 5: an export view was rendered.
+    /// An export view was rendered.
     ExportRendered,
-    /// Phase 5: an export profile was simulated (no actual emission).
+    /// An export profile was simulated (no actual emission).
     ExportSimulated,
-    /// Phase 5: an agent proposal was submitted.
+    /// An agent proposal was submitted.
     AgentProposalSubmitted,
-    /// Phase 5: an agent proposal was promoted to canonical.
+    /// An agent proposal was promoted to canonical.
     AgentProposalPromoted,
-    /// Phase 5: an agent proposal was rejected.
+    /// An agent proposal was rejected.
     AgentProposalRejected,
 }
 

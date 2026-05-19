@@ -1,4 +1,4 @@
-//! Attestation reports bound to synthesizer keys (Phase 7).
+//! Attestation reports bound to synthesizer keys.
 //!
 //! Per `docs/DESIGN.md` §10 every synthesis run in confidential-compute
 //! mode produces an attestation report that binds the synthesizer's
@@ -17,9 +17,9 @@
 //! * [`AttestationAuditEntry`] — links an attestation to the audit
 //!   trail so every confidential synthesis run is auditable.
 //!
-//! The Phase 7 implementation uses mock attestation for all platforms
+//! The current implementation uses mock attestation for all platforms
 //! (the real TEE quote-verification libraries are platform-specific
-//! C FFI and will land behind feature flags in a future phase).
+//! C FFI and will land behind feature flags in a future update).
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ use crate::hash::{content_hash, ContentHash};
 
 /// Supported TEE platforms.
 ///
-/// Phase 7 ships `Mock` for testing; production implementations will
+/// Currently ships `Mock` for testing; production implementations will
 /// land behind feature flags (`intel-tdx`, `amd-sev-snp`,
 /// `nitro-enclaves`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

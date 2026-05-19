@@ -1,11 +1,11 @@
-//! Phase 6 — Permission Service.
+//! Stage 6 — Permission Service.
 //!
 //! Builds a Zanzibar-style relation graph for the
-//! tenant → domain → channel hierarchy used in earlier phases and
+//! tenant → domain → channel hierarchy used in earlier stages and
 //! exercises [`check_permission`] against it. Per `docs/DESIGN.md` §7.1
 //! and `ARCHITECTURE.md` §6, every access decision in the substrate
 //! is a reachability query over a graph of relation tuples; this
-//! phase plants the graph and runs the queries.
+//! stage plants the graph and runs the queries.
 //!
 //! The graph wired up here is:
 //!
@@ -44,7 +44,7 @@ use crate::dataset::Dataset;
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE: &str = "phase06_permissions";
+const PHASE: &str = "permissions";
 
 pub fn run(
     dataset: &Dataset,
@@ -53,13 +53,13 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Phase 6: Permission Service");
+    let mut phase = PhaseReport::new("Stage 6: Permission Service");
 
     // -------- Namespaces --------------------------------------------
     // Use the substrate's default chain (Owner ⇒ Admin ⇒ Editor ⇒
     // Member ⇒ Viewer) and add an explicit `Agent` namespace so the
     // managed-endpoint synthesizer can be granted Synthesizer rights
-    // on the tenant in later phases.
+    // on the tenant in later stages.
     let mut namespaces = NamespaceRegistry::with_defaults();
     let agent_namespace = NamespaceConfig::new(ObjectType::Agent)
         .imply(Relation::Owner, &[Relation::Admin])
@@ -79,7 +79,7 @@ pub fn run(
     let synthesis_agent = Uuid::from_u128(0x4711_0000_0000_0000_0000_0000_0000_0099);
 
     // Reuse the dataset scope ids so reachability checks are tied to
-    // the same hierarchy that Phases 1–5 ingested into.
+    // the same hierarchy that stages 1–5 ingested into.
     let tenant_obj = ObjectRef::new(ObjectType::Tenant, dataset.tenant_scope.id.0);
     let domain_obj = ObjectRef::new(ObjectType::Domain, dataset.domain_scope.id.0);
     let channel_obj = ObjectRef::new(ObjectType::Channel, dataset.channel_scope.id.0);

@@ -7,7 +7,7 @@
 //! surface (see the sibling `ffi` crate) but speaks JSON-over-N-API
 //! instead of typed object handles.
 //!
-//! The Phase 1 deliverable is the **wire skeleton**:
+//! The current deliverable is the **wire skeleton**:
 //!
 //! 1. JSON-shaped wrapper types (re-exported from `ffi::types` with
 //!    a desktop-only [`InitConfig`] added).
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn forget_forwards_invalid_id_for_malformed_id() {
-        // `forget` is wired in Phase A: it validates the id is a
+        // `forget` is wired: it validates the id is a
         // UUID before touching the runtime, so malformed ids surface
         // as `InvalidId`.
         let err = forget("id".into()).unwrap_err();
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn list_memories_forwards_invalid_id_for_malformed_scope() {
-        // `list_memories` is wired in Phase A.5 — the surface
+        // `list_memories` is wired — the surface
         // validates the scope id is a UUID before reaching the
         // memory layer.
         let err = list_memories(
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn synthesis_endpoints_forward_invalid_id_for_malformed_scope() {
         // `get_channel_memory` is wired; `trigger_synthesis` parses
-        // the scope id before returning the Phase-A.5 `Unavailable`
+        // the scope id before returning the `Unavailable`
         // marker. Both should report InvalidId for a malformed id.
         assert_eq!(
             get_channel_memory("scope".into()).unwrap_err().kind(),
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn generate_keypair_returns_ml_dsa_65_envelope() {
-        // Wired in Phase A. The N-API layer just forwards the
+        // Wired. The N-API layer just forwards the
         // structured envelope; assert the envelope shape is
         // preserved across the bridge.
         let kp = generate_keypair().expect("generate_keypair");

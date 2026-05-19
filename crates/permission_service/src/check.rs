@@ -24,7 +24,7 @@
 //!    terminate.
 //!
 //! The visited-set is keyed on `(ObjectRef, Relation)`; for the
-//! Phase 3 in-memory store this is more than enough to avoid
+//! in-memory store this is more than enough to avoid
 //! pathological loops.
 
 use std::collections::HashSet;

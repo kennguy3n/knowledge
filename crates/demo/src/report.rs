@@ -129,7 +129,7 @@ impl DemoReport {
         }
         out.push('\n');
 
-        out.push_str("## Phases\n\n");
+        out.push_str("## Stages\n\n");
         for phase in &self.phases {
             let _ = writeln!(
                 out,

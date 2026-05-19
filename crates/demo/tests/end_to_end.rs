@@ -66,7 +66,7 @@ fn demo_results_file_is_written_and_well_formed() {
     let required_sections = [
         "# Knowledge Substrate End-to-End Demo Results",
         "## Summary statistics",
-        "## Phases",
+        "## Stages",
         "## Benchmarks (per-operation timings)",
         "## Assertions",
     ];
@@ -90,26 +90,26 @@ fn demo_results_file_is_written_and_well_formed() {
         );
     }
 
-    // Every phase from the Phase 1 -> Phase 12 pipeline must be
-    // represented as a `### Phase N: ...` heading.
-    let phase_headings = [
-        "### Phase 1: Evidence Ingestion",
-        "### Phase 2: Observation Extraction",
-        "### Phase 3: Memory Manager",
-        "### Phase 4: Concept Graph",
-        "### Phase 5: Synthesis Pipeline",
-        "### Phase 6: Permission Service",
-        "### Phase 7: Crypto",
-        "### Phase 8: Export Plane",
-        "### Phase 9: Agent Contract",
-        "### Phase 10: Reasoning Engine",
-        "### Phase 11: Connector Framework",
-        "### Phase 12: Audit Service",
+    // Every stage from the 1 -> 12 pipeline must be represented as a
+    // `### Stage N: ...` heading.
+    let stage_headings = [
+        "### Stage 1: Evidence Ingestion",
+        "### Stage 2: Observation Extraction",
+        "### Stage 3: Memory Manager",
+        "### Stage 4: Concept Graph",
+        "### Stage 5: Synthesis Pipeline",
+        "### Stage 6: Permission Service",
+        "### Stage 7: Crypto",
+        "### Stage 8: Export Plane",
+        "### Stage 9: Agent Contract",
+        "### Stage 10: Reasoning Engine",
+        "### Stage 11: Connector Framework",
+        "### Stage 12: Audit Service",
     ];
-    for phase in phase_headings {
+    for stage in stage_headings {
         assert!(
-            contents.contains(phase),
-            "results file missing per-phase heading for `{phase}`"
+            contents.contains(stage),
+            "results file missing per-stage heading for `{stage}`"
         );
     }
 }
@@ -198,32 +198,32 @@ fn demo_assertion_counts_match_stdout_and_file() {
 fn demo_records_timing_data_for_every_phase() {
     let (_stdout, contents) = run_demo();
 
-    // Per-phase headings include a duration in parentheses, e.g.
-    // `### Phase 1: Evidence Ingestion (12.345ms)`. Require every
-    // phase's heading line to carry a parseable duration suffix.
-    let phase_prefixes = [
-        "### Phase 1:",
-        "### Phase 2:",
-        "### Phase 3:",
-        "### Phase 4:",
-        "### Phase 5:",
-        "### Phase 6:",
-        "### Phase 7:",
-        "### Phase 8:",
-        "### Phase 9:",
-        "### Phase 10:",
-        "### Phase 11:",
-        "### Phase 12:",
+    // Per-stage headings include a duration in parentheses, e.g.
+    // `### Stage 1: Evidence Ingestion (12.345ms)`. Require every
+    // stage's heading line to carry a parseable duration suffix.
+    let stage_prefixes = [
+        "### Stage 1:",
+        "### Stage 2:",
+        "### Stage 3:",
+        "### Stage 4:",
+        "### Stage 5:",
+        "### Stage 6:",
+        "### Stage 7:",
+        "### Stage 8:",
+        "### Stage 9:",
+        "### Stage 10:",
+        "### Stage 11:",
+        "### Stage 12:",
     ];
-    for prefix in phase_prefixes {
+    for prefix in stage_prefixes {
         let line = contents
             .lines()
             .find(|line| line.starts_with(prefix))
-            .unwrap_or_else(|| panic!("phase heading line for `{prefix}` not found"));
+            .unwrap_or_else(|| panic!("stage heading line for `{prefix}` not found"));
         let has_timing = line.contains("\u{00b5}s") || line.contains("ms") || line.ends_with("s)");
         assert!(
             has_timing,
-            "phase heading `{line}` did not include a parseable timing"
+            "stage heading `{line}` did not include a parseable timing"
         );
     }
 

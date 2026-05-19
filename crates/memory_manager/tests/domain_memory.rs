@@ -1,6 +1,6 @@
-//! Integration tests for the Phase 3 [`DomainMemoryObject`].
+//! Integration tests for [`DomainMemoryObject`].
 //!
-//! Per `docs/internal/PHASES.md` Phase 3 acceptance criteria, the domain memory
+//! Per `docs/DESIGN.md` §6.2, the domain memory
 //! object covers:
 //!
 //! * CRUD over workstreams / dependencies / risks / procedures.

@@ -2,8 +2,7 @@
 //! memory, user memory CRUD, and the privacy-strip invariant.
 //!
 //! This crate implements the `memory_manager` module called out in
-//! `ARCHITECTURE.md` §2.1 and the Phase 1 deliverables in
-//! `docs/internal/PHASES.md`. It is the on-device authority for the lifecycle of
+//! `ARCHITECTURE.md` §2.1. It is the on-device authority for the lifecycle of
 //! every [`MemoryObject`]: how it transitions through the decay state
 //! machine, how its retention score is computed and updated, how it
 //! is pinned / unpinned / forgotten, and how it is bounded into a
@@ -11,7 +10,7 @@
 //!
 //! The crate is also the home of [`PrivacyStrip`] and
 //! [`SynthesisOutput`] — the type-system-enforced invariant from
-//! `docs/DESIGN.md` §6 / Phase 1 that "every synthesis output carries a
+//! `docs/DESIGN.md` §6 that "every synthesis output carries a
 //! privacy strip describing its compute location, model, and egress".
 //! It is impossible to construct a [`SynthesisOutput`] without first
 //! constructing a [`PrivacyStrip`].
@@ -20,7 +19,7 @@
 //!
 //! * Memory model & decay: `docs/DESIGN.md` §4.
 //! * Decay state machine: `ARCHITECTURE.md` §7.
-//! * Phase 1 deliverables: `docs/internal/PHASES.md` Phase 1.
+//! * Memory deliverables: `docs/DESIGN.md` §4.
 
 #![deny(missing_docs)]
 

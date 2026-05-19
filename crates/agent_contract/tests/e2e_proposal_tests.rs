@@ -1,4 +1,4 @@
-//! End-to-end Phase 5 proposal-lifecycle tests.
+//! End-to-end proposal-lifecycle tests.
 //!
 //! Exercises the full agent-write contract:
 //!

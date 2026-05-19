@@ -1,6 +1,6 @@
 //! [`SynthesisPipeline`] — the synthesizer interface.
 //!
-//! Phase 2 ships:
+//! This module ships:
 //!
 //! * The trait shape (`synthesize(window, inputs) -> SynthesisObject`).
 //! * A [`NoOpSynthesizer`] test implementation that emits a
@@ -26,15 +26,15 @@ use crate::window::SynthesisWindow;
 
 /// Inputs to one synthesis run.
 ///
-/// Phase 2's `NoOpSynthesizer` only consumes the [`SynthesisInputs::recap_seed`]
-/// field. The SLM-backed synthesizer in later phases will consume the
+/// The `NoOpSynthesizer` only consumes the [`SynthesisInputs::recap_seed`]
+/// field. The SLM-backed synthesizer will consume the
 /// observation-row inputs (`observations`) and produce a real
 /// [`SummaryBundle`].
 #[derive(Debug, Default, Clone)]
 pub struct SynthesisInputs {
     /// The structured-output records the SLM should aggregate (the
-    /// observation rows in the window). Phase 2 leaves this empty for
-    /// the no-op synthesizer.
+    /// observation rows in the window). Left empty for the no-op
+    /// synthesizer.
     pub observations: Vec<crate::schema::ObservationRow>,
     /// Seed text for the recap line. Useful for tests where the
     /// caller wants a deterministic synthesis output without an SLM.

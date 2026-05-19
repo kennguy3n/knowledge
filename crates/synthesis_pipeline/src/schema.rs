@@ -4,7 +4,7 @@
 //! with GBNF grammar-constrained decoding ... the substrate never has
 //! to repair malformed JSON from the SLM at the consumer side".
 //!
-//! The Phase 2 deliverable is the **shape** of those outputs as Rust
+//! The deliverable is the **shape** of those outputs as Rust
 //! types. The actual GBNF grammar files live alongside the prompt
 //! catalog in the inference pipeline; the on-device `llama-server`
 //! constrains the SLM to emit exactly these JSON shapes, and the

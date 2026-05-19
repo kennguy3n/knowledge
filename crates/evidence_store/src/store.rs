@@ -103,7 +103,7 @@ pub struct EvidenceStore {
     /// Master key — wiped on drop.
     master_key: MasterKey,
     /// Optional [`EmbeddingModel`] used by the ingest path to populate
-    /// the `evidence_embeddings` cache (Phase B). When `None` no
+    /// the `evidence_embeddings` cache. When `None` no
     /// embedding is persisted on write — the hybrid retriever then
     /// falls back to re-embedding the body on each search.
     embedding_model: Option<Box<dyn EmbeddingModel>>,
@@ -592,7 +592,7 @@ impl EvidenceStore {
     ) -> Result<()> {
         // Only index UTF-8 content. Binary blobs (files, media) are
         // not indexed at this layer — observation-plane extraction
-        // handles those in later phases.
+        // handles those in a future update.
         if let Ok(text) = std::str::from_utf8(body) {
             tx.execute(
                 "INSERT INTO evidence_fts (content, evidence_id, scope_id) VALUES (?1, ?2, ?3)",
@@ -1393,7 +1393,7 @@ impl EvidenceStore {
 
     /// Wire an [`EmbeddingModel`] into the store so subsequent
     /// [`Self::ingest`] calls populate the `evidence_embeddings`
-    /// cache (Phase B). `model_tag` is stamped on every persisted
+    /// cache. `model_tag` is stamped on every persisted
     /// row so the cache can be invalidated when the model changes.
     ///
     /// Consumes `self` and returns the same store \u2014 callers can
@@ -1596,7 +1596,7 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // See `migrate_evidence_embeddings_to_composite_pk` for the
         // shape-detection + table-swap logic.
         3 => migrate_evidence_embeddings_to_composite_pk(conn),
-        // v4 (Phase A.5 Gap 4): add `forgotten_scopes`. Purely
+        // v4: add `forgotten_scopes`. Purely
         // additive; the idempotent `CREATE TABLE IF NOT EXISTS` in
         // `SCHEMA_SQL` handles both the fresh-DB and forward-port
         // paths, so this arm is a no-op.

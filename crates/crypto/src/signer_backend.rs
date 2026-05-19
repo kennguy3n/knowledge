@@ -1,7 +1,7 @@
 //! Signer-backend trait + the post-quantum [`MlDsa65Signer`] backend.
 //!
-//! Per `docs/internal/PHASES.md` Phase 7 the substrate must lift the
-//! provenance-signature algorithm from HMAC-SHA256
+//! The substrate lifts the provenance-signature algorithm from
+//! HMAC-SHA256
 //! ([`crate::provenance::TestSigner`]) to the FIPS 204 ML-DSA-65
 //! lattice signature. This module ships:
 //!
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn signer_backend_trait_round_trips() {
         let signer = MlDsa65Signer::generate();
-        let msg = b"hello phase 7";
+        let msg = b"hello ml-dsa-65";
         let sig = signer.sign_bytes(msg).expect("sign");
         assert!(signer.verify_bytes(msg, &sig).expect("verify"));
         assert!(!signer.verify_bytes(b"different", &sig).expect("verify"));

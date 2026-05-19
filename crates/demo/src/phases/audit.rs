@@ -1,12 +1,12 @@
-//! Phase 12 — Audit Service.
+//! Stage 12 — Audit Service.
 //!
-//! Drives the [`audit_service::AuditLog`] populated by phases 5 / 6 /
+//! Drives the [`audit_service::AuditLog`] populated by stages 5 / 6 /
 //! 7 / 8 / 9 / 10 / 11 and exercises the production query API
 //! (scope, action type, time range, actor) end-to-end. Every prior
-//! phase that performs an audit-worthy action (synthesis emission,
+//! stage that performs an audit-worthy action (synthesis emission,
 //! permission grant, key destruction, export render / simulate, agent
 //! proposal lifecycle, contradiction detection, connector exercise)
-//! has already appended into [`RuntimeState::audit_log`]; Phase 12
+//! has already appended into [`RuntimeState::audit_log`]; this stage
 //! now seals the run by:
 //!
 //! 1. Appending a tenant-lifecycle "demo-run-completed" entry so the
@@ -33,7 +33,7 @@ use crate::dataset::Dataset;
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE_LABEL: &str = "phase12_audit";
+const PHASE_LABEL: &str = "audit";
 
 pub fn run(
     dataset: &Dataset,
@@ -42,7 +42,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let start = Instant::now();
-    let mut phase = PhaseReport::new("Phase 12: Audit Service");
+    let mut phase = PhaseReport::new("Stage 12: Audit Service");
 
     // 1. Append a tenant-lifecycle "demo-run-completed" entry so the
     //    final audit row is the substrate-level provenance of the
@@ -69,7 +69,7 @@ pub fn run(
     let total_entries = state.audit_log.len();
     log.record(
         PHASE_LABEL,
-        "audit log accumulated entries from every audit-emitting phase",
+        "audit log accumulated entries from every audit-emitting stage",
         total_entries >= 12,
     );
 
@@ -123,13 +123,13 @@ pub fn run(
     );
     phase.stat("scope_query.tenant.hits", scope_hits.len().to_string());
     report.add_benchmark(
-        "phase12.audit.query_by_scope",
+        "audit.query_by_scope",
         scope_hits.len() as u64,
         scope_query_elapsed,
     );
 
     // 4b. Action-filtered query — narrow to canonical-promotion
-    //     entries (Phase 9 / 10 emit these via
+    //     entries (agent / reasoning stages emit these via
     //     `log_proposal_promoted`).
     let promoted_query = AuditQuery::new().with_action(AuditActionType::AgentProposalPromoted);
     let promoted_q_started = Instant::now();
@@ -145,7 +145,7 @@ pub fn run(
         promoted_hits.len().to_string(),
     );
     report.add_benchmark(
-        "phase12.audit.query_by_action",
+        "audit.query_by_action",
         promoted_hits.len() as u64,
         promoted_q_elapsed,
     );
@@ -171,7 +171,7 @@ pub fn run(
     let until_hits: Vec<_> = state.audit_log.query(&until_query).collect();
     log.record(
         PHASE_LABEL,
-        "time-range (until) query covers earlier phases' entries",
+        "time-range (until) query covers earlier stages' entries",
         until_hits.len() >= total_entries.saturating_sub(1),
     );
     phase.stat(
@@ -183,7 +183,7 @@ pub fn run(
         until_hits.len().to_string(),
     );
     report.add_benchmark(
-        "phase12.audit.query_by_time_range",
+        "audit.query_by_time_range",
         (since_hits.len() + until_hits.len()) as u64,
         time_q_elapsed,
     );
@@ -225,12 +225,12 @@ pub fn run(
             actor_hits.len().to_string(),
         );
         report.add_benchmark(
-            "phase12.audit.query_by_actor",
+            "audit.query_by_actor",
             actor_hits.len() as u64,
             actor_q_elapsed,
         );
     } else {
-        // Phase 9 always emits a User-actor entry, so this branch is
+        // The agent stage always emits a User-actor entry, so this branch is
         // a safety net for future refactors. We still record the
         // assertion so it's surfaced rather than silently skipped.
         log.record(
@@ -260,7 +260,7 @@ pub fn run(
         combined_hits.len().to_string(),
     );
     report.add_benchmark(
-        "phase12.audit.composite_query",
+        "audit.composite_query",
         combined_hits.len() as u64,
         combined_q_elapsed,
     );
@@ -275,7 +275,7 @@ pub fn run(
         state.audit_log.len() >= total_entries,
     );
 
-    // ---- Wrap up the phase report. ----
+    // ---- Wrap up the stage report. ----
     phase.stat("audit_log.entries", state.audit_log.len().to_string());
     phase.stat("audit_log.action_types", action_types.len().to_string());
     phase.stat("queries.executed", "5".to_string());

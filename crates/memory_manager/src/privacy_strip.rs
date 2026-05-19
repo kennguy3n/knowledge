@@ -2,8 +2,8 @@
 //! synthesis output carries a description of where the synthesis ran,
 //! which model produced it, and how many bytes left the device.
 //!
-//! Per `docs/DESIGN.md` §6 and `docs/internal/PHASES.md` Phase 1 ("Privacy strip on
-//! every synthesis output (compute, model, egress)").
+//! Per `docs/DESIGN.md` §6: "privacy strip on every synthesis output
+//! (compute, model, egress)".
 //!
 //! The invariant is enforced by hiding [`SynthesisOutput`]'s field and
 //! exposing only [`SynthesisOutput::new`], which takes a

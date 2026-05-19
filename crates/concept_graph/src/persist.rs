@@ -1,8 +1,8 @@
 //! [`PersistentConceptGraph`] — SQLCipher-backed persistence wrapper
 //! over the in-memory [`crate::ConceptGraph`].
 //!
-//! Per `docs/internal/PHASES.md` Phase 3 task 7, the Phase 2 in-memory adjacency
-//! list is wrapped with a thin store that mirrors every node/edge to
+//! The in-memory adjacency list is wrapped with a thin store that
+//! mirrors every node/edge to
 //! a SQLCipher database. The encrypted store reuses the same per-user
 //! master key as `evidence_store` (see `ARCHITECTURE.md` §2.2): a
 //! `sqlcipher:concepts:v1` page key for the database itself, and a

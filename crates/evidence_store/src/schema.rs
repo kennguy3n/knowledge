@@ -2,7 +2,7 @@
 //!
 //! The schema is intentionally append-only on the `evidence` table —
 //! UPDATE / DELETE attempts are rejected by triggers (see Task 4 in
-//! the Phase 0 spec). Only the `body_store.ref_count` column and the
+//! the spec). Only the `body_store.ref_count` column and the
 //! `ring_buffer` table are mutable.
 
 /// Schema version stamped into `PRAGMA user_version`. Bumped on every
@@ -10,10 +10,10 @@
 ///
 /// History:
 /// - v1: initial evidence / body_store / ring_buffer / evidence_fts.
-/// - v2 (Phase B): added `evidence_embeddings` for the on-device ONNX
+/// - v2: added `evidence_embeddings` for the on-device ONNX
 ///   embedding cache used by the hybrid retriever's semantic-vector
 ///   lane.
-/// - v3 (Phase B follow-up): widened the `evidence_embeddings`
+/// - v3: widened the `evidence_embeddings`
 ///   primary key from `evidence_id` alone to the composite
 ///   `(evidence_id, model_tag)`. This lets multiple cached vectors
 ///   coexist for the same evidence row when the embedding model is
@@ -22,7 +22,7 @@
 ///   destroying them via `INSERT OR REPLACE`. The upgrade is
 ///   destructive (cannot be expressed with `CREATE * IF NOT EXISTS`)
 ///   so the migration is implemented in `apply_migration(3)`.
-/// - v4 (Phase A.5 Gap 4): added `forgotten_scopes` tombstone table
+/// - v4: added `forgotten_scopes` tombstone table
 ///   so cryptographic-forgetting tombstones survive process restarts
 ///   — the in-memory `DekRegistry` is rebuilt from this table on
 ///   `open_store`. Purely additive.
@@ -105,14 +105,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(
 );
 
 -- Embedding cache used by the hybrid retriever's semantic-vector
--- lane (Phase B). Populated on write when an `EmbeddingModel` has
+-- lane. Populated on write when an `EmbeddingModel` has
 -- been wired into the store; queried by `HybridRetriever` instead of
 -- re-embedding the plaintext body on every search. The `embedding`
 -- column stores the `f32` vector as little-endian raw bytes.
 --
 -- The primary key is the composite (`evidence_id`, `model_tag`) so a
 -- single evidence row can have multiple cached vectors — one per
--- model the store has been wired into. This is the v3 shape (Phase B
+-- model the store has been wired into. This is the v3 shape (
 -- follow-up); the destructive v2 -> v3 migration that rewrites a
 -- pre-existing single-PK table into this shape lives in
 -- `apply_migration` in `store.rs`. For an already-v3 database this
@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS evidence_embeddings (
     PRIMARY KEY (evidence_id, model_tag)
 );
 
--- Phase A.5 (Gap 4) — durable cryptographic-forgetting tombstones.
+-- Durable cryptographic-forgetting tombstones.
 -- Each row records that the runtime destroyed the per-scope DEK for
 -- `scope_id` at `forgotten_at` (Unix epoch seconds). The substrate
 -- replays these rows into the in-process `DekRegistry` on every

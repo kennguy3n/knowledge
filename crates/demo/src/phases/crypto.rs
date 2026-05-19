@@ -1,9 +1,9 @@
-//! Phase 7 — Crypto.
+//! Stage 7 — Crypto.
 //!
 //! Exercises the substrate's cryptographic primitives end-to-end:
 //!
 //! * **Provenance signing** — a `TestSigner` (HMAC-SHA256) produces a
-//!   `SignedBundle` for each canonical concept created in Phase 4 and
+//!   `SignedBundle` for each canonical concept created in the concept-graph stage and
 //!   then verifies the signature, plus shows that wrong-key /
 //!   tampered bundles fail verification.
 //! * **Hybrid KEM** — generate an X25519 + ML-KEM-768 hybrid keypair,
@@ -42,7 +42,7 @@ use crate::dataset::Dataset;
 use crate::phases::runtime::RuntimeState;
 use crate::report::{DemoReport, PhaseReport};
 
-const PHASE: &str = "phase07_crypto";
+const PHASE: &str = "crypto";
 
 pub fn run(
     dataset: &Dataset,
@@ -51,7 +51,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Phase 7: Crypto");
+    let mut phase = PhaseReport::new("Stage 7: Crypto");
 
     // -------- Provenance signing -----------------------------------
     let signer_key: [u8; TEST_SIGNER_KEY_LEN] = {
@@ -76,8 +76,8 @@ pub fn run(
     let mut wrong_key_failures: u64 = 0;
     let mut tampered_failures: u64 = 0;
 
-    // Prefer real concept ids from Phase 4, but fall back to derived
-    // ids when Phase 4 wasn't able to canonicalise anything (the
+    // Prefer real concept ids from the concept-graph stage, but fall back to derived
+    // ids when that stage wasn't able to canonicalise anything (the
     // demo still needs to exercise the signer).
     let entity_ids: Vec<Uuid> = if state.canonical_concept_ids.is_empty() {
         (0..6)
@@ -163,8 +163,7 @@ pub fn run(
         "scope:{};epoch:0;table:evidence_body",
         dataset.tenant_scope.id.0
     );
-    let aead_payload =
-        b"This is a Phase 7 evidence body that exercises the AEAD API end-to-end.".to_vec();
+    let aead_payload = b"This is an evidence body that exercises the AEAD API end-to-end.".to_vec();
     let aead_started = Instant::now();
     let aead_ct = encrypt_aead(&aead_key, &aead_nonce, &aead_payload, aead_aad.as_bytes())
         .expect("aead encrypt");
@@ -203,7 +202,7 @@ pub fn run(
     registry.insert_scope_dek(scope_dek);
 
     // Encrypt a payload under the live scope DEK.
-    let forget_payload = b"Phase 7 forgetting test: this should be irrecoverable post-destroy.";
+    let forget_payload = b"Forgetting test: this should be irrecoverable post-destroy.";
     let forget_aad = format!("forgetting:scope={}", scope_id.0);
     let forget_nonce: [u8; AEAD_NONCE_LEN] = {
         let mut n = [0u8; AEAD_NONCE_LEN];
@@ -323,7 +322,7 @@ pub fn run(
             ))
             .scope(dataset.channel_scope.id)
             .details(serde_json::json!({
-                "trigger": "demo:phase7",
+                "trigger": "demo:crypto",
                 "events": destroyed_count,
             }))
             .build()
@@ -339,7 +338,7 @@ pub fn run(
             ))
             .scope(dataset.channel_alt_scope.id)
             .details(serde_json::json!({
-                "trigger": "demo:phase7:single_epoch",
+                "trigger": "demo:crypto:single_epoch",
                 "epoch": epoch_zero.0,
             }))
             .build()
