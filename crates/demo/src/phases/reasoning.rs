@@ -553,30 +553,30 @@ pub fn run(
     // Benchmarks.
     let n_edges = edges.len() as u64;
     report.add_benchmark(
-        "phase10.contradiction.scan",
+        "reasoning.contradiction.scan",
         n_edges.max(1),
         bench_contradiction_scan,
     );
     report.add_benchmark(
-        "phase10.contradiction.adjudicate",
+        "reasoning.contradiction.adjudicate",
         detected.max(1) as u64,
         bench_adjudication,
     );
-    report.add_benchmark("phase10.traversal", 2, bench_traversal);
+    report.add_benchmark("reasoning.traversal", 2, bench_traversal);
     report.add_benchmark(
-        "phase10.got.execute",
+        "reasoning.got.execute",
         got_result.reasoning_trace.len().max(1) as u64,
         bench_got,
     );
     report.add_benchmark(
-        "phase10.community.detect_summarise",
+        "reasoning.community.detect_summarise",
         hierarchy.communities.len().max(1) as u64,
         bench_communities,
     );
-    report.add_benchmark("phase10.community.route", 1, bench_route);
-    report.add_benchmark("phase10.planner.plan", plans.len() as u64, bench_plan);
+    report.add_benchmark("reasoning.community.route", 1, bench_route);
+    report.add_benchmark("reasoning.planner.plan", plans.len() as u64, bench_plan);
     report.add_benchmark(
-        "phase10.planner.execute",
+        "reasoning.planner.execute",
         executions.len() as u64,
         bench_execute,
     );

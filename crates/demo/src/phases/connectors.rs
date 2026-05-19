@@ -233,7 +233,7 @@ fn exercise_google_drive(
         .initial_sync(&cfg, &token)
         .expect("drive initial_sync");
     report.add_benchmark(
-        "phase11.google_drive.initial_sync",
+        "connectors.google_drive.initial_sync",
         initial.events.len() as u64,
         initial_started.elapsed(),
     );
@@ -258,7 +258,7 @@ fn exercise_google_drive(
         .incremental_sync(&cfg, &token, &sync_state)
         .expect("drive incremental_sync");
     report.add_benchmark(
-        "phase11.google_drive.incremental_sync",
+        "connectors.google_drive.incremental_sync",
         incremental.events.len() as u64,
         inc_started.elapsed(),
     );
@@ -293,7 +293,7 @@ fn exercise_google_drive(
         .handle_webhook_event(&serde_json::to_vec(&push_payload).unwrap())
         .expect("drive webhook decode");
     report.add_benchmark(
-        "phase11.google_drive.webhook",
+        "connectors.google_drive.webhook",
         webhook_events.len() as u64,
         webhook_started.elapsed(),
     );
@@ -391,7 +391,7 @@ fn exercise_jira(
         .initial_sync(&cfg, &token)
         .expect("jira initial_sync");
     report.add_benchmark(
-        "phase11.jira.initial_sync",
+        "connectors.jira.initial_sync",
         initial.events.len() as u64,
         initial_started.elapsed(),
     );
@@ -415,7 +415,7 @@ fn exercise_jira(
         .incremental_sync(&cfg, &token, &sync_state)
         .expect("jira incremental_sync");
     report.add_benchmark(
-        "phase11.jira.incremental_sync",
+        "connectors.jira.incremental_sync",
         incremental.events.len() as u64,
         inc_started.elapsed(),
     );
@@ -481,7 +481,7 @@ fn exercise_jira(
             .any(|e| matches!(e, ConnectorEvent::PermissionChanged { .. })),
     );
     report.add_benchmark(
-        "phase11.jira.webhook",
+        "connectors.jira.webhook",
         webhook_total,
         webhook_started.elapsed(),
     );
@@ -587,7 +587,7 @@ fn exercise_slack(
         .initial_sync(&cfg, &token)
         .expect("slack initial_sync");
     report.add_benchmark(
-        "phase11.slack.initial_sync",
+        "connectors.slack.initial_sync",
         initial.events.len() as u64,
         initial_started.elapsed(),
     );
@@ -611,7 +611,7 @@ fn exercise_slack(
         .incremental_sync(&cfg, &token, &sync_state)
         .expect("slack incremental_sync");
     report.add_benchmark(
-        "phase11.slack.incremental_sync",
+        "connectors.slack.incremental_sync",
         incremental.events.len() as u64,
         inc_started.elapsed(),
     );
@@ -654,7 +654,7 @@ fn exercise_slack(
         .handle_webhook_event(&serde_json::to_vec(&event_payload).unwrap())
         .expect("slack webhook decode");
     report.add_benchmark(
-        "phase11.slack.webhook",
+        "connectors.slack.webhook",
         webhook_events.len() as u64,
         webhook_started.elapsed(),
     );
@@ -729,7 +729,7 @@ fn exercise_email(
         .initial_sync(&cfg, &token)
         .expect("gmail initial_sync");
     report.add_benchmark(
-        "phase11.email.gmail.initial_sync",
+        "connectors.email.gmail.initial_sync",
         gmail_initial.events.len() as u64,
         gmail_initial_started.elapsed(),
     );
@@ -752,7 +752,7 @@ fn exercise_email(
         .incremental_sync(&cfg, &token, &gmail_state)
         .expect("gmail incremental_sync");
     report.add_benchmark(
-        "phase11.email.gmail.incremental_sync",
+        "connectors.email.gmail.incremental_sync",
         gmail_incremental.events.len() as u64,
         gmail_inc_started.elapsed(),
     );
@@ -781,7 +781,7 @@ fn exercise_email(
         .handle_webhook_event(&serde_json::to_vec(&gmail_webhook_payload).unwrap())
         .expect("gmail webhook decode");
     report.add_benchmark(
-        "phase11.email.gmail.webhook",
+        "connectors.email.gmail.webhook",
         gmail_webhook_events.len() as u64,
         gmail_webhook_started.elapsed(),
     );
@@ -837,7 +837,7 @@ fn exercise_email(
         .initial_sync(&cfg, &graph_token)
         .expect("graph initial_sync");
     report.add_benchmark(
-        "phase11.email.graph.initial_sync",
+        "connectors.email.graph.initial_sync",
         graph_initial.events.len() as u64,
         graph_initial_started.elapsed(),
     );
@@ -856,7 +856,7 @@ fn exercise_email(
         .incremental_sync(&cfg, &graph_token, &graph_state)
         .expect("graph incremental_sync");
     report.add_benchmark(
-        "phase11.email.graph.incremental_sync",
+        "connectors.email.graph.incremental_sync",
         graph_incremental.events.len() as u64,
         graph_inc_started.elapsed(),
     );
@@ -889,7 +889,7 @@ fn exercise_email(
         .handle_webhook_event(&serde_json::to_vec(&graph_webhook_payload).unwrap())
         .expect("graph webhook decode");
     report.add_benchmark(
-        "phase11.email.graph.webhook",
+        "connectors.email.graph.webhook",
         graph_webhook_events.len() as u64,
         graph_webhook_started.elapsed(),
     );

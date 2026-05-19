@@ -123,7 +123,7 @@ pub fn run(
     );
     phase.stat("scope_query.tenant.hits", scope_hits.len().to_string());
     report.add_benchmark(
-        "phase12.audit.query_by_scope",
+        "audit.query_by_scope",
         scope_hits.len() as u64,
         scope_query_elapsed,
     );
@@ -145,7 +145,7 @@ pub fn run(
         promoted_hits.len().to_string(),
     );
     report.add_benchmark(
-        "phase12.audit.query_by_action",
+        "audit.query_by_action",
         promoted_hits.len() as u64,
         promoted_q_elapsed,
     );
@@ -183,7 +183,7 @@ pub fn run(
         until_hits.len().to_string(),
     );
     report.add_benchmark(
-        "phase12.audit.query_by_time_range",
+        "audit.query_by_time_range",
         (since_hits.len() + until_hits.len()) as u64,
         time_q_elapsed,
     );
@@ -225,7 +225,7 @@ pub fn run(
             actor_hits.len().to_string(),
         );
         report.add_benchmark(
-            "phase12.audit.query_by_actor",
+            "audit.query_by_actor",
             actor_hits.len() as u64,
             actor_q_elapsed,
         );
@@ -260,7 +260,7 @@ pub fn run(
         combined_hits.len().to_string(),
     );
     report.add_benchmark(
-        "phase12.audit.composite_query",
+        "audit.composite_query",
         combined_hits.len() as u64,
         combined_q_elapsed,
     );
