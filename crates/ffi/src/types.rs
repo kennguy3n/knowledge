@@ -46,6 +46,25 @@ pub enum SourceKind {
     Other,
 }
 
+/// Importance classification for ingested evidence.
+///
+/// Mirrors [`evidence_store::ImportanceClass`] as a wire-flat enum.
+/// `Critical` and `Important` rows live in the primary evidence
+/// table; `Useful` rows may be offloaded sooner; `Noise` rows go
+/// directly to the ring buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum FfiImportanceClass {
+    /// Must never be evicted (regulatory, compliance).
+    Critical,
+    /// Default tier — long-lived evidence.
+    Important,
+    /// Kept but deprioritised for synthesis and retrieval.
+    Useful,
+    /// Ephemeral; routed to the capped ring buffer.
+    Noise,
+}
+
 /// One row materialised from the encrypted evidence plane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceRecord {

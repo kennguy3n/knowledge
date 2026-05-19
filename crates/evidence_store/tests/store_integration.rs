@@ -475,8 +475,7 @@ fn cek_wrap_forget_scope_a_leaves_scope_b_readable() {
     };
 
     // Re-open with the same master key — scope B must survive.
-    let store =
-        EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
     let pt = store.read_body(res_b.evidence_id).unwrap();
     assert_eq!(pt, body, "scope B must survive a process restart");
 
@@ -524,8 +523,7 @@ fn cek_wrap_forget_both_scopes_makes_body_unrecoverable() {
     }
 
     // Re-open and verify the body is gone at the storage level.
-    let store =
-        EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
 
     // No CEK wraps remain.
     let wrap_count: i64 = store
@@ -569,7 +567,10 @@ fn cek_wrap_same_scope_reingest_is_idempotent() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(wrap_count, 1, "same-scope re-ingest must not duplicate wraps");
+    assert_eq!(
+        wrap_count, 1,
+        "same-scope re-ingest must not duplicate wraps"
+    );
 
     // Both evidence rows must read the same body.
     assert_eq!(store.read_body(r1.evidence_id).unwrap(), body);

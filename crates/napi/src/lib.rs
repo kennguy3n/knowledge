@@ -29,8 +29,8 @@ pub mod types;
 
 pub use error::{NapiError, NapiResult};
 pub use ffi::{
-    EvidenceRecord, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult,
-    ScopeIdString, SourceKind, SynthesisTrigger,
+    EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord,
+    MemoryState, QueryResult, ScopeIdString, SourceKind, SynthesisTrigger,
 };
 pub use types::{IngestRequest, InitConfig, QueryRequest};
 
@@ -77,7 +77,7 @@ pub fn close_store() -> NapiResult<()> {
 /// Returns [`NapiError`] if the request body is malformed or the
 /// underlying FFI surface returns an error.
 pub fn ingest_message(req: IngestRequest) -> NapiResult<serde_json::Value> {
-    ffi::ingest_message(req.scope_id, req.body, req.source)
+    ffi::ingest_message(req.scope_id, req.body, req.source, req.importance)
         .map(|id| serde_json::json!({ "evidence_id": id }))
         .map_err(NapiError::from)
 }
@@ -287,10 +287,16 @@ mod tests {
             scope_id: "scope".into(),
             body: "hi".into(),
             source: SourceKind::Manual,
+            importance: FfiImportanceClass::Important,
         };
         let s = serde_json::to_string(&req).unwrap();
         let back: IngestRequest = serde_json::from_str(&s).unwrap();
         assert_eq!(req, back);
+
+        // Importance field defaults to Important when absent from JSON.
+        let minimal = r#"{"scope_id":"s","body":"b","source":"Manual"}"#;
+        let parsed: IngestRequest = serde_json::from_str(minimal).unwrap();
+        assert_eq!(parsed.importance, FfiImportanceClass::Important);
     }
 
     #[test]
@@ -302,6 +308,7 @@ mod tests {
             scope_id: "scope".into(),
             body: "hi".into(),
             source: SourceKind::Slack,
+            importance: FfiImportanceClass::Important,
         };
         let err = ingest_message(req).unwrap_err();
         assert_eq!(err.kind(), "InvalidId");

@@ -413,10 +413,7 @@ impl EvidenceStore {
                      WHERE w.content_hash = ?1 \
                        AND w.scope_id != ?2 \
                      LIMIT 1",
-                    params![
-                        hash.as_slice(),
-                        scope_id.as_uuid().as_bytes().as_slice(),
-                    ],
+                    params![hash.as_slice(), scope_id.as_uuid().as_bytes().as_slice(),],
                     |row| {
                         Ok((
                             row.get::<_, Vec<u8>>(0)?,
@@ -428,8 +425,7 @@ impl EvidenceStore {
                 .optional()?;
             match existing_wrap {
                 Some((wrapped_cek, wrap_nonce, donor_scope_bytes)) => {
-                    let donor_scope =
-                        ScopeId::from_uuid(slice_to_uuid(&donor_scope_bytes)?);
+                    let donor_scope = ScopeId::from_uuid(slice_to_uuid(&donor_scope_bytes)?);
                     let donor_key = self.scope_key(donor_scope)?;
                     Some((wrapped_cek, wrap_nonce, donor_key))
                 }
@@ -459,22 +455,14 @@ impl EvidenceStore {
                 .query_row(
                     "SELECT 1 FROM body_store_key_wraps \
                      WHERE content_hash = ?1 AND scope_id = ?2",
-                    params![
-                        hash.as_slice(),
-                        scope_id.as_uuid().as_bytes().as_slice(),
-                    ],
+                    params![hash.as_slice(), scope_id.as_uuid().as_bytes().as_slice(),],
                     |_| Ok(()),
                 )
                 .optional()?
                 .is_some();
             if !already_has_wrap {
                 if let Some((donor_wrapped, donor_nonce, donor_key)) = &dedup_donor {
-                    let cek = unwrap_cek(
-                        donor_key,
-                        donor_wrapped,
-                        donor_nonce,
-                        &hash,
-                    )?;
+                    let cek = unwrap_cek(donor_key, donor_wrapped, donor_nonce, &hash)?;
                     let wrap_nonce = random_nonce();
                     let wrapped = wrap_cek(&scope_key, &cek, &wrap_nonce, &hash)?;
                     tx.execute(
@@ -805,9 +793,7 @@ impl EvidenceStore {
                         |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?)),
                     )
                     .map_err(|e| match e {
-                        rusqlite::Error::QueryReturnedNoRows => {
-                            EvidenceError::DanglingBodyRef
-                        }
+                        rusqlite::Error::QueryReturnedNoRows => EvidenceError::DanglingBodyRef,
                         other => EvidenceError::Sqlite(other),
                     })?;
                 let cek = unwrap_cek(
@@ -1207,9 +1193,8 @@ impl EvidenceStore {
         // Collect the content hashes that this scope wraps so we can
         // check for orphans after deletion.
         let hashes: Vec<Vec<u8>> = {
-            let mut stmt = tx.prepare(
-                "SELECT content_hash FROM body_store_key_wraps WHERE scope_id = ?1",
-            )?;
+            let mut stmt =
+                tx.prepare("SELECT content_hash FROM body_store_key_wraps WHERE scope_id = ?1")?;
             let rows = stmt
                 .query_map(params![scope_id.as_uuid().as_bytes().as_slice()], |row| {
                     row.get::<_, Vec<u8>>(0)
@@ -1606,9 +1591,7 @@ fn unwrap_cek(
     let aad = cek_wrap_aad(content_hash);
     let pt = decrypt_aead(wrapper_key, &nonce, wrapped, &aad)?;
     if pt.len() != AEAD_KEY_LEN {
-        return Err(EvidenceError::Schema(
-            "unwrapped CEK has wrong length",
-        ));
+        return Err(EvidenceError::Schema("unwrapped CEK has wrong length"));
     }
     let mut key = [0u8; AEAD_KEY_LEN];
     key.copy_from_slice(&pt);
