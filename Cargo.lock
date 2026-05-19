@@ -986,6 +986,7 @@ checksum = "9155a582abd142abc056962c29e3ce5ff2ad5469f4246b537ed42c5deba857da"
 dependencies = [
  "ctutils",
  "typenum",
+ "zeroize",
 ]
 
 [[package]]
@@ -1427,6 +1428,7 @@ dependencies = [
  "pkcs8",
  "shake",
  "signature",
+ "zeroize",
 ]
 
 [[package]]
@@ -1450,6 +1452,7 @@ dependencies = [
  "ctutils",
  "hybrid-array 0.4.12",
  "num-traits",
+ "zeroize",
 ]
 
 [[package]]

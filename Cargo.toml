@@ -52,8 +52,11 @@ rand = "0.8"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 ml-kem = { version = "0.2", features = ["std"] }
 
-# Post-quantum signatures (FIPS 204 ML-DSA-65 backend)
-ml-dsa = "0.1.0"
+# Post-quantum signatures (FIPS 204 ML-DSA-65 backend).
+# `features = ["zeroize"]` opts the upstream `ml-dsa` crate into the
+# `ZeroizeOnDrop` impl on `SigningKey<MlDsa65>` so long-lived secret-
+# key state in `MlDsa65Signer` is wiped from memory when dropped.
+ml-dsa = { version = "0.1.0", features = ["zeroize"] }
 
 # Stateless hash-based post-quantum signatures
 # (SPHINCS+-SHAKE-128f-simple via PQClean).
