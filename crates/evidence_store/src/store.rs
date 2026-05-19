@@ -1290,6 +1290,105 @@ impl EvidenceStore {
         Ok(dek)
     }
 
+    // ─────────────── Memory-object persistence (C10) ───────────────
+
+    /// Persist a serializable memory object (user or channel) for
+    /// `scope_id`. The `kind` tag discriminates between different
+    /// memory types ("user_memory" / "channel_memory"). The object
+    /// is JSON-serialized and AEAD-encrypted under the scope key.
+    ///
+    /// Upserts: calling this with the same `(scope_id, kind)` pair
+    /// overwrites the previous blob.
+    pub fn save_memory_blob(
+        &self,
+        scope_id: ScopeId,
+        kind: &str,
+        plaintext_json: &[u8],
+    ) -> Result<()> {
+        let key = self.scope_key(scope_id)?;
+        let nonce = random_nonce();
+        let mut aad = Vec::with_capacity(16 + kind.len());
+        aad.extend_from_slice(b"memory:");
+        aad.extend_from_slice(kind.as_bytes());
+        aad.push(b':');
+        aad.extend_from_slice(scope_id.as_uuid().as_bytes());
+        let ciphertext = encrypt_aead(&key, &nonce, plaintext_json, &aad)?;
+        let now = chrono::Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO memory_objects \
+             (scope_id, kind, nonce, payload, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                scope_id.as_uuid().as_bytes().as_slice(),
+                kind,
+                nonce.as_slice(),
+                ciphertext,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Load a previously-persisted memory blob for `(scope_id, kind)`.
+    /// Returns `None` if no row exists.
+    pub fn load_memory_blob(
+        &self,
+        scope_id: ScopeId,
+        kind: &str,
+    ) -> Result<Option<Vec<u8>>> {
+        let row: Option<(Vec<u8>, Vec<u8>)> = self
+            .conn
+            .query_row(
+                "SELECT nonce, payload FROM memory_objects \
+                 WHERE scope_id = ?1 AND kind = ?2",
+                params![scope_id.as_uuid().as_bytes().as_slice(), kind],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((nonce_bytes, ciphertext)) = row else {
+            return Ok(None);
+        };
+        if nonce_bytes.len() != AEAD_NONCE_LEN {
+            return Err(EvidenceError::Schema(
+                "memory_objects nonce has wrong length",
+            ));
+        }
+        let mut nonce = [0u8; AEAD_NONCE_LEN];
+        nonce.copy_from_slice(&nonce_bytes);
+        let key = self.scope_key(scope_id)?;
+        let mut aad = Vec::with_capacity(16 + kind.len());
+        aad.extend_from_slice(b"memory:");
+        aad.extend_from_slice(kind.as_bytes());
+        aad.push(b':');
+        aad.extend_from_slice(scope_id.as_uuid().as_bytes());
+        let plaintext = decrypt_aead(&key, &nonce, &ciphertext, &aad)?;
+        Ok(Some(plaintext))
+    }
+
+    /// Delete all memory blobs for `scope_id` (all kinds).
+    pub fn delete_memory_blobs_for_scope(&self, scope_id: ScopeId) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM memory_objects WHERE scope_id = ?1",
+            params![scope_id.as_uuid().as_bytes().as_slice()],
+        )?;
+        Ok(())
+    }
+
+    /// List all scope IDs that have persisted memory blobs of the
+    /// given `kind`. Used at startup to rehydrate the in-memory maps.
+    pub fn list_memory_scopes(&self, kind: &str) -> Result<Vec<ScopeId>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT scope_id FROM memory_objects WHERE kind = ?1",
+        )?;
+        let rows = stmt.query_map(params![kind], |row| row.get::<_, Vec<u8>>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let bytes = row?;
+            out.push(ScopeId::from_uuid(slice_to_uuid(&bytes)?));
+        }
+        Ok(out)
+    }
+
     /// Purge every secondary-index row that retains plaintext for
     /// `scope_id`.
     ///
@@ -1758,6 +1857,9 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // v6 (C2): add `scope_deks`. Purely additive; handled by
         // SCHEMA_SQL's `CREATE TABLE IF NOT EXISTS`.
         6 => Ok(()),
+        // v7 (C10): add `memory_objects`. Purely additive; handled
+        // by SCHEMA_SQL's `CREATE TABLE IF NOT EXISTS`.
+        7 => Ok(()),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
         )),

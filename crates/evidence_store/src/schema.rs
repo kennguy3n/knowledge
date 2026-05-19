@@ -40,7 +40,13 @@
 ///   stored in this table. `forget()` deletes the row, making the
 ///   scope key truly unrecoverable even if the master key is
 ///   compromised. Purely additive.
-pub const SCHEMA_VERSION: i32 = 6;
+/// - v7 (C10): added `memory_objects` for persisted per-scope
+///   memory state. Each scope's `UserMemoryObject` (or
+///   `ChannelMemoryObject`) is JSON-serialized and AEAD-encrypted
+///   under the scope key, so memory state survives process
+///   restarts. Mutations (pin, unpin, decay_sweep) flush the
+///   updated state to this table. Purely additive.
+pub const SCHEMA_VERSION: i32 = 7;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -183,5 +189,19 @@ CREATE TABLE IF NOT EXISTS scope_deks (
     wrapped_dek     BLOB    NOT NULL,
     nonce           BLOB    NOT NULL,
     created_at      INTEGER NOT NULL
+);
+
+-- v7 (C10) — encrypted per-scope memory objects.
+-- Each row stores a scope's memory objects (user or channel)
+-- as a single AEAD-encrypted JSON blob. The `kind` column
+-- discriminates between user_memory and channel_memory.
+-- Mutations (pin, unpin, decay_sweep) upsert the entire blob.
+CREATE TABLE IF NOT EXISTS memory_objects (
+    scope_id        BLOB    NOT NULL,
+    kind            TEXT    NOT NULL,
+    nonce           BLOB    NOT NULL,
+    payload         BLOB    NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    PRIMARY KEY (scope_id, kind)
 );
 "#;

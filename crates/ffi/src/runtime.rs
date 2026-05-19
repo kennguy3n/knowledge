@@ -132,6 +132,40 @@ impl FfiRuntime {
             .entry(scope)
             .or_insert_with(|| ChannelMemoryObject::new(scope))
     }
+
+    /// Flush the in-memory `UserMemoryObject` for `scope` to the
+    /// encrypted evidence store. Called after every mutation (pin,
+    /// unpin, decay_sweep) so the state survives process restarts.
+    pub(crate) fn flush_user_memory(&self, scope: ScopeId) -> crate::error::FfiResult<()> {
+        if let Some(umo) = self.user_memories.get(&scope) {
+            let json = serde_json::to_vec(umo).map_err(|e| crate::error::FfiError::Memory {
+                message: format!("failed to serialize user memory: {e}"),
+            })?;
+            self.store
+                .save_memory_blob(scope, "user_memory", &json)
+                .map_err(|e| crate::error::FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+        }
+        Ok(())
+    }
+
+    /// Flush the in-memory `ChannelMemoryObject` for `scope` to the
+    /// encrypted evidence store.
+    #[allow(dead_code)]
+    pub(crate) fn flush_channel_memory(&self, scope: ScopeId) -> crate::error::FfiResult<()> {
+        if let Some(cmo) = self.channel_memories.get(&scope) {
+            let json = serde_json::to_vec(cmo).map_err(|e| crate::error::FfiError::Memory {
+                message: format!("failed to serialize channel memory: {e}"),
+            })?;
+            self.store
+                .save_memory_blob(scope, "channel_memory", &json)
+                .map_err(|e| crate::error::FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+        }
+        Ok(())
+    }
 }
 
 fn singleton() -> &'static Mutex<Option<FfiRuntime>> {
@@ -267,12 +301,60 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
         registry.insert_scope_dek(dek);
     }
 
+    // Rehydrate persisted user memories from the encrypted
+    // `memory_objects` table (v7 schema). Tombstoned scopes are
+    // skipped — their memory blobs should have been deleted by
+    // `forget()`.
+    let mut user_memories = HashMap::new();
+    let user_scopes = store
+        .list_memory_scopes("user_memory")
+        .map_err(|e| FfiError::Evidence {
+            message: e.to_string(),
+        })?;
+    for scope in user_scopes {
+        if tombstones.contains(&scope) {
+            continue;
+        }
+        if let Some(blob) = store
+            .load_memory_blob(scope, "user_memory")
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?
+        {
+            if let Ok(umo) = serde_json::from_slice::<UserMemoryObject>(&blob) {
+                user_memories.insert(scope, umo);
+            }
+        }
+    }
+
+    let mut channel_memories = HashMap::new();
+    let channel_scopes = store
+        .list_memory_scopes("channel_memory")
+        .map_err(|e| FfiError::Evidence {
+            message: e.to_string(),
+        })?;
+    for scope in channel_scopes {
+        if tombstones.contains(&scope) {
+            continue;
+        }
+        if let Some(blob) = store
+            .load_memory_blob(scope, "channel_memory")
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?
+        {
+            if let Ok(cmo) = serde_json::from_slice::<ChannelMemoryObject>(&blob) {
+                channel_memories.insert(scope, cmo);
+            }
+        }
+    }
+
     *guard = Some(FfiRuntime {
         master_key,
         store,
         registry,
-        user_memories: HashMap::new(),
-        channel_memories: HashMap::new(),
+        user_memories,
+        channel_memories,
     });
     Ok(())
 }

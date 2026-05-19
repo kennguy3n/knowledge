@@ -390,7 +390,8 @@ pub fn pin(id: String) -> FfiResult<()> {
             .expect("owning scope located above must still exist");
         umo.pin(&uuid).map_err(|e| FfiError::Memory {
             message: e.to_string(),
-        })
+        })?;
+        rt.flush_user_memory(owning_scope)
     })
 }
 
@@ -427,7 +428,8 @@ pub fn unpin(id: String) -> FfiResult<()> {
             .expect("owning scope located above must still exist");
         umo.unpin(&uuid).map_err(|e| FfiError::Memory {
             message: e.to_string(),
-        })
+        })?;
+        rt.flush_user_memory(owning_scope)
     })
 }
 
@@ -510,6 +512,15 @@ pub fn forget(id: String) -> FfiResult<()> {
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
+        // Delete persisted memory blobs so forgotten-scope memory
+        // state does not survive the next open_store.
+        rt.store()
+            .delete_memory_blobs_for_scope(scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        rt.user_memories.remove(&scope);
+        rt.channel_memories.remove(&scope);
         Ok(())
     })
 }
@@ -551,6 +562,14 @@ pub fn forget_scope(scope_id: String) -> FfiResult<()> {
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
+        // Delete persisted memory blobs for the forgotten scope.
+        rt.store()
+            .delete_memory_blobs_for_scope(scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        rt.user_memories.remove(&scope);
+        rt.channel_memories.remove(&scope);
         Ok(())
     })
 }
@@ -612,7 +631,9 @@ pub fn run_decay_sweep(scope_id: ScopeIdString) -> FfiResult<u32> {
         }
         let umo = rt.user_memory_mut(scope);
         let report = umo.decay_sweep(chrono::Utc::now());
-        Ok((report.candidates_archived + report.superseded_archived) as u32)
+        let count = (report.candidates_archived + report.superseded_archived) as u32;
+        rt.flush_user_memory(scope)?;
+        Ok(count)
     })
 }
 
@@ -1713,6 +1734,138 @@ mod tests {
         assert!(
             hits_after.is_empty(),
             "post-reopen query must return no rows for the previously-tombstoned scope"
+        );
+
+        teardown();
+    }
+
+    /// C10 integration test: memory state survives an open/close/open
+    /// cycle via the encrypted `memory_objects` table.
+    #[test]
+    fn memory_persists_across_open_close_open() {
+        let _g = test_lock();
+        let _ = close_store();
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let key_hex = "a5".repeat(32);
+
+        // First session: open, add a memory object, pin it, close.
+        open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open 1");
+        let scope_uuid = uuid::Uuid::new_v4();
+        let scope_str = scope_uuid.to_string();
+        let scope = parse_scope_id(&scope_str).unwrap();
+
+        // Ensure scope is registered so the DEK exists.
+        runtime::with_runtime(|rt| {
+            rt.ensure_scope_registered(scope)?;
+            Ok(())
+        })
+        .expect("ensure_scope_registered");
+
+        // Insert a memory object and pin it.
+        runtime::with_runtime(|rt| {
+            let umo = rt.user_memory_mut(scope);
+            let obj = memory_manager::MemoryObject::new_candidate(
+                scope,
+                memory_manager::SensitivityClass::Important,
+            );
+            let obj_id = obj.id;
+            umo.insert(obj);
+            umo.pin(&obj_id).map_err(|e| FfiError::Memory {
+                message: e.to_string(),
+            })?;
+            // Flush to disk.
+            rt.flush_user_memory(scope)?;
+            Ok(())
+        })
+        .expect("insert + pin");
+
+        // Verify we can see the memory object before closing.
+        let before_close = list_memories(scope_str.clone(), MemoryFilter::default())
+            .expect("list before close");
+        assert_eq!(before_close.len(), 1, "one memory object before close");
+        // Check pin count via the internal MemoryObject (not exposed
+        // on the FFI MemoryRecord wire type).
+        runtime::with_runtime(|rt| {
+            let umo = rt.user_memory(scope).expect("scope must exist");
+            assert_eq!(umo.objects[0].pin_count, 1, "pinned once before close");
+            Ok(())
+        })
+        .expect("pin count check");
+
+        close_store().expect("close 1");
+
+        // Second session: re-open with same key.
+        open_store(path.to_string_lossy().into_owned(), key_hex).expect("open 2");
+
+        // Memory object must be rehydrated from disk.
+        let after_reopen = list_memories(scope_str.clone(), MemoryFilter::default())
+            .expect("list after reopen");
+        assert_eq!(
+            after_reopen.len(),
+            1,
+            "memory object must survive close/open cycle"
+        );
+        runtime::with_runtime(|rt| {
+            let umo = rt.user_memory(scope).expect("scope must exist after reopen");
+            assert_eq!(
+                umo.objects[0].pin_count, 1,
+                "pin count must survive close/open cycle"
+            );
+            Ok(())
+        })
+        .expect("pin count check after reopen");
+
+        teardown();
+    }
+
+    /// C10 integration test: forget_scope deletes persisted memory
+    /// blobs so they do not reappear on reopen.
+    #[test]
+    fn forget_scope_deletes_persisted_memory() {
+        let _g = test_lock();
+        let _ = close_store();
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let key_hex = "a5".repeat(32);
+
+        open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open 1");
+        let scope_uuid = uuid::Uuid::new_v4();
+        let scope_str = scope_uuid.to_string();
+        let scope = parse_scope_id(&scope_str).unwrap();
+
+        runtime::with_runtime(|rt| {
+            rt.ensure_scope_registered(scope)?;
+            Ok(())
+        })
+        .expect("ensure_scope_registered");
+
+        // Insert a memory object and flush it.
+        runtime::with_runtime(|rt| {
+            let umo = rt.user_memory_mut(scope);
+            let obj = memory_manager::MemoryObject::new_candidate(
+                scope,
+                memory_manager::SensitivityClass::Useful,
+            );
+            umo.insert(obj);
+            rt.flush_user_memory(scope)?;
+            Ok(())
+        })
+        .expect("insert + flush");
+
+        // Forget the scope.
+        forget_scope(scope_str.clone()).expect("forget_scope");
+
+        close_store().expect("close 1");
+
+        // Reopen — memories for the forgotten scope must NOT reappear.
+        open_store(path.to_string_lossy().into_owned(), key_hex).expect("open 2");
+
+        let after = list_memories(scope_str.clone(), MemoryFilter::default())
+            .expect("list after forget + reopen");
+        assert!(
+            after.is_empty(),
+            "forgotten-scope memories must not reappear after reopen"
         );
 
         teardown();
