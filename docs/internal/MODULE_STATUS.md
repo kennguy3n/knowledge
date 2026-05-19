@@ -33,12 +33,12 @@ about Unicode glyphs in their terminal font.
 | `connectors`           | Contract/spec  | Fixture parsers, no live APIs    | Slack / Drive / GitHub / Jira / Confluence / OneDrive / Notion / Figma parsers consume JSON fixtures committed in `crates/connectors/fixtures/`. None hit a live API. |
 | `crypto`               | Runtime-ready  | Real PQ + classical primitives   | BLAKE3, XChaCha20-Poly1305, HKDF, HMAC, X25519, ML-KEM-768, ML-DSA-65 are all real. **`StubKemBackend`, `TestSigner`, `TEST_SIGNER_KEY_LEN`** are gated behind `cfg(any(test, feature = "test-support"))`. **SPHINCS+ is a BLAKE3-based stub** (see `crypto::sphincs` module docs). See "Known security debt" below. |
 | `demo`                 | Mock/test/demo | Scaffolding driver only          | The CLI demo binary opts into `crypto/test-support`, `synthesis_pipeline/test-support`, and `synthesis_engine/test-support` because it wires `TestSigner` + `NoOpSynthesizer` + `MockTeeRuntime` end-to-end. Not a production entrypoint. |
-| `evidence_store`       | Runtime-ready  | Real SQLCipher, AEAD, FTS5       | SQLCipher (AES-256-CBC + HMAC-SHA512 per page), per-scope AEAD, content-hash dedup, ring buffer FIFO, FTS5 retrieval all run on real SQLite. Embedding pipeline is a skeleton (XLM-R adapter pending). **FTS5 index retains plaintext after scope DEK destruction** — see `evidence_store/tests/forgetting_fts.rs` and the "Known security debt" section below. |
+| `evidence_store`       | Runtime-ready  | Real SQLCipher, AEAD, FTS5       | SQLCipher (AES-256-CBC + HMAC-SHA512 per page), per-scope AEAD, content-hash dedup with per-scope CEK wrapping, ring buffer FIFO, FTS5 retrieval all run on real SQLite. Embedding pipeline is a skeleton (XLM-R adapter pending). FTS5 index is purged on forget via `purge_fts_for_scope`; body-table rows are cryptographically erased via per-scope CEK-wrap deletion. |
 | `export_plane`         | Runtime-ready  | Real implementation              | Agent-facing read APIs, scope enforcement, redaction; integrates with `agent_contract`.                                                       |
-| `ffi`                  | Contract/spec  | Skeleton, every export `Unimplemented` | UniFFI / cbindgen build pipeline produces real artifacts but every exported function returns the `Unimplemented` error variant. Host UI wiring lands in a later phase. |
-| `inference_router`     | Contract/spec  | Routing logic only               | Cost/latency/policy router compiles and the trait surface is real, but the backend adapters (Bonsai-1.7B on-device, managed cloud endpoints) are stubs returning placeholder payloads. |
+| `ffi`                  | Partial runtime | Phase A.5: core evidence + crypto + memory wired | `open_store`, `close_store`, `ingest_message`, `query`, `get_evidence`, `forget`, `forget_scope`, `encrypt`, `decrypt`, `generate_keypair`, `get_user_memory`, `pin`, `unpin`, `list_memories`, `run_decay_sweep`, `get_channel_memory`, `escape_fts_query` are wired and tested. `trigger_synthesis` returns `Unavailable`. |
+| `inference_router`     | Contract/spec  | Routing logic + llama.cpp HTTP   | Cost/latency/policy router compiles and the trait surface is real. The llama.cpp adapter has a real HTTP client (feature-gated behind `http-client`). MLX adapter reports `Unavailable` and falls through when the native runtime is not linked. |
 | `memory_manager`       | Runtime-ready  | Real state machine               | Decay state machine, retention scoring, working-memory promotion/eviction, lexicon classifier. No mocks.                                      |
-| `napi`                 | Contract/spec  | Forwards to FFI                  | N-API addon for macOS / Windows; forwards every call into the FFI skeleton, which returns `Unimplemented`.                                    |
+| `napi`                 | Partial runtime | Forwards to FFI                  | N-API addon for macOS / Windows; forwards every call into the FFI surface. Core evidence/crypto/memory operations are wired; synthesis returns `Unavailable`. |
 | `observation_engine`   | Contract/spec  | SLM-assisted pipeline skeleton   | Window manager + observation router are real; the SLM observer path is wired to the inference-router stub adapter so it does not yet run a real Bonsai-1.7B. |
 | `permission_service`   | Runtime-ready  | Real implementation              | Tenant / domain / scope permission rules; backed by SQLCipher tables.                                                                          |
 | `reasoning_engine`     | Contract/spec  | Graph-of-thought skeleton        | Plan / step / graph types and the `ReasoningEngine` trait compile and have tests, but the planner relies on stub inference and does not yet run a real LLM call. |
@@ -98,44 +98,23 @@ code paths.
 The following items are honest gaps tracked here so they cannot be
 silently re-marketed as "complete":
 
-1. **FTS5 plaintext index survives scope DEK destruction.**
-   `evidence_store` keeps a SQLite FTS5 virtual table for fast
-   retrieval. FTS5 stores the *tokenized plaintext* of every ingested
-   body — that is how the index works — so zeroizing the scope's
-   body AEAD key does NOT remove searchable terms from the index.
-   The gap is pinned by
-   `crates/evidence_store/tests/forgetting_fts.rs::fts_index_retains_plaintext_after_scope_dek_destruction`.
-   Three viable mitigations are listed at the bottom of that file
-   (rebuild FTS on key destruction, encrypt FTS terms separately, or
-   destroy the entire SQLCipher database key).
+1. **FTS5 plaintext index purge is best-effort.** `forget()` and
+   `forget_scope()` now call `purge_fts_for_scope()` to delete FTS5
+   tokens for the forgotten scope. Persisted tombstones ensure that
+   a crash between tombstone persist and FTS purge is recovered on
+   the next `open_store()`. However, SQLite FTS5 `DELETE` may leave
+   residual data in the shadow tables until `OPTIMIZE` or `REBUILD`
+   is run.
 
-2. **`ml-dsa 0.0.4` has a timing side-channel
-   (`RUSTSEC-2025-0144`).** The fix lands in `ml-dsa >= 0.1.0-rc.3`,
-   which is a substantial API bump for a pre-1.0 RustCrypto crate.
-   The upgrade has to be sequenced with the wider Phase 7
-   provenance overhaul because `crates/crypto/src/signer_backend.rs`
-   and the FFI surface (`crates/ffi/src/types.rs`) currently pin
-   the 0.0.4 type names. The CI `cargo audit` step records the
-   ignore explicitly on the command line (`--ignore
-   RUSTSEC-2025-0144`) so the debt shows up in every CI log.
+2. **SPHINCS+ provenance signer is a BLAKE3-derived stub.** The
+   module docs in `crates/crypto/src/sphincs.rs` are honest about
+   this: the type signatures match SPHINCS+ wire formats but the
+   underlying construction is a BLAKE3 keyed-hash, *not* a hash-
+   based signature scheme. Production provenance signing uses
+   ML-DSA-65 today; replacing the stub with a real SPHINCS+ backend
+   (e.g. via `pqcrypto-sphincsplus`) is tracked under Phase 7.
 
-3. **SPHINCS+ provenance signer is a BLAKE3-derived stub.** The
-   module docs in `crates/crypto/src/sphincs.rs` (lines 20-31) are
-   already honest about this: the type signatures match SPHINCS+
-   wire formats but the underlying construction is a BLAKE3
-   keyed-hash, *not* a hash-based signature scheme. Production
-   provenance signing uses ML-DSA-65 today; replacing the stub with
-   a real SPHINCS+ backend (e.g. via `pqcrypto-sphincsplus`) is
-   tracked under Phase 7.
-
-4. **Platform bindings return `Unimplemented`.** `crates/ffi`,
-   `crates/napi`, the iOS UniFFI bindings, and the macOS / Windows
-   N-API addons all have real build pipelines that emit artifacts,
-   but every exported function currently returns the
-   `Unimplemented` error variant. Host UI integration is a
-   later-phase deliverable.
-
-5. **No live connector traffic.** All eight connectors in
+3. **No live connector traffic.** All eight connectors in
    `crates/connectors/` parse JSON fixtures from
    `crates/connectors/fixtures/`. There is no OAuth2 transport,
    no retry / refresh-token plumbing, and no ACL sync; the

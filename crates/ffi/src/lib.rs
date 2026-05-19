@@ -80,8 +80,8 @@ pub mod types;
 pub use error::{FfiError, FfiResult};
 pub use runtime::{close_store, open_store};
 pub use types::{
-    EvidenceRecord, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult,
-    ScopeIdString, SourceKind, SynthesisTrigger,
+    EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord,
+    MemoryState, QueryResult, ScopeIdString, SourceKind, SynthesisTrigger,
 };
 
 use crypto::{
@@ -98,18 +98,12 @@ use runtime::with_runtime;
 /// Ingest a message into the encrypted evidence plane.
 ///
 /// `scope_id` is a UUID string identifying the scope (channel,
-/// thread, profile, …). `body` is plaintext UTF-8 to encrypt. `source`
-/// is the connector tag (`"Slack"`, `"Email"`, `"Manual"`, …).
+/// thread, profile, …). `body` is plaintext UTF-8 to encrypt.
+/// `source` is the connector tag (`"Slack"`, `"Email"`,
+/// `"Manual"`, …). `importance` controls the storage tier: see
+/// [`FfiImportanceClass`](types::FfiImportanceClass) for details.
 ///
 /// Returns the new evidence row's UUID as a string on success.
-///
-/// # Phase A simplification
-///
-/// Every ingest is currently routed at `ImportanceClass::Important`.
-/// The underlying [`EvidenceStore`](evidence_store::EvidenceStore)
-/// supports `Useful` and `Noise` (the latter goes to the ring
-/// buffer), but exposing that knob through the FFI is tracked as a
-/// follow-up — see the crate-level docs.
 ///
 /// # Errors
 ///
@@ -122,6 +116,7 @@ pub fn ingest_message(
     scope_id: ScopeIdString,
     body: String,
     source: SourceKind,
+    importance: FfiImportanceClass,
 ) -> FfiResult<String> {
     let scope = parse_scope_id(&scope_id)?;
     with_runtime(|rt| {
@@ -138,7 +133,7 @@ pub fn ingest_message(
                 scope,
                 body.as_bytes(),
                 Some(source_kind_tag(source)),
-                ImportanceClass::Important,
+                ffi_importance_to_internal(importance),
             )
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
@@ -230,6 +225,34 @@ pub fn query(
         }
         Ok(out)
     })
+}
+
+/// Escape user-supplied text for safe use in an FTS5 `MATCH` clause.
+///
+/// FTS5 interprets bare keywords, `AND`/`OR`/`NOT`/`NEAR`, prefix
+/// globs (`*`), column filters (`:`) and phrase quotes as query
+/// syntax. Passing raw user input directly to [`query`] can produce
+/// parse errors or unintended Boolean logic.
+///
+/// This function wraps the input in double quotes (making it a
+/// literal phrase) and escapes any embedded double quotes by
+/// doubling them (`"` → `""`), which is the FTS5 escape convention.
+///
+/// ```text
+/// escape_fts_query(r#"hello "world""#) => r#""hello ""world""""#
+/// ```
+pub fn escape_fts_query(input: String) -> String {
+    let mut out = String::with_capacity(input.len() + 2);
+    out.push('"');
+    for ch in input.chars() {
+        if ch == '"' {
+            out.push_str("\"\"");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn snippet_clip(body: &str, max_chars: usize) -> String {
@@ -431,12 +454,14 @@ pub fn unpin(id: String) -> FfiResult<()> {
 /// calls for the same scope continue to short-circuit with
 /// [`FfiError::NotFound`].
 ///
-/// The encrypted **bodies** in `evidence` / `body_store` are
-/// intentionally not deleted — the append-only trigger on
-/// `evidence` forbids it, and without the per-scope DEK the
-/// ciphertexts are unrecoverable anyway. Hosts that need to drop
-/// the physical bytes must perform a VACUUM-style rebuild at a
-/// higher layer.
+/// The encrypted **inline** bodies in the `evidence` table are
+/// intentionally not deleted — the append-only trigger forbids it,
+/// and without the per-scope DEK the ciphertexts are unrecoverable.
+/// For **body-table** rows (`body_store`), `forget()` destroys the
+/// per-scope CEK wraps (`body_store_key_wraps`). When no scope
+/// retains a wrap for a given content hash the body row is garbage-
+/// collected. Hosts that need to scrub surviving inline ciphertexts
+/// must perform a VACUUM-style rebuild at a higher layer.
 ///
 /// # Errors
 ///
@@ -477,6 +502,52 @@ pub fn forget(id: String) -> FfiResult<()> {
             })?;
         rt.store_mut()
             .purge_fts_for_scope(scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        rt.store_mut()
+            .purge_body_key_wraps_for_scope(scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        Ok(())
+    })
+}
+
+/// Cryptographically forget a scope by its UUID directly.
+///
+/// Unlike [`forget`] which resolves an evidence ID to find the
+/// scope, this function accepts a scope UUID directly. This is
+/// the preferred API when the caller already knows the scope —
+/// see `crates/ffi/src/lib.rs` doc header §"Direct scope
+/// operations".
+///
+/// The mechanics mirror [`forget`]: the per-scope DEK is destroyed
+/// in memory, a tombstone is persisted, and the FTS5 / body-store
+/// CEK wraps are purged.
+///
+/// # Errors
+///
+/// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
+/// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+/// * [`FfiError::Evidence`] if persisting the tombstone or purging
+///   secondary indexes fails.
+pub fn forget_scope(scope_id: String) -> FfiResult<()> {
+    let scope = parse_scope_id(&scope_id)?;
+    with_runtime(|rt| {
+        rt.forget_scope(scope);
+        rt.store_mut()
+            .record_forgotten_scope(scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        rt.store_mut()
+            .purge_fts_for_scope(scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        rt.store_mut()
+            .purge_body_key_wraps_for_scope(scope)
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
@@ -640,7 +711,7 @@ pub fn generate_keypair() -> FfiResult<FfiKeypair> {
     Ok(FfiKeypair {
         algorithm: "ml-dsa-65".into(),
         public_key: <_ as AsRef<[u8]>>::as_ref(&encoded.verifying_key).to_vec(),
-        private_key: <_ as AsRef<[u8]>>::as_ref(&encoded.signing_key).to_vec(),
+        private_key: <_ as AsRef<[u8]>>::as_ref(&encoded.signing_seed).to_vec(),
     })
 }
 
@@ -839,6 +910,15 @@ fn ffi_filter_to_memory_filter(
     mm
 }
 
+fn ffi_importance_to_internal(ffi: FfiImportanceClass) -> ImportanceClass {
+    match ffi {
+        FfiImportanceClass::Critical => ImportanceClass::Critical,
+        FfiImportanceClass::Important => ImportanceClass::Important,
+        FfiImportanceClass::Useful => ImportanceClass::Useful,
+        FfiImportanceClass::Noise => ImportanceClass::Noise,
+    }
+}
+
 fn source_kind_tag(source: SourceKind) -> &'static str {
     match source {
         SourceKind::Manual => "manual",
@@ -978,8 +1058,13 @@ mod tests {
         let phrase = "xyzzyffiroundtripphrase";
         let body = format!("Reminder: please file the {phrase} report by Friday.");
 
-        let evidence_id =
-            ingest_message(scope.clone(), body.clone(), SourceKind::Slack).expect("ingest_message");
+        let evidence_id = ingest_message(
+            scope.clone(),
+            body.clone(),
+            SourceKind::Slack,
+            FfiImportanceClass::Important,
+        )
+        .expect("ingest_message");
         assert!(!evidence_id.is_empty());
 
         let hits = query(scope.clone(), phrase.into(), 10).expect("query");
@@ -1005,7 +1090,12 @@ mod tests {
             other => panic!("expected NotFound after forget, got {other:?}"),
         }
 
-        match ingest_message(scope.clone(), "second message".into(), SourceKind::Manual) {
+        match ingest_message(
+            scope.clone(),
+            "second message".into(),
+            SourceKind::Manual,
+            FfiImportanceClass::Important,
+        ) {
             Err(FfiError::NotFound { kind, .. }) => assert_eq!(kind, "scope"),
             other => panic!("expected NotFound after forget, got {other:?}"),
         }
@@ -1051,19 +1141,18 @@ mod tests {
     fn generate_keypair_returns_ml_dsa_65() {
         let kp = generate_keypair().expect("generate_keypair");
         assert_eq!(kp.algorithm, "ml-dsa-65");
-        // ML-DSA-65 verifying key is 1952 bytes, signing key is 4032
-        // bytes (FIPS 204 §4.2 / §4.3). We assert lower bounds rather
-        // than exact equality so an upstream `ml-dsa` minor-version
-        // bump that changes the wire encoding does not crater this
-        // test gratuitously.
+        // ML-DSA-65 verifying key is 1952 bytes (FIPS 204 §4.2).
         assert!(
             kp.public_key.len() >= 1500,
             "ml-dsa-65 verifying key suspiciously small: {}",
             kp.public_key.len()
         );
-        assert!(
-            kp.private_key.len() >= 3500,
-            "ml-dsa-65 signing key suspiciously small: {}",
+        // ml-dsa 0.1.0 represents the signing key as a 32-byte seed
+        // (from which the full expanded key is derived at use time).
+        assert_eq!(
+            kp.private_key.len(),
+            32,
+            "ml-dsa-65 signing seed must be 32 bytes, got {}",
             kp.private_key.len()
         );
     }
@@ -1202,8 +1291,13 @@ mod tests {
         let _dir = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
         let phrase = "memorymanagerforgetphrase";
-        let evidence_id =
-            ingest_message(scope.clone(), phrase.into(), SourceKind::Manual).expect("ingest");
+        let evidence_id = ingest_message(
+            scope.clone(),
+            phrase.into(),
+            SourceKind::Manual,
+            FfiImportanceClass::Important,
+        )
+        .expect("ingest");
 
         // Seed a memory object into the same scope so we can prove
         // forget elides it.
@@ -1333,6 +1427,7 @@ mod tests {
             scope.clone(),
             "pin-after-forget-seed-body".into(),
             SourceKind::Manual,
+            FfiImportanceClass::Important,
         )
         .expect("ingest");
         let mem_id = runtime::with_runtime(|rt| {
@@ -1428,6 +1523,7 @@ mod tests {
             uuid::Uuid::new_v4().to_string(),
             "body".into(),
             SourceKind::Manual,
+            FfiImportanceClass::Important,
         )
         .unwrap_err();
         assert!(
@@ -1456,6 +1552,7 @@ mod tests {
             scope.clone(),
             "the persistent forgetting test body".into(),
             SourceKind::Manual,
+            FfiImportanceClass::Important,
         )
         .expect("ingest_message");
         forget(evidence_id).expect("forget");
@@ -1474,6 +1571,7 @@ mod tests {
             scope,
             "second message after restart".into(),
             SourceKind::Manual,
+            FfiImportanceClass::Important,
         ) {
             Err(FfiError::NotFound { kind, .. }) => assert_eq!(kind, "scope"),
             other => panic!("expected NotFound {{ kind: \"scope\" }} after restart, got {other:?}"),
@@ -1505,8 +1603,13 @@ mod tests {
 
         open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open_store");
 
-        let evidence_id = ingest_message(scope_str.clone(), PHRASE.into(), SourceKind::Manual)
-            .expect("ingest_message");
+        let evidence_id = ingest_message(
+            scope_str.clone(),
+            PHRASE.into(),
+            SourceKind::Manual,
+            FfiImportanceClass::Important,
+        )
+        .expect("ingest_message");
         assert!(!evidence_id.is_empty());
 
         // Sanity: FTS5 surfaces the phrase before any forgetting.

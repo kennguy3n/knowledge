@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use ffi::types::{ScopeIdString, SourceKind};
+use ffi::types::{FfiImportanceClass, ScopeIdString, SourceKind};
 
 /// One-time initialization config the Electron host passes via
 /// `init(JSON.stringify(config))`.
@@ -29,6 +29,14 @@ pub struct IngestRequest {
     pub body: String,
     /// Source connector kind.
     pub source: SourceKind,
+    /// Importance classification. Defaults to `Important` when
+    /// absent from the JSON payload.
+    #[serde(default = "default_importance")]
+    pub importance: FfiImportanceClass,
+}
+
+fn default_importance() -> FfiImportanceClass {
+    FfiImportanceClass::Important
 }
 
 /// JSON-shaped argument object for [`super::query`].

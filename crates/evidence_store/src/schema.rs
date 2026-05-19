@@ -26,7 +26,14 @@
 ///   so cryptographic-forgetting tombstones survive process restarts
 ///   — the in-memory `DekRegistry` is rebuilt from this table on
 ///   `open_store`. Purely additive.
-pub const SCHEMA_VERSION: i32 = 4;
+/// - v5 (WS1): added `body_store_key_wraps` for per-scope CEK
+///   wrapping of deduplicated body-table rows. Bodies in
+///   `body_store` are now encrypted under a random per-row Content
+///   Encryption Key (CEK); each scope that references the body
+///   wraps the CEK under its per-scope AEAD key. `forget()` deletes
+///   wraps for the forgotten scope; when no wraps remain the body
+///   is cryptographically unrecoverable. Purely additive.
+pub const SCHEMA_VERSION: i32 = 5;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -136,4 +143,24 @@ CREATE TABLE IF NOT EXISTS forgotten_scopes (
     scope_id        BLOB    PRIMARY KEY,
     forgotten_at    INTEGER NOT NULL
 );
+
+-- v5 (WS1) — per-scope CEK wraps for deduplicated body-table rows.
+-- Each row wraps the random Content Encryption Key (CEK) of a body_store
+-- row under the per-scope AEAD key so that `forget()` can destroy a
+-- scope's access to shared bodies without affecting other scopes.
+-- When no wraps remain for a given `content_hash`, the body is
+-- cryptographically unrecoverable.
+CREATE TABLE IF NOT EXISTS body_store_key_wraps (
+    content_hash    BLOB    NOT NULL,
+    scope_id        BLOB    NOT NULL,
+    wrapped_cek     BLOB    NOT NULL,
+    nonce           BLOB    NOT NULL,
+    PRIMARY KEY (content_hash, scope_id)
+);
+
+-- Forgetting a scope queries body_store_key_wraps by scope_id alone.
+-- The composite PK only supports prefix lookups on content_hash;
+-- without this index those queries require a full table scan.
+CREATE INDEX IF NOT EXISTS idx_body_wraps_scope
+    ON body_store_key_wraps (scope_id);
 "#;

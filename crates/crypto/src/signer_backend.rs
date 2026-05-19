@@ -16,16 +16,15 @@
 //! * [`MlDsa65EncodedKeyPair`] / [`MlDsa65EncodedVerifyingKey`] — wire
 //!   forms used to persist or transmit ML-DSA-65 keys.
 //!
-//! The `ml-dsa` crate is a pre-1.0 (`0.0.4`) RustCrypto release. If
-//! the API changes upstream, only this module needs to track the
+//! The `ml-dsa` crate (0.1.0, FIPS 204 stable) backs this module.
+//! If the API changes upstream, only this module needs to track the
 //! delta — every other crate in the workspace consumes
 //! [`crate::provenance::ProvenanceSigner`].
 
 use ml_dsa::{
-    signature::{Signer, Verifier},
-    EncodedSigningKey, EncodedVerifyingKey, KeyGen, MlDsa65, Signature, SigningKey, VerifyingKey,
+    signature::{Keypair, Signer, Verifier},
+    EncodedVerifyingKey, Generate, MlDsa65, Seed, Signature, SigningKey, VerifyingKey,
 };
-use rand::rngs::OsRng;
 
 use crate::errors::CryptoError;
 use crate::provenance::{ProvenanceBundle, ProvenanceSignature, ProvenanceSigner, SignedBundle};
@@ -63,11 +62,11 @@ pub struct MlDsa65Signer {
 impl MlDsa65Signer {
     /// Generate a fresh ML-DSA-65 key pair from the OS RNG.
     pub fn generate() -> Self {
-        let mut rng = OsRng;
-        let kp = MlDsa65::key_gen(&mut rng);
+        let sk = SigningKey::<MlDsa65>::generate();
+        let vk = sk.verifying_key();
         Self {
-            signing_key: kp.signing_key().clone(),
-            verifying_key: kp.verifying_key().clone(),
+            signing_key: sk,
+            verifying_key: vk,
         }
     }
 
@@ -91,18 +90,19 @@ impl MlDsa65Signer {
     /// Encode the signing + verifying keys for persistence / transport.
     pub fn encode(&self) -> MlDsa65EncodedKeyPair {
         MlDsa65EncodedKeyPair {
-            signing_key: self.signing_key.encode(),
+            signing_seed: self.signing_key.to_seed(),
             verifying_key: self.verifying_key.encode(),
         }
     }
 
-    /// Decode a previously [`Self::encode`]-d key pair. Both halves
-    /// are restored from their encoded form. As a safety check the
-    /// freshly decoded keys are exercised against a fixed test
-    /// message; if they do not validate against each other the
-    /// caller has supplied mismatched halves and we error out.
+    /// Decode a previously [`Self::encode`]-d key pair. The signing
+    /// key is deterministically expanded from its 32-byte seed. As a
+    /// safety check the freshly decoded keys are exercised against a
+    /// fixed test message; if they do not validate against each
+    /// other the caller has supplied mismatched halves and we error
+    /// out.
     pub fn decode(encoded: &MlDsa65EncodedKeyPair) -> Result<Self, CryptoError> {
-        let signing_key = SigningKey::<MlDsa65>::decode(&encoded.signing_key);
+        let signing_key = SigningKey::<MlDsa65>::from_seed(&encoded.signing_seed);
         let verifying_key = VerifyingKey::<MlDsa65>::decode(&encoded.verifying_key);
         let probe = b"ml-dsa-65 keypair coherence probe";
         let signature: Signature<MlDsa65> = signing_key.sign(probe);
@@ -120,8 +120,8 @@ impl MlDsa65Signer {
 /// the audit trail or wrapping with the master key.
 #[derive(Clone)]
 pub struct MlDsa65EncodedKeyPair {
-    /// Encoded signing key (~4 kB).
-    pub signing_key: EncodedSigningKey<MlDsa65>,
+    /// 32-byte seed from which the full signing key is derived.
+    pub signing_seed: Seed,
     /// Encoded verifying key (~2 kB).
     pub verifying_key: EncodedVerifyingKey<MlDsa65>,
 }
@@ -276,7 +276,7 @@ mod tests {
         let signer_a = MlDsa65Signer::generate();
         let signer_b = MlDsa65Signer::generate();
         let mismatched = MlDsa65EncodedKeyPair {
-            signing_key: signer_a.signing_key().encode(),
+            signing_seed: signer_a.signing_key().to_seed(),
             verifying_key: signer_b.verifying_key().encode(),
         };
         match MlDsa65Signer::decode(&mismatched) {

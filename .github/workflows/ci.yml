@@ -15,52 +15,128 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  check:
-    name: fmt + clippy + build + test
+  fmt:
+    name: rustfmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: rustfmt
+      - run: cargo fmt --all -- --check
 
-      - name: Cache cargo registry + target
-        uses: actions/cache@v4
+  clippy-default:
+    name: clippy (default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-clippy-default-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-clippy-default-
+      - run: cargo clippy --all-targets -- -D warnings
 
-      - name: Format check
-        run: cargo fmt --all -- --check
+  clippy-all:
+    name: clippy (all features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-clippy-all-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-clippy-all-
+      - run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Clippy lint
-        run: cargo clippy --all-targets --all-features -- -D warnings
+  build-default:
+    name: build (default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-build-default-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-build-default-
+      - run: cargo build --all-targets
 
-      - name: Build
-        run: cargo build --all-targets --all-features
+  build-release:
+    name: build (release, default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-build-release-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-build-release-
+      - run: cargo build --release --workspace --exclude demo
 
-      - name: Test
-        run: cargo test --all --all-features
+  test-default:
+    name: test (default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-test-default-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-test-default-
+      - run: cargo test --all
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+  test-all-features:
+    name: test (all features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-test-all-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-test-all-
+      - run: cargo test --all --all-features
 
-      # `RUSTSEC-2025-0144` is a timing side-channel in `ml-dsa 0.0.4`
-      # (the pre-1.0 RustCrypto crate the Phase 7 ML-DSA-65 backend
-      # currently pins). The fix lands in `ml-dsa >= 0.1.0-rc.3`,
-      # which is a substantial API bump that has to be sequenced with
-      # the wider provenance overhaul. The acknowledged debt is
-      # tracked in `docs/internal/PROGRESS.md` (Phase 7) and
-      # `docs/internal/MODULE_STATUS.md` ("Known security debt"). The ignore
-      # is recorded explicitly on the command line — not in a config
-      # file that cargo-audit 0.22 silently does not read from the
-      # repo root — so it shows up in CI logs every run.
-      - name: Security audit
-        run: cargo audit --ignore RUSTSEC-2025-0144
+  audit:
+    name: security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit
+
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo install cargo-deny --locked
+      - run: cargo deny check

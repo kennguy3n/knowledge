@@ -238,6 +238,11 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
+        store
+            .purge_body_key_wraps_for_scope(*scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
     }
 
     *guard = Some(FfiRuntime {

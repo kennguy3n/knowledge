@@ -1,5 +1,15 @@
 //! SPHINCS+ stateless backup signer — Phase 7 deliverable.
 //!
+//! # ⚠ WARNING: STUB IMPLEMENTATION
+//!
+//! This module ships a **BLAKE3-based stub** — NOT a real SPHINCS+
+//! implementation. It mirrors the SPHINCS+ API surface (key sizes,
+//! signature layout, encode/decode) so the rest of the substrate can
+//! code against it, but the cryptographic strength comes from BLAKE3
+//! keyed-hash, not from the SPHINCS+ hash-based signature scheme.
+//! Do **not** rely on this for production-grade post-quantum security
+//! until the stub is replaced with a real SPHINCS+ backend.
+//!
 //! Per `docs/DESIGN.md` §9.1 ("Post-quantum signatures"), the substrate
 //! ships **two** quantum-resistant signers side-by-side:
 //!
@@ -65,6 +75,8 @@ pub const SPHINCS_PLUS_SIGNATURE_LEN: usize = 32;
 pub const SPHINCS_PLUS_ALGORITHM_TAG: &str = "sphincs-plus-shake256-128f-simple";
 
 /// SPHINCS+ signing key + verifying key.
+///
+/// **WARNING: STUB** — uses BLAKE3 keyed-hash, not real SPHINCS+.
 ///
 /// Owns the two halves freshly derived from a 32-byte seed. The
 /// public key is the BLAKE3 hash of the seed under a fixed context;
@@ -325,7 +337,7 @@ pub struct CoSignerEncodedVerifier {
 /// the "AND" combiner: an attacker who breaks only one of the two
 /// underlying schemes cannot forge a valid co-signature.
 pub struct CoSigner {
-    ml_dsa_65: MlDsa65Signer,
+    ml_dsa_65: Box<MlDsa65Signer>,
     sphincs_plus: SphincsPlusSigner,
 }
 
@@ -339,7 +351,7 @@ impl CoSigner {
     /// Generate a fresh dual keypair.
     pub fn generate() -> Self {
         Self {
-            ml_dsa_65: MlDsa65Signer::generate(),
+            ml_dsa_65: Box::new(MlDsa65Signer::generate()),
             sphincs_plus: SphincsPlusSigner::generate(),
         }
     }
@@ -348,7 +360,7 @@ impl CoSigner {
     /// restoring from wrapped storage).
     pub fn from_parts(ml_dsa_65: MlDsa65Signer, sphincs_plus: SphincsPlusSigner) -> Self {
         Self {
-            ml_dsa_65,
+            ml_dsa_65: Box::new(ml_dsa_65),
             sphincs_plus,
         }
     }
@@ -371,7 +383,7 @@ impl CoSigner {
 
     /// Decode a previously [`Self::encode`]-d dual keypair.
     pub fn decode(encoded: &CoSignerEncodedKeypair) -> Result<Self, CryptoError> {
-        let ml_dsa_65 = MlDsa65Signer::decode(&encoded.ml_dsa_65)?;
+        let ml_dsa_65 = Box::new(MlDsa65Signer::decode(&encoded.ml_dsa_65)?);
         let sphincs_plus = SphincsPlusSigner::decode(&encoded.sphincs_plus)?;
         Ok(Self {
             ml_dsa_65,

@@ -909,7 +909,7 @@ fn schema_migration_v2_to_v3_widens_pk_and_preserves_rows() {
         evidence_store::schema::SCHEMA_VERSION,
         "user_version must be stamped to SCHEMA_VERSION after v2 → v3 migration"
     );
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
 
     // 2. Both seeded rows must survive byte-for-byte.
     let read_a = store

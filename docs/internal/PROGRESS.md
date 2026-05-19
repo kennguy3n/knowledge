@@ -45,7 +45,7 @@ data instead of fixtures.
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| Phase 0: Foundation | Mixed | Runtime: evidence store, crypto, CI. Contract: iOS / Android / macOS / Windows FFI bindings (every export returns `Unimplemented`). |
+| Phase 0: Foundation | Mixed | Runtime: evidence store, crypto, CI, FFI (Phase A.5 — core evidence/crypto/memory wired). Contract: iOS / Android / macOS / Windows shells (synthesis returns `Unavailable`). |
 | Phase 1: Personal Memory (on-device) | Mixed | Runtime: memory manager state machine, retention scoring, lexicon classifier, working memory, hybrid retrieval. Contract: XLM-R embeddings, SLM-assisted observation pipeline (no real SLM wired), episodic memory (uses `NoOpSynthesizer`). |
 | Phase 2: Channel Memory | Mixed | Runtime: window manager, AEAD publish/consume, GBNF schema, MLS leaf KEMs, ML-DSA-65 provenance. Contract: elected-device synthesizer (drives `NoOpSynthesizer`). |
 | Phase 3: Domain & Tenant Memory | Mixed | Runtime: hierarchy enforcement, concept graph, permission service, tenant service, audit log. Contract: server-side synthesis engine (skeleton + stub `ManagedEndpointSynthesizer`), Go gateway (not in this repo). |
@@ -63,7 +63,7 @@ For a per-crate breakdown see
 
 | Area | Status | Notes |
 |------|--------|-------|
-| Evidence store (SQLCipher, FTS5, AEAD, dedup, ring buffer) | Runtime complete | Real SQLCipher with bundled OpenSSL; FTS5 plaintext index. See the forgetting caveat in `crates/evidence_store/tests/forgetting_fts.rs`. |
+| Evidence store (SQLCipher, FTS5, AEAD, dedup, ring buffer) | Runtime complete | Real SQLCipher with bundled OpenSSL; per-scope CEK wrapping for body-table dedup. FTS5 index is purged on forget via `purge_fts_for_scope`. |
 | Crypto: BLAKE3, AEAD, HKDF, hybrid X25519 + ML-KEM-768 | Runtime complete | Real RustCrypto `ml-kem` backend; hybrid combiner is real. `StubKemBackend` is feature-gated test-only. |
 | Crypto: ML-DSA-65 provenance signer | Runtime complete | Real RustCrypto `ml-dsa`. `TestSigner` (HMAC-SHA256) is feature-gated test-only. |
 | Crypto: SPHINCS+ | Stub | `crates/crypto/src/sphincs.rs` is a BLAKE3-keyed placeholder. Real backend not wired. |
@@ -84,10 +84,10 @@ For a per-crate breakdown see
 | Connectors (Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Gmail / Microsoft Graph) | Contract complete | All are fixture parsers. No live API transport, no real OAuth2 refresh against a real IdP, no real webhook ingest. |
 | Connector framework (OAuth2 token vault, delta sync, webhooks) | Contract complete | Type surface only; no real HTTP / network transport. |
 | ACL sync from source systems into the relation graph | Contract complete | Sync types defined; no live provider feed. |
-| Inference router | Contract complete | Router logic exists; adapter implementations need real backends (llama.cpp / MLX / ONNX). |
+| Inference router | Mixed | Router logic is real. llama.cpp adapter has a real HTTP client (feature-gated). MLX adapter correctly reports `Unavailable` and falls through when the native runtime is not linked. |
 | Reasoning engine (multi-hop, GoT, community summaries) | Mixed | Traversal / contradiction adjudication / incremental recompute are real. GoT executor is contract-only when it needs an SLM. |
-| FFI (UniFFI for iOS, JNI for Android) | Contract complete | Every exported function returns `Unimplemented`. Build pipeline produces a real artifact; the artifact has no behaviour. |
-| N-API (macOS / Windows addon) | Contract complete | Forwards to the FFI surface; same `Unimplemented` story. |
+| FFI (UniFFI for iOS, JNI for Android) | Partial runtime | Phase A.5: `open_store`, `close_store`, `ingest_message`, `query`, `get_evidence`, `forget`, `forget_scope`, `encrypt`, `decrypt`, `generate_keypair`, `get_user_memory`, `pin`, `unpin`, `list_memories`, `run_decay_sweep`, `get_channel_memory`, `escape_fts_query` are wired. `trigger_synthesis` returns `Unavailable`. |
+| N-API (macOS / Windows addon) | Partial runtime | Forwards to the FFI surface; core operations wired, synthesis returns `Unavailable`. |
 | Sync engine (CRDT delta sync of synthesis objects) | Contract complete | Deliberate stub until Phase 2's multi-device path lands. |
 | Red-team privacy / prompt-injection suite | Not started | Listed in Phase 7 but no test code exists yet. |
 | Memory quality metrics (retention precision, contradiction rate, decay tuning) | Not started | Listed in Phase 7 but no metrics pipeline exists yet. |
@@ -106,13 +106,15 @@ For a per-crate breakdown see
 - [x] **Contract complete:** On-device importance classifier —
   real lexicon path; SLM path (Bonsai-1.7B via shared
   `llama-server`) is not wired in this repo
-- [x] **Contract complete:** iOS framework binding (UniFFI
-  `.xcframework`) — every exported function returns
-  `Unimplemented`
-- [x] **Contract complete:** Android JNI binding (per-ABI shared
-  libraries) — every exported function returns `Unimplemented`
-- [x] **Contract complete:** macOS / Windows N-API addon binding —
-  forwards to the FFI surface, same `Unimplemented` story
+- [x] **Partial runtime:** iOS framework binding (UniFFI
+  `.xcframework`) — core evidence/crypto/memory functions wired
+  (Phase A.5); synthesis returns `Unavailable`
+- [x] **Partial runtime:** Android JNI binding (per-ABI shared
+  libraries) — core evidence/crypto/memory wired (Phase A.5);
+  synthesis returns `Unavailable`
+- [x] **Partial runtime:** macOS / Windows N-API addon binding —
+  forwards to the FFI surface; core operations wired, synthesis
+  returns `Unavailable`
 - [x] **Runtime complete:** Unit test suite for the evidence
   store, crypto, and lexicon importance classifier
 - [x] **Runtime complete:** CI pipeline (lint, unit tests,
@@ -304,10 +306,10 @@ is not.
   synthesizer keys with audit-trail linkage (under the mock TEE)
 - [x] **Runtime complete:** Cryptographic forgetting — per-scope
   and per-epoch DEK destroy paths, zeroize-on-drop, tombstone
-  registry. **Caveat:** the SQLite FTS5 plaintext index in
-  `evidence_store` is *not* erased by DEK destruction. See
-  `crates/evidence_store/tests/forgetting_fts.rs` for the
-  test that documents the gap
+  registry. Body-table dedup uses per-scope CEK wrapping
+  (`body_store_key_wraps`); FTS5 is purged via
+  `purge_fts_for_scope`. Tombstone replay on `open_store`
+  closes the crash-gap between tombstone persist and purge
 - [ ] **Not started:** Red-team privacy and prompt-injection test
   suites
 - [ ] **Not started:** Memory quality metrics (retention

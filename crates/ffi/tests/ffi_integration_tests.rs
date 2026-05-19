@@ -20,8 +20,9 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use ffi::{
     close_store, decrypt, encrypt, forget, generate_keypair, get_channel_memory, get_evidence,
     get_user_memory, ingest_message, list_memories, open_store, pin, query, run_decay_sweep,
-    trigger_synthesis, unpin, EvidenceRecord, FfiError, FfiKeypair, FfiSignature, MemoryFilter,
-    MemoryRecord, MemoryState, QueryResult, SourceKind, SynthesisTrigger,
+    trigger_synthesis, unpin, EvidenceRecord, FfiError, FfiImportanceClass, FfiKeypair,
+    FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, SourceKind,
+    SynthesisTrigger,
 };
 use tempfile::TempDir;
 
@@ -65,8 +66,13 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
     let phrase = "xyzzyintegrationroundtrip";
     let body = format!("Schedule the {phrase} review for Q4 close.");
 
-    let evidence_id =
-        ingest_message(scope.clone(), body.clone(), SourceKind::Slack).expect("ingest_message");
+    let evidence_id = ingest_message(
+        scope.clone(),
+        body.clone(),
+        SourceKind::Slack,
+        FfiImportanceClass::Important,
+    )
+    .expect("ingest_message");
     assert!(!evidence_id.is_empty());
 
     let hits = query(scope.clone(), phrase.into(), 10).expect("query");
