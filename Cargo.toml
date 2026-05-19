@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["crates/crypto/fuzz"]
 members = [
     "crates/agent_contract",
     "crates/audit_service",
@@ -26,7 +27,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.85"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/kennguy3n/knowledge"
 

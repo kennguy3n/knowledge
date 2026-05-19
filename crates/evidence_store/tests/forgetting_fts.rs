@@ -196,3 +196,74 @@ fn purge_fts_for_scope_only_purges_target_scope() {
     assert!(store.get(res_a.evidence_id).expect("get a").is_some());
     assert!(store.get(res_b.evidence_id).expect("get b").is_some());
 }
+
+/// After `purge_fts_for_scope`, the FTS5 OPTIMIZE command must have
+/// compacted the shadow tables so that tokenised plaintext fragments
+/// no longer linger in the `%_data` segment B-tree. We verify this
+/// by querying the raw `evidence_fts_data` table — after OPTIMIZE,
+/// the segment structure is collapsed and contains no content rows
+/// for the purged scope.
+#[test]
+fn fts5_optimize_compacts_shadow_tables_after_purge() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    let scope = ScopeId::new_v4();
+    let body = format!(
+        "This message contains {FORGETTING_PHRASE} which must be fully \
+         compacted from shadow tables after purge and OPTIMIZE."
+    );
+
+    {
+        let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+            .expect("open store");
+
+        store
+            .ingest(
+                scope,
+                body.as_bytes(),
+                Some("source:optimize-test"),
+                ImportanceClass::Important,
+            )
+            .expect("ingest");
+
+        // Pre-purge: FTS5 indexes the phrase.
+        let hits = store
+            .search_fts(scope, FORGETTING_PHRASE, 10)
+            .expect("search pre-purge");
+        assert_eq!(hits.len(), 1, "FTS5 must find the phrase before purge");
+
+        // Purge runs DELETE + OPTIMIZE inside a single transaction.
+        store
+            .purge_fts_for_scope(scope)
+            .expect("purge_fts_for_scope");
+    }
+
+    // Re-open so we're reading only the on-disk state.
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("re-open store");
+
+    // After OPTIMIZE, querying the FTS table must return nothing.
+    let hits = store
+        .search_fts(scope, FORGETTING_PHRASE, 10)
+        .expect("search post-optimize");
+    assert!(
+        hits.is_empty(),
+        "FTS5 must return no results after purge + OPTIMIZE"
+    );
+
+    // Also verify via the raw FTS5 MATCH — the shadow table's content
+    // rows should have been compacted away.
+    let raw_count: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1",
+            rusqlite::params![FORGETTING_PHRASE],
+            |row| row.get(0),
+        )
+        .expect("raw fts count");
+    assert_eq!(
+        raw_count, 0,
+        "Raw FTS5 shadow tables must contain zero matching rows after OPTIMIZE"
+    );
+}

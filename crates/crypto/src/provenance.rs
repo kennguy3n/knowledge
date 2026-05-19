@@ -293,7 +293,9 @@ mod tests {
     fn fixture_key(seed: u8) -> [u8; TEST_SIGNER_KEY_LEN] {
         let mut k = [0u8; TEST_SIGNER_KEY_LEN];
         for (i, byte) in k.iter_mut().enumerate() {
-            *byte = (i as u8).wrapping_add(seed);
+            *byte = u8::try_from(i)
+                .expect("TEST_SIGNER_KEY_LEN fits in u8")
+                .wrapping_add(seed);
         }
         k
     }

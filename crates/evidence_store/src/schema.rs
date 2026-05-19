@@ -33,7 +33,20 @@
 ///   wraps the CEK under its per-scope AEAD key. `forget()` deletes
 ///   wraps for the forgotten scope; when no wraps remain the body
 ///   is cryptographically unrecoverable. Purely additive.
-pub const SCHEMA_VERSION: i32 = 5;
+/// - v6 (C2): added `scope_deks` for independently generated scope
+///   Data Encryption Keys. Each scope key is now randomly generated
+///   via `OsRng` rather than HKDF-derived from the master key.
+///   The DEK is AEAD-wrapped under a master-derived wrapping key and
+///   stored in this table. `forget()` deletes the row, making the
+///   scope key truly unrecoverable even if the master key is
+///   compromised. Purely additive.
+/// - v7 (C10): added `memory_objects` for persisted per-scope
+///   memory state. Each scope's `UserMemoryObject` (or
+///   `ChannelMemoryObject`) is JSON-serialized and AEAD-encrypted
+///   under the scope key, so memory state survives process
+///   restarts. Mutations (pin, unpin, decay_sweep) flush the
+///   updated state to this table. Purely additive.
+pub const SCHEMA_VERSION: i32 = 7;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -163,4 +176,32 @@ CREATE TABLE IF NOT EXISTS body_store_key_wraps (
 -- without this index those queries require a full table scan.
 CREATE INDEX IF NOT EXISTS idx_body_wraps_scope
     ON body_store_key_wraps (scope_id);
+
+-- v6 (C2) — independently generated per-scope DEKs.
+-- Each scope's AEAD key is generated via OsRng (not HKDF-derived from
+-- the master key). The raw DEK is AEAD-wrapped under a wrapping key
+-- derived from the master key, so it can be unwrapped at open_store
+-- time. On forget(), the row is deleted — without the wrapped DEK
+-- the scope key is truly unrecoverable even if the master key is
+-- later compromised.
+CREATE TABLE IF NOT EXISTS scope_deks (
+    scope_id        BLOB    PRIMARY KEY,
+    wrapped_dek     BLOB    NOT NULL,
+    nonce           BLOB    NOT NULL,
+    created_at      INTEGER NOT NULL
+);
+
+-- v7 (C10) — encrypted per-scope memory objects.
+-- Each row stores a scope's memory objects (user or channel)
+-- as a single AEAD-encrypted JSON blob. The `kind` column
+-- discriminates between user_memory and channel_memory.
+-- Mutations (pin, unpin, decay_sweep) upsert the entire blob.
+CREATE TABLE IF NOT EXISTS memory_objects (
+    scope_id        BLOB    NOT NULL,
+    kind            TEXT    NOT NULL,
+    nonce           BLOB    NOT NULL,
+    payload         BLOB    NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    PRIMARY KEY (scope_id, kind)
+);
 "#;

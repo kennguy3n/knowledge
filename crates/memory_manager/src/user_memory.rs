@@ -86,7 +86,7 @@ impl MemoryFilter {
 /// This is a vec-backed CRUD layer; persistence to the encrypted
 /// evidence store is the caller's responsibility (the memory plane
 /// is currently in-memory; persistence + sync are not yet wired).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserMemoryObject {
     /// Identifier of the owning user.
     pub user_id: Uuid,

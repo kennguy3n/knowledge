@@ -29,9 +29,9 @@
 //! * [`get_user_memory`] / [`pin`] / [`unpin`] / [`list_memories`] /
 //!   [`run_decay_sweep`] / [`get_channel_memory`] are wired through to
 //!   the in-process [`memory_manager::UserMemoryObject`] /
-//!   [`memory_manager::ChannelMemoryObject`] CRUD layer. The memory
-//!   plane is in-memory only — persistence to the encrypted
-//!   evidence plane is not yet wired.
+//!   [`memory_manager::ChannelMemoryObject`] CRUD layer. Memory
+//!   objects are persisted to the encrypted `memory_objects` table
+//!   (schema v7) and rehydrated on [`open_store`].
 //! * [`trigger_synthesis`] returns [`FfiError::Unavailable`] with
 //!   `subsystem = "synthesis"` until the on-device SLM router is
 //!   wired through this surface.
@@ -44,18 +44,6 @@
 //!
 //! These are deliberate to keep the unblocker PR small. Each one is
 //! a clean follow-up:
-//!
-//! * **Cryptographic forgetting is session-scoped.** The
-//!   [`forget`] tombstones live in an in-memory
-//!   [`crypto::forgetting::DekRegistry`] that is dropped by
-//!   [`close_store`]. A durable on-disk DEK registry lands with the
-//!   broader forgetting work; until then, hosts that need durability
-//!   across process restarts must layer their own persistence on
-//!   top.
-//! * **`forget` resolves a scope via an evidence id.** There is no
-//!   way to forget a scope that has only ever been used via
-//!   [`encrypt`] / [`decrypt`] without ingest. A `forget_scope` API
-//!   is tracked as a follow-up.
 //! * **Ingest hardcodes `ImportanceClass::Important`.** The
 //!   evidence store supports `Important` / `Useful` / `Noise` (with
 //!   different storage routing, including the noise ring buffer);
@@ -85,7 +73,7 @@ pub use types::{
 };
 
 use crypto::{
-    decrypt_aead, derive_key, encrypt_aead, forgetting, signer_backend::MlDsa65Signer, AeadNonce,
+    decrypt_aead, encrypt_aead, forgetting, signer_backend::MlDsa65Signer, AeadNonce,
     AEAD_NONCE_LEN,
 };
 use evidence_store::{EvidenceId, ImportanceClass, ScopeId};
@@ -390,7 +378,8 @@ pub fn pin(id: String) -> FfiResult<()> {
             .expect("owning scope located above must still exist");
         umo.pin(&uuid).map_err(|e| FfiError::Memory {
             message: e.to_string(),
-        })
+        })?;
+        rt.flush_user_memory(owning_scope)
     })
 }
 
@@ -427,7 +416,8 @@ pub fn unpin(id: String) -> FfiResult<()> {
             .expect("owning scope located above must still exist");
         umo.unpin(&uuid).map_err(|e| FfiError::Memory {
             message: e.to_string(),
-        })
+        })?;
+        rt.flush_user_memory(owning_scope)
     })
 }
 
@@ -495,11 +485,23 @@ pub fn forget(id: String) -> FfiResult<()> {
         //    embedding indexes so plaintext-derived secondary
         //    payloads cannot be recovered post-forget.
         rt.forget_scope(scope);
+        // Tombstone first — this is the durable gate that prevents
+        // the scope from being accessible on restart.
         rt.store_mut()
             .record_forgotten_scope(scope)
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
+        // Best-effort DEK deletion: if this fails the tombstone
+        // still blocks access and open_store's recovery path will
+        // retry the deletion on next startup.
+        if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
+            eprintln!(
+                "warning: failed to delete scope DEK for {}: {e}; \
+                 will retry on next open_store",
+                scope.as_uuid()
+            );
+        }
         rt.store_mut()
             .purge_fts_for_scope(scope)
             .map_err(|e| FfiError::Evidence {
@@ -510,6 +512,15 @@ pub fn forget(id: String) -> FfiResult<()> {
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
+        // Delete persisted memory blobs so forgotten-scope memory
+        // state does not survive the next open_store.
+        rt.store()
+            .delete_memory_blobs_for_scope(scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        rt.user_memories.remove(&scope);
+        rt.channel_memories.remove(&scope);
         Ok(())
     })
 }
@@ -536,11 +547,20 @@ pub fn forget_scope(scope_id: String) -> FfiResult<()> {
     let scope = parse_scope_id(&scope_id)?;
     with_runtime(|rt| {
         rt.forget_scope(scope);
+        // Tombstone first — durable gate.
         rt.store_mut()
             .record_forgotten_scope(scope)
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
+        // Best-effort DEK deletion (see forget() for rationale).
+        if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
+            eprintln!(
+                "warning: failed to delete scope DEK for {}: {e}; \
+                 will retry on next open_store",
+                scope.as_uuid()
+            );
+        }
         rt.store_mut()
             .purge_fts_for_scope(scope)
             .map_err(|e| FfiError::Evidence {
@@ -551,6 +571,14 @@ pub fn forget_scope(scope_id: String) -> FfiResult<()> {
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
+        // Delete persisted memory blobs for the forgotten scope.
+        rt.store()
+            .delete_memory_blobs_for_scope(scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        rt.user_memories.remove(&scope);
+        rt.channel_memories.remove(&scope);
         Ok(())
     })
 }
@@ -610,9 +638,17 @@ pub fn run_decay_sweep(scope_id: ScopeIdString) -> FfiResult<u32> {
         if rt.is_scope_forgotten(scope) {
             return Ok(0);
         }
+        // Only run decay and flush if the scope has an existing UMO.
+        // `user_memory_mut` would create an empty one, and flushing
+        // it would persist an orphan empty blob.
+        if rt.user_memory(scope).is_none() {
+            return Ok(0);
+        }
         let umo = rt.user_memory_mut(scope);
         let report = umo.decay_sweep(chrono::Utc::now());
-        Ok((report.candidates_archived + report.superseded_archived) as u32)
+        let count = (report.candidates_archived + report.superseded_archived) as u32;
+        rt.flush_user_memory(scope)?;
+        Ok(count)
     })
 }
 
@@ -722,6 +758,8 @@ pub fn generate_keypair() -> FfiResult<FfiKeypair> {
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+/// * [`FfiError::Evidence`] if scope DEK registration fails (store
+///   write error).
 /// * [`FfiError::Crypto`] on AEAD or key-derivation failure.
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
 pub fn encrypt(scope_id: ScopeIdString, plaintext: Vec<u8>) -> FfiResult<Vec<u8>> {
@@ -733,6 +771,9 @@ pub fn encrypt(scope_id: ScopeIdString, plaintext: Vec<u8>) -> FfiResult<Vec<u8>
                 id: scope_id.clone(),
             });
         }
+        // Auto-register so new scopes get a random DEK and
+        // pre-v6 scopes adopt their HKDF key into the registry.
+        rt.ensure_scope_registered(scope)?;
         let key = rt.scope_encrypt_key(scope)?;
         let mut nonce: AeadNonce = [0u8; AEAD_NONCE_LEN];
         rand::thread_rng().fill_bytes(&mut nonce);
@@ -776,9 +817,26 @@ pub fn decrypt(scope_id: ScopeIdString, ciphertext: Vec<u8>) -> FfiResult<Vec<u8
         nonce.copy_from_slice(&ciphertext[..AEAD_NONCE_LEN]);
         let body = &ciphertext[AEAD_NONCE_LEN..];
         let aad = scope_aad(scope);
-        let plain = decrypt_aead(&key, &nonce, body, &aad).map_err(|e| FfiError::Crypto {
-            message: e.to_string(),
-        })?;
+        let plain = match decrypt_aead(&key, &nonce, body, &aad) {
+            Ok(p) => p,
+            Err(primary_err) => {
+                // The primary key failed — try the legacy HKDF key.
+                // Pre-v6 ciphertexts were encrypted under
+                // `scope:{uuid}:ffi-encrypt:v1`; after scope
+                // registration the primary key is the random DEK,
+                // so old ciphertexts need this fallback.
+                let legacy = rt.legacy_ffi_encrypt_key(scope)?;
+                if legacy == key {
+                    // Same key — no point retrying.
+                    return Err(FfiError::Crypto {
+                        message: primary_err.to_string(),
+                    });
+                }
+                decrypt_aead(&legacy, &nonce, body, &aad).map_err(|e| FfiError::Crypto {
+                    message: e.to_string(),
+                })?
+            }
+        };
         Ok(plain)
     })
 }
@@ -956,27 +1014,60 @@ fn scope_aad(scope: ScopeId) -> Vec<u8> {
 // `crypto`-specific knowledge (HKDF context labels, AEAD nonce
 // length) stays co-located with the public functions that use them.
 impl runtime::FfiRuntime {
-    /// Derive the scope-specific AEAD key used by [`encrypt`] /
-    /// [`decrypt`]. Callers **must** check
-    /// [`Self::is_scope_forgotten`] before invoking this — the
-    /// forgotten-scope short-circuit lives at the public-function
-    /// layer so the error mapping (`NotFound { kind: "scope" }`)
-    /// stays consistent across the surface.
+    /// Look up the scope-specific AEAD key used by [`encrypt`] /
+    /// [`decrypt`]. Tries the DEK registry first (populated during
+    /// `open_store` or `ensure_scope_registered`). Falls back to the
+    /// legacy HKDF derivation (`scope:{uuid}:ffi-encrypt:v1`) so
+    /// that ciphertexts produced by pre-v6 `encrypt()` remain
+    /// decryptable. Callers **must** check
+    /// [`Self::is_scope_forgotten`] before invoking this.
     fn scope_encrypt_key(&self, scope: ScopeId) -> FfiResult<crypto::AeadKey> {
+        let registry_scope = forgetting::ScopeId(scope.as_uuid());
+        if let Some(dek) = self.registry().get_scope_dek(registry_scope) {
+            let key = dek.key().ok_or_else(|| FfiError::Crypto {
+                message: "scope DEK has been destroyed".into(),
+            })?;
+            return Ok(*key);
+        }
+        // Legacy HKDF fallback: pre-v6 databases derived scope keys
+        // from the master key with a per-surface label. This keeps
+        // existing ciphertexts decryptable until the host explicitly
+        // registers the scope (which adopts the HKDF key into the
+        // registry via ensure_scope_dek's evidence check).
         let label = format!("scope:{}:ffi-encrypt:v1", scope.as_uuid());
-        derive_key(self.master_key(), label.as_bytes()).map_err(|e| FfiError::Crypto {
+        crypto::derive_key(self.master_key(), label.as_bytes()).map_err(|e| FfiError::Crypto {
             message: e.to_string(),
         })
     }
 
+    /// Derive the legacy HKDF key for the `ffi-encrypt` surface. Used
+    /// by [`decrypt`] as a fallback when the primary (DEK) key fails
+    /// AEAD authentication — i.e. the ciphertext was produced by a
+    /// pre-v6 `encrypt()`.
+    fn legacy_ffi_encrypt_key(&self, scope: ScopeId) -> FfiResult<crypto::AeadKey> {
+        let label = format!("scope:{}:ffi-encrypt:v1", scope.as_uuid());
+        crypto::derive_key(self.master_key(), label.as_bytes()).map_err(|e| FfiError::Crypto {
+            message: e.to_string(),
+        })
+    }
+
+    /// Ensure the scope has an independently-generated DEK registered
+    /// in the in-memory `DekRegistry` and persisted in the evidence
+    /// store's `scope_deks` table.
+    ///
+    /// New scopes get a fresh random DEK via `OsRng`. Existing scopes
+    /// (already in the registry) are a no-op.
     fn ensure_scope_registered(&mut self, scope: ScopeId) -> FfiResult<()> {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
         if self.registry().get_scope_dek(registry_scope).is_some() {
             return Ok(());
         }
-        let label = format!("scope:{}:dek:v1", scope.as_uuid());
-        let key =
-            derive_key(self.master_key(), label.as_bytes()).map_err(|e| FfiError::Crypto {
+        // Generate an independently random DEK and persist it wrapped
+        // in the evidence store's scope_deks table.
+        let key = self
+            .store_mut()
+            .ensure_scope_dek(scope)
+            .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
         let dek = forgetting::ScopeDek::new(registry_scope, forgetting::EpochId::zero(), key);
@@ -1106,6 +1197,8 @@ mod tests {
         let _g = test_lock();
         let _dir = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
+        let scope_id = parse_scope_id(&scope).unwrap();
+        runtime::with_runtime(|rt| rt.ensure_scope_registered(scope_id)).expect("register");
         let plaintext = b"the quick brown fox".to_vec();
         let ct = encrypt(scope.clone(), plaintext.clone()).expect("encrypt");
         assert!(ct.len() > plaintext.len());
@@ -1130,6 +1223,13 @@ mod tests {
         let _dir = fresh_store();
         let scope_a = uuid::Uuid::new_v4().to_string();
         let scope_b = uuid::Uuid::new_v4().to_string();
+        let scope_a_id = parse_scope_id(&scope_a).unwrap();
+        let scope_b_id = parse_scope_id(&scope_b).unwrap();
+        runtime::with_runtime(|rt| {
+            rt.ensure_scope_registered(scope_a_id)?;
+            rt.ensure_scope_registered(scope_b_id)
+        })
+        .expect("register");
         let ct = encrypt(scope_a, b"secret".to_vec()).expect("encrypt");
         let err = decrypt(scope_b, ct).unwrap_err();
         assert!(matches!(err, FfiError::Crypto { .. }));
@@ -1692,6 +1792,140 @@ mod tests {
         assert!(
             hits_after.is_empty(),
             "post-reopen query must return no rows for the previously-tombstoned scope"
+        );
+
+        teardown();
+    }
+
+    /// C10 integration test: memory state survives an open/close/open
+    /// cycle via the encrypted `memory_objects` table.
+    #[test]
+    fn memory_persists_across_open_close_open() {
+        let _g = test_lock();
+        let _ = close_store();
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let key_hex = "a5".repeat(32);
+
+        // First session: open, add a memory object, pin it, close.
+        open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open 1");
+        let scope_uuid = uuid::Uuid::new_v4();
+        let scope_str = scope_uuid.to_string();
+        let scope = parse_scope_id(&scope_str).unwrap();
+
+        // Ensure scope is registered so the DEK exists.
+        runtime::with_runtime(|rt| {
+            rt.ensure_scope_registered(scope)?;
+            Ok(())
+        })
+        .expect("ensure_scope_registered");
+
+        // Insert a memory object and pin it.
+        runtime::with_runtime(|rt| {
+            let umo = rt.user_memory_mut(scope);
+            let obj = memory_manager::MemoryObject::new_candidate(
+                scope,
+                memory_manager::SensitivityClass::Important,
+            );
+            let obj_id = obj.id;
+            umo.insert(obj);
+            umo.pin(&obj_id).map_err(|e| FfiError::Memory {
+                message: e.to_string(),
+            })?;
+            // Flush to disk.
+            rt.flush_user_memory(scope)?;
+            Ok(())
+        })
+        .expect("insert + pin");
+
+        // Verify we can see the memory object before closing.
+        let before_close =
+            list_memories(scope_str.clone(), MemoryFilter::default()).expect("list before close");
+        assert_eq!(before_close.len(), 1, "one memory object before close");
+        // Check pin count via the internal MemoryObject (not exposed
+        // on the FFI MemoryRecord wire type).
+        runtime::with_runtime(|rt| {
+            let umo = rt.user_memory(scope).expect("scope must exist");
+            assert_eq!(umo.objects[0].pin_count, 1, "pinned once before close");
+            Ok(())
+        })
+        .expect("pin count check");
+
+        close_store().expect("close 1");
+
+        // Second session: re-open with same key.
+        open_store(path.to_string_lossy().into_owned(), key_hex).expect("open 2");
+
+        // Memory object must be rehydrated from disk.
+        let after_reopen =
+            list_memories(scope_str.clone(), MemoryFilter::default()).expect("list after reopen");
+        assert_eq!(
+            after_reopen.len(),
+            1,
+            "memory object must survive close/open cycle"
+        );
+        runtime::with_runtime(|rt| {
+            let umo = rt
+                .user_memory(scope)
+                .expect("scope must exist after reopen");
+            assert_eq!(
+                umo.objects[0].pin_count, 1,
+                "pin count must survive close/open cycle"
+            );
+            Ok(())
+        })
+        .expect("pin count check after reopen");
+
+        teardown();
+    }
+
+    /// C10 integration test: forget_scope deletes persisted memory
+    /// blobs so they do not reappear on reopen.
+    #[test]
+    fn forget_scope_deletes_persisted_memory() {
+        let _g = test_lock();
+        let _ = close_store();
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let key_hex = "a5".repeat(32);
+
+        open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open 1");
+        let scope_uuid = uuid::Uuid::new_v4();
+        let scope_str = scope_uuid.to_string();
+        let scope = parse_scope_id(&scope_str).unwrap();
+
+        runtime::with_runtime(|rt| {
+            rt.ensure_scope_registered(scope)?;
+            Ok(())
+        })
+        .expect("ensure_scope_registered");
+
+        // Insert a memory object and flush it.
+        runtime::with_runtime(|rt| {
+            let umo = rt.user_memory_mut(scope);
+            let obj = memory_manager::MemoryObject::new_candidate(
+                scope,
+                memory_manager::SensitivityClass::Useful,
+            );
+            umo.insert(obj);
+            rt.flush_user_memory(scope)?;
+            Ok(())
+        })
+        .expect("insert + flush");
+
+        // Forget the scope.
+        forget_scope(scope_str.clone()).expect("forget_scope");
+
+        close_store().expect("close 1");
+
+        // Reopen — memories for the forgotten scope must NOT reappear.
+        open_store(path.to_string_lossy().into_owned(), key_hex).expect("open 2");
+
+        let after = list_memories(scope_str.clone(), MemoryFilter::default())
+            .expect("list after forget + reopen");
+        assert!(
+            after.is_empty(),
+            "forgotten-scope memories must not reappear after reopen"
         );
 
         teardown();

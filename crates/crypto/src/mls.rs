@@ -155,7 +155,11 @@ impl MlsCommit {
             CommitOperation::Create { creator, roster } => {
                 out.push(0x01);
                 out.extend_from_slice(creator.0.as_bytes());
-                out.extend_from_slice(&(roster.len() as u32).to_be_bytes());
+                let roster_len: u32 = roster
+                    .len()
+                    .try_into()
+                    .expect("roster length exceeds u32::MAX");
+                out.extend_from_slice(&roster_len.to_be_bytes());
                 for m in roster {
                     out.extend_from_slice(m.0.as_bytes());
                 }
@@ -522,7 +526,7 @@ mod tests {
     fn fixed_seed() -> [u8; AEAD_KEY_LEN] {
         let mut seed = [0u8; AEAD_KEY_LEN];
         for (i, b) in seed.iter_mut().enumerate() {
-            *b = i as u8;
+            *b = u8::try_from(i).expect("AEAD_KEY_LEN fits in u8");
         }
         seed
     }

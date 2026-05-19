@@ -681,7 +681,9 @@ mod tests {
     fn fixture_key(seed: u8) -> AeadKey {
         let mut k = [0u8; AEAD_KEY_LEN];
         for (i, byte) in k.iter_mut().enumerate() {
-            *byte = (i as u8).wrapping_add(seed);
+            *byte = u8::try_from(i)
+                .expect("AEAD_KEY_LEN fits in u8")
+                .wrapping_add(seed);
         }
         k
     }
@@ -689,7 +691,9 @@ mod tests {
     fn fixture_nonce() -> AeadNonce {
         let mut n = [0u8; AEAD_NONCE_LEN];
         for (i, byte) in n.iter_mut().enumerate() {
-            *byte = (i as u8).wrapping_mul(31);
+            *byte = u8::try_from(i)
+                .expect("AEAD_NONCE_LEN fits in u8")
+                .wrapping_mul(31);
         }
         n
     }
