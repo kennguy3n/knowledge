@@ -1,9 +1,9 @@
 //! Stage 12 — Audit Service.
 //!
-//! Drives the [`audit_service::AuditLog`] populated by phases 5 / 6 /
+//! Drives the [`audit_service::AuditLog`] populated by stages 5 / 6 /
 //! 7 / 8 / 9 / 10 / 11 and exercises the production query API
 //! (scope, action type, time range, actor) end-to-end. Every prior
-//! phase that performs an audit-worthy action (synthesis emission,
+//! stage that performs an audit-worthy action (synthesis emission,
 //! permission grant, key destruction, export render / simulate, agent
 //! proposal lifecycle, contradiction detection, connector exercise)
 //! has already appended into [`RuntimeState::audit_log`]; this stage
@@ -69,7 +69,7 @@ pub fn run(
     let total_entries = state.audit_log.len();
     log.record(
         PHASE_LABEL,
-        "audit log accumulated entries from every audit-emitting phase",
+        "audit log accumulated entries from every audit-emitting stage",
         total_entries >= 12,
     );
 
@@ -171,7 +171,7 @@ pub fn run(
     let until_hits: Vec<_> = state.audit_log.query(&until_query).collect();
     log.record(
         PHASE_LABEL,
-        "time-range (until) query covers earlier phases' entries",
+        "time-range (until) query covers earlier stages' entries",
         until_hits.len() >= total_entries.saturating_sub(1),
     );
     phase.stat(

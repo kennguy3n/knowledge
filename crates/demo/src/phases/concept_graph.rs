@@ -24,7 +24,7 @@
 //! not in the loaded subset. The same contract is exercised
 //! end-to-end by `crates/concept_graph/tests/persist_tests.rs`.
 //!
-//! Concretely: every persisted edge in this phase has both endpoints
+//! Concretely: every persisted edge in this stage has both endpoints
 //! in the same scope as the edge itself. The "logical hierarchy"
 //! (channel → domain → tenant) is realised in two layers:
 //!
@@ -66,7 +66,7 @@ const PHASE: &str = "concept_graph";
 /// Canonical concept anchors that this stage seeds into the persistent
 /// graph. Picked so they cover every scope tier and resolve to terms
 /// that actually appear in the synthetic dataset (so the visualization
-/// search query in this phase has a real hit to find).
+/// search query in this stage has a real hit to find).
 struct ConceptSeed {
     label: &'static str,
     definition: &'static str,
