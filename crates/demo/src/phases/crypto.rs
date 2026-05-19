@@ -322,7 +322,7 @@ pub fn run(
             ))
             .scope(dataset.channel_scope.id)
             .details(serde_json::json!({
-                "trigger": "demo:phase7",
+                "trigger": "demo:crypto",
                 "events": destroyed_count,
             }))
             .build()
@@ -338,7 +338,7 @@ pub fn run(
             ))
             .scope(dataset.channel_alt_scope.id)
             .details(serde_json::json!({
-                "trigger": "demo:phase7:single_epoch",
+                "trigger": "demo:crypto:single_epoch",
                 "epoch": epoch_zero.0,
             }))
             .build()
