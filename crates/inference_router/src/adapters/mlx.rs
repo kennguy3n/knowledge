@@ -4,9 +4,11 @@
 //! and runs the SLM with INT4 quantisation on the Apple Neural Engine.
 //! In Rust-only land this crate ships a skeleton: [`MlxAdapter`]
 //! detects whether it is running on Apple Silicon, gates dispatch by
-//! the configured device tier, and returns
-//! [`crate::RouterError::Unavailable`] otherwise so the router falls
-//! through to the next adapter.
+//! the configured device tier, and **verifies the MLX runtime is
+//! actually linked** before reporting itself as `Available`. If the
+//! runtime is absent (as in the pure-Rust crate), both `probe()` and
+//! `generate()` return [`crate::RouterError::Unavailable`] so the
+//! router falls through to the next adapter (e.g. llama.cpp).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -68,7 +70,8 @@ impl InferenceAdapter for MlxAdapter {
             self.config.device_tier,
             DeviceTier::Medium | DeviceTier::High
         );
-        let available = is_apple && tier_ok;
+        let runtime_linked = mlx_runtime_linked();
+        let available = is_apple && tier_ok && runtime_linked;
         self.available.store(available, Ordering::SeqCst);
         if available {
             ProbeResult::Available
@@ -102,11 +105,11 @@ impl InferenceAdapter for MlxAdapter {
         }
         // The Rust crate cannot link the MLX runtime on its own; the
         // production binding lives in the iOS / macOS native shell.
-        // For the substrate-side unit tests we surface this as a
-        // structured error so the router falls through to llama.cpp.
-        Err(RouterError::InferenceFailure(
-            "mlx runtime is not linked into the rust crate".into(),
-        ))
+        // Return Unavailable (not InferenceFailure) so the router's
+        // `is_fallback()` check allows fallthrough to llama.cpp.
+        Err(RouterError::Unavailable {
+            task: task_tag_static(task_tag),
+        })
     }
 }
 
@@ -126,6 +129,27 @@ fn task_tag_static(task_tag: &str) -> &'static str {
     }
 }
 
+/// Returns `true` only when the MLX Swift runtime is linked into this
+/// binary. The pure-Rust crate never has it; the iOS / macOS native
+/// shell sets the runtime-linked flag at init time via
+/// [`set_mlx_runtime_linked`]. When the flag is not set (default),
+/// this returns `false` so `probe()` reports `Unavailable` and the
+/// router falls through to the next adapter.
+fn mlx_runtime_linked() -> bool {
+    MLX_RUNTIME_LINKED.load(Ordering::Acquire)
+}
+
+/// Global flag: set to `true` by the native shell (iOS / macOS) once
+/// the MLX Swift runtime is initialised and ready for inference.
+static MLX_RUNTIME_LINKED: AtomicBool = AtomicBool::new(false);
+
+/// Called by the native shell to signal that the MLX runtime is
+/// available and ready. This must be called before [`MlxAdapter::probe`]
+/// for the adapter to report `Available`.
+pub fn set_mlx_runtime_linked(linked: bool) {
+    MLX_RUNTIME_LINKED.store(linked, Ordering::Release);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,11 +163,22 @@ mod tests {
     }
 
     #[test]
-    fn probe_available_on_apple_silicon_high_tier() {
+    fn probe_unavailable_on_apple_silicon_without_runtime() {
+        set_mlx_runtime_linked(false);
+        let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
+        let adapter = MlxAdapter::with_platform_override(cfg, true);
+        assert_eq!(adapter.probe(), ProbeResult::Unavailable);
+        assert!(!adapter.is_available());
+    }
+
+    #[test]
+    fn probe_available_on_apple_silicon_high_tier_with_runtime() {
+        set_mlx_runtime_linked(true);
         let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
         let adapter = MlxAdapter::with_platform_override(cfg, true);
         assert_eq!(adapter.probe(), ProbeResult::Available);
         assert!(adapter.is_available());
+        set_mlx_runtime_linked(false);
     }
 
     #[test]
@@ -175,5 +210,25 @@ mod tests {
         adapter.probe();
         let err = adapter.generate("tag_importance", "", "").unwrap_err();
         assert!(matches!(err, RouterError::Unavailable { .. }));
+    }
+
+    #[test]
+    fn generate_returns_fallback_error_when_runtime_not_linked() {
+        set_mlx_runtime_linked(true);
+        let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
+        let adapter = MlxAdapter::with_platform_override(cfg, true);
+        adapter.probe();
+        assert!(adapter.is_available());
+        // Even when probe says available, generate returns Unavailable
+        // (a fallback error) because the MLX runtime isn't truly linked
+        // — the Rust crate always hits this path.
+        set_mlx_runtime_linked(false);
+        // Force re-probe so is_available correctly reflects the state
+        adapter.probe();
+        let err = adapter.generate("synth_summary", "", "").unwrap_err();
+        assert!(
+            err.is_fallback(),
+            "MLX generate() must return a fallback error"
+        );
     }
 }

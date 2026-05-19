@@ -526,14 +526,21 @@ fn router_error_variants_are_all_constructible_via_real_call_paths() {
     assert!(matches!(err, RouterError::Unavailable { .. }));
     assert!(err.is_fallback());
 
-    // InferenceFailure: comes from MlxAdapter on a non-Apple Silicon
-    // host once the platform override pretends MLX is available.
+    // InferenceFailure: a hard error that must NOT be a fallback.
+    // (MlxAdapter no longer produces this variant — it correctly
+    // returns Unavailable when the runtime is absent — but other
+    // adapters may produce it, e.g. llama.cpp HTTP transport errors.)
+    let inference_failure = RouterError::InferenceFailure("boom".into());
+    assert!(!inference_failure.is_fallback());
+
+    // MlxAdapter without a linked runtime now returns Unavailable
+    // (a fallback error), which lets the router fall through.
     let cfg = high_tier_config();
     let mlx = MlxAdapter::with_platform_override(cfg.clone(), true);
     mlx.probe();
     let err = mlx.generate("tag_importance", "", "").unwrap_err();
-    assert!(matches!(err, RouterError::InferenceFailure(_)));
-    assert!(!err.is_fallback());
+    assert!(matches!(err, RouterError::Unavailable { .. }));
+    assert!(err.is_fallback());
 
     // NotProbed: dispatch before bootstrap.
     let unbooted = InferenceRouter::new(high_tier_config(), vec![Box::new(FallbackAdapter::new())]);
