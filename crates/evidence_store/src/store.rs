@@ -95,11 +95,13 @@ pub struct EvidenceStore {
     conn: Connection,
     config: EvidenceStoreConfig,
     /// Cached per-scope AEAD key derivations. Re-derived from the
-    /// master key + scope context label. Wrapped in `RefCell` so the
+    /// master key + scope context label. Wrapped in `RwLock` so the
     /// read paths (e.g. [`Self::read_body`]) can populate the cache
     /// while only borrowing `&self`, which lets the hybrid retriever
     /// fan-in semantic similarity over an immutable store handle.
-    scope_keys: std::cell::RefCell<std::collections::HashMap<ScopeId, AeadKey>>,
+    /// Unlike `RefCell`, `RwLock` is `Sync` and will block (rather
+    /// than panic) if shared across threads.
+    scope_keys: std::sync::RwLock<std::collections::HashMap<ScopeId, AeadKey>>,
     /// Master key — wiped on drop.
     master_key: MasterKey,
     /// Optional [`EmbeddingModel`] used by the ingest path to populate
@@ -116,7 +118,7 @@ pub struct EvidenceStore {
 impl Drop for EvidenceStore {
     fn drop(&mut self) {
         self.master_key.zeroize();
-        for (_id, key) in self.scope_keys.get_mut().iter_mut() {
+        for (_id, key) in self.scope_keys.write().unwrap().iter_mut() {
             key.zeroize();
         }
     }
@@ -249,7 +251,7 @@ impl EvidenceStore {
         let mut store = Self {
             conn,
             config,
-            scope_keys: std::cell::RefCell::new(std::collections::HashMap::new()),
+            scope_keys: std::sync::RwLock::new(std::collections::HashMap::new()),
             master_key: *master_key,
             embedding_model: None,
             embedding_model_tag: String::new(),
@@ -288,14 +290,14 @@ impl EvidenceStore {
     ///
     /// Takes `&self` so the read paths (e.g. [`Self::read_body`]) can
     /// populate the per-scope key cache without an exclusive borrow.
-    /// The cache lives behind a [`std::cell::RefCell`].
+    /// The cache lives behind a [`std::sync::RwLock`].
     fn scope_key(&self, scope_id: ScopeId) -> Result<AeadKey> {
-        if let Some(k) = self.scope_keys.borrow().get(&scope_id) {
+        if let Some(k) = self.scope_keys.read().unwrap().get(&scope_id) {
             return Ok(*k);
         }
         let label = format!("scope:{}:body:v1", scope_id.as_uuid());
         let key = derive_key(&self.master_key, label.as_bytes())?;
-        self.scope_keys.borrow_mut().insert(scope_id, key);
+        self.scope_keys.write().unwrap().insert(scope_id, key);
         Ok(key)
     }
 
@@ -1215,6 +1217,16 @@ impl EvidenceStore {
             tx.execute(&fts_sql, rusqlite::params_from_iter(params.iter().copied()))?;
             tx.execute(&emb_sql, rusqlite::params_from_iter(params.iter().copied()))?;
         }
+
+        // Compact the FTS5 shadow tables so tokenised plaintext
+        // fragments in the `%_data` segment B-tree are physically
+        // removed — not just logically deleted. Without this, an
+        // attacker with raw SQLite access could recover plaintext
+        // tokens from the `%_data` pages even after the DELETE.
+        tx.execute(
+            "INSERT INTO evidence_fts(evidence_fts) VALUES('optimize')",
+            [],
+        )?;
 
         tx.commit()?;
         Ok(())
