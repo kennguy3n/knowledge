@@ -278,6 +278,13 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
+        // Clean up orphaned memory blobs that survived a crash
+        // between tombstone write and blob deletion in forget().
+        store
+            .delete_memory_blobs_for_scope(*scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
     }
 
     // Populate the DekRegistry from the store's in-memory cache,
@@ -321,14 +328,8 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
         if tombstones.contains(&scope) {
             continue;
         }
-        if let Some(blob) =
-            store
-                .load_memory_blob(scope, "user_memory")
-                .map_err(|e| FfiError::Evidence {
-                    message: e.to_string(),
-                })?
-        {
-            match serde_json::from_slice::<UserMemoryObject>(&blob) {
+        match store.load_memory_blob(scope, "user_memory") {
+            Ok(Some(blob)) => match serde_json::from_slice::<UserMemoryObject>(&blob) {
                 Ok(umo) => {
                     user_memories.insert(scope, umo);
                 }
@@ -339,6 +340,14 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
                         scope.as_uuid()
                     );
                 }
+            },
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!(
+                    "warning: failed to load user_memory blob for scope {}: {e}; \
+                     skipping",
+                    scope.as_uuid()
+                );
             }
         }
     }
@@ -354,13 +363,8 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
         if tombstones.contains(&scope) {
             continue;
         }
-        if let Some(blob) = store
-            .load_memory_blob(scope, "channel_memory")
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?
-        {
-            match serde_json::from_slice::<ChannelMemoryObject>(&blob) {
+        match store.load_memory_blob(scope, "channel_memory") {
+            Ok(Some(blob)) => match serde_json::from_slice::<ChannelMemoryObject>(&blob) {
                 Ok(cmo) => {
                     channel_memories.insert(scope, cmo);
                 }
@@ -371,6 +375,14 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
                         scope.as_uuid()
                     );
                 }
+            },
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!(
+                    "warning: failed to load channel_memory blob for scope {}: {e}; \
+                     skipping",
+                    scope.as_uuid()
+                );
             }
         }
     }
