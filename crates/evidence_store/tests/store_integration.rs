@@ -116,12 +116,22 @@ fn content_hash_dedup_shares_one_body_row() {
     assert_eq!(store.body_store_count().unwrap(), 1);
     assert_eq!(store.body_ref_count(&res1.content_hash).unwrap(), Some(3));
 
-    // The body_store row is encrypted with the scope-independent
-    // body-store key; reading must succeed from evidence rows in
-    // either scope (Task 1 — cross-scope body dedup decryption).
+    // Per-scope CEK wrapping: reading must succeed from evidence rows
+    // in either scope via the scope's CEK wrap.
     assert_eq!(store.read_body(res1.evidence_id).unwrap(), body);
     assert_eq!(store.read_body(res2.evidence_id).unwrap(), body);
     assert_eq!(store.read_body(res3.evidence_id).unwrap(), body);
+
+    // Verify per-scope CEK wraps exist (two scopes ⇒ two wraps).
+    let wrap_count: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM body_store_key_wraps WHERE content_hash = ?1",
+            rusqlite::params![res1.content_hash.as_slice()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(wrap_count, 2, "two scopes must produce two CEK wraps");
 }
 
 #[test]
@@ -420,4 +430,148 @@ fn record_forgotten_scope_is_idempotent() {
 
     let loaded = store.load_forgotten_scopes().unwrap();
     assert_eq!(loaded, vec![scope]);
+}
+
+// ---------------------------------------------------------------------
+// WS1 — per-scope CEK wrapping regression tests.
+//
+// The body-store deduplication design shares a single encrypted body
+// row across scopes. Each scope holds a per-scope "CEK wrap" — a
+// Content Encryption Key wrapped under the scope's AEAD key. On
+// `forget()` the wraps for the forgotten scope are purged. When no
+// wraps remain for a content hash the body is cryptographically
+// unrecoverable.
+// ---------------------------------------------------------------------
+
+#[test]
+fn cek_wrap_forget_scope_a_leaves_scope_b_readable() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    let scope_a = ScopeId::new_v4();
+    let scope_b = ScopeId::new_v4();
+    let body = vec![b'C'; DEFAULT_INLINE_THRESHOLD_BYTES * 4];
+
+    let (res_a, res_b) = {
+        let mut store =
+            EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
+        let ra = store
+            .ingest(scope_a, &body, None, ImportanceClass::Useful)
+            .unwrap();
+        let rb = store
+            .ingest(scope_b, &body, None, ImportanceClass::Useful)
+            .unwrap();
+        assert_eq!(ra.content_hash, rb.content_hash);
+        assert_eq!(store.body_store_count().unwrap(), 1);
+
+        // Forget scope A — purge its CEK wraps.
+        store.purge_body_key_wraps_for_scope(scope_a).unwrap();
+
+        // Scope B must still be able to read the body.
+        let pt = store.read_body(rb.evidence_id).unwrap();
+        assert_eq!(pt, body, "scope B must still decrypt after scope A forgot");
+
+        (ra, rb)
+    };
+
+    // Re-open with the same master key — scope B must survive.
+    let store =
+        EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
+    let pt = store.read_body(res_b.evidence_id).unwrap();
+    assert_eq!(pt, body, "scope B must survive a process restart");
+
+    // Scope A's evidence row still exists (append-only table), but
+    // attempting to read the body must fail because its CEK wrap is
+    // gone.
+    let err = store.read_body(res_a.evidence_id);
+    assert!(
+        err.is_err(),
+        "scope A's body must be unrecoverable after forget"
+    );
+}
+
+#[test]
+fn cek_wrap_forget_both_scopes_makes_body_unrecoverable() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let content_hash;
+
+    let scope_a = ScopeId::new_v4();
+    let scope_b = ScopeId::new_v4();
+    let body = vec![b'D'; DEFAULT_INLINE_THRESHOLD_BYTES + 100];
+
+    {
+        let mut store =
+            EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
+        let ra = store
+            .ingest(scope_a, &body, None, ImportanceClass::Useful)
+            .unwrap();
+        let _rb = store
+            .ingest(scope_b, &body, None, ImportanceClass::Useful)
+            .unwrap();
+        content_hash = ra.content_hash;
+
+        // Forget both scopes.
+        store.purge_body_key_wraps_for_scope(scope_a).unwrap();
+        store.purge_body_key_wraps_for_scope(scope_b).unwrap();
+
+        // The body_store row should have been garbage-collected.
+        assert_eq!(
+            store.body_store_count().unwrap(),
+            0,
+            "orphaned body_store row must be garbage-collected"
+        );
+    }
+
+    // Re-open and verify the body is gone at the storage level.
+    let store =
+        EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
+
+    // No CEK wraps remain.
+    let wrap_count: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM body_store_key_wraps WHERE content_hash = ?1",
+            rusqlite::params![content_hash.as_slice()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(wrap_count, 0, "all CEK wraps must be purged");
+
+    // Body store row must be gone too.
+    assert_eq!(
+        store.body_store_count().unwrap(),
+        0,
+        "body_store must be empty after both scopes forgot"
+    );
+}
+
+#[test]
+fn cek_wrap_same_scope_reingest_is_idempotent() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let body = vec![b'E'; DEFAULT_INLINE_THRESHOLD_BYTES + 1];
+
+    let r1 = store
+        .ingest(scope, &body, None, ImportanceClass::Useful)
+        .unwrap();
+    let r2 = store
+        .ingest(scope, &body, None, ImportanceClass::Useful)
+        .unwrap();
+    assert_eq!(r1.content_hash, r2.content_hash);
+
+    // Only one CEK wrap for the single scope.
+    let wrap_count: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM body_store_key_wraps WHERE content_hash = ?1",
+            rusqlite::params![r1.content_hash.as_slice()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(wrap_count, 1, "same-scope re-ingest must not duplicate wraps");
+
+    // Both evidence rows must read the same body.
+    assert_eq!(store.read_body(r1.evidence_id).unwrap(), body);
+    assert_eq!(store.read_body(r2.evidence_id).unwrap(), body);
 }

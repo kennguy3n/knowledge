@@ -431,12 +431,14 @@ pub fn unpin(id: String) -> FfiResult<()> {
 /// calls for the same scope continue to short-circuit with
 /// [`FfiError::NotFound`].
 ///
-/// The encrypted **bodies** in `evidence` / `body_store` are
-/// intentionally not deleted — the append-only trigger on
-/// `evidence` forbids it, and without the per-scope DEK the
-/// ciphertexts are unrecoverable anyway. Hosts that need to drop
-/// the physical bytes must perform a VACUUM-style rebuild at a
-/// higher layer.
+/// The encrypted **inline** bodies in the `evidence` table are
+/// intentionally not deleted — the append-only trigger forbids it,
+/// and without the per-scope DEK the ciphertexts are unrecoverable.
+/// For **body-table** rows (`body_store`), `forget()` destroys the
+/// per-scope CEK wraps (`body_store_key_wraps`). When no scope
+/// retains a wrap for a given content hash the body row is garbage-
+/// collected. Hosts that need to scrub surviving inline ciphertexts
+/// must perform a VACUUM-style rebuild at a higher layer.
 ///
 /// # Errors
 ///
@@ -477,6 +479,11 @@ pub fn forget(id: String) -> FfiResult<()> {
             })?;
         rt.store_mut()
             .purge_fts_for_scope(scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        rt.store_mut()
+            .purge_body_key_wraps_for_scope(scope)
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
