@@ -24,6 +24,9 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(missing_docs)]
 
+#[cfg(all(feature = "test-support", not(debug_assertions)))]
+compile_error!("test-support must not be enabled in release builds");
+
 pub mod aead;
 pub mod attestation;
 pub mod errors;
