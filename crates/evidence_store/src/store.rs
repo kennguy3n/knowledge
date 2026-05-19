@@ -118,9 +118,10 @@ pub struct EvidenceStore {
 impl Drop for EvidenceStore {
     fn drop(&mut self) {
         self.master_key.zeroize();
-        // `get_mut()` is infallible on `&mut self` — no lock
-        // acquisition, no panic on poisoned RwLock.
-        for (_id, key) in self.scope_keys.get_mut().unwrap().iter_mut() {
+        // `get_mut()` bypasses locking on `&mut self` but still
+        // checks the poison flag — recover gracefully so Drop never
+        // panics (a panic during unwinding would abort).
+        for (_id, key) in self.scope_keys.get_mut().unwrap_or_else(|e| e.into_inner()).iter_mut() {
             key.zeroize();
         }
     }
@@ -1416,7 +1417,8 @@ impl EvidenceStore {
         let mut nonce = [0u8; AEAD_NONCE_LEN];
         nonce.copy_from_slice(&nonce_bytes);
         let key = self.scope_key(scope_id)?;
-        let mut aad = Vec::with_capacity(16 + kind.len());
+        // b"memory:" (7) + kind + b':' (1) + UUID (16) = 24 + kind.len()
+        let mut aad = Vec::with_capacity(24 + kind.len());
         aad.extend_from_slice(b"memory:");
         aad.extend_from_slice(kind.as_bytes());
         aad.push(b':');
