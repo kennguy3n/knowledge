@@ -260,6 +260,19 @@ impl EvidenceStore {
         // post-open prepared statements.
         store.preflight()?;
 
+        // v6 (C2): hydrate the in-memory scope-key cache from the
+        // durable `scope_deks` table. Scopes registered after v6
+        // have their DEKs stored wrapped here; loading them on open
+        // means `scope_key()` finds the independently-generated key
+        // in cache rather than falling back to HKDF derivation.
+        {
+            let deks = store.load_scope_deks()?;
+            let mut cache = store.scope_keys.write().unwrap();
+            for (scope, key) in deks {
+                cache.insert(scope, key);
+            }
+        }
+
         // v4→v5 backfill: re-encrypt any pre-existing body-table rows
         // that were encrypted under the old scope-independent
         // body_store_key but have no per-scope CEK wraps yet.
@@ -286,7 +299,12 @@ impl EvidenceStore {
         Ok(())
     }
 
-    /// Get-or-derive the AEAD key for the given scope.
+    /// Look up the AEAD key for the given scope from the in-memory
+    /// cache. New scopes should have their DEK provisioned via
+    /// [`Self::ensure_scope_dek`] *before* any read/write path needs
+    /// it. For databases upgraded from pre-v6 schema, this method
+    /// falls back to HKDF derivation so that existing encrypted
+    /// bodies remain readable without a bulk re-encryption migration.
     ///
     /// Takes `&self` so the read paths (e.g. [`Self::read_body`]) can
     /// populate the per-scope key cache without an exclusive borrow.
@@ -295,6 +313,10 @@ impl EvidenceStore {
         if let Some(k) = self.scope_keys.read().unwrap().get(&scope_id) {
             return Ok(*k);
         }
+        // Legacy fallback: pre-v6 databases have bodies encrypted
+        // under HKDF-derived keys. Derive the key so those rows
+        // remain readable. New scopes go through `ensure_scope_dek`
+        // which generates a random DEK stored in `scope_deks`.
         let label = format!("scope:{}:body:v1", scope_id.as_uuid());
         let key = derive_key(&self.master_key, label.as_bytes())?;
         self.scope_keys.write().unwrap().insert(scope_id, key);
@@ -1151,6 +1173,123 @@ impl EvidenceStore {
         Ok(out)
     }
 
+    // ───────────────── Independently-generated scope DEKs (C2) ─────
+
+    /// Derive the wrapping key used to AEAD-encrypt scope DEKs at
+    /// rest. The wrapping key itself is HKDF-derived from the master
+    /// key — that is fine because the *wrapped* material (the scope
+    /// DEK) is independently generated. An attacker with the master
+    /// key can derive the wrapping key, but after a `forget()` the
+    /// wrapped DEK row is deleted and the scope key is truly
+    /// unrecoverable.
+    fn dek_wrapping_key(&self) -> Result<AeadKey> {
+        derive_key(&self.master_key, b"scope-dek-wrap:v1").map_err(Into::into)
+    }
+
+    /// Persist a new independently-generated scope DEK.
+    ///
+    /// `dek` is the raw 32-byte AEAD key. It is wrapped (encrypted)
+    /// under the master-derived wrapping key and stored in the
+    /// `scope_deks` table. Idempotent: re-inserting an existing
+    /// scope DEK is a no-op via `INSERT OR IGNORE`.
+    pub fn store_scope_dek(&mut self, scope_id: ScopeId, dek: &AeadKey) -> Result<()> {
+        let wrap_key = self.dek_wrapping_key()?;
+        let nonce = random_nonce();
+        let aad = scope_dek_aad(scope_id);
+        let wrapped = encrypt_aead(&wrap_key, &nonce, dek.as_slice(), &aad)?;
+        let now = Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT OR IGNORE INTO scope_deks (scope_id, wrapped_dek, nonce, created_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                scope_id.as_uuid().as_bytes().as_slice(),
+                wrapped,
+                nonce.as_slice(),
+                now
+            ],
+        )?;
+        // Also populate the in-memory cache so subsequent calls to
+        // `scope_key()` find the key without a table lookup.
+        self.scope_keys.write().unwrap().insert(scope_id, *dek);
+        Ok(())
+    }
+
+    /// Load every persisted scope DEK, unwrap it, and return the map.
+    ///
+    /// Called once by `open_store` to hydrate the in-memory key cache
+    /// from the durable `scope_deks` table.
+    pub fn load_scope_deks(&self) -> Result<std::collections::HashMap<ScopeId, AeadKey>> {
+        let wrap_key = self.dek_wrapping_key()?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT scope_id, wrapped_dek, nonce FROM scope_deks")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
+        })?;
+        let mut out = std::collections::HashMap::new();
+        for row in rows {
+            let (scope_bytes, wrapped, nonce_bytes) = row?;
+            let scope = ScopeId::from_uuid(slice_to_uuid(&scope_bytes)?);
+            let aad = scope_dek_aad(scope);
+            if nonce_bytes.len() != AEAD_NONCE_LEN {
+                return Err(EvidenceError::Schema(
+                    "scope DEK nonce has wrong length in scope_deks table",
+                ));
+            }
+            let mut nonce = [0u8; AEAD_NONCE_LEN];
+            nonce.copy_from_slice(&nonce_bytes);
+            let plain = decrypt_aead(&wrap_key, &nonce, &wrapped, &aad)?;
+            if plain.len() != AEAD_KEY_LEN {
+                return Err(EvidenceError::Schema(
+                    "unwrapped scope DEK has wrong length",
+                ));
+            }
+            let mut key = [0u8; AEAD_KEY_LEN];
+            key.copy_from_slice(&plain);
+            out.insert(scope, key);
+        }
+        Ok(out)
+    }
+
+    /// Delete the wrapped scope DEK for `scope_id` from the
+    /// `scope_deks` table and remove it from the in-memory cache.
+    ///
+    /// After this call, the scope key is truly unrecoverable — the
+    /// master-derived wrapping key can no longer reconstruct it
+    /// because the wrapped material has been deleted.
+    pub fn delete_scope_dek(&mut self, scope_id: ScopeId) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM scope_deks WHERE scope_id = ?1",
+            params![scope_id.as_uuid().as_bytes().as_slice()],
+        )?;
+        self.scope_keys.write().unwrap().remove(&scope_id);
+        Ok(())
+    }
+
+    /// Generate a new random scope DEK via `OsRng`, persist it in the
+    /// `scope_deks` table (wrapped under the master-derived wrapping
+    /// key), and populate the in-memory cache.
+    ///
+    /// Returns the raw DEK. If a DEK for this scope already exists in
+    /// the cache or table, the existing key is returned without
+    /// generating a new one.
+    pub fn ensure_scope_dek(&mut self, scope_id: ScopeId) -> Result<AeadKey> {
+        // Fast path: already cached.
+        if let Some(k) = self.scope_keys.read().unwrap().get(&scope_id) {
+            return Ok(*k);
+        }
+        // Generate a fresh random DEK.
+        use rand::RngCore;
+        let mut dek = [0u8; AEAD_KEY_LEN];
+        rand::rngs::OsRng.fill_bytes(&mut dek);
+        self.store_scope_dek(scope_id, &dek)?;
+        Ok(dek)
+    }
+
     /// Purge every secondary-index row that retains plaintext for
     /// `scope_id`.
     ///
@@ -1616,6 +1755,9 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // v5 (WS1): add `body_store_key_wraps`. Purely additive;
         // handled by SCHEMA_SQL's `CREATE TABLE IF NOT EXISTS`.
         5 => Ok(()),
+        // v6 (C2): add `scope_deks`. Purely additive; handled by
+        // SCHEMA_SQL's `CREATE TABLE IF NOT EXISTS`.
+        6 => Ok(()),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
         )),
@@ -1788,6 +1930,13 @@ fn body_table_aad(hash: &ContentHash) -> Vec<u8> {
 fn ring_buffer_aad(scope_id: ScopeId) -> Vec<u8> {
     let mut aad = Vec::with_capacity(14 + 16);
     aad.extend_from_slice(b"ring_buffer:v1");
+    aad.extend_from_slice(scope_id.as_uuid().as_bytes());
+    aad
+}
+
+fn scope_dek_aad(scope_id: ScopeId) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(16 + 16);
+    aad.extend_from_slice(b"scope-dek-wrap:v1");
     aad.extend_from_slice(scope_id.as_uuid().as_bytes());
     aad
 }

@@ -83,6 +83,7 @@ impl FfiRuntime {
 
     /// Borrow the per-user master key. Kept `pub(crate)` so callers
     /// cannot leak it across the FFI boundary.
+    #[allow(dead_code)]
     pub(crate) fn master_key(&self) -> &MasterKey {
         &self.master_key
     }
@@ -243,6 +244,27 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
             .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
+    }
+
+    // Load independently-generated scope DEKs from the `scope_deks`
+    // table (v6 schema). Each persisted DEK is registered in the
+    // in-memory `DekRegistry` so the encrypt / decrypt paths find
+    // the scope key without re-deriving. Tombstoned scopes are
+    // skipped — their DEK rows should already have been deleted by
+    // `forget()`, but the filter is defense-in-depth.
+    let scope_deks = store
+        .load_scope_deks()
+        .map_err(|e| FfiError::Evidence {
+            message: e.to_string(),
+        })?;
+    for (scope, key) in &scope_deks {
+        let registry_scope = forgetting::ScopeId(scope.as_uuid());
+        if registry.is_scope_forgotten(registry_scope) {
+            continue;
+        }
+        let dek =
+            forgetting::ScopeDek::new(registry_scope, forgetting::EpochId::zero(), *key);
+        registry.insert_scope_dek(dek);
     }
 
     *guard = Some(FfiRuntime {

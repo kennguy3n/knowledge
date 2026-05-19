@@ -85,7 +85,7 @@ pub use types::{
 };
 
 use crypto::{
-    decrypt_aead, derive_key, encrypt_aead, forgetting, signer_backend::MlDsa65Signer, AeadNonce,
+    decrypt_aead, encrypt_aead, forgetting, signer_backend::MlDsa65Signer, AeadNonce,
     AEAD_NONCE_LEN,
 };
 use evidence_store::{EvidenceId, ImportanceClass, ScopeId};
@@ -956,27 +956,45 @@ fn scope_aad(scope: ScopeId) -> Vec<u8> {
 // `crypto`-specific knowledge (HKDF context labels, AEAD nonce
 // length) stays co-located with the public functions that use them.
 impl runtime::FfiRuntime {
-    /// Derive the scope-specific AEAD key used by [`encrypt`] /
-    /// [`decrypt`]. Callers **must** check
+    /// Look up the scope-specific AEAD key used by [`encrypt`] /
+    /// [`decrypt`]. The key is the independently-generated DEK stored
+    /// in the `scope_deks` table (v6 schema), NOT an HKDF derivation
+    /// from the master key. Callers **must** check
     /// [`Self::is_scope_forgotten`] before invoking this — the
     /// forgotten-scope short-circuit lives at the public-function
     /// layer so the error mapping (`NotFound { kind: "scope" }`)
     /// stays consistent across the surface.
     fn scope_encrypt_key(&self, scope: ScopeId) -> FfiResult<crypto::AeadKey> {
-        let label = format!("scope:{}:ffi-encrypt:v1", scope.as_uuid());
-        derive_key(self.master_key(), label.as_bytes()).map_err(|e| FfiError::Crypto {
-            message: e.to_string(),
-        })
+        let registry_scope = forgetting::ScopeId(scope.as_uuid());
+        let dek = self.registry().get_scope_dek(registry_scope).ok_or_else(|| {
+            FfiError::NotFound {
+                kind: "scope".into(),
+                id: scope.as_uuid().to_string(),
+            }
+        })?;
+        let key = dek.key().ok_or_else(|| FfiError::Crypto {
+            message: "scope DEK has been destroyed".into(),
+        })?;
+        Ok(*key)
     }
 
+    /// Ensure the scope has an independently-generated DEK registered
+    /// in the in-memory `DekRegistry` and persisted in the evidence
+    /// store's `scope_deks` table.
+    ///
+    /// New scopes get a fresh random DEK via `OsRng`. Existing scopes
+    /// (already in the registry) are a no-op.
     fn ensure_scope_registered(&mut self, scope: ScopeId) -> FfiResult<()> {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
         if self.registry().get_scope_dek(registry_scope).is_some() {
             return Ok(());
         }
-        let label = format!("scope:{}:dek:v1", scope.as_uuid());
-        let key =
-            derive_key(self.master_key(), label.as_bytes()).map_err(|e| FfiError::Crypto {
+        // Generate an independently random DEK and persist it wrapped
+        // in the evidence store's scope_deks table.
+        let key = self
+            .store_mut()
+            .ensure_scope_dek(scope)
+            .map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             })?;
         let dek = forgetting::ScopeDek::new(registry_scope, forgetting::EpochId::zero(), key);
@@ -987,6 +1005,9 @@ impl runtime::FfiRuntime {
     fn forget_scope(&mut self, scope: ScopeId) {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
         let _ = forgetting::destroy_scope_dek(self.registry_mut(), registry_scope);
+        // Delete the wrapped DEK from durable storage so the scope
+        // key is truly unrecoverable even with the master key.
+        let _ = self.store_mut().delete_scope_dek(scope);
     }
 
     fn is_scope_forgotten(&self, scope: ScopeId) -> bool {
