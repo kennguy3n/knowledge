@@ -153,6 +153,17 @@ pub fn set_mlx_runtime_linked(linked: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// Tests that touch the global `MLX_RUNTIME_LINKED` flag must be
+    /// serialized — Cargo runs tests in parallel by default and the
+    /// flag is process-global mutable state.
+    fn mlx_lock() -> MutexGuard<'static, ()> {
+        static M: OnceLock<Mutex<()>> = OnceLock::new();
+        M.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     #[test]
     fn probe_unavailable_off_apple_silicon() {
@@ -164,6 +175,7 @@ mod tests {
 
     #[test]
     fn probe_unavailable_on_apple_silicon_without_runtime() {
+        let _g = mlx_lock();
         set_mlx_runtime_linked(false);
         let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
         let adapter = MlxAdapter::with_platform_override(cfg, true);
@@ -173,6 +185,7 @@ mod tests {
 
     #[test]
     fn probe_available_on_apple_silicon_high_tier_with_runtime() {
+        let _g = mlx_lock();
         set_mlx_runtime_linked(true);
         let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
         let adapter = MlxAdapter::with_platform_override(cfg, true);
@@ -214,6 +227,7 @@ mod tests {
 
     #[test]
     fn generate_returns_fallback_error_when_runtime_not_linked() {
+        let _g = mlx_lock();
         set_mlx_runtime_linked(true);
         let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
         let adapter = MlxAdapter::with_platform_override(cfg, true);
