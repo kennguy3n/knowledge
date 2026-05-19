@@ -18,7 +18,7 @@ For the component map, data flow, and crypto layer, read
 
 ## Quick start
 
-The shared core is a Cargo workspace targeting **Rust 1.75+ (stable)**.
+The shared core is a Cargo workspace targeting **Rust 1.85+ (stable)**.
 
 ### Prerequisites
 
