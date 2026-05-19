@@ -257,6 +257,14 @@ impl EvidenceStore {
         // No-op for now, but keeps the borrow checker happy if we add
         // post-open prepared statements.
         store.preflight()?;
+
+        // v4→v5 backfill: re-encrypt any pre-existing body-table rows
+        // that were encrypted under the old scope-independent
+        // body_store_key but have no per-scope CEK wraps yet.
+        if detected_version > 0 && detected_version < 5 {
+            store.backfill_legacy_body_wraps()?;
+        }
+
         Ok(store)
     }
 
@@ -467,6 +475,39 @@ impl EvidenceStore {
                     let wrapped = wrap_cek(&scope_key, &cek, &wrap_nonce, &hash)?;
                     tx.execute(
                         "INSERT OR IGNORE INTO body_store_key_wraps \
+                         (content_hash, scope_id, wrapped_cek, nonce) \
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![
+                            hash.as_slice(),
+                            scope_id.as_uuid().as_bytes().as_slice(),
+                            wrapped,
+                            wrap_nonce.as_slice(),
+                        ],
+                    )?;
+                } else {
+                    // Orphaned body_store row: all previous CEK wraps
+                    // have been purged (every scope that referenced it
+                    // was forgotten). The ciphertext is unrecoverable,
+                    // so delete the stale row and fall through to the
+                    // new-body path below.
+                    tx.execute(
+                        "DELETE FROM body_store WHERE content_hash = ?1",
+                        params![hash.as_slice()],
+                    )?;
+                    // Re-encrypt from scratch.
+                    let cek = random_cek();
+                    let body_nonce = random_nonce();
+                    let aad = body_table_aad(&hash);
+                    let ciphertext = encrypt_aead(&cek, &body_nonce, body, &aad)?;
+                    tx.execute(
+                        "INSERT INTO body_store (content_hash, body, nonce, ref_count) \
+                         VALUES (?1, ?2, ?3, 1)",
+                        params![hash.as_slice(), ciphertext, body_nonce.as_slice()],
+                    )?;
+                    let wrap_nonce = random_nonce();
+                    let wrapped = wrap_cek(&scope_key, &cek, &wrap_nonce, &hash)?;
+                    tx.execute(
+                        "INSERT INTO body_store_key_wraps \
                          (content_hash, scope_id, wrapped_cek, nonce) \
                          VALUES (?1, ?2, ?3, ?4)",
                         params![
@@ -1239,6 +1280,111 @@ impl EvidenceStore {
         Ok(())
     }
 
+    /// v4→v5 backfill: re-encrypt body-table rows that were written
+    /// under the old scope-independent body_store_key.  For each
+    /// orphaned content_hash (in body_store but not in
+    /// body_store_key_wraps), derive the legacy key, decrypt, generate
+    /// a fresh CEK, re-encrypt, update the row, then create a wrap
+    /// for every scope that references the body in the evidence table.
+    fn backfill_legacy_body_wraps(&mut self) -> Result<()> {
+        let legacy_key = derive_key(&self.master_key, b"body_store:v1")?;
+
+        // Find body_store rows that have zero wraps.
+        let orphans: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT bs.content_hash, bs.body, bs.nonce \
+                 FROM body_store bs \
+                 WHERE NOT EXISTS ( \
+                     SELECT 1 FROM body_store_key_wraps w \
+                     WHERE w.content_hash = bs.content_hash \
+                 )",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            out
+        };
+
+        if orphans.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self.conn.transaction()?;
+        for (hash_bytes, ct, nonce_bytes) in &orphans {
+            if nonce_bytes.len() != AEAD_NONCE_LEN {
+                continue;
+            }
+            let mut body_nonce = [0u8; AEAD_NONCE_LEN];
+            body_nonce.copy_from_slice(nonce_bytes);
+
+            let mut content_hash = [0u8; 32];
+            if hash_bytes.len() != 32 {
+                continue;
+            }
+            content_hash.copy_from_slice(hash_bytes);
+
+            // Decrypt under the legacy key.
+            let aad = body_table_aad(&content_hash);
+            let Ok(pt) = decrypt_aead(&legacy_key, &body_nonce, ct, &aad) else {
+                continue; // already re-encrypted or corrupt
+            };
+
+            // Re-encrypt under a fresh CEK.
+            let cek = random_cek();
+            let new_nonce = random_nonce();
+            let new_ct = encrypt_aead(&cek, &new_nonce, &pt, &aad)?;
+            tx.execute(
+                "UPDATE body_store SET body = ?1, nonce = ?2 WHERE content_hash = ?3",
+                params![new_ct, new_nonce.as_slice(), hash_bytes.as_slice()],
+            )?;
+
+            // Create a CEK wrap for every scope that references this hash.
+            let scope_ids: Vec<Vec<u8>> = {
+                let mut s = tx.prepare(
+                    "SELECT DISTINCT scope_id FROM evidence \
+                     WHERE content_hash = ?1 AND storage_path = 1",
+                )?;
+                let rows =
+                    s.query_map(params![hash_bytes.as_slice()], |r| r.get::<_, Vec<u8>>(0))?;
+                rows.filter_map(Result::ok).collect()
+            };
+
+            for scope_bytes in &scope_ids {
+                let scope = ScopeId::from_uuid(match slice_to_uuid(scope_bytes) {
+                    Ok(u) => u,
+                    Err(_) => continue,
+                });
+                let scope_key = {
+                    let label = format!("scope:{}:body:v1", scope.as_uuid());
+                    derive_key(&self.master_key, label.as_bytes())?
+                };
+                let wrap_nonce = random_nonce();
+                let wrapped = wrap_cek(&scope_key, &cek, &wrap_nonce, &content_hash)?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO body_store_key_wraps \
+                     (content_hash, scope_id, wrapped_cek, nonce) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        hash_bytes.as_slice(),
+                        scope_bytes.as_slice(),
+                        wrapped,
+                        wrap_nonce.as_slice(),
+                    ],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Wire an [`EmbeddingModel`] into the store so subsequent
     /// [`Self::ingest`] calls populate the `evidence_embeddings`
     /// cache (Phase B). `model_tag` is stamped on every persisted
@@ -1554,9 +1700,10 @@ fn random_nonce() -> AeadNonce {
 }
 
 fn random_cek() -> AeadKey {
+    use rand::rngs::OsRng;
     use rand::RngCore;
     let mut key = [0u8; AEAD_KEY_LEN];
-    rand::thread_rng().fill_bytes(&mut key);
+    OsRng.fill_bytes(&mut key);
     key
 }
 
@@ -1599,7 +1746,7 @@ fn unwrap_cek(
 }
 
 fn cek_wrap_aad(content_hash: &ContentHash) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(14 + 32);
+    let mut aad = Vec::with_capacity(12 + 32);
     aad.extend_from_slice(b"cek_wrap:v1:");
     aad.extend_from_slice(content_hash);
     aad

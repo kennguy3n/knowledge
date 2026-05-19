@@ -157,4 +157,10 @@ CREATE TABLE IF NOT EXISTS body_store_key_wraps (
     nonce           BLOB    NOT NULL,
     PRIMARY KEY (content_hash, scope_id)
 );
+
+-- Forgetting a scope queries body_store_key_wraps by scope_id alone.
+-- The composite PK only supports prefix lookups on content_hash;
+-- without this index those queries require a full table scan.
+CREATE INDEX IF NOT EXISTS idx_body_wraps_scope
+    ON body_store_key_wraps (scope_id);
 "#;
