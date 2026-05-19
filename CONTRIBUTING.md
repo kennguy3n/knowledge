@@ -59,7 +59,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 - Use `#[deny(missing_docs)]` — every public API must have doc
   comments.
 - Gate test-only types behind `cfg(any(test, feature = "test-support"))`
-  and document them in the per-crate Notes column of MODULE_STATUS.md.
+  and document them in the crate's top-level doc comment.
 
 ## Security
 

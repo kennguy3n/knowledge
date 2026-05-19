@@ -159,7 +159,7 @@ pub fn run(
     let working_evicted = working.evict_expired();
     let working_after = working.get_context().len();
 
-    // -- EpisodicMemory ingest from Phase-2 observations -> sessions.
+    // -- EpisodicMemory ingest from observation-stage observations -> sessions.
     let detector = SessionDetector::default();
     let summarizer = StubSummarizer::new();
     let mut episodic = EpisodicMemory::new(summarizer, detector);

@@ -77,7 +77,7 @@ pub fn run(
             .mark_in_progress(window_id)
             .expect("channel window -> in_progress");
 
-        // Build a recap seed from every Phase-1 row that landed in
+        // Build a recap seed from every evidence-stage row that landed in
         // this channel scope. Real recap content -- the synthesizer
         // (NoOp) just copies it through.
         let recap_seed: String = state

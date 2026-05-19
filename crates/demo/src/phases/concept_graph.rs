@@ -299,7 +299,7 @@ pub fn run(
         );
     }
 
-    // DerivedFrom: every Phase-1 evidence row gets a tombstone node
+    // DerivedFrom: every evidence-stage row gets a tombstone node
     // and a `concept --derived_from--> evidence` edge. The tombstone
     // node lives in the tenant scope (so the DerivedFrom edge stays
     // scope-cohesive); the original evidence row's scope is captured
