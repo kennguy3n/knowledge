@@ -29,9 +29,9 @@
 //! * [`get_user_memory`] / [`pin`] / [`unpin`] / [`list_memories`] /
 //!   [`run_decay_sweep`] / [`get_channel_memory`] are wired through to
 //!   the in-process [`memory_manager::UserMemoryObject`] /
-//!   [`memory_manager::ChannelMemoryObject`] CRUD layer. The memory
-//!   plane is in-memory only — persistence to the encrypted
-//!   evidence plane is not yet wired.
+//!   [`memory_manager::ChannelMemoryObject`] CRUD layer. Memory
+//!   objects are persisted to the encrypted `memory_objects` table
+//!   (schema v7) and rehydrated on [`open_store`].
 //! * [`trigger_synthesis`] returns [`FfiError::Unavailable`] with
 //!   `subsystem = "synthesis"` until the on-device SLM router is
 //!   wired through this surface.
@@ -44,18 +44,6 @@
 //!
 //! These are deliberate to keep the unblocker PR small. Each one is
 //! a clean follow-up:
-//!
-//! * **Cryptographic forgetting is session-scoped.** The
-//!   [`forget`] tombstones live in an in-memory
-//!   [`crypto::forgetting::DekRegistry`] that is dropped by
-//!   [`close_store`]. A durable on-disk DEK registry lands with the
-//!   broader forgetting work; until then, hosts that need durability
-//!   across process restarts must layer their own persistence on
-//!   top.
-//! * **`forget` resolves a scope via an evidence id.** There is no
-//!   way to forget a scope that has only ever been used via
-//!   [`encrypt`] / [`decrypt`] without ingest. A `forget_scope` API
-//!   is tracked as a follow-up.
 //! * **Ingest hardcodes `ImportanceClass::Important`.** The
 //!   evidence store supports `Important` / `Useful` / `Noise` (with
 //!   different storage routing, including the noise ring buffer);
@@ -770,6 +758,8 @@ pub fn generate_keypair() -> FfiResult<FfiKeypair> {
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+/// * [`FfiError::Evidence`] if scope DEK registration fails (store
+///   write error).
 /// * [`FfiError::Crypto`] on AEAD or key-derivation failure.
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
 pub fn encrypt(scope_id: ScopeIdString, plaintext: Vec<u8>) -> FfiResult<Vec<u8>> {

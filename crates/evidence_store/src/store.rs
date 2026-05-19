@@ -1220,7 +1220,7 @@ impl EvidenceStore {
         let aad = scope_dek_aad(scope_id);
         let wrapped = encrypt_aead(&wrap_key, &nonce, dek.as_slice(), &aad)?;
         let now = Utc::now().timestamp();
-        self.conn.execute(
+        let rows_changed = self.conn.execute(
             "INSERT OR IGNORE INTO scope_deks (scope_id, wrapped_dek, nonce, created_at) \
              VALUES (?1, ?2, ?3, ?4)",
             params![
@@ -1230,9 +1230,13 @@ impl EvidenceStore {
                 now
             ],
         )?;
-        // Also populate the in-memory cache so subsequent calls to
-        // `scope_key()` find the key without a table lookup.
-        self.scope_keys.write().unwrap().insert(scope_id, *dek);
+        // Only update the in-memory cache when the DB row was actually
+        // inserted. When INSERT OR IGNORE is a no-op (row already
+        // exists), the DB retains the original key and the cache must
+        // stay consistent with it.
+        if rows_changed > 0 {
+            self.scope_keys.write().unwrap().insert(scope_id, *dek);
+        }
         Ok(())
     }
 

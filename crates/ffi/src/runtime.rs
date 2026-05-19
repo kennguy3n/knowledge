@@ -20,7 +20,7 @@
 //! finer-grained concurrency (e.g. multi-shard ingest), this is the
 //! single seam to replace.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crypto::forgetting::{self, DekRegistry};
@@ -230,11 +230,13 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
     // `NotFound { kind: "scope" }` — the in-memory short-circuit
     // is what every public `is_scope_forgotten` check reads.
     let mut registry = DekRegistry::new();
-    let tombstones = store
+    let tombstones: HashSet<ScopeId> = store
         .load_forgotten_scopes()
         .map_err(|e| FfiError::Evidence {
             message: e.to_string(),
-        })?;
+        })?
+        .into_iter()
+        .collect();
     for scope in &tombstones {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
         // The return value is the list of `KeyDestructionEvent`s
