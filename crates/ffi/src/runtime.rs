@@ -280,16 +280,10 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
             })?;
     }
 
-    // Load independently-generated scope DEKs from the `scope_deks`
-    // table (v6 schema). Each persisted DEK is registered in the
-    // in-memory `DekRegistry` so the encrypt / decrypt paths find
-    // the scope key without re-deriving. Tombstoned scopes are
-    // skipped — their DEK rows should already have been deleted by
-    // `forget()`, but the filter is defense-in-depth.
-    let scope_deks = store.load_scope_deks().map_err(|e| FfiError::Evidence {
-        message: e.to_string(),
-    })?;
-    for (scope, key) in &scope_deks {
+    // Populate the DekRegistry from the store's in-memory cache,
+    // which was already hydrated from `scope_deks` during
+    // `EvidenceStore::open`. No second DB query needed.
+    for (scope, key) in &store.cached_scope_keys() {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
         if registry.is_scope_forgotten(registry_scope) {
             continue;
@@ -319,8 +313,17 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
                     message: e.to_string(),
                 })?
         {
-            if let Ok(umo) = serde_json::from_slice::<UserMemoryObject>(&blob) {
-                user_memories.insert(scope, umo);
+            match serde_json::from_slice::<UserMemoryObject>(&blob) {
+                Ok(umo) => {
+                    user_memories.insert(scope, umo);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "warning: failed to deserialize user_memory for scope {}: {e}; \
+                         blob dropped",
+                        scope.as_uuid()
+                    );
+                }
             }
         }
     }
@@ -342,8 +345,17 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
                 message: e.to_string(),
             })?
         {
-            if let Ok(cmo) = serde_json::from_slice::<ChannelMemoryObject>(&blob) {
-                channel_memories.insert(scope, cmo);
+            match serde_json::from_slice::<ChannelMemoryObject>(&blob) {
+                Ok(cmo) => {
+                    channel_memories.insert(scope, cmo);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "warning: failed to deserialize channel_memory for scope {}: {e}; \
+                         blob dropped",
+                        scope.as_uuid()
+                    );
+                }
             }
         }
     }

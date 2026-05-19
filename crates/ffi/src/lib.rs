@@ -629,6 +629,12 @@ pub fn run_decay_sweep(scope_id: ScopeIdString) -> FfiResult<u32> {
         if rt.is_scope_forgotten(scope) {
             return Ok(0);
         }
+        // Only run decay and flush if the scope has an existing UMO.
+        // `user_memory_mut` would create an empty one, and flushing
+        // it would persist an orphan empty blob.
+        if rt.user_memory(scope).is_none() {
+            return Ok(0);
+        }
         let umo = rt.user_memory_mut(scope);
         let report = umo.decay_sweep(chrono::Utc::now());
         let count = (report.candidates_archived + report.superseded_archived) as u32;
@@ -754,6 +760,9 @@ pub fn encrypt(scope_id: ScopeIdString, plaintext: Vec<u8>) -> FfiResult<Vec<u8>
                 id: scope_id.clone(),
             });
         }
+        // Auto-register so new scopes get a random DEK and
+        // pre-v6 scopes adopt their HKDF key into the registry.
+        rt.ensure_scope_registered(scope)?;
         let key = rt.scope_encrypt_key(scope)?;
         let mut nonce: AeadNonce = [0u8; AEAD_NONCE_LEN];
         rand::thread_rng().fill_bytes(&mut nonce);
@@ -797,9 +806,26 @@ pub fn decrypt(scope_id: ScopeIdString, ciphertext: Vec<u8>) -> FfiResult<Vec<u8
         nonce.copy_from_slice(&ciphertext[..AEAD_NONCE_LEN]);
         let body = &ciphertext[AEAD_NONCE_LEN..];
         let aad = scope_aad(scope);
-        let plain = decrypt_aead(&key, &nonce, body, &aad).map_err(|e| FfiError::Crypto {
-            message: e.to_string(),
-        })?;
+        let plain = match decrypt_aead(&key, &nonce, body, &aad) {
+            Ok(p) => p,
+            Err(primary_err) => {
+                // The primary key failed — try the legacy HKDF key.
+                // Pre-v6 ciphertexts were encrypted under
+                // `scope:{uuid}:ffi-encrypt:v1`; after scope
+                // registration the primary key is the random DEK,
+                // so old ciphertexts need this fallback.
+                let legacy = rt.legacy_ffi_encrypt_key(scope)?;
+                if legacy == key {
+                    // Same key — no point retrying.
+                    return Err(FfiError::Crypto {
+                        message: primary_err.to_string(),
+                    });
+                }
+                decrypt_aead(&legacy, &nonce, body, &aad).map_err(|e| FfiError::Crypto {
+                    message: e.to_string(),
+                })?
+            }
+        };
         Ok(plain)
     })
 }
@@ -978,26 +1004,40 @@ fn scope_aad(scope: ScopeId) -> Vec<u8> {
 // length) stays co-located with the public functions that use them.
 impl runtime::FfiRuntime {
     /// Look up the scope-specific AEAD key used by [`encrypt`] /
-    /// [`decrypt`]. The key is the independently-generated DEK stored
-    /// in the `scope_deks` table (v6 schema), NOT an HKDF derivation
-    /// from the master key. Callers **must** check
-    /// [`Self::is_scope_forgotten`] before invoking this — the
-    /// forgotten-scope short-circuit lives at the public-function
-    /// layer so the error mapping (`NotFound { kind: "scope" }`)
-    /// stays consistent across the surface.
+    /// [`decrypt`]. Tries the DEK registry first (populated during
+    /// `open_store` or `ensure_scope_registered`). Falls back to the
+    /// legacy HKDF derivation (`scope:{uuid}:ffi-encrypt:v1`) so
+    /// that ciphertexts produced by pre-v6 `encrypt()` remain
+    /// decryptable. Callers **must** check
+    /// [`Self::is_scope_forgotten`] before invoking this.
     fn scope_encrypt_key(&self, scope: ScopeId) -> FfiResult<crypto::AeadKey> {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
-        let dek = self
-            .registry()
-            .get_scope_dek(registry_scope)
-            .ok_or_else(|| FfiError::NotFound {
-                kind: "scope".into(),
-                id: scope.as_uuid().to_string(),
+        if let Some(dek) = self.registry().get_scope_dek(registry_scope) {
+            let key = dek.key().ok_or_else(|| FfiError::Crypto {
+                message: "scope DEK has been destroyed".into(),
             })?;
-        let key = dek.key().ok_or_else(|| FfiError::Crypto {
-            message: "scope DEK has been destroyed".into(),
-        })?;
-        Ok(*key)
+            return Ok(*key);
+        }
+        // Legacy HKDF fallback: pre-v6 databases derived scope keys
+        // from the master key with a per-surface label. This keeps
+        // existing ciphertexts decryptable until the host explicitly
+        // registers the scope (which adopts the HKDF key into the
+        // registry via ensure_scope_dek's evidence check).
+        let label = format!("scope:{}:ffi-encrypt:v1", scope.as_uuid());
+        crypto::derive_key(self.master_key(), label.as_bytes()).map_err(|e| FfiError::Crypto {
+            message: e.to_string(),
+        })
+    }
+
+    /// Derive the legacy HKDF key for the `ffi-encrypt` surface. Used
+    /// by [`decrypt`] as a fallback when the primary (DEK) key fails
+    /// AEAD authentication — i.e. the ciphertext was produced by a
+    /// pre-v6 `encrypt()`.
+    fn legacy_ffi_encrypt_key(&self, scope: ScopeId) -> FfiResult<crypto::AeadKey> {
+        let label = format!("scope:{}:ffi-encrypt:v1", scope.as_uuid());
+        crypto::derive_key(self.master_key(), label.as_bytes()).map_err(|e| FfiError::Crypto {
+            message: e.to_string(),
+        })
     }
 
     /// Ensure the scope has an independently-generated DEK registered

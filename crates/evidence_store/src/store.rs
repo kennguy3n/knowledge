@@ -118,7 +118,9 @@ pub struct EvidenceStore {
 impl Drop for EvidenceStore {
     fn drop(&mut self) {
         self.master_key.zeroize();
-        for (_id, key) in self.scope_keys.write().unwrap().iter_mut() {
+        // `get_mut()` is infallible on `&mut self` — no lock
+        // acquisition, no panic on poisoned RwLock.
+        for (_id, key) in self.scope_keys.get_mut().unwrap().iter_mut() {
             key.zeroize();
         }
     }
@@ -1173,6 +1175,13 @@ impl EvidenceStore {
         Ok(out)
     }
 
+    /// Return a snapshot of the in-memory scope-key cache. Used by
+    /// `open_store` to populate the `DekRegistry` without a second
+    /// DB round-trip.
+    pub fn cached_scope_keys(&self) -> std::collections::HashMap<ScopeId, AeadKey> {
+        self.scope_keys.read().unwrap().clone()
+    }
+
     // ───────────────── Independently-generated scope DEKs (C2) ─────
 
     /// Derive the wrapping key used to AEAD-encrypt scope DEKs at
@@ -1270,19 +1279,73 @@ impl EvidenceStore {
         Ok(())
     }
 
-    /// Generate a new random scope DEK via `OsRng`, persist it in the
-    /// `scope_deks` table (wrapped under the master-derived wrapping
-    /// key), and populate the in-memory cache.
+    /// Ensure the scope has an AEAD key in the in-memory cache,
+    /// generating and persisting a new random DEK only when the scope
+    /// is genuinely new.
     ///
-    /// Returns the raw DEK. If a DEK for this scope already exists in
-    /// the cache or table, the existing key is returned without
-    /// generating a new one.
+    /// Resolution order:
+    /// 1. In-memory cache (fast path).
+    /// 2. `scope_deks` DB table — the wrapped DEK may have been
+    ///    persisted by a prior session but not yet loaded into cache.
+    /// 3. Legacy HKDF fallback — if evidence rows exist for this
+    ///    scope (pre-v6 database), the scope was encrypted under an
+    ///    HKDF-derived key. We adopt that key and persist it in
+    ///    `scope_deks` so future opens find it directly.
+    /// 4. Fresh random DEK via `OsRng` — only for genuinely new
+    ///    scopes with no prior evidence.
     pub fn ensure_scope_dek(&mut self, scope_id: ScopeId) -> Result<AeadKey> {
-        // Fast path: already cached.
+        // 1. Fast path: already in memory.
         if let Some(k) = self.scope_keys.read().unwrap().get(&scope_id) {
             return Ok(*k);
         }
-        // Generate a fresh random DEK.
+
+        // 2. Check the durable scope_deks table.
+        let wrap_key = self.dek_wrapping_key()?;
+        let db_row: Option<(Vec<u8>, Vec<u8>)> = self
+            .conn
+            .query_row(
+                "SELECT wrapped_dek, nonce FROM scope_deks WHERE scope_id = ?1",
+                params![scope_id.as_uuid().as_bytes().as_slice()],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?;
+        if let Some((wrapped, nonce_bytes)) = db_row {
+            if nonce_bytes.len() != AEAD_NONCE_LEN {
+                return Err(EvidenceError::Schema(
+                    "scope DEK nonce has wrong length in scope_deks table",
+                ));
+            }
+            let mut nonce = [0u8; AEAD_NONCE_LEN];
+            nonce.copy_from_slice(&nonce_bytes);
+            let aad = scope_dek_aad(scope_id);
+            let plain = decrypt_aead(&wrap_key, &nonce, &wrapped, &aad)?;
+            if plain.len() != AEAD_KEY_LEN {
+                return Err(EvidenceError::Schema(
+                    "unwrapped scope DEK has wrong length",
+                ));
+            }
+            let mut key = [0u8; AEAD_KEY_LEN];
+            key.copy_from_slice(&plain);
+            self.scope_keys.write().unwrap().insert(scope_id, key);
+            return Ok(key);
+        }
+
+        // 3. Legacy check: if evidence rows exist for this scope
+        //    they were encrypted under the HKDF-derived key. Adopt
+        //    that key and persist it so future opens find it.
+        let has_evidence: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM evidence WHERE scope_id = ?1)",
+            params![scope_id.as_uuid().as_bytes().as_slice()],
+            |row| row.get(0),
+        )?;
+        if has_evidence {
+            let label = format!("scope:{}:body:v1", scope_id.as_uuid());
+            let key = derive_key(&self.master_key, label.as_bytes())?;
+            self.store_scope_dek(scope_id, &key)?;
+            return Ok(key);
+        }
+
+        // 4. Genuinely new scope: generate a fresh random DEK.
         use rand::RngCore;
         let mut dek = [0u8; AEAD_KEY_LEN];
         rand::rngs::OsRng.fill_bytes(&mut dek);
@@ -1307,7 +1370,8 @@ impl EvidenceStore {
     ) -> Result<()> {
         let key = self.scope_key(scope_id)?;
         let nonce = random_nonce();
-        let mut aad = Vec::with_capacity(16 + kind.len());
+        // b"memory:" (7) + kind + b':' (1) + UUID (16) = 24 + kind.len()
+        let mut aad = Vec::with_capacity(24 + kind.len());
         aad.extend_from_slice(b"memory:");
         aad.extend_from_slice(kind.as_bytes());
         aad.push(b':');
@@ -2033,7 +2097,8 @@ fn ring_buffer_aad(scope_id: ScopeId) -> Vec<u8> {
 }
 
 fn scope_dek_aad(scope_id: ScopeId) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(16 + 16);
+    // b"scope-dek-wrap:v1" = 17 bytes + UUID = 16 bytes = 33 total.
+    let mut aad = Vec::with_capacity(17 + 16);
     aad.extend_from_slice(b"scope-dek-wrap:v1");
     aad.extend_from_slice(scope_id.as_uuid().as_bytes());
     aad
