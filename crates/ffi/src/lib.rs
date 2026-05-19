@@ -496,7 +496,7 @@ pub fn forget(id: String) -> FfiResult<()> {
         //    restart still rejects the scope. 3. Purge the FTS5 /
         //    embedding indexes so plaintext-derived secondary
         //    payloads cannot be recovered post-forget.
-        rt.forget_scope(scope);
+        rt.forget_scope(scope)?;
         rt.store_mut()
             .record_forgotten_scope(scope)
             .map_err(|e| FfiError::Evidence {
@@ -546,7 +546,7 @@ pub fn forget(id: String) -> FfiResult<()> {
 pub fn forget_scope(scope_id: String) -> FfiResult<()> {
     let scope = parse_scope_id(&scope_id)?;
     with_runtime(|rt| {
-        rt.forget_scope(scope);
+        rt.forget_scope(scope)?;
         rt.store_mut()
             .record_forgotten_scope(scope)
             .map_err(|e| FfiError::Evidence {
@@ -1064,12 +1064,16 @@ impl runtime::FfiRuntime {
         Ok(())
     }
 
-    fn forget_scope(&mut self, scope: ScopeId) {
+    fn forget_scope(&mut self, scope: ScopeId) -> FfiResult<()> {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
         let _ = forgetting::destroy_scope_dek(self.registry_mut(), registry_scope);
         // Delete the wrapped DEK from durable storage so the scope
         // key is truly unrecoverable even with the master key.
-        let _ = self.store_mut().delete_scope_dek(scope);
+        self.store_mut()
+            .delete_scope_dek(scope)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })
     }
 
     fn is_scope_forgotten(&self, scope: ScopeId) -> bool {

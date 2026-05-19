@@ -283,9 +283,16 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
     // Populate the DekRegistry from the store's in-memory cache,
     // which was already hydrated from `scope_deks` during
     // `EvidenceStore::open`. No second DB query needed.
+    //
+    // Defense-in-depth: if `delete_scope_dek` failed during a prior
+    // `forget()`, the wrapped DEK may still sit in `scope_deks` and
+    // `load_scope_deks` will have loaded it into the store's cache.
+    // Evict forgotten keys from the store cache so that no code path
+    // (even a direct `scope_key()` call) can recover the key.
     for (scope, key) in &store.cached_scope_keys() {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
         if registry.is_scope_forgotten(registry_scope) {
+            store.evict_cached_scope_key(*scope);
             continue;
         }
         let dek = forgetting::ScopeDek::new(registry_scope, forgetting::EpochId::zero(), *key);

@@ -121,7 +121,12 @@ impl Drop for EvidenceStore {
         // `get_mut()` bypasses locking on `&mut self` but still
         // checks the poison flag — recover gracefully so Drop never
         // panics (a panic during unwinding would abort).
-        for (_id, key) in self.scope_keys.get_mut().unwrap_or_else(|e| e.into_inner()).iter_mut() {
+        for (_id, key) in self
+            .scope_keys
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter_mut()
+        {
             key.zeroize();
         }
     }
@@ -1181,6 +1186,13 @@ impl EvidenceStore {
     /// DB round-trip.
     pub fn cached_scope_keys(&self) -> std::collections::HashMap<ScopeId, AeadKey> {
         self.scope_keys.read().unwrap().clone()
+    }
+
+    /// Remove a scope key from the in-memory cache only (does NOT
+    /// touch the `scope_deks` table). Used during `open_store` to
+    /// evict keys for forgotten scopes as a defense-in-depth measure.
+    pub fn evict_cached_scope_key(&self, scope_id: ScopeId) {
+        self.scope_keys.write().unwrap().remove(&scope_id);
     }
 
     // ───────────────── Independently-generated scope DEKs (C2) ─────
