@@ -126,11 +126,11 @@ jobs:
       - run: cargo test --all --all-features
 
   msrv:
-    name: MSRV (1.75.0)
+    name: MSRV (1.85.0)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.75.0
+      - uses: dtolnay/rust-toolchain@1.85.0
       - uses: actions/cache@v4
         with:
           path: |
@@ -182,7 +182,12 @@ jobs:
           NDK_TOOLCHAIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
           echo "CC_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
           echo "AR_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "RANLIB_aarch64_linux_android=${NDK_TOOLCHAIN}/bin/llvm-ranlib" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${NDK_TOOLCHAIN}/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          # openssl-sys build script also looks for the target-prefixed
+          # ranlib in $PATH. Symlink it so the Makefile install_dev step
+          # finds aarch64-linux-android-ranlib.
+          sudo ln -sf "${NDK_TOOLCHAIN}/bin/llvm-ranlib" /usr/local/bin/aarch64-linux-android-ranlib
       - run: cargo check --workspace --target aarch64-linux-android
 
   audit:
