@@ -86,8 +86,7 @@ short version:
   Notion, Jira, Confluence, Figma, HubSpot, Slack, Email) are
   fixture parsers with no live OAuth2 transport. The server-side
   synthesis service is a Rust skeleton; the Go gateway lives
-  outside this repo. SPHINCS+ is a BLAKE3-keyed placeholder, not
-  a real lattice signer.
+  outside this repo.
 - **What it is not.** Not a chat-with-your-files product, not a
   vector database with a UI bolted on top, not a production
   release. It is a substrate for surfaces, not a surface itself.
@@ -103,10 +102,6 @@ claims:
   ensure the purge survives a crash / restart. However, SQLite
   FTS5 `DELETE` may leave residual data in shadow tables until
   `OPTIMIZE` or `REBUILD` is run.
-- **SPHINCS+ is a stub.** `crates/crypto/src/sphincs.rs` is a
-  BLAKE3-keyed placeholder so the substrate can keep its
-  co-signing call sites; a real SPHINCS+ backend has not been
-  wired.
 - **Platform shells are partially wired.** The Rust FFI core
   covers evidence, crypto, and memory management; synthesis
   remains `Unavailable`. Wiring the host UIs

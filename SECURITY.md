@@ -44,13 +44,7 @@ The following are honest gaps:
    SQLite FTS5 `DELETE` may leave residual data in shadow tables until
    `OPTIMIZE` or `REBUILD` is run.
 
-2. **SPHINCS+ provenance signer is a BLAKE3 stub.** The module
-   (`crates/crypto/src/sphincs.rs`) mirrors SPHINCS+ key/signature
-   sizes but uses BLAKE3 keyed-hash internally. Production provenance
-   signing uses ML-DSA-65; the SPHINCS+ backup signer is not yet a
-   real hash-based signature scheme.
-
-3. **No live connector traffic.** All connectors consume JSON fixtures.
+2. **No live connector traffic.** All connectors consume JSON fixtures.
    OAuth2 token handling and live API transport are type-surface only.
 
 ## Supported Versions

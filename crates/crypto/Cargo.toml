@@ -30,6 +30,8 @@ zeroize = { workspace = true }
 x25519-dalek = { workspace = true }
 ml-kem = { workspace = true }
 ml-dsa = { workspace = true }
+pqcrypto-sphincsplus = { workspace = true }
+pqcrypto-traits = { workspace = true }
 rand_core = { workspace = true }
 rand = { workspace = true }
 

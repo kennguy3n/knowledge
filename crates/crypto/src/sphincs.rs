@@ -1,47 +1,58 @@
 //! SPHINCS+ stateless backup signer.
 //!
-//! # ⚠ WARNING: STUB IMPLEMENTATION
-//!
-//! This module ships a **BLAKE3-based stub** — NOT a real SPHINCS+
-//! implementation. It mirrors the SPHINCS+ API surface (key sizes,
-//! signature layout, encode/decode) so the rest of the substrate can
-//! code against it, but the cryptographic strength comes from BLAKE3
-//! keyed-hash, not from the SPHINCS+ hash-based signature scheme.
-//! Do **not** rely on this for production-grade post-quantum security
-//! until the stub is replaced with a real SPHINCS+ backend.
+//! Real, production SPHINCS+-SHAKE-128f-simple signatures backed by
+//! [PQClean] via the [`pqcrypto-sphincsplus`] crate (CC0-licensed C
+//! reference implementation wrapped by an MIT/Apache safe Rust
+//! façade). The substrate uses this signer as the *stateless,
+//! hash-based* counterpart to the lattice-based ML-DSA-65 path —
+//! together they form an AND-combiner whose security floor only
+//! falls if **both** primitives are broken.
 //!
 //! Per `docs/DESIGN.md` §9.1 ("Post-quantum signatures"), the substrate
 //! ships **two** quantum-resistant signers side-by-side:
 //!
 //! 1. **ML-DSA-65** ([`crate::signer_backend::MlDsa65Signer`]) — the
 //!    primary signer. Lattice-based, ~3.3 kB signatures.
-//! 2. **SPHINCS+-SHAKE256-128f-simple** (this module) — a *stateless*
+//! 2. **SPHINCS+-SHAKE-128f-simple** (this module) — a *stateless*
 //!    hash-based backup signer for archival or "high-assurance"
 //!    signing where the security-floor must not depend on lattice
-//!    assumptions. Larger signatures (~17 kB) but provably secure
-//!    under hash-function assumptions only.
+//!    assumptions. Larger signatures (17,088 bytes) but provably
+//!    secure under hash-function assumptions only.
 //!
 //! Both are wrapped under the same [`crate::provenance::ProvenanceSigner`]
 //! trait so callers stay algorithm-agnostic. The [`CoSigner`] in this
 //! module emits **dual signatures** (one per algorithm) for archival
 //! group operations — verification requires *both* halves to validate.
 //!
-//! # Crate-dependency status
+//! # Implementation notes
 //!
-//! The current deliverable ships a **stub** implementation that uses
-//! BLAKE3 (already a workspace dep) as the keyed hash core. The
-//! upstream `pqcrypto-sphincsplus` and `sphincsplus` crates pin to
-//! pre-1.0 RustCrypto / liboqs-bindings versions whose ABI has not
-//! stabilised; once one of them ships a 1.0 release we'll swap the
-//! stub for the real implementation behind this same module's public
-//! API. The trait surface, encoded-key transport types, signature
-//! lengths, and test suite are all production-correct — the only
-//! piece that changes when the dep is pinned is the body of
-//! [`SphincsPlusSigner::sign_bytes`] / [`SphincsPlusVerifier::verify_bytes`].
+//! * **Variant.** SPHINCS+-SHAKE-128f-simple is the NIST round-3
+//!   "simple" parameter set at 128-bit security with the "fast"
+//!   tree-height tuning. The PQClean reference implementation is
+//!   public-domain (CC0).
+//! * **Signature size.** 17,088 bytes per signature — large but
+//!   bounded and predictable. Use SPHINCS+ only on the archival
+//!   [`CoSigner`] path, not on per-synthesis provenance (which uses
+//!   ML-DSA-65's ~3.3 kB signatures). See `ARCHITECTURE.md` §8.1 for
+//!   the policy.
+//! * **Key sizes.** Public key 32 B, secret key 64 B (the PQClean
+//!   `SK.seed ‖ SK.prf ‖ PK.seed ‖ PK.root` layout).
+//! * **`unsafe` boundary.** The `pqcrypto-sphincsplus` crate uses
+//!   `unsafe` internally for the C FFI; that's fine — this crate's
+//!   `unsafe_code = "forbid"` lint only governs source code within
+//!   this crate, not transitive dependencies compiled in isolation.
+//! * **Determinism / seeded keygen.** PQClean does not expose
+//!   `crypto_sign_seed_keypair` through the safe Rust façade, so we
+//!   do not advertise a deterministic 32-byte-seed constructor. Use
+//!   [`SphincsPlusSigner::generate`] for fresh keys and
+//!   [`SphincsPlusSigner::decode`] (with the full encoded keypair)
+//!   to restore from storage.
+//!
+//! [PQClean]: https://github.com/PQClean/PQClean
+//! [`pqcrypto-sphincsplus`]: https://docs.rs/pqcrypto-sphincsplus
 
-use blake3::Hasher;
-use rand::rngs::OsRng;
-use rand::RngCore;
+use pqcrypto_sphincsplus::sphincsshake128fsimple as sphincs_inner;
+use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _, SecretKey as _};
 use serde::{Deserialize, Serialize};
 
 use crate::errors::CryptoError;
@@ -51,86 +62,83 @@ use crate::signer_backend::{
     SignerBackend,
 };
 
-/// SPHINCS+-SHAKE256-128f-simple **public** key length, in bytes.
-/// (Pinned to the SPHINCS+ NIST round-3 simple variant.)
-pub const SPHINCS_PLUS_PUBLIC_KEY_LEN: usize = 32;
-
-/// SPHINCS+-SHAKE256-128f-simple **secret** key length, in bytes.
-/// The stub uses 64 bytes (matches the SPHINCS+ "small" parameter set
-/// secret-key size of 64 bytes — sk_seed ‖ sk_prf ‖ pk_seed ‖ pk_root).
-pub const SPHINCS_PLUS_SECRET_KEY_LEN: usize = 64;
-
-/// SPHINCS+-SHAKE256-128f-simple **signature** length, in bytes.
-/// The real algorithm produces 17 088-byte signatures. The current
-/// stub emits a fixed 32-byte BLAKE3 keyed hash so tests can exercise
-/// the trait surface without a 17 kB allocation per signature.
+/// SPHINCS+-SHAKE-128f-simple **public** key length, in bytes.
 ///
-/// **NOTE** — when the real `pqcrypto-sphincsplus` dependency is
-/// pinned, this constant flips to `17_088` and the tests for length
-/// enforcement update accordingly.
-pub const SPHINCS_PLUS_SIGNATURE_LEN: usize = 32;
+/// Sourced from `pqcrypto-sphincsplus`'s `public_key_bytes()` so it
+/// stays in lock-step with the upstream PQClean parameter set. A
+/// `const_assert!` below pins the expected value (32) at compile
+/// time — an upstream bump that changed the parameter set would
+/// surface as a build failure rather than a silent ABI mismatch.
+pub const SPHINCS_PLUS_PUBLIC_KEY_LEN: usize = sphincs_inner::public_key_bytes();
+
+/// SPHINCS+-SHAKE-128f-simple **secret** key length, in bytes.
+///
+/// PQClean stores the secret key as `SK.seed ‖ SK.prf ‖ PK.seed ‖
+/// PK.root` — four 16-byte halves at the 128-bit security level —
+/// yielding 64 bytes total.
+pub const SPHINCS_PLUS_SECRET_KEY_LEN: usize = sphincs_inner::secret_key_bytes();
+
+/// SPHINCS+-SHAKE-128f-simple **signature** length, in bytes (17,088).
+///
+/// This is the fixed detached-signature size emitted by the PQClean
+/// reference implementation; the substrate enforces strict equality
+/// at verification time so a truncated or padded transport blob
+/// cannot pass through unchallenged.
+pub const SPHINCS_PLUS_SIGNATURE_LEN: usize = sphincs_inner::signature_bytes();
+
+// Compile-time guards: catch any upstream bump that silently changes
+// the parameter set. The numeric pins are the NIST round-3 SHAKE-128f-
+// simple values; flipping these requires a deliberate audit.
+const _: () = assert!(SPHINCS_PLUS_PUBLIC_KEY_LEN == 32);
+const _: () = assert!(SPHINCS_PLUS_SECRET_KEY_LEN == 64);
+const _: () = assert!(SPHINCS_PLUS_SIGNATURE_LEN == 17_088);
 
 /// SPHINCS+ algorithm tag carried in [`crate::provenance::SynthesisActivity`]
 /// and audit-log envelopes.
 pub const SPHINCS_PLUS_ALGORITHM_TAG: &str = "sphincs-plus-shake256-128f-simple";
 
-/// SPHINCS+ signing key + verifying key.
+/// SPHINCS+ signing key + verifying key (real PQClean-backed).
 ///
-/// **WARNING: STUB** — uses BLAKE3 keyed-hash, not real SPHINCS+.
-///
-/// Owns the two halves freshly derived from a 32-byte seed. The
-/// public key is the BLAKE3 hash of the seed under a fixed context;
-/// the secret key is the seed itself padded out to the SPHINCS+
-/// secret-key length.
-#[derive(Clone, Debug)]
+/// Owns the two halves emitted by `pqcrypto_sphincsplus::keypair()`.
+/// The wrapper exposes only `&[u8]` views of the key material so
+/// callers can persist / transport the bytes without touching the
+/// FFI types directly.
+#[derive(Clone)]
 pub struct SphincsPlusSigner {
-    secret_key: [u8; SPHINCS_PLUS_SECRET_KEY_LEN],
-    public_key: [u8; SPHINCS_PLUS_PUBLIC_KEY_LEN],
+    secret_key: sphincs_inner::SecretKey,
+    public_key: sphincs_inner::PublicKey,
+}
+
+impl std::fmt::Debug for SphincsPlusSigner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SphincsPlusSigner")
+            .field("algorithm", &SPHINCS_PLUS_ALGORITHM_TAG)
+            .field("public_key_len", &SPHINCS_PLUS_PUBLIC_KEY_LEN)
+            .field("secret_key_len", &SPHINCS_PLUS_SECRET_KEY_LEN)
+            .finish()
+    }
 }
 
 impl SphincsPlusSigner {
-    /// Generate a fresh keypair from the OS RNG.
+    /// Generate a fresh SPHINCS+-SHAKE-128f-simple keypair from the
+    /// PQClean PRNG (which seeds itself from the OS RNG on first
+    /// use).
     pub fn generate() -> Self {
-        let mut seed = [0u8; 32];
-        OsRng.fill_bytes(&mut seed);
-        Self::from_seed(&seed)
-    }
-
-    /// Derive a keypair deterministically from a 32-byte seed. Useful
-    /// for tests + key-rotation routines that wrap the seed under the
-    /// master key.
-    pub fn from_seed(seed: &[u8; 32]) -> Self {
-        let mut secret_key = [0u8; SPHINCS_PLUS_SECRET_KEY_LEN];
-        // sk[0..32]   = sk_seed (the input seed)
-        // sk[32..64]  = sk_prf  (derived as BLAKE3("sphincs-plus:sk_prf:v1", seed))
-        secret_key[..32].copy_from_slice(seed);
-        let mut h = Hasher::new();
-        h.update(b"sphincs-plus:sk_prf:v1");
-        h.update(seed);
-        let prf = h.finalize();
-        secret_key[32..].copy_from_slice(prf.as_bytes());
-
-        let mut h = Hasher::new();
-        h.update(b"sphincs-plus:pk:v1");
-        h.update(seed);
-        let pk_hash = h.finalize();
-        let mut public_key = [0u8; SPHINCS_PLUS_PUBLIC_KEY_LEN];
-        public_key.copy_from_slice(pk_hash.as_bytes());
-
+        let (public_key, secret_key) = sphincs_inner::keypair();
         Self {
             secret_key,
             public_key,
         }
     }
 
-    /// Borrow the public key.
-    pub fn public_key(&self) -> &[u8; SPHINCS_PLUS_PUBLIC_KEY_LEN] {
-        &self.public_key
+    /// Borrow the public key as a byte slice (32 bytes).
+    pub fn public_key(&self) -> &[u8] {
+        self.public_key.as_bytes()
     }
 
-    /// Borrow the secret key.
-    pub fn secret_key(&self) -> &[u8; SPHINCS_PLUS_SECRET_KEY_LEN] {
-        &self.secret_key
+    /// Borrow the secret key as a byte slice (64 bytes).
+    pub fn secret_key(&self) -> &[u8] {
+        self.secret_key.as_bytes()
     }
 
     /// Construct a verifier carrying just the public half.
@@ -143,40 +151,43 @@ impl SphincsPlusSigner {
     /// Encode the keypair for persistence / transport.
     pub fn encode(&self) -> SphincsPlusEncodedKeypair {
         SphincsPlusEncodedKeypair {
-            secret_key: self.secret_key.to_vec(),
-            public_key: self.public_key.to_vec(),
+            secret_key: self.secret_key.as_bytes().to_vec(),
+            public_key: self.public_key.as_bytes().to_vec(),
         }
     }
 
     /// Decode a previously [`Self::encode`]-d keypair, validating
-    /// that the two halves are coherent — the supplied public key
-    /// must match the public key that the secret-key seed derives.
+    /// that the two halves are coherent.
+    ///
+    /// Coherence is verified end-to-end by signing a fixed probe
+    /// message with the decoded secret key and verifying that
+    /// signature with the decoded public key. This catches:
+    ///
+    /// * wrong-length encoded halves (length check up front),
+    /// * a public key spliced from a different keypair (probe
+    ///   signature fails to verify),
+    /// * any silent corruption of the secret-key material that
+    ///   produces structurally-valid bytes but does not sign
+    ///   correctly.
+    ///
+    /// We deliberately do not re-derive the public key from the
+    /// secret-key seed half: PQClean does not expose seeded keygen
+    /// through the safe Rust façade, and an end-to-end probe is
+    /// strictly stronger anyway (it exercises both halves through
+    /// the real `sign` + `verify` paths).
     pub fn decode(encoded: &SphincsPlusEncodedKeypair) -> Result<Self, CryptoError> {
-        if encoded.secret_key.len() != SPHINCS_PLUS_SECRET_KEY_LEN {
-            return Err(CryptoError::ProvenanceSerialisation(
-                "sphincs+: secret key length",
-            ));
-        }
-        if encoded.public_key.len() != SPHINCS_PLUS_PUBLIC_KEY_LEN {
-            return Err(CryptoError::ProvenanceSerialisation(
-                "sphincs+: public key length",
-            ));
-        }
-        let mut secret_key = [0u8; SPHINCS_PLUS_SECRET_KEY_LEN];
-        secret_key.copy_from_slice(&encoded.secret_key);
-        let mut public_key = [0u8; SPHINCS_PLUS_PUBLIC_KEY_LEN];
-        public_key.copy_from_slice(&encoded.public_key);
+        let secret_key = sphincs_inner::SecretKey::from_bytes(&encoded.secret_key)
+            .map_err(|_| CryptoError::ProvenanceSerialisation("sphincs+: secret key length"))?;
+        let public_key = sphincs_inner::PublicKey::from_bytes(&encoded.public_key)
+            .map_err(|_| CryptoError::ProvenanceSerialisation("sphincs+: public key length"))?;
 
-        // Re-derive the public key from the seed half (sk[0..32]) and
-        // require it to match the supplied public key. This is what
-        // catches mismatched encoded halves.
-        let mut seed = [0u8; 32];
-        seed.copy_from_slice(&secret_key[..32]);
-        let expected = Self::from_seed(&seed);
-        if !constant_time_eq(&expected.public_key, &public_key) {
-            return Err(CryptoError::ProvenanceVerification);
-        }
-        if !constant_time_eq(&expected.secret_key, &secret_key) {
+        // End-to-end coherence probe: sign+verify a fixed canonical
+        // message. Any mismatch between the two halves (wrong pk for
+        // this sk, corrupted sk, …) surfaces as a verification
+        // failure rather than a silent key swap.
+        let probe = b"sphincs-plus keypair coherence probe v1";
+        let signature = sphincs_inner::detached_sign(probe, &secret_key);
+        if sphincs_inner::verify_detached_signature(&signature, probe, &public_key).is_err() {
             return Err(CryptoError::ProvenanceVerification);
         }
 
@@ -191,36 +202,49 @@ impl SphincsPlusSigner {
 /// distribute alongside published synthesis objects.
 #[derive(Clone)]
 pub struct SphincsPlusVerifier {
-    public_key: [u8; SPHINCS_PLUS_PUBLIC_KEY_LEN],
+    public_key: sphincs_inner::PublicKey,
 }
 
 impl SphincsPlusVerifier {
     /// Construct a verifier from an encoded verifying key.
     pub fn from_encoded(encoded: &SphincsPlusEncodedVerifyingKey) -> Result<Self, CryptoError> {
-        if encoded.public_key.len() != SPHINCS_PLUS_PUBLIC_KEY_LEN {
-            return Err(CryptoError::ProvenanceSerialisation(
-                "sphincs+: public key length",
-            ));
-        }
-        let mut public_key = [0u8; SPHINCS_PLUS_PUBLIC_KEY_LEN];
-        public_key.copy_from_slice(&encoded.public_key);
+        let public_key = sphincs_inner::PublicKey::from_bytes(&encoded.public_key)
+            .map_err(|_| CryptoError::ProvenanceSerialisation("sphincs+: public key length"))?;
         Ok(Self { public_key })
     }
 
     /// Encode the verifying key for persistence / transport.
     pub fn encode(&self) -> SphincsPlusEncodedVerifyingKey {
         SphincsPlusEncodedVerifyingKey {
-            public_key: self.public_key.to_vec(),
+            public_key: self.public_key.as_bytes().to_vec(),
         }
     }
 
     /// Verify `signature` against `msg`.
+    ///
+    /// Returns `Ok(true)` iff the signature is the canonical 17,088
+    /// bytes and PQClean's detached-signature verifier accepts it
+    /// against `msg` under this public key. Any structural defect
+    /// (wrong length, parser rejection) and any cryptographic
+    /// failure both surface as `Ok(false)` — the trait contract is
+    /// "did this verify?", not "was this well-formed?".
     pub fn verify_bytes(&self, msg: &[u8], signature: &[u8]) -> Result<bool, CryptoError> {
+        // Strict length check up front. PQClean's `from_bytes`
+        // already rejects oversize blobs but accepts undersize ones
+        // by zero-padding, so we enforce equality here to keep the
+        // "truncated signature fails verification" contract.
         if signature.len() != SPHINCS_PLUS_SIGNATURE_LEN {
             return Ok(false);
         }
-        let expected = compute_sphincs_signature(&self.public_key, msg);
-        Ok(constant_time_eq(&expected, signature))
+        let Ok(parsed) = sphincs_inner::DetachedSignature::from_bytes(signature) else {
+            return Ok(false);
+        };
+        // `VerificationError` is `#[non_exhaustive]` upstream, so we
+        // collapse every error variant to "did not verify" rather
+        // than pretending the substrate can distinguish them. Any
+        // failure mode — invalid signature, unknown error, future
+        // variants — surfaces as `Ok(false)`.
+        Ok(sphincs_inner::verify_detached_signature(&parsed, msg, &self.public_key).is_ok())
     }
 
     /// Verify a [`SignedBundle`] under this verifying key.
@@ -230,39 +254,12 @@ impl SphincsPlusVerifier {
     }
 }
 
-fn compute_sphincs_signature(
-    public_key: &[u8; SPHINCS_PLUS_PUBLIC_KEY_LEN],
-    msg: &[u8],
-) -> Vec<u8> {
-    // The stub emits a deterministic, public-key-bound BLAKE3 hash so
-    // the SignerBackend / ProvenanceSigner tests can validate the
-    // round-trip independent of the upstream SPHINCS+ algorithm
-    // implementation. When the real dep is pinned, this body becomes
-    // `pqcrypto::sphincsplus::shake256_128f_simple::sign(msg, sk)`.
-    let mut h = Hasher::new();
-    h.update(b"sphincs-plus:signature:v1");
-    h.update(public_key);
-    h.update(msg);
-    h.finalize().as_bytes().to_vec()
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
-
 /// Wire form of a SPHINCS+ keypair.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SphincsPlusEncodedKeypair {
-    /// Encoded secret key.
+    /// Encoded secret key (64 bytes).
     pub secret_key: Vec<u8>,
-    /// Encoded public verifying key.
+    /// Encoded public verifying key (32 bytes).
     pub public_key: Vec<u8>,
 }
 
@@ -270,13 +267,14 @@ pub struct SphincsPlusEncodedKeypair {
 /// needs to validate signatures).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SphincsPlusEncodedVerifyingKey {
-    /// Encoded public verifying key.
+    /// Encoded public verifying key (32 bytes).
     pub public_key: Vec<u8>,
 }
 
 impl SignerBackend for SphincsPlusSigner {
     fn sign_bytes(&self, msg: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        Ok(compute_sphincs_signature(&self.public_key, msg))
+        let sig = sphincs_inner::detached_sign(msg, &self.secret_key);
+        Ok(sig.as_bytes().to_vec())
     }
 
     fn verify_bytes(&self, msg: &[u8], signature: &[u8]) -> Result<bool, CryptoError> {
@@ -307,7 +305,7 @@ impl ProvenanceSigner for SphincsPlusSigner {
 pub struct CoSignature {
     /// ML-DSA-65 signature bytes.
     pub ml_dsa_65: Vec<u8>,
-    /// SPHINCS+ signature bytes.
+    /// SPHINCS+ signature bytes (17,088 bytes).
     pub sphincs_plus: Vec<u8>,
 }
 
@@ -450,15 +448,6 @@ mod tests {
     }
 
     #[test]
-    fn from_seed_is_deterministic() {
-        let seed = [42u8; 32];
-        let a = SphincsPlusSigner::from_seed(&seed);
-        let b = SphincsPlusSigner::from_seed(&seed);
-        assert_eq!(a.public_key(), b.public_key());
-        assert_eq!(a.secret_key(), b.secret_key());
-    }
-
-    #[test]
     fn round_trip_signs_and_verifies() {
         let signer = SphincsPlusSigner::generate();
         let bundle = fixture_bundle();
@@ -556,6 +545,14 @@ mod tests {
     }
 
     #[test]
+    fn oversize_signature_fails_verification() {
+        let signer = SphincsPlusSigner::generate();
+        let mut signed = signer.sign(fixture_bundle()).expect("sign");
+        signed.signature.0.push(0x42);
+        assert!(!signer.verify(&signed).expect("verify"));
+    }
+
+    #[test]
     fn algorithm_tag_is_pinned() {
         assert_eq!(
             SPHINCS_PLUS_ALGORITHM_TAG,
@@ -616,7 +613,7 @@ mod tests {
     fn signature_lengths_match_pinned_constants() {
         assert_eq!(SPHINCS_PLUS_PUBLIC_KEY_LEN, 32);
         assert_eq!(SPHINCS_PLUS_SECRET_KEY_LEN, 64);
-        assert_eq!(SPHINCS_PLUS_SIGNATURE_LEN, 32);
+        assert_eq!(SPHINCS_PLUS_SIGNATURE_LEN, 17_088);
     }
 
     #[test]

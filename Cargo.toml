@@ -55,6 +55,15 @@ ml-kem = { version = "0.2", features = ["std"] }
 # Post-quantum signatures (FIPS 204 ML-DSA-65 backend)
 ml-dsa = "0.1.0"
 
+# Stateless hash-based post-quantum signatures
+# (SPHINCS+-SHAKE-128f-simple via PQClean).
+# `pqcrypto-sphincsplus` wraps the PQClean C reference implementation
+# behind a safe Rust API; `pqcrypto-traits` carries the shared
+# PublicKey / SecretKey / DetachedSignature trait surface used to
+# round-trip wire bytes.
+pqcrypto-sphincsplus = "0.7"
+pqcrypto-traits = "0.3"
+
 # Storage
 rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl", "blob"] }
 
