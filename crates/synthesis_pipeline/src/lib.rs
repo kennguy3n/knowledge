@@ -33,6 +33,9 @@
 
 #![deny(missing_docs)]
 
+#[cfg(all(feature = "test-support", not(debug_assertions)))]
+compile_error!("test-support must not be enabled in release builds");
+
 pub mod election;
 pub mod error;
 pub mod hierarchy;
