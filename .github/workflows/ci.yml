@@ -91,7 +91,7 @@ jobs:
             target
           key: ${{ runner.os }}-build-release-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-build-release-
-      - run: cargo build --all-targets --release
+      - run: cargo build --release
 
   test-default:
     name: test (default features)
