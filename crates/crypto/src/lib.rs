@@ -32,6 +32,35 @@
 //!   abstracts the two signature backends so [`sphincs::CoSigner`] can
 //!   AND-combine the lattice (ML-DSA-65) and hash-based (SPHINCS+) halves
 //!   without coupling to either implementation.
+//!
+//! # Test-only types (`test-support` feature)
+//!
+//! `CONTRIBUTING.md` requires that test-only types be gated behind
+//! `cfg(any(test, feature = "test-support"))` AND documented in the
+//! crate's top-level doc comment. The `test-support` feature is
+//! declared in `Cargo.toml` as a no-op feature flag (no transitive
+//! dependencies); enabling it exposes the following deterministic
+//! mocks for unit tests, integration tests, fuzzers, and the
+//! `demo` binary:
+//!
+//! * `kem::StubKemBackend` — fixed-output [`KemBackend`] used to
+//!   make hybrid-KEM tests reproducible.
+//! * `provenance::TestSigner` / `provenance::TEST_SIGNER_KEY_LEN` —
+//!   deterministic [`provenance::ProvenanceSigner`] for provenance
+//!   round-trip tests.
+//! * `forgetting::DeterministicEpochKeySource` — deterministic
+//!   [`forgetting::EpochKeySource`] for `EpochManager` rotation
+//!   tests; derives keys as
+//!   `BLAKE3("test-epoch-key" || scope_uuid || epoch_id_le_u64)`.
+//!
+//! The three types above are referenced as plain code spans rather
+//! than intra-doc links because their re-exports are themselves
+//! gated behind `cfg(any(test, feature = "test-support"))`, so the
+//! links would be unresolved under default-features `cargo doc`.
+//!
+//! A `compile_error!` below enforces that `test-support` is never
+//! enabled in release builds, so production binaries cannot
+//! accidentally ship the mocks.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(missing_docs)]
