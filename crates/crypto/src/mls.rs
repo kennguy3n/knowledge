@@ -29,9 +29,12 @@ use sha2::Sha256;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
-use crate::aead::{AeadKey, AEAD_KEY_LEN};
+use crate::aead::{decrypt_aead, encrypt_aead, AeadKey, AeadNonce, AEAD_KEY_LEN, AEAD_NONCE_LEN};
 use crate::errors::CryptoError;
-use crate::hybrid_kem::HybridPublicKey;
+use crate::hybrid_kem::{
+    hybrid_kem_decap, hybrid_kem_encap, HybridCiphertext, HybridPublicKey, HybridSecretKey,
+    HybridSharedSecret,
+};
 use crate::kem::{KemPublicKey, KEM_PUBLIC_KEY_LEN};
 use crate::signer_backend::SignerBackend;
 
@@ -187,6 +190,15 @@ impl MlsCommit {
 
 /// Welcome envelope handed to a freshly-admitted member so they can
 /// reconstruct the group state.
+///
+/// Per `docs/DESIGN.md` §9 the welcome must transport the per-epoch
+/// secret confidentially to a single recipient. The secret (along
+/// with the next ratchet value, so the new member can advance with
+/// future commits) is wrapped under an XChaCha20-Poly1305 AEAD whose
+/// key and nonce are derived from a hybrid X25519 + ML-KEM-768
+/// shared secret that is itself KEM-encapsulated to the new member's
+/// published [`LeafKeyPackage::init_key`]. The wrapped plaintext is
+/// 64 bytes: `epoch_secret (32) || next_ratchet (32)`.
 #[derive(Debug, Clone)]
 pub struct MlsWelcome {
     /// Group the member is being welcomed into.
@@ -195,11 +207,17 @@ pub struct MlsWelcome {
     pub epoch: MlsEpoch,
     /// Roster the new member should see.
     pub roster: Vec<MlsMemberId>,
-    /// Per-epoch secret to bootstrap the new member's view of the
-    /// key schedule. In a full RFC 9420 implementation this would be
-    /// encrypted to the member's leaf init key; here we encode the
-    /// raw 32-byte secret since the registry is in-memory.
-    pub epoch_secret: [u8; AEAD_KEY_LEN],
+    /// Hybrid KEM ciphertext: ephemeral X25519 public key plus
+    /// ML-KEM-768 ciphertext, produced by [`hybrid_kem_encap`] under
+    /// the new member's [`HybridPublicKey`]. Decapsulating with the
+    /// matching [`HybridSecretKey`] recovers the shared secret used
+    /// to derive the welcome AEAD key/nonce.
+    pub kem_ciphertext: HybridCiphertext,
+    /// XChaCha20-Poly1305 ciphertext of `epoch_secret || next_ratchet`
+    /// (64 bytes plaintext) under the welcome AEAD key derived from
+    /// the hybrid KEM shared secret. The 16-byte Poly1305 tag is
+    /// appended by [`encrypt_aead`].
+    pub encrypted_epoch_secret: Vec<u8>,
 }
 
 /// Per-epoch group key schedule. Holds the root secret and the keys
@@ -251,11 +269,14 @@ impl Drop for GroupKeySchedule {
 
 impl Drop for MlsGroup {
     fn drop(&mut self) {
-        // The seed is the root from which every epoch secret is
-        // HKDF-derived; wiping it on drop matches the behaviour of
-        // [`GroupKeySchedule`] and the per-scope/per-epoch DEKs in
-        // [`crate::forgetting`].
-        self.seed.zeroize();
+        // The ratchet is the symmetric secret that, together with the
+        // current epoch, derives the next epoch secret. Wiping it on
+        // drop matches the behaviour of [`GroupKeySchedule`] and the
+        // per-scope/per-epoch DEKs in [`crate::forgetting`], and is
+        // what gives the rest of the design forward secrecy: once a
+        // group is dropped, no past or future epoch secret can be
+        // reconstructed from its in-memory state.
+        self.ratchet.zeroize();
     }
 }
 
@@ -299,24 +320,42 @@ pub struct MlsGroup {
     pub members: BTreeMap<MlsMemberId, LeafKeyPackage>,
     /// Active key schedule for `epoch`.
     pub schedule: GroupKeySchedule,
-    /// Random secret seed used to derive successor-epoch secrets via
-    /// HKDF. Wiped on drop with the schedule.
-    seed: [u8; AEAD_KEY_LEN],
+    /// Current ratchet state — the HKDF output produced by the
+    /// previous epoch's [`ratchet_epoch`] call (or the genesis
+    /// initialiser for epoch 0). On every commit the ratchet is
+    /// consumed to derive `(epoch_secret, next_ratchet)`; the old
+    /// value is then zeroised and replaced with `next_ratchet`. This
+    /// is what gives the group **forward secrecy**: compromising the
+    /// current ratchet does not allow an attacker to recover any
+    /// epoch secret from a previous epoch.
+    ratchet: [u8; AEAD_KEY_LEN],
 }
 
 impl MlsGroup {
     /// Create a new MLS group with `creator` as the only member.
     /// Signs and returns the genesis [`MlsCommit`] alongside the
     /// initialised state.
+    ///
+    /// `initial_ratchet` is the high-entropy seed for the per-epoch
+    /// HKDF ratchet. The genesis derivation consumes it to produce
+    /// epoch 0's secret and the ratchet that will feed epoch 1; the
+    /// caller's copy of `initial_ratchet` is moved into this function
+    /// and immediately overwritten on the stack by the derivation, so
+    /// no group member needs to retain the genesis seed after
+    /// creation.
     pub fn create<S: SignerBackend>(
         signer: &S,
         creator: MlsMemberId,
         creator_leaf: LeafKeyPackage,
-        seed: [u8; AEAD_KEY_LEN],
+        initial_ratchet: [u8; AEAD_KEY_LEN],
     ) -> Result<(Self, MlsCommit), CryptoError> {
         let group_id = MlsGroupId::new_v4();
         let epoch = MlsEpoch::zero();
-        let epoch_secret = derive_epoch_secret(&seed, group_id, epoch)?;
+        let (epoch_secret, next_ratchet) = ratchet_epoch(&initial_ratchet, group_id, epoch)?;
+        // The genesis seed is no longer needed; wipe the local copy
+        // so a single ratchet state remains in memory.
+        let mut initial_ratchet = initial_ratchet;
+        initial_ratchet.zeroize();
         let schedule = derive_schedule(group_id, epoch, epoch_secret)?;
 
         let mut members = BTreeMap::new();
@@ -341,7 +380,7 @@ impl MlsGroup {
                 epoch,
                 members,
                 schedule,
-                seed,
+                ratchet: next_ratchet,
             },
             commit,
         ))
@@ -399,8 +438,16 @@ impl MlsGroup {
     }
 
     /// Apply `commit` to the group state. Verifies the signature
-    /// using `verifier`, updates the roster and bumps the epoch, then
+    /// using `verifier`, checks roster authorisation, updates the
+    /// roster and bumps the epoch, then advances the ratchet and
     /// derives a fresh [`GroupKeySchedule`].
+    ///
+    /// The ratchet advance is the per-epoch forward-secrecy step: it
+    /// consumes the current ratchet to derive `(epoch_secret,
+    /// next_ratchet)`, zeroises the previous ratchet, and stores
+    /// `next_ratchet`. After a successful `process_commit`, the only
+    /// way to recompute the new epoch secret is to know the previous
+    /// ratchet value, which has been wiped.
     pub fn process_commit<V: SignerBackend>(
         &mut self,
         commit: &MlsCommit,
@@ -423,6 +470,17 @@ impl MlsGroup {
         if matches!(commit.operation, CommitOperation::Create { .. }) {
             return Err(CryptoError::ProvenanceSerialisation(
                 "Create commits cannot be processed on an existing group",
+            ));
+        }
+        // Roster-based authorisation: a valid signature alone is not
+        // sufficient — the committer must currently be a member of
+        // the group. Without this check a former member (or any
+        // party holding a signing key recognised by `verifier`)
+        // could forge state transitions on a group they no longer
+        // belong to.
+        if !self.members.contains_key(&commit.committed_by) {
+            return Err(CryptoError::ProvenanceSerialisation(
+                "committer is not a group member",
             ));
         }
         if commit.epoch != self.epoch.next() {
@@ -458,19 +516,133 @@ impl MlsGroup {
             }
         }
         self.epoch = commit.epoch;
-        let secret = derive_epoch_secret(&self.seed, self.group_id, self.epoch)?;
-        self.schedule = derive_schedule(self.group_id, self.epoch, secret)?;
+        // Advance the ratchet: derive the new epoch's secret AND the
+        // next ratchet value from the current ratchet, then zeroise
+        // the consumed ratchet and replace it with `next_ratchet`.
+        let (epoch_secret, next_ratchet) = ratchet_epoch(&self.ratchet, self.group_id, self.epoch)?;
+        self.ratchet.zeroize();
+        self.ratchet = next_ratchet;
+        self.schedule = derive_schedule(self.group_id, self.epoch, epoch_secret)?;
         Ok(())
     }
 
-    /// Build a [`MlsWelcome`] envelope for a freshly added member.
-    pub fn build_welcome(&self, _added: MlsMemberId) -> MlsWelcome {
-        MlsWelcome {
+    /// Build a [`MlsWelcome`] envelope for `added`, encrypting the
+    /// epoch secret and the current ratchet under a hybrid X25519 +
+    /// ML-KEM-768 KEM to the added member's published init key.
+    ///
+    /// The caller MUST have installed `added`'s real
+    /// [`LeafKeyPackage`] via [`install_leaf`] before calling this —
+    /// otherwise we would be encapsulating to an all-zero placeholder
+    /// hybrid public key, silently breaking the welcome's
+    /// confidentiality. Such calls are rejected with
+    /// [`CryptoError::ProvenanceSerialisation`].
+    pub fn build_welcome(&self, added: MlsMemberId) -> Result<MlsWelcome, CryptoError> {
+        let leaf = self
+            .members
+            .get(&added)
+            .ok_or(CryptoError::ProvenanceSerialisation(
+                "added member is not in the current roster",
+            ))?;
+        if is_placeholder_hybrid_pk(&leaf.init_key) {
+            return Err(CryptoError::ProvenanceSerialisation(
+                "added member's init_key is a placeholder; install_leaf with the real key package first",
+            ));
+        }
+
+        // Hybrid KEM-encapsulate to the new member's init key. The
+        // returned shared secret is used as IKM for the welcome AEAD
+        // key + nonce derivation; only the holder of the matching
+        // hybrid secret key can recover it.
+        let (shared, kem_ciphertext) = hybrid_kem_encap(&leaf.init_key)?;
+
+        let (aead_key, aead_nonce) =
+            derive_welcome_aead_material(&shared, self.group_id, self.epoch)?;
+        let aad = welcome_aad(self.group_id, self.epoch);
+
+        // Plaintext = epoch_secret || ratchet, so the new member can
+        // both decrypt the current epoch AND advance the ratchet on
+        // the next commit (otherwise they would be stuck at the join
+        // epoch). Both halves are 32 bytes; the concatenation never
+        // leaves this function as plaintext.
+        let mut plaintext = [0u8; AEAD_KEY_LEN * 2];
+        plaintext[..AEAD_KEY_LEN].copy_from_slice(self.schedule.epoch_secret());
+        plaintext[AEAD_KEY_LEN..].copy_from_slice(&self.ratchet);
+        let ciphertext = encrypt_aead(&aead_key, &aead_nonce, &plaintext, &aad);
+        plaintext.zeroize();
+        let encrypted_epoch_secret = ciphertext?;
+
+        Ok(MlsWelcome {
             group_id: self.group_id,
             epoch: self.epoch,
             roster: self.members.keys().copied().collect(),
-            epoch_secret: *self.schedule.epoch_secret(),
+            kem_ciphertext,
+            encrypted_epoch_secret,
+        })
+    }
+
+    /// Bootstrap a fresh [`MlsGroup`] from `welcome` using the new
+    /// member's hybrid secret key.
+    ///
+    /// The function decapsulates the hybrid KEM ciphertext to recover
+    /// the shared secret, derives the welcome AEAD key/nonce from it,
+    /// decrypts the wrapped `epoch_secret || ratchet` plaintext, and
+    /// reconstructs the [`GroupKeySchedule`] and ratchet state.
+    /// Roster members other than the new member receive placeholder
+    /// leaves — the caller is expected to install real
+    /// [`LeafKeyPackage`]s via [`install_leaf`] as it learns them,
+    /// matching the existing `process_commit` Add behaviour.
+    pub fn process_welcome(
+        welcome: &MlsWelcome,
+        init_sk: &HybridSecretKey,
+    ) -> Result<Self, CryptoError> {
+        let shared = hybrid_kem_decap(init_sk, &welcome.kem_ciphertext)?;
+        let (aead_key, aead_nonce) =
+            derive_welcome_aead_material(&shared, welcome.group_id, welcome.epoch)?;
+        let aad = welcome_aad(welcome.group_id, welcome.epoch);
+
+        let mut plaintext = decrypt_aead(
+            &aead_key,
+            &aead_nonce,
+            &welcome.encrypted_epoch_secret,
+            &aad,
+        )?;
+        if plaintext.len() != AEAD_KEY_LEN * 2 {
+            // Wipe before erroring so we never leak partial state.
+            plaintext.zeroize();
+            return Err(CryptoError::ProvenanceSerialisation(
+                "welcome plaintext has unexpected length",
+            ));
         }
+        let mut epoch_secret = [0u8; AEAD_KEY_LEN];
+        let mut ratchet = [0u8; AEAD_KEY_LEN];
+        epoch_secret.copy_from_slice(&plaintext[..AEAD_KEY_LEN]);
+        ratchet.copy_from_slice(&plaintext[AEAD_KEY_LEN..]);
+        plaintext.zeroize();
+
+        let schedule = derive_schedule(welcome.group_id, welcome.epoch, epoch_secret)?;
+
+        // Reconstruct the roster with placeholder leaves; real
+        // [`LeafKeyPackage`]s are installed via [`install_leaf`].
+        let mut members = BTreeMap::new();
+        for id in &welcome.roster {
+            members.insert(
+                *id,
+                LeafKeyPackage {
+                    member_id: *id,
+                    init_key: placeholder_hybrid_pk(),
+                    created_at: Utc::now(),
+                    cipher_suite: "x25519+mlkem768/aes256-gcm/sha256/ed25519-or-mldsa65",
+                },
+            );
+        }
+
+        Ok(Self {
+            group_id: welcome.group_id,
+            epoch: welcome.epoch,
+            members,
+            schedule,
+            ratchet,
+        })
     }
 
     /// Patch a known leaf key package into the roster (used after
@@ -480,21 +652,84 @@ impl MlsGroup {
     }
 }
 
-/// Derive the 32-byte epoch secret from `(seed, group_id, epoch)`.
-fn derive_epoch_secret(
-    seed: &[u8; AEAD_KEY_LEN],
+/// Per-epoch HKDF ratchet step.
+///
+/// Given the current `ratchet` (the HKDF output produced by the
+/// previous epoch's call to this function, or the genesis initialiser
+/// for epoch 0), this derives **two** 32-byte outputs:
+///
+/// * `epoch_secret` — the root of the [`GroupKeySchedule`] for the
+///   epoch being entered.
+/// * `next_ratchet` — the value the group must store and consume on
+///   the next commit. The current `ratchet` is logically destroyed
+///   after this call: the caller MUST zeroise it before retaining
+///   `next_ratchet`.
+///
+/// `(group_id, epoch)` is bound into the HKDF `info` so that key
+/// material is keyed to a specific group and epoch — no two epochs
+/// (within the same or across groups) can ever produce the same
+/// outputs even if they accidentally shared a ratchet value.
+fn ratchet_epoch(
+    ratchet: &[u8; AEAD_KEY_LEN],
     group_id: MlsGroupId,
     epoch: MlsEpoch,
-) -> Result<[u8; AEAD_KEY_LEN], CryptoError> {
-    let salt = b"knowledge-mls-epoch-secret-v1";
-    let hk = Hkdf::<Sha256>::new(Some(salt), seed);
+) -> Result<([u8; AEAD_KEY_LEN], [u8; AEAD_KEY_LEN]), CryptoError> {
+    let hk = Hkdf::<Sha256>::new(Some(b"knowledge-mls-ratchet-v2"), ratchet);
     let mut info = Vec::with_capacity(16 + 8);
     info.extend_from_slice(group_id.0.as_bytes());
     info.extend_from_slice(&epoch.0.to_be_bytes());
-    let mut out = [0u8; AEAD_KEY_LEN];
-    hk.expand(&info, &mut out)
+
+    let mut epoch_secret = [0u8; AEAD_KEY_LEN];
+    let mut next_ratchet = [0u8; AEAD_KEY_LEN];
+    // The labels `info || "…"` keep the two outputs domain-separated
+    // — recovering one of them tells an attacker nothing about the
+    // other, even though both are expanded from the same PRK.
+    let mut info_epoch = info.clone();
+    info_epoch.extend_from_slice(b"|epoch-secret");
+    let mut info_next = info;
+    info_next.extend_from_slice(b"|next-ratchet");
+    hk.expand(&info_epoch, &mut epoch_secret)
         .map_err(|_| CryptoError::KeyDerivation("HKDF expand epoch-secret failed"))?;
-    Ok(out)
+    hk.expand(&info_next, &mut next_ratchet)
+        .map_err(|_| CryptoError::KeyDerivation("HKDF expand next-ratchet failed"))?;
+    Ok((epoch_secret, next_ratchet))
+}
+
+/// Derive the welcome AEAD key and nonce from the hybrid KEM shared
+/// secret, binding `(group_id, epoch)` into the derivation so that a
+/// captured welcome cannot be replayed against a different epoch.
+fn derive_welcome_aead_material(
+    shared: &HybridSharedSecret,
+    group_id: MlsGroupId,
+    epoch: MlsEpoch,
+) -> Result<(AeadKey, AeadNonce), CryptoError> {
+    let hk = Hkdf::<Sha256>::new(Some(b"knowledge-mls-welcome-v2"), shared);
+    let mut info = Vec::with_capacity(16 + 8);
+    info.extend_from_slice(group_id.0.as_bytes());
+    info.extend_from_slice(&epoch.0.to_be_bytes());
+    let mut key_info = info.clone();
+    key_info.extend_from_slice(b"|aead-key");
+    let mut nonce_info = info;
+    nonce_info.extend_from_slice(b"|aead-nonce");
+
+    let mut key = [0u8; AEAD_KEY_LEN];
+    let mut nonce = [0u8; AEAD_NONCE_LEN];
+    hk.expand(&key_info, &mut key)
+        .map_err(|_| CryptoError::KeyDerivation("HKDF expand welcome-aead-key failed"))?;
+    hk.expand(&nonce_info, &mut nonce)
+        .map_err(|_| CryptoError::KeyDerivation("HKDF expand welcome-aead-nonce failed"))?;
+    Ok((key, nonce))
+}
+
+/// AAD bound into the welcome AEAD: a versioned tag plus the group
+/// id and epoch the welcome is for. Distinct from the AEAD key/nonce
+/// info labels so cross-protocol confusion is impossible.
+fn welcome_aad(group_id: MlsGroupId, epoch: MlsEpoch) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(b"knowledge-mls-welcome-v2|".len() + 16 + 8);
+    aad.extend_from_slice(b"knowledge-mls-welcome-v2|");
+    aad.extend_from_slice(group_id.0.as_bytes());
+    aad.extend_from_slice(&epoch.0.to_be_bytes());
+    aad
 }
 
 /// Construct an all-zero placeholder hybrid public key. Used when a
@@ -505,6 +740,14 @@ fn placeholder_hybrid_pk() -> HybridPublicKey {
         x25519: [0u8; 32],
         mlkem768,
     }
+}
+
+/// Detect the all-zero placeholder hybrid public key inserted by
+/// `process_commit` for an Add before the real leaf key package is
+/// delivered. Used by [`MlsGroup::build_welcome`] to refuse to issue
+/// a welcome encapsulated to zeros.
+fn is_placeholder_hybrid_pk(pk: &HybridPublicKey) -> bool {
+    pk.x25519.iter().all(|b| *b == 0) && pk.mlkem768.iter().all(|b| *b == 0)
 }
 
 #[cfg(test)]
@@ -519,11 +762,27 @@ mod tests {
         LeafKeyPackage::new(member_id, pk)
     }
 
+    /// Like [`fresh_leaf`] but generated with the **real**
+    /// `MlKem768Backend` (the default backend used by
+    /// [`hybrid_kem_encap`]) and retains the hybrid secret key. The
+    /// welcome-decryption tests need a real keypair because the stub
+    /// backend's public keys are not interoperable with real
+    /// encapsulation; only a real keypair will round-trip through
+    /// [`build_welcome`] -> [`process_welcome`].
+    fn fresh_leaf_with_sk(member_id: MlsMemberId) -> (LeafKeyPackage, HybridSecretKey) {
+        let (pk, sk) = crate::hybrid_kem::hybrid_keypair().expect("keypair");
+        (LeafKeyPackage::new(member_id, pk), sk)
+    }
+
     fn signer() -> MlDsa65Signer {
         MlDsa65Signer::generate()
     }
 
-    fn fixed_seed() -> [u8; AEAD_KEY_LEN] {
+    /// Deterministic 32-byte initial ratchet for tests. The genesis
+    /// derivation consumes this and produces epoch 0's secret plus
+    /// the ratchet that feeds epoch 1 — the value here is never
+    /// retained on the group after `MlsGroup::create` returns.
+    fn fixed_initial_ratchet() -> [u8; AEAD_KEY_LEN] {
         let mut seed = [0u8; AEAD_KEY_LEN];
         for (i, b) in seed.iter_mut().enumerate() {
             *b = u8::try_from(i).expect("AEAD_KEY_LEN fits in u8");
@@ -536,7 +795,8 @@ mod tests {
         let s = signer();
         let creator = MlsMemberId::new_v4();
         let leaf = fresh_leaf(creator);
-        let (group, commit) = MlsGroup::create(&s, creator, leaf, fixed_seed()).expect("create");
+        let (group, commit) =
+            MlsGroup::create(&s, creator, leaf, fixed_initial_ratchet()).expect("create");
         assert_eq!(group.epoch, MlsEpoch::zero());
         assert_eq!(group.members.len(), 1);
         assert_eq!(commit.epoch, MlsEpoch::zero());
@@ -549,7 +809,7 @@ mod tests {
         let s = signer();
         let creator = MlsMemberId::new_v4();
         let (mut group, _genesis) =
-            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_seed()).unwrap();
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
         let new_id = MlsMemberId::new_v4();
         let leaf = fresh_leaf(new_id);
         let commit = group.add_member(&s, creator, leaf.clone()).unwrap();
@@ -565,7 +825,7 @@ mod tests {
         let s = signer();
         let creator = MlsMemberId::new_v4();
         let (mut group, _) =
-            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_seed()).unwrap();
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
         let new_id = MlsMemberId::new_v4();
         let leaf = fresh_leaf(new_id);
         let add = group.add_member(&s, creator, leaf.clone()).unwrap();
@@ -583,7 +843,7 @@ mod tests {
         let s = signer();
         let creator = MlsMemberId::new_v4();
         let (mut group, _) =
-            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_seed()).unwrap();
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
         let secret_genesis = *group.schedule.epoch_secret();
         let key_genesis = group.schedule.shared_memory_key;
         let new_id = MlsMemberId::new_v4();
@@ -601,7 +861,7 @@ mod tests {
         let s = signer();
         let creator = MlsMemberId::new_v4();
         let (mut group, _) =
-            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_seed()).unwrap();
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
         let new_id = MlsMemberId::new_v4();
         let leaf = fresh_leaf(new_id);
         let mut bad = group.add_member(&s, creator, leaf).unwrap();
@@ -615,7 +875,7 @@ mod tests {
         let s = signer();
         let creator = MlsMemberId::new_v4();
         let (mut group, _) =
-            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_seed()).unwrap();
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
         let new_id = MlsMemberId::new_v4();
         let leaf = fresh_leaf(new_id);
         let mut commit = group.add_member(&s, creator, leaf).unwrap();
@@ -631,12 +891,49 @@ mod tests {
     fn welcome_carries_current_state() {
         let s = signer();
         let creator = MlsMemberId::new_v4();
-        let (group, _) = MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_seed()).unwrap();
-        let welcome = group.build_welcome(creator);
+        let (group, _) =
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
+        let welcome = group.build_welcome(creator).expect("welcome");
         assert_eq!(welcome.group_id, group.group_id);
         assert_eq!(welcome.epoch, group.epoch);
         assert_eq!(welcome.roster, vec![creator]);
-        assert_eq!(welcome.epoch_secret, *group.schedule.epoch_secret());
+        // Wrapped material is non-empty and the ciphertext is at
+        // least the plaintext length (64 bytes) plus a 16-byte
+        // Poly1305 tag.
+        assert_eq!(welcome.encrypted_epoch_secret.len(), AEAD_KEY_LEN * 2 + 16);
+        // KEM ciphertext carries a non-zero ephemeral X25519 public
+        // key and a non-zero ML-KEM-768 ciphertext.
+        assert!(welcome
+            .kem_ciphertext
+            .x25519_eph_pub
+            .iter()
+            .any(|b| *b != 0));
+        assert!(welcome.kem_ciphertext.mlkem768_ct.iter().any(|b| *b != 0));
+    }
+
+    #[test]
+    fn build_welcome_rejects_placeholder_init_key() {
+        // A welcome cannot be issued before the added member's real
+        // leaf is installed — otherwise we would KEM-encap to the
+        // all-zero placeholder hybrid public key, breaking welcome
+        // confidentiality.
+        let s = signer();
+        let creator = MlsMemberId::new_v4();
+        let (mut group, _) =
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
+        let new_id = MlsMemberId::new_v4();
+        let leaf = fresh_leaf(new_id);
+        let add = group.add_member(&s, creator, leaf.clone()).unwrap();
+        group.process_commit(&add, &s).unwrap();
+        // NOTE: we deliberately skip `install_leaf` so the new
+        // member's stored leaf is still the placeholder.
+        let err = group.build_welcome(new_id).unwrap_err();
+        assert!(matches!(
+            err,
+            CryptoError::ProvenanceSerialisation(
+                "added member's init_key is a placeholder; install_leaf with the real key package first"
+            )
+        ));
     }
 
     #[test]
@@ -644,7 +941,7 @@ mod tests {
         let s = signer();
         let creator = MlsMemberId::new_v4();
         let (_group, commit) =
-            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_seed()).unwrap();
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
         assert_eq!(commit.signing_payload(), commit.signing_payload());
     }
 
@@ -662,7 +959,7 @@ mod tests {
         let s = signer();
         let creator = MlsMemberId::new_v4();
         let (mut group, genesis) =
-            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_seed()).unwrap();
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
         // Re-process the genesis Create commit on the live group.
         let err = group.process_commit(&genesis, &s).unwrap_err();
         assert!(matches!(
@@ -680,10 +977,188 @@ mod tests {
     fn member_already_in_group_rejects_add() {
         let s = signer();
         let creator = MlsMemberId::new_v4();
-        let (group, _) = MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_seed()).unwrap();
+        let (group, _) =
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
         let err = group
             .add_member(&s, creator, fresh_leaf(creator))
             .unwrap_err();
         assert!(matches!(err, CryptoError::ProvenanceSerialisation(_)));
+    }
+
+    /// Forward secrecy: once the ratchet has advanced, the
+    /// epoch_secret for any previous epoch cannot be reconstructed
+    /// from the current ratchet state. We advance the group through
+    /// three commits and verify that the resulting ratchet, fed
+    /// through `ratchet_epoch` at *any* prior epoch number, produces
+    /// secrets that do NOT match the captured historical secrets.
+    #[test]
+    fn epoch_secret_cannot_be_recovered_after_ratchet_advance() {
+        let s = signer();
+        let creator = MlsMemberId::new_v4();
+        let (mut group, _) =
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
+        let group_id = group.group_id;
+
+        // Snapshot epoch 0's secret.
+        let secret_epoch_0 = *group.schedule.epoch_secret();
+
+        // Add a member → epoch 1.
+        let m1 = MlsMemberId::new_v4();
+        let l1 = fresh_leaf(m1);
+        let c1 = group.add_member(&s, creator, l1.clone()).unwrap();
+        group.process_commit(&c1, &s).unwrap();
+        group.install_leaf(l1);
+        let secret_epoch_1 = *group.schedule.epoch_secret();
+
+        // Add another member → epoch 2.
+        let m2 = MlsMemberId::new_v4();
+        let l2 = fresh_leaf(m2);
+        let c2 = group.add_member(&s, creator, l2.clone()).unwrap();
+        group.process_commit(&c2, &s).unwrap();
+        group.install_leaf(l2);
+        let secret_epoch_2 = *group.schedule.epoch_secret();
+
+        // Add another member → epoch 3.
+        let m3 = MlsMemberId::new_v4();
+        let l3 = fresh_leaf(m3);
+        let c3 = group.add_member(&s, creator, l3.clone()).unwrap();
+        group.process_commit(&c3, &s).unwrap();
+        group.install_leaf(l3);
+        let secret_epoch_3 = *group.schedule.epoch_secret();
+
+        // All four epoch secrets are distinct.
+        assert_ne!(secret_epoch_0, secret_epoch_1);
+        assert_ne!(secret_epoch_1, secret_epoch_2);
+        assert_ne!(secret_epoch_2, secret_epoch_3);
+        assert_ne!(secret_epoch_0, secret_epoch_2);
+        assert_ne!(secret_epoch_0, secret_epoch_3);
+        assert_ne!(secret_epoch_1, secret_epoch_3);
+
+        // The post-epoch-3 ratchet is what the group currently
+        // holds. Even if an attacker exfiltrates it, they cannot
+        // re-derive any prior epoch's secret — not by running
+        // `ratchet_epoch` at the prior epoch number, not by running
+        // it at the current epoch number, not at any epoch number.
+        let compromised = group.ratchet;
+        for epoch in 0u64..=4 {
+            let (candidate, _) = ratchet_epoch(&compromised, group_id, MlsEpoch(epoch)).unwrap();
+            assert_ne!(
+                candidate, secret_epoch_0,
+                "epoch 0 secret recovered from post-epoch-3 ratchet at epoch {epoch}",
+            );
+            assert_ne!(
+                candidate, secret_epoch_1,
+                "epoch 1 secret recovered from post-epoch-3 ratchet at epoch {epoch}",
+            );
+            assert_ne!(
+                candidate, secret_epoch_2,
+                "epoch 2 secret recovered from post-epoch-3 ratchet at epoch {epoch}",
+            );
+            assert_ne!(
+                candidate, secret_epoch_3,
+                "epoch 3 secret recovered from post-epoch-3 ratchet at epoch {epoch}",
+            );
+        }
+    }
+
+    /// Confidentiality: the wrapped welcome plaintext can be
+    /// recovered only by the holder of the hybrid secret key matching
+    /// the added member's [`LeafKeyPackage::init_key`]. An attacker
+    /// holding any *other* hybrid secret key cannot read the
+    /// `epoch_secret || ratchet` payload.
+    #[test]
+    fn welcome_epoch_secret_requires_member_secret_key() {
+        let s = signer();
+        let creator = MlsMemberId::new_v4();
+        let (mut group, _) =
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
+        let new_id = MlsMemberId::new_v4();
+        let (new_leaf, new_sk) = fresh_leaf_with_sk(new_id);
+        let add = group.add_member(&s, creator, new_leaf.clone()).unwrap();
+        group.process_commit(&add, &s).unwrap();
+        group.install_leaf(new_leaf);
+        let welcome = group.build_welcome(new_id).expect("welcome");
+
+        // The intended member CAN decrypt and the bootstrap recovers
+        // exactly the current epoch secret + ratchet held by the
+        // originating group.
+        let bootstrapped = MlsGroup::process_welcome(&welcome, &new_sk).expect("process_welcome");
+        assert_eq!(bootstrapped.group_id, group.group_id);
+        assert_eq!(bootstrapped.epoch, group.epoch);
+        assert_eq!(
+            bootstrapped.schedule.epoch_secret(),
+            group.schedule.epoch_secret(),
+        );
+        // The bootstrapped derived keys match too, because they are
+        // a deterministic HKDF of the epoch secret.
+        assert_eq!(
+            bootstrapped.schedule.shared_memory_key,
+            group.schedule.shared_memory_key,
+        );
+        assert_eq!(bootstrapped.ratchet, group.ratchet);
+
+        // A different (real-backend) hybrid secret key cannot
+        // recover the payload. We use the real backend here too so
+        // the decap call itself succeeds structurally — what must
+        // fail is the AEAD authentication step after the wrong
+        // shared secret is recovered.
+        let (_pk_other, sk_other) = crate::hybrid_kem::hybrid_keypair().expect("keypair");
+        let err = MlsGroup::process_welcome(&welcome, &sk_other).expect_err("foreign sk must fail");
+        assert!(
+            matches!(err, CryptoError::AeadDecryption),
+            "unexpected error variant: {err:?}",
+        );
+    }
+
+    /// Authorisation: a commit signed by a party who is not a
+    /// current roster member must be rejected, even when the
+    /// signature itself verifies under the supplied verifier.
+    #[test]
+    fn non_member_commit_is_rejected() {
+        let s = signer();
+        let creator = MlsMemberId::new_v4();
+        let (mut group, _) =
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
+
+        // Forge a well-formed Add commit whose `committed_by` is a
+        // brand-new, never-admitted member id. The commit is signed
+        // with `s` (whose public half `verifier` recognises), so the
+        // signature DOES verify — the only reason to reject is the
+        // roster check.
+        let outsider = MlsMemberId::new_v4();
+        let added = MlsMemberId::new_v4();
+        let leaf = fresh_leaf(added);
+        // Reuse `add_member`'s signing path by manually building
+        // the commit with `committed_by = outsider`.
+        let mut commit = MlsCommit {
+            group_id: group.group_id,
+            epoch: group.epoch.next(),
+            operation: CommitOperation::Add {
+                added: leaf.member_id,
+            },
+            committed_by: outsider,
+            committed_at: Utc::now(),
+            signature: Vec::new(),
+        };
+        commit.signature = s.sign_bytes(&commit.signing_payload()).unwrap();
+
+        // Sanity: the signature alone DOES verify against `s`.
+        assert!(s
+            .verify_bytes(&commit.signing_payload(), &commit.signature)
+            .unwrap());
+
+        // But `process_commit` rejects because `outsider` is not in
+        // the current roster.
+        let err = group.process_commit(&commit, &s).unwrap_err();
+        assert!(matches!(
+            err,
+            CryptoError::ProvenanceSerialisation("committer is not a group member")
+        ));
+
+        // Group state is unchanged.
+        assert_eq!(group.epoch, MlsEpoch::zero());
+        assert_eq!(group.members.len(), 1);
+        assert!(!group.members.contains_key(&added));
+        assert!(!group.members.contains_key(&outsider));
     }
 }
