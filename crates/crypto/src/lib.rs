@@ -17,9 +17,21 @@
 //!   concatenate-then-KDF combiner (`HKDF-SHA256`) — both halves are
 //!   real, post-quantum ML-KEM-768 is provided by the `ml-kem` RustCrypto
 //!   crate.
+//! * **ML-DSA-65** (FIPS 204 lattice signatures) for per-synthesis
+//!   provenance, backed by the `ml-dsa` RustCrypto crate with
+//!   `ZeroizeOnDrop` on long-lived secret-key state. See
+//!   [`signer_backend::MlDsa65Signer`].
+//! * **SPHINCS+-SHAKE-128f-simple** (stateless hash-based signatures)
+//!   for the archival AND-combiner co-signing path, backed by the
+//!   PQClean reference implementation via the `pqcrypto-sphincsplus`
+//!   crate, with zeroize-on-drop on long-lived secret-key state. See
+//!   [`sphincs::SphincsPlusSigner`] and [`sphincs::CoSigner`].
 //! * A [`KemBackend`] trait so the ML-KEM-768 side can be swapped for an
 //!   FFI-backed implementation (`liboqs`) later without touching the rest
-//!   of the substrate.
+//!   of the substrate. A [`signer_backend::SignerBackend`] trait
+//!   abstracts the two signature backends so [`sphincs::CoSigner`] can
+//!   AND-combine the lattice (ML-DSA-65) and hash-based (SPHINCS+) halves
+//!   without coupling to either implementation.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(missing_docs)]
