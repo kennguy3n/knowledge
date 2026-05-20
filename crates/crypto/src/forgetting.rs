@@ -705,10 +705,22 @@ pub struct DeterministicEpochKeySource;
 
 impl EpochKeySource for DeterministicEpochKeySource {
     fn derive(&mut self, scope: ScopeId, epoch: EpochId) -> AeadKey {
-        let mut buf = Vec::with_capacity(8 + 16 + 8);
-        buf.extend_from_slice(b"test-epoch-key");
-        buf.extend_from_slice(scope.0.as_bytes());
-        buf.extend_from_slice(&epoch.0.to_le_bytes());
+        // Derive the buffer capacity from the same slices that are
+        // about to be written so the two cannot drift apart if the
+        // prefix literal ever changes. The previous hard-coded
+        // `Vec::with_capacity(8 + 16 + 8)` under-allocated by 6
+        // bytes because `b"test-epoch-key"` is 14 bytes, not 8 —
+        // causing exactly one heap reallocation on every key
+        // derivation. Test-only path, so no security or
+        // correctness impact, just a wasted alloc.
+        let prefix: &[u8] = b"test-epoch-key";
+        let scope_bytes = scope.0.as_bytes();
+        let epoch_bytes = epoch.0.to_le_bytes();
+        let mut buf =
+            Vec::with_capacity(prefix.len() + scope_bytes.len() + epoch_bytes.len());
+        buf.extend_from_slice(prefix);
+        buf.extend_from_slice(scope_bytes);
+        buf.extend_from_slice(&epoch_bytes);
         let hash = blake3::hash(&buf);
         let mut out = [0u8; AEAD_KEY_LEN];
         out.copy_from_slice(&hash.as_bytes()[..AEAD_KEY_LEN]);
