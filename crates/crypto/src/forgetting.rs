@@ -434,14 +434,6 @@ pub fn destroy_scope_dek(
     }
     let now = Utc::now();
     let mut events = Vec::new();
-    // Every distinct epoch we tombstone in this call. Used to drive
-    // the `TombstoneStore::persist_tombstone` calls below — the
-    // store implementation is responsible for deduplicating against
-    // any rows already on disk (via `INSERT OR IGNORE` on the
-    // production SQLCipher path), so we just collect the in-memory
-    // set without any pre-filtering against `registry.tombstones`.
-    let mut destroyed_epochs: std::collections::BTreeSet<EpochId> =
-        std::collections::BTreeSet::new();
 
     if let Some(mut dek) = registry.scope_deks.remove(&scope) {
         let was_destroyed = dek.is_destroyed();
@@ -455,7 +447,6 @@ pub fn destroy_scope_dek(
                 destroyed_at: now,
             });
             registry.tombstones.insert((scope, epoch), now);
-            destroyed_epochs.insert(epoch);
         }
     }
 
@@ -477,7 +468,6 @@ pub fn destroy_scope_dek(
                     destroyed_at: now,
                 });
                 registry.tombstones.insert(key, now);
-                destroyed_epochs.insert(key.1);
             }
         }
     }
@@ -485,8 +475,22 @@ pub fn destroy_scope_dek(
     registry.forgotten_scopes.insert(scope, now);
 
     if let Some(store) = tombstone_store {
-        for epoch_id in destroyed_epochs {
-            store.persist_tombstone(scope, epoch_id, now)?;
+        // Persist every in-memory tombstone for this scope — including
+        // ones whose DEK was destroyed by an earlier call that ran
+        // with `tombstone_store = None`. Filtering to "only the
+        // epochs destroyed in this call" would silently leak the
+        // pre-existing tombstones to disk-loss on the next restart.
+        // The store is responsible for deduplicating against rows
+        // already on disk (the production SQLCipher path uses
+        // `INSERT OR IGNORE`), so re-persisting an existing tombstone
+        // is cheap and idempotent.
+        let scope_tombstones: Vec<(EpochId, DateTime<Utc>)> = registry
+            .tombstones
+            .iter()
+            .filter_map(|(&(s, e), &ts)| (s == scope).then_some((e, ts)))
+            .collect();
+        for (epoch_id, destroyed_at) in scope_tombstones {
+            store.persist_tombstone(scope, epoch_id, destroyed_at)?;
         }
         store.persist_forgotten_scope(scope, now)?;
     }
@@ -1306,6 +1310,51 @@ mod tests {
         // table — only `destroy_scope_dek` makes a scope fully
         // forgotten.
         assert!(store.forgotten_scopes.is_empty());
+    }
+
+    #[test]
+    fn destroy_scope_dek_persists_pre_existing_tombstones() {
+        // An epoch destroyed earlier with `tombstone_store = None`
+        // sits in `registry.tombstones` but never reached disk.
+        // When the scope-wide destroy finally runs with a store,
+        // the pre-existing tombstone MUST be persisted along with
+        // the newly-destroyed ones — otherwise the next restart
+        // resurrects an epoch the substrate already considers
+        // forgotten.
+        let mut registry = DekRegistry::new();
+        let scope = ScopeId::new_v4();
+
+        registry.insert_scope_dek(ScopeDek::new(scope, EpochId::zero(), fixture_key(1)));
+        registry.insert_epoch_dek(EpochDek::new(scope, EpochId::zero(), fixture_key(2)));
+        registry.insert_epoch_dek(EpochDek::new(scope, EpochId(1), fixture_key(3)));
+
+        // Destroy epoch 0 ephemerally — no store, so the tombstone
+        // is in-memory only.
+        let _ = destroy_epoch_dek(&mut registry, scope, EpochId::zero(), None).expect("ephemeral");
+        assert_eq!(registry.tombstones().count(), 1);
+
+        // Now destroy the scope through a real store. The store
+        // must see tombstones for *both* epoch 0 (pre-existing) and
+        // epoch 1 (newly destroyed).
+        let mut store = CapturingTombstoneStore::default();
+        let _ = destroy_scope_dek(
+            &mut registry,
+            scope,
+            Some(&mut store as &mut dyn TombstoneStore),
+        )
+        .expect("scope destroy");
+
+        let persisted_epochs: std::collections::BTreeSet<EpochId> =
+            store.tombstones.iter().map(|(_, e, _)| *e).collect();
+        assert!(
+            persisted_epochs.contains(&EpochId::zero()),
+            "pre-existing tombstone must be persisted on the scope destroy",
+        );
+        assert!(
+            persisted_epochs.contains(&EpochId(1)),
+            "newly destroyed tombstone must be persisted",
+        );
+        assert_eq!(store.forgotten_scopes.len(), 1);
     }
 
     #[test]

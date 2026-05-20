@@ -229,25 +229,26 @@ impl PersistentTenantRegistry {
     }
 
     /// Delete `id` (cryptographic forgetting + lifecycle terminal
-    /// transition). Mirrors the resulting state to disk —
-    /// including the `destroyed` flag on the root-key reference.
+    /// transition). Mirrors the resulting state to disk atomically:
+    /// the encrypted `tenants` payload, the denormalised
+    /// `tenant_configs` row, and the `deleted_at` timestamp all
+    /// commit together inside a single transaction so a crash or a
+    /// SQL failure mid-delete cannot leave the on-disk store
+    /// half-updated (e.g. payload says `Deleted` but `deleted_at`
+    /// is still NULL).
     pub fn delete(&mut self, id: TenantId) -> Result<()> {
         self.registry.delete(id)?;
         let tenant = self.registry.get(id)?.clone();
-        // Update both `tenants` and `tenant_configs` so the
-        // destroyed key state survives a restart.
-        self.persist_tenant(&tenant)?;
-        self.persist_config(id, &tenant.config)?;
-        // Also stamp the deleted_at column so on-disk queries
-        // ("show me tenants deleted in the last 30 days") work
-        // without decrypting the payload.
         let now = chrono::Utc::now().timestamp_millis();
-        self.conn
-            .execute(
-                "UPDATE tenants SET deleted_at = ?1 WHERE id = ?2",
-                params![now, id.as_uuid().as_bytes().to_vec()],
-            )
-            .map_err(TenantError::Sqlite)?;
+        let tx = self.conn.transaction().map_err(TenantError::Sqlite)?;
+        Self::persist_tenant_in(&tx, &self.payload_key, &tenant)?;
+        Self::persist_config_in(&tx, id, &tenant.config)?;
+        tx.execute(
+            "UPDATE tenants SET deleted_at = ?1 WHERE id = ?2",
+            params![now, id.as_uuid().as_bytes().to_vec()],
+        )
+        .map_err(TenantError::Sqlite)?;
+        tx.commit().map_err(TenantError::Sqlite)?;
         Ok(())
     }
 
@@ -386,68 +387,74 @@ impl PersistentTenantRegistry {
     }
 
     fn persist_tenant(&mut self, tenant: &Tenant) -> Result<()> {
+        Self::persist_tenant_in(&self.conn, &self.payload_key, tenant)
+    }
+
+    fn persist_tenant_in(conn: &Connection, payload_key: &AeadKey, tenant: &Tenant) -> Result<()> {
         let payload = serde_json::to_vec(tenant)
             .map_err(|_| TenantError::Persistence("tenant payload could not be serialised"))?;
         let nonce = random_nonce();
         let id = tenant.id.as_uuid();
         let aad = tenant_aad(id);
-        let ct = encrypt_aead(&self.payload_key, &nonce, &payload, &aad)?;
+        let ct = encrypt_aead(payload_key, &nonce, &payload, &aad)?;
         let root_key_bytes = tenant.config.root_key.handle.as_bytes().to_vec();
-        self.conn
-            .execute(
-                "INSERT INTO tenants
-                    (id, name, status, created_at, updated_at, deleted_at,
-                     root_key_ref, nonce, payload)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                 ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    status = excluded.status,
-                    updated_at = excluded.updated_at,
-                    root_key_ref = excluded.root_key_ref,
-                    nonce = excluded.nonce,
-                    payload = excluded.payload",
-                params![
-                    id.as_bytes().to_vec(),
-                    &tenant.name,
-                    tenant.status.as_str(),
-                    tenant.created_at.timestamp_millis(),
-                    tenant.updated_at.timestamp_millis(),
-                    // deleted_at is stamped by `delete()` after
-                    // the upsert so we don't accidentally clear
-                    // it on a routine status flip.
-                    Option::<i64>::None,
-                    root_key_bytes,
-                    nonce.to_vec(),
-                    ct,
-                ],
-            )
-            .map_err(TenantError::Sqlite)?;
+        conn.execute(
+            "INSERT INTO tenants
+                (id, name, status, created_at, updated_at, deleted_at,
+                 root_key_ref, nonce, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                status = excluded.status,
+                updated_at = excluded.updated_at,
+                root_key_ref = excluded.root_key_ref,
+                nonce = excluded.nonce,
+                payload = excluded.payload",
+            params![
+                id.as_bytes().to_vec(),
+                &tenant.name,
+                tenant.status.as_str(),
+                tenant.created_at.timestamp_millis(),
+                tenant.updated_at.timestamp_millis(),
+                // deleted_at is stamped by `delete()` after
+                // the upsert so we don't accidentally clear
+                // it on a routine status flip.
+                Option::<i64>::None,
+                root_key_bytes,
+                nonce.to_vec(),
+                ct,
+            ],
+        )
+        .map_err(TenantError::Sqlite)?;
         Ok(())
     }
 
     fn persist_config(&mut self, id: TenantId, config: &TenantConfig) -> Result<()> {
+        Self::persist_config_in(&self.conn, id, config)
+    }
+
+    fn persist_config_in(conn: &Connection, id: TenantId, config: &TenantConfig) -> Result<()> {
         let storage_json = serde_json::to_string(&config.storage)
             .map_err(|_| TenantError::Persistence("storage config could not be serialised"))?;
         let synthesis_json = serde_json::to_string(&config.synthesis)
             .map_err(|_| TenantError::Persistence("synthesis config could not be serialised"))?;
         let key_ref_bytes = config.root_key.handle.as_bytes().to_vec();
-        self.conn
-            .execute(
-                "INSERT INTO tenant_configs
-                    (tenant_id, encryption_key_ref, storage_config, synthesis_config)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(tenant_id) DO UPDATE SET
-                    encryption_key_ref = excluded.encryption_key_ref,
-                    storage_config = excluded.storage_config,
-                    synthesis_config = excluded.synthesis_config",
-                params![
-                    id.as_uuid().as_bytes().to_vec(),
-                    key_ref_bytes,
-                    storage_json,
-                    synthesis_json,
-                ],
-            )
-            .map_err(TenantError::Sqlite)?;
+        conn.execute(
+            "INSERT INTO tenant_configs
+                (tenant_id, encryption_key_ref, storage_config, synthesis_config)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(tenant_id) DO UPDATE SET
+                encryption_key_ref = excluded.encryption_key_ref,
+                storage_config = excluded.storage_config,
+                synthesis_config = excluded.synthesis_config",
+            params![
+                id.as_uuid().as_bytes().to_vec(),
+                key_ref_bytes,
+                storage_json,
+                synthesis_json,
+            ],
+        )
+        .map_err(TenantError::Sqlite)?;
         Ok(())
     }
 
@@ -628,6 +635,40 @@ mod tests {
         let tenant = reg.registry().get(id).unwrap();
         assert_eq!(tenant.status, TenantStatus::Deleted);
         assert!(tenant.config.root_key.destroyed);
+
+        // The delete path runs the payload upsert, the config
+        // upsert, and the `deleted_at` stamp inside a single
+        // SQLite transaction. Read every on-disk artefact back to
+        // prove all three commits actually landed (the transaction
+        // semantics make the three writes atomic; this assertion
+        // makes sure none of them was silently dropped).
+        let deleted_at: Option<i64> = reg
+            .conn
+            .query_row(
+                "SELECT deleted_at FROM tenants WHERE id = ?1",
+                params![id.as_uuid().as_bytes().to_vec()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(deleted_at.is_some(), "delete must stamp deleted_at");
+        let status_on_disk: String = reg
+            .conn
+            .query_row(
+                "SELECT status FROM tenants WHERE id = ?1",
+                params![id.as_uuid().as_bytes().to_vec()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status_on_disk, TenantStatus::Deleted.as_str());
+        let config_rows: i64 = reg
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM tenant_configs WHERE tenant_id = ?1",
+                params![id.as_uuid().as_bytes().to_vec()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(config_rows, 1, "config row must exist post-delete");
     }
 
     #[test]

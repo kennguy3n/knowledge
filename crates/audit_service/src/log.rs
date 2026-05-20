@@ -164,6 +164,15 @@ impl AuditLog {
         Ok(())
     }
 
+    /// The sequence number the next [`Self::append`] /
+    /// [`Self::replay_persisted`] call will assign. Used by
+    /// [`crate::PersistentAuditLog`] to stamp an entry *before*
+    /// writing it to disk, so a persist failure can leave the
+    /// in-memory log untouched.
+    pub fn peek_next_sequence(&self) -> u64 {
+        self.next_sequence
+    }
+
     /// Look up an entry by id. Returns `None` if absent.
     pub fn get(&self, id: AuditEntryId) -> Option<&AuditEntry> {
         self.entries.iter().find(|e| e.id == id)

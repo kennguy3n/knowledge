@@ -377,19 +377,36 @@ fn tuple_row_id(tuple: &RelationTuple) -> Uuid {
         0x6c, 0x1a, 0x9d, 0x37, 0x7e, 0xea, 0x4f, 0x18, 0xa4, 0x21, 0x90, 0x46, 0x73, 0xe5, 0x21,
         0x82,
     ]);
+
+    // Build the UUIDv5 input under an unambiguous length-prefixed
+    // encoding: every field is prefixed with its u32 length (little-
+    // endian), and an absent `subject_relation` is encoded as the
+    // length-zero field (distinct from `Some("")` because the
+    // enum-tag domain never contains the empty string). A purely
+    // delimiter-based encoding (e.g. `b'|'`) collides whenever the
+    // delimiter byte happens to appear inside a fixed-width field
+    // like the UUID payloads, which exposes us to silent
+    // deduplication of distinct tuples once any new
+    // `ObjectType` / `Relation` variant ever encodes a `|` byte.
+    fn push_len_prefixed(buf: &mut Vec<u8>, field: &[u8]) {
+        let len = u32::try_from(field.len()).expect("relation-tuple field exceeds u32::MAX");
+        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(field);
+    }
+
     let mut name = Vec::with_capacity(128);
-    name.extend_from_slice(tuple.object.object_type.as_str().as_bytes());
-    name.push(b'|');
-    name.extend_from_slice(tuple.object.object_id.as_bytes());
-    name.push(b'|');
-    name.extend_from_slice(tuple.relation.as_str().as_bytes());
-    name.push(b'|');
-    name.extend_from_slice(tuple.subject.subject_type.as_str().as_bytes());
-    name.push(b'|');
-    name.extend_from_slice(tuple.subject.subject_id.as_bytes());
-    name.push(b'|');
-    if let Some(rel) = tuple.subject.subject_relation {
-        name.extend_from_slice(rel.as_str().as_bytes());
+    push_len_prefixed(&mut name, tuple.object.object_type.as_str().as_bytes());
+    push_len_prefixed(&mut name, tuple.object.object_id.as_bytes());
+    push_len_prefixed(&mut name, tuple.relation.as_str().as_bytes());
+    push_len_prefixed(&mut name, tuple.subject.subject_type.as_str().as_bytes());
+    push_len_prefixed(&mut name, tuple.subject.subject_id.as_bytes());
+    match tuple.subject.subject_relation {
+        Some(rel) => push_len_prefixed(&mut name, rel.as_str().as_bytes()),
+        // Length-zero field disambiguates a `None` subject relation
+        // from an enum-tag-empty-string `Some(_)` — which never
+        // appears today, but encoding it explicitly closes the
+        // door on a future variant collapsing the two cases.
+        None => push_len_prefixed(&mut name, b""),
     }
     Uuid::new_v5(&NS_PERMISSION_TUPLE, &name)
 }
@@ -655,5 +672,82 @@ mod tests {
         // Now write t2 — the partially-written log can recover.
         s.insert(t2).unwrap();
         assert!(s.store().contains(&t2));
+    }
+
+    #[test]
+    fn tuple_row_id_is_distinct_for_distinct_tuples() {
+        // The UUIDv5 input encoding must produce distinct row ids
+        // for distinct logical tuples even when the components share
+        // byte-level prefixes. This is the property a delimiter-only
+        // encoding cannot guarantee (a `b'|'` byte appearing inside a
+        // UUID payload would let two distinct tuples render to the
+        // same `name` slice and therefore the same UUIDv5 output).
+        let obj_id = Uuid::new_v4();
+        let subj_id = Uuid::new_v4();
+        let base = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
+            Relation::Owner,
+            SubjectRef::direct(SubjectType::User, subj_id),
+        );
+        let other_obj_type = RelationTuple::new(
+            ObjectRef::new(ObjectType::Domain, obj_id),
+            Relation::Owner,
+            SubjectRef::direct(SubjectType::User, subj_id),
+        );
+        let other_relation = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
+            Relation::Editor,
+            SubjectRef::direct(SubjectType::User, subj_id),
+        );
+        let other_subj_type = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
+            Relation::Owner,
+            SubjectRef::direct(SubjectType::Tenant, subj_id),
+        );
+        let other_subj_id = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
+            Relation::Owner,
+            SubjectRef::direct(SubjectType::User, Uuid::new_v4()),
+        );
+        let with_relation = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
+            Relation::Owner,
+            SubjectRef::via(SubjectType::User, subj_id, Relation::Admin),
+        );
+
+        let ids = [
+            tuple_row_id(&base),
+            tuple_row_id(&other_obj_type),
+            tuple_row_id(&other_relation),
+            tuple_row_id(&other_subj_type),
+            tuple_row_id(&other_subj_id),
+            tuple_row_id(&with_relation),
+        ];
+        let unique: std::collections::BTreeSet<Uuid> = ids.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            ids.len(),
+            "every distinct tuple must hash to a distinct row id",
+        );
+    }
+
+    #[test]
+    fn tuple_row_id_is_stable_for_equal_tuples() {
+        // Two structurally identical tuples must always render to
+        // the same row id — this is the dedup property that lets
+        // `INSERT OR IGNORE` collapse re-inserts.
+        let obj_id = Uuid::new_v4();
+        let subj_id = Uuid::new_v4();
+        let a = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
+            Relation::Member,
+            SubjectRef::direct(SubjectType::User, subj_id),
+        );
+        let b = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
+            Relation::Member,
+            SubjectRef::direct(SubjectType::User, subj_id),
+        );
+        assert_eq!(tuple_row_id(&a), tuple_row_id(&b));
     }
 }

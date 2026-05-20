@@ -79,15 +79,16 @@ const SCHEMA_VERSION: i32 = 1;
 ///
 /// The in-memory log carries the index used by [`AuditQuery`] /
 /// [`AuditLog::get`]; the SQLCipher database is the durable
-/// append-only record. `append` writes both — in-memory first
-/// (which assigns the sequence number) and then mirrors the
-/// resulting entry to disk. If the disk write fails, the in-memory
-/// append is **not** rolled back; the entry remains in memory and
-/// the disk error is surfaced so the caller can retry. This
-/// matches the append-only contract: an audit entry exists the
-/// moment the substrate observes it, and the durability path is a
-/// best-effort mirror that callers must guard with their own
-/// retries.
+/// append-only record. `append` is *persist-first, commit-second*:
+/// the entry is stamped with the in-memory log's next sequence
+/// number, persisted to disk, and only then committed to the
+/// in-memory log. A failed disk write therefore leaves both the
+/// in-memory log and its sequence counter untouched, so the
+/// in-memory log is always a strict prefix of the on-disk log and
+/// `load_all`'s contiguous-sequence check never trips on a gap
+/// caused by a transient persist failure. Callers that observe an
+/// [`AuditError`] from `append` may safely retry with the same
+/// entry — no sequence has been consumed.
 ///
 /// `Drop` zeroises the master key and the payload AEAD key so they
 /// do not linger in freed heap memory.
@@ -180,33 +181,35 @@ impl PersistentAuditLog {
         &self.log
     }
 
-    /// Append `entry` to the in-memory log (assigning a sequence
-    /// number) and mirror it to disk. Returns the entry id.
+    /// Stamp `entry` with the next sequence number, persist it to
+    /// disk, and then commit it to the in-memory log. Returns the
+    /// entry id.
     ///
-    /// The sequence number is assigned by [`AuditLog::append`] and
-    /// is monotonically increasing. The on-disk row carries the
-    /// same sequence number under a `UNIQUE` constraint so a
-    /// crash-during-mirror cannot leave two entries with the same
-    /// sequence on disk.
-    pub fn append(&mut self, entry: AuditEntry) -> Result<AuditEntryId> {
-        let id = self.log.append(entry);
-        // `entries().last()` is the entry we just appended; it
-        // carries the freshly-assigned sequence number.
-        let stamped = self
-            .log
-            .entries()
-            .last()
-            .cloned()
-            .ok_or(AuditError::Persistence(
-                "in-memory log lost the entry it just appended",
-            ))?;
-        self.persist(&stamped)?;
+    /// Persistence runs *before* the in-memory log is mutated, so a
+    /// failed disk write leaves the in-memory log (and its
+    /// `next_sequence` counter) untouched. This preserves the
+    /// invariant that the in-memory log is always a prefix of the
+    /// on-disk log, which `load_all` relies on (the
+    /// `replay_persisted` contract rejects gapped sequences). The
+    /// `UNIQUE(sequence)` constraint plus the contiguous-sequence
+    /// check in `load_all` together guarantee that a crash mid-call
+    /// cannot produce two rows with the same sequence on disk.
+    pub fn append(&mut self, mut entry: AuditEntry) -> Result<AuditEntryId> {
+        entry.sequence = self.log.peek_next_sequence();
+        let id = entry.id;
+        self.persist(&entry)?;
+        // Disk is durable — commit the in-memory mirror. `replay_persisted`
+        // enforces the same monotonic-sequence invariant `append` would,
+        // so the two paths converge to identical state.
+        self.log.replay_persisted(entry)?;
         Ok(id)
     }
 
-    /// Number of entries persisted on disk. Diverges from
-    /// [`AuditLog::len`] only if a previous [`Self::append`] failed
-    /// to mirror.
+    /// Number of entries persisted on disk. Under normal operation
+    /// this matches [`AuditLog::len`] because [`Self::append`]
+    /// persists before mutating the in-memory log; the two can
+    /// diverge only if an external writer (or a unit test) inserts
+    /// a row by going around the public API.
     pub fn persisted_count(&self) -> Result<usize> {
         let n: i64 = self
             .conn
@@ -555,5 +558,74 @@ mod tests {
             ],
         );
         assert!(res.is_err(), "duplicate sequence INSERT must be rejected");
+    }
+
+    #[test]
+    fn failed_persist_rolls_back_in_memory_append() {
+        // Simulates a transient persist failure: we pre-seed the
+        // `UNIQUE(sequence)` slot the next `append` would target so
+        // its INSERT trips the constraint. The persist-first contract
+        // demands that the in-memory log and its sequence counter
+        // remain untouched, leaving the caller free to retry without
+        // creating an on-disk gap.
+        let tmp = NamedTempFile::new().unwrap();
+        let key = fixture_key();
+
+        let mut log = PersistentAuditLog::open(tmp.path(), &key).unwrap();
+        log.append(fresh_entry()).unwrap();
+        assert_eq!(log.log().peek_next_sequence(), 1);
+
+        // Squat on sequence 1 with a direct INSERT so the next
+        // public `append` collides with the UNIQUE constraint.
+        let squatter = fresh_entry();
+        let squatter_payload = serde_json::to_vec(&squatter).unwrap();
+        let squatter_nonce = random_nonce();
+        let squatter_aad = entry_aad(squatter.id.0, 1);
+        let squatter_ct = encrypt_aead(
+            &log.payload_key,
+            &squatter_nonce,
+            &squatter_payload,
+            &squatter_aad,
+        )
+        .unwrap();
+        log.conn
+            .execute(
+                "INSERT INTO audit_log
+                    (id, sequence, action_type, actor_type, actor_id,
+                     target_type, target_id, scope_id, created_at, nonce, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    squatter.id.0.as_bytes().to_vec(),
+                    1_i64,
+                    "canonical_promotion",
+                    "system",
+                    "",
+                    None::<String>,
+                    None::<String>,
+                    None::<Vec<u8>>,
+                    0_i64,
+                    squatter_nonce.to_vec(),
+                    squatter_ct,
+                ],
+            )
+            .unwrap();
+
+        let before_len = log.log().len();
+        let before_next = log.log().peek_next_sequence();
+        let result = log.append(fresh_entry());
+        assert!(
+            matches!(result, Err(AuditError::Sqlite(_))),
+            "expected the duplicate-sequence INSERT to fail, got {result:?}",
+        );
+        assert_eq!(
+            log.log().len(),
+            before_len,
+            "failed persist must not grow the in-memory log",
+        );
+        assert_eq!(
+            log.log().peek_next_sequence(),
+            before_next,
+            "failed persist must not consume a sequence number",
+        );
     }
 }
