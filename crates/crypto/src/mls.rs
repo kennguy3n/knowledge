@@ -72,9 +72,23 @@ impl MlsEpoch {
         Self(0)
     }
 
-    /// Next epoch (saturating at `u64::MAX`).
-    pub fn next(self) -> Self {
-        Self(self.0.saturating_add(1))
+    /// Next epoch, or [`CryptoError::EpochOverflow`] if the counter
+    /// would overflow `u64::MAX`.
+    ///
+    /// Previously this saturated at `u64::MAX`, which silently
+    /// permitted an unbounded sequence of commits at the terminal
+    /// epoch: `commit.epoch == self.epoch.next()` would keep
+    /// returning `true` and `process_commit` would keep consuming
+    /// the ratchet for commits that did not actually advance the
+    /// counter. Surfacing the overflow as a hard error makes the
+    /// terminal condition observable and prevents that footgun. In
+    /// practice no group ever reaches `u64::MAX`, but the semantic
+    /// difference is worth getting right.
+    pub fn next(self) -> Result<Self, CryptoError> {
+        self.0
+            .checked_add(1)
+            .map(Self)
+            .ok_or(CryptoError::EpochOverflow)
     }
 }
 
@@ -234,8 +248,6 @@ pub struct GroupKeySchedule {
     pub shared_memory_key: AeadKey,
     /// Derived sender-data key (used for confidential channel headers).
     pub sender_data_key: AeadKey,
-    /// Derived welcome-envelope key.
-    pub welcome_key: AeadKey,
 }
 
 impl GroupKeySchedule {
@@ -253,7 +265,6 @@ impl std::fmt::Debug for GroupKeySchedule {
             .field("epoch_secret", &"<redacted>")
             .field("shared_memory_key", &"<redacted>")
             .field("sender_data_key", &"<redacted>")
-            .field("welcome_key", &"<redacted>")
             .finish()
     }
 }
@@ -263,7 +274,6 @@ impl Drop for GroupKeySchedule {
         self.epoch_secret.zeroize();
         self.shared_memory_key.zeroize();
         self.sender_data_key.zeroize();
-        self.welcome_key.zeroize();
     }
 }
 
@@ -318,24 +328,20 @@ fn derive_schedule(
         v
     };
     let info_sender = {
-        let mut v = prefix.clone();
+        let mut v = prefix;
         v.extend_from_slice(b"|sender-data");
         v
     };
-    let info_welcome = {
-        let mut v = prefix;
-        v.extend_from_slice(b"|welcome");
-        v
-    };
+    // The welcome envelope's AEAD key is **not** derived from the
+    // group key schedule — it is derived per-welcome from the
+    // hybrid KEM shared secret via [`derive_welcome_aead_material`].
+    // We therefore intentionally do not expand a `welcome_key` here.
     let mut shared = [0u8; AEAD_KEY_LEN];
     let mut sender = [0u8; AEAD_KEY_LEN];
-    let mut welcome = [0u8; AEAD_KEY_LEN];
     hk.expand(&info_shared, &mut shared)
         .map_err(|_| CryptoError::KeyDerivation("HKDF expand shared-memory failed"))?;
     hk.expand(&info_sender, &mut sender)
         .map_err(|_| CryptoError::KeyDerivation("HKDF expand sender-data failed"))?;
-    hk.expand(&info_welcome, &mut welcome)
-        .map_err(|_| CryptoError::KeyDerivation("HKDF expand welcome failed"))?;
 
     // Move the inner array into the schedule. `*epoch_secret`
     // dereferences and copies (`[u8; 32]: Copy`); the `Zeroizing`
@@ -351,7 +357,6 @@ fn derive_schedule(
         epoch_secret: inner,
         shared_memory_key: shared,
         sender_data_key: sender,
-        welcome_key: welcome,
     })
 }
 
@@ -478,7 +483,7 @@ impl MlsGroup {
         }
         let mut commit = MlsCommit {
             group_id: self.group_id,
-            epoch: self.epoch.next(),
+            epoch: self.epoch.next()?,
             operation: CommitOperation::Add {
                 added: leaf.member_id,
             },
@@ -502,7 +507,7 @@ impl MlsGroup {
         }
         let mut commit = MlsCommit {
             group_id: self.group_id,
-            epoch: self.epoch.next(),
+            epoch: self.epoch.next()?,
             operation: CommitOperation::Remove { removed },
             committed_by,
             committed_at: Utc::now(),
@@ -570,7 +575,12 @@ impl MlsGroup {
                 "committer is not a group member",
             ));
         }
-        if commit.epoch != self.epoch.next() {
+        // `self.epoch.next()` is fallible at `u64::MAX`. Surfacing
+        // the overflow here ensures that a terminal group cannot
+        // silently keep "advancing" — every commit attempt past
+        // the addressable epoch space is rejected explicitly.
+        let expected_epoch = self.epoch.next()?;
+        if commit.epoch != expected_epoch {
             return Err(CryptoError::ProvenanceSerialisation(
                 "commit epoch out of order",
             ));
@@ -1167,7 +1177,11 @@ mod tests {
     #[test]
     fn epoch_zero_and_next_round_trip() {
         assert_eq!(MlsEpoch::zero().0, 0);
-        assert_eq!(MlsEpoch::zero().next().0, 1);
+        assert_eq!(MlsEpoch::zero().next().unwrap().0, 1);
+        // Overflow at the terminal epoch is reported as a hard
+        // error rather than silently saturating at `u64::MAX`.
+        let max = MlsEpoch(u64::MAX);
+        assert!(matches!(max.next(), Err(CryptoError::EpochOverflow)));
     }
 
     #[test]
@@ -1419,7 +1433,7 @@ mod tests {
         // the commit with `committed_by = outsider`.
         let mut commit = MlsCommit {
             group_id: group.group_id,
-            epoch: group.epoch.next(),
+            epoch: group.epoch.next().unwrap(),
             operation: CommitOperation::Add {
                 added: leaf.member_id,
             },
@@ -1473,7 +1487,7 @@ mod tests {
         let ghost = MlsMemberId::new_v4();
         let mut commit = MlsCommit {
             group_id: group.group_id,
-            epoch: group.epoch.next(),
+            epoch: group.epoch.next().unwrap(),
             operation: CommitOperation::Remove { removed: ghost },
             committed_by: creator,
             committed_at: Utc::now(),

@@ -47,4 +47,10 @@ pub enum CryptoError {
         /// Primitive(s) the operation actually used.
         got: &'static str,
     },
+    /// An MLS epoch counter overflowed `u64::MAX`. The group has
+    /// reached the end of its addressable epoch space and cannot
+    /// produce any more commits; callers should treat this as a
+    /// terminal condition and start a fresh group.
+    #[error("MLS epoch counter overflow at u64::MAX")]
+    EpochOverflow,
 }
