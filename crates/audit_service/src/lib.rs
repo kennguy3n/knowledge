@@ -5,12 +5,23 @@
 //! proposals, policy changes**, plus tenant-lifecycle events
 //! (provisioning, deletion, key destruction).
 //!
-//! The current implementation is a deterministic in-memory log keyed
-//! by [`AuditEntryId`] and ordered by [`AuditEntry::sequence`]. The
-//! log is *append-only* — there is no public mutate / delete API; the
-//! type system enforces that an inserted entry cannot be modified or
-//! removed. Persistence (Postgres / object-store) lands in later
-//! milestones.
+//! The crate exposes two layered logs:
+//!
+//! * [`AuditLog`] — an in-memory append-only log keyed by
+//!   [`AuditEntryId`] and ordered by [`AuditEntry::sequence`].
+//!   Used as the query surface for [`AuditQuery`] / [`AuditLog::get`].
+//!   The type exposes no public mutate / delete API; the type
+//!   system enforces that an inserted entry cannot be modified or
+//!   removed.
+//! * [`PersistentAuditLog`] — a SQLCipher-backed wrapper that
+//!   mirrors every [`AuditLog::append`] to disk and rehydrates the
+//!   in-memory log on open. The page-encryption key is derived
+//!   from the per-user master key under HKDF context
+//!   `b"sqlcipher:audit:v1"`; per-row payloads are encrypted with
+//!   XChaCha20-Poly1305 under a per-store AEAD key
+//!   (`audit_entry:v1`). The on-disk schema is itself append-only
+//!   — there are no `UPDATE` or `DELETE` statements anywhere in
+//!   the persistence layer.
 
 #![deny(missing_docs)]
 
@@ -18,6 +29,7 @@ pub mod entry;
 pub mod error;
 pub mod helpers;
 pub mod log;
+pub mod persist;
 
 pub use entry::{
     Actor, AuditActionType, AuditEntry, AuditEntryBuilder, AuditEntryId, TargetRef, TargetType,
@@ -28,3 +40,4 @@ pub use helpers::{
     log_proposal_submitted,
 };
 pub use log::{AuditLog, AuditQuery};
+pub use persist::PersistentAuditLog;

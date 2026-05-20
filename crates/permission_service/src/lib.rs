@@ -24,10 +24,16 @@
 //! `(D, d-9) # editor @ (Tenant, t-1) # admin` resolves by recursing
 //! into `(Tenant, t-1) # admin @ ?`.
 //!
-//! Persistence is intentionally deferred — the current implementation
-//! is an in-memory [`TupleStore`] suitable for unit / e2e tests and
-//! for server-skeleton work. The on-disk variant is not yet
-//! implemented.
+//! The crate exposes two layered stores:
+//!
+//! * [`TupleStore`] — an in-memory `HashSet`-backed view used as the
+//!   query surface by `check_permission` and friends.
+//! * [`PersistentTupleStore`] — a SQLCipher-backed wrapper that
+//!   mirrors every mutation to disk and rehydrates the in-memory
+//!   view on open. The page-encryption key is derived from the
+//!   per-user master key under HKDF context
+//!   `b"sqlcipher:permissions:v1"`; per-row payloads are encrypted
+//!   under a per-store AEAD key (`permission_tuple:v1`).
 //!
 //! Cross-references:
 //!
@@ -39,11 +45,13 @@
 pub mod check;
 pub mod error;
 pub mod namespace;
+pub mod persist;
 pub mod store;
 pub mod tuple;
 
 pub use check::{check_permission, PermissionCheck};
 pub use error::{PermissionError, Result};
 pub use namespace::{NamespaceConfig, NamespaceRegistry};
+pub use persist::PersistentTupleStore;
 pub use store::TupleStore;
 pub use tuple::{ObjectRef, ObjectType, Relation, RelationTuple, SubjectRef, SubjectType};

@@ -47,6 +47,25 @@ pub enum CryptoError {
         /// Primitive(s) the operation actually used.
         got: &'static str,
     },
+    /// A [`crate::forgetting::TombstoneStore`] implementation
+    /// rejected a tombstone persist or load call.
+    ///
+    /// `crypto` itself owns no on-disk storage — the
+    /// [`crate::forgetting::TombstoneStore`] trait is the durability
+    /// boundary that host crates (typically `ffi` /
+    /// `evidence_store`) implement against their own SQLCipher
+    /// tables. When that underlying I/O fails, the host wraps the
+    /// driver-specific error into this string and surfaces it
+    /// through the trait so the destroy code path can decide
+    /// whether to retry on next open or alert.
+    ///
+    /// Unlike [`Self::KeyDerivation`] (which takes a `&'static
+    /// str` for compile-time-known KDF tags), this variant holds
+    /// an owned `String` because the underlying error message is
+    /// supplied at runtime by whichever store implementation the
+    /// host has wired in.
+    #[error("tombstone persistence failed: {0}")]
+    TombstonePersistence(String),
     /// An epoch counter overflowed `u64::MAX`.
     ///
     /// Surfaced by both [`crate::mls::MlsEpoch::next`] and

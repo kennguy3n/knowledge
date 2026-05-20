@@ -28,10 +28,21 @@
 //!   audit row for every destroy. The `crypto` crate intentionally
 //!   does not depend on `audit_service`; the wiring lives at a higher
 //!   layer.
+//! * [`TombstoneStore`] — hook trait so a host crate (e.g. `ffi` /
+//!   `evidence_store`) can persist the per-epoch + per-scope
+//!   tombstones a destroy call produces, without forcing `crypto` to
+//!   take a SQLite dependency. The trait is the durability boundary
+//!   that turns the otherwise ephemeral [`DekRegistry`] into a
+//!   restart-safe substrate primitive.
 //!
-//! The registry is intentionally ephemeral / in-memory. Persistent
-//! storage of forgetting metadata (tombstones, audit cross-references)
-//! lands in a future update alongside the `evidence_store` rewrite.
+//! The [`DekRegistry`] itself is in-memory; durable cryptographic-
+//! forgetting state lives on the host side via [`TombstoneStore`].
+//! Callers that want their tombstones to survive process restarts
+//! pass an `Option<&mut dyn TombstoneStore>` into
+//! [`destroy_scope_dek`] / [`destroy_epoch_dek`] so each destroy call
+//! both wipes the in-memory key material and records the tombstone
+//! on disk in one atomic step. Passing `None` keeps the legacy
+//! ephemeral-only semantics for tests and demos.
 
 use std::collections::BTreeMap;
 
@@ -270,6 +281,67 @@ pub trait KeyDestructionAuditor {
     fn record_destruction(&mut self, event: &KeyDestructionEvent);
 }
 
+/// Durable persistence hook for cryptographic-forgetting tombstones.
+///
+/// The [`DekRegistry`] holds tombstones in memory only. To make
+/// forgetting survive process restarts, the host crate (typically
+/// the `ffi` runtime, which already owns a SQLCipher-backed
+/// `evidence_store`) implements `TombstoneStore` and threads it
+/// through [`destroy_scope_dek`] / [`destroy_epoch_dek`]. The trait
+/// is intentionally narrow — it only persists destruction metadata,
+/// never the destroyed key material itself.
+///
+/// `crypto` cannot take a SQLite dependency (it would create a
+/// circular dep with `evidence_store`), so this trait is the
+/// abstract durability boundary. Production callers wire a wrapper
+/// around their on-disk `forgotten_scopes` / `epoch_tombstones`
+/// tables; tests can implement the trait against an in-memory
+/// `Vec` if they want to assert that the destroy code path actually
+/// invokes the persistence hook.
+///
+/// All methods are fallible (`Result<_, CryptoError>`) because
+/// on-disk persistence can fail. A failed `persist_*` call must NOT
+/// be silently swallowed by callers — the in-memory destruction is
+/// still effective for the current process, but the next restart
+/// will not see the tombstone and the substrate may resurrect a
+/// nominally-forgotten scope on reopen. [`destroy_scope_dek`] and
+/// [`destroy_epoch_dek`] surface the underlying error so the caller
+/// can roll forward (retry on next open) or alert.
+pub trait TombstoneStore {
+    /// Persist a per-epoch tombstone: the epoch DEK for `(scope,
+    /// epoch)` has been destroyed at `destroyed_at`. Implementations
+    /// MUST be idempotent — re-recording an existing tombstone is a
+    /// no-op rather than an error, so callers can replay safely
+    /// after a partial-failure rerun.
+    fn persist_tombstone(
+        &mut self,
+        scope: ScopeId,
+        epoch: EpochId,
+        destroyed_at: DateTime<Utc>,
+    ) -> Result<(), CryptoError>;
+
+    /// Persist a scope-wide forgetting tombstone: every DEK for
+    /// `scope` has been destroyed at `destroyed_at`. Implementations
+    /// MUST be idempotent.
+    fn persist_forgotten_scope(
+        &mut self,
+        scope: ScopeId,
+        destroyed_at: DateTime<Utc>,
+    ) -> Result<(), CryptoError>;
+
+    /// Replay every persisted per-epoch tombstone. The [`FfiRuntime`]
+    /// uses this on `open_store` to rebuild the in-memory
+    /// [`DekRegistry`] so post-restart calls for forgotten epochs
+    /// continue to short-circuit. The returned ordering is
+    /// unspecified; callers must not rely on it.
+    fn load_tombstones(&self) -> Result<Vec<(ScopeId, EpochId, DateTime<Utc>)>, CryptoError>;
+
+    /// Replay every persisted scope-wide forgetting tombstone. The
+    /// returned ordering is unspecified; callers must not rely on
+    /// it.
+    fn load_forgotten_scopes(&self) -> Result<Vec<(ScopeId, DateTime<Utc>)>, CryptoError>;
+}
+
 /// In-memory registry of active DEKs.
 ///
 /// The registry holds the live key material plus a tombstone for
@@ -339,12 +411,37 @@ impl DekRegistry {
 /// every per-epoch DEK. Returns the per-key destruction events so the
 /// caller can persist them in the audit trail. Idempotent: re-running
 /// against an already-forgotten scope returns an empty vec.
-pub fn destroy_scope_dek(registry: &mut DekRegistry, scope: ScopeId) -> Vec<KeyDestructionEvent> {
+///
+/// When `tombstone_store` is `Some(_)`, every tombstone produced by
+/// this call is also persisted via the supplied [`TombstoneStore`]
+/// so it survives process restarts. The in-memory destruction is
+/// performed first; persistence runs after every key has been
+/// zeroized so a persistence failure cannot leave a live DEK behind.
+/// A persistence error is returned as-is — the in-memory state is
+/// already mutated but the on-disk tombstone may be missing; callers
+/// SHOULD surface the error and retry on next `open_store`. Passing
+/// `None` keeps the legacy ephemeral-only semantics (tombstones
+/// remain in the in-memory [`DekRegistry`] only and are lost on
+/// restart) and is appropriate for tests and demos that do not need
+/// durability.
+pub fn destroy_scope_dek(
+    registry: &mut DekRegistry,
+    scope: ScopeId,
+    tombstone_store: Option<&mut dyn TombstoneStore>,
+) -> Result<Vec<KeyDestructionEvent>, CryptoError> {
     if registry.is_scope_forgotten(scope) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let now = Utc::now();
     let mut events = Vec::new();
+    // Every distinct epoch we tombstone in this call. Used to drive
+    // the `TombstoneStore::persist_tombstone` calls below — the
+    // store implementation is responsible for deduplicating against
+    // any rows already on disk (via `INSERT OR IGNORE` on the
+    // production SQLCipher path), so we just collect the in-memory
+    // set without any pre-filtering against `registry.tombstones`.
+    let mut destroyed_epochs: std::collections::BTreeSet<EpochId> =
+        std::collections::BTreeSet::new();
 
     if let Some(mut dek) = registry.scope_deks.remove(&scope) {
         let was_destroyed = dek.is_destroyed();
@@ -358,6 +455,7 @@ pub fn destroy_scope_dek(registry: &mut DekRegistry, scope: ScopeId) -> Vec<KeyD
                 destroyed_at: now,
             });
             registry.tombstones.insert((scope, epoch), now);
+            destroyed_epochs.insert(epoch);
         }
     }
 
@@ -379,23 +477,38 @@ pub fn destroy_scope_dek(registry: &mut DekRegistry, scope: ScopeId) -> Vec<KeyD
                     destroyed_at: now,
                 });
                 registry.tombstones.insert(key, now);
+                destroyed_epochs.insert(key.1);
             }
         }
     }
 
     registry.forgotten_scopes.insert(scope, now);
-    events
+
+    if let Some(store) = tombstone_store {
+        for epoch_id in destroyed_epochs {
+            store.persist_tombstone(scope, epoch_id, now)?;
+        }
+        store.persist_forgotten_scope(scope, now)?;
+    }
+
+    Ok(events)
 }
 
 /// Destroy a single epoch DEK. Idempotent: re-running against an
 /// already-forgotten epoch returns an empty vec.
+///
+/// `tombstone_store` has the same semantics as in
+/// [`destroy_scope_dek`]: when `Some(_)`, the new tombstone is
+/// persisted via the supplied store after the in-memory DEK has
+/// been zeroized. `None` keeps the legacy ephemeral-only behaviour.
 pub fn destroy_epoch_dek(
     registry: &mut DekRegistry,
     scope: ScopeId,
     epoch: EpochId,
-) -> Vec<KeyDestructionEvent> {
+    tombstone_store: Option<&mut dyn TombstoneStore>,
+) -> Result<Vec<KeyDestructionEvent>, CryptoError> {
     if registry.is_epoch_forgotten(scope, epoch) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let now = Utc::now();
     let mut events = Vec::new();
@@ -422,7 +535,12 @@ pub fn destroy_epoch_dek(
         });
     }
     registry.tombstones.insert((scope, epoch), now);
-    events
+
+    if let Some(store) = tombstone_store {
+        store.persist_tombstone(scope, epoch, now)?;
+    }
+
+    Ok(events)
 }
 
 /// Convenience predicate.
@@ -804,7 +922,7 @@ mod tests {
         registry.insert_epoch_dek(EpochDek::new(scope, EpochId(1), fixture_key(3)));
 
         assert!(!registry.is_scope_forgotten(scope));
-        let events = destroy_scope_dek(&mut registry, scope);
+        let events = destroy_scope_dek(&mut registry, scope, None).unwrap();
         assert!(registry.is_scope_forgotten(scope));
         assert!(registry.get_scope_dek(scope).is_none());
         assert!(registry.get_epoch_dek(scope, EpochId::zero()).is_none());
@@ -820,8 +938,8 @@ mod tests {
         let mut registry = DekRegistry::new();
         let scope = ScopeId::new_v4();
         registry.insert_scope_dek(ScopeDek::new(scope, EpochId::zero(), fixture_key(1)));
-        let first = destroy_scope_dek(&mut registry, scope);
-        let second = destroy_scope_dek(&mut registry, scope);
+        let first = destroy_scope_dek(&mut registry, scope, None).unwrap();
+        let second = destroy_scope_dek(&mut registry, scope, None).unwrap();
         assert!(!first.is_empty());
         assert!(second.is_empty());
         assert!(registry.is_scope_forgotten(scope));
@@ -834,7 +952,7 @@ mod tests {
         registry.insert_epoch_dek(EpochDek::new(scope, EpochId::zero(), fixture_key(1)));
         registry.insert_epoch_dek(EpochDek::new(scope, EpochId(1), fixture_key(2)));
 
-        let events = destroy_epoch_dek(&mut registry, scope, EpochId::zero());
+        let events = destroy_epoch_dek(&mut registry, scope, EpochId::zero(), None).unwrap();
         assert_eq!(events.len(), 1);
         assert!(!events[0].scope_wide);
         assert!(registry.is_epoch_forgotten(scope, EpochId::zero()));
@@ -847,8 +965,8 @@ mod tests {
         let mut registry = DekRegistry::new();
         let scope = ScopeId::new_v4();
         registry.insert_epoch_dek(EpochDek::new(scope, EpochId::zero(), fixture_key(1)));
-        let _ = destroy_epoch_dek(&mut registry, scope, EpochId::zero());
-        let again = destroy_epoch_dek(&mut registry, scope, EpochId::zero());
+        let _ = destroy_epoch_dek(&mut registry, scope, EpochId::zero(), None).unwrap();
+        let again = destroy_epoch_dek(&mut registry, scope, EpochId::zero(), None).unwrap();
         assert!(again.is_empty());
     }
 
@@ -872,7 +990,7 @@ mod tests {
             encrypt_aead(dek.key().expect("live"), &nonce, plaintext, aad).expect("encrypt")
         };
 
-        let _ = destroy_scope_dek(&mut registry, scope);
+        let _ = destroy_scope_dek(&mut registry, scope, None).unwrap();
 
         // Registry can no longer surface a key for this scope — i.e.
         // there is no path through the registry to decrypt `ct`.
@@ -1057,7 +1175,7 @@ mod tests {
         let scope = ScopeId::new_v4();
         registry.insert_scope_dek(ScopeDek::new(scope, EpochId::zero(), fixture_key(1)));
         registry.insert_epoch_dek(EpochDek::new(scope, EpochId(0), fixture_key(2)));
-        let events = destroy_scope_dek(&mut registry, scope);
+        let events = destroy_scope_dek(&mut registry, scope, None).unwrap();
         let mut auditor = CapturingAuditor::default();
         record_key_destructions(&mut auditor, &events);
         assert_eq!(auditor.0.len(), events.len());
@@ -1080,5 +1198,200 @@ mod tests {
         assert!(dek.is_destroyed());
         dek.destroy();
         assert!(dek.is_destroyed());
+    }
+
+    /// In-memory `TombstoneStore` used to assert the destroy code
+    /// path actually invokes the persistence hook. Production
+    /// callers wire a SQLCipher-backed wrapper around the
+    /// `evidence_store`'s `forgotten_scopes` / `epoch_tombstones`
+    /// tables; this in-memory variant lets us exercise the trait
+    /// contract here without standing up a database.
+    #[derive(Default)]
+    struct CapturingTombstoneStore {
+        tombstones: Vec<(ScopeId, EpochId, DateTime<Utc>)>,
+        forgotten_scopes: Vec<(ScopeId, DateTime<Utc>)>,
+    }
+
+    impl TombstoneStore for CapturingTombstoneStore {
+        fn persist_tombstone(
+            &mut self,
+            scope: ScopeId,
+            epoch: EpochId,
+            destroyed_at: DateTime<Utc>,
+        ) -> Result<(), CryptoError> {
+            if !self
+                .tombstones
+                .iter()
+                .any(|(s, e, _)| *s == scope && *e == epoch)
+            {
+                self.tombstones.push((scope, epoch, destroyed_at));
+            }
+            Ok(())
+        }
+
+        fn persist_forgotten_scope(
+            &mut self,
+            scope: ScopeId,
+            destroyed_at: DateTime<Utc>,
+        ) -> Result<(), CryptoError> {
+            if !self.forgotten_scopes.iter().any(|(s, _)| *s == scope) {
+                self.forgotten_scopes.push((scope, destroyed_at));
+            }
+            Ok(())
+        }
+
+        fn load_tombstones(&self) -> Result<Vec<(ScopeId, EpochId, DateTime<Utc>)>, CryptoError> {
+            Ok(self.tombstones.clone())
+        }
+
+        fn load_forgotten_scopes(&self) -> Result<Vec<(ScopeId, DateTime<Utc>)>, CryptoError> {
+            Ok(self.forgotten_scopes.clone())
+        }
+    }
+
+    #[test]
+    fn destroy_scope_dek_persists_tombstones_through_store() {
+        let mut registry = DekRegistry::new();
+        let mut store = CapturingTombstoneStore::default();
+        let scope = ScopeId::new_v4();
+
+        registry.insert_scope_dek(ScopeDek::new(scope, EpochId::zero(), fixture_key(1)));
+        registry.insert_epoch_dek(EpochDek::new(scope, EpochId::zero(), fixture_key(2)));
+        registry.insert_epoch_dek(EpochDek::new(scope, EpochId(1), fixture_key(3)));
+
+        let events = destroy_scope_dek(
+            &mut registry,
+            scope,
+            Some(&mut store as &mut dyn TombstoneStore),
+        )
+        .expect("destroy");
+        assert_eq!(events.len(), 3);
+
+        // Every per-epoch tombstone observed in the registry must
+        // appear in the on-disk store. The exact ordering is
+        // unspecified by the trait, so compare as a set.
+        let in_registry: std::collections::BTreeSet<(ScopeId, EpochId)> =
+            registry.tombstones().map(|(s, e, _)| (s, e)).collect();
+        let in_store: std::collections::BTreeSet<(ScopeId, EpochId)> =
+            store.tombstones.iter().map(|(s, e, _)| (*s, *e)).collect();
+        assert_eq!(in_registry, in_store, "epoch tombstones must agree");
+
+        // The scope-wide forgetting tombstone is recorded exactly
+        // once even though the call walked multiple epoch DEKs.
+        assert_eq!(store.forgotten_scopes.len(), 1);
+        assert_eq!(store.forgotten_scopes[0].0, scope);
+    }
+
+    #[test]
+    fn destroy_epoch_dek_persists_single_tombstone() {
+        let mut registry = DekRegistry::new();
+        let mut store = CapturingTombstoneStore::default();
+        let scope = ScopeId::new_v4();
+
+        registry.insert_epoch_dek(EpochDek::new(scope, EpochId::zero(), fixture_key(1)));
+        registry.insert_epoch_dek(EpochDek::new(scope, EpochId(1), fixture_key(2)));
+
+        let _ = destroy_epoch_dek(
+            &mut registry,
+            scope,
+            EpochId::zero(),
+            Some(&mut store as &mut dyn TombstoneStore),
+        )
+        .expect("destroy");
+
+        assert_eq!(store.tombstones.len(), 1);
+        assert_eq!(store.tombstones[0].0, scope);
+        assert_eq!(store.tombstones[0].1, EpochId::zero());
+        // Per-epoch destroys MUST NOT touch the forgotten_scopes
+        // table — only `destroy_scope_dek` makes a scope fully
+        // forgotten.
+        assert!(store.forgotten_scopes.is_empty());
+    }
+
+    #[test]
+    fn destroy_scope_dek_is_idempotent_against_store() {
+        let mut registry = DekRegistry::new();
+        let mut store = CapturingTombstoneStore::default();
+        let scope = ScopeId::new_v4();
+
+        registry.insert_scope_dek(ScopeDek::new(scope, EpochId::zero(), fixture_key(1)));
+        let _ = destroy_scope_dek(
+            &mut registry,
+            scope,
+            Some(&mut store as &mut dyn TombstoneStore),
+        )
+        .expect("first destroy");
+
+        let snapshot = store.tombstones.clone();
+        let snapshot_scopes = store.forgotten_scopes.clone();
+
+        // Re-running the destroy must not append duplicate rows.
+        let second = destroy_scope_dek(
+            &mut registry,
+            scope,
+            Some(&mut store as &mut dyn TombstoneStore),
+        )
+        .expect("second destroy");
+        assert!(second.is_empty());
+        assert_eq!(snapshot, store.tombstones);
+        assert_eq!(snapshot_scopes, store.forgotten_scopes);
+    }
+
+    /// `TombstoneStore` implementation that fails on the first
+    /// `persist_tombstone` call. Used to assert that the destroy
+    /// path surfaces persistence errors instead of silently
+    /// swallowing them — a swallow would let a forgotten scope
+    /// resurrect on restart.
+    struct FailingTombstoneStore;
+
+    impl TombstoneStore for FailingTombstoneStore {
+        fn persist_tombstone(
+            &mut self,
+            _scope: ScopeId,
+            _epoch: EpochId,
+            _destroyed_at: DateTime<Utc>,
+        ) -> Result<(), CryptoError> {
+            Err(CryptoError::TombstonePersistence(
+                "simulated I/O failure (persist_tombstone)".to_string(),
+            ))
+        }
+
+        fn persist_forgotten_scope(
+            &mut self,
+            _scope: ScopeId,
+            _destroyed_at: DateTime<Utc>,
+        ) -> Result<(), CryptoError> {
+            Err(CryptoError::TombstonePersistence(
+                "simulated I/O failure (persist_forgotten_scope)".to_string(),
+            ))
+        }
+
+        fn load_tombstones(&self) -> Result<Vec<(ScopeId, EpochId, DateTime<Utc>)>, CryptoError> {
+            Ok(Vec::new())
+        }
+
+        fn load_forgotten_scopes(&self) -> Result<Vec<(ScopeId, DateTime<Utc>)>, CryptoError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn destroy_surfaces_persistence_error() {
+        let mut registry = DekRegistry::new();
+        let scope = ScopeId::new_v4();
+        registry.insert_epoch_dek(EpochDek::new(scope, EpochId::zero(), fixture_key(1)));
+
+        let err = destroy_epoch_dek(
+            &mut registry,
+            scope,
+            EpochId::zero(),
+            Some(&mut FailingTombstoneStore as &mut dyn TombstoneStore),
+        )
+        .unwrap_err();
+        assert!(matches!(err, CryptoError::TombstonePersistence(_)));
+        // Even on persistence failure, the in-memory destruction
+        // must have completed — anything less leaves a live DEK.
+        assert!(registry.is_epoch_forgotten(scope, EpochId::zero()));
+        assert!(registry.get_epoch_dek(scope, EpochId::zero()).is_none());
     }
 }

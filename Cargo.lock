@@ -88,11 +88,17 @@ name = "audit_service"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "crypto",
  "evidence_store",
+ "rand 0.8.6",
+ "rand_core 0.6.4",
+ "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -1631,10 +1637,16 @@ name = "permission_service"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "crypto",
+ "rand 0.8.6",
+ "rand_core 0.6.4",
+ "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -2411,10 +2423,15 @@ dependencies = [
  "chrono",
  "crypto",
  "permission_service",
+ "rand 0.8.6",
+ "rand_core 0.6.4",
+ "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

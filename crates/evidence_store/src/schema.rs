@@ -46,7 +46,16 @@
 ///   under the scope key, so memory state survives process
 ///   restarts. Mutations (pin, unpin, decay_sweep) flush the
 ///   updated state to this table. Purely additive.
-pub const SCHEMA_VERSION: i32 = 7;
+/// - v8: added `epoch_tombstones` for per-`(scope, epoch)`
+///   cryptographic-forgetting tombstones. The existing
+///   `forgotten_scopes` table is scope-grain only; epoch DEK
+///   destruction — emitted by
+///   [`crypto::forgetting::destroy_epoch_dek`] — was previously
+///   in-memory only and lost across restarts. The substrate now
+///   replays this table into the in-process [`DekRegistry`] on
+///   every `open_store` so post-restart calls for forgotten epochs
+///   continue to short-circuit. Purely additive.
+pub const SCHEMA_VERSION: i32 = 8;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -203,5 +212,22 @@ CREATE TABLE IF NOT EXISTS memory_objects (
     payload         BLOB    NOT NULL,
     updated_at      INTEGER NOT NULL,
     PRIMARY KEY (scope_id, kind)
+);
+
+-- v8 — per-(scope, epoch) cryptographic-forgetting tombstones.
+-- Each row records that the runtime destroyed the epoch DEK for
+-- `(scope_id, epoch_id)` at `forgotten_at` (Unix epoch seconds).
+-- Scope-wide forgetting still goes through `forgotten_scopes`;
+-- this table makes per-epoch destruction (emitted by
+-- `crypto::forgetting::destroy_epoch_dek`) durable across process
+-- restarts so post-restart calls for the same epoch continue to
+-- short-circuit. Like `forgotten_scopes`, re-inserts for an
+-- already-forgotten (scope, epoch) are no-ops via the
+-- TombstoneStore implementation's `INSERT OR IGNORE`.
+CREATE TABLE IF NOT EXISTS epoch_tombstones (
+    scope_id        BLOB    NOT NULL,
+    epoch_id        INTEGER NOT NULL,
+    forgotten_at    INTEGER NOT NULL,
+    PRIMARY KEY (scope_id, epoch_id)
 );
 "#;

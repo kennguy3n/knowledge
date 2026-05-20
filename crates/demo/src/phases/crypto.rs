@@ -229,7 +229,11 @@ pub fn run(
             == forget_payload;
 
     // Destroy and verify forgetting.
-    let destroy_events = destroy_scope_dek(&mut registry, scope_id);
+    // The demo uses the legacy ephemeral-only signature (no
+    // `TombstoneStore`) — the demo registry is throwaway and the
+    // tombstones do not need to survive process exit.
+    let destroy_events = destroy_scope_dek(&mut registry, scope_id, None)
+        .expect("destroy_scope_dek must succeed with no tombstone store");
     let destroyed_count = destroy_events.len() as u64;
     let live_after_destroy = registry.get_scope_dek(scope_id).is_some();
     let scope_forgotten = registry.is_scope_forgotten(scope_id);
@@ -248,7 +252,8 @@ pub fn run(
     zeroed_key.fill(0);
 
     // Idempotency: a second destroy returns no fresh events.
-    let redundant_events = destroy_scope_dek(&mut registry, scope_id);
+    let redundant_events = destroy_scope_dek(&mut registry, scope_id, None)
+        .expect("destroy_scope_dek must succeed with no tombstone store");
     let destroy_idempotent = redundant_events.is_empty();
 
     // -------- Epoch DEK destruction (independent epoch) -----------
@@ -272,7 +277,9 @@ pub fn run(
     epoch_registry.insert_epoch_dek(EpochDek::new(alt_scope, epoch_one, one_key));
 
     let epoch_count_before = epoch_registry.epoch_count(alt_scope);
-    let destroyed_epoch_events = destroy_epoch_dek(&mut epoch_registry, alt_scope, epoch_zero);
+    let destroyed_epoch_events =
+        destroy_epoch_dek(&mut epoch_registry, alt_scope, epoch_zero, None)
+            .expect("destroy_epoch_dek must succeed with no tombstone store");
     let destroyed_epoch_zero_recorded = !destroyed_epoch_events.is_empty();
     let live_epoch_one = epoch_registry.get_epoch_dek(alt_scope, epoch_one).is_some();
     let live_epoch_zero = epoch_registry
