@@ -43,7 +43,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-fuzz-weekly-${{ matrix.target }}-
             ${{ runner.os }}-fuzz-
-      - run: cargo install cargo-fuzz --locked
+      # See ci.yml: cargo-fuzz 0.13.1's bundled lockfile pins a `rustix`
+      # version that no longer compiles on current nightly, so we drop
+      # `--locked` and let cargo pick up newer semver-compatible deps.
+      - run: cargo install cargo-fuzz
       - name: ${{ matrix.target }} (1h)
         working-directory: crates/crypto/fuzz
         run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=3600

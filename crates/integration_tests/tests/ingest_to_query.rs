@@ -42,9 +42,7 @@ fn open_store(path: &std::path::Path) -> EvidenceStore {
 fn body_for(scope_tag: &str, idx: usize) -> Vec<u8> {
     // Two-token shape so search_fts has both a per-row unique token
     // and a per-scope shared token to query against.
-    let prefix = format!(
-        "scope-{scope_tag} unique-token-{idx} migration deadline channel-recap "
-    );
+    let prefix = format!("scope-{scope_tag} unique-token-{idx} migration deadline channel-recap ");
     let mut body = prefix.into_bytes();
     body.resize(BODY_SIZE, b'.');
     body
@@ -113,15 +111,11 @@ fn ingest_query_forget_one_scope_preserves_the_other() {
     store
         .purge_body_key_wraps_for_scope(scope_a)
         .expect("purge wraps A");
-    store
-        .purge_fts_for_scope(scope_a)
-        .expect("purge fts A");
+    store.purge_fts_for_scope(scope_a).expect("purge fts A");
     store
         .record_forgotten_scope(scope_a)
         .expect("record forgotten A");
-    store
-        .delete_scope_dek(scope_a)
-        .expect("delete scope DEK A");
+    store.delete_scope_dek(scope_a).expect("delete scope DEK A");
 
     // 4a. Scope A's FTS queries return nothing.
     let post_forget_a: Vec<EvidenceId> = store

@@ -199,32 +199,37 @@ fn bench_ml_dsa_verify(c: &mut Criterion) {
     });
 }
 
-fn bench_sphincs_sign(c: &mut Criterion) {
+/// Bench SPHINCS+ sign and verify together so they share a single
+/// `crypto/sphincs_plus` Criterion benchmark group. Splitting them
+/// into two functions would cause Criterion to instantiate two
+/// groups with the same name in sequence, and the second `finish()`
+/// would overwrite the first group's HTML summary report.
+fn bench_sphincs(c: &mut Criterion) {
     let signer = SphincsPlusSigner::generate();
-    let msg = b"sphincs+ sign benchmark canonical bundle bytes";
-    // SPHINCS+ sign is intentionally slow (~tens of ms). Capping
-    // sample size keeps `cargo bench` runtime sane.
+    let verifier = signer.verifier();
+    let sign_msg = b"sphincs+ sign benchmark canonical bundle bytes";
+    let verify_msg = b"sphincs+ verify benchmark canonical bundle bytes";
+    // Pre-compute the signature used by the verify bench so the
+    // measured loop does not include sign cost.
+    let sig = signer.sign_bytes(verify_msg).expect("sign");
+
     let mut group = c.benchmark_group("crypto/sphincs_plus");
+    // SPHINCS+ sign is intentionally slow (~tens of ms). Capping
+    // sample size keeps `cargo bench` runtime sane. Verify is
+    // cheap so it benefits from criterion's default sample size,
+    // but a single group must share one sample size — 20 is the
+    // floor that still gives criterion a meaningful estimate.
     group.sample_size(20);
     group.bench_function("sign", |b| {
         b.iter(|| {
-            let sig = signer.sign_bytes(black_box(msg)).expect("sign");
+            let sig = signer.sign_bytes(black_box(sign_msg)).expect("sign");
             black_box(sig);
         });
     });
-    group.finish();
-}
-
-fn bench_sphincs_verify(c: &mut Criterion) {
-    let signer = SphincsPlusSigner::generate();
-    let verifier = signer.verifier();
-    let msg = b"sphincs+ verify benchmark canonical bundle bytes";
-    let sig = signer.sign_bytes(msg).expect("sign");
-    let mut group = c.benchmark_group("crypto/sphincs_plus");
     group.bench_function("verify", |b| {
         b.iter(|| {
             let ok = verifier
-                .verify_bytes(black_box(msg), black_box(&sig))
+                .verify_bytes(black_box(verify_msg), black_box(&sig))
                 .expect("verify_bytes");
             assert!(ok, "freshly-signed message must verify");
         });
@@ -242,7 +247,6 @@ criterion_group!(
     bench_derive_key,
     bench_ml_dsa_sign,
     bench_ml_dsa_verify,
-    bench_sphincs_sign,
-    bench_sphincs_verify,
+    bench_sphincs,
 );
 criterion_main!(crypto_benches);

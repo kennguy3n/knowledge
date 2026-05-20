@@ -136,7 +136,10 @@ fn aead_round_trip_then_forget_scope_makes_ciphertext_unrecoverable() {
     let mut master_key = [0u8; MASTER_KEY_LEN];
     for (i, byte) in master_key.iter_mut().enumerate() {
         // `i` ≤ MASTER_KEY_LEN (= 32) so try_from is exact.
-        *byte = u8::try_from(i).unwrap_or(0xAA).wrapping_mul(31).wrapping_add(7);
+        *byte = u8::try_from(i)
+            .unwrap_or(0xAA)
+            .wrapping_mul(31)
+            .wrapping_add(7);
     }
 
     // Derive a per-scope AEAD key under a representative HKDF
@@ -166,8 +169,7 @@ fn aead_round_trip_then_forget_scope_makes_ciphertext_unrecoverable() {
     scope_key.fill(0);
     master_key.fill(0);
     assert_eq!(
-        scope_key,
-        [0u8; AEAD_KEY_LEN],
+        scope_key, [0u8; AEAD_KEY_LEN],
         "scope key buffer must be all-zero after destruction"
     );
 

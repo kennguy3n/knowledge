@@ -94,7 +94,13 @@ fn full_inheritance_and_userset_rewrites_resolve() {
 
     // 2. Admin gets editor / member / viewer on tenant, but NOT
     // owner.
-    assert!(check_permission(&store, &ns, tenant, Relation::Admin, admin));
+    assert!(check_permission(
+        &store,
+        &ns,
+        tenant,
+        Relation::Admin,
+        admin
+    ));
     assert!(check_permission(
         &store,
         &ns,
@@ -192,7 +198,13 @@ fn empty_namespace_registry_falls_back_to_self_relation_only() {
         .insert(RelationTuple::new(tenant, Relation::Owner, owner))
         .expect("insert owner");
 
-    assert!(check_permission(&store, &ns, tenant, Relation::Owner, owner));
+    assert!(check_permission(
+        &store,
+        &ns,
+        tenant,
+        Relation::Owner,
+        owner
+    ));
     assert!(
         !check_permission(&store, &ns, tenant, Relation::Viewer, owner),
         "without an inheritance config, Owner must not imply Viewer"

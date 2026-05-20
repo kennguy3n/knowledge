@@ -9,6 +9,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Principle of least privilege: every job in this workflow only needs
+# read access to the repo contents. The `fuzz` job's
+# `actions/upload-artifact@v4` step uploads to the per-run actions
+# scope, which is granted automatically and does not require an
+# additional permission grant.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
@@ -224,7 +232,12 @@ jobs:
             crates/crypto/fuzz/target
           key: ${{ runner.os }}-fuzz-${{ hashFiles('crates/crypto/fuzz/Cargo.toml', 'crates/crypto/Cargo.toml', 'Cargo.lock') }}
           restore-keys: ${{ runner.os }}-fuzz-
-      - run: cargo install cargo-fuzz --locked
+      # `cargo install cargo-fuzz` without `--locked` so the install
+      # picks up newer semver-compatible deps (in particular `rustix`,
+      # which the bundled 0.13.1 lock pins to a version that no longer
+      # compiles on current nightly). `cargo-fuzz` itself stays at the
+      # latest published version.
+      - run: cargo install cargo-fuzz
       # The fuzz workspace lives at crates/crypto/fuzz (excluded from
       # the parent workspace) so we run from there. 120 s per target
       # is the ceiling for fast PR-loop feedback; the weekly job

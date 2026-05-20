@@ -28,7 +28,10 @@ fn fixture_master_key() -> MasterKey {
     let mut k = [0u8; MASTER_KEY_LEN];
     for (i, byte) in k.iter_mut().enumerate() {
         // `i` is bounded by MASTER_KEY_LEN (= 32).
-        *byte = u8::try_from(i).unwrap_or(0xA1).wrapping_mul(31).wrapping_add(7);
+        *byte = u8::try_from(i)
+            .unwrap_or(0xA1)
+            .wrapping_mul(31)
+            .wrapping_add(7);
     }
     k
 }
@@ -38,11 +41,7 @@ fn bench_add_node(c: &mut Criterion) {
     c.bench_function("concept_graph/add_node/10k", |b| {
         b.iter_with_setup(ConceptGraph::new, |mut g| {
             for i in 0..ADD_NODE_COUNT {
-                let n = ConceptNode::new_candidate(
-                    format!("bench-node-{i}"),
-                    "definition",
-                    scope,
-                );
+                let n = ConceptNode::new_candidate(format!("bench-node-{i}"), "definition", scope);
                 g.add_node(black_box(n))
                     .expect("add_node must not fail with fresh ids");
             }

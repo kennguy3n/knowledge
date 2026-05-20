@@ -54,12 +54,9 @@ fn evidence_promotion_and_supersession_round_trip() {
     ];
 
     // 1. Open both stores and ingest evidence rows.
-    let mut store = EvidenceStore::open(
-        &evidence_path,
-        &MASTER_KEY,
-        EvidenceStoreConfig::default(),
-    )
-    .expect("open evidence store");
+    let mut store =
+        EvidenceStore::open(&evidence_path, &MASTER_KEY, EvidenceStoreConfig::default())
+            .expect("open evidence store");
 
     let mut evidence_ids = Vec::new();
     for (label, def) in observations {
@@ -147,8 +144,7 @@ fn evidence_promotion_and_supersession_round_trip() {
     drop(graph);
     let mut graph_reopened =
         PersistentConceptGraph::open(&graph_path, &MASTER_KEY).expect("reopen graph");
-    let (loaded_nodes, loaded_edges) =
-        graph_reopened.load_scope(scope).expect("load_scope");
+    let (loaded_nodes, loaded_edges) = graph_reopened.load_scope(scope).expect("load_scope");
     assert_eq!(loaded_nodes, 3, "3 nodes hydrated from SQLCipher");
     assert_eq!(loaded_edges, 2, "2 edges hydrated from SQLCipher");
     for &id in &concept_ids {
@@ -161,8 +157,7 @@ fn evidence_promotion_and_supersession_round_trip() {
 
     // 5. Supersede the Migration Plan with a fresh node, then
     //    rehydrate again and verify the supersession edge survived.
-    let new_migration =
-        ConceptNode::new_candidate("Migration Plan v2", "M3 → M4 cutover", scope);
+    let new_migration = ConceptNode::new_candidate("Migration Plan v2", "M3 → M4 cutover", scope);
     let new_id = graph_reopened
         .add_node(new_migration)
         .expect("add successor");
@@ -187,8 +182,7 @@ fn evidence_promotion_and_supersession_round_trip() {
     drop(graph_reopened);
     let mut graph_final =
         PersistentConceptGraph::open(&graph_path, &MASTER_KEY).expect("reopen for final check");
-    let (final_nodes, final_edges) =
-        graph_final.load_scope(scope).expect("load_scope final");
+    let (final_nodes, final_edges) = graph_final.load_scope(scope).expect("load_scope final");
     assert_eq!(final_nodes, 4, "predecessor + 2 originals + successor");
     assert_eq!(final_edges, 3, "IsA + PartOf + Supersedes");
     let pred = graph_final

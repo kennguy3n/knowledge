@@ -109,9 +109,7 @@ fn bench_read_body(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(BODY_TABLE_BODY_SIZE as u64));
     group.bench_function("10KB_Important", |b| {
         b.iter(|| {
-            let pt = store
-                .read_body(black_box(evidence_id))
-                .expect("read_body");
+            let pt = store.read_body(black_box(evidence_id)).expect("read_body");
             black_box(pt);
         });
     });
@@ -124,9 +122,7 @@ fn bench_search_fts(c: &mut Criterion) {
     for i in 0..FTS_CORPUS_SIZE {
         // Mix a unique token + a shared token so the bench measures
         // both selective and selective-but-multi-hit FTS queries.
-        let body = format!(
-            "alpha bravo charlie unique-token-{i} migration deadline channel-recap"
-        );
+        let body = format!("alpha bravo charlie unique-token-{i} migration deadline channel-recap");
         store
             .ingest(
                 scope,
