@@ -1789,10 +1789,10 @@ impl EvidenceStore {
         // stays well below SQLite's `SQLITE_MAX_VARIABLE_NUMBER` cap
         // so the statement compiles even on builds that lower it,
         // mirroring the FTS purge sibling above.
+        // `slice::chunks` never yields an empty slice, so no explicit
+        // empty-guard is needed; the loop body issues exactly one
+        // `DELETE` per non-empty chunk.
         for chunk in hashes.chunks(DELETE_BATCH) {
-            if chunk.is_empty() {
-                continue;
-            }
             let placeholders = (0..chunk.len())
                 .map(|i| format!("?{}", i + 1))
                 .collect::<Vec<_>>()
@@ -1805,11 +1805,12 @@ impl EvidenceStore {
                      WHERE w.content_hash = body_store.content_hash \
                  )"
             );
-            let params: Vec<&dyn rusqlite::ToSql> = chunk
-                .iter()
-                .map(|h| h as &dyn rusqlite::ToSql)
-                .collect();
-            tx.execute(sql.as_str(), rusqlite::params_from_iter(params.iter().copied()))?;
+            let params: Vec<&dyn rusqlite::ToSql> =
+                chunk.iter().map(|h| h as &dyn rusqlite::ToSql).collect();
+            tx.execute(
+                sql.as_str(),
+                rusqlite::params_from_iter(params.iter().copied()),
+            )?;
         }
 
         tx.commit()?;
