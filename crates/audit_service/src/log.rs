@@ -7,6 +7,7 @@ use uuid::Uuid;
 use evidence_store::ScopeId;
 
 use crate::entry::{Actor, AuditActionType, AuditEntry, AuditEntryId};
+use crate::error::{AuditError, Result};
 
 /// Filter specification for [`AuditLog::query`].
 ///
@@ -134,6 +135,42 @@ impl AuditLog {
         let id = entry.id;
         self.entries.push(entry);
         id
+    }
+
+    /// Replay a previously-appended entry, preserving its existing
+    /// `sequence` field. Used by [`crate::PersistentAuditLog`] when
+    /// rehydrating the log from disk so the in-memory sequence
+    /// numbers match the on-disk ones.
+    ///
+    /// The entry must arrive in `sequence` order — strictly
+    /// increasing and not gapped with respect to the current
+    /// `next_sequence`. A replay out of order is an integrity
+    /// violation (the row order on disk does not match the
+    /// claimed sequence numbers) and is rejected with
+    /// [`AuditError::Persistence`]. The log's `next_sequence`
+    /// advances to `entry.sequence + 1` so subsequent
+    /// [`Self::append`] calls keep the monotonic invariant.
+    pub fn replay_persisted(&mut self, entry: AuditEntry) -> Result<()> {
+        if entry.sequence != self.next_sequence {
+            return Err(AuditError::Persistence(
+                "replayed audit entry sequence is not contiguous with next_sequence",
+            ));
+        }
+        // `saturating_add` is the same overflow guard
+        // `append` uses, so the replay path cannot regress the
+        // counter past `u64::MAX`.
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        self.entries.push(entry);
+        Ok(())
+    }
+
+    /// The sequence number the next [`Self::append`] /
+    /// [`Self::replay_persisted`] call will assign. Used by
+    /// [`crate::PersistentAuditLog`] to stamp an entry *before*
+    /// writing it to disk, so a persist failure can leave the
+    /// in-memory log untouched.
+    pub fn peek_next_sequence(&self) -> u64 {
+        self.next_sequence
     }
 
     /// Look up an entry by id. Returns `None` if absent.

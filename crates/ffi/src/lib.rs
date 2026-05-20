@@ -479,19 +479,14 @@ pub fn forget(id: String) -> FfiResult<()> {
                 id: id.clone(),
             })?;
         let scope = row.scope_id;
-        // 1. In-memory DEK destruction (immediate effect on this
-        //    process). 2. Persist the tombstone so a process
-        //    restart still rejects the scope. 3. Purge the FTS5 /
-        //    embedding indexes so plaintext-derived secondary
-        //    payloads cannot be recovered post-forget.
-        rt.forget_scope(scope);
-        // Tombstone first — this is the durable gate that prevents
-        // the scope from being accessible on restart.
-        rt.store_mut()
-            .record_forgotten_scope(scope)
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?;
+        // 1. In-memory DEK destruction *and* tombstone persistence
+        //    in one atomic step — the destroy call routes through
+        //    the `TombstoneStore` adapter so the on-disk
+        //    `forgotten_scopes` row is written before the destroy
+        //    returns. 2. Purge the FTS5 / embedding indexes so
+        //    plaintext-derived secondary payloads cannot be
+        //    recovered post-forget.
+        rt.forget_scope(scope)?;
         // Best-effort DEK deletion: if this fails the tombstone
         // still blocks access and open_store's recovery path will
         // retry the deletion on next startup.
@@ -546,13 +541,9 @@ pub fn forget(id: String) -> FfiResult<()> {
 pub fn forget_scope(scope_id: String) -> FfiResult<()> {
     let scope = parse_scope_id(&scope_id)?;
     with_runtime(|rt| {
-        rt.forget_scope(scope);
-        // Tombstone first — durable gate.
-        rt.store_mut()
-            .record_forgotten_scope(scope)
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?;
+        // Atomic in-memory + on-disk forgetting (see
+        // `FfiRuntime::forget_scope` for the rationale).
+        rt.forget_scope(scope)?;
         // Best-effort DEK deletion (see forget() for rationale).
         if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
             eprintln!(
@@ -1075,9 +1066,32 @@ impl runtime::FfiRuntime {
         Ok(())
     }
 
-    fn forget_scope(&mut self, scope: ScopeId) {
+    /// Destroy the in-memory scope DEK *and* persist the matching
+    /// tombstone in the evidence store's `forgotten_scopes` /
+    /// `epoch_tombstones` tables in one atomic operation.
+    ///
+    /// Returns [`FfiError::Evidence`] if the on-disk tombstone
+    /// persistence fails. In that case the in-memory DEK is still
+    /// zeroized (the destroy code path runs persistence after
+    /// destruction) but the next `open_store` will not see the
+    /// tombstone — callers SHOULD surface the error to their host
+    /// so it can retry or alert.
+    fn forget_scope(&mut self, scope: ScopeId) -> Result<(), FfiError> {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
-        let _ = forgetting::destroy_scope_dek(self.registry_mut(), registry_scope);
+        // Split-borrow `&mut self` so we can hand both the registry
+        // and the store to `destroy_scope_dek` at the same time.
+        // Going through accessor methods would have to consume
+        // `self` twice and the borrow checker would reject it.
+        let runtime::FfiRuntime {
+            registry, store, ..
+        } = self;
+        let mut adapter = runtime::EvidenceStoreTombstoneStore::new(store);
+        forgetting::destroy_scope_dek(registry, registry_scope, Some(&mut adapter)).map_err(
+            |e| FfiError::Evidence {
+                message: e.to_string(),
+            },
+        )?;
+        Ok(())
     }
 
     fn is_scope_forgotten(&self, scope: ScopeId) -> bool {

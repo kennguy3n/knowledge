@@ -136,7 +136,8 @@ fn forgotten_scope_yields_no_dek() {
     let key = [0x77u8; crypto::AEAD_KEY_LEN];
     registry.insert_scope_dek(ScopeDek::new(scope_id, EpochId::zero(), key));
     assert!(registry.get_scope_dek(scope_id).is_some());
-    let events = destroy_scope_dek(&mut registry, scope_id);
+    let events = destroy_scope_dek(&mut registry, scope_id, None)
+        .expect("destroy_scope_dek must succeed with no tombstone store");
     assert!(!events.is_empty(), "scope DEK destroy must emit an event");
     assert!(
         registry.is_scope_forgotten(scope_id),
@@ -147,7 +148,8 @@ fn forgotten_scope_yields_no_dek() {
         "registry must not return DEK material for a forgotten scope"
     );
     // Idempotent destroy.
-    let again = destroy_scope_dek(&mut registry, scope_id);
+    let again = destroy_scope_dek(&mut registry, scope_id, None)
+        .expect("destroy_scope_dek must succeed with no tombstone store");
     assert!(
         again.is_empty(),
         "double-destroy must be idempotent (no new events)"
@@ -444,7 +446,8 @@ fn forgetting_zeroizes_and_isolates_dek_registry_entries() {
     let key_b = registry.get_scope_dek(scope_b).expect("scope B DEK").key();
     assert_ne!(key_a, key_b, "two distinct scopes returned the same DEK");
 
-    let events_a = destroy_scope_dek(&mut registry, scope_a);
+    let events_a = destroy_scope_dek(&mut registry, scope_a, None)
+        .expect("destroy_scope_dek must succeed with no tombstone store");
     assert!(!events_a.is_empty(), "destroy_scope_dek must emit an event");
     assert!(registry.is_scope_forgotten(scope_a));
     assert!(!registry.is_scope_forgotten(scope_b));

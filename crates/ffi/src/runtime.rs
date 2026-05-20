@@ -23,13 +23,114 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use crypto::forgetting::{self, DekRegistry};
-use crypto::MasterKey;
+use chrono::{DateTime, TimeZone, Utc};
+use crypto::forgetting::{self, DekRegistry, TombstoneStore};
+use crypto::{CryptoError, MasterKey};
 use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
 use memory_manager::{ChannelMemoryObject, UserMemoryObject};
 use zeroize::Zeroize;
 
 use crate::error::{FfiError, FfiResult};
+
+/// `crypto::forgetting::TombstoneStore` implementation backed by the
+/// `EvidenceStore`'s SQLCipher tables.
+///
+/// `crypto` cannot take a SQLite dependency (it would create a
+/// circular dep with `evidence_store`), so this adapter lives in the
+/// FFI runtime crate. It threads tombstone persistence through the
+/// existing `forgotten_scopes` (v4) and `epoch_tombstones` (v8)
+/// tables so [`crypto::forgetting::destroy_scope_dek`] and
+/// [`crypto::forgetting::destroy_epoch_dek`] can record the
+/// destruction in a single atomic step \u2014 the in-memory DEK is
+/// zeroized first, then the on-disk tombstone is written before the
+/// destroy call returns.
+///
+/// Both persist methods are idempotent at the SQL layer via the
+/// underlying `INSERT OR IGNORE` semantics, matching the
+/// `TombstoneStore` contract.
+pub(crate) struct EvidenceStoreTombstoneStore<'a> {
+    store: &'a mut EvidenceStore,
+}
+
+impl<'a> EvidenceStoreTombstoneStore<'a> {
+    pub(crate) fn new(store: &'a mut EvidenceStore) -> Self {
+        Self { store }
+    }
+}
+
+/// Convert a `chrono::DateTime<Utc>` into the Unix-epoch-seconds
+/// representation used by both the `forgotten_scopes` and
+/// `epoch_tombstones` tables.
+fn dt_to_unix(at: DateTime<Utc>) -> i64 {
+    at.timestamp()
+}
+
+/// Inverse of [`dt_to_unix`]. Returns `Utc::now()` instead of
+/// erroring on a malformed timestamp because the alternative is to
+/// fail the whole `open_store` replay over what would necessarily be
+/// a corrupted on-disk row \u2014 the surrounding code already treats
+/// timestamps as advisory metadata for the audit trail (the
+/// destruction itself is what re-establishes the registry invariant).
+fn unix_to_dt(unix: i64) -> DateTime<Utc> {
+    Utc.timestamp_opt(unix, 0).single().unwrap_or_else(Utc::now)
+}
+
+impl TombstoneStore for EvidenceStoreTombstoneStore<'_> {
+    fn persist_tombstone(
+        &mut self,
+        scope: forgetting::ScopeId,
+        epoch: forgetting::EpochId,
+        destroyed_at: DateTime<Utc>,
+    ) -> Result<(), CryptoError> {
+        let scope_id = ScopeId::from_uuid(scope.0);
+        self.store
+            .record_epoch_tombstone(scope_id, epoch.0, dt_to_unix(destroyed_at))
+            .map_err(|e| CryptoError::TombstonePersistence(e.to_string()))
+    }
+
+    fn persist_forgotten_scope(
+        &mut self,
+        scope: forgetting::ScopeId,
+        destroyed_at: DateTime<Utc>,
+    ) -> Result<(), CryptoError> {
+        let scope_id = ScopeId::from_uuid(scope.0);
+        self.store
+            .record_forgotten_scope_at(scope_id, dt_to_unix(destroyed_at))
+            .map_err(|e| CryptoError::TombstonePersistence(e.to_string()))
+    }
+
+    fn load_tombstones(
+        &self,
+    ) -> Result<Vec<(forgetting::ScopeId, forgetting::EpochId, DateTime<Utc>)>, CryptoError> {
+        let rows = self
+            .store
+            .load_epoch_tombstones()
+            .map_err(|e| CryptoError::TombstonePersistence(e.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(|(scope_id, epoch_id, ts)| {
+                (
+                    forgetting::ScopeId(scope_id.as_uuid()),
+                    forgetting::EpochId(epoch_id),
+                    unix_to_dt(ts),
+                )
+            })
+            .collect())
+    }
+
+    fn load_forgotten_scopes(
+        &self,
+    ) -> Result<Vec<(forgetting::ScopeId, DateTime<Utc>)>, CryptoError> {
+        let rows = self
+            .store
+            .load_forgotten_scopes_with_timestamps()
+            .map_err(|e| CryptoError::TombstonePersistence(e.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(|(scope_id, ts)| (forgetting::ScopeId(scope_id.as_uuid()), unix_to_dt(ts)))
+            .collect())
+    }
+}
 
 /// In-memory runtime state carried across FFI calls.
 ///
@@ -246,7 +347,41 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
         // *re-loaded* tombstones is not required by the spec —
         // each tombstone was already audited on its original
         // forget() call.
-        let _ = forgetting::destroy_scope_dek(&mut registry, registry_scope);
+        //
+        // We pass `None` for the `TombstoneStore` parameter — the
+        // on-disk tombstone already exists (we are replaying it),
+        // so re-persisting would be a duplicate `INSERT OR IGNORE`
+        // and a wasted I/O round-trip. The destroy call still
+        // populates the in-memory `tombstones` map on the
+        // `DekRegistry`.
+        let _ = forgetting::destroy_scope_dek(&mut registry, registry_scope, None)
+            .expect("None tombstone-store cannot fail");
+    }
+
+    // Replay per-epoch tombstones (v8 schema). The
+    // `forgotten_scopes` table above only carries scope-grain
+    // forgetting; individual epoch DEK destructions (emitted by
+    // `crypto::forgetting::destroy_epoch_dek`) live in
+    // `epoch_tombstones`. Both must be replayed so post-restart
+    // calls for forgotten epochs continue to short-circuit even
+    // when the scope itself is still live.
+    let epoch_tombstones = store
+        .load_epoch_tombstones()
+        .map_err(|e| FfiError::Evidence {
+            message: e.to_string(),
+        })?;
+    for (scope_id, epoch_id, _at) in epoch_tombstones {
+        // Skip rows whose scope is already scope-forgotten — the
+        // earlier `destroy_scope_dek` walk already added every
+        // epoch tombstone for that scope, so a per-epoch replay
+        // would be redundant.
+        if tombstones.contains(&scope_id) {
+            continue;
+        }
+        let registry_scope = forgetting::ScopeId(scope_id.as_uuid());
+        let registry_epoch = forgetting::EpochId(epoch_id);
+        let _ = forgetting::destroy_epoch_dek(&mut registry, registry_scope, registry_epoch, None)
+            .expect("None tombstone-store cannot fail");
     }
 
     // Follow-up — re-purge the FTS5 / embedding

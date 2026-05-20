@@ -73,8 +73,10 @@ impl Tenant {
     }
 }
 
-/// In-memory tenant catalog. Persistence (Postgres + key store) lands
-/// in a future update.
+/// In-memory tenant catalog. The query surface used by
+/// `tenant_service` callers and by
+/// [`crate::PersistentTenantRegistry`] (which mirrors every mutation
+/// to a SQLCipher database).
 #[derive(Debug, Clone, Default)]
 pub struct TenantRegistry {
     tenants: HashMap<TenantId, Tenant>,
@@ -265,5 +267,43 @@ impl TenantRegistry {
             .iter()
             .filter_map(|((t, _), m)| if *t == tenant_id { Some(m) } else { None })
             .collect()
+    }
+
+    /// Insert a tenant row that was rehydrated from persistent
+    /// storage. Used by [`crate::PersistentTenantRegistry::load_all`].
+    ///
+    /// Unlike [`Self::create`], this method does *not* assign a
+    /// fresh id, validate the config, or stamp a new `created_at`
+    /// — the on-disk row is the source of truth and the in-memory
+    /// view must match it byte-for-byte after a restart. Returns
+    /// [`TenantError::AlreadyExists`] only if the registry already
+    /// holds a tenant with the same id (a programmer error: the
+    /// caller is expected to reset the registry before rehydration).
+    pub fn insert_persisted(&mut self, tenant: Tenant) -> Result<()> {
+        let id = tenant.id;
+        if self.tenants.contains_key(&id) {
+            return Err(TenantError::AlreadyExists(id.0));
+        }
+        self.tenants.insert(id, tenant);
+        Ok(())
+    }
+
+    /// Insert a membership row that was rehydrated from persistent
+    /// storage. Used by [`crate::PersistentTenantRegistry::load_all`].
+    ///
+    /// The membership is inserted verbatim — including a
+    /// `TenantMemberStatus::Removed` row, which the public API
+    /// keeps around as an audit artefact. Returns
+    /// [`TenantError::NotFound`] if the membership's tenant id is
+    /// not present in the registry (the caller must rehydrate
+    /// tenants *before* members so the foreign-key relationship is
+    /// satisfied).
+    pub fn insert_persisted_member(&mut self, member: TenantMember) -> Result<()> {
+        let tenant_id = TenantId(member.tenant_id);
+        if !self.tenants.contains_key(&tenant_id) {
+            return Err(TenantError::NotFound(member.tenant_id));
+        }
+        self.members.insert((tenant_id, member.user_id), member);
+        Ok(())
     }
 }

@@ -1152,9 +1152,23 @@ impl EvidenceStore {
     /// [`Self::purge_fts_for_scope`] respectively.
     pub fn record_forgotten_scope(&mut self, scope_id: ScopeId) -> Result<()> {
         let now = Utc::now().timestamp();
+        self.record_forgotten_scope_at(scope_id, now)
+    }
+
+    /// Like [`Self::record_forgotten_scope`], but persists `at`
+    /// (Unix epoch seconds) as the `forgotten_at` column instead of
+    /// calling `Utc::now()` internally.
+    ///
+    /// The FFI runtime's `TombstoneStore` impl uses this entry
+    /// point so the on-disk tombstone records *the exact instant*
+    /// the in-memory [`crypto::forgetting::destroy_scope_dek`] call
+    /// produced, rather than a slightly-later wall-clock reading.
+    /// Like its sibling, this is idempotent — re-recording an
+    /// existing tombstone is a no-op via `INSERT OR IGNORE`.
+    pub fn record_forgotten_scope_at(&mut self, scope_id: ScopeId, at: i64) -> Result<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO forgotten_scopes (scope_id, forgotten_at) VALUES (?1, ?2)",
-            params![scope_id.as_uuid().as_bytes().as_slice(), now],
+            params![scope_id.as_uuid().as_bytes().as_slice(), at],
         )?;
         Ok(())
     }
@@ -1177,6 +1191,90 @@ impl EvidenceStore {
         for row in rows {
             let bytes = row?;
             out.push(ScopeId::from_uuid(slice_to_uuid(&bytes)?));
+        }
+        Ok(out)
+    }
+
+    /// Same as [`Self::load_forgotten_scopes`] but returns the
+    /// `forgotten_at` column alongside the scope id. The FFI
+    /// runtime's `TombstoneStore::load_forgotten_scopes` impl uses
+    /// this entry point.
+    pub fn load_forgotten_scopes_with_timestamps(&self) -> Result<Vec<(ScopeId, i64)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT scope_id, forgotten_at FROM forgotten_scopes")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (bytes, ts) = row?;
+            out.push((ScopeId::from_uuid(slice_to_uuid(&bytes)?), ts));
+        }
+        Ok(out)
+    }
+
+    /// Persist a per-`(scope, epoch)` cryptographic-forgetting
+    /// tombstone produced by
+    /// [`crypto::forgetting::destroy_epoch_dek`]. The on-disk
+    /// record makes the destruction durable across restarts; the
+    /// FFI runtime replays it through `destroy_epoch_dek` on
+    /// `open_store` so post-restart calls for the forgotten epoch
+    /// short-circuit.
+    ///
+    /// Idempotent via `INSERT OR IGNORE` on the `(scope_id,
+    /// epoch_id)` primary key — re-recording an existing tombstone
+    /// is a no-op rather than an error.
+    pub fn record_epoch_tombstone(
+        &mut self,
+        scope_id: ScopeId,
+        epoch_id: u64,
+        at: i64,
+    ) -> Result<()> {
+        // SQLite REAL/INTEGER columns are i64. Epoch ids are u64
+        // by definition (per `crypto::forgetting::EpochId`), but
+        // in practice we never get anywhere near 2^63 — the
+        // rotation policy default is 24h or 16 GiB per epoch, so
+        // a single scope would need ~2.5e13 years of continuous
+        // rotation to overflow. We reject the impossible case
+        // explicitly so a corrupt host-side counter cannot silently
+        // wrap into negative ids.
+        let epoch_signed = i64::try_from(epoch_id).map_err(|_| {
+            EvidenceError::Schema("epoch_id overflows i64 — refusing to persist tombstone")
+        })?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO epoch_tombstones (scope_id, epoch_id, forgotten_at) \
+             VALUES (?1, ?2, ?3)",
+            params![scope_id.as_uuid().as_bytes().as_slice(), epoch_signed, at],
+        )?;
+        Ok(())
+    }
+
+    /// Load every persisted per-`(scope, epoch)` tombstone. The
+    /// FFI runtime's `TombstoneStore::load_tombstones` impl uses
+    /// this entry point on `open_store` to rebuild the in-memory
+    /// [`crypto::forgetting::DekRegistry`] so post-restart calls
+    /// for forgotten epochs continue to short-circuit.
+    ///
+    /// The returned ordering is unspecified.
+    pub fn load_epoch_tombstones(&self) -> Result<Vec<(ScopeId, u64, i64)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT scope_id, epoch_id, forgotten_at FROM epoch_tombstones")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (bytes, epoch_signed, ts) = row?;
+            let epoch = u64::try_from(epoch_signed).map_err(|_| {
+                EvidenceError::Schema("epoch_tombstones.epoch_id is negative — database corruption")
+            })?;
+            out.push((ScopeId::from_uuid(slice_to_uuid(&bytes)?), epoch, ts));
         }
         Ok(out)
     }
@@ -2034,6 +2132,9 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // v7 (C10): add `memory_objects`. Purely additive; handled
         // by SCHEMA_SQL's `CREATE TABLE IF NOT EXISTS`.
         7 => Ok(()),
+        // v8: add `epoch_tombstones`. Purely additive; handled
+        // by SCHEMA_SQL's `CREATE TABLE IF NOT EXISTS`.
+        8 => Ok(()),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
         )),

@@ -1,4 +1,8 @@
-//! In-memory tuple store.
+//! In-memory tuple store — the query surface for the permission
+//! service. The on-disk durability layer wraps this store via
+//! [`crate::PersistentTupleStore`], mirroring every mutation to a
+//! SQLCipher database while leaving the in-memory `HashSet` as the
+//! authoritative query view for `check_permission`.
 
 use std::collections::HashSet;
 
@@ -12,8 +16,9 @@ use crate::tuple::{ObjectRef, Relation, RelationTuple};
 /// detect double-write bugs (use [`Self::upsert`] for the
 /// best-effort flavour).
 ///
-/// Persistence is intentionally deferred — ships the in-memory
-/// variant; the on-disk SQLCipher-backed variant is not yet wired.
+/// This is the query surface used by [`crate::check::check_permission`];
+/// callers that want their tuples to survive a process restart
+/// should wrap this store with [`crate::PersistentTupleStore`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TupleStore {
     tuples: HashSet<RelationTuple>,
