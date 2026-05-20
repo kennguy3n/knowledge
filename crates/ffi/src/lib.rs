@@ -60,15 +60,17 @@
 //!   embedding pipeline is wired.
 
 #![deny(missing_docs)]
-// Public FFI entry points take owned `String` / `Vec<u8>` by value
-// because the UniFFI (Swift / Kotlin) and N-API (Electron) bindings
-// generate code that hands ownership across the language boundary —
-// every JS-side string the host passes in arrives as a fresh
-// `String`. Borrowed equivalents would force a needless extra copy
-// in the generated bindings (or simply not compile under UniFFI's
-// proc-macro constraints), so this lint is silenced at the module
-// level rather than per-function.
-#![allow(clippy::needless_pass_by_value)]
+// Public FFI entry points below carry per-function
+// `#[allow(clippy::needless_pass_by_value)]` rather than a
+// module-level blanket. Each public function in this file is shaped
+// for the UniFFI (Swift / Kotlin) and N-API (Electron) bindings,
+// which hand ownership of `String` / `Vec<u8>` across the language
+// boundary on every call; borrowed equivalents would force an extra
+// copy in generated code (or simply not compile under UniFFI's
+// proc-macro constraints). Keeping the allow local lets clippy keep
+// catching inadvertent by-value taking in *internal* helpers in this
+// file, which do not cross the FFI boundary and should idiomatically
+// borrow.
 
 pub mod error;
 pub mod runtime;
@@ -109,6 +111,7 @@ use runtime::with_runtime;
 /// * [`FfiError::Evidence`] if the underlying evidence store fails.
 /// * [`FfiError::NotFound`] if `scope_id` has been cryptographically
 ///   forgotten via [`forget`].
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn ingest_message(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -130,7 +133,7 @@ pub fn ingest_message(
             .ingest(
                 scope,
                 body.as_bytes(),
-                Some(source_kind_tag(source)),
+                Some(source_kind_tag(&source)),
                 ffi_importance_to_internal(importance),
             )
             .map_err(|e| FfiError::Evidence {
@@ -172,6 +175,7 @@ pub fn ingest_message(
 /// Returns an empty vector if `scope_id` has been forgotten — this is
 /// a deliberate "soft" semantic so callers can treat forgotten scopes
 /// the same as scopes that simply have no matching rows.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn query(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -240,6 +244,7 @@ pub fn query(
 /// ```text
 /// escape_fts_query(r#"hello "world""#) => r#""hello ""world""""#
 /// ```
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn escape_fts_query(input: String) -> String {
     let mut out = String::with_capacity(input.len() + 2);
     out.push('"');
@@ -273,6 +278,7 @@ fn snippet_clip(body: &str, max_chars: usize) -> String {
 /// * [`FfiError::NotFound`] if the evidence row does not exist or
 ///   belongs to a forgotten scope.
 /// * [`FfiError::Evidence`] if reading or decrypting the body fails.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn get_evidence(handle: RuntimeHandle, evidence_id: String) -> FfiResult<EvidenceRecord> {
     let id = parse_evidence_id(&evidence_id)?;
     with_runtime(handle, |rt| {
@@ -335,6 +341,7 @@ pub fn get_evidence(handle: RuntimeHandle, evidence_id: String) -> FfiResult<Evi
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn get_user_memory(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -373,6 +380,7 @@ pub fn get_user_memory(
 ///   open scope, or if the owning scope has been forgotten.
 /// * [`FfiError::Memory`] if the underlying state-machine transition
 ///   rejects the pin (e.g. the object is in a terminal state).
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn pin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
     let uuid = parse_uuid(&id)?;
     with_runtime(handle, |rt| {
@@ -411,6 +419,7 @@ pub fn pin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
 /// * [`FfiError::NotFound`] if no memory object has that id in any
 ///   open scope, or if the owning scope has been forgotten.
 /// * [`FfiError::Memory`] if the underlying state-machine rejects.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn unpin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
     let uuid = parse_uuid(&id)?;
     with_runtime(handle, |rt| {
@@ -479,6 +488,7 @@ pub fn unpin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
 ///   destruction is still effective in this case, but the next
 ///   `open_store` will not see the tombstone and the FTS index may
 ///   still contain plaintext for the affected scope.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn forget(handle: RuntimeHandle, id: String) -> FfiResult<()> {
     let evidence_id = parse_evidence_id(&id)?;
     with_runtime(handle, |rt| {
@@ -552,6 +562,7 @@ pub fn forget(handle: RuntimeHandle, id: String) -> FfiResult<()> {
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 /// * [`FfiError::Evidence`] if persisting the tombstone or purging
 ///   secondary indexes fails.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
     let scope = parse_scope_id(&scope_id)?;
     with_runtime(handle, |rt| {
@@ -598,6 +609,7 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings/structs across the language boundary on every call.
 pub fn list_memories(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -638,6 +650,7 @@ pub fn list_memories(
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn run_decay_sweep(handle: RuntimeHandle, scope_id: ScopeIdString) -> FfiResult<u32> {
     let scope = parse_scope_id(&scope_id)?;
     with_runtime(handle, |rt| {
@@ -670,6 +683,7 @@ pub fn run_decay_sweep(handle: RuntimeHandle, scope_id: ScopeIdString) -> FfiRes
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn get_channel_memory(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -717,6 +731,7 @@ pub fn get_channel_memory(
 ///   build (the current default).
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn trigger_synthesis(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -775,6 +790,7 @@ pub fn generate_keypair() -> FfiResult<FfiKeypair> {
 ///   write error).
 /// * [`FfiError::Crypto`] on AEAD or key-derivation failure.
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned byte buffers across the language boundary on every call.
 pub fn encrypt(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -815,6 +831,7 @@ pub fn encrypt(
 /// * [`FfiError::Crypto`] if the envelope is malformed or decryption
 ///   fails.
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned byte buffers across the language boundary on every call.
 pub fn decrypt(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -997,7 +1014,7 @@ fn ffi_importance_to_internal(ffi: FfiImportanceClass) -> ImportanceClass {
     }
 }
 
-fn source_kind_tag(source: SourceKind) -> &'static str {
+fn source_kind_tag(source: &SourceKind) -> &'static str {
     match source {
         SourceKind::Manual => "manual",
         SourceKind::Slack => "slack",

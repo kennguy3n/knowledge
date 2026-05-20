@@ -400,6 +400,7 @@ where
 ///   hex characters.
 /// * [`FfiError::Evidence`] if SQLCipher fails to open the underlying
 ///   database or the tombstone-replay path errors out.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHandle> {
     let master_key = parse_master_key_hex(&master_key_hex)?;
     let mut store = EvidenceStore::open(&path, &master_key, EvidenceStoreConfig::default())
@@ -645,11 +646,24 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHand
     };
 
     let handle = RuntimeHandle(next_handle());
+    // Defense-in-depth against `AtomicU64` wraparound: `next_handle`
+    // starts at 1 and increments via `fetch_add`, so after exactly
+    // `u64::MAX` allocations the counter wraps back to 0 — the
+    // `RuntimeHandle::NONE` sentinel that every other FFI function
+    // treats as "no handle". Refuse to mint that value rather than
+    // silently violate the NONE-is-always-invalid contract. In
+    // practice this is unreachable (2^64 opens per process), but the
+    // check is two instructions and pins the invariant.
+    if handle.0 == RuntimeHandle::NONE.0 {
+        return Err(FfiError::Evidence {
+            message: "runtime handle allocator wrapped to the reserved NONE sentinel".into(),
+        });
+    }
     let mut guard = write_registry();
-    // Allocation is monotonic via `NEXT`, so a collision would mean
-    // we already wrapped a `u64`. That's effectively impossible
-    // under normal use but we still guard against it rather than
-    // silently overwriting an open runtime.
+    // Allocation is monotonic via `NEXT`, so a collision against an
+    // already-open handle would also mean we wrapped. Same reasoning
+    // as the sentinel check above — refuse rather than silently
+    // overwrite an open runtime.
     if guard.contains_key(&handle.0) {
         return Err(FfiError::Evidence {
             message: format!("runtime handle {} collided during allocation", handle.0),
@@ -666,11 +680,26 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHand
 /// `try`/`finally` shutdown handler without first probing the
 /// runtime state.
 ///
-/// If another thread is mid-call on the same handle when this runs,
-/// that thread keeps the runtime alive via its cloned `Arc` until its
-/// call finishes — the runtime then drops cleanly. `close_store`
-/// itself returns immediately after removing the registry entry; it
-/// does not wait for the in-flight call to finish.
+/// # Concurrency contract
+///
+/// `close_store` is **non-blocking**. It removes the entry from the
+/// handle map (so no new calls can reach the runtime) and returns
+/// immediately. If another thread is mid-call on the same handle
+/// when this runs, that thread keeps the runtime alive via its
+/// cloned `Arc` until its own call finishes; the runtime then drops
+/// (closing the SQLite connection and zeroizing the master key)
+/// when the last `Arc` reference is released.
+///
+/// **Implication for hosts**: returning from `close_store` does NOT
+/// guarantee the underlying SQLite database file has been closed.
+/// On Windows in particular, attempting to move, delete, or re-open
+/// the database file immediately after `close_store` returns can
+/// fail with a file-lock error if another thread is still inside a
+/// `with_runtime` call. Hosts that need a hard "file is fully
+/// released" guarantee should serialize their teardown so no FFI
+/// calls are in flight before invoking `close_store`. POSIX systems
+/// allow concurrent rename/unlink and so are unaffected, but the
+/// underlying journal/WAL files may still be open briefly.
 pub fn close_store(handle: RuntimeHandle) -> FfiResult<()> {
     let _ = write_registry().remove(&handle.0);
     Ok(())
