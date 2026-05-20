@@ -522,8 +522,11 @@ longer recoverable.
   Body-table dedup rows are protected by per-scope CEK wraps
   (`body_store_key_wraps`): deleting a scope's wraps makes the
   shared body unrecoverable once no wraps remain. FTS5 tokens
-  are purged via `purge_fts_for_scope`; tombstone replay on
-  `open_store` closes the crash-gap.
+  are purged via `purge_fts_for_scope`, which runs `DELETE +
+  REBUILD` inside a single transaction so the shadow tables are
+  truncated and re-tokenised from the surviving content — no
+  residual plaintext fragments linger in the `%_data` segment
+  B-tree. Tombstone replay on `open_store` closes the crash-gap.
 - **Per-epoch DEK destroy** forgets a time slice of the cold
   archive.
 - **Per-row DEK** (used for very-high-sensitivity rows) gives

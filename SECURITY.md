@@ -38,13 +38,7 @@ personal device. The threat model assumes:
 
 The following are honest gaps:
 
-1. **FTS5 plaintext index purge is best-effort.** `forget()` and
-   `forget_scope()` purge FTS5 tokens via `purge_fts_for_scope`, and
-   tombstone replay on `open_store` closes the crash-gap. However,
-   SQLite FTS5 `DELETE` may leave residual data in shadow tables until
-   `OPTIMIZE` or `REBUILD` is run.
-
-2. **No live connector traffic.** All connectors consume JSON fixtures.
+1. **No live connector traffic.** All connectors consume JSON fixtures.
    OAuth2 token handling and live API transport are type-surface only.
 
 ## Supported Versions

@@ -197,21 +197,22 @@ fn purge_fts_for_scope_only_purges_target_scope() {
     assert!(store.get(res_b.evidence_id).expect("get b").is_some());
 }
 
-/// After `purge_fts_for_scope`, the FTS5 OPTIMIZE command must have
-/// compacted the shadow tables so that tokenised plaintext fragments
-/// no longer linger in the `%_data` segment B-tree. We verify this
-/// by querying the raw `evidence_fts_data` table — after OPTIMIZE,
-/// the segment structure is collapsed and contains no content rows
-/// for the purged scope.
+/// After `purge_fts_for_scope`, the FTS5 REBUILD command must have
+/// truncated and re-built the shadow tables so that tokenised
+/// plaintext fragments no longer linger in the `%_data` segment
+/// B-tree. We verify this by querying the raw `evidence_fts` virtual
+/// table — after REBUILD, the segment structure is reconstructed
+/// from the surviving content rows only and contains no entries for
+/// the purged scope.
 #[test]
-fn fts5_optimize_compacts_shadow_tables_after_purge() {
+fn fts5_rebuild_purges_shadow_tables_after_purge() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("evidence.db");
 
     let scope = ScopeId::new_v4();
     let body = format!(
         "This message contains {FORGETTING_PHRASE} which must be fully \
-         compacted from shadow tables after purge and OPTIMIZE."
+         purged from shadow tables after purge and REBUILD."
     );
 
     {
@@ -222,7 +223,7 @@ fn fts5_optimize_compacts_shadow_tables_after_purge() {
             .ingest(
                 scope,
                 body.as_bytes(),
-                Some("source:optimize-test"),
+                Some("source:rebuild-test"),
                 ImportanceClass::Important,
             )
             .expect("ingest");
@@ -233,7 +234,10 @@ fn fts5_optimize_compacts_shadow_tables_after_purge() {
             .expect("search pre-purge");
         assert_eq!(hits.len(), 1, "FTS5 must find the phrase before purge");
 
-        // Purge runs DELETE + OPTIMIZE inside a single transaction.
+        // Purge runs DELETE + REBUILD inside a single transaction.
+        // The REBUILD step truncates the shadow tables and
+        // re-tokenises from the surviving `content` column, so no
+        // plaintext fragments from the purged scope survive on disk.
         store
             .purge_fts_for_scope(scope)
             .expect("purge_fts_for_scope");
@@ -243,17 +247,17 @@ fn fts5_optimize_compacts_shadow_tables_after_purge() {
     let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
         .expect("re-open store");
 
-    // After OPTIMIZE, querying the FTS table must return nothing.
+    // After REBUILD, querying the FTS table must return nothing.
     let hits = store
         .search_fts(scope, FORGETTING_PHRASE, 10)
-        .expect("search post-optimize");
+        .expect("search post-rebuild");
     assert!(
         hits.is_empty(),
-        "FTS5 must return no results after purge + OPTIMIZE"
+        "FTS5 must return no results after purge + REBUILD"
     );
 
-    // Also verify via the raw FTS5 MATCH — the shadow table's content
-    // rows should have been compacted away.
+    // Also verify via the raw FTS5 MATCH — the shadow table's
+    // segment B-tree must contain no matching rows for the phrase.
     let raw_count: i64 = store
         .raw_conn()
         .query_row(
@@ -264,6 +268,6 @@ fn fts5_optimize_compacts_shadow_tables_after_purge() {
         .expect("raw fts count");
     assert_eq!(
         raw_count, 0,
-        "Raw FTS5 shadow tables must contain zero matching rows after OPTIMIZE"
+        "Raw FTS5 shadow tables must contain zero matching rows after REBUILD"
     );
 }

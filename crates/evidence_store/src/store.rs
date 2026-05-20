@@ -1543,13 +1543,21 @@ impl EvidenceStore {
             tx.execute(&emb_sql, rusqlite::params_from_iter(params.iter().copied()))?;
         }
 
-        // Compact the FTS5 shadow tables so tokenised plaintext
-        // fragments in the `%_data` segment B-tree are physically
-        // removed — not just logically deleted. Without this, an
-        // attacker with raw SQLite access could recover plaintext
-        // tokens from the `%_data` pages even after the DELETE.
+        // Force FTS5 to rebuild its shadow tables from the surviving
+        // content rows. `OPTIMIZE` only merges segments and can leave
+        // tokenised plaintext fragments behind in the `%_data`
+        // segment B-tree for rows that were `DELETE`'d in this same
+        // transaction. `REBUILD` truncates the shadow tables
+        // (`%_data`, `%_idx`, `%_docsize`, …) and re-tokenises from
+        // the FTS table's stored `content` column, which now no
+        // longer references the purged scope — so no residual
+        // plaintext tokens survive on disk for the forgotten scope.
+        //
+        // This is the strongest in-engine guarantee SQLite FTS5
+        // exposes; the alternative would be a full `VACUUM` at a
+        // higher layer, which is owned by the host.
         tx.execute(
-            "INSERT INTO evidence_fts(evidence_fts) VALUES('optimize')",
+            "INSERT INTO evidence_fts(evidence_fts) VALUES('rebuild')",
             [],
         )?;
 

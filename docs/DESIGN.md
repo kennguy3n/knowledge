@@ -149,9 +149,13 @@ per-scope CEK wraps in the `body_store_key_wraps` table ensure
 deduplication while maintaining cryptographic forgetting:
 deleting a scope's wraps makes the body unrecoverable once no
 wraps remain. FTS5 tokens are purged via `purge_fts_for_scope`
-on forget, with tombstone replay on `open_store` closing the
-crash-gap. Rows hold scope id, content hash, source connector
-ref, and ACL pointer.
+on forget — `DELETE` followed by `REBUILD` in a single
+transaction, which truncates the FTS5 shadow tables
+(`%_data`, `%_idx`, `%_docsize`, …) and re-tokenises them
+from the surviving content rows, so no plaintext fragments
+from the forgotten scope linger on disk. Tombstone replay on
+`open_store` closes the crash-gap. Rows hold scope id, content
+hash, source connector ref, and ACL pointer.
 
 ### 3.2 Observation plane
 
