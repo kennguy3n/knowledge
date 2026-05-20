@@ -462,12 +462,47 @@ impl CoSigner {
 }
 
 impl CoVerifier {
+    /// Construct directly from per-algorithm verifiers (e.g. when
+    /// reconstructing from independently-restored halves).
+    pub fn from_parts(ml_dsa_65: MlDsa65Verifier, sphincs_plus: SphincsPlusVerifier) -> Self {
+        Self {
+            ml_dsa_65,
+            sphincs_plus,
+        }
+    }
+
     /// Encode this verifier for transport.
     pub fn encode(&self) -> CoSignerEncodedVerifier {
         CoSignerEncodedVerifier {
             ml_dsa_65: self.ml_dsa_65.encode(),
             sphincs_plus: self.sphincs_plus.encode(),
         }
+    }
+
+    /// Reconstruct a [`CoVerifier`] from its wire form.
+    ///
+    /// Composes the per-algorithm [`MlDsa65Verifier::from_encoded`]
+    /// and [`SphincsPlusVerifier::from_encoded`] constructors so a
+    /// remote verifier can be rebuilt from a serialized
+    /// [`CoSignerEncodedVerifier`] *without* the secret-key material
+    /// that [`CoSigner::decode`] requires. This closes the gap where a
+    /// `CoVerifier` could be serialized via [`Self::encode`] but not
+    /// deserialized on the other end (the verifier-only counterpart
+    /// to [`CoSigner::decode`]).
+    ///
+    /// The ML-DSA-65 half is infallible (its `from_encoded` accepts
+    /// any 1952-byte fixed-size verifying key); the SPHINCS+ half is
+    /// fallible because PQClean validates the 32-byte public-key
+    /// length and rejects anything else. A malformed SPHINCS+
+    /// half therefore surfaces as
+    /// [`CryptoError::ProvenanceSerialisation`].
+    pub fn from_encoded(encoded: &CoSignerEncodedVerifier) -> Result<Self, CryptoError> {
+        let ml_dsa_65 = MlDsa65Verifier::from_encoded(&encoded.ml_dsa_65);
+        let sphincs_plus = SphincsPlusVerifier::from_encoded(&encoded.sphincs_plus)?;
+        Ok(Self {
+            ml_dsa_65,
+            sphincs_plus,
+        })
     }
 
     /// Verify a co-signature. Returns `Ok(true)` iff *both* signatures
@@ -687,6 +722,63 @@ mod tests {
         let msg = b"hello dual";
         let sig = restored.co_sign(msg).expect("co_sign");
         assert!(co.verifier().co_verify(msg, &sig).expect("co_verify"));
+    }
+
+    #[test]
+    fn co_verifier_round_trips_through_encoded_form() {
+        let co = CoSigner::generate();
+
+        // Encode and rebuild the verifier from the wire form alone —
+        // this is the path a remote service would use after receiving
+        // the encoded co-verifier over the network. The original
+        // `CoVerifier` never escapes the temporary because we go
+        // straight through `.encode()`.
+        let encoded = co.verifier().encode();
+        let restored = CoVerifier::from_encoded(&encoded).expect("from_encoded");
+
+        let msg = b"verifier-only restore";
+        let signature = co.co_sign(msg).expect("co_sign");
+        assert!(restored.co_verify(msg, &signature).expect("co_verify"));
+    }
+
+    #[test]
+    fn co_verifier_from_encoded_rejects_corrupt_sphincs_public_key() {
+        let co = CoSigner::generate();
+        let mut encoded = co.verifier().encode();
+        // Drop the last byte of the SPHINCS+ public key so PQClean's
+        // strict-length parse rejects the half. The ML-DSA-65 half is
+        // a fixed-size `VerifyingKey` and isn't independently mutable,
+        // so this exercises the only fallible path in `from_encoded`.
+        encoded.sphincs_plus.public_key.pop();
+
+        // CoVerifier doesn't derive Debug (none of the signer/verifier
+        // types in this crate do, to avoid risking key bytes in panic
+        // messages), so destructure the result manually rather than
+        // `expect_err`-ing it.
+        let Err(err) = CoVerifier::from_encoded(&encoded) else {
+            panic!("expected error from truncated SPHINCS+ verifying key");
+        };
+        assert!(
+            matches!(err, CryptoError::ProvenanceSerialisation(_)),
+            "expected ProvenanceSerialisation, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn co_verifier_from_parts_matches_signer_verifier() {
+        let co = CoSigner::generate();
+        let from_signer = co.verifier();
+        // Re-build the same verifier from per-algorithm parts so
+        // callers that reload the two halves independently (e.g. from
+        // separate storage shards) can stitch them back together.
+        let from_parts = CoVerifier::from_parts(
+            from_signer.ml_dsa_65.clone(),
+            from_signer.sphincs_plus.clone(),
+        );
+
+        let msg = b"from_parts equivalence";
+        let signature = co.co_sign(msg).expect("co_sign");
+        assert!(from_parts.co_verify(msg, &signature).expect("co_verify"));
     }
 
     #[test]
