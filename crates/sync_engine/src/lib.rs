@@ -315,13 +315,27 @@ where
     ///
     /// * If the cache is `Some` and the watermark is current, it's
     ///   a no-op.
-    /// * If the cache is `Some` but stale, ops with index
-    ///   `>= watermark` are applied incrementally on top.
+    /// * If the cache is `Some` but stale (watermark `<` len), ops
+    ///   with index `>= watermark` are applied incrementally on top.
     /// * If the cache is `None`, the full log is replayed.
+    ///
+    /// The invariant `cache_watermark <= log.ops.len()` is enforced
+    /// on every mutation path the engine controls and on the only
+    /// raw-mutation entry point ([`Self::op_log_mut`], which calls
+    /// [`Self::invalidate_cache`] before returning). A debug-build
+    /// assertion fires if a caller manages to violate this anyway;
+    /// release builds gracefully fall back to a full replay so a
+    /// post-truncation cache rebuild is still correct, just
+    /// slower.
     fn materialise(&self) -> Result<()> {
         let len = self.log.ops.len();
         let mut slot = self.cached_state.borrow_mut();
         let watermark = self.cache_watermark.get();
+        debug_assert!(
+            slot.is_none() || watermark <= len,
+            "sync_engine cache invariant violated: watermark={watermark} > log.ops.len()={len}; \
+             a caller mutated the op log without going through op_log_mut() / invalidate_cache()"
+        );
         match slot.as_mut() {
             Some((set, supers)) if watermark <= len => {
                 if watermark == len {
@@ -334,6 +348,10 @@ where
                 Ok(())
             }
             _ => {
+                // Either the cache was None, or the watermark
+                // exceeded `len` (invariant violation, only
+                // reachable in release builds). Either way the safe
+                // recovery is a full replay.
                 let (set, supers) = self.log.replay()?;
                 *slot = Some((set, supers));
                 self.cache_watermark.set(len);
@@ -387,32 +405,20 @@ where
     }
 
     /// Compact the underlying op log, dropping every historical
-    /// `Remove` / `Supersede` op while preserving the materialised
-    /// set. Bumps the [`OpLog::compaction_epoch`] so peers know they
-    /// must bootstrap via [`Self::snapshot`] if they are behind.
+    /// `Remove` op while preserving the materialised set **and**
+    /// the supersession history. Bumps the
+    /// [`OpLog::compaction_epoch`] so peers know they must
+    /// bootstrap via [`Self::snapshot`] if they are behind.
     ///
     /// Returns the number of ops removed.
     pub fn compact(&mut self) -> Result<usize> {
-        // Pre-compaction: capture the current materialised supersessions so
-        // we can preserve them across compaction. `compact()` itself only
-        // re-emits `Add` ops (the live tag carriers) and intentionally
-        // drops every `Remove` / `Supersede` entry — but the supersession
-        // *history* is part of the visible state, and callers of
-        // `state()` rely on it surfacing after compaction too.
-        let (_set, supers) = self.log.replay()?;
+        // [`OpLog::compact`] is responsible for preserving both the
+        // live `Add` tags and the supersession history in the
+        // rewritten log — so a fresh replay after compaction
+        // reproduces the same `(set, supersessions)` pair. The
+        // engine only needs to invalidate and rehydrate its own
+        // materialised-state cache afterwards.
         let removed = self.log.compact()?;
-
-        // After `compact()` the log holds only `Add` ops, so a fresh
-        // replay reproduces the same materialised set with `supers`
-        // empty. Re-emit the historical supersessions as `Supersede`
-        // ops with **empty** `observed_tags` so they end up in the
-        // `supersessions` Vec on replay without tombstoning anything
-        // (the live tags are already in `Add` ops we just emitted).
-        for (pred, succ) in supers {
-            self.log.record_supersede(pred, succ, Vec::new());
-        }
-
-        // Rebuild the cache from the rewritten log.
         self.invalidate_cache();
         self.materialise()?;
         Ok(removed)
@@ -452,14 +458,23 @@ where
     }
 
     /// Reconstruct a [`SyncEngine`] from a snapshot produced by
-    /// [`Self::snapshot`].
+    /// [`Self::snapshot`] **for the same replica that authored
+    /// it** — i.e. the "resume after restart" case, not the
+    /// "new peer joining the cluster" case.
     ///
-    /// The restored engine adopts the snapshot's op log verbatim
-    /// (so `(replica_id, seq)` dedup against subsequent peer
-    /// deltas works) and hydrates its materialised-state cache
-    /// directly from the snapshot's `set` + `supersessions` (so the
-    /// first [`Self::state`] call is O(1) and does not need to
-    /// re-replay the log).
+    /// The restored engine adopts the snapshot's op log and
+    /// `replica_id` verbatim, so any subsequent local op it
+    /// authors continues the same replica's `(replica_id, seq)`
+    /// stream. The materialised-state cache is hydrated directly
+    /// from the snapshot's `set` + `supersessions` (so the first
+    /// [`Self::state`] call is O(1)).
+    ///
+    /// **Do not** use this to bootstrap a brand-new peer from
+    /// another replica's snapshot — you would silently inherit
+    /// the author's `replica_id` and start attributing your local
+    /// writes to them, corrupting the dedup table on every other
+    /// peer in the cluster. Use [`Self::bootstrap_from_snapshot`]
+    /// for that case.
     pub fn restore_snapshot(bytes: &[u8]) -> Result<Self>
     where
         T: for<'de> Deserialize<'de> + Serialize,
@@ -474,6 +489,67 @@ where
         }
 
         let engine = Self::from_log(snap.replica_id, snap.log);
+        *engine.cached_state.borrow_mut() = Some((snap.set, snap.supersessions));
+        engine.cache_watermark.set(engine.log.ops.len());
+        Ok(engine)
+    }
+
+    /// Bootstrap a fresh peer from another replica's snapshot.
+    ///
+    /// Unlike [`Self::restore_snapshot`], the receiver keeps its
+    /// **own** freshly-generated `replica_id` (or one supplied via
+    /// [`Self::bootstrap_from_snapshot_with_replica_id`]); the
+    /// snapshot's log is merged in op-by-op with every entry's
+    /// original authoring `replica_id` preserved, so subsequent
+    /// delta sync with the original author still dedupes correctly
+    /// via `(replica_id, seq)`.
+    ///
+    /// The receiver's local `clock` starts at 0 — future local
+    /// ops are authored under the new `replica_id` with a fresh
+    /// seq stream, so they cannot collide with the snapshot author's
+    /// stream. The compaction epoch is inherited from the snapshot
+    /// so the receiver does not accept stale deltas authored
+    /// before the author's last compaction.
+    pub fn bootstrap_from_snapshot(bytes: &[u8]) -> Result<Self>
+    where
+        T: for<'de> Deserialize<'de> + Serialize,
+    {
+        Self::bootstrap_from_snapshot_with_replica_id(bytes, Uuid::new_v4())
+    }
+
+    /// Like [`Self::bootstrap_from_snapshot`] but lets the caller
+    /// pin the receiver's `replica_id` — used by the persistence
+    /// layer to keep the on-disk replica identity stable across
+    /// process restarts even when bootstrapping from a snapshot.
+    pub fn bootstrap_from_snapshot_with_replica_id(
+        bytes: &[u8],
+        new_replica_id: Uuid,
+    ) -> Result<Self>
+    where
+        T: for<'de> Deserialize<'de> + Serialize,
+    {
+        let snap: EngineSnapshot<T> = serde_json::from_slice(bytes)
+            .map_err(|_| SyncError::Serialisation("could not deserialise engine snapshot"))?;
+
+        if snap.log.replica_id != snap.replica_id {
+            return Err(SyncError::Serialisation(
+                "snapshot replica_id does not match log.replica_id",
+            ));
+        }
+
+        // Build a fresh op log under the receiver's own replica_id.
+        // Then absorb every snapshot op via `merge_single`, which
+        // preserves each op's original authoring `replica_id` and
+        // `seq` so the receiver's `(replica_id, seq)` dedup table
+        // covers exactly the snapshot's ops — subsequent deltas
+        // from the original author dedupe correctly.
+        let mut local_log: OpLog<T> = OpLog::new(new_replica_id);
+        for op in snap.log.ops {
+            local_log.merge_single(op);
+        }
+        local_log.compaction_epoch = snap.log.compaction_epoch;
+
+        let engine = Self::from_log(new_replica_id, local_log);
         *engine.cached_state.borrow_mut() = Some((snap.set, snap.supersessions));
         engine.cache_watermark.set(engine.log.ops.len());
         Ok(engine)

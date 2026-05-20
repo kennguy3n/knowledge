@@ -93,9 +93,14 @@ const SCHEMA_VERSION: i32 = 1;
 /// independent (a per-scope key compromise reveals only that
 /// scope's ciphertexts).
 ///
-/// `Drop` zeroises the cached AEAD scope key and the master key so
-/// neither lingers in freed heap memory after the wrapper is
-/// dropped.
+/// `Drop` zeroises the cached AEAD scope key so it does not
+/// linger in freed heap memory after the wrapper is dropped. The
+/// master key passed to [`Self::open`] is **not** retained: both
+/// the SQLCipher page-encryption key and the per-scope AEAD key
+/// are derived from it at open time and the master key is then
+/// allowed to drop out of scope, minimising the window of time
+/// the substrate's root key material lives in this wrapper's
+/// memory.
 ///
 /// `Debug` is intentionally redacted — the wrapper holds key
 /// material whose serialised form must never reach a panic message
@@ -108,7 +113,6 @@ where
     conn: Connection,
     scope: SyncScopeId,
     scope_key: AeadKey,
-    master_key: MasterKey,
     /// Number of ops we have already persisted from the engine's
     /// log. Always `<= self.engine.op_log().ops.len()`.
     persisted_len: usize,
@@ -124,7 +128,6 @@ where
             .field("engine_len", &self.engine.op_log().ops.len())
             .field("persisted_len", &self.persisted_len)
             .field("scope_key", &"<redacted>")
-            .field("master_key", &"<redacted>")
             .finish_non_exhaustive()
     }
 }
@@ -134,7 +137,6 @@ where
     T: Eq + Hash + Clone,
 {
     fn drop(&mut self) {
-        self.master_key.zeroize();
         self.scope_key.zeroize();
     }
 }
@@ -203,12 +205,15 @@ where
         let scope_label = format!("scope:{}:sync_op:v1", scope.as_uuid());
         let scope_key = derive_key(master_key, scope_label.as_bytes())?;
 
+        // We do not retain `master_key` past this point — both
+        // derived keys (SQLCipher page key + per-scope AEAD key)
+        // are now in place, so the substrate's root key material
+        // can drop out of scope at the caller.
         let mut wrapper = Self {
             engine: SyncEngine::from_log(replica, OpLog::<T>::new(replica)),
             conn,
             scope,
             scope_key,
-            master_key: *master_key,
             persisted_len: 0,
         };
         wrapper.load()?;

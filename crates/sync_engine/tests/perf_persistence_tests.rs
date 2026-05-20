@@ -213,6 +213,53 @@ fn delta_rejected_when_sender_is_post_compaction_and_receiver_is_not() {
 }
 
 #[test]
+fn bootstrap_from_snapshot_keeps_receiver_replica_id_independent() {
+    // A new peer joining the cluster MUST keep its own
+    // `replica_id` after bootstrapping from another replica's
+    // snapshot — otherwise its local writes would be attributed
+    // to the original author and silently corrupt the cluster's
+    // `(replica_id, seq)` dedup table.
+    let mut author: SyncEngine<String> = SyncEngine::new();
+    author.add("hello".into());
+    author.add("world".into());
+    author.supersede("hello".into(), "hello_v2".into());
+    let author_id = author.replica_id();
+    let snap = author.snapshot().unwrap();
+
+    let mut receiver = SyncEngine::<String>::bootstrap_from_snapshot(&snap).unwrap();
+    let receiver_id = receiver.replica_id();
+    assert_ne!(
+        receiver_id, author_id,
+        "bootstrap_from_snapshot must NOT inherit the author's replica_id"
+    );
+
+    // Receiver sees the author's materialised state.
+    let (state, supers) = receiver.state().unwrap();
+    assert!(state.contains(&"world".to_string()));
+    assert!(!state.contains(&"hello".to_string()));
+    assert_eq!(supers, vec![("hello".to_string(), "hello_v2".to_string())]);
+
+    // Receiver's local writes are authored under its own id with a
+    // fresh seq stream (starting from 1, since clock starts at 0
+    // and `record_add` bumps it before stamping).
+    receiver.add("from_receiver".into());
+    let last_local = receiver
+        .op_log()
+        .ops
+        .iter()
+        .rfind(|o| o.replica_id == receiver_id)
+        .expect("receiver authored at least one op");
+    assert_eq!(last_local.replica_id, receiver_id);
+    assert_eq!(last_local.seq, 1);
+
+    // Subsequent delta sync from the author dedupes against the
+    // snapshot ops (which still carry the author's `replica_id`).
+    let delta = encode_delta_since(author.op_log(), 0).unwrap();
+    let absorbed = apply_delta(&mut receiver, &delta).unwrap();
+    assert_eq!(absorbed, 0, "author's pre-snapshot ops must dedupe");
+}
+
+#[test]
 fn snapshot_restore_round_trip_preserves_state_and_epoch() {
     let mut engine: SyncEngine<String> = SyncEngine::new();
     engine.add("foo".into());

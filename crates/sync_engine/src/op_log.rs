@@ -213,19 +213,25 @@ where
         }
     }
 
-    /// Rewrite the log into a minimal `Add`-only form that
-    /// reproduces the current materialised set, bumping
-    /// [`Self::compaction_epoch`] by one.
+    /// Rewrite the log into a minimal form that reproduces the
+    /// current materialised set **and** the supersession history,
+    /// bumping [`Self::compaction_epoch`] by one.
     ///
     /// Concretely:
     ///
     /// 1. Replay the full log to obtain the live (value, surviving
-    ///    tags) entries.
-    /// 2. Replace `self.ops` with one `Add { value, tag }` per
-    ///    `(value, surviving_tag)` pair, re-using the original
-    ///    tags. New seqs are allocated from `self.clock` so they
-    ///    do not collide with anything already in the log on this
-    ///    or any peer replica.
+    ///    tags) entries and the supersession history.
+    /// 2. Replace `self.ops` with:
+    ///    * one `Add { value, tag }` per `(value, surviving_tag)`
+    ///      pair (re-using the original tags so subsequent merges
+    ///      from already-caught-up peers dedupe rather than
+    ///      re-introducing equivalent ops with fresh seqs); and
+    ///    * one `Supersede { value, successor, observed_tags: [] }`
+    ///      per historical supersession, with an **empty** observed
+    ///      tags list so it does not tombstone any live `Add` tags
+    ///      we just re-emitted — it exists solely to preserve the
+    ///      `(predecessor, successor)` pair in the replayed
+    ///      supersession history.
     /// 3. Rebuild `self.seen` to match the new op set.
     /// 4. Bump `self.compaction_epoch`.
     ///
@@ -234,20 +240,26 @@ where
     ///
     /// ### Safety / sync semantics
     ///
-    /// Compaction is **lossy** with respect to tombstones: every
-    /// historical `Remove` / `Supersede` op is dropped, on the
-    /// assumption that any peer that needs those tombstones has
-    /// already merged them. Peers that have not synced past the
-    /// pre-compaction state will see the new `compaction_epoch`
-    /// and must bootstrap via [`crate::SyncEngine::snapshot`]
-    /// rather than continuing with delta sync.
+    /// Compaction is **lossy** with respect to `Remove` ops: every
+    /// historical `Remove` is dropped, on the assumption that any
+    /// peer that needs those tombstones has already merged them.
+    /// `Supersede` history is preserved in the compacted log so
+    /// callers of [`Self::replay`] see the same `supersessions`
+    /// vector after compaction as before — this is required for
+    /// the snapshot / restore round-trip to remain consistent even
+    /// when the receiver later invalidates its materialised-state
+    /// cache and rebuilds it from the log alone. Peers that have
+    /// not synced past the pre-compaction state will see the new
+    /// `compaction_epoch` and must bootstrap via
+    /// [`crate::SyncEngine::snapshot`] rather than continuing with
+    /// delta sync.
     ///
     /// Tag values are preserved across compaction, so subsequent
     /// merges from already-caught-up peers remain idempotent: any
     /// peer that re-sends an `Add { value, tag }` for a tag we
     /// already have is simply deduped.
     pub fn compact(&mut self) -> Result<usize> {
-        let (set, _supers) = self.replay()?;
+        let (set, supersessions) = self.replay()?;
         let old_len = self.ops.len();
 
         let mut new_ops: Vec<SyncOp<T>> = Vec::new();
@@ -268,6 +280,28 @@ where
                 new_seen.insert((entry.replica_id, entry.seq));
                 new_ops.push(entry);
             }
+        }
+
+        // Preserve supersession history so post-compaction
+        // [`Self::replay`] reproduces the same `supersessions`
+        // vector as the pre-compaction log. Each `Supersede` entry
+        // is emitted with an empty `observed_tags` list so it
+        // contributes only to the supersessions Vec and does not
+        // tombstone any live tag we just re-emitted.
+        for (value, successor) in supersessions {
+            self.clock = self.clock.saturating_add(1);
+            let entry = SyncOp {
+                replica_id: self.replica_id,
+                seq: self.clock,
+                created_at: Utc::now(),
+                op: SyncOpKind::Supersede {
+                    value,
+                    successor,
+                    observed_tags: Vec::new(),
+                },
+            };
+            new_seen.insert((entry.replica_id, entry.seq));
+            new_ops.push(entry);
         }
 
         self.ops = new_ops;
