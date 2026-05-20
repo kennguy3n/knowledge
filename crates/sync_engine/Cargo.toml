@@ -8,11 +8,19 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+crypto = { path = "../crypto" }
+
 thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rusqlite = { workspace = true }
+zeroize = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

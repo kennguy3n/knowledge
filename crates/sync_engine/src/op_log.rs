@@ -67,6 +67,17 @@ where
 }
 
 /// Append-only op log for one replica.
+///
+/// In addition to the append-only [`SyncOp`] list, the log carries
+/// two book-keeping fields:
+///
+/// * `clock` — replica-local monotonic counter; every appended op
+///   takes the next `clock` value as its `seq`.
+/// * `compaction_epoch` — incremented every time [`Self::compact`]
+///   rewrites the log. Peers exchange this on the wire (see
+///   [`crate::delta::DeltaEnvelope`]) so a receiver whose own
+///   epoch is **behind** the sender's can refuse the delta and
+///   bootstrap from a snapshot instead.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpLog<T>
 where
@@ -77,6 +88,16 @@ where
     /// Monotonic counter — always strictly greater than the highest
     /// seq seen so far.
     pub clock: u64,
+    /// Monotonic compaction-generation counter. Starts at `0`;
+    /// every successful [`Self::compact`] bumps it by one.
+    ///
+    /// Peers that haven't merged the log at this epoch yet **must**
+    /// resync via [`crate::SyncEngine::snapshot`] rather than
+    /// applying a delta, because the compacted log no longer
+    /// contains the historical `Remove` ops that pre-compaction
+    /// peers may have needed.
+    #[serde(default)]
+    pub compaction_epoch: u64,
     /// Append-only list of ops authored by this replica plus any ops
     /// merged in from peers.
     pub ops: Vec<SyncOp<T>>,
@@ -94,9 +115,26 @@ where
         Self {
             replica_id,
             clock: 0,
+            compaction_epoch: 0,
             ops: Vec::new(),
             seen: HashSet::new(),
         }
+    }
+
+    /// Number of ops currently in the log.
+    pub fn len(&self) -> usize {
+        self.ops.len()
+    }
+
+    /// True iff the op log has zero entries.
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
+
+    /// Current compaction-generation counter. See
+    /// [`Self::compaction_epoch`].
+    pub fn compaction_epoch_value(&self) -> u64 {
+        self.compaction_epoch
     }
 
     /// Append a fresh `Add` op. Returns the tag allocated.
@@ -136,6 +174,11 @@ where
     }
 
     /// Merge `other` into `self`, deduplicating by `(replica_id, seq)`.
+    ///
+    /// The local `compaction_epoch` is bumped to `max(self, other)`
+    /// so the receiver tracks the highest compaction point it has
+    /// seen — peers that fall further behind will see the lifted
+    /// epoch and re-bootstrap via [`crate::SyncEngine::snapshot`].
     pub fn merge(&mut self, other: &OpLog<T>) {
         for entry in &other.ops {
             let key = (entry.replica_id, entry.seq);
@@ -146,6 +189,91 @@ where
                 self.ops.push(entry.clone());
             }
         }
+        self.compaction_epoch = self.compaction_epoch.max(other.compaction_epoch);
+    }
+
+    /// Absorb a single `entry` into the log, deduplicating by
+    /// `(replica_id, seq)`. Returns `true` iff the op was newly
+    /// absorbed (i.e. the caller can now treat it as part of the
+    /// local log) and `false` if it was already present.
+    ///
+    /// Used by [`crate::delta::apply_delta`] to fold individual
+    /// remote ops into the local log without round-tripping through
+    /// a full peer `OpLog`.
+    pub fn merge_single(&mut self, entry: SyncOp<T>) -> bool {
+        let key = (entry.replica_id, entry.seq);
+        if self.seen.insert(key) {
+            if entry.replica_id == self.replica_id {
+                self.clock = self.clock.max(entry.seq);
+            }
+            self.ops.push(entry);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Rewrite the log into a minimal `Add`-only form that
+    /// reproduces the current materialised set, bumping
+    /// [`Self::compaction_epoch`] by one.
+    ///
+    /// Concretely:
+    ///
+    /// 1. Replay the full log to obtain the live (value, surviving
+    ///    tags) entries.
+    /// 2. Replace `self.ops` with one `Add { value, tag }` per
+    ///    `(value, surviving_tag)` pair, re-using the original
+    ///    tags. New seqs are allocated from `self.clock` so they
+    ///    do not collide with anything already in the log on this
+    ///    or any peer replica.
+    /// 3. Rebuild `self.seen` to match the new op set.
+    /// 4. Bump `self.compaction_epoch`.
+    ///
+    /// Returns the number of ops *removed* by compaction
+    /// (`old_len - new_len`).
+    ///
+    /// ### Safety / sync semantics
+    ///
+    /// Compaction is **lossy** with respect to tombstones: every
+    /// historical `Remove` / `Supersede` op is dropped, on the
+    /// assumption that any peer that needs those tombstones has
+    /// already merged them. Peers that have not synced past the
+    /// pre-compaction state will see the new `compaction_epoch`
+    /// and must bootstrap via [`crate::SyncEngine::snapshot`]
+    /// rather than continuing with delta sync.
+    ///
+    /// Tag values are preserved across compaction, so subsequent
+    /// merges from already-caught-up peers remain idempotent: any
+    /// peer that re-sends an `Add { value, tag }` for a tag we
+    /// already have is simply deduped.
+    pub fn compact(&mut self) -> Result<usize> {
+        let (set, _supers) = self.replay()?;
+        let old_len = self.ops.len();
+
+        let mut new_ops: Vec<SyncOp<T>> = Vec::new();
+        let mut new_seen: HashSet<(Uuid, u64)> = HashSet::new();
+
+        for (value, tags) in set.entries() {
+            for tag in tags {
+                self.clock = self.clock.saturating_add(1);
+                let entry = SyncOp {
+                    replica_id: self.replica_id,
+                    seq: self.clock,
+                    created_at: Utc::now(),
+                    op: SyncOpKind::Add {
+                        value: value.clone(),
+                        tag,
+                    },
+                };
+                new_seen.insert((entry.replica_id, entry.seq));
+                new_ops.push(entry);
+            }
+        }
+
+        self.ops = new_ops;
+        self.seen = new_seen;
+        self.compaction_epoch = self.compaction_epoch.saturating_add(1);
+        Ok(old_len.saturating_sub(self.ops.len()))
     }
 
     /// Replay the entire log into a fresh [`AddWinsSet`].

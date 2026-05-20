@@ -1,0 +1,344 @@
+//! Integration tests for the performance + persistence enhancements
+//! to the sync engine: cached materialised state, log compaction,
+//! SQLCipher persistence, delta wire serialisation, and snapshot
+//! checkpointing.
+//!
+//! These tests deliberately exercise the *real* code paths
+//! end-to-end — no stubs, no scaffolding — per the project's
+//! testing rules (see `CONTRIBUTING.md` + the user-authored
+//! "Knowledge: real implementation" rule).
+
+use std::time::Instant;
+
+use sync_engine::delta::{apply_delta, decode_delta, encode_delta_since, DeltaEnvelope};
+use sync_engine::persist::PersistentSyncEngine;
+use sync_engine::{SyncEngine, SyncError, SyncScopeId};
+use tempfile::tempdir;
+use uuid::Uuid;
+
+/// Build a deterministic test master key. `MasterKey` is the
+/// type alias `[u8; MASTER_KEY_LEN]`.
+fn test_master_key() -> crypto::MasterKey {
+    let mut k: crypto::MasterKey = [0u8; crypto::MASTER_KEY_LEN];
+    for (i, slot) in k.iter_mut().enumerate() {
+        *slot = (i as u8).wrapping_mul(11).wrapping_add(31);
+    }
+    k
+}
+
+#[test]
+fn cached_state_is_orders_of_magnitude_faster_than_replay() {
+    // Build a 10k-op log: 5000 adds + 5000 removes (so the live
+    // set has 0 entries but the op log is sizable).
+    let mut engine: SyncEngine<u64> = SyncEngine::new();
+    let n: u64 = 10_000;
+    for i in 0..n / 2 {
+        engine.add(i);
+    }
+    for i in 0..n / 2 {
+        engine.remove(i);
+    }
+    assert_eq!(engine.op_log().ops.len() as u64, n);
+
+    // Warm up: the first state() call extends/builds the cache.
+    let _ = engine.state().unwrap();
+
+    // Measure cache-hit `state()` cost across many calls.
+    let iters = 200u32;
+    let start = Instant::now();
+    for _ in 0..iters {
+        let _ = engine.state().unwrap();
+    }
+    let cached_avg = start.elapsed() / iters;
+
+    // Measure full-replay cost for the same log via the underlying
+    // OpLog. This is what `state()` used to cost on every call
+    // before caching was introduced.
+    let start = Instant::now();
+    for _ in 0..iters {
+        let _ = engine.op_log().replay().unwrap();
+    }
+    let replay_avg = start.elapsed() / iters;
+
+    println!(
+        "cached_avg={:?}  replay_avg={:?}  ratio={:.2}x",
+        cached_avg,
+        replay_avg,
+        replay_avg.as_secs_f64() / cached_avg.as_secs_f64().max(1e-9),
+    );
+
+    // Replay must be measurably more expensive than the cached
+    // path for a 10k-op log. We assert a conservative 5x ratio so
+    // CI noise doesn't flake; in practice the ratio is far higher
+    // because the cache is O(live elements) while replay is
+    // O(total ops).
+    assert!(
+        cached_avg.as_secs_f64() * 5.0 < replay_avg.as_secs_f64(),
+        "cached state() ({cached_avg:?}) should be \u{2265}5\u{00d7} faster than a full replay ({replay_avg:?})"
+    );
+}
+
+#[test]
+fn compaction_preserves_state_and_shortens_log() {
+    let mut engine: SyncEngine<String> = SyncEngine::new();
+    for i in 0..1000 {
+        engine.add(format!("v{i}"));
+    }
+    for i in 0..500 {
+        engine.remove(format!("v{i}"));
+    }
+    let pre_log_len = engine.op_log().ops.len();
+    assert_eq!(pre_log_len, 1500);
+
+    let (pre_state, pre_supers) = engine.state().unwrap();
+    let pre_epoch = engine.compaction_epoch();
+
+    let removed = engine.compact().unwrap();
+    assert!(removed > 0, "compaction removed {removed} ops");
+
+    let post_log_len = engine.op_log().ops.len();
+    assert!(
+        post_log_len < pre_log_len,
+        "log should shrink: pre={pre_log_len}, post={post_log_len}"
+    );
+
+    let (post_state, post_supers) = engine.state().unwrap();
+    assert_eq!(post_state.elements_count(), pre_state.elements_count());
+    for value in pre_state.elements() {
+        assert!(post_state.contains(value), "{value} disappeared");
+    }
+    assert_eq!(post_supers.len(), pre_supers.len());
+    assert_eq!(engine.compaction_epoch(), pre_epoch + 1);
+
+    // Continued operation after compaction works.
+    engine.add("post_compact".to_string());
+    let (state, _) = engine.state().unwrap();
+    assert!(state.contains(&"post_compact".to_string()));
+}
+
+#[test]
+fn delta_round_trip_full_history() {
+    let mut sender: SyncEngine<String> = SyncEngine::new();
+    sender.add("alpha".into());
+    sender.add("beta".into());
+    sender.add("gamma".into());
+    sender.remove("alpha".into());
+    sender.supersede("beta".into(), "beta_v2".into());
+
+    let delta = encode_delta_since(sender.op_log(), 0).unwrap();
+    let env: DeltaEnvelope<String> = decode_delta(&delta).unwrap();
+    assert!(!env.ops.is_empty());
+    assert_eq!(env.compaction_epoch, 0);
+    assert_eq!(env.since_seq, 0);
+
+    let mut receiver: SyncEngine<String> = SyncEngine::new();
+    let absorbed = apply_delta(&mut receiver, &delta).unwrap();
+    assert_eq!(absorbed, sender.op_log().ops.len());
+
+    let (sender_state, sender_supers) = sender.state().unwrap();
+    let (receiver_state, receiver_supers) = receiver.state().unwrap();
+    assert_eq!(
+        sender_state.elements_count(),
+        receiver_state.elements_count()
+    );
+    for v in sender_state.elements() {
+        assert!(receiver_state.contains(v));
+    }
+    assert_eq!(sender_supers, receiver_supers);
+}
+
+#[test]
+fn delta_round_trip_incremental_after_partial_sync() {
+    let mut sender: SyncEngine<String> = SyncEngine::new();
+    sender.add("a".into());
+    sender.add("b".into());
+
+    // Receiver pulls everything so far.
+    let initial = encode_delta_since(sender.op_log(), 0).unwrap();
+    let mut receiver: SyncEngine<String> = SyncEngine::new();
+    apply_delta(&mut receiver, &initial).unwrap();
+
+    // Receiver remembers the highest seq it has from `sender`.
+    let watermark = sender.op_log().clock;
+
+    // Sender keeps going.
+    sender.add("c".into());
+    sender.remove("a".into());
+
+    // Receiver pulls the post-watermark delta only.
+    let incremental = encode_delta_since(sender.op_log(), watermark).unwrap();
+    let env: DeltaEnvelope<String> = decode_delta(&incremental).unwrap();
+    // The two new ops authored after the watermark.
+    let from_sender: Vec<_> = env
+        .ops
+        .iter()
+        .filter(|o| o.replica_id == sender.replica_id())
+        .collect();
+    assert_eq!(from_sender.len(), 2);
+
+    apply_delta(&mut receiver, &incremental).unwrap();
+    let (state, _) = receiver.state().unwrap();
+    assert!(state.contains(&"b".to_string()));
+    assert!(state.contains(&"c".to_string()));
+    assert!(!state.contains(&"a".to_string()));
+}
+
+#[test]
+fn delta_rejected_when_sender_is_post_compaction_and_receiver_is_not() {
+    let mut sender: SyncEngine<String> = SyncEngine::new();
+    sender.add("a".into());
+    sender.add("b".into());
+    sender.compact().unwrap();
+
+    let delta = encode_delta_since(sender.op_log(), 0).unwrap();
+    let mut receiver: SyncEngine<String> = SyncEngine::new();
+    let err = apply_delta(&mut receiver, &delta).unwrap_err();
+    assert!(
+        matches!(err, SyncError::CompactionEpochBehind { local: 0, delta: 1 }),
+        "expected CompactionEpochBehind, got {err:?}"
+    );
+
+    // After bootstrapping via a snapshot, the receiver's epoch
+    // catches up and the delta is now applicable.
+    let snap = sender.snapshot().unwrap();
+    let mut receiver = SyncEngine::<String>::restore_snapshot(&snap).unwrap();
+    assert_eq!(receiver.compaction_epoch(), 1);
+    // Delta now matches the local epoch — applying it is a no-op
+    // (snapshot already absorbed the live state) but does not
+    // error.
+    let absorbed = apply_delta(&mut receiver, &delta).unwrap();
+    // The snapshot rehydrated as Add-only ops that share the same
+    // tag UUIDs as the sender, so the delta's Adds dedupe.
+    assert_eq!(absorbed, 0);
+}
+
+#[test]
+fn snapshot_restore_round_trip_preserves_state_and_epoch() {
+    let mut engine: SyncEngine<String> = SyncEngine::new();
+    engine.add("foo".into());
+    engine.add("bar".into());
+    engine.supersede("foo".into(), "foo_v2".into());
+    engine.compact().unwrap();
+    let pre_epoch = engine.compaction_epoch();
+    let (pre_state, pre_supers) = engine.state().unwrap();
+
+    let bytes = engine.snapshot().unwrap();
+    let restored = SyncEngine::<String>::restore_snapshot(&bytes).unwrap();
+
+    let (post_state, post_supers) = restored.state().unwrap();
+    assert_eq!(restored.replica_id(), engine.replica_id());
+    assert_eq!(restored.compaction_epoch(), pre_epoch);
+    assert_eq!(pre_state.elements_count(), post_state.elements_count());
+    for v in pre_state.elements() {
+        assert!(post_state.contains(v));
+    }
+    assert_eq!(pre_supers, post_supers);
+}
+
+#[test]
+fn persistence_write_close_reopen_round_trip() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("sync.sqlite");
+    let scope = SyncScopeId::new_v4();
+    let replica = Uuid::new_v4();
+    let mk = test_master_key();
+
+    let expected_live: Vec<String>;
+    let expected_supers: Vec<(String, String)>;
+    {
+        let mut p = PersistentSyncEngine::<String>::open(&db_path, scope, replica, &mk).unwrap();
+        for i in 0..50 {
+            p.add(format!("k{i}")).unwrap();
+        }
+        for i in 0..20 {
+            p.remove(format!("k{i}")).unwrap();
+        }
+        p.supersede("k49".into(), "k49_v2".into()).unwrap();
+
+        let (state, supers) = p.engine().state().unwrap();
+        expected_live = (20..49).map(|i| format!("k{i}")).collect();
+        expected_supers = supers;
+        assert_eq!(state.elements_count(), expected_live.len());
+    }
+
+    let p2 = PersistentSyncEngine::<String>::open(&db_path, scope, replica, &mk).unwrap();
+    let (state, supers) = p2.engine().state().unwrap();
+    assert_eq!(state.elements_count(), expected_live.len());
+    for v in &expected_live {
+        assert!(state.contains(v), "missing {v} after reopen");
+    }
+    assert_eq!(supers, expected_supers);
+}
+
+#[test]
+fn persistence_compact_persists_compacted_log() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("sync.sqlite");
+    let scope = SyncScopeId::new_v4();
+    let replica = Uuid::new_v4();
+    let mk = test_master_key();
+
+    let post_compact_live;
+    let post_compact_log_len;
+    {
+        let mut p = PersistentSyncEngine::<String>::open(&db_path, scope, replica, &mk).unwrap();
+        for i in 0..100 {
+            p.add(format!("v{i}")).unwrap();
+        }
+        for i in 0..50 {
+            p.remove(format!("v{i}")).unwrap();
+        }
+        assert_eq!(p.persisted_len().unwrap(), 150);
+        p.compact().unwrap();
+        post_compact_log_len = p.persisted_len().unwrap();
+        post_compact_live = p
+            .engine()
+            .state()
+            .unwrap()
+            .0
+            .elements()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+        assert!(post_compact_log_len < 150);
+        assert_eq!(p.engine().compaction_epoch(), 1);
+    }
+
+    let p2 = PersistentSyncEngine::<String>::open(&db_path, scope, replica, &mk).unwrap();
+    assert_eq!(p2.persisted_len().unwrap(), post_compact_log_len);
+    assert_eq!(p2.engine().compaction_epoch(), 1);
+    let (state, _) = p2.engine().state().unwrap();
+    let live: std::collections::HashSet<_> = state.elements().cloned().collect();
+    assert_eq!(live, post_compact_live);
+}
+
+#[test]
+fn persistence_two_scopes_share_one_db_independently() {
+    // Two different scopes opened against the same file must not
+    // see each other's ops — the per-row `scope_id` plus the
+    // per-scope AEAD key keep them isolated cryptographically and
+    // at the schema level.
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("sync.sqlite");
+    let scope_a = SyncScopeId::new_v4();
+    let scope_b = SyncScopeId::new_v4();
+    let replica = Uuid::new_v4();
+    let mk = test_master_key();
+
+    {
+        let mut a = PersistentSyncEngine::<String>::open(&db_path, scope_a, replica, &mk).unwrap();
+        a.add("from_a".into()).unwrap();
+    }
+    {
+        let mut b = PersistentSyncEngine::<String>::open(&db_path, scope_b, replica, &mk).unwrap();
+        b.add("from_b".into()).unwrap();
+    }
+
+    let a2 = PersistentSyncEngine::<String>::open(&db_path, scope_a, replica, &mk).unwrap();
+    let b2 = PersistentSyncEngine::<String>::open(&db_path, scope_b, replica, &mk).unwrap();
+    let (state_a, _) = a2.engine().state().unwrap();
+    let (state_b, _) = b2.engine().state().unwrap();
+    assert!(state_a.contains(&"from_a".to_string()));
+    assert!(!state_a.contains(&"from_b".to_string()));
+    assert!(state_b.contains(&"from_b".to_string()));
+    assert!(!state_b.contains(&"from_a".to_string()));
+}

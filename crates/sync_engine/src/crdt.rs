@@ -131,6 +131,38 @@ where
             .unwrap_or_default()
     }
 
+    /// Number of distinct values currently live (i.e. with at
+    /// least one non-tombstoned tag).
+    pub fn elements_count(&self) -> usize {
+        self.elements
+            .iter()
+            .filter(|(_, tags)| tags.iter().any(|tag| !self.tombstones.contains(tag)))
+            .count()
+    }
+
+    /// Iterate over `(value, live_tags)` pairs — i.e. every value
+    /// with at least one non-tombstoned tag, paired with the
+    /// snapshot of its surviving tags. Used by [`OpLog::compact`]
+    /// to emit a minimal set of `Add` ops covering the live state.
+    ///
+    /// Order is unspecified, but stable within a single iteration.
+    ///
+    /// [`OpLog::compact`]: crate::op_log::OpLog::compact
+    pub fn entries(&self) -> impl Iterator<Item = (&T, Vec<Uuid>)> {
+        self.elements.iter().filter_map(|(value, tags)| {
+            let live: Vec<Uuid> = tags
+                .iter()
+                .copied()
+                .filter(|tag| !self.tombstones.contains(tag))
+                .collect();
+            if live.is_empty() {
+                None
+            } else {
+                Some((value, live))
+            }
+        })
+    }
+
     /// Set of tombstoned tags (for diagnostics / logging).
     pub fn tombstones(&self) -> &HashSet<Uuid> {
         &self.tombstones
