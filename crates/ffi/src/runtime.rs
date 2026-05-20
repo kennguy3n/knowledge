@@ -369,38 +369,65 @@ fn write_registry() -> std::sync::RwLockWriteGuard<'static, HashMap<u64, HandleE
 }
 
 thread_local! {
-    /// Per-thread depth counter for [`with_runtime`] frames.
+    /// Stack of [`RuntimeHandle`] values whose `with_runtime` frames
+    /// the current thread is currently executing.
     ///
-    /// Incremented on `with_runtime` entry, decremented on exit (via
-    /// the [`WithRuntimeGuard`] RAII helper so panics still decrement).
-    /// [`close_store`] reads this counter to detect the reentrant-call
-    /// case: a closure passed to `with_runtime` that calls
-    /// `close_store(handle)` *on the same handle it is currently
-    /// holding* would otherwise deadlock in the `Arc::try_unwrap` spin
-    /// loop, because the caller itself is the outstanding clone the
-    /// loop is waiting on.
+    /// Pushed on `with_runtime` entry, popped on exit (via the
+    /// [`WithRuntimeGuard`] RAII helper so panics still pop).
+    /// [`close_store`] reads this stack to detect the *same-handle*
+    /// reentrant-call case: a closure passed to `with_runtime(H, ...)`
+    /// that calls `close_store(H)` would otherwise deadlock in the
+    /// `Arc::try_unwrap` spin loop, because the caller itself is the
+    /// outstanding clone the loop is waiting on.
     ///
-    /// Using a thread-local depth counter (instead of a global one)
-    /// keeps the check zero-cost across threads — `close_store` only
-    /// fails reentrant calls from the *same* thread that already holds
-    /// a `with_runtime` frame, while concurrent calls from other
-    /// threads continue to drain via the synchronous teardown path.
-    static WITH_RUNTIME_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Tracking handles individually (rather than a single depth
+    /// counter) preserves the documented contract that closing a
+    /// **different** handle from inside `with_runtime` is supported:
+    /// `close_store(H2)` from inside `with_runtime(H1, ...)` is safe
+    /// because the thread's outstanding `Arc` clone is for `H1`, not
+    /// `H2`, so the drain loop on `H2` terminates immediately.
+    ///
+    /// `Vec` (rather than `HashSet`) because the expected stack depth
+    /// is 0 or 1 (nested `with_runtime` is rare) and linear scan over
+    /// a tiny `Vec` is cheaper than a hash lookup. The push/pop
+    /// discipline also surfaces any guard imbalance loudly: the next
+    /// `close_store` check would observe the wrong handle on top.
+    static WITH_RUNTIME_STACK: std::cell::RefCell<Vec<u64>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
-struct WithRuntimeGuard;
+struct WithRuntimeGuard {
+    handle: u64,
+}
 
 impl WithRuntimeGuard {
-    fn enter() -> Self {
-        WITH_RUNTIME_DEPTH.with(|d| d.set(d.get() + 1));
-        WithRuntimeGuard
+    fn enter(handle: u64) -> Self {
+        WITH_RUNTIME_STACK.with(|s| s.borrow_mut().push(handle));
+        WithRuntimeGuard { handle }
     }
 }
 
 impl Drop for WithRuntimeGuard {
     fn drop(&mut self) {
-        WITH_RUNTIME_DEPTH.with(|d| d.set(d.get() - 1));
+        WITH_RUNTIME_STACK.with(|s| {
+            let mut stack = s.borrow_mut();
+            // Stacks are LIFO: the most recent `enter` pushed this
+            // guard's `handle`, so the top should match. Pop
+            // unconditionally to keep the invariant tight; the
+            // `debug_assert_eq!` flags any imbalance (e.g. a future
+            // refactor that lets a guard outlive its frame).
+            let popped = stack.pop();
+            debug_assert_eq!(
+                popped,
+                Some(self.handle),
+                "WithRuntimeGuard pop/push imbalance"
+            );
+        });
     }
+}
+
+fn thread_holds_runtime_handle(handle: u64) -> bool {
+    WITH_RUNTIME_STACK.with(|s| s.borrow().contains(&handle))
 }
 
 /// Run `f` against the runtime bound to `handle`, returning
@@ -415,10 +442,10 @@ impl Drop for WithRuntimeGuard {
 /// `close_store` then blocks (only on its own handle) until the
 /// in-flight call on that handle finishes; see its docs for details.
 ///
-/// Increments [`WITH_RUNTIME_DEPTH`] for the current thread for the
-/// duration of the closure (via a RAII guard so panics still
-/// decrement). [`close_store`] reads that counter to detect the
-/// reentrant-call deadlock case.
+/// Pushes `handle` onto [`WITH_RUNTIME_STACK`] for the current
+/// thread for the duration of the closure (via a RAII guard so
+/// panics still pop). [`close_store`] reads that stack to detect
+/// the same-handle reentrant-call deadlock case.
 pub(crate) fn with_runtime<F, T>(handle: RuntimeHandle, f: F) -> FfiResult<T>
 where
     F: FnOnce(&mut FfiRuntime) -> FfiResult<T>,
@@ -432,7 +459,7 @@ where
                 subsystem: "evidence_store".into(),
             })?
     };
-    let _depth_guard = WithRuntimeGuard::enter();
+    let _depth_guard = WithRuntimeGuard::enter(handle.0);
     let mut rt = entry
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -787,28 +814,30 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHand
 /// waiting to drop, which would cause the loop to spin forever.
 ///
 /// To make that misuse loud instead of silent, `close_store` checks
-/// the per-thread [`WITH_RUNTIME_DEPTH`] counter that
-/// [`with_runtime`] maintains via [`WithRuntimeGuard`]. If the
-/// counter is non-zero, `close_store` returns an explicit
+/// the per-thread [`WITH_RUNTIME_STACK`] that [`with_runtime`]
+/// maintains via [`WithRuntimeGuard`]. If the stack contains the
+/// *specific* handle being closed, `close_store` returns an explicit
 /// [`FfiError::Evidence`] without removing the entry from the
 /// registry — preserving the contract that *no* state changes when
 /// the call fails.
 ///
 /// Closing a *different* handle from inside `with_runtime` is
 /// supported and behaves correctly: the calling thread's `Arc` clone
-/// is for a different registry entry, so it never blocks the drain
-/// loop on the closed handle.
+/// is for a different registry entry, so the per-handle reentrance
+/// guard does not fire and the drain loop on the closed handle
+/// terminates immediately.
 pub fn close_store(handle: RuntimeHandle) -> FfiResult<()> {
     // Reentrance guard: bail before any state change if this thread
-    // is currently executing inside a `with_runtime` closure (on any
-    // handle). Removing the entry and then spinning while the
-    // calling thread itself holds the outstanding clone would
-    // produce a silent infinite loop — the explicit error makes the
-    // misuse diagnosable.
-    let depth = WITH_RUNTIME_DEPTH.with(std::cell::Cell::get);
-    if depth > 0 {
+    // is currently executing inside a `with_runtime` closure on
+    // **this specific** handle. Removing the entry and then spinning
+    // while the calling thread itself holds the outstanding clone
+    // would produce a silent infinite loop — the explicit error
+    // makes the misuse diagnosable. Cross-handle calls fall through
+    // because the calling thread's clone is for a different
+    // registry entry.
+    if thread_holds_runtime_handle(handle.0) {
         return Err(FfiError::Evidence {
-            message: "close_store called from within a with_runtime frame on this thread; this would deadlock the synchronous-teardown spin loop".into(),
+            message: "close_store called from within a with_runtime frame for the same handle on this thread; this would deadlock the synchronous-teardown spin loop".into(),
         });
     }
     let Some(mut entry) = write_registry().remove(&handle.0) else {
@@ -907,33 +936,38 @@ mod tests {
         );
     }
 
-    /// Calling `close_store` from inside a `with_runtime` frame must
-    /// fail loudly with `FfiError::Evidence` rather than silently
-    /// deadlocking in the `Arc::try_unwrap` spin loop.
+    /// Calling `close_store(H)` from inside a `with_runtime(H, ...)`
+    /// frame must fail loudly with `FfiError::Evidence` rather than
+    /// silently deadlocking in the `Arc::try_unwrap` spin loop.
     ///
     /// The reentrance detection is keyed on the thread-local
-    /// `WITH_RUNTIME_DEPTH` counter, so we drive it directly here
-    /// (without an actual open store) by entering a fake
-    /// `WithRuntimeGuard` frame and then calling `close_store` with
-    /// an arbitrary unknown handle. The `Err(FfiError::Evidence)`
-    /// path must trip *before* the registry lookup; otherwise an
-    /// unknown handle would fast-path to `Ok(())` and mask the bug.
+    /// `WITH_RUNTIME_STACK`, so we drive it directly here (without
+    /// an actual open store) by pushing the same handle onto the
+    /// stack and then calling `close_store` with it. The
+    /// `Err(FfiError::Evidence)` path must trip *before* the
+    /// registry lookup; otherwise an unknown handle would fast-path
+    /// to `Ok(())` and mask the bug.
     #[test]
-    fn close_store_rejects_reentrant_call_on_same_thread() {
-        // Synthesise a `with_runtime` frame on this thread without
-        // having to hold an actual `Arc<Mutex<FfiRuntime>>`. The
-        // depth counter is what `close_store` checks, not the
+    fn close_store_rejects_same_handle_reentrant_call_on_same_thread() {
+        // Synthesise a `with_runtime(H, ...)` frame on this thread
+        // without having to hold an actual `Arc<Mutex<FfiRuntime>>`.
+        // The per-handle stack is what `close_store` checks, not the
         // registry. Bind the guard to a regular name so we can drop
         // it explicitly later (an `_`-prefixed binding would be
         // dropped at end of scope, missing the post-drop assertion).
-        let guard = WithRuntimeGuard::enter();
+        let h = RuntimeHandle(u64::MAX);
+        let guard = WithRuntimeGuard::enter(h.0);
 
-        let err = close_store(RuntimeHandle(u64::MAX)).unwrap_err();
+        let err = close_store(h).unwrap_err();
         match err {
             FfiError::Evidence { ref message } => {
                 assert!(
                     message.contains("close_store called from within a with_runtime frame"),
                     "expected reentrance error, got: {message}"
+                );
+                assert!(
+                    message.contains("same handle"),
+                    "expected same-handle qualifier in error message, got: {message}"
                 );
             }
             other => panic!("expected FfiError::Evidence, got: {other:?}"),
@@ -942,24 +976,78 @@ mod tests {
         // Sanity: after the guard drops, `close_store` on the same
         // unknown handle succeeds as a no-op (idempotent path).
         drop(guard);
-        close_store(RuntimeHandle(u64::MAX)).expect("non-reentrant close_store on unknown handle");
+        close_store(h).expect("non-reentrant close_store on unknown handle");
     }
 
-    /// `close_store` from a *different* thread is fine even when one
-    /// thread is in a `with_runtime` frame. We can only assert this
-    /// directly against the counter (a full multi-thread test lives
-    /// in `crates/ffi/tests/ffi_integration_tests.rs`); here we just
-    /// pin that the counter is per-thread by checking that this
-    /// thread's counter is unaffected by another thread entering and
-    /// leaving a guard.
+    /// Closing a *different* handle from inside a `with_runtime(H1, ...)`
+    /// frame is supported (the calling thread's `Arc` clone is for
+    /// `H1`, not `H2`, so the drain loop on `H2` terminates
+    /// immediately). The reentrance guard must NOT reject it.
+    ///
+    /// We pin this directly against the per-handle stack: enter a
+    /// frame for `H1`, then call `close_store(H2)` and expect it to
+    /// reach the registry lookup (and fast-path to `Ok(())` for the
+    /// unknown handle) rather than failing with the reentrance
+    /// error.
     #[test]
-    fn with_runtime_depth_is_thread_local() {
-        assert_eq!(WITH_RUNTIME_DEPTH.with(std::cell::Cell::get), 0);
-        let handle = std::thread::spawn(|| {
-            let _g = WithRuntimeGuard::enter();
-            assert_eq!(WITH_RUNTIME_DEPTH.with(std::cell::Cell::get), 1);
+    fn close_store_allows_cross_handle_call_from_with_runtime_frame() {
+        let h1 = RuntimeHandle(0xAAAA_AAAA_AAAA_AAAA);
+        let h2 = RuntimeHandle(0xBBBB_BBBB_BBBB_BBBB);
+        assert_ne!(h1.0, h2.0);
+
+        let _frame = WithRuntimeGuard::enter(h1.0);
+        // `H2` is not in the registry, so the call should reach the
+        // `write_registry().remove(&h2.0)` branch and return Ok(())
+        // because the entry is absent. The reentrance guard must not
+        // fire because the thread is NOT inside a `with_runtime(H2, ...)`
+        // frame.
+        close_store(h2).expect("cross-handle close_store from within with_runtime frame");
+    }
+
+    /// The `WITH_RUNTIME_STACK` is thread-local: another thread
+    /// entering and leaving a guard does not affect this thread's
+    /// stack. A full multi-thread close_store test lives in
+    /// `crates/ffi/tests/ffi_integration_tests.rs`; here we just
+    /// pin the per-thread scoping directly.
+    #[test]
+    fn with_runtime_stack_is_thread_local() {
+        let stack_empty = || WITH_RUNTIME_STACK.with(|s| s.borrow().is_empty());
+        assert!(stack_empty(), "this thread's stack starts empty");
+        let join = std::thread::spawn(|| {
+            let _g = WithRuntimeGuard::enter(42);
+            WITH_RUNTIME_STACK.with(|s| s.borrow().len())
         });
-        handle.join().expect("thread join");
-        assert_eq!(WITH_RUNTIME_DEPTH.with(std::cell::Cell::get), 0);
+        let other_len = join.join().expect("thread join");
+        assert_eq!(other_len, 1, "other thread observed depth 1 inside guard");
+        assert!(
+            stack_empty(),
+            "this thread's stack still empty after the other thread"
+        );
+    }
+
+    /// `WithRuntimeGuard` is LIFO. Nested guards on the same thread
+    /// must pop in the reverse order they were pushed.
+    #[test]
+    fn with_runtime_stack_is_lifo() {
+        let a = WithRuntimeGuard::enter(1);
+        let b = WithRuntimeGuard::enter(2);
+        let c = WithRuntimeGuard::enter(3);
+
+        assert!(thread_holds_runtime_handle(1));
+        assert!(thread_holds_runtime_handle(2));
+        assert!(thread_holds_runtime_handle(3));
+        assert!(!thread_holds_runtime_handle(4));
+
+        drop(c);
+        assert!(thread_holds_runtime_handle(1));
+        assert!(thread_holds_runtime_handle(2));
+        assert!(!thread_holds_runtime_handle(3));
+
+        drop(b);
+        assert!(thread_holds_runtime_handle(1));
+        assert!(!thread_holds_runtime_handle(2));
+
+        drop(a);
+        assert!(!thread_holds_runtime_handle(1));
     }
 }
