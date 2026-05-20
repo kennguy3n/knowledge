@@ -298,6 +298,12 @@ where
     /// Append every op in `[self.persisted_len .. engine.log.len())`
     /// to disk inside a single transaction, then update
     /// `self.persisted_len` and `sync_meta`.
+    ///
+    /// `sync_ops` inserts **and** the matching `sync_meta` upsert are
+    /// committed atomically: a crash between them would otherwise
+    /// leave the on-disk `compaction_epoch` lagging the
+    /// just-persisted op set, breaking the delta-sync epoch guard
+    /// that prevents accepting stale deltas after a `compact()`.
     fn flush_appended(&mut self) -> Result<()> {
         let target_len = self.engine.op_log().ops.len();
         if target_len < self.persisted_len {
@@ -307,18 +313,17 @@ where
             // rewrite so disk and memory line up.
             return self.rewrite_all();
         }
-        if target_len == self.persisted_len {
-            // Nothing new to flush, but we still want to track
-            // clock / compaction_epoch updates from the
-            // most-recent mutation (e.g. a no-op remove).
-            return self.upsert_meta();
-        }
+        // Even when target_len == persisted_len we still issue a
+        // `BEGIN IMMEDIATE` / `COMMIT` round so the meta upsert is
+        // atomic with any concurrent reader: a sibling connection
+        // never observes a partial update to `sync_meta`.
 
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result: Result<()> = (|| {
             for op in &self.engine.op_log().ops[self.persisted_len..target_len] {
                 self.insert_op_row(op)?;
             }
+            self.upsert_meta_inner()?;
             Ok(())
         })();
 
@@ -326,7 +331,7 @@ where
             Ok(()) => match self.conn.execute_batch("COMMIT") {
                 Ok(()) => {
                     self.persisted_len = target_len;
-                    self.upsert_meta()
+                    Ok(())
                 }
                 Err(e) => {
                     let _ = self.conn.execute_batch("ROLLBACK");
@@ -340,6 +345,9 @@ where
         }
     }
 
+    /// Truncate-and-reinsert the whole on-disk op set for this scope,
+    /// with the matching `sync_meta` upsert in the **same**
+    /// transaction. Used by [`Self::compact`] and [`Self::save`].
     fn rewrite_all(&mut self) -> Result<()> {
         let scope_bytes = self.scope.as_uuid().as_bytes().to_vec();
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
@@ -351,13 +359,14 @@ where
             for op in &self.engine.op_log().ops {
                 self.insert_op_row(op)?;
             }
+            self.upsert_meta_inner()?;
             Ok(())
         })();
         match result {
             Ok(()) => match self.conn.execute_batch("COMMIT") {
                 Ok(()) => {
                     self.persisted_len = self.engine.op_log().ops.len();
-                    self.upsert_meta()
+                    Ok(())
                 }
                 Err(e) => {
                     let _ = self.conn.execute_batch("ROLLBACK");
@@ -400,7 +409,16 @@ where
         Ok(())
     }
 
-    fn upsert_meta(&self) -> Result<()> {
+    /// Upsert the `sync_meta` row for this scope.
+    ///
+    /// The `_inner` suffix signals that this **does not** open or
+    /// commit its own transaction: callers must invoke it within an
+    /// already-open `BEGIN IMMEDIATE` block so the meta write commits
+    /// atomically with the matching `sync_ops` changes. Otherwise a
+    /// crash between the ops commit and the meta write would silently
+    /// roll `compaction_epoch` back and let the delta-sync epoch
+    /// guard accept stale deltas.
+    fn upsert_meta_inner(&self) -> Result<()> {
         self.conn.execute(
             "INSERT INTO sync_meta (scope_id, replica_id, clock, compaction_epoch)
              VALUES (?1, ?2, ?3, ?4)
