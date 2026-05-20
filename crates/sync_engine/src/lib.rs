@@ -243,6 +243,16 @@ where
 
     /// Record a `Remove(value)` op observing all currently-visible
     /// tags for the value, and reflect the tombstones in the cache.
+    ///
+    /// **Short-circuit:** if there are no currently-visible tags for
+    /// `value` (i.e. the local replica has never seen `value`, or all
+    /// of its known tags are already tombstoned), this is a no-op:
+    /// no op is appended to the log and no on-disk row is written.
+    /// A `Remove { observed_tags: [] }` op is a no-op on every
+    /// receiver — `AddWinsSet::remove_tags(value, &[])` does nothing
+    /// — so recording one would only grow the log + persisted table
+    /// without carrying any information. Defensive `remove()` of an
+    /// unknown value is the canonical case this guards against.
     pub fn remove(&mut self, value: T) {
         // Read observed tags from the cached state (rebuilding the
         // cache if necessary) so we do not pay the O(log_len) cost
@@ -262,6 +272,9 @@ where
             }
             Err(_) => return,
         };
+        if observed.is_empty() {
+            return;
+        }
         self.log.record_remove(value.clone(), observed.clone());
         if let Some((set, _supers)) = self.cached_state.get_mut().as_mut() {
             set.remove_tags(&value, &observed);

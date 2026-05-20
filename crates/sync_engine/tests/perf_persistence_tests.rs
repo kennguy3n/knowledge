@@ -389,3 +389,59 @@ fn persistence_two_scopes_share_one_db_independently() {
     assert!(state_b.contains(&"from_b".to_string()));
     assert!(!state_b.contains(&"from_a".to_string()));
 }
+
+#[test]
+fn remove_on_unknown_value_is_a_full_no_op_including_persistence() {
+    // Defensive `remove()` of a value the local replica has never
+    // seen must not append a Remove op to the log and must not
+    // persist a row to the on-disk table — a Remove op with empty
+    // `observed_tags` is a no-op on every receiver, so emitting it
+    // would only inflate the log + disk without carrying any
+    // information.
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("sync.sqlite");
+    let scope = SyncScopeId::new_v4();
+    let replica = Uuid::new_v4();
+    let mk = test_master_key();
+
+    let mut p = PersistentSyncEngine::<String>::open(&db_path, scope, replica, &mk).unwrap();
+
+    // Add one real value so the log + on-disk table are not empty
+    // — this guarantees we are testing the "no-op remove leaves
+    // length unchanged" property rather than "everything is empty".
+    p.add("present".to_string()).unwrap();
+    let len_after_add = p.engine().op_log().ops.len();
+    let persisted_after_add = p.persisted_len().unwrap();
+    assert_eq!(len_after_add, 1);
+    assert_eq!(persisted_after_add, 1);
+
+    // Defensive remove of values that were never added.
+    for never_added in ["absent_a", "absent_b", "absent_c"] {
+        p.remove(never_added.to_string()).unwrap();
+    }
+
+    // Log length must be exactly what it was after the single add.
+    assert_eq!(
+        p.engine().op_log().ops.len(),
+        len_after_add,
+        "no-op remove must not append to the in-memory op log",
+    );
+    // On-disk row count must be exactly what it was after the
+    // single add.
+    assert_eq!(
+        p.persisted_len().unwrap(),
+        persisted_after_add,
+        "no-op remove must not write any rows to sync_ops",
+    );
+
+    // Removing the present value still works and is reflected in
+    // both the log and the persisted table.
+    p.remove("present".to_string()).unwrap();
+    assert_eq!(p.engine().op_log().ops.len(), len_after_add + 1);
+    assert_eq!(p.persisted_len().unwrap(), persisted_after_add + 1);
+
+    // A second remove of the now-absent value is a no-op again.
+    p.remove("present".to_string()).unwrap();
+    assert_eq!(p.engine().op_log().ops.len(), len_after_add + 1);
+    assert_eq!(p.persisted_len().unwrap(), persisted_after_add + 1);
+}
