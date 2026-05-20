@@ -316,8 +316,8 @@ fn derive_schedule(
     let salt = b"knowledge-mls-key-schedule-v1";
     let hk = Hkdf::<Sha256>::new(Some(salt), epoch_secret.as_slice());
     // Bind `(group_id, epoch)` plus a per-output domain label into
-    // each `info`. Reusing the same `prefix` keeps the three info
-    // strings cheap to construct and ensures all three derivations
+    // each `info`. Reusing the same `prefix` keeps the two info
+    // strings cheap to construct and ensures both derivations
     // share the same group/epoch tag.
     let mut prefix = Vec::with_capacity(16 + 8);
     prefix.extend_from_slice(group_id.0.as_bytes());
