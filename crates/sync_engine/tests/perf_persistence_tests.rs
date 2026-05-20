@@ -445,3 +445,56 @@ fn remove_on_unknown_value_is_a_full_no_op_including_persistence() {
     assert_eq!(p.engine().op_log().ops.len(), len_after_add + 1);
     assert_eq!(p.persisted_len().unwrap(), persisted_after_add + 1);
 }
+
+#[test]
+fn op_log_serialised_form_does_not_carry_seen_index() {
+    // The `seen: HashSet<(replica_id, seq)>` dedup index inside
+    // OpLog is a redundant projection of `ops` — every entry
+    // corresponds to one element of `ops`. Including it in the
+    // serialised payload would double the `(replica_id, seq)` byte
+    // cost on the wire (snapshots and delta payloads) for zero
+    // information gain.
+    //
+    // This regression test pins two properties:
+    //   (1) the JSON-serialised snapshot form does not contain a
+    //       `"seen"` key (would otherwise duplicate every
+    //       `(replica_id, seq)` pair on the wire)
+    //   (2) the rehydrated dedup index is correctly rebuilt from
+    //       `ops` on deserialise — re-applying the same delta to
+    //       a receiver bootstrapped from the snapshot is a no-op.
+    let mut engine: SyncEngine<u64> = SyncEngine::new();
+    for i in 0..50_u64 {
+        engine.add(i);
+    }
+    let snapshot_bytes = engine.snapshot().unwrap();
+    let text = std::str::from_utf8(&snapshot_bytes).unwrap();
+    assert!(
+        !text.contains("\"seen\""),
+        "OpLog serialised snapshot form must not include the redundant `seen` dedup index",
+    );
+
+    // Encode the delta the snapshot author would send.
+    let delta_bytes = encode_delta_since(engine.op_log(), 0).unwrap();
+
+    // Receiver bootstraps from the snapshot — already absorbs
+    // every op the author included.
+    let mut receiver: SyncEngine<u64> =
+        SyncEngine::bootstrap_from_snapshot(&snapshot_bytes).unwrap();
+    let before = receiver.op_log().ops.len();
+    assert_eq!(
+        before, 50,
+        "receiver must observe every op the snapshot carried"
+    );
+
+    // Applying the same delta must be a no-op iff the rehydrated
+    // `seen` index actually dedupes — which is the property the
+    // `#[serde(skip)]` + `From<OpLogOnDisk>` shadow-type pattern
+    // provides.
+    apply_delta(&mut receiver, &delta_bytes).unwrap();
+    apply_delta(&mut receiver, &delta_bytes).unwrap();
+    assert_eq!(
+        receiver.op_log().ops.len(),
+        before,
+        "rehydrated `seen` index must dedupe re-applied delta ops",
+    );
+}

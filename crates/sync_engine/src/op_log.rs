@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::hash::Hash;
 
 use chrono::{DateTime, Utc};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -79,6 +80,11 @@ where
 ///   epoch is **behind** the sender's can refuse the delta and
 ///   bootstrap from a snapshot instead.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "OpLogOnDisk<T>")]
+#[serde(bound(
+    serialize = "T: Serialize + Eq + Hash + Clone",
+    deserialize = "T: DeserializeOwned + Eq + Hash + Clone"
+))]
 pub struct OpLog<T>
 where
     T: Eq + Hash + Clone,
@@ -103,7 +109,58 @@ where
     pub ops: Vec<SyncOp<T>>,
     /// Set of `(replica_id, seq)` pairs already absorbed — used to
     /// dedupe on [`merge`].
+    ///
+    /// **Not serialised**: this index is a redundant projection of
+    /// `ops` (every entry corresponds to exactly one element of
+    /// `ops`), so emitting it on the wire would double the
+    /// `(replica_id, seq)` byte cost of every snapshot and delta
+    /// payload for zero information gain. It is reconstructed from
+    /// `ops` during deserialisation via the [`OpLogOnDisk`] shadow
+    /// type and `From<OpLogOnDisk<T>> for OpLog<T>` below.
+    #[serde(skip)]
     seen: HashSet<(Uuid, u64)>,
+}
+
+/// On-disk / on-wire shape of [`OpLog`]: identical to it minus the
+/// redundant `seen` dedup index, which is reconstructed from `ops`
+/// in [`From<OpLogOnDisk<T>> for OpLog<T>`].
+///
+/// This indirection is what implements the `#[serde(skip)]` +
+/// "rebuild on load" pattern documented on [`OpLog::seen`]. It is
+/// purely an internal serde plumbing type and is not part of the
+/// public API.
+#[derive(Deserialize)]
+#[serde(bound = "T: DeserializeOwned + Eq + Hash + Clone")]
+struct OpLogOnDisk<T>
+where
+    T: Eq + Hash + Clone,
+{
+    replica_id: Uuid,
+    #[serde(default)]
+    clock: u64,
+    #[serde(default)]
+    compaction_epoch: u64,
+    #[serde(default)]
+    ops: Vec<SyncOp<T>>,
+}
+
+impl<T> From<OpLogOnDisk<T>> for OpLog<T>
+where
+    T: Eq + Hash + Clone,
+{
+    fn from(disk: OpLogOnDisk<T>) -> Self {
+        let mut seen: HashSet<(Uuid, u64)> = HashSet::with_capacity(disk.ops.len());
+        for op in &disk.ops {
+            seen.insert((op.replica_id, op.seq));
+        }
+        Self {
+            replica_id: disk.replica_id,
+            clock: disk.clock,
+            compaction_epoch: disk.compaction_epoch,
+            ops: disk.ops,
+            seen,
+        }
+    }
 }
 
 impl<T> OpLog<T>

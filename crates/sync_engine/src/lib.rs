@@ -116,6 +116,10 @@ pub struct CrdtDelta {
 /// dedup invariant *and* the bootstrap-without-replay invariant
 /// promised in `docs/DESIGN.md` §3.2.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "T: Serialize + Eq + Hash + Clone",
+    deserialize = "T: serde::de::DeserializeOwned + Eq + Hash + Clone"
+))]
 pub struct EngineSnapshot<T>
 where
     T: Eq + Hash + Clone,

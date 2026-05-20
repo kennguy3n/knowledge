@@ -249,14 +249,35 @@ where
     }
 
     /// Record a `Remove` op on the engine and mirror it to disk.
+    ///
+    /// If [`SyncEngine::remove`] short-circuits (no live tags to
+    /// tombstone, i.e. the value has never been observed on this
+    /// replica), no op is appended to the log and no SQLite
+    /// transaction is opened — defensive `remove` of an unknown
+    /// value is a true no-op end-to-end.
     pub fn remove(&mut self, value: T) -> Result<()> {
+        let before = self.engine.op_log().ops.len();
         self.engine.remove(value);
+        if self.engine.op_log().ops.len() == before {
+            return Ok(());
+        }
         self.flush_appended()
     }
 
     /// Record a `Supersede` op on the engine and mirror it to disk.
+    ///
+    /// If [`SyncEngine::supersede`] does not append a new op (the
+    /// engine may elide it in future revisions; today it always
+    /// appends one because a supersession carries the
+    /// `(value, successor)` edge regardless of observed tags), no
+    /// SQLite transaction is opened. The check is symmetrical to
+    /// [`Self::remove`].
     pub fn supersede(&mut self, value: T, successor: T) -> Result<()> {
+        let before = self.engine.op_log().ops.len();
         self.engine.supersede(value, successor);
+        if self.engine.op_log().ops.len() == before {
+            return Ok(());
+        }
         self.flush_appended()
     }
 
