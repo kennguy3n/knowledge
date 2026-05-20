@@ -1,36 +1,95 @@
-//! Process-global FFI runtime singleton.
+//! Handle-based FFI runtime registry.
 //!
 //! The UniFFI / N-API surface is shaped like a flat C-style API: each
 //! function takes plain data and returns plain data. The Rust core,
 //! however, owns stateful objects (an open SQLCipher database, a
 //! `DekRegistry` of destroyed keys, a master key). This module mediates
-//! between those two worlds by holding a process-global
-//! `OnceLock<Mutex<Option<FfiRuntime>>>`.
+//! between those two worlds by holding a process-wide map of open
+//! runtimes keyed by an opaque [`RuntimeHandle`].
 //!
-//! The runtime is initialized exactly once via [`open_store`] and torn
-//! down via [`close_store`]. Subsequent calls to [`open_store`] without
-//! an intervening [`close_store`] return [`FfiError::Evidence`] so tests
-//! and host shutdown sequences cannot accidentally clobber an open
-//! store.
+//! # Lifecycle
 //!
-//! Concurrency: every public FFI function acquires the singleton's
-//! `Mutex` for the duration of one call. The substrate's per-call
-//! workloads are short (single SQL statement, single AEAD seal) so
-//! coarse-grained locking is acceptable. If a future update needs
-//! finer-grained concurrency (e.g. multi-shard ingest), this is the
-//! single seam to replace.
+//! * [`open_store`] allocates a fresh runtime, inserts it into the map
+//!   and returns the caller's [`RuntimeHandle`].
+//! * Every other FFI function takes a [`RuntimeHandle`] as its first
+//!   argument and reaches into the map to find the corresponding
+//!   runtime. Calls with an unknown handle return
+//!   [`FfiError::Unavailable`] with `subsystem = "evidence_store"`.
+//! * [`close_store`] removes the entry from the map; the underlying
+//!   `FfiRuntime` is dropped once any concurrent in-flight call on the
+//!   same handle has released its clone of the `Arc` (the `Drop` impl
+//!   zeroizes the master key and closes the SQLite handle).
+//!
+//! Multiple handles can be open simultaneously — each holds an
+//! independent SQLCipher database, master key, and `DekRegistry`.
+//! Hosts that want a single global runtime simply call `open_store`
+//! once and reuse the handle; hosts that want per-account isolation
+//! (multi-profile desktop app, integration tests running in parallel,
+//! …) call `open_store` once per profile.
+//!
+//! # Concurrency
+//!
+//! The handle map is wrapped in an `RwLock`. Lookups acquire the read
+//! lock just long enough to clone an `Arc<Mutex<FfiRuntime>>` out of
+//! the entry. The actual FFI call then locks the per-handle `Mutex`,
+//! so calls against the same handle serialize while calls against
+//! distinct handles run in parallel.
+//!
+//! `close_store` takes the write lock and removes the entry. If
+//! another thread is mid-call on the same handle when `close_store`
+//! runs, that thread keeps the runtime alive via its cloned `Arc`
+//! until its call finishes — the runtime then drops cleanly.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard};
 
 use chrono::{DateTime, TimeZone, Utc};
 use crypto::forgetting::{self, DekRegistry, TombstoneStore};
 use crypto::{CryptoError, MasterKey};
 use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
 use memory_manager::{ChannelMemoryObject, UserMemoryObject};
+use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 use crate::error::{FfiError, FfiResult};
+
+/// Opaque handle to an open evidence-store runtime, returned by
+/// [`open_store`] and required as the first argument of every other
+/// FFI function.
+///
+/// Handles are monotonically-allocated `u64`s; the host treats them
+/// as opaque. The `0` value is reserved as an invalid sentinel —
+/// passing it to any FFI function returns
+/// [`FfiError::Unavailable`] with `subsystem = "evidence_store"`.
+#[repr(transparent)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct RuntimeHandle(pub u64);
+
+impl RuntimeHandle {
+    /// The reserved sentinel value. Never returned by [`open_store`].
+    /// Hosts can use it as a "no handle yet" placeholder before
+    /// calling `open_store`.
+    pub const NONE: RuntimeHandle = RuntimeHandle(0);
+
+    /// The raw `u64` carried by the handle.
+    #[must_use]
+    pub fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<u64> for RuntimeHandle {
+    fn from(v: u64) -> Self {
+        RuntimeHandle(v)
+    }
+}
+
+impl From<RuntimeHandle> for u64 {
+    fn from(h: RuntimeHandle) -> Self {
+        h.0
+    }
+}
 
 /// `crypto::forgetting::TombstoneStore` implementation backed by the
 /// `EvidenceStore`'s SQLCipher tables.
@@ -41,7 +100,7 @@ use crate::error::{FfiError, FfiResult};
 /// existing `forgotten_scopes` (v4) and `epoch_tombstones` (v8)
 /// tables so [`crypto::forgetting::destroy_scope_dek`] and
 /// [`crypto::forgetting::destroy_epoch_dek`] can record the
-/// destruction in a single atomic step \u2014 the in-memory DEK is
+/// destruction in a single atomic step — the in-memory DEK is
 /// zeroized first, then the on-disk tombstone is written before the
 /// destroy call returns.
 ///
@@ -68,7 +127,7 @@ fn dt_to_unix(at: DateTime<Utc>) -> i64 {
 /// Inverse of [`dt_to_unix`]. Returns `Utc::now()` instead of
 /// erroring on a malformed timestamp because the alternative is to
 /// fail the whole `open_store` replay over what would necessarily be
-/// a corrupted on-disk row \u2014 the surrounding code already treats
+/// a corrupted on-disk row — the surrounding code already treats
 /// timestamps as advisory metadata for the audit trail (the
 /// destruction itself is what re-establishes the registry invariant).
 fn unix_to_dt(unix: i64) -> DateTime<Utc> {
@@ -139,19 +198,19 @@ impl TombstoneStore for EvidenceStoreTombstoneStore<'_> {
 /// keys and to seed [`DekRegistry`] entries lazily on ingest), and the
 /// destroyed-key registry that backs [`forget`](crate::forget).
 ///
-/// The struct is intentionally not `Clone` — there must be exactly one
-/// per process. Tests reset this by calling
-/// [`close_store`](crate::close_store) before re-opening.
+/// One `FfiRuntime` exists per open [`RuntimeHandle`]. The runtime is
+/// dropped once the handle is removed from the registry *and* every
+/// in-flight call that had cloned its `Arc` has released it.
 pub struct FfiRuntime {
     pub(crate) master_key: MasterKey,
     pub(crate) store: EvidenceStore,
     pub(crate) registry: DekRegistry,
-    /// Per-scope user-memory CRUD layer. Kept in process memory
-    /// only — persistence to the encrypted evidence plane is not yet
-    /// wired.
+    /// Per-scope user-memory CRUD layer. Rehydrated on `open_store`
+    /// from the encrypted `memory_objects` table and flushed back on
+    /// every mutation so the state survives process restarts.
     pub(crate) user_memories: HashMap<ScopeId, UserMemoryObject>,
-    /// Per-scope channel-memory recap home. Also kept in process
-    /// memory only.
+    /// Per-scope channel-memory recap home. Persisted to the same
+    /// `memory_objects` table under the `channel_memory` kind.
     pub(crate) channel_memories: HashMap<ScopeId, ChannelMemoryObject>,
 }
 
@@ -196,7 +255,7 @@ impl FfiRuntime {
     /// Read-only FFI paths (`get_user_memory`, `list_memories`)
     /// use this accessor instead of [`Self::user_memory_mut`] so a
     /// query for an unknown scope does not permanently allocate an
-    /// empty `UserMemoryObject` in the per-process map.
+    /// empty `UserMemoryObject` in the per-handle map.
     pub(crate) fn user_memory(&self, scope: ScopeId) -> Option<&UserMemoryObject> {
         self.user_memories.get(&scope)
     }
@@ -269,55 +328,77 @@ impl FfiRuntime {
     }
 }
 
-fn singleton() -> &'static Mutex<Option<FfiRuntime>> {
-    static RUNTIME: OnceLock<Mutex<Option<FfiRuntime>>> = OnceLock::new();
-    RUNTIME.get_or_init(|| Mutex::new(None))
+// ───────────────────────── Handle registry ─────────────────────────
+
+type HandleEntry = Arc<Mutex<FfiRuntime>>;
+
+fn registry() -> &'static RwLock<HashMap<u64, HandleEntry>> {
+    static REGISTRY: OnceLock<RwLock<HashMap<u64, HandleEntry>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-fn lock_runtime() -> MutexGuard<'static, Option<FfiRuntime>> {
-    // A poisoned mutex means a previous panic happened inside an FFI
-    // call. We recover the inner state so the host can keep
-    // functioning rather than propagating the poison.
-    singleton()
-        .lock()
+fn next_handle() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::SeqCst)
+}
+
+fn read_registry() -> RwLockReadGuard<'static, HashMap<u64, HandleEntry>> {
+    registry()
+        .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Run `f` against the singleton runtime, returning
-/// [`FfiError::Unavailable`] if the store has not been opened.
-pub(crate) fn with_runtime<F, T>(f: F) -> FfiResult<T>
+fn write_registry() -> std::sync::RwLockWriteGuard<'static, HashMap<u64, HandleEntry>> {
+    registry()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Run `f` against the runtime bound to `handle`, returning
+/// [`FfiError::Unavailable`] when the handle is unknown (either never
+/// opened or already closed).
+///
+/// The function clones the per-handle `Arc<Mutex<FfiRuntime>>` out of
+/// the registry under the read lock and releases the read lock before
+/// taking the per-runtime `Mutex` — so a long-running call on handle
+/// A never blocks a short-running call on handle B, and `close_store`
+/// can land its `remove` even while a different handle is busy.
+pub(crate) fn with_runtime<F, T>(handle: RuntimeHandle, f: F) -> FfiResult<T>
 where
     F: FnOnce(&mut FfiRuntime) -> FfiResult<T>,
 {
-    let mut guard = lock_runtime();
-    let rt = guard.as_mut().ok_or_else(|| FfiError::Unavailable {
-        subsystem: "evidence_store".into(),
-    })?;
-    f(rt)
+    let entry = {
+        let guard = read_registry();
+        guard.get(&handle.0).cloned().ok_or_else(|| {
+            FfiError::Unavailable {
+                subsystem: "evidence_store".into(),
+            }
+        })?
+    };
+    let mut rt = entry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    f(&mut rt)
 }
 
 /// Open the SQLCipher-backed evidence store at `path` using the
 /// 32-byte master key encoded as `master_key_hex` (64 lower-case hex
-/// chars). Must be called before any other wired FFI function.
+/// chars). Returns the [`RuntimeHandle`] that every other FFI function
+/// needs as its first argument.
 ///
-/// Calling this twice without an intervening [`close_store`] is a
-/// programming error: the second call returns [`FfiError::Evidence`]
-/// rather than silently replacing the open store.
+/// Multiple stores can be opened concurrently — each call returns a
+/// fresh handle bound to an independent `EvidenceStore`, master key
+/// and `DekRegistry`. Re-opening the same on-disk database under a
+/// second handle is supported but the two handles do **not** share an
+/// in-memory `DekRegistry` cache, so they will each replay the
+/// `forgotten_scopes` table on open.
 ///
 /// # Errors
 ///
 /// * [`FfiError::InvalidId`] if `master_key_hex` is not exactly 64
 ///   hex characters.
-/// * [`FfiError::Evidence`] if a store is already open or if SQLCipher
-///   fails to open the underlying database.
-pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
+/// * [`FfiError::Evidence`] if SQLCipher fails to open the underlying
+///   database or the tombstone-replay path errors out.
+pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHandle> {
     let master_key = parse_master_key_hex(&master_key_hex)?;
-    let mut guard = lock_runtime();
-    if guard.is_some() {
-        return Err(FfiError::Evidence {
-            message: "evidence store is already open; call close_store first".into(),
-        });
-    }
     let mut store = EvidenceStore::open(&path, &master_key, EvidenceStoreConfig::default())
         .map_err(|e| FfiError::Evidence {
             message: e.to_string(),
@@ -384,8 +465,8 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
             .expect("None tombstone-store cannot fail");
     }
 
-    // Follow-up — re-purge the FTS5 / embedding
-    // secondary indexes for every replayed tombstone.
+    // Re-purge the FTS5 / embedding secondary indexes for every
+    // replayed tombstone.
     //
     // `forget()` performs three steps in order: (1) destroy the
     // in-memory DEK, (2) persist the tombstone via
@@ -467,9 +548,10 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
             store.evict_cached_scope_key(*scope);
             // Best-effort: delete the dangling wrapped DEK from disk.
             if let Err(e) = store.delete_scope_dek_row(*scope) {
-                eprintln!(
-                    "warning: failed to clean up dangling scope_deks row for {}: {e}",
-                    scope.as_uuid()
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    error = %e,
+                    "failed to clean up dangling scope_deks row; will retry on next open_store"
                 );
             }
             continue;
@@ -498,19 +580,19 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
                     user_memories.insert(scope, umo);
                 }
                 Err(e) => {
-                    eprintln!(
-                        "warning: failed to deserialize user_memory for scope {}: {e}; \
-                         blob dropped",
-                        scope.as_uuid()
+                    tracing::warn!(
+                        scope = %scope.as_uuid(),
+                        error = %e,
+                        "failed to deserialize user_memory blob; blob dropped"
                     );
                 }
             },
             Ok(None) => {}
             Err(e) => {
-                eprintln!(
-                    "warning: failed to load user_memory blob for scope {}: {e}; \
-                     skipping",
-                    scope.as_uuid()
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    error = %e,
+                    "failed to load user_memory blob; skipping"
                 );
             }
         }
@@ -533,42 +615,61 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
                     channel_memories.insert(scope, cmo);
                 }
                 Err(e) => {
-                    eprintln!(
-                        "warning: failed to deserialize channel_memory for scope {}: {e}; \
-                         blob dropped",
-                        scope.as_uuid()
+                    tracing::warn!(
+                        scope = %scope.as_uuid(),
+                        error = %e,
+                        "failed to deserialize channel_memory blob; blob dropped"
                     );
                 }
             },
             Ok(None) => {}
             Err(e) => {
-                eprintln!(
-                    "warning: failed to load channel_memory blob for scope {}: {e}; \
-                     skipping",
-                    scope.as_uuid()
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    error = %e,
+                    "failed to load channel_memory blob; skipping"
                 );
             }
         }
     }
 
-    *guard = Some(FfiRuntime {
+    let runtime = FfiRuntime {
         master_key,
         store,
         registry,
         user_memories,
         channel_memories,
-    });
-    Ok(())
+    };
+
+    let handle = RuntimeHandle(next_handle());
+    let mut guard = write_registry();
+    // Allocation is monotonic via `NEXT`, so a collision would mean
+    // we already wrapped a `u64`. That's effectively impossible
+    // under normal use but we still guard against it rather than
+    // silently overwriting an open runtime.
+    if guard.contains_key(&handle.0) {
+        return Err(FfiError::Evidence {
+            message: format!("runtime handle {} collided during allocation", handle.0),
+        });
+    }
+    guard.insert(handle.0, Arc::new(Mutex::new(runtime)));
+    Ok(handle)
 }
 
-/// Drop the open evidence store and zeroize the master key.
+/// Drop the runtime bound to `handle` and zeroize its master key.
 ///
-/// Idempotent: closing an already-closed store is a no-op and returns
-/// `Ok(())`. The host can therefore call this in a `try`/`finally`
-/// shutdown handler without first probing the runtime state.
-pub fn close_store() -> FfiResult<()> {
-    let mut guard = lock_runtime();
-    *guard = None;
+/// Idempotent: closing an unknown or already-closed handle is a no-op
+/// and returns `Ok(())`. The host can therefore call this in a
+/// `try`/`finally` shutdown handler without first probing the
+/// runtime state.
+///
+/// If another thread is mid-call on the same handle when this runs,
+/// that thread keeps the runtime alive via its cloned `Arc` until its
+/// call finishes — the runtime then drops cleanly. `close_store`
+/// itself returns immediately after removing the registry entry; it
+/// does not wait for the in-flight call to finish.
+pub fn close_store(handle: RuntimeHandle) -> FfiResult<()> {
+    let _ = write_registry().remove(&handle.0);
     Ok(())
 }
 
@@ -614,5 +715,27 @@ mod tests {
     fn parse_master_key_hex_rejects_non_hex_input() {
         let err = parse_master_key_hex(&"zz".repeat(32)).unwrap_err();
         assert!(matches!(err, FfiError::InvalidId { .. }));
+    }
+
+    #[test]
+    fn runtime_handle_round_trips_through_u64() {
+        let h = RuntimeHandle(42);
+        assert_eq!(h.raw(), 42);
+        let v: u64 = h.into();
+        assert_eq!(v, 42);
+        let back: RuntimeHandle = 42u64.into();
+        assert_eq!(back, h);
+    }
+
+    #[test]
+    fn runtime_handle_none_is_the_zero_sentinel() {
+        assert_eq!(RuntimeHandle::NONE.raw(), 0);
+        assert_eq!(RuntimeHandle::NONE, RuntimeHandle(0));
+    }
+
+    #[test]
+    fn with_runtime_returns_unavailable_for_unknown_handle() {
+        let err = with_runtime(RuntimeHandle(u64::MAX), |_| Ok(())).unwrap_err();
+        assert!(matches!(err, FfiError::Unavailable { ref subsystem } if subsystem == "evidence_store"));
     }
 }

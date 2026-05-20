@@ -24,6 +24,12 @@ use crate::schema::{SCHEMA_SQL, SCHEMA_VERSION};
 /// §9.1).
 pub const DEFAULT_RING_BUFFER_MAX_BYTES: usize = 5 * 1024 * 1024;
 
+/// Maximum number of `?` placeholders we pack into a single `IN (...)`
+/// clause before chunking. SQLite's default
+/// `SQLITE_MAX_VARIABLE_NUMBER` is 999; we stay well below it so the
+/// statement compiles even on builds that lower the cap.
+const DELETE_BATCH: usize = 256;
+
 /// Configuration for [`EvidenceStore::open`].
 #[derive(Debug, Clone)]
 pub struct EvidenceStoreConfig {
@@ -1470,9 +1476,8 @@ impl EvidenceStore {
         }
 
         // 4. Genuinely new scope: generate a fresh random DEK.
-        use rand::RngCore;
         let mut dek = [0u8; AEAD_KEY_LEN];
-        rand::rngs::OsRng.fill_bytes(&mut dek);
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut dek);
         self.store_scope_dek(scope_id, &dek)?;
         Ok(dek)
     }
@@ -1699,9 +1704,8 @@ impl EvidenceStore {
         // `IN (?, ?, ...)` clause that exceeds SQLite's parameter
         // cap. `SQLITE_MAX_VARIABLE_NUMBER` is 999 on the default
         // build; we stay well under it.
-        const BATCH: usize = 256;
         let mut fts_rows_deleted: usize = 0;
-        for chunk in evidence_ids.chunks(BATCH) {
+        for chunk in evidence_ids.chunks(DELETE_BATCH) {
             let placeholders = (0..chunk.len())
                 .map(|i| format!("?{}", i + 1))
                 .collect::<Vec<_>>()
@@ -1778,8 +1782,7 @@ impl EvidenceStore {
         // Garbage-collect orphaned body_store rows whose last wrap
         // was just deleted. A body_store row with zero remaining
         // wraps is cryptographically unrecoverable.
-        const BATCH: usize = 256;
-        for chunk in hashes.chunks(BATCH) {
+        for chunk in hashes.chunks(DELETE_BATCH) {
             for h in chunk {
                 let remaining: i64 = tx
                     .query_row(
@@ -2109,6 +2112,14 @@ fn bytes_to_embedding(bytes: &[u8]) -> Result<Vec<f32>> {
 /// target shape (the fresh-DB case), it must detect "already there"
 /// and return `Ok(())` without doing destructive work.
 fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
+    // Each schema version gets its own arm even when several share an
+    // `Ok(())` body. The per-version comment documents *why* the
+    // migration is a no-op (purely additive `CREATE TABLE IF NOT
+    // EXISTS` handled by `SCHEMA_SQL`, or genuinely empty). Collapsing
+    // the no-op arms into a single `_ => Ok(())` would lose that
+    // per-version provenance, which matters when auditing migrations
+    // across releases.
+    #[allow(clippy::match_same_arms)]
     match target {
         // v1: initial schema; nothing to do (handled by SCHEMA_SQL).
         // v2: add `evidence_embeddings`; handled by SCHEMA_SQL.

@@ -191,6 +191,14 @@ impl PersistentConceptGraph {
     /// persist call is the only operation that can fail at the I/O
     /// boundary; if it does, the in-memory insert is rolled back so
     /// the in-memory graph and the database stay in lockstep.
+    //
+    // `node` is taken by value because the underlying `graph.add_node`
+    // consumes it (moves into the node map) and the persist call
+    // needs to borrow it on the rollback-or-no-op fallthrough. The
+    // owned-then-cloned-then-borrowed pattern is intentional —
+    // borrowing instead would force the caller to clone, which is
+    // the same allocation in a less-obvious place.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn add_node(&mut self, node: ConceptNode) -> Result<NodeId> {
         let id = self.graph.add_node(node.clone())?;
         if let Err(e) = self.persist_node(&node) {
@@ -210,6 +218,9 @@ impl PersistentConceptGraph {
     /// As with [`Self::add_node`], in-memory validation runs first
     /// (dangling-endpoint rejection) and the in-memory mutation is
     /// rolled back if the persist call fails.
+    //
+    // See [`Self::add_node`] for why this owns rather than borrows.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn add_edge(&mut self, edge: ConceptEdge) -> Result<EdgeId> {
         let id = self.graph.add_edge(edge.clone())?;
         if let Err(e) = self.persist_edge(&edge) {

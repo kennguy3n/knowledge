@@ -60,13 +60,22 @@
 //!   embedding pipeline is wired.
 
 #![deny(missing_docs)]
+// Public FFI entry points take owned `String` / `Vec<u8>` by value
+// because the UniFFI (Swift / Kotlin) and N-API (Electron) bindings
+// generate code that hands ownership across the language boundary —
+// every JS-side string the host passes in arrives as a fresh
+// `String`. Borrowed equivalents would force a needless extra copy
+// in the generated bindings (or simply not compile under UniFFI's
+// proc-macro constraints), so this lint is silenced at the module
+// level rather than per-function.
+#![allow(clippy::needless_pass_by_value)]
 
 pub mod error;
 pub mod runtime;
 pub mod types;
 
 pub use error::{FfiError, FfiResult};
-pub use runtime::{close_store, open_store};
+pub use runtime::{close_store, open_store, RuntimeHandle};
 pub use types::{
     EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord,
     MemoryState, QueryResult, ScopeIdString, SourceKind, SynthesisTrigger,
@@ -101,13 +110,14 @@ use runtime::with_runtime;
 /// * [`FfiError::NotFound`] if `scope_id` has been cryptographically
 ///   forgotten via [`forget`].
 pub fn ingest_message(
+    handle: RuntimeHandle,
     scope_id: ScopeIdString,
     body: String,
     source: SourceKind,
     importance: FfiImportanceClass,
 ) -> FfiResult<String> {
     let scope = parse_scope_id(&scope_id)?;
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Err(FfiError::NotFound {
                 kind: "scope".into(),
@@ -163,12 +173,13 @@ pub fn ingest_message(
 /// a deliberate "soft" semantic so callers can treat forgotten scopes
 /// the same as scopes that simply have no matching rows.
 pub fn query(
+    handle: RuntimeHandle,
     scope_id: ScopeIdString,
     query_text: String,
     limit: u32,
 ) -> FfiResult<Vec<QueryResult>> {
     let scope = parse_scope_id(&scope_id)?;
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Ok(Vec::new());
         }
@@ -262,9 +273,9 @@ fn snippet_clip(body: &str, max_chars: usize) -> String {
 /// * [`FfiError::NotFound`] if the evidence row does not exist or
 ///   belongs to a forgotten scope.
 /// * [`FfiError::Evidence`] if reading or decrypting the body fails.
-pub fn get_evidence(evidence_id: String) -> FfiResult<EvidenceRecord> {
+pub fn get_evidence(handle: RuntimeHandle, evidence_id: String) -> FfiResult<EvidenceRecord> {
     let id = parse_evidence_id(&evidence_id)?;
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         let row = rt
             .store()
             .get(id)
@@ -324,9 +335,12 @@ pub fn get_evidence(evidence_id: String) -> FfiResult<EvidenceRecord> {
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
-pub fn get_user_memory(scope_id: ScopeIdString) -> FfiResult<Vec<MemoryRecord>> {
+pub fn get_user_memory(
+    handle: RuntimeHandle,
+    scope_id: ScopeIdString,
+) -> FfiResult<Vec<MemoryRecord>> {
     let scope = parse_scope_id(&scope_id)?;
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Ok(Vec::new());
         }
@@ -359,9 +373,9 @@ pub fn get_user_memory(scope_id: ScopeIdString) -> FfiResult<Vec<MemoryRecord>> 
 ///   open scope, or if the owning scope has been forgotten.
 /// * [`FfiError::Memory`] if the underlying state-machine transition
 ///   rejects the pin (e.g. the object is in a terminal state).
-pub fn pin(id: String) -> FfiResult<()> {
+pub fn pin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
     let uuid = parse_uuid(&id)?;
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         let owning_scope = locate_owning_scope(rt, &uuid).ok_or_else(|| FfiError::NotFound {
             kind: "memory".into(),
             id: id.clone(),
@@ -397,9 +411,9 @@ pub fn pin(id: String) -> FfiResult<()> {
 /// * [`FfiError::NotFound`] if no memory object has that id in any
 ///   open scope, or if the owning scope has been forgotten.
 /// * [`FfiError::Memory`] if the underlying state-machine rejects.
-pub fn unpin(id: String) -> FfiResult<()> {
+pub fn unpin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
     let uuid = parse_uuid(&id)?;
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         let owning_scope = locate_owning_scope(rt, &uuid).ok_or_else(|| FfiError::NotFound {
             kind: "memory".into(),
             id: id.clone(),
@@ -465,9 +479,9 @@ pub fn unpin(id: String) -> FfiResult<()> {
 ///   destruction is still effective in this case, but the next
 ///   `open_store` will not see the tombstone and the FTS index may
 ///   still contain plaintext for the affected scope.
-pub fn forget(id: String) -> FfiResult<()> {
+pub fn forget(handle: RuntimeHandle, id: String) -> FfiResult<()> {
     let evidence_id = parse_evidence_id(&id)?;
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         let row = rt
             .store()
             .get(evidence_id)
@@ -491,10 +505,10 @@ pub fn forget(id: String) -> FfiResult<()> {
         // still blocks access and open_store's recovery path will
         // retry the deletion on next startup.
         if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
-            eprintln!(
-                "warning: failed to delete scope DEK for {}: {e}; \
-                 will retry on next open_store",
-                scope.as_uuid()
+            tracing::warn!(
+                scope = %scope.as_uuid(),
+                error = %e,
+                "failed to delete scope DEK; will retry on next open_store",
             );
         }
         rt.store_mut()
@@ -538,18 +552,18 @@ pub fn forget(id: String) -> FfiResult<()> {
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 /// * [`FfiError::Evidence`] if persisting the tombstone or purging
 ///   secondary indexes fails.
-pub fn forget_scope(scope_id: String) -> FfiResult<()> {
+pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
     let scope = parse_scope_id(&scope_id)?;
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         // Atomic in-memory + on-disk forgetting (see
         // `FfiRuntime::forget_scope` for the rationale).
         rt.forget_scope(scope)?;
         // Best-effort DEK deletion (see forget() for rationale).
         if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
-            eprintln!(
-                "warning: failed to delete scope DEK for {}: {e}; \
-                 will retry on next open_store",
-                scope.as_uuid()
+            tracing::warn!(
+                scope = %scope.as_uuid(),
+                error = %e,
+                "failed to delete scope DEK; will retry on next open_store",
             );
         }
         rt.store_mut()
@@ -585,11 +599,12 @@ pub fn forget_scope(scope_id: String) -> FfiResult<()> {
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 pub fn list_memories(
+    handle: RuntimeHandle,
     scope_id: ScopeIdString,
     filter: MemoryFilter,
 ) -> FfiResult<Vec<MemoryRecord>> {
     let scope = parse_scope_id(&scope_id)?;
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Ok(Vec::new());
         }
@@ -606,7 +621,7 @@ pub fn list_memories(
         // dropped the `state = Some(Pinned)` filter.
         let require_pinned = filter.pinned_only || filter.state == Some(MemoryState::Pinned);
         let out: Vec<MemoryRecord> = umo
-            .list(mm_filter)
+            .list(&mm_filter)
             .into_iter()
             .filter(|o| !require_pinned || o.pin_count > 0)
             .map(memory_object_to_record)
@@ -623,9 +638,9 @@ pub fn list_memories(
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
-pub fn run_decay_sweep(scope_id: ScopeIdString) -> FfiResult<u32> {
+pub fn run_decay_sweep(handle: RuntimeHandle, scope_id: ScopeIdString) -> FfiResult<u32> {
     let scope = parse_scope_id(&scope_id)?;
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Ok(0);
         }
@@ -655,9 +670,12 @@ pub fn run_decay_sweep(scope_id: ScopeIdString) -> FfiResult<u32> {
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
-pub fn get_channel_memory(scope_id: ScopeIdString) -> FfiResult<Option<MemoryRecord>> {
+pub fn get_channel_memory(
+    handle: RuntimeHandle,
+    scope_id: ScopeIdString,
+) -> FfiResult<Option<MemoryRecord>> {
     let scope = parse_scope_id(&scope_id)?;
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Ok(None);
         }
@@ -699,9 +717,13 @@ pub fn get_channel_memory(scope_id: ScopeIdString) -> FfiResult<Option<MemoryRec
 ///   build (the current default).
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
-pub fn trigger_synthesis(scope_id: ScopeIdString, _trigger: SynthesisTrigger) -> FfiResult<String> {
+pub fn trigger_synthesis(
+    handle: RuntimeHandle,
+    scope_id: ScopeIdString,
+    _trigger: SynthesisTrigger,
+) -> FfiResult<String> {
     let scope = parse_scope_id(&scope_id)?;
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Err(FfiError::NotFound {
                 kind: "scope".into(),
@@ -753,9 +775,13 @@ pub fn generate_keypair() -> FfiResult<FfiKeypair> {
 ///   write error).
 /// * [`FfiError::Crypto`] on AEAD or key-derivation failure.
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
-pub fn encrypt(scope_id: ScopeIdString, plaintext: Vec<u8>) -> FfiResult<Vec<u8>> {
+pub fn encrypt(
+    handle: RuntimeHandle,
+    scope_id: ScopeIdString,
+    plaintext: Vec<u8>,
+) -> FfiResult<Vec<u8>> {
     let scope = parse_scope_id(&scope_id)?;
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Err(FfiError::NotFound {
                 kind: "scope".into(),
@@ -789,14 +815,18 @@ pub fn encrypt(scope_id: ScopeIdString, plaintext: Vec<u8>) -> FfiResult<Vec<u8>
 /// * [`FfiError::Crypto`] if the envelope is malformed or decryption
 ///   fails.
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
-pub fn decrypt(scope_id: ScopeIdString, ciphertext: Vec<u8>) -> FfiResult<Vec<u8>> {
+pub fn decrypt(
+    handle: RuntimeHandle,
+    scope_id: ScopeIdString,
+    ciphertext: Vec<u8>,
+) -> FfiResult<Vec<u8>> {
     let scope = parse_scope_id(&scope_id)?;
     if ciphertext.len() < AEAD_NONCE_LEN {
         return Err(FfiError::Crypto {
             message: "ciphertext envelope shorter than nonce prefix".into(),
         });
     }
-    with_runtime(|rt| {
+    with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Err(FfiError::NotFound {
                 kind: "scope".into(),
@@ -1102,39 +1132,27 @@ impl runtime::FfiRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
     use tempfile::tempdir;
 
-    // The FFI surface holds a process-global runtime singleton, so
-    // tests that open / close it must be serialized. Each test that
-    // touches the singleton starts by acquiring this mutex.
-    fn test_lock() -> MutexGuard<'static, ()> {
-        static M: OnceLock<Mutex<()>> = OnceLock::new();
-        M.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    fn fresh_store() -> tempfile::TempDir {
-        // Defensive: previous test could have panicked mid-flight,
-        // leaving the singleton populated. `close_store` is
-        // idempotent so this is safe.
-        let _ = close_store();
+    /// Helper: open a fresh temp-dir-backed store, returning the
+    /// allocated [`RuntimeHandle`] and the owning `TempDir`. The
+    /// `TempDir` must outlive the handle so the on-disk database
+    /// is not garbage-collected while the runtime still holds it
+    /// open.
+    fn fresh_store() -> (RuntimeHandle, tempfile::TempDir) {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("evidence.db");
         let key_hex = "a5".repeat(32);
-        open_store(path.to_string_lossy().into_owned(), key_hex).expect("open_store");
-        dir
+        let handle = open_store(path.to_string_lossy().into_owned(), key_hex).expect("open_store");
+        (handle, dir)
     }
 
-    fn teardown() {
-        close_store().expect("close_store");
+    fn teardown(handle: RuntimeHandle) {
+        close_store(handle).expect("close_store");
     }
 
     #[test]
     fn open_store_rejects_invalid_hex_master_key() {
-        let _g = test_lock();
-        let _ = close_store();
         let dir = tempdir().unwrap();
         let path = dir.path().join("evidence.db");
         let err = open_store(path.to_string_lossy().into_owned(), "not-hex".into()).unwrap_err();
@@ -1143,8 +1161,6 @@ mod tests {
 
     #[test]
     fn open_store_rejects_wrong_length_master_key() {
-        let _g = test_lock();
-        let _ = close_store();
         let dir = tempdir().unwrap();
         let path = dir.path().join("evidence.db");
         let err = open_store(path.to_string_lossy().into_owned(), "ab".repeat(16)).unwrap_err();
@@ -1152,9 +1168,44 @@ mod tests {
     }
 
     #[test]
+    fn open_store_allocates_distinct_handles_for_independent_dbs() {
+        // Two independent on-disk stores must produce two distinct
+        // handles; calls on one must not affect the other.
+        let (h1, _d1) = fresh_store();
+        let (h2, _d2) = fresh_store();
+        assert_ne!(h1, h2, "open_store must allocate distinct handles");
+
+        let scope = uuid::Uuid::new_v4().to_string();
+        let phrase = "storeoneisolationphrase";
+        let _ = ingest_message(
+            h1,
+            scope.clone(),
+            format!("body contains {phrase}"),
+            SourceKind::Manual,
+            FfiImportanceClass::Important,
+        )
+        .expect("ingest into store 1");
+
+        // Querying the same scope from store 2 must return zero hits
+        // — store 2 has never seen this scope nor the FTS term.
+        let hits = query(h2, scope, phrase.into(), 10).expect("query store 2");
+        assert!(hits.is_empty(), "stores must be isolated by handle");
+
+        teardown(h1);
+        teardown(h2);
+    }
+
+    #[test]
+    fn close_store_is_idempotent_for_unknown_handle() {
+        // Closing an unknown handle returns Ok — hosts rely on this
+        // in `try`/`finally` shutdown paths.
+        close_store(RuntimeHandle::NONE).expect("close NONE");
+        close_store(RuntimeHandle(u64::MAX)).expect("close unknown");
+    }
+
+    #[test]
     fn ingest_then_query_then_get_then_forget_round_trips() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
         // Single-token phrase (no punctuation) so the FTS5 `unicode61`
         // tokenizer indexes it verbatim and `MATCH` does not need
@@ -1163,6 +1214,7 @@ mod tests {
         let body = format!("Reminder: please file the {phrase} report by Friday.");
 
         let evidence_id = ingest_message(
+            h,
             scope.clone(),
             body.clone(),
             SourceKind::Slack,
@@ -1171,30 +1223,31 @@ mod tests {
         .expect("ingest_message");
         assert!(!evidence_id.is_empty());
 
-        let hits = query(scope.clone(), phrase.into(), 10).expect("query");
+        let hits = query(h, scope.clone(), phrase.into(), 10).expect("query");
         assert_eq!(hits.len(), 1, "FTS5 should surface the ingested phrase");
         assert_eq!(hits[0].evidence_id, evidence_id);
         assert!(hits[0].snippet.contains(phrase));
 
-        let record = get_evidence(evidence_id.clone()).expect("get_evidence");
+        let record = get_evidence(h, evidence_id.clone()).expect("get_evidence");
         assert_eq!(record.body, body);
         assert_eq!(record.source, SourceKind::Slack);
         assert_eq!(record.scope_id, scope);
 
-        forget(evidence_id.clone()).expect("forget");
+        forget(h, evidence_id.clone()).expect("forget");
 
-        let hits_after = query(scope.clone(), phrase.into(), 10).expect("query after forget");
+        let hits_after = query(h, scope.clone(), phrase.into(), 10).expect("query after forget");
         assert!(
             hits_after.is_empty(),
             "post-forget query must not return rows"
         );
 
-        match get_evidence(evidence_id.clone()) {
+        match get_evidence(h, evidence_id.clone()) {
             Err(FfiError::NotFound { kind, .. }) => assert_eq!(kind, "evidence"),
             other => panic!("expected NotFound after forget, got {other:?}"),
         }
 
         match ingest_message(
+            h,
             scope.clone(),
             "second message".into(),
             SourceKind::Manual,
@@ -1203,51 +1256,48 @@ mod tests {
             Err(FfiError::NotFound { kind, .. }) => assert_eq!(kind, "scope"),
             other => panic!("expected NotFound after forget, got {other:?}"),
         }
-        teardown();
+        teardown(h);
     }
 
     #[test]
     fn encrypt_decrypt_round_trips_for_scope() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
         let scope_id = parse_scope_id(&scope).unwrap();
-        runtime::with_runtime(|rt| rt.ensure_scope_registered(scope_id)).expect("register");
+        runtime::with_runtime(h, |rt| rt.ensure_scope_registered(scope_id)).expect("register");
         let plaintext = b"the quick brown fox".to_vec();
-        let ct = encrypt(scope.clone(), plaintext.clone()).expect("encrypt");
+        let ct = encrypt(h, scope.clone(), plaintext.clone()).expect("encrypt");
         assert!(ct.len() > plaintext.len());
-        let pt = decrypt(scope.clone(), ct).expect("decrypt");
+        let pt = decrypt(h, scope.clone(), ct).expect("decrypt");
         assert_eq!(pt, plaintext);
-        teardown();
+        teardown(h);
     }
 
     #[test]
     fn decrypt_rejects_short_envelope() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
-        let err = decrypt(scope, vec![0u8; 4]).unwrap_err();
+        let err = decrypt(h, scope, vec![0u8; 4]).unwrap_err();
         assert!(matches!(err, FfiError::Crypto { .. }));
-        teardown();
+        teardown(h);
     }
 
     #[test]
     fn decrypt_rejects_cross_scope_ciphertext() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope_a = uuid::Uuid::new_v4().to_string();
         let scope_b = uuid::Uuid::new_v4().to_string();
         let scope_a_id = parse_scope_id(&scope_a).unwrap();
         let scope_b_id = parse_scope_id(&scope_b).unwrap();
-        runtime::with_runtime(|rt| {
+        runtime::with_runtime(h, |rt| {
             rt.ensure_scope_registered(scope_a_id)?;
             rt.ensure_scope_registered(scope_b_id)
         })
         .expect("register");
-        let ct = encrypt(scope_a, b"secret".to_vec()).expect("encrypt");
-        let err = decrypt(scope_b, ct).unwrap_err();
+        let ct = encrypt(h, scope_a, b"secret".to_vec()).expect("encrypt");
+        let err = decrypt(h, scope_b, ct).unwrap_err();
         assert!(matches!(err, FfiError::Crypto { .. }));
-        teardown();
+        teardown(h);
     }
 
     #[test]
@@ -1272,24 +1322,24 @@ mod tests {
 
     #[test]
     fn get_user_memory_is_empty_for_fresh_scope() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
-        let records = get_user_memory(scope).expect("get_user_memory");
+        let records = get_user_memory(h, scope).expect("get_user_memory");
         assert!(records.is_empty());
-        teardown();
+        teardown(h);
     }
 
     #[test]
     fn list_memories_is_empty_for_fresh_scope() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
-        let records = list_memories(scope.clone(), MemoryFilter::default()).expect("list_memories");
+        let records =
+            list_memories(h, scope.clone(), MemoryFilter::default()).expect("list_memories");
         assert!(records.is_empty());
 
         // Filtering by state on a fresh scope is also empty.
         let candidates = list_memories(
+            h,
             scope,
             MemoryFilter {
                 state: Some(MemoryState::Candidate),
@@ -1298,46 +1348,42 @@ mod tests {
         )
         .expect("list_memories candidate filter");
         assert!(candidates.is_empty());
-        teardown();
+        teardown(h);
     }
 
     #[test]
     fn run_decay_sweep_is_zero_for_fresh_scope() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
-        let n = run_decay_sweep(scope).expect("run_decay_sweep");
+        let n = run_decay_sweep(h, scope).expect("run_decay_sweep");
         assert_eq!(n, 0);
-        teardown();
+        teardown(h);
     }
 
     #[test]
     fn get_channel_memory_is_none_until_synthesis_runs() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
-        let cm = get_channel_memory(scope).expect("get_channel_memory");
+        let cm = get_channel_memory(h, scope).expect("get_channel_memory");
         assert!(cm.is_none());
-        teardown();
+        teardown(h);
     }
 
     #[test]
     fn trigger_synthesis_reports_unavailable_until_slm_is_wired() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
-        let err = trigger_synthesis(scope, SynthesisTrigger::ManualUserAction).unwrap_err();
+        let err = trigger_synthesis(h, scope, SynthesisTrigger::ManualUserAction).unwrap_err();
         assert!(
             matches!(err, FfiError::Unavailable { ref subsystem } if subsystem == "synthesis"),
             "expected Unavailable {{ subsystem: synthesis }}, got {err:?}"
         );
-        teardown();
+        teardown(h);
     }
 
     #[test]
     fn pin_and_unpin_round_trip_through_user_memory() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope_uuid = uuid::Uuid::new_v4();
         let scope_str = scope_uuid.to_string();
         // The pin / unpin surface needs an existing memory object;
@@ -1345,7 +1391,7 @@ mod tests {
         // ingest through the FFI is not yet wired). Seed one
         // directly via the in-crate runtime hook so we still cover
         // the round-trip.
-        let mem_id = runtime::with_runtime(|rt| {
+        let mem_id = runtime::with_runtime(h, |rt| {
             let scope = parse_scope_id(&scope_str)?;
             let umo = rt.user_memory_mut(scope);
             Ok(umo.add_observation(
@@ -1356,55 +1402,53 @@ mod tests {
         })
         .expect("seed memory object");
 
-        let records = get_user_memory(scope_str.clone()).expect("get_user_memory");
+        let records = get_user_memory(h, scope_str.clone()).expect("get_user_memory");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, mem_id.to_string());
         assert_eq!(records[0].state, MemoryState::Candidate);
         assert_eq!(records[0].summary, "Sara owns the rollout");
 
-        pin(mem_id.to_string()).expect("pin");
-        let pinned = get_user_memory(scope_str.clone()).expect("get_user_memory after pin");
+        pin(h, mem_id.to_string()).expect("pin");
+        let pinned = get_user_memory(h, scope_str.clone()).expect("get_user_memory after pin");
         assert_eq!(pinned[0].state, MemoryState::Pinned);
 
-        unpin(mem_id.to_string()).expect("unpin");
-        let after_unpin = get_user_memory(scope_str).expect("get_user_memory after unpin");
+        unpin(h, mem_id.to_string()).expect("unpin");
+        let after_unpin = get_user_memory(h, scope_str).expect("get_user_memory after unpin");
         // pin_count back to 0 means the underlying state machine
         // controls the wire state again. The decay-state-machine
         // promotion in `pin()` lifted the object to Reinforced, so
         // the FFI mapping should now surface `Reinforced`.
         assert_eq!(after_unpin[0].state, MemoryState::Reinforced);
-        teardown();
+        teardown(h);
     }
 
     #[test]
     fn pin_unknown_id_reports_not_found() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let bogus = uuid::Uuid::new_v4().to_string();
-        let err = pin(bogus).unwrap_err();
+        let err = pin(h, bogus).unwrap_err();
         assert!(
             matches!(err, FfiError::NotFound { ref kind, .. } if kind == "memory"),
             "expected NotFound {{ kind: memory }}, got {err:?}"
         );
-        teardown();
+        teardown(h);
     }
 
     #[test]
     fn pin_rejects_malformed_id() {
-        let _g = test_lock();
-        let _dir = fresh_store();
-        let err = pin("not-a-uuid".into()).unwrap_err();
+        let (h, _dir) = fresh_store();
+        let err = pin(h, "not-a-uuid".into()).unwrap_err();
         assert!(matches!(err, FfiError::InvalidId { .. }));
-        teardown();
+        teardown(h);
     }
 
     #[test]
     fn get_user_memory_returns_empty_after_forget() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
         let phrase = "memorymanagerforgetphrase";
         let evidence_id = ingest_message(
+            h,
             scope.clone(),
             phrase.into(),
             SourceKind::Manual,
@@ -1414,7 +1458,7 @@ mod tests {
 
         // Seed a memory object into the same scope so we can prove
         // forget elides it.
-        runtime::with_runtime(|rt| {
+        runtime::with_runtime(h, |rt| {
             let s = parse_scope_id(&scope)?;
             let umo = rt.user_memory_mut(s);
             let _ = umo.add_observation(
@@ -1426,20 +1470,22 @@ mod tests {
         })
         .expect("seed");
 
-        assert_eq!(get_user_memory(scope.clone()).expect("pre-forget").len(), 1);
+        assert_eq!(
+            get_user_memory(h, scope.clone()).expect("pre-forget").len(),
+            1
+        );
 
-        forget(evidence_id).expect("forget");
-        assert!(get_user_memory(scope).expect("post-forget").is_empty());
-        teardown();
+        forget(h, evidence_id).expect("forget");
+        assert!(get_user_memory(h, scope).expect("post-forget").is_empty());
+        teardown(h);
     }
 
     #[test]
     fn list_memories_filters_by_state() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
         // Seed three candidate observations.
-        runtime::with_runtime(|rt| {
+        runtime::with_runtime(h, |rt| {
             let s = parse_scope_id(&scope)?;
             let umo = rt.user_memory_mut(s);
             let _ = umo.add_observation("a", "one", memory_manager::SensitivityClass::Useful);
@@ -1449,10 +1495,11 @@ mod tests {
         })
         .expect("seed");
 
-        let all = list_memories(scope.clone(), MemoryFilter::default()).expect("list all");
+        let all = list_memories(h, scope.clone(), MemoryFilter::default()).expect("list all");
         assert_eq!(all.len(), 3);
 
         let candidates = list_memories(
+            h,
             scope.clone(),
             MemoryFilter {
                 state: Some(MemoryState::Candidate),
@@ -1463,6 +1510,7 @@ mod tests {
         assert_eq!(candidates.len(), 3);
 
         let reinforced = list_memories(
+            h,
             scope,
             MemoryFilter {
                 state: Some(MemoryState::Reinforced),
@@ -1471,7 +1519,7 @@ mod tests {
         )
         .expect("list reinforced");
         assert!(reinforced.is_empty());
-        teardown();
+        teardown(h);
     }
 
     /// Regression: `list_memories` with `state = Some(Pinned)` must
@@ -1486,11 +1534,10 @@ mod tests {
     /// got every object in the scope back, including unpinned ones.
     #[test]
     fn list_memories_state_pinned_returns_only_pinned() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
         // Seed two observations, pin one of them.
-        let pinned_id = runtime::with_runtime(|rt| {
+        let pinned_id = runtime::with_runtime(h, |rt| {
             let s = parse_scope_id(&scope)?;
             let umo = rt.user_memory_mut(s);
             let pinned =
@@ -1500,9 +1547,10 @@ mod tests {
             Ok(pinned)
         })
         .expect("seed");
-        pin(pinned_id.to_string()).expect("pin");
+        pin(h, pinned_id.to_string()).expect("pin");
 
         let only_pinned = list_memories(
+            h,
             scope.clone(),
             MemoryFilter {
                 state: Some(MemoryState::Pinned),
@@ -1518,7 +1566,7 @@ mod tests {
         assert_eq!(only_pinned[0].id, pinned_id.to_string());
         assert_eq!(only_pinned[0].state, MemoryState::Pinned);
 
-        teardown();
+        teardown(h);
     }
 
     /// Regression: `pin` / `unpin` must reject mutations against
@@ -1530,20 +1578,20 @@ mod tests {
     /// (`get_user_memory`, `list_memories`) reports as invisible.
     #[test]
     fn pin_after_forget_returns_not_found() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
 
         // Seed one evidence row (so `forget` has a row to resolve to
         // a scope) and one memory object in the same scope.
         let evidence_id = ingest_message(
+            h,
             scope.clone(),
             "pin-after-forget-seed-body".into(),
             SourceKind::Manual,
             FfiImportanceClass::Important,
         )
         .expect("ingest");
-        let mem_id = runtime::with_runtime(|rt| {
+        let mem_id = runtime::with_runtime(h, |rt| {
             let s = parse_scope_id(&scope)?;
             let umo = rt.user_memory_mut(s);
             Ok(umo.add_observation(
@@ -1554,24 +1602,24 @@ mod tests {
         })
         .expect("seed memory");
 
-        forget(evidence_id).expect("forget");
+        forget(h, evidence_id).expect("forget");
 
         // Pin must now return NotFound { kind: "memory" } — the same
         // shape the read surfaces present for the forgotten scope.
-        let pin_err = pin(mem_id.to_string()).unwrap_err();
+        let pin_err = pin(h, mem_id.to_string()).unwrap_err();
         assert!(
             matches!(pin_err, FfiError::NotFound { ref kind, .. } if kind == "memory"),
             "pin after forget must return NotFound {{ kind: memory }}, got {pin_err:?}"
         );
 
         // Same contract for unpin.
-        let unpin_err = unpin(mem_id.to_string()).unwrap_err();
+        let unpin_err = unpin(h, mem_id.to_string()).unwrap_err();
         assert!(
             matches!(unpin_err, FfiError::NotFound { ref kind, .. } if kind == "memory"),
             "unpin after forget must return NotFound {{ kind: memory }}, got {unpin_err:?}"
         );
 
-        teardown();
+        teardown(h);
     }
 
     /// Regression for the design follow-up: `get_user_memory` and
@@ -1581,24 +1629,24 @@ mod tests {
     /// per-scope `user_memories` map at its previous size.
     #[test]
     fn read_paths_do_not_allocate_user_memory_for_unknown_scope() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
 
         // Snapshot the map size before any read.
-        let before = runtime::with_runtime(|rt| Ok(rt.user_memories.len())).expect("len before");
+        let before =
+            runtime::with_runtime(h, |rt| Ok(rt.user_memories.len())).expect("len before");
 
-        let bundle = get_user_memory(scope.clone()).expect("get_user_memory");
+        let bundle = get_user_memory(h, scope.clone()).expect("get_user_memory");
         assert!(bundle.is_empty());
-        let listed = list_memories(scope, MemoryFilter::default()).expect("list_memories");
+        let listed = list_memories(h, scope, MemoryFilter::default()).expect("list_memories");
         assert!(listed.is_empty());
 
-        let after = runtime::with_runtime(|rt| Ok(rt.user_memories.len())).expect("len after");
+        let after = runtime::with_runtime(h, |rt| Ok(rt.user_memories.len())).expect("len after");
         assert_eq!(
             before, after,
             "read paths must not allocate per-scope user_memory entries"
         );
-        teardown();
+        teardown(h);
     }
 
     /// Regression for the design follow-up: `trigger_synthesis` must
@@ -1607,32 +1655,34 @@ mod tests {
     /// call that never produces a recap.
     #[test]
     fn trigger_synthesis_unavailable_does_not_allocate_channel_memory() {
-        let _g = test_lock();
-        let _dir = fresh_store();
+        let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
 
-        let before = runtime::with_runtime(|rt| Ok(rt.channel_memories.len())).expect("len before");
+        let before =
+            runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len before");
 
-        match trigger_synthesis(scope, SynthesisTrigger::ManualUserAction) {
+        match trigger_synthesis(h, scope, SynthesisTrigger::ManualUserAction) {
             Err(FfiError::Unavailable { subsystem }) => assert_eq!(subsystem, "synthesis"),
             other => panic!("expected Unavailable {{ subsystem: synthesis }}, got {other:?}"),
         }
 
-        let after = runtime::with_runtime(|rt| Ok(rt.channel_memories.len())).expect("len after");
+        let after =
+            runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len after");
         assert_eq!(
             before, after,
             "trigger_synthesis must not allocate channel memory when returning Unavailable"
         );
-        teardown();
+        teardown(h);
     }
 
     #[test]
-    fn calls_before_open_store_report_unavailable() {
-        let _g = test_lock();
-        // Belt-and-suspenders: explicit close in case a previous test
-        // left state behind (we use a process-global singleton).
-        let _ = close_store();
+    fn calls_with_no_open_handle_report_unavailable() {
+        // No prior `open_store` — every FFI function called with the
+        // reserved `NONE` sentinel must surface the structured
+        // `Unavailable { subsystem: "evidence_store" }` so hosts can
+        // present a uniform "not initialised" UI.
         let err = ingest_message(
+            RuntimeHandle::NONE,
             uuid::Uuid::new_v4().to_string(),
             "body".into(),
             SourceKind::Manual,
@@ -1651,36 +1701,36 @@ mod tests {
     /// short-circuits with `NotFound { kind: "scope" }`.
     #[test]
     fn forget_survives_close_and_reopen() {
-        let _g = test_lock();
-        let _ = close_store();
-
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("evidence.db");
         let key_hex = "a5".repeat(32);
         let scope = uuid::Uuid::new_v4().to_string();
 
-        open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open_store");
+        let h1 = open_store(path.to_string_lossy().into_owned(), key_hex.clone())
+            .expect("open_store");
 
         let evidence_id = ingest_message(
+            h1,
             scope.clone(),
             "the persistent forgetting test body".into(),
             SourceKind::Manual,
             FfiImportanceClass::Important,
         )
         .expect("ingest_message");
-        forget(evidence_id).expect("forget");
+        forget(h1, evidence_id).expect("forget");
 
-        // Round-trip the singleton. The in-memory `DekRegistry` is
+        // Round-trip the runtime. The in-memory `DekRegistry` is
         // dropped here; the next `open_store` must rebuild it from
         // the persisted `forgotten_scopes` table.
-        close_store().expect("close_store");
-        open_store(path.to_string_lossy().into_owned(), key_hex).expect("re-open_store");
+        close_store(h1).expect("close_store");
+        let h2 = open_store(path.to_string_lossy().into_owned(), key_hex).expect("re-open_store");
 
         // The scope must still be rejected. We probe via
         // `ingest_message` because that's the canonical
         // `is_scope_forgotten` short-circuit path that hosts hit
         // first after a restart.
         match ingest_message(
+            h2,
             scope,
             "second message after restart".into(),
             SourceKind::Manual,
@@ -1689,7 +1739,7 @@ mod tests {
             Err(FfiError::NotFound { kind, .. }) => assert_eq!(kind, "scope"),
             other => panic!("expected NotFound {{ kind: \"scope\" }} after restart, got {other:?}"),
         }
-        teardown();
+        teardown(h2);
     }
 
     /// The FFI `forget()` path persists
@@ -1706,17 +1756,16 @@ mod tests {
     fn open_store_repurges_fts_for_persisted_tombstones() {
         const PHRASE: &str = "openstoreftsrepurgeregressionphrase";
 
-        let _g = test_lock();
-        let _ = close_store();
-
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("evidence.db");
         let key_hex = "a5".repeat(32);
         let scope_str = uuid::Uuid::new_v4().to_string();
 
-        open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open_store");
+        let h1 = open_store(path.to_string_lossy().into_owned(), key_hex.clone())
+            .expect("open_store");
 
         let evidence_id = ingest_message(
+            h1,
             scope_str.clone(),
             PHRASE.into(),
             SourceKind::Manual,
@@ -1726,14 +1775,14 @@ mod tests {
         assert!(!evidence_id.is_empty());
 
         // Sanity: FTS5 surfaces the phrase before any forgetting.
-        let hits = query(scope_str.clone(), PHRASE.into(), 10).expect("query pre-forget");
+        let hits = query(h1, scope_str.clone(), PHRASE.into(), 10).expect("query pre-forget");
         assert_eq!(hits.len(), 1, "FTS5 must surface the seeded phrase");
 
         // Simulate the crash window: persist the tombstone *without*
         // running `purge_fts_for_scope`. The public `forget()` would
         // do both — we reach into the store directly to model a crash
         // between steps 2 and 3.
-        runtime::with_runtime(|rt| {
+        runtime::with_runtime(h1, |rt| {
             let scope = parse_scope_id(&scope_str)?;
             rt.store_mut()
                 .record_forgotten_scope(scope)
@@ -1747,7 +1796,7 @@ mod tests {
         // Verify the crash state: the FTS index still contains the
         // phrase even though the tombstone is now on disk. This is
         // the security gap the re-purge closes.
-        runtime::with_runtime(|rt| {
+        runtime::with_runtime(h1, |rt| {
             let scope = parse_scope_id(&scope_str)?;
             let raw_term_count: i64 = rt
                 .store()
@@ -1770,15 +1819,12 @@ mod tests {
 
         // Restart cycle. The next `open_store` is where the re-purge
         // runs.
-        close_store().expect("close_store");
-        open_store(path.to_string_lossy().into_owned(), key_hex).expect("re-open_store");
+        close_store(h1).expect("close_store");
+        let h2 = open_store(path.to_string_lossy().into_owned(), key_hex).expect("re-open_store");
 
         // After the re-purge, the raw FTS5 shadow tables must
-        // contain no rows for the forgotten scope. We probe the raw
-        // table directly so a future `search_fts` short-circuit on
-        // the forgotten scope cannot hide a missing on-disk
-        // delete.
-        runtime::with_runtime(|rt| {
+        // contain no rows for the forgotten scope.
+        runtime::with_runtime(h2, |rt| {
             let scope = parse_scope_id(&scope_str)?;
             let raw_term_count: i64 = rt
                 .store()
@@ -1802,40 +1848,39 @@ mod tests {
         // Public query surface mirrors the raw probe — the canonical
         // host-visible signal that the cryptographic-forgetting
         // contract is now intact across crashes.
-        let hits_after = query(scope_str.clone(), PHRASE.into(), 10).expect("query post-reopen");
+        let hits_after =
+            query(h2, scope_str.clone(), PHRASE.into(), 10).expect("query post-reopen");
         assert!(
             hits_after.is_empty(),
             "post-reopen query must return no rows for the previously-tombstoned scope"
         );
 
-        teardown();
+        teardown(h2);
     }
 
     /// C10 integration test: memory state survives an open/close/open
     /// cycle via the encrypted `memory_objects` table.
     #[test]
     fn memory_persists_across_open_close_open() {
-        let _g = test_lock();
-        let _ = close_store();
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("evidence.db");
         let key_hex = "a5".repeat(32);
 
         // First session: open, add a memory object, pin it, close.
-        open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open 1");
+        let h1 = open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open 1");
         let scope_uuid = uuid::Uuid::new_v4();
         let scope_str = scope_uuid.to_string();
         let scope = parse_scope_id(&scope_str).unwrap();
 
         // Ensure scope is registered so the DEK exists.
-        runtime::with_runtime(|rt| {
+        runtime::with_runtime(h1, |rt| {
             rt.ensure_scope_registered(scope)?;
             Ok(())
         })
         .expect("ensure_scope_registered");
 
         // Insert a memory object and pin it.
-        runtime::with_runtime(|rt| {
+        runtime::with_runtime(h1, |rt| {
             let umo = rt.user_memory_mut(scope);
             let obj = memory_manager::MemoryObject::new_candidate(
                 scope,
@@ -1853,32 +1898,32 @@ mod tests {
         .expect("insert + pin");
 
         // Verify we can see the memory object before closing.
-        let before_close =
-            list_memories(scope_str.clone(), MemoryFilter::default()).expect("list before close");
+        let before_close = list_memories(h1, scope_str.clone(), MemoryFilter::default())
+            .expect("list before close");
         assert_eq!(before_close.len(), 1, "one memory object before close");
         // Check pin count via the internal MemoryObject (not exposed
         // on the FFI MemoryRecord wire type).
-        runtime::with_runtime(|rt| {
+        runtime::with_runtime(h1, |rt| {
             let umo = rt.user_memory(scope).expect("scope must exist");
             assert_eq!(umo.objects[0].pin_count, 1, "pinned once before close");
             Ok(())
         })
         .expect("pin count check");
 
-        close_store().expect("close 1");
+        close_store(h1).expect("close 1");
 
         // Second session: re-open with same key.
-        open_store(path.to_string_lossy().into_owned(), key_hex).expect("open 2");
+        let h2 = open_store(path.to_string_lossy().into_owned(), key_hex).expect("open 2");
 
         // Memory object must be rehydrated from disk.
-        let after_reopen =
-            list_memories(scope_str.clone(), MemoryFilter::default()).expect("list after reopen");
+        let after_reopen = list_memories(h2, scope_str.clone(), MemoryFilter::default())
+            .expect("list after reopen");
         assert_eq!(
             after_reopen.len(),
             1,
             "memory object must survive close/open cycle"
         );
-        runtime::with_runtime(|rt| {
+        runtime::with_runtime(h2, |rt| {
             let umo = rt
                 .user_memory(scope)
                 .expect("scope must exist after reopen");
@@ -1890,32 +1935,30 @@ mod tests {
         })
         .expect("pin count check after reopen");
 
-        teardown();
+        teardown(h2);
     }
 
     /// C10 integration test: forget_scope deletes persisted memory
     /// blobs so they do not reappear on reopen.
     #[test]
     fn forget_scope_deletes_persisted_memory() {
-        let _g = test_lock();
-        let _ = close_store();
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("evidence.db");
         let key_hex = "a5".repeat(32);
 
-        open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open 1");
+        let h1 = open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open 1");
         let scope_uuid = uuid::Uuid::new_v4();
         let scope_str = scope_uuid.to_string();
         let scope = parse_scope_id(&scope_str).unwrap();
 
-        runtime::with_runtime(|rt| {
+        runtime::with_runtime(h1, |rt| {
             rt.ensure_scope_registered(scope)?;
             Ok(())
         })
         .expect("ensure_scope_registered");
 
         // Insert a memory object and flush it.
-        runtime::with_runtime(|rt| {
+        runtime::with_runtime(h1, |rt| {
             let umo = rt.user_memory_mut(scope);
             let obj = memory_manager::MemoryObject::new_candidate(
                 scope,
@@ -1928,20 +1971,20 @@ mod tests {
         .expect("insert + flush");
 
         // Forget the scope.
-        forget_scope(scope_str.clone()).expect("forget_scope");
+        forget_scope(h1, scope_str.clone()).expect("forget_scope");
 
-        close_store().expect("close 1");
+        close_store(h1).expect("close 1");
 
         // Reopen — memories for the forgotten scope must NOT reappear.
-        open_store(path.to_string_lossy().into_owned(), key_hex).expect("open 2");
+        let h2 = open_store(path.to_string_lossy().into_owned(), key_hex).expect("open 2");
 
-        let after = list_memories(scope_str.clone(), MemoryFilter::default())
+        let after = list_memories(h2, scope_str.clone(), MemoryFilter::default())
             .expect("list after forget + reopen");
         assert!(
             after.is_empty(),
             "forgotten-scope memories must not reappear after reopen"
         );
 
-        teardown();
+        teardown(h2);
     }
 }

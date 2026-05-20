@@ -74,7 +74,7 @@ fn full_lifecycle_walks_state_machine_and_scoring() {
     assert_eq!(u.read(&canon_id).unwrap().superseded_by, Some(new_canon));
 
     // List filters work over the mixed-state set.
-    let archived = u.list(MemoryFilter::any().with_state(MemoryState::Archived));
+    let archived = u.list(&MemoryFilter::any().with_state(MemoryState::Archived));
     assert_eq!(archived.len(), 1);
     assert_eq!(archived[0].id, stale_id);
 

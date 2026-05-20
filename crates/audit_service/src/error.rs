@@ -31,8 +31,9 @@ impl PartialEq for AuditError {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::EntryImmutable, Self::EntryImmutable) => true,
-            (Self::MissingField(a), Self::MissingField(b)) => a == b,
-            (Self::Persistence(a), Self::Persistence(b)) => a == b,
+            // Both variants carry `&'static str`, identical semantic.
+            (Self::MissingField(a), Self::MissingField(b))
+            | (Self::Persistence(a), Self::Persistence(b)) => a == b,
             // SQLite + crypto errors carry opaque inner state — we
             // intentionally treat them as never structurally equal
             // so existing tests comparing hot-path variants keep
