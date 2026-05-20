@@ -1633,8 +1633,7 @@ mod tests {
         let scope = uuid::Uuid::new_v4().to_string();
 
         // Snapshot the map size before any read.
-        let before =
-            runtime::with_runtime(h, |rt| Ok(rt.user_memories.len())).expect("len before");
+        let before = runtime::with_runtime(h, |rt| Ok(rt.user_memories.len())).expect("len before");
 
         let bundle = get_user_memory(h, scope.clone()).expect("get_user_memory");
         assert!(bundle.is_empty());
@@ -1706,8 +1705,8 @@ mod tests {
         let key_hex = "a5".repeat(32);
         let scope = uuid::Uuid::new_v4().to_string();
 
-        let h1 = open_store(path.to_string_lossy().into_owned(), key_hex.clone())
-            .expect("open_store");
+        let h1 =
+            open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open_store");
 
         let evidence_id = ingest_message(
             h1,
@@ -1761,8 +1760,8 @@ mod tests {
         let key_hex = "a5".repeat(32);
         let scope_str = uuid::Uuid::new_v4().to_string();
 
-        let h1 = open_store(path.to_string_lossy().into_owned(), key_hex.clone())
-            .expect("open_store");
+        let h1 =
+            open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open_store");
 
         let evidence_id = ingest_message(
             h1,

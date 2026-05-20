@@ -369,13 +369,16 @@ where
 {
     let entry = {
         let guard = read_registry();
-        guard.get(&handle.0).cloned().ok_or_else(|| {
-            FfiError::Unavailable {
+        guard
+            .get(&handle.0)
+            .cloned()
+            .ok_or_else(|| FfiError::Unavailable {
                 subsystem: "evidence_store".into(),
-            }
-        })?
+            })?
     };
-    let mut rt = entry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut rt = entry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     f(&mut rt)
 }
 
@@ -736,6 +739,8 @@ mod tests {
     #[test]
     fn with_runtime_returns_unavailable_for_unknown_handle() {
         let err = with_runtime(RuntimeHandle(u64::MAX), |_| Ok(())).unwrap_err();
-        assert!(matches!(err, FfiError::Unavailable { ref subsystem } if subsystem == "evidence_store"));
+        assert!(
+            matches!(err, FfiError::Unavailable { ref subsystem } if subsystem == "evidence_store")
+        );
     }
 }

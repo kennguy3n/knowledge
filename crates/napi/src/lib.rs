@@ -248,7 +248,8 @@ pub fn encrypt(
     plaintext_b64: String,
 ) -> NapiResult<String> {
     let plaintext = decode_b64(&plaintext_b64)?;
-    let cipher = ffi::encrypt(RuntimeHandle(handle), scope_id, plaintext).map_err(NapiError::from)?;
+    let cipher =
+        ffi::encrypt(RuntimeHandle(handle), scope_id, plaintext).map_err(NapiError::from)?;
     Ok(encode_b64(&cipher))
 }
 
@@ -497,11 +498,19 @@ mod tests {
         // The N-API layer base64-decodes the payload and forwards to
         // FFI. With a malformed scope string FFI rejects with
         // InvalidId before any crypto work happens.
-        let err = encrypt(RuntimeHandle::NONE.0, "scope".into(), encode_b64(&[1, 2, 3]))
-            .unwrap_err();
+        let err = encrypt(
+            RuntimeHandle::NONE.0,
+            "scope".into(),
+            encode_b64(&[1, 2, 3]),
+        )
+        .unwrap_err();
         assert_eq!(err.kind(), "InvalidId");
-        let err = decrypt(RuntimeHandle::NONE.0, "scope".into(), encode_b64(&[1, 2, 3]))
-            .unwrap_err();
+        let err = decrypt(
+            RuntimeHandle::NONE.0,
+            "scope".into(),
+            encode_b64(&[1, 2, 3]),
+        )
+        .unwrap_err();
         assert_eq!(err.kind(), "InvalidId");
     }
 

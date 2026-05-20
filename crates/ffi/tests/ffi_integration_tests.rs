@@ -39,8 +39,8 @@ fn fresh_store() -> (RuntimeHandle, TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("evidence.db");
     let master_key_hex = "a5".repeat(32);
-    let handle = open_store(path.to_string_lossy().into_owned(), master_key_hex)
-        .expect("open_store");
+    let handle =
+        open_store(path.to_string_lossy().into_owned(), master_key_hex).expect("open_store");
     (handle, dir)
 }
 
@@ -396,8 +396,7 @@ fn crypto_envelope_round_trip_via_wire_types() {
         snippet: "snippet text".into(),
     };
     let qr_json = serde_json::to_string(&qr).expect("QueryResult must serialize");
-    let qr_back: QueryResult =
-        serde_json::from_str(&qr_json).expect("QueryResult must round-trip");
+    let qr_back: QueryResult = serde_json::from_str(&qr_json).expect("QueryResult must round-trip");
     assert_eq!(qr, qr_back);
 }
 
