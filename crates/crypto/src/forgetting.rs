@@ -758,7 +758,13 @@ pub fn record_key_destructions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aead::{decrypt_aead, encrypt_aead, AeadNonce, AEAD_NONCE_LEN};
+    // Import `AEAD_KEY_LEN` directly from `crate::aead` rather than
+    // relying on the parent module's `use super::*`. The parent's
+    // import is gated `cfg(any(test, feature = "test-support"))`,
+    // so the indirect path would still resolve under `cfg(test)`,
+    // but explicit imports make the dependency obvious and remove
+    // a subtle coupling between the two cfg gates.
+    use crate::aead::{decrypt_aead, encrypt_aead, AeadNonce, AEAD_KEY_LEN, AEAD_NONCE_LEN};
 
     fn fixture_key(seed: u8) -> AeadKey {
         let mut k = [0u8; AEAD_KEY_LEN];
