@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Workspace-level cross-crate integration tests for the Knowledge substrate. The library crate is an empty parent for the per-file integration binaries under `tests/`."
 publish = false
 
 # Workspace-level cross-crate integration tests.

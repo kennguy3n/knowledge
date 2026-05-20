@@ -1,6 +1,6 @@
 [package]
 name = "agent_contract"
-description = "Agent write contract — proposal-only API for software agents writing into the Knowledge substrate. Implements docs/DESIGN.md §7.3."
+description = "Proposal-only write contract for software agents writing into the Knowledge substrate — typed proposals, lifecycle, and human / policy promotion to canonical."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

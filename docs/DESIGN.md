@@ -1,29 +1,30 @@
 # Knowledge — Design
 
 This is the design document for the Knowledge substrate. It
-captures the product thesis, the strategic principles, the layered
-substrate, the memory model, the on-device model strategy, the
-scope hierarchy, the permission model, the deployment modes, the
-post-quantum cryptography, and the integration surface.
+captures the product thesis, the strategic principles, the
+layered substrate, the memory model, the on-device model
+strategy, the scope hierarchy, the permission model, the
+deployment modes, the post-quantum cryptography, and the
+integration surface.
 
-The platform is the privacy-first continual knowledge / context
-substrate behind KChat. It serves both the consumer surface (B2C)
-and the enterprise surface (B2B) over the same memory model. See
+Knowledge is a privacy-first continual knowledge and context
+substrate. It serves a consumer surface (B2C) and an enterprise
+surface (B2B) over the same memory model. See
 [README.md](../README.md) for an overview and
-[ARCHITECTURE.md](../ARCHITECTURE.md) for the system design that
-realises this document.
+[ARCHITECTURE.md](../ARCHITECTURE.md) for the implementation
+architecture that realises this document.
 
 ---
 
 ## 1. Product thesis
 
-We are not building a "chat with your files" product, and we are
-not building a vector database with a UI bolted on top. We are
-building a **shared cognitive substrate** that compounds over
-time — a substrate where every conversation, document, decision,
-and workflow leaves a structured, decaying, scoped trace, and
-where surfaces (chat, search, agents, exports) consume that trace
-instead of reaching back into raw evidence every time.
+Knowledge is not a chat-with-your-files product, and it is not a
+vector database with a UI bolted on top. It is a **shared
+cognitive substrate** that compounds over time — a substrate
+where every conversation, document, decision, and workflow
+leaves a structured, decaying, scoped trace, and where surfaces
+(chat, search, agents, exports) consume that trace instead of
+reaching back into raw evidence on every call.
 
 The thesis stands on five pillars:
 
@@ -54,10 +55,10 @@ The thesis stands on five pillars:
    piece of memory carries provenance. Every export goes through
    the same export plane.
 
-The product Knowledge replaces is the slow, manual, ad-hoc work of
-re-explaining a person's, a team's, or a tenant's context to every
-new tool, every new model, every new contributor. The substrate
-remembers so the surfaces don't have to.
+The product Knowledge replaces is the slow, manual, ad-hoc work
+of re-explaining a person's, a team's, or a tenant's context to
+every new tool, every new model, every new contributor. The
+substrate remembers so surfaces don't have to.
 
 ---
 
@@ -128,34 +129,18 @@ flowchart TB
 
 Raw encrypted messages, files, chunks, transcripts, and tool
 outputs. Append-only, scope-bound, with content-aware storage
-routing:
+routing and per-scope cryptographic forgetting.
 
-- **Inline (≤ 512 bytes):** body stored directly in the evidence
-  row. BLAKE3 hash computed for integrity framing; no dedup index
-  lookup. Optimized for the common case of short text messages.
-- **Body table (> 512 bytes):** body stored in a separate
-  content-hash-deduplicated table. Duplicate BLAKE3 hashes share
-  a single body row. Optimized for files, document chunks,
-  transcripts, and forwarded/cross-posted content.
-- **Ring buffer (noise class):** messages classified as noise at
-  ingest are stored in a fixed-size FIFO ring buffer available
-  for the current synthesis window only. No epoch key needed for
-  disposal — content is simply overwritten.
+The substrate routes bodies on a size threshold: short text
+messages go inline in the evidence row (no dedup index lookup);
+larger bodies go to a content-hash-deduplicated body table with
+per-scope key wraps so cryptographic forgetting still works on
+shared content; noise-class messages go to a fixed-size FIFO
+ring buffer that overwrites on rollover.
 
-Inline rows (body <= 512 bytes) use per-scope AEAD
-(XChaCha20-Poly1305). Body-table rows (body > 512 bytes) are
-encrypted under a random Content Encryption Key (CEK);
-per-scope CEK wraps in the `body_store_key_wraps` table ensure
-deduplication while maintaining cryptographic forgetting:
-deleting a scope's wraps makes the body unrecoverable once no
-wraps remain. FTS5 tokens are purged via `purge_fts_for_scope`
-on forget — `DELETE` followed by `REBUILD` in a single
-transaction, which truncates the FTS5 shadow tables
-(`%_data`, `%_idx`, `%_docsize`, …) and re-tokenises them
-from the surviving content rows, so no plaintext fragments
-from the forgotten scope linger on disk. Tombstone replay on
-`open_store` closes the crash-gap. Rows hold scope id, content
-hash, source connector ref, and ACL pointer.
+For the concrete routing thresholds, table layout, key-wrap
+schema, FTS5 purge semantics, and tombstone replay path, see
+[ARCHITECTURE.md §2.2](../ARCHITECTURE.md#22-local-store).
 
 ### 3.2 Observation plane
 
@@ -276,8 +261,8 @@ the substrate considers truly final, and it is the contract the
 
 ## 5. On-device model strategy
 
-The on-device model strategy is shared across the KChat platform;
-the canonical model-selection document is
+The on-device model strategy is shared across the KChat
+platform; the canonical model-selection document is
 [`kchat-on-device-model-strategy.md`](https://github.com/kennguy3n/slm-chat-demo/blob/main/docs/kchat-on-device-model-strategy.md).
 This section captures the model picks the Knowledge substrate
 relies on directly.
@@ -563,9 +548,11 @@ synthesizer per scope window:
 ## 9. Post-quantum cryptography
 
 Knowledge stores long-lived memory, so it has to assume the
-"harvest now, decrypt later" threat model. Post-quantum
-cryptography is the default, and classical primitives are kept
-only in hybrid mode for transition compatibility.
+harvest-now-decrypt-later threat model. Post-quantum
+cryptography is the default; classical primitives are kept only
+in hybrid mode for transition compatibility. For the concrete
+primitive inventory and key layout, see
+[ARCHITECTURE.md §8](../ARCHITECTURE.md#8-post-quantum-crypto-layer).
 
 ### 9.1 Primitives
 
