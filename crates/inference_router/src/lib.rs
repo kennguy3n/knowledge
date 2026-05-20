@@ -26,7 +26,10 @@ pub mod task;
 pub use adapter::{AdapterKind, InferenceAdapter, ProbeResult};
 #[cfg(feature = "http-client")]
 pub use adapters::HttpLlamaServerClient;
-pub use adapters::{FallbackAdapter, LlamaCppAdapter, LlamaServerClient, MlxAdapter};
+pub use adapters::{
+    get_mlx_generate_fn, set_mlx_generate_fn, set_mlx_runtime_linked, FallbackAdapter,
+    LlamaCppAdapter, LlamaServerClient, MlxAdapter, MlxGenerateFn,
+};
 pub use config::{DeviceTier, RouterConfig, IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PROMPT};
 pub use error::RouterError;
 pub use router::InferenceRouter;

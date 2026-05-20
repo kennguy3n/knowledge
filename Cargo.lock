@@ -843,6 +843,7 @@ dependencies = [
  "chrono",
  "crypto",
  "evidence_store",
+ "inference_router",
  "memory_manager",
  "rand 0.8.6",
  "rusqlite",

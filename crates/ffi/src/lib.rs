@@ -713,31 +713,46 @@ pub fn get_channel_memory(
 
 /// Trigger synthesis on `scope_id` with the given trigger reason.
 ///
-/// # Status
+/// # Behaviour
 ///
-/// The synthesis pipeline requires an on-device SLM (the
-/// `inference_router` + a `llama-server` adapter or equivalent).
-/// The FFI runtime does not yet hold an `InferenceRouter` handle,
-/// so this call currently returns
-/// [`FfiError::Unavailable`] with `subsystem = "synthesis"`. The
-/// wiring lands together with the on-device SLM bring-up. The function signature and
-/// validation behaviour (UUID parsing, forgotten-scope handling)
-/// are stable; only the underlying call dispatch is deferred.
+/// Reads the most recent
+/// [`SYNTHESIS_EVIDENCE_WINDOW`] evidence rows for `scope_id`,
+/// decrypts their bodies, builds an [`InferenceTask::SynthSummary`]
+/// prompt, dispatches it through the runtime's
+/// [`InferenceRouter`], parses the resulting [`SummaryBundle`] JSON,
+/// and writes the recap + extracted decisions / open questions /
+/// active tasks into the scope's [`ChannelMemoryObject`]. The
+/// channel memory is then flushed to the encrypted
+/// `memory_objects` table so the recap survives process restarts.
+///
+/// Returns the synthesis window id (UUID) as a string. The same
+/// id is stored on the channel memory's `last_synthesis_window`
+/// field so the host can correlate the recap with the call that
+/// produced it.
 ///
 /// # Errors
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called,
-///   or if the synthesis subsystem has not been wired through this
-///   build (the current default).
+///   or if the synthesis subsystem has no adapter that supports
+///   [`InferenceTask::SynthSummary`] available in this build
+///   (e.g. neither MLX nor the llama.cpp loopback is linked).
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
-/// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
+/// * [`FfiError::NotFound`] if `scope_id` has been forgotten or
+///   has no evidence to summarise.
+/// * [`FfiError::Evidence`] if the underlying store fails (read
+///   or memory-blob flush).
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn trigger_synthesis(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
-    _trigger: SynthesisTrigger,
+    trigger: SynthesisTrigger,
 ) -> FfiResult<String> {
     let scope = parse_scope_id(&scope_id)?;
+    tracing::info!(
+        scope = %scope.as_uuid(),
+        trigger = ?trigger,
+        "trigger_synthesis: dispatching SynthSummary",
+    );
     with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Err(FfiError::NotFound {
@@ -745,15 +760,104 @@ pub fn trigger_synthesis(
                 id: scope_id.clone(),
             });
         }
-        // No `ChannelMemoryObject` allocation here — until a real
-        // synthesizer runs, allocating one would attach observable
-        // state to a call that never produces a recap. The
-        // allocation moves into the synthesizer's success path
-        // once the SLM router is wired through.
-        Err(FfiError::Unavailable {
-            subsystem: "synthesis".into(),
+        synthesize_scope(rt, scope).map_err(|err| {
+            tracing::warn!(
+                scope = %scope.as_uuid(),
+                error = ?err,
+                "trigger_synthesis: failed",
+            );
+            err
         })
     })
+}
+
+/// Window size (in evidence rows) used by [`trigger_synthesis`] to
+/// build the SLM prompt. Picked to fit comfortably inside the
+/// 4 K-token context of the SLMs the substrate targets (the
+/// `recap` field in the produced bundle is a 2–4 sentence headline
+/// per the [`InferenceTask::SynthSummary`] prompt template, so
+/// every additional row crowds the model). Public so integration
+/// tests can assert against the exact same window the production
+/// path uses.
+pub const SYNTHESIS_EVIDENCE_WINDOW: usize = 50;
+
+/// Core synthesis implementation called by [`trigger_synthesis`]
+/// once the scope-validity preconditions are satisfied.
+///
+/// Split from the public entry point so the integration tests in
+/// `crates/integration_tests/` can drive it against a populated
+/// runtime without re-deriving prompt-construction logic.
+fn synthesize_scope(rt: &mut runtime::FfiRuntime, scope: ScopeId) -> FfiResult<String> {
+    use inference_router::{InferenceTask, SummaryBundle};
+
+    let recent_ids = rt
+        .store()
+        .recent_evidence_ids_for_scope(scope, SYNTHESIS_EVIDENCE_WINDOW)
+        .map_err(|e| FfiError::Evidence {
+            message: e.to_string(),
+        })?;
+    if recent_ids.is_empty() {
+        return Err(FfiError::NotFound {
+            kind: "evidence".into(),
+            id: scope.as_uuid().to_string(),
+        });
+    }
+
+    // Decrypt each row in reverse so the prompt reads chronologically
+    // (oldest message first → newest last), matching the natural
+    // reading order the prompt template asks the SLM to summarise.
+    // `recent_evidence_ids_for_scope` returns newest-first; reverse
+    // before reading so we can stop early on the first decryption
+    // failure without consuming the rest of the list.
+    let mut bodies: Vec<String> = Vec::with_capacity(recent_ids.len());
+    for evidence_id in recent_ids.iter().rev() {
+        let body = rt
+            .store()
+            .read_body(*evidence_id)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        // Lossy decode is intentional: evidence bodies are UTF-8 in
+        // practice (ingest is gated through `String` at the FFI
+        // surface) but a malformed row should still be summarisable
+        // rather than failing the entire synthesis call.
+        bodies.push(String::from_utf8_lossy(&body).into_owned());
+    }
+
+    let combined = bodies.join("\n\n");
+    let prompt = InferenceTask::SynthSummary
+        .prompt_template()
+        .replace("{body}", &combined);
+
+    let router = rt.inference_router();
+    if !router.is_bootstrapped() {
+        return Err(FfiError::Unavailable {
+            subsystem: "synthesis".into(),
+        });
+    }
+    let raw = router
+        .dispatch(InferenceTask::SynthSummary, &prompt)
+        .map_err(|e| FfiError::Unavailable {
+            subsystem: format!("synthesis: {e}"),
+        })?;
+    let bundle: SummaryBundle = serde_json::from_str(&raw).map_err(|e| FfiError::Evidence {
+        message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
+    })?;
+
+    let window_id = uuid::Uuid::new_v4();
+    let cmo = rt.channel_memory_mut(scope);
+    cmo.update_recap(bundle.recap.clone(), Some(window_id));
+    for decision in bundle.decisions {
+        cmo.add_decision(memory_manager::Decision::new(scope, decision));
+    }
+    for q in bundle.open_questions {
+        cmo.add_open_question(memory_manager::OpenQuestion::new(scope, q));
+    }
+    for task_text in bundle.active_tasks {
+        cmo.add_task(memory_manager::ActiveTask::new(scope, task_text));
+    }
+    rt.flush_channel_memory(scope)?;
+    Ok(window_id.to_string())
 }
 
 // ──────────────────────────── Crypto ────────────────────────────
@@ -1386,14 +1490,47 @@ mod tests {
         teardown(h);
     }
 
+    /// When the scope has no evidence at all, `trigger_synthesis`
+    /// returns `NotFound { kind: "evidence" }` rather than dispatching
+    /// an empty prompt to the SLM. Sending an empty prompt would
+    /// waste an inference call and produce a nonsensical bundle.
     #[test]
-    fn trigger_synthesis_reports_unavailable_until_slm_is_wired() {
+    fn trigger_synthesis_returns_not_found_when_scope_has_no_evidence() {
         let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
         let err = trigger_synthesis(h, scope, SynthesisTrigger::ManualUserAction).unwrap_err();
         assert!(
-            matches!(err, FfiError::Unavailable { ref subsystem } if subsystem == "synthesis"),
-            "expected Unavailable {{ subsystem: synthesis }}, got {err:?}"
+            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "evidence"),
+            "expected NotFound {{ kind: evidence }}, got {err:?}"
+        );
+        teardown(h);
+    }
+
+    /// With evidence in the scope but no SLM adapter that supports
+    /// `SynthSummary` (the default test build has neither MLX nor
+    /// the `http-client` feature), the router cannot dispatch the
+    /// task and `trigger_synthesis` surfaces `Unavailable { subsystem:
+    /// synthesis: … }`.
+    #[test]
+    fn trigger_synthesis_returns_unavailable_when_no_synth_adapter() {
+        let (h, _dir) = fresh_store();
+        let scope_uuid = uuid::Uuid::new_v4();
+        let scope = scope_uuid.to_string();
+        ingest_message(
+            h,
+            scope.clone(),
+            "hello world".into(),
+            SourceKind::Manual,
+            FfiImportanceClass::Useful,
+        )
+        .expect("ingest seed evidence");
+        let err = trigger_synthesis(h, scope, SynthesisTrigger::ManualUserAction).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FfiError::Unavailable { ref subsystem } if subsystem.starts_with("synthesis")
+            ),
+            "expected Unavailable {{ subsystem: synthesis* }}, got {err:?}"
         );
         teardown(h);
     }
@@ -1665,28 +1802,59 @@ mod tests {
         teardown(h);
     }
 
-    /// Regression for the design follow-up: `trigger_synthesis` must
-    /// not allocate a `ChannelMemoryObject` when returning
-    /// `Unavailable`. Allocating one attaches observable state to a
-    /// call that never produces a recap.
+    /// Regression for the design rule: a synthesis call that fails
+    /// before reaching the SLM must not allocate a
+    /// `ChannelMemoryObject`. Allocating one would attach observable
+    /// state to a call that never produces a recap.
+    ///
+    /// The two failure modes covered:
+    /// 1. `NotFound { kind: "evidence" }` — scope has nothing to
+    ///    summarise.
+    /// 2. `Unavailable { subsystem: "synthesis: …" }` — router has
+    ///    no adapter that supports `SynthSummary`.
     #[test]
-    fn trigger_synthesis_unavailable_does_not_allocate_channel_memory() {
+    fn trigger_synthesis_failure_does_not_allocate_channel_memory() {
         let (h, _dir) = fresh_store();
-        let scope = uuid::Uuid::new_v4().to_string();
 
+        // Case 1: empty scope → NotFound, no allocation.
+        let scope_empty = uuid::Uuid::new_v4().to_string();
         let before =
             runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len before");
-
-        match trigger_synthesis(h, scope, SynthesisTrigger::ManualUserAction) {
-            Err(FfiError::Unavailable { subsystem }) => assert_eq!(subsystem, "synthesis"),
-            other => panic!("expected Unavailable {{ subsystem: synthesis }}, got {other:?}"),
+        match trigger_synthesis(h, scope_empty, SynthesisTrigger::ManualUserAction) {
+            Err(FfiError::NotFound { kind, .. }) => assert_eq!(kind, "evidence"),
+            other => panic!("expected NotFound {{ kind: evidence }}, got {other:?}"),
         }
+        let after_empty =
+            runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len after empty");
+        assert_eq!(before, after_empty);
 
-        let after =
-            runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len after");
+        // Case 2: scope has evidence but no SLM adapter → Unavailable,
+        // no allocation.
+        let scope_evidence = uuid::Uuid::new_v4().to_string();
+        ingest_message(
+            h,
+            scope_evidence.clone(),
+            "hello world".into(),
+            SourceKind::Manual,
+            FfiImportanceClass::Useful,
+        )
+        .expect("ingest seed evidence");
+        let before_synth =
+            runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len before synth");
+        match trigger_synthesis(h, scope_evidence, SynthesisTrigger::ManualUserAction) {
+            Err(FfiError::Unavailable { subsystem }) => {
+                assert!(
+                    subsystem.starts_with("synthesis"),
+                    "expected synthesis subsystem, got {subsystem}"
+                );
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+        let after_synth =
+            runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len after synth");
         assert_eq!(
-            before, after,
-            "trigger_synthesis must not allocate channel memory when returning Unavailable"
+            before_synth, after_synth,
+            "trigger_synthesis must not allocate channel memory when returning a pre-dispatch error"
         );
         teardown(h);
     }

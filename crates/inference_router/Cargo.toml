@@ -16,6 +16,11 @@ default = []
 # crate can compile on hosts without the `reqwest` build chain
 # (e.g. CI shells that don't link OpenSSL / rustls).
 http-client = ["dep:reqwest"]
+# Exposes test-only helpers (e.g. `clear_mlx_generate_fn`) outside
+# `cfg(test)` so neighbouring crates' integration tests can reach
+# them. Production builds leave this off so the helpers are
+# unreachable from the FFI surface.
+test-support = []
 
 [dependencies]
 crypto = { path = "../crypto" }

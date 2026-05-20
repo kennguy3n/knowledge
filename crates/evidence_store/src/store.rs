@@ -952,6 +952,38 @@ impl EvidenceStore {
         }))
     }
 
+    /// List the most recent `limit` evidence row ids for `scope_id`,
+    /// ordered newest → oldest by `created_at` (ties broken by `id`
+    /// for determinism). Uses the `(scope_id, created_at DESC)`
+    /// covering index added in schema v1, so the query is index-only
+    /// and does not scan the table.
+    ///
+    /// Returns `Ok(vec![])` for scopes with no rows. Callers feed the
+    /// returned ids through [`Self::read_body`] when they need the
+    /// plaintext payloads — the synthesis pipeline uses this to build
+    /// SLM prompts from a scope's recent evidence window.
+    pub fn recent_evidence_ids_for_scope(
+        &self,
+        scope_id: ScopeId,
+        limit: usize,
+    ) -> Result<Vec<EvidenceId>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM evidence
+             WHERE scope_id = ?1
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(
+            params![scope_id.as_uuid().as_bytes().as_slice(), limit as i64],
+            |row| row.get::<_, Vec<u8>>(0),
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(EvidenceId(slice_to_uuid(&row?)?));
+        }
+        Ok(out)
+    }
+
     /// Run an FTS5 search scoped to `scope_id`.
     ///
     /// The query is passed straight through to FTS5; callers should

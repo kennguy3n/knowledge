@@ -132,25 +132,49 @@ fn memory_surface_returns_empty_for_fresh_scope() {
 
 /// Synthesis-pipeline surfaces are partially wired: the recap
 /// fetcher returns `None` until a real synthesis has run, and
-/// `trigger_synthesis` returns `Unavailable { subsystem: "synthesis" }`
-/// until the on-device SLM router is wired through. The
-/// stable method-string contract for `Unimplemented` is gone — hosts
-/// now switch on `kind` instead, so this test pins the new
-/// `Unavailable` shape.
+/// `trigger_synthesis` now dispatches through the inference router.
+/// In a test build without MLX or the `http-client` feature, no
+/// adapter supports `SynthSummary`, so the surface yields:
+/// * `NotFound { kind: "evidence" }` when the scope is empty
+///   (no point dispatching an empty prompt), and
+/// * `Unavailable { subsystem: "synthesis…" }` when the scope has
+///   evidence but no SLM adapter is available.
+///
+/// Hosts switch on `kind` to drive UI / fallback behaviour.
 #[test]
 fn synthesis_surface_returns_stable_partial_implementation() {
     let (h, _dir) = fresh_store();
 
-    let scope = uuid::Uuid::new_v4().to_string();
-    let recap = get_channel_memory(h, scope.clone()).expect("get_channel_memory");
+    // Case 1: empty scope — recap is None and synthesis returns
+    // NotFound rather than wasting an inference call.
+    let empty_scope = uuid::Uuid::new_v4().to_string();
+    let recap = get_channel_memory(h, empty_scope.clone()).expect("get_channel_memory");
     assert!(
         recap.is_none(),
         "channel recap must be None before synthesis runs"
     );
+    match trigger_synthesis(h, empty_scope, SynthesisTrigger::ManualUserAction) {
+        Err(FfiError::NotFound { kind, .. }) => assert_eq!(kind, "evidence"),
+        other => panic!("expected NotFound {{ kind: evidence }}, got {other:?}"),
+    }
 
+    // Case 2: scope with evidence — router has no synth-capable
+    // adapter on this build, so we get Unavailable.
+    let scope = uuid::Uuid::new_v4().to_string();
+    ingest_message(
+        h,
+        scope.clone(),
+        "hello world".into(),
+        SourceKind::Manual,
+        FfiImportanceClass::Useful,
+    )
+    .expect("ingest seed evidence");
     match trigger_synthesis(h, scope, SynthesisTrigger::ManualUserAction) {
-        Err(FfiError::Unavailable { subsystem }) => assert_eq!(subsystem, "synthesis"),
-        other => panic!("expected Unavailable {{ subsystem: synthesis }}, got {other:?}"),
+        Err(FfiError::Unavailable { subsystem }) => assert!(
+            subsystem.starts_with("synthesis"),
+            "expected synthesis subsystem, got {subsystem}"
+        ),
+        other => panic!("expected Unavailable, got {other:?}"),
     }
 
     close_store(h).expect("close_store");
