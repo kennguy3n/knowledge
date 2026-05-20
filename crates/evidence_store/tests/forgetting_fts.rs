@@ -424,7 +424,11 @@ fn purge_fts_for_scopes_batch_matches_per_scope_purge() {
         .purge_fts_for_scopes(&[scope_a, scope_b, scope_c])
         .expect("batch purge");
 
-    for (scope, phrase) in [(scope_a, phrase_a), (scope_b, phrase_b), (scope_c, phrase_c)] {
+    for (scope, phrase) in [
+        (scope_a, phrase_a),
+        (scope_b, phrase_b),
+        (scope_c, phrase_c),
+    ] {
         let hits = store
             .search_fts(scope, phrase, 10)
             .expect("search purged scope post-batch");
@@ -477,7 +481,5 @@ fn purge_fts_for_scopes_batch_matches_per_scope_purge() {
 
     // Empty-slice batch purge is a no-op without touching the
     // database at all.
-    store
-        .purge_fts_for_scopes(&[])
-        .expect("empty batch purge");
+    store.purge_fts_for_scopes(&[]).expect("empty batch purge");
 }
