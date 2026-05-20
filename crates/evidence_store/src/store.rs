@@ -1502,6 +1502,15 @@ impl EvidenceStore {
     ///    FTS5 supports `DELETE` on the virtual table (it does NOT
     ///    have the append-only trigger that protects `evidence`).
     /// 3. `DELETE FROM evidence_embeddings WHERE evidence_id IN (...)`.
+    /// 4. If — and only if — step 2 actually removed at least one
+    ///    FTS row, issue `INSERT INTO evidence_fts(evidence_fts)
+    ///    VALUES('rebuild')` to truncate the FTS5 shadow tables and
+    ///    re-tokenise from the surviving content rows. Skipping
+    ///    this when zero FTS rows were deleted is what makes the
+    ///    function genuinely idempotent: re-purging an
+    ///    already-purged scope on startup costs one `SELECT` plus
+    ///    one zero-row `DELETE`, not a full O(total_fts_rows)
+    ///    rebuild.
     ///
     /// The `evidence` rows themselves are intentionally left in
     /// place — the append-only trigger forbids removing them, and
@@ -1509,8 +1518,63 @@ impl EvidenceStore {
     /// / inline `evidence.body` are unrecoverable anyway. Hosts
     /// that need to drop the physical bytes must perform a
     /// VACUUM-style rebuild at a higher layer.
+    ///
+    /// When replaying many tombstones on `open_store`, prefer
+    /// [`Self::purge_fts_for_scopes`] instead — it issues at most
+    /// one rebuild for the whole batch rather than one per scope.
     pub fn purge_fts_for_scope(&mut self, scope_id: ScopeId) -> Result<()> {
         let tx = self.conn.transaction()?;
+        let fts_rows_deleted = Self::purge_fts_for_scope_in_tx(&tx, scope_id)?;
+        if fts_rows_deleted > 0 {
+            Self::rebuild_evidence_fts_in_tx(&tx)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Batched equivalent of [`Self::purge_fts_for_scope`] for
+    /// processing many tombstoned scopes in a single transaction.
+    ///
+    /// Runs the per-scope `DELETE` work for every entry in
+    /// `scope_ids`, then issues at most one FTS5 `REBUILD` at the
+    /// end — not one per scope. This is what the tombstone replay
+    /// loop on `open_store` uses: a database that has forgotten
+    /// `N` scopes pays O(total_fts_rows) for the rebuild instead
+    /// of O(N × total_fts_rows).
+    ///
+    /// The rebuild is skipped entirely when zero FTS rows were
+    /// removed across the whole batch (the steady-state case where
+    /// every scope was already purged on a prior boot).
+    pub fn purge_fts_for_scopes(&mut self, scope_ids: &[ScopeId]) -> Result<()> {
+        if scope_ids.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.transaction()?;
+        let mut total_fts_rows_deleted: usize = 0;
+        for scope_id in scope_ids {
+            total_fts_rows_deleted += Self::purge_fts_for_scope_in_tx(&tx, *scope_id)?;
+        }
+        if total_fts_rows_deleted > 0 {
+            Self::rebuild_evidence_fts_in_tx(&tx)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Delete every FTS / embedding row tied to `scope_id` inside
+    /// the caller's transaction. Returns the number of FTS rows
+    /// actually removed — callers use this to decide whether a
+    /// `REBUILD` is needed at the end of the transaction.
+    ///
+    /// This is the shared core of [`Self::purge_fts_for_scope`]
+    /// (single-scope) and [`Self::purge_fts_for_scopes`] (batch);
+    /// keeping the delete logic in one place ensures the two
+    /// entry points cannot drift on which tables they touch or
+    /// how parameter batching is sized.
+    fn purge_fts_for_scope_in_tx(
+        tx: &rusqlite::Transaction<'_>,
+        scope_id: ScopeId,
+    ) -> Result<usize> {
         let evidence_ids: Vec<Vec<u8>> = {
             let mut stmt = tx.prepare("SELECT id FROM evidence WHERE scope_id = ?1")?;
             let rows = stmt
@@ -1529,6 +1593,7 @@ impl EvidenceStore {
         // cap. `SQLITE_MAX_VARIABLE_NUMBER` is 999 on the default
         // build; we stay well under it.
         const BATCH: usize = 256;
+        let mut fts_rows_deleted: usize = 0;
         for chunk in evidence_ids.chunks(BATCH) {
             let placeholders = (0..chunk.len())
                 .map(|i| format!("?{}", i + 1))
@@ -1539,29 +1604,34 @@ impl EvidenceStore {
                 format!("DELETE FROM evidence_embeddings WHERE evidence_id IN ({placeholders})");
             let params: Vec<&dyn rusqlite::ToSql> =
                 chunk.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
-            tx.execute(&fts_sql, rusqlite::params_from_iter(params.iter().copied()))?;
+            fts_rows_deleted +=
+                tx.execute(&fts_sql, rusqlite::params_from_iter(params.iter().copied()))?;
             tx.execute(&emb_sql, rusqlite::params_from_iter(params.iter().copied()))?;
         }
+        Ok(fts_rows_deleted)
+    }
 
-        // Force FTS5 to rebuild its shadow tables from the surviving
-        // content rows. `OPTIMIZE` only merges segments and can leave
-        // tokenised plaintext fragments behind in the `%_data`
-        // segment B-tree for rows that were `DELETE`'d in this same
-        // transaction. `REBUILD` truncates the shadow tables
-        // (`%_data`, `%_idx`, `%_docsize`, …) and re-tokenises from
-        // the FTS table's stored `content` column, which now no
-        // longer references the purged scope — so no residual
-        // plaintext tokens survive on disk for the forgotten scope.
-        //
-        // This is the strongest in-engine guarantee SQLite FTS5
-        // exposes; the alternative would be a full `VACUUM` at a
-        // higher layer, which is owned by the host.
+    /// Issue the FTS5 `REBUILD` command on `evidence_fts`,
+    /// truncating the shadow tables (`%_data`, `%_idx`,
+    /// `%_docsize`, …) and re-tokenising from the surviving
+    /// content rows.
+    ///
+    /// `OPTIMIZE` only merges segments and can leave tokenised
+    /// plaintext fragments behind in the `%_data` segment B-tree
+    /// for rows that were `DELETE`'d in this same transaction.
+    /// `REBUILD` re-tokenises from the FTS table's stored
+    /// `content` column — which now no longer references the
+    /// purged scopes — so no residual plaintext tokens survive on
+    /// disk for the forgotten scopes.
+    ///
+    /// This is the strongest in-engine guarantee SQLite FTS5
+    /// exposes; the alternative would be a full `VACUUM` at a
+    /// higher layer, which is owned by the host.
+    fn rebuild_evidence_fts_in_tx(tx: &rusqlite::Transaction<'_>) -> Result<()> {
         tx.execute(
             "INSERT INTO evidence_fts(evidence_fts) VALUES('rebuild')",
             [],
         )?;
-
-        tx.commit()?;
         Ok(())
     }
 

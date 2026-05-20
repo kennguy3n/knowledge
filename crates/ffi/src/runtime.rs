@@ -260,8 +260,22 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
     // derived FTS terms persist on disk indefinitely — accessible
     // via raw SQLite without the per-scope DEK and so escaping the
     // cryptographic-forgetting contract. Re-running the purge on
-    // every `open_store` closes that window. The purge is
-    // idempotent: dropping already-deleted FTS rows is a no-op.
+    // every `open_store` closes that window.
+    //
+    // The FTS purge uses the batched [`EvidenceStore::purge_fts_for_scopes`]
+    // entry point so we issue at most a single FTS5 `REBUILD` for
+    // the whole replay — not one per scope. The single-scope
+    // [`EvidenceStore::purge_fts_for_scope`] always rebuilds, and a
+    // database that has forgotten `N` scopes would otherwise pay
+    // O(N × total_fts_rows) on every `open_store`. The batch
+    // method also skips the rebuild entirely when zero FTS rows
+    // were removed across the whole batch (the steady-state case
+    // where every scope was already fully purged on a prior boot,
+    // so each per-scope `DELETE` is a zero-row no-op).
+    //
+    // The wrap / blob purges are still issued per scope: each one
+    // only touches a small number of rows for the scope it owns,
+    // so there is no analogous N-rebuild blow-up to consolidate.
     //
     // A purge failure here surfaces as an `Evidence` error rather
     // than being swallowed — mirroring the `forget()` path's
@@ -269,12 +283,19 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
     // already does for the same conditions. A host that hits this
     // path on startup has a corrupt or unreadable secondary index
     // and needs to know about it.
+    // `tombstones` is a `HashSet` for the dedup-on-load and
+    // `is_scope_forgotten` lookups above; `purge_fts_for_scopes`
+    // wants a slice. The slice's iteration order does not affect
+    // correctness — DELETEs are commutative and the single batched
+    // REBUILD runs after every per-scope DELETE has landed in the
+    // open transaction.
+    let tombstones_slice: Vec<ScopeId> = tombstones.iter().copied().collect();
+    store
+        .purge_fts_for_scopes(&tombstones_slice)
+        .map_err(|e| FfiError::Evidence {
+            message: e.to_string(),
+        })?;
     for scope in &tombstones {
-        store
-            .purge_fts_for_scope(*scope)
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?;
         store
             .purge_body_key_wraps_for_scope(*scope)
             .map_err(|e| FfiError::Evidence {
