@@ -40,6 +40,7 @@ rand = { workspace = true }
 [dev-dependencies]
 blake3 = { workspace = true }
 serde_json = { workspace = true }
+criterion = { workspace = true }
 # Self-referential dev-dep: enables the `test-support` feature when
 # compiling integration tests under `tests/`. Cargo's `cfg(test)` flag
 # is only set on the test binary, NOT on the library it links against,
@@ -47,6 +48,13 @@ serde_json = { workspace = true }
 # `TestSigner` / `TEST_SIGNER_KEY_LEN` / `StubKemBackend` in the
 # integration test crates. This is the same pattern tokio / serde use.
 crypto = { path = ".", features = ["test-support"] }
+
+# Criterion benchmark harness for the hot crypto paths
+# (AEAD / hybrid KEM / content hash / KDF / signatures). `harness =
+# false` disables libtest so criterion's own main function runs.
+[[bench]]
+name = "crypto_bench"
+harness = false
 
 [lints.rust]
 unsafe_code = "forbid"

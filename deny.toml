@@ -1,4 +1,28 @@
+# `cargo deny check` configuration.
+#
+# Schema follows cargo-deny's stable post-0.14 layout — security
+# advisories live under `[advisories]`, license policy under
+# `[licenses]`, dependency bans under `[bans]`, and source allow-lists
+# under `[sources]`.
+
+[advisories]
+# Fail the build on any known vulnerability in a transitive dep. The
+# corresponding `[deprecated]` boolean keys (`vulnerability`,
+# `unmaintained`, `yanked`) were the pre-0.14 cargo-deny schema; the
+# `version = 2` opt-in below selects the modern, stricter handling
+# where these used to be implicit.
+version = 2
+# Yanked crates almost always indicate a known-bad release; treat
+# any in the lockfile as a hard failure rather than a warning.
+yanked = "deny"
+# Allow specific advisories or yanked crates only through explicit,
+# version-pinned ignore entries. Leaving this list empty means CI
+# fails the moment a new advisory matches a crate we ship.
+ignore = []
+
 [licenses]
+version = 2
+# SPDX identifiers we explicitly accept across the workspace tree.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -9,6 +33,8 @@ allow = [
     "Unicode-DFS-2016",
     "Zlib",
 ]
+# Any license outside the allow-list above fails the build (the
+# default once `version = 2` is set).
 
 [bans]
 multiple-versions = "warn"

@@ -13,6 +13,7 @@ members = [
     "crates/export_plane",
     "crates/ffi",
     "crates/inference_router",
+    "crates/integration_tests",
     "crates/memory_manager",
     "crates/napi",
     "crates/observation_engine",
@@ -75,6 +76,12 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 
 # Tests
 tempfile = "3"
+
+# Benchmarks. Pinned major version `0.5` to match the criterion API the
+# `crates/*/benches/*.rs` harnesses target. `html_reports` emits the
+# per-bench HTML output to `target/criterion/` so reviewers can pull a
+# self-contained report from a CI artifact without re-running locally.
+criterion = { version = "0.5", features = ["html_reports"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

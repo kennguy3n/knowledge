@@ -23,6 +23,13 @@ rand_core = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+criterion = { workspace = true }
+
+# Criterion benchmark harness for the in-memory graph + persistence
+# round-trip. `harness = false` lets criterion run its own main.
+[[bench]]
+name = "graph_bench"
+harness = false
 
 [lints]
 workspace = true
