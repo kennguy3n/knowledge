@@ -40,6 +40,7 @@ use uuid::Uuid;
 use zeroize::Zeroize;
 
 use crate::aead::{AeadKey, AEAD_KEY_LEN};
+use crate::errors::CryptoError;
 
 /// Newtype for scope identifiers used by the registry. Matches the
 /// shape of [`evidence_store::ScopeId`] but lives in `crypto` so the
@@ -64,9 +65,25 @@ impl EpochId {
         Self(0)
     }
 
-    /// Return the next epoch (saturating at `u64::MAX`).
-    pub fn next(self) -> Self {
-        Self(self.0.saturating_add(1))
+    /// Return the next epoch, or [`CryptoError::EpochOverflow`] if
+    /// the counter would overflow `u64::MAX`.
+    ///
+    /// This used to saturate at `u64::MAX`, which silently permitted
+    /// the [`EpochManager`] to keep "rotating" once the terminal
+    /// epoch was reached: each call to [`EpochManager::rotate`]
+    /// would derive a fresh DEK, mark the previous epoch cold, and
+    /// then re-bind the *same* epoch id to the new DEK — a
+    /// catastrophic break of the forward-secrecy invariant where
+    /// epoch ids monotonically increase. Surfacing the overflow as a
+    /// hard error here keeps the substrate consistent with
+    /// [`crate::mls::MlsEpoch::next`] and ensures every commit /
+    /// rotation attempt past the addressable epoch space is rejected
+    /// explicitly rather than silently corrupting the registry.
+    pub fn next(self) -> Result<Self, CryptoError> {
+        self.0
+            .checked_add(1)
+            .map(Self)
+            .ok_or(CryptoError::EpochOverflow)
     }
 }
 
@@ -547,25 +564,33 @@ impl<S: EpochKeySource> EpochManager<S> {
     /// Returns the new epoch id and the trigger that caused the rotation
     /// (always [`EpochRotationTrigger::PolicyForced`] for this entry
     /// point).
+    ///
+    /// Fails with [`CryptoError::EpochOverflow`] if the scope has
+    /// already reached the terminal epoch (`EpochId(u64::MAX)`).
     pub fn force_rotate(
         &mut self,
         scope: ScopeId,
         registry: &mut DekRegistry,
-    ) -> (EpochId, EpochRotationTrigger) {
-        let new_epoch = self.rotate(scope, registry);
-        (new_epoch, EpochRotationTrigger::PolicyForced)
+    ) -> Result<(EpochId, EpochRotationTrigger), CryptoError> {
+        let new_epoch = self.rotate(scope, registry)?;
+        Ok((new_epoch, EpochRotationTrigger::PolicyForced))
     }
 
     /// Tell the manager that `bytes` plaintext were encrypted under
     /// the current epoch's DEK. If this puts the scope over the
     /// configured size budget, rotates and returns
-    /// `Some(EpochRotationTrigger::SizeExceeded)`.
+    /// `Ok(Some(EpochRotationTrigger::SizeExceeded))`.
+    ///
+    /// Fails with [`CryptoError::EpochOverflow`] if a rotation would
+    /// be needed but the scope has already reached the terminal
+    /// epoch — the per-epoch byte counter does not roll over
+    /// silently.
     pub fn record_bytes(
         &mut self,
         scope: ScopeId,
         bytes: u64,
         registry: &mut DekRegistry,
-    ) -> Option<EpochRotationTrigger> {
+    ) -> Result<Option<EpochRotationTrigger>, CryptoError> {
         let now = Utc::now();
         let mut should_rotate: Option<EpochRotationTrigger> = None;
         if let Some(infos) = self.epochs.get_mut(&scope) {
@@ -581,20 +606,24 @@ impl<S: EpochKeySource> EpochManager<S> {
             }
         }
         if should_rotate.is_some() {
-            self.rotate(scope, registry);
+            self.rotate(scope, registry)?;
         }
-        should_rotate
+        Ok(should_rotate)
     }
 
     /// Tell the manager that `now` has elapsed without any new bytes —
     /// useful for calling on a periodic timer to trigger time-based
     /// rotation even on idle scopes.
+    ///
+    /// Fails with [`CryptoError::EpochOverflow`] if a time-based
+    /// rotation would be needed but the scope has already reached
+    /// the terminal epoch.
     pub fn tick(
         &mut self,
         scope: ScopeId,
         now: DateTime<Utc>,
         registry: &mut DekRegistry,
-    ) -> Option<EpochRotationTrigger> {
+    ) -> Result<Option<EpochRotationTrigger>, CryptoError> {
         let needs_rotate = self
             .epochs
             .get(&scope)
@@ -603,17 +632,28 @@ impl<S: EpochKeySource> EpochManager<S> {
                 now.signed_duration_since(latest.started_at) >= self.policy.max_epoch_duration
             });
         if needs_rotate {
-            self.rotate(scope, registry);
-            Some(EpochRotationTrigger::TimeElapsed)
+            self.rotate(scope, registry)?;
+            Ok(Some(EpochRotationTrigger::TimeElapsed))
         } else {
-            None
+            Ok(None)
         }
     }
 
-    fn rotate(&mut self, scope: ScopeId, registry: &mut DekRegistry) -> EpochId {
-        let next = self
-            .current_epoch(scope)
-            .map_or_else(EpochId::zero, EpochId::next);
+    fn rotate(
+        &mut self,
+        scope: ScopeId,
+        registry: &mut DekRegistry,
+    ) -> Result<EpochId, CryptoError> {
+        // `EpochId::next` is now fallible at `u64::MAX`. Surfacing
+        // the overflow here ensures the manager refuses to rotate a
+        // scope that has reached the terminal epoch instead of
+        // silently re-binding the same id to a fresh DEK — which
+        // would break the monotonically-increasing-epoch invariant
+        // that forgetting / forward-secrecy proofs depend on.
+        let next = match self.current_epoch(scope) {
+            Some(current) => current.next()?,
+            None => EpochId::zero(),
+        };
         if let Some(infos) = self.epochs.get_mut(&scope) {
             for info in infos.iter_mut() {
                 info.cold = true;
@@ -629,7 +669,7 @@ impl<S: EpochKeySource> EpochManager<S> {
         registry.insert_epoch_dek(EpochDek::new(scope, next, key));
         self.epochs.entry(scope).or_default().push(info);
         self.current.insert(scope, next);
-        next
+        Ok(next)
     }
 }
 
@@ -823,7 +863,9 @@ mod tests {
         );
         let scope = ScopeId::new_v4();
         mgr.ensure_scope(scope, &mut registry);
-        let (new_epoch, trigger) = mgr.force_rotate(scope, &mut registry);
+        let (new_epoch, trigger) = mgr
+            .force_rotate(scope, &mut registry)
+            .expect("force_rotate at fresh scope cannot overflow");
         assert_eq!(new_epoch, EpochId(1));
         assert_eq!(trigger, EpochRotationTrigger::PolicyForced);
         assert_eq!(mgr.current_epoch(scope), Some(EpochId(1)));
@@ -841,7 +883,9 @@ mod tests {
         );
         let scope = ScopeId::new_v4();
         mgr.ensure_scope(scope, &mut registry);
-        let trigger = mgr.record_bytes(scope, 2048, &mut registry);
+        let trigger = mgr
+            .record_bytes(scope, 2048, &mut registry)
+            .expect("record_bytes at fresh scope cannot overflow");
         assert_eq!(trigger, Some(EpochRotationTrigger::SizeExceeded));
         assert_eq!(mgr.current_epoch(scope), Some(EpochId(1)));
     }
@@ -856,7 +900,9 @@ mod tests {
         let scope = ScopeId::new_v4();
         mgr.ensure_scope(scope, &mut registry);
         let later = Utc::now() + Duration::seconds(10);
-        let trigger = mgr.tick(scope, later, &mut registry);
+        let trigger = mgr
+            .tick(scope, later, &mut registry)
+            .expect("tick at fresh scope cannot overflow");
         assert_eq!(trigger, Some(EpochRotationTrigger::TimeElapsed));
         assert_eq!(mgr.current_epoch(scope), Some(EpochId(1)));
     }
@@ -870,8 +916,10 @@ mod tests {
         );
         let scope = ScopeId::new_v4();
         mgr.ensure_scope(scope, &mut registry);
-        mgr.force_rotate(scope, &mut registry);
-        mgr.force_rotate(scope, &mut registry);
+        mgr.force_rotate(scope, &mut registry)
+            .expect("force_rotate at fresh scope cannot overflow");
+        mgr.force_rotate(scope, &mut registry)
+            .expect("force_rotate at fresh scope cannot overflow");
         let epochs = mgr.list_epochs(scope);
         assert_eq!(epochs.len(), 3);
         assert_eq!(epochs[0].epoch_id, EpochId::zero());
@@ -880,6 +928,79 @@ mod tests {
         assert!(epochs[0].cold);
         assert!(epochs[1].cold);
         assert!(!epochs[2].cold);
+    }
+
+    #[test]
+    fn epoch_id_zero_and_next_round_trip() {
+        assert_eq!(EpochId::zero().0, 0);
+        assert_eq!(
+            EpochId::zero().next().expect("0.next() never overflows").0,
+            1
+        );
+        // Overflow at the terminal epoch is reported as a hard
+        // error rather than silently saturating at `u64::MAX` —
+        // matching the [`crate::mls::MlsEpoch::next`] semantics.
+        let max = EpochId(u64::MAX);
+        assert!(matches!(max.next(), Err(CryptoError::EpochOverflow)));
+    }
+
+    /// At the terminal epoch, every public mutation entry point on
+    /// [`EpochManager`] must refuse to rotate — silently saturating
+    /// would re-bind the same epoch id to a fresh DEK, which is
+    /// exactly the forward-secrecy break this fix closes.
+    #[test]
+    fn epoch_manager_refuses_to_rotate_at_terminal_epoch() {
+        let mut registry = DekRegistry::new();
+        let mut mgr = EpochManager::new(
+            EpochRotationPolicy::new(Duration::seconds(1), 1),
+            DeterministicEpochKeySource,
+        );
+        let scope = ScopeId::new_v4();
+        mgr.ensure_scope(scope, &mut registry);
+
+        // Splice the manager's tracking so the scope is parked at
+        // `EpochId(u64::MAX)` without driving u64::MAX rotations.
+        // The internal state is intentionally exposed only to the
+        // crate's own tests via `pub(super)`-free field access; we
+        // achieve the same effect here by replacing the bookkeeping
+        // through the public surface.
+        let terminal = EpochId(u64::MAX);
+        // Overwrite the manager's current/epochs view of `scope` so
+        // that `current_epoch(scope)` returns the terminal epoch.
+        mgr.current.insert(scope, terminal);
+        mgr.epochs.insert(
+            scope,
+            vec![EpochInfo {
+                epoch_id: terminal,
+                started_at: Utc::now() - Duration::days(365),
+                bytes_encrypted: 0,
+                cold: false,
+            }],
+        );
+        registry.insert_epoch_dek(EpochDek::new(scope, terminal, fixture_key(7)));
+
+        // force_rotate refuses.
+        assert!(matches!(
+            mgr.force_rotate(scope, &mut registry),
+            Err(CryptoError::EpochOverflow)
+        ));
+
+        // record_bytes that *would* trigger a size rotation refuses.
+        assert!(matches!(
+            mgr.record_bytes(scope, u64::MAX, &mut registry),
+            Err(CryptoError::EpochOverflow)
+        ));
+
+        // tick that *would* trigger a time rotation refuses.
+        let later = Utc::now() + Duration::days(366);
+        assert!(matches!(
+            mgr.tick(scope, later, &mut registry),
+            Err(CryptoError::EpochOverflow)
+        ));
+
+        // current_epoch is unchanged after every failed rotation
+        // attempt — the manager refused to re-bind the terminal id.
+        assert_eq!(mgr.current_epoch(scope), Some(terminal));
     }
 
     #[test]

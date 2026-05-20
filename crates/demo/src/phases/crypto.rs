@@ -255,7 +255,9 @@ pub fn run(
     let mut epoch_registry = DekRegistry::new();
     let alt_scope = ScopeId(dataset.channel_alt_scope.id.0);
     let epoch_zero = EpochId::zero();
-    let epoch_one = epoch_zero.next();
+    let epoch_one = epoch_zero
+        .next()
+        .expect("EpochId::zero().next() never overflows");
 
     let mut zero_key: AeadKey = [0u8; AEAD_KEY_LEN];
     for (i, b) in zero_key.iter_mut().enumerate() {
@@ -290,17 +292,21 @@ pub fn run(
         .current_epoch(rotation_scope)
         .expect("initial epoch");
 
-    let _ = manager.force_rotate(rotation_scope, &mut rotation_registry);
+    let _ = manager
+        .force_rotate(rotation_scope, &mut rotation_registry)
+        .expect("force_rotate at fresh demo scope cannot overflow EpochId");
     let after_force_rotate = manager
         .current_epoch(rotation_scope)
         .expect("post-force epoch");
 
     // Drive a size-based rotation by recording bytes.
-    let _ = manager.record_bytes(
-        rotation_scope,
-        16 * 1024 * 1024 * 1024 + 1,
-        &mut rotation_registry,
-    );
+    let _ = manager
+        .record_bytes(
+            rotation_scope,
+            16 * 1024 * 1024 * 1024 + 1,
+            &mut rotation_registry,
+        )
+        .expect("record_bytes at fresh demo scope cannot overflow EpochId");
     let after_size_rotate = manager
         .current_epoch(rotation_scope)
         .expect("post-size epoch");
