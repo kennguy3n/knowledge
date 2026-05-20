@@ -313,12 +313,12 @@ fn extract_entities(body: &str) -> String {
     if entities.is_empty() {
         return r#"{"entities":[]}"#.into();
     }
+    use std::fmt::Write as _;
     let mut out = String::from(r#"{"entities":["#);
     for (i, (name, kind)) in entities.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
-        use std::fmt::Write as _;
         let _ = write!(
             out,
             r#"{{"name":"{name}","type":"{kind}"}}"#,
@@ -474,6 +474,7 @@ fn extract_project_names(body: &str, out: &mut Vec<(String, &'static str)>) {
 /// tab, and carriage return. Sufficient for the entity-name strings
 /// the extractors emit (which are always ASCII-printable).
 fn json_escape(s: &str) -> String {
+    use std::fmt::Write as _;
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -483,7 +484,6 @@ fn json_escape(s: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             c if (c as u32) < 0x20 => {
-                use std::fmt::Write as _;
                 let _ = write!(out, "\\u{:04x}", c as u32);
             }
             c => out.push(c),
