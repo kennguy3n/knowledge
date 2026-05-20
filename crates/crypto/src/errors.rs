@@ -47,10 +47,21 @@ pub enum CryptoError {
         /// Primitive(s) the operation actually used.
         got: &'static str,
     },
-    /// An MLS epoch counter overflowed `u64::MAX`. The group has
-    /// reached the end of its addressable epoch space and cannot
-    /// produce any more commits; callers should treat this as a
-    /// terminal condition and start a fresh group.
-    #[error("MLS epoch counter overflow at u64::MAX")]
+    /// An epoch counter overflowed `u64::MAX`.
+    ///
+    /// Surfaced by both [`crate::mls::MlsEpoch::next`] and
+    /// [`crate::forgetting::EpochId::next`] — the substrate refuses
+    /// to silently saturate at the terminal epoch because that would
+    /// allow an unbounded sequence of "epoch advances" that did not
+    /// actually advance, breaking forward-secrecy invariants
+    /// (forgotten epochs could appear to coexist with new ones at
+    /// the same id).
+    ///
+    /// For MLS groups, callers should treat this as a terminal
+    /// condition and start a fresh group. For forgetting epochs,
+    /// callers should rotate the scope to a fresh, smaller numbering
+    /// (or escalate — reaching `u64::MAX` epochs on a single scope
+    /// is overwhelmingly indicative of a logic bug).
+    #[error("epoch counter overflow at u64::MAX")]
     EpochOverflow,
 }
