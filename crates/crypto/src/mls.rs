@@ -27,7 +27,7 @@ use chrono::{DateTime, Utc};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::aead::{decrypt_aead, encrypt_aead, AeadKey, AeadNonce, AEAD_KEY_LEN, AEAD_NONCE_LEN};
 use crate::errors::CryptoError;
@@ -337,25 +337,39 @@ impl MlsGroup {
     /// initialised state.
     ///
     /// `initial_ratchet` is the high-entropy seed for the per-epoch
-    /// HKDF ratchet. The genesis derivation consumes it to produce
-    /// epoch 0's secret and the ratchet that will feed epoch 1; the
-    /// caller's copy of `initial_ratchet` is moved into this function
-    /// and immediately overwritten on the stack by the derivation, so
-    /// no group member needs to retain the genesis seed after
-    /// creation.
+    /// HKDF ratchet. It is taken as [`Zeroizing<[u8; AEAD_KEY_LEN]>`]
+    /// for two reasons:
+    ///
+    /// 1. [`Zeroizing`] is **not** `Copy` even though `[u8; 32]` is,
+    ///    so the caller is forced to express ownership transfer
+    ///    explicitly — accidental duplication of the genesis seed
+    ///    via implicit copy is rejected at compile time.
+    /// 2. The local copy this function receives is wrapped in
+    ///    [`Zeroizing`], so its [`Drop`] impl wipes the bytes from
+    ///    this stack frame on every exit path, including on error
+    ///    returns. The genesis derivation consumes the value to
+    ///    produce epoch 0's secret and the ratchet that will feed
+    ///    epoch 1; no group member needs to retain the genesis seed
+    ///    after creation.
+    ///
+    /// Note that Rust does not guarantee zeroisation of the **caller's**
+    /// stack frame copy of the array — the bytes are `memcpy`'d into
+    /// this function's frame at call-time and only this frame is
+    /// wiped on return. Callers that need defence-in-depth at their
+    /// own frame should also store the seed in a [`Zeroizing`] binding
+    /// from the start, which is naturally enforced by this signature.
     pub fn create<S: SignerBackend>(
         signer: &S,
         creator: MlsMemberId,
         creator_leaf: LeafKeyPackage,
-        initial_ratchet: [u8; AEAD_KEY_LEN],
+        initial_ratchet: Zeroizing<[u8; AEAD_KEY_LEN]>,
     ) -> Result<(Self, MlsCommit), CryptoError> {
         let group_id = MlsGroupId::new_v4();
         let epoch = MlsEpoch::zero();
         let (epoch_secret, next_ratchet) = ratchet_epoch(&initial_ratchet, group_id, epoch)?;
-        // The genesis seed is no longer needed; wipe the local copy
-        // so a single ratchet state remains in memory.
-        let mut initial_ratchet = initial_ratchet;
-        initial_ratchet.zeroize();
+        // `initial_ratchet` is dropped at the end of this scope; its
+        // `Zeroizing` wrapper wipes the bytes from our stack frame.
+        drop(initial_ratchet);
         let schedule = derive_schedule(group_id, epoch, epoch_secret)?;
 
         let mut members = BTreeMap::new();
@@ -606,7 +620,13 @@ impl MlsGroup {
                     return Err(e);
                 }
             };
-        let aad = welcome_aad(self.group_id, self.epoch);
+        // The roster carried in the welcome envelope is bound into
+        // the AEAD AAD so any tampering with `welcome.roster` in
+        // transit causes `process_welcome` to fail closed. The
+        // BTreeMap iterates keys in sorted order, which the
+        // serialised `roster: Vec<MlsMemberId>` field preserves.
+        let roster: Vec<MlsMemberId> = self.members.keys().copied().collect();
+        let aad = welcome_aad(self.group_id, self.epoch, &roster);
 
         // Plaintext = epoch_secret || ratchet, so the new member can
         // both decrypt the current epoch AND advance the ratchet on
@@ -626,7 +646,7 @@ impl MlsGroup {
         Ok(MlsWelcome {
             group_id: self.group_id,
             epoch: self.epoch,
-            roster: self.members.keys().copied().collect(),
+            roster,
             kem_ciphertext,
             encrypted_epoch_secret,
         })
@@ -662,7 +682,7 @@ impl MlsGroup {
                     return Err(e);
                 }
             };
-        let aad = welcome_aad(welcome.group_id, welcome.epoch);
+        let aad = welcome_aad(welcome.group_id, welcome.epoch, &welcome.roster);
 
         let plaintext_result = decrypt_aead(
             &aead_key,
@@ -802,14 +822,38 @@ fn derive_welcome_aead_material(
     Ok((key, nonce))
 }
 
-/// AAD bound into the welcome AEAD: a versioned tag plus the group
-/// id and epoch the welcome is for. Distinct from the AEAD key/nonce
-/// info labels so cross-protocol confusion is impossible.
-fn welcome_aad(group_id: MlsGroupId, epoch: MlsEpoch) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(b"knowledge-mls-welcome-v2|".len() + 16 + 8);
-    aad.extend_from_slice(b"knowledge-mls-welcome-v2|");
+/// AAD bound into the welcome AEAD: a versioned tag, the group id
+/// and epoch the welcome is for, plus a length-prefixed serialisation
+/// of the roster the welcome carries.
+///
+/// Binding the roster into the AAD is what closes the
+/// "tampered-roster" gap: [`MlsWelcome::roster`] is transmitted
+/// alongside the AEAD ciphertext and is otherwise unauthenticated.
+/// Without this binding, a man-in-the-middle could rewrite the roster
+/// (add or remove member ids) without invalidating the AEAD tag,
+/// causing the new member to either reject legitimate commits from
+/// real members or accept commits from a member it shouldn't trust.
+/// With this binding, any modification of `welcome.roster` between
+/// [`MlsGroup::build_welcome`] and [`MlsGroup::process_welcome`]
+/// makes the AEAD tag invalid, so [`process_welcome`] fails closed.
+///
+/// Distinct from the AEAD key/nonce info labels so cross-protocol
+/// confusion is impossible. The roster ids are emitted in the order
+/// they appear in the slice — [`build_welcome`] feeds the BTreeMap's
+/// sorted-key iteration, and [`process_welcome`] feeds the exact
+/// bytes carried in `welcome.roster`, so the two sides only agree on
+/// the AAD when the roster has not been tampered with in transit.
+fn welcome_aad(group_id: MlsGroupId, epoch: MlsEpoch, roster: &[MlsMemberId]) -> Vec<u8> {
+    let prefix = b"knowledge-mls-welcome-v2|";
+    let roster_len: u32 = roster.len().try_into().expect("welcome roster fits in u32");
+    let mut aad = Vec::with_capacity(prefix.len() + 16 + 8 + 4 + roster.len() * 16);
+    aad.extend_from_slice(prefix);
     aad.extend_from_slice(group_id.0.as_bytes());
     aad.extend_from_slice(&epoch.0.to_be_bytes());
+    aad.extend_from_slice(&roster_len.to_be_bytes());
+    for id in roster {
+        aad.extend_from_slice(id.0.as_bytes());
+    }
     aad
 }
 
@@ -859,16 +903,19 @@ mod tests {
         MlDsa65Signer::generate()
     }
 
-    /// Deterministic 32-byte initial ratchet for tests. The genesis
-    /// derivation consumes this and produces epoch 0's secret plus
-    /// the ratchet that feeds epoch 1 — the value here is never
-    /// retained on the group after `MlsGroup::create` returns.
-    fn fixed_initial_ratchet() -> [u8; AEAD_KEY_LEN] {
+    /// Deterministic 32-byte initial ratchet for tests, wrapped in
+    /// [`Zeroizing`] to match the production [`MlsGroup::create`]
+    /// signature. The genesis derivation consumes this and produces
+    /// epoch 0's secret plus the ratchet that feeds epoch 1 — the
+    /// value here is never retained on the group after
+    /// `MlsGroup::create` returns, and is wiped from this stack frame
+    /// when the [`Zeroizing`] wrapper is dropped.
+    fn fixed_initial_ratchet() -> Zeroizing<[u8; AEAD_KEY_LEN]> {
         let mut seed = [0u8; AEAD_KEY_LEN];
         for (i, b) in seed.iter_mut().enumerate() {
             *b = u8::try_from(i).expect("AEAD_KEY_LEN fits in u8");
         }
-        seed
+        Zeroizing::new(seed)
     }
 
     #[test]
@@ -1195,6 +1242,71 @@ mod tests {
             matches!(err, CryptoError::AeadDecryption),
             "unexpected error variant: {err:?}",
         );
+    }
+
+    /// Integrity: [`MlsWelcome::roster`] is bound into the AEAD AAD,
+    /// so any tampering of the roster between sender and receiver
+    /// causes [`MlsGroup::process_welcome`] to fail with an AEAD
+    /// authentication error instead of silently accepting the welcome
+    /// under an attacker-chosen roster. Without this binding a MITM
+    /// could rewrite the roster (e.g. inject a phantom member id, or
+    /// drop a legitimate one) and the new member would have no way to
+    /// notice.
+    #[test]
+    fn welcome_with_tampered_roster_is_rejected() {
+        let s = signer();
+        let creator = MlsMemberId::new_v4();
+        let (mut group, _) =
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
+        let new_id = MlsMemberId::new_v4();
+        let (new_leaf, new_sk) = fresh_leaf_with_sk(new_id);
+        let add = group.add_member(&s, creator, new_leaf.clone()).unwrap();
+        group.process_commit(&add, &s).unwrap();
+        group.install_leaf(new_leaf);
+        let welcome = group.build_welcome(new_id).expect("welcome");
+
+        // Tamper with the roster in transit: prepend a phantom id.
+        // The KEM ciphertext and AEAD ciphertext are unchanged, so
+        // decapsulation still recovers the correct shared secret and
+        // derives the correct key/nonce — what must fail is the AEAD
+        // authentication step, because the receiver computes the AAD
+        // from the tampered roster and gets a different byte string
+        // than the sender bound at encryption time.
+        let mut tampered = welcome.clone();
+        let phantom = MlsMemberId::new_v4();
+        tampered.roster.insert(0, phantom);
+        let err = MlsGroup::process_welcome(&tampered, &new_sk)
+            .expect_err("tampered roster must be rejected");
+        assert!(
+            matches!(err, CryptoError::AeadDecryption),
+            "unexpected error variant: {err:?}",
+        );
+
+        // Removing a legitimate roster entry is also detected.
+        let mut tampered = welcome.clone();
+        tampered.roster.pop();
+        let err = MlsGroup::process_welcome(&tampered, &new_sk)
+            .expect_err("roster-shortened welcome must be rejected");
+        assert!(
+            matches!(err, CryptoError::AeadDecryption),
+            "unexpected error variant: {err:?}",
+        );
+
+        // Reordering the roster is also detected — the AAD encodes
+        // members in their exact transmitted order, not as a set.
+        if welcome.roster.len() >= 2 {
+            let mut tampered = welcome.clone();
+            tampered.roster.swap(0, 1);
+            let err = MlsGroup::process_welcome(&tampered, &new_sk)
+                .expect_err("reordered roster must be rejected");
+            assert!(
+                matches!(err, CryptoError::AeadDecryption),
+                "unexpected error variant: {err:?}",
+            );
+        }
+
+        // Sanity: the untampered welcome still round-trips.
+        MlsGroup::process_welcome(&welcome, &new_sk).expect("untampered welcome must succeed");
     }
 
     /// Authorisation: a commit signed by a party who is not a
