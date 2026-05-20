@@ -585,6 +585,21 @@ impl<S: EpochKeySource> EpochManager<S> {
     /// be needed but the scope has already reached the terminal
     /// epoch — the per-epoch byte counter does not roll over
     /// silently.
+    ///
+    /// **Counter-mutation contract on overflow.** The accounting
+    /// update to `bytes_encrypted` happens *before* the rotation
+    /// attempt and is **not** rolled back if the rotation returns
+    /// [`CryptoError::EpochOverflow`]. The bytes were genuinely
+    /// encrypted under the (now permanently-wedged) terminal DEK,
+    /// so the counter accurately reflects the encrypted volume
+    /// even when the manager refuses to rotate. Rolling back would
+    /// lose that audit signal — the wrong direction for a
+    /// forgetting / forward-secrecy substrate. Callers that
+    /// observe `Err(EpochOverflow)` should treat the scope's
+    /// terminal epoch as wedged (no further rotations possible)
+    /// and switch to a fresh scope rather than retrying; repeated
+    /// calls will continue to fail with the same error while the
+    /// counter ticks past the budget.
     pub fn record_bytes(
         &mut self,
         scope: ScopeId,
