@@ -161,7 +161,7 @@ pub enum SynthesisTrigger {
 /// FFI-safe public-key bundle returned by [`super::generate_keypair`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FfiKeypair {
-    /// Algorithm tag (`"ml-dsa-65"`, `"sphincs-shake256-128f-simple"`).
+    /// Algorithm tag (`"ml-dsa-65"`, `"sphincs-plus-shake-128f-simple"`).
     pub algorithm: String,
     /// Encoded public verifying key (algorithm-specific bytes).
     pub public_key: Vec<u8>,

@@ -488,7 +488,7 @@ the delete.
 |---|---|---|
 | Key encapsulation | **ML-KEM-768 (Kyber)** | Hybrid X25519 + ML-KEM-768 during transition |
 | Provenance signatures | **ML-DSA-65 (Dilithium)** | Every synthesis output and every export bundle is signed |
-| Stateless backup signatures | **SPHINCS+** | Reserved for high-assurance / archival signing |
+| Stateless backup signatures | **SPHINCS+-SHAKE-128f-simple** (PQClean via `pqcrypto-sphincsplus`) | Reserved for high-assurance / archival signing via the `CoSigner` AND-combiner. 17,088-byte signatures: too large for per-synthesis provenance — used **only** on the archival group-op path alongside ML-DSA-65, not as a per-record signer. |
 | Symmetric AEAD | XChaCha20-Poly1305 | Per-scope and per-epoch keys |
 | Hashing / framing | BLAKE3 | Content hash, MAC framing |
 
