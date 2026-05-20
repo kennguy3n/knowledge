@@ -15,10 +15,15 @@
 //!   argument and reaches into the map to find the corresponding
 //!   runtime. Calls with an unknown handle return
 //!   [`FfiError::Unavailable`] with `subsystem = "evidence_store"`.
-//! * [`close_store`] removes the entry from the map; the underlying
-//!   `FfiRuntime` is dropped once any concurrent in-flight call on the
-//!   same handle has released its clone of the `Arc` (the `Drop` impl
-//!   zeroizes the master key and closes the SQLite handle).
+//! * [`close_store`] removes the entry from the map and then blocks
+//!   until any concurrent in-flight call on the same handle has
+//!   released its clone of the `Arc`. The underlying `FfiRuntime` is
+//!   dropped (zeroizing the master key and closing the SQLite handle)
+//!   before `close_store` returns, restoring the implicit synchronous
+//!   teardown that the pre-handle singleton design provided.
+//!   Hosts can therefore `move`/`unlink` the database file immediately
+//!   after `close_store` returns without risking a Windows
+//!   mandatory-file-lock conflict.
 //!
 //! Multiple handles can be open simultaneously — each holds an
 //! independent SQLCipher database, master key, and `DekRegistry`.
@@ -35,10 +40,12 @@
 //! so calls against the same handle serialize while calls against
 //! distinct handles run in parallel.
 //!
-//! `close_store` takes the write lock and removes the entry. If
-//! another thread is mid-call on the same handle when `close_store`
-//! runs, that thread keeps the runtime alive via its cloned `Arc`
-//! until its call finishes — the runtime then drops cleanly.
+//! `close_store` first takes the write lock and removes the entry
+//! (so no new clones can be minted) and then drains any
+//! already-in-flight calls by spinning on `Arc::try_unwrap` until it
+//! owns the only remaining strong reference. Concurrent calls on
+//! *other* handles are unaffected — they touch different entries in
+//! the map.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -339,7 +346,14 @@ fn registry() -> &'static RwLock<HashMap<u64, HandleEntry>> {
 
 fn next_handle() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
-    NEXT.fetch_add(1, Ordering::SeqCst)
+    // `Relaxed` is sufficient: `fetch_add` is an atomic RMW so each
+    // caller is guaranteed to receive a distinct value regardless of
+    // memory ordering. There is no other memory location whose
+    // visibility must be sequenced against this counter — the
+    // registry write lock (taken in `open_store` right after the
+    // increment) carries the actual happens-before edge for inserting
+    // the new entry.
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 fn read_registry() -> RwLockReadGuard<'static, HashMap<u64, HandleEntry>> {
@@ -363,6 +377,8 @@ fn write_registry() -> std::sync::RwLockWriteGuard<'static, HashMap<u64, HandleE
 /// taking the per-runtime `Mutex` — so a long-running call on handle
 /// A never blocks a short-running call on handle B, and `close_store`
 /// can land its `remove` even while a different handle is busy.
+/// `close_store` then blocks (only on its own handle) until the
+/// in-flight call on that handle finishes; see its docs for details.
 pub(crate) fn with_runtime<F, T>(handle: RuntimeHandle, f: F) -> FfiResult<T>
 where
     F: FnOnce(&mut FfiRuntime) -> FfiResult<T>,
@@ -682,27 +698,58 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHand
 ///
 /// # Concurrency contract
 ///
-/// `close_store` is **non-blocking**. It removes the entry from the
-/// handle map (so no new calls can reach the runtime) and returns
-/// immediately. If another thread is mid-call on the same handle
-/// when this runs, that thread keeps the runtime alive via its
-/// cloned `Arc` until its own call finishes; the runtime then drops
-/// (closing the SQLite connection and zeroizing the master key)
-/// when the last `Arc` reference is released.
+/// `close_store` is **synchronous**: it does not return until the
+/// SQLite connection and the master key for `handle` have been
+/// dropped.
 ///
-/// **Implication for hosts**: returning from `close_store` does NOT
-/// guarantee the underlying SQLite database file has been closed.
-/// On Windows in particular, attempting to move, delete, or re-open
-/// the database file immediately after `close_store` returns can
-/// fail with a file-lock error if another thread is still inside a
-/// `with_runtime` call. Hosts that need a hard "file is fully
-/// released" guarantee should serialize their teardown so no FFI
-/// calls are in flight before invoking `close_store`. POSIX systems
-/// allow concurrent rename/unlink and so are unaffected, but the
-/// underlying journal/WAL files may still be open briefly.
+/// 1. Remove the entry from the handle map under the registry write
+///    lock — this stops any *new* `with_runtime` calls on `handle`
+///    from acquiring a fresh `Arc` clone.
+/// 2. Drain any *already-in-flight* calls by spinning on
+///    [`Arc::try_unwrap`] until we own the only remaining strong
+///    reference. The set of outstanding clones is fixed at the moment
+///    step 1 completes (since the registry no longer hands out new
+///    ones), so this loop is bounded by the longest in-flight call.
+/// 3. Drop the unwrapped `Mutex<FfiRuntime>`. Dropping `FfiRuntime`
+///    closes the SQLCipher connection and zeroizes the master key on
+///    the way out.
+///
+/// This matches the implicit synchronous-teardown property of the
+/// pre-handle singleton design (where `lock_runtime` + `*guard =
+/// None` blocked until any in-flight call released the singleton
+/// mutex), so Windows hosts can still `move`/`unlink` the database
+/// file immediately after `close_store` returns without risking a
+/// mandatory-file-lock conflict.
+///
+/// Idempotent: closing an unknown or already-closed handle is a
+/// no-op and returns `Ok(())` without spinning.
 pub fn close_store(handle: RuntimeHandle) -> FfiResult<()> {
-    let _ = write_registry().remove(&handle.0);
-    Ok(())
+    let Some(mut entry) = write_registry().remove(&handle.0) else {
+        return Ok(());
+    };
+    // Drain outstanding `with_runtime` calls on this handle. Because
+    // step 1 (the `remove` above) already happened, no new clones can
+    // be minted — the strong count can only monotonically drop until
+    // it reaches 1 (our copy). We use `try_unwrap` rather than
+    // `Arc::strong_count` + race-prone manual checking, then yield
+    // briefly if another thread still holds a clone so we do not
+    // pin a CPU core on long-running calls.
+    loop {
+        match Arc::try_unwrap(entry) {
+            Ok(mutex) => {
+                // Drop here closes the SQLCipher connection and
+                // zeroizes the master key (`FfiRuntime::Drop`).
+                drop(mutex);
+                return Ok(());
+            }
+            Err(returned) => {
+                entry = returned;
+                // 1 ms sleep balances responsiveness against CPU
+                // burn for the common case of short in-flight calls.
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
 }
 
 fn parse_master_key_hex(hex: &str) -> FfiResult<MasterKey> {

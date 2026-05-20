@@ -24,12 +24,6 @@ pub type ScopeIdString = String;
 ///
 /// Mirrors `connector_framework::ConnectorKind` plus a `Manual`
 /// catch-all for sideloaded ingest.
-// `serde::Deserialize` derives a visitor that takes the variant
-// payload by value; clippy attributes the resulting warning to the
-// enum declaration. The lint is a false positive against
-// derive-generated code (we cannot rewrite the macro output), so the
-// allow lives on the type itself rather than the module.
-#[allow(clippy::needless_pass_by_value)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum SourceKind {
@@ -142,8 +136,6 @@ pub struct MemoryRecord {
 }
 
 /// Filter for [`super::list_memories`].
-// Same derive-generated false positive as `SourceKind` above.
-#[allow(clippy::needless_pass_by_value)]
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryFilter {
     /// If `Some`, restrict to rows in this state.

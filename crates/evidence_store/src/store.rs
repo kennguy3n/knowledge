@@ -1782,23 +1782,34 @@ impl EvidenceStore {
         // Garbage-collect orphaned body_store rows whose last wrap
         // was just deleted. A body_store row with zero remaining
         // wraps is cryptographically unrecoverable.
+        //
+        // Single batched `DELETE … WHERE content_hash IN (?,?,…) AND
+        // NOT EXISTS (…)` per chunk replaces the previous N+1 query
+        // pattern (SELECT COUNT then DELETE per hash). `DELETE_BATCH`
+        // stays well below SQLite's `SQLITE_MAX_VARIABLE_NUMBER` cap
+        // so the statement compiles even on builds that lower it,
+        // mirroring the FTS purge sibling above.
         for chunk in hashes.chunks(DELETE_BATCH) {
-            for h in chunk {
-                let remaining: i64 = tx
-                    .query_row(
-                        "SELECT COUNT(*) FROM body_store_key_wraps WHERE content_hash = ?1",
-                        params![h.as_slice()],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
-                if remaining == 0 {
-                    // No scope can decrypt this body any more — drop it.
-                    tx.execute(
-                        "DELETE FROM body_store WHERE content_hash = ?1",
-                        params![h.as_slice()],
-                    )?;
-                }
+            if chunk.is_empty() {
+                continue;
             }
+            let placeholders = (0..chunk.len())
+                .map(|i| format!("?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "DELETE FROM body_store \
+                 WHERE content_hash IN ({placeholders}) \
+                 AND NOT EXISTS ( \
+                     SELECT 1 FROM body_store_key_wraps w \
+                     WHERE w.content_hash = body_store.content_hash \
+                 )"
+            );
+            let params: Vec<&dyn rusqlite::ToSql> = chunk
+                .iter()
+                .map(|h| h as &dyn rusqlite::ToSql)
+                .collect();
+            tx.execute(sql.as_str(), rusqlite::params_from_iter(params.iter().copied()))?;
         }
 
         tx.commit()?;

@@ -23,16 +23,19 @@
 //! and is fully unit-testable from the workspace.
 
 #![deny(missing_docs)]
-// N-API entry points carry per-function
-// `#[allow(clippy::needless_pass_by_value)]` annotations rather than
-// a module-level blanket. Each public function in this file mirrors
-// an FFI entry point and is shaped for the JS bridge that
-// `napi-derive` will generate — every argument arrives as a
-// freshly-allocated `String` / `Vec<u8>` handed across the language
-// boundary, so borrowed equivalents would force an extra copy on
-// every call. Keeping the allow local lets clippy still catch
-// inadvertent by-value taking in internal helpers that don't cross
-// the FFI boundary.
+// Most N-API entry points in this file forward their `String` /
+// `Vec<u8>` arguments straight into the matching `ffi::*` call, which
+// consumes them by value — clippy treats that as a genuine
+// consumption and does not fire `needless_pass_by_value`. The
+// exception is the `encrypt` / `decrypt` pair: they call helpers
+// that only borrow their inputs, so a per-function
+// `#[allow(clippy::needless_pass_by_value)]` is applied there with a
+// comment explaining why the by-value signature is kept (napi-derive
+// hands owned `String` / `Vec<u8>` across the JS boundary on every
+// call; borrowing would force an extra copy in generated code).
+// Keeping the allows local lets clippy still catch inadvertent
+// by-value taking in internal helpers that don't cross the FFI
+// boundary.
 
 pub mod error;
 pub mod types;

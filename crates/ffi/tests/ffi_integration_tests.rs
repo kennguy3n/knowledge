@@ -242,6 +242,114 @@ fn distinct_handles_isolate_independent_stores() {
     close_store(h2).expect("close h2");
 }
 
+/// `close_store` must be synchronous with respect to in-flight calls
+/// on the same handle: when another thread is mid-call via
+/// `with_runtime`, `close_store` must not return until that call has
+/// released its `Arc` clone and the `FfiRuntime` (along with its
+/// SQLCipher connection and master key) has been dropped. This
+/// restores the implicit synchronous-teardown property the pre-handle
+/// singleton design provided and matters for hosts on Windows whose
+/// mandatory file locks would otherwise prevent a `move`/`unlink` of
+/// the database file immediately after `close_store` returns.
+///
+/// Verify the contract along two complementary axes:
+///
+/// 1. **Registry removed before return** — a follow-up call on the
+///    closed handle must return `FfiError::Unavailable`.
+/// 2. **Database file fully released before return** — re-opening the
+///    same on-disk SQLCipher file under a fresh handle immediately
+///    after `close_store` returns must succeed and observe the row
+///    the original handle wrote. SQLCipher's open path holds an
+///    exclusive lock; if the previous connection were still alive in
+///    a leaked `Arc` it would either fail outright on Windows or
+///    surface a `SQLITE_BUSY` on Linux.
+#[test]
+fn close_store_blocks_on_inflight_calls() {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    // Spawn N worker threads that hammer ingest_message in a tight
+    // loop. A `Barrier` synchronises their start with the main
+    // thread's `close_store` so that at least one worker is
+    // mid-`with_runtime` when the close lands and we exercise the
+    // `Arc::try_unwrap` drain path rather than the empty-clones
+    // fast path.
+    const WORKERS: usize = 8;
+    const ITERS_PER_WORKER: usize = 200;
+
+    let dir = TempDir::new().expect("tempdir");
+    let path = dir.path().join("db.sqlite");
+    let path_str = path.to_string_lossy().into_owned();
+    let key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    let h = open_store(path_str.clone(), key.to_string()).expect("open_store");
+    let scope = uuid::Uuid::new_v4().to_string();
+    let phrase = "closestoresynchronousteardown";
+    let evidence_id = ingest_message(
+        h,
+        scope.clone(),
+        format!("body containing {phrase}"),
+        SourceKind::Manual,
+        FfiImportanceClass::Important,
+    )
+    .expect("seed ingest");
+
+    let barrier = Arc::new(Barrier::new(WORKERS + 1));
+    let mut workers = Vec::with_capacity(WORKERS);
+    for w in 0..WORKERS {
+        let barrier = Arc::clone(&barrier);
+        let scope = scope.clone();
+        workers.push(thread::spawn(move || {
+            barrier.wait();
+            for i in 0..ITERS_PER_WORKER {
+                // Tolerate `Unavailable` — once `close_store` has
+                // removed the registry entry, subsequent calls
+                // from this worker will start observing it.
+                let _ = ingest_message(
+                    h,
+                    scope.clone(),
+                    format!("race body w{w} i{i}"),
+                    SourceKind::Manual,
+                    FfiImportanceClass::Important,
+                );
+            }
+        }));
+    }
+
+    barrier.wait();
+    close_store(h).expect("close_store");
+
+    // 1. Registry must report the handle as gone immediately on
+    //    return from `close_store`.
+    match get_evidence(h, evidence_id.clone()) {
+        Err(FfiError::Unavailable { subsystem }) => {
+            assert_eq!(subsystem, "evidence_store");
+        }
+        other => panic!("expected Unavailable after close_store, got {other:?}"),
+    }
+
+    // 2. SQLCipher file must be fully released — opening it under a
+    //    fresh handle from the *same* path must succeed without
+    //    waiting on or contending with a leaked connection. The row
+    //    we seeded above must still be queryable through the new
+    //    handle (proving SQLCipher actually flushed the WAL on
+    //    drop), and we read it back immediately, with no retry.
+    let h2 = open_store(path_str, key.to_string()).expect("re-open after close_store");
+    let hits = query(h2, scope.clone(), phrase.into(), 10).expect("query reopened handle");
+    assert!(
+        hits.iter().any(|hit| hit.evidence_id == evidence_id),
+        "re-opened handle must observe the row the closed handle wrote"
+    );
+    close_store(h2).expect("close re-opened handle");
+
+    // Joining the workers last makes the test deterministic without
+    // relying on wall-clock — if `close_store` were not synchronous
+    // we would still have observed the failures above.
+    for j in workers {
+        j.join().expect("worker join");
+    }
+}
+
 // ──────────────────────────── Error mapping ─────────────────────────
 
 /// Every variant of [`FfiError`] must (a) JSON-round-trip and (b)
