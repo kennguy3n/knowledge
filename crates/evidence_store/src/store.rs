@@ -1520,8 +1520,17 @@ impl EvidenceStore {
     /// VACUUM-style rebuild at a higher layer.
     ///
     /// When replaying many tombstones on `open_store`, prefer
-    /// [`Self::purge_fts_for_scopes`] instead — it issues at most
-    /// one rebuild for the whole batch rather than one per scope.
+    /// [`Self::purge_fts_for_scopes`] instead. Both methods skip
+    /// the `REBUILD` when zero FTS rows were actually deleted, so
+    /// the steady-state replay (every scope already purged on a
+    /// prior boot) is equivalent either way. The batch method's
+    /// real advantage is the crash-recovery shape: when `K` of the
+    /// `N` tombstones still have FTS rows because a crash landed
+    /// between tombstone write and FTS purge, calling this
+    /// single-scope method `N` times issues `K` separate rebuilds
+    /// (one per scope that still has data); the batch method
+    /// coalesces them into a single rebuild at the end of the
+    /// transaction.
     pub fn purge_fts_for_scope(&mut self, scope_id: ScopeId) -> Result<()> {
         let tx = self.conn.transaction()?;
         let fts_rows_deleted = Self::purge_fts_for_scope_in_tx(&tx, scope_id)?;

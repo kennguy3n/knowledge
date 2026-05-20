@@ -263,15 +263,21 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
     // every `open_store` closes that window.
     //
     // The FTS purge uses the batched [`EvidenceStore::purge_fts_for_scopes`]
-    // entry point so we issue at most a single FTS5 `REBUILD` for
-    // the whole replay — not one per scope. The single-scope
-    // [`EvidenceStore::purge_fts_for_scope`] always rebuilds, and a
-    // database that has forgotten `N` scopes would otherwise pay
-    // O(N × total_fts_rows) on every `open_store`. The batch
-    // method also skips the rebuild entirely when zero FTS rows
-    // were removed across the whole batch (the steady-state case
-    // where every scope was already fully purged on a prior boot,
-    // so each per-scope `DELETE` is a zero-row no-op).
+    // entry point so we issue at most a single FTS5 `REBUILD`
+    // across the whole replay — not one per scope.
+    //
+    // Both [`EvidenceStore::purge_fts_for_scope`] and the batch
+    // method skip the `REBUILD` when zero FTS rows were actually
+    // deleted, so the steady-state replay (every scope already
+    // purged on a prior boot) costs `O(N)` zero-row `DELETE`s and
+    // *no* rebuilds in either shape. The batch entry point
+    // matters in the crash-recovery shape — where `K` of the `N`
+    // tombstones still have FTS rows because we crashed between
+    // tombstone write and FTS purge. Calling the single-scope
+    // method `N` times in that shape would issue `K` separate
+    // rebuilds (one per scope that still has data, each
+    // O(total_fts_rows)); the batch method coalesces them into a
+    // single rebuild at the end of the open transaction.
     //
     // The wrap / blob purges are still issued per scope: each one
     // only touches a small number of rows for the scope it owns,
