@@ -9,6 +9,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Principle of least privilege: every job in this workflow only needs
+# read access to the repo contents. The `fuzz` job's
+# `actions/upload-artifact@v4` step uploads to the per-run actions
+# scope, which is granted automatically and does not require an
+# additional permission grant.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
@@ -205,3 +213,49 @@ jobs:
       - uses: actions/checkout@v4
       - run: cargo install cargo-deny --locked
       - run: cargo deny check
+
+  fuzz:
+    name: cargo-fuzz (crypto, short)
+    runs-on: ubuntu-latest
+    # libFuzzer-via-cargo-fuzz only builds on nightly; the substrate
+    # itself stays on stable, so this job is the only place the
+    # nightly toolchain is used.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            crates/crypto/fuzz/target
+          key: ${{ runner.os }}-fuzz-${{ hashFiles('crates/crypto/fuzz/Cargo.toml', 'crates/crypto/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-fuzz-
+      # `cargo install cargo-fuzz` without `--locked` so the install
+      # picks up newer semver-compatible deps (in particular `rustix`,
+      # which the bundled 0.13.1 lock pins to a version that no longer
+      # compiles on current nightly). `cargo-fuzz` itself stays at the
+      # latest published version.
+      - run: cargo install cargo-fuzz
+      # The fuzz workspace lives at crates/crypto/fuzz (excluded from
+      # the parent workspace) so we run from there. 120 s per target
+      # is the ceiling for fast PR-loop feedback; the weekly job
+      # (.github/workflows/fuzz-weekly.yml) runs each target for an
+      # hour.
+      - name: fuzz_aead_roundtrip (120s)
+        working-directory: crates/crypto/fuzz
+        run: cargo +nightly fuzz run fuzz_aead_roundtrip -- -max_total_time=120
+      - name: fuzz_hkdf_derive (120s)
+        working-directory: crates/crypto/fuzz
+        run: cargo +nightly fuzz run fuzz_hkdf_derive -- -max_total_time=120
+      - name: fuzz_sphincs_sign_verify (120s)
+        working-directory: crates/crypto/fuzz
+        run: cargo +nightly fuzz run fuzz_sphincs_sign_verify -- -max_total_time=120
+      - name: Upload fuzz artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-fuzz-artifacts
+          path: crates/crypto/fuzz/artifacts/
+          if-no-files-found: ignore

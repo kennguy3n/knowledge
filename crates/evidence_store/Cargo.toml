@@ -44,6 +44,7 @@ tokenizers = { version = "0.21", optional = true, default-features = false, feat
 
 [dev-dependencies]
 tempfile = { workspace = true }
+criterion = { workspace = true }
 permission_service = { path = "../permission_service" }
 agent_contract = { path = "../agent_contract" }
 memory_manager = { path = "../memory_manager" }
@@ -52,6 +53,13 @@ memory_manager = { path = "../memory_manager" }
 # `test-support` feature on `crypto` so the gated mock types are
 # visible while compiling the test binaries.
 crypto = { path = "../crypto", features = ["test-support"] }
+
+# Criterion benchmark harness for the hot ingest / read / search /
+# ring-buffer paths. `harness = false` lets criterion run its own
+# main; the bench file lives at `benches/store_bench.rs`.
+[[bench]]
+name = "store_bench"
+harness = false
 
 [lints]
 workspace = true

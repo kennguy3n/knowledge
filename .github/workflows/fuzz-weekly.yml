@@ -1,0 +1,61 @@
+name: Weekly Fuzz
+
+# Each `crypto` fuzz target runs for one hour every Monday at 03:00 UTC.
+# This is the deep-soak counterpart to the 120-second PR-loop fuzz job
+# in `ci.yml`. `workflow_dispatch` lets a maintainer trigger an ad-hoc
+# run from the Actions tab without touching the cron schedule.
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'  # Monday 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-weekly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: cargo-fuzz (crypto, 1h per target)
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_aead_roundtrip
+          - fuzz_hkdf_derive
+          - fuzz_sphincs_sign_verify
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            crates/crypto/fuzz/target
+          key: ${{ runner.os }}-fuzz-weekly-${{ matrix.target }}-${{ hashFiles('crates/crypto/fuzz/Cargo.toml', 'crates/crypto/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-weekly-${{ matrix.target }}-
+            ${{ runner.os }}-fuzz-
+      # See ci.yml: cargo-fuzz 0.13.1's bundled lockfile pins a `rustix`
+      # version that no longer compiles on current nightly, so we drop
+      # `--locked` and let cargo pick up newer semver-compatible deps.
+      - run: cargo install cargo-fuzz
+      - name: ${{ matrix.target }} (1h)
+        working-directory: crates/crypto/fuzz
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=3600
+      - name: Upload corpus + artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-fuzz-${{ matrix.target }}
+          path: |
+            crates/crypto/fuzz/corpus/${{ matrix.target }}/
+            crates/crypto/fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
