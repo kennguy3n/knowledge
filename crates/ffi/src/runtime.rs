@@ -1,36 +1,102 @@
-//! Process-global FFI runtime singleton.
+//! Handle-based FFI runtime registry.
 //!
 //! The UniFFI / N-API surface is shaped like a flat C-style API: each
 //! function takes plain data and returns plain data. The Rust core,
 //! however, owns stateful objects (an open SQLCipher database, a
 //! `DekRegistry` of destroyed keys, a master key). This module mediates
-//! between those two worlds by holding a process-global
-//! `OnceLock<Mutex<Option<FfiRuntime>>>`.
+//! between those two worlds by holding a process-wide map of open
+//! runtimes keyed by an opaque [`RuntimeHandle`].
 //!
-//! The runtime is initialized exactly once via [`open_store`] and torn
-//! down via [`close_store`]. Subsequent calls to [`open_store`] without
-//! an intervening [`close_store`] return [`FfiError::Evidence`] so tests
-//! and host shutdown sequences cannot accidentally clobber an open
-//! store.
+//! # Lifecycle
 //!
-//! Concurrency: every public FFI function acquires the singleton's
-//! `Mutex` for the duration of one call. The substrate's per-call
-//! workloads are short (single SQL statement, single AEAD seal) so
-//! coarse-grained locking is acceptable. If a future update needs
-//! finer-grained concurrency (e.g. multi-shard ingest), this is the
-//! single seam to replace.
+//! * [`open_store`] allocates a fresh runtime, inserts it into the map
+//!   and returns the caller's [`RuntimeHandle`].
+//! * Every other FFI function takes a [`RuntimeHandle`] as its first
+//!   argument and reaches into the map to find the corresponding
+//!   runtime. Calls with an unknown handle return
+//!   [`FfiError::Unavailable`] with `subsystem = "evidence_store"`.
+//! * [`close_store`] removes the entry from the map and then blocks
+//!   until any concurrent in-flight call on the same handle has
+//!   released its clone of the `Arc`. The underlying `FfiRuntime` is
+//!   dropped (zeroizing the master key and closing the SQLite handle)
+//!   before `close_store` returns, restoring the implicit synchronous
+//!   teardown that the pre-handle singleton design provided.
+//!   Hosts can therefore `move`/`unlink` the database file immediately
+//!   after `close_store` returns without risking a Windows
+//!   mandatory-file-lock conflict.
+//!
+//! Multiple handles can be open simultaneously — each holds an
+//! independent SQLCipher database, master key, and `DekRegistry`.
+//! Hosts that want a single global runtime simply call `open_store`
+//! once and reuse the handle; hosts that want per-account isolation
+//! (multi-profile desktop app, integration tests running in parallel,
+//! …) call `open_store` once per profile.
+//!
+//! # Concurrency
+//!
+//! The handle map is wrapped in an `RwLock`. Lookups acquire the read
+//! lock just long enough to clone an `Arc<Mutex<FfiRuntime>>` out of
+//! the entry. The actual FFI call then locks the per-handle `Mutex`,
+//! so calls against the same handle serialize while calls against
+//! distinct handles run in parallel.
+//!
+//! `close_store` first takes the write lock and removes the entry
+//! (so no new clones can be minted) and then drains any
+//! already-in-flight calls by spinning on `Arc::try_unwrap` until it
+//! owns the only remaining strong reference. Concurrent calls on
+//! *other* handles are unaffected — they touch different entries in
+//! the map.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard};
 
 use chrono::{DateTime, TimeZone, Utc};
 use crypto::forgetting::{self, DekRegistry, TombstoneStore};
 use crypto::{CryptoError, MasterKey};
 use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
 use memory_manager::{ChannelMemoryObject, UserMemoryObject};
+use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 use crate::error::{FfiError, FfiResult};
+
+/// Opaque handle to an open evidence-store runtime, returned by
+/// [`open_store`] and required as the first argument of every other
+/// FFI function.
+///
+/// Handles are monotonically-allocated `u64`s; the host treats them
+/// as opaque. The `0` value is reserved as an invalid sentinel —
+/// passing it to any FFI function returns
+/// [`FfiError::Unavailable`] with `subsystem = "evidence_store"`.
+#[repr(transparent)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct RuntimeHandle(pub u64);
+
+impl RuntimeHandle {
+    /// The reserved sentinel value. Never returned by [`open_store`].
+    /// Hosts can use it as a "no handle yet" placeholder before
+    /// calling `open_store`.
+    pub const NONE: RuntimeHandle = RuntimeHandle(0);
+
+    /// The raw `u64` carried by the handle.
+    #[must_use]
+    pub fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<u64> for RuntimeHandle {
+    fn from(v: u64) -> Self {
+        RuntimeHandle(v)
+    }
+}
+
+impl From<RuntimeHandle> for u64 {
+    fn from(h: RuntimeHandle) -> Self {
+        h.0
+    }
+}
 
 /// `crypto::forgetting::TombstoneStore` implementation backed by the
 /// `EvidenceStore`'s SQLCipher tables.
@@ -41,7 +107,7 @@ use crate::error::{FfiError, FfiResult};
 /// existing `forgotten_scopes` (v4) and `epoch_tombstones` (v8)
 /// tables so [`crypto::forgetting::destroy_scope_dek`] and
 /// [`crypto::forgetting::destroy_epoch_dek`] can record the
-/// destruction in a single atomic step \u2014 the in-memory DEK is
+/// destruction in a single atomic step — the in-memory DEK is
 /// zeroized first, then the on-disk tombstone is written before the
 /// destroy call returns.
 ///
@@ -68,7 +134,7 @@ fn dt_to_unix(at: DateTime<Utc>) -> i64 {
 /// Inverse of [`dt_to_unix`]. Returns `Utc::now()` instead of
 /// erroring on a malformed timestamp because the alternative is to
 /// fail the whole `open_store` replay over what would necessarily be
-/// a corrupted on-disk row \u2014 the surrounding code already treats
+/// a corrupted on-disk row — the surrounding code already treats
 /// timestamps as advisory metadata for the audit trail (the
 /// destruction itself is what re-establishes the registry invariant).
 fn unix_to_dt(unix: i64) -> DateTime<Utc> {
@@ -139,19 +205,19 @@ impl TombstoneStore for EvidenceStoreTombstoneStore<'_> {
 /// keys and to seed [`DekRegistry`] entries lazily on ingest), and the
 /// destroyed-key registry that backs [`forget`](crate::forget).
 ///
-/// The struct is intentionally not `Clone` — there must be exactly one
-/// per process. Tests reset this by calling
-/// [`close_store`](crate::close_store) before re-opening.
+/// One `FfiRuntime` exists per open [`RuntimeHandle`]. The runtime is
+/// dropped once the handle is removed from the registry *and* every
+/// in-flight call that had cloned its `Arc` has released it.
 pub struct FfiRuntime {
     pub(crate) master_key: MasterKey,
     pub(crate) store: EvidenceStore,
     pub(crate) registry: DekRegistry,
-    /// Per-scope user-memory CRUD layer. Kept in process memory
-    /// only — persistence to the encrypted evidence plane is not yet
-    /// wired.
+    /// Per-scope user-memory CRUD layer. Rehydrated on `open_store`
+    /// from the encrypted `memory_objects` table and flushed back on
+    /// every mutation so the state survives process restarts.
     pub(crate) user_memories: HashMap<ScopeId, UserMemoryObject>,
-    /// Per-scope channel-memory recap home. Also kept in process
-    /// memory only.
+    /// Per-scope channel-memory recap home. Persisted to the same
+    /// `memory_objects` table under the `channel_memory` kind.
     pub(crate) channel_memories: HashMap<ScopeId, ChannelMemoryObject>,
 }
 
@@ -196,7 +262,7 @@ impl FfiRuntime {
     /// Read-only FFI paths (`get_user_memory`, `list_memories`)
     /// use this accessor instead of [`Self::user_memory_mut`] so a
     /// query for an unknown scope does not permanently allocate an
-    /// empty `UserMemoryObject` in the per-process map.
+    /// empty `UserMemoryObject` in the per-handle map.
     pub(crate) fn user_memory(&self, scope: ScopeId) -> Option<&UserMemoryObject> {
         self.user_memories.get(&scope)
     }
@@ -269,55 +335,182 @@ impl FfiRuntime {
     }
 }
 
-fn singleton() -> &'static Mutex<Option<FfiRuntime>> {
-    static RUNTIME: OnceLock<Mutex<Option<FfiRuntime>>> = OnceLock::new();
-    RUNTIME.get_or_init(|| Mutex::new(None))
+// ───────────────────────── Handle registry ─────────────────────────
+
+type HandleEntry = Arc<Mutex<FfiRuntime>>;
+
+fn registry() -> &'static RwLock<HashMap<u64, HandleEntry>> {
+    static REGISTRY: OnceLock<RwLock<HashMap<u64, HandleEntry>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-fn lock_runtime() -> MutexGuard<'static, Option<FfiRuntime>> {
-    // A poisoned mutex means a previous panic happened inside an FFI
-    // call. We recover the inner state so the host can keep
-    // functioning rather than propagating the poison.
-    singleton()
-        .lock()
+fn next_handle() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    // `Relaxed` is sufficient: `fetch_add` is an atomic RMW so each
+    // caller is guaranteed to receive a distinct value regardless of
+    // memory ordering. There is no other memory location whose
+    // visibility must be sequenced against this counter — the
+    // registry write lock (taken in `open_store` right after the
+    // increment) carries the actual happens-before edge for inserting
+    // the new entry.
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+fn read_registry() -> RwLockReadGuard<'static, HashMap<u64, HandleEntry>> {
+    registry()
+        .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Run `f` against the singleton runtime, returning
-/// [`FfiError::Unavailable`] if the store has not been opened.
-pub(crate) fn with_runtime<F, T>(f: F) -> FfiResult<T>
+fn write_registry() -> std::sync::RwLockWriteGuard<'static, HashMap<u64, HandleEntry>> {
+    registry()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+thread_local! {
+    /// Stack of [`RuntimeHandle`] values whose `with_runtime` frames
+    /// the current thread is currently executing.
+    ///
+    /// Pushed on `with_runtime` entry, popped on exit (via the
+    /// [`WithRuntimeGuard`] RAII helper so panics still pop).
+    /// [`close_store`] reads this stack to detect the *same-handle*
+    /// reentrant-call case: a closure passed to `with_runtime(H, ...)`
+    /// that calls `close_store(H)` would otherwise deadlock in the
+    /// `Arc::try_unwrap` spin loop, because the caller itself is the
+    /// outstanding clone the loop is waiting on.
+    ///
+    /// Tracking handles individually (rather than a single depth
+    /// counter) preserves the documented contract that closing a
+    /// **different** handle from inside `with_runtime` is supported:
+    /// `close_store(H2)` from inside `with_runtime(H1, ...)` is safe
+    /// because the thread's outstanding `Arc` clone is for `H1`, not
+    /// `H2`, so the drain loop on `H2` terminates immediately.
+    ///
+    /// `Vec` (rather than `HashSet`) because the expected stack depth
+    /// is 0 or 1 (nested `with_runtime` is rare) and linear scan over
+    /// a tiny `Vec` is cheaper than a hash lookup. The push/pop
+    /// discipline also surfaces any guard imbalance loudly: the next
+    /// `close_store` check would observe the wrong handle on top.
+    static WITH_RUNTIME_STACK: std::cell::RefCell<Vec<u64>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+struct WithRuntimeGuard {
+    handle: u64,
+}
+
+impl WithRuntimeGuard {
+    fn enter(handle: u64) -> Self {
+        WITH_RUNTIME_STACK.with(|s| s.borrow_mut().push(handle));
+        WithRuntimeGuard { handle }
+    }
+}
+
+impl Drop for WithRuntimeGuard {
+    fn drop(&mut self) {
+        WITH_RUNTIME_STACK.with(|s| {
+            let mut stack = s.borrow_mut();
+            // Stacks are LIFO: the most recent `enter` pushed this
+            // guard's `handle`, so the top should match. Pop
+            // unconditionally to keep the invariant tight; the
+            // `debug_assert_eq!` flags any imbalance (e.g. a future
+            // refactor that lets a guard outlive its frame).
+            let popped = stack.pop();
+            debug_assert_eq!(
+                popped,
+                Some(self.handle),
+                "WithRuntimeGuard pop/push imbalance"
+            );
+        });
+    }
+}
+
+fn thread_holds_runtime_handle(handle: u64) -> bool {
+    WITH_RUNTIME_STACK.with(|s| s.borrow().contains(&handle))
+}
+
+/// Run `f` against the runtime bound to `handle`, returning
+/// [`FfiError::Unavailable`] when the handle is unknown (either never
+/// opened or already closed).
+///
+/// The function clones the per-handle `Arc<Mutex<FfiRuntime>>` out of
+/// the registry under the read lock and releases the read lock before
+/// taking the per-runtime `Mutex` — so a long-running call on handle
+/// A never blocks a short-running call on handle B, and `close_store`
+/// can land its `remove` even while a different handle is busy.
+/// `close_store` then blocks (only on its own handle) until the
+/// in-flight call on that handle finishes; see its docs for details.
+///
+/// Pushes `handle` onto [`WITH_RUNTIME_STACK`] for the current
+/// thread for the duration of the closure (via a RAII guard so
+/// panics still pop). [`close_store`] reads that stack to detect
+/// the same-handle reentrant-call deadlock case.
+pub(crate) fn with_runtime<F, T>(handle: RuntimeHandle, f: F) -> FfiResult<T>
 where
     F: FnOnce(&mut FfiRuntime) -> FfiResult<T>,
 {
-    let mut guard = lock_runtime();
-    let rt = guard.as_mut().ok_or_else(|| FfiError::Unavailable {
-        subsystem: "evidence_store".into(),
-    })?;
-    f(rt)
+    let entry = {
+        let guard = read_registry();
+        guard
+            .get(&handle.0)
+            .cloned()
+            .ok_or_else(|| FfiError::Unavailable {
+                subsystem: "evidence_store".into(),
+            })?
+    };
+    let _depth_guard = WithRuntimeGuard::enter(handle.0);
+    let mut rt = entry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    f(&mut rt)
 }
 
 /// Open the SQLCipher-backed evidence store at `path` using the
 /// 32-byte master key encoded as `master_key_hex` (64 lower-case hex
-/// chars). Must be called before any other wired FFI function.
+/// chars). Returns the [`RuntimeHandle`] that every other FFI function
+/// needs as its first argument.
 ///
-/// Calling this twice without an intervening [`close_store`] is a
-/// programming error: the second call returns [`FfiError::Evidence`]
-/// rather than silently replacing the open store.
+/// Multiple stores can be opened concurrently — each call returns a
+/// fresh handle bound to an independent `EvidenceStore`, master key
+/// and `DekRegistry`. Re-opening the same on-disk database under a
+/// second handle is supported but the two handles do **not** share an
+/// in-memory `DekRegistry` cache, so they will each replay the
+/// `forgotten_scopes` table on open.
 ///
 /// # Errors
 ///
 /// * [`FfiError::InvalidId`] if `master_key_hex` is not exactly 64
 ///   hex characters.
-/// * [`FfiError::Evidence`] if a store is already open or if SQLCipher
-///   fails to open the underlying database.
-pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
+/// * [`FfiError::Evidence`] if SQLCipher fails to open the underlying
+///   database or the tombstone-replay path errors out.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHandle> {
     let master_key = parse_master_key_hex(&master_key_hex)?;
-    let mut guard = lock_runtime();
-    if guard.is_some() {
+
+    // Allocate and validate the handle *before* doing any expensive
+    // SQLCipher work. `next_handle` is `AtomicU64::fetch_add`, so
+    // every successful caller observes a unique value, but after
+    // exactly `u64::MAX` allocations the counter wraps to 0 — the
+    // `RuntimeHandle::NONE` sentinel every other FFI function treats
+    // as "no handle". Reject that case up front so the wraparound
+    // path short-circuits without opening the SQLCipher connection,
+    // replaying tombstones, or running the FTS purge sweep (all O(N)
+    // in stored scopes). The collision-against-existing-handle check
+    // still has to run after we have the registry write lock, but
+    // that lock is taken only once at the end of `open_store` so it
+    // does not gate the long-running store-construction work.
+    //
+    // In practice the wraparound branch is unreachable (2^64 opens
+    // per process), but the check is two instructions and pins the
+    // invariant for the cost of one branch.
+    let handle = RuntimeHandle(next_handle());
+    if handle.0 == RuntimeHandle::NONE.0 {
         return Err(FfiError::Evidence {
-            message: "evidence store is already open; call close_store first".into(),
+            message: "runtime handle allocator wrapped to the reserved NONE sentinel".into(),
         });
     }
+
     let mut store = EvidenceStore::open(&path, &master_key, EvidenceStoreConfig::default())
         .map_err(|e| FfiError::Evidence {
             message: e.to_string(),
@@ -384,8 +577,8 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
             .expect("None tombstone-store cannot fail");
     }
 
-    // Follow-up — re-purge the FTS5 / embedding
-    // secondary indexes for every replayed tombstone.
+    // Re-purge the FTS5 / embedding secondary indexes for every
+    // replayed tombstone.
     //
     // `forget()` performs three steps in order: (1) destroy the
     // in-memory DEK, (2) persist the tombstone via
@@ -467,9 +660,10 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
             store.evict_cached_scope_key(*scope);
             // Best-effort: delete the dangling wrapped DEK from disk.
             if let Err(e) = store.delete_scope_dek_row(*scope) {
-                eprintln!(
-                    "warning: failed to clean up dangling scope_deks row for {}: {e}",
-                    scope.as_uuid()
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    error = %e,
+                    "failed to clean up dangling scope_deks row; will retry on next open_store"
                 );
             }
             continue;
@@ -498,19 +692,19 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
                     user_memories.insert(scope, umo);
                 }
                 Err(e) => {
-                    eprintln!(
-                        "warning: failed to deserialize user_memory for scope {}: {e}; \
-                         blob dropped",
-                        scope.as_uuid()
+                    tracing::warn!(
+                        scope = %scope.as_uuid(),
+                        error = %e,
+                        "failed to deserialize user_memory blob; blob dropped"
                     );
                 }
             },
             Ok(None) => {}
             Err(e) => {
-                eprintln!(
-                    "warning: failed to load user_memory blob for scope {}: {e}; \
-                     skipping",
-                    scope.as_uuid()
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    error = %e,
+                    "failed to load user_memory blob; skipping"
                 );
             }
         }
@@ -533,43 +727,145 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<()> {
                     channel_memories.insert(scope, cmo);
                 }
                 Err(e) => {
-                    eprintln!(
-                        "warning: failed to deserialize channel_memory for scope {}: {e}; \
-                         blob dropped",
-                        scope.as_uuid()
+                    tracing::warn!(
+                        scope = %scope.as_uuid(),
+                        error = %e,
+                        "failed to deserialize channel_memory blob; blob dropped"
                     );
                 }
             },
             Ok(None) => {}
             Err(e) => {
-                eprintln!(
-                    "warning: failed to load channel_memory blob for scope {}: {e}; \
-                     skipping",
-                    scope.as_uuid()
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    error = %e,
+                    "failed to load channel_memory blob; skipping"
                 );
             }
         }
     }
 
-    *guard = Some(FfiRuntime {
+    let runtime = FfiRuntime {
         master_key,
         store,
         registry,
         user_memories,
         channel_memories,
-    });
-    Ok(())
+    };
+
+    let mut guard = write_registry();
+    // Allocation is monotonic via `NEXT`, so a collision against an
+    // already-open handle would also mean we wrapped. Same reasoning
+    // as the sentinel check on `handle` above — refuse rather than
+    // silently overwrite an open runtime.
+    //
+    // The collision check is inside the write lock to ensure no other
+    // `open_store` racing with this one can insert at the same key
+    // between our `contains_key` test and our `insert`.
+    if guard.contains_key(&handle.0) {
+        return Err(FfiError::Evidence {
+            message: format!("runtime handle {} collided during allocation", handle.0),
+        });
+    }
+    guard.insert(handle.0, Arc::new(Mutex::new(runtime)));
+    Ok(handle)
 }
 
-/// Drop the open evidence store and zeroize the master key.
+/// Drop the runtime bound to `handle` and zeroize its master key.
 ///
-/// Idempotent: closing an already-closed store is a no-op and returns
-/// `Ok(())`. The host can therefore call this in a `try`/`finally`
-/// shutdown handler without first probing the runtime state.
-pub fn close_store() -> FfiResult<()> {
-    let mut guard = lock_runtime();
-    *guard = None;
-    Ok(())
+/// Idempotent: closing an unknown or already-closed handle is a no-op
+/// and returns `Ok(())`. The host can therefore call this in a
+/// `try`/`finally` shutdown handler without first probing the
+/// runtime state.
+///
+/// # Concurrency contract
+///
+/// `close_store` is **synchronous**: it does not return until the
+/// SQLite connection and the master key for `handle` have been
+/// dropped.
+///
+/// 1. Remove the entry from the handle map under the registry write
+///    lock — this stops any *new* `with_runtime` calls on `handle`
+///    from acquiring a fresh `Arc` clone.
+/// 2. Drain any *already-in-flight* calls by spinning on
+///    [`Arc::try_unwrap`] until we own the only remaining strong
+///    reference. The set of outstanding clones is fixed at the moment
+///    step 1 completes (since the registry no longer hands out new
+///    ones), so this loop is bounded by the longest in-flight call.
+/// 3. Drop the unwrapped `Mutex<FfiRuntime>`. Dropping `FfiRuntime`
+///    closes the SQLCipher connection and zeroizes the master key on
+///    the way out.
+///
+/// This matches the implicit synchronous-teardown property of the
+/// pre-handle singleton design (where `lock_runtime` + `*guard =
+/// None` blocked until any in-flight call released the singleton
+/// mutex), so Windows hosts can still `move`/`unlink` the database
+/// file immediately after `close_store` returns without risking a
+/// mandatory-file-lock conflict.
+///
+/// Idempotent: closing an unknown or already-closed handle is a
+/// no-op and returns `Ok(())` without spinning.
+///
+/// # Reentrance
+///
+/// `close_store` **must not** be called from inside a [`with_runtime`]
+/// closure for the *same* handle. The calling thread would be holding
+/// one of the `Arc<Mutex<FfiRuntime>>` clones the spin loop is
+/// waiting to drop, which would cause the loop to spin forever.
+///
+/// To make that misuse loud instead of silent, `close_store` checks
+/// the per-thread [`WITH_RUNTIME_STACK`] that [`with_runtime`]
+/// maintains via [`WithRuntimeGuard`]. If the stack contains the
+/// *specific* handle being closed, `close_store` returns an explicit
+/// [`FfiError::Evidence`] without removing the entry from the
+/// registry — preserving the contract that *no* state changes when
+/// the call fails.
+///
+/// Closing a *different* handle from inside `with_runtime` is
+/// supported and behaves correctly: the calling thread's `Arc` clone
+/// is for a different registry entry, so the per-handle reentrance
+/// guard does not fire and the drain loop on the closed handle
+/// terminates immediately.
+pub fn close_store(handle: RuntimeHandle) -> FfiResult<()> {
+    // Reentrance guard: bail before any state change if this thread
+    // is currently executing inside a `with_runtime` closure on
+    // **this specific** handle. Removing the entry and then spinning
+    // while the calling thread itself holds the outstanding clone
+    // would produce a silent infinite loop — the explicit error
+    // makes the misuse diagnosable. Cross-handle calls fall through
+    // because the calling thread's clone is for a different
+    // registry entry.
+    if thread_holds_runtime_handle(handle.0) {
+        return Err(FfiError::Evidence {
+            message: "close_store called from within a with_runtime frame for the same handle on this thread; this would deadlock the synchronous-teardown spin loop".into(),
+        });
+    }
+    let Some(mut entry) = write_registry().remove(&handle.0) else {
+        return Ok(());
+    };
+    // Drain outstanding `with_runtime` calls on this handle. Because
+    // step 1 (the `remove` above) already happened, no new clones can
+    // be minted — the strong count can only monotonically drop until
+    // it reaches 1 (our copy). We use `try_unwrap` rather than
+    // `Arc::strong_count` + race-prone manual checking, then yield
+    // briefly if another thread still holds a clone so we do not
+    // pin a CPU core on long-running calls.
+    loop {
+        match Arc::try_unwrap(entry) {
+            Ok(mutex) => {
+                // Drop here closes the SQLCipher connection and
+                // zeroizes the master key (`FfiRuntime::Drop`).
+                drop(mutex);
+                return Ok(());
+            }
+            Err(returned) => {
+                entry = returned;
+                // 1 ms sleep balances responsiveness against CPU
+                // burn for the common case of short in-flight calls.
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
 }
 
 fn parse_master_key_hex(hex: &str) -> FfiResult<MasterKey> {
@@ -614,5 +910,144 @@ mod tests {
     fn parse_master_key_hex_rejects_non_hex_input() {
         let err = parse_master_key_hex(&"zz".repeat(32)).unwrap_err();
         assert!(matches!(err, FfiError::InvalidId { .. }));
+    }
+
+    #[test]
+    fn runtime_handle_round_trips_through_u64() {
+        let h = RuntimeHandle(42);
+        assert_eq!(h.raw(), 42);
+        let v: u64 = h.into();
+        assert_eq!(v, 42);
+        let back: RuntimeHandle = 42u64.into();
+        assert_eq!(back, h);
+    }
+
+    #[test]
+    fn runtime_handle_none_is_the_zero_sentinel() {
+        assert_eq!(RuntimeHandle::NONE.raw(), 0);
+        assert_eq!(RuntimeHandle::NONE, RuntimeHandle(0));
+    }
+
+    #[test]
+    fn with_runtime_returns_unavailable_for_unknown_handle() {
+        let err = with_runtime(RuntimeHandle(u64::MAX), |_| Ok(())).unwrap_err();
+        assert!(
+            matches!(err, FfiError::Unavailable { ref subsystem } if subsystem == "evidence_store")
+        );
+    }
+
+    /// Calling `close_store(H)` from inside a `with_runtime(H, ...)`
+    /// frame must fail loudly with `FfiError::Evidence` rather than
+    /// silently deadlocking in the `Arc::try_unwrap` spin loop.
+    ///
+    /// The reentrance detection is keyed on the thread-local
+    /// `WITH_RUNTIME_STACK`, so we drive it directly here (without
+    /// an actual open store) by pushing the same handle onto the
+    /// stack and then calling `close_store` with it. The
+    /// `Err(FfiError::Evidence)` path must trip *before* the
+    /// registry lookup; otherwise an unknown handle would fast-path
+    /// to `Ok(())` and mask the bug.
+    #[test]
+    fn close_store_rejects_same_handle_reentrant_call_on_same_thread() {
+        // Synthesise a `with_runtime(H, ...)` frame on this thread
+        // without having to hold an actual `Arc<Mutex<FfiRuntime>>`.
+        // The per-handle stack is what `close_store` checks, not the
+        // registry. Bind the guard to a regular name so we can drop
+        // it explicitly later (an `_`-prefixed binding would be
+        // dropped at end of scope, missing the post-drop assertion).
+        let h = RuntimeHandle(u64::MAX);
+        let guard = WithRuntimeGuard::enter(h.0);
+
+        let err = close_store(h).unwrap_err();
+        match err {
+            FfiError::Evidence { ref message } => {
+                assert!(
+                    message.contains("close_store called from within a with_runtime frame"),
+                    "expected reentrance error, got: {message}"
+                );
+                assert!(
+                    message.contains("same handle"),
+                    "expected same-handle qualifier in error message, got: {message}"
+                );
+            }
+            other => panic!("expected FfiError::Evidence, got: {other:?}"),
+        }
+
+        // Sanity: after the guard drops, `close_store` on the same
+        // unknown handle succeeds as a no-op (idempotent path).
+        drop(guard);
+        close_store(h).expect("non-reentrant close_store on unknown handle");
+    }
+
+    /// Closing a *different* handle from inside a `with_runtime(H1, ...)`
+    /// frame is supported (the calling thread's `Arc` clone is for
+    /// `H1`, not `H2`, so the drain loop on `H2` terminates
+    /// immediately). The reentrance guard must NOT reject it.
+    ///
+    /// We pin this directly against the per-handle stack: enter a
+    /// frame for `H1`, then call `close_store(H2)` and expect it to
+    /// reach the registry lookup (and fast-path to `Ok(())` for the
+    /// unknown handle) rather than failing with the reentrance
+    /// error.
+    #[test]
+    fn close_store_allows_cross_handle_call_from_with_runtime_frame() {
+        let h1 = RuntimeHandle(0xAAAA_AAAA_AAAA_AAAA);
+        let h2 = RuntimeHandle(0xBBBB_BBBB_BBBB_BBBB);
+        assert_ne!(h1.0, h2.0);
+
+        let _frame = WithRuntimeGuard::enter(h1.0);
+        // `H2` is not in the registry, so the call should reach the
+        // `write_registry().remove(&h2.0)` branch and return Ok(())
+        // because the entry is absent. The reentrance guard must not
+        // fire because the thread is NOT inside a `with_runtime(H2, ...)`
+        // frame.
+        close_store(h2).expect("cross-handle close_store from within with_runtime frame");
+    }
+
+    /// The `WITH_RUNTIME_STACK` is thread-local: another thread
+    /// entering and leaving a guard does not affect this thread's
+    /// stack. A full multi-thread close_store test lives in
+    /// `crates/ffi/tests/ffi_integration_tests.rs`; here we just
+    /// pin the per-thread scoping directly.
+    #[test]
+    fn with_runtime_stack_is_thread_local() {
+        let stack_empty = || WITH_RUNTIME_STACK.with(|s| s.borrow().is_empty());
+        assert!(stack_empty(), "this thread's stack starts empty");
+        let join = std::thread::spawn(|| {
+            let _g = WithRuntimeGuard::enter(42);
+            WITH_RUNTIME_STACK.with(|s| s.borrow().len())
+        });
+        let other_len = join.join().expect("thread join");
+        assert_eq!(other_len, 1, "other thread observed depth 1 inside guard");
+        assert!(
+            stack_empty(),
+            "this thread's stack still empty after the other thread"
+        );
+    }
+
+    /// `WithRuntimeGuard` is LIFO. Nested guards on the same thread
+    /// must pop in the reverse order they were pushed.
+    #[test]
+    fn with_runtime_stack_is_lifo() {
+        let a = WithRuntimeGuard::enter(1);
+        let b = WithRuntimeGuard::enter(2);
+        let c = WithRuntimeGuard::enter(3);
+
+        assert!(thread_holds_runtime_handle(1));
+        assert!(thread_holds_runtime_handle(2));
+        assert!(thread_holds_runtime_handle(3));
+        assert!(!thread_holds_runtime_handle(4));
+
+        drop(c);
+        assert!(thread_holds_runtime_handle(1));
+        assert!(thread_holds_runtime_handle(2));
+        assert!(!thread_holds_runtime_handle(3));
+
+        drop(b);
+        assert!(thread_holds_runtime_handle(1));
+        assert!(!thread_holds_runtime_handle(2));
+
+        drop(a);
+        assert!(!thread_holds_runtime_handle(1));
     }
 }

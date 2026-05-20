@@ -279,20 +279,6 @@ impl CommunityHierarchy {
             // collapses A, B and C into a single component.
             let n = current.len();
             let mut parent: Vec<usize> = (0..n).collect();
-            fn find(parent: &mut [usize], mut i: usize) -> usize {
-                while parent[i] != i {
-                    parent[i] = parent[parent[i]];
-                    i = parent[i];
-                }
-                i
-            }
-            fn union(parent: &mut [usize], a: usize, b: usize) {
-                let ra = find(parent, a);
-                let rb = find(parent, b);
-                if ra != rb {
-                    parent[ra] = rb;
-                }
-            }
             for i in 0..n {
                 for j in (i + 1)..n {
                     let overlap = current[i]
@@ -300,13 +286,13 @@ impl CommunityHierarchy {
                         .iter()
                         .any(|s| current[j].scope_ids.contains(s));
                     if overlap {
-                        union(&mut parent, i, j);
+                        uf_union(&mut parent, i, j);
                     }
                 }
             }
             let mut by_root: BTreeMap<usize, Vec<&Community>> = BTreeMap::new();
             for (i, c) in current.iter().enumerate() {
-                let r = find(&mut parent, i);
+                let r = uf_find(&mut parent, i);
                 by_root.entry(r).or_default().push(*c);
             }
             let groups: Vec<Vec<&Community>> = by_root.into_values().collect();
@@ -538,6 +524,28 @@ impl CommunityQueryRouter {
         }
         scored.sort_by_key(|s| std::cmp::Reverse(s.0));
         scored.into_iter().take(limit).map(|(_, s)| s).collect()
+    }
+}
+
+/// Union-find `find` with path compression: returns the representative
+/// element of `i`'s component and flattens the parent chain on the
+/// way up so subsequent queries on the same component are O(α(n)).
+fn uf_find(parent: &mut [usize], mut i: usize) -> usize {
+    while parent[i] != i {
+        parent[i] = parent[parent[i]];
+        i = parent[i];
+    }
+    i
+}
+
+/// Union-find `union`: merge the components containing `a` and `b`
+/// by pointing `a`'s root at `b`'s. No-op if they were already in
+/// the same component.
+fn uf_union(parent: &mut [usize], a: usize, b: usize) {
+    let ra = uf_find(parent, a);
+    let rb = uf_find(parent, b);
+    if ra != rb {
+        parent[ra] = rb;
     }
 }
 

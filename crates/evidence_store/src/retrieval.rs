@@ -415,15 +415,23 @@ impl<'a> HybridRetriever<'a> {
             .get_embedding_for_model(id, &self.embedding_model_tag)
         {
             Ok(Some(stored)) if stored.len() == query_dim => return Ok(Some(stored)),
-            // Dimension mismatch (defensive — should not happen when
-            // `model_tag` matches, since a single tag implies a single
-            // dimension) or no cached row at all → fall through to
-            // the live-embed path so the score is still useful for
-            // this query.
+            // Two distinct failure modes share the same handling — both
+            // demote to "cache miss, let the live-embed path try":
+            //
+            // * `Ok(_)`: dimension mismatch (defensive — should not
+            //   happen when `model_tag` matches, since a single tag
+            //   implies a single dimension) or no cached row at all.
+            //
+            // * `Err(Schema | Sqlite)`: a corrupted cache row or
+            //   transient SQL error must not abort the whole search.
+            //
+            // The arms are intentionally listed separately so each
+            // failure mode is documented; `clippy::match_same_arms`
+            // is silenced because collapsing them would lose that
+            // semantic distinction.
+            #[allow(clippy::match_same_arms)]
             Ok(_) => {}
-            // A corrupted cache row or transient SQL error must not
-            // abort the whole search. Treat it as a cache miss and
-            // let the live-embed path try.
+            #[allow(clippy::match_same_arms)]
             Err(EvidenceError::Schema(_) | EvidenceError::Sqlite(_)) => {}
             // `get_embedding_for_model` only constructs `Sqlite` (from
             // the `query_row` call) and `Schema` (from

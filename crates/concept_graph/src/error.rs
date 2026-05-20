@@ -49,12 +49,13 @@ pub enum GraphError {
 impl PartialEq for GraphError {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::NodeNotFound(a), Self::NodeNotFound(b)) => a == b,
-            (Self::EdgeNotFound(a), Self::EdgeNotFound(b)) => a == b,
-            (Self::DuplicateNode(a), Self::DuplicateNode(b)) => a == b,
-            (Self::DanglingEdge(a), Self::DanglingEdge(b)) => a == b,
-            (Self::SelfSupersession(a), Self::SelfSupersession(b)) => a == b,
-            (Self::SelfContradiction(a), Self::SelfContradiction(b)) => a == b,
+            // All UUID-payload variants share the same equality semantic.
+            (Self::NodeNotFound(a), Self::NodeNotFound(b))
+            | (Self::EdgeNotFound(a), Self::EdgeNotFound(b))
+            | (Self::DuplicateNode(a), Self::DuplicateNode(b))
+            | (Self::DanglingEdge(a), Self::DanglingEdge(b))
+            | (Self::SelfSupersession(a), Self::SelfSupersession(b))
+            | (Self::SelfContradiction(a), Self::SelfContradiction(b)) => a == b,
             (Self::Persistence(a), Self::Persistence(b)) => a == b,
             // SQLite + crypto errors carry opaque inner state — we
             // intentionally treat them as never structurally equal so

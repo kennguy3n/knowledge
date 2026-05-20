@@ -315,6 +315,19 @@ fn exercise_google_drive(
     }
 }
 
+fn issue(key: &str, summary: &str, created: chrono::DateTime<Utc>) -> JiraIssue {
+    JiraIssue {
+        key: key.into(),
+        id: key.replace('-', ""),
+        fields: JiraFields {
+            summary: summary.into(),
+            created: Some(created),
+            updated: Some(created),
+            status: None,
+        },
+    }
+}
+
 fn exercise_jira(
     _dataset: &Dataset,
     log: &mut AssertionLog,
@@ -325,18 +338,6 @@ fn exercise_jira(
     let instance = ConnectorInstanceId::new_v4();
 
     let now = Utc::now();
-    fn issue(key: &str, summary: &str, created: chrono::DateTime<Utc>) -> JiraIssue {
-        JiraIssue {
-            key: key.into(),
-            id: key.replace('-', ""),
-            fields: JiraFields {
-                summary: summary.into(),
-                created: Some(created),
-                updated: Some(created),
-                status: None,
-            },
-        }
-    }
 
     let initial_pages = vec![JiraSearchResponse {
         issues: vec![
@@ -495,6 +496,21 @@ fn exercise_jira(
     }
 }
 
+fn ts(secs: i64) -> String {
+    format!("{secs}.000000")
+}
+
+fn message(channel: &str, ts_str: &str, text: &str) -> SlackMessage {
+    SlackMessage {
+        ts: ts_str.into(),
+        message_type: "message".into(),
+        subtype: None,
+        channel: channel.into(),
+        user: Some("U-DEMO".into()),
+        text: text.into(),
+    }
+}
+
 fn exercise_slack(
     _dataset: &Dataset,
     log: &mut AssertionLog,
@@ -503,20 +519,6 @@ fn exercise_slack(
     let scope = ScopeId::new_v4();
     let cfg = ConnectorConfig::new(ConnectorKind::Slack, AuthKind::OAuth2, scope);
     let instance = ConnectorInstanceId::new_v4();
-
-    fn ts(secs: i64) -> String {
-        format!("{secs}.000000")
-    }
-    fn message(channel: &str, ts_str: &str, text: &str) -> SlackMessage {
-        SlackMessage {
-            ts: ts_str.into(),
-            message_type: "message".into(),
-            subtype: None,
-            channel: channel.into(),
-            user: Some("U-DEMO".into()),
-            text: text.into(),
-        }
-    }
 
     let now_secs = Utc::now().timestamp();
     let initial_pages = vec![SlackInitialSyncPage {

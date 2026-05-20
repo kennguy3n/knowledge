@@ -57,6 +57,12 @@ pub enum TenantError {
 
 impl PartialEq for TenantError {
     fn eq(&self, other: &Self) -> bool {
+        // Each arm's body is `a == b` but `a`/`b` bind to different
+        // types per variant (Uuid, String, lifecycle states, ...), so
+        // the arms cannot be collapsed into a single `|`-pattern in
+        // safe Rust. `match_same_arms` is silenced locally on that
+        // basis.
+        #[allow(clippy::match_same_arms)]
         match (self, other) {
             (Self::NotFound(a), Self::NotFound(b)) => a == b,
             (

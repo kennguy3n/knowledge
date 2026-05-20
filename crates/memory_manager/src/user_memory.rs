@@ -164,7 +164,7 @@ impl UserMemoryObject {
     }
 
     /// List references to all objects matching `filter`.
-    pub fn list(&self, filter: MemoryFilter) -> Vec<&MemoryObject> {
+    pub fn list(&self, filter: &MemoryFilter) -> Vec<&MemoryObject> {
         self.objects.iter().filter(|o| filter.matches(o)).collect()
     }
 
@@ -251,9 +251,9 @@ mod tests {
         let mut u = umo();
         let _ = u.add_observation("task", "a", SensitivityClass::Useful);
         let _ = u.add_observation("fact", "b", SensitivityClass::Useful);
-        let tasks = u.list(MemoryFilter::any().with_observation_type("task"));
+        let tasks = u.list(&MemoryFilter::any().with_observation_type("task"));
         assert_eq!(tasks.len(), 1);
-        let candidates = u.list(MemoryFilter::any().with_state(MemoryState::Candidate));
+        let candidates = u.list(&MemoryFilter::any().with_state(MemoryState::Candidate));
         assert_eq!(candidates.len(), 2);
     }
 }

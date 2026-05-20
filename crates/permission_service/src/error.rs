@@ -34,8 +34,7 @@ pub enum PermissionError {
 impl PartialEq for PermissionError {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::DuplicateTuple, Self::DuplicateTuple) => true,
-            (Self::NotFound, Self::NotFound) => true,
+            (Self::DuplicateTuple, Self::DuplicateTuple) | (Self::NotFound, Self::NotFound) => true,
             (Self::NamespaceAlreadyRegistered(a), Self::NamespaceAlreadyRegistered(b)) => a == b,
             (Self::Persistence(a), Self::Persistence(b)) => a == b,
             // SQLite + crypto errors carry opaque inner state — we

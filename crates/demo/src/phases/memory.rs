@@ -119,7 +119,7 @@ pub fn run(
     let pre_sweep = user.objects.len();
     let sweep_report = user.decay_sweep(Utc::now());
     let post_sweep_archived = user
-        .list(MemoryFilter::any().with_state(MemoryState::Archived))
+        .list(&MemoryFilter::any().with_state(MemoryState::Archived))
         .len() as u64;
 
     // -- Forget a non-canonical to exercise the drop branch, and
@@ -143,10 +143,10 @@ pub fn run(
         .expect("forget a canonical");
 
     let canonical_after = user
-        .list(MemoryFilter::any().with_state(MemoryState::Canonical))
+        .list(&MemoryFilter::any().with_state(MemoryState::Canonical))
         .len() as u64;
     let deleted_after = user
-        .list(MemoryFilter::any().with_state(MemoryState::Deleted))
+        .list(&MemoryFilter::any().with_state(MemoryState::Deleted))
         .len() as u64;
 
     // -- WorkingMemory with TTL eviction.

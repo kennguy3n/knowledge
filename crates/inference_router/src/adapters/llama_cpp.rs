@@ -278,7 +278,8 @@ mod http_client {
             completion_timeout: Duration,
             probe_timeout: Duration,
         ) -> Result<Self, String> {
-            let server_url = normalise_url(server_url.into());
+            let server_url: String = server_url.into();
+            let server_url = normalise_url(&server_url);
             let client = reqwest::blocking::Client::builder()
                 .timeout(completion_timeout)
                 .build()
@@ -361,7 +362,7 @@ mod http_client {
     /// constructor documents "trailing slashes are tolerated" so
     /// matching every trailing slash (not just one) is the
     /// non-surprising implementation of that contract.
-    fn normalise_url(s: String) -> String {
+    fn normalise_url(s: &str) -> String {
         s.trim_end_matches('/').to_string()
     }
 
@@ -371,12 +372,12 @@ mod http_client {
 
         #[test]
         fn normalise_url_strips_trailing_slash() {
-            assert_eq!(normalise_url("http://x:8080/".into()), "http://x:8080");
-            assert_eq!(normalise_url("http://x:8080".into()), "http://x:8080");
+            assert_eq!(normalise_url("http://x:8080/"), "http://x:8080");
+            assert_eq!(normalise_url("http://x:8080"), "http://x:8080");
             // Multiple trailing slashes must all be stripped so
             // appending `/health` never produces `//health`.
-            assert_eq!(normalise_url("http://x:8080//".into()), "http://x:8080");
-            assert_eq!(normalise_url("http://x:8080///".into()), "http://x:8080");
+            assert_eq!(normalise_url("http://x:8080//"), "http://x:8080");
+            assert_eq!(normalise_url("http://x:8080///"), "http://x:8080");
         }
 
         #[test]

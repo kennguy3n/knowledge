@@ -71,10 +71,10 @@ fn list_filters_by_state_and_observation_type() {
     let _ = u.add_observation("task", "c", SensitivityClass::Useful);
     u.pin(&id_b).unwrap();
 
-    let tasks = u.list(MemoryFilter::any().with_observation_type("task"));
+    let tasks = u.list(&MemoryFilter::any().with_observation_type("task"));
     assert_eq!(tasks.len(), 2);
 
-    let reinforced = u.list(MemoryFilter::any().with_state(MemoryState::Reinforced));
+    let reinforced = u.list(&MemoryFilter::any().with_state(MemoryState::Reinforced));
     assert_eq!(reinforced.len(), 1);
     assert_eq!(reinforced[0].id, id_b);
 }
