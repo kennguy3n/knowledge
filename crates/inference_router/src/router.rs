@@ -477,7 +477,9 @@ mod tests {
         // it a prompt body containing a "useful" lexicon term so the
         // classifier picks that class deterministically.
         let prompt = "stuff\n\nMessage:\nplease investigate the question";
-        let out = router.dispatch(InferenceTask::TagImportance, prompt).unwrap();
+        let out = router
+            .dispatch(InferenceTask::TagImportance, prompt)
+            .unwrap();
         assert!(out.contains("\"class\":\"useful\""), "got {out}");
         // Synthesis routes only to llama.cpp/MLX; with both
         // unavailable the router emits Unavailable.

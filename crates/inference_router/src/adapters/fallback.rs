@@ -172,17 +172,7 @@ const USEFUL_LEXICON: &[&str] = &[
 
 /// Lexicon words that bias the message toward `Noise`.
 const NOISE_LEXICON: &[&str] = &[
-    "lol",
-    "haha",
-    "👍",
-    "🙏",
-    "fyi",
-    "thx",
-    "thanks",
-    "welcome",
-    "weekend",
-    "lunch",
-    "coffee",
+    "lol", "haha", "👍", "🙏", "fyi", "thx", "thanks", "welcome", "weekend", "lunch", "coffee",
 ];
 
 /// Score a body against `lexicon`, returning the number of whole-word
@@ -202,11 +192,11 @@ fn lexicon_count(lower_body: &str, lexicon: &[&str]) -> usize {
         let mut search_from = 0;
         while let Some(rel_idx) = lower_body[search_from..].find(word) {
             let abs_idx = search_from + rel_idx;
-            let before_ok = abs_idx == 0
-                || !lower_body.as_bytes()[abs_idx - 1].is_ascii_alphanumeric();
+            let before_ok =
+                abs_idx == 0 || !lower_body.as_bytes()[abs_idx - 1].is_ascii_alphanumeric();
             let end = abs_idx + word.len();
-            let after_ok = end == lower_body.len()
-                || !lower_body.as_bytes()[end].is_ascii_alphanumeric();
+            let after_ok =
+                end == lower_body.len() || !lower_body.as_bytes()[end].is_ascii_alphanumeric();
             if before_ok && after_ok {
                 count += 1;
             }
@@ -300,6 +290,8 @@ fn confidence_from_density(score: usize, total: usize) -> f64 {
 /// builds (embedded, WASM). Hand-rolled scanners are fine for this
 /// scope.
 fn extract_entities(body: &str) -> String {
+    use std::fmt::Write as _;
+
     if body.trim().is_empty() {
         return r#"{"entities":[]}"#.into();
     }
@@ -313,7 +305,6 @@ fn extract_entities(body: &str) -> String {
     if entities.is_empty() {
         return r#"{"entities":[]}"#.into();
     }
-    use std::fmt::Write as _;
     let mut out = String::from(r#"{"entities":["#);
     for (i, (name, kind)) in entities.iter().enumerate() {
         if i > 0 {
@@ -340,9 +331,7 @@ fn extract_mentions(body: &str, out: &mut Vec<(String, &'static str)>) {
         if bytes[i] == b'@' {
             let start = i + 1;
             let mut end = start;
-            while end < bytes.len()
-                && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_')
-            {
+            while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
                 end += 1;
             }
             if end > start {
@@ -367,16 +356,12 @@ fn extract_urls(body: &str, out: &mut Vec<(String, &'static str)>) {
             let start = search_from + rel;
             // Require a word boundary (start of string or non-alnum)
             // before the prefix so `"shttps://"` isn't matched.
-            if start > 0
-                && body.as_bytes()[start - 1].is_ascii_alphanumeric()
-            {
+            if start > 0 && body.as_bytes()[start - 1].is_ascii_alphanumeric() {
                 search_from = start + prefix.len();
                 continue;
             }
             let tail = &body[start..];
-            let end_rel = tail
-                .find(|c: char| c.is_whitespace())
-                .unwrap_or(tail.len());
+            let end_rel = tail.find(|c: char| c.is_whitespace()).unwrap_or(tail.len());
             let mut url = &tail[..end_rel];
             while let Some(last) = url.chars().last() {
                 if matches!(last, '.' | ',' | ')' | ']' | '!' | '?' | ';' | ':') {
@@ -418,8 +403,7 @@ fn extract_iso_dates(body: &str, out: &mut Vec<(String, &'static str)>) {
             let preceded_by_digit = i > 0 && bytes[i - 1].is_ascii_digit();
             // Reject if followed by another digit (would mean we're
             // looking at e.g. "1234-56-7890" — not a real date).
-            let followed_by_digit = i + 10 < bytes.len()
-                && bytes[i + 10].is_ascii_digit();
+            let followed_by_digit = i + 10 < bytes.len() && bytes[i + 10].is_ascii_digit();
             if !preceded_by_digit && !followed_by_digit {
                 out.push((body[i..i + 10].to_string(), "date"));
             }
@@ -438,8 +422,8 @@ fn extract_project_names(body: &str, out: &mut Vec<(String, &'static str)>) {
     /// Sentence-starter words that incidentally begin with a
     /// capital. Adding entries here trades recall for precision.
     const SENTENCE_STARTERS: &[&str] = &[
-        "The", "This", "That", "We", "I", "You", "He", "She", "It", "They",
-        "A", "An", "Our", "My", "Your", "His", "Her", "Their",
+        "The", "This", "That", "We", "I", "You", "He", "She", "It", "They", "A", "An", "Our", "My",
+        "Your", "His", "Her", "Their",
     ];
     let mut current: Vec<&str> = Vec::new();
     let emit = |buf: &mut Vec<&str>, out: &mut Vec<(String, &'static str)>| {
@@ -449,7 +433,9 @@ fn extract_project_names(body: &str, out: &mut Vec<(String, &'static str)>) {
         }
         buf.clear();
     };
-    for token in body.split(|c: char| c.is_whitespace() || matches!(c, '.' | ',' | ':' | ';' | '!' | '?')) {
+    for token in
+        body.split(|c: char| c.is_whitespace() || matches!(c, '.' | ',' | ':' | ';' | '!' | '?'))
+    {
         // Strip trailing closing punctuation (e.g. `"design)"`).
         let token = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
         if token.len() < 2 {

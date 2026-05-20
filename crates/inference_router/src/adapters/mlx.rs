@@ -175,12 +175,7 @@ impl InferenceAdapter for MlxAdapter {
         }
     }
 
-    fn generate(
-        &self,
-        task_tag: &str,
-        prompt: &str,
-        grammar: &str,
-    ) -> Result<String, RouterError> {
+    fn generate(&self, task_tag: &str, prompt: &str, grammar: &str) -> Result<String, RouterError> {
         if !self.is_available() {
             return Err(RouterError::Unavailable {
                 task: task_tag_static(task_tag),
