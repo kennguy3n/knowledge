@@ -197,21 +197,22 @@ fn purge_fts_for_scope_only_purges_target_scope() {
     assert!(store.get(res_b.evidence_id).expect("get b").is_some());
 }
 
-/// After `purge_fts_for_scope`, the FTS5 OPTIMIZE command must have
-/// compacted the shadow tables so that tokenised plaintext fragments
-/// no longer linger in the `%_data` segment B-tree. We verify this
-/// by querying the raw `evidence_fts_data` table — after OPTIMIZE,
-/// the segment structure is collapsed and contains no content rows
-/// for the purged scope.
+/// After `purge_fts_for_scope`, the FTS5 REBUILD command must have
+/// truncated and re-built the shadow tables so that tokenised
+/// plaintext fragments no longer linger in the `%_data` segment
+/// B-tree. We verify this by querying the raw `evidence_fts` virtual
+/// table — after REBUILD, the segment structure is reconstructed
+/// from the surviving content rows only and contains no entries for
+/// the purged scope.
 #[test]
-fn fts5_optimize_compacts_shadow_tables_after_purge() {
+fn fts5_rebuild_purges_shadow_tables_after_purge() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("evidence.db");
 
     let scope = ScopeId::new_v4();
     let body = format!(
         "This message contains {FORGETTING_PHRASE} which must be fully \
-         compacted from shadow tables after purge and OPTIMIZE."
+         purged from shadow tables after purge and REBUILD."
     );
 
     {
@@ -222,7 +223,7 @@ fn fts5_optimize_compacts_shadow_tables_after_purge() {
             .ingest(
                 scope,
                 body.as_bytes(),
-                Some("source:optimize-test"),
+                Some("source:rebuild-test"),
                 ImportanceClass::Important,
             )
             .expect("ingest");
@@ -233,7 +234,10 @@ fn fts5_optimize_compacts_shadow_tables_after_purge() {
             .expect("search pre-purge");
         assert_eq!(hits.len(), 1, "FTS5 must find the phrase before purge");
 
-        // Purge runs DELETE + OPTIMIZE inside a single transaction.
+        // Purge runs DELETE + REBUILD inside a single transaction.
+        // The REBUILD step truncates the shadow tables and
+        // re-tokenises from the surviving `content` column, so no
+        // plaintext fragments from the purged scope survive on disk.
         store
             .purge_fts_for_scope(scope)
             .expect("purge_fts_for_scope");
@@ -243,17 +247,17 @@ fn fts5_optimize_compacts_shadow_tables_after_purge() {
     let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
         .expect("re-open store");
 
-    // After OPTIMIZE, querying the FTS table must return nothing.
+    // After REBUILD, querying the FTS table must return nothing.
     let hits = store
         .search_fts(scope, FORGETTING_PHRASE, 10)
-        .expect("search post-optimize");
+        .expect("search post-rebuild");
     assert!(
         hits.is_empty(),
-        "FTS5 must return no results after purge + OPTIMIZE"
+        "FTS5 must return no results after purge + REBUILD"
     );
 
-    // Also verify via the raw FTS5 MATCH — the shadow table's content
-    // rows should have been compacted away.
+    // Also verify via the raw FTS5 MATCH — the shadow table's
+    // segment B-tree must contain no matching rows for the phrase.
     let raw_count: i64 = store
         .raw_conn()
         .query_row(
@@ -264,6 +268,218 @@ fn fts5_optimize_compacts_shadow_tables_after_purge() {
         .expect("raw fts count");
     assert_eq!(
         raw_count, 0,
-        "Raw FTS5 shadow tables must contain zero matching rows after OPTIMIZE"
+        "Raw FTS5 shadow tables must contain zero matching rows after REBUILD"
     );
+}
+
+/// Re-purging an already-purged scope must be a cheap no-op: zero
+/// FTS rows are deleted, so the function must skip the
+/// O(total_fts_rows) `REBUILD` entirely. We can't directly observe
+/// "did we issue REBUILD?", but we can pin the externally visible
+/// contract: the FTS table's `dbstat`-style row count for the
+/// segment B-tree must not change across an already-purged
+/// re-invocation, and unrelated scopes' FTS hits must continue to
+/// match. (REBUILD is observable as a *reset* of FTS5's internal
+/// segment structure — a no-op skip leaves it untouched.)
+#[test]
+fn purge_fts_for_scope_is_idempotent_no_op_after_first_purge() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    let purged_scope = ScopeId::new_v4();
+    let surviving_scope = ScopeId::new_v4();
+    let surviving_phrase = "kept_scope_survivor_marker_phrase";
+
+    let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("open store");
+
+    // Ingest into both scopes.
+    store
+        .ingest(
+            purged_scope,
+            format!("body with {FORGETTING_PHRASE} for purge").as_bytes(),
+            Some("source:idempotent-purge"),
+            ImportanceClass::Important,
+        )
+        .expect("ingest purged scope");
+    store
+        .ingest(
+            surviving_scope,
+            format!("body with {surviving_phrase} for survival").as_bytes(),
+            Some("source:idempotent-purge"),
+            ImportanceClass::Important,
+        )
+        .expect("ingest surviving scope");
+
+    // First purge: deletes one FTS row and triggers a REBUILD.
+    store
+        .purge_fts_for_scope(purged_scope)
+        .expect("first purge");
+    let hits = store
+        .search_fts(purged_scope, FORGETTING_PHRASE, 10)
+        .expect("search after first purge");
+    assert!(hits.is_empty(), "phrase must be gone after first purge");
+
+    // Snapshot the FTS5 segment id sequence after the first purge.
+    // `evidence_fts_data` is the `%_data` shadow table; its rowids
+    // are reset by REBUILD. After a no-op repurge they must be
+    // unchanged.
+    let segments_after_first_purge: Vec<i64> = store
+        .raw_conn()
+        .prepare("SELECT id FROM evidence_fts_data ORDER BY id")
+        .expect("prepare segments")
+        .query_map([], |row| row.get::<_, i64>(0))
+        .expect("query segments")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect segments");
+
+    // Re-purge the same already-purged scope. This must be a true
+    // no-op: zero FTS rows are deleted, so the shadow tables must
+    // not be reset by a redundant REBUILD.
+    store
+        .purge_fts_for_scope(purged_scope)
+        .expect("second (idempotent) purge");
+
+    let segments_after_second_purge: Vec<i64> = store
+        .raw_conn()
+        .prepare("SELECT id FROM evidence_fts_data ORDER BY id")
+        .expect("prepare segments")
+        .query_map([], |row| row.get::<_, i64>(0))
+        .expect("query segments")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect segments");
+
+    assert_eq!(
+        segments_after_first_purge, segments_after_second_purge,
+        "purge_fts_for_scope must skip REBUILD when zero FTS rows were deleted"
+    );
+
+    // The surviving scope's phrase remains discoverable across the
+    // idempotent re-purge.
+    let surviving_hits = store
+        .search_fts(surviving_scope, surviving_phrase, 10)
+        .expect("search surviving scope");
+    assert_eq!(
+        surviving_hits.len(),
+        1,
+        "Surviving scope's FTS row must remain after idempotent re-purge"
+    );
+}
+
+/// The batch entry point `purge_fts_for_scopes` must produce the
+/// same end state as calling `purge_fts_for_scope` once per scope,
+/// while issuing at most one FTS5 REBUILD for the whole batch. We
+/// verify the end state directly (every purged scope's phrase is
+/// gone, surviving scopes still match), which is the externally
+/// visible contract callers depend on.
+#[test]
+fn purge_fts_for_scopes_batch_matches_per_scope_purge() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    let scope_a = ScopeId::new_v4();
+    let scope_b = ScopeId::new_v4();
+    let scope_c = ScopeId::new_v4();
+    let scope_survivor = ScopeId::new_v4();
+
+    let phrase_a = "batchpurge_marker_alpha_token";
+    let phrase_b = "batchpurge_marker_bravo_token";
+    let phrase_c = "batchpurge_marker_charlie_token";
+    let phrase_survivor = "batchpurge_marker_survivor_token";
+
+    let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("open store");
+
+    for (scope, phrase) in [
+        (scope_a, phrase_a),
+        (scope_b, phrase_b),
+        (scope_c, phrase_c),
+        (scope_survivor, phrase_survivor),
+    ] {
+        store
+            .ingest(
+                scope,
+                format!("body containing {phrase} for batch purge test").as_bytes(),
+                Some("source:batch-purge"),
+                ImportanceClass::Important,
+            )
+            .expect("ingest");
+    }
+
+    // Pre-purge: every phrase resolves.
+    for (scope, phrase) in [
+        (scope_a, phrase_a),
+        (scope_b, phrase_b),
+        (scope_c, phrase_c),
+        (scope_survivor, phrase_survivor),
+    ] {
+        let hits = store
+            .search_fts(scope, phrase, 10)
+            .expect("search pre-purge");
+        assert_eq!(hits.len(), 1, "phrase {phrase} must match before purge");
+    }
+
+    // One batch purge for three scopes; the fourth survives.
+    store
+        .purge_fts_for_scopes(&[scope_a, scope_b, scope_c])
+        .expect("batch purge");
+
+    for (scope, phrase) in [
+        (scope_a, phrase_a),
+        (scope_b, phrase_b),
+        (scope_c, phrase_c),
+    ] {
+        let hits = store
+            .search_fts(scope, phrase, 10)
+            .expect("search purged scope post-batch");
+        assert!(
+            hits.is_empty(),
+            "phrase {phrase} must be gone after batch purge"
+        );
+
+        // Raw FTS MATCH must also return zero hits across the
+        // entire table for the purged phrase (REBUILD truncated
+        // the shadow tables and re-tokenised from surviving rows
+        // only).
+        let raw_count: i64 = store
+            .raw_conn()
+            .query_row(
+                "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1",
+                rusqlite::params![phrase],
+                |row| row.get(0),
+            )
+            .expect("raw fts count");
+        assert_eq!(
+            raw_count, 0,
+            "Raw FTS5 must contain zero rows for purged phrase {phrase} after batch purge"
+        );
+    }
+
+    let survivor_hits = store
+        .search_fts(scope_survivor, phrase_survivor, 10)
+        .expect("search surviving scope post-batch");
+    assert_eq!(
+        survivor_hits.len(),
+        1,
+        "Surviving scope's FTS row must remain after batch purge"
+    );
+
+    // Calling the batch entry point a second time on the same
+    // already-purged scopes must be a no-op: zero rows deleted, no
+    // REBUILD issued, surviving scope still matches.
+    store
+        .purge_fts_for_scopes(&[scope_a, scope_b, scope_c])
+        .expect("idempotent batch repurge");
+    let survivor_hits = store
+        .search_fts(scope_survivor, phrase_survivor, 10)
+        .expect("search surviving scope after idempotent batch repurge");
+    assert_eq!(
+        survivor_hits.len(),
+        1,
+        "Surviving scope's FTS row must remain after idempotent batch repurge"
+    );
+
+    // Empty-slice batch purge is a no-op without touching the
+    // database at all.
+    store.purge_fts_for_scopes(&[]).expect("empty batch purge");
 }

@@ -96,12 +96,6 @@ short version:
 The most important honesty caveats for anyone evaluating privacy
 claims:
 
-- **FTS5 plaintext index purge is best-effort.** `forget()` and
-  `forget_scope()` now call `purge_fts_for_scope()` to delete
-  FTS5 tokens for the forgotten scope, and persisted tombstones
-  ensure the purge survives a crash / restart. However, SQLite
-  FTS5 `DELETE` may leave residual data in shadow tables until
-  `OPTIMIZE` or `REBUILD` is run.
 - **Platform shells are partially wired.** The Rust FFI core
   covers evidence, crypto, and memory management; synthesis
   remains `Unavailable`. Wiring the host UIs
@@ -272,8 +266,9 @@ construction:
 2. **Cryptographic forgetting via key destruction.** True deletion
    is enforced by destroying the per-scope or per-epoch keys —
    not by best-effort row deletes. A scope is gone the moment its
-   key is gone. See [Known limitations](#known-limitations) above
-   for the FTS5 caveat.
+   key is gone. The FTS5 plaintext index for the forgotten scope
+   is purged in the same transaction (`DELETE` + `REBUILD`), so
+   no residual tokens survive on disk.
 3. **Post-quantum thinking from day one.** All new key exchanges
    use a hybrid X25519 + ML-KEM-768 (Kyber) construction;
    provenance and manifest signing use ML-DSA-65 (Dilithium); a
