@@ -280,28 +280,75 @@ impl Drop for MlsGroup {
     }
 }
 
-/// Derive a [`GroupKeySchedule`] from a 32-byte epoch root secret.
+/// Expand `epoch_secret` into the per-epoch [`GroupKeySchedule`].
+///
+/// The HKDF `info` for each output binds `group_id` and `epoch`
+/// alongside a fixed domain-separation label. This is defence-in-
+/// depth: `epoch_secret` is itself derived per `(group_id, epoch)`
+/// inside [`ratchet_epoch`], so re-binding here is strictly
+/// redundant for any caller that goes through `ratchet_epoch`.
+/// Including it anyway makes [`derive_schedule`] safe to call with
+/// any caller-supplied epoch secret — the derived keys are
+/// unambiguously tied to a specific group and epoch even if the
+/// input were ever recycled across contexts.
+///
+/// `epoch_secret` is taken as [`Zeroizing<[u8; AEAD_KEY_LEN]>`] so
+/// the stack-frame copy this function receives is wiped on every
+/// exit path (including the error branches). Callers that pass
+/// their own [`Zeroizing`] binding by move get end-to-end
+/// defence-in-depth: their stack frame is wiped on scope exit and
+/// this function's frame is wiped on return.
 fn derive_schedule(
     group_id: MlsGroupId,
     epoch: MlsEpoch,
-    epoch_secret: [u8; AEAD_KEY_LEN],
+    epoch_secret: Zeroizing<[u8; AEAD_KEY_LEN]>,
 ) -> Result<GroupKeySchedule, CryptoError> {
     let salt = b"knowledge-mls-key-schedule-v1";
-    let hk = Hkdf::<Sha256>::new(Some(salt), &epoch_secret);
+    let hk = Hkdf::<Sha256>::new(Some(salt), epoch_secret.as_slice());
+    // Bind `(group_id, epoch)` plus a per-output domain label into
+    // each `info`. Reusing the same `prefix` keeps the three info
+    // strings cheap to construct and ensures all three derivations
+    // share the same group/epoch tag.
+    let mut prefix = Vec::with_capacity(16 + 8);
+    prefix.extend_from_slice(group_id.0.as_bytes());
+    prefix.extend_from_slice(&epoch.0.to_be_bytes());
+    let info_shared = {
+        let mut v = prefix.clone();
+        v.extend_from_slice(b"|shared-memory");
+        v
+    };
+    let info_sender = {
+        let mut v = prefix.clone();
+        v.extend_from_slice(b"|sender-data");
+        v
+    };
+    let info_welcome = {
+        let mut v = prefix;
+        v.extend_from_slice(b"|welcome");
+        v
+    };
     let mut shared = [0u8; AEAD_KEY_LEN];
     let mut sender = [0u8; AEAD_KEY_LEN];
     let mut welcome = [0u8; AEAD_KEY_LEN];
-    hk.expand(b"shared-memory", &mut shared)
+    hk.expand(&info_shared, &mut shared)
         .map_err(|_| CryptoError::KeyDerivation("HKDF expand shared-memory failed"))?;
-    hk.expand(b"sender-data", &mut sender)
+    hk.expand(&info_sender, &mut sender)
         .map_err(|_| CryptoError::KeyDerivation("HKDF expand sender-data failed"))?;
-    hk.expand(b"welcome", &mut welcome)
+    hk.expand(&info_welcome, &mut welcome)
         .map_err(|_| CryptoError::KeyDerivation("HKDF expand welcome failed"))?;
 
+    // Move the inner array into the schedule. `*epoch_secret`
+    // dereferences and copies (`[u8; 32]: Copy`); the `Zeroizing`
+    // wrapper is then dropped, wiping our stack-frame copy. The
+    // schedule has its own `Drop` impl that wipes `epoch_secret`
+    // when the schedule is dropped, so long-term storage is also
+    // covered.
+    let inner: [u8; AEAD_KEY_LEN] = *epoch_secret;
+    drop(epoch_secret);
     Ok(GroupKeySchedule {
         group_id,
         epoch,
-        epoch_secret,
+        epoch_secret: inner,
         shared_memory_key: shared,
         sender_data_key: sender,
         welcome_key: welcome,
@@ -366,10 +413,16 @@ impl MlsGroup {
     ) -> Result<(Self, MlsCommit), CryptoError> {
         let group_id = MlsGroupId::new_v4();
         let epoch = MlsEpoch::zero();
+        // `epoch_secret` and `next_ratchet` are both wrapped in
+        // `Zeroizing` by `ratchet_epoch`, so the local bindings
+        // here get wiped on scope exit — the bytes don't linger on
+        // this stack frame after `create` returns.
         let (epoch_secret, next_ratchet) = ratchet_epoch(&initial_ratchet, group_id, epoch)?;
-        // `initial_ratchet` is dropped at the end of this scope; its
-        // `Zeroizing` wrapper wipes the bytes from our stack frame.
+        // `initial_ratchet` is dropped here; its `Zeroizing` wrapper
+        // wipes the bytes from our stack frame.
         drop(initial_ratchet);
+        // `epoch_secret` moves into `derive_schedule`, which wipes
+        // its own parameter copy on drop.
         let schedule = derive_schedule(group_id, epoch, epoch_secret)?;
 
         let mut members = BTreeMap::new();
@@ -388,13 +441,21 @@ impl MlsGroup {
         };
         commit.signature = signer.sign_bytes(&commit.signing_payload())?;
 
+        // Copy the inner bytes out of `next_ratchet`. `*next_ratchet`
+        // dereferences and copies (`[u8; 32]: Copy`); the original
+        // `Zeroizing` wrapper is dropped before we return, wiping our
+        // local stack-frame copy. Long-term storage lives in
+        // `MlsGroup::ratchet` and is wiped by `Drop for MlsGroup`.
+        let ratchet: [u8; AEAD_KEY_LEN] = *next_ratchet;
+        drop(next_ratchet);
+
         Ok((
             Self {
                 group_id,
                 epoch,
                 members,
                 schedule,
-                ratchet: next_ratchet,
+                ratchet,
             },
             commit,
         ))
@@ -541,8 +602,15 @@ impl MlsGroup {
 
         // ---- Phase 2: derive new state (fallible, but still no
         // mutations to `self`) ----
+        //
+        // `ratchet_epoch` returns both outputs wrapped in `Zeroizing`,
+        // so `epoch_secret` and `next_ratchet` here are bound to
+        // wrappers that wipe their inner bytes on scope exit. Any
+        // `?` early-return below leaves no plaintext on the stack.
         let new_epoch = commit.epoch;
         let (epoch_secret, next_ratchet) = ratchet_epoch(&self.ratchet, self.group_id, new_epoch)?;
+        // `epoch_secret` moves into `derive_schedule`, which wipes
+        // its own parameter copy on drop.
         let new_schedule = derive_schedule(self.group_id, new_epoch, epoch_secret)?;
 
         // ---- Phase 3: commit. From this point on no operation may
@@ -571,7 +639,12 @@ impl MlsGroup {
         }
         self.epoch = new_epoch;
         self.ratchet.zeroize();
-        self.ratchet = next_ratchet;
+        // Copy the new ratchet into `self.ratchet`, then drop the
+        // `Zeroizing` wrapper so its stack-frame copy is wiped.
+        // `self.ratchet` is the long-term owner; `Drop for MlsGroup`
+        // wipes it when the group itself is dropped.
+        self.ratchet = *next_ratchet;
+        drop(next_ratchet);
         self.schedule = new_schedule;
         Ok(())
     }
@@ -667,12 +740,13 @@ impl MlsGroup {
         welcome: &MlsWelcome,
         init_sk: &HybridSecretKey,
     ) -> Result<Self, CryptoError> {
-        // `shared`, `aead_key`, `aead_nonce`, and `epoch_secret` are
-        // all derived from the KEM shared secret and are sensitive.
-        // We keep them `mut` and zeroise them before every return
-        // path (including the error paths) so they don't linger on
-        // the stack after `process_welcome` returns. `epoch_secret`
-        // is moved into `derive_schedule` which consumes it.
+        // Every sensitive local in this function is either an array
+        // that we explicitly `zeroize()` before every return path
+        // (`shared`, `aead_key`, `aead_nonce`, `plaintext`) or is
+        // wrapped in `Zeroizing` so its stack-frame bytes are wiped
+        // on `Drop` (`epoch_secret`, `ratchet`, the schedule's own
+        // [`Drop`] impl). After `process_welcome` returns, no
+        // plaintext key material lingers on this frame.
         let mut shared = hybrid_kem_decap(init_sk, &welcome.kem_ciphertext)?;
         let (mut aead_key, mut aead_nonce) =
             match derive_welcome_aead_material(&shared, welcome.group_id, welcome.epoch) {
@@ -703,24 +777,21 @@ impl MlsGroup {
                 "welcome plaintext has unexpected length",
             ));
         }
-        let mut epoch_secret = [0u8; AEAD_KEY_LEN];
-        let mut ratchet = [0u8; AEAD_KEY_LEN];
+        // Split the decrypted plaintext into the two secret halves.
+        // Both are wrapped in `Zeroizing` so their stack-frame copies
+        // here are wiped on scope exit — the bytes don't linger on
+        // `process_welcome`'s frame after we return.
+        let mut epoch_secret = Zeroizing::new([0u8; AEAD_KEY_LEN]);
+        let mut ratchet = Zeroizing::new([0u8; AEAD_KEY_LEN]);
         epoch_secret.copy_from_slice(&plaintext[..AEAD_KEY_LEN]);
         ratchet.copy_from_slice(&plaintext[AEAD_KEY_LEN..]);
         plaintext.zeroize();
 
-        let schedule = match derive_schedule(welcome.group_id, welcome.epoch, epoch_secret) {
-            Ok(schedule) => schedule,
-            Err(e) => {
-                // `derive_schedule` consumes `epoch_secret` by value,
-                // but if it returns early before consuming the input
-                // (impossible here in practice, but defensive) we
-                // would also want to wipe `ratchet` which is still
-                // live in scope.
-                ratchet.zeroize();
-                return Err(e);
-            }
-        };
+        // `epoch_secret` moves into `derive_schedule`, which wipes
+        // its own parameter copy on drop. On the error branch,
+        // `epoch_secret` and `ratchet` are still owned by us; both
+        // are dropped (and wiped) when this function returns.
+        let schedule = derive_schedule(welcome.group_id, welcome.epoch, epoch_secret)?;
 
         // Reconstruct the roster with placeholder leaves; real
         // [`LeafKeyPackage`]s are installed via [`install_leaf`].
@@ -737,12 +808,20 @@ impl MlsGroup {
             );
         }
 
+        // Copy the inner bytes out of `ratchet`. `*ratchet`
+        // dereferences and copies (`[u8; 32]: Copy`); the `Zeroizing`
+        // wrapper is dropped before we return, wiping our local
+        // stack-frame copy. Long-term storage lives in
+        // `MlsGroup::ratchet` and is wiped by `Drop for MlsGroup`.
+        let ratchet_inner: [u8; AEAD_KEY_LEN] = *ratchet;
+        drop(ratchet);
+
         Ok(Self {
             group_id: welcome.group_id,
             epoch: welcome.epoch,
             members,
             schedule,
-            ratchet,
+            ratchet: ratchet_inner,
         })
     }
 
@@ -774,14 +853,20 @@ fn ratchet_epoch(
     ratchet: &[u8; AEAD_KEY_LEN],
     group_id: MlsGroupId,
     epoch: MlsEpoch,
-) -> Result<([u8; AEAD_KEY_LEN], [u8; AEAD_KEY_LEN]), CryptoError> {
+) -> Result<(Zeroizing<[u8; AEAD_KEY_LEN]>, Zeroizing<[u8; AEAD_KEY_LEN]>), CryptoError> {
     let hk = Hkdf::<Sha256>::new(Some(b"knowledge-mls-ratchet-v2"), ratchet);
     let mut info = Vec::with_capacity(16 + 8);
     info.extend_from_slice(group_id.0.as_bytes());
     info.extend_from_slice(&epoch.0.to_be_bytes());
 
-    let mut epoch_secret = [0u8; AEAD_KEY_LEN];
-    let mut next_ratchet = [0u8; AEAD_KEY_LEN];
+    // Both outputs are wrapped in `Zeroizing` so the caller's local
+    // bindings are wiped on scope exit. `[u8; 32]` is `Copy`, so a
+    // bare return-by-value would leave both the callee's stack
+    // slot and any caller-side intermediate copies live until their
+    // frames are reused for other data — wrapping in `Zeroizing`
+    // explicitly bounds that lifetime to the wrapper's drop.
+    let mut epoch_secret = Zeroizing::new([0u8; AEAD_KEY_LEN]);
+    let mut next_ratchet = Zeroizing::new([0u8; AEAD_KEY_LEN]);
     // The labels `info || "…"` keep the two outputs domain-separated
     // — recovering one of them tells an attacker nothing about the
     // other, even though both are expanded from the same PRK.
@@ -789,9 +874,9 @@ fn ratchet_epoch(
     info_epoch.extend_from_slice(b"|epoch-secret");
     let mut info_next = info;
     info_next.extend_from_slice(b"|next-ratchet");
-    hk.expand(&info_epoch, &mut epoch_secret)
+    hk.expand(&info_epoch, epoch_secret.as_mut_slice())
         .map_err(|_| CryptoError::KeyDerivation("HKDF expand epoch-secret failed"))?;
-    hk.expand(&info_next, &mut next_ratchet)
+    hk.expand(&info_next, next_ratchet.as_mut_slice())
         .map_err(|_| CryptoError::KeyDerivation("HKDF expand next-ratchet failed"))?;
     Ok((epoch_secret, next_ratchet))
 }
@@ -1176,6 +1261,9 @@ mod tests {
         let compromised = group.ratchet;
         for epoch in 0u64..=4 {
             let (candidate, _) = ratchet_epoch(&compromised, group_id, MlsEpoch(epoch)).unwrap();
+            // `candidate` is `Zeroizing<[u8; 32]>`; deref to compare
+            // against the bare arrays captured above.
+            let candidate: [u8; AEAD_KEY_LEN] = *candidate;
             assert_ne!(
                 candidate, secret_epoch_0,
                 "epoch 0 secret recovered from post-epoch-3 ratchet at epoch {epoch}",
