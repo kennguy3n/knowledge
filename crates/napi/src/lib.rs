@@ -49,6 +49,16 @@ pub use types::{IngestRequest, InitConfig, QueryRequest};
 /// JavaScript represents this as a `bigint` to preserve the full
 /// 64-bit width without loss of precision (N-API will marshal this
 /// transparently once the `#[napi]` macros land).
+///
+/// # Sentinel
+///
+/// `0n` (BigInt zero) is the reserved "no handle" sentinel mirroring
+/// [`RuntimeHandle::NONE`]. The handle allocator on the Rust side
+/// starts at `1n` and never re-mints `0n`, so any call from JS that
+/// passes `0n` is guaranteed to be rejected with
+/// [`NapiError::Unavailable`] for the `evidence_store` subsystem.
+/// Hosts should treat `0n` as "not yet opened" rather than as a
+/// valid handle.
 pub type NapiHandle = u64;
 
 /// Initialize the Rust core with a JSON config blob. Hosts call this
