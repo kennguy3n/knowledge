@@ -39,7 +39,13 @@ use chrono::{DateTime, Duration, Utc};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
-use crate::aead::{AeadKey, AEAD_KEY_LEN};
+use crate::aead::AeadKey;
+// `AEAD_KEY_LEN` is only referenced by `DeterministicEpochKeySource::derive`,
+// which is itself gated behind `cfg(any(test, feature = "test-support"))`.
+// Gating the import in lockstep keeps default builds clean under
+// `-D unused-imports` while letting test / demo builds resolve it.
+#[cfg(any(test, feature = "test-support"))]
+use crate::aead::AEAD_KEY_LEN;
 use crate::errors::CryptoError;
 
 /// Newtype for scope identifiers used by the registry. Matches the
@@ -700,15 +706,36 @@ pub trait EpochKeySource {
 
 /// Deterministic, in-memory key source for tests. Derives keys as
 /// `BLAKE3("test-epoch-key" || scope_uuid || epoch_id_le_u64)`.
+///
+/// Gated behind `cfg(any(test, feature = "test-support"))` per
+/// `CONTRIBUTING.md` ("Gate test-only types behind
+/// `cfg(any(test, feature = "test-support"))`"), matching the
+/// pattern used for [`crate::StubKemBackend`] and
+/// [`crate::TestSigner`]. Production binaries that don't enable
+/// `test-support` do not ship this mock; the `demo` crate enables
+/// the feature explicitly via its `Cargo.toml`.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Default, Clone)]
 pub struct DeterministicEpochKeySource;
 
+#[cfg(any(test, feature = "test-support"))]
 impl EpochKeySource for DeterministicEpochKeySource {
     fn derive(&mut self, scope: ScopeId, epoch: EpochId) -> AeadKey {
-        let mut buf = Vec::with_capacity(8 + 16 + 8);
-        buf.extend_from_slice(b"test-epoch-key");
-        buf.extend_from_slice(scope.0.as_bytes());
-        buf.extend_from_slice(&epoch.0.to_le_bytes());
+        // Derive the buffer capacity from the same slices that are
+        // about to be written so the two cannot drift apart if the
+        // prefix literal ever changes. The previous hard-coded
+        // `Vec::with_capacity(8 + 16 + 8)` under-allocated by 6
+        // bytes because `b"test-epoch-key"` is 14 bytes, not 8 —
+        // causing exactly one heap reallocation on every key
+        // derivation. Test-only path, so no security or
+        // correctness impact, just a wasted alloc.
+        let prefix: &[u8] = b"test-epoch-key";
+        let scope_bytes = scope.0.as_bytes();
+        let epoch_bytes = epoch.0.to_le_bytes();
+        let mut buf = Vec::with_capacity(prefix.len() + scope_bytes.len() + epoch_bytes.len());
+        buf.extend_from_slice(prefix);
+        buf.extend_from_slice(scope_bytes);
+        buf.extend_from_slice(&epoch_bytes);
         let hash = blake3::hash(&buf);
         let mut out = [0u8; AEAD_KEY_LEN];
         out.copy_from_slice(&hash.as_bytes()[..AEAD_KEY_LEN]);
@@ -731,7 +758,13 @@ pub fn record_key_destructions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aead::{decrypt_aead, encrypt_aead, AeadNonce, AEAD_NONCE_LEN};
+    // Import `AEAD_KEY_LEN` directly from `crate::aead` rather than
+    // relying on the parent module's `use super::*`. The parent's
+    // import is gated `cfg(any(test, feature = "test-support"))`,
+    // so the indirect path would still resolve under `cfg(test)`,
+    // but explicit imports make the dependency obvious and remove
+    // a subtle coupling between the two cfg gates.
+    use crate::aead::{decrypt_aead, encrypt_aead, AeadNonce, AEAD_KEY_LEN, AEAD_NONCE_LEN};
 
     fn fixture_key(seed: u8) -> AeadKey {
         let mut k = [0u8; AEAD_KEY_LEN];
