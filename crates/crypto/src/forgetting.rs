@@ -39,7 +39,13 @@ use chrono::{DateTime, Duration, Utc};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
-use crate::aead::{AeadKey, AEAD_KEY_LEN};
+use crate::aead::AeadKey;
+// `AEAD_KEY_LEN` is only referenced by `DeterministicEpochKeySource::derive`,
+// which is itself gated behind `cfg(any(test, feature = "test-support"))`.
+// Gating the import in lockstep keeps default builds clean under
+// `-D unused-imports` while letting test / demo builds resolve it.
+#[cfg(any(test, feature = "test-support"))]
+use crate::aead::AEAD_KEY_LEN;
 use crate::errors::CryptoError;
 
 /// Newtype for scope identifiers used by the registry. Matches the
@@ -700,9 +706,19 @@ pub trait EpochKeySource {
 
 /// Deterministic, in-memory key source for tests. Derives keys as
 /// `BLAKE3("test-epoch-key" || scope_uuid || epoch_id_le_u64)`.
+///
+/// Gated behind `cfg(any(test, feature = "test-support"))` per
+/// `CONTRIBUTING.md` ("Gate test-only types behind
+/// `cfg(any(test, feature = "test-support"))`"), matching the
+/// pattern used for [`crate::StubKemBackend`] and
+/// [`crate::TestSigner`]. Production binaries that don't enable
+/// `test-support` do not ship this mock; the `demo` crate enables
+/// the feature explicitly via its `Cargo.toml`.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Default, Clone)]
 pub struct DeterministicEpochKeySource;
 
+#[cfg(any(test, feature = "test-support"))]
 impl EpochKeySource for DeterministicEpochKeySource {
     fn derive(&mut self, scope: ScopeId, epoch: EpochId) -> AeadKey {
         // Derive the buffer capacity from the same slices that are
@@ -716,8 +732,7 @@ impl EpochKeySource for DeterministicEpochKeySource {
         let prefix: &[u8] = b"test-epoch-key";
         let scope_bytes = scope.0.as_bytes();
         let epoch_bytes = epoch.0.to_le_bytes();
-        let mut buf =
-            Vec::with_capacity(prefix.len() + scope_bytes.len() + epoch_bytes.len());
+        let mut buf = Vec::with_capacity(prefix.len() + scope_bytes.len() + epoch_bytes.len());
         buf.extend_from_slice(prefix);
         buf.extend_from_slice(scope_bytes);
         buf.extend_from_slice(&epoch_bytes);
