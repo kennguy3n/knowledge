@@ -465,8 +465,15 @@ where
                 Ok((clock as u64, epoch as u64))
             },
         ) {
+            // Symmetric `.max()` semantics for both meta fields: the
+            // persisted values are authoritative for a fresh load, but
+            // the same recovery code path will also be reused if
+            // `merge_single` ever bumps `compaction_epoch` in the
+            // future (today it only bumps `clock`). Keeping both
+            // restores defensive avoids a silent regression if that
+            // changes.
             log.clock = log.clock.max(clock);
-            log.compaction_epoch = epoch;
+            log.compaction_epoch = log.compaction_epoch.max(epoch);
         }
 
         self.engine = SyncEngine::from_log(self.engine.replica_id(), log);
