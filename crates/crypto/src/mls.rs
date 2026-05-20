@@ -438,9 +438,20 @@ impl MlsGroup {
     }
 
     /// Apply `commit` to the group state. Verifies the signature
-    /// using `verifier`, checks roster authorisation, updates the
-    /// roster and bumps the epoch, then advances the ratchet and
-    /// derives a fresh [`GroupKeySchedule`].
+    /// using `verifier`, checks roster authorisation, validates the
+    /// commit operation against the current roster, then advances
+    /// the ratchet and derives a fresh [`GroupKeySchedule`] before
+    /// finally mutating `self`.
+    ///
+    /// State mutation is **atomic**: every fallible step (signature
+    /// verification, roster authorisation, operation validation,
+    /// ratchet derivation, schedule derivation) runs against the
+    /// pre-commit state without touching `self`. Only once every
+    /// fallible step has succeeded do we commit the new roster,
+    /// epoch, ratchet, and schedule together. A `?` early-return
+    /// midway through can therefore never leave the group in a
+    /// half-applied state where, e.g., the roster has been mutated
+    /// but the ratchet did not advance.
     ///
     /// The ratchet advance is the per-epoch forward-secrecy step: it
     /// consumes the current ratchet to derive `(epoch_secret,
@@ -453,6 +464,7 @@ impl MlsGroup {
         commit: &MlsCommit,
         verifier: &V,
     ) -> Result<(), CryptoError> {
+        // ---- Phase 1: validate (read-only against `self`) ----
         if commit.group_id != self.group_id {
             return Err(CryptoError::ProvenanceSerialisation(
                 "commit group_id mismatch",
@@ -488,6 +500,13 @@ impl MlsGroup {
                 "commit epoch out of order",
             ));
         }
+        // Validate the operation against the current roster. Both
+        // Add and Remove must point at a meaningful target — a
+        // Remove of a non-member would silently advance the epoch
+        // and consume the ratchet for a no-op, which is
+        // indistinguishable from a successful removal to a passive
+        // observer and lets a malicious committer wastefully
+        // rotate the schedule.
         match &commit.operation {
             CommitOperation::Create { .. } => unreachable!("Create rejected above"),
             CommitOperation::Add { added } => {
@@ -496,6 +515,27 @@ impl MlsGroup {
                         "member already present",
                     ));
                 }
+            }
+            CommitOperation::Remove { removed } => {
+                if !self.members.contains_key(removed) {
+                    return Err(CryptoError::ProvenanceSerialisation(
+                        "removed member is not in the roster",
+                    ));
+                }
+            }
+        }
+
+        // ---- Phase 2: derive new state (fallible, but still no
+        // mutations to `self`) ----
+        let new_epoch = commit.epoch;
+        let (epoch_secret, next_ratchet) = ratchet_epoch(&self.ratchet, self.group_id, new_epoch)?;
+        let new_schedule = derive_schedule(self.group_id, new_epoch, epoch_secret)?;
+
+        // ---- Phase 3: commit. From this point on no operation may
+        // fail — every mutation below is infallible. ----
+        match &commit.operation {
+            CommitOperation::Create { .. } => unreachable!("Create rejected above"),
+            CommitOperation::Add { added } => {
                 // The new leaf key package is delivered via the
                 // welcome envelope; we don't have it here. Insert a
                 // placeholder leaf so the roster is consistent and
@@ -515,14 +555,10 @@ impl MlsGroup {
                 self.members.remove(removed);
             }
         }
-        self.epoch = commit.epoch;
-        // Advance the ratchet: derive the new epoch's secret AND the
-        // next ratchet value from the current ratchet, then zeroise
-        // the consumed ratchet and replace it with `next_ratchet`.
-        let (epoch_secret, next_ratchet) = ratchet_epoch(&self.ratchet, self.group_id, self.epoch)?;
+        self.epoch = new_epoch;
         self.ratchet.zeroize();
         self.ratchet = next_ratchet;
-        self.schedule = derive_schedule(self.group_id, self.epoch, epoch_secret)?;
+        self.schedule = new_schedule;
         Ok(())
     }
 
@@ -553,10 +589,23 @@ impl MlsGroup {
         // returned shared secret is used as IKM for the welcome AEAD
         // key + nonce derivation; only the holder of the matching
         // hybrid secret key can recover it.
-        let (shared, kem_ciphertext) = hybrid_kem_encap(&leaf.init_key)?;
+        //
+        // `shared`, `aead_key`, and `aead_nonce` are all derived from
+        // the KEM shared secret and are sensitive: an attacker who
+        // recovers any of them can decrypt the welcome and obtain the
+        // epoch secret and ratchet. They are kept `mut` and zeroised
+        // on every exit path below, so they live on the stack only as
+        // long as `encrypt_aead` needs them.
+        let (mut shared, kem_ciphertext) = hybrid_kem_encap(&leaf.init_key)?;
 
-        let (aead_key, aead_nonce) =
-            derive_welcome_aead_material(&shared, self.group_id, self.epoch)?;
+        let (mut aead_key, mut aead_nonce) =
+            match derive_welcome_aead_material(&shared, self.group_id, self.epoch) {
+                Ok(material) => material,
+                Err(e) => {
+                    shared.zeroize();
+                    return Err(e);
+                }
+            };
         let aad = welcome_aad(self.group_id, self.epoch);
 
         // Plaintext = epoch_secret || ratchet, so the new member can
@@ -569,6 +618,9 @@ impl MlsGroup {
         plaintext[AEAD_KEY_LEN..].copy_from_slice(&self.ratchet);
         let ciphertext = encrypt_aead(&aead_key, &aead_nonce, &plaintext, &aad);
         plaintext.zeroize();
+        shared.zeroize();
+        aead_key.zeroize();
+        aead_nonce.zeroize();
         let encrypted_epoch_secret = ciphertext?;
 
         Ok(MlsWelcome {
@@ -595,17 +647,35 @@ impl MlsGroup {
         welcome: &MlsWelcome,
         init_sk: &HybridSecretKey,
     ) -> Result<Self, CryptoError> {
-        let shared = hybrid_kem_decap(init_sk, &welcome.kem_ciphertext)?;
-        let (aead_key, aead_nonce) =
-            derive_welcome_aead_material(&shared, welcome.group_id, welcome.epoch)?;
+        // `shared`, `aead_key`, `aead_nonce`, and `epoch_secret` are
+        // all derived from the KEM shared secret and are sensitive.
+        // We keep them `mut` and zeroise them before every return
+        // path (including the error paths) so they don't linger on
+        // the stack after `process_welcome` returns. `epoch_secret`
+        // is moved into `derive_schedule` which consumes it.
+        let mut shared = hybrid_kem_decap(init_sk, &welcome.kem_ciphertext)?;
+        let (mut aead_key, mut aead_nonce) =
+            match derive_welcome_aead_material(&shared, welcome.group_id, welcome.epoch) {
+                Ok(material) => material,
+                Err(e) => {
+                    shared.zeroize();
+                    return Err(e);
+                }
+            };
         let aad = welcome_aad(welcome.group_id, welcome.epoch);
 
-        let mut plaintext = decrypt_aead(
+        let plaintext_result = decrypt_aead(
             &aead_key,
             &aead_nonce,
             &welcome.encrypted_epoch_secret,
             &aad,
-        )?;
+        );
+        // The AEAD key/nonce are no longer needed beyond this point;
+        // wipe them regardless of decryption outcome.
+        shared.zeroize();
+        aead_key.zeroize();
+        aead_nonce.zeroize();
+        let mut plaintext = plaintext_result?;
         if plaintext.len() != AEAD_KEY_LEN * 2 {
             // Wipe before erroring so we never leak partial state.
             plaintext.zeroize();
@@ -619,7 +689,18 @@ impl MlsGroup {
         ratchet.copy_from_slice(&plaintext[AEAD_KEY_LEN..]);
         plaintext.zeroize();
 
-        let schedule = derive_schedule(welcome.group_id, welcome.epoch, epoch_secret)?;
+        let schedule = match derive_schedule(welcome.group_id, welcome.epoch, epoch_secret) {
+            Ok(schedule) => schedule,
+            Err(e) => {
+                // `derive_schedule` consumes `epoch_secret` by value,
+                // but if it returns early before consuming the input
+                // (impossible here in practice, but defensive) we
+                // would also want to wipe `ratchet` which is still
+                // live in scope.
+                ratchet.zeroize();
+                return Err(e);
+            }
+        };
 
         // Reconstruct the roster with placeholder leaves; real
         // [`LeafKeyPackage`]s are installed via [`install_leaf`].
@@ -889,10 +970,16 @@ mod tests {
 
     #[test]
     fn welcome_carries_current_state() {
+        // Use the *real* backend keypair here — `build_welcome`
+        // calls `hybrid_kem_encap` which uses the real ML-KEM-768
+        // backend, and a stub-format public key is not a meaningful
+        // input for that path. Exercising the real keypair makes
+        // the structural assertions below reflect production
+        // behaviour rather than a coincidence of the stub backend.
         let s = signer();
         let creator = MlsMemberId::new_v4();
-        let (group, _) =
-            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
+        let (leaf, _sk) = fresh_leaf_with_sk(creator);
+        let (group, _) = MlsGroup::create(&s, creator, leaf, fixed_initial_ratchet()).unwrap();
         let welcome = group.build_welcome(creator).expect("welcome");
         assert_eq!(welcome.group_id, group.group_id);
         assert_eq!(welcome.epoch, group.epoch);
@@ -1160,5 +1247,96 @@ mod tests {
         assert_eq!(group.members.len(), 1);
         assert!(!group.members.contains_key(&added));
         assert!(!group.members.contains_key(&outsider));
+    }
+
+    /// Authorisation: a Remove commit whose target is not currently
+    /// in the roster must be rejected, even when the signature is
+    /// valid and the committer is a real member. Without this check
+    /// a malicious committer could silently force the epoch to
+    /// advance and the ratchet to be consumed for a no-op Remove,
+    /// indistinguishable on the wire from a genuine removal and
+    /// wastefully rotating the schedule.
+    #[test]
+    fn remove_of_nonexistent_member_is_rejected() {
+        let s = signer();
+        let creator = MlsMemberId::new_v4();
+        let (mut group, _) =
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
+
+        // Snapshot pre-state so we can confirm atomicity below.
+        let epoch_before = group.epoch;
+        let ratchet_before = group.ratchet;
+        let schedule_epoch_secret_before = *group.schedule.epoch_secret();
+        let members_before: Vec<MlsMemberId> = group.members.keys().copied().collect();
+
+        // Sign a well-formed Remove commit targeting an outsider id.
+        let ghost = MlsMemberId::new_v4();
+        let mut commit = MlsCommit {
+            group_id: group.group_id,
+            epoch: group.epoch.next(),
+            operation: CommitOperation::Remove { removed: ghost },
+            committed_by: creator,
+            committed_at: Utc::now(),
+            signature: Vec::new(),
+        };
+        commit.signature = s.sign_bytes(&commit.signing_payload()).unwrap();
+
+        let err = group.process_commit(&commit, &s).unwrap_err();
+        assert!(matches!(
+            err,
+            CryptoError::ProvenanceSerialisation("removed member is not in the roster")
+        ));
+
+        // Atomicity: every part of `MlsGroup` is exactly as it was
+        // before the rejected commit — epoch did not advance, the
+        // ratchet was not consumed, the schedule was not rotated,
+        // and the roster is unchanged.
+        assert_eq!(group.epoch, epoch_before);
+        assert_eq!(group.ratchet, ratchet_before);
+        assert_eq!(group.schedule.epoch_secret(), &schedule_epoch_secret_before);
+        let members_after: Vec<MlsMemberId> = group.members.keys().copied().collect();
+        assert_eq!(members_after, members_before);
+    }
+
+    /// Atomicity (defence-in-depth): when `process_commit` rejects
+    /// a commit for any reason — here, an out-of-order epoch — the
+    /// group's roster, epoch, ratchet, and schedule are all left
+    /// untouched. The validate / derive / commit phasing in
+    /// `process_commit` is what guarantees this; this test pins it.
+    #[test]
+    fn process_commit_rejection_leaves_state_unchanged() {
+        let s = signer();
+        let creator = MlsMemberId::new_v4();
+        let (mut group, _) =
+            MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
+
+        let epoch_before = group.epoch;
+        let ratchet_before = group.ratchet;
+        let schedule_epoch_secret_before = *group.schedule.epoch_secret();
+        let members_before: Vec<MlsMemberId> = group.members.keys().copied().collect();
+
+        // Build an Add commit whose epoch is several steps ahead of
+        // `self.epoch.next()` — this triggers the "epoch out of
+        // order" rejection path *after* signature verification and
+        // roster authorisation have passed.
+        let new_id = MlsMemberId::new_v4();
+        let leaf = fresh_leaf(new_id);
+        let mut commit = group.add_member(&s, creator, leaf).unwrap();
+        commit.epoch = MlsEpoch(commit.epoch.0 + 5);
+        commit.signature = s.sign_bytes(&commit.signing_payload()).unwrap();
+
+        let err = group.process_commit(&commit, &s).unwrap_err();
+        assert!(matches!(
+            err,
+            CryptoError::ProvenanceSerialisation("commit epoch out of order")
+        ));
+
+        // No mutation occurred.
+        assert_eq!(group.epoch, epoch_before);
+        assert_eq!(group.ratchet, ratchet_before);
+        assert_eq!(group.schedule.epoch_secret(), &schedule_epoch_secret_before);
+        let members_after: Vec<MlsMemberId> = group.members.keys().copied().collect();
+        assert_eq!(members_after, members_before);
+        assert!(!group.members.contains_key(&new_id));
     }
 }
