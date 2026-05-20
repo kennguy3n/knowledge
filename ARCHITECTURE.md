@@ -1,24 +1,24 @@
 # Knowledge — Architecture
 
-This document is the system architecture for the Knowledge
+This is the implementation architecture for the Knowledge
 substrate. It builds on the layered six-plane substrate from
 [docs/DESIGN.md](./docs/DESIGN.md) and turns it into a concrete
-component map, data flow, permission model, decay state machine,
-crypto layer, device-optimization strategy, and platform-specific
-implementation notes.
+component map, a data flow, a permission model, a decay state
+machine, a crypto layer, a device-optimisation strategy, and
+platform-specific implementation notes.
 
 For the product thesis, the strategic principles, and the
-per-class decay policies behind these mechanics, read
-[docs/DESIGN.md](./docs/DESIGN.md). For per-platform tuning, read
+per-class decay policies behind these mechanics, see
+[docs/DESIGN.md](./docs/DESIGN.md). For per-platform tuning, see
 [docs/PLATFORMS.md](./docs/PLATFORMS.md).
 
 ---
 
 ## 1. System overview
 
-Knowledge is split into three cooperating surfaces — an on-device
-surface that runs on every form factor a user owns, a server
-surface that runs the connector pipeline and cross-tenant
+Knowledge is split into three cooperating surfaces — an
+on-device surface that runs on every form factor a user owns, a
+server surface that runs the connector pipeline and cross-tenant
 synthesis, and an inference layer that serves both. They all
 consume the same Rust shared core.
 
@@ -193,12 +193,14 @@ on-device SLM inference path lands.
 
 ### 2.5 Post-quantum primitives summary
 
-The `crypto` crate wraps the post-quantum and classical primitives
-the rest of the substrate consumes through a small high-level API:
-content hashing, AEAD, key derivation, hybrid KEM encap / decap,
-and provenance signing / verification. The cryptographic design
-and the threat model live in [docs/DESIGN.md](./docs/DESIGN.md) §9;
-the concrete primitive inventory and key layout are in §8 below.
+The `crypto` crate wraps the post-quantum and classical
+primitives the rest of the substrate consumes through a small
+high-level API: content hashing, AEAD, key derivation, hybrid
+KEM encap / decap, and provenance signing / verification. The
+cryptographic design and the threat model live in
+[docs/DESIGN.md §9](./docs/DESIGN.md#9-post-quantum-cryptography);
+the concrete primitive inventory and key layout are in §8
+below.
 
 ---
 
@@ -534,15 +536,15 @@ longer recoverable.
 
 ---
 
-## 9. Device & platform notes
+## 9. Device and platform notes
 
 The substrate adapts to four signals (storage, memory, battery,
 network) and ships platform-specific integration notes for iOS,
-Android, macOS, and Windows. The full catalogue —
-SQLCipher storage routing, working-set caps, decay-sweep
-throttling, ANR-class watchdogs, idle-window observation
-processing, background-fetch policies, and the per-platform FFI /
-N-API shims — lives in [`docs/PLATFORMS.md`](./docs/PLATFORMS.md).
+Android, macOS, and Windows. The full catalogue — SQLCipher
+storage routing, working-set caps, decay-sweep throttling,
+ANR-class watchdogs, idle-window observation processing,
+background-fetch policies, and the per-platform FFI / N-API
+shims — lives in [`docs/PLATFORMS.md`](./docs/PLATFORMS.md).
 
 ---
 

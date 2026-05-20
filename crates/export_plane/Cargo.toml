@@ -1,6 +1,6 @@
 [package]
 name = "export_plane"
-description = "Export plane — portable concept profiles, export policies, controls, and policy simulator for the Knowledge substrate. Implements docs/DESIGN.md §3.5."
+description = "Export plane for the Knowledge substrate — portable concept profiles, export policies, controls, and a read-only policy simulator."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

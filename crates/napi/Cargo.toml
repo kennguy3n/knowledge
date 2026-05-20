@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "N-API addon skeleton for macOS / Windows Electron desktop integration."
+description = "N-API addon surface for macOS / Windows Electron desktop integration with the Knowledge substrate."
 
 [dependencies]
 crypto = { path = "../crypto" }

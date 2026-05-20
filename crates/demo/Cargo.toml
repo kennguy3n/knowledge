@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Public-API end-to-end driver for the Knowledge substrate. Exercises every crate (evidence, observation, memory, concept graph, synthesis, permissions, crypto, export, agent contract, reasoning, connectors, audit) against a synthetic dataset and writes a reconciled markdown report."
 publish = false
 
 [[bin]]

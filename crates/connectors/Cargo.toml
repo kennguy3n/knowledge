@@ -1,6 +1,6 @@
 [package]
 name = "connectors"
-description = "Vendor-specific connector implementations for the Knowledge substrate (Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot)."
+description = "Vendor-specific connector implementations for the Knowledge substrate (Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

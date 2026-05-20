@@ -1,68 +1,72 @@
-# Contributing to Knowledge
+# Contributing
 
-Thank you for considering a contribution to the Knowledge substrate.
+Thank you for considering a contribution to Knowledge. This guide
+covers the build environment, the quality gates the workspace
+enforces, and the pull-request flow.
 
-## Getting Started
+## Prerequisites
 
-### Prerequisites
+- **Rust** — a stable toolchain on or after the MSRV declared in
+  `Cargo.toml` (`rust-version`). Install via
+  [rustup](https://rustup.rs/) and add `clippy` and `rustfmt`
+  with `rustup component add clippy rustfmt`.
+- **C toolchain** for the bundled SQLCipher + OpenSSL sources
+  built by `rusqlite`'s `bundled-sqlcipher-vendored-openssl`
+  feature. On Debian / Ubuntu: `sudo apt install build-essential`.
+- **`cargo-deny` and `cargo-audit`** — used in CI for license
+  and advisory checks. Install with
+  `cargo install cargo-deny cargo-audit`.
 
-- **Rust** — the workspace's `rust-version` field specifies the MSRV.
-  Install via [rustup](https://rustup.rs/).
-- **cargo-deny** and **cargo-audit** — used by CI for license and
-  advisory checks. Install with `cargo install cargo-deny cargo-audit`.
-
-### Building
+## Build, test, and lint
 
 ```bash
-cargo build          # default features
+cargo build --all-targets
 cargo build --release
-```
-
-### Running Tests
-
-```bash
-cargo test --all               # default features
-cargo test --all --all-features  # includes test-support mocks
-```
-
-### Linting
-
-```bash
+cargo test --all                    # default features
+cargo test --all --all-features     # includes test-support helpers
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-## Pull Request Process
+CI also runs `cargo audit` and `cargo deny check`. Run them
+locally before opening a pull request:
 
-1. **Branch from `main`.** Use a descriptive branch name
-   (e.g. `fix/body-store-forgetting`, `feat/fts-escape-helper`).
+```bash
+cargo audit
+cargo deny check
+```
+
+## Pull-request workflow
+
+1. **Branch off `main`** with a descriptive name
+   (`fix/body-store-forgetting`, `feat/fts-escape-helper`).
 2. **Keep commits focused.** One logical change per commit; rebase
-   before merging if the history is noisy.
-3. **Run the full CI locally** before opening the PR:
-   ```bash
-   cargo fmt --all -- --check
-   cargo clippy --all-targets --all-features -- -D warnings
-   cargo test --all --all-features
-   cargo audit
-   cargo deny check
-   ```
-4. **Update documentation** when you change behaviour:
-   - If you add or change a public FFI function, update the README's
-     "What is partially wired" list.
-5. **Do not commit secrets**, `.env` files, or credentials.
+   the branch before requesting review if the history is noisy.
+3. **Run the full quality gate locally** (fmt + clippy + test +
+   audit + deny) before opening the pull request.
+4. **Update the README's status section** when you add, remove,
+   or change a public FFI function so the "wired" / "contract-only"
+   lists stay accurate.
+5. **Do not commit secrets**, `.env` files, fixture credentials,
+   or local override configs.
 
-## Code Style
+## Code style
 
-- Follow the existing conventions in each file.
+- Follow the existing conventions in each file; match the
+  surrounding code's tone, indentation, and naming.
 - Prefer minimal, focused edits over large refactors.
-- Use `#[deny(missing_docs)]` — every public API must have doc
-  comments.
-- Gate test-only types behind `cfg(any(test, feature = "test-support"))`
-  and document them in the crate's top-level doc comment.
+- Public APIs are linted with `#[deny(missing_docs)]`. Every
+  public item must have a doc comment that explains its
+  contract, not just restates its name.
+- Gate test-only types behind
+  `cfg(any(test, feature = "test-support"))` and document them
+  in the crate's top-level doc comment.
+- New `unsafe` requires a `SAFETY:` comment justifying every
+  invariant the call relies on.
 
 ## Security
 
-If you discover a vulnerability, please follow the responsible
-disclosure process in [`SECURITY.md`](./SECURITY.md) rather than
-opening a public issue.
+If you discover a vulnerability, do not open a public issue.
+Follow the responsible disclosure process in
+[`SECURITY.md`](./SECURITY.md).
