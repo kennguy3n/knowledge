@@ -86,6 +86,8 @@ pub use aead::{
     decrypt_aead, encrypt_aead, AeadCiphertext, AeadKey, AeadNonce, AEAD_KEY_LEN, AEAD_NONCE_LEN,
 };
 pub use errors::CryptoError;
+#[cfg(any(test, feature = "test-support"))]
+pub use forgetting::DeterministicEpochKeySource;
 pub use hash::{content_hash, ContentHash, CONTENT_HASH_LEN};
 pub use hybrid_kem::{
     hybrid_kem_decap, hybrid_kem_decap_with_backend, hybrid_kem_encap,
