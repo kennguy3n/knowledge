@@ -257,6 +257,14 @@ where
     /// — so recording one would only grow the log + persisted table
     /// without carrying any information. Defensive `remove()` of an
     /// unknown value is the canonical case this guards against.
+    // `value: T` is by-value rather than `&T` to keep `remove(v)` symmetric
+    // with the sibling `add(v)` / `supersede(v, s)` methods (both of which
+    // genuinely consume `value` — `add` hands it to `add_with_tag` and
+    // `supersede` pushes it into the cached `supers` vec). Removing it is
+    // the only one that just clones, but flipping this single method to
+    // `&T` would force every test/caller of `sync_engine` to switch
+    // between `.remove(v)` and `.add(v)` styles for no observable gain.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn remove(&mut self, value: T) {
         // Read observed tags from the cached state (rebuilding the
         // cache if necessary) so we do not pay the O(log_len) cost
