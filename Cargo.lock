@@ -2548,10 +2548,15 @@ name = "sync_engine"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "crypto",
+ "rand 0.8.6",
+ "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

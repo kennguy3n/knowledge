@@ -237,7 +237,22 @@ jobs:
       # which the bundled 0.13.1 lock pins to a version that no longer
       # compiles on current nightly). `cargo-fuzz` itself stays at the
       # latest published version.
-      - run: cargo install cargo-fuzz
+      #
+      # Skip the install when a prior run's cache has already
+      # restored a `cargo-fuzz` binary into `~/.cargo/bin/` (via the
+      # `restore-keys` fallback above). Otherwise `cargo install`
+      # exits non-zero with "binary `cargo-fuzz` already exists in
+      # destination" because it refuses to overwrite without
+      # `--force` — a problem any PR that bumps `Cargo.lock` hits
+      # on every run after the first cold-cache build.
+      - name: Install cargo-fuzz (skip when cache already provided it)
+        run: |
+          if command -v cargo-fuzz >/dev/null 2>&1; then
+            echo "cargo-fuzz already on PATH at $(command -v cargo-fuzz); skipping install."
+            cargo fuzz --version
+          else
+            cargo install cargo-fuzz
+          fi
       # The fuzz workspace lives at crates/crypto/fuzz (excluded from
       # the parent workspace) so we run from there. 120 s per target
       # is the ceiling for fast PR-loop feedback; the weekly job

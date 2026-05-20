@@ -46,7 +46,22 @@ jobs:
       # See ci.yml: cargo-fuzz 0.13.1's bundled lockfile pins a `rustix`
       # version that no longer compiles on current nightly, so we drop
       # `--locked` and let cargo pick up newer semver-compatible deps.
-      - run: cargo install cargo-fuzz
+      #
+      # The cache above restores `~/.cargo/bin/` from a sibling fuzz
+      # cache key (`${{ runner.os }}-fuzz-`) when the matrix-specific
+      # key misses; that warm cache contains an existing `cargo-fuzz`
+      # binary, so calling `cargo install` again without `--force`
+      # fails with "binary already exists in destination". Skip the
+      # install when the cache already provided the binary — matches
+      # the same guard used in ci.yml's `fuzz` job.
+      - name: Install cargo-fuzz (skip when cache already provided it)
+        run: |
+          if command -v cargo-fuzz >/dev/null 2>&1; then
+            echo "cargo-fuzz already on PATH at $(command -v cargo-fuzz); skipping install."
+            cargo fuzz --version
+          else
+            cargo install cargo-fuzz
+          fi
       - name: ${{ matrix.target }} (1h)
         working-directory: crates/crypto/fuzz
         run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=3600
