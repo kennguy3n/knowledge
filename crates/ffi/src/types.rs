@@ -318,9 +318,8 @@ mod tests {
         // marshals into `MemoryFilter` (N-API, UniFFI Swift,
         // UniFFI Kotlin) at the substrate level.
         let payload = r#"{"state":"Pinned","pinnedOnly":true,"pinned_only":true}"#;
-        let err = serde_json::from_str::<MemoryFilter>(payload).expect_err(
-            "MemoryFilter must reject unknown camelCase keys like `pinnedOnly`",
-        );
+        let err = serde_json::from_str::<MemoryFilter>(payload)
+            .expect_err("MemoryFilter must reject unknown camelCase keys like `pinnedOnly`");
         let msg = err.to_string();
         assert!(
             msg.contains("unknown field") && msg.contains("pinnedOnly"),
