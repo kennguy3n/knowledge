@@ -331,21 +331,23 @@ pub fn js_decrypt(handle: BigInt, scope_id: String, ciphertext_b64: String) -> R
 // ---------------------------------------------------------------------------
 
 /// Return the package version of the Rust core baked into this
-/// `.node` artefact. Lets the JS-side bootstrapper assert against a
-/// known-good version before opening any stores so a stale addon
-/// from a previous install doesn't silently corrupt data.
+/// `.node` artefact. Mirrors [`crate::core_version`]. Lets the JS-side
+/// bootstrapper assert against a known-good version before opening
+/// any stores so a stale addon from a previous install doesn't
+/// silently corrupt data.
 #[napi(js_name = "coreVersion")]
 pub fn js_core_version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
+    crate::core_version()
 }
 
-/// Lightweight "is the bridge alive?" probe. Returns the string
-/// `"ok"` synchronously without touching any subsystems. Phase 6
-/// will replace this with a full [`HealthStatus`] envelope sourced
-/// from the substrate's metrics + tracing layer.
+/// Lightweight "is the bridge alive?" probe. Mirrors
+/// [`crate::health_check`]. Returns the string `"ok"` synchronously
+/// without touching any subsystems. Phase 6 will replace this with a
+/// full `HealthStatus` envelope sourced from the substrate's metrics
+/// + tracing layer.
 #[napi(js_name = "healthCheck")]
 pub fn js_health_check() -> String {
-    "ok".to_string()
+    crate::health_check()
 }
 
 #[cfg(test)]

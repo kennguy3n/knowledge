@@ -5,9 +5,10 @@ export declare function closeStore(handle: bigint): void
 
 /**
  * Return the package version of the Rust core baked into this
- * `.node` artefact. Lets the JS-side bootstrapper assert against a
- * known-good version before opening any stores so a stale addon
- * from a previous install doesn't silently corrupt data.
+ * `.node` artefact. Mirrors [`crate::core_version`]. Lets the JS-side
+ * bootstrapper assert against a known-good version before opening
+ * any stores so a stale addon from a previous install doesn't
+ * silently corrupt data.
  */
 export declare function coreVersion(): string
 
@@ -62,10 +63,11 @@ export declare function getEvidence(handle: bigint, evidenceId: string): any
 export declare function getUserMemory(handle: bigint, scopeId: string): any
 
 /**
- * Lightweight "is the bridge alive?" probe. Returns the string
- * `"ok"` synchronously without touching any subsystems. Phase 6
- * will replace this with a full [`HealthStatus`] envelope sourced
- * from the substrate's metrics + tracing layer.
+ * Lightweight "is the bridge alive?" probe. Mirrors
+ * [`crate::health_check`]. Returns the string `"ok"` synchronously
+ * without touching any subsystems. Phase 6 will replace this with a
+ * full `HealthStatus` envelope sourced from the substrate's metrics
+ * + tracing layer.
  */
 export declare function healthCheck(): string
 

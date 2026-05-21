@@ -307,6 +307,31 @@ pub fn decrypt(
     Ok(encode_b64(&plain))
 }
 
+/// Return the semver of the Rust core baked into this build artefact.
+///
+/// Sourced from `CARGO_PKG_VERSION` at compile time, which mirrors
+/// the workspace-level `version` in the root `Cargo.toml`. Hosts use
+/// this to assert against a known-good core before opening any stores
+/// so a stale addon from a previous install doesn't silently corrupt
+/// data. The corresponding JS-facing wrapper is
+/// [`bindings::js_core_version`].
+pub fn core_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Lightweight "is the bridge alive?" probe.
+///
+/// Returns the string `"ok"` synchronously without touching any
+/// subsystems. Phase 6 will replace this with a full `HealthStatus`
+/// envelope sourced from the substrate's metrics + tracing layer; for
+/// now it exists so callers (the desktop status panel and the
+/// `health-check` exit-code probe shipped alongside the addon) can
+/// confirm the FFI layer is reachable before any other call. The
+/// corresponding JS-facing wrapper is [`bindings::js_health_check`].
+pub fn health_check() -> String {
+    "ok".to_string()
+}
+
 const B64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn encode_b64(bytes: &[u8]) -> String {

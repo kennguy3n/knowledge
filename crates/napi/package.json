@@ -23,14 +23,13 @@
       "x86_64-unknown-linux-gnu",
       "x86_64-apple-darwin",
       "aarch64-apple-darwin",
-      "x86_64-pc-windows-msvc",
-      "aarch64-pc-windows-msvc"
+      "x86_64-pc-windows-msvc"
     ]
   },
   "scripts": {
     "build": "napi build --platform --release --js index.js --dts index.d.ts",
     "build:debug": "napi build --platform --js index.js --dts index.d.ts",
-    "test": "node --test test/"
+    "test": "node --test 'test/*.test.mjs'"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.6.2"
