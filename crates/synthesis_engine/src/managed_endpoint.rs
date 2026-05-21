@@ -464,6 +464,41 @@ const PAYLOAD_PREVIEW_CHARS: usize = 512;
 /// contract, building a [`SynthesisRequest`], dispatching it through
 /// the client, and wrapping the response payload in a typed
 /// [`synthesis_pipeline::SynthesisObject`].
+///
+/// # Layering: mechanics vs. policy
+///
+/// This type is the **mechanics** half of the synthesizer split:
+/// validate hierarchy → build request → dispatch → wrap response. It
+/// deliberately performs **no scope-binding enforcement** — it does
+/// not consult the per-scope allow-list maintained on
+/// [`crate::tee_worker::TeeWorkerConfig::scope_bindings`], nor does
+/// it consult any tenant / domain / channel policy. Hierarchy
+/// validation here is purely structural ("is this domain-input shape
+/// well-formed for this window?"); it does not answer "is this scope
+/// allowed to be synthesised by this attested enclave?".
+///
+/// The **policy** half lives on [`crate::tee_worker::TeeWorker`],
+/// which composes this synthesizer behind its
+/// [`crate::tee_worker::TeeWorker::enter_synthesizing`] guard.
+/// `enter_synthesizing` runs the attested measurement check and the
+/// `assert_scope_allowed` predicate before this synthesizer is ever
+/// called — so a scope that is not in the worker's binding set never
+/// reaches `synthesize_domain` / `synthesize_tenant` here.
+///
+/// # Direct construction is a footgun
+///
+/// Instantiating `HttpManagedEndpointSynthesizer` outside of
+/// [`crate::tee_worker::TeeWorker`] and calling `synthesize_domain` /
+/// `synthesize_tenant` on it **bypasses the scope-binding check** by
+/// design. That is appropriate for unit tests
+/// (`MockHttpClient::echo()`-driven fixtures verify the mechanics in
+/// isolation), but it is **NOT appropriate for production deployment**
+/// — any production call site that does not go through the
+/// `TeeWorker` policy wrapper has effectively no enforcement that the
+/// scope being summarised is one the attested enclave is authorised
+/// to handle. New non-test consumers MUST wrap this type in a
+/// `TeeWorker` (or an equivalent policy layer that re-implements
+/// `assert_scope_allowed`-grade checks) before the call.
 pub struct HttpManagedEndpointSynthesizer<C: HttpClient> {
     cfg: EndpointConfig,
     client: C,

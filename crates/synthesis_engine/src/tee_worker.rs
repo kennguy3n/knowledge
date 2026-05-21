@@ -190,6 +190,23 @@ pub struct TeeWorker<R: TeeRuntime, C: HttpClient = MockHttpClient> {
     /// the bytes returned by the model are the bytes wrapped into
     /// the emitted `SynthesisObject` — no deterministic concat or
     /// shadow path.
+    ///
+    /// **Security-critical layering.** This field is the only path
+    /// the worker uses to talk to the model, and it is the only path
+    /// that should reach a real
+    /// [`HttpManagedEndpointSynthesizer`] in production. The
+    /// synthesizer itself **does not enforce
+    /// [`TeeWorkerConfig::scope_bindings`]** —
+    /// `assert_scope_allowed` lives on `TeeWorker` (called from
+    /// [`Self::enter_synthesizing`]) and is the only place the
+    /// substrate checks "is this scope authorised for this attested
+    /// enclave?". See [`HttpManagedEndpointSynthesizer`]'s
+    /// `# Direct construction is a footgun` section for the
+    /// corresponding warning on the mechanics side. Hosts that need
+    /// a different policy layer must implement an equivalent
+    /// `assert_scope_allowed`-grade check before delegating to a
+    /// raw `HttpManagedEndpointSynthesizer`; they must not call into
+    /// the synthesizer directly.
     synth: HttpManagedEndpointSynthesizer<C>,
 }
 
