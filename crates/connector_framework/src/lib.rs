@@ -38,6 +38,13 @@ pub mod sync;
 pub mod token_vault;
 pub mod webhook;
 
+#[cfg(feature = "async-runtime")]
+pub mod async_runtime;
+#[cfg(feature = "async-http-client")]
+pub mod http_async;
+#[cfg(feature = "webhook-server")]
+pub mod webhook_server;
+
 pub use acl_sync::{
     AclSyncEngine, AclSyncReport, PermissionDelta, PermissionMapping, SourcePermission,
     SourcePermissionLevel, SourceRevocation,
@@ -75,3 +82,10 @@ pub use webhook::{
     parse_webhook_event, WebhookEventTypes, WebhookId, WebhookSecret, WebhookStatus,
     WebhookSubscription,
 };
+
+#[cfg(feature = "async-runtime")]
+pub use async_runtime::{AsyncConnector, AsyncHttpTransport, BlockingConnectorAdapter};
+#[cfg(feature = "async-http-client")]
+pub use http_async::ReqwestAsyncHttpTransport;
+#[cfg(feature = "webhook-server")]
+pub use webhook_server::{WebhookDispatch, WebhookDispatcher, WebhookServer, WebhookServerConfig};

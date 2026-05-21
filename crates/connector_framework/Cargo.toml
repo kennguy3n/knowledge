@@ -19,6 +19,24 @@ http-client = ["dep:reqwest"]
 # integration tests can reach them. Production builds leave this
 # off so the helpers stay unreachable from the FFI surface.
 test-support = []
+# Phase 5 async surface. Pulls in `tokio`, `async-trait`, and the
+# async reqwest client so the substrate can drive connectors from a
+# tokio runtime instead of `std::thread`-based polling. The
+# pre-existing `Connector` trait + `BlockingHttpTransport` stay
+# unmodified — the async layer is additive and is built on top of
+# them via the `BlockingConnectorAdapter` bridge.
+async-runtime = ["dep:tokio", "dep:async-trait"]
+# Phase 5 async HTTP transport. Independent of `http-client` so
+# offline cross-checks can build the async surface without the
+# blocking client. Adds the async features of `reqwest` (without
+# the `blocking` feature, which would pull in its own thread pool).
+async-http-client = ["async-runtime", "dep:reqwest"]
+# Phase 5 webhook receiver server. Built on `axum` + `hyper` +
+# `tower`. Gated separately from `async-runtime` so a substrate
+# embedding the connector framework purely as a client (e.g. the
+# desktop host that subscribes to webhooks via a cloud relay) can
+# still build without the server crates.
+webhook-server = ["async-runtime", "dep:axum", "dep:tower", "dep:hyper", "dep:hyper-util"]
 
 [dependencies]
 crypto = { path = "../crypto" }
@@ -31,8 +49,18 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tracing = { workspace = true }
 zeroize = { workspace = true }
 reqwest = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+tower = { workspace = true, optional = true }
+hyper = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
 [lints]
 workspace = true

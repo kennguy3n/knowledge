@@ -158,6 +158,20 @@ impl LlamaServerClient for MockLlamaServerClient {
     }
 }
 
+/// Strip every trailing `/` so `format!("{}/health", url)` stays
+/// correct whether the caller passes `http://x:8080`,
+/// `http://x:8080/`, or the pathological `http://x:8080//`. The
+/// constructors of [`HttpLlamaServerClient`] (sync) and
+/// [`AsyncHttpLlamaServerClient`] (async) both document "trailing
+/// slashes are tolerated" — matching every trailing slash (not
+/// just one) is the non-surprising implementation of that
+/// contract, and sharing the helper across both clients keeps the
+/// policy uniform regardless of which transport feature is enabled.
+#[cfg(any(feature = "http-client", feature = "async-http-client"))]
+fn normalise_url(s: &str) -> String {
+    s.trim_end_matches('/').to_string()
+}
+
 #[cfg(feature = "http-client")]
 pub use http_client::HttpLlamaServerClient;
 
@@ -356,15 +370,13 @@ mod http_client {
         }
     }
 
-    /// Strip every trailing `/` so `format!("{}/health", url)` stays
-    /// correct whether the caller passes `http://x:8080`,
-    /// `http://x:8080/`, or the pathological `http://x:8080//`. The
-    /// constructor documents "trailing slashes are tolerated" so
-    /// matching every trailing slash (not just one) is the
-    /// non-surprising implementation of that contract.
-    fn normalise_url(s: &str) -> String {
-        s.trim_end_matches('/').to_string()
-    }
+    /// Re-export of the file-level [`super::normalise_url`] helper
+    /// so existing in-module callers (`Self::with_timeouts`, the
+    /// `tests` submodule) keep their original short path. The
+    /// helper itself lives at the file root so the
+    /// `async-http-client` sibling module can reuse it without
+    /// forcing both transport features to be enabled together.
+    pub(super) use super::normalise_url;
 
     #[cfg(test)]
     mod tests {
@@ -465,5 +477,217 @@ mod tests {
         let adapter = LlamaCppAdapter::new(cfg, Box::new(MockLlamaServerClient::ok("x")));
         assert!(adapter.supports(InferenceTask::TagImportance));
         assert!(!adapter.supports(InferenceTask::SynthSummary));
+    }
+}
+
+#[cfg(feature = "async-http-client")]
+pub use http_client_async::{AsyncHttpLlamaServerClient, AsyncLlamaServerClient};
+
+#[cfg(feature = "async-http-client")]
+mod http_client_async {
+    //! Phase 5 — async HTTP transport for the llama.cpp loopback
+    //! server.
+    //!
+    //! Mirror of [`super::http_client::HttpLlamaServerClient`] that
+    //! drives `reqwest::Client` (non-blocking) under a tokio
+    //! runtime. The endpoint shape is identical to the sync path
+    //! (`GET /health`, `POST /completion`) so the substrate can
+    //! choose between the blocking and async client at startup
+    //! without touching anything downstream.
+    //!
+    //! The async client implements its own
+    //! [`AsyncLlamaServerClient`] trait — it's a sibling of
+    //! [`super::LlamaServerClient`], not a `Box<dyn ...>` wrapper,
+    //! because the underlying `complete` and `ping` futures cannot
+    //! be hoisted into the sync trait's signature without going
+    //! through `tokio::runtime::Handle::block_on` (which would
+    //! defeat the point of the async surface).
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+
+    /// Async sibling of [`super::LlamaServerClient`]. Drives the
+    /// llama.cpp loopback server via async HTTP under a tokio
+    /// runtime. The substrate plumbs this into a future-driven
+    /// inference path; the existing sync trait remains the
+    /// supported entrypoint for substrate code that doesn't run a
+    /// tokio runtime.
+    #[async_trait]
+    pub trait AsyncLlamaServerClient: Send + Sync {
+        /// `true` iff the server is reachable.
+        async fn ping(&self) -> bool;
+
+        /// Run a completion. `grammar` is fed verbatim as the
+        /// `--grammar` parameter; pass an empty string for free-form
+        /// completions.
+        async fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String>;
+    }
+
+    /// Default request timeout for `/completion`. Matches the
+    /// sync client's [`super::http_client::DEFAULT_HTTP_TIMEOUT_SECS`].
+    pub const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 120;
+    /// Default request timeout for `/health` probes. Matches the
+    /// sync client.
+    pub const DEFAULT_HTTP_PROBE_TIMEOUT_SECS: u64 = 2;
+    /// Default `n_predict` cap, matching the sync client.
+    pub const DEFAULT_N_PREDICT: u32 = 512;
+    /// Default sampling temperature, matching the sync client.
+    pub const DEFAULT_TEMPERATURE: f32 = 0.1;
+
+    /// Real async HTTP client for the llama.cpp loopback server.
+    ///
+    /// Holds two `reqwest::Client`s with separate timeouts: a long
+    /// one for `/completion` and a short one for `/health` probes
+    /// — same shape as the sync client.
+    pub struct AsyncHttpLlamaServerClient {
+        server_url: String,
+        client: reqwest::Client,
+        probe_client: reqwest::Client,
+    }
+
+    impl AsyncHttpLlamaServerClient {
+        /// Build a client with default timeouts.
+        ///
+        /// # Errors
+        ///
+        /// Returns `Err` if the underlying `reqwest::Client`
+        /// builder rejects either timeout configuration.
+        pub fn new(server_url: impl Into<String>) -> Result<Self, String> {
+            Self::with_timeouts(
+                server_url,
+                Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
+                Duration::from_secs(DEFAULT_HTTP_PROBE_TIMEOUT_SECS),
+            )
+        }
+
+        /// Build a client with a custom completion timeout (probe
+        /// defaults to [`DEFAULT_HTTP_PROBE_TIMEOUT_SECS`]).
+        ///
+        /// # Errors
+        ///
+        /// Returns `Err` if the underlying `reqwest::Client`
+        /// builder rejects the timeout configuration.
+        pub fn with_timeout(
+            server_url: impl Into<String>,
+            timeout: Duration,
+        ) -> Result<Self, String> {
+            Self::with_timeouts(
+                server_url,
+                timeout,
+                Duration::from_secs(DEFAULT_HTTP_PROBE_TIMEOUT_SECS),
+            )
+        }
+
+        /// Build a client with explicit timeouts.
+        ///
+        /// # Errors
+        ///
+        /// Returns `Err` if the underlying `reqwest::Client`
+        /// builder rejects either timeout configuration.
+        pub fn with_timeouts(
+            server_url: impl Into<String>,
+            completion_timeout: Duration,
+            probe_timeout: Duration,
+        ) -> Result<Self, String> {
+            let client = reqwest::Client::builder()
+                .timeout(completion_timeout)
+                .build()
+                .map_err(|e| format!("reqwest async build failed: {e}"))?;
+            let probe_client = reqwest::Client::builder()
+                .timeout(probe_timeout)
+                .build()
+                .map_err(|e| format!("reqwest async build failed: {e}"))?;
+            Ok(Self {
+                server_url: super::normalise_url(&server_url.into()),
+                client,
+                probe_client,
+            })
+        }
+
+        /// Borrow the resolved server URL (no trailing slash).
+        #[must_use]
+        pub fn server_url(&self) -> &str {
+            &self.server_url
+        }
+    }
+
+    #[async_trait]
+    impl AsyncLlamaServerClient for AsyncHttpLlamaServerClient {
+        async fn ping(&self) -> bool {
+            let url = format!("{}/health", self.server_url);
+            match self.probe_client.get(&url).send().await {
+                Ok(resp) => resp.status().is_success(),
+                Err(_) => false,
+            }
+        }
+
+        async fn complete(&self, prompt: &str, grammar: &str) -> Result<String, String> {
+            let url = format!("{}/completion", self.server_url);
+            let mut body = serde_json::json!({
+                "prompt": prompt,
+                "n_predict": DEFAULT_N_PREDICT,
+                "temperature": DEFAULT_TEMPERATURE,
+                "stream": false,
+            });
+            if !grammar.is_empty() {
+                body["grammar"] = serde_json::Value::String(grammar.to_string());
+            }
+            let resp = self
+                .client
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("POST {url} failed: {e}"))?;
+            let status = resp.status();
+            if !status.is_success() {
+                let detail = resp.text().await.unwrap_or_default();
+                return Err(format!(
+                    "llama-server returned {status} from {url}: {detail}"
+                ));
+            }
+            let json: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| format!("llama-server response was not JSON: {e}"))?;
+            let content = json
+                .get("content")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("llama-server response missing string `content`: {json}"))?;
+            Ok(content.to_string())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn constructs_with_default_timeout() {
+            let c = AsyncHttpLlamaServerClient::new("http://127.0.0.1:8080/")
+                .expect("client should build");
+            assert_eq!(c.server_url(), "http://127.0.0.1:8080");
+        }
+
+        #[tokio::test]
+        async fn ping_against_unreachable_host_returns_false() {
+            let c = AsyncHttpLlamaServerClient::with_timeout(
+                "http://127.0.0.1:1",
+                Duration::from_millis(50),
+            )
+            .expect("client should build");
+            assert!(!c.ping().await);
+        }
+
+        #[tokio::test]
+        async fn complete_against_unreachable_host_returns_err() {
+            let c = AsyncHttpLlamaServerClient::with_timeout(
+                "http://127.0.0.1:1",
+                Duration::from_millis(50),
+            )
+            .expect("client should build");
+            let err = c.complete("hello", "").await.expect_err("must fail");
+            assert!(err.contains("POST"), "got: {err}");
+        }
     }
 }
