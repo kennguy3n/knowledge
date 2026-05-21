@@ -34,9 +34,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_get_json, bearer_post_json, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
-    ConnectorInstanceId, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    ConnectorInstanceId, HttpMethod, HttpRequest, HttpTransport, OAuth2CodeExchange, OAuth2Token,
+    Result, SourceDocumentId, SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -291,6 +291,42 @@ impl FigmaConnector {
             components,
         })
     }
+
+    /// Best-effort revocation of already-registered webhook ids when
+    /// `subscribe_webhook` aborts partway through the team_id ×
+    /// event_type matrix. The caller has decided to fail the
+    /// subscription, which means the registered ids will never be
+    /// persisted in [`WebhookSubscription::provider_subscription_id`]
+    /// — so without rollback they would orphan in Figma's dashboard,
+    /// continuing to deliver webhooks that the substrate can't
+    /// correlate.
+    ///
+    /// Cleanup is **best-effort**: each DELETE is attempted, and
+    /// individual failures are swallowed (we already have an
+    /// outer error to surface; a secondary failure shouldn't mask
+    /// it). The connector emits no observable side effect beyond
+    /// the DELETE requests on the transport. The original error is
+    /// always preserved by the caller via `return Err(_)` after
+    /// this method returns.
+    fn rollback_partial_webhooks(&self, base_url: &str, token: &OAuth2Token, ids: &[String]) {
+        for id in ids {
+            let url = format!("{base_url}/v2/webhooks/{id}");
+            // We could in principle parse the response to log /
+            // surface secondary failures, but the goal here is to
+            // tear down what we can without escalating. Each call
+            // already retries on transient errors at the transport
+            // layer; once that exhausts we accept the orphan and
+            // move on.
+            let req = HttpRequest {
+                method: HttpMethod::Delete,
+                url,
+                headers: Vec::new(),
+                body: Vec::new(),
+            }
+            .with_bearer(token.access_token.expose());
+            let _ = self.transport.execute(req);
+        }
+    }
 }
 
 fn parse_role(role: &str) -> Option<SourcePermissionLevel> {
@@ -457,7 +493,7 @@ impl Connector for FigmaConnector {
                     "endpoint": callback_url,
                     "passcode": passcode,
                 });
-                let resp: FigmaWebhookCreateResponse = bearer_post_json(
+                let resp: Result<FigmaWebhookCreateResponse> = bearer_post_json(
                     &self.transport,
                     "figma",
                     "/v2/webhooks",
@@ -465,13 +501,30 @@ impl Connector for FigmaConnector {
                     token,
                     &[],
                     &body,
-                )?;
-                let id = resp.id.ok_or_else(|| {
-                    ConnectorError::Webhook(
-                        "figma /v2/webhooks returned no id on registration".into(),
-                    )
-                })?;
-                registered_ids.push(id);
+                );
+                match resp {
+                    Ok(payload) => {
+                        if let Some(id) = payload.id {
+                            registered_ids.push(id);
+                        } else {
+                            // Partial-registration rollback: Figma
+                            // accepted the call but didn't return
+                            // an id, so we have no way to revoke
+                            // it later. Clean up everything we did
+                            // get an id for so the operator's
+                            // dashboard isn't littered with orphan
+                            // webhooks.
+                            self.rollback_partial_webhooks(&base_url, token, &registered_ids);
+                            return Err(ConnectorError::Webhook(
+                                "figma /v2/webhooks returned no id on registration".into(),
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        self.rollback_partial_webhooks(&base_url, token, &registered_ids);
+                        return Err(e);
+                    }
+                }
             }
         }
         if registered_ids.is_empty() {
@@ -752,6 +805,73 @@ mod tests {
             assert_eq!(body["team_id"], "team-1");
             assert_eq!(body["endpoint"], "https://demo.example/webhooks/figma");
         }
+    }
+
+    #[test]
+    fn subscribe_webhook_rolls_back_successful_registrations_on_failure() {
+        // Setup: the connector registers 5 event_types per team.
+        // Mock first two POSTs success (`w1`, `w2`), third POST
+        // returns 500 (transport retries exhaust → ConnectorError).
+        // After the failure, the connector must issue DELETE
+        // requests for `w1` and `w2` before returning Err — so no
+        // orphan webhooks linger in Figma's dashboard.
+        let transport = Arc::new(MockHttpTransport::new());
+        // FIFO success POSTs:
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.test/figma/v2/webhooks",
+            ok_json(&serde_json::json!({"id": "w1"})),
+        );
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.test/figma/v2/webhooks",
+            ok_json(&serde_json::json!({"id": "w2"})),
+        );
+        // Third POST returns a hard 4xx (no transport retry; the
+        // failure propagates as ConnectorError::Sync or Webhook).
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.test/figma/v2/webhooks",
+            MockResponse::status(403, b"forbidden".to_vec()),
+        );
+        // Expected rollback DELETEs — these are the assertions we
+        // care about for this test.
+        transport.expect(
+            HttpMethod::Delete,
+            "https://api.test/figma/v2/webhooks/w1",
+            MockResponse::status(204, Vec::new()),
+        );
+        transport.expect(
+            HttpMethod::Delete,
+            "https://api.test/figma/v2/webhooks/w2",
+            MockResponse::status(204, Vec::new()),
+        );
+
+        let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .subscribe_webhook(&cfg(), &tok, "https://demo.example/webhooks/figma")
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConnectorError::Sync(_) | ConnectorError::Webhook(_) | ConnectorError::Auth(_)
+            ),
+            "subscribe_webhook must surface the upstream failure"
+        );
+        // Verify that both rollback DELETEs were actually issued:
+        let deletes: Vec<_> = transport
+            .recorded()
+            .into_iter()
+            .filter(|r| r.method == HttpMethod::Delete)
+            .collect();
+        assert_eq!(
+            deletes.len(),
+            2,
+            "must issue one DELETE per successfully-registered webhook id"
+        );
+        assert_eq!(deletes[0].url, "https://api.test/figma/v2/webhooks/w1");
+        assert_eq!(deletes[1].url, "https://api.test/figma/v2/webhooks/w2");
     }
 
     #[test]

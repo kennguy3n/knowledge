@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    bearer_get_json, bearer_post_json, percent_encode_form_component, Connector, ConnectorConfig,
+    bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, HttpTransport, OAuth2CodeExchange,
     OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId, SyncRunResult,
     SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
@@ -294,12 +294,12 @@ impl GoogleDriveConnector {
             let mut url = format!(
                 "{base_url}/drive/v3/files?pageSize={}&q={}&fields={}",
                 self.page_size,
-                percent_encode_form_component(q),
-                percent_encode_form_component(FILE_LIST_FIELDS_MASK),
+                percent_encode_path_component(q),
+                percent_encode_path_component(FILE_LIST_FIELDS_MASK),
             );
             if let Some(tok) = page_token.as_deref() {
                 url.push_str("&pageToken=");
-                url.push_str(&percent_encode_form_component(tok));
+                url.push_str(&percent_encode_path_component(tok));
             }
             let resp: GoogleDriveFileList = bearer_get_json(
                 &self.transport,
@@ -372,9 +372,9 @@ impl GoogleDriveConnector {
         for _ in 0..MAX_LIST_PAGES {
             let url = format!(
                 "{base_url}/drive/v3/changes?pageToken={}&pageSize={}&includeRemoved=true&fields={}",
-                percent_encode_form_component(&page_token),
+                percent_encode_path_component(&page_token),
                 self.page_size,
-                percent_encode_form_component(CHANGE_LIST_FIELDS_MASK),
+                percent_encode_path_component(CHANGE_LIST_FIELDS_MASK),
             );
             let resp: GoogleDriveChangeList = bearer_get_json(
                 &self.transport,
@@ -558,7 +558,7 @@ impl Connector for GoogleDriveConnector {
             .to_string();
         let url = format!(
             "{base_url}/drive/v3/changes/watch?pageToken={}",
-            percent_encode_form_component(page_token),
+            percent_encode_path_component(page_token),
         );
         let body = serde_json::json!({
             "id": channel_id,
@@ -698,12 +698,12 @@ mod tests {
         let mut url = format!(
             "{base_url}/drive/v3/files?pageSize={}&q={}&fields={}",
             DEFAULT_PAGE_SIZE,
-            percent_encode_form_component(q),
-            percent_encode_form_component(FILE_LIST_FIELDS_MASK),
+            percent_encode_path_component(q),
+            percent_encode_path_component(FILE_LIST_FIELDS_MASK),
         );
         if let Some(tok) = page_token {
             url.push_str("&pageToken=");
-            url.push_str(&percent_encode_form_component(tok));
+            url.push_str(&percent_encode_path_component(tok));
         }
         transport.expect(
             HttpMethod::Get,
@@ -733,9 +733,9 @@ mod tests {
     ) {
         let url = format!(
             "{base_url}/drive/v3/changes?pageToken={}&pageSize={}&includeRemoved=true&fields={}",
-            percent_encode_form_component(page_token),
+            percent_encode_path_component(page_token),
             DEFAULT_PAGE_SIZE,
-            percent_encode_form_component(CHANGE_LIST_FIELDS_MASK),
+            percent_encode_path_component(CHANGE_LIST_FIELDS_MASK),
         );
         transport.expect(
             HttpMethod::Get,
@@ -1004,7 +1004,7 @@ mod tests {
         let base = "https://api.test/google";
         let watch_url = format!(
             "{base}/drive/v3/changes/watch?pageToken={}",
-            percent_encode_form_component("watch-start-1"),
+            percent_encode_path_component("watch-start-1"),
         );
         transport.expect(
             HttpMethod::Post,

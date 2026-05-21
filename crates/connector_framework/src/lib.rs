@@ -56,7 +56,7 @@ pub use http::{
 pub use http::{MockHttpTransport, MockResponse, RecordedRequest};
 pub use http_helpers::{
     bearer_get_json, bearer_post_form, bearer_post_json, classify_failure, encode_form,
-    percent_encode_form_component,
+    percent_encode_form_component, percent_encode_path_component,
 };
 #[cfg(feature = "http-client")]
 pub use oauth::default_oauth_client;

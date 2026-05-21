@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{Duration, Utc};
-use connector_framework::percent_encode_form_component;
+use connector_framework::percent_encode_path_component;
 use connector_framework::{
     AuthKind, Connector, ConnectorConfig, ConnectorEvent, ConnectorInstanceId, ConnectorKind,
     HttpMethod, MockHttpTransport, MockResponse, OAuth2CodeExchange, OAuth2Token, Result, SyncMode,
@@ -203,8 +203,8 @@ fn exercise_google_drive(
         HttpMethod::Get,
         format!(
             "{base_url}/drive/v3/files?pageSize={DRIVE_PAGE_SIZE}&q={}&fields={}",
-            percent_encode_form_component(q),
-            percent_encode_form_component(file_list_fields),
+            percent_encode_path_component(q),
+            percent_encode_path_component(file_list_fields),
         ),
         ok_json(&json!(GoogleDriveFileList {
             files: vec![
@@ -233,9 +233,9 @@ fn exercise_google_drive(
         HttpMethod::Get,
         format!(
             "{base_url}/drive/v3/files?pageSize={DRIVE_PAGE_SIZE}&q={}&fields={}&pageToken={}",
-            percent_encode_form_component(q),
-            percent_encode_form_component(file_list_fields),
-            percent_encode_form_component("drive-page-2"),
+            percent_encode_path_component(q),
+            percent_encode_path_component(file_list_fields),
+            percent_encode_path_component("drive-page-2"),
         ),
         ok_json(&json!(GoogleDriveFileList {
             files: vec![GoogleDriveFile {
@@ -263,8 +263,8 @@ fn exercise_google_drive(
         HttpMethod::Get,
         format!(
             "{base_url}/drive/v3/changes?pageToken={}&pageSize={DRIVE_PAGE_SIZE}&includeRemoved=true&fields={}",
-            percent_encode_form_component("changes-token-1"),
-            percent_encode_form_component(change_list_fields),
+            percent_encode_path_component("changes-token-1"),
+            percent_encode_path_component(change_list_fields),
         ),
         ok_json(&json!(GoogleDriveChangeList {
             changes: vec![
@@ -299,7 +299,7 @@ fn exercise_google_drive(
         HttpMethod::Post,
         format!(
             "{base_url}/drive/v3/changes/watch?pageToken={}",
-            percent_encode_form_component("watch-start-1"),
+            percent_encode_path_component("watch-start-1"),
         ),
         ok_json(&json!(GoogleDriveWatchResponse {
             id: Some("chan-demo".into()),
@@ -444,7 +444,7 @@ fn exercise_jira(
     // the connector stops after one round-trip.
     transport.expect(
         HttpMethod::Get,
-        "https://api.test/jira/rest/api/3/search?jql=ORDER+BY+created+ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
+        "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
         ok_json(&json!(JiraSearchResponse {
             issues: vec![
                 issue("PROJ-101", "Adopt knowledge substrate", now - Duration::days(2)),
@@ -469,7 +469,7 @@ fn exercise_jira(
         HttpMethod::Get,
         format!(
             "https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
-            connector_framework::percent_encode_form_component(&expected_jql)
+            connector_framework::percent_encode_path_component(&expected_jql)
         ),
         ok_json(&json!(JiraSearchResponse {
             issues: vec![
@@ -889,7 +889,7 @@ fn exercise_email(
         HttpMethod::Get,
         format!(
             "{gmail_base}/gmail/v1/users/me/messages?maxResults={}",
-            percent_encode_form_component(&page_size)
+            percent_encode_path_component(&page_size)
         ),
         ok_json(&json!(GmailMessagesListPage {
             messages: vec![
@@ -914,8 +914,8 @@ fn exercise_email(
         HttpMethod::Get,
         format!(
             "{gmail_base}/gmail/v1/users/me/messages?maxResults={}&pageToken={}",
-            percent_encode_form_component(&page_size),
-            percent_encode_form_component("gmail-page-2"),
+            percent_encode_path_component(&page_size),
+            percent_encode_path_component("gmail-page-2"),
         ),
         ok_json(&json!(GmailMessagesListPage {
             messages: vec![GmailMessageRef {
@@ -942,8 +942,8 @@ fn exercise_email(
         HttpMethod::Get,
         format!(
             "{gmail_base}/gmail/v1/users/me/history?startHistoryId={}&maxResults={}",
-            percent_encode_form_component("1099"),
-            percent_encode_form_component(&page_size),
+            percent_encode_path_component("1099"),
+            percent_encode_path_component(&page_size),
         ),
         ok_json(&json!({
             "history": [{

@@ -945,8 +945,7 @@ impl Connector for EmailConnector {
                 // is the responsibility of `initial_sync` (it
                 // anchors the cursor via `users.getProfile`), not
                 // of the webhook subscription.
-                subscription.provider_subscription_id =
-                    Some(format!("gmail-watch:{user_path}"));
+                subscription.provider_subscription_id = Some(format!("gmail-watch:{user_path}"));
                 Ok(subscription)
             }
             EmailProvider::MicrosoftGraph => {
@@ -999,18 +998,35 @@ impl Connector for EmailConnector {
     fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
         // Webhook decoding doesn't have a `provider` field on the
         // wire (Gmail Pub/Sub vs Graph batches are
-        // distinguishable by shape), so we try Graph first (its
-        // envelope is more strict) and fall back to Gmail.
+        // distinguishable by shape), so we try Graph first and fall
+        // back to Gmail.
+        //
+        // The discriminator is whether the parsed Graph envelope
+        // carries *recognisable* Graph content — either at least
+        // one notification in `value` OR a non-empty
+        // `validationToken`. Both struct fields use
+        // `#[serde(default)]` so that a partial body (e.g. a
+        // Microsoft retry that omits one of the fields) still
+        // decodes, but that leniency means an arbitrary JSON object
+        // like `{}` would *also* parse successfully into a
+        // batch with `value=[]` and `validation_token=None`. Treat
+        // that empty-but-well-formed case as "not Graph" so Gmail
+        // Pub/Sub envelopes — which never carry either field —
+        // never get misrouted into the Graph decode path.
         if let Ok(batch) = serde_json::from_slice::<GraphChangeNotificationBatch>(body) {
-            if batch.validation_token.is_some() && batch.value.is_empty() {
+            if batch.validation_token.is_some() {
+                // Validation handshake (RFC: a Graph subscription
+                // setup POST). Per Microsoft docs the body is
+                // `{ "validationToken": "..." }` with no `value`;
+                // the connector returns Ok(empty) so the substrate
+                // can echo the token back to Microsoft separately.
                 return Ok(Vec::new());
             }
             if !batch.value.is_empty() {
                 return Self::decode_graph_batch(batch);
             }
-            // Empty batch with no validationToken — could be a
-            // Gmail Pub/Sub envelope that lacked `value`; fall
-            // through to Gmail decode.
+            // Else: parsed-as-Graph but carries neither field —
+            // not actually a Graph payload. Fall through to Gmail.
         }
         let push: GmailPushNotification = serde_json::from_slice(body)?;
         if push.email_address.is_empty() && push.history_id == 0 {
@@ -1721,6 +1737,33 @@ mod tests {
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    #[test]
+    fn gmail_pubsub_envelope_is_not_misrouted_to_graph_decode_path() {
+        // Regression for the Graph-vs-Gmail discriminator: a
+        // Gmail Pub/Sub body carries neither `value` nor
+        // `validationToken`, so the well-formed-but-empty Graph
+        // parse must NOT short-circuit. The handler must fall
+        // through and surface Gmail events.
+        let transport = MockHttpTransport::new();
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
+            Arc::new(transport),
+            // Construct as Graph on purpose — the *connector* doesn't
+            // know which provider sent the webhook; the shape does.
+            graph_oauth(),
+        );
+        let body = serde_json::json!({
+            "emailAddress": "user@example.com",
+            "historyId": 99,
+            "messageIds": ["msg-from-gmail"]
+        });
+        let evs = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap();
+        assert_eq!(evs.len(), 1, "Gmail body should route to Gmail decode");
+        assert_eq!(evs[0].document_id().as_str(), "gmail:msg:msg-from-gmail");
     }
 
     #[test]

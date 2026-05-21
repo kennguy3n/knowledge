@@ -211,21 +211,48 @@ pub fn bearer_post_form<R: DeserializeOwned>(
 /// Percent-encode a single value per RFC 3986 §2 — the subset used
 /// by `application/x-www-form-urlencoded` bodies.
 ///
+/// This encoder is **only** for the body of an
+/// `application/x-www-form-urlencoded` POST: it encodes a literal
+/// space as `+`, matching the WHATWG URL-living-standard /
+/// HTML5 form-submission algorithm. For URL **query strings** and
+/// path segments, use [`percent_encode_path_component`] which
+/// emits `%20` per RFC 3986 §3.4.
+///
 /// We deliberately do **not** pull in a dedicated `url` /
-/// `percent-encoding` dependency for this — the only consumers are
+/// `percent-encoding` dependency — the only consumers are
 /// `encode_form` (for OAuth2 token endpoint bodies) and the
 /// per-provider `incremental_sync` URL builders, and the algorithm
 /// is small enough to inline. Mirrors the implementation in
 /// `crate::oauth` so the framework speaks one dialect.
 #[must_use]
 pub fn percent_encode_form_component(s: &str) -> String {
+    encode_with_space(s, true)
+}
+
+/// Percent-encode a single value as a URL path / query component
+/// per RFC 3986 §2.3 / §3.4. Spaces are emitted as `%20`, not `+`,
+/// so the result is correct for `?key=value` query parameters and
+/// `/{segment}` path components — including the case where a strict
+/// RFC 3986 proxy or gateway sits between the substrate and the
+/// provider and would reject `+` in a query string.
+///
+/// Use this (not [`percent_encode_form_component`]) for any string
+/// that becomes part of the URL, including cursor / pagination
+/// tokens, search queries, etc.
+#[must_use]
+pub fn percent_encode_path_component(s: &str) -> String {
+    encode_with_space(s, false)
+}
+
+#[inline]
+fn encode_with_space(s: &str, space_as_plus: bool) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(b as char);
             }
-            b' ' => out.push('+'),
+            b' ' if space_as_plus => out.push('+'),
             _ => {
                 out.push('%');
                 out.push(hex_nibble(b >> 4));
@@ -378,6 +405,49 @@ mod tests {
             "Az0-_.~",
             "unreserved characters must pass through unchanged"
         );
+    }
+
+    #[test]
+    fn percent_encode_path_component_uses_pct20_for_spaces() {
+        // A strict RFC 3986 §3.4 proxy / gateway may reject `+` in a
+        // query string; the URL encoder must emit `%20` so the
+        // substrate's traffic is never rejected mid-path.
+        assert_eq!(
+            percent_encode_path_component("hello world"),
+            "hello%20world"
+        );
+    }
+
+    #[test]
+    fn percent_encode_path_component_round_trips_jql_with_spaces() {
+        // Regression: Jira's JQL is the most common spaces-in-URL
+        // case in this PR (`updated > 2024-01-01 ORDER BY updated`).
+        // Asserting `%20` here pins the encoder choice in the URL
+        // path against accidental migration back to `+`.
+        let encoded = percent_encode_path_component("updated > '2024-01-01' ORDER BY updated ASC");
+        assert!(
+            encoded.contains("%20"),
+            "expected spaces as %20, got: {encoded}"
+        );
+        assert!(
+            !encoded.contains('+'),
+            "URL encoder must not emit `+` for spaces; got: {encoded}"
+        );
+    }
+
+    #[test]
+    fn percent_encode_path_and_form_agree_on_non_space_special_chars() {
+        // The two encoders only differ on the space character —
+        // every other reserved byte must be percent-encoded the
+        // same way. This guards against an accidental divergence
+        // (e.g. exempting `&` from one but not the other) that
+        // would silently break URL parsing.
+        let payload = "a&b=c/d?e#f g";
+        let form = percent_encode_form_component(payload);
+        let path = percent_encode_path_component(payload);
+        // The form encoder writes `+` for ' '; the path encoder
+        // writes `%20`. Other special bytes must match.
+        assert_eq!(form.replace('+', "%20"), path);
     }
 
     #[test]

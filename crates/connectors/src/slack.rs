@@ -298,7 +298,7 @@ impl SlackConnector {
             let url = match &cursor {
                 Some(c) => format!(
                     "{base_url}/conversations.list?exclude_archived=true&limit=200&cursor={}",
-                    connector_framework::percent_encode_form_component(c)
+                    connector_framework::percent_encode_path_component(c)
                 ),
                 None => format!("{base_url}/conversations.list?exclude_archived=true&limit=200"),
             };
@@ -344,16 +344,16 @@ impl SlackConnector {
         for _ in 0..MAX_HISTORY_PAGES_PER_CHANNEL {
             let mut url = format!(
                 "{base_url}/conversations.history?channel={}&limit={}",
-                connector_framework::percent_encode_form_component(channel_id),
+                connector_framework::percent_encode_path_component(channel_id),
                 self.history_page_limit
             );
             if let Some(o) = oldest {
                 url.push_str("&oldest=");
-                url.push_str(&connector_framework::percent_encode_form_component(o));
+                url.push_str(&connector_framework::percent_encode_path_component(o));
             }
             if let Some(c) = &cursor {
                 url.push_str("&cursor=");
-                url.push_str(&connector_framework::percent_encode_form_component(c));
+                url.push_str(&connector_framework::percent_encode_path_component(c));
             }
             let resp: SlackHistoryResponse = bearer_get_json(
                 &self.transport,
@@ -527,7 +527,20 @@ impl Connector for SlackConnector {
             .and_then(rfc3339_to_slack_ts)
             .or_else(|| state.cursor.clone());
         let mut events: Vec<ConnectorEvent> = Vec::new();
-        let mut watermark: Option<DateTime<Utc>> = None;
+        // Seed from the prior watermark so a sync run that returns
+        // zero (or unexpectedly old) messages can never regress the
+        // cursor backwards. Slack's `oldest` filter is server-side
+        // and inclusive at the granularity of fractional seconds, so
+        // a clock-skew / precision-loss case could otherwise return
+        // messages with `ts <= cursor` and pull the watermark back —
+        // duplicating the boundary message on the next run. Matches
+        // the seeding pattern used by Confluence / HubSpot / Jira /
+        // Notion in this same PR.
+        let mut watermark: Option<DateTime<Utc>> = state
+            .cursor
+            .as_deref()
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
         for channel in &channels {
             let mut messages =
                 self.fetch_history(&base_url, token, &channel.id, oldest.as_deref())?;

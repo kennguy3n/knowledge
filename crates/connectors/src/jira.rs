@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    bearer_get_json, bearer_post_json, percent_encode_form_component, Connector, ConnectorConfig,
+    bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, HttpTransport, OAuth2CodeExchange,
     OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId, SyncRunResult,
     SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
@@ -226,7 +226,7 @@ impl JiraConnector {
             let url = format!(
                 "{base_url}/rest/api/3/search?jql={}&startAt={start_at}&maxResults={}\
                  &fields=summary,created,updated,status",
-                percent_encode_form_component(jql),
+                percent_encode_path_component(jql),
                 self.page_size,
             );
             let resp: JiraSearchResponse = bearer_get_json(
@@ -344,12 +344,27 @@ impl Connector for JiraConnector {
             .map_or_else(|| "ORDER BY updated ASC".to_string(), watermark_jql);
         let issues = self.paginate_search(&base_url, token, &jql)?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(issues.len());
-        let mut watermark: Option<DateTime<Utc>> = state
+        let prior_watermark: Option<DateTime<Utc>> = state
             .cursor
             .as_deref()
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));
+        let mut watermark = prior_watermark;
         for issue in &issues {
+            // The JQL filter is `updated >= '<cursor>'` (Jira does
+            // not support a strict `>` against the JQL time grammar
+            // — its parser truncates to the precision of the
+            // supplied literal). That means the boundary issue —
+            // the one whose `updated` exactly equals the prior
+            // cursor — is returned every incremental run. Skip it
+            // client-side so the substrate sees each update at most
+            // once, matching the Confluence / HubSpot dedup pattern.
+            let when = issue.fields.updated.or(issue.fields.created);
+            if let (Some(prev), Some(t)) = (prior_watermark, when) {
+                if t <= prev {
+                    continue;
+                }
+            }
             events.push(issue_to_event(issue, "update"));
             // Mirror `initial_sync` — fall back to `created` when
             // `updated` is absent so the watermark always
@@ -358,7 +373,7 @@ impl Connector for JiraConnector {
             // missing-`updated` case keeps the two sync paths
             // symmetric and defends against API responses where
             // the field is omitted (sparse-field projections).
-            if let Some(t) = issue.fields.updated.or(issue.fields.created) {
+            if let Some(t) = when {
                 watermark = Some(watermark.map_or(t, |w| w.max(t)));
             }
         }
@@ -572,7 +587,7 @@ mod tests {
         let now = Utc::now();
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/jira/rest/api/3/search?jql=ORDER+BY+created+ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
+            "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
             ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-1", now, now)],
                 "startAt": 0, "maxResults": 50, "total": 1,
@@ -596,7 +611,7 @@ mod tests {
         // First page: 2 issues, total=3 — must request page 2.
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/jira/rest/api/3/search?jql=ORDER+BY+created+ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
+            "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
             ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-1", now, now), issue("PROJ-2", now, now)],
                 "startAt": 0, "maxResults": 50, "total": 3,
@@ -604,7 +619,7 @@ mod tests {
         );
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/jira/rest/api/3/search?jql=ORDER+BY+created+ASC&startAt=2&maxResults=50&fields=summary,created,updated,status",
+            "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=2&maxResults=50&fields=summary,created,updated,status",
             ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-3", now, now)],
                 "startAt": 2, "maxResults": 50, "total": 3,
@@ -623,7 +638,7 @@ mod tests {
         let now = Utc::now();
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/jira/rest/api/3/search?jql=ORDER+BY+created+ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
+            "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
             ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-1", now, now)],
                 "startAt": 0, "maxResults": 50, "total": 1,
@@ -646,7 +661,7 @@ mod tests {
             HttpMethod::Get,
             format!(
                 "https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
-                percent_encode_form_component(&expected_jql)
+                percent_encode_path_component(&expected_jql)
             ),
             ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-2", now - Duration::days(1), now)],
@@ -666,11 +681,67 @@ mod tests {
     }
 
     #[test]
+    fn incremental_sync_dedupes_boundary_issue_against_prior_cursor() {
+        // Jira's JQL is `updated >= '<cursor>'` (inclusive), so the
+        // last issue from the prior sync (whose `updated` equals
+        // the watermark) is returned on every subsequent run. The
+        // connector must skip it client-side and only surface
+        // strictly-newer rows. Mirror the dedup invariant for
+        // HubSpot / Confluence.
+        let transport = Arc::new(MockHttpTransport::new());
+        let now = Utc::now();
+        let cursor_t = now - Duration::hours(1);
+        let cursor = cursor_t.to_rfc3339();
+        let expected_jql = format!("updated >= '{cursor}' ORDER BY updated ASC");
+        // Page returns two issues: the boundary one (same `updated`
+        // as cursor) and one strictly newer. Only the newer must
+        // be emitted, and the watermark must advance to it.
+        let newer = now;
+        transport.expect(
+            HttpMethod::Get,
+            format!(
+                "https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
+                percent_encode_path_component(&expected_jql)
+            ),
+            ok_json(&serde_json::json!({
+                "issues": [
+                    issue("PROJ-1", now - Duration::days(1), cursor_t),
+                    issue("PROJ-2", now - Duration::days(1), newer),
+                ],
+                "startAt": 0, "maxResults": 50, "total": 2,
+            })),
+        );
+        let c = JiraConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some(cursor);
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        assert_eq!(
+            res.events.len(),
+            1,
+            "boundary issue must be skipped; only strictly-newer remains"
+        );
+        assert_eq!(
+            res.events[0].document_id().as_str(),
+            "PROJ-2",
+            "the strictly-newer issue must be the one emitted"
+        );
+        let next = res.next_cursor.expect("watermark must advance");
+        let next_t = DateTime::parse_from_rfc3339(&next)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(
+            next_t > cursor_t,
+            "watermark must advance past the boundary"
+        );
+    }
+
+    #[test]
     fn initial_sync_maps_401_to_auth_error() {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/jira/rest/api/3/search?jql=ORDER+BY+created+ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
+            "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
             MockResponse::status(401, b"unauthorized".to_vec()),
         );
         let c = JiraConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());

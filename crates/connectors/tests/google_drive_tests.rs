@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use chrono::{Duration, Utc};
 use connector_framework::{
-    bearer_get_json, percent_encode_form_component, AuthKind, Connector, ConnectorConfig,
+    bearer_get_json, percent_encode_path_component, AuthKind, Connector, ConnectorConfig,
     ConnectorError, ConnectorEvent, ConnectorInstanceId, ConnectorKind, HttpMethod, HttpTransport,
     MockHttpTransport, MockResponse, OAuth2CodeExchange, OAuth2Token, Result,
     SourcePermissionLevel, SyncState,
@@ -33,7 +33,7 @@ use evidence_store::ScopeId;
 #[allow(dead_code)]
 fn ensure_helpers_linked() {
     let _ = bearer_get_json::<serde_json::Value>;
-    let _ = percent_encode_form_component;
+    let _ = percent_encode_path_component;
 }
 
 const FILES_LIST_FIXTURE: &str = include_str!("fixtures/google_drive_files_list.json");
@@ -80,12 +80,12 @@ fn files_list_url(page_token: Option<&str>) -> String {
     let mut url = format!(
         "{BASE_URL}/drive/v3/files?pageSize={}&q={}&fields={}",
         DEFAULT_PAGE_SIZE,
-        percent_encode_form_component("trashed = false"),
-        percent_encode_form_component(FILE_LIST_FIELDS_MASK),
+        percent_encode_path_component("trashed = false"),
+        percent_encode_path_component(FILE_LIST_FIELDS_MASK),
     );
     if let Some(tok) = page_token {
         url.push_str("&pageToken=");
-        url.push_str(&percent_encode_form_component(tok));
+        url.push_str(&percent_encode_path_component(tok));
     }
     url
 }
@@ -93,9 +93,9 @@ fn files_list_url(page_token: Option<&str>) -> String {
 fn changes_list_url(page_token: &str) -> String {
     format!(
         "{BASE_URL}/drive/v3/changes?pageToken={}&pageSize={}&includeRemoved=true&fields={}",
-        percent_encode_form_component(page_token),
+        percent_encode_path_component(page_token),
         DEFAULT_PAGE_SIZE,
-        percent_encode_form_component(CHANGE_LIST_FIELDS_MASK),
+        percent_encode_path_component(CHANGE_LIST_FIELDS_MASK),
     )
 }
 
@@ -132,7 +132,7 @@ fn install_fixture_responses(transport: &MockHttpTransport) {
         HttpMethod::Post,
         format!(
             "{BASE_URL}/drive/v3/changes/watch?pageToken={}",
-            percent_encode_form_component("watch-start-1"),
+            percent_encode_path_component("watch-start-1"),
         ),
         MockResponse::ok_json(
             serde_json::to_vec(&GoogleDriveWatchResponse {

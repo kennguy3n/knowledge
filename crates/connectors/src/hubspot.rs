@@ -313,7 +313,7 @@ impl HubSpotConnector {
                     "{base_url}/crm/v3/objects/{}?limit={}&after={}",
                     kind.as_path_segment(),
                     self.page_size,
-                    connector_framework::percent_encode_form_component(cursor),
+                    connector_framework::percent_encode_path_component(cursor),
                 ),
                 None => format!(
                     "{base_url}/crm/v3/objects/{}?limit={}",
