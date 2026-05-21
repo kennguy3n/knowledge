@@ -252,15 +252,30 @@ impl InferenceRouter {
     /// background variant spawned by [`Self::spawn_bootstrap`]) has
     /// completed.
     ///
-    /// Returns immediately when bootstrap has already finished, so
-    /// callers that are not racing the probe pay only an atomic
-    /// load. Callers racing the probe — typically an FFI surface
-    /// invoked right after `open_store` — park on the condvar
-    /// until the bootstrap thread notifies completion.
+    /// Returns immediately when bootstrap has already finished
+    /// (the condvar's `done` flag observed under the lock is the
+    /// authoritative signal). Callers racing the probe — typically
+    /// an FFI surface invoked right after `open_store` — park on
+    /// the condvar until the bootstrap thread notifies completion.
+    ///
+    /// An earlier revision short-circuited on a lockless atomic read
+    /// of [`Self::bootstrapped`] before taking the lock, which under
+    /// the [`Self::reset_bootstrap_state`] / re-spawn path was racy:
+    /// SeqCst guarantees a total order over the atomic load and the
+    /// (reset) atomic store, but does not guarantee the reader's load
+    /// is sequenced *after* the writer's store in that order. A
+    /// caller could therefore observe `bootstrapped == true` (from
+    /// the prior bootstrap) while the reset had already taken the
+    /// lock and flipped `done = false`, then return from
+    /// `wait_for_bootstrap` without ever parking on the condvar.
+    /// Acquiring the mutex first eliminates the race entirely: the
+    /// reset and the wait now use the same critical section to read
+    /// / write the `done` flag, and the mutex's acquire/release
+    /// edges establish a clean happens-before relation. The cost is
+    /// one mutex acquire per call, which is negligible —
+    /// `wait_for_bootstrap` is called at most once per FFI synthesis
+    /// dispatch (rare, host-driven cadence), not from any hot path.
     pub fn wait_for_bootstrap(&self) {
-        if self.is_bootstrapped() {
-            return;
-        }
         let (lock, cvar) = &self.bootstrap_signal;
         let mut done = lock.lock().expect("bootstrap_signal lock");
         while !*done {

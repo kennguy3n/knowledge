@@ -825,6 +825,37 @@ pub const SYNTHESIS_EVIDENCE_WINDOW: usize = 50;
 /// outstanding `Arc<Mutex<FfiRuntime>>` clones from `WITH_RUNTIME_STACK`,
 /// so the runtime itself is not at risk of disappearing — but stripping
 /// the lifetime tie is what makes the split structurally legal).
+///
+/// # Lost-work race with `close_store`
+///
+/// Because Phase 2 runs without the per-handle mutex, a host that
+/// calls [`close_store`](crate::close_store) **concurrently** with
+/// `trigger_synthesis` can land its close between Phase 2 and Phase 3:
+///
+/// * Phase 1 captures the [`Arc<InferenceRouter>`] and drops the
+///   mutex.
+/// * Phase 2 issues the SLM dispatch. The host calls
+///   [`close_store`](crate::close_store) on a different thread, which
+///   removes the handle from the registry and (after the drain loop
+///   completes — see the docs on
+///   [`close_store`](crate::close_store)) drops the runtime.
+/// * Phase 2 returns successfully with a parsed [`SummaryBundle`].
+/// * Phase 3's [`with_runtime`] re-lookup fails with
+///   [`FfiError::Unavailable`] because the handle is no longer in
+///   the registry.
+///
+/// In that scenario the SLM did real work (and burned real wall
+/// clock / GPU time) but the recap is **discarded** — the host
+/// observes `Unavailable` even though synthesis "happened". This is
+/// a *safe* race — Phase 3 is the only phase that writes to the
+/// store, so no partial state is ever persisted — and the
+/// alternative (holding the mutex across the multi-second SLM
+/// dispatch) would freeze every other FFI call on the handle.
+/// Hosts that need to guarantee no synthesis runs are lost across
+/// shutdown should await the result of `trigger_synthesis` before
+/// calling [`close_store`](crate::close_store); the substrate's
+/// recommended close path drains pending FFI calls externally rather
+/// than letting them race the close.
 fn synthesize_scope(
     handle: RuntimeHandle,
     scope: ScopeId,

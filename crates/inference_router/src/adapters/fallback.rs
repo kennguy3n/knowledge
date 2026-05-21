@@ -301,13 +301,33 @@ fn classify_importance(body: &str) -> String {
 /// Pure rule-based classifiers shouldn't claim 1.0 — leave headroom
 /// for the SLM-driven adapter — but should beat 0.5 when there is
 /// any signal at all.
+///
+/// The upper bound of `0.95` is **load-bearing for the GBNF grammar**
+/// at [`crate::task::GRAMMAR_TAG_IMPORTANCE`], which only matches
+/// `"0" "." [0-9]+ | "1.0" | "1"`. A confidence ≥ 1.0 would format
+/// (via `{:.2}`) to the string `"1.00"`, which does NOT match the
+/// `"1.0"` alternative and would be rejected by the dispatch-time
+/// grammar validation in the router. The current implementation
+/// cannot exceed `0.95` (the squashing range is `[0.55, 0.95]` by
+/// construction), but a defensive `min(0.99_f64)` clamp is applied
+/// below as a *belt-and-braces* guard so any future refactor that
+/// widens the range — or an arithmetic accident — still produces
+/// grammar-compliant output. See the
+/// `confidence_from_density_clamps_below_one` test for the
+/// regression pin.
 fn confidence_from_density(score: usize, total: usize) -> f64 {
     if total == 0 {
         return 0.50;
     }
     let ratio = score as f64 / total as f64;
     // Squash to [0.55, 0.95].
-    0.55 + ratio * 0.40
+    let v = 0.55 + ratio * 0.40;
+    // Defensive clamp: see the doc above on the GBNF grammar's
+    // `"0" "." [0-9]+ | "1.0" | "1"` alternative — `{:.2}` of 1.0
+    // formats as `"1.00"` which would be rejected. `0.99_f64` keeps
+    // the formatted output inside the `"0" "." [0-9]+` branch even
+    // if the squashing range is widened in a future refactor.
+    v.min(0.99_f64)
 }
 
 // ──────────────────── extract_entities: regex-lite NER ────────────────────
@@ -653,6 +673,76 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
         assert!(parsed["class"].is_string());
         assert!(parsed["confidence"].is_f64());
+    }
+
+    /// Regression for Devin Review finding ANALYSIS_0005: the GBNF
+    /// grammar at [`crate::task::GRAMMAR_TAG_IMPORTANCE`] only accepts
+    /// `"0" "." [0-9]+ | "1.0" | "1"`. A formatted confidence of
+    /// `"1.00"` would NOT match (the `"1.0"` alternative requires
+    /// exactly one trailing zero), so we must never emit a confidence
+    /// ≥ 1.0 even via a future refactor that widens the squashing
+    /// range. The defensive `min(0.99_f64)` clamp in
+    /// [`confidence_from_density`] enforces this; this test pins the
+    /// invariant by feeding the helper an arithmetic worst case
+    /// (`score == total`, which under the un-clamped formula would
+    /// yield `0.95` today — and a hypothetical `score > total`
+    /// scenario which the clamp catches).
+    #[test]
+    fn confidence_from_density_clamps_below_one() {
+        // Worst-case ratio under the documented [0.55, 0.95] range:
+        // formats well under 1.0. The numeric value may be slightly
+        // above `0.95` due to floating-point representation of
+        // `0.55 + 1.0 * 0.40`, but the formatted (`{:.2}`) value is
+        // what the grammar sees — `"0.95"` either way.
+        let c = confidence_from_density(10, 10);
+        let epsilon = f64::EPSILON * 16.0;
+        assert!(
+            (0.55..=0.95 + epsilon).contains(&c),
+            "got {c} (epsilon={epsilon})",
+        );
+        assert_eq!(format!("{c:.2}"), "0.95");
+
+        // Out-of-contract overshoot (e.g. a future refactor passes
+        // `score > total`): clamp keeps the format below 1.0 — and
+        // critically, `{:.2}` formats `0.99` as `"0.99"`, never
+        // `"1.00"`. The clamp picks `0.99_f64` specifically because
+        // `format!("{:.2}", 0.99_f64) == "0.99"` (binary rounding
+        // does not bump it up to `"1.00"`).
+        let c = confidence_from_density(100, 10);
+        assert!(c < 1.0, "got {c}");
+        assert_eq!(format!("{c:.2}"), "0.99");
+
+        // Grammar shape check: every formatted confidence emitted by
+        // `classify_importance` must start with `"0."` (the
+        // `"0" "." [0-9]+` branch). The other two grammar alternatives
+        // (`"1.0"`, `"1"`) are intentionally unreachable from the
+        // fallback adapter — only an SLM-backed adapter that has
+        // higher justifiable confidence would emit those.
+        for body in [
+            "We have a P0 outage right now",
+            "Just a friendly FYI thanks!",
+            "Decision needed on the deploy approval",
+            "Question? @alice can you investigate?",
+            "   ",
+            "",
+        ] {
+            let out = classify_importance(body);
+            // Pluck the confidence value out of the JSON-y string —
+            // the format is `{"class":"...","confidence":X.XX}`.
+            let cstart = out.find("\"confidence\":").expect("has field") + "\"confidence\":".len();
+            let cend = out[cstart..].find('}').expect("closes") + cstart;
+            let confidence_str = &out[cstart..cend];
+            assert!(
+                confidence_str.starts_with("0."),
+                "{body:?} produced non-grammar-compliant confidence {confidence_str:?} in {out}",
+            );
+            // And the full numeric must parse back as a float in
+            // [0.0, 1.0) — i.e. strictly less than 1.0 so a stricter
+            // future grammar that disallowed `"1.0"` entirely would
+            // still accept the fallback's output.
+            let v: f64 = confidence_str.parse().expect("parses");
+            assert!(v < 1.0, "{body:?} produced confidence {v} >= 1.0");
+        }
     }
 
     #[test]
