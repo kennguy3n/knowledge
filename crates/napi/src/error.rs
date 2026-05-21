@@ -31,6 +31,24 @@ pub enum NapiError {
         message: String,
     },
 
+    /// A substrate-side encoding / packaging step failed *after* the
+    /// real Rust call already succeeded — e.g. `serde_json::to_value`
+    /// on a result struct that should be infallible by construction.
+    ///
+    /// This is **not** an input-validation failure: by the time the
+    /// addon reaches a path that yields `Internal`, the JS caller's
+    /// arguments have already been parsed and the underlying FFI
+    /// function has already returned a value. Tagging it `Internal`
+    /// (instead of overloading `InvalidArgument`) lets desktop
+    /// telemetry distinguish "caller sent us bad input" from
+    /// "substrate has a latent bug" without forcing the host to
+    /// pattern-match on opaque error messages.
+    #[error("internal: {message}")]
+    Internal {
+        /// Diagnostic for the host.
+        message: String,
+    },
+
     /// Forwarded error from the underlying [`ffi`] surface.
     #[error("{0}")]
     Ffi(FfiError),
@@ -42,6 +60,7 @@ impl NapiError {
         match self {
             Self::InvalidConfig { .. } => "InvalidConfig",
             Self::InvalidArgument { .. } => "InvalidArgument",
+            Self::Internal { .. } => "Internal",
             Self::Ffi(inner) => inner.kind(),
         }
     }
@@ -73,6 +92,32 @@ mod tests {
         };
         assert!(err.to_string().contains("bad b64"));
         assert_eq!(err.kind(), "InvalidArgument");
+    }
+
+    #[test]
+    fn internal_message_includes_diagnostic() {
+        // Pins the wire-stable kind tag for the `Internal` variant
+        // used by binding wrappers that need to surface a
+        // *substrate-side* encoding failure (e.g.
+        // `serde_json::to_value` on a successful result).
+        // JS-side log scrapers key on `kind == "Internal"` to route
+        // the event to substrate-bug telemetry instead of
+        // caller-error telemetry.
+        let err = NapiError::Internal {
+            message: "could not encode rows: out of memory".into(),
+        };
+        assert!(err.to_string().contains("out of memory"));
+        assert_eq!(err.kind(), "Internal");
+    }
+
+    #[test]
+    fn internal_round_trips_via_json() {
+        let err = NapiError::Internal {
+            message: "boom".into(),
+        };
+        let s = serde_json::to_string(&err).unwrap();
+        let back: NapiError = serde_json::from_str(&s).unwrap();
+        assert_eq!(err, back);
     }
 
     #[test]

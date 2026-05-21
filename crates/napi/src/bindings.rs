@@ -163,7 +163,14 @@ pub fn js_query(handle: BigInt, req: serde_json::Value) -> Result<serde_json::Va
     let typed: QueryRequest = parse_arg(req)?;
     let rows = crate::query(h, typed).map_err(to_js_error)?;
     serde_json::to_value(rows).map_err(|e| {
-        to_js_error(NapiError::InvalidArgument {
+        // `Internal`, not `InvalidArgument`: the JS caller's input
+        // has already cleared `parse_arg` and the underlying
+        // `crate::query` call has already returned successfully.
+        // A `to_value` failure here means the substrate has a
+        // latent encoding bug on a `Serialize` impl that should
+        // be infallible by construction — routing this to the
+        // `Internal` bucket keeps caller-error telemetry clean.
+        to_js_error(NapiError::Internal {
             message: format!("failed to serialise query rows: {e}"),
         })
     })
@@ -175,7 +182,9 @@ pub fn js_get_evidence(handle: BigInt, evidence_id: String) -> Result<serde_json
     let h = handle_from_bigint(&handle)?;
     let row = crate::get_evidence(h, evidence_id).map_err(to_js_error)?;
     serde_json::to_value(row).map_err(|e| {
-        to_js_error(NapiError::InvalidArgument {
+        // See `js_query` — a substrate-side encoding bug, not
+        // a caller-side input bug.
+        to_js_error(NapiError::Internal {
             message: format!("failed to serialise evidence row: {e}"),
         })
     })
@@ -199,7 +208,9 @@ pub fn js_get_user_memory(handle: BigInt, scope_id: String) -> Result<serde_json
     let h = handle_from_bigint(&handle)?;
     let rows: Vec<MemoryRecord> = crate::get_user_memory(h, scope_id).map_err(to_js_error)?;
     serde_json::to_value(rows).map_err(|e| {
-        to_js_error(NapiError::InvalidArgument {
+        // See `js_query` — a substrate-side encoding bug, not
+        // a caller-side input bug.
+        to_js_error(NapiError::Internal {
             message: format!("failed to serialise memory rows: {e}"),
         })
     })
@@ -254,7 +265,9 @@ pub fn js_list_memories(
     let typed: MemoryFilter = parse_arg(filter)?;
     let rows: Vec<MemoryRecord> = crate::list_memories(h, scope_id, typed).map_err(to_js_error)?;
     serde_json::to_value(rows).map_err(|e| {
-        to_js_error(NapiError::InvalidArgument {
+        // See `js_query` — a substrate-side encoding bug, not
+        // a caller-side input bug.
+        to_js_error(NapiError::Internal {
             message: format!("failed to serialise memory rows: {e}"),
         })
     })
@@ -279,7 +292,9 @@ pub fn js_get_channel_memory(handle: BigInt, scope_id: String) -> Result<serde_j
     let h = handle_from_bigint(&handle)?;
     let row: Option<MemoryRecord> = crate::get_channel_memory(h, scope_id).map_err(to_js_error)?;
     serde_json::to_value(row).map_err(|e| {
-        to_js_error(NapiError::InvalidArgument {
+        // See `js_query` — a substrate-side encoding bug, not
+        // a caller-side input bug.
+        to_js_error(NapiError::Internal {
             message: format!("failed to serialise channel memory: {e}"),
         })
     })
@@ -309,7 +324,9 @@ pub fn js_trigger_synthesis(handle: BigInt, scope_id: String, trigger: String) -
 pub fn js_generate_keypair() -> Result<serde_json::Value> {
     let kp = crate::generate_keypair().map_err(to_js_error)?;
     serde_json::to_value(kp).map_err(|e| {
-        to_js_error(NapiError::InvalidArgument {
+        // See `js_query` — a substrate-side encoding bug, not
+        // a caller-side input bug.
+        to_js_error(NapiError::Internal {
             message: format!("failed to serialise keypair: {e}"),
         })
     })
