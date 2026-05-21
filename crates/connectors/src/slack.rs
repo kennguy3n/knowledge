@@ -336,17 +336,39 @@ impl SlackCursor {
     /// timestamp). The legacy fallback never lights up the channel
     /// cache, so the next `incremental_sync` will re-list once and
     /// start caching from there.
+    ///
+    /// **Forward compatibility:** when the cursor parses as JSON
+    /// but carries an unknown `v` (e.g. a future connector wrote
+    /// `v=2` and an older connector is reading it during a rolling
+    /// deployment), the watermark is preserved (it's a stable
+    /// RFC-3339 string across every schema we'd ship) while the
+    /// channel cache is discarded. Without this, the older
+    /// connector would re-ingest every message in the workspace,
+    /// because every "unknown-v" parse would zero out the
+    /// `oldest` parameter passed to `conversations.history`.
     fn parse(s: &str) -> Self {
         if let Ok(parsed) = serde_json::from_str::<Self>(s) {
             // Defensively normalise the version field — any
             // `v` value that we recognise as backward-compatible
-            // (currently just `1`) is fine; unknown future
-            // versions are treated as opaque and the cache is
-            // discarded so a fresh re-list happens.
+            // (currently just `1`) is fine.
             if parsed.v == 1 {
                 return parsed;
             }
-            return Self::default();
+            // Unknown future version (e.g. a newer connector wrote
+            // a `v=2` cursor and an older connector is reading it
+            // during a rolling deployment). The cache layout may
+            // have changed in v2+, so we cannot trust it — but the
+            // `watermark` field is a stable RFC-3339 string in
+            // every schema we'd ship, and discarding it would
+            // re-ingest every message since the dawn of time. Pull
+            // the watermark forward, drop the cache, and let the
+            // next `incremental_sync` re-list channels once.
+            return Self {
+                v: 1,
+                watermark: parsed.watermark,
+                channels: Vec::new(),
+                channels_listed_at: None,
+            };
         }
         Self {
             v: 1,
@@ -1676,6 +1698,57 @@ mod tests {
         // convert it via `rfc3339_to_slack_ts` for the oldest param.
         let parsed = SlackCursor::parse("2023-11-14T22:13:20Z");
         assert_eq!(parsed.watermark.as_deref(), Some("2023-11-14T22:13:20Z"));
+        assert!(parsed.channels.is_empty());
+        assert!(parsed.channels_listed_at.is_none());
+    }
+
+    #[test]
+    fn slack_cursor_preserves_watermark_across_unknown_future_version() {
+        // Forward-compat regression: a future connector version writes
+        // `v=2` (which the current connector does not understand). The
+        // current parser MUST keep the watermark — discarding it would
+        // re-ingest every message in the workspace on the next
+        // incremental_sync run during a rolling deployment.
+        //
+        // The channel cache layout may have changed in v2+, so dropping
+        // the cache is correct — the next run re-lists once and
+        // restarts the cache fresh under v=1 semantics.
+        let future_cursor = serde_json::json!({
+            "v": 2,
+            "watermark": "2024-08-01T12:00:00Z",
+            "channels": [{"id": "C-NEW-SHAPE", "extra_v2_field": "anything"}],
+            "channels_listed_at": "2024-08-01T11:55:00Z",
+        })
+        .to_string();
+        let parsed = SlackCursor::parse(&future_cursor);
+        // Normalised back to v=1 so the connector's own code paths
+        // continue to work.
+        assert_eq!(parsed.v, 1);
+        // Watermark survives — this is the critical invariant.
+        assert_eq!(parsed.watermark.as_deref(), Some("2024-08-01T12:00:00Z"));
+        // Channel cache is dropped (its shape may have changed).
+        assert!(parsed.channels.is_empty());
+        assert!(parsed.channels_listed_at.is_none());
+        // cache_is_fresh must report stale so the next run re-lists.
+        assert!(!parsed.cache_is_fresh(Utc::now(), Duration::hours(6)));
+    }
+
+    #[test]
+    fn slack_cursor_unknown_future_version_without_watermark_falls_back_to_default() {
+        // Edge case: a future schema that renamed `watermark` to
+        // something else, so our v=1 parser can't recover it. The
+        // parser must still return a usable cursor (with empty
+        // watermark) rather than panic. The connector will then re-do
+        // an initial sync — wasteful, but correct.
+        let future_cursor = serde_json::json!({
+            "v": 99,
+            "last_message_ts": "2024-08-01T12:00:00Z",
+            "channels": [],
+        })
+        .to_string();
+        let parsed = SlackCursor::parse(&future_cursor);
+        assert_eq!(parsed.v, 1);
+        assert!(parsed.watermark.is_none());
         assert!(parsed.channels.is_empty());
         assert!(parsed.channels_listed_at.is_none());
     }
