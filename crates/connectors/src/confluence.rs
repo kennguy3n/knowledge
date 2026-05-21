@@ -273,10 +273,29 @@ impl ConfluenceConnector {
     /// Returns the merged page list in the order the server emitted
     /// them — Confluence v2 sorts by `-modified-date` (most recent
     /// first) for our query.
+    ///
+    /// `cutoff` enables **server-bounded incremental loading**:
+    /// because the v2 endpoint sorts by `-modified-date` (newest
+    /// first), once the response contains an object whose
+    /// [`modified_at`] is `<= cutoff`, every subsequent object on
+    /// this page and every later page is guaranteed to be at or
+    /// before the watermark and is dropped. The current page is
+    /// truncated to the strictly-newer prefix and iteration stops
+    /// — saving the substrate from fetching the rest of the
+    /// workspace's history on every incremental run. Pass `None`
+    /// to walk every page (the `initial_sync` path).
+    ///
+    /// The early-exit only fires when the *server's* sort order is
+    /// honoured; if the response is out-of-order (a transient
+    /// Atlassian cache anomaly), the function falls through and
+    /// walks the rest of the page — the per-row `t <= prev`
+    /// defence-in-depth filter in [`Self::incremental_sync`] still
+    /// drops stale rows correctly.
     fn paginate_pages(
         &self,
         base_url: &str,
         token: &OAuth2Token,
+        cutoff: Option<DateTime<Utc>>,
     ) -> Result<Vec<ConfluenceContent>> {
         let mut pages = Vec::<ConfluenceContent>::new();
         // First page — explicit query string. Subsequent pages
@@ -311,6 +330,21 @@ impl ConfluenceConnector {
             // defensively even if `_links.next` was set.
             if resp.results.is_empty() {
                 return Ok(pages);
+            }
+            // Watermark-aware short-circuit — descending sort means
+            // the first `<= cutoff` row is the boundary between
+            // strictly-newer (keep) and at-or-older (drop). Stop
+            // here without following `_links.next`; every later
+            // page is guaranteed to be at or below the cutoff.
+            if let Some(cut) = cutoff {
+                if let Some(stop_at) = resp
+                    .results
+                    .iter()
+                    .position(|c| modified_at(c).is_some_and(|t| t <= cut))
+                {
+                    pages.extend(resp.results.into_iter().take(stop_at));
+                    return Ok(pages);
+                }
             }
             pages.extend(resp.results);
             next_path = resp.links.next;
@@ -383,7 +417,7 @@ impl Connector for ConfluenceConnector {
 
     fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
-        let pages = self.paginate_pages(&base_url, token)?;
+        let pages = self.paginate_pages(&base_url, token, None)?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(pages.len());
         let mut watermark: Option<DateTime<Utc>> = None;
         for c in &pages {
@@ -410,16 +444,23 @@ impl Connector for ConfluenceConnector {
             .as_deref()
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));
-        let pages = self.paginate_pages(&base_url, token)?;
+        // `paginate_pages` short-circuits on the first row
+        // at-or-below `prior_watermark` (it relies on the
+        // server's `-modified-date` sort). The per-row filter
+        // below is kept as defence-in-depth for the rare case
+        // where Atlassian's cache returns rows out of order on
+        // a single page — in that scenario the short-circuit
+        // truncates at the first stale row, but the prefix may
+        // still contain stragglers we want to drop.
+        let pages = self.paginate_pages(&base_url, token, prior_watermark)?;
         let mut events: Vec<ConnectorEvent> = Vec::new();
         let mut watermark: Option<DateTime<Utc>> = prior_watermark;
         for c in &pages {
-            // Drop anything we'd already have processed in a prior
-            // sync — v2's `/pages` is sorted by `-modified-date` so
-            // we could short-circuit on the first old row, but
-            // walking the whole page is harmless and tolerates
-            // out-of-order rows from cache thrash on Atlassian's
-            // side.
+            // Defence-in-depth filter for out-of-order rows from
+            // Atlassian cache thrash — the server-side sort + the
+            // `paginate_pages` short-circuit already drop the
+            // majority of stale rows before we ever see them, so
+            // this loop body normally never fires `continue`.
             if let (Some(prev), Some(t)) = (prior_watermark, modified_at(c)) {
                 if t <= prev {
                     continue;
@@ -724,6 +765,68 @@ mod tests {
             }
             other => panic!("expected DocumentUpdated for c-new, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn incremental_sync_short_circuits_pagination_at_first_stale_page() {
+        // Pins the server-bounded incremental loading invariant:
+        // because the v2 endpoint sorts by `-modified-date`
+        // (newest first), once the response contains a row at or
+        // below the prior watermark, `paginate_pages` must stop
+        // immediately without following `_links.next`.
+        //
+        // We register a SINGLE canned response for page 1 — page 1
+        // contains 1 fresh row + 1 stale row + a `_links.next`
+        // pointing at a hypothetical page 2. We do NOT register a
+        // response for page 2. If the short-circuit ever
+        // regresses, the connector will issue a GET for page 2,
+        // the mock will fall through to `mock_not_configured`
+        // (HTTP 404), and `incremental_sync` will return
+        // `Err(ConnectorError::Sync(...))`. The `.unwrap()` below
+        // makes that failure mode loud.
+        let now = Utc::now();
+        let watermark = (now - Duration::minutes(1)).to_rfc3339();
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
+            ok_json(&serde_json::json!({
+                "results": [
+                    // Strictly newer than the watermark — keep.
+                    page("c-new", 2, now),
+                    // At or below the watermark — drop, and skip
+                    // page 2 entirely.
+                    page("c-old", 3, now - Duration::hours(2)),
+                ],
+                "_links": {
+                    // If this URL ever gets fetched, the test
+                    // fails — no expectation is registered for it.
+                    "next": "/wiki/api/v2/pages?cursor=should-not-fetch&limit=50&sort=-modified-date"
+                }
+            })),
+        );
+        let recorder = Arc::clone(&transport);
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some(watermark);
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        // Only the fresh row was emitted.
+        assert_eq!(res.events.len(), 1);
+        // Explicit positive assertion: exactly ONE GET landed on
+        // the transport — page 2 was never fetched.
+        let requests = recorder.recorded();
+        assert_eq!(
+            requests.len(),
+            1,
+            "expected short-circuit to issue only one GET, got {}: {:?}",
+            requests.len(),
+            requests.iter().map(|r| &r.url).collect::<Vec<_>>()
+        );
+        assert!(
+            !requests[0].url.contains("should-not-fetch"),
+            "first request should be the initial page, not the next-cursor URL"
+        );
     }
 
     #[test]
