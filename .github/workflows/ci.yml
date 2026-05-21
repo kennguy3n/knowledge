@@ -51,6 +51,48 @@ jobs:
           restore-keys: ${{ runner.os }}-clippy-default-
       - run: cargo clippy --all-targets -- -D warnings
 
+  unsafe-code-guard:
+    name: unsafe-code allowlist
+    runs-on: ubuntu-latest
+    # Workspace-wide `unsafe_code` is set to `deny` (not `forbid`) in
+    # the root `Cargo.toml` so that the napi-derive proc-macro
+    # expansion in `crates/napi/src/bindings.rs` can opt back in via
+    # a single `#![allow(unsafe_code)]`. This job pins the set of
+    # crates that are permitted to use that escape hatch: if a new
+    # `allow(unsafe_code)` (inner or outer attribute) appears
+    # anywhere outside `crates/napi/`, the job fails and forces the
+    # author to justify the relaxation in review instead of slipping
+    # it past the workspace-level guarantee.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find unsafe_code allows outside the napi allowlist
+        run: |
+          # Allowlisted paths. Edit this list (and the doc above)
+          # when a new crate is consciously granted an exception.
+          ALLOWED_PREFIX='^crates/napi/'
+
+          # `grep -nE` so we surface filename + line for every hit.
+          # `git ls-files` so we only look at tracked sources (no
+          # vendored deps, no build artefacts).
+          matches="$(git ls-files \
+            -- '*.rs' \
+            | grep -vE "${ALLOWED_PREFIX}" \
+            | xargs grep -nE '#!?\[allow\(unsafe_code\)\]' || true)"
+
+          if [ -n "${matches}" ]; then
+            echo '::error::A new `allow(unsafe_code)` was introduced outside the napi allowlist:'
+            echo "${matches}"
+            echo
+            echo 'The workspace `Cargo.toml` sets `unsafe_code = "deny"` so that the'
+            echo 'napi crate can opt back in for napi-derive proc-macro expansion.'
+            echo 'Any other relaxation needs explicit review — please either remove'
+            echo 'the `allow`, or update the allowlist in `.github/workflows/ci.yml`'
+            echo 'with a justification comment.'
+            exit 1
+          fi
+
+          echo 'No stray allow(unsafe_code) attributes found outside crates/napi/.'
+
   clippy-all:
     name: clippy (all features)
     runs-on: ubuntu-latest

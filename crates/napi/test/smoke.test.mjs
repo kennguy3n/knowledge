@@ -22,22 +22,57 @@ const core = requireCJS(resolvePath(here, '..', 'index.js'));
 // `coreVersion()` against the source of truth instead of a hardcoded
 // string here — that way a `cargo release` bump can't silently drift
 // the JS surface from the Rust crate.
+//
+// Section-scoped lookup: we deliberately walk the TOML line-by-line
+// and only accept a `version = "..."` line that lives directly under
+// the `[workspace.package]` table (or the crate's own top-level
+// section, before any other `[...]` table starts). A naive
+// `/^\s*version\s*=\s*"([^"]+)"/m` would match the first `version`
+// in the file — fine today because `[workspace.package]` precedes
+// `[workspace.dependencies]` and every workspace dep is declared
+// inline (`uuid = { version = "1", ... }`), but the moment someone
+// adds a multi-line table form before `[workspace.package]` —
+// e.g. `[workspace.dependencies.foo]` / `version = "1"` on the next
+// line — the JS smoke test would silently start pinning the wrong
+// version. Anchoring on the table header makes that failure
+// impossible.
+function findVersionInSection(toml, sectionHeader) {
+  const lines = toml.split(/\r?\n/);
+  let inSection = false;
+  for (const raw of lines) {
+    const line = raw.replace(/#.*$/, '').trimEnd();
+    const tableMatch = /^\[([^\]]+)\]\s*$/.exec(line);
+    if (tableMatch) {
+      inSection = tableMatch[1] === sectionHeader;
+      continue;
+    }
+    if (!inSection) continue;
+    const m = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
+    if (m) return m[1];
+  }
+  return null;
+}
+
 function readCargoVersion() {
   const toml = readFileSync(resolvePath(here, '..', 'Cargo.toml'), 'utf-8');
   // Workspace inheritance: `version.workspace = true` means the
-  // value lives in the root `Cargo.toml`.
+  // value lives in the root `Cargo.toml` under `[workspace.package]`.
   if (/version\.workspace\s*=\s*true/.test(toml)) {
     const root = readFileSync(
       resolvePath(here, '..', '..', '..', 'Cargo.toml'),
       'utf-8',
     );
-    const m = /^\s*version\s*=\s*"([^"]+)"/m.exec(root);
-    if (!m) throw new Error('cannot find workspace version in root Cargo.toml');
-    return m[1];
+    const v = findVersionInSection(root, 'workspace.package');
+    if (!v) {
+      throw new Error(
+        'cannot find version under [workspace.package] in root Cargo.toml',
+      );
+    }
+    return v;
   }
-  const m = /^\s*version\s*=\s*"([^"]+)"/m.exec(toml);
-  if (!m) throw new Error('cannot find version in crates/napi/Cargo.toml');
-  return m[1];
+  const v = findVersionInSection(toml, 'package');
+  if (!v) throw new Error('cannot find version under [package] in crates/napi/Cargo.toml');
+  return v;
 }
 
 function parseEnvelope(err) {
