@@ -32,6 +32,7 @@ pub mod connector;
 pub mod error;
 pub mod event;
 pub mod http;
+pub mod http_helpers;
 pub mod oauth;
 pub mod sync;
 pub mod token_vault;
@@ -53,6 +54,10 @@ pub use http::{
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use http::{MockHttpTransport, MockResponse, RecordedRequest};
+pub use http_helpers::{
+    bearer_get_json, bearer_post_form, bearer_post_json, classify_failure, encode_form,
+    percent_encode_form_component,
+};
 #[cfg(feature = "http-client")]
 pub use oauth::default_oauth_client;
 pub use oauth::{ConfiguredRefresher, OAuth2Client, DEFAULT_OAUTH_TIMEOUT_SECS};
