@@ -19,6 +19,7 @@ use connector_framework::{
     HttpMethod, MockHttpTransport, MockResponse, OAuth2CodeExchange, OAuth2Token, Result, SyncMode,
     SyncState, SyncStatus,
 };
+use connector_framework::percent_encode_form_component;
 use connectors::{
     email::{
         EmailConnector, EmailProvider, GmailMessage, GmailMessagesListPage, GraphMessage,
@@ -26,7 +27,8 @@ use connectors::{
     },
     google_drive::{
         GoogleDriveChange, GoogleDriveChangeList, GoogleDriveConnector, GoogleDriveFile,
-        GoogleDriveFileList,
+        GoogleDriveFileList, GoogleDriveStartPageToken, GoogleDriveWatchResponse,
+        DEFAULT_PAGE_SIZE as DRIVE_PAGE_SIZE,
     },
     jira::{JiraConnector, JiraFields, JiraIssue, JiraSearchResponse},
     slack::{SlackChannel, SlackConnector, SlackHistoryResponse, SlackResponseMetadata},
@@ -178,12 +180,32 @@ fn exercise_google_drive(
     report: &mut DemoReport,
 ) -> ConnectorMetrics {
     let scope = ScopeId::new_v4();
-    let cfg = ConnectorConfig::new(ConnectorKind::GoogleDrive, AuthKind::OAuth2, scope);
+    let cfg = ConnectorConfig::new(ConnectorKind::GoogleDrive, AuthKind::OAuth2, scope)
+        .with_auth_config(json!({
+            "authorization_code": "demo-code",
+            "api_base_url": "https://api.test/google",
+            "start_page_token": "watch-start-1",
+            "channel_id": "chan-demo",
+        }));
     let instance = ConnectorInstanceId::new_v4();
 
     let now = Utc::now();
-    let initial_pages = vec![
-        GoogleDriveFileList {
+    let transport = Arc::new(MockHttpTransport::new());
+    let base_url = "https://api.test/google";
+    let q = "trashed = false";
+    let file_list_fields = "nextPageToken,files(id,name,mimeType,trashed,modifiedTime,createdTime)";
+    let change_list_fields = "nextPageToken,newStartPageToken,\
+         changes(fileId,kind,removed,time,file(id,name,mimeType,trashed,modifiedTime,createdTime))";
+
+    // Initial sync — two pages of files.list.
+    transport.expect(
+        HttpMethod::Get,
+        format!(
+            "{base_url}/drive/v3/files?pageSize={DRIVE_PAGE_SIZE}&q={}&fields={}",
+            percent_encode_form_component(q),
+            percent_encode_form_component(file_list_fields),
+        ),
+        ok_json(json!(GoogleDriveFileList {
             files: vec![
                 GoogleDriveFile {
                     id: "drive-doc-1".into(),
@@ -202,10 +224,19 @@ fn exercise_google_drive(
                     created_time: Some(now - Duration::hours(72)),
                 },
             ],
-            next_page_token: Some("page-2".into()),
+            next_page_token: Some("drive-page-2".into()),
             new_start_page_token: None,
-        },
-        GoogleDriveFileList {
+        })),
+    );
+    transport.expect(
+        HttpMethod::Get,
+        format!(
+            "{base_url}/drive/v3/files?pageSize={DRIVE_PAGE_SIZE}&q={}&fields={}&pageToken={}",
+            percent_encode_form_component(q),
+            percent_encode_form_component(file_list_fields),
+            percent_encode_form_component("drive-page-2"),
+        ),
+        ok_json(json!(GoogleDriveFileList {
             files: vec![GoogleDriveFile {
                 id: "drive-doc-3".into(),
                 name: "Engineering-RFC-114.pdf".into(),
@@ -215,41 +246,72 @@ fn exercise_google_drive(
                 created_time: Some(now - Duration::hours(8)),
             }],
             next_page_token: None,
-            new_start_page_token: Some("changes-token-1".into()),
-        },
-    ];
+            new_start_page_token: None,
+        })),
+    );
+    // changes.getStartPageToken — anchors the substrate watermark.
+    transport.expect(
+        HttpMethod::Get,
+        format!("{base_url}/drive/v3/changes/startPageToken"),
+        ok_json(json!(GoogleDriveStartPageToken {
+            start_page_token: Some("changes-token-1".into()),
+        })),
+    );
+    // Incremental sync — one page of changes.list.
+    transport.expect(
+        HttpMethod::Get,
+        format!(
+            "{base_url}/drive/v3/changes?pageToken={}&pageSize={DRIVE_PAGE_SIZE}&includeRemoved=true&fields={}",
+            percent_encode_form_component("changes-token-1"),
+            percent_encode_form_component(change_list_fields),
+        ),
+        ok_json(json!(GoogleDriveChangeList {
+            changes: vec![
+                GoogleDriveChange {
+                    file_id: "drive-doc-2".into(),
+                    kind: "file".into(),
+                    removed: false,
+                    file: Some(GoogleDriveFile {
+                        id: "drive-doc-2".into(),
+                        name: "OKR-tracker.gsheet".into(),
+                        mime_type: "application/vnd.google-apps.spreadsheet".into(),
+                        trashed: false,
+                        modified_time: Some(now - Duration::minutes(30)),
+                        created_time: Some(now - Duration::hours(72)),
+                    }),
+                    time: Some(now - Duration::minutes(30)),
+                },
+                GoogleDriveChange {
+                    file_id: "drive-doc-stale".into(),
+                    kind: "file".into(),
+                    removed: true,
+                    file: None,
+                    time: Some(now - Duration::minutes(15)),
+                },
+            ],
+            next_page_token: None,
+            new_start_page_token: Some("changes-token-2".into()),
+        })),
+    );
+    // changes.watch — webhook subscribe.
+    transport.expect(
+        HttpMethod::Post,
+        format!(
+            "{base_url}/drive/v3/changes/watch?pageToken={}",
+            percent_encode_form_component("watch-start-1"),
+        ),
+        ok_json(json!(GoogleDriveWatchResponse {
+            id: Some("chan-demo".into()),
+            resource_id: Some("res-demo".into()),
+            expiration: Some((now + Duration::days(7)).timestamp_millis()),
+        })),
+    );
 
-    let incremental_pages = vec![GoogleDriveChangeList {
-        changes: vec![
-            GoogleDriveChange {
-                file_id: "drive-doc-2".into(),
-                kind: "file".into(),
-                removed: false,
-                file: Some(GoogleDriveFile {
-                    id: "drive-doc-2".into(),
-                    name: "OKR-tracker.gsheet".into(),
-                    mime_type: "application/vnd.google-apps.spreadsheet".into(),
-                    trashed: false,
-                    modified_time: Some(now - Duration::minutes(30)),
-                    created_time: Some(now - Duration::hours(72)),
-                }),
-                time: Some(now - Duration::minutes(30)),
-            },
-            GoogleDriveChange {
-                file_id: "drive-doc-stale".into(),
-                kind: "file".into(),
-                removed: true,
-                file: None,
-                time: Some(now - Duration::minutes(15)),
-            },
-        ],
-        next_page_token: None,
-        new_start_page_token: Some("changes-token-2".into()),
-    }];
-
-    let connector = GoogleDriveConnector::new(instance)
-        .with_initial_pages(initial_pages)
-        .with_incremental_pages(incremental_pages);
+    let connector = GoogleDriveConnector::new(
+        instance,
+        transport,
+        DemoOAuth::arc("https://www.googleapis.com/auth/drive.readonly"),
+    );
 
     let token = connector.authenticate(&cfg).expect("drive auth");
     log.record(

@@ -2,18 +2,65 @@
 //!
 //! Exercises the full sync → incremental → webhook cycle against
 //! fixture JSON in `tests/fixtures/google_drive_*.json` to mirror the
-//! shape of real Drive API responses.
+//! shape of real Drive API responses, using the `MockHttpTransport`
+//! to serve the fixtures over the [`HttpTransport`] boundary that
+//! production wires to `reqwest`.
+//!
+//! These tests live alongside the in-module unit tests — the unit
+//! tests pin individual API behaviours (pagination loop guard,
+//! webhook parsing, etc.), while this file drives the full
+//! `authenticate → initial_sync → incremental_sync → subscribe_webhook
+//! → handle_webhook_event` lifecycle end-to-end.
 
+use std::sync::Arc;
+
+use chrono::{Duration, Utc};
 use connector_framework::{
-    AuthKind, Connector, ConnectorConfig, ConnectorError, ConnectorEvent, ConnectorInstanceId,
-    ConnectorKind, SourcePermissionLevel, SyncState,
+    bearer_get_json, percent_encode_form_component, AuthKind, Connector, ConnectorConfig,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, ConnectorKind, HttpMethod, HttpTransport,
+    MockHttpTransport, MockResponse, OAuth2CodeExchange, OAuth2Token, Result,
+    SourcePermissionLevel, SyncState,
 };
-use connectors::google_drive::{GoogleDriveChangeList, GoogleDriveConnector, GoogleDriveFileList};
+use connectors::google_drive::{
+    GoogleDriveChangeList, GoogleDriveConnector, GoogleDriveFileList, GoogleDriveStartPageToken,
+    GoogleDriveWatchResponse, DEFAULT_PAGE_SIZE,
+};
 use evidence_store::ScopeId;
+
+// Quiet the unused-import warning — these helpers exist so the test
+// file mirrors the connector's URL-building behaviour and we don't
+// drift from production wiring.
+#[allow(dead_code)]
+fn ensure_helpers_linked() {
+    let _ = bearer_get_json::<serde_json::Value>;
+    let _ = percent_encode_form_component;
+}
 
 const FILES_LIST_FIXTURE: &str = include_str!("fixtures/google_drive_files_list.json");
 const CHANGES_FIXTURE: &str = include_str!("fixtures/google_drive_changes.json");
 const PUSH_FIXTURE: &str = include_str!("fixtures/google_drive_push.json");
+
+const BASE_URL: &str = "https://api.test/google";
+const FILE_LIST_FIELDS_MASK: &str =
+    "nextPageToken,files(id,name,mimeType,trashed,modifiedTime,createdTime)";
+const CHANGE_LIST_FIELDS_MASK: &str = "nextPageToken,newStartPageToken,\
+     changes(fileId,kind,removed,time,file(id,name,mimeType,trashed,modifiedTime,createdTime))";
+
+struct FixedOAuth;
+impl OAuth2CodeExchange for FixedOAuth {
+    fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
+        Ok(OAuth2Token::new(
+            "drive-access",
+            "drive-refresh",
+            Utc::now() + Duration::hours(1),
+            "https://www.googleapis.com/auth/drive.readonly",
+        ))
+    }
+}
+
+fn oauth() -> Arc<dyn OAuth2CodeExchange> {
+    Arc::new(FixedOAuth)
+}
 
 fn cfg() -> ConnectorConfig {
     ConnectorConfig::new(
@@ -21,21 +68,89 @@ fn cfg() -> ConnectorConfig {
         AuthKind::OAuth2,
         ScopeId::new_v4(),
     )
+    .with_auth_config(serde_json::json!({
+        "authorization_code": "demo-code",
+        "api_base_url": BASE_URL,
+        "start_page_token": "watch-start-1",
+        "channel_id": "chan-77",
+    }))
 }
 
-fn build_connector() -> GoogleDriveConnector {
-    let initial: GoogleDriveFileList =
+fn files_list_url(page_token: Option<&str>) -> String {
+    let mut url = format!(
+        "{BASE_URL}/drive/v3/files?pageSize={}&q={}&fields={}",
+        DEFAULT_PAGE_SIZE,
+        percent_encode_form_component("trashed = false"),
+        percent_encode_form_component(FILE_LIST_FIELDS_MASK),
+    );
+    if let Some(tok) = page_token {
+        url.push_str("&pageToken=");
+        url.push_str(&percent_encode_form_component(tok));
+    }
+    url
+}
+
+fn changes_list_url(page_token: &str) -> String {
+    format!(
+        "{BASE_URL}/drive/v3/changes?pageToken={}&pageSize={}&includeRemoved=true&fields={}",
+        percent_encode_form_component(page_token),
+        DEFAULT_PAGE_SIZE,
+        percent_encode_form_component(CHANGE_LIST_FIELDS_MASK),
+    )
+}
+
+fn install_fixture_responses(transport: &MockHttpTransport) {
+    // Reshape the fixture-shaped files page into the live wire format
+    // so the test exercises real cursor pagination via the mock.
+    let files: GoogleDriveFileList =
         serde_json::from_str(FILES_LIST_FIXTURE).expect("parse files.list fixture");
-    let incremental: GoogleDriveChangeList =
+    transport.expect(
+        HttpMethod::Get,
+        files_list_url(None),
+        MockResponse::ok_json(serde_json::to_vec(&files).unwrap()),
+    );
+    // Anchor the changes feed.
+    transport.expect(
+        HttpMethod::Get,
+        format!("{BASE_URL}/drive/v3/changes/startPageToken"),
+        MockResponse::ok_json(
+            serde_json::to_vec(&GoogleDriveStartPageToken {
+                start_page_token: Some("drive:start:42".into()),
+            })
+            .unwrap(),
+        ),
+    );
+    let changes: GoogleDriveChangeList =
         serde_json::from_str(CHANGES_FIXTURE).expect("parse changes fixture");
-    GoogleDriveConnector::new(ConnectorInstanceId::new_v4())
-        .with_initial_pages(vec![initial])
-        .with_incremental_pages(vec![incremental])
+    transport.expect(
+        HttpMethod::Get,
+        changes_list_url("drive:start:42"),
+        MockResponse::ok_json(serde_json::to_vec(&changes).unwrap()),
+    );
+    // Drive's watch endpoint.
+    transport.expect(
+        HttpMethod::Post,
+        format!(
+            "{BASE_URL}/drive/v3/changes/watch?pageToken={}",
+            percent_encode_form_component("watch-start-1"),
+        ),
+        MockResponse::ok_json(
+            serde_json::to_vec(&GoogleDriveWatchResponse {
+                id: Some("chan-77".into()),
+                resource_id: Some("res-1".into()),
+                expiration: Some((Utc::now() + Duration::days(7)).timestamp_millis()),
+            })
+            .unwrap(),
+        ),
+    );
 }
 
 #[test]
 fn full_lifecycle_against_fixture_data() {
-    let connector = build_connector();
+    let transport = MockHttpTransport::new();
+    install_fixture_responses(&transport);
+    let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+    let connector = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
     let config = cfg();
 
     // 1. Authenticate.
@@ -69,12 +184,12 @@ fn full_lifecycle_against_fixture_data() {
     assert_eq!(
         initial.next_cursor.as_deref(),
         Some("drive:start:42"),
-        "next_cursor should be the newStartPageToken"
+        "next_cursor should be the startPageToken anchor",
     );
 
     // 3. Incremental sync — fixture has 1 update + 1 removal.
     let mut state = SyncState::new(connector.instance);
-    state.cursor = initial.next_cursor.clone();
+    state.cursor.clone_from(&initial.next_cursor);
     let incremental = connector
         .incremental_sync(&config, &token, &state)
         .expect("incremental_sync");
@@ -94,7 +209,7 @@ fn full_lifecycle_against_fixture_data() {
     assert_eq!(
         incremental.next_cursor.as_deref(),
         Some("drive:start:99"),
-        "newStartPageToken advances"
+        "newStartPageToken advances",
     );
 
     // 4. Subscribe webhook.
@@ -105,6 +220,11 @@ fn full_lifecycle_against_fixture_data() {
     assert_eq!(sub.callback_url, "https://substrate.example/hooks/drive");
     assert!(!sub.secret.expose().is_empty());
     assert!(sub.expires_at.is_some(), "Drive channels carry a TTL");
+    assert_eq!(
+        sub.provider_subscription_id.as_deref(),
+        Some("chan-77:res-1"),
+        "channel id + resource id captured for revocation",
+    );
 
     // 5. Handle webhook event — permission change fixture.
     let events = connector
@@ -126,7 +246,9 @@ fn full_lifecycle_against_fixture_data() {
 
 #[test]
 fn invalid_json_webhook_returns_error() {
-    let connector = build_connector();
+    let transport = MockHttpTransport::new();
+    let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+    let connector = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
     let err = connector
         .handle_webhook_event(b"{not valid json")
         .expect_err("invalid JSON should fail");
@@ -135,7 +257,9 @@ fn invalid_json_webhook_returns_error() {
 
 #[test]
 fn unknown_resource_state_returns_webhook_error() {
-    let connector = build_connector();
+    let transport = MockHttpTransport::new();
+    let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+    let connector = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
     let body = serde_json::json!({
         "resourceId": "drive:file:1",
         "resourceState": "totally-unknown-state",
@@ -148,7 +272,9 @@ fn unknown_resource_state_returns_webhook_error() {
 
 #[test]
 fn missing_required_field_returns_error() {
-    let connector = build_connector();
+    let transport = MockHttpTransport::new();
+    let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+    let connector = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
     // Missing required `resourceState` field.
     let body = serde_json::json!({"resourceId": "drive:file:1"});
     let err = connector
