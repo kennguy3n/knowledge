@@ -417,7 +417,7 @@ impl PersistentConceptGraph {
                 |row| row.get(0),
             )
             .map_err(GraphError::Sqlite)?;
-        Ok(n as usize)
+        Ok(i64_count_to_usize(n))
     }
 
     /// Number of persisted edges for `scope`.
@@ -431,7 +431,7 @@ impl PersistentConceptGraph {
                 |row| row.get(0),
             )
             .map_err(GraphError::Sqlite)?;
-        Ok(n as usize)
+        Ok(i64_count_to_usize(n))
     }
 
     fn scope_key(&mut self, scope: ScopeId) -> Result<AeadKey> {
@@ -527,6 +527,16 @@ impl PersistentConceptGraph {
             .map_err(GraphError::Sqlite)?;
         Ok(())
     }
+}
+
+/// Convert a `COUNT(*)` value returned by SQLite into a Rust `usize`.
+/// Counts are non-negative by definition; the `.max(0)` guard handles
+/// a negative reading defensively (corrupted database / unexpected
+/// driver behaviour) without panicking, and `try_from` saturates the
+/// result at `usize::MAX` on 32-bit targets where a `i64` count
+/// exceeds the address space.
+fn i64_count_to_usize(n: i64) -> usize {
+    usize::try_from(n.max(0)).unwrap_or(usize::MAX)
 }
 
 fn random_nonce() -> [u8; AEAD_NONCE_LEN] {

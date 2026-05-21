@@ -7,6 +7,19 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# Enables the reqwest-backed `BlockingHttpTransport` and
+# `ReqwestOAuth2CodeExchange` / `ReqwestTokenRefresher`. Gated so
+# CI hosts without the reqwest / rustls build chain (cross-checks,
+# offline lints) can still compile the crate against fixtures.
+http-client = ["dep:reqwest"]
+# Exposes test-only helpers (`MockHttpTransport`, fixture-driven
+# connector knobs) outside `cfg(test)` so neighbouring crates'
+# integration tests can reach them. Production builds leave this
+# off so the helpers stay unreachable from the FFI surface.
+test-support = []
+
 [dependencies]
 crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }
@@ -19,6 +32,7 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 zeroize = { workspace = true }
+reqwest = { workspace = true, optional = true }
 
 [lints]
 workspace = true

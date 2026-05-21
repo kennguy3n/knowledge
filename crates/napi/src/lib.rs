@@ -350,14 +350,22 @@ fn decode_b64(s: &str) -> NapiResult<Vec<u8>> {
                     .ok_or(NapiError::InvalidArgument {
                         message: "invalid base64 character".into(),
                     })?;
-            v |= idx as u32;
+            // `idx` is bounded by `B64_ALPHABET.len() == 64`, so the
+            // conversion is lossless. `try_from` keeps the cast lints
+            // happy without resorting to `as`.
+            v |= u32::try_from(idx).expect("base64 alphabet index always fits in u32");
         }
-        out.push(((v >> 16) & 0xFF) as u8);
-        if pad < 2 {
-            out.push(((v >> 8) & 0xFF) as u8);
-        }
-        if pad < 1 {
-            out.push((v & 0xFF) as u8);
+        // Each byte extracted is masked to 0xFF before the cast, so
+        // truncation is the intended semantic.
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            out.push(((v >> 16) & 0xFF) as u8);
+            if pad < 2 {
+                out.push(((v >> 8) & 0xFF) as u8);
+            }
+            if pad < 1 {
+                out.push((v & 0xFF) as u8);
+            }
         }
     }
     Ok(out)

@@ -533,7 +533,12 @@ mod tests {
         // reproducible. The bytes are not sensitive.
         let mut k: MasterKey = [0u8; MASTER_KEY_LEN];
         for (i, b) in k.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_mul(7);
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "deterministic test key seed; i < MASTER_KEY_LEN < 256"
+            )]
+            let byte = (i & 0xFF) as u8;
+            *b = byte.wrapping_mul(7);
         }
         k
     }
@@ -627,7 +632,12 @@ mod tests {
         let key_a = fixture_key();
         let mut key_b: MasterKey = [0u8; MASTER_KEY_LEN];
         for (i, b) in key_b.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_add(99);
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "deterministic test key seed; i < MASTER_KEY_LEN < 256"
+            )]
+            let byte = (i & 0xFF) as u8;
+            *b = byte.wrapping_add(99);
         }
 
         {

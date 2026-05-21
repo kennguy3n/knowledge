@@ -55,6 +55,9 @@ use chrono::{DateTime, TimeZone, Utc};
 use crypto::forgetting::{self, DekRegistry, TombstoneStore};
 use crypto::{CryptoError, MasterKey};
 use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
+use inference_router::{
+    FallbackAdapter, InferenceAdapter, InferenceRouter, LlamaCppAdapter, MlxAdapter, RouterConfig,
+};
 use memory_manager::{ChannelMemoryObject, UserMemoryObject};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -219,10 +222,48 @@ pub struct FfiRuntime {
     /// Per-scope channel-memory recap home. Persisted to the same
     /// `memory_objects` table under the `channel_memory` kind.
     pub(crate) channel_memories: HashMap<ScopeId, ChannelMemoryObject>,
+    /// On-device SLM inference router. Constructed eagerly at
+    /// `open_store` time so classification tasks (which the
+    /// [`FallbackAdapter`] handles even without an SLM) are always
+    /// available; synthesis tasks dispatch through the MLX +
+    /// llama.cpp adapters when those are wired by the platform shell.
+    ///
+    /// No interior `Mutex` is needed: `InferenceRouter::dispatch`
+    /// takes `&self`, and each adapter manages its own probe state
+    /// / activity tracking through `OnceLock`, `AtomicBool`, or
+    /// `RwLock` as appropriate. The whole `FfiRuntime` is itself
+    /// held inside `Arc<Mutex<FfiRuntime>>` at the handle registry,
+    /// which already serialises calls against the same handle —
+    /// adding an inner mutex would double-lock without buying any
+    /// extra safety.
+    ///
+    /// Stored behind an `Arc` so [`open_store`] can hand a clone to
+    /// the background bootstrap thread without giving up ownership.
+    /// The `Arc<InferenceRouter>` itself is `Sync`, and dispatch /
+    /// idle-sweep paths only need `&InferenceRouter`, which the
+    /// `Deref` impl on `Arc` provides transparently.
+    pub(crate) inference_router: Arc<InferenceRouter>,
 }
 
 impl Drop for FfiRuntime {
     fn drop(&mut self) {
+        // Reap the inference-router bootstrap thread before any
+        // other teardown work. The bootstrap thread holds an `Arc`
+        // clone of `inference_router`, so without an explicit join
+        // the thread can outlive `close_store` by however long the
+        // probe takes (e.g. a multi-second `GET /health` against
+        // the llama.cpp loopback server when the http-client
+        // feature is enabled). That window is memory-safe — the
+        // thread's `Arc` keeps the router alive — but it leaks
+        // OS resources (open sockets, file descriptors) past the
+        // point at which the host has been told the store is
+        // closed, which the substrate's lifecycle contract
+        // ([`close_store`] docs at the top of this module)
+        // explicitly forbids. `shutdown()` is idempotent and
+        // returns immediately when no background thread is in
+        // flight, so the cost on the fast path is one
+        // uncontended mutex acquisition.
+        self.inference_router.shutdown();
         self.master_key.zeroize();
     }
 }
@@ -285,19 +326,57 @@ impl FfiRuntime {
         self.channel_memories.get(&scope)
     }
 
-    /// Borrow the per-scope channel memory, creating an empty one if
-    /// it does not yet exist.
+    /// Persist a fully-built [`ChannelMemoryObject`] to disk and,
+    /// only on disk-save success, install it into the per-scope
+    /// in-memory map.
     ///
-    /// Currently unused on the FFI surface — `trigger_synthesis`
-    /// returns `Unavailable` without allocating, and a real
-    /// allocation only happens once the SLM-driven synthesizer
-    /// lands. Kept here so the call-site doesn't need to
-    /// re-derive map manipulation logic when that wiring arrives.
-    #[allow(dead_code)]
-    pub(crate) fn channel_memory_mut(&mut self, scope: ScopeId) -> &mut ChannelMemoryObject {
-        self.channel_memories
-            .entry(scope)
-            .or_insert_with(|| ChannelMemoryObject::new(scope))
+    /// `trigger_synthesis` builds the next recap off-the-side via
+    /// [`Self::channel_memory`] (cloning the existing entry if one
+    /// exists) so that any failure between the inference dispatch
+    /// and the final flush leaves the substrate's observable state
+    /// untouched. This pins the
+    /// `trigger_synthesis_failure_does_not_allocate_channel_memory`
+    /// invariant: no `channel_memories` map entry is created until
+    /// `save_memory_blob` returns `Ok`.
+    pub(crate) fn save_channel_memory(
+        &mut self,
+        scope: ScopeId,
+        cmo: ChannelMemoryObject,
+    ) -> crate::error::FfiResult<()> {
+        let json = serde_json::to_vec(&cmo).map_err(|e| crate::error::FfiError::Memory {
+            message: format!("failed to serialize channel memory: {e}"),
+        })?;
+        self.store
+            .save_memory_blob(scope, "channel_memory", &json)
+            .map_err(|e| crate::error::FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        self.channel_memories.insert(scope, cmo);
+        Ok(())
+    }
+
+    /// Return an owned `Arc` clone of the on-device SLM inference
+    /// router so callers can keep a handle alive after dropping the
+    /// surrounding [`with_runtime`](crate::runtime::with_runtime)
+    /// frame.
+    ///
+    /// This is the entry point that [`crate::trigger_synthesis`] uses
+    /// to split the synthesis call into a `gather → dispatch → apply`
+    /// pipeline: it clones the router here while the runtime mutex is
+    /// held, then drops the mutex before issuing the (potentially
+    /// multi-second) `wait_for_bootstrap` + SLM dispatch. The owned
+    /// clone keeps the underlying [`InferenceRouter`] alive across the
+    /// unlocked phase even if every other holder were torn down — the
+    /// `FfiRuntime` itself can't be dropped concurrently because
+    /// `close_store` synchronises with in-flight `with_runtime` frames
+    /// via `WITH_RUNTIME_STACK` + the per-handle drain loop, but a
+    /// background sweep that legitimately rebuilds the router would
+    /// otherwise race the dispatch caller.
+    ///
+    /// The clone itself is a single atomic increment on the strong
+    /// count; no allocation, no contention with concurrent dispatch.
+    pub(crate) fn inference_router_arc(&self) -> Arc<InferenceRouter> {
+        Arc::clone(&self.inference_router)
     }
 
     /// Flush the in-memory `UserMemoryObject` for `scope` to the
@@ -310,23 +389,6 @@ impl FfiRuntime {
             })?;
             self.store
                 .save_memory_blob(scope, "user_memory", &json)
-                .map_err(|e| crate::error::FfiError::Evidence {
-                    message: e.to_string(),
-                })?;
-        }
-        Ok(())
-    }
-
-    /// Flush the in-memory `ChannelMemoryObject` for `scope` to the
-    /// encrypted evidence store.
-    #[allow(dead_code)]
-    pub(crate) fn flush_channel_memory(&self, scope: ScopeId) -> crate::error::FfiResult<()> {
-        if let Some(cmo) = self.channel_memories.get(&scope) {
-            let json = serde_json::to_vec(cmo).map_err(|e| crate::error::FfiError::Memory {
-                message: format!("failed to serialize channel memory: {e}"),
-            })?;
-            self.store
-                .save_memory_blob(scope, "channel_memory", &json)
                 .map_err(|e| crate::error::FfiError::Evidence {
                     message: e.to_string(),
                 })?;
@@ -745,12 +807,23 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHand
         }
     }
 
+    let router_config = router_config_from_env();
+    let inference_router = Arc::new(build_inference_router(router_config));
+    // Spawn the adapter probe on a background thread so `open_store`
+    // returns immediately even when an adapter's probe hits the
+    // network (e.g. the `http-client`-backed llama.cpp adapter
+    // pings `GET /health` with a multi-second timeout). FFI calls
+    // that need the router (`trigger_synthesis`) join on
+    // `wait_for_bootstrap` before dispatch.
+    Arc::clone(&inference_router).spawn_bootstrap();
+
     let runtime = FfiRuntime {
         master_key,
         store,
         registry,
         user_memories,
         channel_memories,
+        inference_router,
     };
 
     let mut guard = write_registry();
@@ -888,6 +961,111 @@ fn parse_master_key_hex(hex: &str) -> FfiResult<MasterKey> {
         })?;
     }
     Ok(out)
+}
+
+// ──────────────────────── Inference router ────────────────────────
+
+/// Environment variable consulted for the llama.cpp loopback server
+/// URL. The default targets the upstream `llama-server` listening on
+/// `http://127.0.0.1:8081` (matches [`RouterConfig::default`]).
+pub(crate) const ENV_SLM_SERVER_URL: &str = "KNOWLEDGE_SLM_SERVER_URL";
+
+/// Environment variable consulted for the SLM model artifact path.
+pub(crate) const ENV_SLM_MODEL_PATH: &str = "KNOWLEDGE_SLM_MODEL_PATH";
+
+/// Environment variable consulted for the device tier
+/// (`low` / `medium` / `high`).
+pub(crate) const ENV_SLM_DEVICE_TIER: &str = "KNOWLEDGE_SLM_DEVICE_TIER";
+
+/// Read a [`RouterConfig`] from the well-known `KNOWLEDGE_SLM_*`
+/// environment variables, falling back to [`RouterConfig::default`]
+/// for any variable that is absent or malformed.
+///
+/// Exposed at `pub(crate)` so the FFI surface can call it from
+/// `open_store` and the unit tests can exercise the env-parsing
+/// branches.
+pub(crate) fn router_config_from_env() -> RouterConfig {
+    use inference_router::DeviceTier;
+    let mut cfg = RouterConfig::default();
+    if let Ok(url) = std::env::var(ENV_SLM_SERVER_URL) {
+        if !url.is_empty() {
+            cfg.server_url = url;
+        }
+    }
+    if let Ok(path) = std::env::var(ENV_SLM_MODEL_PATH) {
+        if !path.is_empty() {
+            cfg.model_path = path;
+        }
+    }
+    if let Ok(tier) = std::env::var(ENV_SLM_DEVICE_TIER) {
+        cfg.device_tier = match tier.to_ascii_lowercase().as_str() {
+            "low" => DeviceTier::Low,
+            "high" => DeviceTier::High,
+            // Default and the explicit "medium" both land here so a
+            // typo in the env var degrades to the documented default
+            // rather than a silent device-tier downgrade.
+            _ => DeviceTier::Medium,
+        };
+    }
+    cfg
+}
+
+/// Build an [`InferenceRouter`] from `config`.
+///
+/// The router holds adapters in priority order:
+///
+/// 1. **MLX** — Apple Silicon native SLM. Returns `Unavailable`
+///    until the iOS / macOS native shell calls
+///    [`inference_router::adapters::mlx::set_mlx_runtime_linked`]
+///    and registers a real generate callback at boot. Always
+///    listed first so when the runtime *is* linked the router
+///    prefers on-device hardware acceleration.
+/// 2. **llama.cpp** — loopback HTTP server. Only constructed when
+///    the `http-client` feature is enabled (the real
+///    [`HttpLlamaServerClient`] is gated behind that feature so the
+///    substrate's default `cargo build` stays free of network deps).
+///    When the feature is off, the slot is skipped — the fallback
+///    adapter then handles classification tasks and synthesis
+///    surfaces as `Unavailable`.
+/// 3. **Fallback** — encoder-only classifier. Always available;
+///    serves classification tasks (`TagImportance`,
+///    `ExtractEntities`, `PromoteObservation`) when MLX and
+///    llama.cpp are both absent.
+///
+/// The returned router is *not yet bootstrapped* — callers must
+/// invoke [`InferenceRouter::bootstrap`] (which `open_store` does)
+/// before [`InferenceRouter::dispatch`].
+pub(crate) fn build_inference_router(config: RouterConfig) -> InferenceRouter {
+    let mut adapters: Vec<Box<dyn InferenceAdapter>> = Vec::with_capacity(3);
+    adapters.push(Box::new(MlxAdapter::new(config.clone())));
+
+    #[cfg(feature = "http-client")]
+    {
+        match inference_router::HttpLlamaServerClient::new(config.server_url.clone()) {
+            Ok(client) => {
+                adapters.push(Box::new(LlamaCppAdapter::new(
+                    config.clone(),
+                    Box::new(client),
+                )));
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "failed to construct HttpLlamaServerClient; llama.cpp adapter disabled",
+                );
+            }
+        }
+    }
+    // Suppress unused-import warning for LlamaCppAdapter on builds
+    // without the http-client feature — the adapter type is still
+    // referenced via the slot above but only at conditional code.
+    #[cfg(not(feature = "http-client"))]
+    {
+        let _ = std::marker::PhantomData::<LlamaCppAdapter>;
+    }
+
+    adapters.push(Box::new(FallbackAdapter::new()));
+    InferenceRouter::new(config, adapters)
 }
 
 #[cfg(test)]

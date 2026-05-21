@@ -502,8 +502,18 @@ fn default_score(path: &[ThoughtNode]) -> f64 {
         return 0.0;
     }
     let sum: f64 = path.iter().map(|t| t.confidence).sum();
-    let mut score = sum / path.len() as f64;
-    let depth_penalty = 0.95_f64.powi(path.len().saturating_sub(1) as i32);
+    // Reasoning paths are bounded to a few thousand nodes by the
+    // traversal budget; `as f64` over a small `usize` cannot lose
+    // precision in any realistic scenario, but go through `try_from`
+    // to keep the cast lints happy.
+    #[allow(clippy::cast_precision_loss)]
+    let path_len_f64 = path.len() as f64;
+    let mut score = sum / path_len_f64;
+    // `powi` takes `i32`; the depth is bounded to the traversal
+    // budget which the substrate caps well below `i32::MAX`, so
+    // saturating `try_into` is the right defensive form.
+    let depth_exp = i32::try_from(path.len().saturating_sub(1)).unwrap_or(i32::MAX);
+    let depth_penalty = 0.95_f64.powi(depth_exp);
     score *= depth_penalty;
     if matches!(
         path.last().map(|t| t.thought_type),

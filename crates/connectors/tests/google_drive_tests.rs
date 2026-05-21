@@ -45,7 +45,10 @@ fn full_lifecycle_against_fixture_data() {
         "access_token populated",
     );
     assert!(
-        !token.refresh_token.expose().is_empty(),
+        token
+            .refresh_token
+            .as_ref()
+            .is_some_and(|rt| !rt.expose().is_empty()),
         "refresh_token populated",
     );
     assert!(

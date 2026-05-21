@@ -380,6 +380,7 @@ dependencies = [
  "evidence_store",
  "observation_engine",
  "permission_service",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -843,6 +844,7 @@ dependencies = [
  "chrono",
  "crypto",
  "evidence_store",
+ "inference_router",
  "memory_manager",
  "rand 0.8.6",
  "rusqlite",
@@ -1348,6 +1350,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tracing",
  "uuid",
 ]
 

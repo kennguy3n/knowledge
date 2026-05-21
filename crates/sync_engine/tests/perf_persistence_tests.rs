@@ -21,7 +21,14 @@ use uuid::Uuid;
 fn test_master_key() -> crypto::MasterKey {
     let mut k: crypto::MasterKey = [0u8; crypto::MASTER_KEY_LEN];
     for (i, slot) in k.iter_mut().enumerate() {
-        *slot = (i as u8).wrapping_mul(11).wrapping_add(31);
+        // `i` is bounded by `MASTER_KEY_LEN` (32) so masking to a
+        // byte never truncates the meaningful bits.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "deterministic test key seed; i < MASTER_KEY_LEN < 256"
+        )]
+        let byte = (i & 0xFF) as u8;
+        *slot = byte.wrapping_mul(11).wrapping_add(31);
     }
     k
 }

@@ -11,11 +11,108 @@
 //! router falls through to the next adapter (e.g. llama.cpp).
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, RwLock};
 
 use crate::adapter::{AdapterKind, InferenceAdapter, ProbeResult};
 use crate::config::{DeviceTier, RouterConfig};
 use crate::error::RouterError;
 use crate::task::InferenceTask;
+
+/// Signature of the native MLX `generate` callback registered by the
+/// iOS / macOS Swift shell.
+///
+/// Parameters mirror [`InferenceAdapter::generate`]:
+/// * `task_tag` — stable task identifier (`"synth_summary"`, …).
+/// * `prompt` — fully-rendered prompt text the SLM should answer.
+/// * `grammar` — GBNF grammar constraint; empty string when the task
+///   does not need one.
+///
+/// On success the callback returns the model's textual output (the
+/// JSON that the GBNF grammar constrains). On failure it returns an
+/// `Err(String)` describing why; the adapter wraps that string in a
+/// [`RouterError::InferenceFailure`] which the router treats as a
+/// non-fallback error (the router does NOT try other adapters after
+/// a hard inference failure — the model itself ran but produced
+/// invalid output).
+pub type MlxGenerateFn = fn(task_tag: &str, prompt: &str, grammar: &str) -> Result<String, String>;
+
+/// Global slot for the native MLX generate callback.
+///
+/// `MlxGenerateFn` is a plain `fn` pointer (`Copy` + `Send` + `Sync`),
+/// so the `Option<MlxGenerateFn>` inside the lock is the entire state:
+/// `None` means "no callback registered", `Some(f)` means "call `f`".
+///
+/// We use an `RwLock` so the hot path (`MlxAdapter::generate`) takes
+/// the *read* lock, which is uncontended even under concurrent
+/// inference dispatches — the only write happens at boot when the
+/// Swift shell registers the callback. The lock is necessary because
+/// the substrate forbids `unsafe`, ruling out the `AtomicPtr` /
+/// `transmute<usize, fn(…)>` shortcut.
+static MLX_GENERATE_FN: LazyLock<RwLock<Option<MlxGenerateFn>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+/// Register the native MLX generate callback.
+///
+/// The iOS / macOS native shell calls this at app launch, after it
+/// has constructed its MLX engine and is ready to serve inference
+/// calls. The Rust adapter calls the registered function from inside
+/// [`MlxAdapter::generate`] when the runtime-linked flag
+/// ([`set_mlx_runtime_linked`]) is set.
+///
+/// Calling this more than once replaces the previous callback. The
+/// substrate's expected usage is a single registration at boot, but
+/// re-registration is supported so the host can swap implementations
+/// when reconfiguring the SLM (e.g. switching device tiers without a
+/// process restart) and so unit tests can exercise both the success
+/// and failure branches within the same `cargo test` process.
+pub fn set_mlx_generate_fn(f: MlxGenerateFn) {
+    let mut guard = MLX_GENERATE_FN
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if guard.is_some() {
+        // Production usage expects a single registration at app
+        // launch; a second call indicates one of (a) a misconfigured
+        // shell registering twice, (b) a hot-reload scenario, or (c)
+        // a test swapping the implementation. Emit a `warn` so the
+        // double-registration shows up in the substrate's audit
+        // log instead of silently swapping the in-flight callback
+        // out from under live dispatchers.
+        tracing::warn!(
+            "MLX generate callback re-registered \u{2014} discarding previous registration. \
+             Expected usage is a single registration at app launch; double registration \
+             may indicate a misconfigured platform shell.",
+        );
+    }
+    *guard = Some(f);
+}
+
+/// Read the currently registered generate callback, or `None` when
+/// no callback has been registered yet.
+///
+/// Used internally by [`MlxAdapter::generate`] on every dispatch and
+/// exposed publicly so the host (and tests) can probe registration
+/// state without invoking the model. The returned function pointer
+/// is owned by the caller (the `RwLock` is released before this
+/// function returns) so concurrent re-registration cannot race with
+/// an in-flight dispatch.
+pub fn get_mlx_generate_fn() -> Option<MlxGenerateFn> {
+    let guard = MLX_GENERATE_FN
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard
+}
+
+/// Test-only helper: clear the registered callback. Production code
+/// never calls this — the only motivation is letting unit tests
+/// exercise both the "no callback" and "callback registered" branches
+/// of [`MlxAdapter::generate`] within the same `cargo test` process.
+#[cfg(any(test, feature = "test-support"))]
+pub fn clear_mlx_generate_fn() {
+    let mut guard = MLX_GENERATE_FN
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = None;
+}
 
 /// MLX adapter. Available on Apple Silicon (`aarch64-apple-darwin`)
 /// when the device tier is `Medium` or `High`.
@@ -92,12 +189,7 @@ impl InferenceAdapter for MlxAdapter {
         }
     }
 
-    fn generate(
-        &self,
-        task_tag: &str,
-        _prompt: &str,
-        _grammar: &str,
-    ) -> Result<String, RouterError> {
+    fn generate(&self, task_tag: &str, prompt: &str, grammar: &str) -> Result<String, RouterError> {
         if !self.is_available() {
             return Err(RouterError::Unavailable {
                 task: task_tag_static(task_tag),
@@ -105,11 +197,23 @@ impl InferenceAdapter for MlxAdapter {
         }
         // The Rust crate cannot link the MLX runtime on its own; the
         // production binding lives in the iOS / macOS native shell.
-        // Return Unavailable (not InferenceFailure) so the router's
-        // `is_fallback()` check allows fallthrough to llama.cpp.
-        Err(RouterError::Unavailable {
-            task: task_tag_static(task_tag),
-        })
+        // The shell calls `set_mlx_generate_fn` at init time with a
+        // function pointer that wraps Swift's MLX engine — invoking
+        // it from here drives the on-device inference.
+        //
+        // When the callback has not been registered we return
+        // Unavailable (a fallback error) so the router falls through
+        // to the next adapter (llama.cpp loopback or the encoder-only
+        // fallback). When it *is* registered any error it returns is
+        // an InferenceFailure (a hard error) — the model ran but its
+        // output is not usable, and falling through to llama.cpp
+        // would give a confusing "second attempt" experience.
+        let Some(callback) = get_mlx_generate_fn() else {
+            return Err(RouterError::Unavailable {
+                task: task_tag_static(task_tag),
+            });
+        };
+        callback(task_tag, prompt, grammar).map_err(RouterError::InferenceFailure)
     }
 }
 
@@ -244,5 +348,96 @@ mod tests {
             err.is_fallback(),
             "MLX generate() must return a fallback error"
         );
+    }
+
+    /// Bridge fixture used by [`generate_dispatches_through_registered_callback`].
+    /// Plain `fn` (not a closure) so it satisfies [`MlxGenerateFn`].
+    /// The signature is dictated by [`MlxGenerateFn`] — clippy's
+    /// "unnecessary Result wrap" lint must be suppressed here because
+    /// the trait alias type requires `Result<String, String>`.
+    #[allow(clippy::unnecessary_wraps)]
+    fn test_callback(task_tag: &str, prompt: &str, grammar: &str) -> Result<String, String> {
+        // Encode the inputs in the output so the assertion below can
+        // verify they round-tripped verbatim. Real Swift shells emit
+        // grammar-constrained JSON; the test substitute just echoes.
+        Ok(format!(
+            "{{\"task\":\"{task_tag}\",\"prompt_len\":{p},\"grammar_len\":{g}}}",
+            p = prompt.len(),
+            g = grammar.len(),
+        ))
+    }
+
+    #[test]
+    fn generate_dispatches_through_registered_callback() {
+        // The MLX generate slot is a `OnceLock` — once set in this
+        // process it stays set for every subsequent test. Hold the
+        // mlx_lock to serialise with the runtime-linked-flag tests,
+        // register the callback (idempotent), probe with the runtime
+        // marked linked, and verify the callback round-trips its
+        // arguments to the adapter return value.
+        let _g = mlx_lock();
+        set_mlx_generate_fn(test_callback);
+        set_mlx_runtime_linked(true);
+        let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
+        let adapter = MlxAdapter::with_platform_override(cfg, true);
+        adapter.probe();
+        assert!(adapter.is_available());
+        let out = adapter
+            .generate("synth_summary", "hello world", "root::=\".+\"")
+            .expect("registered callback should succeed");
+        assert!(out.contains("\"task\":\"synth_summary\""), "got {out}");
+        assert!(out.contains("\"prompt_len\":11"), "got {out}");
+        // Restore the global flag so unrelated tests that follow do
+        // not observe runtime-linked=true.
+        set_mlx_runtime_linked(false);
+    }
+
+    /// Bridge fixture used by [`generate_propagates_callback_error_as_inference_failure`].
+    fn failing_callback(_task_tag: &str, _prompt: &str, _grammar: &str) -> Result<String, String> {
+        Err("model produced ill-formed JSON".into())
+    }
+
+    #[test]
+    fn generate_propagates_callback_error_as_inference_failure() {
+        // Swap the success callback for one that always fails, run
+        // generate, and verify the error is propagated as
+        // `RouterError::InferenceFailure` (a non-fallback error —
+        // the router must NOT retry on the next adapter when the
+        // model itself ran but produced invalid output).
+        let _g = mlx_lock();
+        set_mlx_generate_fn(failing_callback);
+        set_mlx_runtime_linked(true);
+        let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
+        let adapter = MlxAdapter::with_platform_override(cfg, true);
+        adapter.probe();
+        let err = adapter.generate("synth_summary", "hi", "").unwrap_err();
+        assert!(
+            matches!(err, RouterError::InferenceFailure(_)),
+            "expected InferenceFailure, got {err:?}"
+        );
+        assert!(
+            !err.is_fallback(),
+            "InferenceFailure must not be a fallback error"
+        );
+        // Restore the test_callback so neighbouring tests that
+        // depend on the success path keep observing it.
+        set_mlx_generate_fn(test_callback);
+        set_mlx_runtime_linked(false);
+    }
+
+    #[test]
+    fn generate_unavailable_when_callback_not_registered() {
+        let _g = mlx_lock();
+        clear_mlx_generate_fn();
+        set_mlx_runtime_linked(true);
+        let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
+        let adapter = MlxAdapter::with_platform_override(cfg, true);
+        adapter.probe();
+        let err = adapter.generate("synth_summary", "", "").unwrap_err();
+        assert!(
+            err.is_fallback(),
+            "missing callback must surface as a fallback error",
+        );
+        set_mlx_runtime_linked(false);
     }
 }

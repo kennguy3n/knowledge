@@ -77,11 +77,33 @@ pub enum FfiError {
 
     /// Transient unavailability — the underlying subsystem is
     /// expected to recover on retry (e.g. ONNX runtime not loaded
-    /// yet, llama-server not running).
+    /// yet, llama-server not running). Hosts SHOULD treat this as a
+    /// soft / retryable failure.
     #[error("subsystem unavailable: {subsystem}")]
     Unavailable {
         /// Name of the unavailable subsystem.
         subsystem: String,
+    },
+
+    /// The underlying inference adapter executed the request but
+    /// the model itself produced an unusable result (grammar
+    /// violation, timeout, transport failure mid-stream, …). This
+    /// is **distinct** from [`Self::Unavailable`]: the adapter is
+    /// present and reachable, but the *attempt* failed. Hosts
+    /// SHOULD NOT silently retry the same prompt — the call path
+    /// already exhausted the router's fallback ladder — and instead
+    /// either surface the error to the user, log it for triage, or
+    /// reduce the input window before retrying.
+    ///
+    /// Mapped from [`inference_router::RouterError::InferenceFailure`].
+    /// Earlier revisions of the FFI surface collapsed this into
+    /// `Unavailable`, which lost the semantic distinction hosts
+    /// need to drive their own retry policy.
+    #[error("inference failure: {message}")]
+    InferenceFailure {
+        /// Diagnostic from the underlying adapter (model name,
+        /// HTTP status, JSON parse error, etc.).
+        message: String,
     },
 }
 
@@ -98,6 +120,7 @@ impl FfiError {
             Self::Synthesis { .. } => "Synthesis",
             Self::Crypto { .. } => "Crypto",
             Self::Unavailable { .. } => "Unavailable",
+            Self::InferenceFailure { .. } => "InferenceFailure",
         }
     }
 }
@@ -164,6 +187,9 @@ mod tests {
             FfiError::Unavailable {
                 subsystem: "onnx".into(),
             },
+            FfiError::InferenceFailure {
+                message: "grammar mismatch".into(),
+            },
         ];
         for original in cases {
             let s = serde_json::to_string(&original).unwrap();
@@ -228,5 +254,36 @@ mod tests {
             .kind(),
             "Unavailable"
         );
+        assert_eq!(
+            FfiError::InferenceFailure {
+                message: "x".into()
+            }
+            .kind(),
+            "InferenceFailure"
+        );
+    }
+
+    /// `FfiError::InferenceFailure` and `FfiError::Unavailable` MUST
+    /// remain distinct kinds. They collapse into the same FFI variant
+    /// in earlier revisions of the surface — pinning the
+    /// discriminants here prevents a future refactor from
+    /// re-collapsing them and losing the host-visible retry semantics.
+    #[test]
+    fn inference_failure_distinct_from_unavailable() {
+        let unavailable = FfiError::Unavailable {
+            subsystem: "x".into(),
+        };
+        let failure = FfiError::InferenceFailure {
+            message: "x".into(),
+        };
+        assert_ne!(unavailable.kind(), failure.kind());
+        // JSON shapes also differ — hosts switch on `kind` and the
+        // detail field name (`subsystem` vs `message`).
+        let u_json = serde_json::to_value(&unavailable).expect("serialise unavailable");
+        let f_json = serde_json::to_value(&failure).expect("serialise failure");
+        assert_eq!(u_json["kind"], "Unavailable");
+        assert_eq!(f_json["kind"], "InferenceFailure");
+        assert!(u_json["detail"].get("subsystem").is_some());
+        assert!(f_json["detail"].get("message").is_some());
     }
 }

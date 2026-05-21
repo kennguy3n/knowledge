@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::embeddings::{cosine_similarity, similarity_to_score, EmbeddingModel};
 use crate::error::{EvidenceError, Result};
 use crate::ids::{EvidenceId, ScopeId};
-use crate::store::EvidenceStore;
+use crate::store::{clamp_limit_to_sqlite, EvidenceStore};
 
 /// One row in a hybrid retrieval result.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -162,7 +162,7 @@ impl<'a> HybridRetriever<'a> {
             params![
                 query,
                 scope_id.as_uuid().as_bytes().as_slice(),
-                limit as i64,
+                clamp_limit_to_sqlite(limit),
             ],
             |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?)),
         )?;
@@ -194,7 +194,10 @@ impl<'a> HybridRetriever<'a> {
              LIMIT ?2",
         )?;
         let rows = stmt.query_map(
-            params![scope_id.as_uuid().as_bytes().as_slice(), limit as i64],
+            params![
+                scope_id.as_uuid().as_bytes().as_slice(),
+                clamp_limit_to_sqlite(limit),
+            ],
             |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?)),
         )?;
         let now = chrono::Utc::now().timestamp();

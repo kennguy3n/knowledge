@@ -517,7 +517,15 @@ mod ort_runtime_impl {
                 return Err(EmbeddingError::EmptyInput);
             }
 
-            let shape = [1_i64, len as i64];
+            // Tokenised input length is bounded by `MAX_SEQ_LEN`
+            // (well below i64::MAX); the explicit conversion makes
+            // the bound and the failure mode explicit.
+            let len_i64 = i64::try_from(len).map_err(|_| {
+                EmbeddingError::InferenceFailure(format!(
+                    "token sequence length {len} exceeds i64::MAX"
+                ))
+            })?;
+            let shape = [1_i64, len_i64];
             let input_ids = Tensor::from_array((shape, ids))
                 .map_err(|e| EmbeddingError::InferenceFailure(format!("input_ids: {e}")))?;
             let attention_mask = Tensor::from_array((shape, mask.clone()))
@@ -542,12 +550,24 @@ mod ort_runtime_impl {
             // branch eagerly pools into an owned `Vec<f32>` rather than
             // unifying through `Option`.
             let process = |shape: &[i64], data: &[f32]| -> Result<Vec<f32>> {
-                if shape.len() != 3 || shape[0] != 1 || shape[1] as usize != len {
+                // ORT shapes are signed 64-bit; for our inputs the
+                // sequence-length and hidden-size dimensions are
+                // bounded by the model config (BERT-ish: seq <= 512,
+                // hidden <= 1024) so a fallible conversion only
+                // fails on malformed model output, which we want to
+                // surface as an inference error.
+                let seq_len_ok =
+                    usize::try_from(shape.get(1).copied().unwrap_or(-1)).is_ok_and(|s| s == len);
+                if shape.len() != 3 || shape[0] != 1 || !seq_len_ok {
                     return Err(EmbeddingError::InferenceFailure(format!(
                         "unexpected output shape: {shape:?} (expected [1, {len}, hidden])"
                     )));
                 }
-                let hidden = shape[2] as usize;
+                let hidden = usize::try_from(shape[2]).map_err(|_| {
+                    EmbeddingError::InferenceFailure(format!(
+                        "negative hidden-dim in output shape: {shape:?}"
+                    ))
+                })?;
                 let mut pooled = vec![0.0_f32; hidden];
                 let mut weight = 0.0_f32;
                 for (i, &m) in mask.iter().enumerate() {
@@ -751,7 +771,12 @@ mod tests {
     fn cosine_similarity_rejects_mismatched_dimensions() {
         let a = vec![1.0, 0.0, 0.0];
         let b = vec![1.0, 0.0];
-        assert_eq!(cosine_similarity(&a, &b), 0.0);
+        // The early-return guard yields exact `0.0` — no float
+        // arithmetic happens — so a bit-for-bit comparison through
+        // `total_cmp` is the right semantic. (Plain `assert_eq!` on
+        // `f64` would tripped `clippy::float_cmp` even though the
+        // value is exact.)
+        assert!(cosine_similarity(&a, &b).total_cmp(&0.0).is_eq());
     }
 
     #[test]

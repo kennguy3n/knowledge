@@ -90,11 +90,14 @@ pub fn run(
             // Corroboration count is the number of other ingested rows
             // whose body contains the observation's content as a
             // substring. Cheap O(n*m) — fine for the demo dataset.
-            let corroboration = state
-                .ingested_rows
-                .iter()
-                .filter(|other| other.body.contains(obs.content.trim()))
-                .count() as u32;
+            let corroboration = u32::try_from(
+                state
+                    .ingested_rows
+                    .iter()
+                    .filter(|other| other.body.contains(obs.content.trim()))
+                    .count(),
+            )
+            .unwrap_or(u32::MAX);
 
             let decision = should_promote(&obs, importance, corroboration, batch_noise, &policy);
             match decision.reason {

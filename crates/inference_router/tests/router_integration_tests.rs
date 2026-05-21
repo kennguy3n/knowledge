@@ -206,10 +206,14 @@ fn low_tier_blocks_slm_adapters() {
         vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
     );
     router.bootstrap();
+    // The fallback adapter scores against a real lexicon; feed it a
+    // body containing a 'useful'-class token so the classifier picks
+    // the expected class deterministically.
+    let prompt = "prefix\n\nMessage:\nplease investigate the question";
     let out = router
-        .dispatch(InferenceTask::TagImportance, "msg")
+        .dispatch(InferenceTask::TagImportance, prompt)
         .expect("classification routes through fallback on low tier");
-    assert!(out.contains("useful"));
+    assert!(out.contains("\"class\":\"useful\""), "got {out}");
 
     // Synthesis is not serviceable on Low tier — no adapter supports
     // it. Router must emit Unavailable.
@@ -469,14 +473,28 @@ fn fallback_adapter_succeeds_on_classification_tasks() {
     let adapter = FallbackAdapter::new();
     adapter.probe();
 
-    let class_tasks = [
-        ("tag_importance", "useful"),
-        ("extract_entities", "entities"),
-        ("promote_observation", "promote"),
+    // Each (tag, prompt, marker) tuple uses a body designed to drive
+    // the lexicon-based fallback to the expected class.
+    let class_tasks: &[(&str, &str, &str)] = &[
+        (
+            "tag_importance",
+            "x\n\nMessage:\nplease investigate the question",
+            "\"class\":\"useful\"",
+        ),
+        (
+            "extract_entities",
+            "x\n\nMessage:\n@alice please review https://example.com",
+            "\"entities\":",
+        ),
+        (
+            "promote_observation",
+            "x\n\nObservation:\nWe decided to approve",
+            "\"promote\":true",
+        ),
     ];
-    for (tag, marker) in class_tasks {
+    for (tag, prompt, marker) in class_tasks.iter().copied() {
         let out = adapter
-            .generate(tag, "", "")
+            .generate(tag, prompt, "")
             .unwrap_or_else(|e| panic!("classification {tag} should succeed but errored: {e}"));
         assert!(
             out.contains(marker),

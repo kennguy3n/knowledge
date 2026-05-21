@@ -7,9 +7,20 @@ license.workspace = true
 repository.workspace = true
 description = "UniFFI bindings surface for iOS / Android platform integration."
 
+[features]
+default = []
+# Pulls in `inference_router/http-client`, enabling the real reqwest-based
+# `HttpLlamaServerClient` so the FFI runtime can wire `trigger_synthesis`
+# to a live llama.cpp loopback server. Without this feature the runtime
+# still constructs an `InferenceRouter` (MLX + Fallback adapters) so
+# classification tasks work, but synthesis tasks return `Unavailable`
+# because the llama.cpp adapter has no client.
+http-client = ["inference_router/http-client"]
+
 [dependencies]
 crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }
+inference_router = { path = "../inference_router" }
 memory_manager = { path = "../memory_manager" }
 synthesis_pipeline = { path = "../synthesis_pipeline" }
 

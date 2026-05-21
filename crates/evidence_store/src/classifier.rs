@@ -425,9 +425,10 @@ mod tests {
 
     #[test]
     fn slm_classifier_integration_with_real_fallback_adapter() {
-        // The real FallbackAdapter returns
-        // `{"class":"useful","confidence":0.5}` for tag_importance —
-        // the SLM classifier should round-trip that verdict.
+        // The real FallbackAdapter scores against a lexicon; the
+        // classifier exists to lift its verdict into
+        // `ImportanceClass`. Feed it bodies that exercise each class
+        // and assert the round-trip mapping.
         let cfg = RouterConfig::default();
         let router = Arc::new(InferenceRouter::new(
             cfg,
@@ -435,11 +436,26 @@ mod tests {
         ));
         router.bootstrap();
         let c = SlmClassifier::new(router);
-        // For a "useful" body with no critical/important keywords the
-        // verdict is Useful regardless.
+
+        // "Critical" lexicon term.
+        assert_eq!(
+            c.classify("Security incident in production — please page on-call"),
+            ImportanceClass::Critical
+        );
+        // "Important" lexicon term.
+        assert_eq!(
+            c.classify("Please review the deadline for the launch"),
+            ImportanceClass::Important
+        );
+        // "Useful" lexicon term (question / interrogative).
+        assert_eq!(
+            c.classify("Could you investigate the question on routing?"),
+            ImportanceClass::Useful
+        );
+        // No signal at all → noise class.
         assert_eq!(
             c.classify("any random body without keywords"),
-            ImportanceClass::Useful
+            ImportanceClass::Noise
         );
     }
 }

@@ -2,7 +2,8 @@
 //! warm-up / idle-unload.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::adapter::{AdapterKind, InferenceAdapter, ProbeResult};
@@ -32,6 +33,31 @@ pub struct InferenceRouter {
     bootstrapped: AtomicBool,
     activity: Mutex<Vec<AdapterActivity>>,
     warmed: AtomicBool,
+    /// Signals completion of [`Self::bootstrap`] / [`Self::spawn_bootstrap`]
+    /// to threads blocked in [`Self::wait_for_bootstrap`].
+    ///
+    /// The bool in the mutex flips to `true` exactly once — either
+    /// synchronously from the end of [`Self::bootstrap`] or from
+    /// the background thread spawned by [`Self::spawn_bootstrap`].
+    /// Once flipped, the condvar is `notify_all`'d so every waiter
+    /// can proceed. The atomic [`Self::bootstrapped`] flag is
+    /// retained for cheap polling on the dispatch hot path; the
+    /// condvar exists specifically for the blocking-wait path that
+    /// hosts use when they need a synchronisation point against
+    /// the background probe.
+    bootstrap_signal: (Mutex<bool>, Condvar),
+    /// Join handle for the background bootstrap thread, if one was
+    /// spawned via [`Self::spawn_bootstrap`]. Owned here so
+    /// [`Self::shutdown`] (and the [`Drop`] impl) can `join()` the
+    /// thread instead of leaving it detached — a detached probe
+    /// thread that outlives the FFI runtime would briefly keep
+    /// network sockets open (e.g. the llama.cpp `/health` probe)
+    /// after the host has called `close_store`, which the substrate
+    /// avoids by waiting on the handle at shutdown time. Mutexed
+    /// rather than atomic-swap because [`JoinHandle`] is not
+    /// `Copy` / `Atomic`-friendly; contention is irrelevant in
+    /// practice (spawn/shutdown are infrequent).
+    bootstrap_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl InferenceRouter {
@@ -54,11 +80,20 @@ impl InferenceRouter {
             bootstrapped: AtomicBool::new(false),
             activity: Mutex::new(activity),
             warmed: AtomicBool::new(false),
+            bootstrap_signal: (Mutex::new(false), Condvar::new()),
+            bootstrap_handle: Mutex::new(None),
         }
     }
 
     /// Run [`InferenceAdapter::probe`] on every adapter. Must be
     /// called before [`Self::dispatch`].
+    ///
+    /// Synchronous — the call blocks until every adapter has been
+    /// probed. Hosts that want to keep their `open` / startup path
+    /// non-blocking should use [`Self::spawn_bootstrap`] instead,
+    /// which dispatches this same logic onto a background thread
+    /// and lets later [`Self::dispatch`] callers block on
+    /// [`Self::wait_for_bootstrap`].
     pub fn bootstrap(&self) -> Vec<(AdapterKind, ProbeResult)> {
         let results = self
             .adapters
@@ -66,7 +101,258 @@ impl InferenceRouter {
             .map(|a| (a.kind(), a.probe()))
             .collect();
         self.bootstrapped.store(true, Ordering::SeqCst);
+        // Wake any threads blocked in `wait_for_bootstrap` — the
+        // synchronous bootstrap path must satisfy the same
+        // contract as the background one so callers can use
+        // either entry point interchangeably.
+        self.notify_bootstrap_complete();
         results
+    }
+
+    /// Run [`Self::bootstrap`] on a dedicated background thread.
+    ///
+    /// Returns immediately; the thread itself probes every adapter
+    /// and, on completion, flips the [`Self::bootstrapped`] flag and
+    /// notifies waiters blocked in [`Self::wait_for_bootstrap`].
+    /// Use this from the FFI `open_store` path to keep the open
+    /// call non-blocking when an adapter probe might hit the
+    /// network (e.g. the `http-client`-backed llama.cpp adapter
+    /// pings `GET /health` with a multi-second timeout).
+    ///
+    /// The spawned thread's [`JoinHandle`] is stored on the router so
+    /// [`Self::shutdown`] (and the [`Drop`] impl) can `join()` it at
+    /// teardown time. Callers do not need to `join` directly; any
+    /// thread that needs a synchronisation point against probe
+    /// completion calls [`Self::wait_for_bootstrap`]. The handle
+    /// exists specifically so the runtime can guarantee no probe
+    /// thread outlives the router's logical lifetime — detached
+    /// probes would briefly keep network sockets open after the host
+    /// has called `close_store`, even though they are memory-safe via
+    /// the [`Arc`] the thread holds.
+    ///
+    /// Calling `spawn_bootstrap` twice on the same router is
+    /// supported: the second call joins the prior handle (blocking
+    /// briefly if the first probe is still running) before spawning a
+    /// fresh thread. This is a defensive guard against host code that
+    /// re-bootstraps on configuration reload; the substrate itself
+    /// only calls `spawn_bootstrap` once per `open_store`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying OS rejects the thread spawn. This
+    /// matches the substrate's policy elsewhere (we treat thread
+    /// spawn failures as unrecoverable initialisation faults).
+    pub fn spawn_bootstrap(self: Arc<Self>) {
+        // Reap any prior handle first so a second call doesn't leak
+        // the previous thread. This is a no-op on the common path
+        // (one bootstrap per router lifetime).
+        self.shutdown();
+        // Reset the bootstrap-completion signal so a `wait_for_bootstrap`
+        // call that races the second probe parks on the condvar
+        // instead of short-circuiting on the prior bootstrap's
+        // `done == true` / `bootstrapped == true`. Without this every
+        // `dispatch` call between `spawn_bootstrap` (re-spawn) and the
+        // new probe's completion would observe stale adapter
+        // availability — e.g. an adapter that was previously
+        // unreachable but is now back online would still route to
+        // `Unavailable` until the new probe lands, which defeats the
+        // entire point of re-bootstrapping. This is a no-op on the
+        // common path (the very first `spawn_bootstrap` call) because
+        // both fields are already `false` from `new`.
+        self.reset_bootstrap_state();
+        let me = Arc::clone(&self);
+        let handle = std::thread::Builder::new()
+            .name("inference-router-bootstrap".into())
+            .spawn(move || {
+                // RAII drop-guard so that even if any adapter's
+                // `probe()` panics during [`Self::bootstrap`], the
+                // condvar protecting `wait_for_bootstrap` is still
+                // signalled — otherwise a single misbehaving adapter
+                // would permanently wedge every future
+                // `trigger_synthesis` call blocked in
+                // [`Self::wait_for_bootstrap`]. The guard is
+                // idempotent with the explicit
+                // `notify_bootstrap_complete()` inside `bootstrap()`:
+                // on the happy path the second notify is a no-op
+                // (the flag is already `true` and `notify_all` on an
+                // empty waiter list has no observable effect); on a
+                // panic, the guard's `Drop` is the only path that
+                // notifies. Note that on panic the
+                // [`Self::bootstrapped`] atomic stays `false`, so
+                // subsequent `dispatch` calls correctly route to
+                // their `NotProbed` / `Unavailable` paths rather
+                // than racing partial state — the guard only ensures
+                // we don't *hang*.
+                struct NotifyOnDrop<'r>(&'r InferenceRouter);
+                impl Drop for NotifyOnDrop<'_> {
+                    fn drop(&mut self) {
+                        self.0.notify_bootstrap_complete();
+                    }
+                }
+                let _guard = NotifyOnDrop(&me);
+                let results = me.bootstrap();
+                for (kind, result) in &results {
+                    tracing::info!(
+                        adapter = kind.as_str(),
+                        probe = ?result,
+                        "inference_router adapter probed (background)",
+                    );
+                }
+            })
+            .expect("spawn inference-router-bootstrap thread");
+        // Stash the handle for `shutdown` / `Drop`. We never call
+        // `expect` on the lock here because contention is impossible
+        // (the only writers are `spawn_bootstrap` and `shutdown`, and
+        // we just returned from the `shutdown` call above) — the
+        // `lock()` is conceptually infallible on a non-poisoned mutex
+        // and a poisoned one indicates a programmer error worth
+        // surfacing as a panic.
+        *self.bootstrap_handle.lock().expect("bootstrap_handle lock") = Some(handle);
+    }
+
+    /// Join the background bootstrap thread spawned by
+    /// [`Self::spawn_bootstrap`], if any. No-op when no background
+    /// bootstrap is in flight (either none was spawned, or a prior
+    /// `shutdown` already reaped the handle).
+    ///
+    /// The substrate calls this from `FfiRuntime::Drop` so the
+    /// background probe never outlives the runtime that owns it.
+    /// External callers may invoke it directly when they want a hard
+    /// synchronisation point against probe completion —
+    /// [`Self::wait_for_bootstrap`] satisfies the same observable
+    /// contract via the condvar, but only `shutdown` guarantees the
+    /// OS-level thread has been reaped.
+    ///
+    /// Safe to call from any thread, multiple times — the second
+    /// call sees `None` and returns immediately.
+    ///
+    /// # Self-join guard
+    ///
+    /// If `shutdown` is invoked from **the bootstrap thread itself**,
+    /// it does NOT join the handle — joining the currently-running
+    /// thread would invoke `pthread_join` on `pthread_self()`, which
+    /// POSIX leaves explicitly undefined (`EDEADLK` on Linux's glibc,
+    /// `EDEADLK` or `EINVAL` on macOS, deadlock on some embedded
+    /// libcs). Dropping the [`JoinHandle`] without joining is safe
+    /// in that case because the running thread is already past the
+    /// closure that owned the work — it can only reach `Drop` /
+    /// `shutdown` by having released the last
+    /// `Arc<InferenceRouter>` strong reference *after* finishing
+    /// the closure. So we are not detaching a still-running probe;
+    /// we are detaching a thread that is one stack frame from
+    /// returning. Detach in this corner cleans up the join slot
+    /// without blocking on a thread that is about to vanish.
+    ///
+    /// The self-join scenario is only reachable for standalone
+    /// embedders that hold no other `Arc<InferenceRouter>` strong
+    /// references across the probe's lifetime. The substrate's own
+    /// path through [`crate::FfiRuntime`] always pins the router for
+    /// the lifetime of the runtime and calls `shutdown` from
+    /// `FfiRuntime::Drop` (on the runtime owner's thread, not the
+    /// probe thread) before releasing its own `Arc`, so the guard is
+    /// a no-op on the production code path.
+    pub fn shutdown(&self) {
+        let handle = self
+            .bootstrap_handle
+            .lock()
+            .expect("bootstrap_handle lock")
+            .take();
+        let Some(h) = handle else {
+            return;
+        };
+        if h.thread().id() == std::thread::current().id() {
+            // Self-join — see the doc above for the full rationale.
+            // We log at `debug` (not `warn`) because this is an
+            // expected, documented outcome for standalone-embedder
+            // teardown, not a fault. Dropping `h` here detaches the
+            // join slot.
+            tracing::debug!(
+                "inference-router-bootstrap thread is dropping its own router; \
+                 skipping self-join (detaching join handle)",
+            );
+            drop(h);
+            return;
+        }
+        // `join()` on a panicked thread returns `Err`; we don't
+        // propagate that here because the bootstrap thread's
+        // panic-safety contract is already covered by the
+        // `NotifyOnDrop` guard inside `spawn_bootstrap` — the
+        // condvar is signalled regardless, so any waiters in
+        // `wait_for_bootstrap` have already unblocked. Logging
+        // the join failure is the most we can usefully do.
+        if let Err(e) = h.join() {
+            tracing::warn!(
+                error = ?e,
+                "inference-router-bootstrap thread panicked during shutdown",
+            );
+        }
+    }
+
+    /// Block the current thread until [`Self::bootstrap`] (or the
+    /// background variant spawned by [`Self::spawn_bootstrap`]) has
+    /// completed.
+    ///
+    /// Returns immediately when bootstrap has already finished
+    /// (the condvar's `done` flag observed under the lock is the
+    /// authoritative signal). Callers racing the probe — typically
+    /// an FFI surface invoked right after `open_store` — park on
+    /// the condvar until the bootstrap thread notifies completion.
+    ///
+    /// An earlier revision short-circuited on a lockless atomic read
+    /// of [`Self::bootstrapped`] before taking the lock, which under
+    /// the [`Self::reset_bootstrap_state`] / re-spawn path was racy:
+    /// SeqCst guarantees a total order over the atomic load and the
+    /// (reset) atomic store, but does not guarantee the reader's load
+    /// is sequenced *after* the writer's store in that order. A
+    /// caller could therefore observe `bootstrapped == true` (from
+    /// the prior bootstrap) while the reset had already taken the
+    /// lock and flipped `done = false`, then return from
+    /// `wait_for_bootstrap` without ever parking on the condvar.
+    /// Acquiring the mutex first eliminates the race entirely: the
+    /// reset and the wait now use the same critical section to read
+    /// / write the `done` flag, and the mutex's acquire/release
+    /// edges establish a clean happens-before relation. The cost is
+    /// one mutex acquire per call, which is negligible —
+    /// `wait_for_bootstrap` is called at most once per FFI synthesis
+    /// dispatch (rare, host-driven cadence), not from any hot path.
+    pub fn wait_for_bootstrap(&self) {
+        let (lock, cvar) = &self.bootstrap_signal;
+        let mut done = lock.lock().expect("bootstrap_signal lock");
+        while !*done {
+            done = cvar.wait(done).expect("bootstrap_signal wait");
+        }
+    }
+
+    /// Internal helper — flip the condvar-protected `done` flag and
+    /// wake every blocked [`Self::wait_for_bootstrap`] caller.
+    fn notify_bootstrap_complete(&self) {
+        let (lock, cvar) = &self.bootstrap_signal;
+        let mut done = lock.lock().expect("bootstrap_signal lock");
+        *done = true;
+        cvar.notify_all();
+    }
+
+    /// Internal helper — reset the bootstrap-completion signal so a
+    /// subsequent [`Self::spawn_bootstrap`] can re-probe and have its
+    /// `wait_for_bootstrap` callers park correctly.
+    ///
+    /// Called from [`Self::spawn_bootstrap`] between joining the
+    /// prior probe thread (via [`Self::shutdown`]) and spawning the
+    /// new one. The invariant lives in one place so the
+    /// atomic-vs-condvar ordering cannot drift: both fields are
+    /// flipped under the condvar's mutex so a `wait_for_bootstrap`
+    /// caller cannot interleave between them and observe a
+    /// half-reset state (atomic `false` but condvar still `done`).
+    ///
+    /// No `notify_all` is issued — we are signalling "NOT done",
+    /// not "done", and the only consumer of `done == false` is the
+    /// `while !*done` loop inside [`Self::wait_for_bootstrap`] which
+    /// observes the transition on its next condvar wake.
+    fn reset_bootstrap_state(&self) {
+        let (lock, _cvar) = &self.bootstrap_signal;
+        let mut done = lock.lock().expect("bootstrap_signal lock");
+        self.bootstrapped.store(false, Ordering::SeqCst);
+        *done = false;
     }
 
     /// Borrow the underlying config.
@@ -165,6 +451,28 @@ impl InferenceRouter {
             entry.last_dispatch = Instant::now();
             entry.loaded = loaded || entry.loaded;
         }
+    }
+}
+
+impl Drop for InferenceRouter {
+    /// Reap the background bootstrap thread, if one is still
+    /// running. The substrate's normal teardown path calls
+    /// [`Self::shutdown`] explicitly from `FfiRuntime::Drop`, but
+    /// this `Drop` impl makes the contract robust against routers
+    /// constructed in standalone contexts (tests, demos,
+    /// embedders that don't go through the FFI surface): no
+    /// matter how the router is dropped, the probe thread will
+    /// be joined before the heap allocation goes away.
+    ///
+    /// Note that the bootstrap thread holds an [`Arc`] back to
+    /// this router, so `Drop` will only ever fire after that
+    /// `Arc` has been released — i.e. only after the probe
+    /// itself has returned. The `join()` inside `shutdown()` is
+    /// therefore guaranteed to complete promptly (it sees a
+    /// thread that has already finished its closure), which
+    /// avoids any potential for `Drop` to block on slow I/O.
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -473,15 +781,328 @@ mod tests {
             vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
         );
         router.bootstrap();
+        // The fallback adapter scores against a real lexicon — feed
+        // it a prompt body containing a "useful" lexicon term so the
+        // classifier picks that class deterministically.
+        let prompt = "stuff\n\nMessage:\nplease investigate the question";
         let out = router
-            .dispatch(InferenceTask::TagImportance, "msg")
+            .dispatch(InferenceTask::TagImportance, prompt)
             .unwrap();
-        assert!(out.contains("useful"));
+        assert!(out.contains("\"class\":\"useful\""), "got {out}");
         // Synthesis routes only to llama.cpp/MLX; with both
         // unavailable the router emits Unavailable.
         let err = router
             .dispatch(InferenceTask::SynthSummary, "x")
             .unwrap_err();
         assert!(matches!(err, RouterError::Unavailable { .. }));
+    }
+
+    /// `spawn_bootstrap` must run probing on a background thread and
+    /// satisfy the same post-condition as the synchronous
+    /// `bootstrap`: `is_bootstrapped` flips to true and waiters get
+    /// released. Pins the FFI `open_store` contract.
+    #[test]
+    fn spawn_bootstrap_runs_probing_on_background_thread() {
+        let router = Arc::new(router_with(vec![Box::new(FallbackAdapter::new())]));
+        assert!(!router.is_bootstrapped());
+        Arc::clone(&router).spawn_bootstrap();
+        // Block on the same primitive the FFI surface uses.
+        router.wait_for_bootstrap();
+        assert!(router.is_bootstrapped());
+        // Dispatch must succeed after the background probe completes
+        // (FallbackAdapter supports TagImportance and is always
+        // available once probed).
+        router
+            .dispatch(InferenceTask::TagImportance, "Message:\nhi")
+            .expect("dispatch after spawn_bootstrap should succeed");
+    }
+
+    /// `wait_for_bootstrap` blocks until probing completes, then
+    /// returns immediately on subsequent calls. Stale callers that
+    /// race the spawn-bootstrap path get a synchronisation point.
+    #[test]
+    fn wait_for_bootstrap_blocks_until_probe_completes() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let router = Arc::new(router_with(vec![Box::new(FallbackAdapter::new())]));
+        // Two waiters race the bootstrap thread; both must observe
+        // bootstrap == complete after their `wait` returns.
+        let barrier = Arc::new(Barrier::new(3));
+        let r1 = Arc::clone(&router);
+        let b1 = Arc::clone(&barrier);
+        let t1 = thread::spawn(move || {
+            b1.wait();
+            r1.wait_for_bootstrap();
+            assert!(r1.is_bootstrapped());
+        });
+        let r2 = Arc::clone(&router);
+        let b2 = Arc::clone(&barrier);
+        let t2 = thread::spawn(move || {
+            b2.wait();
+            r2.wait_for_bootstrap();
+            assert!(r2.is_bootstrapped());
+        });
+        barrier.wait();
+        Arc::clone(&router).spawn_bootstrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        // A subsequent wait is a no-op (no condvar wait).
+        router.wait_for_bootstrap();
+    }
+
+    /// Adapter whose `probe()` panics — used to exercise the
+    /// panic-safety drop-guard inside [`InferenceRouter::spawn_bootstrap`].
+    struct PanicProbeAdapter;
+    impl InferenceAdapter for PanicProbeAdapter {
+        fn kind(&self) -> AdapterKind {
+            AdapterKind::LlamaCpp
+        }
+        fn probe(&self) -> ProbeResult {
+            panic!("PanicProbeAdapter::probe is intentionally panicking");
+        }
+        fn is_available(&self) -> bool {
+            false
+        }
+        fn supports(&self, _: InferenceTask) -> bool {
+            false
+        }
+        fn generate(&self, _: &str, _: &str, _: &str) -> Result<String, RouterError> {
+            Err(RouterError::Unavailable {
+                task: "synth_summary",
+            })
+        }
+    }
+
+    /// A panic on any adapter's `probe()` must NOT permanently wedge
+    /// `wait_for_bootstrap` callers. The detached background thread's
+    /// `NotifyOnDrop` guard fires on unwind, flipping the condvar's
+    /// `done` flag so blocked waiters are released. `is_bootstrapped`
+    /// stays `false` (the atomic is only flipped on the happy path),
+    /// so subsequent `dispatch` calls correctly route to their
+    /// `NotProbed` / `Unavailable` paths rather than racing partial
+    /// state — but no thread hangs.
+    #[test]
+    fn spawn_bootstrap_panic_does_not_wedge_waiters() {
+        let router = Arc::new(router_with(vec![
+            Box::new(PanicProbeAdapter),
+            Box::new(FallbackAdapter::new()),
+        ]));
+        assert!(!router.is_bootstrapped());
+        Arc::clone(&router).spawn_bootstrap();
+        // The wait must return — the drop-guard fires on panic so the
+        // condvar is signalled even though `bootstrap()` unwound.
+        router.wait_for_bootstrap();
+        // The atomic stays false because the panic prevented the
+        // happy-path `bootstrapped.store(true)`. Dispatch routes to
+        // `NotProbed` rather than hanging.
+        assert!(
+            !router.is_bootstrapped(),
+            "panicking probe must leave bootstrapped == false",
+        );
+    }
+
+    /// Synchronous `bootstrap` must also notify the condvar so a
+    /// caller that mixes the two entry points cannot deadlock.
+    #[test]
+    fn synchronous_bootstrap_releases_condvar_waiters() {
+        use std::thread;
+
+        let router = Arc::new(router_with(vec![Box::new(FallbackAdapter::new())]));
+        let r = Arc::clone(&router);
+        let t = thread::spawn(move || {
+            // Park on the condvar — the synchronous bootstrap below
+            // must still wake us.
+            r.wait_for_bootstrap();
+            assert!(r.is_bootstrapped());
+        });
+        // Give the waiter a moment to park on the condvar before we
+        // notify; the test still passes if `bootstrap` runs first
+        // (the wait short-circuits via `is_bootstrapped`), so the
+        // sleep just exercises the notify path more often.
+        std::thread::sleep(Duration::from_millis(5));
+        router.bootstrap();
+        t.join().unwrap();
+    }
+
+    /// Adapter whose `probe()` parks on a barrier until the test
+    /// releases it. Used to deterministically reproduce the
+    /// "second `spawn_bootstrap` re-uses stale state" bug — with the
+    /// adapter blocked inside `probe()`, we get a clean window
+    /// between `spawn_bootstrap` returning and the new probe
+    /// completing in which to observe `is_bootstrapped()` /
+    /// `wait_for_bootstrap()` behaviour.
+    struct GatedProbeAdapter {
+        gate: Arc<std::sync::Barrier>,
+    }
+    impl InferenceAdapter for GatedProbeAdapter {
+        fn kind(&self) -> AdapterKind {
+            AdapterKind::LlamaCpp
+        }
+        fn probe(&self) -> ProbeResult {
+            self.gate.wait();
+            ProbeResult::Available
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn supports(&self, _: InferenceTask) -> bool {
+            false
+        }
+        fn generate(&self, _: &str, _: &str, _: &str) -> Result<String, RouterError> {
+            Err(RouterError::Unavailable {
+                task: "synth_summary",
+            })
+        }
+    }
+
+    /// Regression for the bug Devin Review flagged on commit d5b0a61:
+    /// `spawn_bootstrap` (second call) must reset both the
+    /// `bootstrapped` atomic *and* the condvar `done` flag, otherwise
+    /// `wait_for_bootstrap` short-circuits on the prior bootstrap's
+    /// stale state and `dispatch` callers race ahead with outdated
+    /// adapter availability.
+    ///
+    /// Strategy: first bootstrap to set `bootstrapped = true`. Then
+    /// re-spawn with a `GatedProbeAdapter` whose `probe()` is blocked
+    /// at a barrier. While the new probe is in flight, both
+    /// `is_bootstrapped()` and the condvar's `done` flag MUST be
+    /// `false` — if either remained `true`, callers would race past
+    /// the in-flight probe. Releasing the barrier then completes the
+    /// probe; the post-conditions return to `true`.
+    #[test]
+    fn re_spawn_bootstrap_resets_bootstrapped_and_condvar_done_flags() {
+        use std::sync::Barrier;
+        use std::thread;
+        // Use a barrier with 2 participants: the test thread + the
+        // adapter's `probe()`. The test calls `gate.wait()` from the
+        // test thread to unblock the probe.
+        let gate = Arc::new(Barrier::new(2));
+        let router = Arc::new(router_with(vec![
+            Box::new(GatedProbeAdapter {
+                gate: Arc::clone(&gate),
+            }),
+            Box::new(FallbackAdapter::new()),
+        ]));
+
+        // First, drive a complete bootstrap on a background thread so
+        // the test thread can release the gate from outside the
+        // probe. After this finishes, `bootstrapped == true` and the
+        // condvar's `done == true` — i.e. the exact stale state the
+        // bug relies on.
+        let r1 = Arc::clone(&router);
+        let first = thread::spawn(move || r1.bootstrap());
+        gate.wait(); // release the first probe
+        first.join().unwrap();
+        assert!(router.is_bootstrapped(), "first bootstrap must complete");
+
+        // Now re-spawn with the gate still closed. `spawn_bootstrap`
+        // joins the prior (already-finished) thread, resets state,
+        // and spawns a new thread which immediately parks inside
+        // `probe()` waiting for the gate.
+        Arc::clone(&router).spawn_bootstrap();
+
+        // The critical assertion: while the new probe is in flight,
+        // the atomic MUST be false. Before the fix, the atomic stayed
+        // `true` from the prior bootstrap and a `dispatch` here would
+        // race past the in-flight probe.
+        assert!(
+            !router.is_bootstrapped(),
+            "second spawn_bootstrap MUST reset bootstrapped to false until the new probe completes",
+        );
+
+        // The condvar's `done` flag must also be reset — verify by
+        // spinning up a waiter and confirming it blocks on the
+        // condvar (i.e. it does not return until we release the
+        // gate). Use a completion-flag pattern to avoid timing-
+        // fragile sleeps in the assertion path.
+        let r3 = Arc::clone(&router);
+        let waiter_done = Arc::new(AtomicBool::new(false));
+        let waiter_done_clone = Arc::clone(&waiter_done);
+        let waiter = thread::spawn(move || {
+            r3.wait_for_bootstrap();
+            waiter_done_clone.store(true, Ordering::SeqCst);
+        });
+
+        // Give the waiter a chance to park on the condvar. Even with
+        // pathological scheduling, a 50ms window is enough to detect
+        // the bug — if `done` were still `true` from the prior
+        // bootstrap, `wait_for_bootstrap` would short-circuit
+        // immediately and the flag would already be set.
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            !waiter_done.load(Ordering::SeqCst),
+            "wait_for_bootstrap MUST block until the new probe completes \
+             — it observed stale done==true from the prior bootstrap",
+        );
+
+        // Release the second probe. The waiter should now unblock
+        // and `is_bootstrapped()` should return to true.
+        gate.wait();
+        waiter.join().unwrap();
+        assert!(waiter_done.load(Ordering::SeqCst));
+        assert!(router.is_bootstrapped());
+    }
+
+    /// Regression for the latent self-join footgun Devin Review
+    /// flagged on commit 8c8ed4f: a standalone embedder that
+    /// constructs `Arc<InferenceRouter>`, calls `spawn_bootstrap`,
+    /// then drops its only `Arc` without joining or waiting MUST
+    /// not invoke `pthread_join` on the bootstrap thread itself.
+    ///
+    /// Scenario: after the outer `Arc` is released, the only
+    /// remaining strong reference is the one captured inside the
+    /// bootstrap thread's closure. When that thread finishes its
+    /// probe loop, its `me: Arc<InferenceRouter>` is the last
+    /// strong reference; dropping it fires
+    /// [`InferenceRouter::drop`] on the bootstrap thread, which
+    /// in turn calls [`InferenceRouter::shutdown`] — and naively
+    /// joining the handle stored in `bootstrap_handle` would be a
+    /// self-join (`pthread_join(pthread_self())`), POSIX-undefined.
+    /// On glibc this surfaces as `EDEADLK` rather than a hard
+    /// deadlock, but on other libcs the behaviour is unspecified.
+    ///
+    /// Verification: the test downgrades to a [`Weak`] before
+    /// dropping the only strong reference, then polls until the
+    /// allocation is freed. If the self-join branch in `shutdown`
+    /// is not taken, the bootstrap thread either (a) deadlocks
+    /// forever (libc-dependent), or (b) logs a `WARN` and proceeds
+    /// — but either way the strong count drops to zero and the
+    /// `Weak::upgrade` returns `None`. The test thus pins the
+    /// substrate-level guarantee: standalone-embedder teardown
+    /// completes without leaking the router allocation.
+    #[test]
+    fn shutdown_skips_self_join_when_dropped_from_bootstrap_thread() {
+        use std::time::Instant;
+
+        let router = Arc::new(router_with(vec![Box::new(FallbackAdapter::new())]));
+        // Spawn the bootstrap thread — the closure captures a clone
+        // of the Arc internally via `Arc::clone(&self)`.
+        Arc::clone(&router).spawn_bootstrap();
+        // Downgrade to a `Weak` so the test can observe the allocation
+        // going away without keeping it alive.
+        let weak = Arc::downgrade(&router);
+        // Release the outer strong reference. After this, the only
+        // remaining strong reference is the closure-captured `me`
+        // inside the bootstrap thread.
+        drop(router);
+        // The bootstrap thread should:
+        //   1. Run the probe (FallbackAdapter — instantaneous).
+        //   2. Notify the condvar via `NotifyOnDrop`.
+        //   3. Drop `me`, taking the strong count from 1 → 0.
+        //   4. `Drop for InferenceRouter` fires on the bootstrap
+        //      thread → `shutdown` detects self-thread → detaches
+        //      the join handle → returns.
+        // Once that sequence completes, `Weak::upgrade()` returns
+        // `None`. A 5-second deadline is generous — the entire
+        // sequence takes microseconds on any reasonable host.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if weak.upgrade().is_none() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("InferenceRouter allocation was not freed within 5s — possible self-join hang");
     }
 }

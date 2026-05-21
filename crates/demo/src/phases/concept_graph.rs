@@ -198,7 +198,7 @@ pub fn run(
         canonical_ids.push(id);
         concept_by_tier.entry(seed.tier).or_default().push(id);
     }
-    let canonical_seed_count = canonical_ids.len() as u64;
+    let canonical_seed_count = u64::try_from(canonical_ids.len()).unwrap_or(u64::MAX);
 
     // -- Wire up scope hierarchy with PartOf / IsA edges.
     let mut typed_edge_count: HashMap<RelationType, u64> = HashMap::new();
@@ -326,7 +326,7 @@ pub fn run(
         for (i, concept_id) in canonical_ids
             .iter()
             .copied()
-            .take(canonical_seed_count as usize)
+            .take(usize::try_from(canonical_seed_count).unwrap_or(usize::MAX))
             .enumerate()
         {
             let ev = evidence_node_ids[i % evidence_node_ids.len()];

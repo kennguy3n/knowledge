@@ -68,13 +68,27 @@ impl std::fmt::Debug for SecretToken {
 }
 
 /// One OAuth2 token bundle for a connector instance.
+///
+/// `refresh_token` is intentionally an [`Option`]: some providers
+/// (Notion, Atlassian rotating-token mode) always return a refresh
+/// token, while others (Slack legacy, public-client / PKCE-only
+/// flows, single-page-app flows that opt out of refresh rotation)
+/// never do. Storing `None` for the latter is more honest than
+/// faking an empty `SecretToken`: it lets
+/// [`OAuth2TokenVault::refresh_if_expiring`] short-circuit with a
+/// structured [`ConnectorError::TokenRefresh`] instead of attempting
+/// a refresh grant with `refresh_token=`, which every compliant
+/// provider rejects as `invalid_grant`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuth2Token {
     /// Bearer access token.
     pub access_token: SecretToken,
     /// Refresh token (long-lived, used to mint a new access token
-    /// when the current one expires).
-    pub refresh_token: SecretToken,
+    /// when the current one expires). `None` when the provider did
+    /// not issue one — the vault treats this as "re-authorisation
+    /// required at next refresh" rather than attempting a doomed
+    /// refresh grant with an empty token.
+    pub refresh_token: Option<SecretToken>,
     /// Wall-clock expiration of `access_token`.
     pub expires_at: DateTime<Utc>,
     /// OAuth2 scope string as granted by the provider.
@@ -84,7 +98,8 @@ pub struct OAuth2Token {
 }
 
 impl OAuth2Token {
-    /// Construct a new token bundle.
+    /// Construct a new token bundle with both access and refresh
+    /// tokens — the common case for confidential-client flows.
     pub fn new(
         access_token: impl Into<String>,
         refresh_token: impl Into<String>,
@@ -93,7 +108,28 @@ impl OAuth2Token {
     ) -> Self {
         Self {
             access_token: SecretToken::new(access_token),
-            refresh_token: SecretToken::new(refresh_token),
+            refresh_token: Some(SecretToken::new(refresh_token)),
+            expires_at,
+            scope: scope.into(),
+            token_type: "Bearer".to_string(),
+        }
+    }
+
+    /// Construct a new token bundle *without* a refresh token —
+    /// callers should use this when the provider explicitly omits
+    /// `refresh_token` from the token response (Slack legacy,
+    /// PKCE-only public clients, etc.) rather than passing an empty
+    /// string to [`Self::new`]. The vault uses the `None` discriminant
+    /// to surface a structured re-auth-required error instead of
+    /// attempting an empty-token refresh grant.
+    pub fn new_without_refresh(
+        access_token: impl Into<String>,
+        expires_at: DateTime<Utc>,
+        scope: impl Into<String>,
+    ) -> Self {
+        Self {
+            access_token: SecretToken::new(access_token),
+            refresh_token: None,
             expires_at,
             scope: scope.into(),
             token_type: "Bearer".to_string(),
@@ -114,13 +150,26 @@ impl OAuth2Token {
 
 /// Result of a token-refresh flow — the *new* access/refresh pair
 /// returned by the provider's token endpoint.
+///
+/// Both token fields wrap their secret in [`SecretToken`] so the
+/// underlying heap buffer is zeroised on drop and a `Debug`-print of
+/// the struct never leaks the value. This mirrors how [`OAuth2Token`]
+/// holds its access/refresh pair — a `RefreshedToken` is a
+/// short-lived intermediate between the provider's response and the
+/// vault entry, but "short-lived" is exactly the kind of qualifier
+/// that decays once a future maintainer extends the type's lifetime
+/// (e.g. captures it in a trace span or a retry buffer). Mirroring
+/// [`OAuth2Token`]'s discipline removes the asymmetry and means every
+/// path that touches a real token in this crate goes through the same
+/// zero-on-drop container.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefreshedToken {
-    /// New access token.
-    pub access_token: String,
+    /// New access token (zero-on-drop).
+    pub access_token: SecretToken,
     /// New refresh token (some providers rotate, others return the
     /// same value). Pass `None` to keep the existing refresh token.
-    pub refresh_token: Option<String>,
+    /// Zero-on-drop when `Some`.
+    pub refresh_token: Option<SecretToken>,
     /// New expiry.
     pub expires_at: DateTime<Utc>,
     /// New scope (if changed).
@@ -137,6 +186,30 @@ pub trait TokenRefresher {
     /// Exchange `refresh_token` for a new access token. Implementors
     /// should return [`ConnectorError::TokenRefresh`] on failure.
     fn refresh(&self, refresh_token: &str) -> Result<RefreshedToken>;
+}
+
+/// One-shot OAuth2 authorisation-code exchange — invoked by a
+/// connector's `authenticate` method when the substrate first
+/// negotiates access.
+///
+/// Production code wires this to an HTTP client that POSTs to the
+/// provider's `/token` endpoint with
+/// `grant_type=authorization_code`. The trait keeps the connector
+/// boundary provider-agnostic.
+pub trait OAuth2CodeExchange {
+    /// Exchange `auth_code` for an access / refresh token pair.
+    /// `redirect_uri` and `client_id` come from
+    /// `config.auth_config_json` (see [`crate::config::ConnectorConfig`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConnectorError::Auth`] on provider rejection or
+    /// [`ConnectorError::Transport`] on network failure.
+    fn exchange_code(
+        &self,
+        config: &crate::config::ConnectorConfig,
+        auth_code: &str,
+    ) -> Result<OAuth2Token>;
 }
 
 /// In-memory OAuth2 token vault, keyed by [`ConnectorInstanceId`].
@@ -219,18 +292,44 @@ impl OAuth2TokenVault {
             .ok_or(ConnectorError::TokenNotFound)?
             .is_expiring_within(now, skew);
         if needs_refresh {
+            // If the stored token has no refresh token (provider
+            // never issued one), refusing to call the refresher is
+            // strictly better than passing an empty string: every
+            // OAuth2 server rejects `refresh_token=` as
+            // `invalid_grant`, and the resulting `TokenRefresh`
+            // error message would be misleading ("provider rejected
+            // our empty refresh token" rather than "we never had a
+            // refresh token in the first place"). Hosts switch on
+            // `ConnectorError::TokenRefresh` to drive re-authorisation
+            // UI, so the variant is correct.
             let refresh_token = self
                 .tokens
                 .get(&instance)
                 .expect("checked above")
                 .refresh_token
+                .as_ref()
+                .ok_or_else(|| {
+                    ConnectorError::TokenRefresh(
+                        "cannot refresh: no refresh_token stored for connector instance — \
+                         re-authorisation required"
+                            .into(),
+                    )
+                })?
                 .expose()
                 .to_string();
             let refreshed = refresher.refresh(&refresh_token)?;
             let entry = self.tokens.get_mut(&instance).expect("checked above");
-            entry.access_token = SecretToken::new(refreshed.access_token);
+            // `refreshed.access_token` / `refresh_token` are already
+            // [`SecretToken`]s — move them directly into the vault
+            // entry rather than copying the bytes through a fresh
+            // allocation. The prior `entry.access_token =
+            // SecretToken::new(refreshed.access_token)` step double-
+            // allocated and left the source buffer to drop separately,
+            // which expanded the zero-on-drop surface area without
+            // shrinking the exposure window.
+            entry.access_token = refreshed.access_token;
             if let Some(rt) = refreshed.refresh_token {
-                entry.refresh_token = SecretToken::new(rt);
+                entry.refresh_token = Some(rt);
             }
             entry.expires_at = refreshed.expires_at;
             if let Some(s) = refreshed.scope {
@@ -254,8 +353,8 @@ mod tests {
     impl TokenRefresher for StaticRefresher {
         fn refresh(&self, _refresh_token: &str) -> Result<RefreshedToken> {
             Ok(RefreshedToken {
-                access_token: self.access.clone(),
-                refresh_token: self.refresh.clone(),
+                access_token: SecretToken::new(self.access.clone()),
+                refresh_token: self.refresh.clone().map(SecretToken::new),
                 expires_at: self.expires_at,
                 scope: None,
             })
@@ -310,7 +409,10 @@ mod tests {
         };
         let updated = vault.refresh_if_expiring(id, now, None, &r).unwrap();
         assert_eq!(updated.access_token.expose(), "new-access");
-        assert_eq!(updated.refresh_token.expose(), "new-refresh");
+        assert_eq!(
+            updated.refresh_token.as_ref().map(SecretToken::expose),
+            Some("new-refresh")
+        );
         assert_eq!(updated.expires_at, new_expiry);
     }
 
@@ -356,7 +458,43 @@ mod tests {
         let updated = vault.refresh_if_expiring(id, now, None, &r).unwrap();
         assert_eq!(updated.access_token.expose(), "after-skew-refresh");
         // Refresh token preserved when refresher omits one.
-        assert_eq!(updated.refresh_token.expose(), "old-refresh");
+        assert_eq!(
+            updated.refresh_token.as_ref().map(SecretToken::expose),
+            Some("old-refresh")
+        );
+    }
+
+    /// When a stored token has *no* refresh token (provider never
+    /// issued one), `refresh_if_expiring` must short-circuit with
+    /// `ConnectorError::TokenRefresh` rather than calling the
+    /// refresher with an empty string and leaking the misleading
+    /// provider error back to the caller.
+    #[test]
+    fn refresh_short_circuits_when_no_refresh_token_stored() {
+        let mut vault = OAuth2TokenVault::new();
+        let id = ConnectorInstanceId::new_v4();
+        let now = Utc::now();
+        // Expired token with NO refresh token — Slack legacy / PKCE
+        // public-client style.
+        vault.put(
+            id,
+            OAuth2Token::new_without_refresh("old-access", now - Duration::seconds(5), "scope"),
+        );
+        // The refresher must never run — use the failing one to
+        // prove that even a working refresher would never get called.
+        let err = vault
+            .refresh_if_expiring(id, now, None, &FailingRefresher)
+            .expect_err("must short-circuit with TokenRefresh");
+        match err {
+            ConnectorError::TokenRefresh(msg) => {
+                assert!(msg.contains("no refresh_token stored"));
+                assert!(
+                    !msg.contains("provider rejected"),
+                    "must not have called the refresher: {msg}"
+                );
+            }
+            other => panic!("expected TokenRefresh, got {other:?}"),
+        }
     }
 
     #[test]

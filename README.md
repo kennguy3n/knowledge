@@ -107,29 +107,48 @@ piece:
   `llama-server` process when `LLAMA_SERVER_BINARY` /
   `LLAMA_SERVER_MODEL` are set.
 
-### Platform FFI surface — partially wired
+### Platform FFI surface — wired
 
 The UniFFI (iOS / Android) and N-API (macOS / Windows) surfaces
-expose the core lifecycle, evidence, crypto, and memory APIs.
-The currently live entry points are:
+expose the core lifecycle, evidence, crypto, memory, and
+synthesis APIs. The currently live entry points are:
 
 `open_store`, `close_store`, `ingest_message`, `query`,
 `get_evidence`, `forget`, `forget_scope`, `encrypt`, `decrypt`,
 `generate_keypair`, `get_user_memory`, `pin`, `unpin`,
-`list_memories`, `run_decay_sweep`, `get_channel_memory`, and
-`escape_fts_query`.
+`list_memories`, `run_decay_sweep`, `get_channel_memory`,
+`escape_fts_query`, and `trigger_synthesis`.
 
-`trigger_synthesis` returns `Unavailable` until the on-device
-SLM inference path lands. Host UI shells (Swift, Kotlin,
+`trigger_synthesis` dispatches a `SynthSummary` task through the
+on-device `InferenceRouter`, persists the resulting recap into
+the scope's `ChannelMemoryObject`, and flushes the channel memory
+blob to disk — returning the synthesis object id (or
+`FfiError::InferenceFailure` if the SLM produced unusable output,
+`FfiError::Unavailable` if no adapter is bootstrapped for the
+current build / device tier). The router currently runs the
+llama.cpp adapter (behind the `http-client` feature against a
+local `llama-server`); the MLX and fallback adapters are wired as
+follow-on integration points (callback bridge and lexicon-based
+classifier respectively). Host UI shells (Swift, Kotlin,
 Electron) are out of scope for this repository.
 
 ### Connectors and server-side surface — contract-only
 
 The nine connectors (Google Drive, OneDrive, Notion, Jira,
 Confluence, Figma, HubSpot, Slack, Email) are fixture parsers
-implementing the substrate's `Connector` trait. Live OAuth2
-transport, webhook subscription, and incremental delta sync are
-not yet implemented. The server-side synthesis service is a
+implementing the substrate's `Connector` trait.
+
+`connector_framework` exposes the production HTTP transport
+machinery — `HttpTransport` / `BlockingHttpTransport` (reqwest,
+behind the `http-client` feature) with retries, backoff, and
+`Retry-After` parsing — plus a real `OAuth2CodeExchange` /
+`TokenRefresher` (`OAuth2Client` / `ConfiguredRefresher`)
+that drives `authorization_code` and `refresh_token` grants
+against any RFC-6749 token endpoint. The nine fixture connectors
+themselves have not yet been refactored to use this transport;
+that is the next chunk of the production-hardening effort.
+Webhook subscription registration and incremental delta sync
+remain fixture-driven. The server-side synthesis service is a
 Rust skeleton in this repository; the Go gateway lives outside.
 
 ---

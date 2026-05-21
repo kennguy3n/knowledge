@@ -143,7 +143,12 @@ mod duration_millis_opt {
     #[allow(clippy::ref_option)]
     pub fn serialize<S: Serializer>(d: &Option<Duration>, s: S) -> Result<S::Ok, S::Error> {
         match d {
-            Some(d) => s.serialize_some(&(d.as_millis() as u64)),
+            // `Duration::as_millis` is `u128`; the substrate's timeouts
+            // are bounded to a few seconds (configured in
+            // `TeeWorkerConfig`), so `try_from` saturates at
+            // `u64::MAX` for any pathological value rather than
+            // wrapping silently.
+            Some(d) => s.serialize_some(&u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
             None => s.serialize_none(),
         }
     }
@@ -371,7 +376,10 @@ impl HttpClient for MockHttpClient {
                 Ok(SynthesisResponse {
                     output_text: format!("{}: {}", req.scope_tier_tag(), joined),
                     model_version: cfg.model_id.clone(),
-                    tokens_used: joined.len() as u32,
+                    // `tokens_used` is a coarse byte-length estimate;
+                    // saturate at `u32::MAX` for any pathological
+                    // input that exceeds 4 GiB rather than wrapping.
+                    tokens_used: u32::try_from(joined.len()).unwrap_or(u32::MAX),
                     latency_ms: 1,
                 })
             }
@@ -381,7 +389,11 @@ impl HttpClient for MockHttpClient {
                 if s.is_empty() {
                     return Err(EndpointError::Endpoint("mock sequence is empty".into()));
                 }
-                let idx = (n as usize).min(s.len() - 1);
+                // `n` is the call counter (`u64`); saturating to
+                // `usize::MAX` on 32-bit targets is harmless because
+                // the subsequent `.min(s.len() - 1)` clamps to the
+                // sequence length anyway.
+                let idx = usize::try_from(n).unwrap_or(usize::MAX).min(s.len() - 1);
                 Ok(s[idx].clone())
             }
         }
@@ -452,6 +464,41 @@ const PAYLOAD_PREVIEW_CHARS: usize = 512;
 /// contract, building a [`SynthesisRequest`], dispatching it through
 /// the client, and wrapping the response payload in a typed
 /// [`synthesis_pipeline::SynthesisObject`].
+///
+/// # Layering: mechanics vs. policy
+///
+/// This type is the **mechanics** half of the synthesizer split:
+/// validate hierarchy → build request → dispatch → wrap response. It
+/// deliberately performs **no scope-binding enforcement** — it does
+/// not consult the per-scope allow-list maintained on
+/// [`crate::tee_worker::TeeWorkerConfig::scope_bindings`], nor does
+/// it consult any tenant / domain / channel policy. Hierarchy
+/// validation here is purely structural ("is this domain-input shape
+/// well-formed for this window?"); it does not answer "is this scope
+/// allowed to be synthesised by this attested enclave?".
+///
+/// The **policy** half lives on [`crate::tee_worker::TeeWorker`],
+/// which composes this synthesizer behind its
+/// [`crate::tee_worker::TeeWorker::enter_synthesizing`] guard.
+/// `enter_synthesizing` runs the attested measurement check and the
+/// `assert_scope_allowed` predicate before this synthesizer is ever
+/// called — so a scope that is not in the worker's binding set never
+/// reaches `synthesize_domain` / `synthesize_tenant` here.
+///
+/// # Direct construction is a footgun
+///
+/// Instantiating `HttpManagedEndpointSynthesizer` outside of
+/// [`crate::tee_worker::TeeWorker`] and calling `synthesize_domain` /
+/// `synthesize_tenant` on it **bypasses the scope-binding check** by
+/// design. That is appropriate for unit tests
+/// (`MockHttpClient::echo()`-driven fixtures verify the mechanics in
+/// isolation), but it is **NOT appropriate for production deployment**
+/// — any production call site that does not go through the
+/// `TeeWorker` policy wrapper has effectively no enforcement that the
+/// scope being summarised is one the attested enclave is authorised
+/// to handle. New non-test consumers MUST wrap this type in a
+/// `TeeWorker` (or an equivalent policy layer that re-implements
+/// `assert_scope_allowed`-grade checks) before the call.
 pub struct HttpManagedEndpointSynthesizer<C: HttpClient> {
     cfg: EndpointConfig,
     client: C,

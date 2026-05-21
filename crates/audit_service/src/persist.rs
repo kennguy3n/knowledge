@@ -387,7 +387,12 @@ mod tests {
     fn fixture_key() -> MasterKey {
         let mut k: MasterKey = [0u8; MASTER_KEY_LEN];
         for (i, b) in k.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_add(13);
+            // `i` is in `0..MASTER_KEY_LEN` (≤ 64), so bitmasking to a
+            // byte is a true zero-extension; the `&` short-circuits
+            // `cast_possible_truncation` to a deterministic mod-256.
+            #[allow(clippy::cast_possible_truncation)]
+            let lane = (i & 0xFF) as u8;
+            *b = lane.wrapping_add(13);
         }
         k
     }
@@ -483,7 +488,10 @@ mod tests {
         let key_a = fixture_key();
         let mut key_b: MasterKey = [0u8; MASTER_KEY_LEN];
         for (i, b) in key_b.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_add(99);
+            // Same bitmasking rationale as `fixture_key()` above.
+            #[allow(clippy::cast_possible_truncation)]
+            let lane = (i & 0xFF) as u8;
+            *b = lane.wrapping_add(99);
         }
 
         {

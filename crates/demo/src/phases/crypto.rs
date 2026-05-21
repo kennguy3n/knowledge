@@ -57,7 +57,11 @@ pub fn run(
     let signer_key: [u8; TEST_SIGNER_KEY_LEN] = {
         let mut k = [0u8; TEST_SIGNER_KEY_LEN];
         for (i, b) in k.iter_mut().enumerate() {
-            *b = i as u8;
+            // `i` is bounded by `TEST_SIGNER_KEY_LEN` (≤ 64); the
+            // bitmask makes truncation explicit and deterministic.
+            #[allow(clippy::cast_possible_truncation)]
+            let lane = (i & 0xFF) as u8;
+            *b = lane;
         }
         k
     };
@@ -155,7 +159,9 @@ pub fn run(
     let aead_nonce: [u8; AEAD_NONCE_LEN] = {
         let mut n = [0u8; AEAD_NONCE_LEN];
         for (i, b) in n.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_mul(7).wrapping_add(0x42);
+            #[allow(clippy::cast_possible_truncation)]
+            let lane = (i & 0xFF) as u8;
+            *b = lane.wrapping_mul(7).wrapping_add(0x42);
         }
         n
     };
@@ -207,7 +213,9 @@ pub fn run(
     let forget_nonce: [u8; AEAD_NONCE_LEN] = {
         let mut n = [0u8; AEAD_NONCE_LEN];
         for (i, b) in n.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_add(0x90);
+            #[allow(clippy::cast_possible_truncation)]
+            let lane = (i & 0xFF) as u8;
+            *b = lane.wrapping_add(0x90);
         }
         n
     };
@@ -266,11 +274,15 @@ pub fn run(
 
     let mut zero_key: AeadKey = [0u8; AEAD_KEY_LEN];
     for (i, b) in zero_key.iter_mut().enumerate() {
-        *b = (i as u8).wrapping_mul(3);
+        #[allow(clippy::cast_possible_truncation)]
+        let lane = (i & 0xFF) as u8;
+        *b = lane.wrapping_mul(3);
     }
     let mut one_key: AeadKey = [0u8; AEAD_KEY_LEN];
     for (i, b) in one_key.iter_mut().enumerate() {
-        *b = (i as u8).wrapping_mul(5).wrapping_add(7);
+        #[allow(clippy::cast_possible_truncation)]
+        let lane = (i & 0xFF) as u8;
+        *b = lane.wrapping_mul(5).wrapping_add(7);
     }
 
     epoch_registry.insert_epoch_dek(EpochDek::new(alt_scope, epoch_zero, zero_key));

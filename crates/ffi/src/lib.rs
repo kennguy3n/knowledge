@@ -32,9 +32,20 @@
 //!   [`memory_manager::ChannelMemoryObject`] CRUD layer. Memory
 //!   objects are persisted to the encrypted `memory_objects` table
 //!   (schema v7) and rehydrated on [`open_store`].
-//! * [`trigger_synthesis`] returns [`FfiError::Unavailable`] with
-//!   `subsystem = "synthesis"` until the on-device SLM router is
-//!   wired through this surface.
+//! * [`trigger_synthesis`] is **wired through to the on-device SLM
+//!   router**: reads the recent-evidence window for the scope, renders
+//!   the [`inference_router::InferenceTask::SynthSummary`] prompt,
+//!   dispatches it through the [`inference_router::InferenceRouter`]
+//!   stored on the runtime, parses the
+//!   [`inference_router::SummaryBundle`] response, and persists the
+//!   recap + extracted decisions / open questions / active tasks into
+//!   the scope's [`memory_manager::ChannelMemoryObject`]. Returns the
+//!   synthesis window UUID. Surfaces
+//!   [`FfiError::Unavailable`] only when no adapter that supports
+//!   [`inference_router::InferenceTask::SynthSummary`] is linked into
+//!   this build (e.g. neither MLX nor the `http-client`-gated
+//!   llama.cpp loopback is registered). See the function-level doc on
+//!   [`trigger_synthesis`] for the full failure-mode table.
 //!
 //! All wired functions require a prior successful call to [`open_store`].
 //! Calling any other function first returns
@@ -665,7 +676,13 @@ pub fn run_decay_sweep(handle: RuntimeHandle, scope_id: ScopeIdString) -> FfiRes
         }
         let umo = rt.user_memory_mut(scope);
         let report = umo.decay_sweep(chrono::Utc::now());
-        let count = (report.candidates_archived + report.superseded_archived) as u32;
+        // `candidates_archived + superseded_archived` are `usize`
+        // counters; saturate at `u32::MAX` for the FFI return rather
+        // than wrapping. The substrate's working sets are bounded
+        // well below `u32::MAX` per scope so this is a defensive
+        // cast, not a behavioural one.
+        let count = u32::try_from(report.candidates_archived + report.superseded_archived)
+            .unwrap_or(u32::MAX);
         rt.flush_user_memory(scope)?;
         Ok(count)
     })
@@ -713,31 +730,297 @@ pub fn get_channel_memory(
 
 /// Trigger synthesis on `scope_id` with the given trigger reason.
 ///
-/// # Status
+/// # Behaviour
 ///
-/// The synthesis pipeline requires an on-device SLM (the
-/// `inference_router` + a `llama-server` adapter or equivalent).
-/// The FFI runtime does not yet hold an `InferenceRouter` handle,
-/// so this call currently returns
-/// [`FfiError::Unavailable`] with `subsystem = "synthesis"`. The
-/// wiring lands together with the on-device SLM bring-up. The function signature and
-/// validation behaviour (UUID parsing, forgotten-scope handling)
-/// are stable; only the underlying call dispatch is deferred.
+/// Reads the most recent
+/// [`SYNTHESIS_EVIDENCE_WINDOW`] evidence rows for `scope_id`,
+/// decrypts their bodies, builds an [`InferenceTask::SynthSummary`]
+/// prompt, dispatches it through the runtime's
+/// [`InferenceRouter`], parses the resulting [`SummaryBundle`] JSON,
+/// and writes the recap + extracted decisions / open questions /
+/// active tasks into the scope's [`ChannelMemoryObject`]. The
+/// channel memory is then flushed to the encrypted
+/// `memory_objects` table so the recap survives process restarts.
+///
+/// Returns the synthesis window id (UUID) as a string. The same
+/// id is stored on the channel memory's `last_synthesis_window`
+/// field so the host can correlate the recap with the call that
+/// produced it.
 ///
 /// # Errors
 ///
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called,
-///   or if the synthesis subsystem has not been wired through this
-///   build (the current default).
+///   or if the synthesis subsystem has no adapter that supports
+///   [`InferenceTask::SynthSummary`] available in this build
+///   (e.g. neither MLX nor the llama.cpp loopback is linked).
+///   Hosts should treat this as a transient / setup-time failure
+///   and retry after the platform shell registers its adapters.
+/// * [`FfiError::InferenceFailure`] if an adapter was selected and
+///   ran but produced an unusable result (grammar violation, model
+///   error, transport failure mid-stream). Hosts SHOULD NOT
+///   silently retry the same prompt — see
+///   [`FfiError::InferenceFailure`] for the contract.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
-/// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
+/// * [`FfiError::NotFound`] if `scope_id` has been forgotten or
+///   has no evidence to summarise.
+/// * [`FfiError::Evidence`] if the underlying store fails (read
+///   or memory-blob flush).
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn trigger_synthesis(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
-    _trigger: SynthesisTrigger,
+    trigger: SynthesisTrigger,
 ) -> FfiResult<String> {
     let scope = parse_scope_id(&scope_id)?;
+    tracing::info!(
+        scope = %scope.as_uuid(),
+        trigger = ?trigger,
+        "trigger_synthesis: dispatching SynthSummary",
+    );
+    synthesize_scope(handle, scope, &scope_id).map_err(|err| {
+        tracing::warn!(
+            scope = %scope.as_uuid(),
+            error = ?err,
+            "trigger_synthesis: failed",
+        );
+        err
+    })
+}
+
+/// Window size (in evidence rows) used by [`trigger_synthesis`] to
+/// build the SLM prompt. Picked to fit comfortably inside the
+/// 4 K-token context of the SLMs the substrate targets (the
+/// `recap` field in the produced bundle is a 2–4 sentence headline
+/// per the [`InferenceTask::SynthSummary`] prompt template, so
+/// every additional row crowds the model). Public so integration
+/// tests can assert against the exact same window the production
+/// path uses.
+pub const SYNTHESIS_EVIDENCE_WINDOW: usize = 50;
+
+/// Core synthesis implementation called by [`trigger_synthesis`]
+/// once the scope-id has been parsed.
+///
+/// # Locking discipline
+///
+/// Split into three phases so the per-handle [`FfiRuntime`] mutex is
+/// **released** for the duration of the SLM dispatch:
+///
+/// 1. **Gather (locked).** [`with_runtime`] acquires the mutex.
+///    Validates the scope, reads the recent-evidence window, decrypts
+///    bodies (skip-and-warn on per-row failure — see the body-decode
+///    loop below), renders the [`InferenceTask::SynthSummary`] prompt,
+///    and clones an [`Arc`] handle to the inference router. Returns
+///    the handle + prompt; **drops the mutex.**
+/// 2. **Dispatch (unlocked).** Calls [`InferenceRouter::wait_for_bootstrap`]
+///    and [`InferenceRouter::dispatch`] against the cloned `Arc`. The
+///    runtime mutex is NOT held — concurrent
+///    [`ingest_message`](crate::ingest_message) / [`query`](crate::query)
+///    / [`get_channel_memory`](crate::get_channel_memory) calls on the
+///    same handle run in parallel with the SLM. This is the key
+///    correctness contract: an SLM dispatch can take seconds (especially
+///    on the `http-client`-backed llama.cpp adapter waiting on the
+///    bootstrap probe + the actual generation), and serialising every
+///    FFI call behind that latency would freeze ingest / query for the
+///    entire window.
+/// 3. **Apply (locked).** [`with_runtime`] re-acquires the mutex.
+///    Re-checks `is_scope_forgotten` (TOCTOU defence: another thread may
+///    have called [`forget_scope`](crate::forget_scope) during the
+///    unlocked phase — racing the recap onto a forgotten scope would
+///    resurrect deleted state). Allocates / fetches the
+///    [`ChannelMemoryObject`], merges the [`SummaryBundle`] via the
+///    `*_dedup` helpers, and flushes to disk.
+///
+/// The `Arc<InferenceRouter>` keeps the router alive across the
+/// unlocked phase even though no [`with_runtime`] frame is pinning the
+/// `FfiRuntime` (the surrounding `close_store` drain loop blocks on
+/// outstanding `Arc<Mutex<FfiRuntime>>` clones from `WITH_RUNTIME_STACK`,
+/// so the runtime itself is not at risk of disappearing — but stripping
+/// the lifetime tie is what makes the split structurally legal).
+///
+/// # Lost-work race with `close_store`
+///
+/// Because Phase 2 runs without the per-handle mutex, a host that
+/// calls [`close_store`](crate::close_store) **concurrently** with
+/// `trigger_synthesis` can land its close between Phase 2 and Phase 3:
+///
+/// * Phase 1 captures the [`Arc<InferenceRouter>`] and drops the
+///   mutex.
+/// * Phase 2 issues the SLM dispatch. The host calls
+///   [`close_store`](crate::close_store) on a different thread, which
+///   removes the handle from the registry and (after the drain loop
+///   completes — see the docs on
+///   [`close_store`](crate::close_store)) drops the runtime.
+/// * Phase 2 returns successfully with a parsed [`SummaryBundle`].
+/// * Phase 3's [`with_runtime`] re-lookup fails with
+///   [`FfiError::Unavailable`] because the handle is no longer in
+///   the registry.
+///
+/// In that scenario the SLM did real work (and burned real wall
+/// clock / GPU time) but the recap is **discarded** — the host
+/// observes `Unavailable` even though synthesis "happened". This is
+/// a *safe* race — Phase 3 is the only phase that writes to the
+/// store, so no partial state is ever persisted — and the
+/// alternative (holding the mutex across the multi-second SLM
+/// dispatch) would freeze every other FFI call on the handle.
+/// Hosts that need to guarantee no synthesis runs are lost across
+/// shutdown should await the result of `trigger_synthesis` before
+/// calling [`close_store`](crate::close_store); the substrate's
+/// recommended close path drains pending FFI calls externally rather
+/// than letting them race the close.
+fn synthesize_scope(
+    handle: RuntimeHandle,
+    scope: ScopeId,
+    scope_id: &ScopeIdString,
+) -> FfiResult<String> {
+    use inference_router::{InferenceTask, RouterError, SummaryBundle};
+
+    // ─────────────────── Phase 1: gather (locked) ───────────────────
+    //
+    // Returns the prompt to dispatch plus an owned `Arc` clone of the
+    // router so the unlocked phase below can operate without re-entering
+    // `with_runtime`.
+    let (router, prompt) = with_runtime(handle, |rt| {
+        if rt.is_scope_forgotten(scope) {
+            return Err(FfiError::NotFound {
+                kind: "scope".into(),
+                id: scope_id.clone(),
+            });
+        }
+        let recent_ids = rt
+            .store()
+            .recent_evidence_ids_for_scope(scope, SYNTHESIS_EVIDENCE_WINDOW)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        if recent_ids.is_empty() {
+            return Err(FfiError::NotFound {
+                kind: "evidence".into(),
+                id: scope.as_uuid().to_string(),
+            });
+        }
+
+        // Decrypt each row in reverse so the prompt reads chronologically
+        // (oldest message first → newest last), matching the natural
+        // reading order the prompt template asks the SLM to summarise.
+        // `recent_evidence_ids_for_scope` returns newest-first; reverse
+        // before reading.
+        //
+        // Skip-and-warn (NOT fail-fast) on per-row read failures: a
+        // single corrupted body row (missing body-table entry, DEK
+        // destroyed mid-flight, etc.) must not block an otherwise-useful
+        // recap. This matches `EvidenceStore::search_hybrid`, which
+        // demotes corrupted rows to `vector_score = 0.0` rather than
+        // failing the whole search. The synthesis path inherits the
+        // same contract: every readable row contributes to the prompt;
+        // unreadable rows are logged and dropped. Only if EVERY row in
+        // the window is unreadable do we surface `FfiError::Evidence`
+        // to the host — otherwise the recap proceeds against the
+        // readable subset.
+        let mut bodies: Vec<String> = Vec::with_capacity(recent_ids.len());
+        let mut skipped: usize = 0;
+        for evidence_id in recent_ids.iter().rev() {
+            match rt.store().read_body(*evidence_id) {
+                Ok(body) => {
+                    // Lossy decode is intentional: evidence bodies are
+                    // UTF-8 in practice (ingest is gated through
+                    // `String` at the FFI surface) but a malformed row
+                    // should still be summarisable rather than failing
+                    // the entire synthesis call.
+                    bodies.push(String::from_utf8_lossy(&body).into_owned());
+                }
+                Err(e) => {
+                    skipped = skipped.saturating_add(1);
+                    tracing::warn!(
+                        scope = %scope.as_uuid(),
+                        evidence = %evidence_id.as_uuid(),
+                        error = %e,
+                        "trigger_synthesis: skipping unreadable evidence row",
+                    );
+                }
+            }
+        }
+        if bodies.is_empty() {
+            return Err(FfiError::Evidence {
+                message: format!(
+                    "synthesis: every evidence row in the {SYNTHESIS_EVIDENCE_WINDOW}-row \
+                     window for scope {} was unreadable ({skipped} skipped)",
+                    scope.as_uuid()
+                ),
+            });
+        }
+        if skipped > 0 {
+            tracing::warn!(
+                scope = %scope.as_uuid(),
+                skipped,
+                kept = bodies.len(),
+                "trigger_synthesis: proceeding with partial evidence window",
+            );
+        }
+
+        let combined = bodies.join("\n\n");
+        let prompt = InferenceTask::SynthSummary
+            .prompt_template()
+            .replace("{body}", &combined);
+        // Clone the `Arc` while still holding the runtime mutex so the
+        // unlocked dispatch phase below has a stable handle that
+        // outlives the `with_runtime` frame. The clone itself is one
+        // atomic increment.
+        Ok((rt.inference_router_arc(), prompt))
+    })?;
+
+    // ───────────────── Phase 2: dispatch (UNLOCKED) ─────────────────
+    //
+    // The per-handle `FfiRuntime` mutex is released for the duration of
+    // these calls so concurrent `ingest_message` / `query` /
+    // `get_channel_memory` on the same handle can run in parallel with
+    // the (potentially multi-second) SLM dispatch.
+    //
+    // `open_store` spawns the adapter probe on a background thread to
+    // keep the open path itself non-blocking; wait here until the
+    // bootstrap finishes so a host that calls `trigger_synthesis`
+    // immediately after `open_store` does not race the probe. The wait
+    // is a no-op once probing has completed.
+    router.wait_for_bootstrap();
+    let raw = router
+        .dispatch(InferenceTask::SynthSummary, &prompt)
+        .map_err(|e| match e {
+            // The model ran but produced an unusable result — hosts
+            // need to distinguish this from "no adapter available"
+            // to drive their own retry policy. See
+            // `FfiError::InferenceFailure` docs for the contract.
+            RouterError::InferenceFailure(message) => FfiError::InferenceFailure {
+                message: format!("synthesis: {message}"),
+            },
+            // `Unavailable`, `TierTooLow`, and `NotProbed` all mean
+            // "no adapter on this build can serve the task"; surface
+            // them uniformly as a transient-unavailable subsystem so
+            // hosts can probe again once their environment changes.
+            other => FfiError::Unavailable {
+                subsystem: format!("synthesis: {other}"),
+            },
+        })?;
+    // Mapped to `InferenceFailure` (not `Evidence`) because the failure
+    // mode is "the model ran but produced unusable JSON", which is the
+    // same retry-policy class as `RouterError::InferenceFailure` above
+    // — the evidence store never even ran, so misclassifying as
+    // `Evidence` would route the host to the wrong remediation
+    // (database recovery vs. retry / fall back to a different adapter
+    // / re-prompt). The grammar constraint applied at dispatch time
+    // should make this branch unreachable in practice, but a buggy /
+    // unconstrained adapter could still feed us non-JSON.
+    let bundle: SummaryBundle =
+        serde_json::from_str(&raw).map_err(|e| FfiError::InferenceFailure {
+            message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
+        })?;
+
+    // ─────────────────── Phase 3: apply (locked) ────────────────────
+    //
+    // Re-acquire the mutex. We must re-check `is_scope_forgotten` here
+    // because another thread may have called `forget_scope` while the
+    // mutex was released — racing the recap onto a forgotten scope
+    // would resurrect deleted state and break the
+    // cryptographic-forgetting guarantee documented on
+    // [`crate::forget_scope`].
     with_runtime(handle, |rt| {
         if rt.is_scope_forgotten(scope) {
             return Err(FfiError::NotFound {
@@ -745,14 +1028,42 @@ pub fn trigger_synthesis(
                 id: scope_id.clone(),
             });
         }
-        // No `ChannelMemoryObject` allocation here — until a real
-        // synthesizer runs, allocating one would attach observable
-        // state to a call that never produces a recap. The
-        // allocation moves into the synthesizer's success path
-        // once the SLM router is wired through.
-        Err(FfiError::Unavailable {
-            subsystem: "synthesis".into(),
-        })
+
+        let window_id = uuid::Uuid::new_v4();
+        // Build the next channel-memory state OFF-THE-SIDE. We clone
+        // any existing entry so the dedup helpers can compare against
+        // the history, but the runtime's `channel_memories` map is
+        // NOT mutated until `save_channel_memory` below succeeds at
+        // writing the new state to disk.
+        //
+        // This pins the
+        // `trigger_synthesis_failure_does_not_allocate_channel_memory`
+        // invariant across every failure mode between the dispatch
+        // result and the final flush — including future ones that
+        // might be added between the `SummaryBundle` parse above and
+        // the save below.
+        let mut cmo = rt
+            .channel_memory(scope)
+            .cloned()
+            .unwrap_or_else(|| memory_manager::ChannelMemoryObject::new(scope));
+        cmo.update_recap(bundle.recap.clone(), Some(window_id));
+        // `*_dedup` variants — the SLM re-emits the same decisions /
+        // questions / tasks every synthesis window because each run
+        // sees an overlapping evidence window. Naive `add_*` would
+        // append the same surface text on every run; dedup preserves
+        // the original entry's lifecycle state (resolved /
+        // completed) and prevents unbounded growth across runs.
+        for decision in bundle.decisions {
+            cmo.add_decision_dedup(memory_manager::Decision::new(scope, decision));
+        }
+        for q in bundle.open_questions {
+            cmo.add_open_question_dedup(memory_manager::OpenQuestion::new(scope, q));
+        }
+        for task_text in bundle.active_tasks {
+            cmo.add_task_dedup(memory_manager::ActiveTask::new(scope, task_text));
+        }
+        rt.save_channel_memory(scope, cmo)?;
+        Ok(window_id.to_string())
     })
 }
 
@@ -1386,14 +1697,47 @@ mod tests {
         teardown(h);
     }
 
+    /// When the scope has no evidence at all, `trigger_synthesis`
+    /// returns `NotFound { kind: "evidence" }` rather than dispatching
+    /// an empty prompt to the SLM. Sending an empty prompt would
+    /// waste an inference call and produce a nonsensical bundle.
     #[test]
-    fn trigger_synthesis_reports_unavailable_until_slm_is_wired() {
+    fn trigger_synthesis_returns_not_found_when_scope_has_no_evidence() {
         let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
         let err = trigger_synthesis(h, scope, SynthesisTrigger::ManualUserAction).unwrap_err();
         assert!(
-            matches!(err, FfiError::Unavailable { ref subsystem } if subsystem == "synthesis"),
-            "expected Unavailable {{ subsystem: synthesis }}, got {err:?}"
+            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "evidence"),
+            "expected NotFound {{ kind: evidence }}, got {err:?}"
+        );
+        teardown(h);
+    }
+
+    /// With evidence in the scope but no SLM adapter that supports
+    /// `SynthSummary` (the default test build has neither MLX nor
+    /// the `http-client` feature), the router cannot dispatch the
+    /// task and `trigger_synthesis` surfaces `Unavailable { subsystem:
+    /// synthesis: … }`.
+    #[test]
+    fn trigger_synthesis_returns_unavailable_when_no_synth_adapter() {
+        let (h, _dir) = fresh_store();
+        let scope_uuid = uuid::Uuid::new_v4();
+        let scope = scope_uuid.to_string();
+        ingest_message(
+            h,
+            scope.clone(),
+            "hello world".into(),
+            SourceKind::Manual,
+            FfiImportanceClass::Useful,
+        )
+        .expect("ingest seed evidence");
+        let err = trigger_synthesis(h, scope, SynthesisTrigger::ManualUserAction).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FfiError::Unavailable { ref subsystem } if subsystem.starts_with("synthesis")
+            ),
+            "expected Unavailable {{ subsystem: synthesis* }}, got {err:?}"
         );
         teardown(h);
     }
@@ -1665,28 +2009,59 @@ mod tests {
         teardown(h);
     }
 
-    /// Regression for the design follow-up: `trigger_synthesis` must
-    /// not allocate a `ChannelMemoryObject` when returning
-    /// `Unavailable`. Allocating one attaches observable state to a
-    /// call that never produces a recap.
+    /// Regression for the design rule: a synthesis call that fails
+    /// before reaching the SLM must not allocate a
+    /// `ChannelMemoryObject`. Allocating one would attach observable
+    /// state to a call that never produces a recap.
+    ///
+    /// The two failure modes covered:
+    /// 1. `NotFound { kind: "evidence" }` — scope has nothing to
+    ///    summarise.
+    /// 2. `Unavailable { subsystem: "synthesis: …" }` — router has
+    ///    no adapter that supports `SynthSummary`.
     #[test]
-    fn trigger_synthesis_unavailable_does_not_allocate_channel_memory() {
+    fn trigger_synthesis_failure_does_not_allocate_channel_memory() {
         let (h, _dir) = fresh_store();
-        let scope = uuid::Uuid::new_v4().to_string();
 
+        // Case 1: empty scope → NotFound, no allocation.
+        let scope_empty = uuid::Uuid::new_v4().to_string();
         let before =
             runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len before");
-
-        match trigger_synthesis(h, scope, SynthesisTrigger::ManualUserAction) {
-            Err(FfiError::Unavailable { subsystem }) => assert_eq!(subsystem, "synthesis"),
-            other => panic!("expected Unavailable {{ subsystem: synthesis }}, got {other:?}"),
+        match trigger_synthesis(h, scope_empty, SynthesisTrigger::ManualUserAction) {
+            Err(FfiError::NotFound { kind, .. }) => assert_eq!(kind, "evidence"),
+            other => panic!("expected NotFound {{ kind: evidence }}, got {other:?}"),
         }
+        let after_empty =
+            runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len after empty");
+        assert_eq!(before, after_empty);
 
-        let after =
-            runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len after");
+        // Case 2: scope has evidence but no SLM adapter → Unavailable,
+        // no allocation.
+        let scope_evidence = uuid::Uuid::new_v4().to_string();
+        ingest_message(
+            h,
+            scope_evidence.clone(),
+            "hello world".into(),
+            SourceKind::Manual,
+            FfiImportanceClass::Useful,
+        )
+        .expect("ingest seed evidence");
+        let before_synth =
+            runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len before synth");
+        match trigger_synthesis(h, scope_evidence, SynthesisTrigger::ManualUserAction) {
+            Err(FfiError::Unavailable { subsystem }) => {
+                assert!(
+                    subsystem.starts_with("synthesis"),
+                    "expected synthesis subsystem, got {subsystem}"
+                );
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+        let after_synth =
+            runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len after synth");
         assert_eq!(
-            before, after,
-            "trigger_synthesis must not allocate channel memory when returning Unavailable"
+            before_synth, after_synth,
+            "trigger_synthesis must not allocate channel memory when returning a pre-dispatch error"
         );
         teardown(h);
     }

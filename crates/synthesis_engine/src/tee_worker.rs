@@ -43,20 +43,14 @@ use crypto::attestation::{
 };
 use crypto::hash::{content_hash, ContentHash};
 use synthesis_pipeline::{
-    build_domain_summary_object, build_tenant_summary_object, DomainSynthesisInput,
-    HierarchyEnforcedWindowManager, PipelineError, SynthesisWindowManager, TenantSynthesisInput,
-    TieredWindowHandle,
+    DomainSynthesisInput, SynthesisWindowManager, TenantSynthesisInput, TieredWindowHandle,
 };
 
 use crate::engine::{DomainSynthesisResult, SynthesisEngine, TenantSynthesisResult};
 use crate::error::{EngineError, Result};
-
-fn map_validation_error(e: PipelineError) -> EngineError {
-    match e {
-        PipelineError::HierarchyViolation(msg) => EngineError::Hierarchy(msg),
-        other => EngineError::Pipeline(other),
-    }
-}
+use crate::managed_endpoint::{
+    EndpointConfig, HttpClient, HttpManagedEndpointSynthesizer, MockHttpClient,
+};
 
 /// Lifecycle states for the confidential-compute worker.
 ///
@@ -185,10 +179,35 @@ impl TeeRuntime for MockTeeRuntime {
 /// 2. Refuses if the attestation has expired (TTL window).
 /// 3. Refuses if the requested scope is outside `scope_bindings`.
 /// 4. Logs a [`AttestationAuditEntry`] before and after the call.
-pub struct TeeWorker<R: TeeRuntime> {
+pub struct TeeWorker<R: TeeRuntime, C: HttpClient = MockHttpClient> {
     runtime: R,
     config: TeeWorkerConfig,
     state: Mutex<TeeWorkerState>,
+    /// Delegate that does the actual SLM call (over HTTPS to the
+    /// managed endpoint inside the same TEE). Holding it on the
+    /// worker lets us guarantee that every synthesize_* call goes
+    /// through `enter_synthesizing` / `exit_synthesizing` and that
+    /// the bytes returned by the model are the bytes wrapped into
+    /// the emitted `SynthesisObject` — no deterministic concat or
+    /// shadow path.
+    ///
+    /// **Security-critical layering.** This field is the only path
+    /// the worker uses to talk to the model, and it is the only path
+    /// that should reach a real
+    /// [`HttpManagedEndpointSynthesizer`] in production. The
+    /// synthesizer itself **does not enforce
+    /// [`TeeWorkerConfig::scope_bindings`]** —
+    /// `assert_scope_allowed` lives on `TeeWorker` (called from
+    /// [`Self::enter_synthesizing`]) and is the only place the
+    /// substrate checks "is this scope authorised for this attested
+    /// enclave?". See [`HttpManagedEndpointSynthesizer`]'s
+    /// `# Direct construction is a footgun` section for the
+    /// corresponding warning on the mechanics side. Hosts that need
+    /// a different policy layer must implement an equivalent
+    /// `assert_scope_allowed`-grade check before delegating to a
+    /// raw `HttpManagedEndpointSynthesizer`; they must not call into
+    /// the synthesizer directly.
+    synth: HttpManagedEndpointSynthesizer<C>,
 }
 
 #[derive(Debug, Default)]
@@ -240,13 +259,45 @@ impl Lifecycle {
     }
 }
 
-impl<R: TeeRuntime> TeeWorker<R> {
-    /// Construct a fresh, **un-attested** worker.
+impl<R: TeeRuntime> TeeWorker<R, MockHttpClient> {
+    /// Construct a fresh, **un-attested** worker backed by the
+    /// default [`MockHttpClient`] echo transport. Production builds
+    /// should use [`TeeWorker::with_synthesizer`] (or the generic
+    /// `TeeWorker::<R, C>::new_with_synthesizer`) to inject a real
+    /// HTTPS client; this default exists so tests and the
+    /// `cfg(test)` paths in the rest of the crate can keep using the
+    /// two-argument constructor.
     pub fn new(runtime: R, config: TeeWorkerConfig) -> Self {
+        let endpoint = EndpointConfig::new(
+            "https://synthesis.tee.invalid/v1/synthesize",
+            "TEE_DEFAULT_KEY_REF",
+            "slm-recap-v1",
+        );
+        let synth = HttpManagedEndpointSynthesizer::new(endpoint, MockHttpClient::echo());
         Self {
             runtime,
             config,
             state: Mutex::new(TeeWorkerState::default()),
+            synth,
+        }
+    }
+}
+
+impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
+    /// Construct a fresh, **un-attested** worker with an explicit
+    /// [`HttpManagedEndpointSynthesizer`] delegate. Production
+    /// callers wire a real HTTPS client into the synthesizer before
+    /// passing it in; tests can reuse [`MockHttpClient`].
+    pub fn with_synthesizer(
+        runtime: R,
+        config: TeeWorkerConfig,
+        synth: HttpManagedEndpointSynthesizer<C>,
+    ) -> Self {
+        Self {
+            runtime,
+            config,
+            state: Mutex::new(TeeWorkerState::default()),
+            synth,
         }
     }
 
@@ -454,7 +505,7 @@ impl<R: TeeRuntime> TeeWorker<R> {
     }
 }
 
-impl<R: TeeRuntime> SynthesisEngine for TeeWorker<R> {
+impl<R: TeeRuntime, C: HttpClient> SynthesisEngine for TeeWorker<R, C> {
     fn synthesize_domain(
         &self,
         windows: &mut SynthesisWindowManager,
@@ -463,32 +514,16 @@ impl<R: TeeRuntime> SynthesisEngine for TeeWorker<R> {
     ) -> Result<DomainSynthesisResult> {
         let scope_id = input.domain_scope.0;
         self.enter_synthesizing(scope_id)?;
-        let result = (|| {
-            windows
-                .validate_domain_input(&handle, &input)
-                .map_err(map_validation_error)?;
-            windows.mark_in_progress(handle.window_id)?;
-
-            // Inside the "enclave": deterministically concatenate the
-            // admitted channel-output payloads. The real TEE worker
-            // would run the SLM here under the attested measurement.
-            let mut payload = b"tee-domain:".to_vec();
-            for (i, o) in input.channel_outputs.iter().enumerate() {
-                if i > 0 {
-                    payload.push(b'\n');
-                }
-                payload.extend_from_slice(&o.object().payload);
-            }
-
-            let object = build_domain_summary_object(
-                input.domain_scope,
-                handle.window_id,
-                payload,
-                Uuid::nil(),
-            );
-            windows.mark_complete(handle.window_id)?;
-            Ok(DomainSynthesisResult { object })
-        })();
+        // Delegate the actual SLM call to the embedded
+        // `HttpManagedEndpointSynthesizer`. The synthesizer runs the
+        // same validation / `mark_in_progress` / `mark_failed` /
+        // `mark_complete` choreography as before — we just no longer
+        // concatenate bytes to fake an output. Wrapping the call in
+        // the `enter_synthesizing` / `exit_synthesizing` guard is what
+        // makes this a "confidential" run: any panic, early return, or
+        // policy-rejected scope flips the worker back to `Idle` so the
+        // attestation TTL stays honest.
+        let result = self.synth.synthesize_domain(windows, handle, input);
         self.exit_synthesizing();
         result
     }
@@ -501,34 +536,7 @@ impl<R: TeeRuntime> SynthesisEngine for TeeWorker<R> {
     ) -> Result<TenantSynthesisResult> {
         let scope_id = input.tenant_scope.0;
         self.enter_synthesizing(scope_id)?;
-        let result = (|| {
-            windows
-                .validate_tenant_input(&handle, &input)
-                .map_err(map_validation_error)?;
-            windows.mark_in_progress(handle.window_id)?;
-
-            let mut payload = b"tee-tenant:".to_vec();
-            for (i, o) in input.domain_outputs.iter().enumerate() {
-                if i > 0 {
-                    payload.push(b'\n');
-                }
-                payload.extend_from_slice(&o.object().payload);
-            }
-            for d in input.approved_documents.iter() {
-                payload.push(b'\n');
-                payload.extend_from_slice(b"doc:");
-                payload.extend_from_slice(&d.payload);
-            }
-
-            let object = build_tenant_summary_object(
-                input.tenant_scope,
-                handle.window_id,
-                payload,
-                Uuid::nil(),
-            );
-            windows.mark_complete(handle.window_id)?;
-            Ok(TenantSynthesisResult { object })
-        })();
+        let result = self.synth.synthesize_tenant(windows, handle, input);
         self.exit_synthesizing();
         result
     }

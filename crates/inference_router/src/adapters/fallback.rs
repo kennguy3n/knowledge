@@ -1,11 +1,23 @@
 //! Encoder-only fallback adapter.
 //!
 //! [`FallbackAdapter`] satisfies classification tasks (`TagImportance`,
-//! `ExtractEntities`, …) by emitting a deterministic JSON payload that
-//! callers can parse without an SLM. Synthesis tasks are rejected via
-//! [`crate::RouterError::Unavailable`] so the router signals the
-//! caller to fall back to a non-SLM strategy (e.g. concatenated
-//! observations from [`crate::task::InferenceTask::SynthSummary`]).
+//! `ExtractEntities`, `PromoteObservation`) by running a real
+//! lexicon-and-regex pipeline against the message body. The pipeline
+//! is deliberately small and dependency-free — it's not as accurate as
+//! a small encoder model, but it is meaningfully better than a
+//! hardcoded constant and it produces deterministic, well-typed JSON
+//! that exactly matches the grammars in [`crate::task`]. Synthesis
+//! tasks are rejected with [`crate::RouterError::Unavailable`] so the
+//! router signals the caller to fall back to a non-SLM strategy.
+//!
+//! ## Lexicons
+//!
+//! The lexicons below are intentionally small, lower-cased, and
+//! whole-word-matched so they don't accidentally fire on substrings
+//! (`"urgent"` matches but `"urgently"` would need its own entry —
+//! we add common inflections explicitly). Adding a new lexicon entry
+//! is the supported way to tune the classifier; do **not** push the
+//! classification into the calling code.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -56,15 +68,14 @@ impl InferenceAdapter for FallbackAdapter {
     fn generate(
         &self,
         task_tag: &str,
-        _prompt: &str,
+        prompt: &str,
         _grammar: &str,
     ) -> Result<String, RouterError> {
+        let body = extract_body(prompt);
         match task_tag {
-            "tag_importance" => Ok(r#"{"class":"useful","confidence":0.5}"#.into()),
-            "extract_entities" => Ok(r#"{"entities":[]}"#.into()),
-            "promote_observation" => {
-                Ok(r#"{"promote":false,"reason":"fallback adapter cannot promote"}"#.into())
-            }
+            "tag_importance" => Ok(classify_importance(body)),
+            "extract_entities" => Ok(extract_entities(body)),
+            "promote_observation" => Ok(promote_observation(body)),
             "synth_summary" | "synth_concept" | "adjudicate_contradiction" => {
                 Err(RouterError::Unavailable {
                     task: stable_tag(task_tag),
@@ -82,6 +93,516 @@ fn stable_tag(task_tag: &str) -> &'static str {
         "adjudicate_contradiction" => "adjudicate_contradiction",
         _ => "unknown",
     }
+}
+
+/// Strip the static prompt scaffolding so the heuristics scan only
+/// the user-visible message body.
+///
+/// The substrate's prompt templates (see
+/// [`crate::task::InferenceTask::prompt_template`]) end with one of
+/// `"\n\nMessage:\n"`, `"\n\nObservation:\n"`, `"\n\nObservations:\n"`,
+/// or `"\n\nSession:\n"` followed by the body. We split on the
+/// *leftmost* matching marker (`str::find`, not `str::rfind`) because the
+/// scaffolding ALWAYS sits at the start of the rendered prompt, while a
+/// nested message in the body — e.g. a Slack thread that quotes another
+/// system's prompt containing `"\n\nMessage:\n…"` — would otherwise hijack
+/// the boundary. Using `rfind` here was a real bug: for prompts shaped
+/// `"<scaffold>\n\nMessage:\nHello\n\nMessage:\nWorld"` it returned just
+/// `"World"`, silently dropping the leading lines of the body and skewing
+/// every downstream classifier toward the tail of the message.
+///
+/// `Session:\n` is the `SynthSummary` marker. The fallback adapter
+/// itself returns `Unavailable` for synthesis tasks, but enumerating
+/// the marker here keeps the extractor in lock-step with
+/// [`InferenceTask::prompt_template`] — so any future helper or
+/// downstream caller that reuses `extract_body` against a synthesis
+/// prompt still gets the bare body back.
+fn extract_body(prompt: &str) -> &str {
+    for marker in BODY_MARKERS {
+        if let Some(idx) = prompt.find(marker) {
+            return &prompt[idx + marker.len()..];
+        }
+    }
+    prompt
+}
+
+/// Prompt-scaffold suffixes that [`extract_body`] recognises.
+///
+/// Each entry MUST be the literal suffix used by one of
+/// [`crate::task::InferenceTask::prompt_template`]'s rendered
+/// templates immediately before the `{body}` placeholder. The
+/// lock-step test in this module's `tests` submodule asserts that
+/// every concrete task whose template ends in `{body}` matches at
+/// least one of these markers — adding a new task with a novel
+/// marker without updating this slice would otherwise silently
+/// degrade the fallback classifier (it would scan the entire
+/// scaffolded prompt instead of just the body).
+const BODY_MARKERS: &[&str] = &[
+    "\n\nMessage:\n",
+    "\n\nObservation:\n",
+    "\n\nObservations:\n",
+    "\n\nSession:\n",
+];
+
+// ─────────────────── tag_importance: lexicon scoring ────────────────────
+
+/// Lexicon words that pull the message into the `Critical` class.
+/// All entries are lower-case whole words; the matcher lowercases the
+/// body once before scanning.
+const CRITICAL_LEXICON: &[&str] = &[
+    "outage",
+    "critical",
+    "p0",
+    "p1",
+    "incident",
+    "emergency",
+    "downtime",
+    "asap",
+    "breach",
+    "compromised",
+];
+
+/// Lexicon words that pull the message into the `Important` class.
+const IMPORTANT_LEXICON: &[&str] = &[
+    "urgent",
+    "important",
+    "deadline",
+    "blocker",
+    "blocking",
+    "action",
+    "decision",
+    "approve",
+    "approval",
+    "review",
+    "release",
+    "ship",
+    "merge",
+    "deploy",
+    "rollback",
+];
+
+/// Lexicon words that pull the message into the `Useful` class.
+const USEFUL_LEXICON: &[&str] = &[
+    "todo",
+    "task",
+    "follow-up",
+    "followup",
+    "question",
+    "investigate",
+    "spec",
+    "design",
+    "rfc",
+    "doc",
+    "documentation",
+    "note",
+    "summary",
+];
+
+/// Lexicon words that bias the message toward `Noise`.
+const NOISE_LEXICON: &[&str] = &[
+    "lol", "haha", "👍", "🙏", "fyi", "thx", "thanks", "welcome", "weekend", "lunch", "coffee",
+];
+
+/// Score a body against `lexicon`, returning the number of whole-word
+/// occurrences. Matching is case-insensitive (the caller pre-lowercases
+/// the body) and word-bounded by ASCII non-alphanumeric characters,
+/// which is good enough for English message bodies; the few false
+/// negatives on inflected forms are why each lexicon ships several
+/// related variants (`"approve"` + `"approval"`).
+fn lexicon_count(lower_body: &str, lexicon: &[&str]) -> usize {
+    let mut count = 0;
+    for word in lexicon {
+        // Token-aware containment scan: we want `"urgent"` to fire on
+        // `"This is urgent."` but NOT on `"insurgent"`. The bytes of
+        // the matched substring are tested for ASCII-alphanumeric
+        // neighbours; non-alphanumeric (including the start / end of
+        // the string) counts as a boundary.
+        let mut search_from = 0;
+        while let Some(rel_idx) = lower_body[search_from..].find(word) {
+            let abs_idx = search_from + rel_idx;
+            let before_ok =
+                abs_idx == 0 || !lower_body.as_bytes()[abs_idx - 1].is_ascii_alphanumeric();
+            let end = abs_idx + word.len();
+            let after_ok =
+                end == lower_body.len() || !lower_body.as_bytes()[end].is_ascii_alphanumeric();
+            if before_ok && after_ok {
+                count += 1;
+            }
+            // Always advance past at least one byte to guarantee
+            // forward progress even on zero-length matches (defence
+            // against future lexicon entries that contain only
+            // punctuation).
+            search_from = abs_idx + word.len().max(1);
+            if search_from >= lower_body.len() {
+                break;
+            }
+        }
+    }
+    count
+}
+
+/// Run the importance classifier and emit the JSON shape demanded by
+/// [`crate::task::GRAMMAR_TAG_IMPORTANCE`].
+fn classify_importance(body: &str) -> String {
+    if body.trim().is_empty() {
+        return r#"{"class":"noise","confidence":0.50}"#.into();
+    }
+    let lower = body.to_ascii_lowercase();
+    let critical = lexicon_count(&lower, CRITICAL_LEXICON);
+    let important = lexicon_count(&lower, IMPORTANT_LEXICON);
+    let useful = lexicon_count(&lower, USEFUL_LEXICON);
+    let noise = lexicon_count(&lower, NOISE_LEXICON);
+
+    // Additional signals: question marks bump us toward Useful (a
+    // question is usually worth tracking); @-mentions count as Useful
+    // (an addressed message is rarely Noise); ALL-CAPS words bump us
+    // toward Important (shouting in chat).
+    let question_marks = body.matches('?').count();
+    let mentions = body.matches('@').count();
+    let allcaps_words = body
+        .split_whitespace()
+        .filter(|w| w.len() >= 3 && w.chars().all(|c| c.is_ascii_uppercase()))
+        .count();
+
+    let critical_score = critical * 3;
+    let important_score = important * 2 + allcaps_words;
+    let useful_score = useful + question_marks + mentions;
+    let noise_score = noise;
+
+    let total = critical_score + important_score + useful_score + noise_score;
+
+    // Pick the highest-scoring class with deterministic ties broken
+    // by severity order (Critical > Important > Useful > Noise) so
+    // ambiguous bodies degrade conservatively (toward the more
+    // attention-worthy class).
+    let (class, confidence) = if total == 0 {
+        ("noise", 0.50)
+    } else if critical_score >= important_score
+        && critical_score >= useful_score
+        && critical_score >= noise_score
+        && critical_score > 0
+    {
+        ("critical", confidence_from_density(critical_score, total))
+    } else if important_score >= useful_score
+        && important_score >= noise_score
+        && important_score > 0
+    {
+        ("important", confidence_from_density(important_score, total))
+    } else if useful_score >= noise_score && useful_score > 0 {
+        ("useful", confidence_from_density(useful_score, total))
+    } else {
+        ("noise", confidence_from_density(noise_score, total))
+    };
+
+    format!(r#"{{"class":"{class}","confidence":{confidence:.2}}}"#)
+}
+
+/// Map a winning class's score to a `[0.55, 0.95]` confidence range.
+/// Pure rule-based classifiers shouldn't claim 1.0 — leave headroom
+/// for the SLM-driven adapter — but should beat 0.5 when there is
+/// any signal at all.
+///
+/// The upper bound of `0.95` is **load-bearing for the GBNF grammar**
+/// at [`crate::task::GRAMMAR_TAG_IMPORTANCE`], which only matches
+/// `"0" "." [0-9]+ | "1.0" | "1"`. A confidence ≥ 1.0 would format
+/// (via `{:.2}`) to the string `"1.00"`, which does NOT match the
+/// `"1.0"` alternative and would be rejected by the dispatch-time
+/// grammar validation in the router. The current implementation
+/// cannot exceed `0.95` (the squashing range is `[0.55, 0.95]` by
+/// construction), but a defensive `min(0.99_f64)` clamp is applied
+/// below as a *belt-and-braces* guard so any future refactor that
+/// widens the range — or an arithmetic accident — still produces
+/// grammar-compliant output. See the
+/// `confidence_from_density_clamps_below_one` test for the
+/// regression pin.
+fn confidence_from_density(score: usize, total: usize) -> f64 {
+    if total == 0 {
+        return 0.50;
+    }
+    let ratio = score as f64 / total as f64;
+    // Squash to [0.55, 0.95].
+    let v = 0.55 + ratio * 0.40;
+    // Defensive clamp: see the doc above on the GBNF grammar's
+    // `"0" "." [0-9]+ | "1.0" | "1"` alternative — `{:.2}` of 1.0
+    // formats as `"1.00"` which would be rejected. `0.99_f64` keeps
+    // the formatted output inside the `"0" "." [0-9]+` branch even
+    // if the squashing range is widened in a future refactor.
+    v.min(0.99_f64)
+}
+
+// ──────────────────── extract_entities: regex-lite NER ────────────────────
+
+/// Run a regex-free entity extractor over `body`. We avoid pulling in
+/// the `regex` crate for one reason: the substrate keeps the
+/// fallback adapter dependency-free so it can ship in size-constrained
+/// builds (embedded, WASM). Hand-rolled scanners are fine for this
+/// scope.
+fn extract_entities(body: &str) -> String {
+    use std::fmt::Write as _;
+
+    if body.trim().is_empty() {
+        return r#"{"entities":[]}"#.into();
+    }
+    let mut entities: Vec<(String, &'static str)> = Vec::new();
+
+    extract_mentions(body, &mut entities);
+    extract_urls(body, &mut entities);
+    extract_iso_dates(body, &mut entities);
+    extract_project_names(body, &mut entities);
+
+    if entities.is_empty() {
+        return r#"{"entities":[]}"#.into();
+    }
+    let mut out = String::from(r#"{"entities":["#);
+    for (i, (name, kind)) in entities.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let _ = write!(
+            out,
+            r#"{{"name":"{name}","type":"{kind}"}}"#,
+            name = json_escape(name),
+        );
+    }
+    out.push_str("]}");
+    out
+}
+
+/// Extract `@mention`-style tokens. Matches the conservative
+/// definition `@` followed by one or more ASCII alphanumeric or
+/// underscore characters, since that's what every chat platform we
+/// target uses.
+fn extract_mentions(body: &str, out: &mut Vec<(String, &'static str)>) {
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'@' {
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+                end += 1;
+            }
+            if end > start {
+                let name = &body[start..end];
+                out.push((format!("@{name}"), "person"));
+            }
+            i = end.max(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Extract URLs. Conservative: looks for `http://` or `https://`
+/// followed by a run of non-whitespace characters; trims trailing
+/// punctuation (`.`, `,`, `)`, `]`) so a URL ending a sentence is
+/// captured cleanly.
+fn extract_urls(body: &str, out: &mut Vec<(String, &'static str)>) {
+    for prefix in ["http://", "https://"] {
+        let mut search_from = 0;
+        while let Some(rel) = body[search_from..].find(prefix) {
+            let start = search_from + rel;
+            // Require a word boundary (start of string or non-alnum)
+            // before the prefix so `"shttps://"` isn't matched.
+            if start > 0 && body.as_bytes()[start - 1].is_ascii_alphanumeric() {
+                search_from = start + prefix.len();
+                continue;
+            }
+            let tail = &body[start..];
+            let end_rel = tail.find(|c: char| c.is_whitespace()).unwrap_or(tail.len());
+            let mut url = &tail[..end_rel];
+            while let Some(last) = url.chars().last() {
+                if matches!(last, '.' | ',' | ')' | ']' | '!' | '?' | ';' | ':') {
+                    url = &url[..url.len() - last.len_utf8()];
+                } else {
+                    break;
+                }
+            }
+            if !url.is_empty() {
+                out.push((url.to_string(), "url"));
+            }
+            search_from = start + end_rel.max(prefix.len());
+        }
+    }
+}
+
+/// Extract ISO-8601 date stamps in the `YYYY-MM-DD` shape. Anything
+/// with separator characters other than `-`, or with fractional
+/// seconds / time zones, is also accepted but only the date prefix is
+/// captured.
+fn extract_iso_dates(body: &str, out: &mut Vec<(String, &'static str)>) {
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i + 10 <= bytes.len() {
+        let window = &bytes[i..i + 10];
+        let is_date = window[0].is_ascii_digit()
+            && window[1].is_ascii_digit()
+            && window[2].is_ascii_digit()
+            && window[3].is_ascii_digit()
+            && window[4] == b'-'
+            && window[5].is_ascii_digit()
+            && window[6].is_ascii_digit()
+            && window[7] == b'-'
+            && window[8].is_ascii_digit()
+            && window[9].is_ascii_digit();
+        if is_date {
+            // Reject if preceded by a digit (avoids matching the
+            // tail half of a longer numeric token).
+            let preceded_by_digit = i > 0 && bytes[i - 1].is_ascii_digit();
+            // Reject if followed by another digit (would mean we're
+            // looking at e.g. "1234-56-7890" — not a real date).
+            let followed_by_digit = i + 10 < bytes.len() && bytes[i + 10].is_ascii_digit();
+            if !preceded_by_digit && !followed_by_digit {
+                out.push((body[i..i + 10].to_string(), "date"));
+            }
+            i += 10;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Extract project / proper-noun phrases: sequences of two or more
+/// capitalised whitespace-separated tokens (`"Knowledge Substrate"`,
+/// `"OneDrive Connector"`). Skips well-known sentence starters that
+/// are usually not entities.
+fn extract_project_names(body: &str, out: &mut Vec<(String, &'static str)>) {
+    /// Sentence-starter words that incidentally begin with a
+    /// capital. Adding entries here trades recall for precision.
+    const SENTENCE_STARTERS: &[&str] = &[
+        "The", "This", "That", "We", "I", "You", "He", "She", "It", "They", "A", "An", "Our", "My",
+        "Your", "His", "Her", "Their",
+    ];
+    let mut current: Vec<&str> = Vec::new();
+    let emit = |buf: &mut Vec<&str>, out: &mut Vec<(String, &'static str)>| {
+        if buf.len() >= 2 {
+            let phrase = buf.join(" ");
+            out.push((phrase, "project"));
+        }
+        buf.clear();
+    };
+    for token in
+        body.split(|c: char| c.is_whitespace() || matches!(c, '.' | ',' | ':' | ';' | '!' | '?'))
+    {
+        // Strip trailing closing punctuation (e.g. `"design)"`).
+        let token = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+        if token.len() < 2 {
+            emit(&mut current, out);
+            continue;
+        }
+        let first = token.as_bytes()[0];
+        let starts_capital = first.is_ascii_uppercase();
+        let rest_ok = token[1..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-');
+        if starts_capital && rest_ok && !SENTENCE_STARTERS.contains(&token) {
+            current.push(token);
+        } else {
+            emit(&mut current, out);
+        }
+    }
+    emit(&mut current, out);
+}
+
+/// Minimal JSON string escape: handles backslash, quote, newline,
+/// tab, and carriage return. Sufficient for the entity-name strings
+/// the extractors emit (which are always ASCII-printable).
+fn json_escape(s: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+// ───────────── promote_observation: decision / task heuristic ─────────────
+
+/// Lexicon keywords that imply a decision or commitment worth
+/// promoting to canonical knowledge.
+const DECISION_LEXICON: &[&str] = &[
+    "decided",
+    "agreed",
+    "resolved",
+    "approved",
+    "shipped",
+    "merged",
+    "deployed",
+    "rolled out",
+    "selected",
+    "chose",
+    "chosen",
+    "concluded",
+    "settled",
+];
+
+/// Lexicon keywords that imply a task assignment worth promoting.
+const TASK_LEXICON: &[&str] = &[
+    "assigned to",
+    "action item",
+    "todo:",
+    "to-do:",
+    "follow-up:",
+    "followup:",
+    "owner:",
+    "will own",
+    "will handle",
+    "will drive",
+    "will lead",
+];
+
+/// Lexicon keywords that imply a deadline worth promoting.
+const DEADLINE_LEXICON: &[&str] = &[
+    "by friday",
+    "by monday",
+    "by tuesday",
+    "by wednesday",
+    "by thursday",
+    "by eod",
+    "due:",
+    "due by",
+    "deadline:",
+    "no later than",
+    "before the end",
+];
+
+/// Heuristic promotion decision.
+///
+/// Returns the JSON shape demanded by [`crate::task::GRAMMAR_PROMOTE_OBSERVATION`].
+fn promote_observation(body: &str) -> String {
+    let lower = body.to_ascii_lowercase();
+    // `lexicon_count` works correctly on multi-word phrases too:
+    // the boundary check looks at the byte immediately before the
+    // match and immediately after it, so a phrase like `"assigned
+    // to"` matches in `"this is assigned to alice"` but NOT in
+    // `"reassigned to alice"` (where the preceding `e` from `re`
+    // makes the start-boundary fail). Using the word-boundary scan
+    // for all three lexicons removes the false positives a plain
+    // `contains()` would produce (e.g. `"reassigned to"` matching
+    // `"assigned to"`, or `"goodwill own"` matching `"will own"`
+    // inside the task lexicon).
+    let decision_hits = lexicon_count(&lower, DECISION_LEXICON);
+    let task_hits = lexicon_count(&lower, TASK_LEXICON);
+    let deadline_hits = lexicon_count(&lower, DEADLINE_LEXICON);
+
+    let promote = decision_hits > 0 || task_hits > 0 || deadline_hits > 0;
+    let reason = match (decision_hits > 0, task_hits > 0, deadline_hits > 0) {
+        (true, _, _) => "contains a decision keyword",
+        (false, true, _) => "contains a task assignment",
+        (false, false, true) => "contains a deadline",
+        (false, false, false) => "no decision, task, or deadline signal found",
+    };
+    format!(r#"{{"promote":{promote},"reason":"{reason}"}}"#)
 }
 
 #[cfg(test)]
@@ -107,11 +628,121 @@ mod tests {
     }
 
     #[test]
-    fn fallback_classification_returns_useful_with_low_confidence() {
+    fn fallback_classification_picks_critical_on_outage_word() {
         let adapter = FallbackAdapter::new();
-        let out = adapter.generate("tag_importance", "", "").unwrap();
-        assert!(out.contains("useful"));
-        assert!(out.contains("0.5"));
+        let prompt = format!(
+            "{}\n\nMessage:\nProduction outage, page on-call now",
+            InferenceTask::TagImportance.prompt_template()
+        );
+        let out = adapter
+            .generate("tag_importance", &prompt, "")
+            .expect("classification");
+        assert!(out.contains("\"class\":\"critical\""), "got {out}");
+    }
+
+    #[test]
+    fn fallback_classification_picks_important_on_deadline_word() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nMessage:\nWe need a deadline-driven decision today";
+        let out = adapter.generate("tag_importance", prompt, "").unwrap();
+        assert!(out.contains("\"class\":\"important\""), "got {out}");
+    }
+
+    #[test]
+    fn fallback_classification_picks_noise_on_empty_body() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nMessage:\n   ";
+        let out = adapter.generate("tag_importance", prompt, "").unwrap();
+        assert!(out.contains("\"class\":\"noise\""), "got {out}");
+    }
+
+    #[test]
+    fn fallback_classification_avoids_substring_false_positives() {
+        // `"insurgent"` contains `"urgent"` but is a different word —
+        // the word-boundary check must reject it.
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nMessage:\nThe insurgent attack continues";
+        let out = adapter.generate("tag_importance", prompt, "").unwrap();
+        assert!(!out.contains("\"class\":\"important\""), "got {out}");
+    }
+
+    #[test]
+    fn fallback_classification_produces_well_formed_json() {
+        let adapter = FallbackAdapter::new();
+        let out = adapter.generate("tag_importance", "x", "").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        assert!(parsed["class"].is_string());
+        assert!(parsed["confidence"].is_f64());
+    }
+
+    /// Regression for Devin Review finding ANALYSIS_0005: the GBNF
+    /// grammar at [`crate::task::GRAMMAR_TAG_IMPORTANCE`] only accepts
+    /// `"0" "." [0-9]+ | "1.0" | "1"`. A formatted confidence of
+    /// `"1.00"` would NOT match (the `"1.0"` alternative requires
+    /// exactly one trailing zero), so we must never emit a confidence
+    /// ≥ 1.0 even via a future refactor that widens the squashing
+    /// range. The defensive `min(0.99_f64)` clamp in
+    /// [`confidence_from_density`] enforces this; this test pins the
+    /// invariant by feeding the helper an arithmetic worst case
+    /// (`score == total`, which under the un-clamped formula would
+    /// yield `0.95` today — and a hypothetical `score > total`
+    /// scenario which the clamp catches).
+    #[test]
+    fn confidence_from_density_clamps_below_one() {
+        // Worst-case ratio under the documented [0.55, 0.95] range:
+        // formats well under 1.0. The numeric value may be slightly
+        // above `0.95` due to floating-point representation of
+        // `0.55 + 1.0 * 0.40`, but the formatted (`{:.2}`) value is
+        // what the grammar sees — `"0.95"` either way.
+        let c = confidence_from_density(10, 10);
+        let epsilon = f64::EPSILON * 16.0;
+        assert!(
+            (0.55..=0.95 + epsilon).contains(&c),
+            "got {c} (epsilon={epsilon})",
+        );
+        assert_eq!(format!("{c:.2}"), "0.95");
+
+        // Out-of-contract overshoot (e.g. a future refactor passes
+        // `score > total`): clamp keeps the format below 1.0 — and
+        // critically, `{:.2}` formats `0.99` as `"0.99"`, never
+        // `"1.00"`. The clamp picks `0.99_f64` specifically because
+        // `format!("{:.2}", 0.99_f64) == "0.99"` (binary rounding
+        // does not bump it up to `"1.00"`).
+        let c = confidence_from_density(100, 10);
+        assert!(c < 1.0, "got {c}");
+        assert_eq!(format!("{c:.2}"), "0.99");
+
+        // Grammar shape check: every formatted confidence emitted by
+        // `classify_importance` must start with `"0."` (the
+        // `"0" "." [0-9]+` branch). The other two grammar alternatives
+        // (`"1.0"`, `"1"`) are intentionally unreachable from the
+        // fallback adapter — only an SLM-backed adapter that has
+        // higher justifiable confidence would emit those.
+        for body in [
+            "We have a P0 outage right now",
+            "Just a friendly FYI thanks!",
+            "Decision needed on the deploy approval",
+            "Question? @alice can you investigate?",
+            "   ",
+            "",
+        ] {
+            let out = classify_importance(body);
+            // Pluck the confidence value out of the JSON-y string —
+            // the format is `{"class":"...","confidence":X.XX}`.
+            let cstart = out.find("\"confidence\":").expect("has field") + "\"confidence\":".len();
+            let cend = out[cstart..].find('}').expect("closes") + cstart;
+            let confidence_str = &out[cstart..cend];
+            assert!(
+                confidence_str.starts_with("0."),
+                "{body:?} produced non-grammar-compliant confidence {confidence_str:?} in {out}",
+            );
+            // And the full numeric must parse back as a float in
+            // [0.0, 1.0) — i.e. strictly less than 1.0 so a stricter
+            // future grammar that disallowed `"1.0"` entirely would
+            // still accept the fallback's output.
+            let v: f64 = confidence_str.parse().expect("parses");
+            assert!(v < 1.0, "{body:?} produced confidence {v} >= 1.0");
+        }
     }
 
     #[test]
@@ -125,10 +756,196 @@ mod tests {
     }
 
     #[test]
-    fn fallback_extract_entities_returns_empty_list() {
+    fn fallback_extract_entities_returns_empty_list_on_empty_body() {
         let adapter = FallbackAdapter::new();
         let out = adapter.generate("extract_entities", "", "").unwrap();
-        assert!(out.contains("\"entities\""));
-        assert!(out.contains("[]"));
+        assert_eq!(out, r#"{"entities":[]}"#);
+    }
+
+    #[test]
+    fn fallback_extract_entities_pulls_mentions_urls_and_dates() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nMessage:\n@alice please review https://example.com by 2025-06-01";
+        let out = adapter.generate("extract_entities", prompt, "").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        let entities = parsed["entities"].as_array().expect("entities array");
+        let names: Vec<&str> = entities
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"@alice"), "got {names:?}");
+        assert!(names.contains(&"https://example.com"), "got {names:?}");
+        assert!(names.contains(&"2025-06-01"), "got {names:?}");
+    }
+
+    #[test]
+    fn fallback_extract_entities_pulls_project_names() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nMessage:\nThe Knowledge Substrate ships next week";
+        let out = adapter.generate("extract_entities", prompt, "").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        let names: Vec<String> = parsed["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            names.iter().any(|n| n.contains("Knowledge Substrate")),
+            "got {names:?}"
+        );
+    }
+
+    #[test]
+    fn fallback_promote_returns_true_on_decision_keyword() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nObservation:\nWe decided to ship v3";
+        let out = adapter.generate("promote_observation", prompt, "").unwrap();
+        assert!(out.contains("\"promote\":true"), "got {out}");
+        assert!(out.contains("decision keyword"), "got {out}");
+    }
+
+    #[test]
+    fn fallback_promote_returns_true_on_action_item() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nObservation:\nAction item: @bob owns the rollout";
+        let out = adapter.generate("promote_observation", prompt, "").unwrap();
+        assert!(out.contains("\"promote\":true"), "got {out}");
+    }
+
+    #[test]
+    fn fallback_promote_returns_false_on_idle_chatter() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nObservation:\nlol thanks";
+        let out = adapter.generate("promote_observation", prompt, "").unwrap();
+        assert!(out.contains("\"promote\":false"), "got {out}");
+    }
+
+    /// Regression: a plain `contains()` scan on the task lexicon
+    /// would match `"assigned to"` inside `"reassigned to alice"`,
+    /// promoting the observation incorrectly. The word-boundary
+    /// `lexicon_count` rejects that match because the byte before
+    /// `"assigned"` is `e` (still alphanumeric), so the start
+    /// boundary fails and the count stays at zero.
+    #[test]
+    fn fallback_promote_rejects_substring_false_positive_on_task_lexicon() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nObservation:\nThis ticket was reassigned to alice yesterday";
+        let out = adapter.generate("promote_observation", prompt, "").unwrap();
+        assert!(
+            out.contains("\"promote\":false"),
+            "expected false promotion for substring-only task match, got {out}"
+        );
+    }
+
+    /// Regression: the word-boundary check must also fire on the
+    /// *trailing* edge — `"action item"` inside `"action items
+    /// list"` should still match (boundary at the start of `"action"`
+    /// and a space after `"item"` makes both ends OK), proving the
+    /// fix didn't regress the legitimate-match path.
+    #[test]
+    fn fallback_promote_still_fires_on_word_bounded_task_phrase() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nObservation:\nHere's the action item: @bob owns the rollout";
+        let out = adapter.generate("promote_observation", prompt, "").unwrap();
+        assert!(
+            out.contains("\"promote\":true"),
+            "expected true promotion for word-bounded task match, got {out}"
+        );
+    }
+
+    #[test]
+    fn extract_body_strips_known_marker() {
+        let prompt = "Some prompt\n\nMessage:\nthe actual body";
+        assert_eq!(extract_body(prompt), "the actual body");
+    }
+
+    #[test]
+    fn extract_body_returns_whole_prompt_when_no_marker() {
+        assert_eq!(extract_body("nothing matches here"), "nothing matches here");
+    }
+
+    /// Regression for a real `rfind` → `find` bug.
+    ///
+    /// Before the fix, `extract_body` used `prompt.rfind(marker)`, which
+    /// for a body that itself contains the scaffold marker — e.g. a
+    /// Slack thread that quotes another tool's prompt — would slice past
+    /// the *inner* marker and drop everything before it. The classifier
+    /// then scored only the tail of the message, drowning useful signal
+    /// from the leading lines.
+    ///
+    /// `find` (leftmost) is the correct choice because the scaffold's
+    /// marker is always the first occurrence in a well-formed rendered
+    /// prompt.
+    #[test]
+    fn extract_body_preserves_body_that_contains_the_marker_text() {
+        let body = "Hello\n\nMessage:\nWorld";
+        let prompt = format!("Scaffold instructions\n\nMessage:\n{body}");
+        assert_eq!(
+            extract_body(&prompt),
+            body,
+            "extract_body must keep the full body even when it contains the marker text",
+        );
+    }
+
+    /// Pins lock-step coverage between `extract_body` and
+    /// [`crate::task::InferenceTask::prompt_template`] for the
+    /// SynthSummary template's `Session:\n` marker.
+    #[test]
+    fn extract_body_strips_session_marker_used_by_synth_summary() {
+        let template = crate::task::InferenceTask::SynthSummary.prompt_template();
+        let body = "alice: ship it\nbob: lgtm";
+        let prompt = template.replace("{body}", body);
+        assert_eq!(extract_body(&prompt), body);
+    }
+
+    /// Lock-step regression: every [`InferenceTask`] whose
+    /// `prompt_template` ends with the `{body}` placeholder MUST
+    /// match one of the markers enumerated in [`BODY_MARKERS`].
+    /// Adding a new task with a novel marker (e.g. `"\n\nThread:\n"`)
+    /// would otherwise silently degrade the fallback classifier —
+    /// it would scan the full scaffolded prompt instead of just the
+    /// body, drowning the lexicon in instruction-text false positives.
+    ///
+    /// This test enumerates every task that the router exposes and
+    /// asserts the substitution post-condition: rendering
+    /// `prompt_template().replace("{body}", BODY)` and feeding it
+    /// to [`extract_body`] returns exactly `BODY`. Iterating the
+    /// task enum here keeps the assertion exhaustive even after a
+    /// new variant is added — the test fails loudly until the
+    /// marker is registered in [`BODY_MARKERS`].
+    #[test]
+    fn extract_body_markers_cover_every_inference_task_template() {
+        // Picked to avoid colliding with the markers and the
+        // lexicon entries the classifier might otherwise match.
+        const SENTINEL: &str = "<<EXTRACT_BODY_LOCK_STEP_SENTINEL>>";
+        let tasks = [
+            crate::task::InferenceTask::TagImportance,
+            crate::task::InferenceTask::ExtractEntities,
+            crate::task::InferenceTask::PromoteObservation,
+            crate::task::InferenceTask::SynthSummary,
+            crate::task::InferenceTask::SynthConcept,
+            crate::task::InferenceTask::AdjudicateContradiction,
+        ];
+        for task in tasks {
+            let template = task.prompt_template();
+            // The substrate's templates either end with `{body}`
+            // (single message) or `{bodies}` (concatenated
+            // observations) right after one of the BODY_MARKERS.
+            // Walk the templates that use `{body}` for the
+            // lock-step check; the `{bodies}` variants are handled
+            // implicitly by the `\n\nObservations:\n` marker which
+            // BODY_MARKERS already lists.
+            if !template.contains("{body}") {
+                continue;
+            }
+            let prompt = template.replace("{body}", SENTINEL);
+            assert_eq!(
+                extract_body(&prompt),
+                SENTINEL,
+                "extract_body missed the marker for {:?}; BODY_MARKERS is out of sync with prompt_template",
+                task.tag(),
+            );
+        }
     }
 }

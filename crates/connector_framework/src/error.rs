@@ -58,6 +58,15 @@ pub enum ConnectorError {
     /// cursor.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+
+    /// HTTP transport failure — wraps low-level send / timeout /
+    /// TLS errors from the underlying client, plus the
+    /// `BlockingHttpTransport`'s retry-budget-exhausted state.
+    /// Connector code should map this into [`Self::Sync`] or
+    /// [`Self::Auth`] when surfacing it to the runtime, depending on
+    /// which call site failed.
+    #[error("http transport error: {0}")]
+    Transport(String),
 }
 
 /// Convenience alias.
