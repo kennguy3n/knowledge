@@ -641,15 +641,12 @@ mod tests {
     fn initial_sync_requires_configured_file_keys() {
         let transport = Arc::new(MockHttpTransport::new());
         let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
-        let cfg_no_keys = ConnectorConfig::new(
-            ConnectorKind::Figma,
-            AuthKind::OAuth2,
-            ScopeId::new_v4(),
-        )
-        .with_auth_config(serde_json::json!({
-            "authorization_code": "demo-code",
-            "api_base_url": "https://api.test/figma",
-        }));
+        let cfg_no_keys =
+            ConnectorConfig::new(ConnectorKind::Figma, AuthKind::OAuth2, ScopeId::new_v4())
+                .with_auth_config(serde_json::json!({
+                    "authorization_code": "demo-code",
+                    "api_base_url": "https://api.test/figma",
+                }));
         let tok = c.authenticate(&cfg()).unwrap();
         let err = c.initial_sync(&cfg_no_keys, &tok).unwrap_err();
         assert!(matches!(err, ConnectorError::Sync(_)));
@@ -668,14 +665,15 @@ mod tests {
         let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(encode_cursor(&BTreeMap::from([
-            ("F1".to_string(), "100".to_string()),
-        ])).unwrap());
+        state.cursor =
+            Some(encode_cursor(&BTreeMap::from([("F1".to_string(), "100".to_string())])).unwrap());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert!(res.events.is_empty());
         // Cursor must round-trip — same versions retained.
         assert_eq!(
-            decode_cursor(res.next_cursor.as_deref()).get("F1").map(String::as_str),
+            decode_cursor(res.next_cursor.as_deref())
+                .get("F1")
+                .map(String::as_str),
             Some("100"),
         );
     }
@@ -693,9 +691,8 @@ mod tests {
         let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(encode_cursor(&BTreeMap::from([
-            ("F1".to_string(), "9".to_string()),
-        ])).unwrap());
+        state.cursor =
+            Some(encode_cursor(&BTreeMap::from([("F1".to_string(), "9".to_string())])).unwrap());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         // File + 1 component → 2 events.
         assert_eq!(res.events.len(), 2);
@@ -758,16 +755,13 @@ mod tests {
     fn subscribe_webhook_requires_team_ids() {
         let transport = Arc::new(MockHttpTransport::new());
         let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
-        let cfg_no_teams = ConnectorConfig::new(
-            ConnectorKind::Figma,
-            AuthKind::OAuth2,
-            ScopeId::new_v4(),
-        )
-        .with_auth_config(serde_json::json!({
-            "authorization_code": "demo-code",
-            "api_base_url": "https://api.test/figma",
-            "file_keys": ["F1"],
-        }));
+        let cfg_no_teams =
+            ConnectorConfig::new(ConnectorKind::Figma, AuthKind::OAuth2, ScopeId::new_v4())
+                .with_auth_config(serde_json::json!({
+                    "authorization_code": "demo-code",
+                    "api_base_url": "https://api.test/figma",
+                    "file_keys": ["F1"],
+                }));
         let tok = c.authenticate(&cfg()).unwrap();
         let err = c
             .subscribe_webhook(&cfg_no_teams, &tok, "https://demo.example/webhooks/figma")

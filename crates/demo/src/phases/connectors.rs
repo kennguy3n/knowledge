@@ -14,12 +14,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{Duration, Utc};
+use connector_framework::percent_encode_form_component;
 use connector_framework::{
     AuthKind, Connector, ConnectorConfig, ConnectorEvent, ConnectorInstanceId, ConnectorKind,
     HttpMethod, MockHttpTransport, MockResponse, OAuth2CodeExchange, OAuth2Token, Result, SyncMode,
     SyncState, SyncStatus,
 };
-use connector_framework::percent_encode_form_component;
 use connectors::{
     email::{
         EmailConnector, EmailProvider, GmailMessage, GmailMessagesListPage, GraphMessage,
@@ -426,12 +426,13 @@ fn exercise_jira(
     report: &mut DemoReport,
 ) -> ConnectorMetrics {
     let scope = ScopeId::new_v4();
-    let cfg = ConnectorConfig::new(ConnectorKind::Jira, AuthKind::OAuth2, scope)
-        .with_auth_config(json!({
+    let cfg = ConnectorConfig::new(ConnectorKind::Jira, AuthKind::OAuth2, scope).with_auth_config(
+        json!({
             "authorization_code": "demo-code",
             "api_base_url": "https://api.test/jira",
             "webhook_secret": "demo-jira-secret",
-        }));
+        }),
+    );
     let instance = ConnectorInstanceId::new_v4();
 
     let now = Utc::now();
@@ -635,12 +636,13 @@ fn exercise_slack(
     report: &mut DemoReport,
 ) -> ConnectorMetrics {
     let scope = ScopeId::new_v4();
-    let cfg = ConnectorConfig::new(ConnectorKind::Slack, AuthKind::OAuth2, scope)
-        .with_auth_config(json!({
+    let cfg = ConnectorConfig::new(ConnectorKind::Slack, AuthKind::OAuth2, scope).with_auth_config(
+        json!({
             "authorization_code": "demo-code",
             "signing_secret": "demo-signing-secret",
             "api_base_url": "https://api.test/slack",
-        }));
+        }),
+    );
     let instance = ConnectorInstanceId::new_v4();
 
     let now_secs = Utc::now().timestamp();
@@ -670,8 +672,16 @@ fn exercise_slack(
             channel: "C-PRODUCT".into(),
             messages: vec![
                 // Slack returns history newest-first.
-                message("C-PRODUCT", &ts(now_secs - 3600), "Action item: prepare migration guide"),
-                message("C-PRODUCT", &ts(now_secs - 5400), "Decision: ship v2 next quarter"),
+                message(
+                    "C-PRODUCT",
+                    &ts(now_secs - 3600),
+                    "Action item: prepare migration guide"
+                ),
+                message(
+                    "C-PRODUCT",
+                    &ts(now_secs - 5400),
+                    "Decision: ship v2 next quarter"
+                ),
                 message("C-PRODUCT", &ts(now_secs - 7200), "Pinned: roadmap review"),
             ],
             has_more: false,
@@ -703,8 +713,8 @@ fn exercise_slack(
     // Build the exact `oldest` parameter the connector will send
     // by mirroring `rfc3339_to_slack_ts`. We pre-compute the most
     // recent watermark from the initial-sync messages.
-    let initial_watermark_dt = chrono::DateTime::<Utc>::from_timestamp(now_secs - 3600, 0)
-        .expect("watermark");
+    let initial_watermark_dt =
+        chrono::DateTime::<Utc>::from_timestamp(now_secs - 3600, 0).expect("watermark");
     let oldest = format!(
         "{}.{:06}",
         initial_watermark_dt.timestamp(),

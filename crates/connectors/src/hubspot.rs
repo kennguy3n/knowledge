@@ -278,8 +278,7 @@ impl HubSpotConnector {
         }
         if kinds.is_empty() {
             return Err(ConnectorError::Sync(
-                "hubspot: auth_config_json.object_kinds was present but contained no kinds"
-                    .into(),
+                "hubspot: auth_config_json.object_kinds was present but contained no kinds".into(),
             ));
         }
         Ok(kinds)
@@ -594,14 +593,13 @@ impl Connector for HubSpotConnector {
     ) -> Result<WebhookSubscription> {
         let base_url = self.resolved_base_url(config);
         let app_id = Self::configured_app_id(config)?;
-        let kinds = Self::configured_kinds(config).unwrap_or_else(|_| vec![HubSpotObjectKind::Contact]);
+        let kinds =
+            Self::configured_kinds(config).unwrap_or_else(|_| vec![HubSpotObjectKind::Contact]);
         const SUBSCRIPTION_KINDS: &[&str] = &["creation", "propertyChange", "deletion"];
         let mut registered: Vec<String> = Vec::new();
         for object_kind in &kinds {
             for sub_kind in SUBSCRIPTION_KINDS {
-                let url = format!(
-                    "{base_url}/webhooks/v3/{app_id}/subscriptions"
-                );
+                let url = format!("{base_url}/webhooks/v3/{app_id}/subscriptions");
                 let event_type = format!("{}.{}", kind_singular(*object_kind), sub_kind);
                 let body = serde_json::json!({
                     "eventType": event_type,
@@ -919,10 +917,7 @@ mod tests {
             body["filterGroups"][0]["filters"][0]["propertyName"],
             "hs_lastmodifieddate"
         );
-        assert_eq!(
-            body["filterGroups"][0]["filters"][0]["operator"],
-            "GTE"
-        );
+        assert_eq!(body["filterGroups"][0]["filters"][0]["operator"], "GTE");
     }
 
     #[test]
@@ -981,15 +976,12 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
-        let cfg_no_app = ConnectorConfig::new(
-            ConnectorKind::HubSpot,
-            AuthKind::OAuth2,
-            ScopeId::new_v4(),
-        )
-        .with_auth_config(serde_json::json!({
-            "authorization_code": "demo-code",
-            "api_base_url": "https://api.test/hubspot",
-        }));
+        let cfg_no_app =
+            ConnectorConfig::new(ConnectorKind::HubSpot, AuthKind::OAuth2, ScopeId::new_v4())
+                .with_auth_config(serde_json::json!({
+                    "authorization_code": "demo-code",
+                    "api_base_url": "https://api.test/hubspot",
+                }));
         let err = c
             .subscribe_webhook(&cfg_no_app, &tok, "https://demo.example/webhooks/hubspot")
             .unwrap_err();

@@ -338,7 +338,11 @@ impl GoogleDriveConnector {
     /// to anchor the changes feed, otherwise the first
     /// `changes.list` skips every change between the sync window and
     /// the watch installation.
-    fn fetch_start_page_token(&self, base_url: &str, token: &OAuth2Token) -> Result<Option<String>> {
+    fn fetch_start_page_token(
+        &self,
+        base_url: &str,
+        token: &OAuth2Token,
+    ) -> Result<Option<String>> {
         let url = format!("{base_url}/drive/v3/changes/startPageToken");
         let resp: GoogleDriveStartPageToken = bearer_get_json(
             &self.transport,
@@ -417,10 +421,7 @@ fn parse_role(role: &str) -> Option<SourcePermissionLevel> {
 }
 
 fn file_to_created_event(f: &GoogleDriveFile) -> ConnectorEvent {
-    let occurred_at = f
-        .created_time
-        .or(f.modified_time)
-        .unwrap_or_else(Utc::now);
+    let occurred_at = f.created_time.or(f.modified_time).unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(f.id.clone());
     if f.trashed {
         ConnectorEvent::DocumentDeleted {
@@ -746,11 +747,8 @@ mod tests {
     #[test]
     fn authenticate_dispatches_to_oauth_exchange() {
         let transport = MockHttpTransport::new();
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            Arc::new(transport),
-            oauth(),
-        );
+        let c =
+            GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), Arc::new(transport), oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         assert!(tok.scope.contains("drive"));
         assert_eq!(tok.access_token.expose(), "drive-access");
@@ -759,11 +757,8 @@ mod tests {
     #[test]
     fn authenticate_requires_authorization_code() {
         let transport = MockHttpTransport::new();
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            Arc::new(transport),
-            oauth(),
-        );
+        let c =
+            GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), Arc::new(transport), oauth());
         let bad_cfg = ConnectorConfig::new(
             ConnectorKind::GoogleDrive,
             AuthKind::OAuth2,
@@ -808,11 +803,8 @@ mod tests {
         expect_start_page_token(&transport, base, "spt-99");
 
         let transport: Arc<dyn HttpTransport> = Arc::new(transport);
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            transport.clone(),
-            oauth(),
-        );
+        let c =
+            GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 3);
@@ -844,11 +836,7 @@ mod tests {
         expect_start_page_token(&transport, base, "spt-1");
 
         let transport: Arc<dyn HttpTransport> = Arc::new(transport);
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            transport,
-            oauth(),
-        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 1);
@@ -891,11 +879,7 @@ mod tests {
         expect_start_page_token(&transport, base, "spt-3");
 
         let transport: Arc<dyn HttpTransport> = Arc::new(transport);
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            transport,
-            oauth(),
-        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         // Two pages walked, third would be the same token → stop.
@@ -952,11 +936,7 @@ mod tests {
         );
 
         let transport: Arc<dyn HttpTransport> = Arc::new(transport);
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            transport,
-            oauth(),
-        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
         state.cursor = Some("watermark-1".into());
@@ -994,11 +974,7 @@ mod tests {
         );
 
         let transport: Arc<dyn HttpTransport> = Arc::new(transport);
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            transport,
-            oauth(),
-        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
         state.cursor = Some("watermark-x".into());
@@ -1012,11 +988,7 @@ mod tests {
     fn incremental_sync_requires_cursor() {
         let transport = MockHttpTransport::new();
         let transport: Arc<dyn HttpTransport> = Arc::new(transport);
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            transport,
-            oauth(),
-        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let state = SyncState::new(c.instance);
         let err = c.incremental_sync(&cfg(), &tok, &state).unwrap_err();
@@ -1057,7 +1029,10 @@ mod tests {
         let mut config = cfg();
         // Force the channel id we want to see echoed.
         if let Some(obj) = config.auth_config_json.as_object_mut() {
-            obj.insert("channel_id".into(), serde_json::Value::String("chan-42".into()));
+            obj.insert(
+                "channel_id".into(),
+                serde_json::Value::String("chan-42".into()),
+            );
         }
         let sub = c
             .subscribe_webhook(&config, &tok, "https://substrate.example/hooks/drive")
@@ -1074,11 +1049,7 @@ mod tests {
     fn subscribe_webhook_requires_start_page_token() {
         let transport = MockHttpTransport::new();
         let transport: Arc<dyn HttpTransport> = Arc::new(transport);
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            transport,
-            oauth(),
-        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let bad_cfg = ConnectorConfig::new(
             ConnectorKind::GoogleDrive,
@@ -1103,11 +1074,7 @@ mod tests {
             br#"{"error":"unauthorized"}"#.to_vec(),
         ));
         let transport: Arc<dyn HttpTransport> = Arc::new(transport);
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            transport,
-            oauth(),
-        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let err = c.initial_sync(&cfg(), &tok).unwrap_err();
         assert!(matches!(err, ConnectorError::Auth(_)));
@@ -1124,11 +1091,7 @@ mod tests {
             "newRole": "writer",
             "occurredAt": Utc::now(),
         });
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            transport,
-            oauth(),
-        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
@@ -1146,11 +1109,7 @@ mod tests {
         let transport = MockHttpTransport::new();
         let transport: Arc<dyn HttpTransport> = Arc::new(transport);
         let body = serde_json::json!({"resourceId": "f1", "resourceState": "weird"});
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            transport,
-            oauth(),
-        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let err = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
@@ -1162,11 +1121,7 @@ mod tests {
         let transport = MockHttpTransport::new();
         let transport: Arc<dyn HttpTransport> = Arc::new(transport);
         let body = serde_json::json!({"resourceId": "f1", "resourceState": "add"});
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            transport,
-            oauth(),
-        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
@@ -1179,11 +1134,7 @@ mod tests {
         let transport = MockHttpTransport::new();
         let transport: Arc<dyn HttpTransport> = Arc::new(transport);
         let body = serde_json::json!({"resourceId": "f1", "resourceState": "remove"});
-        let c = GoogleDriveConnector::new(
-            ConnectorInstanceId::new_v4(),
-            transport,
-            oauth(),
-        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();

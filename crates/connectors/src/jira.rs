@@ -229,8 +229,14 @@ impl JiraConnector {
                 percent_encode_form_component(jql),
                 self.page_size,
             );
-            let resp: JiraSearchResponse =
-                bearer_get_json(&self.transport, "jira", "/rest/api/3/search", &url, token, &[])?;
+            let resp: JiraSearchResponse = bearer_get_json(
+                &self.transport,
+                "jira",
+                "/rest/api/3/search",
+                &url,
+                token,
+                &[],
+            )?;
             let returned = u32::try_from(resp.issues.len()).unwrap_or(u32::MAX);
             issues.extend(resp.issues);
             // Jira returns an empty `issues` array when we've walked
@@ -404,9 +410,7 @@ impl Connector for JiraConnector {
             )));
         }
         let webhook_id = entry.created_webhook_id.ok_or_else(|| {
-            ConnectorError::Webhook(
-                "jira /rest/api/3/webhook returned no createdWebhookId".into(),
-            )
+            ConnectorError::Webhook("jira /rest/api/3/webhook returned no createdWebhookId".into())
         })?;
         let mut subscription = WebhookSubscription::new(
             self.instance,

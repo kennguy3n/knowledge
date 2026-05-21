@@ -302,8 +302,14 @@ impl SlackConnector {
                 ),
                 None => format!("{base_url}/conversations.list?exclude_archived=true&limit=200"),
             };
-            let resp: SlackChannelListResponse =
-                bearer_get_json(&self.transport, "slack", "conversations.list", &url, token, &[])?;
+            let resp: SlackChannelListResponse = bearer_get_json(
+                &self.transport,
+                "slack",
+                "conversations.list",
+                &url,
+                token,
+                &[],
+            )?;
             check_slack_ok(&resp.ok, &resp.error, "conversations.list")?;
             channels.extend(resp.channels.into_iter().filter(|c| !c.is_archived));
             let next = resp.response_metadata.next_cursor;
@@ -977,9 +983,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
-            MockResponse::ok_json(
-                br#"{"ok":false,"error":"invalid_auth"}"#.to_vec(),
-            ),
+            MockResponse::ok_json(br#"{"ok":false,"error":"invalid_auth"}"#.to_vec()),
         );
         let c = connector_with(Arc::clone(&transport));
         let err = c.initial_sync(&cfg(), &token()).unwrap_err();
@@ -995,9 +999,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
-            MockResponse::ok_json(
-                br#"{"ok":false,"error":"ratelimited"}"#.to_vec(),
-            ),
+            MockResponse::ok_json(br#"{"ok":false,"error":"ratelimited"}"#.to_vec()),
         );
         let c = connector_with(Arc::clone(&transport));
         let err = c.initial_sync(&cfg(), &token()).unwrap_err();

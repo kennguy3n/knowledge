@@ -179,9 +179,9 @@ impl NotionConnector {
         let mut cursor: Option<String> = None;
         for _ in 0..MAX_SEARCH_PAGES {
             let mut body = filter_payload.clone();
-            let body_map = body
-                .as_object_mut()
-                .ok_or_else(|| ConnectorError::Sync("notion /v1/search body must be a JSON object".into()))?;
+            let body_map = body.as_object_mut().ok_or_else(|| {
+                ConnectorError::Sync("notion /v1/search body must be a JSON object".into())
+            })?;
             body_map.insert(
                 "page_size".to_string(),
                 serde_json::Value::from(self.page_size),
