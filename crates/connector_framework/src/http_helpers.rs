@@ -54,8 +54,18 @@ pub fn classify_failure(provider: &str, endpoint: &str, resp: &HttpResponse) -> 
         "<empty body>".to_string()
     } else if trimmed.len() > 512 {
         // Cap so a paginated HTML error page from a misconfigured
-        // gateway doesn't blow up a structured log line.
-        format!("{}…", &trimmed[..512])
+        // gateway doesn't blow up a structured log line. Walk
+        // back from byte 512 to the previous UTF-8 char boundary
+        // — `from_utf8_lossy` may have substituted invalid bytes
+        // with U+FFFD (3 bytes each), so a naive `&trimmed[..512]`
+        // would panic when the cap falls inside a multi-byte
+        // sequence. `str::is_char_boundary(0)` is always true, so
+        // the loop is guaranteed to terminate.
+        let mut end = 512;
+        while !trimmed.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &trimmed[..end])
     } else {
         trimmed.to_string()
     };
@@ -317,6 +327,34 @@ mod tests {
         assert!(
             !msg.contains(&"a".repeat(1_000)),
             "long body must be truncated"
+        );
+    }
+
+    #[test]
+    fn classify_failure_truncation_respects_utf8_boundary() {
+        // Pad with 510 ASCII bytes, then two invalid UTF-8 bytes
+        // so `from_utf8_lossy` substitutes them with two U+FFFD
+        // characters (3 bytes each). The resulting `&str` is
+        // 510 + 6 = 516 bytes long, so the trim/cap branch fires
+        // and tries to slice at byte 512 — that falls *inside*
+        // the first U+FFFD (bytes 510..513), which would panic
+        // on a naive `&str[..512]`. The safe truncation walks
+        // back to byte 510 (the prior char boundary) and renders
+        // the prefix without crashing.
+        let mut body = b"a".repeat(510);
+        body.extend_from_slice(&[0xFF, 0xFF]);
+        let resp = HttpResponse {
+            status: 502,
+            headers: vec![],
+            body,
+        };
+        let err = classify_failure("notion", "/v1/search", &resp);
+        let msg = format!("{err}");
+        assert!(msg.contains('…'), "expected truncation ellipsis: {msg}");
+        // The 510 ASCII bytes must be preserved verbatim.
+        assert!(
+            msg.contains(&"a".repeat(510)),
+            "expected the 510-byte ASCII prefix in the error message"
         );
     }
 

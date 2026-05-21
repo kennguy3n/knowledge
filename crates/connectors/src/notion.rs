@@ -168,12 +168,24 @@ impl NotionConnector {
     /// `filter_payload` is the JSON body that Notion accepts on
     /// `POST /v1/search` — `initial_sync` posts a `{}` body which
     /// matches everything; `incremental_sync` posts a sort over
-    /// `last_edited_time` descending and filters server-side.
+    /// `last_edited_time` descending and a `cutoff` watermark so we
+    /// can short-circuit pagination at the first object older than
+    /// the prior watermark.
+    ///
+    /// `cutoff` is honoured only when the caller has sorted the
+    /// search descending by `last_edited_time` (i.e. the incremental
+    /// path). Pass `None` to walk every page (the initial path).
+    /// When set and the response page contains an object with
+    /// `last_edited_time <= cutoff`, the iteration stops mid-page
+    /// — every subsequent object is guaranteed older under the
+    /// descending sort, so fetching further pages would be wasted
+    /// I/O.
     fn paginate_search(
         &self,
         base_url: &str,
         token: &OAuth2Token,
         filter_payload: &serde_json::Value,
+        cutoff: Option<DateTime<Utc>>,
     ) -> Result<Vec<NotionObject>> {
         let mut results = Vec::<NotionObject>::new();
         let mut cursor: Option<String> = None;
@@ -202,6 +214,20 @@ impl NotionConnector {
                 &[Self::NOTION_VERSION_HEADER],
                 &body,
             )?;
+            if let Some(cut) = cutoff {
+                // Descending sort by `last_edited_time` — find the
+                // first object at or below the cutoff and stop
+                // there. Truncate this page (and skip every later
+                // page) since they are guaranteed older.
+                if let Some(stop_at) = resp
+                    .results
+                    .iter()
+                    .position(|o| o.last_edited_time.is_some_and(|t| t <= cut))
+                {
+                    results.extend(resp.results.into_iter().take(stop_at));
+                    return Ok(results);
+                }
+            }
             results.extend(resp.results);
             let next = resp.next_cursor;
             if !resp.has_more || next.is_none() {
@@ -277,7 +303,7 @@ impl Connector for NotionConnector {
         let base_url = self.resolved_base_url(config);
         // Initial sync — `/v1/search` with an empty body matches
         // every page and database the integration can see.
-        let objects = self.paginate_search(&base_url, token, &serde_json::json!({}))?;
+        let objects = self.paginate_search(&base_url, token, &serde_json::json!({}), None)?;
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(objects.len());
         let mut watermark: Option<DateTime<Utc>> = None;
         for obj in &objects {
@@ -312,19 +338,17 @@ impl Connector for NotionConnector {
             .as_deref()
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));
-        let objects = self.paginate_search(&base_url, token, &search_payload)?;
-        let mut events: Vec<ConnectorEvent> = Vec::new();
+        // `paginate_search` already truncates at the first object
+        // older than `cursor_watermark` under the descending sort,
+        // so every object here has `last_edited_time > cursor_watermark`
+        // (or is missing the field, in which case we still emit it
+        // — Notion shouldn't normally omit `last_edited_time`, but
+        // a missing value is safer to surface than to silently
+        // drop).
+        let objects = self.paginate_search(&base_url, token, &search_payload, cursor_watermark)?;
+        let mut events: Vec<ConnectorEvent> = Vec::with_capacity(objects.len());
         let mut watermark: Option<DateTime<Utc>> = cursor_watermark;
         for obj in &objects {
-            // Server-side filtering by `last_edited_time` isn't
-            // supported on `/v1/search`, so we filter client-side
-            // against the prior cursor. Skip objects we've
-            // already processed.
-            if let (Some(prev), Some(t)) = (cursor_watermark, obj.last_edited_time) {
-                if t <= prev {
-                    continue;
-                }
-            }
             events.push(object_to_event(obj, SyncMode::Incremental));
             if let Some(t) = obj.last_edited_time {
                 watermark = Some(watermark.map_or(t, |w| w.max(t)));
@@ -571,6 +595,58 @@ mod tests {
     }
 
     #[test]
+    fn incremental_sync_short_circuits_pagination_at_watermark() {
+        // First page contains one fresh object then one already-seen
+        // object — the descending sort means every subsequent page
+        // is guaranteed older, so paginate_search must NOT fetch
+        // page 2 even though the response says `has_more=true`.
+        let transport = Arc::new(MockHttpTransport::new());
+        let now = Utc::now();
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.test/notion/v1/search",
+            ok_json(&serde_json::json!({
+                "results": [
+                    {
+                        "id": "fresh",
+                        "object": "page",
+                        "created_time": now - Duration::days(1),
+                        "last_edited_time": now,
+                        "archived": false,
+                    },
+                    {
+                        "id": "already-seen",
+                        "object": "page",
+                        "created_time": now - Duration::days(2),
+                        "last_edited_time": now - Duration::hours(2),
+                        "archived": false,
+                    },
+                ],
+                "next_cursor": "page-2",
+                "has_more": true,
+            })),
+        );
+        // Page 2 must never be requested — assert this by recording
+        // only one expected response. A second call would 404 on
+        // the mock and fail the test loudly.
+        let c = NotionConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some((now - Duration::hours(1)).to_rfc3339());
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        assert_eq!(res.events.len(), 1);
+        assert_eq!(
+            transport
+                .recorded()
+                .iter()
+                .filter(|r| r.method == HttpMethod::Post)
+                .count(),
+            1,
+            "paginate_search must short-circuit at the watermark and not fetch page 2"
+        );
+    }
+
+    #[test]
     fn incremental_sync_emits_archived_as_deleted() {
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
@@ -677,7 +753,7 @@ mod tests {
         // back). Manually exercise paginate_search.
         let base_url = c.resolved_base_url(&cfg());
         let err = c
-            .paginate_search(&base_url, &tok, &serde_json::json!({}))
+            .paginate_search(&base_url, &tok, &serde_json::json!({}), None)
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Sync(_)));
     }

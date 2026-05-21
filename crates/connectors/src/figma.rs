@@ -474,11 +474,16 @@ impl Connector for FigmaConnector {
                 registered_ids.push(id);
             }
         }
-        let primary_id = registered_ids.first().cloned().ok_or_else(|| {
-            ConnectorError::Webhook(
+        if registered_ids.is_empty() {
+            // No event_types were registered — typically because
+            // `auth_config_json.team_ids` resolved to an empty
+            // list. Surface this as a webhook error so the
+            // substrate doesn't persist a half-formed subscription
+            // with an empty `provider_subscription_id`.
+            return Err(ConnectorError::Webhook(
                 "figma subscribe_webhook: no event_types were registered (empty team_ids?)".into(),
-            )
-        })?;
+            ));
+        }
         let mut subscription = WebhookSubscription::new(
             self.instance,
             callback_url,
@@ -487,12 +492,10 @@ impl Connector for FigmaConnector {
             // Figma webhooks have no provider TTL.
             None,
         );
+        // All ids are stored in a comma-joined list; the revoke
+        // path splits on `,` and issues `DELETE /v2/webhooks/{id}`
+        // per element.
         subscription.provider_subscription_id = Some(registered_ids.join(","));
-        // Anchor: the first id is the "canonical" id used in audit
-        // logs; the others live in the comma-joined list. Reading
-        // back from the canonical id requires no parsing if only one
-        // event_type was registered.
-        let _ = primary_id;
         Ok(subscription)
     }
 

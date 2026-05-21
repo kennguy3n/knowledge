@@ -933,7 +933,20 @@ impl Connector for EmailConnector {
                     },
                     Some(expires_at),
                 );
-                subscription.provider_subscription_id = resp.history_id;
+                // Gmail's `users.watch` does NOT return a discrete
+                // subscription / channel id — revocation calls
+                // `users.{userPath}.stop`. The substrate's webhook
+                // lifecycle manager needs a stable handle to that
+                // resource; stamp it with a structured `gmail-watch:`
+                // marker so the manager can split on `:` and
+                // dispatch the stop call. We intentionally do NOT
+                // store `resp.history_id` here — that value is the
+                // watermark for the next `history.list` call, which
+                // is the responsibility of `initial_sync` (it
+                // anchors the cursor via `users.getProfile`), not
+                // of the webhook subscription.
+                subscription.provider_subscription_id =
+                    Some(format!("gmail-watch:{user_path}"));
                 Ok(subscription)
             }
             EmailProvider::MicrosoftGraph => {
@@ -1356,7 +1369,7 @@ mod tests {
     }
 
     #[test]
-    fn gmail_subscribe_webhook_posts_watch_and_captures_history_id() {
+    fn gmail_subscribe_webhook_posts_watch_and_stamps_user_path() {
         let transport = MockHttpTransport::new();
         transport.expect(
             HttpMethod::Post,
@@ -1376,7 +1389,16 @@ mod tests {
         let sub = c
             .subscribe_webhook(&cfg, &tok, "https://substrate.example/email/gmail")
             .unwrap();
-        assert_eq!(sub.provider_subscription_id.as_deref(), Some("7777"));
+        // The substrate's revoke path needs a structured handle to
+        // call `users/{userPath}/stop` on — the historyId returned
+        // by `users.watch` is a watermark, not a subscription id,
+        // so we stamp a `gmail-watch:` marker carrying the user
+        // path. The historyId itself belongs in sync state (set by
+        // `initial_sync` via `users.getProfile`).
+        assert_eq!(
+            sub.provider_subscription_id.as_deref(),
+            Some("gmail-watch:users/me")
+        );
         assert!(sub.event_types.document_created);
         // Direct push only carries history id; updates/deletes
         // surface via the incremental history.list poll.
@@ -1385,6 +1407,45 @@ mod tests {
         // Expiration parsed from epoch-ms.
         let expected = DateTime::<Utc>::from_timestamp_millis(1_900_000_000_000).unwrap();
         assert_eq!(sub.expires_at, Some(expected));
+    }
+
+    #[test]
+    fn gmail_subscribe_webhook_stamps_user_path_with_custom_user_id() {
+        // When `auth_config_json.gmail_user_id` overrides the
+        // default `me`, the synthetic subscription id must carry
+        // the new path so revocation lines up with the actual
+        // watched mailbox.
+        let transport = MockHttpTransport::new();
+        transport.expect(
+            HttpMethod::Post,
+            format!("{GMAIL_BASE}/gmail/v1/users/team@example.com/watch"),
+            ok_json(&serde_json::json!({
+                "historyId": "8888",
+                "expiration": "1900000000000"
+            })),
+        );
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
+            Arc::new(transport),
+            gmail_oauth(),
+        );
+        let mut cfg = gmail_cfg();
+        let auth = cfg
+            .auth_config_json
+            .as_object_mut()
+            .expect("auth_config_json object");
+        auth.insert(
+            "gmail_user_id".to_string(),
+            serde_json::Value::String("team@example.com".to_string()),
+        );
+        let tok = c.authenticate(&cfg).unwrap();
+        let sub = c
+            .subscribe_webhook(&cfg, &tok, "https://substrate.example/email/gmail")
+            .unwrap();
+        assert_eq!(
+            sub.provider_subscription_id.as_deref(),
+            Some("gmail-watch:users/team@example.com")
+        );
     }
 
     #[test]

@@ -351,7 +351,14 @@ impl Connector for JiraConnector {
             .map(|dt| dt.with_timezone(&Utc));
         for issue in &issues {
             events.push(issue_to_event(issue, "update"));
-            if let Some(t) = issue.fields.updated {
+            // Mirror `initial_sync` — fall back to `created` when
+            // `updated` is absent so the watermark always
+            // advances. Jira normally echoes `created` into
+            // `updated` for new issues, but tolerating the
+            // missing-`updated` case keeps the two sync paths
+            // symmetric and defends against API responses where
+            // the field is omitted (sparse-field projections).
+            if let Some(t) = issue.fields.updated.or(issue.fields.created) {
                 watermark = Some(watermark.map_or(t, |w| w.max(t)));
             }
         }
