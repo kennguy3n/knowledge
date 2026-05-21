@@ -136,7 +136,34 @@ impl<T: HttpTransport> ReqwestOAuth2Client<T> {
             })
     }
 
-    fn execute_token_grant(&self, token_url: &str, form: &[(&str, &str)]) -> Result<TokenResponse> {
+    /// POST a form-encoded body to a token endpoint and parse the
+    /// response into a [`TokenResponse`].
+    ///
+    /// `error_kind` is the [`ConnectorError`] variant constructor
+    /// used for non-2xx responses and invalid-JSON bodies. The two
+    /// production grants use different variants:
+    ///
+    /// * `authorization_code` → [`ConnectorError::Auth`] (the call
+    ///   site is interactive sign-in, so the host needs to surface a
+    ///   re-auth prompt).
+    /// * `refresh_token` → [`ConnectorError::TokenRefresh`] (the
+    ///   call site is background token rotation; per the
+    ///   [`TokenRefresher`] trait docs, refresher implementations
+    ///   *must* return `TokenRefresh` on provider failure so callers
+    ///   that pattern-match on the variant can trigger a full
+    ///   re-authorisation flow rather than treating it as a generic
+    ///   auth error).
+    ///
+    /// Transport-layer failures (connection reset, DNS, TLS) still
+    /// surface as [`ConnectorError::Transport`] via the `?` on
+    /// `self.transport.execute(req)` — they are never reclassified
+    /// as `Auth` / `TokenRefresh`.
+    fn execute_token_grant(
+        &self,
+        token_url: &str,
+        form: &[(&str, &str)],
+        error_kind: fn(String) -> ConnectorError,
+    ) -> Result<TokenResponse> {
         // Manual urlencoded body — avoids pulling in a new
         // dependency just for OAuth2 form encoding.
         let body = encode_form(form);
@@ -144,7 +171,7 @@ impl<T: HttpTransport> ReqwestOAuth2Client<T> {
             .with_header("Content-Type", "application/x-www-form-urlencoded")
             .with_header("Accept", "application/json");
         let resp = self.transport.execute(req)?;
-        parse_token_response(&resp)
+        parse_token_response(&resp, error_kind)
     }
 }
 
@@ -179,7 +206,7 @@ impl<T: HttpTransport + 'static> OAuth2CodeExchange for ReqwestOAuth2Client<T> {
         if let Some(secret) = exposed_secret {
             form.push(("client_secret", secret));
         }
-        let resp = self.execute_token_grant(token_url, &form)?;
+        let resp = self.execute_token_grant(token_url, &form, ConnectorError::Auth)?;
         Ok(token_response_to_oauth2(resp, Utc::now()))
     }
 }
@@ -222,7 +249,11 @@ impl<T: HttpTransport + 'static> ReqwestOAuth2Client<T> {
         if let Some(secret) = exposed_secret {
             form.push(("client_secret", secret));
         }
-        let resp = self.execute_token_grant(token_url, &form)?;
+        // Refresh-grant failures must surface as
+        // `ConnectorError::TokenRefresh` per the [`TokenRefresher`]
+        // trait contract — see the doc on `execute_token_grant`
+        // above.
+        let resp = self.execute_token_grant(token_url, &form, ConnectorError::TokenRefresh)?;
         Ok(token_response_to_refreshed(resp, Utc::now()))
     }
 }
@@ -312,7 +343,16 @@ struct TokenResponse {
     token_type: Option<String>,
 }
 
-fn parse_token_response(resp: &HttpResponse) -> Result<TokenResponse> {
+/// Parse a token-endpoint response into a [`TokenResponse`].
+///
+/// `error_kind` decides which [`ConnectorError`] variant non-success
+/// responses and invalid-JSON bodies map to — see
+/// [`ReqwestOAuth2Client::execute_token_grant`] for the rationale on
+/// why the two grants pick different variants.
+fn parse_token_response(
+    resp: &HttpResponse,
+    error_kind: fn(String) -> ConnectorError,
+) -> Result<TokenResponse> {
     if !resp.is_success() {
         // Try to extract `error` / `error_description` from a JSON
         // OAuth2 error response; fall through to the raw body if
@@ -328,23 +368,30 @@ fn parse_token_response(resp: &HttpResponse) -> Result<TokenResponse> {
                 Some(format!("{err}: {desc}"))
             })
             .unwrap_or_else(|| String::from_utf8_lossy(&resp.body).to_string());
-        return Err(ConnectorError::Auth(format!(
+        return Err(error_kind(format!(
             "OAuth2 token endpoint returned status {} — {}",
             resp.status, detail
         )));
     }
     serde_json::from_slice::<TokenResponse>(&resp.body)
-        .map_err(|e| ConnectorError::Auth(format!("token response not valid JSON: {e}")))
+        .map_err(|e| error_kind(format!("token response not valid JSON: {e}")))
 }
 
 fn token_response_to_oauth2(resp: TokenResponse, now: DateTime<Utc>) -> OAuth2Token {
     let expires_at = now + expires_in_to_duration(resp.expires_in);
-    let mut token = OAuth2Token::new(
-        resp.access_token,
-        resp.refresh_token.unwrap_or_default(),
-        expires_at,
-        resp.scope.unwrap_or_default(),
-    );
+    let scope = resp.scope.unwrap_or_default();
+    // Map the optional `refresh_token` field onto the
+    // `OAuth2Token::refresh_token` discriminant rather than forcing
+    // `Some(SecretToken::new(""))`. Slack legacy and PKCE-only public
+    // clients omit the field entirely; storing `None` lets
+    // `OAuth2TokenVault::refresh_if_expiring` short-circuit with a
+    // structured re-auth-required error instead of POSTing
+    // `refresh_token=` to the provider and surfacing the resulting
+    // `invalid_grant` rejection back to the host.
+    let mut token = match resp.refresh_token {
+        Some(rt) => OAuth2Token::new(resp.access_token, rt, expires_at, scope),
+        None => OAuth2Token::new_without_refresh(resp.access_token, expires_at, scope),
+    };
     if let Some(t) = resp.token_type {
         token.token_type = t;
     }
@@ -364,7 +411,18 @@ fn expires_in_to_duration(expires_in: Option<i64>) -> ChronoDuration {
     // Providers that omit `expires_in` (e.g. Slack legacy tokens)
     // get a defensive 1-hour default — the vault will refresh as
     // needed.
-    ChronoDuration::seconds(expires_in.unwrap_or(3600))
+    //
+    // A negative `expires_in` (RFC-violating, but observed from
+    // buggy / malicious providers) is clamped to zero. Without this
+    // clamp the token would be parsed as "already-expired by
+    // `|expires_in|` seconds", which still degrades safely (the vault
+    // refreshes on first use), but the clamp makes the semantics
+    // explicit: "no usable lifetime" instead of "valid for a negative
+    // duration". Callers can rely on `expires_at >= now` for any
+    // non-`None` response, which simplifies retry-budget accounting
+    // in the connector runtime.
+    let seconds = expires_in.unwrap_or(3600).max(0);
+    ChronoDuration::seconds(seconds)
 }
 
 /// Minimal `application/x-www-form-urlencoded` encoder — handles
@@ -448,7 +506,10 @@ mod tests {
         let client = ReqwestOAuth2Client::new(transport.clone()).with_client_secret("s3cret");
         let token = client.exchange_code(&cfg(), "code-xyz").expect("exchange");
         assert_eq!(token.access_token.expose(), "AT");
-        assert_eq!(token.refresh_token.expose(), "RT");
+        assert_eq!(
+            token.refresh_token.as_ref().map(SecretToken::expose),
+            Some("RT")
+        );
         assert_eq!(token.scope, "read_content");
         assert_eq!(token.token_type, "Bearer");
 
@@ -515,6 +576,124 @@ mod tests {
             }
             other => panic!("expected Auth, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn refresh_grant_error_surfaces_token_refresh_variant() {
+        // Per the `TokenRefresher` trait contract, provider rejections of a
+        // refresh grant must surface as `ConnectorError::TokenRefresh` —
+        // NOT `ConnectorError::Auth` — so callers that pattern-match on
+        // the variant can trigger a full re-auth flow rather than treating
+        // it as a generic auth error. The shared `parse_token_response`
+        // helper is parametrised by an `error_kind` ctor specifically to
+        // keep this invariant explicit.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse {
+                status: 400,
+                headers: vec![("content-type".into(), "application/json".into())],
+                body: br#"{"error":"invalid_grant","error_description":"refresh token revoked"}"#
+                    .to_vec(),
+            },
+        );
+        let client = ReqwestOAuth2Client::new(transport).with_client_secret("s3cret");
+
+        // Direct path through `refresh_with_config`.
+        let err = client
+            .refresh_with_config(&cfg(), "RT-OLD")
+            .expect_err("refresh must fail on provider rejection");
+        match err {
+            ConnectorError::TokenRefresh(msg) => {
+                assert!(msg.contains("invalid_grant"));
+                assert!(msg.contains("refresh token revoked"));
+            }
+            other => panic!("expected TokenRefresh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn refresh_grant_error_via_token_refresher_trait_surfaces_token_refresh_variant() {
+        // Same invariant as above but driven through the `&dyn TokenRefresher`
+        // path that `OAuth2TokenVault::refresh_if_expiring` takes — this
+        // is the polymorphic call site whose callers most need the
+        // variant discrimination.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse {
+                status: 401,
+                headers: vec![("content-type".into(), "application/json".into())],
+                body: br#"{"error":"invalid_client"}"#.to_vec(),
+            },
+        );
+        let client = ReqwestOAuth2Client::new(transport).with_client_secret("s3cret");
+        let refresher = ConfiguredRefresher::new(client, cfg());
+        let err = (&refresher as &dyn TokenRefresher)
+            .refresh("RT-OLD")
+            .expect_err("trait-driven refresh must fail");
+        match err {
+            ConnectorError::TokenRefresh(msg) => assert!(msg.contains("invalid_client")),
+            other => panic!("expected TokenRefresh, got {other:?}"),
+        }
+    }
+
+    /// Providers that omit `refresh_token` (Slack legacy, PKCE-only
+    /// public clients) must round-trip through `exchange_code` and
+    /// land as `OAuth2Token::refresh_token = None` — not as
+    /// `Some(SecretToken::new(""))`. The empty-string variant would
+    /// later cause `OAuth2TokenVault::refresh_if_expiring` to POST
+    /// `refresh_token=` to the provider, which every compliant
+    /// implementation rejects as `invalid_grant`.
+    #[test]
+    fn exchange_code_without_refresh_token_stores_none() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","expires_in":3600,"scope":"read_content"}"#.to_vec(),
+            ),
+        );
+        let client = ReqwestOAuth2Client::new(transport).with_client_secret("s3cret");
+        let token = client.exchange_code(&cfg(), "code-xyz").expect("exchange");
+        assert!(
+            token.refresh_token.is_none(),
+            "provider omitted refresh_token; OAuth2Token must store None, not Some(empty)"
+        );
+    }
+
+    /// Buggy or malicious providers that return a negative `expires_in`
+    /// must not produce a token whose `expires_at` is "valid for a
+    /// negative duration". `expires_in_to_duration` clamps to zero,
+    /// making `expires_at == now` (i.e. already-expired, refresh on
+    /// first use) — never `now - |expires_in|`.
+    #[test]
+    fn negative_expires_in_clamps_to_zero() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":-3600,"scope":"x"}"#
+                    .to_vec(),
+            ),
+        );
+        let client = ReqwestOAuth2Client::new(transport).with_client_secret("s3cret");
+        let before = Utc::now();
+        let token = client.exchange_code(&cfg(), "code").expect("exchange");
+        let after = Utc::now();
+        // `expires_at` lands inside the [before, after] window — i.e.
+        // ~now, not in the past by an hour.
+        assert!(
+            token.expires_at >= before && token.expires_at <= after,
+            "negative expires_in not clamped: expires_at {:?} outside [{:?}, {:?}]",
+            token.expires_at,
+            before,
+            after
+        );
     }
 
     #[test]

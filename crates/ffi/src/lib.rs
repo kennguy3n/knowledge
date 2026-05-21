@@ -867,9 +867,20 @@ fn synthesize_scope(rt: &mut runtime::FfiRuntime, scope: ScopeId) -> FfiResult<S
                 subsystem: format!("synthesis: {other}"),
             },
         })?;
-    let bundle: SummaryBundle = serde_json::from_str(&raw).map_err(|e| FfiError::Evidence {
-        message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
-    })?;
+    // Mapped to `InferenceFailure` (not `Evidence`) because the
+    // failure mode is "the model ran but produced unusable JSON",
+    // which is the same retry-policy class as
+    // `RouterError::InferenceFailure` above — the evidence store
+    // never even ran, so misclassifying as `Evidence` would route the
+    // host to the wrong remediation (database recovery vs. retry /
+    // fall back to a different adapter / re-prompt). The grammar
+    // constraint applied at dispatch time should make this branch
+    // unreachable in practice, but a buggy / unconstrained adapter
+    // could still feed us non-JSON.
+    let bundle: SummaryBundle =
+        serde_json::from_str(&raw).map_err(|e| FfiError::InferenceFailure {
+            message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
+        })?;
 
     let window_id = uuid::Uuid::new_v4();
     // Build the next channel-memory state OFF-THE-SIDE. We clone any
