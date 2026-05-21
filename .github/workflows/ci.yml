@@ -4,6 +4,8 @@ on:
   push:
     branches: ["**"]
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -384,6 +386,71 @@ jobs:
           path: crates/crypto/fuzz/artifacts/
           if-no-files-found: ignore
 
+  napi-build-pr:
+    name: napi-build (PR smoke, ubuntu-latest)
+    needs: build-default
+    # Lightweight PR-loop validation of the N-API addon. Runs on every
+    # PR push *except* PRs labelled `ci:full` (those get the full
+    # cross-platform matrix via the `napi-build` job below — the two
+    # jobs are mutually exclusive so we never run both on the same
+    # event).
+    #
+    # Linux-only. The Rust source, the `index.js`/`index.d.ts` loader
+    # generation, the JSON-envelope error contract, and the JS smoke
+    # tests are all platform-agnostic, so exercising them on a single
+    # `ubuntu-latest` runner catches every napi-side regression we
+    # could catch on macOS or Windows. The platform-specific surface
+    # (macOS `-undefined dynamic_lookup`, Windows `.lib` import
+    # libraries, ARM64 link order) is only meaningful for release
+    # artefacts and is gated behind the `ci:full` label / push-to-main.
+    #
+    # Naming: this job intentionally keeps the `napi-build` prefix so
+    # branch protection rules that require "napi-build (...)" status
+    # checks can match either this PR smoke leg or the cross-platform
+    # matrix legs interchangeably.
+    if: |
+      github.event_name == 'pull_request' &&
+      !contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # Share the cache key with the full-matrix `napi-build` job's
+          # Linux leg so PR runs warm the cache that push-to-main
+          # consumes, and vice versa.
+          key: ${{ runner.os }}-napi-x86_64-unknown-linux-gnu-${{ hashFiles('Cargo.lock', 'crates/napi/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-napi-x86_64-unknown-linux-gnu-
+      - name: cargo test -p napi_addon --lib
+        run: cargo test -p napi_addon --lib --target x86_64-unknown-linux-gnu
+      - name: npm install (crates/napi)
+        working-directory: crates/napi
+        run: npm install --no-fund --no-audit
+      - name: napi build (release)
+        working-directory: crates/napi
+        run: npx napi build --platform --release --target x86_64-unknown-linux-gnu --js index.js --dts index.d.ts
+      - name: Verify generated loader / dts match tracked copies
+        working-directory: crates/napi
+        run: |
+          git diff --exit-code -- index.js index.d.ts || (
+            echo '::error::crates/napi/index.js or index.d.ts is out of date — re-run `npx napi build --platform --release --js index.js --dts index.d.ts` from crates/napi/ and commit the result.'
+            exit 1
+          )
+      - name: node --test (smoke tests)
+        working-directory: crates/napi
+        run: node --test 'test/*.test.mjs'
+
   napi-build:
     name: napi-build (${{ matrix.target }})
     needs: build-default
@@ -395,6 +462,31 @@ jobs:
     # exercising the binary in a Node host) would miss link-time
     # issues like the macOS `dynamic_lookup` directive emitted by
     # `napi_build::setup()`.
+    #
+    # PR iteration cost: the macos-13 (Intel) leg of this matrix has
+    # historically queue-starved for 1–2 hours per run because the
+    # public `macos-13` runner pool is small. Cross-platform validation
+    # is only meaningful at merge time — in-progress PRs are validated
+    # by the `napi-build-pr` smoke job (Linux-only) immediately below.
+    # The full 4-platform matrix runs only when:
+    #
+    #   * `push`           — includes every push to `main` so release
+    #                       artefacts always exist after merge.
+    #   * `workflow_dispatch` — manual one-click full run from the
+    #                       Actions UI.
+    #   * PR labelled `ci:full` — explicit opt-in per the user
+    #                       directive "don't have to run all checks
+    #                       every PRs until explicitly requested".
+    #                       Apply the label when you want
+    #                       cross-platform validation before merge
+    #                       (e.g. release candidates, big napi
+    #                       refactors). Removing the label cancels
+    #                       the in-flight run via the workflow
+    #                       concurrency key.
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full'))
     strategy:
       fail-fast: false
       matrix:
