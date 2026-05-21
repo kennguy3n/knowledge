@@ -364,51 +364,77 @@ fn exercise_jira(
     report: &mut DemoReport,
 ) -> ConnectorMetrics {
     let scope = ScopeId::new_v4();
-    let cfg = ConnectorConfig::new(ConnectorKind::Jira, AuthKind::OAuth2, scope);
+    let cfg = ConnectorConfig::new(ConnectorKind::Jira, AuthKind::OAuth2, scope)
+        .with_auth_config(json!({
+            "authorization_code": "demo-code",
+            "api_base_url": "https://api.test/jira",
+            "webhook_secret": "demo-jira-secret",
+        }));
     let instance = ConnectorInstanceId::new_v4();
 
     let now = Utc::now();
+    let transport = Arc::new(MockHttpTransport::new());
 
-    let initial_pages = vec![JiraSearchResponse {
-        issues: vec![
-            issue(
-                "PROJ-101",
-                "Adopt knowledge substrate",
-                now - Duration::days(2),
-            ),
-            issue(
-                "PROJ-102",
-                "Wire up agent contract",
-                now - Duration::days(1),
-            ),
-            issue("PROJ-103", "Enable export plane", now - Duration::hours(20)),
-        ],
-        start_at: 0,
-        max_results: 50,
-        total: 3,
-    }];
+    // Initial sync — JQL `ORDER BY created ASC`, one page of three
+    // issues (PROJ-101…PROJ-103). `total` matches `issues.len()` so
+    // the connector stops after one round-trip.
+    transport.expect(
+        HttpMethod::Get,
+        "https://api.test/jira/rest/api/3/search?jql=ORDER+BY+created+ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
+        ok_json(json!(JiraSearchResponse {
+            issues: vec![
+                issue("PROJ-101", "Adopt knowledge substrate", now - Duration::days(2)),
+                issue("PROJ-102", "Wire up agent contract", now - Duration::days(1)),
+                issue("PROJ-103", "Enable export plane", now - Duration::hours(20)),
+            ],
+            start_at: 0,
+            max_results: 50,
+            total: 3,
+        })),
+    );
 
-    let incremental_pages = vec![JiraSearchResponse {
-        issues: vec![
-            issue(
-                "PROJ-102",
-                "Wire up agent contract",
-                now - Duration::minutes(45),
-            ),
-            issue(
-                "PROJ-104",
-                "Audit log retention review",
-                now - Duration::minutes(20),
-            ),
-        ],
-        start_at: 0,
-        max_results: 50,
-        total: 2,
-    }];
+    // Incremental sync — the cursor from the initial sync is the
+    // newest `updated` timestamp (now - 20h on PROJ-103). The
+    // connector serialises that to RFC-3339 and emits
+    // `updated >= '<cursor>' ORDER BY updated ASC`. Pre-compute the
+    // matching URL so the mock can answer deterministically.
+    let initial_watermark = now - Duration::hours(20);
+    let cursor_rfc = initial_watermark.to_rfc3339();
+    let expected_jql = format!("updated >= '{cursor_rfc}' ORDER BY updated ASC");
+    transport.expect(
+        HttpMethod::Get,
+        format!(
+            "https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
+            connector_framework::percent_encode_form_component(&expected_jql)
+        ),
+        ok_json(json!(JiraSearchResponse {
+            issues: vec![
+                issue("PROJ-102", "Wire up agent contract", now - Duration::minutes(45)),
+                issue("PROJ-104", "Audit log retention review", now - Duration::minutes(20)),
+            ],
+            start_at: 0,
+            max_results: 50,
+            total: 2,
+        })),
+    );
 
-    let connector = JiraConnector::new(instance)
-        .with_initial_pages(initial_pages)
-        .with_incremental_pages(incremental_pages);
+    // Webhook subscription — Jira returns the assigned numeric id
+    // which the substrate persists into `provider_subscription_id`.
+    transport.expect(
+        HttpMethod::Post,
+        "https://api.test/jira/rest/api/3/webhook",
+        ok_json(json!({
+            "webhookRegistrationResult": [
+                {"createdWebhookId": 7777, "errors": []}
+            ]
+        })),
+    );
+
+    let connector = JiraConnector::new(
+        instance,
+        transport.clone(),
+        DemoOAuth::arc("read:jira-work read:jira-user manage:jira-webhook"),
+    );
 
     let token = connector.authenticate(&cfg).expect("jira auth");
     log.record(
