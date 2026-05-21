@@ -122,6 +122,13 @@ pub struct WebhookSubscription {
     /// Wall-clock expiry, when the provider issues finite-lifetime
     /// subscriptions (e.g. Google Drive — ~7 days max).
     pub expires_at: Option<DateTime<Utc>>,
+    /// Provider-assigned subscription id (`Jira` webhook id, `Drive`
+    /// channel id, `Microsoft Graph` subscription id, …). Used by the
+    /// substrate to revoke / re-register the subscription on rotation.
+    /// `None` for providers that don't issue server-side ids (Slack,
+    /// Notion polling-only mode).
+    #[serde(default)]
+    pub provider_subscription_id: Option<String>,
 }
 
 impl WebhookSubscription {
@@ -142,6 +149,7 @@ impl WebhookSubscription {
             status: WebhookStatus::Pending,
             created_at: Utc::now(),
             expires_at,
+            provider_subscription_id: None,
         }
     }
 

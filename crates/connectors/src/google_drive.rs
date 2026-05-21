@@ -1,26 +1,74 @@
 //! Google Drive connector — Drive API v3.
 //!
-//! * `initial_sync` walks the `files.list` endpoint with pagination
-//!   keyed off `nextPageToken`.
-//! * `incremental_sync` uses the Changes API
-//!   (`changes.list?pageToken=…`) — `startPageToken` plays the role
-//!   of the substrate-side cursor.
-//! * `subscribe_webhook` installs a Drive *push notification channel*
-//!   targeting `callback_url`.
-//! * `handle_webhook_event` parses Drive's resource-state push
-//!   payload (`X-Goog-Resource-State` body, plus a JSON resource
-//!   description) into a [`ConnectorEvent`].
+//! * `authenticate` POSTs the authorization code to
+//!   `https://oauth2.googleapis.com/token` via the wired
+//!   [`OAuth2CodeExchange`] (production: real `OAuth2Client` against
+//!   Google's IdP; tests: `MockHttpTransport`).
+//! * `initial_sync` walks `GET /drive/v3/files` keyed off
+//!   `nextPageToken` and seeds the substrate-side cursor with the
+//!   `startPageToken` Drive returns from
+//!   `GET /drive/v3/changes/startPageToken`.
+//! * `incremental_sync` walks `GET /drive/v3/changes?pageToken=<cursor>`,
+//!   surfacing each change as the appropriate
+//!   [`ConnectorEvent`] (created / updated / deleted). The
+//!   `newStartPageToken` on the final page becomes the next cursor.
+//! * `subscribe_webhook` POSTs
+//!   `https://www.googleapis.com/drive/v3/changes/watch?pageToken=<token>`
+//!   to install a push channel; Drive returns the channel id and
+//!   `resourceId`, both of which we stash on the
+//!   [`WebhookSubscription`] (`provider_subscription_id` carries the
+//!   channel id, the resource id is recorded in the secret blob via
+//!   the channel-state payload that Drive POSTs back to the
+//!   substrate).
+//! * `handle_webhook_event` parses Drive's resource-state push body
+//!   into a [`ConnectorEvent`] (`add` → created, `update` → updated,
+//!   `remove`/`trash` → deleted, `permission_change` →
+//!   permission-changed).
 //!
-//! The trait is synchronous; vendor I/O is mocked through fixture
-//! JSON so the substrate can unit-test the contract end-to-end.
+//! Wiring contract (mirror of the Jira / Confluence / HubSpot
+//! connectors): the constructor takes an `Arc<dyn HttpTransport>` and
+//! an `Arc<dyn OAuth2CodeExchange>`; production wires
+//! `BlockingHttpTransport` + `OAuth2Client`, tests wire
+//! `MockHttpTransport` + a fixed-token exchange.
 
-use chrono::{DateTime, Duration, Utc};
+use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
 use connector_framework::{
-    Connector, ConnectorConfig, ConnectorError, ConnectorEvent, ConnectorInstanceId, OAuth2Token,
-    Result, SourceDocumentId, SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, HttpTransport, OAuth2CodeExchange,
+    OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId, SyncRunResult,
+    SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
+
+/// Default Drive REST base URL. Override via
+/// `auth_config_json.api_base_url` for sandboxes / proxies.
+pub const DEFAULT_API_BASE_URL: &str = "https://www.googleapis.com";
+
+/// Default page size for `files.list` / `changes.list`. Drive's
+/// documented maximum is 1000 — we stay at 100 to match the other
+/// connectors' batching cadence and keep error-path body capture
+/// readable in logs.
+pub const DEFAULT_PAGE_SIZE: u32 = 100;
+
+/// Safety ceiling on number of pages a single sync will walk —
+/// catches mis-shaped server responses that return a non-empty page
+/// without ever clearing `nextPageToken`.
+pub const MAX_LIST_PAGES: usize = 10_000;
+
+/// Default `fields` mask requested from `files.list` / `changes.list`.
+/// Drive returns the full file body if you ask for it; we request
+/// only the subset the substrate parses to keep responses small.
+pub const FILE_FIELDS_MASK: &str = "id,name,mimeType,trashed,modifiedTime,createdTime";
+
+/// `fields` mask used on the wrapping `files.list` page.
+const FILE_LIST_FIELDS_MASK: &str =
+    "nextPageToken,files(id,name,mimeType,trashed,modifiedTime,createdTime)";
+
+/// `fields` mask used on the wrapping `changes.list` page.
+const CHANGE_LIST_FIELDS_MASK: &str = "nextPageToken,newStartPageToken,\
+     changes(fileId,kind,removed,time,file(id,name,mimeType,trashed,modifiedTime,createdTime))";
 
 /// One file as returned by Drive `files.list`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,8 +101,11 @@ pub struct GoogleDriveFileList {
     /// Token for the next page; absent on the final page.
     #[serde(default, rename = "nextPageToken")]
     pub next_page_token: Option<String>,
-    /// Token to seed `incremental_sync` with — Drive returns this on
-    /// the final page so callers know what `startPageToken` to use.
+    /// `files.list` does NOT return `newStartPageToken`; the substrate
+    /// fetches it separately via `changes.getStartPageToken`. The
+    /// field is retained on the wire type so existing fixtures /
+    /// integration tests that bundle the start token into the final
+    /// page continue to deserialize cleanly.
     #[serde(default, rename = "newStartPageToken")]
     pub new_start_page_token: Option<String>,
 }
@@ -93,6 +144,30 @@ pub struct GoogleDriveChangeList {
     pub new_start_page_token: Option<String>,
 }
 
+/// `GET /drive/v3/changes/startPageToken` response.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GoogleDriveStartPageToken {
+    /// Cursor to seed the next `changes.list` call with.
+    #[serde(default, rename = "startPageToken")]
+    pub start_page_token: Option<String>,
+}
+
+/// `POST /drive/v3/changes/watch` response — Drive returns the
+/// channel id + the resourceId we'll see on inbound push pings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GoogleDriveWatchResponse {
+    /// Channel id Drive assigned (echoes what we sent in the
+    /// request, unless we omitted it — we always send a UUID).
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Resource id Drive will surface on push pings.
+    #[serde(default, rename = "resourceId")]
+    pub resource_id: Option<String>,
+    /// Channel expiry, milliseconds since the Unix epoch.
+    #[serde(default)]
+    pub expiration: Option<i64>,
+}
+
 /// One Drive push-notification body. The relevant headers
 /// (`X-Goog-Resource-State`, `X-Goog-Resource-Id`) are inlined into
 /// the JSON body for substrate-side parity.
@@ -118,50 +193,221 @@ pub struct GoogleDrivePushNotification {
 
 /// Google Drive connector.
 ///
-/// Holds fixture pages (initial + incremental) keyed by index — the
-/// trait methods walk these in order and emit
-/// [`ConnectorEvent`]s.
-#[derive(Debug, Clone)]
+/// Holds the wired [`HttpTransport`] + [`OAuth2CodeExchange`] used to
+/// drive every Drive REST call (token exchange, `files.list`,
+/// `changes.list`, `changes.watch`).
 pub struct GoogleDriveConnector {
     /// Connector instance id (used by `subscribe_webhook`).
     pub instance: ConnectorInstanceId,
-    /// First-pass fixture pages. `initial_sync` walks every page in
-    /// order and emits one event per file.
-    pub initial_pages: Vec<GoogleDriveFileList>,
-    /// Incremental fixture pages — `incremental_sync` reads exactly
-    /// one page per call, using the substrate-side cursor
-    /// `page-N` as a 1-based index.
-    pub incremental_pages: Vec<GoogleDriveChangeList>,
+    transport: Arc<dyn HttpTransport>,
+    oauth: Arc<dyn OAuth2CodeExchange>,
+    api_base_url: String,
+    page_size: u32,
+}
+
+impl std::fmt::Debug for GoogleDriveConnector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GoogleDriveConnector")
+            .field("instance", &self.instance)
+            .field("api_base_url", &self.api_base_url)
+            .field("page_size", &self.page_size)
+            .field("transport", &"<HttpTransport>")
+            .field("oauth", &"<OAuth2CodeExchange>")
+            .finish()
+    }
 }
 
 impl GoogleDriveConnector {
-    /// Construct a connector with no fixture data — every sync call
-    /// will return zero events.
-    pub fn new(instance: ConnectorInstanceId) -> Self {
+    /// Construct a Drive connector.
+    ///
+    /// `transport` carries every REST call; `oauth` drives the
+    /// `authorization_code` exchange against
+    /// `https://oauth2.googleapis.com/token`. Production wires these
+    /// to `BlockingHttpTransport` + `OAuth2Client`; tests use
+    /// `MockHttpTransport`.
+    pub fn new(
+        instance: ConnectorInstanceId,
+        transport: Arc<dyn HttpTransport>,
+        oauth: Arc<dyn OAuth2CodeExchange>,
+    ) -> Self {
         Self {
             instance,
-            initial_pages: Vec::new(),
-            incremental_pages: Vec::new(),
+            transport,
+            oauth,
+            api_base_url: DEFAULT_API_BASE_URL.to_string(),
+            page_size: DEFAULT_PAGE_SIZE,
         }
     }
 
-    /// Override the initial-sync fixture pages.
-    pub fn with_initial_pages(mut self, pages: Vec<GoogleDriveFileList>) -> Self {
-        self.initial_pages = pages;
+    /// Override the Drive REST base URL (production wires the
+    /// default; tests redirect to a fake host).
+    #[must_use]
+    pub fn with_api_base_url(mut self, url: impl Into<String>) -> Self {
+        self.api_base_url = url.into();
         self
     }
 
-    /// Override the incremental-sync fixture pages.
-    pub fn with_incremental_pages(mut self, pages: Vec<GoogleDriveChangeList>) -> Self {
-        self.incremental_pages = pages;
+    /// Override the page size used by `files.list` / `changes.list`.
+    /// Clamped to `[1, 1000]` per Drive's documented maximum.
+    #[must_use]
+    pub fn with_page_size(mut self, size: u32) -> Self {
+        self.page_size = size.clamp(1, 1000);
         self
     }
 
-    fn page_index(cursor: Option<&str>) -> usize {
-        cursor
-            .and_then(|c| c.strip_prefix("page-"))
-            .and_then(|n| n.parse::<usize>().ok())
-            .map_or(0, |n| n.saturating_sub(1))
+    fn resolved_base_url(&self, config: &ConnectorConfig) -> String {
+        config
+            .auth_config_json
+            .get("api_base_url")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(
+                || self.api_base_url.clone(),
+                std::string::ToString::to_string,
+            )
+    }
+
+    /// Read the optional `q` filter from `auth_config_json.q` (Drive
+    /// search query) — defaults to "trashed=false" so deleted files
+    /// don't pollute the initial sync.
+    fn resolved_query(config: &ConnectorConfig) -> String {
+        config
+            .auth_config_json
+            .get("q")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("trashed = false")
+            .to_string()
+    }
+
+    /// Walk every `files.list` page until either `nextPageToken` is
+    /// absent, the server returns an empty page with no token, or
+    /// [`MAX_LIST_PAGES`] is hit.
+    fn paginate_files(
+        &self,
+        base_url: &str,
+        token: &OAuth2Token,
+        q: &str,
+    ) -> Result<Vec<GoogleDriveFile>> {
+        let mut files = Vec::<GoogleDriveFile>::new();
+        let mut page_token: Option<String> = None;
+        let mut prev_token: Option<String> = None;
+        for _ in 0..MAX_LIST_PAGES {
+            let mut url = format!(
+                "{base_url}/drive/v3/files?pageSize={}&q={}&fields={}",
+                self.page_size,
+                percent_encode_path_component(q),
+                percent_encode_path_component(FILE_LIST_FIELDS_MASK),
+            );
+            if let Some(tok) = page_token.as_deref() {
+                url.push_str("&pageToken=");
+                url.push_str(&percent_encode_path_component(tok));
+            }
+            let resp: GoogleDriveFileList = bearer_get_json(
+                &self.transport,
+                "google_drive",
+                "/drive/v3/files",
+                &url,
+                token,
+                &[],
+            )?;
+            let returned = resp.files.len();
+            files.extend(resp.files);
+            let Some(next) = resp.next_page_token else {
+                return Ok(files);
+            };
+            // Loop guard — a misbehaving server that echoes the same
+            // token on every page would otherwise spin forever.
+            if prev_token.as_deref() == Some(next.as_str()) {
+                return Ok(files);
+            }
+            // Empty page mid-stream — treat as end-of-list defensively
+            // even if a token was returned.
+            if returned == 0 {
+                return Ok(files);
+            }
+            prev_token = Some(next.clone());
+            page_token = Some(next);
+        }
+        Err(ConnectorError::Sync(format!(
+            "google_drive /drive/v3/files exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
+        )))
+    }
+
+    /// Fetch the cursor to seed `incremental_sync` with —
+    /// `GET /drive/v3/changes/startPageToken`. Drive's docs are
+    /// explicit: callers MUST call this once after the initial sync
+    /// to anchor the changes feed, otherwise the first
+    /// `changes.list` skips every change between the sync window and
+    /// the watch installation.
+    fn fetch_start_page_token(
+        &self,
+        base_url: &str,
+        token: &OAuth2Token,
+    ) -> Result<Option<String>> {
+        let url = format!("{base_url}/drive/v3/changes/startPageToken");
+        let resp: GoogleDriveStartPageToken = bearer_get_json(
+            &self.transport,
+            "google_drive",
+            "/drive/v3/changes/startPageToken",
+            &url,
+            token,
+            &[],
+        )?;
+        Ok(resp.start_page_token)
+    }
+
+    /// Walk `changes.list` pages until either `nextPageToken` is
+    /// absent (Drive sets `newStartPageToken` on the final page so
+    /// callers can advance the watermark) or [`MAX_LIST_PAGES`] is
+    /// hit.
+    fn paginate_changes(
+        &self,
+        base_url: &str,
+        token: &OAuth2Token,
+        start_token: &str,
+    ) -> Result<(Vec<GoogleDriveChange>, Option<String>)> {
+        let mut changes = Vec::<GoogleDriveChange>::new();
+        let mut page_token = start_token.to_string();
+        let mut prev_token: Option<String> = None;
+        let mut new_start_token: Option<String> = None;
+        for _ in 0..MAX_LIST_PAGES {
+            let url = format!(
+                "{base_url}/drive/v3/changes?pageToken={}&pageSize={}&includeRemoved=true&fields={}",
+                percent_encode_path_component(&page_token),
+                self.page_size,
+                percent_encode_path_component(CHANGE_LIST_FIELDS_MASK),
+            );
+            let resp: GoogleDriveChangeList = bearer_get_json(
+                &self.transport,
+                "google_drive",
+                "/drive/v3/changes",
+                &url,
+                token,
+                &[],
+            )?;
+            let returned = resp.changes.len();
+            changes.extend(resp.changes);
+            // Drive returns `newStartPageToken` on the final page —
+            // hold onto it as the substrate watermark, regardless of
+            // whether `nextPageToken` is also set (mid-stream the
+            // server may include both).
+            if resp.new_start_page_token.is_some() {
+                new_start_token = resp.new_start_page_token;
+            }
+            let Some(next) = resp.next_page_token else {
+                return Ok((changes, new_start_token));
+            };
+            if prev_token.as_deref() == Some(next.as_str()) {
+                return Ok((changes, new_start_token));
+            }
+            if returned == 0 {
+                return Ok((changes, new_start_token));
+            }
+            prev_token = Some(next.clone());
+            page_token = next;
+        }
+        Err(ConnectorError::Sync(format!(
+            "google_drive /drive/v3/changes exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
+        )))
     }
 }
 
@@ -174,76 +420,100 @@ fn parse_role(role: &str) -> Option<SourcePermissionLevel> {
     }
 }
 
+fn file_to_created_event(f: &GoogleDriveFile) -> ConnectorEvent {
+    let occurred_at = f.created_time.or(f.modified_time).unwrap_or_else(Utc::now);
+    let id = SourceDocumentId::new(f.id.clone());
+    if f.trashed {
+        ConnectorEvent::DocumentDeleted {
+            document_id: id,
+            occurred_at,
+        }
+    } else {
+        ConnectorEvent::DocumentCreated {
+            document_id: id,
+            occurred_at,
+        }
+    }
+}
+
+fn change_to_event(ch: &GoogleDriveChange) -> ConnectorEvent {
+    let occurred_at = ch.time.unwrap_or_else(Utc::now);
+    let id = SourceDocumentId::new(ch.file_id.clone());
+    if ch.removed || ch.file.as_ref().is_some_and(|f| f.trashed) {
+        ConnectorEvent::DocumentDeleted {
+            document_id: id,
+            occurred_at,
+        }
+    } else {
+        ConnectorEvent::DocumentUpdated {
+            document_id: id,
+            occurred_at,
+        }
+    }
+}
+
 impl Connector for GoogleDriveConnector {
-    fn authenticate(&self, _config: &ConnectorConfig) -> Result<OAuth2Token> {
-        Ok(OAuth2Token::new(
-            "drive-access-token",
-            "drive-refresh-token",
-            Utc::now() + Duration::hours(1),
-            "https://www.googleapis.com/auth/drive.readonly",
-        ))
+    fn authenticate(&self, config: &ConnectorConfig) -> Result<OAuth2Token> {
+        let auth_code = config
+            .auth_config_json
+            .get("authorization_code")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                ConnectorError::Auth(
+                    "google_drive authenticate: auth_config_json.authorization_code is required"
+                        .into(),
+                )
+            })?;
+        self.oauth.exchange_code(config, auth_code)
     }
 
-    fn initial_sync(
-        &self,
-        _config: &ConnectorConfig,
-        _token: &OAuth2Token,
-    ) -> Result<SyncRunResult> {
-        let mut events: Vec<ConnectorEvent> = Vec::new();
-        let mut seed_token: Option<String> = None;
-        for page in &self.initial_pages {
-            for f in &page.files {
-                if f.trashed {
-                    events.push(ConnectorEvent::DocumentDeleted {
-                        document_id: SourceDocumentId::new(f.id.clone()),
-                        occurred_at: f.modified_time.unwrap_or_else(Utc::now),
-                    });
-                } else {
-                    events.push(ConnectorEvent::DocumentCreated {
-                        document_id: SourceDocumentId::new(f.id.clone()),
-                        occurred_at: f.created_time.or(f.modified_time).unwrap_or_else(Utc::now),
-                    });
-                }
-            }
-            if page.new_start_page_token.is_some() {
-                seed_token.clone_from(&page.new_start_page_token);
-            }
+    fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult> {
+        let base_url = self.resolved_base_url(config);
+        let q = Self::resolved_query(config);
+        let files = self.paginate_files(&base_url, token, &q)?;
+        let mut events: Vec<ConnectorEvent> = Vec::with_capacity(files.len());
+        for f in &files {
+            events.push(file_to_created_event(f));
         }
+        // Anchor the changes feed at the point in time we finished
+        // the file walk — every change after this point flows
+        // through the incremental sync. Without this step, the first
+        // incremental run would start from an undefined cursor and
+        // either skip or re-deliver every change since installation.
+        let next_cursor = self.fetch_start_page_token(&base_url, token)?;
         Ok(SyncRunResult {
             events,
-            next_cursor: seed_token,
+            next_cursor,
         })
     }
 
     fn incremental_sync(
         &self,
-        _config: &ConnectorConfig,
-        _token: &OAuth2Token,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
         state: &SyncState,
     ) -> Result<SyncRunResult> {
-        let idx = Self::page_index(state.cursor.as_deref());
-        let page = self.incremental_pages.get(idx).cloned().unwrap_or_default();
-        let mut events: Vec<ConnectorEvent> = Vec::new();
-        for ch in page.changes {
-            let occurred_at = ch.time.unwrap_or_else(Utc::now);
-            let id = SourceDocumentId::new(ch.file_id);
-            if ch.removed || ch.file.as_ref().is_some_and(|f| f.trashed) {
-                events.push(ConnectorEvent::DocumentDeleted {
-                    document_id: id,
-                    occurred_at,
-                });
-            } else {
-                events.push(ConnectorEvent::DocumentUpdated {
-                    document_id: id,
-                    occurred_at,
-                });
-            }
+        let base_url = self.resolved_base_url(config);
+        // Without a cursor we cannot incrementally fetch — the
+        // substrate should be running the initial sync first. We
+        // surface the gap as a `Sync` error so the runtime reschedules
+        // with the seed cursor populated.
+        let start_token = state.cursor.as_deref().ok_or_else(|| {
+            ConnectorError::Sync(
+                "google_drive incremental_sync: missing cursor; \
+                 initial_sync must populate startPageToken first"
+                    .into(),
+            )
+        })?;
+        let (changes, new_start_token) = self.paginate_changes(&base_url, token, start_token)?;
+        let mut events: Vec<ConnectorEvent> = Vec::with_capacity(changes.len());
+        for ch in &changes {
+            events.push(change_to_event(ch));
         }
-        let next_cursor = if idx + 1 < self.incremental_pages.len() {
-            Some(format!("page-{}", idx + 2))
-        } else {
-            page.new_start_page_token
-        };
+        // Drive returns `newStartPageToken` on the final page; if the
+        // server omitted it (mock / older API), fall back to the
+        // existing cursor so we don't lose our place.
+        let next_cursor = new_start_token.or_else(|| Some(start_token.to_string()));
         Ok(SyncRunResult {
             events,
             next_cursor,
@@ -252,18 +522,86 @@ impl Connector for GoogleDriveConnector {
 
     fn subscribe_webhook(
         &self,
-        _config: &ConnectorConfig,
-        _token: &OAuth2Token,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
         callback_url: &str,
     ) -> Result<WebhookSubscription> {
-        // Drive push channels are valid for 7 days.
-        Ok(WebhookSubscription::new(
+        let base_url = self.resolved_base_url(config);
+        // Drive's watch endpoint requires a `pageToken` so it can
+        // bind the channel to a specific point in the changes feed.
+        // Without one, Drive would return 400 — we surface that to
+        // the substrate as a configuration error.
+        let page_token = config
+            .auth_config_json
+            .get("start_page_token")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                ConnectorError::Webhook(
+                    "google_drive subscribe_webhook: auth_config_json.start_page_token is required \
+                     (call changes.getStartPageToken first)"
+                        .into(),
+                )
+            })?;
+        let channel_id = config
+            .auth_config_json
+            .get("channel_id")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(
+                || self.instance.as_uuid().to_string(),
+                std::string::ToString::to_string,
+            );
+        let token_secret = config
+            .auth_config_json
+            .get("channel_token")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("google-drive-channel-secret")
+            .to_string();
+        let url = format!(
+            "{base_url}/drive/v3/changes/watch?pageToken={}",
+            percent_encode_path_component(page_token),
+        );
+        let body = serde_json::json!({
+            "id": channel_id,
+            "type": "web_hook",
+            "address": callback_url,
+            "token": token_secret,
+        });
+        let resp: GoogleDriveWatchResponse = bearer_post_json(
+            &self.transport,
+            "google_drive",
+            "/drive/v3/changes/watch",
+            &url,
+            token,
+            &[],
+            &body,
+        )?;
+        // Drive echoes the channel id; if for any reason it didn't,
+        // fall back to the one we sent so the subscription is still
+        // revocable.
+        let assigned_id = resp.id.unwrap_or(channel_id);
+        let expires_at = resp
+            .expiration
+            .and_then(DateTime::<Utc>::from_timestamp_millis)
+            // Drive channels are valid for 7 days when the server
+            // doesn't echo an explicit expiration.
+            .or_else(|| Some(Utc::now() + chrono::Duration::days(7)));
+        let mut subscription = WebhookSubscription::new(
             self.instance,
             callback_url,
-            WebhookSecret::new("google-drive-channel-secret"),
+            WebhookSecret::new(token_secret),
             WebhookEventTypes::all(),
-            Some(Utc::now() + Duration::days(7)),
-        ))
+            expires_at,
+        );
+        // Drive's revocation endpoint needs the channel id + resource
+        // id together. We persist them as `<channel_id>:<resource_id>`
+        // so the substrate's webhook-revoke path has everything it
+        // needs without a second round-trip to look the resource id
+        // up.
+        subscription.provider_subscription_id = Some(match resp.resource_id {
+            Some(rid) if !rid.is_empty() => format!("{assigned_id}:{rid}"),
+            _ => assigned_id,
+        });
+        Ok(subscription)
     }
 
     fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
@@ -304,8 +642,27 @@ impl Connector for GoogleDriveConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use connector_framework::{AuthKind, ConnectorKind};
+    use chrono::Duration;
+    use connector_framework::{
+        AuthKind, ConnectorKind, HttpMethod, MockHttpTransport, MockResponse,
+    };
     use evidence_store::ScopeId;
+
+    struct FixedOAuth;
+    impl OAuth2CodeExchange for FixedOAuth {
+        fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
+            Ok(OAuth2Token::new(
+                "drive-access",
+                "drive-refresh",
+                Utc::now() + Duration::hours(1),
+                "https://www.googleapis.com/auth/drive.readonly",
+            ))
+        }
+    }
+
+    fn oauth() -> Arc<dyn OAuth2CodeExchange> {
+        Arc::new(FixedOAuth)
+    }
 
     fn cfg() -> ConnectorConfig {
         ConnectorConfig::new(
@@ -313,69 +670,420 @@ mod tests {
             AuthKind::OAuth2,
             ScopeId::new_v4(),
         )
+        .with_auth_config(serde_json::json!({
+            "authorization_code": "demo-code",
+            "api_base_url": "https://api.test/google",
+            "start_page_token": "watch-start-1",
+        }))
+    }
+
+    fn file(id: &str, trashed: bool, modified: DateTime<Utc>) -> GoogleDriveFile {
+        GoogleDriveFile {
+            id: id.into(),
+            name: format!("{id}.gdoc"),
+            mime_type: "application/vnd.google-apps.document".into(),
+            trashed,
+            modified_time: Some(modified),
+            created_time: Some(modified),
+        }
+    }
+
+    fn expect_files_list(
+        transport: &MockHttpTransport,
+        base_url: &str,
+        q: &str,
+        page_token: Option<&str>,
+        response: &GoogleDriveFileList,
+    ) {
+        let mut url = format!(
+            "{base_url}/drive/v3/files?pageSize={}&q={}&fields={}",
+            DEFAULT_PAGE_SIZE,
+            percent_encode_path_component(q),
+            percent_encode_path_component(FILE_LIST_FIELDS_MASK),
+        );
+        if let Some(tok) = page_token {
+            url.push_str("&pageToken=");
+            url.push_str(&percent_encode_path_component(tok));
+        }
+        transport.expect(
+            HttpMethod::Get,
+            url,
+            MockResponse::ok_json(serde_json::to_vec(response).unwrap()),
+        );
+    }
+
+    fn expect_start_page_token(transport: &MockHttpTransport, base_url: &str, token: &str) {
+        transport.expect(
+            HttpMethod::Get,
+            format!("{base_url}/drive/v3/changes/startPageToken"),
+            MockResponse::ok_json(
+                serde_json::to_vec(&GoogleDriveStartPageToken {
+                    start_page_token: Some(token.into()),
+                })
+                .unwrap(),
+            ),
+        );
+    }
+
+    fn expect_changes_list(
+        transport: &MockHttpTransport,
+        base_url: &str,
+        page_token: &str,
+        response: &GoogleDriveChangeList,
+    ) {
+        let url = format!(
+            "{base_url}/drive/v3/changes?pageToken={}&pageSize={}&includeRemoved=true&fields={}",
+            percent_encode_path_component(page_token),
+            DEFAULT_PAGE_SIZE,
+            percent_encode_path_component(CHANGE_LIST_FIELDS_MASK),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            url,
+            MockResponse::ok_json(serde_json::to_vec(response).unwrap()),
+        );
     }
 
     #[test]
-    fn authenticate_returns_drive_scope() {
-        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4());
+    fn authenticate_dispatches_to_oauth_exchange() {
+        let transport = MockHttpTransport::new();
+        let c =
+            GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), Arc::new(transport), oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         assert!(tok.scope.contains("drive"));
+        assert_eq!(tok.access_token.expose(), "drive-access");
     }
 
     #[test]
-    fn initial_sync_emits_created_events_and_seeds_cursor() {
-        let pages = vec![GoogleDriveFileList {
-            files: vec![GoogleDriveFile {
-                id: "f1".into(),
-                name: "Doc".into(),
-                mime_type: "application/vnd.google-apps.document".into(),
-                trashed: false,
-                modified_time: Some(Utc::now()),
-                created_time: Some(Utc::now()),
-            }],
-            next_page_token: None,
-            new_start_page_token: Some("seed-1".into()),
-        }];
-        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4()).with_initial_pages(pages);
+    fn authenticate_requires_authorization_code() {
+        let transport = MockHttpTransport::new();
+        let c =
+            GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), Arc::new(transport), oauth());
+        let bad_cfg = ConnectorConfig::new(
+            ConnectorKind::GoogleDrive,
+            AuthKind::OAuth2,
+            ScopeId::new_v4(),
+        );
+        let err = c.authenticate(&bad_cfg).unwrap_err();
+        assert!(matches!(err, ConnectorError::Auth(_)));
+    }
+
+    #[test]
+    fn initial_sync_walks_files_then_fetches_start_token() {
+        let transport = MockHttpTransport::new();
+        let now = Utc::now();
+        let base = "https://api.test/google";
+        let q = "trashed = false";
+
+        // Page 1.
+        expect_files_list(
+            &transport,
+            base,
+            q,
+            None,
+            &GoogleDriveFileList {
+                files: vec![file("f1", false, now), file("f2", false, now)],
+                next_page_token: Some("page-token-2".into()),
+                new_start_page_token: None,
+            },
+        );
+        // Page 2 (final).
+        expect_files_list(
+            &transport,
+            base,
+            q,
+            Some("page-token-2"),
+            &GoogleDriveFileList {
+                files: vec![file("f3", false, now)],
+                next_page_token: None,
+                new_start_page_token: None,
+            },
+        );
+        // Anchor the watermark.
+        expect_start_page_token(&transport, base, "spt-99");
+
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c =
+            GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let res = c.initial_sync(&cfg(), &tok).unwrap();
+        assert_eq!(res.events.len(), 3);
+        assert!(res
+            .events
+            .iter()
+            .all(|e| matches!(e, ConnectorEvent::DocumentCreated { .. })));
+        assert_eq!(res.next_cursor.as_deref(), Some("spt-99"));
+    }
+
+    #[test]
+    fn initial_sync_emits_deleted_for_trashed_files() {
+        let transport = MockHttpTransport::new();
+        let now = Utc::now();
+        let base = "https://api.test/google";
+        let q = "trashed = false";
+
+        expect_files_list(
+            &transport,
+            base,
+            q,
+            None,
+            &GoogleDriveFileList {
+                files: vec![file("f1", true, now)],
+                next_page_token: None,
+                new_start_page_token: None,
+            },
+        );
+        expect_start_page_token(&transport, base, "spt-1");
+
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 1);
         assert!(matches!(
             res.events[0],
-            ConnectorEvent::DocumentCreated { .. }
+            ConnectorEvent::DocumentDeleted { .. }
         ));
-        assert_eq!(res.next_cursor.as_deref(), Some("seed-1"));
     }
 
     #[test]
-    fn incremental_sync_handles_removed_changes() {
-        let pages = vec![GoogleDriveChangeList {
-            changes: vec![GoogleDriveChange {
-                file_id: "f9".into(),
-                kind: "file".into(),
-                removed: true,
-                file: None,
-                time: Some(Utc::now()),
-            }],
-            next_page_token: None,
-            new_start_page_token: Some("seed-2".into()),
-        }];
-        let c =
-            GoogleDriveConnector::new(ConnectorInstanceId::new_v4()).with_incremental_pages(pages);
+    fn paginate_files_loop_guard_stops_on_repeated_token() {
+        let transport = MockHttpTransport::new();
+        let now = Utc::now();
+        let base = "https://api.test/google";
+        let q = "trashed = false";
+
+        // Two pages with the same nextPageToken — pathological.
+        expect_files_list(
+            &transport,
+            base,
+            q,
+            None,
+            &GoogleDriveFileList {
+                files: vec![file("f1", false, now)],
+                next_page_token: Some("stuck".into()),
+                new_start_page_token: None,
+            },
+        );
+        expect_files_list(
+            &transport,
+            base,
+            q,
+            Some("stuck"),
+            &GoogleDriveFileList {
+                files: vec![file("f2", false, now)],
+                next_page_token: Some("stuck".into()),
+                new_start_page_token: None,
+            },
+        );
+        expect_start_page_token(&transport, base, "spt-3");
+
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let res = c.initial_sync(&cfg(), &tok).unwrap();
+        // Two pages walked, third would be the same token → stop.
+        assert_eq!(res.events.len(), 2);
+        assert_eq!(res.next_cursor.as_deref(), Some("spt-3"));
+    }
+
+    #[test]
+    fn incremental_sync_walks_changes_and_advances_watermark() {
+        let transport = MockHttpTransport::new();
+        let now = Utc::now();
+        let base = "https://api.test/google";
+
+        expect_changes_list(
+            &transport,
+            base,
+            "watermark-1",
+            &GoogleDriveChangeList {
+                changes: vec![
+                    GoogleDriveChange {
+                        file_id: "f1".into(),
+                        kind: "file".into(),
+                        removed: false,
+                        file: Some(file("f1", false, now)),
+                        time: Some(now),
+                    },
+                    GoogleDriveChange {
+                        file_id: "f-deleted".into(),
+                        kind: "file".into(),
+                        removed: true,
+                        file: None,
+                        time: Some(now),
+                    },
+                ],
+                next_page_token: Some("page-b".into()),
+                new_start_page_token: None,
+            },
+        );
+        expect_changes_list(
+            &transport,
+            base,
+            "page-b",
+            &GoogleDriveChangeList {
+                changes: vec![GoogleDriveChange {
+                    file_id: "f3".into(),
+                    kind: "file".into(),
+                    removed: false,
+                    file: Some(file("f3", false, now)),
+                    time: Some(now),
+                }],
+                next_page_token: None,
+                new_start_page_token: Some("watermark-2".into()),
+            },
+        );
+
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = None;
+        state.cursor = Some("watermark-1".into());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(res.events.len(), 1);
-        assert!(matches!(
-            res.events[0],
-            ConnectorEvent::DocumentDeleted { .. }
+        assert_eq!(res.events.len(), 3);
+        let deletes = res
+            .events
+            .iter()
+            .filter(|e| matches!(e, ConnectorEvent::DocumentDeleted { .. }))
+            .count();
+        let updates = res
+            .events
+            .iter()
+            .filter(|e| matches!(e, ConnectorEvent::DocumentUpdated { .. }))
+            .count();
+        assert_eq!(deletes, 1);
+        assert_eq!(updates, 2);
+        assert_eq!(res.next_cursor.as_deref(), Some("watermark-2"));
+    }
+
+    #[test]
+    fn incremental_sync_falls_back_to_previous_cursor_when_no_new_start_token() {
+        let transport = MockHttpTransport::new();
+        let base = "https://api.test/google";
+
+        expect_changes_list(
+            &transport,
+            base,
+            "watermark-x",
+            &GoogleDriveChangeList {
+                changes: vec![],
+                next_page_token: None,
+                new_start_page_token: None,
+            },
+        );
+
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some("watermark-x".into());
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        assert_eq!(res.events.len(), 0);
+        // Server didn't return a new token; we hold our place.
+        assert_eq!(res.next_cursor.as_deref(), Some("watermark-x"));
+    }
+
+    #[test]
+    fn incremental_sync_requires_cursor() {
+        let transport = MockHttpTransport::new();
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let state = SyncState::new(c.instance);
+        let err = c.incremental_sync(&cfg(), &tok, &state).unwrap_err();
+        match err {
+            ConnectorError::Sync(msg) => assert!(msg.contains("missing cursor")),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subscribe_webhook_posts_watch_request_and_captures_channel_id() {
+        let transport = MockHttpTransport::new();
+        let base = "https://api.test/google";
+        let watch_url = format!(
+            "{base}/drive/v3/changes/watch?pageToken={}",
+            percent_encode_path_component("watch-start-1"),
+        );
+        transport.expect(
+            HttpMethod::Post,
+            watch_url,
+            MockResponse::ok_json(
+                serde_json::to_vec(&GoogleDriveWatchResponse {
+                    id: Some("chan-42".into()),
+                    resource_id: Some("res-99".into()),
+                    expiration: None,
+                })
+                .unwrap(),
+            ),
+        );
+
+        let transport_arc: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GoogleDriveConnector::new(
+            ConnectorInstanceId::new_v4(),
+            transport_arc.clone(),
+            oauth(),
+        );
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut config = cfg();
+        // Force the channel id we want to see echoed.
+        if let Some(obj) = config.auth_config_json.as_object_mut() {
+            obj.insert(
+                "channel_id".into(),
+                serde_json::Value::String("chan-42".into()),
+            );
+        }
+        let sub = c
+            .subscribe_webhook(&config, &tok, "https://substrate.example/hooks/drive")
+            .unwrap();
+        assert_eq!(sub.connector, c.instance);
+        assert_eq!(
+            sub.provider_subscription_id.as_deref(),
+            Some("chan-42:res-99")
+        );
+        assert!(sub.expires_at.is_some());
+    }
+
+    #[test]
+    fn subscribe_webhook_requires_start_page_token() {
+        let transport = MockHttpTransport::new();
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let bad_cfg = ConnectorConfig::new(
+            ConnectorKind::GoogleDrive,
+            AuthKind::OAuth2,
+            ScopeId::new_v4(),
+        )
+        .with_auth_config(serde_json::json!({
+            "authorization_code": "demo-code",
+            "api_base_url": "https://api.test/google",
+        }));
+        let err = c
+            .subscribe_webhook(&bad_cfg, &tok, "https://substrate.example/hooks/drive")
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    #[test]
+    fn unauthorized_status_maps_to_auth_error() {
+        let transport = MockHttpTransport::new();
+        transport.with_default_response(MockResponse::status(
+            401,
+            br#"{"error":"unauthorized"}"#.to_vec(),
         ));
-        assert_eq!(res.next_cursor.as_deref(), Some("seed-2"));
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c.initial_sync(&cfg(), &tok).unwrap_err();
+        assert!(matches!(err, ConnectorError::Auth(_)));
     }
 
     #[test]
     fn webhook_parses_permission_change() {
+        let transport = MockHttpTransport::new();
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
         let body = serde_json::json!({
             "resourceId": "f1",
             "resourceState": "permission_change",
@@ -383,7 +1091,7 @@ mod tests {
             "newRole": "writer",
             "occurredAt": Utc::now(),
         });
-        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4());
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
@@ -398,11 +1106,39 @@ mod tests {
 
     #[test]
     fn webhook_unknown_state_errors() {
+        let transport = MockHttpTransport::new();
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
         let body = serde_json::json!({"resourceId": "f1", "resourceState": "weird"});
-        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4());
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let err = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    #[test]
+    fn webhook_add_state_emits_created() {
+        let transport = MockHttpTransport::new();
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let body = serde_json::json!({"resourceId": "f1", "resourceState": "add"});
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let evs = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(evs[0], ConnectorEvent::DocumentCreated { .. }));
+    }
+
+    #[test]
+    fn webhook_remove_state_emits_deleted() {
+        let transport = MockHttpTransport::new();
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let body = serde_json::json!({"resourceId": "f1", "resourceState": "remove"});
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let evs = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(evs[0], ConnectorEvent::DocumentDeleted { .. }));
     }
 }

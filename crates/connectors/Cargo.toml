@@ -7,6 +7,21 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# Pulls in the framework's reqwest-backed `BlockingHttpTransport`
+# and `default_oauth_client`. The connector crates themselves do
+# not depend on reqwest directly — every HTTP call goes through
+# the `connector_framework::HttpTransport` trait object — so
+# enabling this feature just transitively pulls reqwest into the
+# substrate's dependency graph.
+http-client = ["connector_framework/http-client"]
+# Exposes `MockHttpTransport` outside `cfg(test)` so neighbouring
+# crates' integration tests can drive each connector with canned
+# JSON responses. The framework also gates `MockHttpTransport`
+# under `test-support`, so this feature is a thin pass-through.
+test-support = ["connector_framework/test-support"]
+
 [dependencies]
 connector_framework = { path = "../connector_framework" }
 crypto = { path = "../crypto" }
@@ -18,6 +33,9 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+connector_framework = { path = "../connector_framework", features = ["test-support"] }
 
 [lints]
 workspace = true
