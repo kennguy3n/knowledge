@@ -98,9 +98,19 @@ jobs:
 
           # `grep -nE` so we surface filename + line for every hit.
           # `git ls-files` so we only look at tracked sources (no
-          # vendored deps, no build artefacts). Also scan workflow
-          # files in case a future review thread tries to relax
-          # the lint by editing this very job.
+          # vendored deps, no build artefacts).
+          #
+          # Scope: tracked `*.rs` files only. The PATTERN above is
+          # Rust attribute syntax (`#[...]` / `#![...]`) and would
+          # never match valid YAML / TOML / Markdown — so extending
+          # the glob to `*.yml` / `*.toml` would be noise. The
+          # workflow file itself (this very job) and the workspace
+          # `Cargo.toml` lint table are protected by branch
+          # protection + code review, not by this grep; a reviewer
+          # editing `ALLOWED_PREFIX` or removing this job has to be
+          # caught by a human reviewing the diff. That is intentional
+          # — this guard is a defense-in-depth check on the actual
+          # source tree, not a self-protecting CI lockdown.
           matches="$(git ls-files \
             -- '*.rs' \
             | grep -vE "${ALLOWED_PREFIX}" \
