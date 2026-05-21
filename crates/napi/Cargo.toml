@@ -2,10 +2,27 @@
 name = "napi_addon"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# napi-rs 3.x requires rustc 1.88+ (the workspace MSRV stays at 1.85
+# for every other crate). This is checked at CI time by the
+# `MSRV (1.85.0)` job, which passes `--exclude napi_addon` so the
+# crates that don't depend on napi-rs continue to compile cleanly on
+# the lower toolchain. Anyone running `cargo build -p napi_addon`
+# directly needs stable >= 1.88 — published binaries in our
+# .github/workflows/ci.yml `napi-build` matrix all use `stable`,
+# which has been past 1.88 since June 2025.
+rust-version = "1.88"
 license.workspace = true
 repository.workspace = true
 description = "N-API addon surface for macOS / Windows Electron desktop integration with the Knowledge substrate."
+
+# We build BOTH a `cdylib` (for `napi build` → `.node` artefact loaded
+# by Node.js) AND an `rlib` (so the workspace's unit tests can call
+# the pure-Rust forwarding API directly without going through the
+# Node bridge). `napi build` picks up the `cdylib` output; `cargo
+# test -p napi_addon` uses the `rlib`. Both share the same `lib.rs`
+# entry point and are produced from a single compile.
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 crypto = { path = "../crypto" }
@@ -18,6 +35,36 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
+
+# Real N-API bindings via napi-rs (https://napi.rs/).
+#
+# Feature mix:
+# * `napi6` — opt into APIs available on Node 10.20+ (covers every
+#   currently supported Node LTS line, which is the minimum the
+#   Electron host targets).
+# * `serde-json` — adds `FromNapiValue` / `ToNapiValue` impls for
+#   `serde_json::Value` so the bridge can accept and emit
+#   arbitrarily-shaped JS objects without hand-rolling marshalling
+#   for every typed argument struct.
+# * `dyn-symbols` (also the napi-rs default) — resolves the
+#   `napi_*` C symbols at runtime through `libloading::Library::this()`
+#   instead of expecting the linker to find them at compile time.
+#   This is what lets `cargo test -p napi_addon` link the test
+#   binary even though there is no Node host providing the
+#   symbols — the test exercises code paths that never actually
+#   invoke a napi C function. Production builds of the `.node`
+#   artefact (loaded by Node via `require()`) get the symbols
+#   resolved from the embedding `node` process.
+napi = { version = "3", default-features = false, features = ["napi6", "serde-json", "dyn-symbols"] }
+napi-derive = "3"
+
+[build-dependencies]
+# Emits the Windows `dllimport`/`dllexport` symbol-export directives
+# the loader needs to dlopen the `.node` file. On Linux/macOS this
+# is a no-op but the call is harmless and matches the canonical
+# napi-rs build-script pattern documented at
+# <https://napi.rs/docs/cli/build>.
+napi-build = "2"
 
 [lints]
 workspace = true

@@ -50,6 +50,15 @@ cargo deny check
    lists stay accurate.
 5. **Do not commit secrets**, `.env` files, fixture credentials,
    or local override configs.
+6. **Request the full N-API cross-platform matrix when you need
+   it.** PRs run a single ubuntu-latest leg of `napi-build` by
+   default to keep the iteration loop fast. The full four-platform
+   matrix (linux x64, macOS arm64/x64, windows x64) runs
+   automatically on every push to `main` and on demand from the
+   Actions UI (`workflow_dispatch`). To get the full matrix on a
+   PR before merge, apply the `ci:full` label — the existing
+   in-flight smoke run is replaced by the full matrix on the next
+   `pull_request` event. Remove the label to switch back.
 
 ## Code style
 

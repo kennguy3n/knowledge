@@ -4,6 +4,8 @@ on:
   push:
     branches: ["**"]
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -50,6 +52,238 @@ jobs:
           key: ${{ runner.os }}-clippy-default-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-clippy-default-
       - run: cargo clippy --all-targets -- -D warnings
+
+  unsafe-code-guard:
+    name: unsafe-code allowlist
+    runs-on: ubuntu-latest
+    # Workspace-wide `unsafe_code` is set to `deny` (not `forbid`) in
+    # the root `Cargo.toml` so that the napi-derive proc-macro
+    # expansion in `crates/napi/src/bindings.rs` can opt back in via
+    # a single `#![allow(unsafe_code)]`. This job pins the set of
+    # crates that are permitted to use that escape hatch: if a new
+    # `allow(unsafe_code)` (inner or outer attribute) appears
+    # anywhere outside `crates/napi/`, the job fails and forces the
+    # author to justify the relaxation in review instead of slipping
+    # it past the workspace-level guarantee.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ripgrep
+        # The `*.rs` scan below uses `rg --multiline` to catch attribute
+        # forms broken across newlines. `rg` is listed in the
+        # `ubuntu-24.04` runner image manifest, but a stale runner /
+        # minimal base image can occasionally omit it from `$PATH` — and
+        # the previous failure mode was silent (a missing `rg` returned
+        # nothing, `|| true` swallowed the error, the guard passed by
+        # accident).
+        #
+        # We therefore (1) probe `rg` first, (2) install via apt if it's
+        # missing, and (3) `rg --version` as a hard assertion so any
+        # future image regression fails this step loudly instead of
+        # silently disabling the security scan.
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            echo 'rg not found in PATH; installing ripgrep via apt.'
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ripgrep
+          fi
+          rg --version
+      - name: Find unsafe_code allows outside the napi allowlist
+        run: |
+          # Allowlisted paths. Edit this list (and the doc above)
+          # when a new crate is consciously granted an exception.
+          ALLOWED_PREFIX='^crates/napi/'
+
+          # Catch every attribute form that relaxes `unsafe_code`,
+          # including ones wrapped in `cfg_attr` AND ones broken
+          # across multiple lines by rustfmt or by a hand author:
+          #   #[allow(unsafe_code)]
+          #   #![allow(unsafe_code)]
+          #   #[cfg_attr(feature = "x", allow(unsafe_code))]
+          #   #![cfg_attr(any(...), allow(unsafe_code))]
+          #   #[allow(
+          #       unsafe_code
+          #   )]
+          #   #[allow(dead_code, unsafe_code, unused_imports)]
+          # The pattern requires an attribute opener (`#[` or `#![`),
+          # any prefix that stays inside the outer attribute brackets
+          # (`[^]]*`), an `allow(` token, and a word-boundaried
+          # `unsafe_code` somewhere inside the `allow(...)` argument
+          # list (`[^)]*\bunsafe_code\b[^)]*`). The pattern uses
+          # `[^]]` / `[^)]` instead of `.` so it spans newlines
+          # without needing `--multiline-dotall`; `rg --multiline -U`
+          # is the multi-line equivalent of `grep -E`.
+          #
+          # The scan is intentionally raw-text and operates on the
+          # whole file — it does NOT skip `//` line comments, `///`
+          # doc comments, or `/* ... */` block comments. A line like
+          #   // example: #[allow(unsafe_code)]
+          # WILL trigger this guard. That's a conservative
+          # false-positive direction (the guard fires when it
+          # arguably shouldn't, instead of letting a real attribute
+          # through), so anyone documenting the lint in a comment
+          # should escape the attribute opener (e.g. write
+          # `#&#91;allow(...)]` or break the literal across lines
+          # with a markdown backtick fence) rather than rely on the
+          # scanner to ignore comments. Future maintainers: this is
+          # safe-by-design, not a bug.
+          PATTERN='#!?\[[^]]*\ballow\([^)]*\bunsafe_code\b[^)]*\)'
+
+          # `rg -nU --multiline` so we catch attribute forms that
+          # break across newlines (rustfmt collapses simple cases
+          # to a single line, but a `#[rustfmt::skip]`-bracketed
+          # attribute, a wide `allow(...)` list that wrapped onto
+          # multiple lines, or a hand-edited file can still hide a
+          # match from a line-oriented grep). `git ls-files` so we
+          # only look at tracked sources (no vendored deps, no
+          # build artefacts).
+          #
+          # Scope: tracked `*.rs` files only. The PATTERN above is
+          # Rust attribute syntax (`#[...]` / `#![...]`) and would
+          # never match valid YAML / TOML / Markdown — so extending
+          # the glob to `*.yml` / `*.toml` would be noise. The
+          # workflow file itself (this very job) and the workspace
+          # `Cargo.toml` lint table are protected by branch
+          # protection + code review, not by this scanner; a
+          # reviewer editing `ALLOWED_PREFIX` or removing this job
+          # has to be caught by a human reviewing the diff. That is
+          # intentional — this guard is a defense-in-depth check on
+          # the actual source tree, not a self-protecting CI
+          # lockdown.
+          #
+          # `rg` availability is enforced by the preceding
+          # `Install ripgrep` step — it either confirmed `rg` is on
+          # PATH or installed ripgrep via apt and printed the
+          # version. If `rg` is somehow still missing here the script
+          # will fail with a `command not found` (exit 127) instead
+          # of silently passing.
+          mapfile -t scan_files < <(git ls-files -- '*.rs' \
+            | grep -vE "${ALLOWED_PREFIX}" || true)
+          if [ "${#scan_files[@]}" -eq 0 ]; then
+            echo 'No tracked *.rs files outside the napi allowlist; skipping scan.'
+            matches=''
+          else
+            # `rg` exits 0 on match found, 1 on no match, 2+ on error.
+            # Capture stdout AND the exit code so a real error (missing
+            # binary, bad regex, IO failure) fails the guard loudly
+            # instead of being swallowed by a blanket `|| true`. The
+            # previous form (`rg ... || true`) is what silently disabled
+            # the scan when the runner image shipped without `rg`.
+            matches="$(rg --multiline -nU -e "${PATTERN}" -- "${scan_files[@]}")" \
+              || rg_status=$?
+            rg_status="${rg_status:-0}"
+            if [ "${rg_status}" -ge 2 ]; then
+              echo "::error::rg exited with status ${rg_status} (>= 2 indicates a real error, not 'no matches')."
+              exit "${rg_status}"
+            fi
+          fi
+
+          if [ -n "${matches}" ]; then
+            echo '::error::A new `allow(unsafe_code)` (including `cfg_attr`-gated forms) was introduced outside the napi allowlist:'
+            echo "${matches}"
+            echo
+            echo 'The workspace `Cargo.toml` sets `unsafe_code = "deny"` so that the'
+            echo 'napi crate can opt back in for napi-derive proc-macro expansion.'
+            echo 'Any other relaxation — including conditional `#[cfg_attr(..., allow(unsafe_code))]`'
+            echo '— needs explicit review. Please either remove the `allow`, or update the allowlist'
+            echo 'in `.github/workflows/ci.yml` with a justification comment.'
+            exit 1
+          fi
+
+          echo 'No stray allow(unsafe_code) attributes found outside crates/napi/.'
+      - name: Pin Cargo.toml unsafe_code policy
+        # Companion check to the *.rs scan above. The Rust attribute
+        # scan only catches someone *adding* `#[allow(unsafe_code)]`
+        # to a source file — it cannot catch someone *removing* the
+        # `unsafe_code = "forbid"` lint declaration from a
+        # security-critical crate's `Cargo.toml`, or *downgrading*
+        # the workspace-level `unsafe_code = "deny"` to `"allow"`.
+        # Both are silent weakenings of the same security posture.
+        #
+        # This step pins the EXPECTED `unsafe_code` declarations in
+        # Cargo.toml files:
+        #
+        #   * Root `Cargo.toml`: must declare `unsafe_code = "deny"`
+        #     (workspace floor; gated relaxation point for napi).
+        #   * `crates/crypto/Cargo.toml`: must declare
+        #     `unsafe_code = "forbid"` (PQC primitives, never relax).
+        #
+        # It also asserts that NO other tracked `Cargo.toml`
+        # introduces an `unsafe_code = ...` declaration without
+        # being added to `ALLOWED_TOML_PATHS` here, with a
+        # justification comment. New FFI crates would extend the
+        # allowlist; pure-Rust crates inherit the workspace `deny`
+        # transparently via `[lints] workspace = true`.
+        run: |
+          # Map of files that are PERMITTED to set `unsafe_code` in
+          # `[lints.rust]` and the exact level we expect. Each
+          # expected entry is `path:level`; the step verifies the
+          # level is present in the file (catches removal /
+          # downgrade) AND that no OTHER tracked `Cargo.toml` sets
+          # `unsafe_code` at all (catches stealth additions).
+          EXPECTED=(
+            'Cargo.toml:deny'
+            'crates/crypto/Cargo.toml:forbid'
+          )
+
+          fail=0
+
+          # 1. Verify each expected file still has the expected level.
+          for entry in "${EXPECTED[@]}"; do
+            path="${entry%:*}"
+            level="${entry##*:}"
+            if [ ! -f "${path}" ]; then
+              echo "::error::Expected pinned Cargo.toml ${path} no longer exists."
+              fail=1
+              continue
+            fi
+            if ! grep -qE "^\s*unsafe_code\s*=\s*\"${level}\"\s*$" "${path}"; then
+              echo "::error::${path} must declare unsafe_code = \"${level}\" — pinned by the unsafe-code-guard CI job."
+              echo '          If you genuinely intend to weaken this, update both this CI step and the corresponding crate review notes.'
+              fail=1
+            fi
+          done
+
+          # 2. Build the allowlist regex from EXPECTED so the scan
+          # below skips known-good files without hardcoding paths
+          # twice.
+          allow_re=''
+          for entry in "${EXPECTED[@]}"; do
+            path="${entry%:*}"
+            esc="$(printf '%s' "${path}" | sed -e 's/[\/.^$*+?()[\]{}|]/\\&/g')"
+            if [ -z "${allow_re}" ]; then
+              allow_re="^(${esc}"
+            else
+              allow_re="${allow_re}|${esc}"
+            fi
+          done
+          allow_re="${allow_re})$"
+
+          # 3. Look for stray `unsafe_code = ...` lines in any
+          # tracked `Cargo.toml` outside the allowlist. Any hit is a
+          # silent attempt to override the workspace policy at the
+          # crate level — must be reviewed (and added to EXPECTED
+          # above with a comment).
+          mapfile -t toml_files < <(git ls-files -- '*Cargo.toml' \
+            | grep -vE "${allow_re}" || true)
+          if [ "${#toml_files[@]}" -gt 0 ]; then
+            stray="$(grep -lE '^\s*unsafe_code\s*=' -- "${toml_files[@]}" || true)"
+            if [ -n "${stray}" ]; then
+              echo '::error::A Cargo.toml outside the unsafe-code-guard allowlist declares `unsafe_code = ...`:'
+              echo "${stray}"
+              echo
+              echo 'Crates inherit the workspace `unsafe_code = "deny"` via `[lints] workspace = true`.'
+              echo 'If a new crate genuinely needs to override the workspace policy (e.g. a new FFI crate'
+              echo 'that needs `deny` instead of `forbid`, or a security-critical crate that needs to pin'
+              echo '`forbid`), add the path to EXPECTED in this CI step with a justification comment.'
+              exit 1
+            fi
+          fi
+
+          if [ "${fail}" -ne 0 ]; then
+            exit 1
+          fi
+
+          echo 'Cargo.toml unsafe_code policy is intact.'
 
   clippy-all:
     name: clippy (all features)
@@ -147,7 +381,12 @@ jobs:
             target
           key: ${{ runner.os }}-msrv-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-msrv-
-      - run: cargo check --workspace --all-targets
+      # `napi_addon` deliberately tracks the napi-rs 3.x MSRV (1.88+)
+      # rather than the workspace floor — see the rust-version comment
+      # in crates/napi/Cargo.toml. Excluding it here keeps the MSRV
+      # signal meaningful for the rest of the workspace while letting
+      # the napi crate use the modern napi-rs release.
+      - run: cargo check --workspace --all-targets --exclude napi_addon
 
   cross-ios:
     name: cross-check (aarch64-apple-ios)
@@ -274,3 +513,206 @@ jobs:
           name: crypto-fuzz-artifacts
           path: crates/crypto/fuzz/artifacts/
           if-no-files-found: ignore
+
+  napi-build-pr:
+    name: napi-build (PR smoke, ubuntu-latest)
+    needs: build-default
+    # Lightweight PR-loop validation of the N-API addon. Runs on every
+    # PR push *except* PRs labelled `ci:full` (those get the full
+    # cross-platform matrix via the `napi-build` job below — the two
+    # jobs are mutually exclusive so we never run both on the same
+    # event).
+    #
+    # Linux-only. The Rust source, the `index.js`/`index.d.ts` loader
+    # generation, the JSON-envelope error contract, and the JS smoke
+    # tests are all platform-agnostic, so exercising them on a single
+    # `ubuntu-latest` runner catches every napi-side regression we
+    # could catch on macOS or Windows. The platform-specific surface
+    # (macOS `-undefined dynamic_lookup`, Windows `.lib` import
+    # libraries, ARM64 link order) is only meaningful for release
+    # artefacts and is gated behind the `ci:full` label / push-to-main.
+    #
+    # Branch protection note: GitHub required-status-checks match
+    # the *exact* check name — there is no prefix / glob matching.
+    # The full job name `napi-build (PR smoke, ubuntu-latest)` is
+    # therefore distinct from `napi-build (x86_64-unknown-linux-gnu)`
+    # and the other matrix-leg names produced by the `napi-build`
+    # job below.
+    #
+    # Recommended branch-protection wiring on `main`:
+    #
+    #   * REQUIRED for every PR:
+    #       `napi-build (PR smoke, ubuntu-latest)`
+    #     This job runs on every PR that is NOT labelled `ci:full`,
+    #     so requiring it guarantees a Linux N-API smoke signal
+    #     before merge without blocking on macOS / Windows runners.
+    #
+    #   * REQUIRED only on PRs labelled `ci:full` (via per-rule
+    #     configuration or a separate ruleset):
+    #       `napi-build (x86_64-unknown-linux-gnu)`
+    #       `napi-build (aarch64-apple-darwin)`
+    #       `napi-build (x86_64-apple-darwin)`
+    #       `napi-build (x86_64-pc-windows-msvc)`
+    #
+    # The `ci:full`-gated full matrix is intentionally NOT required
+    # on every PR — it exists so contributors can opt in to the
+    # platform-specific link / runtime smoke before tagging a
+    # release, and so the same matrix runs unconditionally on
+    # pushes to `main`.
+    if: |
+      github.event_name == 'pull_request' &&
+      !contains(github.event.pull_request.labels.*.name, 'ci:full')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # Share the cache key with the full-matrix `napi-build` job's
+          # Linux leg so PR runs warm the cache that push-to-main
+          # consumes, and vice versa.
+          key: ${{ runner.os }}-napi-x86_64-unknown-linux-gnu-${{ hashFiles('Cargo.lock', 'crates/napi/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-napi-x86_64-unknown-linux-gnu-
+      - name: cargo test -p napi_addon --lib
+        run: cargo test -p napi_addon --lib --target x86_64-unknown-linux-gnu
+      - name: npm install (crates/napi)
+        working-directory: crates/napi
+        run: npm install --no-fund --no-audit
+      - name: napi build (release)
+        working-directory: crates/napi
+        run: npx napi build --platform --release --target x86_64-unknown-linux-gnu --js index.js --dts index.d.ts
+      - name: Verify generated loader / dts match tracked copies
+        working-directory: crates/napi
+        run: |
+          git diff --exit-code -- index.js index.d.ts || (
+            echo '::error::crates/napi/index.js or index.d.ts is out of date — re-run `npx napi build --platform --release --js index.js --dts index.d.ts` from crates/napi/ and commit the result.'
+            exit 1
+          )
+      - name: node --test (smoke tests)
+        working-directory: crates/napi
+        run: node --test 'test/*.test.mjs'
+
+  napi-build:
+    name: napi-build (${{ matrix.target }})
+    needs: build-default
+    # The N-API addon lives in `crates/napi/` and produces a
+    # platform-specific `.node` artefact via `napi build`. We build
+    # natively on each platform that the Electron host targets so
+    # Node can actually `require()` the produced binary as part of
+    # the smoke test. Cross-compile-only verification (without
+    # exercising the binary in a Node host) would miss link-time
+    # issues like the macOS `dynamic_lookup` directive emitted by
+    # `napi_build::setup()`.
+    #
+    # PR iteration cost: the macos-13 (Intel) leg of this matrix has
+    # historically queue-starved for 1–2 hours per run because the
+    # public `macos-13` runner pool is small. Cross-platform validation
+    # is only meaningful at merge time — in-progress PRs are validated
+    # by the `napi-build-pr` smoke job (Linux-only) immediately below.
+    # The full 4-platform matrix runs only when:
+    #
+    #   * `push`           — includes every push to `main` so release
+    #                       artefacts always exist after merge.
+    #   * `workflow_dispatch` — manual one-click full run from the
+    #                       Actions UI.
+    #   * PR labelled `ci:full` — explicit opt-in per the user
+    #                       directive "don't have to run all checks
+    #                       every PRs until explicitly requested".
+    #                       Apply the label when you want
+    #                       cross-platform validation before merge
+    #                       (e.g. release candidates, big napi
+    #                       refactors). Removing the label cancels
+    #                       the in-flight run via the workflow
+    #                       concurrency key.
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full'))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-napi-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'crates/napi/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-napi-${{ matrix.target }}-
+      # `cargo test -p napi_addon` proves the JSON-envelope error
+      # contract on the rlib build before we go to the trouble of
+      # producing the cdylib artefact. Running it as a separate step
+      # makes the failure mode clearer: a red `cargo test` step
+      # means the Rust-side envelope is wrong; a red `node --test`
+      # step means the JS-side surface drifted.
+      - name: cargo test -p napi_addon --lib
+        run: cargo test -p napi_addon --lib --target ${{ matrix.target }}
+      - name: npm install (crates/napi)
+        working-directory: crates/napi
+        run: npm install --no-fund --no-audit
+      # `napi build --platform --release` produces three files in
+      # `crates/napi/`:
+      #
+      # * `knowledge.<target>.node` — the platform-suffixed cdylib
+      #   the Electron host `require()`s through the `index.js`
+      #   loader.
+      # * `index.js` — auto-generated loader that picks the right
+      #   `.node` for the current `process.platform` /
+      #   `process.arch`.
+      # * `index.d.ts` — auto-generated TypeScript types.
+      #
+      # We compare the regenerated `index.js` / `index.d.ts` against
+      # the tracked-in-git copies and fail the job if they drift, so
+      # forgotten regenerations after a `crates/napi/src/bindings.rs`
+      # edit get caught at PR time rather than after a release ships
+      # stale types.
+      - name: napi build (release)
+        working-directory: crates/napi
+        run: npx napi build --platform --release --target ${{ matrix.target }} --js index.js --dts index.d.ts
+      - name: Verify generated loader / dts match tracked copies
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: crates/napi
+        run: |
+          git diff --exit-code -- index.js index.d.ts || (
+            echo '::error::crates/napi/index.js or index.d.ts is out of date — re-run `npx napi build --platform --release --js index.js --dts index.d.ts` from crates/napi/ and commit the result.'
+            exit 1
+          )
+      - name: node --test (smoke tests)
+        working-directory: crates/napi
+        run: node --test 'test/*.test.mjs'
+      - name: Upload .node artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-addon-${{ matrix.target }}
+          path: crates/napi/knowledge.*.node
+          if-no-files-found: error
+          retention-days: 14

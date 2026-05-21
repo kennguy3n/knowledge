@@ -113,11 +113,23 @@ The UniFFI (iOS / Android) and N-API (macOS / Windows) surfaces
 expose the core lifecycle, evidence, crypto, memory, and
 synthesis APIs. The currently live entry points are:
 
-`open_store`, `close_store`, `ingest_message`, `query`,
+`init`, `open_store`, `close_store`, `ingest_message`, `query`,
 `get_evidence`, `forget`, `forget_scope`, `encrypt`, `decrypt`,
 `generate_keypair`, `get_user_memory`, `pin`, `unpin`,
 `list_memories`, `run_decay_sweep`, `get_channel_memory`,
-`escape_fts_query`, and `trigger_synthesis`.
+`escape_fts_query`, `trigger_synthesis`, `core_version`, and
+`health_check`.
+
+The N-API surface in `crates/napi` exposes these as `camelCase`
+JS names (e.g. `openStore`, `ingestMessage`, `coreVersion`,
+`healthCheck`) via `napi-derive`'s standard rename; the Rust /
+UniFFI surface keeps the `snake_case` names above. `init`,
+`core_version`, and `health_check` are JS-facing bootstrap
+helpers — `init` parses a JSON config blob and primes the core,
+`core_version` returns the workspace semver baked into the build,
+and `health_check` is a synchronous "is the bridge alive?" probe
+that returns `"ok"` (Phase 6 will replace it with a full
+`HealthStatus` envelope sourced from metrics + tracing).
 
 `trigger_synthesis` dispatches a `SynthSummary` task through the
 on-device `InferenceRouter`, persists the resulting recap into

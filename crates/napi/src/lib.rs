@@ -18,9 +18,14 @@
 //! 3. A round-trippable [`NapiError`] mapped from [`ffi::FfiError`]
 //!    so the Electron host gets a stable JSON envelope.
 //!
-//! Real `#[napi]` proc-macros land when `napi` and `napi-derive` are
-//! pinned. Until then this crate compiles as a regular Rust library
-//! and is fully unit-testable from the workspace.
+//! Phase 4 — the [`#[napi]`] proc-macros are live. The cdylib that
+//! `napi build` produces is loaded by Node via `require('./*.node')`.
+//! The [`bindings`] module is the JS-facing surface; the freestanding
+//! `pub fn`s in this file remain the canonical Rust-facing API so
+//! unit tests and Rust callers can exercise the substrate without
+//! going through the Node bridge.
+//!
+//! See [`bindings`] for the full JS API.
 
 #![deny(missing_docs)]
 // Most N-API entry points in this file forward their `String` /
@@ -37,6 +42,7 @@
 // by-value taking in internal helpers that don't cross the FFI
 // boundary.
 
+pub mod bindings;
 pub mod error;
 pub mod types;
 
@@ -58,10 +64,13 @@ pub use types::{IngestRequest, InitConfig, QueryRequest};
 /// `0n` (BigInt zero) is the reserved "no handle" sentinel mirroring
 /// [`RuntimeHandle::NONE`]. The handle allocator on the Rust side
 /// starts at `1n` and never re-mints `0n`, so any call from JS that
-/// passes `0n` is guaranteed to be rejected with
-/// [`NapiError::Unavailable`] for the `evidence_store` subsystem.
-/// Hosts should treat `0n` as "not yet opened" rather than as a
-/// valid handle.
+/// passes `0n` is guaranteed to be rejected with the
+/// `"Unavailable"` kind tag — surfaced as
+/// [`NapiError::Ffi`]`(`[`ffi::FfiError::Unavailable`]`)` and
+/// stringified to JS as `kind: "Unavailable"` by
+/// [`NapiError::kind`] (which delegates through the wrapped
+/// [`ffi::FfiError`]). Hosts should treat `0n` as "not yet opened"
+/// rather than as a valid handle.
 pub type NapiHandle = u64;
 
 /// Initialize the Rust core with a JSON config blob. Hosts call this
@@ -301,6 +310,31 @@ pub fn decrypt(
     Ok(encode_b64(&plain))
 }
 
+/// Return the semver of the Rust core baked into this build artefact.
+///
+/// Sourced from `CARGO_PKG_VERSION` at compile time, which mirrors
+/// the workspace-level `version` in the root `Cargo.toml`. Hosts use
+/// this to assert against a known-good core before opening any stores
+/// so a stale addon from a previous install doesn't silently corrupt
+/// data. The corresponding JS-facing wrapper is
+/// [`bindings::js_core_version`].
+pub fn core_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Lightweight "is the bridge alive?" probe.
+///
+/// Returns the string `"ok"` synchronously without touching any
+/// subsystems. Phase 6 will replace this with a full `HealthStatus`
+/// envelope sourced from the substrate's metrics + tracing layer; for
+/// now it exists so callers (the desktop status panel and the
+/// `health-check` exit-code probe shipped alongside the addon) can
+/// confirm the FFI layer is reachable before any other call. The
+/// corresponding JS-facing wrapper is [`bindings::js_health_check`].
+pub fn health_check() -> String {
+    "ok".to_string()
+}
+
 const B64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn encode_b64(bytes: &[u8]) -> String {
@@ -328,7 +362,7 @@ fn encode_b64(bytes: &[u8]) -> String {
 
 fn decode_b64(s: &str) -> NapiResult<Vec<u8>> {
     let s = s.as_bytes();
-    if s.len() % 4 != 0 {
+    if !s.len().is_multiple_of(4) {
         return Err(NapiError::InvalidArgument {
             message: "base64 input length must be a multiple of 4".into(),
         });

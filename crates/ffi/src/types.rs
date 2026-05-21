@@ -136,7 +136,19 @@ pub struct MemoryRecord {
 }
 
 /// Filter for [`super::list_memories`].
+///
+/// `deny_unknown_fields` is applied here (rather than only at the
+/// N-API binding layer) because the same `MemoryFilter` shape is
+/// serialised across UniFFI (Swift / Kotlin) and the JS bridge.
+/// Rejecting unknown keys uniformly at the substrate layer means
+/// a typo like `pinnedOnly` (camelCase) or `Pinned_Only`
+/// (PascalCase) fails fast with a clear `InvalidArgument` at the
+/// FFI boundary on every host, rather than silently producing an
+/// empty `state` filter (since `state` is `Option<…>` and would
+/// otherwise default to `None`) and then returning a confusing
+/// over-broad row set.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MemoryFilter {
     /// If `Some`, restrict to rows in this state.
     pub state: Option<MemoryState>,
@@ -294,6 +306,37 @@ mod tests {
         let s = serde_json::to_string(&f).unwrap();
         let back: MemoryFilter = serde_json::from_str(&s).unwrap();
         assert_eq!(f, back);
+    }
+
+    #[test]
+    fn memory_filter_rejects_camelcase_pinned_only_alias() {
+        // Pins the `deny_unknown_fields` invariant — a JS / Swift
+        // caller using `pinnedOnly` (camelCase) instead of the
+        // canonical `pinned_only` (snake_case) must surface as a
+        // clear deserialization error, not silently default to
+        // `pinned_only = false`. This protects every host that
+        // marshals into `MemoryFilter` (N-API, UniFFI Swift,
+        // UniFFI Kotlin) at the substrate level.
+        let payload = r#"{"state":"Pinned","pinnedOnly":true,"pinned_only":true}"#;
+        let err = serde_json::from_str::<MemoryFilter>(payload)
+            .expect_err("MemoryFilter must reject unknown camelCase keys like `pinnedOnly`");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown field") && msg.contains("pinnedOnly"),
+            "expected `unknown field `pinnedOnly``, got {msg}"
+        );
+    }
+
+    #[test]
+    fn memory_filter_rejects_stray_unknown_field() {
+        // Anything other than `state` / `pinned_only` must error.
+        let payload = r#"{"state":null,"pinned_only":false,"junk":42}"#;
+        let err = serde_json::from_str::<MemoryFilter>(payload)
+            .expect_err("MemoryFilter must reject stray unknown keys");
+        assert!(
+            err.to_string().contains("unknown field"),
+            "expected `unknown field` error, got {err}"
+        );
     }
 
     #[test]

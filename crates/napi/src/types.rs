@@ -10,7 +10,15 @@ use ffi::types::{FfiImportanceClass, ScopeIdString, SourceKind};
 
 /// One-time initialization config the Electron host passes via
 /// `init(JSON.stringify(config))`.
+///
+/// `deny_unknown_fields` surfaces JS-side key typos (e.g.
+/// `"dataDir"` instead of `"data_dir"`) as a clear
+/// `InvalidArgument` error at the FFI boundary instead of
+/// silently using the [`Default`] for the missing field and then
+/// later failing with an opaque "directory does not exist" deep
+/// inside the substrate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InitConfig {
     /// Filesystem directory holding the encrypted SQLCipher
     /// database, model artefacts, and audit log.
@@ -21,7 +29,13 @@ pub struct InitConfig {
 }
 
 /// JSON-shaped argument object for [`super::ingest_message`].
+///
+/// `deny_unknown_fields` keeps the JS surface tight: a typo like
+/// `"scopeId"` (camelCase) or `"Body"` (PascalCase) becomes a
+/// clear `InvalidArgument` rather than silently emitting an
+/// `IngestEvent` against the wrong scope or with an empty body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IngestRequest {
     /// UUID-string scope id.
     pub scope_id: ScopeIdString,
@@ -40,7 +54,14 @@ fn default_importance() -> FfiImportanceClass {
 }
 
 /// JSON-shaped argument object for [`super::query`].
+///
+/// `deny_unknown_fields` rejects JS payloads with stray keys at
+/// the FFI boundary so a typo like `"queryText"` (camelCase)
+/// surfaces as `InvalidArgument` instead of running a hybrid
+/// query with an empty `query_text` (which would silently return
+/// the most-recent-rows bucket and look like a UI bug).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct QueryRequest {
     /// UUID-string scope id.
     pub scope_id: ScopeIdString,
