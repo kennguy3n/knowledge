@@ -580,6 +580,19 @@ mod mock_impl {
                 body: br#"{"error":"rate_limited"}"#.to_vec(),
             }
         }
+
+        /// Build a response with an arbitrary status and body. The
+        /// `content-type` header is left unset so callers can pin
+        /// the exact shape they need (e.g. text/plain for error
+        /// bodies).
+        #[must_use]
+        pub fn status(status: u16, body: impl Into<Vec<u8>>) -> Self {
+            Self {
+                status,
+                headers: Vec::new(),
+                body: body.into(),
+            }
+        }
     }
 
     /// Recorded request — useful for asserting that the connector
