@@ -20,7 +20,9 @@ use serde::Deserialize;
 use crate::config::ConnectorConfig;
 use crate::error::{ConnectorError, Result};
 use crate::http::{HttpRequest, HttpResponse, HttpTransport};
-use crate::token_vault::{OAuth2CodeExchange, OAuth2Token, RefreshedToken, TokenRefresher};
+use crate::token_vault::{
+    OAuth2CodeExchange, OAuth2Token, RefreshedToken, SecretToken, TokenRefresher,
+};
 
 /// Reqwest-backed OAuth2 client that drives both `authorization_code`
 /// and `refresh_token` grants over a shared [`HttpTransport`].
@@ -31,10 +33,33 @@ use crate::token_vault::{OAuth2CodeExchange, OAuth2Token, RefreshedToken, TokenR
 /// [`ConnectorConfig`] / the explicit `with_*` setters. The client
 /// is `Clone` so callers can share it across the connector
 /// runtime's worker pool.
-#[derive(Clone)]
+/// `client_secret` is held as a [`SecretToken`] so its heap buffer
+/// is zeroised on drop. The provider's OAuth2 client secret is a
+/// long-lived, hard-to-rotate credential (rotating it requires
+/// re-registering the application at the provider's developer
+/// console), so leaving its bytes in freed memory after a drop or a
+/// reqwest clone would leak it to whoever subsequently allocates
+/// that heap region. `SecretToken` already gives the access /
+/// refresh tokens the same treatment in [`OAuth2Token`] / [`RefreshedToken`]
+/// — the client secret deserves *at least* the same care.
 pub struct ReqwestOAuth2Client<T: HttpTransport> {
     transport: std::sync::Arc<T>,
-    client_secret: Option<String>,
+    client_secret: Option<SecretToken>,
+}
+
+// Manual `Clone` impl: a derived one would synthesise a `T: Clone`
+// bound, but the only field that depends on `T` is `Arc<T>`, which
+// is `Clone` *regardless* of whether `T` is. Cloning produces a
+// second `Arc` handle to the shared transport (no underlying
+// transport copy) and a `Clone` of the `Option<SecretToken>` (which
+// is itself a fresh heap allocation that zeroises on drop).
+impl<T: HttpTransport> Clone for ReqwestOAuth2Client<T> {
+    fn clone(&self) -> Self {
+        Self {
+            transport: std::sync::Arc::clone(&self.transport),
+            client_secret: self.client_secret.clone(),
+        }
+    }
 }
 
 impl<T: HttpTransport> std::fmt::Debug for ReqwestOAuth2Client<T> {
@@ -64,9 +89,16 @@ impl<T: HttpTransport> ReqwestOAuth2Client<T> {
 
     /// Provide the OAuth2 client secret (kept in memory only — the
     /// substrate never persists it). Chainable.
+    ///
+    /// The accepted `impl Into<String>` is wrapped in a [`SecretToken`]
+    /// before being stored, so its heap buffer is zeroised on drop
+    /// and a `Debug`-print of this client never exposes the value.
+    /// Callers that already hold a [`SecretToken`] (e.g. surfaced
+    /// from an OS keychain wrapper) can pass `secret.expose().to_owned()`
+    /// here; the value re-enters a zeroising container immediately.
     #[must_use]
     pub fn with_client_secret(mut self, secret: impl Into<String>) -> Self {
-        self.client_secret = Some(secret.into());
+        self.client_secret = Some(SecretToken::new(secret));
         self
     }
 
@@ -121,7 +153,15 @@ impl<T: HttpTransport + 'static> OAuth2CodeExchange for ReqwestOAuth2Client<T> {
         let token_url = Self::token_url(config)?;
         let client_id = Self::client_id(config)?;
         let redirect_uri = Self::redirect_uri(config)?;
-        let secret = self.client_secret.as_deref().unwrap_or("");
+        // `SecretToken::expose` is the explicit unwrap point — the
+        // borrowed `&str` only lives long enough to feed the form
+        // body builder below, and `expose` is documented as the
+        // single read accessor (no `Deref<str>` impl exists, so we
+        // cannot accidentally log it).
+        let secret = self
+            .client_secret
+            .as_ref()
+            .map_or("", SecretToken::expose);
         let form = [
             ("grant_type", "authorization_code"),
             ("code", auth_code),
@@ -159,7 +199,10 @@ impl<T: HttpTransport + 'static> ReqwestOAuth2Client<T> {
     ) -> Result<RefreshedToken> {
         let token_url = Self::token_url(config)?;
         let client_id = Self::client_id(config)?;
-        let secret = self.client_secret.as_deref().unwrap_or("");
+        let secret = self
+            .client_secret
+            .as_ref()
+            .map_or("", SecretToken::expose);
         let form = [
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
@@ -186,10 +229,22 @@ impl<T: HttpTransport + 'static> ReqwestOAuth2Client<T> {
 /// runtime with no compile-time signal. `ConfiguredRefresher` fixes
 /// the asymmetry by capturing the missing config at construction
 /// time, so the vault's polymorphic call path works correctly.
-#[derive(Clone)]
 pub struct ConfiguredRefresher<T: HttpTransport> {
     client: ReqwestOAuth2Client<T>,
     config: ConnectorConfig,
+}
+
+// Manual `Clone` for the same reason as `ReqwestOAuth2Client`:
+// avoid synthesising an unnecessary `T: Clone` bound on the
+// `HttpTransport` type parameter (the transport is shared via
+// `Arc` inside the embedded client).
+impl<T: HttpTransport> Clone for ConfiguredRefresher<T> {
+    fn clone(&self) -> Self {
+        Self {
+            client: self.client.clone(),
+            config: self.config.clone(),
+        }
+    }
 }
 
 impl<T: HttpTransport> std::fmt::Debug for ConfiguredRefresher<T> {
@@ -500,6 +555,53 @@ mod tests {
         assert!(body.contains("refresh_token=RT-OLD"));
         assert!(body.contains("client_id=client-abc"));
         assert!(body.contains("client_secret=s3cret"));
+    }
+
+    /// `client_secret` is held in a [`SecretToken`] so its heap
+    /// buffer is zeroised on drop, its `Debug` is redacted, and a
+    /// `Clone` of the client doesn't leave a second un-zeroising
+    /// copy on the heap. Earlier revisions stored a plain `String`
+    /// and leaked the secret to freed memory after each clone /
+    /// drop. Pinning the Debug + on-wire behaviour here makes that
+    /// regression impossible to land silently.
+    #[test]
+    fn client_secret_is_redacted_in_debug_and_survives_clone() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let client =
+            ReqwestOAuth2Client::new(transport.clone()).with_client_secret("super-secret-value");
+
+        // Debug must NOT contain the raw secret.
+        let dbg = format!("{client:?}");
+        assert!(
+            !dbg.contains("super-secret-value"),
+            "Debug leaked client_secret: {dbg}"
+        );
+        assert!(
+            dbg.contains("[redacted]"),
+            "Debug must show '[redacted]' instead of the secret: {dbg}"
+        );
+
+        // Cloning must preserve the secret (it's the entire point
+        // of `Clone` on this type — workers share the client across
+        // the connector runtime) but each copy still lives inside
+        // a `SecretToken` so the heap buffer zeroises on drop.
+        let cloned = client.clone();
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s","token_type":"Bearer"}"#.to_vec(),
+            ),
+        );
+        let _ = cloned
+            .exchange_code(&cfg(), "code")
+            .expect("clone retains secret");
+        let recorded = transport.recorded();
+        let body = String::from_utf8(recorded[0].body.clone()).expect("utf8");
+        assert!(
+            body.contains("client_secret=super-secret-value"),
+            "Clone must still POST the secret"
+        );
     }
 
     #[test]
