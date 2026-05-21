@@ -334,7 +334,7 @@ fn encode_b64(bytes: &[u8]) -> String {
 
 fn decode_b64(s: &str) -> NapiResult<Vec<u8>> {
     let s = s.as_bytes();
-    if s.len() % 4 != 0 {
+    if !s.len().is_multiple_of(4) {
         return Err(NapiError::InvalidArgument {
             message: "base64 input length must be a multiple of 4".into(),
         });
