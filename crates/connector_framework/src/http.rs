@@ -142,12 +142,43 @@ impl HttpResponse {
         (200..300).contains(&self.status)
     }
 
-    /// True iff `status` represents a transient error worth retrying
-    /// — 408 (request timeout), 429 (too many requests), 502 / 503 /
-    /// 504 (upstream availability).
+    /// True iff `status` represents a transient error worth retrying.
+    ///
+    /// The set we treat as transient is the conventional SaaS-API retry
+    /// list — 408 (request timeout), 429 (too many requests), 500
+    /// (internal server error), 502 (bad gateway), 503 (service
+    /// unavailable), 504 (gateway timeout) — i.e. everything reqwest's
+    /// `retry-policies`, Python `urllib3.Retry(status_forcelist=[500,
+    /// 502, 503, 504])`, the Atlassian / Notion / HubSpot SDKs, and the
+    /// AWS / Azure SDKs all retry by default.
+    ///
+    /// 500 is intentionally included even though the strict reading of
+    /// the spec ("the server encountered an unexpected condition")
+    /// could be a deterministic bug that retry won't fix. In practice
+    /// every cloud SaaS this substrate targets — Slack, Notion,
+    /// Atlassian (Jira / Confluence), Google Drive, Microsoft Graph,
+    /// HubSpot, Figma — issues 500s for transient capacity / load /
+    /// dependency-blip events that succeed on retry. Treating 500 as
+    /// permanent here would surface those as connector-sync failures
+    /// to the host, which would then have to add its own retry layer
+    /// on top — defeating the purpose of having a transport-level
+    /// retry policy. The exponential backoff in [`RetryPolicy::backoff`]
+    /// keeps us from hammering a truly-broken upstream.
+    ///
+    /// Safety for non-idempotent POSTs: every POST the connector
+    /// framework issues is either (a) an OAuth2 token endpoint, where a
+    /// 500 has not consumed the `code` / `refresh_token` (a successful
+    /// consume would have returned 2xx); a subsequent retry that lands
+    /// on a healthy server either succeeds or gets a 4xx that
+    /// `is_transient` returns false for; (b) a webhook subscription
+    /// create, which providers dedup by callback URL; or (c) a
+    /// provider-specific search endpoint (Notion's `/v1/search`) that
+    /// is server-side idempotent. Connectors that need non-idempotent
+    /// POST semantics must opt out of transport-level retry by setting
+    /// [`RetryPolicy::max_retries`] to 0 on a per-call basis.
     #[must_use]
     pub fn is_transient(&self) -> bool {
-        matches!(self.status, 408 | 429 | 502 | 503 | 504)
+        matches!(self.status, 408 | 429 | 500 | 502 | 503 | 504)
     }
 
     /// Look up a response header by lower-cased name.
@@ -776,8 +807,15 @@ mod tests {
     }
 
     #[test]
-    fn http_response_is_transient_for_429_and_503() {
-        for s in [408u16, 429, 502, 503, 504] {
+    fn http_response_is_transient_for_standard_retry_set() {
+        // Pin the exact retry set so a future change to `is_transient`
+        // (e.g. adding 425 Too Early, or stripping 500 again) shows up
+        // here loudly instead of silently shifting connector retry
+        // behaviour across the whole substrate. 500 is part of the
+        // retry set — see the `is_transient` doc for the rationale
+        // (every cloud SaaS we target issues 500 for transient
+        // capacity / dependency-blip events that succeed on retry).
+        for s in [408u16, 429, 500, 502, 503, 504] {
             assert!(
                 HttpResponse {
                     status: s,
@@ -788,7 +826,7 @@ mod tests {
                 "status {s} should be transient"
             );
         }
-        for s in [200u16, 401, 404, 500] {
+        for s in [200u16, 301, 400, 401, 403, 404, 409, 422] {
             assert!(
                 !HttpResponse {
                     status: s,
