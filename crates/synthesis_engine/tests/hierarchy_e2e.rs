@@ -51,7 +51,12 @@ use synthesis_pipeline::{
 fn fixture_master_key() -> MasterKey {
     let mut k = [0u8; MASTER_KEY_LEN];
     for (i, b) in k.iter_mut().enumerate() {
-        *b = (i as u8).wrapping_mul(17);
+        // `i` is bounded by `MASTER_KEY_LEN` (≤ 64) so bitmasking
+        // to a byte is a true zero-extension; the `&` short-circuits
+        // `cast_possible_truncation` to a deterministic mod-256.
+        #[allow(clippy::cast_possible_truncation)]
+        let lane = (i & 0xFF) as u8;
+        *b = lane.wrapping_mul(17);
     }
     k
 }
@@ -59,7 +64,10 @@ fn fixture_master_key() -> MasterKey {
 fn fixture_signer_key() -> [u8; TEST_SIGNER_KEY_LEN] {
     let mut k = [0u8; TEST_SIGNER_KEY_LEN];
     for (i, b) in k.iter_mut().enumerate() {
-        *b = (i as u8).wrapping_add(3);
+        // Same bitmasking rationale as `fixture_master_key()` above.
+        #[allow(clippy::cast_possible_truncation)]
+        let lane = (i & 0xFF) as u8;
+        *b = lane.wrapping_add(3);
     }
     k
 }

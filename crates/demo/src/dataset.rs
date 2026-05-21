@@ -86,6 +86,15 @@ Risks: regulatory pushback in the EU, customer churn after the initial onboardin
 and the dependency on the new entitlement service which is still in private beta. \
 This plan has been signed off by the executive team and is the canonical record.";
 
+/// Convert a small loop index into an `i64` minute offset for the
+/// synthetic dataset. The dataset has fewer than a thousand rows per
+/// channel so the cast cannot wrap on any realistic target; `try_from`
+/// keeps the cast lints honest and saturates at `i64::MAX` rather
+/// than wrapping in the pathological case.
+fn idx_as_i64(i: usize) -> i64 {
+    i64::try_from(i).unwrap_or(i64::MAX)
+}
+
 pub fn build_dataset() -> Dataset {
     let user_scope = NamedScope {
         id: ScopeId(Uuid::new_v4()),
@@ -138,7 +147,7 @@ pub fn build_dataset() -> Dataset {
             scope_tier: ScopeTier::Channel,
             source_ref: format!("slack/{plat}/m{i:03}"),
             body: (*line).to_string(),
-            occurred_at: base + Duration::minutes(i as i64 * 4),
+            occurred_at: base + Duration::minutes(idx_as_i64(i) * 4),
         });
     }
 
@@ -161,7 +170,7 @@ pub fn build_dataset() -> Dataset {
             scope_tier: ScopeTier::Channel,
             source_ref: format!("slack/{mkt}/m{i:03}"),
             body: (*line).to_string(),
-            occurred_at: base + Duration::minutes(2 + i as i64 * 6),
+            occurred_at: base + Duration::minutes(2 + idx_as_i64(i) * 6),
         });
     }
 
@@ -186,7 +195,7 @@ pub fn build_dataset() -> Dataset {
             scope_tier: ScopeTier::Channel,
             source_ref: format!("slack/{scope}/noise{i:03}"),
             body: (*line).to_string(),
-            occurred_at: base + Duration::minutes(60 + i as i64 * 3),
+            occurred_at: base + Duration::minutes(60 + idx_as_i64(i) * 3),
         });
     }
 
@@ -204,7 +213,7 @@ pub fn build_dataset() -> Dataset {
             scope_tier: ScopeTier::Domain,
             source_ref: format!("doc/{dom}/d{i:03}"),
             body: (*line).to_string(),
-            occurred_at: base + Duration::minutes(120 + i as i64 * 5),
+            occurred_at: base + Duration::minutes(120 + idx_as_i64(i) * 5),
         });
     }
     // Long body that triggers the body-table path (>512 bytes).
@@ -238,7 +247,7 @@ pub fn build_dataset() -> Dataset {
             scope_tier: ScopeTier::Tenant,
             source_ref: format!("policy/{tnt}/p{i:03}"),
             body: (*line).to_string(),
-            occurred_at: base + Duration::minutes(200 + i as i64 * 10),
+            occurred_at: base + Duration::minutes(200 + idx_as_i64(i) * 10),
         });
     }
     msgs.push(SyntheticMessage {
@@ -265,7 +274,7 @@ pub fn build_dataset() -> Dataset {
             scope_tier: ScopeTier::User,
             source_ref: format!("note/{usr}/n{i:03}"),
             body: (*line).to_string(),
-            occurred_at: base + Duration::minutes(280 + i as i64 * 4),
+            occurred_at: base + Duration::minutes(280 + idx_as_i64(i) * 4),
         });
     }
 

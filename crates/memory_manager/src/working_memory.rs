@@ -159,15 +159,27 @@ impl WorkingMemory {
             return;
         }
         // Evict the entry with the lowest relevance score; tie-break
-        // by oldest insertion time.
+        // by oldest insertion time. We compare scores through
+        // `f64::total_cmp` rather than `<` / `==` so that
+        //
+        //   * NaN scores (which compare unordered under `<`) get a
+        //     deterministic placement instead of silently being
+        //     "incomparable" and disrupting the eviction choice, and
+        //   * the secondary `inserted_at` key only fires when the
+        //     primary scores are bit-for-bit identical — which is
+        //     the only case where the lint's "float equality is
+        //     fragile" warning is actually irrelevant.
         let mut idx = 0;
         for i in 1..self.entries.len() {
             let cur = &self.entries[idx];
             let cand = &self.entries[i];
-            if cand.relevance_score < cur.relevance_score
-                || (cand.relevance_score == cur.relevance_score
-                    && cand.inserted_at < cur.inserted_at)
-            {
+            let score_ordering = cand.relevance_score.total_cmp(&cur.relevance_score);
+            let preferred = match score_ordering {
+                std::cmp::Ordering::Less => true,
+                std::cmp::Ordering::Equal => cand.inserted_at < cur.inserted_at,
+                std::cmp::Ordering::Greater => false,
+            };
+            if preferred {
                 idx = i;
             }
         }

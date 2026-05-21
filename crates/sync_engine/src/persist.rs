@@ -313,7 +313,13 @@ where
             params![self.scope.as_uuid().as_bytes().to_vec()],
             |row| row.get(0),
         )?;
-        Ok(n as usize)
+        // SQLite COUNT(*) is always non-negative and bounded by the
+        // row count of a single table, so this fits in `usize` on
+        // 64-bit targets. The explicit fallible conversion guards
+        // 32-bit targets and any future driver oddity.
+        usize::try_from(n).map_err(|_| {
+            SyncError::Serialisation("sync_ops row count exceeds usize::MAX on this target")
+        })
     }
 
     /// Append every op in `[self.persisted_len .. engine.log.len())`
@@ -420,7 +426,9 @@ where
             params![
                 self.scope.as_uuid().as_bytes().to_vec(),
                 op.replica_id.as_bytes().to_vec(),
-                op.seq as i64,
+                i64::try_from(op.seq).map_err(|_| {
+                    SyncError::Serialisation("op seq exceeds SQLite signed 64-bit range")
+                })?,
                 op.created_at.timestamp(),
                 op_kind_tag(&op.op),
                 nonce.to_vec(),
@@ -450,8 +458,16 @@ where
             params![
                 self.scope.as_uuid().as_bytes().to_vec(),
                 self.engine.replica_id().as_bytes().to_vec(),
-                self.engine.op_log().clock as i64,
-                self.engine.op_log().compaction_epoch as i64,
+                i64::try_from(self.engine.op_log().clock).map_err(|_| {
+                    SyncError::Serialisation(
+                        "sync clock exceeds SQLite signed 64-bit range",
+                    )
+                })?,
+                i64::try_from(self.engine.op_log().compaction_epoch).map_err(|_| {
+                    SyncError::Serialisation(
+                        "compaction_epoch exceeds SQLite signed 64-bit range",
+                    )
+                })?,
             ],
         )?;
         Ok(())
@@ -479,7 +495,15 @@ where
                 let ct: Vec<u8> = row.get(3)?;
                 let replica_id = slice_to_uuid(&replica_bytes)?;
                 let nonce = slice_to_nonce(&nonce_bytes)?;
-                raw_rows.push((nonce, ct, replica_id, seq as u64));
+                // SQLite stores `seq` as signed 64-bit; ops with a
+                // negative seq would indicate either schema
+                // corruption or a writer that bypassed the
+                // `i64::try_from(op.seq)` check above. Surface as
+                // a deserialisation error rather than wrap.
+                let seq_u64 = u64::try_from(seq).map_err(|_| {
+                    SyncError::Serialisation("persisted sync op had negative seq")
+                })?;
+                raw_rows.push((nonce, ct, replica_id, seq_u64));
             }
         }
 
@@ -501,7 +525,14 @@ where
             |row| {
                 let clock: i64 = row.get(0)?;
                 let epoch: i64 = row.get(1)?;
-                Ok((clock as u64, epoch as u64))
+                // SQLite stores both fields as signed; a negative
+                // value would indicate schema corruption from a
+                // non-substrate writer. Treat as zero for the
+                // `.max()` reconciliation below — that's the
+                // safe-conservative behaviour.
+                let clock_u64 = u64::try_from(clock).unwrap_or(0);
+                let epoch_u64 = u64::try_from(epoch).unwrap_or(0);
+                Ok((clock_u64, epoch_u64))
             },
         ) {
             // Symmetric `.max()` semantics for both meta fields: the
@@ -586,7 +617,14 @@ mod tests {
         // `[u8; MASTER_KEY_LEN]`.
         let mut k: MasterKey = [0u8; crypto::MASTER_KEY_LEN];
         for (i, slot) in k.iter_mut().enumerate() {
-            *slot = (i as u8).wrapping_mul(7).wrapping_add(13);
+            // `i` is bounded by `MASTER_KEY_LEN` (32) so masking
+            // to a byte never truncates the meaningful bits.
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "deterministic test key seed; i < MASTER_KEY_LEN < 256"
+            )]
+            let byte = (i & 0xFF) as u8;
+            *slot = byte.wrapping_mul(7).wrapping_add(13);
         }
         k
     }

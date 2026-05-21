@@ -665,7 +665,13 @@ pub fn run_decay_sweep(handle: RuntimeHandle, scope_id: ScopeIdString) -> FfiRes
         }
         let umo = rt.user_memory_mut(scope);
         let report = umo.decay_sweep(chrono::Utc::now());
-        let count = (report.candidates_archived + report.superseded_archived) as u32;
+        // `candidates_archived + superseded_archived` are `usize`
+        // counters; saturate at `u32::MAX` for the FFI return rather
+        // than wrapping. The substrate's working sets are bounded
+        // well below `u32::MAX` per scope so this is a defensive
+        // cast, not a behavioural one.
+        let count = u32::try_from(report.candidates_archived + report.superseded_archived)
+            .unwrap_or(u32::MAX);
         rt.flush_user_memory(scope)?;
         Ok(count)
     })

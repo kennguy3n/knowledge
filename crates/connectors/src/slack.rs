@@ -215,7 +215,12 @@ fn slack_ts_to_datetime(ts: &str) -> Option<DateTime<Utc>> {
     let mut parts = ts.split('.');
     let secs = parts.next()?.parse::<i64>().ok()?;
     let micro = parts.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
-    DateTime::<Utc>::from_timestamp(secs, (micro as u32).saturating_mul(1_000))
+    // Slack microseconds are a non-negative 6-digit string;
+    // `try_from` rejects negative or overflowing values and we then
+    // multiply into nanoseconds with saturating arithmetic to keep
+    // an out-of-range microsecond from wrapping around.
+    let micro_u32 = u32::try_from(micro).unwrap_or(0);
+    DateTime::<Utc>::from_timestamp(secs, micro_u32.saturating_mul(1_000))
 }
 
 /// Map a Slack message into a substrate-side connector event,

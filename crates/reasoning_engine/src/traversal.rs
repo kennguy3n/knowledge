@@ -279,7 +279,7 @@ impl<'g> GraphTraversal<'g> {
 
         let nothing_to_visit = self.graph.get_node(query.start).is_none();
         if nothing_to_visit {
-            trace.elapsed_ms = start_time.elapsed().as_millis() as u64;
+            trace.elapsed_ms = elapsed_ms_saturating(&start_time);
             return TraversalResult {
                 paths,
                 visited: visited_order,
@@ -353,7 +353,7 @@ impl<'g> GraphTraversal<'g> {
             }
         }
 
-        trace.elapsed_ms = start_time.elapsed().as_millis() as u64;
+        trace.elapsed_ms = elapsed_ms_saturating(&start_time);
 
         TraversalResult {
             paths,
@@ -392,6 +392,15 @@ impl<'g> GraphTraversal<'g> {
         }
         out
     }
+}
+
+/// `Instant::elapsed().as_millis()` is `u128`; the substrate's
+/// reasoning budgets are sub-second so any value beyond `u64::MAX`
+/// milliseconds (~585 million years) is impossible in practice.
+/// `try_from` saturates defensively rather than wrapping if a
+/// pathological caller (e.g. a stalled debug session) overflows.
+fn elapsed_ms_saturating(start: &Instant) -> u64 {
+    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

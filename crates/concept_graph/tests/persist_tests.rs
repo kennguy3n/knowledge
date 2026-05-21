@@ -9,7 +9,13 @@ use evidence_store::ScopeId;
 fn fixture_master_key() -> MasterKey {
     let mut k = [0u8; MASTER_KEY_LEN];
     for (i, b) in k.iter_mut().enumerate() {
-        *b = (i as u8).wrapping_mul(31).wrapping_add(7);
+        // `i` is in `0..MASTER_KEY_LEN` (≤ 64) so bitmasking to a
+        // byte is a true zero-extension; the `&` guarantees a
+        // deterministic mod-256 lane independent of any future
+        // `MASTER_KEY_LEN` change.
+        #[allow(clippy::cast_possible_truncation)]
+        let lane = (i & 0xFF) as u8;
+        *b = lane.wrapping_mul(31).wrapping_add(7);
     }
     k
 }

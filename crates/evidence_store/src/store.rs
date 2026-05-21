@@ -974,7 +974,10 @@ impl EvidenceStore {
              LIMIT ?2",
         )?;
         let rows = stmt.query_map(
-            params![scope_id.as_uuid().as_bytes().as_slice(), limit as i64],
+            params![
+                scope_id.as_uuid().as_bytes().as_slice(),
+                clamp_limit_to_sqlite(limit),
+            ],
             |row| row.get::<_, Vec<u8>>(0),
         )?;
         let mut out = Vec::new();
@@ -1005,7 +1008,7 @@ impl EvidenceStore {
             params![
                 query,
                 scope_id.as_uuid().as_bytes().as_slice(),
-                limit as i64,
+                clamp_limit_to_sqlite(limit),
             ],
             |row| row.get::<_, Vec<u8>>(0),
         )?;
@@ -1026,7 +1029,10 @@ impl EvidenceStore {
         let nonce = random_nonce();
         let aad = ring_buffer_aad(scope_id);
         let ciphertext = encrypt_aead(&key, &nonce, body, &aad)?;
-        let payload_size = (ciphertext.len() + nonce.len()) as i64;
+        // Payload size fits in SQLite's signed 64-bit INTEGER on any
+        // realistic deployment (ciphertext + nonce << 2^63). Clamp
+        // defensively rather than overflow if the bound ever changes.
+        let payload_size = i64::try_from(ciphertext.len() + nonce.len()).unwrap_or(i64::MAX);
         // Unix epoch *seconds*, matching the documented type of
         // [`RingBufferEntry::created_at`] and the `evidence` table's
         // `created_at` column.
@@ -1045,8 +1051,11 @@ impl EvidenceStore {
             ],
         )?;
 
-        // Evict oldest until we fit within the cap.
-        let cap = self.config.ring_buffer_max_bytes as i64;
+        // Evict oldest until we fit within the cap. Clamp the
+        // configured cap into SQLite's signed 64-bit range — a
+        // value > i64::MAX would mean "unbounded", which is what
+        // saturating to i64::MAX expresses.
+        let cap = i64::try_from(self.config.ring_buffer_max_bytes).unwrap_or(i64::MAX);
         loop {
             let total: i64 = tx.query_row(
                 "SELECT COALESCE(SUM(payload_size), 0) FROM ring_buffer",
@@ -1121,7 +1130,7 @@ impl EvidenceStore {
             [],
             |r| r.get(0),
         )?;
-        Ok(total.max(0) as usize)
+        Ok(i64_count_to_usize(total))
     }
 
     /// Return the number of ring-buffer entries (across all scopes).
@@ -1129,7 +1138,7 @@ impl EvidenceStore {
         let n: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM ring_buffer", [], |r| r.get(0))?;
-        Ok(n.max(0) as usize)
+        Ok(i64_count_to_usize(n))
     }
 
     /// Drop every ring-buffer entry across all scopes.
@@ -1143,7 +1152,7 @@ impl EvidenceStore {
         let n: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM evidence", [], |r| r.get(0))?;
-        Ok(n.max(0) as usize)
+        Ok(i64_count_to_usize(n))
     }
 
     /// Number of distinct body-table rows. Useful in tests of dedup.
@@ -1151,7 +1160,7 @@ impl EvidenceStore {
         let n: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM body_store", [], |r| r.get(0))?;
-        Ok(n.max(0) as usize)
+        Ok(i64_count_to_usize(n))
     }
 
     /// Reference count for a body in the body-store. Useful in tests
@@ -2372,6 +2381,25 @@ fn scope_dek_aad(scope_id: ScopeId) -> Vec<u8> {
     aad.extend_from_slice(b"scope-dek-wrap:v1");
     aad.extend_from_slice(scope_id.as_uuid().as_bytes());
     aad
+}
+
+/// Clamp a Rust `usize` LIMIT/OFFSET argument into the signed range
+/// SQLite expects on the wire. Saturating at `i64::MAX` is the
+/// correct semantic for an out-of-range value: SQL `LIMIT i64::MAX`
+/// is effectively "no limit", which is what "limit too large to
+/// represent" means.
+pub(crate) fn clamp_limit_to_sqlite(n: usize) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
+}
+
+/// Convert a `COUNT(*) / SUM(...)` result from SQLite into a Rust
+/// `usize`. Both functions are non-negative by definition; the
+/// `.max(0)` guard handles a negative value defensively in case
+/// schema corruption or a non-substrate writer produced one. On a
+/// 32-bit target a count > `usize::MAX` saturates rather than
+/// truncating.
+fn i64_count_to_usize(n: i64) -> usize {
+    usize::try_from(n.max(0)).unwrap_or(usize::MAX)
 }
 
 fn slice_to_uuid(bytes: &[u8]) -> Result<Uuid> {

@@ -347,6 +347,22 @@ mod tests {
     use crate::transitions::MemoryStateMachine;
     use evidence_store::ScopeId;
 
+    /// Compare two `f64` values for tests where the expected value
+    /// is a defined boundary (`0.0`, `1.0`, `0.5`) produced by an
+    /// exact integer-ratio division. Using `total_cmp` here is
+    /// stricter than an epsilon check (boundary values must match
+    /// bit-for-bit) but tolerates `NaN` correctly — `0.0_f64 ==
+    /// NaN` is `false`, whereas `total_cmp` orders `NaN` at one
+    /// extreme so a regression that produces `NaN` still fails the
+    /// assertion loudly.
+    #[track_caller]
+    fn assert_float_eq(actual: f64, expected: f64) {
+        assert!(
+            actual.total_cmp(&expected).is_eq(),
+            "float mismatch: actual={actual}, expected={expected}"
+        );
+    }
+
     fn obj(
         state: MemoryState,
         retrieval_count: u32,
@@ -365,7 +381,7 @@ mod tests {
         let p = compute_retention_precision(&[]);
         assert_eq!(p.retained, 0);
         assert_eq!(p.retrieved, 0);
-        assert_eq!(p.precision, 0.0);
+        assert_float_eq(p.precision, 0.0);
     }
 
     #[test]
@@ -392,7 +408,7 @@ mod tests {
             obj(MemoryState::Canonical, 2, SensitivityClass::Useful),
         ];
         let p = compute_retention_precision(&objects);
-        assert_eq!(p.precision, 1.0);
+        assert_float_eq(p.precision, 1.0);
     }
 
     #[test]
@@ -409,7 +425,7 @@ mod tests {
         let r = compute_contradiction_rate(&[], &[]);
         assert_eq!(r.ground_truth_total, 0);
         assert_eq!(r.detected, 0);
-        assert_eq!(r.rate, 0.0);
+        assert_float_eq(r.rate, 0.0);
     }
 
     #[test]
@@ -419,7 +435,7 @@ mod tests {
         let r = compute_contradiction_rate(&[p1, p2], &[p1, p2]);
         assert_eq!(r.detected, 2);
         assert_eq!(r.ground_truth_total, 2);
-        assert_eq!(r.rate, 1.0);
+        assert_float_eq(r.rate, 1.0);
     }
 
     #[test]
@@ -437,7 +453,7 @@ mod tests {
         let bogus = ContradictionPair::new(Uuid::new_v4(), Uuid::new_v4());
         let r = compute_contradiction_rate(&[bogus], &[truth]);
         assert_eq!(r.detected, 0);
-        assert_eq!(r.rate, 0.0);
+        assert_float_eq(r.rate, 0.0);
     }
 
     #[test]
@@ -496,7 +512,7 @@ mod tests {
         assert_eq!(r.decay_tuning.deleted, 1);
         assert_eq!(r.decay_tuning.archived, 2);
         assert_eq!(r.decay_tuning.scored, 5);
-        assert_eq!(r.retention_precision.precision, 1.0);
+        assert_float_eq(r.retention_precision.precision, 1.0);
     }
 
     #[test]
@@ -571,6 +587,6 @@ mod tests {
         assert_eq!(r.decay_tuning.promoted, 3);
         assert_eq!(r.retention_precision.retained, 1);
         assert_eq!(r.retention_precision.retrieved, 1);
-        assert_eq!(r.retention_precision.precision, 1.0);
+        assert_float_eq(r.retention_precision.precision, 1.0);
     }
 }

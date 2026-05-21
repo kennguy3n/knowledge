@@ -145,7 +145,15 @@ impl RuntimeState {
     pub fn new() -> Self {
         let mut master_key_bytes = [0u8; 32];
         for (i, b) in master_key_bytes.iter_mut().enumerate() {
-            *b = ((i as u32).wrapping_mul(17).wrapping_add(3) & 0xff) as u8;
+            // `i` is bounded by 32, so bitmasking to a byte is a
+            // true zero-extension. The mod-256 lane stays
+            // deterministic across the cast lints.
+            #[allow(clippy::cast_possible_truncation)]
+            let lane = (i & 0xFF) as u8;
+            *b = u32::from(lane)
+                .wrapping_mul(17)
+                .wrapping_add(3)
+                .to_le_bytes()[0];
         }
         Self {
             master_key: master_key_bytes,

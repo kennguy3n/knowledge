@@ -143,7 +143,12 @@ mod duration_millis_opt {
     #[allow(clippy::ref_option)]
     pub fn serialize<S: Serializer>(d: &Option<Duration>, s: S) -> Result<S::Ok, S::Error> {
         match d {
-            Some(d) => s.serialize_some(&(d.as_millis() as u64)),
+            // `Duration::as_millis` is `u128`; the substrate's timeouts
+            // are bounded to a few seconds (configured in
+            // `TeeWorkerConfig`), so `try_from` saturates at
+            // `u64::MAX` for any pathological value rather than
+            // wrapping silently.
+            Some(d) => s.serialize_some(&u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
             None => s.serialize_none(),
         }
     }
@@ -371,7 +376,10 @@ impl HttpClient for MockHttpClient {
                 Ok(SynthesisResponse {
                     output_text: format!("{}: {}", req.scope_tier_tag(), joined),
                     model_version: cfg.model_id.clone(),
-                    tokens_used: joined.len() as u32,
+                    // `tokens_used` is a coarse byte-length estimate;
+                    // saturate at `u32::MAX` for any pathological
+                    // input that exceeds 4 GiB rather than wrapping.
+                    tokens_used: u32::try_from(joined.len()).unwrap_or(u32::MAX),
                     latency_ms: 1,
                 })
             }
@@ -381,7 +389,11 @@ impl HttpClient for MockHttpClient {
                 if s.is_empty() {
                     return Err(EndpointError::Endpoint("mock sequence is empty".into()));
                 }
-                let idx = (n as usize).min(s.len() - 1);
+                // `n` is the call counter (`u64`); saturating to
+                // `usize::MAX` on 32-bit targets is harmless because
+                // the subsequent `.min(s.len() - 1)` clamps to the
+                // sequence length anyway.
+                let idx = usize::try_from(n).unwrap_or(usize::MAX).min(s.len() - 1);
                 Ok(s[idx].clone())
             }
         }

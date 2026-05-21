@@ -267,7 +267,7 @@ fn url_encode(s: &str, out: &mut String) {
     for c in s.bytes() {
         match c {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(c as char)
+                out.push(c as char);
             }
             b' ' => out.push('+'),
             _ => {

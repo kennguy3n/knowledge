@@ -10,6 +10,22 @@ use evidence_store::{
 };
 use tempfile::tempdir;
 
+/// Assert that a retrieval score is bit-for-bit equal to an expected
+/// boundary value (typically `0.0`). The retrieval-score struct fields
+/// are populated by the retriever from short-circuit paths (no float
+/// arithmetic happens when, e.g., the vector lane has no embedding
+/// model), so an exact-equality assertion is the right semantic.
+/// `f64::total_cmp` gives a strict comparison that still flags `NaN`
+/// loudly — `assert_eq!` on `f64` would have been correct here but
+/// trips `clippy::float_cmp`.
+#[track_caller]
+fn assert_score_eq(actual: f64, expected: f64) {
+    assert!(
+        actual.total_cmp(&expected).is_eq(),
+        "score mismatch: actual={actual}, expected={expected}"
+    );
+}
+
 /// Always errors. Used to assert `rerank_with_embeddings` propagates
 /// `EvidenceError::Embedding` rather than collapsing the failure into
 /// a `Schema` variant via `Box::leak` (the regression target for the
@@ -84,8 +100,8 @@ fn fts_search_finds_matching_text() {
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].evidence_id, r1.evidence_id);
     assert!(hits[0].fts_score > 0.0);
-    assert_eq!(hits[0].recency_score, 0.0);
-    assert_eq!(hits[0].vector_score, 0.0);
+    assert_score_eq(hits[0].recency_score, 0.0);
+    assert_score_eq(hits[0].vector_score, 0.0);
 }
 
 #[test]
@@ -142,7 +158,7 @@ fn hybrid_search_combines_fts_and_recency() {
     assert!(hits[0].score > 0.0);
     assert!(hits[0].fts_score > 0.0);
     assert!(hits[0].recency_score > 0.0);
-    assert_eq!(hits[0].vector_score, 0.0);
+    assert_score_eq(hits[0].vector_score, 0.0);
 }
 
 #[test]
@@ -507,9 +523,10 @@ fn search_hybrid_treats_corrupted_body_row_as_miss() {
         .iter()
         .find(|h| h.evidence_id == corrupted.evidence_id)
         .expect("corrupted row must still appear (FTS-matched), just with a zero vector_score");
-    assert_eq!(
-        corrupted_hit.vector_score, 0.0,
-        "corrupted row's vector lane must be demoted to 0.0, not error: {hits:?}"
+    assert_score_eq(corrupted_hit.vector_score, 0.0);
+    assert!(
+        corrupted_hit.score >= 0.0,
+        "corrupted row's combined score must remain finite: {hits:?}"
     );
 }
 
