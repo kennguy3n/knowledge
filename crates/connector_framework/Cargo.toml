@@ -13,7 +13,13 @@ default = []
 # `ReqwestOAuth2CodeExchange` / `ReqwestTokenRefresher`. Gated so
 # CI hosts without the reqwest / rustls build chain (cross-checks,
 # offline lints) can still compile the crate against fixtures.
-http-client = ["dep:reqwest"]
+#
+# Pulls in `reqwest/blocking` explicitly so an async-only build
+# (only `async-http-client` enabled) does NOT transitively pull in
+# reqwest's blocking client + its dedicated thread pool. See the
+# rationale on the workspace-level `reqwest` dep in the root
+# Cargo.toml.
+http-client = ["dep:reqwest", "reqwest/blocking"]
 # Exposes test-only helpers (`MockHttpTransport`, fixture-driven
 # connector knobs) outside `cfg(test)` so neighbouring crates'
 # integration tests can reach them. Production builds leave this
@@ -28,8 +34,10 @@ test-support = []
 async-runtime = ["dep:tokio", "dep:async-trait"]
 # Phase 5 async HTTP transport. Independent of `http-client` so
 # offline cross-checks can build the async surface without the
-# blocking client. Adds the async features of `reqwest` (without
-# the `blocking` feature, which would pull in its own thread pool).
+# blocking client. Adds reqwest with only the async features
+# enabled — `reqwest/blocking` (and its dedicated thread pool) is
+# opted into solely by the sync `http-client` feature above, so an
+# `async-http-client`-only build never links the blocking client.
 async-http-client = ["async-runtime", "dep:reqwest"]
 # Phase 5 webhook receiver server. Built on `axum` + `hyper` +
 # `tower`. Gated separately from `async-runtime` so a substrate
@@ -61,6 +69,12 @@ hyper-util = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+# The `webhook-server` tests in `src/webhook_server.rs` spin up an
+# axum server on `127.0.0.1:0` and drive it with an async reqwest
+# client. Declared here (not on the `webhook-server` feature) so
+# the runtime dependency footprint of `webhook-server` stays
+# minimal — `reqwest` is only linked into the test binaries.
+reqwest = { workspace = true }
 
 [lints]
 workspace = true

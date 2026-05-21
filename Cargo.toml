@@ -107,7 +107,16 @@ serde_json = "1"
 # `async-http-client` feature). Both are gated so cross-checks and
 # offline lints that don't link the network stack can still build
 # the substrate.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+#
+# `blocking` is *not* in the workspace-default feature set: consumers
+# that need it (the sync `BlockingHttpTransport` and the sync llama
+# adapter) opt in via the `reqwest/blocking` feature on their own
+# `http-client` Cargo feature. Async-only consumers
+# (`async-http-client`) therefore do not transitively pull in
+# reqwest's blocking client + its dedicated thread pool, keeping the
+# async dependency footprint honest with what `async-http-client`'s
+# doc comment promises.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Tokio multi-thread runtime for the Phase 5 async surface. Gated
 # behind `[features]` on the crates that opt-in — the synchronous

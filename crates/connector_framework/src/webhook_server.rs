@@ -20,9 +20,10 @@
 //! * registers a `GET /healthz` liveness endpoint that returns
 //!   `200 OK` with the substrate's build version (callers can use
 //!   this for load-balancer health checks),
-//! * surfaces graceful shutdown via
-//!   [`WebhookServer::shutdown_signal`] so the substrate can drive
-//!   the receiver from its own lifecycle without leaking sockets.
+//! * surfaces graceful shutdown via [`WebhookServer::run_until`]
+//!   (oneshot-driven) and [`WebhookServer::serve_on`]
+//!   (arbitrary-future-driven) so the substrate can drive the
+//!   receiver from its own lifecycle without leaking sockets.
 //!
 //! The dispatcher trait is intentionally generic: it doesn't
 //! mention `Connector` directly. That lets the substrate plumb the
@@ -174,9 +175,10 @@ impl WebhookServer {
     }
 
     /// Serve forever (until the underlying tokio runtime is
-    /// dropped). Most callers should prefer
-    /// [`Self::serve_with_shutdown`] so they can drive shutdown
-    /// from the substrate's lifecycle.
+    /// dropped). Most callers should prefer [`Self::run_until`]
+    /// (oneshot-driven) or [`Self::serve_on`] (arbitrary-future
+    /// driven) so they can drive shutdown from the substrate's
+    /// lifecycle without leaking the listener socket on teardown.
     ///
     /// # Errors
     ///
@@ -257,7 +259,23 @@ async fn webhook_handler(
     match dispatcher.dispatch(&provider_id, body).await {
         Ok(()) => (StatusCode::OK, "ok".into()),
         Err(ConnectorError::Webhook(msg)) => (StatusCode::BAD_REQUEST, msg),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()),
+        // Deliberately opaque: any non-`Webhook` `ConnectorError` is
+        // a substrate-side failure (`Transport`, `Auth`,
+        // `Permission`, an upstream queue, an internal serialization
+        // bug, …). The external provider that POSTed this webhook
+        // has no business seeing the substrate's internal error
+        // strings — those can contain queue names, redacted-but-not
+        // -fully-scrubbed URLs, auth-state hints, or upstream tenant
+        // ids. Dispatchers are responsible for their own
+        // server-side logging / tracing of the underlying `Err(e)`;
+        // the receiver just signals "upstream is unhealthy, retry
+        // later" via 502 with a fixed body. (Webhook providers
+        // typically only inspect the status code anyway and retry
+        // any 5xx.)
+        Err(_) => (
+            StatusCode::BAD_GATEWAY,
+            "internal dispatcher error".to_string(),
+        ),
     }
 }
 
@@ -391,7 +409,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatcher_other_error_maps_to_502() {
+    async fn dispatcher_other_error_maps_to_502_with_opaque_body() {
+        // CollectorDispatcher in `OtherErr` mode returns
+        // `ConnectorError::Transport("queue down")`. The receiver
+        // MUST translate that into a 502 with a generic body so the
+        // external provider cannot learn anything about the
+        // substrate's internal queue topology. In particular, the
+        // body must NOT echo back the dispatcher's
+        // `e.to_string()` (which would include "queue down").
         let (addr, shutdown, handle, _collector) = spawn_test_server(Mode::OtherErr).await;
 
         let client = reqwest::Client::new();
@@ -402,6 +427,12 @@ mod tests {
             .await
             .expect("send");
         assert_eq!(resp.status(), 502);
+        let body = resp.text().await.expect("body");
+        assert_eq!(body, "internal dispatcher error");
+        assert!(
+            !body.contains("queue down"),
+            "502 body must not leak ConnectorError detail; got: {body}"
+        );
 
         let _ = shutdown.send(());
         handle.await.expect("join").expect("serve");
