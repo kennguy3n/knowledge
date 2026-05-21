@@ -147,6 +147,19 @@ impl InferenceRouter {
         // the previous thread. This is a no-op on the common path
         // (one bootstrap per router lifetime).
         self.shutdown();
+        // Reset the bootstrap-completion signal so a `wait_for_bootstrap`
+        // call that races the second probe parks on the condvar
+        // instead of short-circuiting on the prior bootstrap's
+        // `done == true` / `bootstrapped == true`. Without this every
+        // `dispatch` call between `spawn_bootstrap` (re-spawn) and the
+        // new probe's completion would observe stale adapter
+        // availability — e.g. an adapter that was previously
+        // unreachable but is now back online would still route to
+        // `Unavailable` until the new probe lands, which defeats the
+        // entire point of re-bootstrapping. This is a no-op on the
+        // common path (the very first `spawn_bootstrap` call) because
+        // both fields are already `false` from `new`.
+        self.reset_bootstrap_state();
         let me = Arc::clone(&self);
         let handle = std::thread::Builder::new()
             .name("inference-router-bootstrap".into())
@@ -262,6 +275,29 @@ impl InferenceRouter {
         let mut done = lock.lock().expect("bootstrap_signal lock");
         *done = true;
         cvar.notify_all();
+    }
+
+    /// Internal helper — reset the bootstrap-completion signal so a
+    /// subsequent [`Self::spawn_bootstrap`] can re-probe and have its
+    /// `wait_for_bootstrap` callers park correctly.
+    ///
+    /// Called from [`Self::spawn_bootstrap`] between joining the
+    /// prior probe thread (via [`Self::shutdown`]) and spawning the
+    /// new one. The invariant lives in one place so the
+    /// atomic-vs-condvar ordering cannot drift: both fields are
+    /// flipped under the condvar's mutex so a `wait_for_bootstrap`
+    /// caller cannot interleave between them and observe a
+    /// half-reset state (atomic `false` but condvar still `done`).
+    ///
+    /// No `notify_all` is issued — we are signalling "NOT done",
+    /// not "done", and the only consumer of `done == false` is the
+    /// `while !*done` loop inside [`Self::wait_for_bootstrap`] which
+    /// observes the transition on its next condvar wake.
+    fn reset_bootstrap_state(&self) {
+        let (lock, _cvar) = &self.bootstrap_signal;
+        let mut done = lock.lock().expect("bootstrap_signal lock");
+        self.bootstrapped.store(false, Ordering::SeqCst);
+        *done = false;
     }
 
     /// Borrow the underlying config.
@@ -832,5 +868,124 @@ mod tests {
         std::thread::sleep(Duration::from_millis(5));
         router.bootstrap();
         t.join().unwrap();
+    }
+
+    /// Adapter whose `probe()` parks on a barrier until the test
+    /// releases it. Used to deterministically reproduce the
+    /// "second `spawn_bootstrap` re-uses stale state" bug — with the
+    /// adapter blocked inside `probe()`, we get a clean window
+    /// between `spawn_bootstrap` returning and the new probe
+    /// completing in which to observe `is_bootstrapped()` /
+    /// `wait_for_bootstrap()` behaviour.
+    struct GatedProbeAdapter {
+        gate: Arc<std::sync::Barrier>,
+    }
+    impl InferenceAdapter for GatedProbeAdapter {
+        fn kind(&self) -> AdapterKind {
+            AdapterKind::LlamaCpp
+        }
+        fn probe(&self) -> ProbeResult {
+            self.gate.wait();
+            ProbeResult::Available
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn supports(&self, _: InferenceTask) -> bool {
+            false
+        }
+        fn generate(&self, _: &str, _: &str, _: &str) -> Result<String, RouterError> {
+            Err(RouterError::Unavailable {
+                task: "synth_summary",
+            })
+        }
+    }
+
+    /// Regression for the bug Devin Review flagged on commit d5b0a61:
+    /// `spawn_bootstrap` (second call) must reset both the
+    /// `bootstrapped` atomic *and* the condvar `done` flag, otherwise
+    /// `wait_for_bootstrap` short-circuits on the prior bootstrap's
+    /// stale state and `dispatch` callers race ahead with outdated
+    /// adapter availability.
+    ///
+    /// Strategy: first bootstrap to set `bootstrapped = true`. Then
+    /// re-spawn with a `GatedProbeAdapter` whose `probe()` is blocked
+    /// at a barrier. While the new probe is in flight, both
+    /// `is_bootstrapped()` and the condvar's `done` flag MUST be
+    /// `false` — if either remained `true`, callers would race past
+    /// the in-flight probe. Releasing the barrier then completes the
+    /// probe; the post-conditions return to `true`.
+    #[test]
+    fn re_spawn_bootstrap_resets_bootstrapped_and_condvar_done_flags() {
+        use std::sync::Barrier;
+        use std::thread;
+        // Use a barrier with 2 participants: the test thread + the
+        // adapter's `probe()`. The test calls `gate.wait()` from the
+        // test thread to unblock the probe.
+        let gate = Arc::new(Barrier::new(2));
+        let router = Arc::new(router_with(vec![
+            Box::new(GatedProbeAdapter {
+                gate: Arc::clone(&gate),
+            }),
+            Box::new(FallbackAdapter::new()),
+        ]));
+
+        // First, drive a complete bootstrap on a background thread so
+        // the test thread can release the gate from outside the
+        // probe. After this finishes, `bootstrapped == true` and the
+        // condvar's `done == true` — i.e. the exact stale state the
+        // bug relies on.
+        let r1 = Arc::clone(&router);
+        let first = thread::spawn(move || r1.bootstrap());
+        gate.wait(); // release the first probe
+        first.join().unwrap();
+        assert!(router.is_bootstrapped(), "first bootstrap must complete");
+
+        // Now re-spawn with the gate still closed. `spawn_bootstrap`
+        // joins the prior (already-finished) thread, resets state,
+        // and spawns a new thread which immediately parks inside
+        // `probe()` waiting for the gate.
+        Arc::clone(&router).spawn_bootstrap();
+
+        // The critical assertion: while the new probe is in flight,
+        // the atomic MUST be false. Before the fix, the atomic stayed
+        // `true` from the prior bootstrap and a `dispatch` here would
+        // race past the in-flight probe.
+        assert!(
+            !router.is_bootstrapped(),
+            "second spawn_bootstrap MUST reset bootstrapped to false until the new probe completes",
+        );
+
+        // The condvar's `done` flag must also be reset — verify by
+        // spinning up a waiter and confirming it blocks on the
+        // condvar (i.e. it does not return until we release the
+        // gate). Use a completion-flag pattern to avoid timing-
+        // fragile sleeps in the assertion path.
+        let r3 = Arc::clone(&router);
+        let waiter_done = Arc::new(AtomicBool::new(false));
+        let waiter_done_clone = Arc::clone(&waiter_done);
+        let waiter = thread::spawn(move || {
+            r3.wait_for_bootstrap();
+            waiter_done_clone.store(true, Ordering::SeqCst);
+        });
+
+        // Give the waiter a chance to park on the condvar. Even with
+        // pathological scheduling, a 50ms window is enough to detect
+        // the bug — if `done` were still `true` from the prior
+        // bootstrap, `wait_for_bootstrap` would short-circuit
+        // immediately and the flag would already be set.
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            !waiter_done.load(Ordering::SeqCst),
+            "wait_for_bootstrap MUST block until the new probe completes \
+             — it observed stale done==true from the prior bootstrap",
+        );
+
+        // Release the second probe. The waiter should now unblock
+        // and `is_bootstrapped()` should return to true.
+        gate.wait();
+        waiter.join().unwrap();
+        assert!(waiter_done.load(Ordering::SeqCst));
+        assert!(router.is_bootstrapped());
     }
 }

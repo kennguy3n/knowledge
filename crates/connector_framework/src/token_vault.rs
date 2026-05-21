@@ -150,13 +150,26 @@ impl OAuth2Token {
 
 /// Result of a token-refresh flow — the *new* access/refresh pair
 /// returned by the provider's token endpoint.
+///
+/// Both token fields wrap their secret in [`SecretToken`] so the
+/// underlying heap buffer is zeroised on drop and a `Debug`-print of
+/// the struct never leaks the value. This mirrors how [`OAuth2Token`]
+/// holds its access/refresh pair — a `RefreshedToken` is a
+/// short-lived intermediate between the provider's response and the
+/// vault entry, but "short-lived" is exactly the kind of qualifier
+/// that decays once a future maintainer extends the type's lifetime
+/// (e.g. captures it in a trace span or a retry buffer). Mirroring
+/// [`OAuth2Token`]'s discipline removes the asymmetry and means every
+/// path that touches a real token in this crate goes through the same
+/// zero-on-drop container.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefreshedToken {
-    /// New access token.
-    pub access_token: String,
+    /// New access token (zero-on-drop).
+    pub access_token: SecretToken,
     /// New refresh token (some providers rotate, others return the
     /// same value). Pass `None` to keep the existing refresh token.
-    pub refresh_token: Option<String>,
+    /// Zero-on-drop when `Some`.
+    pub refresh_token: Option<SecretToken>,
     /// New expiry.
     pub expires_at: DateTime<Utc>,
     /// New scope (if changed).
@@ -306,9 +319,17 @@ impl OAuth2TokenVault {
                 .to_string();
             let refreshed = refresher.refresh(&refresh_token)?;
             let entry = self.tokens.get_mut(&instance).expect("checked above");
-            entry.access_token = SecretToken::new(refreshed.access_token);
+            // `refreshed.access_token` / `refresh_token` are already
+            // [`SecretToken`]s — move them directly into the vault
+            // entry rather than copying the bytes through a fresh
+            // allocation. The prior `entry.access_token =
+            // SecretToken::new(refreshed.access_token)` step double-
+            // allocated and left the source buffer to drop separately,
+            // which expanded the zero-on-drop surface area without
+            // shrinking the exposure window.
+            entry.access_token = refreshed.access_token;
             if let Some(rt) = refreshed.refresh_token {
-                entry.refresh_token = Some(SecretToken::new(rt));
+                entry.refresh_token = Some(rt);
             }
             entry.expires_at = refreshed.expires_at;
             if let Some(s) = refreshed.scope {
@@ -332,8 +353,8 @@ mod tests {
     impl TokenRefresher for StaticRefresher {
         fn refresh(&self, _refresh_token: &str) -> Result<RefreshedToken> {
             Ok(RefreshedToken {
-                access_token: self.access.clone(),
-                refresh_token: self.refresh.clone(),
+                access_token: SecretToken::new(self.access.clone()),
+                refresh_token: self.refresh.clone().map(SecretToken::new),
                 expires_at: self.expires_at,
                 scope: None,
             })

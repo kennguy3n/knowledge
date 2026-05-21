@@ -430,9 +430,14 @@ fn token_response_to_oauth2(resp: TokenResponse, now: DateTime<Utc>) -> OAuth2To
 }
 
 fn token_response_to_refreshed(resp: TokenResponse, now: DateTime<Utc>) -> RefreshedToken {
+    // Wrap both token fields in [`SecretToken`] so the provider's
+    // plaintext access / refresh tokens never sit in a non-zeroising
+    // heap allocation — see the doc on [`RefreshedToken`] for the
+    // rationale on why this intermediate type holds the same
+    // discipline as [`OAuth2Token`].
     RefreshedToken {
-        access_token: resp.access_token,
-        refresh_token: resp.refresh_token,
+        access_token: SecretToken::new(resp.access_token),
+        refresh_token: resp.refresh_token.map(SecretToken::new),
         expires_at: now + expires_in_to_duration(resp.expires_in),
         scope: resp.scope,
     }
@@ -575,10 +580,10 @@ mod tests {
         let refreshed = client
             .refresh_with_config(&cfg(), "RT-OLD")
             .expect("refresh");
-        assert_eq!(refreshed.access_token, "NEW");
+        assert_eq!(refreshed.access_token.expose(), "NEW");
         assert_eq!(refreshed.scope.as_deref(), Some("read_content"));
         // Provider didn't return a new refresh_token — keeper.
-        assert_eq!(refreshed.refresh_token, None);
+        assert!(refreshed.refresh_token.is_none());
 
         let recorded = transport.recorded();
         let body = String::from_utf8(recorded[0].body.clone()).expect("utf8");
@@ -766,7 +771,7 @@ mod tests {
         let refreshed: RefreshedToken = (&refresher as &dyn TokenRefresher)
             .refresh("RT-OLD")
             .expect("trait-driven refresh succeeds");
-        assert_eq!(refreshed.access_token, "FRESH");
+        assert_eq!(refreshed.access_token.expose(), "FRESH");
         assert_eq!(refreshed.scope.as_deref(), Some("read_content"));
 
         // Wire-level: the refresh grant went out with the captured
