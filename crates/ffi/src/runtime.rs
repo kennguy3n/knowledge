@@ -227,10 +227,15 @@ pub struct FfiRuntime {
     /// [`FallbackAdapter`] handles even without an SLM) are always
     /// available; synthesis tasks dispatch through the MLX +
     /// llama.cpp adapters when those are wired by the platform shell.
-    /// Held inside a `Mutex` because `InferenceRouter::dispatch`
-    /// takes `&self` but the adapters need interior mutability
-    /// (probe state, activity tracking); the outer mutex is fine
-    /// because dispatch is rare relative to ingest/query.
+    ///
+    /// No interior `Mutex` is needed: `InferenceRouter::dispatch`
+    /// takes `&self`, and each adapter manages its own probe state
+    /// / activity tracking through `OnceLock`, `AtomicBool`, or
+    /// `RwLock` as appropriate. The whole `FfiRuntime` is itself
+    /// held inside `Arc<Mutex<FfiRuntime>>` at the handle registry,
+    /// which already serialises calls against the same handle —
+    /// adding an inner mutex would double-lock without buying any
+    /// extra safety.
     pub(crate) inference_router: InferenceRouter,
 }
 

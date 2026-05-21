@@ -139,6 +139,30 @@ pub trait TokenRefresher {
     fn refresh(&self, refresh_token: &str) -> Result<RefreshedToken>;
 }
 
+/// One-shot OAuth2 authorisation-code exchange — invoked by a
+/// connector's `authenticate` method when the substrate first
+/// negotiates access.
+///
+/// Production code wires this to an HTTP client that POSTs to the
+/// provider's `/token` endpoint with
+/// `grant_type=authorization_code`. The trait keeps the connector
+/// boundary provider-agnostic.
+pub trait OAuth2CodeExchange {
+    /// Exchange `auth_code` for an access / refresh token pair.
+    /// `redirect_uri` and `client_id` come from
+    /// `config.auth_config_json` (see [`crate::config::ConnectorConfig`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConnectorError::Auth`] on provider rejection or
+    /// [`ConnectorError::Transport`] on network failure.
+    fn exchange_code(
+        &self,
+        config: &crate::config::ConnectorConfig,
+        auth_code: &str,
+    ) -> Result<OAuth2Token>;
+}
+
 /// In-memory OAuth2 token vault, keyed by [`ConnectorInstanceId`].
 ///
 /// The vault stores [`OAuth2Token`] bundles per connector instance

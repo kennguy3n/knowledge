@@ -27,6 +27,21 @@ pub const DEFAULT_COMPLETED_TASK_TTL_DAYS: i64 = 30;
 /// Default TTL after which a *resolved* open question is archived.
 pub const DEFAULT_RESOLVED_QUESTION_TTL_DAYS: i64 = 30;
 
+/// Canonical form used by the `*_dedup` insert helpers to decide
+/// whether two surface texts refer to the same channel-memory item.
+///
+/// The synthesis SLM is non-deterministic on whitespace and casing —
+/// the same decision may come back as `"Approved policy v3"` on one
+/// run and `"approved  policy v3"` on the next. We collapse all
+/// runs of ASCII whitespace, trim, and lowercase before comparing so
+/// these collapse to one row.
+fn normalise_surface_text(s: &str) -> String {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
 /// Newtype wrapper so callers can distinguish a recorded **decision**
 /// from a generic memory object.
 ///
@@ -183,6 +198,10 @@ impl ChannelMemoryObject {
 
     /// Append a decision and stamp `updated_at`. Returns the
     /// decision's memory id for callbacks.
+    ///
+    /// Unconditional append — for the synthesis-driven path that
+    /// must not accumulate duplicates across windows, use
+    /// [`Self::add_decision_dedup`] instead.
     pub fn add_decision(&mut self, decision: Decision) -> Uuid {
         let id = decision.memory.id;
         self.decisions.push(decision);
@@ -192,6 +211,9 @@ impl ChannelMemoryObject {
 
     /// Append a task and stamp `updated_at`. Returns the task's
     /// memory id.
+    ///
+    /// Unconditional append — for the synthesis-driven path see
+    /// [`Self::add_task_dedup`].
     pub fn add_task(&mut self, task: ActiveTask) -> Uuid {
         let id = task.memory.id;
         self.active_tasks.push(task);
@@ -201,11 +223,87 @@ impl ChannelMemoryObject {
 
     /// Append an open question and stamp `updated_at`. Returns the
     /// question's memory id.
+    ///
+    /// Unconditional append — for the synthesis-driven path see
+    /// [`Self::add_open_question_dedup`].
     pub fn add_open_question(&mut self, question: OpenQuestion) -> Uuid {
         let id = question.memory.id;
         self.open_questions.push(question);
         self.updated_at = Utc::now();
         id
+    }
+
+    /// Idempotent variant of [`Self::add_decision`] for the
+    /// synthesis pipeline.
+    ///
+    /// Repeated `trigger_synthesis` calls feed overlapping evidence
+    /// windows to the SLM, which re-emits the same decisions on
+    /// every run. A naive `add_decision` would accumulate
+    /// duplicates with each run. This variant compares the surface
+    /// `text` against existing decisions and skips the insert if a
+    /// case-insensitive whitespace-normalised match is found —
+    /// preserving the original decision's memory state, lifecycle,
+    /// and decay timing.
+    ///
+    /// Returns `Some(memory_id)` when the decision was newly
+    /// inserted, `None` if it was deduplicated against an existing
+    /// entry.
+    pub fn add_decision_dedup(&mut self, decision: Decision) -> Option<Uuid> {
+        let key = normalise_surface_text(&decision.text);
+        if self
+            .decisions
+            .iter()
+            .any(|d| normalise_surface_text(&d.text) == key)
+        {
+            return None;
+        }
+        Some(self.add_decision(decision))
+    }
+
+    /// Idempotent variant of [`Self::add_task`] for synthesis.
+    /// Dedupes by `(text, assignee)` after surface normalisation so
+    /// "@Sara draft the RFC" and "Draft the RFC" assigned to "@Sara"
+    /// collapse to one row.
+    ///
+    /// Already-completed tasks are *not* re-added: completing a task
+    /// is an explicit lifecycle event and re-adding would resurrect
+    /// it as `Candidate`, undoing the completion. Returns `None`
+    /// in both the "dedup against active" and "dedup against
+    /// completed" cases.
+    pub fn add_task_dedup(&mut self, task: ActiveTask) -> Option<Uuid> {
+        let key = normalise_surface_text(&task.text);
+        let assignee_key = task
+            .assignee
+            .as_deref()
+            .map(normalise_surface_text)
+            .unwrap_or_default();
+        if self.active_tasks.iter().any(|t| {
+            normalise_surface_text(&t.text) == key
+                && t.assignee
+                    .as_deref()
+                    .map(normalise_surface_text)
+                    .unwrap_or_default()
+                    == assignee_key
+        }) {
+            return None;
+        }
+        Some(self.add_task(task))
+    }
+
+    /// Idempotent variant of [`Self::add_open_question`] for
+    /// synthesis. Dedupes by surface text. Already-resolved
+    /// questions are *not* re-added: resolving is an explicit
+    /// lifecycle event and re-adding would reopen the question.
+    pub fn add_open_question_dedup(&mut self, question: OpenQuestion) -> Option<Uuid> {
+        let key = normalise_surface_text(&question.text);
+        if self
+            .open_questions
+            .iter()
+            .any(|q| normalise_surface_text(&q.text) == key)
+        {
+            return None;
+        }
+        Some(self.add_open_question(question))
     }
 
     /// Mark `question_id` as resolved.
@@ -336,5 +434,71 @@ mod tests {
         let mut chan = ChannelMemoryObject::new(scope);
         let err = chan.resolve_question(Uuid::new_v4()).unwrap_err();
         assert!(matches!(err, MemoryError::NotFound(_)));
+    }
+
+    /// Pins the dedup contract for the synthesis pipeline: even
+    /// if the SLM re-emits the same decision text on every run
+    /// (case- and whitespace-insensitive), the channel memory
+    /// records it exactly once. Regression test for the
+    /// `synthesize_scope` duplicate-accumulation bug.
+    #[test]
+    fn add_decision_dedup_collapses_repeated_synthesis_runs() {
+        let scope = ScopeId::new_v4();
+        let mut chan = ChannelMemoryObject::new(scope);
+
+        let first = chan.add_decision_dedup(Decision::new(scope, "Approved policy v3"));
+        assert!(first.is_some(), "first insert must succeed");
+
+        // Whitespace-normalised + case-insensitive match must be
+        // treated as the same decision.
+        let dup = chan.add_decision_dedup(Decision::new(scope, "  approved   POLICY v3  "));
+        assert!(dup.is_none(), "second run must dedup");
+
+        let new = chan.add_decision_dedup(Decision::new(scope, "Approved policy v4"));
+        assert!(new.is_some(), "genuinely new decision must insert");
+
+        assert_eq!(chan.decisions.len(), 2);
+    }
+
+    #[test]
+    fn add_task_dedup_keys_on_text_and_assignee() {
+        let scope = ScopeId::new_v4();
+        let mut chan = ChannelMemoryObject::new(scope);
+
+        let a = ActiveTask::new(scope, "Draft RFC").with_assignee("@sara");
+        let b = ActiveTask::new(scope, " draft  rfc ").with_assignee("@SARA");
+        let c = ActiveTask::new(scope, "Draft RFC").with_assignee("@bob");
+
+        assert!(chan.add_task_dedup(a).is_some());
+        assert!(
+            chan.add_task_dedup(b).is_none(),
+            "case/whitespace normalised match must dedup"
+        );
+        assert!(
+            chan.add_task_dedup(c).is_some(),
+            "different assignee is a different task"
+        );
+        assert_eq!(chan.active_tasks.len(), 2);
+    }
+
+    #[test]
+    fn add_open_question_dedup_preserves_resolution_state() {
+        let scope = ScopeId::new_v4();
+        let mut chan = ChannelMemoryObject::new(scope);
+
+        let id = chan
+            .add_open_question_dedup(OpenQuestion::new(scope, "Who owns the API rollout?"))
+            .expect("first insert");
+        chan.resolve_question(id).unwrap();
+        assert!(chan.open_questions[0].is_resolved());
+
+        // SLM re-emits the same question on the next synthesis
+        // window. Dedup must NOT reopen the resolved question by
+        // inserting a fresh `OpenQuestion` row.
+        let dup =
+            chan.add_open_question_dedup(OpenQuestion::new(scope, "who   owns the api rollout?"));
+        assert!(dup.is_none());
+        assert_eq!(chan.open_questions.len(), 1);
+        assert!(chan.open_questions[0].is_resolved());
     }
 }

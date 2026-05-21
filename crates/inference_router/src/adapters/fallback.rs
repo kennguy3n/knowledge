@@ -98,16 +98,25 @@ fn stable_tag(task_tag: &str) -> &'static str {
 /// Strip the static prompt scaffolding so the heuristics scan only
 /// the user-visible message body.
 ///
-/// The substrate's prompt templates (see [`crate::task::InferenceTask::prompt_template`])
-/// end with one of `"\n\nMessage:\n"`, `"\n\nObservation:\n"`, or
-/// `"\n\nObservations:\n"` followed by the body. We split on the
+/// The substrate's prompt templates (see
+/// [`crate::task::InferenceTask::prompt_template`]) end with one of
+/// `"\n\nMessage:\n"`, `"\n\nObservation:\n"`, `"\n\nObservations:\n"`,
+/// or `"\n\nSession:\n"` followed by the body. We split on the
 /// rightmost matching marker so a body that itself contains the
 /// marker text (rare but possible) doesn't truncate the result.
+///
+/// `Session:\n` is the `SynthSummary` marker. The fallback adapter
+/// itself returns `Unavailable` for synthesis tasks, but enumerating
+/// the marker here keeps the extractor in lock-step with
+/// [`InferenceTask::prompt_template`] — so any future helper or
+/// downstream caller that reuses `extract_body` against a synthesis
+/// prompt still gets the bare body back.
 fn extract_body(prompt: &str) -> &str {
     for marker in [
         "\n\nMessage:\n",
         "\n\nObservation:\n",
         "\n\nObservations:\n",
+        "\n\nSession:\n",
     ] {
         if let Some(idx) = prompt.rfind(marker) {
             return &prompt[idx + marker.len()..];
@@ -710,5 +719,16 @@ mod tests {
     #[test]
     fn extract_body_returns_whole_prompt_when_no_marker() {
         assert_eq!(extract_body("nothing matches here"), "nothing matches here");
+    }
+
+    /// Pins lock-step coverage between `extract_body` and
+    /// [`crate::task::InferenceTask::prompt_template`] for the
+    /// SynthSummary template's `Session:\n` marker.
+    #[test]
+    fn extract_body_strips_session_marker_used_by_synth_summary() {
+        let template = crate::task::InferenceTask::SynthSummary.prompt_template();
+        let body = "alice: ship it\nbob: lgtm";
+        let prompt = template.replace("{body}", body);
+        assert_eq!(extract_body(&prompt), body);
     }
 }

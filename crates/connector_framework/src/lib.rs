@@ -31,6 +31,8 @@ pub mod config;
 pub mod connector;
 pub mod error;
 pub mod event;
+pub mod http;
+pub mod oauth;
 pub mod sync;
 pub mod token_vault;
 pub mod webhook;
@@ -44,9 +46,18 @@ pub use config::{AuthKind, ConnectorConfig, ConnectorInstance, ConnectorKind};
 pub use connector::{Connector, SyncRunResult};
 pub use error::{ConnectorError, Result};
 pub use event::{ConnectorEvent, SourceDocumentId, SourceUserId};
+#[cfg(feature = "http-client")]
+pub use http::{BlockingHttpTransport, DEFAULT_HTTP_TIMEOUT_SECS};
+pub use http::{HttpMethod, HttpRequest, HttpResponse, HttpTransport, RetryPolicy};
+#[cfg(any(test, feature = "test-support"))]
+pub use http::{MockHttpTransport, MockResponse, RecordedRequest};
+#[cfg(feature = "http-client")]
+pub use oauth::default_oauth_client;
+pub use oauth::{ReqwestOAuth2Client, DEFAULT_OAUTH_TIMEOUT_SECS};
 pub use sync::{SyncMode, SyncState, SyncStatus};
 pub use token_vault::{
-    ConnectorInstanceId, OAuth2Token, OAuth2TokenVault, RefreshedToken, SecretToken, TokenRefresher,
+    ConnectorInstanceId, OAuth2CodeExchange, OAuth2Token, OAuth2TokenVault, RefreshedToken,
+    SecretToken, TokenRefresher,
 };
 pub use webhook::{
     parse_webhook_event, WebhookEventTypes, WebhookId, WebhookSecret, WebhookStatus,

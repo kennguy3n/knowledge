@@ -847,14 +847,20 @@ fn synthesize_scope(rt: &mut runtime::FfiRuntime, scope: ScopeId) -> FfiResult<S
     let window_id = uuid::Uuid::new_v4();
     let cmo = rt.channel_memory_mut(scope);
     cmo.update_recap(bundle.recap.clone(), Some(window_id));
+    // `*_dedup` variants — the SLM re-emits the same decisions /
+    // questions / tasks every synthesis window because each run
+    // sees an overlapping evidence window. Naive `add_*` would
+    // append the same surface text on every run; dedup preserves
+    // the original entry's lifecycle state (resolved /
+    // completed) and prevents unbounded growth across runs.
     for decision in bundle.decisions {
-        cmo.add_decision(memory_manager::Decision::new(scope, decision));
+        cmo.add_decision_dedup(memory_manager::Decision::new(scope, decision));
     }
     for q in bundle.open_questions {
-        cmo.add_open_question(memory_manager::OpenQuestion::new(scope, q));
+        cmo.add_open_question_dedup(memory_manager::OpenQuestion::new(scope, q));
     }
     for task_text in bundle.active_tasks {
-        cmo.add_task(memory_manager::ActiveTask::new(scope, task_text));
+        cmo.add_task_dedup(memory_manager::ActiveTask::new(scope, task_text));
     }
     rt.flush_channel_memory(scope)?;
     Ok(window_id.to_string())
