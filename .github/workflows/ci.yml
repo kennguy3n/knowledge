@@ -67,6 +67,26 @@ jobs:
     # it past the workspace-level guarantee.
     steps:
       - uses: actions/checkout@v4
+      - name: Install ripgrep
+        # The `*.rs` scan below uses `rg --multiline` to catch attribute
+        # forms broken across newlines. `rg` is listed in the
+        # `ubuntu-24.04` runner image manifest, but a stale runner /
+        # minimal base image can occasionally omit it from `$PATH` — and
+        # the previous failure mode was silent (a missing `rg` returned
+        # nothing, `|| true` swallowed the error, the guard passed by
+        # accident).
+        #
+        # We therefore (1) probe `rg` first, (2) install via apt if it's
+        # missing, and (3) `rg --version` as a hard assertion so any
+        # future image regression fails this step loudly instead of
+        # silently disabling the security scan.
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            echo 'rg not found in PATH; installing ripgrep via apt.'
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ripgrep
+          fi
+          rg --version
       - name: Find unsafe_code allows outside the napi allowlist
         run: |
           # Allowlisted paths. Edit this list (and the doc above)
@@ -130,17 +150,31 @@ jobs:
           # the actual source tree, not a self-protecting CI
           # lockdown.
           #
-          # `rg` 13.x ships preinstalled on `ubuntu-latest` GitHub
-          # runners; verify with `rg --version` in a one-shot job
-          # if a future migration to a different base image breaks
-          # this assumption.
+          # `rg` availability is enforced by the preceding
+          # `Install ripgrep` step — it either confirmed `rg` is on
+          # PATH or installed ripgrep via apt and printed the
+          # version. If `rg` is somehow still missing here the script
+          # will fail with a `command not found` (exit 127) instead
+          # of silently passing.
           mapfile -t scan_files < <(git ls-files -- '*.rs' \
             | grep -vE "${ALLOWED_PREFIX}" || true)
           if [ "${#scan_files[@]}" -eq 0 ]; then
             echo 'No tracked *.rs files outside the napi allowlist; skipping scan.'
             matches=''
           else
-            matches="$(rg --multiline -nU -e "${PATTERN}" -- "${scan_files[@]}" || true)"
+            # `rg` exits 0 on match found, 1 on no match, 2+ on error.
+            # Capture stdout AND the exit code so a real error (missing
+            # binary, bad regex, IO failure) fails the guard loudly
+            # instead of being swallowed by a blanket `|| true`. The
+            # previous form (`rg ... || true`) is what silently disabled
+            # the scan when the runner image shipped without `rg`.
+            matches="$(rg --multiline -nU -e "${PATTERN}" -- "${scan_files[@]}")" \
+              || rg_status=$?
+            rg_status="${rg_status:-0}"
+            if [ "${rg_status}" -ge 2 ]; then
+              echo "::error::rg exited with status ${rg_status} (>= 2 indicates a real error, not 'no matches')."
+              exit "${rg_status}"
+            fi
           fi
 
           if [ -n "${matches}" ]; then
