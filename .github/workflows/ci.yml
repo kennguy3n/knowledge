@@ -532,10 +532,33 @@ jobs:
     # libraries, ARM64 link order) is only meaningful for release
     # artefacts and is gated behind the `ci:full` label / push-to-main.
     #
-    # Naming: this job intentionally keeps the `napi-build` prefix so
-    # branch protection rules that require "napi-build (...)" status
-    # checks can match either this PR smoke leg or the cross-platform
-    # matrix legs interchangeably.
+    # Branch protection note: GitHub required-status-checks match
+    # the *exact* check name — there is no prefix / glob matching.
+    # The full job name `napi-build (PR smoke, ubuntu-latest)` is
+    # therefore distinct from `napi-build (x86_64-unknown-linux-gnu)`
+    # and the other matrix-leg names produced by the `napi-build`
+    # job below.
+    #
+    # Recommended branch-protection wiring on `main`:
+    #
+    #   * REQUIRED for every PR:
+    #       `napi-build (PR smoke, ubuntu-latest)`
+    #     This job runs on every PR that is NOT labelled `ci:full`,
+    #     so requiring it guarantees a Linux N-API smoke signal
+    #     before merge without blocking on macOS / Windows runners.
+    #
+    #   * REQUIRED only on PRs labelled `ci:full` (via per-rule
+    #     configuration or a separate ruleset):
+    #       `napi-build (x86_64-unknown-linux-gnu)`
+    #       `napi-build (aarch64-apple-darwin)`
+    #       `napi-build (x86_64-apple-darwin)`
+    #       `napi-build (x86_64-pc-windows-msvc)`
+    #
+    # The `ci:full`-gated full matrix is intentionally NOT required
+    # on every PR — it exists so contributors can opt in to the
+    # platform-specific link / runtime smoke before tagging a
+    # release, and so the same matrix runs unconditionally on
+    # pushes to `main`.
     if: |
       github.event_name == 'pull_request' &&
       !contains(github.event.pull_request.labels.*.name, 'ci:full')
