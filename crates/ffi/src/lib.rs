@@ -32,9 +32,20 @@
 //!   [`memory_manager::ChannelMemoryObject`] CRUD layer. Memory
 //!   objects are persisted to the encrypted `memory_objects` table
 //!   (schema v7) and rehydrated on [`open_store`].
-//! * [`trigger_synthesis`] returns [`FfiError::Unavailable`] with
-//!   `subsystem = "synthesis"` until the on-device SLM router is
-//!   wired through this surface.
+//! * [`trigger_synthesis`] is **wired through to the on-device SLM
+//!   router**: reads the recent-evidence window for the scope, renders
+//!   the [`inference_router::InferenceTask::SynthSummary`] prompt,
+//!   dispatches it through the [`inference_router::InferenceRouter`]
+//!   stored on the runtime, parses the
+//!   [`inference_router::SummaryBundle`] response, and persists the
+//!   recap + extracted decisions / open questions / active tasks into
+//!   the scope's [`memory_manager::ChannelMemoryObject`]. Returns the
+//!   synthesis window UUID. Surfaces
+//!   [`FfiError::Unavailable`] only when no adapter that supports
+//!   [`inference_router::InferenceTask::SynthSummary`] is linked into
+//!   this build (e.g. neither MLX nor the `http-client`-gated
+//!   llama.cpp loopback is registered). See the function-level doc on
+//!   [`trigger_synthesis`] for the full failure-mode table.
 //!
 //! All wired functions require a prior successful call to [`open_store`].
 //! Calling any other function first returns
