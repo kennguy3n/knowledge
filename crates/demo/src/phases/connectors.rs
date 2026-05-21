@@ -10,12 +10,14 @@
 //! into [`RuntimeState`] / the demo report so the final markdown
 //! summary captures the connector-side surface.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{Duration, Utc};
 use connector_framework::{
     AuthKind, Connector, ConnectorConfig, ConnectorEvent, ConnectorInstanceId, ConnectorKind,
-    SyncMode, SyncState, SyncStatus,
+    HttpMethod, MockHttpTransport, MockResponse, OAuth2CodeExchange, OAuth2Token, Result, SyncMode,
+    SyncState, SyncStatus,
 };
 use connectors::{
     email::{
@@ -27,12 +29,40 @@ use connectors::{
         GoogleDriveFileList,
     },
     jira::{JiraConnector, JiraFields, JiraIssue, JiraSearchResponse},
-    slack::{
-        SlackChannel, SlackConnector, SlackHistoryResponse, SlackInitialSyncPage, SlackMessage,
-        SlackResponseMetadata,
-    },
+    slack::{SlackChannel, SlackConnector, SlackHistoryResponse, SlackResponseMetadata},
 };
 use evidence_store::ScopeId;
+use serde_json::json;
+
+/// Fixed-token OAuth2 exchange used by the demo. Returns a long-lived
+/// token deterministically so the demo never touches a real provider
+/// token endpoint. Production runtimes wire in
+/// `connector_framework::OAuth2Client<BlockingHttpTransport>`.
+struct DemoOAuth {
+    scope: &'static str,
+}
+
+impl OAuth2CodeExchange for DemoOAuth {
+    fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
+        Ok(OAuth2Token::new(
+            "demo-access-token",
+            "demo-refresh-token",
+            Utc::now() + Duration::hours(12),
+            self.scope,
+        ))
+    }
+}
+
+impl DemoOAuth {
+    fn arc(scope: &'static str) -> Arc<dyn OAuth2CodeExchange> {
+        Arc::new(Self { scope })
+    }
+}
+
+/// Convenience: serialise a value into a `MockResponse::ok_json` body.
+fn ok_json(value: serde_json::Value) -> MockResponse {
+    MockResponse::ok_json(serde_json::to_vec(&value).expect("serde_json::to_vec"))
+}
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
@@ -500,8 +530,8 @@ fn ts(secs: i64) -> String {
     format!("{secs}.000000")
 }
 
-fn message(channel: &str, ts_str: &str, text: &str) -> SlackMessage {
-    SlackMessage {
+fn message(channel: &str, ts_str: &str, text: &str) -> connectors::slack::SlackMessage {
+    connectors::slack::SlackMessage {
         ts: ts_str.into(),
         message_type: "message".into(),
         subtype: None,
@@ -517,65 +547,119 @@ fn exercise_slack(
     report: &mut DemoReport,
 ) -> ConnectorMetrics {
     let scope = ScopeId::new_v4();
-    let cfg = ConnectorConfig::new(ConnectorKind::Slack, AuthKind::OAuth2, scope);
+    let cfg = ConnectorConfig::new(ConnectorKind::Slack, AuthKind::OAuth2, scope)
+        .with_auth_config(json!({
+            "authorization_code": "demo-code",
+            "signing_secret": "demo-signing-secret",
+            "api_base_url": "https://api.test/slack",
+        }));
     let instance = ConnectorInstanceId::new_v4();
 
     let now_secs = Utc::now().timestamp();
-    let initial_pages = vec![SlackInitialSyncPage {
-        channels: vec![SlackChannel {
-            id: "C-PRODUCT".into(),
-            name: "product".into(),
-            is_archived: false,
-        }],
-        history_by_channel: vec![SlackHistoryResponse {
+    let transport = Arc::new(MockHttpTransport::new());
+
+    // Initial sync — one channel, three messages.
+    transport.expect(
+        HttpMethod::Get,
+        "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
+        ok_json(json!({
+            "ok": true,
+            "channels": [
+                SlackChannel {
+                    id: "C-PRODUCT".into(),
+                    name: "product".into(),
+                    is_archived: false,
+                },
+            ],
+            "response_metadata": SlackResponseMetadata::default(),
+        })),
+    );
+    transport.expect(
+        HttpMethod::Get,
+        "https://api.test/slack/conversations.history?channel=C-PRODUCT&limit=200",
+        ok_json(json!(SlackHistoryResponse {
             ok: true,
             channel: "C-PRODUCT".into(),
             messages: vec![
+                // Slack returns history newest-first.
+                message("C-PRODUCT", &ts(now_secs - 3600), "Action item: prepare migration guide"),
+                message("C-PRODUCT", &ts(now_secs - 5400), "Decision: ship v2 next quarter"),
                 message("C-PRODUCT", &ts(now_secs - 7200), "Pinned: roadmap review"),
-                message(
-                    "C-PRODUCT",
-                    &ts(now_secs - 5400),
-                    "Decision: ship v2 next quarter",
-                ),
-                message(
-                    "C-PRODUCT",
-                    &ts(now_secs - 3600),
-                    "Action item: prepare migration guide",
-                ),
             ],
             has_more: false,
             response_metadata: SlackResponseMetadata::default(),
-        }],
-    }];
+            error: None,
+        })),
+    );
+    // Incremental sync — same channel listing, plus a fresh history
+    // page. The cursor written by initial_sync is an RFC-3339
+    // timestamp; the connector converts it to a Slack ts for the
+    // oldest parameter, so we register the call without binding to
+    // a specific oldest value (the MockHttpTransport falls back to
+    // method+url prefix match — we register one response per URL).
+    transport.expect(
+        HttpMethod::Get,
+        "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
+        ok_json(json!({
+            "ok": true,
+            "channels": [
+                SlackChannel {
+                    id: "C-PRODUCT".into(),
+                    name: "product".into(),
+                    is_archived: false,
+                },
+            ],
+            "response_metadata": SlackResponseMetadata::default(),
+        })),
+    );
+    // Build the exact `oldest` parameter the connector will send
+    // by mirroring `rfc3339_to_slack_ts`. We pre-compute the most
+    // recent watermark from the initial-sync messages.
+    let initial_watermark_dt = chrono::DateTime::<Utc>::from_timestamp(now_secs - 3600, 0)
+        .expect("watermark");
+    let oldest = format!(
+        "{}.{:06}",
+        initial_watermark_dt.timestamp(),
+        initial_watermark_dt.timestamp_subsec_micros()
+    );
+    transport.expect(
+        HttpMethod::Get,
+        format!(
+            "https://api.test/slack/conversations.history?channel=C-PRODUCT&limit=200&oldest={oldest}"
+        ),
+        ok_json(json!(SlackHistoryResponse {
+            ok: true,
+            channel: "C-PRODUCT".into(),
+            messages: vec![
+                // Newest-first.
+                connectors::slack::SlackMessage {
+                    ts: ts(now_secs - 900),
+                    message_type: "message".into(),
+                    subtype: Some("message_deleted".into()),
+                    channel: "C-PRODUCT".into(),
+                    user: Some("U-DEMO".into()),
+                    text: "Removed: stale pin".into(),
+                },
+                connectors::slack::SlackMessage {
+                    ts: ts(now_secs - 1800),
+                    message_type: "message".into(),
+                    subtype: Some("message_changed".into()),
+                    channel: "C-PRODUCT".into(),
+                    user: Some("U-DEMO".into()),
+                    text: "Updated decision: pull-in to this quarter".into(),
+                },
+            ],
+            has_more: false,
+            response_metadata: SlackResponseMetadata::default(),
+            error: None,
+        })),
+    );
 
-    let incremental_pages = vec![SlackHistoryResponse {
-        ok: true,
-        channel: "C-PRODUCT".into(),
-        messages: vec![
-            SlackMessage {
-                ts: ts(now_secs - 1800),
-                message_type: "message".into(),
-                subtype: Some("message_changed".into()),
-                channel: "C-PRODUCT".into(),
-                user: Some("U-DEMO".into()),
-                text: "Updated decision: pull-in to this quarter".into(),
-            },
-            SlackMessage {
-                ts: ts(now_secs - 900),
-                message_type: "message".into(),
-                subtype: Some("message_deleted".into()),
-                channel: "C-PRODUCT".into(),
-                user: Some("U-DEMO".into()),
-                text: "Removed: stale pin".into(),
-            },
-        ],
-        has_more: false,
-        response_metadata: SlackResponseMetadata::default(),
-    }];
-
-    let connector = SlackConnector::new(instance)
-        .with_initial_pages(initial_pages)
-        .with_incremental_pages(incremental_pages);
+    let connector = SlackConnector::new(
+        instance,
+        transport,
+        DemoOAuth::arc("channels:history channels:read files:read"),
+    );
 
     let token = connector.authenticate(&cfg).expect("slack auth");
     log.record(

@@ -16,8 +16,8 @@ path = "src/main.rs"
 agent_contract = { path = "../agent_contract" }
 audit_service = { path = "../audit_service" }
 concept_graph = { path = "../concept_graph" }
-connector_framework = { path = "../connector_framework" }
-connectors = { path = "../connectors" }
+connector_framework = { path = "../connector_framework", features = ["test-support"] }
+connectors = { path = "../connectors", features = ["test-support"] }
 # The demo is explicitly a test / scaffolding driver — it directly
 # constructs `TestSigner` and `NoOpSynthesizer`, so it enables the
 # `test-support` features that expose them. Production binaries that
