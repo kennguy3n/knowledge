@@ -71,23 +71,38 @@ jobs:
           # when a new crate is consciously granted an exception.
           ALLOWED_PREFIX='^crates/napi/'
 
+          # Catch every attribute form that relaxes `unsafe_code`,
+          # including ones wrapped in `cfg_attr`:
+          #   #[allow(unsafe_code)]
+          #   #![allow(unsafe_code)]
+          #   #[cfg_attr(feature = "x", allow(unsafe_code))]
+          #   #![cfg_attr(any(...), allow(unsafe_code))]
+          # The pattern requires an attribute opener (`#[` or `#![`)
+          # followed by any prefix and then a word-boundaried
+          # `allow(unsafe_code)`. That means a literal `allow(...)`
+          # inside a `//` line comment or a doc comment does NOT
+          # trigger the guard, but every real attribute form does.
+          PATTERN='#!?\[.*\ballow\(unsafe_code\)'
+
           # `grep -nE` so we surface filename + line for every hit.
           # `git ls-files` so we only look at tracked sources (no
-          # vendored deps, no build artefacts).
+          # vendored deps, no build artefacts). Also scan workflow
+          # files in case a future review thread tries to relax
+          # the lint by editing this very job.
           matches="$(git ls-files \
             -- '*.rs' \
             | grep -vE "${ALLOWED_PREFIX}" \
-            | xargs grep -nE '#!?\[allow\(unsafe_code\)\]' || true)"
+            | xargs grep -nE "${PATTERN}" || true)"
 
           if [ -n "${matches}" ]; then
-            echo '::error::A new `allow(unsafe_code)` was introduced outside the napi allowlist:'
+            echo '::error::A new `allow(unsafe_code)` (including `cfg_attr`-gated forms) was introduced outside the napi allowlist:'
             echo "${matches}"
             echo
             echo 'The workspace `Cargo.toml` sets `unsafe_code = "deny"` so that the'
             echo 'napi crate can opt back in for napi-derive proc-macro expansion.'
-            echo 'Any other relaxation needs explicit review — please either remove'
-            echo 'the `allow`, or update the allowlist in `.github/workflows/ci.yml`'
-            echo 'with a justification comment.'
+            echo 'Any other relaxation — including conditional `#[cfg_attr(..., allow(unsafe_code))]`'
+            echo '— needs explicit review. Please either remove the `allow`, or update the allowlist'
+            echo 'in `.github/workflows/ci.yml` with a justification comment.'
             exit 1
           fi
 

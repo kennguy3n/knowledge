@@ -36,11 +36,83 @@ const core = requireCJS(resolvePath(here, '..', 'index.js'));
 // line — the JS smoke test would silently start pinning the wrong
 // version. Anchoring on the table header makes that failure
 // impossible.
+// Strip a TOML line comment without eating `#` characters that
+// live inside a basic string ("..."), a literal string ('...'),
+// or a multi-line string ("""..."""). A naive `raw.replace(/#.*$/, '')`
+// would mis-truncate lines like `description = "1.0 # latest"` or
+// `description = "rust # crates"` — fine today because we only
+// scan for `version = "x.y.z"` lines and version strings never
+// contain `#`, but the helper would silently misbehave if reused
+// for any other field. This stripper walks the line character by
+// character, tracking whether we're inside a string literal, and
+// only treats `#` as a comment start when it appears outside any
+// quoted region. TOML's quote-escape rules are simpler than JSON's
+// (`\"` inside `"..."`, no escapes inside `'...'`), so a
+// state machine over the line is sufficient — no need for a full
+// parser dependency.
+function stripTomlComment(raw) {
+  let quote = null; // null | '"' | "'" | '"""' | "'''"
+  let i = 0;
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (quote === null) {
+      // Multi-line triple-quoted strings open with `"""` / `'''`.
+      if (raw.startsWith('"""', i)) {
+        quote = '"""';
+        i += 3;
+        continue;
+      }
+      if (raw.startsWith("'''", i)) {
+        quote = "'''";
+        i += 3;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        i += 1;
+        continue;
+      }
+      if (ch === '#') {
+        return raw.slice(0, i);
+      }
+    } else if (quote === '"""' || quote === "'''") {
+      if (raw.startsWith(quote, i)) {
+        i += 3;
+        quote = null;
+        continue;
+      }
+      i += 1;
+      continue;
+    } else if (quote === '"') {
+      // Basic strings honour backslash escapes — skip the next
+      // character if we see one so `\"` doesn't close the string.
+      if (ch === '\\' && i + 1 < raw.length) {
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        quote = null;
+      }
+      i += 1;
+      continue;
+    } else if (quote === "'") {
+      // Literal strings have no escapes; the next `'` closes.
+      if (ch === "'") {
+        quote = null;
+      }
+      i += 1;
+      continue;
+    }
+    i += 1;
+  }
+  return raw;
+}
+
 function findVersionInSection(toml, sectionHeader) {
   const lines = toml.split(/\r?\n/);
   let inSection = false;
   for (const raw of lines) {
-    const line = raw.replace(/#.*$/, '').trimEnd();
+    const line = stripTomlComment(raw).trimEnd();
     const tableMatch = /^\[([^\]]+)\]\s*$/.exec(line);
     if (tableMatch) {
       inSection = tableMatch[1] === sectionHeader;
@@ -81,6 +153,48 @@ function parseEnvelope(err) {
   // `crates/napi/src/bindings.rs`.
   return JSON.parse(err.message);
 }
+
+test('stripTomlComment ignores `#` inside basic/literal/multiline strings', () => {
+  // The naive `replace(/#.*$/, '')` would truncate every one of
+  // these to a wrong value. The state-machine stripper preserves
+  // every `#` that lives inside any TOML string variant.
+  assert.strictEqual(
+    stripTomlComment('description = "1.0 # latest"   # real comment'),
+    'description = "1.0 # latest"   ',
+  );
+  assert.strictEqual(
+    stripTomlComment(`description = '1.0 # latest'   # real comment`),
+    `description = '1.0 # latest'   `,
+  );
+  assert.strictEqual(
+    stripTomlComment('escape = "say \\"hi # there\\""  # cmt'),
+    'escape = "say \\"hi # there\\""  ',
+  );
+  // No `#` at all → pass-through unchanged.
+  assert.strictEqual(
+    stripTomlComment('plain = "no hashes"'),
+    'plain = "no hashes"',
+  );
+  // Whole-line comment.
+  assert.strictEqual(stripTomlComment('# just a comment'), '');
+  // No comment at all on a string-free line.
+  assert.strictEqual(stripTomlComment('foo = 42'), 'foo = 42');
+});
+
+test('findVersionInSection survives a `#`-containing string before the version line', () => {
+  // Adversarial fixture: a string-valued field that contains
+  // `version = "999.999.999"` inside a literal string before the
+  // real `version = "0.1.0"` line. A regex matcher without proper
+  // section anchoring (or with a naive comment stripper) would
+  // either match the embedded text or strip the closing quote.
+  const fixture = [
+    '[workspace.package]',
+    'description = "see version = \\"999.999.999\\" # not real"',
+    'version = "0.1.0"',
+    '',
+  ].join('\n');
+  assert.strictEqual(findVersionInSection(fixture, 'workspace.package'), '0.1.0');
+});
 
 test('every documented function is exported with camelCase name', () => {
   const expected = [
