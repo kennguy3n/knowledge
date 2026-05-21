@@ -236,7 +236,13 @@ pub struct FfiRuntime {
     /// which already serialises calls against the same handle —
     /// adding an inner mutex would double-lock without buying any
     /// extra safety.
-    pub(crate) inference_router: InferenceRouter,
+    ///
+    /// Stored behind an `Arc` so [`open_store`] can hand a clone to
+    /// the background bootstrap thread without giving up ownership.
+    /// The `Arc<InferenceRouter>` itself is `Sync`, and dispatch /
+    /// idle-sweep paths only need `&InferenceRouter`, which the
+    /// `Deref` impl on `Arc` provides transparently.
+    pub(crate) inference_router: Arc<InferenceRouter>,
 }
 
 impl Drop for FfiRuntime {
@@ -765,15 +771,14 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHand
     }
 
     let router_config = router_config_from_env();
-    let inference_router = build_inference_router(router_config);
-    let probe_results = inference_router.bootstrap();
-    for (kind, result) in &probe_results {
-        tracing::info!(
-            adapter = kind.as_str(),
-            probe = ?result,
-            "inference_router adapter probed",
-        );
-    }
+    let inference_router = Arc::new(build_inference_router(router_config));
+    // Spawn the adapter probe on a background thread so `open_store`
+    // returns immediately even when an adapter's probe hits the
+    // network (e.g. the `http-client`-backed llama.cpp adapter
+    // pings `GET /health` with a multi-second timeout). FFI calls
+    // that need the router (`trigger_synthesis`) join on
+    // `wait_for_bootstrap` before dispatch.
+    Arc::clone(&inference_router).spawn_bootstrap();
 
     let runtime = FfiRuntime {
         master_key,

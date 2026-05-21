@@ -742,6 +742,13 @@ pub fn get_channel_memory(
 ///   or if the synthesis subsystem has no adapter that supports
 ///   [`InferenceTask::SynthSummary`] available in this build
 ///   (e.g. neither MLX nor the llama.cpp loopback is linked).
+///   Hosts should treat this as a transient / setup-time failure
+///   and retry after the platform shell registers its adapters.
+/// * [`FfiError::InferenceFailure`] if an adapter was selected and
+///   ran but produced an unusable result (grammar violation, model
+///   error, transport failure mid-stream). Hosts SHOULD NOT
+///   silently retry the same prompt — see
+///   [`FfiError::InferenceFailure`] for the contract.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten or
 ///   has no evidence to summarise.
@@ -794,7 +801,7 @@ pub const SYNTHESIS_EVIDENCE_WINDOW: usize = 50;
 /// `crates/integration_tests/` can drive it against a populated
 /// runtime without re-deriving prompt-construction logic.
 fn synthesize_scope(rt: &mut runtime::FfiRuntime, scope: ScopeId) -> FfiResult<String> {
-    use inference_router::{InferenceTask, SummaryBundle};
+    use inference_router::{InferenceTask, RouterError, SummaryBundle};
 
     let recent_ids = rt
         .store()
@@ -836,15 +843,29 @@ fn synthesize_scope(rt: &mut runtime::FfiRuntime, scope: ScopeId) -> FfiResult<S
         .replace("{body}", &combined);
 
     let router = rt.inference_router();
-    if !router.is_bootstrapped() {
-        return Err(FfiError::Unavailable {
-            subsystem: "synthesis".into(),
-        });
-    }
+    // `open_store` now spawns the adapter probe on a background
+    // thread to keep the open path itself non-blocking; wait here
+    // until the bootstrap finishes so a host that calls
+    // `trigger_synthesis` immediately after `open_store` does not
+    // race the probe. The wait is no-op once probing has completed.
+    router.wait_for_bootstrap();
     let raw = router
         .dispatch(InferenceTask::SynthSummary, &prompt)
-        .map_err(|e| FfiError::Unavailable {
-            subsystem: format!("synthesis: {e}"),
+        .map_err(|e| match e {
+            // The model ran but produced an unusable result — hosts
+            // need to distinguish this from "no adapter available"
+            // to drive their own retry policy. See
+            // `FfiError::InferenceFailure` docs for the contract.
+            RouterError::InferenceFailure(message) => FfiError::InferenceFailure {
+                message: format!("synthesis: {message}"),
+            },
+            // `Unavailable`, `TierTooLow`, and `NotProbed` all mean
+            // "no adapter on this build can serve the task"; surface
+            // them uniformly as a transient-unavailable subsystem so
+            // hosts can probe again once their environment changes.
+            other => FfiError::Unavailable {
+                subsystem: format!("synthesis: {other}"),
+            },
         })?;
     let bundle: SummaryBundle = serde_json::from_str(&raw).map_err(|e| FfiError::Evidence {
         message: format!("synthesis: malformed SummaryBundle JSON: {e}"),

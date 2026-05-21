@@ -432,6 +432,18 @@ fn ffi_error_variants_are_wire_stable() {
             },
             "Unavailable",
         ),
+        // Pin the host-visible distinction between
+        // `Unavailable` (no adapter for the task) and
+        // `InferenceFailure` (adapter ran, model produced an
+        // unusable result). Hosts switch on `kind` and the
+        // detail field to drive retry policy — silently
+        // collapsing the two would erase that signal.
+        (
+            FfiError::InferenceFailure {
+                message: "synthesis: grammar violation on SummaryBundle".into(),
+            },
+            "InferenceFailure",
+        ),
     ];
 
     for (err, expected_kind) in cases {

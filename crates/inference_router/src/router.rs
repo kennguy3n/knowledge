@@ -2,7 +2,7 @@
 //! warm-up / idle-unload.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::adapter::{AdapterKind, InferenceAdapter, ProbeResult};
@@ -32,6 +32,19 @@ pub struct InferenceRouter {
     bootstrapped: AtomicBool,
     activity: Mutex<Vec<AdapterActivity>>,
     warmed: AtomicBool,
+    /// Signals completion of [`Self::bootstrap`] / [`Self::spawn_bootstrap`]
+    /// to threads blocked in [`Self::wait_for_bootstrap`].
+    ///
+    /// The bool in the mutex flips to `true` exactly once — either
+    /// synchronously from the end of [`Self::bootstrap`] or from
+    /// the background thread spawned by [`Self::spawn_bootstrap`].
+    /// Once flipped, the condvar is `notify_all`'d so every waiter
+    /// can proceed. The atomic [`Self::bootstrapped`] flag is
+    /// retained for cheap polling on the dispatch hot path; the
+    /// condvar exists specifically for the blocking-wait path that
+    /// hosts use when they need a synchronisation point against
+    /// the background probe.
+    bootstrap_signal: (Mutex<bool>, Condvar),
 }
 
 impl InferenceRouter {
@@ -54,11 +67,19 @@ impl InferenceRouter {
             bootstrapped: AtomicBool::new(false),
             activity: Mutex::new(activity),
             warmed: AtomicBool::new(false),
+            bootstrap_signal: (Mutex::new(false), Condvar::new()),
         }
     }
 
     /// Run [`InferenceAdapter::probe`] on every adapter. Must be
     /// called before [`Self::dispatch`].
+    ///
+    /// Synchronous — the call blocks until every adapter has been
+    /// probed. Hosts that want to keep their `open` / startup path
+    /// non-blocking should use [`Self::spawn_bootstrap`] instead,
+    /// which dispatches this same logic onto a background thread
+    /// and lets later [`Self::dispatch`] callers block on
+    /// [`Self::wait_for_bootstrap`].
     pub fn bootstrap(&self) -> Vec<(AdapterKind, ProbeResult)> {
         let results = self
             .adapters
@@ -66,7 +87,77 @@ impl InferenceRouter {
             .map(|a| (a.kind(), a.probe()))
             .collect();
         self.bootstrapped.store(true, Ordering::SeqCst);
+        // Wake any threads blocked in `wait_for_bootstrap` — the
+        // synchronous bootstrap path must satisfy the same
+        // contract as the background one so callers can use
+        // either entry point interchangeably.
+        self.notify_bootstrap_complete();
         results
+    }
+
+    /// Run [`Self::bootstrap`] on a dedicated background thread.
+    ///
+    /// Returns immediately; the thread itself probes every adapter
+    /// and, on completion, flips the [`Self::bootstrapped`] flag and
+    /// notifies waiters blocked in [`Self::wait_for_bootstrap`].
+    /// Use this from the FFI `open_store` path to keep the open
+    /// call non-blocking when an adapter probe might hit the
+    /// network (e.g. the `http-client`-backed llama.cpp adapter
+    /// pings `GET /health` with a multi-second timeout).
+    ///
+    /// The spawned thread is detached — the caller does not need to
+    /// `join` it. Any thread that needs a synchronisation point
+    /// against probe completion calls [`Self::wait_for_bootstrap`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying OS rejects the thread spawn. This
+    /// matches the substrate's policy elsewhere (we treat thread
+    /// spawn failures as unrecoverable initialisation faults).
+    pub fn spawn_bootstrap(self: Arc<Self>) {
+        let me = Arc::clone(&self);
+        std::thread::Builder::new()
+            .name("inference-router-bootstrap".into())
+            .spawn(move || {
+                let results = me.bootstrap();
+                for (kind, result) in &results {
+                    tracing::info!(
+                        adapter = kind.as_str(),
+                        probe = ?result,
+                        "inference_router adapter probed (background)",
+                    );
+                }
+            })
+            .expect("spawn inference-router-bootstrap thread");
+    }
+
+    /// Block the current thread until [`Self::bootstrap`] (or the
+    /// background variant spawned by [`Self::spawn_bootstrap`]) has
+    /// completed.
+    ///
+    /// Returns immediately when bootstrap has already finished, so
+    /// callers that are not racing the probe pay only an atomic
+    /// load. Callers racing the probe — typically an FFI surface
+    /// invoked right after `open_store` — park on the condvar
+    /// until the bootstrap thread notifies completion.
+    pub fn wait_for_bootstrap(&self) {
+        if self.is_bootstrapped() {
+            return;
+        }
+        let (lock, cvar) = &self.bootstrap_signal;
+        let mut done = lock.lock().expect("bootstrap_signal lock");
+        while !*done {
+            done = cvar.wait(done).expect("bootstrap_signal wait");
+        }
+    }
+
+    /// Internal helper — flip the condvar-protected `done` flag and
+    /// wake every blocked [`Self::wait_for_bootstrap`] caller.
+    fn notify_bootstrap_complete(&self) {
+        let (lock, cvar) = &self.bootstrap_signal;
+        let mut done = lock.lock().expect("bootstrap_signal lock");
+        *done = true;
+        cvar.notify_all();
     }
 
     /// Borrow the underlying config.
@@ -487,5 +578,82 @@ mod tests {
             .dispatch(InferenceTask::SynthSummary, "x")
             .unwrap_err();
         assert!(matches!(err, RouterError::Unavailable { .. }));
+    }
+
+    /// `spawn_bootstrap` must run probing on a background thread and
+    /// satisfy the same post-condition as the synchronous
+    /// `bootstrap`: `is_bootstrapped` flips to true and waiters get
+    /// released. Pins the FFI `open_store` contract.
+    #[test]
+    fn spawn_bootstrap_runs_probing_on_background_thread() {
+        let router = Arc::new(router_with(vec![Box::new(FallbackAdapter::new())]));
+        assert!(!router.is_bootstrapped());
+        Arc::clone(&router).spawn_bootstrap();
+        // Block on the same primitive the FFI surface uses.
+        router.wait_for_bootstrap();
+        assert!(router.is_bootstrapped());
+        // Dispatch must succeed after the background probe completes
+        // (FallbackAdapter supports TagImportance and is always
+        // available once probed).
+        router
+            .dispatch(InferenceTask::TagImportance, "Message:\nhi")
+            .expect("dispatch after spawn_bootstrap should succeed");
+    }
+
+    /// `wait_for_bootstrap` blocks until probing completes, then
+    /// returns immediately on subsequent calls. Stale callers that
+    /// race the spawn-bootstrap path get a synchronisation point.
+    #[test]
+    fn wait_for_bootstrap_blocks_until_probe_completes() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let router = Arc::new(router_with(vec![Box::new(FallbackAdapter::new())]));
+        // Two waiters race the bootstrap thread; both must observe
+        // bootstrap == complete after their `wait` returns.
+        let barrier = Arc::new(Barrier::new(3));
+        let r1 = Arc::clone(&router);
+        let b1 = Arc::clone(&barrier);
+        let t1 = thread::spawn(move || {
+            b1.wait();
+            r1.wait_for_bootstrap();
+            assert!(r1.is_bootstrapped());
+        });
+        let r2 = Arc::clone(&router);
+        let b2 = Arc::clone(&barrier);
+        let t2 = thread::spawn(move || {
+            b2.wait();
+            r2.wait_for_bootstrap();
+            assert!(r2.is_bootstrapped());
+        });
+        barrier.wait();
+        Arc::clone(&router).spawn_bootstrap();
+        t1.join().unwrap();
+        t2.join().unwrap();
+        // A subsequent wait is a no-op (no condvar wait).
+        router.wait_for_bootstrap();
+    }
+
+    /// Synchronous `bootstrap` must also notify the condvar so a
+    /// caller that mixes the two entry points cannot deadlock.
+    #[test]
+    fn synchronous_bootstrap_releases_condvar_waiters() {
+        use std::thread;
+
+        let router = Arc::new(router_with(vec![Box::new(FallbackAdapter::new())]));
+        let r = Arc::clone(&router);
+        let t = thread::spawn(move || {
+            // Park on the condvar — the synchronous bootstrap below
+            // must still wake us.
+            r.wait_for_bootstrap();
+            assert!(r.is_bootstrapped());
+        });
+        // Give the waiter a moment to park on the condvar before we
+        // notify; the test still passes if `bootstrap` runs first
+        // (the wait short-circuits via `is_bootstrapped`), so the
+        // sleep just exercises the notify path more often.
+        std::thread::sleep(Duration::from_millis(5));
+        router.bootstrap();
+        t.join().unwrap();
     }
 }

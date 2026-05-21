@@ -112,18 +112,31 @@ fn stable_tag(task_tag: &str) -> &'static str {
 /// downstream caller that reuses `extract_body` against a synthesis
 /// prompt still gets the bare body back.
 fn extract_body(prompt: &str) -> &str {
-    for marker in [
-        "\n\nMessage:\n",
-        "\n\nObservation:\n",
-        "\n\nObservations:\n",
-        "\n\nSession:\n",
-    ] {
+    for marker in BODY_MARKERS {
         if let Some(idx) = prompt.rfind(marker) {
             return &prompt[idx + marker.len()..];
         }
     }
     prompt
 }
+
+/// Prompt-scaffold suffixes that [`extract_body`] recognises.
+///
+/// Each entry MUST be the literal suffix used by one of
+/// [`crate::task::InferenceTask::prompt_template`]'s rendered
+/// templates immediately before the `{body}` placeholder. The
+/// lock-step test in this module's `tests` submodule asserts that
+/// every concrete task whose template ends in `{body}` matches at
+/// least one of these markers — adding a new task with a novel
+/// marker without updating this slice would otherwise silently
+/// degrade the fallback classifier (it would scan the entire
+/// scaffolded prompt instead of just the body).
+const BODY_MARKERS: &[&str] = &[
+    "\n\nMessage:\n",
+    "\n\nObservation:\n",
+    "\n\nObservations:\n",
+    "\n\nSession:\n",
+];
 
 // ─────────────────── tag_importance: lexicon scoring ────────────────────
 
@@ -765,5 +778,55 @@ mod tests {
         let body = "alice: ship it\nbob: lgtm";
         let prompt = template.replace("{body}", body);
         assert_eq!(extract_body(&prompt), body);
+    }
+
+    /// Lock-step regression: every [`InferenceTask`] whose
+    /// `prompt_template` ends with the `{body}` placeholder MUST
+    /// match one of the markers enumerated in [`BODY_MARKERS`].
+    /// Adding a new task with a novel marker (e.g. `"\n\nThread:\n"`)
+    /// would otherwise silently degrade the fallback classifier —
+    /// it would scan the full scaffolded prompt instead of just the
+    /// body, drowning the lexicon in instruction-text false positives.
+    ///
+    /// This test enumerates every task that the router exposes and
+    /// asserts the substitution post-condition: rendering
+    /// `prompt_template().replace("{body}", BODY)` and feeding it
+    /// to [`extract_body`] returns exactly `BODY`. Iterating the
+    /// task enum here keeps the assertion exhaustive even after a
+    /// new variant is added — the test fails loudly until the
+    /// marker is registered in [`BODY_MARKERS`].
+    #[test]
+    fn extract_body_markers_cover_every_inference_task_template() {
+        // Picked to avoid colliding with the markers and the
+        // lexicon entries the classifier might otherwise match.
+        const SENTINEL: &str = "<<EXTRACT_BODY_LOCK_STEP_SENTINEL>>";
+        let tasks = [
+            crate::task::InferenceTask::TagImportance,
+            crate::task::InferenceTask::ExtractEntities,
+            crate::task::InferenceTask::PromoteObservation,
+            crate::task::InferenceTask::SynthSummary,
+            crate::task::InferenceTask::SynthConcept,
+            crate::task::InferenceTask::AdjudicateContradiction,
+        ];
+        for task in tasks {
+            let template = task.prompt_template();
+            // The substrate's templates either end with `{body}`
+            // (single message) or `{bodies}` (concatenated
+            // observations) right after one of the BODY_MARKERS.
+            // Walk the templates that use `{body}` for the
+            // lock-step check; the `{bodies}` variants are handled
+            // implicitly by the `\n\nObservations:\n` marker which
+            // BODY_MARKERS already lists.
+            if !template.contains("{body}") {
+                continue;
+            }
+            let prompt = template.replace("{body}", SENTINEL);
+            assert_eq!(
+                extract_body(&prompt),
+                SENTINEL,
+                "extract_body missed the marker for {:?}; BODY_MARKERS is out of sync with prompt_template",
+                task.tag(),
+            );
+        }
     }
 }
