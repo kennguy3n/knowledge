@@ -147,7 +147,12 @@ jobs:
             target
           key: ${{ runner.os }}-msrv-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-msrv-
-      - run: cargo check --workspace --all-targets
+      # `napi_addon` deliberately tracks the napi-rs 3.x MSRV (1.88+)
+      # rather than the workspace floor — see the rust-version comment
+      # in crates/napi/Cargo.toml. Excluding it here keeps the MSRV
+      # signal meaningful for the rest of the workspace while letting
+      # the napi crate use the modern napi-rs release.
+      - run: cargo check --workspace --all-targets --exclude napi_addon
 
   cross-ios:
     name: cross-check (aarch64-apple-ios)

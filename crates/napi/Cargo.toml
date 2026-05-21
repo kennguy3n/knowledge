@@ -2,7 +2,15 @@
 name = "napi_addon"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# napi-rs 3.x requires rustc 1.88+ (the workspace MSRV stays at 1.85
+# for every other crate). This is checked at CI time by the
+# `MSRV (1.85.0)` job, which passes `--exclude napi_addon` so the
+# crates that don't depend on napi-rs continue to compile cleanly on
+# the lower toolchain. Anyone running `cargo build -p napi_addon`
+# directly needs stable >= 1.88 — published binaries in our
+# .github/workflows/ci.yml `napi-build` matrix all use `stable`,
+# which has been past 1.88 since June 2025.
+rust-version = "1.88"
 license.workspace = true
 repository.workspace = true
 description = "N-API addon surface for macOS / Windows Electron desktop integration with the Knowledge substrate."
