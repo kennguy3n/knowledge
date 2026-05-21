@@ -119,6 +119,32 @@ impl InferenceRouter {
         std::thread::Builder::new()
             .name("inference-router-bootstrap".into())
             .spawn(move || {
+                // RAII drop-guard so that even if any adapter's
+                // `probe()` panics during [`Self::bootstrap`], the
+                // condvar protecting `wait_for_bootstrap` is still
+                // signalled — otherwise a single misbehaving adapter
+                // would permanently wedge every future
+                // `trigger_synthesis` call blocked in
+                // [`Self::wait_for_bootstrap`]. The guard is
+                // idempotent with the explicit
+                // `notify_bootstrap_complete()` inside `bootstrap()`:
+                // on the happy path the second notify is a no-op
+                // (the flag is already `true` and `notify_all` on an
+                // empty waiter list has no observable effect); on a
+                // panic, the guard's `Drop` is the only path that
+                // notifies. Note that on panic the
+                // [`Self::bootstrapped`] atomic stays `false`, so
+                // subsequent `dispatch` calls correctly route to
+                // their `NotProbed` / `Unavailable` paths rather
+                // than racing partial state — the guard only ensures
+                // we don't *hang*.
+                struct NotifyOnDrop<'r>(&'r InferenceRouter);
+                impl Drop for NotifyOnDrop<'_> {
+                    fn drop(&mut self) {
+                        self.0.notify_bootstrap_complete();
+                    }
+                }
+                let _guard = NotifyOnDrop(&me);
                 let results = me.bootstrap();
                 for (kind, result) in &results {
                     tracing::info!(
@@ -632,6 +658,57 @@ mod tests {
         t2.join().unwrap();
         // A subsequent wait is a no-op (no condvar wait).
         router.wait_for_bootstrap();
+    }
+
+    /// Adapter whose `probe()` panics — used to exercise the
+    /// panic-safety drop-guard inside [`InferenceRouter::spawn_bootstrap`].
+    struct PanicProbeAdapter;
+    impl InferenceAdapter for PanicProbeAdapter {
+        fn kind(&self) -> AdapterKind {
+            AdapterKind::LlamaCpp
+        }
+        fn probe(&self) -> ProbeResult {
+            panic!("PanicProbeAdapter::probe is intentionally panicking");
+        }
+        fn is_available(&self) -> bool {
+            false
+        }
+        fn supports(&self, _: InferenceTask) -> bool {
+            false
+        }
+        fn generate(&self, _: &str, _: &str, _: &str) -> Result<String, RouterError> {
+            Err(RouterError::Unavailable {
+                task: "synth_summary",
+            })
+        }
+    }
+
+    /// A panic on any adapter's `probe()` must NOT permanently wedge
+    /// `wait_for_bootstrap` callers. The detached background thread's
+    /// `NotifyOnDrop` guard fires on unwind, flipping the condvar's
+    /// `done` flag so blocked waiters are released. `is_bootstrapped`
+    /// stays `false` (the atomic is only flipped on the happy path),
+    /// so subsequent `dispatch` calls correctly route to their
+    /// `NotProbed` / `Unavailable` paths rather than racing partial
+    /// state — but no thread hangs.
+    #[test]
+    fn spawn_bootstrap_panic_does_not_wedge_waiters() {
+        let router = Arc::new(router_with(vec![
+            Box::new(PanicProbeAdapter),
+            Box::new(FallbackAdapter::new()),
+        ]));
+        assert!(!router.is_bootstrapped());
+        Arc::clone(&router).spawn_bootstrap();
+        // The wait must return — the drop-guard fires on panic so the
+        // condvar is signalled even though `bootstrap()` unwound.
+        router.wait_for_bootstrap();
+        // The atomic stays false because the panic prevented the
+        // happy-path `bootstrapped.store(true)`. Dispatch routes to
+        // `NotProbed` rather than hanging.
+        assert!(
+            !router.is_bootstrapped(),
+            "panicking probe must leave bootstrapped == false",
+        );
     }
 
     /// Synchronous `bootstrap` must also notify the condvar so a

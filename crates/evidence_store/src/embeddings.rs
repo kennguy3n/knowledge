@@ -556,9 +556,8 @@ mod ort_runtime_impl {
                 // hidden <= 1024) so a fallible conversion only
                 // fails on malformed model output, which we want to
                 // surface as an inference error.
-                let seq_len_ok = usize::try_from(shape.get(1).copied().unwrap_or(-1))
-                    .map(|s| s == len)
-                    .unwrap_or(false);
+                let seq_len_ok =
+                    usize::try_from(shape.get(1).copied().unwrap_or(-1)).is_ok_and(|s| s == len);
                 if shape.len() != 3 || shape[0] != 1 || !seq_len_ok {
                     return Err(EmbeddingError::InferenceFailure(format!(
                         "unexpected output shape: {shape:?} (expected [1, {len}, hidden])"

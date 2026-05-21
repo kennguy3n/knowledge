@@ -872,7 +872,22 @@ fn synthesize_scope(rt: &mut runtime::FfiRuntime, scope: ScopeId) -> FfiResult<S
     })?;
 
     let window_id = uuid::Uuid::new_v4();
-    let cmo = rt.channel_memory_mut(scope);
+    // Build the next channel-memory state OFF-THE-SIDE. We clone any
+    // existing entry so the dedup helpers can compare against the
+    // history, but the runtime's `channel_memories` map is NOT
+    // mutated until `save_channel_memory` below succeeds at writing
+    // the new state to disk.
+    //
+    // This pins the
+    // `trigger_synthesis_failure_does_not_allocate_channel_memory`
+    // invariant across every failure mode between the dispatch
+    // result and the final flush — including future ones that
+    // might be added between the `SummaryBundle` parse above and
+    // the save below.
+    let mut cmo = rt
+        .channel_memory(scope)
+        .cloned()
+        .unwrap_or_else(|| memory_manager::ChannelMemoryObject::new(scope));
     cmo.update_recap(bundle.recap.clone(), Some(window_id));
     // `*_dedup` variants — the SLM re-emits the same decisions /
     // questions / tasks every synthesis window because each run
@@ -889,7 +904,7 @@ fn synthesize_scope(rt: &mut runtime::FfiRuntime, scope: ScopeId) -> FfiResult<S
     for task_text in bundle.active_tasks {
         cmo.add_task_dedup(memory_manager::ActiveTask::new(scope, task_text));
     }
-    rt.flush_channel_memory(scope)?;
+    rt.save_channel_memory(scope, cmo)?;
     Ok(window_id.to_string())
 }
 

@@ -425,7 +425,6 @@ mod blocking_impl {
 
     impl HttpTransport for BlockingHttpTransport {
         fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
-            let mut last_err: Option<ConnectorError> = None;
             for attempt in 0..=self.retry.max_retries {
                 match self.execute_once(&request) {
                     Ok(resp) if resp.is_transient() && attempt < self.retry.max_retries => {
@@ -435,8 +434,13 @@ mod blocking_impl {
                         continue;
                     }
                     Ok(resp) => return Ok(resp),
-                    Err(e) if attempt < self.retry.max_retries => {
-                        last_err = Some(e);
+                    Err(_) if attempt < self.retry.max_retries => {
+                        // Transient transport failure (reqwest-level —
+                        // DNS, connect, read timeout). We drop the
+                        // error here; if every retry fails the final
+                        // iteration returns the *last* error (via the
+                        // arm below), which is the most useful for
+                        // diagnosing systemic outages.
                         let wait = self.retry.backoff(attempt + 1, None);
                         std::thread::sleep(wait);
                         continue;
@@ -444,13 +448,18 @@ mod blocking_impl {
                     Err(e) => return Err(e),
                 }
             }
-            // Retry budget exhausted with the last call having been
-            // an `Err`. The `Ok(transient)` path either returns or
-            // hits the `attempt == max_retries` case which falls
-            // through to a synthetic error.
-            Err(last_err.unwrap_or_else(|| {
-                ConnectorError::Transport("retry budget exhausted on transient HTTP error".into())
-            }))
+            // Unreachable: every iteration of `0..=max_retries` either
+            // returns (`Ok(resp) | Err(e)` on the final attempt) or
+            // continues (the only `continue` paths trip on
+            // `attempt < max_retries`, which is false once
+            // `attempt == max_retries`). The loop therefore cannot
+            // complete normally. We use `unreachable!()` (which
+            // panics if the invariant is ever broken by a future
+            // refactor) instead of a synthetic `Err` that would lie
+            // about which retry failed.
+            unreachable!(
+                "BlockingHttpTransport retry loop must always return inside the loop body",
+            );
         }
     }
 

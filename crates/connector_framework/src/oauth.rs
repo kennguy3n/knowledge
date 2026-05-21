@@ -158,17 +158,27 @@ impl<T: HttpTransport + 'static> OAuth2CodeExchange for ReqwestOAuth2Client<T> {
         // body builder below, and `expose` is documented as the
         // single read accessor (no `Deref<str>` impl exists, so we
         // cannot accidentally log it).
-        let secret = self
-            .client_secret
-            .as_ref()
-            .map_or("", SecretToken::expose);
-        let form = [
+        //
+        // When no `client_secret` has been configured we omit the
+        // form field entirely rather than sending `client_secret=`
+        // with an empty value — Azure AD (and some other strict
+        // identity platforms) reject `invalid_client` for an empty
+        // secret on a public-client (PKCE-style) registration. The
+        // confidential-client flow used by Slack / Notion / Atlassian
+        // / Google requires a non-empty secret, so the same omission
+        // also surfaces a misconfigured confidential client as a
+        // 400 from the provider rather than a 401 with a misleading
+        // "empty client_secret" reason.
+        let exposed_secret = self.client_secret.as_ref().map(SecretToken::expose);
+        let mut form: Vec<(&str, &str)> = vec![
             ("grant_type", "authorization_code"),
             ("code", auth_code),
             ("redirect_uri", redirect_uri),
             ("client_id", client_id),
-            ("client_secret", secret),
         ];
+        if let Some(secret) = exposed_secret {
+            form.push(("client_secret", secret));
+        }
         let resp = self.execute_token_grant(token_url, &form)?;
         Ok(token_response_to_oauth2(resp, Utc::now()))
     }
@@ -199,16 +209,19 @@ impl<T: HttpTransport + 'static> ReqwestOAuth2Client<T> {
     ) -> Result<RefreshedToken> {
         let token_url = Self::token_url(config)?;
         let client_id = Self::client_id(config)?;
-        let secret = self
-            .client_secret
-            .as_ref()
-            .map_or("", SecretToken::expose);
-        let form = [
+        // See [`OAuth2CodeExchange::exchange_code`] for the rationale
+        // on conditionally omitting `client_secret` rather than
+        // sending an empty string — same constraint applies to the
+        // refresh grant.
+        let exposed_secret = self.client_secret.as_ref().map(SecretToken::expose);
+        let mut form: Vec<(&str, &str)> = vec![
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
             ("client_id", client_id),
-            ("client_secret", secret),
         ];
+        if let Some(secret) = exposed_secret {
+            form.push(("client_secret", secret));
+        }
         let resp = self.execute_token_grant(token_url, &form)?;
         Ok(token_response_to_refreshed(resp, Utc::now()))
     }
@@ -602,6 +615,60 @@ mod tests {
             body.contains("client_secret=super-secret-value"),
             "Clone must still POST the secret"
         );
+    }
+
+    /// When the client is built without a `client_secret`, the token
+    /// endpoint must NOT receive `client_secret=` (empty string) in
+    /// the form body — Azure AD and other strict identity platforms
+    /// reject that as `invalid_client` on public-client / PKCE
+    /// registrations. The field is omitted entirely from the form.
+    #[test]
+    fn client_secret_omitted_from_form_when_unset() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s","token_type":"Bearer"}"#.to_vec(),
+            ),
+        );
+        // Build a client with NO secret (the public-client / PKCE
+        // case). `with_client_secret` is intentionally not called.
+        let client = ReqwestOAuth2Client::new(transport.clone());
+        let _ = client
+            .exchange_code(&cfg(), "code-xyz")
+            .expect("public-client exchange should succeed");
+
+        let recorded = transport.recorded();
+        let body = String::from_utf8(recorded[0].body.clone()).expect("utf8");
+        assert!(
+            !body.contains("client_secret"),
+            "form body must omit `client_secret` entirely when none configured, got {body}"
+        );
+        // The other required fields still ride the form.
+        assert!(body.contains("grant_type=authorization_code"));
+        assert!(body.contains("code=code-xyz"));
+        assert!(body.contains("client_id=client-abc"));
+
+        // Same invariant for the refresh-token grant.
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"NEW","expires_in":7200,"scope":"s"}"#.to_vec(),
+            ),
+        );
+        let _ = client
+            .refresh_with_config(&cfg(), "RT-OLD")
+            .expect("public-client refresh should succeed");
+        let recorded = transport.recorded();
+        let body = String::from_utf8(recorded[1].body.clone()).expect("utf8");
+        assert!(
+            !body.contains("client_secret"),
+            "refresh-grant form body must omit `client_secret` entirely when none configured, got {body}"
+        );
+        assert!(body.contains("grant_type=refresh_token"));
+        assert!(body.contains("refresh_token=RT-OLD"));
     }
 
     #[test]

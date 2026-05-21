@@ -309,16 +309,33 @@ impl FfiRuntime {
         self.channel_memories.get(&scope)
     }
 
-    /// Borrow the per-scope channel memory, creating an empty one if
-    /// it does not yet exist.
+    /// Persist a fully-built [`ChannelMemoryObject`] to disk and,
+    /// only on disk-save success, install it into the per-scope
+    /// in-memory map.
     ///
-    /// `trigger_synthesis` calls this to attach the synthesised
-    /// recap to the scope's [`ChannelMemoryObject`] before flushing
-    /// it via [`Self::flush_channel_memory`].
-    pub(crate) fn channel_memory_mut(&mut self, scope: ScopeId) -> &mut ChannelMemoryObject {
-        self.channel_memories
-            .entry(scope)
-            .or_insert_with(|| ChannelMemoryObject::new(scope))
+    /// `trigger_synthesis` builds the next recap off-the-side via
+    /// [`Self::channel_memory`] (cloning the existing entry if one
+    /// exists) so that any failure between the inference dispatch
+    /// and the final flush leaves the substrate's observable state
+    /// untouched. This pins the
+    /// `trigger_synthesis_failure_does_not_allocate_channel_memory`
+    /// invariant: no `channel_memories` map entry is created until
+    /// `save_memory_blob` returns `Ok`.
+    pub(crate) fn save_channel_memory(
+        &mut self,
+        scope: ScopeId,
+        cmo: ChannelMemoryObject,
+    ) -> crate::error::FfiResult<()> {
+        let json = serde_json::to_vec(&cmo).map_err(|e| crate::error::FfiError::Memory {
+            message: format!("failed to serialize channel memory: {e}"),
+        })?;
+        self.store
+            .save_memory_blob(scope, "channel_memory", &json)
+            .map_err(|e| crate::error::FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        self.channel_memories.insert(scope, cmo);
+        Ok(())
     }
 
     /// Borrow the on-device SLM inference router.
@@ -336,22 +353,6 @@ impl FfiRuntime {
             })?;
             self.store
                 .save_memory_blob(scope, "user_memory", &json)
-                .map_err(|e| crate::error::FfiError::Evidence {
-                    message: e.to_string(),
-                })?;
-        }
-        Ok(())
-    }
-
-    /// Flush the in-memory `ChannelMemoryObject` for `scope` to the
-    /// encrypted evidence store.
-    pub(crate) fn flush_channel_memory(&self, scope: ScopeId) -> crate::error::FfiResult<()> {
-        if let Some(cmo) = self.channel_memories.get(&scope) {
-            let json = serde_json::to_vec(cmo).map_err(|e| crate::error::FfiError::Memory {
-                message: format!("failed to serialize channel memory: {e}"),
-            })?;
-            self.store
-                .save_memory_blob(scope, "channel_memory", &json)
                 .map_err(|e| crate::error::FfiError::Evidence {
                     message: e.to_string(),
                 })?;

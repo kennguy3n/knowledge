@@ -459,14 +459,10 @@ where
                 self.scope.as_uuid().as_bytes().to_vec(),
                 self.engine.replica_id().as_bytes().to_vec(),
                 i64::try_from(self.engine.op_log().clock).map_err(|_| {
-                    SyncError::Serialisation(
-                        "sync clock exceeds SQLite signed 64-bit range",
-                    )
+                    SyncError::Serialisation("sync clock exceeds SQLite signed 64-bit range")
                 })?,
                 i64::try_from(self.engine.op_log().compaction_epoch).map_err(|_| {
-                    SyncError::Serialisation(
-                        "compaction_epoch exceeds SQLite signed 64-bit range",
-                    )
+                    SyncError::Serialisation("compaction_epoch exceeds SQLite signed 64-bit range")
                 })?,
             ],
         )?;
@@ -500,9 +496,8 @@ where
                 // corruption or a writer that bypassed the
                 // `i64::try_from(op.seq)` check above. Surface as
                 // a deserialisation error rather than wrap.
-                let seq_u64 = u64::try_from(seq).map_err(|_| {
-                    SyncError::Serialisation("persisted sync op had negative seq")
-                })?;
+                let seq_u64 = u64::try_from(seq)
+                    .map_err(|_| SyncError::Serialisation("persisted sync op had negative seq"))?;
                 raw_rows.push((nonce, ct, replica_id, seq_u64));
             }
         }

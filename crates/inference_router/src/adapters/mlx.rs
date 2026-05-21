@@ -69,6 +69,20 @@ pub fn set_mlx_generate_fn(f: MlxGenerateFn) {
     let mut guard = MLX_GENERATE_FN
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if guard.is_some() {
+        // Production usage expects a single registration at app
+        // launch; a second call indicates one of (a) a misconfigured
+        // shell registering twice, (b) a hot-reload scenario, or (c)
+        // a test swapping the implementation. Emit a `warn` so the
+        // double-registration shows up in the substrate's audit
+        // log instead of silently swapping the in-flight callback
+        // out from under live dispatchers.
+        tracing::warn!(
+            "MLX generate callback re-registered \u{2014} discarding previous registration. \
+             Expected usage is a single registration at app launch; double registration \
+             may indicate a misconfigured platform shell.",
+        );
+    }
     *guard = Some(f);
 }
 
