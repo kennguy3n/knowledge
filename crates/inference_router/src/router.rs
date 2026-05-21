@@ -1103,8 +1103,6 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        panic!(
-            "InferenceRouter allocation was not freed within 5s — possible self-join hang",
-        );
+        panic!("InferenceRouter allocation was not freed within 5s — possible self-join hang",);
     }
 }
