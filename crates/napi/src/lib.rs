@@ -18,9 +18,14 @@
 //! 3. A round-trippable [`NapiError`] mapped from [`ffi::FfiError`]
 //!    so the Electron host gets a stable JSON envelope.
 //!
-//! Real `#[napi]` proc-macros land when `napi` and `napi-derive` are
-//! pinned. Until then this crate compiles as a regular Rust library
-//! and is fully unit-testable from the workspace.
+//! Phase 4 — the [`#[napi]`] proc-macros are live. The cdylib that
+//! `napi build` produces is loaded by Node via `require('./*.node')`.
+//! The [`bindings`] module is the JS-facing surface; the freestanding
+//! `pub fn`s in this file remain the canonical Rust-facing API so
+//! unit tests and Rust callers can exercise the substrate without
+//! going through the Node bridge.
+//!
+//! See [`bindings`] for the full JS API.
 
 #![deny(missing_docs)]
 // Most N-API entry points in this file forward their `String` /
@@ -37,6 +42,7 @@
 // by-value taking in internal helpers that don't cross the FFI
 // boundary.
 
+pub mod bindings;
 pub mod error;
 pub mod types;
 

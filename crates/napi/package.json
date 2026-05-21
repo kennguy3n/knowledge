@@ -1,0 +1,38 @@
+{
+  "name": "@knowledge/napi-addon",
+  "version": "0.1.0",
+  "description": "Node.js native addon bridging the Knowledge substrate's Rust core to the Electron desktop host. Built by `napi-rs` from `crates/napi`.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "knowledge.*.node"
+  ],
+  "engines": {
+    "node": ">= 18"
+  },
+  "license": "Apache-2.0 OR MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kennguy3n/knowledge"
+  },
+  "napi": {
+    "binaryName": "knowledge",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc"
+    ]
+  },
+  "scripts": {
+    "build": "napi build --platform --release --js index.js --dts index.d.ts",
+    "build:debug": "napi build --platform --js index.js --dts index.d.ts",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.6.2"
+  }
+}

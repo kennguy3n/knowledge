@@ -274,3 +274,93 @@ jobs:
           name: crypto-fuzz-artifacts
           path: crates/crypto/fuzz/artifacts/
           if-no-files-found: ignore
+
+  napi-build:
+    name: napi-build (${{ matrix.target }})
+    needs: build-default
+    # The N-API addon lives in `crates/napi/` and produces a
+    # platform-specific `.node` artefact via `napi build`. We build
+    # natively on each platform that the Electron host targets so
+    # Node can actually `require()` the produced binary as part of
+    # the smoke test. Cross-compile-only verification (without
+    # exercising the binary in a Node host) would miss link-time
+    # issues like the macOS `dynamic_lookup` directive emitted by
+    # `napi_build::setup()`.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-napi-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'crates/napi/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-napi-${{ matrix.target }}-
+      # `cargo test -p napi_addon` proves the JSON-envelope error
+      # contract on the rlib build before we go to the trouble of
+      # producing the cdylib artefact. Running it as a separate step
+      # makes the failure mode clearer: a red `cargo test` step
+      # means the Rust-side envelope is wrong; a red `node --test`
+      # step means the JS-side surface drifted.
+      - name: cargo test -p napi_addon --lib
+        run: cargo test -p napi_addon --lib --target ${{ matrix.target }}
+      - name: npm install (crates/napi)
+        working-directory: crates/napi
+        run: npm install --no-fund --no-audit
+      # `napi build --platform --release` produces three files in
+      # `crates/napi/`:
+      #
+      # * `knowledge.<target>.node` — the platform-suffixed cdylib
+      #   the Electron host `require()`s through the `index.js`
+      #   loader.
+      # * `index.js` — auto-generated loader that picks the right
+      #   `.node` for the current `process.platform` /
+      #   `process.arch`.
+      # * `index.d.ts` — auto-generated TypeScript types.
+      #
+      # We compare the regenerated `index.js` / `index.d.ts` against
+      # the tracked-in-git copies and fail the job if they drift, so
+      # forgotten regenerations after a `crates/napi/src/bindings.rs`
+      # edit get caught at PR time rather than after a release ships
+      # stale types.
+      - name: napi build (release)
+        working-directory: crates/napi
+        run: npx napi build --platform --release --target ${{ matrix.target }} --js index.js --dts index.d.ts
+      - name: Verify generated loader / dts match tracked copies
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: crates/napi
+        run: |
+          git diff --exit-code -- index.js index.d.ts || (
+            echo '::error::crates/napi/index.js or index.d.ts is out of date — re-run `npx napi build --platform --release --js index.js --dts index.d.ts` from crates/napi/ and commit the result.'
+            exit 1
+          )
+      - name: node --test (smoke tests)
+        working-directory: crates/napi
+        run: node --test 'test/*.test.mjs'
+      - name: Upload .node artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-addon-${{ matrix.target }}
+          path: crates/napi/knowledge.*.node
+          if-no-files-found: error
+          retention-days: 14

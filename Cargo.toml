@@ -113,7 +113,18 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny` (rather than `forbid`) so individual crates that need to
+# cross an FFI boundary can opt back in via a localized
+# `#![allow(unsafe_code)]` on the modules that genuinely need it
+# (e.g. `crates/napi/src/bindings.rs`, where `napi-derive`'s
+# proc-macros expand into Node-loader stubs that necessarily
+# touch raw C pointers). The expectation is that any crate that
+# downgrades this also documents the reason inline next to the
+# `allow` — see `crates/napi/src/bindings.rs` for the canonical
+# pattern. Crates that should never relax this (e.g. `crypto`)
+# re-state `unsafe_code = "forbid"` in their own `[lints.rust]`
+# block.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
