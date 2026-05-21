@@ -142,7 +142,7 @@ implementing the substrate's `Connector` trait.
 machinery — `HttpTransport` / `BlockingHttpTransport` (reqwest,
 behind the `http-client` feature) with retries, backoff, and
 `Retry-After` parsing — plus a real `OAuth2CodeExchange` /
-`TokenRefresher` (`ReqwestOAuth2Client` / `ConfiguredRefresher`)
+`TokenRefresher` (`OAuth2Client` / `ConfiguredRefresher`)
 that drives `authorization_code` and `refresh_token` grants
 against any RFC-6749 token endpoint. The nine fixture connectors
 themselves have not yet been refactored to use this transport;

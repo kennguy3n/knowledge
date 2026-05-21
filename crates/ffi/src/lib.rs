@@ -820,21 +820,57 @@ fn synthesize_scope(rt: &mut runtime::FfiRuntime, scope: ScopeId) -> FfiResult<S
     // (oldest message first → newest last), matching the natural
     // reading order the prompt template asks the SLM to summarise.
     // `recent_evidence_ids_for_scope` returns newest-first; reverse
-    // before reading so we can stop early on the first decryption
-    // failure without consuming the rest of the list.
+    // before reading.
+    //
+    // Skip-and-warn (NOT fail-fast) on per-row read failures: a single
+    // corrupted body row (missing body-table entry, DEK destroyed
+    // mid-flight, etc.) must not block an otherwise-useful recap. This
+    // matches `EvidenceStore::search_hybrid`, which demotes corrupted
+    // rows to `vector_score = 0.0` rather than failing the whole
+    // search. The synthesis path inherits the same contract: every
+    // readable row contributes to the prompt; unreadable rows are
+    // logged and dropped. Only if EVERY row in the window is
+    // unreadable do we surface `FfiError::Evidence` to the host —
+    // otherwise the recap proceeds against the readable subset.
     let mut bodies: Vec<String> = Vec::with_capacity(recent_ids.len());
+    let mut skipped: usize = 0;
     for evidence_id in recent_ids.iter().rev() {
-        let body = rt
-            .store()
-            .read_body(*evidence_id)
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?;
-        // Lossy decode is intentional: evidence bodies are UTF-8 in
-        // practice (ingest is gated through `String` at the FFI
-        // surface) but a malformed row should still be summarisable
-        // rather than failing the entire synthesis call.
-        bodies.push(String::from_utf8_lossy(&body).into_owned());
+        match rt.store().read_body(*evidence_id) {
+            Ok(body) => {
+                // Lossy decode is intentional: evidence bodies are
+                // UTF-8 in practice (ingest is gated through `String`
+                // at the FFI surface) but a malformed row should
+                // still be summarisable rather than failing the
+                // entire synthesis call.
+                bodies.push(String::from_utf8_lossy(&body).into_owned());
+            }
+            Err(e) => {
+                skipped = skipped.saturating_add(1);
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    evidence = %evidence_id.as_uuid(),
+                    error = %e,
+                    "trigger_synthesis: skipping unreadable evidence row",
+                );
+            }
+        }
+    }
+    if bodies.is_empty() {
+        return Err(FfiError::Evidence {
+            message: format!(
+                "synthesis: every evidence row in the {SYNTHESIS_EVIDENCE_WINDOW}-row \
+                 window for scope {} was unreadable ({skipped} skipped)",
+                scope.as_uuid()
+            ),
+        });
+    }
+    if skipped > 0 {
+        tracing::warn!(
+            scope = %scope.as_uuid(),
+            skipped,
+            kept = bodies.len(),
+            "trigger_synthesis: proceeding with partial evidence window",
+        );
     }
 
     let combined = bodies.join("\n\n");

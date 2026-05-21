@@ -55,7 +55,12 @@ pub use http::{
 pub use http::{MockHttpTransport, MockResponse, RecordedRequest};
 #[cfg(feature = "http-client")]
 pub use oauth::default_oauth_client;
-pub use oauth::{ConfiguredRefresher, ReqwestOAuth2Client, DEFAULT_OAUTH_TIMEOUT_SECS};
+pub use oauth::{ConfiguredRefresher, OAuth2Client, DEFAULT_OAUTH_TIMEOUT_SECS};
+// Deprecated transport-suggestive alias, retained for one minor
+// cycle so external consumers can migrate without an API break.
+// New code should reach for `OAuth2Client` directly.
+#[allow(deprecated)]
+pub use oauth::ReqwestOAuth2Client;
 pub use sync::{SyncMode, SyncState, SyncStatus};
 pub use token_vault::{
     ConnectorInstanceId, OAuth2CodeExchange, OAuth2Token, OAuth2TokenVault, RefreshedToken,

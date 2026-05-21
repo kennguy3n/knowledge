@@ -1,17 +1,20 @@
 //! Real OAuth2 client implementations.
 //!
-//! Provides reqwest-backed `OAuth2CodeExchange` and `TokenRefresher`
-//! implementations that POST to a provider's `/token` endpoint with
-//! `grant_type=authorization_code` and `grant_type=refresh_token`
-//! respectively. Both are gated behind the `http-client` feature
-//! flag so CI hosts without the reqwest build chain can still
-//! compile the crate.
+//! Provides transport-agnostic `OAuth2CodeExchange` and
+//! `TokenRefresher` implementations that POST to a provider's
+//! `/token` endpoint with `grant_type=authorization_code` and
+//! `grant_type=refresh_token` respectively. The client is generic
+//! over [`HttpTransport`] — the production binary plugs in the
+//! `reqwest`-backed [`crate::http::BlockingHttpTransport`] (gated
+//! behind the `http-client` feature flag so CI hosts without the
+//! reqwest build chain can still compile the crate), while tests
+//! swap in [`crate::http::MockHttpTransport`].
 //!
 //! The OAuth2 endpoint URL and `client_id` / `redirect_uri` are
 //! read out of [`crate::config::ConnectorConfig::auth_config_json`]
 //! (a flexible JSON blob — see `docs/DESIGN.md` §10.2). The
 //! `client_secret` is **never** stored on disk; production callers
-//! pass it in via [`ReqwestOAuth2Client::with_client_secret`] at
+//! pass it in via [`OAuth2Client::with_client_secret`] at
 //! runtime from the OS keychain / secrets manager.
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
@@ -24,10 +27,22 @@ use crate::token_vault::{
     OAuth2CodeExchange, OAuth2Token, RefreshedToken, SecretToken, TokenRefresher,
 };
 
-/// Reqwest-backed OAuth2 client that drives both `authorization_code`
-/// and `refresh_token` grants over a shared [`HttpTransport`].
+/// Transport-agnostic OAuth2 client that drives both
+/// `authorization_code` and `refresh_token` grants over a shared
+/// [`HttpTransport`].
 ///
-/// One `ReqwestOAuth2Client` instance services every connector
+/// The name was previously `ReqwestOAuth2Client`, but the type is
+/// generic over [`HttpTransport`] and compiles without the `reqwest`
+/// dependency — the only thing `reqwest`-specific is the default
+/// [`crate::http::BlockingHttpTransport`] (behind the `http-client`
+/// feature). Tests instantiate the client with
+/// [`crate::http::MockHttpTransport`]; a future transport (e.g. a
+/// `hyper`-only build, or a WASM `fetch`-backed transport) would
+/// plug in here just as cleanly. A deprecated
+/// [`ReqwestOAuth2Client`] alias remains for backward compatibility
+/// — new code should use the [`OAuth2Client`] name.
+///
+/// One `OAuth2Client` instance services every connector
 /// using the same transport — the per-provider knobs (token URL,
 /// `client_id`, `client_secret`) come in via the
 /// [`ConnectorConfig`] / the explicit `with_*` setters. The client
@@ -42,7 +57,7 @@ use crate::token_vault::{
 /// that heap region. `SecretToken` already gives the access /
 /// refresh tokens the same treatment in [`OAuth2Token`] / [`RefreshedToken`]
 /// — the client secret deserves *at least* the same care.
-pub struct ReqwestOAuth2Client<T: HttpTransport> {
+pub struct OAuth2Client<T: HttpTransport> {
     transport: std::sync::Arc<T>,
     client_secret: Option<SecretToken>,
 }
@@ -53,7 +68,7 @@ pub struct ReqwestOAuth2Client<T: HttpTransport> {
 // second `Arc` handle to the shared transport (no underlying
 // transport copy) and a `Clone` of the `Option<SecretToken>` (which
 // is itself a fresh heap allocation that zeroises on drop).
-impl<T: HttpTransport> Clone for ReqwestOAuth2Client<T> {
+impl<T: HttpTransport> Clone for OAuth2Client<T> {
     fn clone(&self) -> Self {
         Self {
             transport: std::sync::Arc::clone(&self.transport),
@@ -62,9 +77,9 @@ impl<T: HttpTransport> Clone for ReqwestOAuth2Client<T> {
     }
 }
 
-impl<T: HttpTransport> std::fmt::Debug for ReqwestOAuth2Client<T> {
+impl<T: HttpTransport> std::fmt::Debug for OAuth2Client<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReqwestOAuth2Client")
+        f.debug_struct("OAuth2Client")
             .field("transport", &"<HttpTransport>")
             .field(
                 "client_secret",
@@ -74,7 +89,7 @@ impl<T: HttpTransport> std::fmt::Debug for ReqwestOAuth2Client<T> {
     }
 }
 
-impl<T: HttpTransport> ReqwestOAuth2Client<T> {
+impl<T: HttpTransport> OAuth2Client<T> {
     /// Wrap a transport. No client secret is set — callers that
     /// negotiate against providers requiring a confidential client
     /// (most major providers: Google, Microsoft, Atlassian, …)
@@ -175,7 +190,7 @@ impl<T: HttpTransport> ReqwestOAuth2Client<T> {
     }
 }
 
-impl<T: HttpTransport + 'static> OAuth2CodeExchange for ReqwestOAuth2Client<T> {
+impl<T: HttpTransport + 'static> OAuth2CodeExchange for OAuth2Client<T> {
     fn exchange_code(&self, config: &ConnectorConfig, auth_code: &str) -> Result<OAuth2Token> {
         let token_url = Self::token_url(config)?;
         let client_id = Self::client_id(config)?;
@@ -211,10 +226,10 @@ impl<T: HttpTransport + 'static> OAuth2CodeExchange for ReqwestOAuth2Client<T> {
     }
 }
 
-impl<T: HttpTransport + 'static> ReqwestOAuth2Client<T> {
+impl<T: HttpTransport + 'static> OAuth2Client<T> {
     /// Refresh an access token using `grant_type=refresh_token`.
     ///
-    /// `ReqwestOAuth2Client` deliberately does NOT implement
+    /// `OAuth2Client` deliberately does NOT implement
     /// [`TokenRefresher`] directly: the refresh grant always needs
     /// the per-connector [`ConnectorConfig`] (for the token URL and
     /// `client_id`), and a `TokenRefresher` impl whose `refresh` method
@@ -258,7 +273,23 @@ impl<T: HttpTransport + 'static> ReqwestOAuth2Client<T> {
     }
 }
 
-/// `TokenRefresher` adapter that pairs a [`ReqwestOAuth2Client`] with
+/// Deprecated alias for [`OAuth2Client`].
+///
+/// The previous name was misleading: the type is generic over
+/// [`HttpTransport`] and compiles cleanly without the `reqwest`
+/// dependency. The new name is transport-agnostic and lines up
+/// with how the rest of the crate refers to OAuth2 surfaces
+/// ([`OAuth2Token`], [`OAuth2CodeExchange`], …). External callers
+/// can keep using `ReqwestOAuth2Client` for one minor cycle to
+/// soften the migration; new code should prefer [`OAuth2Client`].
+#[deprecated(
+    since = "0.2.0",
+    note = "renamed to `OAuth2Client` — the type is transport-agnostic and works with any \
+            `HttpTransport`, not just the reqwest-backed default"
+)]
+pub type ReqwestOAuth2Client<T> = OAuth2Client<T>;
+
+/// `TokenRefresher` adapter that pairs a [`OAuth2Client`] with
 /// the [`ConnectorConfig`] needed to drive the refresh grant.
 ///
 /// `OAuth2TokenVault::refresh_if_expiring` only accepts
@@ -266,7 +297,7 @@ impl<T: HttpTransport + 'static> ReqwestOAuth2Client<T> {
 /// connector's token URL and client id — there is no realistic
 /// `TokenRefresher` impl that works without that context. Earlier
 /// revisions of this crate exposed a blanket `TokenRefresher` impl on
-/// `ReqwestOAuth2Client` whose `refresh` method always returned an
+/// `OAuth2Client` whose `refresh` method always returned an
 /// error directing the caller to use `refresh_with_config`; that
 /// satisfied the trait type-system contract but violated its semantic
 /// contract — every `OAuth2TokenVault` refresh would silently fail at
@@ -274,11 +305,11 @@ impl<T: HttpTransport + 'static> ReqwestOAuth2Client<T> {
 /// the asymmetry by capturing the missing config at construction
 /// time, so the vault's polymorphic call path works correctly.
 pub struct ConfiguredRefresher<T: HttpTransport> {
-    client: ReqwestOAuth2Client<T>,
+    client: OAuth2Client<T>,
     config: ConnectorConfig,
 }
 
-// Manual `Clone` for the same reason as `ReqwestOAuth2Client`:
+// Manual `Clone` for the same reason as `OAuth2Client`:
 // avoid synthesising an unnecessary `T: Clone` bound on the
 // `HttpTransport` type parameter (the transport is shared via
 // `Arc` inside the embedded client).
@@ -306,7 +337,7 @@ impl<T: HttpTransport + 'static> ConfiguredRefresher<T> {
     /// refresh grant. Clone the underlying client + config once at
     /// the call site that knows both pieces.
     #[must_use]
-    pub fn new(client: ReqwestOAuth2Client<T>, config: ConnectorConfig) -> Self {
+    pub fn new(client: OAuth2Client<T>, config: ConnectorConfig) -> Self {
         Self { client, config }
     }
 
@@ -347,7 +378,7 @@ struct TokenResponse {
 ///
 /// `error_kind` decides which [`ConnectorError`] variant non-success
 /// responses and invalid-JSON bodies map to — see
-/// [`ReqwestOAuth2Client::execute_token_grant`] for the rationale on
+/// [`OAuth2Client::execute_token_grant`] for the rationale on
 /// why the two grants pick different variants.
 fn parse_token_response(
     resp: &HttpResponse,
@@ -469,11 +500,11 @@ pub const DEFAULT_OAUTH_TIMEOUT_SECS: u64 = 30;
 /// Returns [`ConnectorError::Transport`] if the underlying reqwest
 /// client builder rejects the timeout configuration.
 #[cfg(feature = "http-client")]
-pub fn default_oauth_client() -> Result<ReqwestOAuth2Client<crate::http::BlockingHttpTransport>> {
+pub fn default_oauth_client() -> Result<OAuth2Client<crate::http::BlockingHttpTransport>> {
     let transport = std::sync::Arc::new(crate::http::BlockingHttpTransport::with_timeout(
         std::time::Duration::from_secs(DEFAULT_OAUTH_TIMEOUT_SECS),
     )?);
-    Ok(ReqwestOAuth2Client::new(transport))
+    Ok(OAuth2Client::new(transport))
 }
 
 #[cfg(test)]
@@ -503,7 +534,7 @@ mod tests {
                 br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"read_content","token_type":"Bearer"}"#.to_vec(),
             ),
         );
-        let client = ReqwestOAuth2Client::new(transport.clone()).with_client_secret("s3cret");
+        let client = OAuth2Client::new(transport.clone()).with_client_secret("s3cret");
         let token = client.exchange_code(&cfg(), "code-xyz").expect("exchange");
         assert_eq!(token.access_token.expose(), "AT");
         assert_eq!(
@@ -540,7 +571,7 @@ mod tests {
                 br#"{"access_token":"NEW","expires_in":7200,"scope":"read_content"}"#.to_vec(),
             ),
         );
-        let client = ReqwestOAuth2Client::new(transport.clone()).with_client_secret("s3cret");
+        let client = OAuth2Client::new(transport.clone()).with_client_secret("s3cret");
         let refreshed = client
             .refresh_with_config(&cfg(), "RT-OLD")
             .expect("refresh");
@@ -567,7 +598,7 @@ mod tests {
                 body: br#"{"error":"invalid_grant","error_description":"code expired"}"#.to_vec(),
             },
         );
-        let client = ReqwestOAuth2Client::new(transport).with_client_secret("s3cret");
+        let client = OAuth2Client::new(transport).with_client_secret("s3cret");
         let err = client.exchange_code(&cfg(), "code").expect_err("must fail");
         match err {
             ConnectorError::Auth(msg) => {
@@ -598,7 +629,7 @@ mod tests {
                     .to_vec(),
             },
         );
-        let client = ReqwestOAuth2Client::new(transport).with_client_secret("s3cret");
+        let client = OAuth2Client::new(transport).with_client_secret("s3cret");
 
         // Direct path through `refresh_with_config`.
         let err = client
@@ -629,7 +660,7 @@ mod tests {
                 body: br#"{"error":"invalid_client"}"#.to_vec(),
             },
         );
-        let client = ReqwestOAuth2Client::new(transport).with_client_secret("s3cret");
+        let client = OAuth2Client::new(transport).with_client_secret("s3cret");
         let refresher = ConfiguredRefresher::new(client, cfg());
         let err = (&refresher as &dyn TokenRefresher)
             .refresh("RT-OLD")
@@ -657,7 +688,7 @@ mod tests {
                 br#"{"access_token":"AT","expires_in":3600,"scope":"read_content"}"#.to_vec(),
             ),
         );
-        let client = ReqwestOAuth2Client::new(transport).with_client_secret("s3cret");
+        let client = OAuth2Client::new(transport).with_client_secret("s3cret");
         let token = client.exchange_code(&cfg(), "code-xyz").expect("exchange");
         assert!(
             token.refresh_token.is_none(),
@@ -681,7 +712,7 @@ mod tests {
                     .to_vec(),
             ),
         );
-        let client = ReqwestOAuth2Client::new(transport).with_client_secret("s3cret");
+        let client = OAuth2Client::new(transport).with_client_secret("s3cret");
         let before = Utc::now();
         let token = client.exchange_code(&cfg(), "code").expect("exchange");
         let after = Utc::now();
@@ -699,7 +730,7 @@ mod tests {
     #[test]
     fn token_url_missing_fails() {
         let transport = Arc::new(MockHttpTransport::new());
-        let client = ReqwestOAuth2Client::new(transport);
+        let client = OAuth2Client::new(transport);
         let mut config = cfg();
         config.auth_config_json = serde_json::json!({});
         let err = client
@@ -718,7 +749,7 @@ mod tests {
         // `ConnectorConfig` into the underlying client and return the
         // refreshed token. This pins the architecturally-correct
         // wiring after we removed the broken blanket
-        // `TokenRefresher for ReqwestOAuth2Client` impl.
+        // `TokenRefresher for OAuth2Client` impl.
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Post,
@@ -727,7 +758,7 @@ mod tests {
                 br#"{"access_token":"FRESH","expires_in":3600,"scope":"read_content"}"#.to_vec(),
             ),
         );
-        let client = ReqwestOAuth2Client::new(transport.clone()).with_client_secret("s3cret");
+        let client = OAuth2Client::new(transport.clone()).with_client_secret("s3cret");
         let refresher = ConfiguredRefresher::new(client, cfg());
 
         // Call through the trait object — this is the path
@@ -759,8 +790,7 @@ mod tests {
     #[test]
     fn client_secret_is_redacted_in_debug_and_survives_clone() {
         let transport = Arc::new(MockHttpTransport::new());
-        let client =
-            ReqwestOAuth2Client::new(transport.clone()).with_client_secret("super-secret-value");
+        let client = OAuth2Client::new(transport.clone()).with_client_secret("super-secret-value");
 
         // Debug must NOT contain the raw secret.
         let dbg = format!("{client:?}");
@@ -813,7 +843,7 @@ mod tests {
         );
         // Build a client with NO secret (the public-client / PKCE
         // case). `with_client_secret` is intentionally not called.
-        let client = ReqwestOAuth2Client::new(transport.clone());
+        let client = OAuth2Client::new(transport.clone());
         let _ = client
             .exchange_code(&cfg(), "code-xyz")
             .expect("public-client exchange should succeed");

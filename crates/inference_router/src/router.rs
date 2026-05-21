@@ -3,6 +3,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::adapter::{AdapterKind, InferenceAdapter, ProbeResult};
@@ -45,6 +46,18 @@ pub struct InferenceRouter {
     /// hosts use when they need a synchronisation point against
     /// the background probe.
     bootstrap_signal: (Mutex<bool>, Condvar),
+    /// Join handle for the background bootstrap thread, if one was
+    /// spawned via [`Self::spawn_bootstrap`]. Owned here so
+    /// [`Self::shutdown`] (and the [`Drop`] impl) can `join()` the
+    /// thread instead of leaving it detached — a detached probe
+    /// thread that outlives the FFI runtime would briefly keep
+    /// network sockets open (e.g. the llama.cpp `/health` probe)
+    /// after the host has called `close_store`, which the substrate
+    /// avoids by waiting on the handle at shutdown time. Mutexed
+    /// rather than atomic-swap because [`JoinHandle`] is not
+    /// `Copy` / `Atomic`-friendly; contention is irrelevant in
+    /// practice (spawn/shutdown are infrequent).
+    bootstrap_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl InferenceRouter {
@@ -68,6 +81,7 @@ impl InferenceRouter {
             activity: Mutex::new(activity),
             warmed: AtomicBool::new(false),
             bootstrap_signal: (Mutex::new(false), Condvar::new()),
+            bootstrap_handle: Mutex::new(None),
         }
     }
 
@@ -105,9 +119,23 @@ impl InferenceRouter {
     /// network (e.g. the `http-client`-backed llama.cpp adapter
     /// pings `GET /health` with a multi-second timeout).
     ///
-    /// The spawned thread is detached — the caller does not need to
-    /// `join` it. Any thread that needs a synchronisation point
-    /// against probe completion calls [`Self::wait_for_bootstrap`].
+    /// The spawned thread's [`JoinHandle`] is stored on the router so
+    /// [`Self::shutdown`] (and the [`Drop`] impl) can `join()` it at
+    /// teardown time. Callers do not need to `join` directly; any
+    /// thread that needs a synchronisation point against probe
+    /// completion calls [`Self::wait_for_bootstrap`]. The handle
+    /// exists specifically so the runtime can guarantee no probe
+    /// thread outlives the router's logical lifetime — detached
+    /// probes would briefly keep network sockets open after the host
+    /// has called `close_store`, even though they are memory-safe via
+    /// the [`Arc`] the thread holds.
+    ///
+    /// Calling `spawn_bootstrap` twice on the same router is
+    /// supported: the second call joins the prior handle (blocking
+    /// briefly if the first probe is still running) before spawning a
+    /// fresh thread. This is a defensive guard against host code that
+    /// re-bootstraps on configuration reload; the substrate itself
+    /// only calls `spawn_bootstrap` once per `open_store`.
     ///
     /// # Panics
     ///
@@ -115,8 +143,12 @@ impl InferenceRouter {
     /// matches the substrate's policy elsewhere (we treat thread
     /// spawn failures as unrecoverable initialisation faults).
     pub fn spawn_bootstrap(self: Arc<Self>) {
+        // Reap any prior handle first so a second call doesn't leak
+        // the previous thread. This is a no-op on the common path
+        // (one bootstrap per router lifetime).
+        self.shutdown();
         let me = Arc::clone(&self);
-        std::thread::Builder::new()
+        let handle = std::thread::Builder::new()
             .name("inference-router-bootstrap".into())
             .spawn(move || {
                 // RAII drop-guard so that even if any adapter's
@@ -155,6 +187,52 @@ impl InferenceRouter {
                 }
             })
             .expect("spawn inference-router-bootstrap thread");
+        // Stash the handle for `shutdown` / `Drop`. We never call
+        // `expect` on the lock here because contention is impossible
+        // (the only writers are `spawn_bootstrap` and `shutdown`, and
+        // we just returned from the `shutdown` call above) — the
+        // `lock()` is conceptually infallible on a non-poisoned mutex
+        // and a poisoned one indicates a programmer error worth
+        // surfacing as a panic.
+        *self.bootstrap_handle.lock().expect("bootstrap_handle lock") = Some(handle);
+    }
+
+    /// Join the background bootstrap thread spawned by
+    /// [`Self::spawn_bootstrap`], if any. No-op when no background
+    /// bootstrap is in flight (either none was spawned, or a prior
+    /// `shutdown` already reaped the handle).
+    ///
+    /// The substrate calls this from `FfiRuntime::Drop` so the
+    /// background probe never outlives the runtime that owns it.
+    /// External callers may invoke it directly when they want a hard
+    /// synchronisation point against probe completion —
+    /// [`Self::wait_for_bootstrap`] satisfies the same observable
+    /// contract via the condvar, but only `shutdown` guarantees the
+    /// OS-level thread has been reaped.
+    ///
+    /// Safe to call from any thread, multiple times — the second
+    /// call sees `None` and returns immediately.
+    pub fn shutdown(&self) {
+        let handle = self
+            .bootstrap_handle
+            .lock()
+            .expect("bootstrap_handle lock")
+            .take();
+        if let Some(h) = handle {
+            // `join()` on a panicked thread returns `Err`; we don't
+            // propagate that here because the bootstrap thread's
+            // panic-safety contract is already covered by the
+            // `NotifyOnDrop` guard inside `spawn_bootstrap` — the
+            // condvar is signalled regardless, so any waiters in
+            // `wait_for_bootstrap` have already unblocked. Logging
+            // the join failure is the most we can usefully do.
+            if let Err(e) = h.join() {
+                tracing::warn!(
+                    error = ?e,
+                    "inference-router-bootstrap thread panicked during shutdown",
+                );
+            }
+        }
     }
 
     /// Block the current thread until [`Self::bootstrap`] (or the
@@ -282,6 +360,28 @@ impl InferenceRouter {
             entry.last_dispatch = Instant::now();
             entry.loaded = loaded || entry.loaded;
         }
+    }
+}
+
+impl Drop for InferenceRouter {
+    /// Reap the background bootstrap thread, if one is still
+    /// running. The substrate's normal teardown path calls
+    /// [`Self::shutdown`] explicitly from `FfiRuntime::Drop`, but
+    /// this `Drop` impl makes the contract robust against routers
+    /// constructed in standalone contexts (tests, demos,
+    /// embedders that don't go through the FFI surface): no
+    /// matter how the router is dropped, the probe thread will
+    /// be joined before the heap allocation goes away.
+    ///
+    /// Note that the bootstrap thread holds an [`Arc`] back to
+    /// this router, so `Drop` will only ever fire after that
+    /// `Arc` has been released — i.e. only after the probe
+    /// itself has returned. The `join()` inside `shutdown()` is
+    /// therefore guaranteed to complete promptly (it sees a
+    /// thread that has already finished its closure), which
+    /// avoids any potential for `Drop` to block on slow I/O.
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 

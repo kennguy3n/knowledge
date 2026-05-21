@@ -247,6 +247,23 @@ pub struct FfiRuntime {
 
 impl Drop for FfiRuntime {
     fn drop(&mut self) {
+        // Reap the inference-router bootstrap thread before any
+        // other teardown work. The bootstrap thread holds an `Arc`
+        // clone of `inference_router`, so without an explicit join
+        // the thread can outlive `close_store` by however long the
+        // probe takes (e.g. a multi-second `GET /health` against
+        // the llama.cpp loopback server when the http-client
+        // feature is enabled). That window is memory-safe — the
+        // thread's `Arc` keeps the router alive — but it leaks
+        // OS resources (open sockets, file descriptors) past the
+        // point at which the host has been told the store is
+        // closed, which the substrate's lifecycle contract
+        // ([`close_store`] docs at the top of this module)
+        // explicitly forbids. `shutdown()` is idempotent and
+        // returns immediately when no background thread is in
+        // flight, so the cost on the fast path is one
+        // uncontended mutex acquisition.
+        self.inference_router.shutdown();
         self.master_key.zeroize();
     }
 }
