@@ -134,22 +134,18 @@ impl<T: HttpTransport + 'static> OAuth2CodeExchange for ReqwestOAuth2Client<T> {
     }
 }
 
-impl<T: HttpTransport + 'static> TokenRefresher for ReqwestOAuth2Client<T> {
-    fn refresh(&self, _refresh_token: &str) -> Result<RefreshedToken> {
-        Err(ConnectorError::TokenRefresh(
-            "ReqwestOAuth2Client::refresh requires the per-connector ConnectorConfig — call \
-             refresh_with_config(config, refresh_token) instead from the connector layer"
-                .into(),
-        ))
-    }
-}
-
 impl<T: HttpTransport + 'static> ReqwestOAuth2Client<T> {
-    /// Variant of [`TokenRefresher::refresh`] that takes the
-    /// connector-specific `ConnectorConfig` (for `token_url` /
-    /// `client_id`). The blanket `TokenRefresher` impl on this type
-    /// requires the config, which the per-connector code already has
-    /// — this is the entry point connectors actually call.
+    /// Refresh an access token using `grant_type=refresh_token`.
+    ///
+    /// `ReqwestOAuth2Client` deliberately does NOT implement
+    /// [`TokenRefresher`] directly: the refresh grant always needs
+    /// the per-connector [`ConnectorConfig`] (for the token URL and
+    /// `client_id`), and a `TokenRefresher` impl whose `refresh` method
+    /// silently ignored the config would be a footgun for
+    /// `OAuth2TokenVault::refresh_if_expiring` callers. Use
+    /// [`ConfiguredRefresher`] instead when a `TokenRefresher` is
+    /// needed — it pairs this client with a config so the
+    /// trait method has everything it needs.
     ///
     /// # Errors
     ///
@@ -172,6 +168,61 @@ impl<T: HttpTransport + 'static> ReqwestOAuth2Client<T> {
         ];
         let resp = self.execute_token_grant(token_url, &form)?;
         Ok(token_response_to_refreshed(resp, Utc::now()))
+    }
+}
+
+/// `TokenRefresher` adapter that pairs a [`ReqwestOAuth2Client`] with
+/// the [`ConnectorConfig`] needed to drive the refresh grant.
+///
+/// `OAuth2TokenVault::refresh_if_expiring` only accepts
+/// `&dyn TokenRefresher`, but the refresh grant always needs the
+/// connector's token URL and client id — there is no realistic
+/// `TokenRefresher` impl that works without that context. Earlier
+/// revisions of this crate exposed a blanket `TokenRefresher` impl on
+/// `ReqwestOAuth2Client` whose `refresh` method always returned an
+/// error directing the caller to use `refresh_with_config`; that
+/// satisfied the trait type-system contract but violated its semantic
+/// contract — every `OAuth2TokenVault` refresh would silently fail at
+/// runtime with no compile-time signal. `ConfiguredRefresher` fixes
+/// the asymmetry by capturing the missing config at construction
+/// time, so the vault's polymorphic call path works correctly.
+#[derive(Clone)]
+pub struct ConfiguredRefresher<T: HttpTransport> {
+    client: ReqwestOAuth2Client<T>,
+    config: ConnectorConfig,
+}
+
+impl<T: HttpTransport> std::fmt::Debug for ConfiguredRefresher<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfiguredRefresher")
+            .field("client", &self.client)
+            .field("kind", &self.config.kind)
+            .field("scope_id", &self.config.scope_id)
+            .finish()
+    }
+}
+
+impl<T: HttpTransport + 'static> ConfiguredRefresher<T> {
+    /// Build a refresher that always uses `config` when driving the
+    /// refresh grant. Clone the underlying client + config once at
+    /// the call site that knows both pieces.
+    #[must_use]
+    pub fn new(client: ReqwestOAuth2Client<T>, config: ConnectorConfig) -> Self {
+        Self { client, config }
+    }
+
+    /// Return a reference to the captured config so the caller can
+    /// re-use it (e.g. to drive an `exchange_code` grant against the
+    /// same provider).
+    #[must_use]
+    pub fn config(&self) -> &ConnectorConfig {
+        &self.config
+    }
+}
+
+impl<T: HttpTransport + 'static> TokenRefresher for ConfiguredRefresher<T> {
+    fn refresh(&self, refresh_token: &str) -> Result<RefreshedToken> {
+        self.client.refresh_with_config(&self.config, refresh_token)
     }
 }
 
@@ -414,20 +465,41 @@ mod tests {
     }
 
     #[test]
-    fn refresher_trait_impl_returns_error_without_config() {
-        // The blanket TokenRefresher::refresh impl on
-        // ReqwestOAuth2Client intentionally returns an error
-        // pointing callers at refresh_with_config (where the
-        // ConnectorConfig is available).
+    fn configured_refresher_drives_refresh_grant_via_trait() {
+        // `ConfiguredRefresher` is what `OAuth2TokenVault::refresh_if_expiring`
+        // accepts (`&dyn TokenRefresher`). It must thread the captured
+        // `ConnectorConfig` into the underlying client and return the
+        // refreshed token. This pins the architecturally-correct
+        // wiring after we removed the broken blanket
+        // `TokenRefresher for ReqwestOAuth2Client` impl.
         let transport = Arc::new(MockHttpTransport::new());
-        let client = ReqwestOAuth2Client::new(transport);
-        let err = TokenRefresher::refresh(&client, "RT").expect_err("must fail");
-        match err {
-            ConnectorError::TokenRefresh(msg) => {
-                assert!(msg.contains("refresh_with_config"));
-            }
-            other => panic!("expected TokenRefresh, got {other:?}"),
-        }
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"FRESH","expires_in":3600,"scope":"read_content"}"#.to_vec(),
+            ),
+        );
+        let client = ReqwestOAuth2Client::new(transport.clone()).with_client_secret("s3cret");
+        let refresher = ConfiguredRefresher::new(client, cfg());
+
+        // Call through the trait object — this is the path
+        // `OAuth2TokenVault::refresh_if_expiring` takes.
+        let refreshed: RefreshedToken = (&refresher as &dyn TokenRefresher)
+            .refresh("RT-OLD")
+            .expect("trait-driven refresh succeeds");
+        assert_eq!(refreshed.access_token, "FRESH");
+        assert_eq!(refreshed.scope.as_deref(), Some("read_content"));
+
+        // Wire-level: the refresh grant went out with the captured
+        // config's client_id and the secret from the client.
+        let recorded = transport.recorded();
+        assert_eq!(recorded.len(), 1);
+        let body = String::from_utf8(recorded[0].body.clone()).expect("utf8");
+        assert!(body.contains("grant_type=refresh_token"));
+        assert!(body.contains("refresh_token=RT-OLD"));
+        assert!(body.contains("client_id=client-abc"));
+        assert!(body.contains("client_secret=s3cret"));
     }
 
     #[test]

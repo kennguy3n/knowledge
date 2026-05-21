@@ -608,6 +608,20 @@ mod mock_impl {
         }
     }
 
+    /// Normalise header names to lowercase so the mock honours the
+    /// `HttpResponse::headers` invariant ("`name` side is lowercased").
+    /// `BlockingHttpTransport` enforces this for real network
+    /// responses; the mock must do the same so tests that construct
+    /// `MockResponse` with mixed-case names (`"Retry-After"`) still
+    /// behave correctly when callers look the value up via
+    /// `HttpResponse::header()` (which lowercases the needle).
+    fn lowercase_header_names(headers: Vec<(String, String)>) -> Vec<(String, String)> {
+        headers
+            .into_iter()
+            .map(|(k, v)| (k.to_ascii_lowercase(), v))
+            .collect()
+    }
+
     impl HttpTransport for MockHttpTransport {
         fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
             self.recorded
@@ -628,7 +642,7 @@ mod mock_impl {
                     let r = queue.remove(0);
                     return Ok(HttpResponse {
                         status: r.status,
-                        headers: r.headers,
+                        headers: lowercase_header_names(r.headers),
                         body: r.body,
                     });
                 }
@@ -636,7 +650,7 @@ mod mock_impl {
             if let Some(r) = self.default_response.lock().expect("default lock").clone() {
                 return Ok(HttpResponse {
                     status: r.status,
-                    headers: r.headers,
+                    headers: lowercase_header_names(r.headers),
                     body: r.body,
                 });
             }
@@ -842,6 +856,36 @@ mod tests {
             let resp = mock.get("https://api.example.com/page", &[]).expect("get");
             assert_eq!(resp.body, format!(r#"{{"page":{i}}}"#).into_bytes());
         }
+    }
+
+    #[test]
+    fn mock_transport_lowercases_response_header_names() {
+        // Regression: tests that pass `MockResponse` with mixed-case
+        // header names (`"Retry-After"`, `"Content-Type"`) used to
+        // pass the keys through verbatim, breaking
+        // `HttpResponse::header()` (which lowercases the needle)
+        // for any caller that constructed the mock with the
+        // wire-style casing.
+        let mock = MockHttpTransport::new();
+        mock.expect(
+            HttpMethod::Get,
+            "https://api.example.com/x",
+            MockResponse {
+                status: 429,
+                headers: vec![
+                    ("Retry-After".into(), "12".into()),
+                    ("Content-Type".into(), "application/json".into()),
+                ],
+                body: br#"{"error":"slow_down"}"#.to_vec(),
+            },
+        );
+        let resp = mock
+            .get("https://api.example.com/x", &[])
+            .expect("mock get");
+        assert_eq!(resp.status, 429);
+        assert_eq!(resp.header("retry-after"), Some("12"));
+        assert_eq!(resp.header("Retry-After"), Some("12"));
+        assert_eq!(resp.header("content-type"), Some("application/json"));
     }
 
     #[test]

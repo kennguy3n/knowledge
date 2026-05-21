@@ -55,7 +55,7 @@ pub use http::{
 pub use http::{MockHttpTransport, MockResponse, RecordedRequest};
 #[cfg(feature = "http-client")]
 pub use oauth::default_oauth_client;
-pub use oauth::{ReqwestOAuth2Client, DEFAULT_OAUTH_TIMEOUT_SECS};
+pub use oauth::{ConfiguredRefresher, ReqwestOAuth2Client, DEFAULT_OAUTH_TIMEOUT_SECS};
 pub use sync::{SyncMode, SyncState, SyncStatus};
 pub use token_vault::{
     ConnectorInstanceId, OAuth2CodeExchange, OAuth2Token, OAuth2TokenVault, RefreshedToken,
