@@ -355,9 +355,28 @@ impl FfiRuntime {
         Ok(())
     }
 
-    /// Borrow the on-device SLM inference router.
-    pub(crate) fn inference_router(&self) -> &InferenceRouter {
-        &self.inference_router
+    /// Return an owned `Arc` clone of the on-device SLM inference
+    /// router so callers can keep a handle alive after dropping the
+    /// surrounding [`with_runtime`](crate::runtime::with_runtime)
+    /// frame.
+    ///
+    /// This is the entry point that [`crate::trigger_synthesis`] uses
+    /// to split the synthesis call into a `gather → dispatch → apply`
+    /// pipeline: it clones the router here while the runtime mutex is
+    /// held, then drops the mutex before issuing the (potentially
+    /// multi-second) `wait_for_bootstrap` + SLM dispatch. The owned
+    /// clone keeps the underlying [`InferenceRouter`] alive across the
+    /// unlocked phase even if every other holder were torn down — the
+    /// `FfiRuntime` itself can't be dropped concurrently because
+    /// `close_store` synchronises with in-flight `with_runtime` frames
+    /// via `WITH_RUNTIME_STACK` + the per-handle drain loop, but a
+    /// background sweep that legitimately rebuilds the router would
+    /// otherwise race the dispatch caller.
+    ///
+    /// The clone itself is a single atomic increment on the strong
+    /// count; no allocation, no contention with concurrent dispatch.
+    pub(crate) fn inference_router_arc(&self) -> Arc<InferenceRouter> {
+        Arc::clone(&self.inference_router)
     }
 
     /// Flush the in-memory `UserMemoryObject` for `scope` to the

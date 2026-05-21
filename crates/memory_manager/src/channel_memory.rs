@@ -265,11 +265,29 @@ impl ChannelMemoryObject {
     /// "@Sara draft the RFC" and "Draft the RFC" assigned to "@Sara"
     /// collapse to one row.
     ///
-    /// Already-completed tasks are *not* re-added: completing a task
-    /// is an explicit lifecycle event and re-adding would resurrect
-    /// it as `Candidate`, undoing the completion. Returns `None`
-    /// in both the "dedup against active" and "dedup against
-    /// completed" cases.
+    /// # Dedup scope: the live `active_tasks` list only
+    ///
+    /// Dedup compares against the in-memory `active_tasks` vector,
+    /// which holds **both** pending and completed-but-not-yet-archived
+    /// tasks. [`Self::complete_task`] only flips `completed_at` — it
+    /// does not remove the entry — so for the
+    /// [`DEFAULT_COMPLETED_TASK_TTL_DAYS`] window (30 days by default)
+    /// a completed task is still visible to dedup. Within that window,
+    /// re-emitting the same `(text, assignee)` from a later synthesis
+    /// run returns `None` and the completion stands; an explicit
+    /// lifecycle event won't be undone by a stochastic SLM that
+    /// happens to surface the same task text again.
+    ///
+    /// **After archival** (the next [`Self::decay_sweep`] past the
+    /// TTL drops the entry from `active_tasks`), the same `(text,
+    /// assignee)` may be re-added as a fresh `Candidate`. This is
+    /// intentional: a year-old "draft the RFC" item that completed
+    /// and aged out is, semantically, a different task from a new
+    /// one the SLM surfaces today.
+    ///
+    /// Returns `Some(memory_id)` when the task was newly inserted,
+    /// `None` when deduplicated against an existing
+    /// (pending-or-completed-within-TTL) entry.
     pub fn add_task_dedup(&mut self, task: ActiveTask) -> Option<Uuid> {
         let key = normalise_surface_text(&task.text);
         let assignee_key = task

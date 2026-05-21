@@ -102,8 +102,14 @@ fn stable_tag(task_tag: &str) -> &'static str {
 /// [`crate::task::InferenceTask::prompt_template`]) end with one of
 /// `"\n\nMessage:\n"`, `"\n\nObservation:\n"`, `"\n\nObservations:\n"`,
 /// or `"\n\nSession:\n"` followed by the body. We split on the
-/// rightmost matching marker so a body that itself contains the
-/// marker text (rare but possible) doesn't truncate the result.
+/// *leftmost* matching marker (`str::find`, not `str::rfind`) because the
+/// scaffolding ALWAYS sits at the start of the rendered prompt, while a
+/// nested message in the body — e.g. a Slack thread that quotes another
+/// system's prompt containing `"\n\nMessage:\n…"` — would otherwise hijack
+/// the boundary. Using `rfind` here was a real bug: for prompts shaped
+/// `"<scaffold>\n\nMessage:\nHello\n\nMessage:\nWorld"` it returned just
+/// `"World"`, silently dropping the leading lines of the body and skewing
+/// every downstream classifier toward the tail of the message.
 ///
 /// `Session:\n` is the `SynthSummary` marker. The fallback adapter
 /// itself returns `Unavailable` for synthesis tasks, but enumerating
@@ -113,7 +119,7 @@ fn stable_tag(task_tag: &str) -> &'static str {
 /// prompt still gets the bare body back.
 fn extract_body(prompt: &str) -> &str {
     for marker in BODY_MARKERS {
-        if let Some(idx) = prompt.rfind(marker) {
+        if let Some(idx) = prompt.find(marker) {
             return &prompt[idx + marker.len()..];
         }
     }
@@ -767,6 +773,29 @@ mod tests {
     #[test]
     fn extract_body_returns_whole_prompt_when_no_marker() {
         assert_eq!(extract_body("nothing matches here"), "nothing matches here");
+    }
+
+    /// Regression for a real `rfind` → `find` bug.
+    ///
+    /// Before the fix, `extract_body` used `prompt.rfind(marker)`, which
+    /// for a body that itself contains the scaffold marker — e.g. a
+    /// Slack thread that quotes another tool's prompt — would slice past
+    /// the *inner* marker and drop everything before it. The classifier
+    /// then scored only the tail of the message, drowning useful signal
+    /// from the leading lines.
+    ///
+    /// `find` (leftmost) is the correct choice because the scaffold's
+    /// marker is always the first occurrence in a well-formed rendered
+    /// prompt.
+    #[test]
+    fn extract_body_preserves_body_that_contains_the_marker_text() {
+        let body = "Hello\n\nMessage:\nWorld";
+        let prompt = format!("Scaffold instructions\n\nMessage:\n{body}");
+        assert_eq!(
+            extract_body(&prompt),
+            body,
+            "extract_body must keep the full body even when it contains the marker text",
+        );
     }
 
     /// Pins lock-step coverage between `extract_body` and

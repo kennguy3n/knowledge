@@ -766,21 +766,13 @@ pub fn trigger_synthesis(
         trigger = ?trigger,
         "trigger_synthesis: dispatching SynthSummary",
     );
-    with_runtime(handle, |rt| {
-        if rt.is_scope_forgotten(scope) {
-            return Err(FfiError::NotFound {
-                kind: "scope".into(),
-                id: scope_id.clone(),
-            });
-        }
-        synthesize_scope(rt, scope).map_err(|err| {
-            tracing::warn!(
-                scope = %scope.as_uuid(),
-                error = ?err,
-                "trigger_synthesis: failed",
-            );
-            err
-        })
+    synthesize_scope(handle, scope, &scope_id).map_err(|err| {
+        tracing::warn!(
+            scope = %scope.as_uuid(),
+            error = ?err,
+            "trigger_synthesis: failed",
+        );
+        err
     })
 }
 
@@ -795,95 +787,157 @@ pub fn trigger_synthesis(
 pub const SYNTHESIS_EVIDENCE_WINDOW: usize = 50;
 
 /// Core synthesis implementation called by [`trigger_synthesis`]
-/// once the scope-validity preconditions are satisfied.
+/// once the scope-id has been parsed.
 ///
-/// Split from the public entry point so the integration tests in
-/// `crates/integration_tests/` can drive it against a populated
-/// runtime without re-deriving prompt-construction logic.
-fn synthesize_scope(rt: &mut runtime::FfiRuntime, scope: ScopeId) -> FfiResult<String> {
+/// # Locking discipline
+///
+/// Split into three phases so the per-handle [`FfiRuntime`] mutex is
+/// **released** for the duration of the SLM dispatch:
+///
+/// 1. **Gather (locked).** [`with_runtime`] acquires the mutex.
+///    Validates the scope, reads the recent-evidence window, decrypts
+///    bodies (skip-and-warn on per-row failure — see the body-decode
+///    loop below), renders the [`InferenceTask::SynthSummary`] prompt,
+///    and clones an [`Arc`] handle to the inference router. Returns
+///    the handle + prompt; **drops the mutex.**
+/// 2. **Dispatch (unlocked).** Calls [`InferenceRouter::wait_for_bootstrap`]
+///    and [`InferenceRouter::dispatch`] against the cloned `Arc`. The
+///    runtime mutex is NOT held — concurrent
+///    [`ingest_message`](crate::ingest_message) / [`query`](crate::query)
+///    / [`get_channel_memory`](crate::get_channel_memory) calls on the
+///    same handle run in parallel with the SLM. This is the key
+///    correctness contract: an SLM dispatch can take seconds (especially
+///    on the `http-client`-backed llama.cpp adapter waiting on the
+///    bootstrap probe + the actual generation), and serialising every
+///    FFI call behind that latency would freeze ingest / query for the
+///    entire window.
+/// 3. **Apply (locked).** [`with_runtime`] re-acquires the mutex.
+///    Re-checks `is_scope_forgotten` (TOCTOU defence: another thread may
+///    have called [`forget_scope`](crate::forget_scope) during the
+///    unlocked phase — racing the recap onto a forgotten scope would
+///    resurrect deleted state). Allocates / fetches the
+///    [`ChannelMemoryObject`], merges the [`SummaryBundle`] via the
+///    `*_dedup` helpers, and flushes to disk.
+///
+/// The `Arc<InferenceRouter>` keeps the router alive across the
+/// unlocked phase even though no [`with_runtime`] frame is pinning the
+/// `FfiRuntime` (the surrounding `close_store` drain loop blocks on
+/// outstanding `Arc<Mutex<FfiRuntime>>` clones from `WITH_RUNTIME_STACK`,
+/// so the runtime itself is not at risk of disappearing — but stripping
+/// the lifetime tie is what makes the split structurally legal).
+fn synthesize_scope(
+    handle: RuntimeHandle,
+    scope: ScopeId,
+    scope_id: &ScopeIdString,
+) -> FfiResult<String> {
     use inference_router::{InferenceTask, RouterError, SummaryBundle};
 
-    let recent_ids = rt
-        .store()
-        .recent_evidence_ids_for_scope(scope, SYNTHESIS_EVIDENCE_WINDOW)
-        .map_err(|e| FfiError::Evidence {
-            message: e.to_string(),
-        })?;
-    if recent_ids.is_empty() {
-        return Err(FfiError::NotFound {
-            kind: "evidence".into(),
-            id: scope.as_uuid().to_string(),
-        });
-    }
-
-    // Decrypt each row in reverse so the prompt reads chronologically
-    // (oldest message first → newest last), matching the natural
-    // reading order the prompt template asks the SLM to summarise.
-    // `recent_evidence_ids_for_scope` returns newest-first; reverse
-    // before reading.
+    // ─────────────────── Phase 1: gather (locked) ───────────────────
     //
-    // Skip-and-warn (NOT fail-fast) on per-row read failures: a single
-    // corrupted body row (missing body-table entry, DEK destroyed
-    // mid-flight, etc.) must not block an otherwise-useful recap. This
-    // matches `EvidenceStore::search_hybrid`, which demotes corrupted
-    // rows to `vector_score = 0.0` rather than failing the whole
-    // search. The synthesis path inherits the same contract: every
-    // readable row contributes to the prompt; unreadable rows are
-    // logged and dropped. Only if EVERY row in the window is
-    // unreadable do we surface `FfiError::Evidence` to the host —
-    // otherwise the recap proceeds against the readable subset.
-    let mut bodies: Vec<String> = Vec::with_capacity(recent_ids.len());
-    let mut skipped: usize = 0;
-    for evidence_id in recent_ids.iter().rev() {
-        match rt.store().read_body(*evidence_id) {
-            Ok(body) => {
-                // Lossy decode is intentional: evidence bodies are
-                // UTF-8 in practice (ingest is gated through `String`
-                // at the FFI surface) but a malformed row should
-                // still be summarisable rather than failing the
-                // entire synthesis call.
-                bodies.push(String::from_utf8_lossy(&body).into_owned());
-            }
-            Err(e) => {
-                skipped = skipped.saturating_add(1);
-                tracing::warn!(
-                    scope = %scope.as_uuid(),
-                    evidence = %evidence_id.as_uuid(),
-                    error = %e,
-                    "trigger_synthesis: skipping unreadable evidence row",
-                );
+    // Returns the prompt to dispatch plus an owned `Arc` clone of the
+    // router so the unlocked phase below can operate without re-entering
+    // `with_runtime`.
+    let (router, prompt) = with_runtime(handle, |rt| {
+        if rt.is_scope_forgotten(scope) {
+            return Err(FfiError::NotFound {
+                kind: "scope".into(),
+                id: scope_id.clone(),
+            });
+        }
+        let recent_ids = rt
+            .store()
+            .recent_evidence_ids_for_scope(scope, SYNTHESIS_EVIDENCE_WINDOW)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        if recent_ids.is_empty() {
+            return Err(FfiError::NotFound {
+                kind: "evidence".into(),
+                id: scope.as_uuid().to_string(),
+            });
+        }
+
+        // Decrypt each row in reverse so the prompt reads chronologically
+        // (oldest message first → newest last), matching the natural
+        // reading order the prompt template asks the SLM to summarise.
+        // `recent_evidence_ids_for_scope` returns newest-first; reverse
+        // before reading.
+        //
+        // Skip-and-warn (NOT fail-fast) on per-row read failures: a
+        // single corrupted body row (missing body-table entry, DEK
+        // destroyed mid-flight, etc.) must not block an otherwise-useful
+        // recap. This matches `EvidenceStore::search_hybrid`, which
+        // demotes corrupted rows to `vector_score = 0.0` rather than
+        // failing the whole search. The synthesis path inherits the
+        // same contract: every readable row contributes to the prompt;
+        // unreadable rows are logged and dropped. Only if EVERY row in
+        // the window is unreadable do we surface `FfiError::Evidence`
+        // to the host — otherwise the recap proceeds against the
+        // readable subset.
+        let mut bodies: Vec<String> = Vec::with_capacity(recent_ids.len());
+        let mut skipped: usize = 0;
+        for evidence_id in recent_ids.iter().rev() {
+            match rt.store().read_body(*evidence_id) {
+                Ok(body) => {
+                    // Lossy decode is intentional: evidence bodies are
+                    // UTF-8 in practice (ingest is gated through
+                    // `String` at the FFI surface) but a malformed row
+                    // should still be summarisable rather than failing
+                    // the entire synthesis call.
+                    bodies.push(String::from_utf8_lossy(&body).into_owned());
+                }
+                Err(e) => {
+                    skipped = skipped.saturating_add(1);
+                    tracing::warn!(
+                        scope = %scope.as_uuid(),
+                        evidence = %evidence_id.as_uuid(),
+                        error = %e,
+                        "trigger_synthesis: skipping unreadable evidence row",
+                    );
+                }
             }
         }
-    }
-    if bodies.is_empty() {
-        return Err(FfiError::Evidence {
-            message: format!(
-                "synthesis: every evidence row in the {SYNTHESIS_EVIDENCE_WINDOW}-row \
-                 window for scope {} was unreadable ({skipped} skipped)",
-                scope.as_uuid()
-            ),
-        });
-    }
-    if skipped > 0 {
-        tracing::warn!(
-            scope = %scope.as_uuid(),
-            skipped,
-            kept = bodies.len(),
-            "trigger_synthesis: proceeding with partial evidence window",
-        );
-    }
+        if bodies.is_empty() {
+            return Err(FfiError::Evidence {
+                message: format!(
+                    "synthesis: every evidence row in the {SYNTHESIS_EVIDENCE_WINDOW}-row \
+                     window for scope {} was unreadable ({skipped} skipped)",
+                    scope.as_uuid()
+                ),
+            });
+        }
+        if skipped > 0 {
+            tracing::warn!(
+                scope = %scope.as_uuid(),
+                skipped,
+                kept = bodies.len(),
+                "trigger_synthesis: proceeding with partial evidence window",
+            );
+        }
 
-    let combined = bodies.join("\n\n");
-    let prompt = InferenceTask::SynthSummary
-        .prompt_template()
-        .replace("{body}", &combined);
+        let combined = bodies.join("\n\n");
+        let prompt = InferenceTask::SynthSummary
+            .prompt_template()
+            .replace("{body}", &combined);
+        // Clone the `Arc` while still holding the runtime mutex so the
+        // unlocked dispatch phase below has a stable handle that
+        // outlives the `with_runtime` frame. The clone itself is one
+        // atomic increment.
+        Ok((rt.inference_router_arc(), prompt))
+    })?;
 
-    let router = rt.inference_router();
-    // `open_store` now spawns the adapter probe on a background
-    // thread to keep the open path itself non-blocking; wait here
-    // until the bootstrap finishes so a host that calls
-    // `trigger_synthesis` immediately after `open_store` does not
-    // race the probe. The wait is no-op once probing has completed.
+    // ───────────────── Phase 2: dispatch (UNLOCKED) ─────────────────
+    //
+    // The per-handle `FfiRuntime` mutex is released for the duration of
+    // these calls so concurrent `ingest_message` / `query` /
+    // `get_channel_memory` on the same handle can run in parallel with
+    // the (potentially multi-second) SLM dispatch.
+    //
+    // `open_store` spawns the adapter probe on a background thread to
+    // keep the open path itself non-blocking; wait here until the
+    // bootstrap finishes so a host that calls `trigger_synthesis`
+    // immediately after `open_store` does not race the probe. The wait
+    // is a no-op once probing has completed.
     router.wait_for_bootstrap();
     let raw = router
         .dispatch(InferenceTask::SynthSummary, &prompt)
@@ -903,56 +957,72 @@ fn synthesize_scope(rt: &mut runtime::FfiRuntime, scope: ScopeId) -> FfiResult<S
                 subsystem: format!("synthesis: {other}"),
             },
         })?;
-    // Mapped to `InferenceFailure` (not `Evidence`) because the
-    // failure mode is "the model ran but produced unusable JSON",
-    // which is the same retry-policy class as
-    // `RouterError::InferenceFailure` above — the evidence store
-    // never even ran, so misclassifying as `Evidence` would route the
-    // host to the wrong remediation (database recovery vs. retry /
-    // fall back to a different adapter / re-prompt). The grammar
-    // constraint applied at dispatch time should make this branch
-    // unreachable in practice, but a buggy / unconstrained adapter
-    // could still feed us non-JSON.
+    // Mapped to `InferenceFailure` (not `Evidence`) because the failure
+    // mode is "the model ran but produced unusable JSON", which is the
+    // same retry-policy class as `RouterError::InferenceFailure` above
+    // — the evidence store never even ran, so misclassifying as
+    // `Evidence` would route the host to the wrong remediation
+    // (database recovery vs. retry / fall back to a different adapter
+    // / re-prompt). The grammar constraint applied at dispatch time
+    // should make this branch unreachable in practice, but a buggy /
+    // unconstrained adapter could still feed us non-JSON.
     let bundle: SummaryBundle =
         serde_json::from_str(&raw).map_err(|e| FfiError::InferenceFailure {
             message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
         })?;
 
-    let window_id = uuid::Uuid::new_v4();
-    // Build the next channel-memory state OFF-THE-SIDE. We clone any
-    // existing entry so the dedup helpers can compare against the
-    // history, but the runtime's `channel_memories` map is NOT
-    // mutated until `save_channel_memory` below succeeds at writing
-    // the new state to disk.
+    // ─────────────────── Phase 3: apply (locked) ────────────────────
     //
-    // This pins the
-    // `trigger_synthesis_failure_does_not_allocate_channel_memory`
-    // invariant across every failure mode between the dispatch
-    // result and the final flush — including future ones that
-    // might be added between the `SummaryBundle` parse above and
-    // the save below.
-    let mut cmo = rt
-        .channel_memory(scope)
-        .cloned()
-        .unwrap_or_else(|| memory_manager::ChannelMemoryObject::new(scope));
-    cmo.update_recap(bundle.recap.clone(), Some(window_id));
-    // `*_dedup` variants — the SLM re-emits the same decisions /
-    // questions / tasks every synthesis window because each run
-    // sees an overlapping evidence window. Naive `add_*` would
-    // append the same surface text on every run; dedup preserves
-    // the original entry's lifecycle state (resolved /
-    // completed) and prevents unbounded growth across runs.
-    for decision in bundle.decisions {
-        cmo.add_decision_dedup(memory_manager::Decision::new(scope, decision));
-    }
-    for q in bundle.open_questions {
-        cmo.add_open_question_dedup(memory_manager::OpenQuestion::new(scope, q));
-    }
-    for task_text in bundle.active_tasks {
-        cmo.add_task_dedup(memory_manager::ActiveTask::new(scope, task_text));
-    }
-    rt.save_channel_memory(scope, cmo)?;
-    Ok(window_id.to_string())
+    // Re-acquire the mutex. We must re-check `is_scope_forgotten` here
+    // because another thread may have called `forget_scope` while the
+    // mutex was released — racing the recap onto a forgotten scope
+    // would resurrect deleted state and break the
+    // cryptographic-forgetting guarantee documented on
+    // [`crate::forget_scope`].
+    with_runtime(handle, |rt| {
+        if rt.is_scope_forgotten(scope) {
+            return Err(FfiError::NotFound {
+                kind: "scope".into(),
+                id: scope_id.clone(),
+            });
+        }
+
+        let window_id = uuid::Uuid::new_v4();
+        // Build the next channel-memory state OFF-THE-SIDE. We clone
+        // any existing entry so the dedup helpers can compare against
+        // the history, but the runtime's `channel_memories` map is
+        // NOT mutated until `save_channel_memory` below succeeds at
+        // writing the new state to disk.
+        //
+        // This pins the
+        // `trigger_synthesis_failure_does_not_allocate_channel_memory`
+        // invariant across every failure mode between the dispatch
+        // result and the final flush — including future ones that
+        // might be added between the `SummaryBundle` parse above and
+        // the save below.
+        let mut cmo = rt
+            .channel_memory(scope)
+            .cloned()
+            .unwrap_or_else(|| memory_manager::ChannelMemoryObject::new(scope));
+        cmo.update_recap(bundle.recap.clone(), Some(window_id));
+        // `*_dedup` variants — the SLM re-emits the same decisions /
+        // questions / tasks every synthesis window because each run
+        // sees an overlapping evidence window. Naive `add_*` would
+        // append the same surface text on every run; dedup preserves
+        // the original entry's lifecycle state (resolved /
+        // completed) and prevents unbounded growth across runs.
+        for decision in bundle.decisions {
+            cmo.add_decision_dedup(memory_manager::Decision::new(scope, decision));
+        }
+        for q in bundle.open_questions {
+            cmo.add_open_question_dedup(memory_manager::OpenQuestion::new(scope, q));
+        }
+        for task_text in bundle.active_tasks {
+            cmo.add_task_dedup(memory_manager::ActiveTask::new(scope, task_text));
+        }
+        rt.save_channel_memory(scope, cmo)?;
+        Ok(window_id.to_string())
+    })
 }
 
 // ──────────────────────────── Crypto ────────────────────────────
