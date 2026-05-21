@@ -1,21 +1,55 @@
 //! HubSpot connector — HubSpot CRM v3 API.
 //!
-//! * `initial_sync` walks `/crm/v3/objects/{contacts|companies|deals|notes}`
-//!   with `after` pagination.
-//! * `incremental_sync` filters via `lastModifiedDate >= cursor` using
-//!   the `/crm/v3/objects/{type}/search` endpoint.
-//! * `subscribe_webhook` registers a HubSpot webhook subscription via
-//!   `/webhooks/v3/{appId}/subscriptions` for object lifecycle events.
-//! * `handle_webhook_event` parses HubSpot's batched webhook payload
-//!   — every event in the batch is materialised as a substrate event.
+//! * `initial_sync` walks `/crm/v3/objects/{type}?limit=100&after=…`
+//!   for every configured object kind (`contacts` is the default;
+//!   `auth_config_json.object_kinds` lets tenants opt in to
+//!   companies / deals / notes / line items). Pagination follows
+//!   HubSpot's `paging.next.after` token until the server stops
+//!   returning a next cursor.
+//! * `incremental_sync` POSTs `/crm/v3/objects/{type}/search` with a
+//!   `lastmodifieddate >= <watermark>` filter, sorted ascending so
+//!   the substrate can advance the watermark in order.
+//! * `subscribe_webhook` POSTs `/webhooks/v3/{appId}/subscriptions`
+//!   once per `(objectType × subscriptionType)` pair (HubSpot only
+//!   accepts one event per subscription create). Every assigned
+//!   numeric id is concatenated into
+//!   [`WebhookSubscription::provider_subscription_id`] for later
+//!   revocation / re-registration.
+//! * `handle_webhook_event` parses HubSpot's batched JSON-array
+//!   webhook payload — every event in the batch is surfaced,
+//!   unknown subscription types are skipped (not errored) so a new
+//!   event family can't discard valid events queued behind it.
+//!
+//! Production wiring runs over [`HttpTransport`] — the substrate
+//! constructs a [`HubSpotConnector`] with a real
+//! `connector_framework::BlockingHttpTransport` (under the
+//! `http-client` feature) and a real `OAuth2Client` for the
+//! `https://api.hubapi.com/oauth/v1/token` exchange. Unit tests
+//! pass `MockHttpTransport` + a fixture OAuth2 exchange.
 
-use chrono::{DateTime, Duration, Utc};
+use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
 use connector_framework::{
-    Connector, ConnectorConfig, ConnectorError, ConnectorEvent, ConnectorInstanceId, OAuth2Token,
-    Result, SourceDocumentId, SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    bearer_get_json, bearer_post_json, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
+    ConnectorInstanceId, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
+    SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState, WebhookEventTypes,
+    WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
+
+/// Default HubSpot REST base URL. Per-instance overrides go through
+/// `auth_config_json.api_base_url`.
+pub const DEFAULT_API_BASE_URL: &str = "https://api.hubapi.com";
+
+/// Page size for `/crm/v3/objects/{type}` and the matching `/search`
+/// endpoint. HubSpot's documented max is 100.
+pub const DEFAULT_PAGE_SIZE: u32 = 100;
+
+/// Safety ceiling on number of pages a single sync will walk —
+/// catches mis-shaped `paging.next.after` cursors that lie about
+/// end-of-list.
+pub const MAX_LIST_PAGES: usize = 10_000;
 
 /// HubSpot CRM object kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,12 +65,42 @@ pub enum HubSpotObjectKind {
     Note,
 }
 
+impl HubSpotObjectKind {
+    /// Path-segment form for `/crm/v3/objects/{type}` (HubSpot's URL
+    /// uses the plural for some kinds — keep this in sync with
+    /// upstream).
+    #[must_use]
+    pub fn as_path_segment(self) -> &'static str {
+        match self {
+            HubSpotObjectKind::Contact => "contacts",
+            HubSpotObjectKind::Company => "companies",
+            HubSpotObjectKind::Deal => "deals",
+            HubSpotObjectKind::Note => "notes",
+        }
+    }
+
+    /// Parse from the `auth_config_json.object_kinds` array.
+    #[must_use]
+    pub fn from_config_str(s: &str) -> Option<Self> {
+        match s {
+            "contact" | "contacts" => Some(Self::Contact),
+            "company" | "companies" => Some(Self::Company),
+            "deal" | "deals" => Some(Self::Deal),
+            "note" | "notes" => Some(Self::Note),
+            _ => None,
+        }
+    }
+}
+
 /// One CRM object (subset).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HubSpotObject {
     /// Object id.
     pub id: String,
-    /// Object kind.
+    /// Object kind. Defaults to [`HubSpotObjectKind::Contact`] when
+    /// not echoed in the wire payload — the per-kind list endpoint
+    /// already disambiguates by URL.
+    #[serde(default = "default_object_kind")]
     pub kind: HubSpotObjectKind,
     /// `createdAt` timestamp.
     #[serde(default, rename = "createdAt")]
@@ -47,6 +111,10 @@ pub struct HubSpotObject {
     /// `archived = true` is the deletion signal.
     #[serde(default)]
     pub archived: bool,
+}
+
+fn default_object_kind() -> HubSpotObjectKind {
+    HubSpotObjectKind::Contact
 }
 
 /// One page of `/crm/v3/objects/{type}` results.
@@ -75,6 +143,18 @@ pub struct HubSpotPagingNext {
     pub after: String,
 }
 
+/// Response from `POST /webhooks/v3/{appId}/subscriptions`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HubSpotSubscriptionCreateResponse {
+    /// Numeric subscription id HubSpot assigned.
+    #[serde(default)]
+    pub id: Option<i64>,
+    /// Whether the subscription is active (HubSpot returns
+    /// `active: false` if the app's webhook target isn't verified).
+    #[serde(default)]
+    pub active: Option<bool>,
+}
+
 /// One HubSpot webhook event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HubSpotWebhookEvent {
@@ -101,43 +181,240 @@ pub struct HubSpotWebhookEvent {
 }
 
 /// HubSpot connector.
-#[derive(Debug, Clone)]
+///
+/// Per-tenant `object_kinds`, `app_id`, and `webhook_secret` are
+/// read from `auth_config_json` on every call; the substrate
+/// persists them at install time.
+#[derive(Clone)]
 pub struct HubSpotConnector {
     /// Connector instance id.
     pub instance: ConnectorInstanceId,
-    /// Initial-sync fixture pages.
-    pub initial_pages: Vec<HubSpotListResponse>,
-    /// Incremental-sync fixture pages.
-    pub incremental_pages: Vec<HubSpotListResponse>,
+    transport: Arc<dyn HttpTransport>,
+    oauth: Arc<dyn OAuth2CodeExchange>,
+    api_base_url: String,
+    page_size: u32,
+}
+
+impl std::fmt::Debug for HubSpotConnector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HubSpotConnector")
+            .field("instance", &self.instance)
+            .field("api_base_url", &self.api_base_url)
+            .field("page_size", &self.page_size)
+            .field("transport", &"<HttpTransport>")
+            .field("oauth", &"<OAuth2CodeExchange>")
+            .finish()
+    }
 }
 
 impl HubSpotConnector {
-    /// Construct an empty connector.
-    pub fn new(instance: ConnectorInstanceId) -> Self {
+    /// Construct a HubSpot connector.
+    ///
+    /// Production wires `transport` to `BlockingHttpTransport` and
+    /// `oauth` to `OAuth2Client`; tests use `MockHttpTransport`.
+    pub fn new(
+        instance: ConnectorInstanceId,
+        transport: Arc<dyn HttpTransport>,
+        oauth: Arc<dyn OAuth2CodeExchange>,
+    ) -> Self {
         Self {
             instance,
-            initial_pages: Vec::new(),
-            incremental_pages: Vec::new(),
+            transport,
+            oauth,
+            api_base_url: DEFAULT_API_BASE_URL.to_string(),
+            page_size: DEFAULT_PAGE_SIZE,
         }
     }
 
-    /// Override initial-sync fixture pages.
-    pub fn with_initial_pages(mut self, pages: Vec<HubSpotListResponse>) -> Self {
-        self.initial_pages = pages;
+    /// Override the HubSpot REST base URL.
+    #[must_use]
+    pub fn with_api_base_url(mut self, url: impl Into<String>) -> Self {
+        self.api_base_url = url.into();
         self
     }
 
-    /// Override incremental-sync fixture pages.
-    pub fn with_incremental_pages(mut self, pages: Vec<HubSpotListResponse>) -> Self {
-        self.incremental_pages = pages;
+    /// Override the page size used by the list/search endpoints.
+    /// Clamped to `[1, 100]` per HubSpot's documented maximum.
+    #[must_use]
+    pub fn with_page_size(mut self, size: u32) -> Self {
+        self.page_size = size.clamp(1, 100);
         self
     }
 
-    fn page_index(cursor: Option<&str>) -> usize {
-        cursor
-            .and_then(|c| c.strip_prefix("page-"))
-            .and_then(|n| n.parse::<usize>().ok())
-            .map_or(0, |n| n.saturating_sub(1))
+    fn resolved_base_url(&self, config: &ConnectorConfig) -> String {
+        config
+            .auth_config_json
+            .get("api_base_url")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(
+                || self.api_base_url.clone(),
+                std::string::ToString::to_string,
+            )
+    }
+
+    /// Resolve the configured object kinds. Defaults to
+    /// `[Contact]` when the tenant didn't customise the list.
+    fn configured_kinds(config: &ConnectorConfig) -> Result<Vec<HubSpotObjectKind>> {
+        let Some(raw) = config
+            .auth_config_json
+            .get("object_kinds")
+            .and_then(serde_json::Value::as_array)
+        else {
+            return Ok(vec![HubSpotObjectKind::Contact]);
+        };
+        let mut kinds = Vec::<HubSpotObjectKind>::new();
+        for v in raw {
+            if let Some(s) = v.as_str() {
+                if let Some(k) = HubSpotObjectKind::from_config_str(s) {
+                    if !kinds.contains(&k) {
+                        kinds.push(k);
+                    }
+                } else {
+                    return Err(ConnectorError::Sync(format!(
+                        "hubspot: auth_config_json.object_kinds[{s}] is not a known kind"
+                    )));
+                }
+            }
+        }
+        if kinds.is_empty() {
+            return Err(ConnectorError::Sync(
+                "hubspot: auth_config_json.object_kinds was present but contained no kinds"
+                    .into(),
+            ));
+        }
+        Ok(kinds)
+    }
+
+    /// Resolve the app id used to scope webhook subscription POSTs.
+    fn configured_app_id(config: &ConnectorConfig) -> Result<String> {
+        config
+            .auth_config_json
+            .get("app_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(std::string::ToString::to_string)
+            .ok_or_else(|| {
+                ConnectorError::Webhook(
+                    "hubspot subscribe_webhook: auth_config_json.app_id is required".into(),
+                )
+            })
+    }
+
+    fn paginate_list(
+        &self,
+        base_url: &str,
+        token: &OAuth2Token,
+        kind: HubSpotObjectKind,
+    ) -> Result<Vec<HubSpotObject>> {
+        let mut objects = Vec::<HubSpotObject>::new();
+        let mut after: Option<String> = None;
+        for _ in 0..MAX_LIST_PAGES {
+            let url = match after.as_deref() {
+                Some(cursor) => format!(
+                    "{base_url}/crm/v3/objects/{}?limit={}&after={}",
+                    kind.as_path_segment(),
+                    self.page_size,
+                    connector_framework::percent_encode_form_component(cursor),
+                ),
+                None => format!(
+                    "{base_url}/crm/v3/objects/{}?limit={}",
+                    kind.as_path_segment(),
+                    self.page_size,
+                ),
+            };
+            let resp: HubSpotListResponse = bearer_get_json(
+                &self.transport,
+                "hubspot",
+                "/crm/v3/objects",
+                &url,
+                token,
+                &[],
+            )?;
+            objects.extend(resp.results.into_iter().map(|mut o| {
+                o.kind = kind;
+                o
+            }));
+            let Some(next) = resp.paging.and_then(|p| p.next) else {
+                return Ok(objects);
+            };
+            if next.after.is_empty() {
+                return Ok(objects);
+            }
+            // Loop guard — protect against pathological servers that
+            // echo the same cursor twice.
+            if after.as_deref() == Some(next.after.as_str()) {
+                return Ok(objects);
+            }
+            after = Some(next.after);
+        }
+        Err(ConnectorError::Sync(format!(
+            "hubspot /crm/v3/objects/{} exceeded {MAX_LIST_PAGES} pages without exhausting cursor",
+            kind.as_path_segment()
+        )))
+    }
+
+    fn paginate_search(
+        &self,
+        base_url: &str,
+        token: &OAuth2Token,
+        kind: HubSpotObjectKind,
+        cursor_ms: i64,
+    ) -> Result<Vec<HubSpotObject>> {
+        let url = format!(
+            "{base_url}/crm/v3/objects/{}/search",
+            kind.as_path_segment()
+        );
+        let mut objects = Vec::<HubSpotObject>::new();
+        let mut after: Option<String> = None;
+        for _ in 0..MAX_LIST_PAGES {
+            let mut body = serde_json::json!({
+                "filterGroups": [{
+                    "filters": [{
+                        "propertyName": "hs_lastmodifieddate",
+                        "operator": "GTE",
+                        "value": cursor_ms,
+                    }]
+                }],
+                "sorts": [{
+                    "propertyName": "hs_lastmodifieddate",
+                    "direction": "ASCENDING"
+                }],
+                "limit": self.page_size,
+            });
+            if let Some(cursor) = after.as_deref() {
+                body.as_object_mut().unwrap().insert(
+                    "after".to_string(),
+                    serde_json::Value::String(cursor.to_string()),
+                );
+            }
+            let resp: HubSpotListResponse = bearer_post_json(
+                &self.transport,
+                "hubspot",
+                "/crm/v3/objects/search",
+                &url,
+                token,
+                &[],
+                &body,
+            )?;
+            objects.extend(resp.results.into_iter().map(|mut o| {
+                o.kind = kind;
+                o
+            }));
+            let Some(next) = resp.paging.and_then(|p| p.next) else {
+                return Ok(objects);
+            };
+            if next.after.is_empty() {
+                return Ok(objects);
+            }
+            if after.as_deref() == Some(next.after.as_str()) {
+                return Ok(objects);
+            }
+            after = Some(next.after);
+        }
+        Err(ConnectorError::Sync(format!(
+            "hubspot /crm/v3/objects/{}/search exceeded {MAX_LIST_PAGES} pages without exhausting cursor",
+            kind.as_path_segment()
+        )))
     }
 }
 
@@ -233,24 +510,27 @@ fn subscription_to_event(
 }
 
 impl Connector for HubSpotConnector {
-    fn authenticate(&self, _config: &ConnectorConfig) -> Result<OAuth2Token> {
-        Ok(OAuth2Token::new(
-            "hubspot-access-token",
-            "hubspot-refresh-token",
-            Utc::now() + Duration::hours(6),
-            "crm.objects.contacts.read crm.objects.companies.read crm.objects.deals.read",
-        ))
+    fn authenticate(&self, config: &ConnectorConfig) -> Result<OAuth2Token> {
+        let auth_code = config
+            .auth_config_json
+            .get("authorization_code")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                ConnectorError::Auth(
+                    "hubspot authenticate: auth_config_json.authorization_code is required".into(),
+                )
+            })?;
+        self.oauth.exchange_code(config, auth_code)
     }
 
-    fn initial_sync(
-        &self,
-        _config: &ConnectorConfig,
-        _token: &OAuth2Token,
-    ) -> Result<SyncRunResult> {
+    fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult> {
+        let base_url = self.resolved_base_url(config);
+        let kinds = Self::configured_kinds(config)?;
         let mut events: Vec<ConnectorEvent> = Vec::new();
         let mut watermark: Option<DateTime<Utc>> = None;
-        for page in &self.initial_pages {
-            for obj in &page.results {
+        for kind in &kinds {
+            let objects = self.paginate_list(&base_url, token, *kind)?;
+            for obj in &objects {
                 events.push(object_to_event(obj, SyncMode::Initial));
                 if let Some(t) = obj.updated_at.or(obj.created_at) {
                     watermark = Some(watermark.map_or(t, |w| w.max(t)));
@@ -265,45 +545,103 @@ impl Connector for HubSpotConnector {
 
     fn incremental_sync(
         &self,
-        _config: &ConnectorConfig,
-        _token: &OAuth2Token,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
         state: &SyncState,
     ) -> Result<SyncRunResult> {
-        let idx = Self::page_index(state.cursor.as_deref());
-        let page = self.incremental_pages.get(idx).cloned().unwrap_or_default();
+        let base_url = self.resolved_base_url(config);
+        let kinds = Self::configured_kinds(config)?;
+        let prior_watermark: Option<DateTime<Utc>> = state
+            .cursor
+            .as_deref()
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+        // First-time incremental → fall back to "modified since the
+        // unix epoch", which the search endpoint accepts as "any
+        // modification".
+        let cursor_ms = prior_watermark.map_or(0, |t| t.timestamp_millis());
         let mut events: Vec<ConnectorEvent> = Vec::new();
-        let mut watermark: Option<DateTime<Utc>> = None;
-        for obj in &page.results {
-            events.push(object_to_event(obj, SyncMode::Incremental));
-            if let Some(t) = obj.updated_at.or(obj.created_at) {
-                watermark = Some(watermark.map_or(t, |w| w.max(t)));
+        let mut watermark: Option<DateTime<Utc>> = prior_watermark;
+        for kind in &kinds {
+            let objects = self.paginate_search(&base_url, token, *kind, cursor_ms)?;
+            for obj in &objects {
+                // Skip objects that match the cursor exactly — the
+                // GTE filter is inclusive, so re-walking the prior
+                // sync's last object is expected and not a duplicate.
+                if let (Some(prev), Some(t)) = (prior_watermark, obj.updated_at.or(obj.created_at))
+                {
+                    if t <= prev {
+                        continue;
+                    }
+                }
+                events.push(object_to_event(obj, SyncMode::Incremental));
+                if let Some(t) = obj.updated_at.or(obj.created_at) {
+                    watermark = Some(watermark.map_or(t, |w| w.max(t)));
+                }
             }
         }
-        let next_cursor = if idx + 1 < self.incremental_pages.len() {
-            Some(format!("page-{}", idx + 2))
-        } else {
-            watermark.map(|t| t.to_rfc3339())
-        };
         Ok(SyncRunResult {
             events,
-            next_cursor,
+            next_cursor: watermark.map(|t| t.to_rfc3339()),
         })
     }
 
     fn subscribe_webhook(
         &self,
-        _config: &ConnectorConfig,
-        _token: &OAuth2Token,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
         callback_url: &str,
     ) -> Result<WebhookSubscription> {
-        Ok(WebhookSubscription::new(
+        let base_url = self.resolved_base_url(config);
+        let app_id = Self::configured_app_id(config)?;
+        let kinds = Self::configured_kinds(config).unwrap_or_else(|_| vec![HubSpotObjectKind::Contact]);
+        const SUBSCRIPTION_KINDS: &[&str] = &["creation", "propertyChange", "deletion"];
+        let mut registered: Vec<String> = Vec::new();
+        for object_kind in &kinds {
+            for sub_kind in SUBSCRIPTION_KINDS {
+                let url = format!(
+                    "{base_url}/webhooks/v3/{app_id}/subscriptions"
+                );
+                let event_type = format!("{}.{}", kind_singular(*object_kind), sub_kind);
+                let body = serde_json::json!({
+                    "eventType": event_type,
+                    "active": true,
+                    "propertyName": serde_json::Value::Null,
+                });
+                let resp: HubSpotSubscriptionCreateResponse = bearer_post_json(
+                    &self.transport,
+                    "hubspot",
+                    "/webhooks/v3/{appId}/subscriptions",
+                    &url,
+                    token,
+                    &[],
+                    &body,
+                )?;
+                let id = resp.id.ok_or_else(|| {
+                    ConnectorError::Webhook(format!(
+                        "hubspot /webhooks/v3/{app_id}/subscriptions returned no id for {event_type}"
+                    ))
+                })?;
+                registered.push(id.to_string());
+            }
+        }
+        let secret = config
+            .auth_config_json
+            .get("webhook_secret")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("hubspot-app-secret");
+        let mut subscription = WebhookSubscription::new(
             self.instance,
             callback_url,
-            WebhookSecret::new("hubspot-app-secret"),
+            WebhookSecret::new(secret),
             WebhookEventTypes::all(),
             // HubSpot subscriptions are evergreen — no provider TTL.
             None,
-        ))
+        );
+        if !registered.is_empty() {
+            subscription.provider_subscription_id = Some(registered.join(","));
+        }
+        Ok(subscription)
     }
 
     fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
@@ -345,67 +683,317 @@ impl Connector for HubSpotConnector {
     }
 }
 
+/// Singular form used in HubSpot subscription event types
+/// (`contact.creation`, not `contacts.creation`).
+fn kind_singular(k: HubSpotObjectKind) -> &'static str {
+    match k {
+        HubSpotObjectKind::Contact => "contact",
+        HubSpotObjectKind::Company => "company",
+        HubSpotObjectKind::Deal => "deal",
+        HubSpotObjectKind::Note => "note",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use connector_framework::{AuthKind, ConnectorKind};
+    use chrono::Duration;
+    use connector_framework::{
+        AuthKind, ConnectorKind, HttpMethod, MockHttpTransport, MockResponse,
+    };
     use evidence_store::ScopeId;
 
-    fn cfg() -> ConnectorConfig {
+    struct FixedOAuth;
+    impl OAuth2CodeExchange for FixedOAuth {
+        fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
+            Ok(OAuth2Token::new(
+                "hubspot-access",
+                "hubspot-refresh",
+                Utc::now() + Duration::hours(6),
+                "crm.objects.contacts.read crm.objects.companies.read crm.objects.deals.read",
+            ))
+        }
+    }
+
+    fn oauth() -> Arc<dyn OAuth2CodeExchange> {
+        Arc::new(FixedOAuth)
+    }
+
+    fn cfg_with(extra: serde_json::Value) -> ConnectorConfig {
+        let mut base = serde_json::json!({
+            "authorization_code": "demo-code",
+            "api_base_url": "https://api.test/hubspot",
+            "app_id": "12345",
+            "webhook_secret": "tenant-app-secret",
+        });
+        let base_map = base.as_object_mut().unwrap();
+        if let Some(extra_map) = extra.as_object() {
+            for (k, v) in extra_map {
+                base_map.insert(k.clone(), v.clone());
+            }
+        }
         ConnectorConfig::new(ConnectorKind::HubSpot, AuthKind::OAuth2, ScopeId::new_v4())
+            .with_auth_config(base)
+    }
+
+    fn cfg() -> ConnectorConfig {
+        cfg_with(serde_json::Value::Object(serde_json::Map::new()))
+    }
+
+    fn ok_json(value: serde_json::Value) -> MockResponse {
+        MockResponse::ok_json(serde_json::to_vec(&value).unwrap())
     }
 
     #[test]
-    fn authenticate_returns_crm_scope() {
-        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4());
+    fn authenticate_dispatches_to_oauth_exchange() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         assert!(tok.scope.contains("crm.objects.contacts.read"));
     }
 
     #[test]
-    fn initial_sync_emits_create_per_object() {
+    fn authenticate_requires_authorization_code() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let cfg_no_code =
+            ConnectorConfig::new(ConnectorKind::HubSpot, AuthKind::OAuth2, ScopeId::new_v4());
+        let err = c.authenticate(&cfg_no_code).unwrap_err();
+        assert!(matches!(err, ConnectorError::Auth(_)));
+    }
+
+    #[test]
+    fn initial_sync_emits_create_per_object_and_follows_paging() {
         let now = Utc::now();
-        let pages = vec![HubSpotListResponse {
-            results: vec![HubSpotObject {
-                id: "101".into(),
-                kind: HubSpotObjectKind::Contact,
-                created_at: Some(now),
-                updated_at: Some(now),
-                archived: false,
-            }],
-            paging: None,
-        }];
-        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4()).with_initial_pages(pages);
+        let transport = Arc::new(MockHttpTransport::new());
+        // Page 1 — paging.next.after points to "next-token"
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/objects/contacts?limit=100",
+            ok_json(serde_json::json!({
+                "results": [{
+                    "id": "101",
+                    "createdAt": now,
+                    "updatedAt": now,
+                }],
+                "paging": {"next": {"after": "next-token"}}
+            })),
+        );
+        // Page 2 — no more.
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/objects/contacts?limit=100&after=next-token",
+            ok_json(serde_json::json!({
+                "results": [{
+                    "id": "102",
+                    "createdAt": now,
+                    "updatedAt": now,
+                }]
+            })),
+        );
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
-        assert_eq!(res.events.len(), 1);
+        assert_eq!(res.events.len(), 2);
         assert!(matches!(
             res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
+        assert!(matches!(
+            res.events[1],
+            ConnectorEvent::DocumentCreated { .. }
+        ));
+        assert!(res.next_cursor.is_some());
     }
 
     #[test]
-    fn incremental_sync_emits_update_for_modified_objects() {
+    fn initial_sync_walks_multiple_kinds_when_configured() {
         let now = Utc::now();
-        let pages = vec![HubSpotListResponse {
-            results: vec![HubSpotObject {
-                id: "999".into(),
-                kind: HubSpotObjectKind::Deal,
-                created_at: Some(now - Duration::days(1)),
-                updated_at: Some(now),
-                archived: false,
-            }],
-            paging: None,
-        }];
-        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4()).with_incremental_pages(pages);
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/objects/contacts?limit=100",
+            ok_json(serde_json::json!({
+                "results": [{
+                    "id": "1",
+                    "createdAt": now,
+                    "updatedAt": now,
+                }]
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/objects/companies?limit=100",
+            ok_json(serde_json::json!({
+                "results": [{
+                    "id": "2",
+                    "createdAt": now,
+                    "updatedAt": now,
+                }]
+            })),
+        );
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
-        let state = SyncState::new(c.instance);
+        let res = c
+            .initial_sync(
+                &cfg_with(serde_json::json!({"object_kinds": ["contacts", "companies"]})),
+                &tok,
+            )
+            .unwrap();
+        assert_eq!(res.events.len(), 2);
+        let ids: Vec<&str> = res
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                ConnectorEvent::DocumentCreated { document_id, .. } => Some(document_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(ids.iter().any(|s| s.starts_with("contact:")));
+        assert!(ids.iter().any(|s| s.starts_with("company:")));
+    }
+
+    #[test]
+    fn initial_sync_rejects_unknown_object_kind() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .initial_sync(
+                &cfg_with(serde_json::json!({"object_kinds": ["weird_kind"]})),
+                &tok,
+            )
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn incremental_sync_filters_via_search_endpoint() {
+        // Cursor at now-1h; the mock returns three rows but the
+        // <= cursor row must be dropped client-side (GTE is
+        // inclusive).
+        let now = Utc::now();
+        let cursor = (now - Duration::hours(1)).to_rfc3339();
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.test/hubspot/crm/v3/objects/contacts/search",
+            ok_json(serde_json::json!({
+                "results": [
+                    {
+                        "id": "old",
+                        "updatedAt": now - Duration::hours(1),
+                    },
+                    {
+                        "id": "new",
+                        "updatedAt": now,
+                    },
+                    {
+                        "id": "archived",
+                        "updatedAt": now,
+                        "archived": true,
+                    }
+                ]
+            })),
+        );
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some(cursor);
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        // "old" matches GTE-cursor exactly → dropped, "new" emits
+        // Updated, "archived" emits Deleted.
+        assert_eq!(res.events.len(), 2);
         assert!(matches!(
             res.events[0],
             ConnectorEvent::DocumentUpdated { .. }
         ));
+        assert!(matches!(
+            res.events[1],
+            ConnectorEvent::DocumentDeleted { .. }
+        ));
+        // The body must include the lastmodifieddate filter.
+        let recorded = transport.recorded();
+        let body: serde_json::Value = serde_json::from_slice(&recorded[0].body).unwrap();
+        assert_eq!(
+            body["filterGroups"][0]["filters"][0]["propertyName"],
+            "hs_lastmodifieddate"
+        );
+        assert_eq!(
+            body["filterGroups"][0]["filters"][0]["operator"],
+            "GTE"
+        );
+    }
+
+    #[test]
+    fn list_401_propagates_as_auth_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/objects/contacts?limit=100",
+            MockResponse::status(401, b"unauthorized".to_vec()),
+        );
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c.initial_sync(&cfg(), &tok).unwrap_err();
+        assert!(matches!(err, ConnectorError::Auth(_)));
+    }
+
+    #[test]
+    fn subscribe_webhook_posts_one_per_event_type_and_captures_ids() {
+        let transport = Arc::new(MockHttpTransport::new());
+        // 3 subscription kinds × 1 object kind = 3 POSTs.
+        for id in [10_i64, 11, 12] {
+            transport.expect(
+                HttpMethod::Post,
+                "https://api.test/hubspot/webhooks/v3/12345/subscriptions",
+                ok_json(serde_json::json!({"id": id, "active": true})),
+            );
+        }
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let sub = c
+            .subscribe_webhook(&cfg(), &tok, "https://demo.example/webhooks/hubspot")
+            .unwrap();
+        assert_eq!(sub.provider_subscription_id.as_deref(), Some("10,11,12"));
+        // Every POST must carry the configured eventType derived
+        // from (object_kind, sub_kind).
+        let recorded = transport.recorded();
+        let event_types: Vec<String> = recorded
+            .iter()
+            .map(|r| {
+                let b: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+                b["eventType"].as_str().unwrap().to_string()
+            })
+            .collect();
+        assert_eq!(
+            event_types,
+            vec![
+                "contact.creation".to_string(),
+                "contact.propertyChange".to_string(),
+                "contact.deletion".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn subscribe_webhook_requires_app_id() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let cfg_no_app = ConnectorConfig::new(
+            ConnectorKind::HubSpot,
+            AuthKind::OAuth2,
+            ScopeId::new_v4(),
+        )
+        .with_auth_config(serde_json::json!({
+            "authorization_code": "demo-code",
+            "api_base_url": "https://api.test/hubspot",
+        }));
+        let err = c
+            .subscribe_webhook(&cfg_no_app, &tok, "https://demo.example/webhooks/hubspot")
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Webhook(_)));
     }
 
     #[test]
@@ -417,7 +1005,8 @@ mod tests {
                 "occurredAt": Utc::now().timestamp_millis(),
             }
         ]);
-        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4());
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
@@ -441,7 +1030,8 @@ mod tests {
                 "propertyValue": "editor",
             }
         ]);
-        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4());
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
@@ -462,7 +1052,8 @@ mod tests {
     #[test]
     fn webhook_empty_batch_errors() {
         let body = serde_json::json!([]);
-        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4());
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let err = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
@@ -494,7 +1085,8 @@ mod tests {
                 "occurredAt": Utc::now().timestamp_millis(),
             }
         ]);
-        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4());
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
@@ -529,7 +1121,8 @@ mod tests {
                 "occurredAt": Utc::now().timestamp_millis(),
             }
         ]);
-        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4());
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
@@ -537,32 +1130,5 @@ mod tests {
         assert!(matches!(evs[0], ConnectorEvent::DocumentCreated { .. }));
         assert!(matches!(evs[1], ConnectorEvent::DocumentUpdated { .. }));
         assert!(matches!(evs[2], ConnectorEvent::DocumentDeleted { .. }));
-    }
-
-    #[test]
-    fn initial_sync_classifies_objects_as_created_regardless_of_timestamps() {
-        // Regression test: earlier revisions used `created_at ==
-        // updated_at` to decide DocumentCreated vs DocumentUpdated,
-        // which silently misclassified real-world payloads where
-        // the two values differ by a few milliseconds even on
-        // first creation.
-        let now = Utc::now();
-        let pages = vec![HubSpotListResponse {
-            results: vec![HubSpotObject {
-                id: "77".into(),
-                kind: HubSpotObjectKind::Contact,
-                created_at: Some(now),
-                updated_at: Some(now + Duration::milliseconds(7)),
-                archived: false,
-            }],
-            paging: None,
-        }];
-        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4()).with_initial_pages(pages);
-        let tok = c.authenticate(&cfg()).unwrap();
-        let res = c.initial_sync(&cfg(), &tok).unwrap();
-        assert!(
-            matches!(res.events[0], ConnectorEvent::DocumentCreated { .. }),
-            "initial_sync must always emit DocumentCreated, not depend on timestamp equality",
-        );
     }
 }
