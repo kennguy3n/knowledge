@@ -84,8 +84,14 @@ export declare function init(configJson: string): void
 /**
  * List memory records, optionally filtered. Mirrors
  * [`crate::list_memories`]. The `filter` argument is a JSON object
- * shaped like `{ "state": "Reinforced", "pinnedOnly": false }`;
- * unspecified fields use the [`MemoryFilter::default`] values.
+ * whose key set must match [`MemoryFilter`] exactly — `state` is
+ * optional (`null` or omitted ⇒ no state filter) and `pinned_only`
+ * is a required bool. The struct carries
+ * `#[serde(deny_unknown_fields)]`, so a typo like `pinnedOnly`
+ * (camelCase) or `Pinned_Only` errors out with a clear
+ * `InvalidArgument` rather than silently defaulting — this catches
+ * JS-side mistakes at the FFI boundary instead of letting them
+ * surface as missing memory rows later in the pipeline.
  */
 export declare function listMemories(handle: bigint, scopeId: string, filter: any): any
 

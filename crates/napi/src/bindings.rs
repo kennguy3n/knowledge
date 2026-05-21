@@ -236,8 +236,14 @@ pub fn js_forget_scope(handle: BigInt, scope_id: String) -> Result<()> {
 
 /// List memory records, optionally filtered. Mirrors
 /// [`crate::list_memories`]. The `filter` argument is a JSON object
-/// shaped like `{ "state": "Reinforced", "pinnedOnly": false }`;
-/// unspecified fields use the [`MemoryFilter::default`] values.
+/// whose key set must match [`MemoryFilter`] exactly — `state` is
+/// optional (`null` or omitted ⇒ no state filter) and `pinned_only`
+/// is a required bool. The struct carries
+/// `#[serde(deny_unknown_fields)]`, so a typo like `pinnedOnly`
+/// (camelCase) or `Pinned_Only` errors out with a clear
+/// `InvalidArgument` rather than silently defaulting — this catches
+/// JS-side mistakes at the FFI boundary instead of letting them
+/// surface as missing memory rows later in the pipeline.
 #[napi(js_name = "listMemories")]
 pub fn js_list_memories(
     handle: BigInt,
@@ -446,6 +452,29 @@ mod tests {
         let err = js_list_memories(bi, "scope".into(), filter).unwrap_err();
         let env = parse_envelope(&err);
         assert_eq!(env["kind"], "InvalidId");
+    }
+
+    #[test]
+    fn js_list_memories_rejects_camelcase_pinned_only_typo() {
+        // Companion to the FFI-level pin
+        // (`crates/ffi/src/types.rs::memory_filter_rejects_camelcase_pinned_only_alias`).
+        // Exercises the N-API wrapper end-to-end: a JS caller
+        // shipping `{ pinnedOnly: false }` instead of
+        // `{ pinned_only: false }` must come back through
+        // [`to_js_error`] as an `InvalidArgument` envelope —
+        // never `InvalidId` (which would imply we silently
+        // defaulted past the typo and then choked downstream on
+        // the bogus scope id).
+        let filter = serde_json::json!({ "state": null, "pinnedOnly": false });
+        let bi = BigInt::from(RuntimeHandle::NONE.0);
+        let err = js_list_memories(bi, "scope".into(), filter).unwrap_err();
+        let env = parse_envelope(&err);
+        assert_eq!(env["kind"], "InvalidArgument");
+        let msg = env["message"].as_str().expect("message is a string");
+        assert!(
+            msg.contains("pinnedOnly"),
+            "expected the JS-facing error to name the offending key `pinnedOnly`, got {msg}"
+        );
     }
 
     #[test]

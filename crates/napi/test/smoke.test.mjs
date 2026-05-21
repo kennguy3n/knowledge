@@ -176,6 +176,26 @@ test('listMemories() rejects a malformed filter shape with InvalidArgument', () 
   );
 });
 
+test('listMemories() rejects camelCase `pinnedOnly` typo with a named InvalidArgument', () => {
+  // Pins the `#[serde(deny_unknown_fields)]` guard on
+  // `MemoryFilter`. A JS developer reaching for what looks like
+  // the natural camelCase key (`pinnedOnly`) must get a clear
+  // InvalidArgument naming the offending key — *not* an
+  // InvalidId surfaced from a silently-defaulted `pinned_only:
+  // false` filter that hit the scope-id parser. This test is the
+  // last line of defence: it would have caught the doc-comment
+  // typo at `bindings.rs:239` that Devin Review (BUG_0001) flagged.
+  assert.throws(
+    () => core.listMemories(0n, 'not-a-uuid', { state: null, pinnedOnly: false }),
+    (err) => {
+      const env = parseEnvelope(err);
+      assert.strictEqual(env.kind, 'InvalidArgument');
+      assert.match(env.message, /pinnedOnly/);
+      return true;
+    },
+  );
+});
+
 test('triggerSynthesis() accepts known trigger enum strings', () => {
   for (const trig of [
     'ManualUserAction',
