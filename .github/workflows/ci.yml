@@ -72,18 +72,28 @@ jobs:
           ALLOWED_PREFIX='^crates/napi/'
 
           # Catch every attribute form that relaxes `unsafe_code`,
-          # including ones wrapped in `cfg_attr`:
+          # including ones wrapped in `cfg_attr` AND ones broken
+          # across multiple lines by rustfmt or by a hand author:
           #   #[allow(unsafe_code)]
           #   #![allow(unsafe_code)]
           #   #[cfg_attr(feature = "x", allow(unsafe_code))]
           #   #![cfg_attr(any(...), allow(unsafe_code))]
-          # The pattern requires an attribute opener (`#[` or `#![`)
-          # followed by any prefix and then a word-boundaried
-          # `allow(unsafe_code)`.
+          #   #[allow(
+          #       unsafe_code
+          #   )]
+          #   #[allow(dead_code, unsafe_code, unused_imports)]
+          # The pattern requires an attribute opener (`#[` or `#![`),
+          # any prefix that stays inside the outer attribute brackets
+          # (`[^]]*`), an `allow(` token, and a word-boundaried
+          # `unsafe_code` somewhere inside the `allow(...)` argument
+          # list (`[^)]*\bunsafe_code\b[^)]*`). The pattern uses
+          # `[^]]` / `[^)]` instead of `.` so it spans newlines
+          # without needing `--multiline-dotall`; `rg --multiline -U`
+          # is the multi-line equivalent of `grep -E`.
           #
-          # The grep is intentionally line-oriented and operates on
-          # raw text — it does NOT skip `//` line comments or `///`
-          # doc comments. A line like
+          # The scan is intentionally raw-text and operates on the
+          # whole file — it does NOT skip `//` line comments, `///`
+          # doc comments, or `/* ... */` block comments. A line like
           #   // example: #[allow(unsafe_code)]
           # WILL trigger this guard. That's a conservative
           # false-positive direction (the guard fires when it
@@ -92,13 +102,18 @@ jobs:
           # should escape the attribute opener (e.g. write
           # `#&#91;allow(...)]` or break the literal across lines
           # with a markdown backtick fence) rather than rely on the
-          # grep to ignore comments. Future maintainers: this is
+          # scanner to ignore comments. Future maintainers: this is
           # safe-by-design, not a bug.
-          PATTERN='#!?\[.*\ballow\(unsafe_code\)'
+          PATTERN='#!?\[[^]]*\ballow\([^)]*\bunsafe_code\b[^)]*\)'
 
-          # `grep -nE` so we surface filename + line for every hit.
-          # `git ls-files` so we only look at tracked sources (no
-          # vendored deps, no build artefacts).
+          # `rg -nU --multiline` so we catch attribute forms that
+          # break across newlines (rustfmt collapses simple cases
+          # to a single line, but a `#[rustfmt::skip]`-bracketed
+          # attribute, a wide `allow(...)` list that wrapped onto
+          # multiple lines, or a hand-edited file can still hide a
+          # match from a line-oriented grep). `git ls-files` so we
+          # only look at tracked sources (no vendored deps, no
+          # build artefacts).
           #
           # Scope: tracked `*.rs` files only. The PATTERN above is
           # Rust attribute syntax (`#[...]` / `#![...]`) and would
@@ -106,15 +121,25 @@ jobs:
           # the glob to `*.yml` / `*.toml` would be noise. The
           # workflow file itself (this very job) and the workspace
           # `Cargo.toml` lint table are protected by branch
-          # protection + code review, not by this grep; a reviewer
-          # editing `ALLOWED_PREFIX` or removing this job has to be
-          # caught by a human reviewing the diff. That is intentional
-          # — this guard is a defense-in-depth check on the actual
-          # source tree, not a self-protecting CI lockdown.
-          matches="$(git ls-files \
-            -- '*.rs' \
-            | grep -vE "${ALLOWED_PREFIX}" \
-            | xargs grep -nE "${PATTERN}" || true)"
+          # protection + code review, not by this scanner; a
+          # reviewer editing `ALLOWED_PREFIX` or removing this job
+          # has to be caught by a human reviewing the diff. That is
+          # intentional — this guard is a defense-in-depth check on
+          # the actual source tree, not a self-protecting CI
+          # lockdown.
+          #
+          # `rg` 13.x ships preinstalled on `ubuntu-latest` GitHub
+          # runners; verify with `rg --version` in a one-shot job
+          # if a future migration to a different base image breaks
+          # this assumption.
+          mapfile -t scan_files < <(git ls-files -- '*.rs' \
+            | grep -vE "${ALLOWED_PREFIX}" || true)
+          if [ "${#scan_files[@]}" -eq 0 ]; then
+            echo 'No tracked *.rs files outside the napi allowlist; skipping scan.'
+            matches=''
+          else
+            matches="$(rg --multiline -nU -e "${PATTERN}" -- "${scan_files[@]}" || true)"
+          fi
 
           if [ -n "${matches}" ]; then
             echo '::error::A new `allow(unsafe_code)` (including `cfg_attr`-gated forms) was introduced outside the napi allowlist:'
