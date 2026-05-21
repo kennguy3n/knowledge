@@ -79,9 +79,21 @@ jobs:
           #   #![cfg_attr(any(...), allow(unsafe_code))]
           # The pattern requires an attribute opener (`#[` or `#![`)
           # followed by any prefix and then a word-boundaried
-          # `allow(unsafe_code)`. That means a literal `allow(...)`
-          # inside a `//` line comment or a doc comment does NOT
-          # trigger the guard, but every real attribute form does.
+          # `allow(unsafe_code)`.
+          #
+          # The grep is intentionally line-oriented and operates on
+          # raw text — it does NOT skip `//` line comments or `///`
+          # doc comments. A line like
+          #   // example: #[allow(unsafe_code)]
+          # WILL trigger this guard. That's a conservative
+          # false-positive direction (the guard fires when it
+          # arguably shouldn't, instead of letting a real attribute
+          # through), so anyone documenting the lint in a comment
+          # should escape the attribute opener (e.g. write
+          # `#&#91;allow(...)]` or break the literal across lines
+          # with a markdown backtick fence) rather than rely on the
+          # grep to ignore comments. Future maintainers: this is
+          # safe-by-design, not a bug.
           PATTERN='#!?\[.*\ballow\(unsafe_code\)'
 
           # `grep -nE` so we surface filename + line for every hit.
