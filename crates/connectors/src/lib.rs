@@ -27,11 +27,19 @@
 //!   `/subscriptions`) under a shared `EmailProvider` enum.
 //!
 //! Each connector models the vendor's REST contract as plain serde
-//! types and parses fixture JSON into [`ConnectorEvent`]s. The
-//! transport layer (HTTP client, retries, rate limiting) lives in
-//! the Go gateway and is not part of this crate — connectors are
-//! deliberately synchronous and side-effect-free against in-memory
-//! fixtures so they can be exhaustively unit-tested.
+//! types and issues real HTTP requests through an injected
+//! [`connector_framework::HttpTransport`] — production wires the
+//! `reqwest`-backed [`connector_framework::BlockingHttpTransport`]
+//! (3 retries with exponential backoff, `Retry-After` honoured,
+//! 30s default timeout) while tests wire
+//! [`connector_framework::MockHttpTransport`] with deterministic
+//! canned responses. The `Connector` trait stays synchronous so the
+//! call surface can be exhaustively unit-tested, but every code path
+//! that crosses the trait boundary in production goes over the wire.
+//! OAuth2 token exchange runs through the
+//! [`connector_framework::OAuth2CodeExchange`] trait, which the
+//! production binary wires to
+//! [`connector_framework::OAuth2Client`] (also `reqwest`-backed).
 
 #![deny(missing_docs)]
 
