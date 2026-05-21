@@ -266,16 +266,23 @@ async fn webhook_handler(
         // has no business seeing the substrate's internal error
         // strings — those can contain queue names, redacted-but-not
         // -fully-scrubbed URLs, auth-state hints, or upstream tenant
-        // ids. Dispatchers are responsible for their own
-        // server-side logging / tracing of the underlying `Err(e)`;
-        // the receiver just signals "upstream is unhealthy, retry
-        // later" via 502 with a fixed body. (Webhook providers
-        // typically only inspect the status code anyway and retry
-        // any 5xx.)
-        Err(_) => (
-            StatusCode::BAD_GATEWAY,
-            "internal dispatcher error".to_string(),
-        ),
+        // ids. The receiver logs the error server-side for
+        // observability (dispatchers *should* also log, but the
+        // receiver is the backstop) and signals "upstream is
+        // unhealthy, retry later" via 502 with a fixed body.
+        // (Webhook providers typically only inspect the status code
+        // anyway and retry any 5xx.)
+        Err(e) => {
+            tracing::warn!(
+                provider_id = %provider_id,
+                error = %e,
+                "webhook dispatcher failed; returning 502 to provider",
+            );
+            (
+                StatusCode::BAD_GATEWAY,
+                "internal dispatcher error".to_string(),
+            )
+        }
     }
 }
 
