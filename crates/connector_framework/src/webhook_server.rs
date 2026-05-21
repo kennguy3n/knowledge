@@ -201,10 +201,7 @@ impl WebhookServer {
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        let router = Router::new()
-            .route("/healthz", get(healthz_handler))
-            .route("/webhooks/:provider_id", post(webhook_handler))
-            .with_state(self.state);
+        let router = build_router(self.state);
 
         axum::serve(listener, router)
             .with_graceful_shutdown(shutdown)
@@ -229,6 +226,20 @@ impl WebhookServer {
         })
         .await
     }
+}
+
+/// Construct the axum router for the receiver. Extracted from
+/// [`WebhookServer::serve_on`] so the test module can drive the
+/// router directly via [`tower::ServiceExt::oneshot`] without
+/// binding a TCP listener — that's axum's official testing pattern
+/// (https://docs.rs/axum/latest/axum/#testing) and it keeps the
+/// dev-dep graph honest by not pulling reqwest (and its async
+/// `idna_adapter` → `icu_normalizer 2.2` chain that raises MSRV).
+fn build_router(state: ServerState) -> Router {
+    Router::new()
+        .route("/healthz", get(healthz_handler))
+        .route("/webhooks/:provider_id", post(webhook_handler))
+        .with_state(state)
 }
 
 /// Health-check route handler. Returns the substrate's build
@@ -289,9 +300,16 @@ async fn webhook_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use http_body_util::BodyExt as _;
     use std::sync::Mutex;
     use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::oneshot;
+    use tower::ServiceExt as _;
 
     /// Collector dispatcher: records every (provider, body) pair
     /// it receives so the test can assert against it.
@@ -324,95 +342,82 @@ mod tests {
         }
     }
 
-    /// Spawn a server bound on `127.0.0.1:0`, return (live addr,
-    /// shutdown sender, server JoinHandle, collector).
-    async fn spawn_test_server(
-        mode: Mode,
-    ) -> (
-        SocketAddr,
-        oneshot::Sender<()>,
-        tokio::task::JoinHandle<Result<()>>,
-        Arc<CollectorDispatcher>,
-    ) {
+    /// Build a `Router` and matching collector for a given dispatcher
+    /// mode. The router is exercised via [`tower::ServiceExt::oneshot`]
+    /// rather than bound on a TCP port — that's axum's recommended
+    /// testing pattern (no network, no async TLS / DNS stack, no
+    /// flaky port-races on shared runners) and it covers exactly the
+    /// same handler code path that `axum::serve` would dispatch to.
+    fn build_test_router(mode: Mode) -> (Router, Arc<CollectorDispatcher>) {
         let collector = Arc::new(CollectorDispatcher {
             received: Mutex::new(Vec::new()),
             mode,
         });
-        let dispatches = vec![WebhookDispatch {
-            provider_id: "slack".into(),
-            dispatcher: collector.clone() as Arc<dyn WebhookDispatcher>,
-        }];
-        let cfg = WebhookServerConfig::new("127.0.0.1:0".parse().expect("addr"));
-        let server = WebhookServer::new(cfg, dispatches);
-        let listener = server.bind().await.expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        let (tx, rx) = oneshot::channel::<()>();
-        let handle = tokio::spawn(async move {
-            server
-                .serve_on(listener, async move {
-                    let _ = rx.await;
-                })
-                .await
-        });
-        // Give axum a beat to wire the router on slower runners.
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        (addr, tx, handle, collector)
+        let mut table: HashMap<String, Arc<dyn WebhookDispatcher>> = HashMap::new();
+        table.insert(
+            "slack".into(),
+            collector.clone() as Arc<dyn WebhookDispatcher>,
+        );
+        let state = ServerState {
+            dispatchers: Arc::new(table),
+        };
+        (build_router(state), collector)
+    }
+
+    /// Collect the body of a `Response<Body>` into a `Vec<u8>`. Wraps
+    /// the `http_body_util::BodyExt::collect` ceremony so test cases
+    /// read like the old `resp.text().await` calls.
+    async fn body_bytes(resp: axum::response::Response) -> Vec<u8> {
+        resp.into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes()
+            .to_vec()
     }
 
     #[tokio::test]
     async fn webhook_post_routes_to_registered_dispatcher() {
-        let (addr, shutdown, handle, collector) = spawn_test_server(Mode::Ok).await;
+        let (router, collector) = build_test_router(Mode::Ok);
 
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(format!("http://{addr}/webhooks/slack"))
-            .body("hello slack")
-            .send()
-            .await
-            .expect("send");
-        assert_eq!(resp.status(), 200);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/webhooks/slack")
+            .body(Body::from("hello slack"))
+            .expect("build req");
+        let resp = router.oneshot(req).await.expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::OK);
 
         let collected = collector.received.lock().expect("lock").clone();
         assert_eq!(collected.len(), 1);
         assert_eq!(collected[0].0, "slack");
         assert_eq!(collected[0].1, b"hello slack");
-
-        let _ = shutdown.send(());
-        handle.await.expect("join").expect("serve");
     }
 
     #[tokio::test]
     async fn unknown_provider_returns_404() {
-        let (addr, shutdown, handle, _collector) = spawn_test_server(Mode::Ok).await;
+        let (router, _collector) = build_test_router(Mode::Ok);
 
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(format!("http://{addr}/webhooks/notion"))
-            .body("hello notion")
-            .send()
-            .await
-            .expect("send");
-        assert_eq!(resp.status(), 404);
-
-        let _ = shutdown.send(());
-        handle.await.expect("join").expect("serve");
+        let req = Request::builder()
+            .method("POST")
+            .uri("/webhooks/notion")
+            .body(Body::from("hello notion"))
+            .expect("build req");
+        let resp = router.oneshot(req).await.expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn dispatcher_webhook_error_maps_to_400() {
-        let (addr, shutdown, handle, _collector) = spawn_test_server(Mode::WebhookErr).await;
+        let (router, _collector) = build_test_router(Mode::WebhookErr);
 
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(format!("http://{addr}/webhooks/slack"))
-            .body("bad payload")
-            .send()
-            .await
-            .expect("send");
-        assert_eq!(resp.status(), 400);
-
-        let _ = shutdown.send(());
-        handle.await.expect("join").expect("serve");
+        let req = Request::builder()
+            .method("POST")
+            .uri("/webhooks/slack")
+            .body(Body::from("bad payload"))
+            .expect("build req");
+        let resp = router.oneshot(req).await.expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -424,79 +429,126 @@ mod tests {
         // substrate's internal queue topology. In particular, the
         // body must NOT echo back the dispatcher's
         // `e.to_string()` (which would include "queue down").
-        let (addr, shutdown, handle, _collector) = spawn_test_server(Mode::OtherErr).await;
+        let (router, _collector) = build_test_router(Mode::OtherErr);
 
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(format!("http://{addr}/webhooks/slack"))
-            .body("any")
-            .send()
-            .await
-            .expect("send");
-        assert_eq!(resp.status(), 502);
-        let body = resp.text().await.expect("body");
+        let req = Request::builder()
+            .method("POST")
+            .uri("/webhooks/slack")
+            .body(Body::from("any"))
+            .expect("build req");
+        let resp = router.oneshot(req).await.expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        let body = String::from_utf8(body_bytes(resp).await).expect("utf8");
         assert_eq!(body, "internal dispatcher error");
         assert!(
             !body.contains("queue down"),
             "502 body must not leak ConnectorError detail; got: {body}"
         );
-
-        let _ = shutdown.send(());
-        handle.await.expect("join").expect("serve");
     }
 
     #[tokio::test]
     async fn healthz_returns_200_with_version() {
-        let (addr, shutdown, handle, _collector) = spawn_test_server(Mode::Ok).await;
+        let (router, _collector) = build_test_router(Mode::Ok);
 
-        let client = reqwest::Client::new();
-        let resp = client
-            .get(format!("http://{addr}/healthz"))
-            .send()
-            .await
-            .expect("send");
-        assert_eq!(resp.status(), 200);
-        let body = resp.text().await.expect("body");
+        let req = Request::builder()
+            .method("GET")
+            .uri("/healthz")
+            .body(Body::empty())
+            .expect("build req");
+        let resp = router.oneshot(req).await.expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = String::from_utf8(body_bytes(resp).await).expect("utf8");
         assert!(body.contains("\"status\":\"ok\""), "got: {body}");
         assert!(
             body.contains(env!("CARGO_PKG_VERSION")),
             "version not in body: {body}",
         );
-
-        let _ = shutdown.send(());
-        handle.await.expect("join").expect("serve");
     }
 
+    /// End-to-end integration test for the bind → serve →
+    /// `with_graceful_shutdown` → drop-listener lifecycle. This is
+    /// the *only* test in this module that goes through a real TCP
+    /// socket: it writes a raw HTTP/1.1 request on a
+    /// [`tokio::net::TcpStream`], reads back the response, then
+    /// triggers shutdown and asserts the next connect attempt fails.
+    /// Using a raw stream (instead of `reqwest`) keeps the dev-dep
+    /// graph minimal — see the rationale on
+    /// `crates/connector_framework/Cargo.toml`'s `[dev-dependencies]`
+    /// block.
     #[tokio::test]
-    async fn shutdown_signal_drops_listener() {
-        let (addr, shutdown, handle, _collector) = spawn_test_server(Mode::Ok).await;
+    async fn serve_lifecycle_serves_then_shuts_down() {
+        let cfg = WebhookServerConfig::new("127.0.0.1:0".parse().expect("addr"));
+        let collector = Arc::new(CollectorDispatcher {
+            received: Mutex::new(Vec::new()),
+            mode: Mode::Ok,
+        });
+        let dispatches = vec![WebhookDispatch {
+            provider_id: "slack".into(),
+            dispatcher: collector.clone() as Arc<dyn WebhookDispatcher>,
+        }];
+        let server = WebhookServer::new(cfg, dispatches);
+        let listener = server.bind().await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (tx, rx) = oneshot::channel::<()>();
+        let handle = tokio::spawn(async move {
+            server
+                .serve_on(listener, async move {
+                    let _ = rx.await;
+                })
+                .await
+        });
 
-        // Trigger shutdown immediately. The `Result` from
-        // `oneshot::Sender::send` is just "did anyone hear me?";
-        // we don't care because the only listener is the server
-        // task and a shutdown signal that arrived after it
-        // already exited is a no-op success.
-        let _ = shutdown.send(());
-        // The server task should complete within a short window.
-        // `Server::serve` returns `Result<(), io::Error>` wrapped
-        // in `JoinError`; `expect` both layers to surface a clean
-        // panic message if the server died unexpectedly.
+        // Real round-trip: write a minimal HTTP/1.1 POST and read the
+        // status line. We don't parse the full response — just enough
+        // to prove the serve loop is wired and routing the request.
+        let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        let req = "POST /webhooks/slack HTTP/1.1\r\n\
+                   Host: localhost\r\n\
+                   Content-Length: 11\r\n\
+                   Connection: close\r\n\
+                   \r\n\
+                   hello slack";
+        stream.write_all(req.as_bytes()).await.expect("write req");
+        let mut buf = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), stream.read_to_end(&mut buf))
+            .await
+            .expect("response within deadline")
+            .expect("read resp");
+        let resp = String::from_utf8_lossy(&buf);
+        assert!(
+            resp.starts_with("HTTP/1.1 200"),
+            "expected 200 status line, got: {resp}"
+        );
+
+        // Dispatcher saw the body.
+        let collected = collector.received.lock().expect("lock").clone();
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].1, b"hello slack");
+
+        // Drive graceful shutdown. The server task must terminate
+        // within a short window — if it hangs, the test fails fast.
+        let _ = tx.send(());
         tokio::time::timeout(Duration::from_secs(2), handle)
             .await
             .expect("server stopped within deadline")
             .expect("join")
             .expect("serve");
 
-        // Connecting again should fail since the listener is gone.
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_millis(200))
-            .build()
-            .expect("client");
-        let err = client
-            .get(format!("http://{addr}/healthz"))
-            .send()
-            .await
-            .err();
-        assert!(err.is_some(), "expected connection to fail after shutdown");
+        // After shutdown the listener is gone, so a fresh connect
+        // attempt must fail (either ECONNREFUSED immediately or
+        // time out — both are acceptable "listener is gone" signals).
+        // ECONNREFUSED on the new connect attempt is the immediate
+        // and expected outcome on Linux/macOS once the listener has
+        // dropped its socket; the `timeout` wrapper is belt-and
+        // -braces in case a platform stalls instead of refusing.
+        // Either "connect failed" path proves the listener is gone.
+        let connect = tokio::time::timeout(
+            Duration::from_millis(200),
+            tokio::net::TcpStream::connect(addr),
+        )
+        .await;
+        if let Ok(Ok(_)) = connect {
+            panic!("connect succeeded after shutdown; listener still bound");
+        }
     }
 }

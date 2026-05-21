@@ -41,11 +41,26 @@
 //!    line.
 //!
 //! The adapter is a real implementation, not a placeholder — it
-//! propagates [`ConnectorError`](crate::ConnectorError) faithfully,
-//! it requires `'static` for the wrapped connector (which all
-//! production connectors satisfy), and it preserves cancellation
-//! semantics so a dropped future cancels the underlying
-//! [`spawn_blocking`] task as soon as the blocking call exits.
+//! propagates [`ConnectorError`](crate::ConnectorError) faithfully
+//! and it requires `'static` for the wrapped connector (which all
+//! production connectors satisfy).
+//!
+//! ### Cancellation note
+//!
+//! [`tokio::task::spawn_blocking`] tasks **cannot be cancelled
+//! mid-execution**: dropping the returned future stops *awaiting*
+//! the result, but the underlying blocking closure continues to
+//! run to completion on the blocking thread pool. Callers that
+//! need to drop an in-flight connector call early should still do
+//! so — the future will resolve to a "cancelled" state from the
+//! caller's perspective and the result will be discarded — but
+//! they must not assume the wrapped sync connector observes the
+//! cancellation. Any cooperative cancellation has to be plumbed
+//! through the connector's own protocol (e.g. an
+//! `AtomicBool` cancel flag, or the connector's HTTP transport
+//! reading from a `cancellation_token`). This is the same
+//! contract tokio publishes for `spawn_blocking`; the adapter
+//! does not — and cannot — relax it.
 
 use std::sync::Arc;
 

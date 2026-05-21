@@ -443,6 +443,7 @@ dependencies = [
  "chrono",
  "crypto",
  "evidence_store",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "observation_engine",

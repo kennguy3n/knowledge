@@ -68,13 +68,20 @@ hyper = { workspace = true, optional = true }
 hyper-util = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
-# The `webhook-server` tests in `src/webhook_server.rs` spin up an
-# axum server on `127.0.0.1:0` and drive it with an async reqwest
-# client. Declared here (not on the `webhook-server` feature) so
-# the runtime dependency footprint of `webhook-server` stays
-# minimal — `reqwest` is only linked into the test binaries.
-reqwest = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util", "io-util"] }
+# The `webhook-server` tests in `src/webhook_server.rs` exercise the
+# router via `tower::ServiceExt::oneshot` (axum's official testing
+# pattern; see https://docs.rs/axum/latest/axum/#testing) for the
+# routing / error-mapping assertions, and via a raw
+# `tokio::net::TcpStream` writing an HTTP/1.1 request for the one
+# end-to-end "real bind + real serve + real graceful shutdown" test.
+# Both avoid pulling reqwest into the dev-dep graph, which keeps the
+# workspace MSRV honest: reqwest's async stack transitively requires
+# `idna_adapter 1.x` → `icu_normalizer 2.2+` which needs rustc 1.86,
+# and dragging that in via dev-deps for `--all-targets` MSRV checks
+# would silently bump the floor.
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"
 
 [lints]
 workspace = true
