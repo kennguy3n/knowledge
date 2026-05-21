@@ -225,26 +225,66 @@ impl InferenceRouter {
     ///
     /// Safe to call from any thread, multiple times — the second
     /// call sees `None` and returns immediately.
+    ///
+    /// # Self-join guard
+    ///
+    /// If `shutdown` is invoked from **the bootstrap thread itself**,
+    /// it does NOT join the handle — joining the currently-running
+    /// thread would invoke `pthread_join` on `pthread_self()`, which
+    /// POSIX leaves explicitly undefined (`EDEADLK` on Linux's glibc,
+    /// `EDEADLK` or `EINVAL` on macOS, deadlock on some embedded
+    /// libcs). Dropping the [`JoinHandle`] without joining is safe
+    /// in that case because the running thread is already past the
+    /// closure that owned the work — it can only reach `Drop` /
+    /// `shutdown` by having released the last
+    /// `Arc<InferenceRouter>` strong reference *after* finishing
+    /// the closure. So we are not detaching a still-running probe;
+    /// we are detaching a thread that is one stack frame from
+    /// returning. Detach in this corner cleans up the join slot
+    /// without blocking on a thread that is about to vanish.
+    ///
+    /// The self-join scenario is only reachable for standalone
+    /// embedders that hold no other `Arc<InferenceRouter>` strong
+    /// references across the probe's lifetime. The substrate's own
+    /// path through [`crate::FfiRuntime`] always pins the router for
+    /// the lifetime of the runtime and calls `shutdown` from
+    /// `FfiRuntime::Drop` (on the runtime owner's thread, not the
+    /// probe thread) before releasing its own `Arc`, so the guard is
+    /// a no-op on the production code path.
     pub fn shutdown(&self) {
         let handle = self
             .bootstrap_handle
             .lock()
             .expect("bootstrap_handle lock")
             .take();
-        if let Some(h) = handle {
-            // `join()` on a panicked thread returns `Err`; we don't
-            // propagate that here because the bootstrap thread's
-            // panic-safety contract is already covered by the
-            // `NotifyOnDrop` guard inside `spawn_bootstrap` — the
-            // condvar is signalled regardless, so any waiters in
-            // `wait_for_bootstrap` have already unblocked. Logging
-            // the join failure is the most we can usefully do.
-            if let Err(e) = h.join() {
-                tracing::warn!(
-                    error = ?e,
-                    "inference-router-bootstrap thread panicked during shutdown",
-                );
-            }
+        let Some(h) = handle else {
+            return;
+        };
+        if h.thread().id() == std::thread::current().id() {
+            // Self-join — see the doc above for the full rationale.
+            // We log at `debug` (not `warn`) because this is an
+            // expected, documented outcome for standalone-embedder
+            // teardown, not a fault. Dropping `h` here detaches the
+            // join slot.
+            tracing::debug!(
+                "inference-router-bootstrap thread is dropping its own router; \
+                 skipping self-join (detaching join handle)",
+            );
+            drop(h);
+            return;
+        }
+        // `join()` on a panicked thread returns `Err`; we don't
+        // propagate that here because the bootstrap thread's
+        // panic-safety contract is already covered by the
+        // `NotifyOnDrop` guard inside `spawn_bootstrap` — the
+        // condvar is signalled regardless, so any waiters in
+        // `wait_for_bootstrap` have already unblocked. Logging
+        // the join failure is the most we can usefully do.
+        if let Err(e) = h.join() {
+            tracing::warn!(
+                error = ?e,
+                "inference-router-bootstrap thread panicked during shutdown",
+            );
         }
     }
 
@@ -1002,5 +1042,69 @@ mod tests {
         waiter.join().unwrap();
         assert!(waiter_done.load(Ordering::SeqCst));
         assert!(router.is_bootstrapped());
+    }
+
+    /// Regression for the latent self-join footgun Devin Review
+    /// flagged on commit 8c8ed4f: a standalone embedder that
+    /// constructs `Arc<InferenceRouter>`, calls `spawn_bootstrap`,
+    /// then drops its only `Arc` without joining or waiting MUST
+    /// not invoke `pthread_join` on the bootstrap thread itself.
+    ///
+    /// Scenario: after the outer `Arc` is released, the only
+    /// remaining strong reference is the one captured inside the
+    /// bootstrap thread's closure. When that thread finishes its
+    /// probe loop, its `me: Arc<InferenceRouter>` is the last
+    /// strong reference; dropping it fires
+    /// [`InferenceRouter::drop`] on the bootstrap thread, which
+    /// in turn calls [`InferenceRouter::shutdown`] — and naively
+    /// joining the handle stored in `bootstrap_handle` would be a
+    /// self-join (`pthread_join(pthread_self())`), POSIX-undefined.
+    /// On glibc this surfaces as `EDEADLK` rather than a hard
+    /// deadlock, but on other libcs the behaviour is unspecified.
+    ///
+    /// Verification: the test downgrades to a [`Weak`] before
+    /// dropping the only strong reference, then polls until the
+    /// allocation is freed. If the self-join branch in `shutdown`
+    /// is not taken, the bootstrap thread either (a) deadlocks
+    /// forever (libc-dependent), or (b) logs a `WARN` and proceeds
+    /// — but either way the strong count drops to zero and the
+    /// `Weak::upgrade` returns `None`. The test thus pins the
+    /// substrate-level guarantee: standalone-embedder teardown
+    /// completes without leaking the router allocation.
+    #[test]
+    fn shutdown_skips_self_join_when_dropped_from_bootstrap_thread() {
+        use std::time::Instant;
+
+        let router = Arc::new(router_with(vec![Box::new(FallbackAdapter::new())]));
+        // Spawn the bootstrap thread — the closure captures a clone
+        // of the Arc internally via `Arc::clone(&self)`.
+        Arc::clone(&router).spawn_bootstrap();
+        // Downgrade to a `Weak` so the test can observe the allocation
+        // going away without keeping it alive.
+        let weak = Arc::downgrade(&router);
+        // Release the outer strong reference. After this, the only
+        // remaining strong reference is the closure-captured `me`
+        // inside the bootstrap thread.
+        drop(router);
+        // The bootstrap thread should:
+        //   1. Run the probe (FallbackAdapter — instantaneous).
+        //   2. Notify the condvar via `NotifyOnDrop`.
+        //   3. Drop `me`, taking the strong count from 1 → 0.
+        //   4. `Drop for InferenceRouter` fires on the bootstrap
+        //      thread → `shutdown` detects self-thread → detaches
+        //      the join handle → returns.
+        // Once that sequence completes, `Weak::upgrade()` returns
+        // `None`. A 5-second deadline is generous — the entire
+        // sequence takes microseconds on any reasonable host.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if weak.upgrade().is_none() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "InferenceRouter allocation was not freed within 5s — possible self-join hang",
+        );
     }
 }
