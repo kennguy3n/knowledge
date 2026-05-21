@@ -156,6 +156,100 @@ jobs:
           fi
 
           echo 'No stray allow(unsafe_code) attributes found outside crates/napi/.'
+      - name: Pin Cargo.toml unsafe_code policy
+        # Companion check to the *.rs scan above. The Rust attribute
+        # scan only catches someone *adding* `#[allow(unsafe_code)]`
+        # to a source file — it cannot catch someone *removing* the
+        # `unsafe_code = "forbid"` lint declaration from a
+        # security-critical crate's `Cargo.toml`, or *downgrading*
+        # the workspace-level `unsafe_code = "deny"` to `"allow"`.
+        # Both are silent weakenings of the same security posture.
+        #
+        # This step pins the EXPECTED `unsafe_code` declarations in
+        # Cargo.toml files:
+        #
+        #   * Root `Cargo.toml`: must declare `unsafe_code = "deny"`
+        #     (workspace floor; gated relaxation point for napi).
+        #   * `crates/crypto/Cargo.toml`: must declare
+        #     `unsafe_code = "forbid"` (PQC primitives, never relax).
+        #
+        # It also asserts that NO other tracked `Cargo.toml`
+        # introduces an `unsafe_code = ...` declaration without
+        # being added to `ALLOWED_TOML_PATHS` here, with a
+        # justification comment. New FFI crates would extend the
+        # allowlist; pure-Rust crates inherit the workspace `deny`
+        # transparently via `[lints] workspace = true`.
+        run: |
+          # Map of files that are PERMITTED to set `unsafe_code` in
+          # `[lints.rust]` and the exact level we expect. Each
+          # expected entry is `path:level`; the step verifies the
+          # level is present in the file (catches removal /
+          # downgrade) AND that no OTHER tracked `Cargo.toml` sets
+          # `unsafe_code` at all (catches stealth additions).
+          EXPECTED=(
+            'Cargo.toml:deny'
+            'crates/crypto/Cargo.toml:forbid'
+          )
+
+          fail=0
+
+          # 1. Verify each expected file still has the expected level.
+          for entry in "${EXPECTED[@]}"; do
+            path="${entry%:*}"
+            level="${entry##*:}"
+            if [ ! -f "${path}" ]; then
+              echo "::error::Expected pinned Cargo.toml ${path} no longer exists."
+              fail=1
+              continue
+            fi
+            if ! grep -qE "^\s*unsafe_code\s*=\s*\"${level}\"\s*$" "${path}"; then
+              echo "::error::${path} must declare unsafe_code = \"${level}\" — pinned by the unsafe-code-guard CI job."
+              echo '          If you genuinely intend to weaken this, update both this CI step and the corresponding crate review notes.'
+              fail=1
+            fi
+          done
+
+          # 2. Build the allowlist regex from EXPECTED so the scan
+          # below skips known-good files without hardcoding paths
+          # twice.
+          allow_re=''
+          for entry in "${EXPECTED[@]}"; do
+            path="${entry%:*}"
+            esc="$(printf '%s' "${path}" | sed -e 's/[\/.^$*+?()[\]{}|]/\\&/g')"
+            if [ -z "${allow_re}" ]; then
+              allow_re="^(${esc}"
+            else
+              allow_re="${allow_re}|${esc}"
+            fi
+          done
+          allow_re="${allow_re})$"
+
+          # 3. Look for stray `unsafe_code = ...` lines in any
+          # tracked `Cargo.toml` outside the allowlist. Any hit is a
+          # silent attempt to override the workspace policy at the
+          # crate level — must be reviewed (and added to EXPECTED
+          # above with a comment).
+          mapfile -t toml_files < <(git ls-files -- '*Cargo.toml' \
+            | grep -vE "${allow_re}" || true)
+          if [ "${#toml_files[@]}" -gt 0 ]; then
+            stray="$(grep -lE '^\s*unsafe_code\s*=' -- "${toml_files[@]}" || true)"
+            if [ -n "${stray}" ]; then
+              echo '::error::A Cargo.toml outside the unsafe-code-guard allowlist declares `unsafe_code = ...`:'
+              echo "${stray}"
+              echo
+              echo 'Crates inherit the workspace `unsafe_code = "deny"` via `[lints] workspace = true`.'
+              echo 'If a new crate genuinely needs to override the workspace policy (e.g. a new FFI crate'
+              echo 'that needs `deny` instead of `forbid`, or a security-critical crate that needs to pin'
+              echo '`forbid`), add the path to EXPECTED in this CI step with a justification comment.'
+              exit 1
+            fi
+          fi
+
+          if [ "${fail}" -ne 0 ]; then
+            exit 1
+          fi
+
+          echo 'Cargo.toml unsafe_code policy is intact.'
 
   clippy-all:
     name: clippy (all features)
