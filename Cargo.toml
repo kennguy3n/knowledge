@@ -99,11 +99,49 @@ criterion = { version = "0.5", features = ["html_reports"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# HTTP client (used by `inference_router`'s `http-client` feature to
-# talk to the llama.cpp loopback `llama-server`). Blocking +
-# rustls-tls so we don't pull in tokio for the synchronous
-# inference path.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# HTTP client. The blocking client is used by the synchronous
+# inference path (`inference_router`'s `http-client` feature talks
+# to the llama.cpp loopback `llama-server`); the async client is
+# used by the Phase 5 async-runtime path (`connector_framework`'s
+# `async-http-client` feature + `inference_router`'s
+# `async-http-client` feature). Both are gated so cross-checks and
+# offline lints that don't link the network stack can still build
+# the substrate.
+#
+# `blocking` is *not* in the workspace-default feature set: consumers
+# that need it (the sync `BlockingHttpTransport` and the sync llama
+# adapter) opt in via the `reqwest/blocking` feature on their own
+# `http-client` Cargo feature. Async-only consumers
+# (`async-http-client`) therefore do not transitively pull in
+# reqwest's blocking client + its dedicated thread pool, keeping the
+# async dependency footprint honest with what `async-http-client`'s
+# doc comment promises.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Tokio multi-thread runtime for the Phase 5 async surface. Gated
+# behind `[features]` on the crates that opt-in — the synchronous
+# core stays free of `tokio` so the crypto / evidence-store /
+# memory-manager / observation-engine surface compiles on hosts
+# without a tokio toolchain.
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "sync", "time", "fs"] }
+
+# Async-trait — only required because Rust does not yet allow
+# `async fn` in regular traits without an opt-in toolchain bump
+# beyond the workspace MSRV (1.85). Once the workspace MSRV reaches
+# 1.91 (when the AFIT-via-dyn-trait release lands), this dep can
+# be deleted and the `#[async_trait]` annotations removed from
+# `connector_framework::AsyncConnector`.
+async-trait = "0.1"
+
+# Axum + tower for the Phase 5 webhook receiver. Axum is built on
+# top of `hyper` 1.x and the `tower` middleware ecosystem. The
+# specific features are chosen so the webhook server compiles
+# without pulling in tokio macros that the rest of the workspace
+# doesn't need.
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
+tower = { version = "0.5", default-features = false, features = ["util"] }
+hyper = { version = "1", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio", "service", "server-auto"] }
 
 # Structured logging facade. Used at `debug!` level only inside the
 # substrate so a host that has not installed a subscriber pays

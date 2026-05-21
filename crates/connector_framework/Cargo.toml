@@ -13,12 +13,38 @@ default = []
 # `ReqwestOAuth2CodeExchange` / `ReqwestTokenRefresher`. Gated so
 # CI hosts without the reqwest / rustls build chain (cross-checks,
 # offline lints) can still compile the crate against fixtures.
-http-client = ["dep:reqwest"]
+#
+# Pulls in `reqwest/blocking` explicitly so an async-only build
+# (only `async-http-client` enabled) does NOT transitively pull in
+# reqwest's blocking client + its dedicated thread pool. See the
+# rationale on the workspace-level `reqwest` dep in the root
+# Cargo.toml.
+http-client = ["dep:reqwest", "reqwest/blocking"]
 # Exposes test-only helpers (`MockHttpTransport`, fixture-driven
 # connector knobs) outside `cfg(test)` so neighbouring crates'
 # integration tests can reach them. Production builds leave this
 # off so the helpers stay unreachable from the FFI surface.
 test-support = []
+# Phase 5 async surface. Pulls in `tokio`, `async-trait`, and the
+# async reqwest client so the substrate can drive connectors from a
+# tokio runtime instead of `std::thread`-based polling. The
+# pre-existing `Connector` trait + `BlockingHttpTransport` stay
+# unmodified — the async layer is additive and is built on top of
+# them via the `BlockingConnectorAdapter` bridge.
+async-runtime = ["dep:tokio", "dep:async-trait"]
+# Phase 5 async HTTP transport. Independent of `http-client` so
+# offline cross-checks can build the async surface without the
+# blocking client. Adds reqwest with only the async features
+# enabled — `reqwest/blocking` (and its dedicated thread pool) is
+# opted into solely by the sync `http-client` feature above, so an
+# `async-http-client`-only build never links the blocking client.
+async-http-client = ["async-runtime", "dep:reqwest"]
+# Phase 5 webhook receiver server. Built on `axum` + `hyper` +
+# `tower`. Gated separately from `async-runtime` so a substrate
+# embedding the connector framework purely as a client (e.g. the
+# desktop host that subscribes to webhooks via a cloud relay) can
+# still build without the server crates.
+webhook-server = ["async-runtime", "dep:axum", "dep:tower", "dep:hyper", "dep:hyper-util"]
 
 [dependencies]
 crypto = { path = "../crypto" }
@@ -31,8 +57,31 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tracing = { workspace = true }
 zeroize = { workspace = true }
 reqwest = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+tower = { workspace = true, optional = true }
+hyper = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util", "io-util"] }
+# The `webhook-server` tests in `src/webhook_server.rs` exercise the
+# router via `tower::ServiceExt::oneshot` (axum's official testing
+# pattern; see https://docs.rs/axum/latest/axum/#testing) for the
+# routing / error-mapping assertions, and via a raw
+# `tokio::net::TcpStream` writing an HTTP/1.1 request for the one
+# end-to-end "real bind + real serve + real graceful shutdown" test.
+# Both avoid pulling reqwest into the dev-dep graph, which keeps the
+# workspace MSRV honest: reqwest's async stack transitively requires
+# `idna_adapter 1.x` → `icu_normalizer 2.2+` which needs rustc 1.86,
+# and dragging that in via dev-deps for `--all-targets` MSRV checks
+# would silently bump the floor.
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"
 
 [lints]
 workspace = true
