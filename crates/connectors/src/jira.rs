@@ -537,8 +537,8 @@ mod tests {
         }
     }
 
-    fn ok_json(value: serde_json::Value) -> MockResponse {
-        MockResponse::ok_json(serde_json::to_vec(&value).unwrap())
+    fn ok_json(value: &serde_json::Value) -> MockResponse {
+        MockResponse::ok_json(serde_json::to_vec(value).unwrap())
     }
 
     #[test]
@@ -566,7 +566,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER+BY+created+ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-1", now, now)],
                 "startAt": 0, "maxResults": 50, "total": 1,
             })),
@@ -590,7 +590,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER+BY+created+ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-1", now, now), issue("PROJ-2", now, now)],
                 "startAt": 0, "maxResults": 50, "total": 3,
             })),
@@ -598,7 +598,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER+BY+created+ASC&startAt=2&maxResults=50&fields=summary,created,updated,status",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-3", now, now)],
                 "startAt": 2, "maxResults": 50, "total": 3,
             })),
@@ -617,7 +617,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER+BY+created+ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-1", now, now)],
                 "startAt": 0, "maxResults": 50, "total": 1,
             })),
@@ -641,7 +641,7 @@ mod tests {
                 "https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
                 percent_encode_form_component(&expected_jql)
             ),
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-2", now - Duration::days(1), now)],
                 "startAt": 0, "maxResults": 50, "total": 1,
             })),
@@ -678,7 +678,7 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/jira/rest/api/3/webhook",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "webhookRegistrationResult": [
                     {"createdWebhookId": 42, "errors": []}
                 ]
@@ -699,7 +699,7 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/jira/rest/api/3/webhook",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "webhookRegistrationResult": [
                     {"errors": ["URL is not reachable from Jira"]}
                 ]

@@ -389,8 +389,8 @@ mod tests {
             }))
     }
 
-    fn ok_json(value: serde_json::Value) -> MockResponse {
-        MockResponse::ok_json(serde_json::to_vec(&value).unwrap())
+    fn ok_json(value: &serde_json::Value) -> MockResponse {
+        MockResponse::ok_json(serde_json::to_vec(value).unwrap())
     }
 
     #[test]
@@ -419,7 +419,7 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/notion/v1/search",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [
                     {
                         "id": "page-1",
@@ -463,7 +463,7 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/notion/v1/search",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [{
                     "id": "page-1", "object": "page",
                     "created_time": now, "last_edited_time": now, "archived": false,
@@ -475,7 +475,7 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/notion/v1/search",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [{
                     "id": "page-2", "object": "page",
                     "created_time": now, "last_edited_time": now, "archived": false,
@@ -507,7 +507,7 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/notion/v1/search",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [{
                     "id": "page-1",
                     "object": "page",
@@ -537,7 +537,7 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/notion/v1/search",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [
                     {
                         "id": "new-page",
@@ -577,7 +577,7 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/notion/v1/search",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [{
                     "id": "page-2",
                     "object": "page",
@@ -663,12 +663,12 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/notion/v1/search",
-            ok_json(page.clone()),
+            ok_json(&page),
         );
         transport.expect(
             HttpMethod::Post,
             "https://api.test/notion/v1/search",
-            ok_json(page),
+            ok_json(&page),
         );
         let c = NotionConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();

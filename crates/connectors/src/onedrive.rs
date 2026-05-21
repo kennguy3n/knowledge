@@ -530,8 +530,8 @@ mod tests {
             }))
     }
 
-    fn ok_json(value: serde_json::Value) -> MockResponse {
-        MockResponse::ok_json(serde_json::to_vec(&value).unwrap())
+    fn ok_json(value: &serde_json::Value) -> MockResponse {
+        MockResponse::ok_json(serde_json::to_vec(value).unwrap())
     }
 
     const DELTA_URL: &str = "https://api.test/graph/v1.0/me/drive/root/delta";
@@ -563,7 +563,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             DELTA_URL,
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "value": [{
                     "id": "f1",
                     "name": "A.docx",
@@ -575,7 +575,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             next_link,
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "value": [{
                     "id": "f2",
                     "name": "B.docx",
@@ -606,7 +606,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             DELTA_URL,
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "value": [{
                     "id": "f1",
                     "name": "X.docx",
@@ -633,7 +633,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             DELTA_URL,
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "value": [{"id":"a", "name":"A"}],
                 "@odata.nextLink": "https://api.test/graph/v1.0/me/drive/root/delta?stuck=1",
             })),
@@ -641,7 +641,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/graph/v1.0/me/drive/root/delta?stuck=1",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "value": [{"id":"b", "name":"B"}],
                 "@odata.nextLink": "https://api.test/graph/v1.0/me/drive/root/delta?stuck=1",
             })),
@@ -660,7 +660,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             cursor,
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "value": [
                     {"id": "f1", "name": "A.docx"},
                     {"id": "f2", "name": "B.docx", "deleted": {"state":"deleted"}},
@@ -700,7 +700,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             cursor,
-            ok_json(serde_json::json!({"value": []})),
+            ok_json(&serde_json::json!({"value": []})),
         );
         let transport: Arc<dyn HttpTransport> = Arc::new(transport);
         let c = OneDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
@@ -731,7 +731,7 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/graph/v1.0/subscriptions",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "id": "sub-abc",
                 "expirationDateTime": (Utc::now() + Duration::days(2)).to_rfc3339(),
             })),
@@ -753,7 +753,7 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/graph/v1.0/subscriptions",
-            ok_json(serde_json::json!({"id": "sub-xyz"})),
+            ok_json(&serde_json::json!({"id": "sub-xyz"})),
         );
         let transport_arc: Arc<dyn HttpTransport> = Arc::new(transport);
         let c = OneDriveConnector::new(ConnectorInstanceId::new_v4(), transport_arc, oauth());
@@ -862,7 +862,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             DELTA_URL,
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "value": [
                     {
                         "id": "item-edited",

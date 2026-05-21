@@ -427,8 +427,6 @@ impl Connector for FigmaConnector {
         token: &OAuth2Token,
         callback_url: &str,
     ) -> Result<WebhookSubscription> {
-        let base_url = self.resolved_base_url(config);
-        let team_ids = Self::configured_team_ids(config)?;
         // Figma's `/v2/webhooks` endpoint registers ONE event_type
         // per call — we batch all five into separate requests and
         // capture the first id in `provider_subscription_id`. The
@@ -441,6 +439,8 @@ impl Connector for FigmaConnector {
             "LIBRARY_PUBLISH",
             "FILE_PERMISSION_UPDATE",
         ];
+        let base_url = self.resolved_base_url(config);
+        let team_ids = Self::configured_team_ids(config)?;
         let passcode = config
             .auth_config_json
             .get("webhook_secret")
@@ -557,7 +557,7 @@ mod tests {
         Arc::new(FixedOAuth)
     }
 
-    fn cfg_with(extra: serde_json::Value) -> ConnectorConfig {
+    fn cfg_with(extra: &serde_json::Value) -> ConnectorConfig {
         let mut base = serde_json::json!({
             "authorization_code": "demo-code",
             "api_base_url": "https://api.test/figma",
@@ -576,11 +576,11 @@ mod tests {
     }
 
     fn cfg() -> ConnectorConfig {
-        cfg_with(serde_json::Value::Object(serde_json::Map::new()))
+        cfg_with(&serde_json::Value::Object(serde_json::Map::new()))
     }
 
-    fn ok_json(value: serde_json::Value) -> MockResponse {
-        MockResponse::ok_json(serde_json::to_vec(&value).unwrap())
+    fn ok_json(value: &serde_json::Value) -> MockResponse {
+        MockResponse::ok_json(serde_json::to_vec(value).unwrap())
     }
 
     /// Figma's wire format: file metadata at the root, components as
@@ -627,7 +627,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/figma/v1/files/F1",
-            ok_json(wire_file("100")),
+            ok_json(&wire_file("100")),
         );
         let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
@@ -660,7 +660,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/figma/v1/files/F1",
-            ok_json(wire_file("100")),
+            ok_json(&wire_file("100")),
         );
         let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
@@ -686,7 +686,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/figma/v1/files/F1",
-            ok_json(wire_file("10")),
+            ok_json(&wire_file("10")),
         );
         let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
@@ -728,7 +728,7 @@ mod tests {
             transport.expect(
                 HttpMethod::Post,
                 "https://api.test/figma/v2/webhooks",
-                ok_json(serde_json::json!({"id": id})),
+                ok_json(&serde_json::json!({"id": id})),
             );
         }
         let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());

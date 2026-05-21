@@ -310,7 +310,7 @@ impl SlackConnector {
                 token,
                 &[],
             )?;
-            check_slack_ok(&resp.ok, &resp.error, "conversations.list")?;
+            check_slack_ok(resp.ok, resp.error.as_ref(), "conversations.list")?;
             channels.extend(resp.channels.into_iter().filter(|c| !c.is_archived));
             let next = resp.response_metadata.next_cursor;
             if next.is_empty() {
@@ -363,7 +363,7 @@ impl SlackConnector {
                 token,
                 &[],
             )?;
-            check_slack_ok(&resp.ok, &resp.error, "conversations.history")?;
+            check_slack_ok(resp.ok, resp.error.as_ref(), "conversations.history")?;
             for mut msg in resp.messages {
                 if msg.channel.is_empty() {
                     msg.channel = channel_id.to_string();
@@ -397,11 +397,11 @@ impl SlackConnector {
 /// rate-limited tokens). Map those onto `ConnectorError::Sync` so the
 /// runtime backs off instead of treating the parsed-JSON as a real
 /// page.
-fn check_slack_ok(ok: &bool, error: &Option<String>, endpoint: &str) -> Result<()> {
-    if *ok {
+fn check_slack_ok(ok: bool, error: Option<&String>, endpoint: &str) -> Result<()> {
+    if ok {
         return Ok(());
     }
-    let msg = error.clone().unwrap_or_else(|| "unknown_error".into());
+    let msg = error.cloned().unwrap_or_else(|| "unknown_error".into());
     // Slack's documented error code for an invalidated bearer is
     // `invalid_auth` / `not_authed` / `token_revoked`. Map those onto
     // `Auth` so the runtime triggers a re-authorisation prompt; every

@@ -693,7 +693,7 @@ mod tests {
         base_url: &str,
         q: &str,
         page_token: Option<&str>,
-        response: GoogleDriveFileList,
+        response: &GoogleDriveFileList,
     ) {
         let mut url = format!(
             "{base_url}/drive/v3/files?pageSize={}&q={}&fields={}",
@@ -708,7 +708,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             url,
-            MockResponse::ok_json(serde_json::to_vec(&response).unwrap()),
+            MockResponse::ok_json(serde_json::to_vec(response).unwrap()),
         );
     }
 
@@ -729,7 +729,7 @@ mod tests {
         transport: &MockHttpTransport,
         base_url: &str,
         page_token: &str,
-        response: GoogleDriveChangeList,
+        response: &GoogleDriveChangeList,
     ) {
         let url = format!(
             "{base_url}/drive/v3/changes?pageToken={}&pageSize={}&includeRemoved=true&fields={}",
@@ -740,7 +740,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             url,
-            MockResponse::ok_json(serde_json::to_vec(&response).unwrap()),
+            MockResponse::ok_json(serde_json::to_vec(response).unwrap()),
         );
     }
 
@@ -781,7 +781,7 @@ mod tests {
             base,
             q,
             None,
-            GoogleDriveFileList {
+            &GoogleDriveFileList {
                 files: vec![file("f1", false, now), file("f2", false, now)],
                 next_page_token: Some("page-token-2".into()),
                 new_start_page_token: None,
@@ -793,7 +793,7 @@ mod tests {
             base,
             q,
             Some("page-token-2"),
-            GoogleDriveFileList {
+            &GoogleDriveFileList {
                 files: vec![file("f3", false, now)],
                 next_page_token: None,
                 new_start_page_token: None,
@@ -827,7 +827,7 @@ mod tests {
             base,
             q,
             None,
-            GoogleDriveFileList {
+            &GoogleDriveFileList {
                 files: vec![file("f1", true, now)],
                 next_page_token: None,
                 new_start_page_token: None,
@@ -859,7 +859,7 @@ mod tests {
             base,
             q,
             None,
-            GoogleDriveFileList {
+            &GoogleDriveFileList {
                 files: vec![file("f1", false, now)],
                 next_page_token: Some("stuck".into()),
                 new_start_page_token: None,
@@ -870,7 +870,7 @@ mod tests {
             base,
             q,
             Some("stuck"),
-            GoogleDriveFileList {
+            &GoogleDriveFileList {
                 files: vec![file("f2", false, now)],
                 next_page_token: Some("stuck".into()),
                 new_start_page_token: None,
@@ -897,7 +897,7 @@ mod tests {
             &transport,
             base,
             "watermark-1",
-            GoogleDriveChangeList {
+            &GoogleDriveChangeList {
                 changes: vec![
                     GoogleDriveChange {
                         file_id: "f1".into(),
@@ -922,7 +922,7 @@ mod tests {
             &transport,
             base,
             "page-b",
-            GoogleDriveChangeList {
+            &GoogleDriveChangeList {
                 changes: vec![GoogleDriveChange {
                     file_id: "f3".into(),
                     kind: "file".into(),
@@ -966,7 +966,7 @@ mod tests {
             &transport,
             base,
             "watermark-x",
-            GoogleDriveChangeList {
+            &GoogleDriveChangeList {
                 changes: vec![],
                 next_page_token: None,
                 new_start_page_token: None,

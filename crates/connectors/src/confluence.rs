@@ -609,8 +609,8 @@ mod tests {
         }
     }
 
-    fn ok_json(value: serde_json::Value) -> MockResponse {
-        MockResponse::ok_json(serde_json::to_vec(&value).unwrap())
+    fn ok_json(value: &serde_json::Value) -> MockResponse {
+        MockResponse::ok_json(serde_json::to_vec(value).unwrap())
     }
 
     #[test]
@@ -642,7 +642,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [page("c1", 1, now)],
                 "_links": {}
             })),
@@ -665,7 +665,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [page("c1", 1, now)],
                 "_links": {
                     "next": "/wiki/api/v2/pages?cursor=abc&limit=50&sort=-modified-date"
@@ -675,7 +675,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/confluence/wiki/api/v2/pages?cursor=abc&limit=50&sort=-modified-date",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [page("c2", 2, now - Duration::minutes(5))],
                 "_links": {}
             })),
@@ -704,7 +704,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [
                     page("c-new", 2, now),
                     page("c-old", 3, now - Duration::hours(2)),
@@ -739,7 +739,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [page("c1", 1, now)],
                 "_links": {
                     "next": "/wiki/api/v2/pages?limit=50&sort=-modified-date"
@@ -786,7 +786,7 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/confluence/wiki/rest/webhooks/1.0/webhook",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "id": 4242,
                 "url": "https://demo.example/webhooks/confluence",
             })),
@@ -831,7 +831,7 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/confluence/wiki/rest/webhooks/1.0/webhook",
-            ok_json(serde_json::json!({})),
+            ok_json(&serde_json::json!({})),
         );
         let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();

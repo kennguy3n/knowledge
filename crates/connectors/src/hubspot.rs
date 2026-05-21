@@ -591,11 +591,11 @@ impl Connector for HubSpotConnector {
         token: &OAuth2Token,
         callback_url: &str,
     ) -> Result<WebhookSubscription> {
+        const SUBSCRIPTION_KINDS: &[&str] = &["creation", "propertyChange", "deletion"];
         let base_url = self.resolved_base_url(config);
         let app_id = Self::configured_app_id(config)?;
         let kinds =
             Self::configured_kinds(config).unwrap_or_else(|_| vec![HubSpotObjectKind::Contact]);
-        const SUBSCRIPTION_KINDS: &[&str] = &["creation", "propertyChange", "deletion"];
         let mut registered: Vec<String> = Vec::new();
         for object_kind in &kinds {
             for sub_kind in SUBSCRIPTION_KINDS {
@@ -717,7 +717,7 @@ mod tests {
         Arc::new(FixedOAuth)
     }
 
-    fn cfg_with(extra: serde_json::Value) -> ConnectorConfig {
+    fn cfg_with(extra: &serde_json::Value) -> ConnectorConfig {
         let mut base = serde_json::json!({
             "authorization_code": "demo-code",
             "api_base_url": "https://api.test/hubspot",
@@ -735,11 +735,11 @@ mod tests {
     }
 
     fn cfg() -> ConnectorConfig {
-        cfg_with(serde_json::Value::Object(serde_json::Map::new()))
+        cfg_with(&serde_json::Value::Object(serde_json::Map::new()))
     }
 
-    fn ok_json(value: serde_json::Value) -> MockResponse {
-        MockResponse::ok_json(serde_json::to_vec(&value).unwrap())
+    fn ok_json(value: &serde_json::Value) -> MockResponse {
+        MockResponse::ok_json(serde_json::to_vec(value).unwrap())
     }
 
     #[test]
@@ -768,7 +768,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/hubspot/crm/v3/objects/contacts?limit=100",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [{
                     "id": "101",
                     "createdAt": now,
@@ -781,7 +781,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/hubspot/crm/v3/objects/contacts?limit=100&after=next-token",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [{
                     "id": "102",
                     "createdAt": now,
@@ -811,7 +811,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/hubspot/crm/v3/objects/contacts?limit=100",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [{
                     "id": "1",
                     "createdAt": now,
@@ -822,7 +822,7 @@ mod tests {
         transport.expect(
             HttpMethod::Get,
             "https://api.test/hubspot/crm/v3/objects/companies?limit=100",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [{
                     "id": "2",
                     "createdAt": now,
@@ -834,7 +834,7 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c
             .initial_sync(
-                &cfg_with(serde_json::json!({"object_kinds": ["contacts", "companies"]})),
+                &cfg_with(&serde_json::json!({"object_kinds": ["contacts", "companies"]})),
                 &tok,
             )
             .unwrap();
@@ -858,7 +858,7 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let err = c
             .initial_sync(
-                &cfg_with(serde_json::json!({"object_kinds": ["weird_kind"]})),
+                &cfg_with(&serde_json::json!({"object_kinds": ["weird_kind"]})),
                 &tok,
             )
             .unwrap_err();
@@ -876,7 +876,7 @@ mod tests {
         transport.expect(
             HttpMethod::Post,
             "https://api.test/hubspot/crm/v3/objects/contacts/search",
-            ok_json(serde_json::json!({
+            ok_json(&serde_json::json!({
                 "results": [
                     {
                         "id": "old",
@@ -942,7 +942,7 @@ mod tests {
             transport.expect(
                 HttpMethod::Post,
                 "https://api.test/hubspot/webhooks/v3/12345/subscriptions",
-                ok_json(serde_json::json!({"id": id, "active": true})),
+                ok_json(&serde_json::json!({"id": id, "active": true})),
             );
         }
         let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
