@@ -690,27 +690,15 @@ fn exercise_slack(
             error: None,
         })),
     );
-    // Incremental sync — same channel listing, plus a fresh history
-    // page. The cursor written by initial_sync is an RFC-3339
-    // timestamp; the connector converts it to a Slack ts for the
-    // oldest parameter, so we register the call without binding to
-    // a specific oldest value (the MockHttpTransport falls back to
-    // method+url prefix match — we register one response per URL).
-    transport.expect(
-        HttpMethod::Get,
-        "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
-        ok_json(&json!({
-            "ok": true,
-            "channels": [
-                SlackChannel {
-                    id: "C-PRODUCT".into(),
-                    name: "product".into(),
-                    is_archived: false,
-                },
-            ],
-            "response_metadata": SlackResponseMetadata::default(),
-        })),
-    );
+    // Incremental sync — the cursor written by `initial_sync`
+    // carries a cached channel listing (see Slack's `SlackCursor`
+    // envelope: `channels` + `channels_listed_at`) so the connector
+    // reuses that listing instead of re-calling
+    // `conversations.list` while the cache is fresh. We therefore
+    // register ONLY the `conversations.history` expectation here —
+    // if the optimisation regresses and the connector re-lists, the
+    // mock returns 404 and the demo's assertion below catches it.
+    //
     // Build the exact `oldest` parameter the connector will send
     // by mirroring `rfc3339_to_slack_ts`. We pre-compute the most
     // recent watermark from the initial-sync messages.
