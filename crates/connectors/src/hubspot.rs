@@ -32,9 +32,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_get_json, bearer_post_json, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
-    ConnectorInstanceId, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    ConnectorInstanceId, HttpMethod, HttpRequest, HttpTransport, OAuth2CodeExchange, OAuth2Token,
+    Result, SourceDocumentId, SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -297,6 +297,47 @@ impl HubSpotConnector {
                     "hubspot subscribe_webhook: auth_config_json.app_id is required".into(),
                 )
             })
+    }
+
+    /// Best-effort cleanup of subscription POSTs that succeeded
+    /// before a later POST in `subscribe_webhook` failed.
+    ///
+    /// HubSpot's `POST /webhooks/v3/{appId}/subscriptions` registers
+    /// **one** event type per call (the API rejects multi-event
+    /// bodies), so a single `subscribe_webhook` invocation iterates
+    /// the `(objectType × subscriptionType)` matrix and issues N
+    /// independent POSTs. If any POST after the first one fails, the
+    /// caller has decided to fail the whole `subscribe_webhook` —
+    /// which means the registered ids will never be persisted via
+    /// [`WebhookSubscription::provider_subscription_id`]. Without
+    /// this rollback the orphaned subscriptions would keep firing
+    /// webhooks the substrate can't correlate.
+    ///
+    /// Cleanup is best-effort: each `DELETE
+    /// /webhooks/v3/{appId}/subscriptions/{id}` is attempted and
+    /// failures are swallowed (we already have an outer error to
+    /// surface; a secondary failure shouldn't mask it). The original
+    /// error is always preserved by the caller via `return Err(_)`
+    /// after this method returns. Mirrors the equivalent helper in
+    /// `figma.rs::rollback_partial_webhooks`.
+    fn rollback_partial_webhooks(
+        &self,
+        base_url: &str,
+        app_id: &str,
+        token: &OAuth2Token,
+        ids: &[String],
+    ) {
+        for id in ids {
+            let url = format!("{base_url}/webhooks/v3/{app_id}/subscriptions/{id}");
+            let req = HttpRequest {
+                method: HttpMethod::Delete,
+                url,
+                headers: Vec::new(),
+                body: Vec::new(),
+            }
+            .with_bearer(token.access_token.expose());
+            let _ = self.transport.execute(req);
+        }
     }
 
     fn paginate_list(
@@ -606,7 +647,7 @@ impl Connector for HubSpotConnector {
                     "active": true,
                     "propertyName": serde_json::Value::Null,
                 });
-                let resp: HubSpotSubscriptionCreateResponse = bearer_post_json(
+                let resp: HubSpotSubscriptionCreateResponse = match bearer_post_json(
                     &self.transport,
                     "hubspot",
                     "/webhooks/v3/{appId}/subscriptions",
@@ -614,12 +655,27 @@ impl Connector for HubSpotConnector {
                     token,
                     &[],
                     &body,
-                )?;
-                let id = resp.id.ok_or_else(|| {
-                    ConnectorError::Webhook(format!(
+                ) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // Partial-registration rollback: any
+                        // already-registered subscription would
+                        // otherwise orphan in the HubSpot dashboard,
+                        // continuing to deliver webhooks the
+                        // substrate can't correlate (because the ids
+                        // are about to be discarded when we return
+                        // `Err` below). Mirror the Figma pattern at
+                        // `figma.rs::rollback_partial_webhooks`.
+                        self.rollback_partial_webhooks(&base_url, &app_id, token, &registered);
+                        return Err(e);
+                    }
+                };
+                let Some(id) = resp.id else {
+                    self.rollback_partial_webhooks(&base_url, &app_id, token, &registered);
+                    return Err(ConnectorError::Webhook(format!(
                         "hubspot /webhooks/v3/{app_id}/subscriptions returned no id for {event_type}"
-                    ))
-                })?;
+                    )));
+                };
                 registered.push(id.to_string());
             }
         }
@@ -986,6 +1042,116 @@ mod tests {
             .subscribe_webhook(&cfg_no_app, &tok, "https://demo.example/webhooks/hubspot")
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    #[test]
+    fn subscribe_webhook_rolls_back_successful_registrations_on_failure() {
+        // HubSpot's `subscribe_webhook` iterates the
+        // (objectType × subscriptionType) matrix issuing one POST
+        // per pair. Single object kind (contacts) × 3 subscription
+        // kinds (creation, propertyChange, deletion) = 3 POSTs.
+        // Mock first two POSTs success (`10`, `11`), third POST
+        // returns 500. After the failure, the connector MUST issue
+        // DELETE requests for `10` and `11` before returning Err.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.test/hubspot/webhooks/v3/12345/subscriptions",
+            ok_json(&serde_json::json!({"id": 10_i64, "active": true})),
+        );
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.test/hubspot/webhooks/v3/12345/subscriptions",
+            ok_json(&serde_json::json!({"id": 11_i64, "active": true})),
+        );
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.test/hubspot/webhooks/v3/12345/subscriptions",
+            MockResponse::status(500, b"internal server error".to_vec()),
+        );
+        // Rollback DELETEs — these are the assertions we care about.
+        transport.expect(
+            HttpMethod::Delete,
+            "https://api.test/hubspot/webhooks/v3/12345/subscriptions/10",
+            MockResponse::status(204, Vec::new()),
+        );
+        transport.expect(
+            HttpMethod::Delete,
+            "https://api.test/hubspot/webhooks/v3/12345/subscriptions/11",
+            MockResponse::status(204, Vec::new()),
+        );
+
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .subscribe_webhook(&cfg(), &tok, "https://demo.example/webhooks/hubspot")
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConnectorError::Sync(_) | ConnectorError::Webhook(_) | ConnectorError::Auth(_)
+            ),
+            "subscribe_webhook must surface the upstream failure"
+        );
+        // Verify that both rollback DELETEs were actually issued.
+        let deletes: Vec<_> = transport
+            .recorded()
+            .into_iter()
+            .filter(|r| r.method == HttpMethod::Delete)
+            .collect();
+        assert_eq!(
+            deletes.len(),
+            2,
+            "must issue one DELETE per successfully-registered subscription id"
+        );
+        assert_eq!(
+            deletes[0].url,
+            "https://api.test/hubspot/webhooks/v3/12345/subscriptions/10"
+        );
+        assert_eq!(
+            deletes[1].url,
+            "https://api.test/hubspot/webhooks/v3/12345/subscriptions/11"
+        );
+    }
+
+    #[test]
+    fn subscribe_webhook_rolls_back_when_server_omits_id() {
+        // Defence-in-depth: even if a POST returns 200 with no `id`
+        // field, the connector must still tear down everything it
+        // *did* register before failing.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.test/hubspot/webhooks/v3/12345/subscriptions",
+            ok_json(&serde_json::json!({"id": 20_i64, "active": true})),
+        );
+        // Second POST: 200 OK but no `id` — connector must rollback.
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.test/hubspot/webhooks/v3/12345/subscriptions",
+            ok_json(&serde_json::json!({"active": true})),
+        );
+        transport.expect(
+            HttpMethod::Delete,
+            "https://api.test/hubspot/webhooks/v3/12345/subscriptions/20",
+            MockResponse::status(204, Vec::new()),
+        );
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .subscribe_webhook(&cfg(), &tok, "https://demo.example/webhooks/hubspot")
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Webhook(_)));
+        let deletes: Vec<_> = transport
+            .recorded()
+            .into_iter()
+            .filter(|r| r.method == HttpMethod::Delete)
+            .collect();
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(
+            deletes[0].url,
+            "https://api.test/hubspot/webhooks/v3/12345/subscriptions/20"
+        );
     }
 
     #[test]

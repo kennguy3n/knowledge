@@ -193,6 +193,26 @@ pub const MAX_LIST_PAGES: usize = 500;
 /// across multiple incremental runs.
 pub const MAX_HISTORY_PAGES_PER_CHANNEL: usize = 250;
 
+/// Cap on the number of channels we will embed in the
+/// `SyncState.cursor` envelope as a TTL-bounded cache.
+///
+/// Each cached entry is a small `{"id":"<channel-id>"}` JSON
+/// object — `~20` bytes for a typical Slack channel id. At 2,000
+/// channels that's ~40 KiB of cursor JSON which sits comfortably
+/// inside even cautious storage envelopes (PostgreSQL `text`,
+/// MySQL `MEDIUMTEXT`, SQLite `TEXT`). Workspaces above this cap
+/// fall back to re-listing every cycle (correctness wins over the
+/// optimisation) — the cap is exposed as a public constant so
+/// operators have a deterministic boundary to reason about.
+///
+/// Channels are stored as **id-only** to minimise cursor size:
+/// `incremental_sync` only consumes `channel.id` (passed as the
+/// `channel` query parameter to `conversations.history`), so the
+/// `name` / `is_archived` fields would be dead weight on the wire.
+/// The full `SlackChannel` shape is reconstructed at cache-hit
+/// time with empty placeholders for those unused fields.
+pub const MAX_CACHED_CHANNELS: usize = 2000;
+
 /// How long the channel list cached in `SyncState.cursor` is
 /// considered fresh before `incremental_sync` re-runs
 /// `conversations.list`.
@@ -232,6 +252,12 @@ pub const DEFAULT_CHANNEL_LIST_TTL_HOURS: i64 = 6;
 /// optimisation). Legacy parses populate `watermark` and leave the
 /// channel cache empty, so the next `incremental_sync` will re-list
 /// once and then start caching.
+///
+/// **Size bound:** `incremental_sync` only consumes `channel.id`,
+/// so we cache it as a thin [`CachedChannel`] struct (`{"id":"<id>"}`)
+/// — typically `~20` bytes per channel. Workspaces above
+/// [`MAX_CACHED_CHANNELS`] fall back to re-listing every cycle so
+/// the cursor never grows unbounded.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SlackCursor {
     /// Schema version. Always 1 for now — bumps would let future
@@ -248,8 +274,11 @@ struct SlackCursor {
     /// Channels we listed on a prior run, used to skip
     /// `conversations.list` while the cache is fresh. Empty on
     /// first run.
+    ///
+    /// Stored as id-only [`CachedChannel`] entries so the cursor
+    /// stays small even for workspaces near [`MAX_CACHED_CHANNELS`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    channels: Vec<SlackChannel>,
+    channels: Vec<CachedChannel>,
     /// Wall-clock time (UTC) of the most recent
     /// `conversations.list` call. Empty on first run.
     ///
@@ -258,6 +287,39 @@ struct SlackCursor {
     /// cached `channels` field or has to re-list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     channels_listed_at: Option<DateTime<Utc>>,
+}
+
+/// Cursor-only projection of [`SlackChannel`] carrying just the id.
+///
+/// `incremental_sync` only ever reads `channel.id` (passed as the
+/// `channel` query parameter to `conversations.history`), so the
+/// `name` and `is_archived` fields would be dead weight on the
+/// wire. Persisting id-only keeps the cursor JSON tight enough to
+/// fit comfortably inside conservative storage envelopes even at
+/// the [`MAX_CACHED_CHANNELS`] cap.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct CachedChannel {
+    id: String,
+}
+
+impl CachedChannel {
+    /// Project a freshly-listed [`SlackChannel`] down to its id.
+    fn from_channel(c: &SlackChannel) -> Self {
+        Self { id: c.id.clone() }
+    }
+
+    /// Reconstruct a placeholder [`SlackChannel`] from the cached
+    /// id. `name` / `is_archived` are intentionally defaulted to
+    /// empty / `false` — they're never read on the cache-hit path,
+    /// and any consumer that wants the live values must force a
+    /// re-list via [`SlackConnector::with_channel_list_ttl`].
+    fn into_channel(self) -> SlackChannel {
+        SlackChannel {
+            id: self.id,
+            name: String::new(),
+            is_archived: false,
+        }
+    }
 }
 
 fn default_cursor_version() -> u32 {
@@ -392,12 +454,14 @@ impl SlackConnector {
     /// [`DEFAULT_CHANNEL_LIST_TTL_HOURS`] for the default and the
     /// `SlackCursor` docs for the storage layout.
     ///
-    /// Negative or zero durations are clamped to a 1-second floor —
-    /// passing `Duration::zero()` would effectively disable the
-    /// cache (every run treats the listing as stale), which is
-    /// surprising; callers wanting that behaviour should pass a
-    /// negative duration explicitly via the equivalent of
-    /// `Duration::seconds(-1)`.
+    /// **Floor:** any input shorter than 1 second (including
+    /// `Duration::zero()` and any negative duration) is clamped to
+    /// 1 second. The floor exists so a misconfigured TTL can't
+    /// devolve into a busy-loop that re-runs `conversations.list`
+    /// on every wakeup; callers wanting an effectively-disabled
+    /// cache should rely on the 1-second clamp (which is
+    /// indistinguishable from "always stale" at sync-cycle
+    /// granularity).
     #[must_use]
     pub fn with_channel_list_ttl(mut self, ttl: chrono::Duration) -> Self {
         self.channel_list_ttl = ttl.max(chrono::Duration::seconds(1));
@@ -421,6 +485,34 @@ impl SlackConnector {
     /// containing object.
     pub fn channel_document_id(channel_id: &str) -> SourceDocumentId {
         SourceDocumentId::new(format!("slack:channel:{channel_id}"))
+    }
+
+    /// Project a freshly-listed channel set into the cursor cache
+    /// representation, respecting the [`MAX_CACHED_CHANNELS`]
+    /// upper bound.
+    ///
+    /// Below the cap: returns the id-only projection plus the
+    /// `Utc::now()` listed-at timestamp so the next
+    /// `incremental_sync` can short-circuit.
+    ///
+    /// At or above the cap: returns an empty `Vec` and `None` for
+    /// `listed_at` so the next run is forced to re-list. This trades
+    /// the per-cycle listing cost for a bounded cursor size — a
+    /// pragmatic choice given that workspaces with > 2k channels
+    /// already pay enough listing overhead that one extra page is
+    /// noise.
+    fn project_channel_cache(
+        channels: &[SlackChannel],
+        now: DateTime<Utc>,
+    ) -> (Vec<CachedChannel>, Option<DateTime<Utc>>) {
+        if channels.len() > MAX_CACHED_CHANNELS {
+            (Vec::new(), None)
+        } else {
+            (
+                channels.iter().map(CachedChannel::from_channel).collect(),
+                Some(now),
+            )
+        }
     }
 
     fn resolved_base_url(&self, config: &ConnectorConfig) -> String {
@@ -654,15 +746,15 @@ impl Connector for SlackConnector {
         }
         // Stamp the channel listing into the cursor so the next
         // `incremental_sync` run can skip `conversations.list` while
-        // the cache is fresh. The JSON envelope is forward-compatible:
-        // legacy callers that decode the cursor as a bare watermark
-        // string get re-served the same envelope on subsequent runs
-        // (see `SlackCursor::parse`).
+        // the cache is fresh. Workspaces above the size cap skip the
+        // cache (set `channels_listed_at = None`) so the cursor JSON
+        // stays bounded by `MAX_CACHED_CHANNELS × ~20 bytes`.
+        let (cached_channels, channels_listed_at) = Self::project_channel_cache(&channels, now);
         let cursor = SlackCursor {
             v: 1,
             watermark: watermark.map(|t| t.to_rfc3339()),
-            channels,
-            channels_listed_at: Some(now),
+            channels: cached_channels,
+            channels_listed_at,
         };
         Ok(SyncRunResult {
             events,
@@ -691,14 +783,26 @@ impl Connector for SlackConnector {
         // prior listing is within `channel_list_ttl`. Drops the
         // N+1 listing overhead for the common case of an
         // incremental run landing inside the freshness window.
-        let (channels, channels_listed_at) =
+        //
+        // The cache-hit path reconstructs a `SlackChannel` from the
+        // id-only `CachedChannel` projection (see `CachedChannel`
+        // docs) — only `channel.id` is read downstream when filling
+        // the `conversations.history` `channel` query parameter, so
+        // the placeholder `name`/`is_archived` fields are safe.
+        let (channels, cached_channels, channels_listed_at) =
             if prior_cursor.cache_is_fresh(now, self.channel_list_ttl) {
-                (
-                    prior_cursor.channels.clone(),
-                    prior_cursor.channels_listed_at,
-                )
+                let cached = prior_cursor.channels.clone();
+                let channels: Vec<SlackChannel> = prior_cursor
+                    .channels
+                    .clone()
+                    .into_iter()
+                    .map(CachedChannel::into_channel)
+                    .collect();
+                (channels, cached, prior_cursor.channels_listed_at)
             } else {
-                (self.list_channels(&base_url, token)?, Some(now))
+                let fresh = self.list_channels(&base_url, token)?;
+                let (cached, listed_at) = Self::project_channel_cache(&fresh, now);
+                (fresh, cached, listed_at)
             };
         // Convert the watermark to Slack's `<unix>.<micros>` format
         // for the `oldest` parameter — RFC-3339 input goes through
@@ -746,7 +850,7 @@ impl Connector for SlackConnector {
         let next_cursor = SlackCursor {
             v: 1,
             watermark: next_watermark,
-            channels,
+            channels: cached_channels,
             channels_listed_at,
         };
         Ok(SyncRunResult {
@@ -1534,11 +1638,7 @@ mod tests {
         let original = SlackCursor {
             v: 1,
             watermark: Some("2023-11-14T22:13:20Z".into()),
-            channels: vec![SlackChannel {
-                id: "C-A".into(),
-                name: "general".into(),
-                is_archived: false,
-            }],
+            channels: vec![CachedChannel { id: "C-A".into() }],
             channels_listed_at: Some(
                 DateTime::parse_from_rfc3339("2024-01-15T10:30:00Z")
                     .unwrap()
@@ -1609,10 +1709,8 @@ mod tests {
         let cached = SlackCursor {
             v: 1,
             watermark: Some("1700000200.000000".into()),
-            channels: vec![SlackChannel {
+            channels: vec![CachedChannel {
                 id: "C-CACHED".into(),
-                name: "cached".into(),
-                is_archived: false,
             }],
             // Listed 5 minutes ago — well within the 6-hour default TTL.
             channels_listed_at: Some(Utc::now() - Duration::minutes(5)),
@@ -1686,11 +1784,7 @@ mod tests {
         let stale = SlackCursor {
             v: 1,
             watermark: Some("1700000200.000000".into()),
-            channels: vec![SlackChannel {
-                id: "C-OLD".into(),
-                name: "stale".into(),
-                is_archived: false,
-            }],
+            channels: vec![CachedChannel { id: "C-OLD".into() }],
             // Listed 12 hours ago — well past the 6-hour default TTL.
             channels_listed_at: Some(Utc::now() - Duration::hours(12)),
         };
@@ -1761,11 +1855,7 @@ mod tests {
         let cached = SlackCursor {
             v: 1,
             watermark: Some("1700000200.000000".into()),
-            channels: vec![SlackChannel {
-                id: "C-A".into(),
-                name: "g".into(),
-                is_archived: false,
-            }],
+            channels: vec![CachedChannel { id: "C-A".into() }],
             // Listed 1 hour ago — would be cache-hit under default
             // TTL, but the 1-second floor forces a refetch.
             channels_listed_at: Some(Utc::now() - Duration::hours(1)),
@@ -1782,5 +1872,44 @@ mod tests {
         assert!(res.events.is_empty());
         // 1-second floor + 1-hour-old cache = stale → re-list.
         assert_eq!(transport.recorded().len(), 2);
+    }
+
+    #[test]
+    fn project_channel_cache_bypasses_cache_above_size_cap() {
+        // Workspaces above `MAX_CACHED_CHANNELS` must not embed
+        // a cache in the cursor — `channels_listed_at` is `None` so
+        // the next `incremental_sync` re-lists, and the embedded
+        // channel set is empty so the cursor JSON stays bounded.
+        let too_many: Vec<SlackChannel> = (0..=MAX_CACHED_CHANNELS)
+            .map(|i| SlackChannel {
+                id: format!("C-{i:05}"),
+                name: format!("ch-{i}"),
+                is_archived: false,
+            })
+            .collect();
+        let now = Utc::now();
+        let (cached, listed_at) = SlackConnector::project_channel_cache(&too_many, now);
+        assert!(
+            cached.is_empty(),
+            "above-cap workspaces must not persist channel cache (got {} entries)",
+            cached.len()
+        );
+        assert!(
+            listed_at.is_none(),
+            "above-cap workspaces must force re-list on next run"
+        );
+
+        // And at the cap exactly: still cached (cap is inclusive
+        // upper bound on persisted entries).
+        let exactly_cap: Vec<SlackChannel> = (0..MAX_CACHED_CHANNELS)
+            .map(|i| SlackChannel {
+                id: format!("C-{i:05}"),
+                name: format!("ch-{i}"),
+                is_archived: false,
+            })
+            .collect();
+        let (cached, listed_at) = SlackConnector::project_channel_cache(&exactly_cap, now);
+        assert_eq!(cached.len(), MAX_CACHED_CHANNELS);
+        assert_eq!(listed_at, Some(now));
     }
 }

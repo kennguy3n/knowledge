@@ -46,10 +46,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use connector_framework::{
-    bearer_get_json, bearer_post_json, encode_form, Connector, ConnectorConfig, ConnectorError,
-    ConnectorEvent, ConnectorInstanceId, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result,
-    SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret,
-    WebhookSubscription,
+    bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, HttpTransport, OAuth2CodeExchange,
+    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes,
+    WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -563,13 +563,21 @@ impl EmailConnector {
         let mut prev_token: Option<String> = None;
         let page_size = DEFAULT_PAGE_SIZE.to_string();
         for _ in 0..MAX_LIST_PAGES {
-            let mut params: Vec<(&str, &str)> = Vec::with_capacity(2);
-            params.push(("maxResults", page_size.as_str()));
+            // RFC 3986 §3.4 query encoding (`%20` for spaces) — see
+            // [`percent_encode_path_component`] for the rationale.
+            // `maxResults` is digits-only and `pageToken` is opaque
+            // base64url today, but we encode unconditionally so a
+            // strict gateway sitting between the substrate and
+            // Gmail can never reject the request on a `+` in the
+            // query.
+            let mut url = format!(
+                "{base}/gmail/v1/{user_path}/messages?maxResults={}",
+                percent_encode_path_component(&page_size)
+            );
             if let Some(t) = &next {
-                params.push(("pageToken", t.as_str()));
+                url.push_str("&pageToken=");
+                url.push_str(&percent_encode_path_component(t));
             }
-            let qs = encode_form(&params);
-            let url = format!("{base}/gmail/v1/{user_path}/messages?{qs}");
             let page: GmailMessagesListPage =
                 bearer_get_json(&self.transport, "gmail", "/messages", &url, token, &[])?;
             let returned = page.messages.len();
@@ -624,14 +632,17 @@ impl EmailConnector {
         let mut latest_history_id: Option<String> = None;
         let page_size = DEFAULT_PAGE_SIZE.to_string();
         for _ in 0..MAX_LIST_PAGES {
-            let mut params: Vec<(&str, &str)> = Vec::with_capacity(3);
-            params.push(("startHistoryId", start_history_id));
-            params.push(("maxResults", page_size.as_str()));
+            // RFC 3986 §3.4 query encoding (`%20` for spaces) — see
+            // `paginate_gmail_messages` for the rationale.
+            let mut url = format!(
+                "{base}/gmail/v1/{user_path}/history?startHistoryId={}&maxResults={}",
+                percent_encode_path_component(start_history_id),
+                percent_encode_path_component(&page_size)
+            );
             if let Some(t) = &next {
-                params.push(("pageToken", t.as_str()));
+                url.push_str("&pageToken=");
+                url.push_str(&percent_encode_path_component(t));
             }
-            let qs = encode_form(&params);
-            let url = format!("{base}/gmail/v1/{user_path}/history?{qs}");
             let page: GmailHistoryPage =
                 bearer_get_json(&self.transport, "gmail", "/history", &url, token, &[])?;
             let returned = page.history.len();
@@ -1165,12 +1176,15 @@ mod tests {
 
     fn gmail_list_url(page_token: Option<&str>) -> String {
         let page_size = DEFAULT_PAGE_SIZE.to_string();
-        let mut params: Vec<(&str, &str)> = vec![("maxResults", page_size.as_str())];
+        let mut url = format!(
+            "{GMAIL_BASE}/gmail/v1/users/me/messages?maxResults={}",
+            percent_encode_path_component(&page_size)
+        );
         if let Some(t) = page_token {
-            params.push(("pageToken", t));
+            url.push_str("&pageToken=");
+            url.push_str(&percent_encode_path_component(t));
         }
-        let qs = encode_form(&params);
-        format!("{GMAIL_BASE}/gmail/v1/users/me/messages?{qs}")
+        url
     }
 
     fn gmail_profile_url() -> String {
@@ -1179,15 +1193,16 @@ mod tests {
 
     fn gmail_history_url(start_history_id: &str, page_token: Option<&str>) -> String {
         let page_size = DEFAULT_PAGE_SIZE.to_string();
-        let mut params: Vec<(&str, &str)> = vec![
-            ("startHistoryId", start_history_id),
-            ("maxResults", page_size.as_str()),
-        ];
+        let mut url = format!(
+            "{GMAIL_BASE}/gmail/v1/users/me/history?startHistoryId={}&maxResults={}",
+            percent_encode_path_component(start_history_id),
+            percent_encode_path_component(&page_size)
+        );
         if let Some(t) = page_token {
-            params.push(("pageToken", t));
+            url.push_str("&pageToken=");
+            url.push_str(&percent_encode_path_component(t));
         }
-        let qs = encode_form(&params);
-        format!("{GMAIL_BASE}/gmail/v1/users/me/history?{qs}")
+        url
     }
 
     fn graph_delta_url() -> String {
