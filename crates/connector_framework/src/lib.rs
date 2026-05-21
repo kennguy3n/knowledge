@@ -48,7 +48,9 @@ pub use error::{ConnectorError, Result};
 pub use event::{ConnectorEvent, SourceDocumentId, SourceUserId};
 #[cfg(feature = "http-client")]
 pub use http::{BlockingHttpTransport, DEFAULT_HTTP_TIMEOUT_SECS};
-pub use http::{HttpMethod, HttpRequest, HttpResponse, HttpTransport, RetryPolicy};
+pub use http::{
+    HttpMethod, HttpRequest, HttpResponse, HttpTransport, RetryPolicy, DEFAULT_MAX_RETRY_AFTER,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub use http::{MockHttpTransport, MockResponse, RecordedRequest};
 #[cfg(feature = "http-client")]

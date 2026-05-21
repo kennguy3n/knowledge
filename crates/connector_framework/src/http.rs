@@ -212,6 +212,19 @@ pub trait HttpTransport: Send + Sync {
 
 // ───────────── retry policy ─────────────
 
+/// Hard ceiling on how long the transport will sleep in response to
+/// a server-provided `Retry-After` hint, irrespective of the
+/// configured exponential `max_backoff`. A misbehaving or adversarial
+/// upstream returning `Retry-After: 86400` (24h) would otherwise stall
+/// the connector runtime's blocking thread pool for a whole day.
+/// Five minutes is a generous-but-bounded compromise: long enough to
+/// respect a real rate-limit window from Slack / Notion / Atlassian
+/// (their typical `Retry-After` is single-digit seconds, occasionally
+/// up to a minute), short enough that a runaway hint won't pin a
+/// substrate thread indefinitely. Callers that need a higher ceiling
+/// can construct a policy via [`RetryPolicy::with_max_retry_after`].
+pub const DEFAULT_MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
+
 /// Retry policy for [`BlockingHttpTransport`] and any other
 /// transport that wants to reuse it. Defaults to three retries with
 /// exponential backoff starting at 250ms and doubling, capped at 5s.
@@ -224,6 +237,12 @@ pub struct RetryPolicy {
     pub initial_backoff: Duration,
     /// Cap on the per-attempt backoff (after exponential growth).
     pub max_backoff: Duration,
+    /// Cap on the per-attempt sleep when the server emits a
+    /// `Retry-After` hint. Server hints are honoured (the transport
+    /// sleeps at least this long) but bounded so a single
+    /// misbehaving upstream can't pin a substrate thread for hours.
+    /// Defaults to [`DEFAULT_MAX_RETRY_AFTER`].
+    pub max_retry_after: Duration,
 }
 
 impl Default for RetryPolicy {
@@ -232,6 +251,7 @@ impl Default for RetryPolicy {
             max_retries: 3,
             initial_backoff: Duration::from_millis(250),
             max_backoff: Duration::from_secs(5),
+            max_retry_after: DEFAULT_MAX_RETRY_AFTER,
         }
     }
 }
@@ -245,7 +265,18 @@ impl RetryPolicy {
             max_retries: 0,
             initial_backoff: Duration::ZERO,
             max_backoff: Duration::ZERO,
+            max_retry_after: Duration::ZERO,
         }
+    }
+
+    /// Override the [`Self::max_retry_after`] ceiling, returning the
+    /// updated policy. Useful for tests and for the rare connector
+    /// whose provider documentation specifies multi-minute rate-limit
+    /// windows (e.g. Atlassian's per-app limit).
+    #[must_use]
+    pub fn with_max_retry_after(mut self, cap: Duration) -> Self {
+        self.max_retry_after = cap;
+        self
     }
 
     /// Compute the backoff for `attempt` (1-indexed: `attempt == 1`
@@ -253,7 +284,10 @@ impl RetryPolicy {
     /// Honours an optional server-provided `retry_after` hint —
     /// the larger of the exponential value and the hint wins so
     /// the substrate respects rate-limit windows without going
-    /// below its own minimum.
+    /// below its own minimum, but the hint is bounded above by
+    /// [`Self::max_retry_after`] so a misbehaving server returning
+    /// `Retry-After: 86400` cannot stall a substrate thread for
+    /// hours.
     #[must_use]
     pub fn backoff(&self, attempt: u32, retry_after: Option<Duration>) -> Duration {
         let exp = self
@@ -261,7 +295,14 @@ impl RetryPolicy {
             .saturating_mul(2u32.saturating_pow(attempt.saturating_sub(1)));
         let exp = exp.min(self.max_backoff);
         match retry_after {
-            Some(server) => server.max(exp),
+            Some(server) => {
+                // Honour the hint but clamp to `max_retry_after` so a
+                // pathological upstream value can't blow past our
+                // ceiling. The `.max(exp)` floor still applies — we
+                // never sleep less than the local exponential value.
+                let bounded = server.min(self.max_retry_after);
+                bounded.max(exp)
+            }
             None => exp,
         }
     }
@@ -632,6 +673,7 @@ mod tests {
             max_retries: 3,
             initial_backoff: Duration::from_millis(100),
             max_backoff: Duration::from_secs(10),
+            max_retry_after: DEFAULT_MAX_RETRY_AFTER,
         };
         assert_eq!(p.backoff(1, None), Duration::from_millis(100));
         assert_eq!(p.backoff(2, None), Duration::from_millis(200));
@@ -644,6 +686,7 @@ mod tests {
             max_retries: 10,
             initial_backoff: Duration::from_secs(1),
             max_backoff: Duration::from_secs(3),
+            max_retry_after: DEFAULT_MAX_RETRY_AFTER,
         };
         // 1s, 2s, 4s -> capped at 3s, then sticks.
         assert_eq!(p.backoff(1, None), Duration::from_secs(1));
@@ -663,6 +706,34 @@ mod tests {
         // Server says "wait 1ms" — our exponential floor still wins.
         let exp = p.backoff(2, None);
         assert!(p.backoff(2, Some(Duration::from_millis(1))) >= exp);
+    }
+
+    /// Regression: a pathological `Retry-After` value (24 hours) must
+    /// be clamped at [`DEFAULT_MAX_RETRY_AFTER`] (5 minutes) so a
+    /// misbehaving upstream cannot pin a substrate blocking thread
+    /// for arbitrarily long.
+    #[test]
+    fn retry_policy_caps_pathological_retry_after_hint() {
+        let p = RetryPolicy::default();
+        let pathological = Duration::from_secs(86_400); // 24 hours
+        let observed = p.backoff(1, Some(pathological));
+        assert_eq!(
+            observed, DEFAULT_MAX_RETRY_AFTER,
+            "Retry-After hint must be clamped to DEFAULT_MAX_RETRY_AFTER"
+        );
+    }
+
+    /// A caller that has a documented multi-minute rate-limit window
+    /// can raise the cap via [`RetryPolicy::with_max_retry_after`].
+    #[test]
+    fn retry_policy_with_max_retry_after_raises_cap() {
+        let p = RetryPolicy::default().with_max_retry_after(Duration::from_secs(900));
+        let server_hint = Duration::from_secs(600);
+        // Server hint < cap → server hint wins (still respected).
+        assert_eq!(p.backoff(1, Some(server_hint)), server_hint);
+        // Server hint > cap → clamped to cap.
+        let too_long = Duration::from_secs(3_600);
+        assert_eq!(p.backoff(1, Some(too_long)), Duration::from_secs(900));
     }
 
     #[test]

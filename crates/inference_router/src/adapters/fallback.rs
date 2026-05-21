@@ -542,17 +542,19 @@ const DEADLINE_LEXICON: &[&str] = &[
 /// Returns the JSON shape demanded by [`crate::task::GRAMMAR_PROMOTE_OBSERVATION`].
 fn promote_observation(body: &str) -> String {
     let lower = body.to_ascii_lowercase();
+    // `lexicon_count` works correctly on multi-word phrases too:
+    // the boundary check looks at the byte immediately before the
+    // match and immediately after it, so a phrase like `"assigned
+    // to"` matches in `"this is assigned to alice"` but NOT in
+    // `"reassigned to alice"` (where the preceding `e` from `re`
+    // makes the start-boundary fail). Using the word-boundary scan
+    // for all three lexicons removes the false positives a plain
+    // `contains()` would produce (e.g. `"reassigned to"` matching
+    // `"assigned to"`, or `"goodwill own"` matching `"will own"`
+    // inside the task lexicon).
     let decision_hits = lexicon_count(&lower, DECISION_LEXICON);
-    // The task / deadline lexicons contain spaces, so the
-    // word-boundary `lexicon_count` doesn't work cleanly — fall back
-    // to a plain substring scan for those (substring is correct here
-    // because every entry already starts at a word boundary in
-    // English).
-    let task_hits = TASK_LEXICON.iter().filter(|p| lower.contains(*p)).count();
-    let deadline_hits = DEADLINE_LEXICON
-        .iter()
-        .filter(|p| lower.contains(*p))
-        .count();
+    let task_hits = lexicon_count(&lower, TASK_LEXICON);
+    let deadline_hits = lexicon_count(&lower, DEADLINE_LEXICON);
 
     let promote = decision_hits > 0 || task_hits > 0 || deadline_hits > 0;
     let reason = match (decision_hits > 0, task_hits > 0, deadline_hits > 0) {
@@ -708,6 +710,39 @@ mod tests {
         let prompt = "Stuff\n\nObservation:\nlol thanks";
         let out = adapter.generate("promote_observation", prompt, "").unwrap();
         assert!(out.contains("\"promote\":false"), "got {out}");
+    }
+
+    /// Regression: a plain `contains()` scan on the task lexicon
+    /// would match `"assigned to"` inside `"reassigned to alice"`,
+    /// promoting the observation incorrectly. The word-boundary
+    /// `lexicon_count` rejects that match because the byte before
+    /// `"assigned"` is `e` (still alphanumeric), so the start
+    /// boundary fails and the count stays at zero.
+    #[test]
+    fn fallback_promote_rejects_substring_false_positive_on_task_lexicon() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nObservation:\nThis ticket was reassigned to alice yesterday";
+        let out = adapter.generate("promote_observation", prompt, "").unwrap();
+        assert!(
+            out.contains("\"promote\":false"),
+            "expected false promotion for substring-only task match, got {out}"
+        );
+    }
+
+    /// Regression: the word-boundary check must also fire on the
+    /// *trailing* edge — `"action item"` inside `"action items
+    /// list"` should still match (boundary at the start of `"action"`
+    /// and a space after `"item"` makes both ends OK), proving the
+    /// fix didn't regress the legitimate-match path.
+    #[test]
+    fn fallback_promote_still_fires_on_word_bounded_task_phrase() {
+        let adapter = FallbackAdapter::new();
+        let prompt = "Stuff\n\nObservation:\nHere's the action item: @bob owns the rollout";
+        let out = adapter.generate("promote_observation", prompt, "").unwrap();
+        assert!(
+            out.contains("\"promote\":true"),
+            "expected true promotion for word-bounded task match, got {out}"
+        );
     }
 
     #[test]
