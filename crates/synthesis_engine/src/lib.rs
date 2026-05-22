@@ -22,9 +22,22 @@
 //! [`synthesis_pipeline::TenantSynthesisInput`] arguments and refuse
 //! to operate on raw evidence rows or cross-scope objects.
 //!
-//! Ships a [`ManagedEndpointSynthesizer`] stub that deterministically
-//! concatenates the input payloads. The real managed-AI endpoint
-//! adapter lands when the SLM gateway is wired through.
+//! Ships two implementations of the [`SynthesisEngine`] trait:
+//!
+//! * [`ManagedEndpointSynthesizer`] (in the `stub` module) — a
+//!   deterministic test scaffold that concatenates the input
+//!   payloads with a hierarchy-tier prefix. Used by end-to-end
+//!   tests and the demo binary to pin contract behaviour without
+//!   issuing real network calls. The `stub` name is descriptive,
+//!   not aspirational — a deterministic concatenator is exactly
+//!   what those tests need.
+//! * [`HttpManagedEndpointSynthesizer`] (in the `managed_endpoint`
+//!   module) — the production synthesizer. POSTs the serialised
+//!   channel- / domain-input payloads to a managed AI endpoint
+//!   over the framework's `HttpClient`, parses the response, and
+//!   emits the corresponding `SynthesisObject`. This is what
+//!   [`TeeWorker::synthesize_domain`] / [`TeeWorker::synthesize_tenant`]
+//!   dispatch through.
 
 #![deny(missing_docs)]
 

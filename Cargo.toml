@@ -176,6 +176,23 @@ unsafe_code = "deny"
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+# Safety-relevant numeric-conversion lints: promote from the
+# default pedantic-warn to an explicit `deny` so the policy is
+# declarative in this file (rather than only enforced indirectly
+# via CI's `-D warnings` flag). Cast sites that legitimately need
+# the lossy / sign-discarding behaviour opt in locally with a
+# `#[allow(clippy::cast_…)]` attribute next to the cast,
+# justifying the bound in a comment — see e.g.
+# `crates/audit_service/src/persist.rs:393` (clamped `u64 -> i64`
+# for SQLite row IDs) and `crates/demo/src/phases/crypto.rs`
+# (deterministic test vectors where the cast cannot truncate by
+# construction). `float_cmp` is already covered by the
+# `clippy::all = deny` line above; restating it here keeps the
+# safety-lint policy visible in one block.
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+cast_possible_wrap = "deny"
+float_cmp = "deny"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"

@@ -27,8 +27,13 @@ every call.
   on-device inference router. The same substrate serves both
   surfaces over the same memory model.
 - **What it isn't.** Not a chat-with-your-files product, not a
-  vector database with a UI on top, not a production release.
-  It is a substrate for surfaces, not a surface itself.
+  vector database with a UI on top, and not a host surface. The
+  API is pre-1.0 — the wire shape may shift before the first
+  tagged release — but the internals are production-grade:
+  real SQLCipher storage, real per-scope DEK forgetting, real
+  HTTP transport for connectors, real on-device inference
+  dispatch, real metrics + health envelope. This is a substrate
+  for surfaces, not a surface itself.
 
 ---
 
@@ -205,24 +210,24 @@ targets explicitly, e.g.
 The call is idempotent: a second invocation is a no-op so the
 host can install at startup without guarding against re-init.
 
-### Connectors and server-side surface — contract-only
+### Connectors and server-side surface
 
 The nine connectors (Google Drive, OneDrive, Notion, Jira,
-Confluence, Figma, HubSpot, Slack, Email) are fixture parsers
-implementing the substrate's `Connector` trait.
+Confluence, Figma, HubSpot, Slack, Email) all run over the
+shared `HttpTransport` machinery in `connector_framework` —
+`BlockingHttpTransport` (reqwest, behind the `http-client`
+feature) with exponential backoff, `Retry-After` parsing, and
+configurable per-request timeout. OAuth2 flows go through
+the real `OAuth2Client` / `ConfiguredRefresher`
+(`authorization_code` + `refresh_token` grants against any
+RFC-6749 token endpoint). Unit tests inject the framework's
+`MockHttpTransport` so the connector's request shape and
+response parsing are exercised end-to-end without crossing the
+network. Webhook subscription registration and incremental
+delta sync use the same transport ladder.
 
-`connector_framework` exposes the production HTTP transport
-machinery — `HttpTransport` / `BlockingHttpTransport` (reqwest,
-behind the `http-client` feature) with retries, backoff, and
-`Retry-After` parsing — plus a real `OAuth2CodeExchange` /
-`TokenRefresher` (`OAuth2Client` / `ConfiguredRefresher`)
-that drives `authorization_code` and `refresh_token` grants
-against any RFC-6749 token endpoint. The nine fixture connectors
-themselves have not yet been refactored to use this transport;
-that is the next chunk of the production-hardening effort.
-Webhook subscription registration and incremental delta sync
-remain fixture-driven. The server-side synthesis service is a
-Rust skeleton in this repository; the Go gateway lives outside.
+The server-side synthesis service is a Rust skeleton in this
+repository; the Go gateway lives outside.
 
 ---
 

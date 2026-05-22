@@ -367,6 +367,33 @@ jobs:
           restore-keys: ${{ runner.os }}-test-all-
       - run: cargo test --all --all-features
 
+  test-http-client-isolated:
+    name: test (http-client feature, isolated)
+    runs-on: ubuntu-latest
+    # Phase 10e: exercise the `http-client` feature on the two
+    # network-aware crates *without* the rest of `--all-features`.
+    # Catches the class of bug where `connector_framework` /
+    # `inference_router` compile only because some OTHER feature
+    # (e.g. `tracing-subscriber`, `async-http-client`) is also
+    # enabled — the all-features job would miss that. Running each
+    # crate's `--features http-client` in isolation pins the
+    # feature-flag boundary cleanly.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-test-http-client-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-test-http-client-
+      - name: connector_framework — http-client only
+        run: cargo test -p connector_framework --no-default-features --features http-client
+      - name: inference_router — http-client only
+        run: cargo test -p inference_router --no-default-features --features http-client
+
   msrv:
     name: MSRV (1.85.0)
     runs-on: ubuntu-latest
