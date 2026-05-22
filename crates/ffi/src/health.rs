@@ -249,7 +249,11 @@ fn evidence_store_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth 
 /// the runtime cannot derive a usable sub-key.
 fn crypto_subsystem(rt: &crate::runtime::FfiRuntime, tombstones: u64) -> SubsystemHealth {
     let mk = rt.master_key();
-    let cached_deks = rt.store().cached_scope_keys().len();
+    // Use the count-only accessor — `cached_scope_keys()` would
+    // clone the full `HashMap<ScopeId, AeadKey>` just to call
+    // `.len()`, which is O(N · key-bytes) per probe. The probe runs
+    // on every health-check, so the saving is meaningful.
+    let cached_deks = rt.store().cached_scope_key_count();
     if mk.iter().all(|b| *b == 0) {
         SubsystemHealth {
             name: "crypto".into(),

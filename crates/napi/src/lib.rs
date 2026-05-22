@@ -346,11 +346,32 @@ pub fn core_version() -> String {
 ///   [`inference_router::InferenceRouter::adapter_states`].
 ///
 /// Returns a [`ffi::HealthStatus`] which the napi binding wraps as
-/// a `serde_json::Value` for the JS side. No `Result`: probing
-/// failures are reported as `Degraded` / `Unavailable` subsystem
-/// entries, not propagated as errors — the envelope must always be
-/// returnable so hosts have a single inspectable surface for the
-/// runtime's liveness.
+/// a `serde_json::Value` for the JS side.
+///
+/// # Why this is `NapiResult<…>` and not `HealthStatus`
+///
+/// The function's signature is `NapiResult<ffi::HealthStatus>`
+/// because the `handle` argument has to be validated before any
+/// probing can begin:
+///
+/// * **Bridge-only probe** — `handle = None` (or the `0n` sentinel)
+///   skips the per-subsystem probes entirely and returns a
+///   `HealthStatus` with just the `bridge` subsystem populated.
+///   Always succeeds.
+/// * **Full probe** — `handle = Some(h)` for a known-live handle
+///   runs every subsystem probe and returns `Ok(HealthStatus)`
+///   regardless of probe outcome: subsystem-level failures degrade
+///   to `Degraded` / `Unavailable` entries inside the envelope, not
+///   to a transport-level `Err`. The envelope must remain
+///   returnable so hosts have a single inspectable surface for the
+///   runtime's liveness.
+/// * **Invalid handle** — `handle = Some(h)` for an unknown /
+///   already-closed handle is the only path that surfaces as
+///   `Err(NapiError::Ffi(FfiError::Unavailable { subsystem: "evidence_store" }))`.
+///   This is intentional: hosts can distinguish "addon loaded but
+///   runtime is closed / never opened" from "subsystem reports
+///   degraded health" by inspecting whether the call returned an
+///   `Err` or an `Ok` envelope with a `Degraded` entry.
 pub fn health_check(handle: Option<NapiHandle>) -> NapiResult<ffi::HealthStatus> {
     // Treat the `NapiHandle::NONE` sentinel (`0n`) as "no handle"
     // so callers can pass `0n` interchangeably with `null`/`undefined`

@@ -197,7 +197,9 @@ test('findVersionInSection survives a `#`-containing string before the version l
 });
 
 test('every documented function is exported with camelCase name', () => {
-  const expected = [
+  // The unconditional surface — every entry point that ships in
+  // every build configuration of the addon.
+  const required = [
     'closeStore',
     'coreVersion',
     'decrypt',
@@ -220,8 +222,24 @@ test('every documented function is exported with camelCase name', () => {
     'triggerSynthesis',
     'unpin',
   ];
-  const got = Object.keys(core).filter((k) => typeof core[k] === 'function').sort();
-  assert.deepStrictEqual(got, expected);
+  // Feature-gated entry points that MAY or MAY NOT be present
+  // depending on which Cargo features the addon was built with.
+  // Each entry is the name of one `#[napi]`-exported function whose
+  // `#[cfg(feature = "...")]` gate omits it from default builds.
+  // Asserting on the unconditional `required` set and filtering
+  // these out of `got` keeps the smoke test green for both
+  // `napi build` (default features — no extras) and
+  // `napi build --features tracing-subscriber` (`initTracing`
+  // present). When a future feature gates a new entry point, add
+  // its camel-case export name here.
+  const optional = new Set([
+    'initTracing', // gated by the `tracing-subscriber` Cargo feature
+  ]);
+  const got = Object.keys(core)
+    .filter((k) => typeof core[k] === 'function')
+    .filter((k) => !optional.has(k))
+    .sort();
+  assert.deepStrictEqual(got, required);
 });
 
 test('coreVersion() matches the workspace Cargo.toml version', () => {

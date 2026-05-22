@@ -106,28 +106,37 @@ static INSTALLED: OnceLock<()> = OnceLock::new();
 /// dispatcher will pick up whichever subscriber is installed
 /// first.
 pub fn try_init_tracing(directive: &str) -> FfiResult<()> {
-    if INSTALLED.get().is_some() {
-        return Ok(());
-    }
+    // Wire through the same metrics::instrument pattern every other
+    // public FFI entry point uses: increments `init_tracing_total`
+    // before the body runs, and routes the `Err` path through
+    // `inc_error` so a malformed directive shows up in
+    // `errors_by_kind.invalid_id`. This satisfies the
+    // CONTRIBUTING.md rule that requires every new public FFI entry
+    // point be wired into the observability layer.
+    metrics::instrument(metrics::inc_init_tracing, || {
+        if INSTALLED.get().is_some() {
+            return Ok(());
+        }
 
-    let filter = EnvFilter::try_new(directive).map_err(|e| FfiError::InvalidId {
-        message: format!("invalid tracing directive `{directive}`: {e}"),
-    })?;
+        let filter = EnvFilter::try_new(directive).map_err(|e| FfiError::InvalidId {
+            message: format!("invalid tracing directive `{directive}`: {e}"),
+        })?;
 
-    // `try_init` returns `Err` if a global default has already been
-    // set by some other code path. That is the substrate's
-    // "another subscriber wins" outcome — we treat it as success
-    // (the host has tracing wired, even if it isn't ours) and
-    // still flip the flag so the health envelope reports tracing
-    // as initialised.
-    let layer = tracing_subscriber::fmt::layer().with_ansi(false);
-    let registry = tracing_subscriber::registry().with(layer).with(filter);
-    let _ = registry.try_init();
+        // `try_init` returns `Err` if a global default has already
+        // been set by some other code path. That is the substrate's
+        // "another subscriber wins" outcome — we treat it as success
+        // (the host has tracing wired, even if it isn't ours) and
+        // still flip the flag so the health envelope reports tracing
+        // as initialised.
+        let layer = tracing_subscriber::fmt::layer().with_ansi(false);
+        let registry = tracing_subscriber::registry().with(layer).with(filter);
+        let _ = registry.try_init();
 
-    // Latch — every subsequent `try_init_tracing` is a no-op.
-    let _ = INSTALLED.set(());
-    metrics::mark_tracing_initialized();
-    Ok(())
+        // Latch — every subsequent `try_init_tracing` is a no-op.
+        let _ = INSTALLED.set(());
+        metrics::mark_tracing_initialized();
+        Ok(())
+    })
 }
 
 #[cfg(test)]

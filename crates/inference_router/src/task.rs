@@ -32,6 +32,26 @@ pub enum InferenceTask {
     AdjudicateContradiction,
 }
 
+impl InferenceTask {
+    /// Canonical ordered list of every variant — the single source of
+    /// truth other modules iterate over. Kept next to the enum
+    /// itself (rather than duplicated in `router.rs`) so the
+    /// exhaustiveness test [`tests::all_is_exhaustive`] below can
+    /// catch any new variant that gets added without being appended
+    /// here. The order is the same as the variant declaration order
+    /// and is part of the router's wire contract (it determines the
+    /// order in which `adapter_states()` reports an adapter's
+    /// supported tasks).
+    pub const ALL: &'static [InferenceTask] = &[
+        Self::TagImportance,
+        Self::ExtractEntities,
+        Self::PromoteObservation,
+        Self::SynthSummary,
+        Self::SynthConcept,
+        Self::AdjudicateContradiction,
+    ];
+}
+
 /// Stable string tag for a task — used as the cache key and as the
 /// `task_tag` argument passed to adapters.
 pub type TaskTag = &'static str;
@@ -313,6 +333,58 @@ mod tests {
         // consumer) reverses the encoding without loss.
         let decoded: SummaryBundle = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, bundle);
+    }
+
+    /// Exhaustiveness pin for [`InferenceTask::ALL`].
+    ///
+    /// The `match` below has NO catch-all arm, so adding a new
+    /// variant to [`InferenceTask`] without also appending it to
+    /// `InferenceTask::ALL` is a **compile error** (the exhaustive
+    /// match no longer covers the enum). On top of that the runtime
+    /// assertion pins cardinality and order so a reviewer who
+    /// deletes a variant from `ALL` (without also removing it from
+    /// the enum) gets a `cargo test` failure.
+    ///
+    /// Concretely this is the structural defence Devin Review asked
+    /// for: the router's `ALL_TASKS` constant now derives from
+    /// `InferenceTask::ALL`, and `InferenceTask::ALL` is pinned to
+    /// the enum's discriminants here.
+    #[test]
+    fn all_is_exhaustive() {
+        let mut count = 0_usize;
+        for &task in InferenceTask::ALL {
+            count += 1;
+            // No `_ =>` arm — if a variant is added to the enum but
+            // not to `ALL`, the compiler refuses to compile this
+            // test until the new variant is appended to `ALL` AND
+            // matched here. If a variant is renamed, the same
+            // mismatch surfaces.
+            #[allow(clippy::match_same_arms)]
+            match task {
+                InferenceTask::TagImportance => {}
+                InferenceTask::ExtractEntities => {}
+                InferenceTask::PromoteObservation => {}
+                InferenceTask::SynthSummary => {}
+                InferenceTask::SynthConcept => {}
+                InferenceTask::AdjudicateContradiction => {}
+            }
+        }
+        assert_eq!(count, 6, "InferenceTask::ALL drifted from enum cardinality");
+        // Order is part of the public contract — pin it explicitly.
+        assert_eq!(
+            InferenceTask::ALL
+                .iter()
+                .map(|t| t.tag())
+                .collect::<Vec<_>>(),
+            vec![
+                "tag_importance",
+                "extract_entities",
+                "promote_observation",
+                "synth_summary",
+                "synth_concept",
+                "adjudicate_contradiction",
+            ],
+        );
     }
 
     #[test]

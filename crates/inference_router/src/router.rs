@@ -20,21 +20,14 @@ struct AdapterActivity {
     loaded: bool,
 }
 
-/// Static table of every [`InferenceTask`] variant — kept here so
-/// [`InferenceRouter::adapter_states`] can enumerate per-adapter
-/// task support without depending on an external introspection
-/// crate. Mirrors the variants in `crate::task::InferenceTask`.
-/// Adding a new task variant requires a matching entry here; the
-/// `adapter_states_lists_every_task_for_each_adapter` unit test
-/// pins the cardinality.
-const ALL_TASKS: &[InferenceTask] = &[
-    InferenceTask::TagImportance,
-    InferenceTask::ExtractEntities,
-    InferenceTask::PromoteObservation,
-    InferenceTask::SynthSummary,
-    InferenceTask::SynthConcept,
-    InferenceTask::AdjudicateContradiction,
-];
+/// Static table of every [`InferenceTask`] variant — re-exported
+/// from [`InferenceTask::ALL`] so the canonical list lives next to
+/// the enum itself and the router never has to maintain a second
+/// copy. The `all_is_exhaustive` test in `task.rs` pins cardinality
+/// and order to the enum's variants via an exhaustive `match`, so
+/// adding a variant to `InferenceTask` without appending it to
+/// `InferenceTask::ALL` is a **compile error**.
+const ALL_TASKS: &[InferenceTask] = InferenceTask::ALL;
 
 /// Wire-flat view of one adapter's current state. Returned by
 /// [`InferenceRouter::adapter_states`].

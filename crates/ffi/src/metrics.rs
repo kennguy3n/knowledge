@@ -8,6 +8,22 @@
 //! through every call site, and so `[snapshot]` can return a stable
 //! view at any moment.
 //!
+//! # Counter semantics — "calls initiated", not "calls completed"
+//!
+//! [`instrument`] increments the per-function call counter BEFORE
+//! running the body closure. This is deliberate: it means every
+//! counter reads as "calls initiated" rather than "calls completed".
+//! A call that panics out of the closure (uncaught — exceptional)
+//! still increments the counter; the per-kind error counter is
+//! incremented on the `Err` path via [`Result::inspect_err`], so a
+//! call that completes with `Err` shows up in BOTH
+//! `<name>_total` and `errors_by_kind.<kind>`. A successful call
+//! shows up only in `<name>_total`; subtracting `errors_by_kind`
+//! per-FFI-function isn't possible because errors aren't tagged by
+//! origin function. This is by design — the per-kind error counters
+//! are a separate axis ("what's failing across the substrate") from
+//! the per-function call counters ("what's the substrate doing").
+//!
 //! # Design
 //!
 //! * **Lock-free on the hot path.** Every counter is an
@@ -64,6 +80,14 @@ pub(crate) struct Metrics {
     pub(crate) encrypt_total: AtomicU64,
     pub(crate) decrypt_total: AtomicU64,
     pub(crate) generate_keypair_total: AtomicU64,
+    /// Total `try_init_tracing` calls (counted whether the underlying
+    /// `tracing-subscriber` feature is compiled in or not — the
+    /// counter exists in [`Metrics`] unconditionally so the wire
+    /// shape of [`MetricsSnapshot`] does not vary by feature flag).
+    /// On non-feature builds the counter stays at `0` because the
+    /// only call site is in the feature-gated `tracing_init`
+    /// module.
+    pub(crate) init_tracing_total: AtomicU64,
 
     // Per-kind error counters. The set mirrors `FfiError::kind`
     // exactly so adding a new error variant is a compile error
@@ -159,6 +183,13 @@ counter_inc!(pub(crate) fn inc_close_store => close_store_total);
 counter_inc!(pub(crate) fn inc_encrypt => encrypt_total);
 counter_inc!(pub(crate) fn inc_decrypt => decrypt_total);
 counter_inc!(pub(crate) fn inc_generate_keypair => generate_keypair_total);
+// Feature-gated to match the only call site
+// (`crate::tracing_init::try_init_tracing`). The counter *field*
+// in `MetricsSnapshot` stays unconditional so the wire shape does
+// not drift across feature flags; the helper that increments it
+// only exists when there is something that could call it.
+#[cfg(feature = "tracing-subscriber")]
+counter_inc!(pub(crate) fn inc_init_tracing => init_tracing_total);
 
 /// Increment the error counter that matches `err.kind()`, and the
 /// `errors_total` summary. Called from the error-mapping shims in
@@ -213,42 +244,50 @@ pub(crate) fn set_tombstone_count(n: u64) {
 /// additive.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MetricsSnapshot {
-    /// Total `open_store` calls completed.
+    /// Total `open_store` calls initiated. See the module docs for
+    /// why the counter reads as "initiated" and not "completed".
     pub open_store_total: u64,
-    /// Total `close_store` calls completed.
+    /// Total `close_store` calls initiated.
     pub close_store_total: u64,
-    /// Total `ingest_message` calls.
+    /// Total `ingest_message` calls initiated.
     pub ingest_total: u64,
-    /// Total `query` calls.
+    /// Total `query` calls initiated.
     pub query_total: u64,
-    /// Total `get_evidence` calls.
+    /// Total `get_evidence` calls initiated.
     pub get_evidence_total: u64,
-    /// Total `get_user_memory` calls.
+    /// Total `get_user_memory` calls initiated.
     pub get_user_memory_total: u64,
-    /// Total `get_channel_memory` calls.
+    /// Total `get_channel_memory` calls initiated.
     pub get_channel_memory_total: u64,
-    /// Total `list_memories` calls.
+    /// Total `list_memories` calls initiated.
     pub list_memories_total: u64,
-    /// Total `pin` calls.
+    /// Total `pin` calls initiated.
     pub pin_total: u64,
-    /// Total `unpin` calls.
+    /// Total `unpin` calls initiated.
     pub unpin_total: u64,
-    /// Total `trigger_synthesis` calls (counted before the actual
-    /// dispatch, so this includes `InferenceFailure` and
+    /// Total `trigger_synthesis` calls initiated (counted before the
+    /// actual dispatch, so this includes `InferenceFailure` and
     /// `Unavailable` returns).
     pub synthesis_triggered_total: u64,
-    /// Total `run_decay_sweep` calls.
+    /// Total `run_decay_sweep` calls initiated.
     pub decay_sweeps_total: u64,
-    /// Total `forget` calls.
+    /// Total `forget` calls initiated.
     pub forgets_total: u64,
-    /// Total `forget_scope` calls.
+    /// Total `forget_scope` calls initiated.
     pub forget_scopes_total: u64,
-    /// Total `encrypt` calls.
+    /// Total `encrypt` calls initiated.
     pub encrypt_total: u64,
-    /// Total `decrypt` calls.
+    /// Total `decrypt` calls initiated.
     pub decrypt_total: u64,
-    /// Total `generate_keypair` calls.
+    /// Total `generate_keypair` calls initiated.
     pub generate_keypair_total: u64,
+    /// Total `try_init_tracing` calls initiated. Always present in
+    /// the snapshot — when the `tracing-subscriber` feature is off,
+    /// the substrate exposes no entry point that touches this
+    /// counter so it stays at `0`. The field stays in the snapshot
+    /// shape unconditionally to keep the wire contract stable
+    /// across features.
+    pub init_tracing_total: u64,
     /// Per-kind error counter snapshot.
     pub errors_by_kind: ErrorCounters,
     /// Total errors across all kinds (sum of `errors_by_kind`'s
@@ -313,6 +352,7 @@ pub fn snapshot() -> MetricsSnapshot {
         encrypt_total: m.encrypt_total.load(Ordering::Relaxed),
         decrypt_total: m.decrypt_total.load(Ordering::Relaxed),
         generate_keypair_total: m.generate_keypair_total.load(Ordering::Relaxed),
+        init_tracing_total: m.init_tracing_total.load(Ordering::Relaxed),
         errors_by_kind: ErrorCounters {
             unimplemented: m.errors_unimplemented.load(Ordering::Relaxed),
             invalid_id: m.errors_invalid_id.load(Ordering::Relaxed),

@@ -405,7 +405,12 @@ pub fn js_health_check(handle: Option<BigInt>) -> Result<serde_json::Value> {
 #[cfg(feature = "tracing-subscriber")]
 #[napi(js_name = "initTracing")]
 pub fn js_init_tracing(directive: String) -> Result<()> {
-    crate::try_init_tracing(&directive).map_err(to_js_error)
+    // `crate::try_init_tracing` is the re-export of `ffi::try_init_tracing`
+    // so its error type is `FfiError`. Funnel it through the napi error
+    // mapper via the `From<FfiError> for NapiError` impl so callers see the
+    // same `kind`/`message`/`detail` JSON envelope every other entry point
+    // produces.
+    crate::try_init_tracing(&directive).map_err(|e| to_js_error(crate::NapiError::from(e)))
 }
 
 #[cfg(test)]
