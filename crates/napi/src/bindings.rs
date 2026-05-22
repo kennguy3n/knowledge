@@ -363,14 +363,54 @@ pub fn js_core_version() -> String {
     crate::core_version()
 }
 
-/// Lightweight "is the bridge alive?" probe. Mirrors
-/// [`crate::health_check`]. Returns the string `"ok"` synchronously
-/// without touching any subsystems. Phase 6 will replace this with a
-/// full `HealthStatus` envelope sourced from the substrate's metrics
-/// + tracing layer.
+/// Full health envelope. Mirrors [`crate::health_check`].
+///
+/// `handle` is optional:
+/// * pass `0n` (or omit it via the TypeScript optional parameter)
+///   to get a bridge-only envelope — useful immediately after
+///   loading the addon, before any [`js_open_store`] call.
+/// * pass a [`BigInt`] returned by [`js_open_store`] to get a full
+///   probe (`bridge` + `evidence_store` + `crypto` + `memory_manager`
+///   + `inference_router` subsystems, with real per-subsystem I/O).
+///
+/// Returns the [`ffi::HealthStatus`] envelope serialised to JSON.
+/// JS hosts get a typed object via napi's `serde_json::Value`
+/// transparent passthrough; the shape is documented in
+/// `crates/napi/index.d.ts`.
 #[napi(js_name = "healthCheck")]
-pub fn js_health_check() -> String {
-    crate::health_check()
+pub fn js_health_check(handle: Option<BigInt>) -> Result<serde_json::Value> {
+    let h = match handle.as_ref() {
+        Some(bi) => Some(handle_from_bigint(bi)?),
+        None => None,
+    };
+    let envelope = crate::health_check(h).map_err(to_js_error)?;
+    serde_json::to_value(envelope).map_err(|e| {
+        to_js_error(crate::NapiError::Internal {
+            message: format!("failed to serialize HealthStatus: {e}"),
+        })
+    })
+}
+
+/// Install a global `tracing` subscriber filtered by the supplied
+/// `RUST_LOG`-syntax directive (e.g. `"ffi=debug,evidence_store=info"`).
+///
+/// Mirrors [`crate::try_init_tracing`]. Idempotent: a second call is
+/// a no-op (the substrate guards against installing competing
+/// subscribers).
+///
+/// Available only when the addon was built with the
+/// `tracing-subscriber` feature; without it this entry point is not
+/// exposed (the underlying `crate::try_init_tracing` is also
+/// feature-gated).
+#[cfg(feature = "tracing-subscriber")]
+#[napi(js_name = "initTracing")]
+pub fn js_init_tracing(directive: String) -> Result<()> {
+    // `crate::try_init_tracing` is the re-export of `ffi::try_init_tracing`
+    // so its error type is `FfiError`. Funnel it through the napi error
+    // mapper via the `From<FfiError> for NapiError` impl so callers see the
+    // same `kind`/`message`/`detail` JSON envelope every other entry point
+    // produces.
+    crate::try_init_tracing(&directive).map_err(|e| to_js_error(crate::NapiError::from(e)))
 }
 
 #[cfg(test)]
@@ -531,8 +571,78 @@ mod tests {
     }
 
     #[test]
-    fn js_health_check_returns_ok_synchronously() {
-        assert_eq!(js_health_check(), "ok");
+    fn js_health_check_without_handle_returns_bridge_only_envelope() {
+        let envelope = js_health_check(None).expect("bridge probe is infallible");
+        let core_version = envelope
+            .get("core_version")
+            .and_then(|v| v.as_str())
+            .expect("core_version is a string");
+        assert_eq!(core_version, env!("CARGO_PKG_VERSION"));
+        let subsystems = envelope
+            .get("subsystems")
+            .and_then(|v| v.as_array())
+            .expect("subsystems is an array");
+        assert_eq!(subsystems.len(), 1);
+        assert_eq!(
+            subsystems[0].get("name").and_then(|v| v.as_str()),
+            Some("bridge")
+        );
+        assert_eq!(
+            subsystems[0].get("status").and_then(|v| v.as_str()),
+            Some("ok")
+        );
+        // tracing_initialized starts false in a fresh process; the
+        // rlib test build does not link `tracing-subscriber` by
+        // default. If a sibling test in the same binary has already
+        // installed a subscriber the flag may flip to true, so we
+        // only assert the field exists and is a boolean.
+        assert!(envelope
+            .get("tracing_initialized")
+            .is_some_and(serde_json::Value::is_boolean));
+        // The metrics snapshot is wire-flat — every counter / gauge
+        // is a sibling field of the snapshot object. At minimum the
+        // ingest counter and the boot timestamp must exist.
+        let metrics = envelope.get("metrics").expect("metrics object");
+        assert!(metrics
+            .get("ingest_total")
+            .and_then(serde_json::Value::as_u64)
+            .is_some());
+        assert!(metrics
+            .get("boot_unix_secs")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|v| v > 0));
+    }
+
+    #[test]
+    fn js_health_check_with_zero_bigint_is_equivalent_to_none() {
+        let zero = BigInt {
+            sign_bit: false,
+            words: vec![0],
+        };
+        let envelope = js_health_check(Some(zero)).expect("zero handle == bridge-only");
+        let subsystems = envelope
+            .get("subsystems")
+            .and_then(|v| v.as_array())
+            .expect("subsystems is an array");
+        assert_eq!(subsystems.len(), 1);
+        assert_eq!(
+            subsystems[0].get("name").and_then(|v| v.as_str()),
+            Some("bridge")
+        );
+    }
+
+    #[test]
+    fn js_health_check_with_unknown_handle_returns_unavailable_envelope_error() {
+        let bogus = BigInt {
+            sign_bit: false,
+            words: vec![u64::MAX],
+        };
+        let err = js_health_check(Some(bogus)).expect_err("unknown handle");
+        let env = parse_envelope(&err);
+        assert_eq!(
+            env.get("kind").and_then(|v| v.as_str()),
+            Some("Unavailable")
+        );
     }
 
     #[test]

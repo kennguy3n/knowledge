@@ -84,11 +84,19 @@
 // borrow.
 
 pub mod error;
+pub mod health;
+pub mod metrics;
 pub mod runtime;
+#[cfg(feature = "tracing-subscriber")]
+pub mod tracing_init;
 pub mod types;
 
 pub use error::{FfiError, FfiResult};
+pub use health::{health_check, AdapterReport, HealthStatus, SubsystemHealth, SubsystemStatus};
+pub use metrics::{snapshot as metrics_snapshot, ErrorCounters, MetricsSnapshot};
 pub use runtime::{close_store, open_store, RuntimeHandle};
+#[cfg(feature = "tracing-subscriber")]
+pub use tracing_init::try_init_tracing;
 pub use types::{
     EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord,
     MemoryState, QueryResult, ScopeIdString, SourceKind, SynthesisTrigger,
@@ -130,27 +138,29 @@ pub fn ingest_message(
     source: SourceKind,
     importance: FfiImportanceClass,
 ) -> FfiResult<String> {
-    let scope = parse_scope_id(&scope_id)?;
-    with_runtime(handle, |rt| {
-        if rt.is_scope_forgotten(scope) {
-            return Err(FfiError::NotFound {
-                kind: "scope".into(),
-                id: scope_id.clone(),
-            });
-        }
-        rt.ensure_scope_registered(scope)?;
-        let result = rt
-            .store_mut()
-            .ingest(
-                scope,
-                body.as_bytes(),
-                Some(source_kind_tag(&source)),
-                ffi_importance_to_internal(importance),
-            )
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?;
-        Ok(result.evidence_id.to_string())
+    metrics::instrument(metrics::inc_ingest, || {
+        let scope = parse_scope_id(&scope_id)?;
+        with_runtime(handle, |rt| {
+            if rt.is_scope_forgotten(scope) {
+                return Err(FfiError::NotFound {
+                    kind: "scope".into(),
+                    id: scope_id.clone(),
+                });
+            }
+            rt.ensure_scope_registered(scope)?;
+            let result = rt
+                .store_mut()
+                .ingest(
+                    scope,
+                    body.as_bytes(),
+                    Some(source_kind_tag(&source)),
+                    ffi_importance_to_internal(importance),
+                )
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            Ok(result.evidence_id.to_string())
+        })
     })
 }
 
@@ -193,51 +203,53 @@ pub fn query(
     query_text: String,
     limit: u32,
 ) -> FfiResult<Vec<QueryResult>> {
-    let scope = parse_scope_id(&scope_id)?;
-    with_runtime(handle, |rt| {
-        if rt.is_scope_forgotten(scope) {
-            return Ok(Vec::new());
-        }
-        let hits = rt
-            .store()
-            .search_fts(scope, &query_text, limit as usize)
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?;
-        // Capture the actual hit count up front so the score
-        // denominator reflects the result set (not the requested
-        // ceiling). Otherwise small result sets cluster near 1.0 —
-        // e.g. 3 hits with limit=100 would yield 1.0 / 0.99 / 0.98
-        // rather than 1.0 / 0.67 / 0.33.
-        let hits_len = hits.len();
-        let mut out = Vec::with_capacity(hits_len);
-        let denom = hits_len.max(1) as f64;
-        for (rank, evidence_id) in hits.into_iter().enumerate() {
-            let snippet = rt
+    metrics::instrument(metrics::inc_query, || {
+        let scope = parse_scope_id(&scope_id)?;
+        with_runtime(handle, |rt| {
+            if rt.is_scope_forgotten(scope) {
+                return Ok(Vec::new());
+            }
+            let hits = rt
                 .store()
-                .read_body(evidence_id)
-                .ok()
-                .and_then(|bytes| String::from_utf8(bytes).ok())
-                .map(|s| snippet_clip(&s, 160))
-                .unwrap_or_default();
-            // FTS5 ranks are negative (lower is better). We don't
-            // currently expose ranking weights here — surface the
-            // monotone position in [0, 1] as `fts_score` for callers
-            // that only need ordering, and leave the recency /
-            // vector components at 0.0 until the embedding pipeline (real ONNX
-            // embeddings) and the dedicated `HybridRetriever` are
-            // wired through this surface.
-            let fts_score = 1.0 - (rank as f64 / denom).min(1.0);
-            out.push(QueryResult {
-                evidence_id: evidence_id.to_string(),
-                score: fts_score,
-                fts_score,
-                recency_score: 0.0,
-                vector_score: 0.0,
-                snippet,
-            });
-        }
-        Ok(out)
+                .search_fts(scope, &query_text, limit as usize)
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            // Capture the actual hit count up front so the score
+            // denominator reflects the result set (not the requested
+            // ceiling). Otherwise small result sets cluster near 1.0 —
+            // e.g. 3 hits with limit=100 would yield 1.0 / 0.99 / 0.98
+            // rather than 1.0 / 0.67 / 0.33.
+            let hits_len = hits.len();
+            let mut out = Vec::with_capacity(hits_len);
+            let denom = hits_len.max(1) as f64;
+            for (rank, evidence_id) in hits.into_iter().enumerate() {
+                let snippet = rt
+                    .store()
+                    .read_body(evidence_id)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                    .map(|s| snippet_clip(&s, 160))
+                    .unwrap_or_default();
+                // FTS5 ranks are negative (lower is better). We don't
+                // currently expose ranking weights here — surface the
+                // monotone position in [0, 1] as `fts_score` for callers
+                // that only need ordering, and leave the recency /
+                // vector components at 0.0 until the embedding pipeline (real ONNX
+                // embeddings) and the dedicated `HybridRetriever` are
+                // wired through this surface.
+                let fts_score = 1.0 - (rank as f64 / denom).min(1.0);
+                out.push(QueryResult {
+                    evidence_id: evidence_id.to_string(),
+                    score: fts_score,
+                    fts_score,
+                    recency_score: 0.0,
+                    vector_score: 0.0,
+                    snippet,
+                });
+            }
+            Ok(out)
+        })
     })
 }
 
@@ -257,6 +269,11 @@ pub fn query(
 /// ```
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn escape_fts_query(input: String) -> String {
+    // Pure string transform, infallible — no `metrics::instrument`
+    // wrapper (which only fits `FfiResult<T>` for `Err` routing),
+    // just the per-call counter. Increment before the body runs so
+    // semantics match every other entry point ("calls initiated").
+    crate::metrics::inc_escape_fts_query();
     let mut out = String::with_capacity(input.len() + 2);
     out.push('"');
     for ch in input.chars() {
@@ -291,39 +308,41 @@ fn snippet_clip(body: &str, max_chars: usize) -> String {
 /// * [`FfiError::Evidence`] if reading or decrypting the body fails.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn get_evidence(handle: RuntimeHandle, evidence_id: String) -> FfiResult<EvidenceRecord> {
-    let id = parse_evidence_id(&evidence_id)?;
-    with_runtime(handle, |rt| {
-        let row = rt
-            .store()
-            .get(id)
-            .map_err(|e| FfiError::Evidence {
+    metrics::instrument(metrics::inc_get_evidence, || {
+        let id = parse_evidence_id(&evidence_id)?;
+        with_runtime(handle, |rt| {
+            let row = rt
+                .store()
+                .get(id)
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?
+                .ok_or_else(|| FfiError::NotFound {
+                    kind: "evidence".into(),
+                    id: evidence_id.clone(),
+                })?;
+            if rt.is_scope_forgotten(row.scope_id) {
+                return Err(FfiError::NotFound {
+                    kind: "evidence".into(),
+                    id: evidence_id.clone(),
+                });
+            }
+            let body_bytes = rt.store().read_body(id).map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
-            })?
-            .ok_or_else(|| FfiError::NotFound {
-                kind: "evidence".into(),
-                id: evidence_id.clone(),
             })?;
-        if rt.is_scope_forgotten(row.scope_id) {
-            return Err(FfiError::NotFound {
-                kind: "evidence".into(),
-                id: evidence_id.clone(),
-            });
-        }
-        let body_bytes = rt.store().read_body(id).map_err(|e| FfiError::Evidence {
-            message: e.to_string(),
-        })?;
-        let body = String::from_utf8(body_bytes).map_err(|_| FfiError::Evidence {
-            message: "evidence body is not valid utf-8".into(),
-        })?;
-        Ok(EvidenceRecord {
-            id: row.id.to_string(),
-            scope_id: row.scope_id.to_string(),
-            body,
-            source: row
-                .source_ref
-                .as_deref()
-                .map_or(SourceKind::Other, parse_source_kind),
-            created_at: row.created_at,
+            let body = String::from_utf8(body_bytes).map_err(|_| FfiError::Evidence {
+                message: "evidence body is not valid utf-8".into(),
+            })?;
+            Ok(EvidenceRecord {
+                id: row.id.to_string(),
+                scope_id: row.scope_id.to_string(),
+                body,
+                source: row
+                    .source_ref
+                    .as_deref()
+                    .map_or(SourceKind::Other, parse_source_kind),
+                created_at: row.created_at,
+            })
         })
     })
 }
@@ -357,15 +376,17 @@ pub fn get_user_memory(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
 ) -> FfiResult<Vec<MemoryRecord>> {
-    let scope = parse_scope_id(&scope_id)?;
-    with_runtime(handle, |rt| {
-        if rt.is_scope_forgotten(scope) {
-            return Ok(Vec::new());
-        }
-        let Some(umo) = rt.user_memory(scope) else {
-            return Ok(Vec::new());
-        };
-        Ok(umo.objects.iter().map(memory_object_to_record).collect())
+    metrics::instrument(metrics::inc_get_user_memory, || {
+        let scope = parse_scope_id(&scope_id)?;
+        with_runtime(handle, |rt| {
+            if rt.is_scope_forgotten(scope) {
+                return Ok(Vec::new());
+            }
+            let Some(umo) = rt.user_memory(scope) else {
+                return Ok(Vec::new());
+            };
+            Ok(umo.objects.iter().map(memory_object_to_record).collect())
+        })
     })
 }
 
@@ -393,26 +414,29 @@ pub fn get_user_memory(
 ///   rejects the pin (e.g. the object is in a terminal state).
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn pin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
-    let uuid = parse_uuid(&id)?;
-    with_runtime(handle, |rt| {
-        let owning_scope = locate_owning_scope(rt, &uuid).ok_or_else(|| FfiError::NotFound {
-            kind: "memory".into(),
-            id: id.clone(),
-        })?;
-        if rt.is_scope_forgotten(owning_scope) {
-            return Err(FfiError::NotFound {
-                kind: "memory".into(),
-                id: id.clone(),
-            });
-        }
-        let umo = rt
-            .user_memories
-            .get_mut(&owning_scope)
-            .expect("owning scope located above must still exist");
-        umo.pin(&uuid).map_err(|e| FfiError::Memory {
-            message: e.to_string(),
-        })?;
-        rt.flush_user_memory(owning_scope)
+    metrics::instrument(metrics::inc_pin, || {
+        let uuid = parse_uuid(&id)?;
+        with_runtime(handle, |rt| {
+            let owning_scope =
+                locate_owning_scope(rt, &uuid).ok_or_else(|| FfiError::NotFound {
+                    kind: "memory".into(),
+                    id: id.clone(),
+                })?;
+            if rt.is_scope_forgotten(owning_scope) {
+                return Err(FfiError::NotFound {
+                    kind: "memory".into(),
+                    id: id.clone(),
+                });
+            }
+            let umo = rt
+                .user_memories
+                .get_mut(&owning_scope)
+                .expect("owning scope located above must still exist");
+            umo.pin(&uuid).map_err(|e| FfiError::Memory {
+                message: e.to_string(),
+            })?;
+            rt.flush_user_memory(owning_scope)
+        })
     })
 }
 
@@ -432,26 +456,29 @@ pub fn pin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
 /// * [`FfiError::Memory`] if the underlying state-machine rejects.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn unpin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
-    let uuid = parse_uuid(&id)?;
-    with_runtime(handle, |rt| {
-        let owning_scope = locate_owning_scope(rt, &uuid).ok_or_else(|| FfiError::NotFound {
-            kind: "memory".into(),
-            id: id.clone(),
-        })?;
-        if rt.is_scope_forgotten(owning_scope) {
-            return Err(FfiError::NotFound {
-                kind: "memory".into(),
-                id: id.clone(),
-            });
-        }
-        let umo = rt
-            .user_memories
-            .get_mut(&owning_scope)
-            .expect("owning scope located above must still exist");
-        umo.unpin(&uuid).map_err(|e| FfiError::Memory {
-            message: e.to_string(),
-        })?;
-        rt.flush_user_memory(owning_scope)
+    metrics::instrument(metrics::inc_unpin, || {
+        let uuid = parse_uuid(&id)?;
+        with_runtime(handle, |rt| {
+            let owning_scope =
+                locate_owning_scope(rt, &uuid).ok_or_else(|| FfiError::NotFound {
+                    kind: "memory".into(),
+                    id: id.clone(),
+                })?;
+            if rt.is_scope_forgotten(owning_scope) {
+                return Err(FfiError::NotFound {
+                    kind: "memory".into(),
+                    id: id.clone(),
+                });
+            }
+            let umo = rt
+                .user_memories
+                .get_mut(&owning_scope)
+                .expect("owning scope located above must still exist");
+            umo.unpin(&uuid).map_err(|e| FfiError::Memory {
+                message: e.to_string(),
+            })?;
+            rt.flush_user_memory(owning_scope)
+        })
     })
 }
 
@@ -501,57 +528,59 @@ pub fn unpin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
 ///   still contain plaintext for the affected scope.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn forget(handle: RuntimeHandle, id: String) -> FfiResult<()> {
-    let evidence_id = parse_evidence_id(&id)?;
-    with_runtime(handle, |rt| {
-        let row = rt
-            .store()
-            .get(evidence_id)
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?
-            .ok_or_else(|| FfiError::NotFound {
-                kind: "evidence".into(),
-                id: id.clone(),
-            })?;
-        let scope = row.scope_id;
-        // 1. In-memory DEK destruction *and* tombstone persistence
-        //    in one atomic step — the destroy call routes through
-        //    the `TombstoneStore` adapter so the on-disk
-        //    `forgotten_scopes` row is written before the destroy
-        //    returns. 2. Purge the FTS5 / embedding indexes so
-        //    plaintext-derived secondary payloads cannot be
-        //    recovered post-forget.
-        rt.forget_scope(scope)?;
-        // Best-effort DEK deletion: if this fails the tombstone
-        // still blocks access and open_store's recovery path will
-        // retry the deletion on next startup.
-        if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
-            tracing::warn!(
-                scope = %scope.as_uuid(),
-                error = %e,
-                "failed to delete scope DEK; will retry on next open_store",
-            );
-        }
-        rt.store_mut()
-            .purge_fts_for_scope(scope)
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?;
-        rt.store_mut()
-            .purge_body_key_wraps_for_scope(scope)
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?;
-        // Delete persisted memory blobs so forgotten-scope memory
-        // state does not survive the next open_store.
-        rt.store()
-            .delete_memory_blobs_for_scope(scope)
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?;
-        rt.user_memories.remove(&scope);
-        rt.channel_memories.remove(&scope);
-        Ok(())
+    metrics::instrument(metrics::inc_forget, || {
+        let evidence_id = parse_evidence_id(&id)?;
+        with_runtime(handle, |rt| {
+            let row = rt
+                .store()
+                .get(evidence_id)
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?
+                .ok_or_else(|| FfiError::NotFound {
+                    kind: "evidence".into(),
+                    id: id.clone(),
+                })?;
+            let scope = row.scope_id;
+            // 1. In-memory DEK destruction *and* tombstone persistence
+            //    in one atomic step — the destroy call routes through
+            //    the `TombstoneStore` adapter so the on-disk
+            //    `forgotten_scopes` row is written before the destroy
+            //    returns. 2. Purge the FTS5 / embedding indexes so
+            //    plaintext-derived secondary payloads cannot be
+            //    recovered post-forget.
+            rt.forget_scope(scope)?;
+            // Best-effort DEK deletion: if this fails the tombstone
+            // still blocks access and open_store's recovery path will
+            // retry the deletion on next startup.
+            if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    error = %e,
+                    "failed to delete scope DEK; will retry on next open_store",
+                );
+            }
+            rt.store_mut()
+                .purge_fts_for_scope(scope)
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            rt.store_mut()
+                .purge_body_key_wraps_for_scope(scope)
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            // Delete persisted memory blobs so forgotten-scope memory
+            // state does not survive the next open_store.
+            rt.store()
+                .delete_memory_blobs_for_scope(scope)
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            rt.user_memories.remove(&scope);
+            rt.channel_memories.remove(&scope);
+            Ok(())
+        })
     })
 }
 
@@ -575,38 +604,40 @@ pub fn forget(handle: RuntimeHandle, id: String) -> FfiResult<()> {
 ///   secondary indexes fails.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
-    let scope = parse_scope_id(&scope_id)?;
-    with_runtime(handle, |rt| {
-        // Atomic in-memory + on-disk forgetting (see
-        // `FfiRuntime::forget_scope` for the rationale).
-        rt.forget_scope(scope)?;
-        // Best-effort DEK deletion (see forget() for rationale).
-        if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
-            tracing::warn!(
-                scope = %scope.as_uuid(),
-                error = %e,
-                "failed to delete scope DEK; will retry on next open_store",
-            );
-        }
-        rt.store_mut()
-            .purge_fts_for_scope(scope)
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?;
-        rt.store_mut()
-            .purge_body_key_wraps_for_scope(scope)
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?;
-        // Delete persisted memory blobs for the forgotten scope.
-        rt.store()
-            .delete_memory_blobs_for_scope(scope)
-            .map_err(|e| FfiError::Evidence {
-                message: e.to_string(),
-            })?;
-        rt.user_memories.remove(&scope);
-        rt.channel_memories.remove(&scope);
-        Ok(())
+    metrics::instrument(metrics::inc_forget_scope, || {
+        let scope = parse_scope_id(&scope_id)?;
+        with_runtime(handle, |rt| {
+            // Atomic in-memory + on-disk forgetting (see
+            // `FfiRuntime::forget_scope` for the rationale).
+            rt.forget_scope(scope)?;
+            // Best-effort DEK deletion (see forget() for rationale).
+            if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    error = %e,
+                    "failed to delete scope DEK; will retry on next open_store",
+                );
+            }
+            rt.store_mut()
+                .purge_fts_for_scope(scope)
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            rt.store_mut()
+                .purge_body_key_wraps_for_scope(scope)
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            // Delete persisted memory blobs for the forgotten scope.
+            rt.store()
+                .delete_memory_blobs_for_scope(scope)
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            rt.user_memories.remove(&scope);
+            rt.channel_memories.remove(&scope);
+            Ok(())
+        })
     })
 }
 
@@ -626,30 +657,32 @@ pub fn list_memories(
     scope_id: ScopeIdString,
     filter: MemoryFilter,
 ) -> FfiResult<Vec<MemoryRecord>> {
-    let scope = parse_scope_id(&scope_id)?;
-    with_runtime(handle, |rt| {
-        if rt.is_scope_forgotten(scope) {
-            return Ok(Vec::new());
-        }
-        let Some(umo) = rt.user_memory(scope) else {
-            return Ok(Vec::new());
-        };
-        let mm_filter = ffi_filter_to_memory_filter(&filter, scope);
-        // `MemoryState::Pinned` has no native internal state — it is
-        // a pin-count predicate layered on top of the underlying
-        // state machine. The call-site filter must apply whenever
-        // the caller asked for pinned rows either through the
-        // explicit `pinned_only` flag *or* by selecting the
-        // `Pinned` state. Gating only on `pinned_only` silently
-        // dropped the `state = Some(Pinned)` filter.
-        let require_pinned = filter.pinned_only || filter.state == Some(MemoryState::Pinned);
-        let out: Vec<MemoryRecord> = umo
-            .list(&mm_filter)
-            .into_iter()
-            .filter(|o| !require_pinned || o.pin_count > 0)
-            .map(memory_object_to_record)
-            .collect();
-        Ok(out)
+    metrics::instrument(metrics::inc_list_memories, || {
+        let scope = parse_scope_id(&scope_id)?;
+        with_runtime(handle, |rt| {
+            if rt.is_scope_forgotten(scope) {
+                return Ok(Vec::new());
+            }
+            let Some(umo) = rt.user_memory(scope) else {
+                return Ok(Vec::new());
+            };
+            let mm_filter = ffi_filter_to_memory_filter(&filter, scope);
+            // `MemoryState::Pinned` has no native internal state — it is
+            // a pin-count predicate layered on top of the underlying
+            // state machine. The call-site filter must apply whenever
+            // the caller asked for pinned rows either through the
+            // explicit `pinned_only` flag *or* by selecting the
+            // `Pinned` state. Gating only on `pinned_only` silently
+            // dropped the `state = Some(Pinned)` filter.
+            let require_pinned = filter.pinned_only || filter.state == Some(MemoryState::Pinned);
+            let out: Vec<MemoryRecord> = umo
+                .list(&mm_filter)
+                .into_iter()
+                .filter(|o| !require_pinned || o.pin_count > 0)
+                .map(memory_object_to_record)
+                .collect();
+            Ok(out)
+        })
     })
 }
 
@@ -663,28 +696,30 @@ pub fn list_memories(
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn run_decay_sweep(handle: RuntimeHandle, scope_id: ScopeIdString) -> FfiResult<u32> {
-    let scope = parse_scope_id(&scope_id)?;
-    with_runtime(handle, |rt| {
-        if rt.is_scope_forgotten(scope) {
-            return Ok(0);
-        }
-        // Only run decay and flush if the scope has an existing UMO.
-        // `user_memory_mut` would create an empty one, and flushing
-        // it would persist an orphan empty blob.
-        if rt.user_memory(scope).is_none() {
-            return Ok(0);
-        }
-        let umo = rt.user_memory_mut(scope);
-        let report = umo.decay_sweep(chrono::Utc::now());
-        // `candidates_archived + superseded_archived` are `usize`
-        // counters; saturate at `u32::MAX` for the FFI return rather
-        // than wrapping. The substrate's working sets are bounded
-        // well below `u32::MAX` per scope so this is a defensive
-        // cast, not a behavioural one.
-        let count = u32::try_from(report.candidates_archived + report.superseded_archived)
-            .unwrap_or(u32::MAX);
-        rt.flush_user_memory(scope)?;
-        Ok(count)
+    metrics::instrument(metrics::inc_decay_sweep, || {
+        let scope = parse_scope_id(&scope_id)?;
+        with_runtime(handle, |rt| {
+            if rt.is_scope_forgotten(scope) {
+                return Ok(0);
+            }
+            // Only run decay and flush if the scope has an existing UMO.
+            // `user_memory_mut` would create an empty one, and flushing
+            // it would persist an orphan empty blob.
+            if rt.user_memory(scope).is_none() {
+                return Ok(0);
+            }
+            let umo = rt.user_memory_mut(scope);
+            let report = umo.decay_sweep(chrono::Utc::now());
+            // `candidates_archived + superseded_archived` are `usize`
+            // counters; saturate at `u32::MAX` for the FFI return rather
+            // than wrapping. The substrate's working sets are bounded
+            // well below `u32::MAX` per scope so this is a defensive
+            // cast, not a behavioural one.
+            let count = u32::try_from(report.candidates_archived + report.superseded_archived)
+                .unwrap_or(u32::MAX);
+            rt.flush_user_memory(scope)?;
+            Ok(count)
+        })
     })
 }
 
@@ -705,26 +740,28 @@ pub fn get_channel_memory(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
 ) -> FfiResult<Option<MemoryRecord>> {
-    let scope = parse_scope_id(&scope_id)?;
-    with_runtime(handle, |rt| {
-        if rt.is_scope_forgotten(scope) {
-            return Ok(None);
-        }
-        let Some(cmo) = rt.channel_memory(scope) else {
-            return Ok(None);
-        };
-        if cmo.recap.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(MemoryRecord {
-            id: cmo.id.to_string(),
-            scope_id: cmo.scope_id.to_string(),
-            summary: cmo.recap.clone(),
-            state: MemoryState::Reinforced,
-            retention_score: 1.0,
-            created_at: cmo.created_at.timestamp(),
-            last_reinforced_at: cmo.updated_at.timestamp(),
-        }))
+    metrics::instrument(metrics::inc_get_channel_memory, || {
+        let scope = parse_scope_id(&scope_id)?;
+        with_runtime(handle, |rt| {
+            if rt.is_scope_forgotten(scope) {
+                return Ok(None);
+            }
+            let Some(cmo) = rt.channel_memory(scope) else {
+                return Ok(None);
+            };
+            if cmo.recap.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(MemoryRecord {
+                id: cmo.id.to_string(),
+                scope_id: cmo.scope_id.to_string(),
+                summary: cmo.recap.clone(),
+                state: MemoryState::Reinforced,
+                retention_score: 1.0,
+                created_at: cmo.created_at.timestamp(),
+                last_reinforced_at: cmo.updated_at.timestamp(),
+            }))
+        })
     })
 }
 
@@ -771,19 +808,21 @@ pub fn trigger_synthesis(
     scope_id: ScopeIdString,
     trigger: SynthesisTrigger,
 ) -> FfiResult<String> {
-    let scope = parse_scope_id(&scope_id)?;
-    tracing::info!(
-        scope = %scope.as_uuid(),
-        trigger = ?trigger,
-        "trigger_synthesis: dispatching SynthSummary",
-    );
-    synthesize_scope(handle, scope, &scope_id).map_err(|err| {
-        tracing::warn!(
+    metrics::instrument(metrics::inc_synthesis_triggered, || {
+        let scope = parse_scope_id(&scope_id)?;
+        tracing::info!(
             scope = %scope.as_uuid(),
-            error = ?err,
-            "trigger_synthesis: failed",
+            trigger = ?trigger,
+            "trigger_synthesis: dispatching SynthSummary",
         );
-        err
+        synthesize_scope(handle, scope, &scope_id).map_err(|err| {
+            tracing::warn!(
+                scope = %scope.as_uuid(),
+                error = ?err,
+                "trigger_synthesis: failed",
+            );
+            err
+        })
     })
 }
 
@@ -1080,12 +1119,14 @@ fn synthesize_scope(
 /// hardware-backed key generators (Secure Enclave, StrongBox) can
 /// surface failures without breaking the FFI contract.
 pub fn generate_keypair() -> FfiResult<FfiKeypair> {
-    let signer = MlDsa65Signer::generate();
-    let encoded = signer.encode();
-    Ok(FfiKeypair {
-        algorithm: "ml-dsa-65".into(),
-        public_key: <_ as AsRef<[u8]>>::as_ref(&encoded.verifying_key).to_vec(),
-        private_key: <_ as AsRef<[u8]>>::as_ref(&encoded.signing_seed).to_vec(),
+    metrics::instrument(metrics::inc_generate_keypair, || {
+        let signer = MlDsa65Signer::generate();
+        let encoded = signer.encode();
+        Ok(FfiKeypair {
+            algorithm: "ml-dsa-65".into(),
+            public_key: <_ as AsRef<[u8]>>::as_ref(&encoded.verifying_key).to_vec(),
+            private_key: <_ as AsRef<[u8]>>::as_ref(&encoded.signing_seed).to_vec(),
+        })
     })
 }
 
@@ -1107,29 +1148,31 @@ pub fn encrypt(
     scope_id: ScopeIdString,
     plaintext: Vec<u8>,
 ) -> FfiResult<Vec<u8>> {
-    let scope = parse_scope_id(&scope_id)?;
-    with_runtime(handle, |rt| {
-        if rt.is_scope_forgotten(scope) {
-            return Err(FfiError::NotFound {
-                kind: "scope".into(),
-                id: scope_id.clone(),
-            });
-        }
-        // Auto-register so new scopes get a random DEK and
-        // pre-v6 scopes adopt their HKDF key into the registry.
-        rt.ensure_scope_registered(scope)?;
-        let key = rt.scope_encrypt_key(scope)?;
-        let mut nonce: AeadNonce = [0u8; AEAD_NONCE_LEN];
-        rand::thread_rng().fill_bytes(&mut nonce);
-        let aad = scope_aad(scope);
-        let ciphertext =
-            encrypt_aead(&key, &nonce, &plaintext, &aad).map_err(|e| FfiError::Crypto {
-                message: e.to_string(),
-            })?;
-        let mut out = Vec::with_capacity(AEAD_NONCE_LEN + ciphertext.len());
-        out.extend_from_slice(&nonce);
-        out.extend_from_slice(&ciphertext);
-        Ok(out)
+    metrics::instrument(metrics::inc_encrypt, || {
+        let scope = parse_scope_id(&scope_id)?;
+        with_runtime(handle, |rt| {
+            if rt.is_scope_forgotten(scope) {
+                return Err(FfiError::NotFound {
+                    kind: "scope".into(),
+                    id: scope_id.clone(),
+                });
+            }
+            // Auto-register so new scopes get a random DEK and
+            // pre-v6 scopes adopt their HKDF key into the registry.
+            rt.ensure_scope_registered(scope)?;
+            let key = rt.scope_encrypt_key(scope)?;
+            let mut nonce: AeadNonce = [0u8; AEAD_NONCE_LEN];
+            rand::thread_rng().fill_bytes(&mut nonce);
+            let aad = scope_aad(scope);
+            let ciphertext =
+                encrypt_aead(&key, &nonce, &plaintext, &aad).map_err(|e| FfiError::Crypto {
+                    message: e.to_string(),
+                })?;
+            let mut out = Vec::with_capacity(AEAD_NONCE_LEN + ciphertext.len());
+            out.extend_from_slice(&nonce);
+            out.extend_from_slice(&ciphertext);
+            Ok(out)
+        })
     })
 }
 
@@ -1148,45 +1191,47 @@ pub fn decrypt(
     scope_id: ScopeIdString,
     ciphertext: Vec<u8>,
 ) -> FfiResult<Vec<u8>> {
-    let scope = parse_scope_id(&scope_id)?;
-    if ciphertext.len() < AEAD_NONCE_LEN {
-        return Err(FfiError::Crypto {
-            message: "ciphertext envelope shorter than nonce prefix".into(),
-        });
-    }
-    with_runtime(handle, |rt| {
-        if rt.is_scope_forgotten(scope) {
-            return Err(FfiError::NotFound {
-                kind: "scope".into(),
-                id: scope_id.clone(),
+    metrics::instrument(metrics::inc_decrypt, || {
+        let scope = parse_scope_id(&scope_id)?;
+        if ciphertext.len() < AEAD_NONCE_LEN {
+            return Err(FfiError::Crypto {
+                message: "ciphertext envelope shorter than nonce prefix".into(),
             });
         }
-        let key = rt.scope_encrypt_key(scope)?;
-        let mut nonce: AeadNonce = [0u8; AEAD_NONCE_LEN];
-        nonce.copy_from_slice(&ciphertext[..AEAD_NONCE_LEN]);
-        let body = &ciphertext[AEAD_NONCE_LEN..];
-        let aad = scope_aad(scope);
-        let plain = match decrypt_aead(&key, &nonce, body, &aad) {
-            Ok(p) => p,
-            Err(primary_err) => {
-                // The primary key failed — try the legacy HKDF key.
-                // Pre-v6 ciphertexts were encrypted under
-                // `scope:{uuid}:ffi-encrypt:v1`; after scope
-                // registration the primary key is the random DEK,
-                // so old ciphertexts need this fallback.
-                let legacy = rt.legacy_ffi_encrypt_key(scope)?;
-                if legacy == key {
-                    // Same key — no point retrying.
-                    return Err(FfiError::Crypto {
-                        message: primary_err.to_string(),
-                    });
-                }
-                decrypt_aead(&legacy, &nonce, body, &aad).map_err(|e| FfiError::Crypto {
-                    message: e.to_string(),
-                })?
+        with_runtime(handle, |rt| {
+            if rt.is_scope_forgotten(scope) {
+                return Err(FfiError::NotFound {
+                    kind: "scope".into(),
+                    id: scope_id.clone(),
+                });
             }
-        };
-        Ok(plain)
+            let key = rt.scope_encrypt_key(scope)?;
+            let mut nonce: AeadNonce = [0u8; AEAD_NONCE_LEN];
+            nonce.copy_from_slice(&ciphertext[..AEAD_NONCE_LEN]);
+            let body = &ciphertext[AEAD_NONCE_LEN..];
+            let aad = scope_aad(scope);
+            let plain = match decrypt_aead(&key, &nonce, body, &aad) {
+                Ok(p) => p,
+                Err(primary_err) => {
+                    // The primary key failed — try the legacy HKDF key.
+                    // Pre-v6 ciphertexts were encrypted under
+                    // `scope:{uuid}:ffi-encrypt:v1`; after scope
+                    // registration the primary key is the random DEK,
+                    // so old ciphertexts need this fallback.
+                    let legacy = rt.legacy_ffi_encrypt_key(scope)?;
+                    if legacy == key {
+                        // Same key — no point retrying.
+                        return Err(FfiError::Crypto {
+                            message: primary_err.to_string(),
+                        });
+                    }
+                    decrypt_aead(&legacy, &nonce, body, &aad).map_err(|e| FfiError::Crypto {
+                        message: e.to_string(),
+                    })?
+                }
+            };
+            Ok(plain)
+        })
     })
 }
 
@@ -1449,6 +1494,10 @@ impl runtime::FfiRuntime {
                 message: e.to_string(),
             },
         )?;
+        // Refresh the metrics tombstone gauge to match the post-
+        // destroy registry size. The Phase 6 health envelope reads
+        // this gauge on every `health_check` call.
+        metrics::set_tombstone_count(self.registry().tombstones().count() as u64);
         Ok(())
     }
 

@@ -63,13 +63,22 @@ export declare function getEvidence(handle: bigint, evidenceId: string): any
 export declare function getUserMemory(handle: bigint, scopeId: string): any
 
 /**
- * Lightweight "is the bridge alive?" probe. Mirrors
- * [`crate::health_check`]. Returns the string `"ok"` synchronously
- * without touching any subsystems. Phase 6 will replace this with a
- * full `HealthStatus` envelope sourced from the substrate's metrics
- * + tracing layer.
+ * Full health envelope. Mirrors [`crate::health_check`].
+ *
+ * `handle` is optional:
+ * * pass `0n` (or omit it via the TypeScript optional parameter)
+ *   to get a bridge-only envelope — useful immediately after
+ *   loading the addon, before any [`js_open_store`] call.
+ * * pass a [`BigInt`] returned by [`js_open_store`] to get a full
+ *   probe (`bridge` + `evidence_store` + `crypto` + `memory_manager`
+ *   + `inference_router` subsystems, with real per-subsystem I/O).
+ *
+ * Returns the [`ffi::HealthStatus`] envelope serialised to JSON.
+ * JS hosts get a typed object via napi's `serde_json::Value`
+ * transparent passthrough; the shape is documented in
+ * `crates/napi/index.d.ts`.
  */
-export declare function healthCheck(): string
+export declare function healthCheck(handle?: bigint | undefined | null): any
 
 /**
  * Ingest a chat / document message. Mirrors

@@ -290,8 +290,9 @@ impl FfiRuntime {
     }
 
     /// Borrow the per-user master key. Kept `pub(crate)` so callers
-    /// cannot leak it across the FFI boundary.
-    #[allow(dead_code)]
+    /// cannot leak it across the FFI boundary. Read by the Phase 6
+    /// health probe to verify the master key is non-zero (an
+    /// all-zero key signals an uninitialised runtime).
     pub(crate) fn master_key(&self) -> &MasterKey {
         &self.master_key
     }
@@ -324,6 +325,18 @@ impl FfiRuntime {
     /// Borrow the per-scope channel memory, if one exists.
     pub(crate) fn channel_memory(&self, scope: ScopeId) -> Option<&ChannelMemoryObject> {
         self.channel_memories.get(&scope)
+    }
+
+    /// Number of distinct scopes with a rehydrated
+    /// [`UserMemoryObject`]. Used by the Phase 6 health probe.
+    pub(crate) fn user_memory_count(&self) -> usize {
+        self.user_memories.len()
+    }
+
+    /// Number of distinct scopes with a rehydrated
+    /// [`ChannelMemoryObject`]. Used by the Phase 6 health probe.
+    pub(crate) fn channel_memory_count(&self) -> usize {
+        self.channel_memories.len()
     }
 
     /// Persist a fully-built [`ChannelMemoryObject`] to disk and,
@@ -548,6 +561,13 @@ where
 ///   database or the tombstone-replay path errors out.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHandle> {
+    crate::metrics::instrument(crate::metrics::inc_open_store, || {
+        open_store_inner(path, master_key_hex)
+    })
+}
+
+#[allow(clippy::needless_pass_by_value)] // Mirror of [`open_store`]: forwards the owned strings the FFI boundary handed to the outer wrapper.
+fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHandle> {
     let master_key = parse_master_key_hex(&master_key_hex)?;
 
     // Allocate and validate the handle *before* doing any expensive
@@ -826,6 +846,12 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHand
         inference_router,
     };
 
+    // Capture the post-replay tombstone count before moving `runtime`
+    // into the registry; we publish it only after the insert succeeds
+    // (see below) so the gauge can never reflect a runtime that was
+    // rejected by the collision check.
+    let tombstones_after_replay = runtime.registry.tombstones().count() as u64;
+
     let mut guard = write_registry();
     // Allocation is monotonic via `NEXT`, so a collision against an
     // already-open handle would also mean we wrapped. Same reasoning
@@ -841,6 +867,13 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHand
         });
     }
     guard.insert(handle.0, Arc::new(Mutex::new(runtime)));
+    // Publish the open_handles + tombstone_count gauges inside the
+    // write lock so both gauges are atomically consistent with the
+    // registry mutation. The tombstone gauge mirrors the freshly-
+    // replayed set so the health envelope reports the post-replay
+    // count even before any FFI call has touched `forget`.
+    crate::metrics::set_open_handles(guard.len() as u64);
+    crate::metrics::set_tombstone_count(tombstones_after_replay);
     Ok(handle)
 }
 
@@ -900,45 +933,57 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHand
 /// guard does not fire and the drain loop on the closed handle
 /// terminates immediately.
 pub fn close_store(handle: RuntimeHandle) -> FfiResult<()> {
-    // Reentrance guard: bail before any state change if this thread
-    // is currently executing inside a `with_runtime` closure on
-    // **this specific** handle. Removing the entry and then spinning
-    // while the calling thread itself holds the outstanding clone
-    // would produce a silent infinite loop — the explicit error
-    // makes the misuse diagnosable. Cross-handle calls fall through
-    // because the calling thread's clone is for a different
-    // registry entry.
-    if thread_holds_runtime_handle(handle.0) {
-        return Err(FfiError::Evidence {
-            message: "close_store called from within a with_runtime frame for the same handle on this thread; this would deadlock the synchronous-teardown spin loop".into(),
-        });
-    }
-    let Some(mut entry) = write_registry().remove(&handle.0) else {
-        return Ok(());
-    };
-    // Drain outstanding `with_runtime` calls on this handle. Because
-    // step 1 (the `remove` above) already happened, no new clones can
-    // be minted — the strong count can only monotonically drop until
-    // it reaches 1 (our copy). We use `try_unwrap` rather than
-    // `Arc::strong_count` + race-prone manual checking, then yield
-    // briefly if another thread still holds a clone so we do not
-    // pin a CPU core on long-running calls.
-    loop {
-        match Arc::try_unwrap(entry) {
-            Ok(mutex) => {
-                // Drop here closes the SQLCipher connection and
-                // zeroizes the master key (`FfiRuntime::Drop`).
-                drop(mutex);
-                return Ok(());
-            }
-            Err(returned) => {
-                entry = returned;
-                // 1 ms sleep balances responsiveness against CPU
-                // burn for the common case of short in-flight calls.
-                std::thread::sleep(std::time::Duration::from_millis(1));
+    crate::metrics::instrument(crate::metrics::inc_close_store, || {
+        // Reentrance guard: bail before any state change if this thread
+        // is currently executing inside a `with_runtime` closure on
+        // **this specific** handle. Removing the entry and then spinning
+        // while the calling thread itself holds the outstanding clone
+        // would produce a silent infinite loop — the explicit error
+        // makes the misuse diagnosable. Cross-handle calls fall through
+        // because the calling thread's clone is for a different
+        // registry entry.
+        if thread_holds_runtime_handle(handle.0) {
+            return Err(FfiError::Evidence {
+                message: "close_store called from within a with_runtime frame for the same handle on this thread; this would deadlock the synchronous-teardown spin loop".into(),
+            });
+        }
+        let entry_opt = {
+            let mut guard = write_registry();
+            let removed = guard.remove(&handle.0);
+            // Refresh the open-handles gauge to match the post-remove
+            // size whether or not the handle was present. On the
+            // "unknown handle" / idempotent path the gauge is
+            // unchanged; on the real-close path it ticks down.
+            crate::metrics::set_open_handles(guard.len() as u64);
+            removed
+        };
+        let Some(mut entry) = entry_opt else {
+            return Ok(());
+        };
+        // Drain outstanding `with_runtime` calls on this handle. Because
+        // step 1 (the `remove` above) already happened, no new clones can
+        // be minted — the strong count can only monotonically drop until
+        // it reaches 1 (our copy). We use `try_unwrap` rather than
+        // `Arc::strong_count` + race-prone manual checking, then yield
+        // briefly if another thread still holds a clone so we do not
+        // pin a CPU core on long-running calls.
+        loop {
+            match Arc::try_unwrap(entry) {
+                Ok(mutex) => {
+                    // Drop here closes the SQLCipher connection and
+                    // zeroizes the master key (`FfiRuntime::Drop`).
+                    drop(mutex);
+                    return Ok(());
+                }
+                Err(returned) => {
+                    entry = returned;
+                    // 1 ms sleep balances responsiveness against CPU
+                    // burn for the common case of short in-flight calls.
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
             }
         }
-    }
+    })
 }
 
 fn parse_master_key_hex(hex: &str) -> FfiResult<MasterKey> {

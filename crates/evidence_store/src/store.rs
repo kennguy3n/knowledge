@@ -1333,6 +1333,19 @@ impl EvidenceStore {
         self.scope_keys.read().unwrap().clone()
     }
 
+    /// Count the entries in the in-memory scope-key cache without
+    /// cloning every key. Used by the FFI `health_check` crypto
+    /// probe (which only needs the count, not the keys) so the
+    /// per-probe cost stays O(1) instead of O(N · key-bytes). The
+    /// underlying lock is a `std::sync::RwLock` shared read guard,
+    /// so concurrent count-readers do not serialize against each
+    /// other; a writer (e.g. a `register_scope_key` path) will
+    /// still briefly block readers, but the critical section is a
+    /// single `HashMap::len()`.
+    pub fn cached_scope_key_count(&self) -> usize {
+        self.scope_keys.read().unwrap().len()
+    }
+
     /// Remove a scope key from the in-memory cache only (does NOT
     /// touch the `scope_deks` table). Used during `open_store` to
     /// evict keys for forgotten scopes as a defense-in-depth measure.

@@ -20,6 +20,37 @@ struct AdapterActivity {
     loaded: bool,
 }
 
+/// Static table of every [`InferenceTask`] variant — re-exported
+/// from [`InferenceTask::ALL`] so the canonical list lives next to
+/// the enum itself and the router never has to maintain a second
+/// copy. The `all_is_exhaustive` test in `task.rs` pins cardinality
+/// and order to the enum's variants via an exhaustive `match`, so
+/// adding a variant to `InferenceTask` without appending it to
+/// `InferenceTask::ALL` is a **compile error**.
+const ALL_TASKS: &[InferenceTask] = InferenceTask::ALL;
+
+/// Wire-flat view of one adapter's current state. Returned by
+/// [`InferenceRouter::adapter_states`].
+#[derive(Debug, Clone)]
+pub struct AdapterState {
+    /// Stable string tag for the adapter (the `kind` field).
+    pub kind: AdapterKind,
+    /// `true` once [`InferenceAdapter::probe`] returned
+    /// [`ProbeResult::Available`] and no subsequent failure marked
+    /// the adapter offline.
+    pub available: bool,
+    /// `true` iff the adapter is currently loaded into memory
+    /// (i.e. has been dispatched to and not yet swept idle by
+    /// [`InferenceRouter::sweep_idle_adapters`]).
+    pub loaded: bool,
+    /// Tasks this adapter declares it can serve via
+    /// [`InferenceAdapter::supports`]. Empty when the adapter is
+    /// available but supports none of the substrate's tasks (e.g.
+    /// a misconfigured `FallbackAdapter` on a device tier that
+    /// disabled classification).
+    pub supports: Vec<InferenceTask>,
+}
+
 /// The on-device inference router.
 ///
 /// Holds an ordered list of [`InferenceAdapter`]s — typically `MLX →
@@ -445,6 +476,44 @@ impl InferenceRouter {
             .any(|entry| entry.kind == kind && entry.loaded)
     }
 
+    /// Wire-flat view of every adapter registered with this router.
+    ///
+    /// Returned in priority order (index 0 = highest priority) so a
+    /// host's diagnostic UI can present the same ladder the router
+    /// would walk on the next [`Self::dispatch`] call. Each entry
+    /// carries the adapter's stable [`AdapterKind`], its current
+    /// availability (post-`probe`), its `loaded` flag (post-idle-
+    /// sweep), and the list of [`InferenceTask`]s it supports.
+    ///
+    /// Used by the Phase 6 `ffi::health::health_check` envelope so
+    /// platform hosts can render a per-adapter status panel without
+    /// having to thread separate accessors for every property.
+    /// The result is a snapshot — concurrent dispatches may flip
+    /// `loaded` after the call returns.
+    #[must_use]
+    pub fn adapter_states(&self) -> Vec<AdapterState> {
+        let activity = self.activity.lock().expect("activity lock");
+        self.adapters
+            .iter()
+            .map(|adapter| {
+                let kind = adapter.kind();
+                let loaded = activity
+                    .iter()
+                    .any(|entry| entry.kind == kind && entry.loaded);
+                AdapterState {
+                    kind,
+                    available: adapter.is_available(),
+                    loaded,
+                    supports: ALL_TASKS
+                        .iter()
+                        .copied()
+                        .filter(|task| adapter.supports(*task))
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+
     fn mark_active(&self, idx: usize, loaded: bool) {
         let mut activity = self.activity.lock().expect("activity lock");
         if let Some(entry) = activity.get_mut(idx) {
@@ -556,6 +625,65 @@ mod tests {
     fn router_with(adapters: Vec<Box<dyn InferenceAdapter>>) -> InferenceRouter {
         let config = RouterConfig::default().with_device_tier(DeviceTier::High);
         InferenceRouter::new(config, adapters)
+    }
+
+    #[test]
+    fn adapter_states_lists_every_adapter_in_priority_order() {
+        let mlx = MockAdapter::new(
+            AdapterKind::Mlx,
+            true,
+            vec![
+                InferenceTask::TagImportance,
+                InferenceTask::SynthSummary,
+                InferenceTask::SynthConcept,
+            ],
+            Ok("ok".into()),
+        );
+        let fallback = MockAdapter::new(
+            AdapterKind::Fallback,
+            true,
+            vec![
+                InferenceTask::TagImportance,
+                InferenceTask::ExtractEntities,
+                InferenceTask::PromoteObservation,
+            ],
+            Ok("ok".into()),
+        );
+        let router = router_with(vec![Box::new(mlx), Box::new(fallback)]);
+
+        let states = router.adapter_states();
+        assert_eq!(states.len(), 2);
+        assert_eq!(states[0].kind, AdapterKind::Mlx);
+        assert_eq!(states[1].kind, AdapterKind::Fallback);
+        assert!(states[0].available);
+        assert!(states[1].available);
+        assert!(!states[0].loaded);
+        assert!(!states[1].loaded);
+        assert_eq!(states[0].supports.len(), 3);
+        assert_eq!(states[1].supports.len(), 3);
+        assert!(states[0].supports.contains(&InferenceTask::SynthSummary));
+        assert!(states[1]
+            .supports
+            .contains(&InferenceTask::PromoteObservation));
+    }
+
+    #[test]
+    fn adapter_states_reflects_unavailability() {
+        let offline = MockAdapter::new(
+            AdapterKind::LlamaCpp,
+            false,
+            vec![InferenceTask::SynthSummary],
+            Err(RouterError::Unavailable { task: "x" }),
+        );
+        let router = router_with(vec![Box::new(offline)]);
+        let states = router.adapter_states();
+        assert_eq!(states.len(), 1);
+        assert!(!states[0].available);
+        assert!(!states[0].loaded);
+        // Even an unavailable adapter must report what it would
+        // support if it WERE available — the field describes the
+        // adapter's contract, not its current state.
+        assert_eq!(states[0].supports, vec![InferenceTask::SynthSummary]);
     }
 
     #[test]
