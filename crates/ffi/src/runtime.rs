@@ -846,10 +846,11 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         inference_router,
     };
 
-    // Mirror the freshly-replayed tombstone set into the metrics
-    // gauge so the health envelope reports the post-replay count
-    // even before any FFI call has touched `forget`.
-    crate::metrics::set_tombstone_count(runtime.registry.tombstones().count() as u64);
+    // Capture the post-replay tombstone count before moving `runtime`
+    // into the registry; we publish it only after the insert succeeds
+    // (see below) so the gauge can never reflect a runtime that was
+    // rejected by the collision check.
+    let tombstones_after_replay = runtime.registry.tombstones().count() as u64;
 
     let mut guard = write_registry();
     // Allocation is monotonic via `NEXT`, so a collision against an
@@ -866,7 +867,13 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         });
     }
     guard.insert(handle.0, Arc::new(Mutex::new(runtime)));
+    // Publish the open_handles + tombstone_count gauges inside the
+    // write lock so both gauges are atomically consistent with the
+    // registry mutation. The tombstone gauge mirrors the freshly-
+    // replayed set so the health envelope reports the post-replay
+    // count even before any FFI call has touched `forget`.
     crate::metrics::set_open_handles(guard.len() as u64);
+    crate::metrics::set_tombstone_count(tombstones_after_replay);
     Ok(handle)
 }
 
