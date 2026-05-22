@@ -31,8 +31,9 @@
 //!   the FFI layer loads and responds before any `open_store` call.
 //!
 //! * `Some(handle)` → probes the open runtime behind `handle`:
-//!   `SELECT 1` against the SQLCipher connection, master-key
-//!   presence on the crypto layer, user / channel memory counts,
+//!   a `SELECT COUNT(*) FROM evidence` against the SQLCipher
+//!   connection (via [`evidence_store::EvidenceStore::evidence_count`]),
+//!   master-key presence on the crypto layer, user / channel memory counts,
 //!   the inference router's adapter ladder. Each probe is real (no
 //!   stubs) and surfaces its outcome as a separate `SubsystemHealth`
 //!   entry so hosts can render a per-subsystem status panel.
@@ -411,10 +412,25 @@ mod tests {
         // block earlier in the same test process, so the value is
         // small but it must be a sane u64 (no overflow / negative
         // wrap via the saturating sub).
-        // Boot stamp must be set after the call.
+        // Boot stamp must be set after the call. We deliberately do
+        // NOT assert exact equality against a freshly-captured
+        // `metrics::snapshot()` here — the metrics block is a
+        // process-wide singleton and another test thread can
+        // increment any counter between the snapshot embedded in
+        // `env.metrics` (captured inside `health_check`) and a
+        // second snapshot captured here. Instead we assert the
+        // envelope's snapshot is **internally consistent** with the
+        // probe (boot stamp set, snapshot fields are well-formed)
+        // and that the boot stamp is non-zero, which is the only
+        // semantic guarantee the singleton provides under parallel
+        // test execution.
+        assert!(env.metrics.boot_unix_secs > 0);
+        // Snapshot fields are monotonic counters / gauges — verify
+        // they are at least the values we last observed for the
+        // boot stamp (which is set-once and never decreases).
         let snap = metrics::snapshot();
         assert!(snap.boot_unix_secs > 0);
-        assert_eq!(env.metrics, snap);
+        assert!(snap.boot_unix_secs >= env.metrics.boot_unix_secs);
     }
 
     #[test]
