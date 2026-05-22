@@ -195,11 +195,11 @@ pedantic = { level = "warn", priority = -1 }
 #
 # Note that `crates/crypto/Cargo.toml` does NOT inherit
 # `[lints] workspace = true` — it maintains its own fully
-# independent `[lints.clippy]` block and already pins
-# `cast_possible_truncation` / `cast_sign_loss` /
-# `cast_possible_wrap` to `deny` there for the same reasons.
-# Every other workspace crate inherits these denials via
-# `[lints] workspace = true`.
+# independent `[lints.clippy]` block and restates all four
+# (`cast_possible_truncation` / `cast_sign_loss` /
+# `cast_possible_wrap` / `float_cmp`) to `deny` there for the
+# same reasons. Every other workspace crate inherits these
+# denials via `[lints] workspace = true`.
 cast_possible_truncation = "deny"
 cast_sign_loss = "deny"
 cast_possible_wrap = "deny"
