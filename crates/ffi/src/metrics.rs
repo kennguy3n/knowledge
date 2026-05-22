@@ -80,6 +80,15 @@ pub(crate) struct Metrics {
     pub(crate) encrypt_total: AtomicU64,
     pub(crate) decrypt_total: AtomicU64,
     pub(crate) generate_keypair_total: AtomicU64,
+    /// Total `health_check` calls initiated. Counted on both the
+    /// bridge-only (no-handle) path and the full-probe (valid-handle)
+    /// path. The `Err` path (unknown / closed handle) still
+    /// increments this counter, then also feeds `errors_total` /
+    /// `errors_by_kind.unavailable` via the `metrics::instrument`
+    /// wrapper. Without this the substrate would have no visibility
+    /// into health-probe traffic — a regression where hosts spin
+    /// on `health_check` would be invisible to operators.
+    pub(crate) health_check_total: AtomicU64,
     /// Total `try_init_tracing` calls (counted whether the underlying
     /// `tracing-subscriber` feature is compiled in or not — the
     /// counter exists in [`Metrics`] unconditionally so the wire
@@ -183,6 +192,7 @@ counter_inc!(pub(crate) fn inc_close_store => close_store_total);
 counter_inc!(pub(crate) fn inc_encrypt => encrypt_total);
 counter_inc!(pub(crate) fn inc_decrypt => decrypt_total);
 counter_inc!(pub(crate) fn inc_generate_keypair => generate_keypair_total);
+counter_inc!(pub(crate) fn inc_health_check => health_check_total);
 // Feature-gated to match the only call site
 // (`crate::tracing_init::try_init_tracing`). The counter *field*
 // in `MetricsSnapshot` stays unconditional so the wire shape does
@@ -281,6 +291,11 @@ pub struct MetricsSnapshot {
     pub decrypt_total: u64,
     /// Total `generate_keypair` calls initiated.
     pub generate_keypair_total: u64,
+    /// Total `health_check` calls initiated — every probe (bridge
+    /// only and full) increments this, including the `Err` path for
+    /// an unknown / closed handle (the `Err` path also feeds
+    /// `errors_by_kind.unavailable`).
+    pub health_check_total: u64,
     /// Total `try_init_tracing` calls initiated. Always present in
     /// the snapshot — when the `tracing-subscriber` feature is off,
     /// the substrate exposes no entry point that touches this
@@ -352,6 +367,7 @@ pub fn snapshot() -> MetricsSnapshot {
         encrypt_total: m.encrypt_total.load(Ordering::Relaxed),
         decrypt_total: m.decrypt_total.load(Ordering::Relaxed),
         generate_keypair_total: m.generate_keypair_total.load(Ordering::Relaxed),
+        health_check_total: m.health_check_total.load(Ordering::Relaxed),
         init_tracing_total: m.init_tracing_total.load(Ordering::Relaxed),
         errors_by_kind: ErrorCounters {
             unimplemented: m.errors_unimplemented.load(Ordering::Relaxed),

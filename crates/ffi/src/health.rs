@@ -164,35 +164,45 @@ pub enum SubsystemStatus {
 /// Forwards `FfiError::Unavailable` when `handle` is invalid;
 /// otherwise the call is infallible.
 pub fn health_check(handle: Option<RuntimeHandle>) -> FfiResult<HealthStatus> {
-    // Force the metrics block to initialise before reading the
-    // boot stamp — `health_check` is one of the entry points
-    // listed in the metrics docs as anchoring uptime.
-    metrics::prime();
+    // Wrap the body with `metrics::instrument` per the CONTRIBUTING.md
+    // observability rule: every public FFI entry point increments
+    // `<name>_total` before its body runs and feeds the `Err` path
+    // through `inc_error`. Hosts that spin on `health_check` will
+    // now show up in `health_check_total`; an `Err` from an invalid
+    // handle increments both `health_check_total` AND
+    // `errors_by_kind.unavailable`, matching the contract of every
+    // other handle-keyed entry point.
+    metrics::instrument(metrics::inc_health_check, || {
+        // Force the metrics block to initialise before reading the
+        // boot stamp — `health_check` is one of the entry points
+        // listed in the metrics docs as anchoring uptime.
+        metrics::prime();
 
-    let mut subsystems = vec![bridge_subsystem()];
+        let mut subsystems = vec![bridge_subsystem()];
 
-    match handle {
-        None => Ok(finish_envelope(subsystems)),
-        Some(RuntimeHandle(0)) => Err(FfiError::Unavailable {
-            subsystem: "evidence_store".into(),
-        }),
-        Some(h) => {
-            runtime::with_runtime(h, |rt| {
-                // Refresh the tombstone gauge before snapshotting
-                // so the returned envelope reflects the runtime
-                // we just probed.
-                let tombstones = rt.registry().tombstones().count() as u64;
-                metrics::set_tombstone_count(tombstones);
+        match handle {
+            None => Ok(finish_envelope(subsystems)),
+            Some(RuntimeHandle(0)) => Err(FfiError::Unavailable {
+                subsystem: "evidence_store".into(),
+            }),
+            Some(h) => {
+                runtime::with_runtime(h, |rt| {
+                    // Refresh the tombstone gauge before snapshotting
+                    // so the returned envelope reflects the runtime
+                    // we just probed.
+                    let tombstones = rt.registry().tombstones().count() as u64;
+                    metrics::set_tombstone_count(tombstones);
 
-                subsystems.push(evidence_store_subsystem(rt));
-                subsystems.push(crypto_subsystem(rt, tombstones));
-                subsystems.push(memory_manager_subsystem(rt));
-                subsystems.push(inference_router_subsystem(rt));
-                Ok(())
-            })?;
-            Ok(finish_envelope(subsystems))
+                    subsystems.push(evidence_store_subsystem(rt));
+                    subsystems.push(crypto_subsystem(rt, tombstones));
+                    subsystems.push(memory_manager_subsystem(rt));
+                    subsystems.push(inference_router_subsystem(rt));
+                    Ok(())
+                })?;
+                Ok(finish_envelope(subsystems))
+            }
         }
-    }
+    })
 }
 
 // ─── Per-subsystem probes ──────────────────────────────────────────
@@ -211,9 +221,12 @@ fn bridge_subsystem() -> SubsystemHealth {
 }
 
 /// Evidence store probe. Runs `evidence_count()` against the open
-/// SQLCipher connection — a real `SELECT COUNT(*) FROM evidence_rows`
+/// SQLCipher connection — a real `SELECT COUNT(*) FROM evidence`
+/// (table is named `evidence`; see `crates/evidence_store/src/schema.rs`)
 /// that exercises the AEAD decryption path. Reports the row count
-/// on `Ok`, the underlying error on failure.
+/// on `Ok`, the underlying error on failure. The `detail` string
+/// uses the label `evidence_rows=…` which is the display label on
+/// the host UI, not the table name.
 fn evidence_store_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     match rt.store().evidence_count() {
         Ok(count) => SubsystemHealth {
