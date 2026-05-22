@@ -80,6 +80,11 @@ pub(crate) struct Metrics {
     pub(crate) encrypt_total: AtomicU64,
     pub(crate) decrypt_total: AtomicU64,
     pub(crate) generate_keypair_total: AtomicU64,
+    /// Total `escape_fts_query` calls. Pure string transform, no
+    /// `Err` path — a non-zero value here is a signal of host
+    /// search activity volume, useful when correlating against
+    /// `query_total` to see escape-helper-to-query ratio.
+    pub(crate) escape_fts_query_total: AtomicU64,
     /// Total `health_check` calls initiated. Counted on both the
     /// bridge-only (no-handle) path and the full-probe (valid-handle)
     /// path. The `Err` path (unknown / closed handle) still
@@ -192,6 +197,7 @@ counter_inc!(pub(crate) fn inc_close_store => close_store_total);
 counter_inc!(pub(crate) fn inc_encrypt => encrypt_total);
 counter_inc!(pub(crate) fn inc_decrypt => decrypt_total);
 counter_inc!(pub(crate) fn inc_generate_keypair => generate_keypair_total);
+counter_inc!(pub(crate) fn inc_escape_fts_query => escape_fts_query_total);
 counter_inc!(pub(crate) fn inc_health_check => health_check_total);
 // Feature-gated to match the only call site
 // (`crate::tracing_init::try_init_tracing`). The counter *field*
@@ -291,6 +297,9 @@ pub struct MetricsSnapshot {
     pub decrypt_total: u64,
     /// Total `generate_keypair` calls initiated.
     pub generate_keypair_total: u64,
+    /// Total `escape_fts_query` calls. Pure string transform, no
+    /// error counter sibling.
+    pub escape_fts_query_total: u64,
     /// Total `health_check` calls initiated — every probe (bridge
     /// only and full) increments this, including the `Err` path for
     /// an unknown / closed handle (the `Err` path also feeds
@@ -367,6 +376,7 @@ pub fn snapshot() -> MetricsSnapshot {
         encrypt_total: m.encrypt_total.load(Ordering::Relaxed),
         decrypt_total: m.decrypt_total.load(Ordering::Relaxed),
         generate_keypair_total: m.generate_keypair_total.load(Ordering::Relaxed),
+        escape_fts_query_total: m.escape_fts_query_total.load(Ordering::Relaxed),
         health_check_total: m.health_check_total.load(Ordering::Relaxed),
         init_tracing_total: m.init_tracing_total.load(Ordering::Relaxed),
         errors_by_kind: ErrorCounters {

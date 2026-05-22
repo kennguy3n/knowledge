@@ -269,6 +269,11 @@ pub fn query(
 /// ```
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 pub fn escape_fts_query(input: String) -> String {
+    // Pure string transform, infallible — no `metrics::instrument`
+    // wrapper (which only fits `FfiResult<T>` for `Err` routing),
+    // just the per-call counter. Increment before the body runs so
+    // semantics match every other entry point ("calls initiated").
+    crate::metrics::inc_escape_fts_query();
     let mut out = String::with_capacity(input.len() + 2);
     out.push('"');
     for ch in input.chars() {

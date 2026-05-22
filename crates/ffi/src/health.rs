@@ -222,11 +222,17 @@ fn bridge_subsystem() -> SubsystemHealth {
 
 /// Evidence store probe. Runs `evidence_count()` against the open
 /// SQLCipher connection — a real `SELECT COUNT(*) FROM evidence`
-/// (table is named `evidence`; see `crates/evidence_store/src/schema.rs`)
-/// that exercises the AEAD decryption path. Reports the row count
-/// on `Ok`, the underlying error on failure. The `detail` string
-/// uses the label `evidence_rows=…` which is the display label on
-/// the host UI, not the table name.
+/// (table is named `evidence`; see `crates/evidence_store/src/schema.rs`).
+/// Exercises the SQLCipher session: the cipher key is unwrapped, the
+/// SQLite VFS reads + decrypts the encrypted page(s) backing the
+/// `evidence` table at the page-cipher layer (default PRAGMA cipher,
+/// AES-256-CBC + HMAC-SHA512), and the count is returned. The probe
+/// does NOT exercise the per-body XChaCha20-Poly1305 AEAD layer in
+/// `crates/crypto` (a row count never touches the `body` blob) —
+/// for that, hosts can issue a real query/get_evidence call after
+/// the probe, which does decrypt one or more bodies. The `detail`
+/// string uses the label `evidence_rows=…` which is the display
+/// label on the host UI, not the table name.
 fn evidence_store_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     match rt.store().evidence_count() {
         Ok(count) => SubsystemHealth {
