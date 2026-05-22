@@ -72,7 +72,6 @@ return_self_not_must_use = "allow"
 needless_pass_by_value = "allow"
 cast_lossless = "allow"
 cast_precision_loss = "allow"
-float_cmp = "allow"
 doc_markdown = "allow"
 struct_excessive_bools = "allow"
 multiple_crate_versions = "allow"
@@ -87,9 +86,14 @@ uninlined_format_args = "allow"
 needless_continue = "allow"
 match_same_arms = "allow"
 # Re-enable cast lints that are security-critical for crypto code.
-# These are suppressed workspace-wide for convenience but must be
-# enforced in this crate to prevent silent truncation / sign-flip
-# bugs in key-length arithmetic and epoch-size calculations.
+# These match the workspace-level deny (Cargo.toml:203-205) but are
+# restated here because the crypto crate does NOT inherit
+# `[lints] workspace = true` — it maintains its own fully
+# independent block. Keeping the explicit deny here means the
+# crate's policy survives even if a maintainer ever removes the
+# workspace-level deny. Enforce these to prevent silent
+# truncation / sign-flip bugs in key-length arithmetic and
+# epoch-size calculations.
 cast_possible_truncation = "deny"
 cast_sign_loss = "deny"
 cast_possible_wrap = "deny"
