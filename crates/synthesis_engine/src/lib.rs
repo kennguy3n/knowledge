@@ -23,7 +23,8 @@
 //! to operate on raw evidence rows or cross-scope objects.
 //!
 //! Ships two leaf implementations of the [`SynthesisEngine`] trait
-//! and one wrapper that delegates to them:
+//! plus one TEE-attested wrapper that delegates to the production
+//! leaf:
 //!
 //! * [`ManagedEndpointSynthesizer`] (in the `stub` module) — a
 //!   deterministic test scaffold that concatenates the input
