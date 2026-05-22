@@ -22,7 +22,8 @@
 //! [`synthesis_pipeline::TenantSynthesisInput`] arguments and refuse
 //! to operate on raw evidence rows or cross-scope objects.
 //!
-//! Ships two implementations of the [`SynthesisEngine`] trait:
+//! Ships two leaf implementations of the [`SynthesisEngine`] trait
+//! and one wrapper that delegates to them:
 //!
 //! * [`ManagedEndpointSynthesizer`] (in the `stub` module) — a
 //!   deterministic test scaffold that concatenates the input
@@ -35,9 +36,16 @@
 //!   module) — the production synthesizer. POSTs the serialised
 //!   channel- / domain-input payloads to a managed AI endpoint
 //!   over the framework's `HttpClient`, parses the response, and
-//!   emits the corresponding `SynthesisObject`. This is what
-//!   [`TeeWorker::synthesize_domain`] / [`TeeWorker::synthesize_tenant`]
-//!   dispatch through.
+//!   emits the corresponding `SynthesisObject`.
+//! * [`TeeWorker`] (in the `tee_worker` module) — the TEE-attested
+//!   wrapper. Also implements `SynthesisEngine` directly so hosts
+//!   can dispatch through a single trait object, but its
+//!   `synthesize_domain` / `synthesize_tenant` bodies just wrap
+//!   `enter_synthesizing` / `exit_synthesizing` attestation guards
+//!   around a delegated call to its embedded
+//!   `HttpManagedEndpointSynthesizer`. Not a third leaf
+//!   implementation — a wrapper that adds the attestation
+//!   choreography around the leaf.
 
 #![deny(missing_docs)]
 
