@@ -93,6 +93,35 @@ static INSTALLED: OnceLock<()> = OnceLock::new();
 /// returns `Ok(())`. On every subsequent call it short-circuits to
 /// `Ok(())` without re-installing.
 ///
+/// # Concurrency — "first directive wins"
+///
+/// Hosts are expected to call `try_init_tracing` exactly once
+/// during early-boot. If two threads race into this function
+/// concurrently with **different** directives, the contract is
+/// well-defined but may surprise the loser:
+///
+/// 1. Both threads pass the `INSTALLED.get().is_some()` check
+///    (which returns `false` until the global default is set).
+/// 2. Both construct an `EnvFilter` from their respective
+///    directives and call `try_init()` on the global subscriber.
+/// 3. **The first to reach `set_global_default` wins**
+///    (`tracing-subscriber` uses an atomic compare-and-swap). The
+///    second `try_init()` returns `Err` and is silently dropped
+///    by the `let _ = …` discard.
+/// 4. Both threads then call `INSTALLED.set(())` (idempotent) and
+///    `mark_tracing_initialized()` (idempotent) and return
+///    `Ok(())`.
+///
+/// Net effect: the runner-up's directive is dropped without a
+/// signal, and the runner-up still gets `Ok(())`. This is safe (no
+/// data corruption; the host still has a working subscriber) but
+/// non-deterministic with respect to which directive ends up
+/// installed. Hosts that need a deterministic filter should
+/// serialise calls themselves (e.g. behind a host-side
+/// `OnceCell`) or call this once from a single early-boot
+/// codepath. The runner-up's `Ok(())` is intentional: it preserves
+/// the "idempotent boot" contract every other entry point upholds.
+///
 /// # Subscriber shape
 ///
 /// The installed subscriber is the canonical

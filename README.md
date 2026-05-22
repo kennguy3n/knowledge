@@ -117,8 +117,14 @@ synthesis APIs. The currently live entry points are:
 `get_evidence`, `forget`, `forget_scope`, `encrypt`, `decrypt`,
 `generate_keypair`, `get_user_memory`, `pin`, `unpin`,
 `list_memories`, `run_decay_sweep`, `get_channel_memory`,
-`escape_fts_query`, `trigger_synthesis`, `core_version`, and
-`health_check`.
+`escape_fts_query`, `trigger_synthesis`, `core_version`,
+`health_check`, and — gated by the `tracing-subscriber` Cargo
+feature on `crates/ffi` — `try_init_tracing` (JS: `initTracing`).
+The tracing helper is feature-gated because it's the only entry
+point that pulls a non-trivial dependency (`tracing-subscriber`);
+hosts that install their own subscriber don't pay the cost. See
+[Observability — metrics, tracing, health](#observability--metrics-tracing-health)
+for the full surface contract.
 
 The N-API surface in `crates/napi` exposes these as `camelCase`
 JS names (e.g. `openStore`, `ingestMessage`, `coreVersion`,
