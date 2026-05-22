@@ -72,7 +72,6 @@ return_self_not_must_use = "allow"
 needless_pass_by_value = "allow"
 cast_lossless = "allow"
 cast_precision_loss = "allow"
-float_cmp = "allow"
 doc_markdown = "allow"
 struct_excessive_bools = "allow"
 multiple_crate_versions = "allow"
@@ -86,10 +85,24 @@ unreadable_literal = "allow"
 uninlined_format_args = "allow"
 needless_continue = "allow"
 match_same_arms = "allow"
-# Re-enable cast lints that are security-critical for crypto code.
-# These are suppressed workspace-wide for convenience but must be
-# enforced in this crate to prevent silent truncation / sign-flip
-# bugs in key-length arithmetic and epoch-size calculations.
+# Re-enable the four safety-relevant numeric-conversion +
+# comparison lints. These match the workspace-level deny (see
+# Cargo.toml:203-206) but are restated here because the crypto
+# crate does NOT inherit `[lints] workspace = true` — it
+# maintains its own fully independent block. Keeping the
+# explicit deny here means the crate's policy survives even if
+# a maintainer ever removes the workspace-level deny.
+#
+# Enforced to prevent silent truncation / sign-flip bugs in
+# key-length arithmetic and epoch-size calculations
+# (`cast_possible_truncation` / `cast_sign_loss` /
+# `cast_possible_wrap`), and to prevent direct `==` / `!=`
+# comparisons on floats sneaking in via future code
+# (`float_cmp`). The crypto crate has no `f32` / `f64` usage
+# today, so the float deny is currently a no-op; it is kept for
+# parity with the workspace policy and to fail-closed if float
+# math is ever introduced.
 cast_possible_truncation = "deny"
 cast_sign_loss = "deny"
 cast_possible_wrap = "deny"
+float_cmp = "deny"

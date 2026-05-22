@@ -22,9 +22,31 @@
 //! [`synthesis_pipeline::TenantSynthesisInput`] arguments and refuse
 //! to operate on raw evidence rows or cross-scope objects.
 //!
-//! Ships a [`ManagedEndpointSynthesizer`] stub that deterministically
-//! concatenates the input payloads. The real managed-AI endpoint
-//! adapter lands when the SLM gateway is wired through.
+//! Ships two leaf implementations of the [`SynthesisEngine`] trait
+//! plus one TEE-attested wrapper that delegates to the production
+//! leaf:
+//!
+//! * [`ManagedEndpointSynthesizer`] (in the `stub` module) — a
+//!   deterministic test scaffold that concatenates the input
+//!   payloads with a hierarchy-tier prefix. Used by end-to-end
+//!   tests and the demo binary to pin contract behaviour without
+//!   issuing real network calls. The `stub` name is descriptive,
+//!   not aspirational — a deterministic concatenator is exactly
+//!   what those tests need.
+//! * [`HttpManagedEndpointSynthesizer`] (in the `managed_endpoint`
+//!   module) — the production synthesizer. POSTs the serialised
+//!   channel- / domain-input payloads to a managed AI endpoint
+//!   over the framework's `HttpClient`, parses the response, and
+//!   emits the corresponding `SynthesisObject`.
+//! * [`TeeWorker`] (in the `tee_worker` module) — the TEE-attested
+//!   wrapper. Also implements `SynthesisEngine` directly so hosts
+//!   can dispatch through a single trait object, but its
+//!   `synthesize_domain` / `synthesize_tenant` bodies just wrap
+//!   `enter_synthesizing` / `exit_synthesizing` attestation guards
+//!   around a delegated call to its embedded
+//!   `HttpManagedEndpointSynthesizer`. Not a third leaf
+//!   implementation — a wrapper that adds the attestation
+//!   choreography around the leaf.
 
 #![deny(missing_docs)]
 

@@ -3,8 +3,15 @@
 //! Per `docs/DESIGN.md` §10.2 a connector is the boundary between the
 //! substrate and one external source system. The trait is kept
 //! deliberately small and synchronous so it can be unit-tested
-//! against in-memory fakes; the production runtime wraps each
-//! method in async tasks.
+//! against in-memory fakes and so the same implementor compiles
+//! on hosts without a tokio toolchain.
+//!
+//! Production hosts that want async dispatch wrap the sync
+//! implementor in [`crate::async_runtime::BlockingConnectorAdapter`]
+//! and run sync calls on tokio's blocking-task pool via
+//! `spawn_blocking`, which exposes the async surface
+//! [`crate::async_runtime::AsyncConnector`] without forcing every
+//! connector to maintain two parallel impls.
 
 use crate::config::ConnectorConfig;
 use crate::error::Result;

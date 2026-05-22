@@ -176,6 +176,34 @@ unsafe_code = "deny"
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+# Safety-relevant numeric-conversion + comparison lints. All four
+# live in `clippy::pedantic` (which is set to `warn` two lines
+# above with priority -1), so without the explicit `deny` entries
+# below they would each be a warning rather than an error. Pin
+# them at `deny` at the default priority so the safety policy is
+# declarative in this file rather than only enforced indirectly
+# via CI's `-D warnings` flag — a future change to the CI
+# invocation must not be able to silently relax these.
+#
+# Cast sites that legitimately need the lossy / sign-discarding
+# behaviour opt in locally with a `#[allow(clippy::cast_…)]`
+# attribute next to the cast, justifying the bound in a comment
+# — see e.g. `crates/audit_service/src/persist.rs:393` (clamped
+# `u64 -> i64` for SQLite row IDs) and `crates/demo/src/phases/crypto.rs`
+# (deterministic test vectors where the cast cannot truncate by
+# construction).
+#
+# Note that `crates/crypto/Cargo.toml` does NOT inherit
+# `[lints] workspace = true` — it maintains its own fully
+# independent `[lints.clippy]` block and restates all four
+# (`cast_possible_truncation` / `cast_sign_loss` /
+# `cast_possible_wrap` / `float_cmp`) to `deny` there for the
+# same reasons. Every other workspace crate inherits these
+# denials via `[lints] workspace = true`.
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+cast_possible_wrap = "deny"
+float_cmp = "deny"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
