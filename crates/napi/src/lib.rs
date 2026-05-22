@@ -47,9 +47,12 @@ pub mod error;
 pub mod types;
 
 pub use error::{NapiError, NapiResult};
+#[cfg(feature = "tracing-subscriber")]
+pub use ffi::try_init_tracing;
 pub use ffi::{
-    EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord,
-    MemoryState, QueryResult, RuntimeHandle, ScopeIdString, SourceKind, SynthesisTrigger,
+    AdapterReport, EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, HealthStatus,
+    MemoryFilter, MemoryRecord, MemoryState, MetricsSnapshot, QueryResult, RuntimeHandle,
+    ScopeIdString, SourceKind, SubsystemHealth, SubsystemStatus, SynthesisTrigger,
 };
 pub use types::{IngestRequest, InitConfig, QueryRequest};
 
@@ -322,17 +325,47 @@ pub fn core_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// Lightweight "is the bridge alive?" probe.
+/// Full health envelope sourced from the substrate's metrics +
+/// tracing layer (Phase 6).
 ///
-/// Returns the string `"ok"` synchronously without touching any
-/// subsystems. Phase 6 will replace this with a full `HealthStatus`
-/// envelope sourced from the substrate's metrics + tracing layer; for
-/// now it exists so callers (the desktop status panel and the
-/// `health-check` exit-code probe shipped alongside the addon) can
-/// confirm the FFI layer is reachable before any other call. The
-/// corresponding JS-facing wrapper is [`bindings::js_health_check`].
-pub fn health_check() -> String {
-    "ok".to_string()
+/// `handle` is optional:
+/// * `None` (or [`RuntimeHandle::NONE`]) returns a bridge-only
+///   envelope: just `core_version`, `uptime_secs`,
+///   `tracing_initialized`, a single `bridge` subsystem, and a
+///   metrics snapshot. Hosts call this immediately after loading the
+///   addon, before any [`open_store`] call, to confirm the FFI layer
+///   itself is reachable.
+/// * `Some(handle)` for an open runtime returns a full envelope:
+///   bridge + per-subsystem probes (`evidence_store`, `crypto`,
+///   `memory_manager`, `inference_router`). Each subsystem is probed
+///   with real I/O — `evidence_store` runs a `SELECT COUNT(*)`
+///   against the open SQLCipher connection, `crypto` verifies the
+///   master key is non-zero, `memory_manager` reports the
+///   rehydrated user / channel memory counts, and
+///   `inference_router` returns per-adapter availability via
+///   [`inference_router::InferenceRouter::adapter_states`].
+///
+/// Returns a [`ffi::HealthStatus`] which the napi binding wraps as
+/// a `serde_json::Value` for the JS side. No `Result`: probing
+/// failures are reported as `Degraded` / `Unavailable` subsystem
+/// entries, not propagated as errors — the envelope must always be
+/// returnable so hosts have a single inspectable surface for the
+/// runtime's liveness.
+pub fn health_check(handle: Option<NapiHandle>) -> NapiResult<ffi::HealthStatus> {
+    // Treat the `NapiHandle::NONE` sentinel (`0n`) as "no handle"
+    // so callers can pass `0n` interchangeably with `null`/`undefined`
+    // from the JS side. Any other handle is forwarded as-is; an
+    // unknown handle surfaces as `NapiError::Ffi(FfiError::Unavailable)`
+    // so callers can distinguish "addon is loaded but runtime is
+    // closed" from a bridge-only probe.
+    let handle = handle.and_then(|h| {
+        if h == RuntimeHandle::NONE.0 {
+            None
+        } else {
+            Some(RuntimeHandle(h))
+        }
+    });
+    ffi::health_check(handle).map_err(NapiError::from)
 }
 
 const B64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

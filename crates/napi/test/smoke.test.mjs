@@ -228,8 +228,76 @@ test('coreVersion() matches the workspace Cargo.toml version', () => {
   assert.strictEqual(core.coreVersion(), readCargoVersion());
 });
 
-test('healthCheck() returns "ok" synchronously', () => {
-  assert.strictEqual(core.healthCheck(), 'ok');
+test('healthCheck() with no handle returns a bridge-only envelope', () => {
+  // Phase 6 surface: `healthCheck()` returns a typed envelope, not
+  // the legacy `"ok"` string. Without a handle the substrate skips
+  // the per-runtime subsystem probes and returns just the bridge
+  // entry — useful for the desktop status panel's bootstrap check
+  // before `openStore`.
+  const env = core.healthCheck();
+  assert.strictEqual(typeof env, 'object', 'envelope is an object');
+  assert.strictEqual(env.core_version, readCargoVersion());
+  assert.strictEqual(typeof env.uptime_secs, 'number');
+  assert.ok(env.uptime_secs >= 0, 'uptime_secs is non-negative');
+  assert.strictEqual(typeof env.tracing_initialized, 'boolean');
+  assert.ok(Array.isArray(env.subsystems), 'subsystems is an array');
+  assert.strictEqual(env.subsystems.length, 1);
+  assert.strictEqual(env.subsystems[0].name, 'bridge');
+  assert.strictEqual(env.subsystems[0].status, 'ok');
+  // The metrics block is wire-flat: every counter / gauge is a
+  // sibling field on `env.metrics`, not nested under `counters`.
+  assert.strictEqual(typeof env.metrics, 'object');
+  assert.strictEqual(typeof env.metrics.ingest_total, 'number');
+  assert.strictEqual(typeof env.metrics.query_total, 'number');
+  assert.strictEqual(typeof env.metrics.open_handles, 'number');
+  assert.strictEqual(typeof env.metrics.tombstone_count, 'number');
+  assert.ok(env.metrics.boot_unix_secs > 0, 'boot_unix_secs is set');
+  // The `errors_by_kind` block tracks per-FfiError-kind counters,
+  // also wire-flat. Each field is a non-negative integer.
+  assert.strictEqual(typeof env.metrics.errors_by_kind, 'object');
+  for (const kind of [
+    'unimplemented',
+    'invalid_id',
+    'not_found',
+    'evidence',
+    'memory',
+    'synthesis',
+    'crypto',
+    'unavailable',
+    'inference_failure',
+  ]) {
+    assert.strictEqual(
+      typeof env.metrics.errors_by_kind[kind],
+      'number',
+      `errors_by_kind.${kind} is a number`,
+    );
+  }
+});
+
+test('healthCheck(0n) is equivalent to healthCheck() (NONE-sentinel passthrough)', () => {
+  // The substrate treats the `0n` sentinel as "no handle" so JS
+  // hosts that track an Option-like handle as `0n` for "not yet
+  // opened" can pass it through without a null-check on the JS
+  // side.
+  const a = core.healthCheck();
+  const b = core.healthCheck(0n);
+  assert.deepStrictEqual(a.subsystems, b.subsystems);
+});
+
+test('healthCheck(unknownHandle) surfaces Unavailable error', () => {
+  // Any handle that didn't come from openStore is invalid; the
+  // substrate refuses to fabricate a probe envelope for an
+  // unknown runtime and surfaces `Unavailable` so callers can
+  // distinguish "closed runtime" from "bridge alive but
+  // disconnected".
+  assert.throws(
+    () => core.healthCheck(0xffffffffffffffffn),
+    (err) => {
+      const env = parseEnvelope(err);
+      assert.strictEqual(env.kind, 'Unavailable');
+      return true;
+    },
+  );
 });
 
 test('escapeFtsQuery() round-trips through the FTS5 escape rules', () => {

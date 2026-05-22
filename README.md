@@ -127,9 +127,14 @@ UniFFI surface keeps the `snake_case` names above. `init`,
 `core_version`, and `health_check` are JS-facing bootstrap
 helpers — `init` parses a JSON config blob and primes the core,
 `core_version` returns the workspace semver baked into the build,
-and `health_check` is a synchronous "is the bridge alive?" probe
-that returns `"ok"` (Phase 6 will replace it with a full
-`HealthStatus` envelope sourced from metrics + tracing).
+and `health_check` returns a `HealthStatus` envelope sourced
+from the substrate's metrics + tracing layer (see
+[Observability — metrics, tracing, health](#observability--metrics-tracing-health)
+below). `healthCheck()` called without a handle returns a
+bridge-only envelope; called with an open-store handle it
+includes per-subsystem probes (`evidence_store`, `crypto`,
+`memory_manager`, `inference_router`) that run real I/O against
+the open runtime.
 
 `trigger_synthesis` dispatches a `SynthSummary` task through the
 on-device `InferenceRouter`, persists the resulting recap into
@@ -143,6 +148,56 @@ local `llama-server`); the MLX and fallback adapters are wired as
 follow-on integration points (callback bridge and lexicon-based
 classifier respectively). Host UI shells (Swift, Kotlin,
 Electron) are out of scope for this repository.
+
+### Observability — metrics, tracing, health
+
+The substrate ships a process-wide observability layer in
+`crates/ffi`. Every public FFI entry point increments lock-free
+`AtomicU64` counters before delegating to the underlying core,
+so the snapshot is updated unconditionally — whether the call
+succeeds, fails, or panics.
+
+**Counters and gauges** are exposed via
+[`ffi::metrics::snapshot()`](crates/ffi/src/metrics.rs) and
+embedded in the health envelope. Counters include
+`ingest_total`, `query_total`, `synthesis_triggered_total`,
+`decay_sweeps_total`, `forgets_total`, `forget_scopes_total`,
+`encrypt_total`, `decrypt_total`, plus per-`FfiError`-kind
+counters under `errors_by_kind` (`unimplemented`, `invalid_id`,
+`not_found`, `evidence`, `memory`, `synthesis`, `crypto`,
+`unavailable`, `inference_failure`). Gauges include
+`open_handles` (live runtime registry size) and
+`tombstone_count` (destroyed-DEK registry size on the most
+recently observed handle).
+
+**Health probe** is exposed as `ffi::health_check(handle:
+Option<RuntimeHandle>)` and surfaced to JS as
+`healthCheck(handle?)`. Returns a `HealthStatus` envelope with
+`core_version`, `uptime_secs`, `tracing_initialized`, an
+ordered `subsystems[]` array, and the full `metrics`
+snapshot. With an open handle the probe runs real I/O —
+`evidence_store` issues `SELECT COUNT(*)` against the open
+SQLCipher connection, `crypto` verifies the master key is
+non-zero, `memory_manager` reports rehydrated user / channel
+memory counts, and `inference_router` returns per-adapter
+availability via `InferenceRouter::adapter_states()`. Without a
+handle (or with the `0n` sentinel) the probe returns a
+bridge-only envelope suitable for an Electron `app.whenReady`
+liveness check before `openStore`.
+
+**Tracing** events are emitted via the `tracing` facade
+throughout the workspace. To install a global subscriber from
+the host enable the `tracing-subscriber` feature on `ffi` /
+`napi_addon` and call `ffi::try_init_tracing(directive)` (Rust)
+or `initTracing(directive)` (JS). The directive uses
+[`tracing_subscriber::EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)'s
+`RUST_LOG` syntax — `EnvFilter` uses `::` as the hierarchy
+separator (not `_` or `-`), and each workspace crate is its own
+target. To enable debug across the substrate, enumerate the
+targets explicitly, e.g.
+`RUST_LOG=ffi=debug,evidence_store=debug,inference_router=info`.
+The call is idempotent: a second invocation is a no-op so the
+host can install at startup without guarding against re-init.
 
 ### Connectors and server-side surface — contract-only
 

@@ -150,6 +150,15 @@ hyper-util = { version = "0.1", default-features = false, features = ["tokio", "
 # `RUST_LOG=evidence_store=debug` traces.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 
+# Optional subscriber used by `ffi`'s `tracing-subscriber` feature and
+# the `napi_addon`'s `tracing-subscriber` feature. NOT enabled by
+# default for any crate — the substrate's library-side default is "no
+# subscriber installed, events go nowhere". Hosts opt in explicitly.
+# The `env-filter` feature provides the `RUST_LOG`-syntax
+# `EnvFilter`; `fmt` provides the stderr formatter used by
+# `ffi::tracing_init::try_init_tracing`.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "registry", "std"] }
+
 [workspace.lints.rust]
 # `deny` (rather than `forbid`) so individual crates that need to
 # cross an FFI boundary can opt back in via a localized

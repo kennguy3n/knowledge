@@ -16,6 +16,14 @@ default = []
 # classification tasks work, but synthesis tasks return `Unavailable`
 # because the llama.cpp adapter has no client.
 http-client = ["inference_router/http-client"]
+# Pulls in `tracing-subscriber` and exposes `tracing_init::try_init_tracing`
+# so platform hosts can install a global tracing subscriber from the
+# substrate without taking a direct dependency on `tracing-subscriber`
+# themselves. Without this feature the substrate still emits tracing
+# events via the `tracing` facade but no subscriber is installed by
+# default — hosts can register their own or accept the "events go
+# nowhere" library-side default.
+tracing-subscriber = ["dep:tracing-subscriber"]
 
 [dependencies]
 crypto = { path = "../crypto" }
@@ -30,6 +38,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true, optional = true }
 uuid = { workspace = true }
 zeroize = { workspace = true }
 

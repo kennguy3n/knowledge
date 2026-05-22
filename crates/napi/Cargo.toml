@@ -24,6 +24,17 @@ description = "N-API addon surface for macOS / Windows Electron desktop integrat
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+# Opt in to the substrate's `tracing-subscriber` integration. Adds
+# the `js_init_tracing(directive)` N-API entry point so Electron
+# hosts can install a global `tracing` subscriber at runtime. Forward
+# the feature into the `ffi` crate so its `try_init_tracing` is
+# compiled in. Without this feature the substrate still emits
+# tracing events via the `tracing` facade but no subscriber is
+# installed by default.
+tracing-subscriber = ["ffi/tracing-subscriber"]
+
 [dependencies]
 crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }

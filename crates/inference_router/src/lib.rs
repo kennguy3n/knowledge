@@ -32,5 +32,5 @@ pub use adapters::{
 };
 pub use config::{DeviceTier, RouterConfig, IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PROMPT};
 pub use error::RouterError;
-pub use router::InferenceRouter;
+pub use router::{AdapterState, InferenceRouter};
 pub use task::{InferenceTask, SummaryBundle, TaskTag};

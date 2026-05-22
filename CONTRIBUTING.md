@@ -73,6 +73,23 @@ cargo deny check
   in the crate's top-level doc comment.
 - New `unsafe` requires a `SAFETY:` comment justifying every
   invariant the call relies on.
+- New public FFI entry points (in `crates/ffi/src/lib.rs` and
+  the matching `crates/napi/src/{lib,bindings}.rs` wrappers)
+  must be wired into the observability layer: wrap the body
+  with `metrics::instrument(metrics::inc_<name>, || { … })`
+  after adding the `<name>_total` counter to
+  `crates/ffi/src/metrics.rs`, and probe the relevant
+  subsystem from `crates/ffi/src/health.rs` if the call
+  exercises a subsystem not already covered there. The
+  `health_check` envelope is the single inspectable surface
+  hosts use to introspect the substrate; do not bypass it.
+- The `tracing-subscriber` feature on `ffi` /  `napi_addon`
+  is opt-in. The substrate emits `tracing` events via the
+  facade regardless of the feature, but no subscriber is
+  installed by default. If you add a host-side log call,
+  prefer `tracing::{info,warn,error,debug}!` over `eprintln!`
+  / `println!` so the directive-filtered subscriber controls
+  output.
 
 ## Security
 
