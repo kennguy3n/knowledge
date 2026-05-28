@@ -63,6 +63,7 @@ use uuid::Uuid;
 
 use crate::error::{FfiError, FfiResult};
 use crate::metrics;
+use crate::parse_scope_id;
 use crate::runtime::{with_runtime, FfiRuntime, RuntimeHandle};
 use crate::types::{
     ConnectorKindTag, ConnectorStatus, ScopeIdString, SyncModeKind, SyncReport, SyncStatusKind,
@@ -779,14 +780,14 @@ fn connector_source_tag(kind: ConnectorKind) -> &'static str {
 
 // ───────────────────────── Identifier helpers ────────────────────────
 
-fn parse_scope_id(s: &str) -> FfiResult<ScopeId> {
-    Uuid::parse_str(s)
-        .map(ScopeId)
-        .map_err(|e| FfiError::InvalidId {
-            message: format!("invalid scope id `{s}`: {e}"),
-        })
-}
-
+/// Per-call connector-instance UUID parser.
+///
+/// Kept here (not promoted to `crate::`) because the connector
+/// lifecycle is the only caller — every other crate-internal callsite
+/// owns `ConnectorInstanceId` values directly, never raw strings. If
+/// a future entry point starts accepting instance ids by string from
+/// outside this module, promote to `pub(crate)` in `lib.rs` next to
+/// `parse_scope_id`.
 fn parse_instance_id(s: &str) -> FfiResult<ConnectorInstanceId> {
     Uuid::parse_str(s)
         .map(ConnectorInstanceId)

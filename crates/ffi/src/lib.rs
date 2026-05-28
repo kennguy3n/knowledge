@@ -1313,7 +1313,17 @@ pub fn decrypt(
 
 // ─────────────────────────── Internals ────────────────────────────
 
-fn parse_scope_id(s: &str) -> FfiResult<ScopeId> {
+/// Crate-wide UUID parser for the `ScopeId` newtype.
+///
+/// Originally this helper lived only in `lib.rs`; `connector.rs`
+/// duplicated it with a near-identical implementation (different
+/// error-message format, equivalent semantics). The two copies
+/// drifted under Devin Review which flagged the duplication — they
+/// were consolidated here so a future change to scope-id validation
+/// touches exactly one site. `pub(crate)` visibility intentionally
+/// keeps it out of the FFI surface (UniFFI/N-API hosts call the
+/// public entry points, never this helper directly).
+pub(crate) fn parse_scope_id(s: &str) -> FfiResult<ScopeId> {
     let uuid = uuid::Uuid::parse_str(s).map_err(|e| FfiError::InvalidId {
         message: format!("scope_id: {e}"),
     })?;
