@@ -488,31 +488,37 @@ pub fn refresh_connector_token(
         })?;
         // ── Phase 2+3: refresh + persist (delegated helper) ──
         //
-        // Force the refresh regardless of expiry by passing a skew
-        // larger than any realistic OAuth2 access-token TTL (one
-        // year). The "did we actually refresh?" question is only
-        // meaningful for the `sync_connector` auto-refresh path
-        // where the skew is set to `AUTO_REFRESH_SKEW_SECS`; here
-        // a `false` from the helper would indicate a contract
-        // mismatch with the docs above (the explicit entry point
-        // always refreshes), so we surface it through the
-        // `refreshed` flag for diagnostic clarity rather than
-        // asserting.
+        // Force the refresh regardless of expiry by passing
+        // `skew: None` (force-refresh mode). The helper skips the
+        // `is_expiring_within` check entirely so the explicit
+        // entry point's "always refreshes" contract is unbreakable
+        // regardless of `current_token.expires_at` — no risk that
+        // a far-future expiry (e.g. a misconfigured provider
+        // returning a 100+ year TTL) silently short-circuits a
+        // host-driven refresh.
         //
-        // `started_at` feeds the helper's `is_expiring_within` skew
-        // check; `refreshed_at` is captured AFTER the helper
-        // returns so `RefreshReport::refreshed_at` reflects when
-        // the round-trip actually completed (per `RefreshReport`'s
-        // doc contract), not when it was initiated. For a
+        // The "did we actually refresh?" question is only
+        // meaningful for the `sync_connector` auto-refresh path
+        // where the skew is `Some(AUTO_REFRESH_SKEW_SECS)`; here
+        // a `false` from the helper would indicate a contract
+        // mismatch with the docs above, so we surface it through
+        // the `refreshed` flag for diagnostic clarity rather than
+        // asserting (in practice, force-refresh mode always
+        // returns `true` because the helper never short-circuits).
+        //
+        // `now` is unused inside the helper under force-refresh
+        // mode (the only consumer was `is_expiring_within`, which
+        // we skip), but we still pass `Utc::now()` so the helper's
+        // signature is identical across both callers. The
+        // post-round-trip `RefreshReport::refreshed_at` timestamp
+        // (line below) is captured separately AFTER the helper
+        // returns so it honestly reflects when the round-trip
+        // completed — per `RefreshReport`'s doc contract — rather
+        // than when the FFI call entered the substrate. For a
         // multi-second network call the two timestamps can diverge
         // noticeably and hosts use `refreshed_at` for correlation
-        // / scheduling, so the post-round-trip stamp is the
-        // honest one to surface.
-        let started_at = Utc::now();
-        // `skew: None` = force-refresh mode. The helper never
-        // short-circuits on `is_expiring_within` — the explicit
-        // entry point's "always refreshes" contract is
-        // unbreakable regardless of `current_token.expires_at`.
+        // / scheduling, so the post-round-trip stamp is the honest
+        // one to surface.
         let (new_token, refreshed) = refresh_token_three_phase(
             handle,
             instance,
@@ -520,7 +526,7 @@ pub fn refresh_connector_token(
             token,
             &config,
             None,
-            started_at,
+            Utc::now(),
         )?;
         Ok(RefreshReport {
             instance_id: instance.0.to_string(),
