@@ -116,19 +116,33 @@ piece:
 
 The UniFFI (iOS / Android) and N-API (macOS / Windows) surfaces
 expose the core lifecycle, evidence, crypto, memory, and
-synthesis APIs. The currently live entry points are:
+synthesis APIs. The currently **shared** entry points (mirrored
+across both bindings) are:
 
-`init`, `open_store`, `close_store`, `ingest_message`, `query`,
+`open_store`, `close_store`, `ingest_message`, `query`,
 `get_evidence`, `forget`, `forget_scope`, `encrypt`, `decrypt`,
 `generate_keypair`, `get_user_memory`, `pin`, `unpin`,
 `list_memories`, `run_decay_sweep`, `get_channel_memory`,
-`escape_fts_query`, `trigger_synthesis`, `health_check`, and — gated
-by the `tracing-subscriber` Cargo feature on `crates/ffi` —
-`try_init_tracing` (JS: `initTracing`).
+`escape_fts_query`, `trigger_synthesis`, `health_check`.
 
-Two entry points are intentionally surface-specific rather than
+Four entry points are intentionally surface-specific rather than
 mirrored across both bindings:
 
+* `init` — **N-API only.** A JS-facing bootstrap helper
+  (`crates/napi/src/lib.rs:86`) that parses a JSON config blob and
+  primes the core for Electron / Node hosts. Mobile hosts (iOS /
+  Android) drive the equivalent setup through their native shell
+  init sequence (Swift `init` / Kotlin `Application.onCreate`), so
+  there's no UniFFI export.
+* `try_init_tracing` (JS: `initTracing`) — **N-API only**, gated by
+  the `tracing-subscriber` Cargo feature on `crates/ffi`. The
+  underlying function (`crates/ffi/src/tracing_init.rs:137`) takes
+  a `&str` directive which UniFFI cannot bridge as a parameter
+  (UniFFI requires `String` for owned wire transfer), so adding a
+  `#[uniffi::export]` shim would require changing the Rust
+  signature — deferred to a follow-up. Mobile hosts that need
+  in-process tracing install their own `tracing-subscriber` from
+  Swift / Kotlin instead.
 * `core_version` — **N-API only.** A JS-facing bootstrap helper
   (`crates/ffi/src/health.rs:396-405`) that returns the workspace
   semver baked into the build. Mobile hosts read the same value out
@@ -139,9 +153,7 @@ mirrored across both bindings:
   N-API surface exposes the same data through `health_check`'s
   envelope, so an extra entry point would be redundant on Electron.
 
-The tracing helper is feature-gated because it's the only entry
-point that pulls a non-trivial dependency (`tracing-subscriber`);
-hosts that install their own subscriber don't pay the cost. See
+See
 [Observability — metrics, tracing, health](#observability--metrics-tracing-health)
 for the full surface contract.
 
@@ -150,8 +162,10 @@ JS names (e.g. `openStore`, `ingestMessage`, `coreVersion`,
 `healthCheck`) via `napi-derive`'s standard rename; the Rust /
 UniFFI surface keeps the `snake_case` names above. `init`,
 `core_version`, and `health_check` are JS-facing bootstrap
-helpers — `init` parses a JSON config blob and primes the core,
-`core_version` returns the workspace semver baked into the build,
+helpers — `init` parses a JSON config blob and primes the core
+(N-API only — see the surface-specific list above),
+`core_version` returns the workspace semver baked into the build
+(N-API only),
 and `health_check` returns a `HealthStatus` envelope sourced
 from the substrate's metrics + tracing layer (see
 [Observability — metrics, tracing, health](#observability--metrics-tracing-health)
