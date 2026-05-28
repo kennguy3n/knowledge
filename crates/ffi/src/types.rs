@@ -183,7 +183,24 @@ pub struct FfiKeypair {
 }
 
 /// FFI-safe signature blob.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+///
+/// **No `uniffi::Record` derive yet — by design.** UniFFI bindgen
+/// only emits Swift / Kotlin types reachable from `#[uniffi::export]`
+/// functions; deriving `Record` on a type that no exported function
+/// consumes registers metadata that the bindgen quietly drops, which
+/// is the kind of dead contract Devin Review flagged on PR #52
+/// (`crates/ffi/src/types.rs:186`). The derive is intentionally
+/// deferred until a `sign(handle, data) -> FfiResult<FfiSignature>` /
+/// `verify(handle, sig, data) -> FfiResult<bool>` FFI pair lands;
+/// that PR adds `#[uniffi::export]` on the new functions and the
+/// `uniffi::Record` derive on this type in the same commit so the
+/// metadata and the consuming export are always in lockstep. The
+/// `Serialize` / `Deserialize` derives stay because the
+/// `ffi_signature_round_trips_via_serde` unit test and the
+/// integration test in `tests/ffi_integration_tests.rs` pin the wire
+/// shape so future sign/verify work cannot accidentally rename or
+/// reorder the fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FfiSignature {
     /// Algorithm tag (matches `FfiKeypair::algorithm`).
     pub algorithm: String,

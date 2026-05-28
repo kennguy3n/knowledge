@@ -23,6 +23,7 @@ members = [
     "crates/synthesis_engine",
     "crates/synthesis_pipeline",
     "crates/tenant_service",
+    "crates/uniffi-bindgen",
 ]
 
 [workspace.package]
@@ -151,15 +152,26 @@ hyper-util = { version = "0.1", default-features = false, features = ["tokio", "
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 # UniFFI — bindings generator for the iOS / Android platform
-# integration surface in `crates/ffi`. The `cli` feature pulls in
-# `uniffi::uniffi_bindgen_main`, which the `uniffi-bindgen` binary
-# target in `crates/ffi/Cargo.toml` re-exports as its `main`. The
-# `tokio` feature is intentionally NOT enabled at workspace level —
-# the FFI surface is currently fully synchronous and pulling in a
-# tokio dependency through uniffi's async support would bloat the
-# mobile static library. If we add async entry points later, opt in
-# locally on the `ffi` crate.
-uniffi = { version = "0.31", features = ["cli"] }
+# integration surface in `crates/ffi`.
+#
+# The workspace-level declaration is intentionally feature-LEAN.
+# Specifically the `cli` feature is NOT enabled here because Cargo
+# features are per-crate (not per-target): enabling `cli` at the
+# workspace level would compile `clap` / `syn` / `quote` /
+# `proc-macro2` into the dependency graph of every crate that
+# inherits `uniffi = { workspace = true }`, including `crates/ffi`'s
+# `staticlib` (iOS `.xcframework`) and `cdylib` (Android `jniLibs/`)
+# outputs. The `uniffi_bindgen_main()` CLI entry point lives in
+# `crates/uniffi-bindgen` (a dedicated binary crate that takes the
+# `cli` feature on its own local `uniffi` dependency) instead — see
+# `crates/uniffi-bindgen/Cargo.toml` for the rationale.
+#
+# The `tokio` feature is intentionally NOT enabled at workspace
+# level either — the FFI surface is currently fully synchronous and
+# pulling in a tokio dependency through uniffi's async support
+# would bloat the mobile static library. If we add async entry
+# points later, opt in locally on the `ffi` crate.
+uniffi = { version = "0.31" }
 
 # Optional subscriber used by `ffi`'s `tracing-subscriber` feature and
 # the `napi_addon`'s `tracing-subscriber` feature. NOT enabled by

@@ -25,18 +25,16 @@ description = "UniFFI bindings surface for iOS / Android platform integration."
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 
-# `uniffi-bindgen` binary — mirrors the `kchat-mls-uniffi`
-# pattern (see `kchat-rust-sdk/crates/kchat-mls-uniffi/Cargo.toml`).
-# Re-exports `uniffi::uniffi_bindgen_main` so `cargo run -p ffi
-# --bin uniffi-bindgen` drives the same CLI as the upstream
-# `uniffi-bindgen` crate, but pinned to the workspace's uniffi
-# version. Android's build script invokes this binary with
-# `--library target/<triple>/release/libffi.so --language kotlin`
-# to generate the Kotlin bindings against the *built* dylib (the
-# "library mode" of bindgen) rather than against a UDL file.
-[[bin]]
-name = "uniffi-bindgen"
-path = "uniffi-bindgen.rs"
+# The `uniffi-bindgen` binary used to live here as a `[[bin]]`
+# target, but that forced the `cli` feature on the workspace
+# `uniffi` dependency (which transitively pulls `clap` / `syn` /
+# `quote` / `proc-macro2`) into THIS crate's dependency graph,
+# including its `staticlib` (iOS `.xcframework`) and `cdylib`
+# (Android `jniLibs/`) outputs. The binary now lives in its own
+# `crates/uniffi-bindgen` workspace crate; the build scripts invoke
+# it with `cargo run -p uniffi-bindgen`, which builds only that
+# crate's dependency graph. See `crates/uniffi-bindgen/Cargo.toml`
+# for the rationale.
 
 [features]
 default = []

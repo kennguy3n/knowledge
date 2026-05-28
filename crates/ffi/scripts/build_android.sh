@@ -72,7 +72,12 @@ cargo build --release -p ffi
 # Step 2: generate Kotlin bindings against the host-arch `.so`.
 # The output `package_name` and `android = true` flags come from
 # `crates/ffi/uniffi.toml`.
-cargo run --release -p ffi --bin uniffi-bindgen -- generate \
+# Drives the `uniffi_bindgen_main()` CLI from the dedicated
+# `crates/uniffi-bindgen` workspace crate. That crate holds the
+# `cli` feature on its own local `uniffi` dependency so the CLI's
+# clap / syn / quote transitive deps never enter the `ffi` crate's
+# `cdylib` dependency graph (which is what cross-compiles below).
+cargo run --release -p uniffi-bindgen -- generate \
   --library "${HOST_LIB_PATH}" \
   --language kotlin \
   --out-dir "${ANDROID_DIR}" \

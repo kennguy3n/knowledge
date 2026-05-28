@@ -58,7 +58,7 @@ bindgen-kotlin:
 	  exit 1; \
 	fi; \
 	mkdir -p "$(CRATE_DIR)/android"; \
-	cargo run --release -p ffi --bin uniffi-bindgen -- generate \
+	cargo run --release -p uniffi-bindgen -- generate \
 	  --library "$$HOST_LIB_PATH" \
 	  --language kotlin \
 	  --out-dir "$(CRATE_DIR)/android" \
@@ -73,7 +73,7 @@ bindgen-swift:
 	  exit 1; \
 	fi; \
 	mkdir -p "$(CRATE_DIR)/ios-bindings"; \
-	cargo run --release -p ffi --bin uniffi-bindgen -- generate \
+	cargo run --release -p uniffi-bindgen -- generate \
 	  --library "$$HOST_LIB_PATH" \
 	  --language swift \
 	  --out-dir "$(CRATE_DIR)/ios-bindings" \

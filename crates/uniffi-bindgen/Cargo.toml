@@ -1,0 +1,45 @@
+[package]
+name = "uniffi-bindgen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Workspace-local `uniffi-bindgen` binary that drives the UniFFI CLI for `crates/ffi`."
+
+# Standalone binary crate. Lives in its own workspace crate so the
+# `cli` feature on `uniffi` (which transitively pulls in `clap`,
+# `syn`, `quote`, `proc-macro2`, …) is only compiled into the
+# bindgen binary's dependency graph — NOT into the `ffi` crate
+# itself, whose `staticlib` (iOS `.xcframework`) and `cdylib`
+# (Android `jniLibs/`) outputs would otherwise carry the
+# compile-time cost on every mobile build.
+#
+# Reference: the same split is used by the upstream UniFFI examples
+# and by `uneycom/kchat-rust-sdk` (`scripts/mls_uniffi_build_android.sh`
+# invokes a dedicated `uniffi-bindgen` binary that does not share its
+# library crate's dependency graph). See PR #52 review thread on
+# `Cargo.toml:162` for the original finding that motivated this split.
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/main.rs"
+
+[dependencies]
+# `cli` feature is enabled ONLY on this binary crate's local
+# `uniffi` dependency — the workspace-level `uniffi` declaration in
+# the root `Cargo.toml` deliberately omits it so library crates
+# (`crates/ffi`) inherit a feature-lean `uniffi` that does not drag
+# `clap` / `syn` / `quote` into their `staticlib` / `cdylib`
+# dependency graphs.
+#
+# Pinning to the same `0.31` version as the workspace declaration is
+# load-bearing: the bindgen CLI parses scaffolding metadata embedded
+# in the `ffi` crate's compiled `.so` / `.a`, and a version mismatch
+# would manifest as corrupted FFI vtables in the generated Swift /
+# Kotlin bindings. See `crates/ffi/uniffi-bindgen.rs` doc comment
+# history for the original rationale.
+uniffi = { version = "0.31", features = ["cli"] }
+
+[lints]
+workspace = true
