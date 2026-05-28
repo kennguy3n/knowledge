@@ -392,12 +392,13 @@ The decision tree for a deployment:
 flowchart TD
     Q1{"Can ANY AI process this data?"}
     Q1 -->|No| M1["Mode 1: No AI"]
-    Q1 -->|Yes| Q2{"Does the AI need data from external systems (Drive / Jira / Notion / …) the device cannot reach?"}
-    Q2 -->|No — chat / device-local only| M2["Mode 2: Local AI Only"]
-    Q2 -->|Yes — and tenant accepts server-side connector pipeline| Q3{"Is the connector data itself highly sensitive (regulated PHI / classified)?"}
-    Q3 -->|No| M3["Mode 3: Local AI + External Data Sources"]
-    Q3 -->|Yes| M4["Mode 4: Hybrid TEE wraps connector synthesis"]
-    Q2 -->|Yes — and all data is already server-resident| M5["Mode 5: Server-Side"]
+    Q1 -->|Yes| Q2{"Does the AI need data from external systems (Drive / Jira / Notion / …) the device cannot reach in real time?"}
+    Q2 -->|No| M2["Mode 2: Local AI Only"]
+    Q2 -->|Yes| Q3{"Is the source-of-truth data already server-resident in the tenant cloud (no device-local data plane needed)?"}
+    Q3 -->|Yes| M5["Mode 5: Server-Side"]
+    Q3 -->|No| Q4{"Is the connector data itself highly sensitive (regulated PHI / classified / cross-jurisdiction)?"}
+    Q4 -->|No| M3["Mode 3: Local AI + External Data Sources"]
+    Q4 -->|Yes| M4["Mode 4: Hybrid TEE wraps connector synthesis"]
 ```
 
 The modes compose. A single tenant can run Mode 2 for employee DM channels, Mode 3 for team channels with channel-scope connectors and personal-scope connectors for individuals, Mode 4 for executive channels with TEE synthesis over sensitive external data, and Mode 5 for their connector-sourced knowledge base — all on the same substrate, same memory model, same cryptographic primitives, same audit trail.
