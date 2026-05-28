@@ -542,24 +542,46 @@ jobs:
           fi
       - name: Configure NDK toolchain
         # Same toolchain wiring as the `cross-android` check job
-        # above. The Android NDK is pre-installed on the
-        # `ubuntu-latest` runner; we just expose the per-target
-        # linker / archiver paths via $GITHUB_ENV so `cargo ndk`
-        # picks them up. API level 24 (Android 7.0+) matches the
-        # min-sdk surface the host app targets.
+        # above, extended to BOTH ABIs the host modules ship
+        # (`aarch64-linux-android` + `x86_64-linux-android`). The
+        # Android NDK is pre-installed on the `ubuntu-latest` runner;
+        # we expose the per-target linker / archiver paths via
+        # $GITHUB_ENV so `cargo ndk` and any `cc`-crate build script
+        # (e.g. `openssl-sys`) pick them up. API level 24
+        # (Android 7.0+) matches the min-sdk surface the host app
+        # targets.
+        #
+        # The NDK binary prefix for each Cargo triple has to be
+        # matched explicitly (`x86_64` keeps the underscore — a
+        # naïve `${var//_/-}` substitution would mangle it to
+        # `x86-64-linux-android` and point at a non-existent
+        # binary). The `cc`-crate env-var names use the
+        # underscored Cargo triple verbatim; only the binary path
+        # uses the NDK's hyphenated-but-keep-`x86_64` convention.
+        #
+        # `openssl-sys`'s build script ALSO probes `$PATH` for a
+        # target-prefixed ranlib (e.g. `aarch64-linux-android-ranlib`).
+        # Symlinking both targets into `/usr/local/bin` matches the
+        # existing `cross-android` job pattern and is defence in
+        # depth — most modern `cc-rs` versions respect the env
+        # vars, but the symlink is what kept the legacy job green
+        # before the env-var wiring was added.
         run: |
           NDK_HOME="${ANDROID_NDK_HOME:-$(ls -d /usr/local/lib/android/sdk/ndk/*/ 2>/dev/null | sort -V | tail -1)}"
           NDK_TOOLCHAIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
-          for triple_underscored in aarch64_linux_android x86_64_linux_android; do
-            triple_hyphenated="${triple_underscored//_/-}"
-            echo "CC_${triple_underscored}=${NDK_TOOLCHAIN}/bin/${triple_hyphenated}24-clang" >> "$GITHUB_ENV"
-            echo "AR_${triple_underscored}=${NDK_TOOLCHAIN}/bin/llvm-ar" >> "$GITHUB_ENV"
-            echo "RANLIB_${triple_underscored}=${NDK_TOOLCHAIN}/bin/llvm-ranlib" >> "$GITHUB_ENV"
-            # Cargo target linker env var uses uppercased triple
-            # with underscores.
-            upper=$(echo "$triple_underscored" | tr '[:lower:]' '[:upper:]')
-            echo "CARGO_TARGET_${upper}_LINKER=${NDK_TOOLCHAIN}/bin/${triple_hyphenated}24-clang" >> "$GITHUB_ENV"
-          done
+          configure_triple() {
+            local cargo_triple="$1"     # e.g. aarch64_linux_android (Cargo env-var form, underscored)
+            local ndk_prefix="$2"       # e.g. aarch64-linux-android (NDK binary prefix; preserves x86_64 underscore)
+            local cargo_target_upper
+            cargo_target_upper=$(echo "$cargo_triple" | tr '[:lower:]' '[:upper:]')
+            echo "CC_${cargo_triple}=${NDK_TOOLCHAIN}/bin/${ndk_prefix}24-clang" >> "$GITHUB_ENV"
+            echo "AR_${cargo_triple}=${NDK_TOOLCHAIN}/bin/llvm-ar" >> "$GITHUB_ENV"
+            echo "RANLIB_${cargo_triple}=${NDK_TOOLCHAIN}/bin/llvm-ranlib" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_${cargo_target_upper}_LINKER=${NDK_TOOLCHAIN}/bin/${ndk_prefix}24-clang" >> "$GITHUB_ENV"
+            sudo ln -sf "${NDK_TOOLCHAIN}/bin/llvm-ranlib" "/usr/local/bin/${ndk_prefix}-ranlib"
+          }
+          configure_triple "aarch64_linux_android" "aarch64-linux-android"
+          configure_triple "x86_64_linux_android"  "x86_64-linux-android"
       - name: Build Android JNI .so + Kotlin bindings
         run: crates/ffi/scripts/build_android.sh
       - name: Upload Android artefacts
