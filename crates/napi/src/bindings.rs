@@ -31,7 +31,8 @@
 // napi-derive hands owned values across the JS boundary every call; borrowing would force an extra copy in generated code.
 #![allow(unsafe_code)] // napi-derive's `#[napi]` proc-macro expands into FFI module-init stubs that necessarily touch raw C pointers (napi_env, napi_callback_info, napi_value). The expansion includes its own `#[allow(unsafe_code)]` on every generated `extern "C"` function; for the workspace-level `deny(unsafe_code)` to be overridable we mirror the allow here. The hand-written code in this module remains `unsafe`-free.
 
-use napi::bindgen_prelude::{BigInt, Error as JsError, Result};
+use napi::bindgen_prelude::{BigInt, Error as JsError, Function, Result};
+use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
 
 #[cfg(test)]
@@ -516,6 +517,132 @@ pub fn js_refresh_connector_token(
             message: format!("failed to serialize RefreshReport: {e}"),
         })
     })
+}
+
+// ─────────────── OAuth2 client-secret resolver (Phase 4.1) ───────────────
+
+/// Adapter that bridges a JS callback (passed across the N-API
+/// boundary as a [`Function`]) into the substrate's
+/// [`ffi::OAuthClientSecretResolver`] trait.
+///
+/// The Rust trait method [`resolve`] is invoked from connector worker
+/// threads driving OAuth2 grants — never the JS main thread — so we
+/// hand the JS callback off to a [`ThreadsafeFunction`] that
+/// `napi-rs` will dispatch on the JS event loop. We then sync-wait
+/// the worker thread on a `std::sync::mpsc` channel that the JS-side
+/// callback fills in with the resolved secret.
+///
+/// Sync waits on JS from a worker thread are safe here because the
+/// FFI substrate's three-phase locking pattern guarantees the
+/// runtime mutex is NOT held while a grant is in flight — so the JS
+/// event loop calling back into our other entry points cannot
+/// deadlock on the worker thread's lock.
+///
+/// `tsfn` is `Send + Sync` (the napi-rs threadsafe-function API is
+/// explicitly designed for cross-thread call), satisfying the
+/// `OAuthClientSecretResolver: Send + Sync` requirement.
+struct JsClientSecretResolver {
+    tsfn: ThreadsafeFunction<
+        (String, String, String),
+        Option<String>,
+        (String, String, String),
+        napi::Status,
+        false, // CalleeHandled — false: the JS-side resolver does NOT receive a leading (err, ...) Node-callback shape.
+    >,
+}
+
+impl ffi::OAuthClientSecretResolver for JsClientSecretResolver {
+    fn resolve(&self, kind: String, scope_id: String, client_id: String) -> Option<String> {
+        // `sync_channel(1)` gives a single-slot oneshot — JS-side
+        // callback fills it with the resolved value (or `None` on
+        // JS exception); the worker thread blocks on `recv()`.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Option<String>>(1);
+        let status = self.tsfn.call_with_return_value(
+            (kind, scope_id, client_id),
+            ThreadsafeFunctionCallMode::Blocking,
+            move |result: Result<Option<String>>, _env| {
+                // A JS exception during the resolver call surfaces
+                // as `Err(...)`; treat that the same as `None` so
+                // the framework falls through to the
+                // `auth_config_json["client_secret"]` fallback
+                // layer. Per the trait contract, the resolver MUST
+                // NOT crash the substrate on its own errors.
+                let _ = tx.send(result.unwrap_or(None));
+                Ok(())
+            },
+        );
+        // `call_with_return_value` returns a Status enum; non-`Ok`
+        // means the call was queued unsuccessfully (e.g. the JS
+        // thread is closing). Surface that as `None` so the
+        // framework falls through to the fallback layer.
+        if status != napi::Status::Ok {
+            return None;
+        }
+        rx.recv().unwrap_or(None)
+    }
+}
+
+/// Register a host-supplied OAuth2 client-secret resolver against
+/// `handle`'s per-runtime [`ffi::OAuth2Client`]. Mirrors
+/// [`crate::set_oauth_client_secret_resolver`].
+///
+/// `resolver` is a JS function with the signature
+/// `(kind: string, scopeId: string, clientId: string) =>
+/// string | null | undefined`. Returning `null` / `undefined`
+/// (both map to `None` on the Rust side) defers to the next
+/// layer of the framework's fallback ladder. Returning `""`
+/// (an empty string) is treated as an **explicit "no-secret"
+/// choice** and short-circuits both the `auth_config_json`
+/// fallback and any static `with_client_secret` value — the
+/// substrate then omits the `client_secret` form field entirely
+/// (public-client semantics). Returning a non-empty string uses
+/// that secret. See the trait-level rustdoc on
+/// [`ffi::OAuthClientSecretResolver`] for the full semantics and
+/// [`connector_framework::OAuth2Client::client_secret_for`] for
+/// the resolution ladder.
+///
+/// The JS callback runs on the JS event loop (the substrate's
+/// connector worker threads `await` the result via a
+/// [`ThreadsafeFunction`]); implementations are free to look the
+/// secret up from the OS keychain, an in-memory cache, or any
+/// async source as long as the call returns synchronously to the
+/// substrate's perspective.
+///
+/// Calling this multiple times REPLACES the previously-registered
+/// resolver. Hosts typically call this exactly once per
+/// `open_store` lifecycle.
+#[napi(js_name = "setOauthClientSecretResolver")]
+pub fn js_set_oauth_client_secret_resolver(
+    handle: BigInt,
+    resolver: Function<(String, String, String), Option<String>>,
+) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    // Build a threadsafe function from the JS callback. The
+    // builder defaults to `CalleeHandled = false` which matches
+    // our adapter's type annotation.
+    let tsfn = resolver
+        .build_threadsafe_function::<(String, String, String)>()
+        .callee_handled::<false>()
+        .build()
+        .map_err(|e| {
+            to_js_error(NapiError::Internal {
+                message: format!("failed to build threadsafe resolver: {e}"),
+            })
+        })?;
+    let arc: std::sync::Arc<dyn ffi::OAuthClientSecretResolver> =
+        std::sync::Arc::new(JsClientSecretResolver { tsfn });
+    crate::set_oauth_client_secret_resolver(h, arc).map_err(to_js_error)
+}
+
+/// Unregister the previously-registered OAuth2 client-secret
+/// resolver on `handle`. Mirrors
+/// [`crate::clear_oauth_client_secret_resolver`].
+///
+/// Calling this when no resolver is registered is a no-op.
+#[napi(js_name = "clearOauthClientSecretResolver")]
+pub fn js_clear_oauth_client_secret_resolver(handle: BigInt) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    crate::clear_oauth_client_secret_resolver(h).map_err(to_js_error)
 }
 
 /// Install a global `tracing` subscriber filtered by the supplied

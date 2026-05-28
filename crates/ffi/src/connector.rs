@@ -10,8 +10,8 @@
 //! [`connector_framework::OAuth2Client`] for `authorization_code`
 //! exchange.
 //!
-//! This module exposes six FFI functions that mirror the connector
-//! lifecycle:
+//! This module exposes eight FFI functions that mirror the
+//! connector lifecycle:
 //!
 //! 1. [`create_connector`] — instantiate a connector for one source
 //!    kind, binding it to a scope.
@@ -36,6 +36,17 @@
 //! 6. [`remove_connector`] — tear down a connector (drop the
 //!    `Box<dyn Connector>`, drop the cached token, drop the
 //!    `ConnectorInstance` row).
+//! 7. [`set_oauth_client_secret_resolver`] — register a host-supplied
+//!    [`OAuthClientSecretResolver`] callback that the substrate
+//!    consults at every OAuth2 grant (both `authorization_code` and
+//!    `refresh_token`) to fetch the `client_secret` from the host's
+//!    keychain. Phase 4.1 wiring — production hosts use this to
+//!    keep confidential credentials off the substrate's persisted
+//!    state.
+//! 8. [`clear_oauth_client_secret_resolver`] — unregister the
+//!    previously-registered resolver. After this call the framework
+//!    falls back to `auth_config_json["client_secret"]` (and then
+//!    omits the form field) on subsequent grants.
 //!
 //! Status:
 //!
@@ -53,11 +64,17 @@
 //!   surface `Unavailable` to the host, which is the same recovery
 //!   path as "subsystem not initialised".
 //!
-//! All six functions require a prior successful call to
+//! All eight functions require a prior successful call to
 //! [`crate::open_store`] (enforced by [`with_runtime`]) and operate
 //! synchronously against the per-handle `Arc<Mutex<FfiRuntime>>`
 //! mutex — connector calls against the same handle serialise, while
-//! calls against different handles run in parallel.
+//! calls against different handles run in parallel. The two
+//! resolver-management entry points
+//! ([`set_oauth_client_secret_resolver`] /
+//! [`clear_oauth_client_secret_resolver`]) hold the runtime mutex
+//! only long enough to update the per-runtime
+//! [`connector_framework::OAuth2Client`]'s resolver slot; they do
+//! NOT call the resolver themselves.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -444,22 +461,30 @@ pub fn authenticate_connector(
 /// * [`FfiError::Evidence`] if the persist call to SQLCipher fails
 ///   in Phase 3.
 ///
-/// # Confidential-client support (Phase 4.1)
+/// # Confidential-client support
 ///
-/// The substrate currently posts the `grant_type=refresh_token`
-/// form WITHOUT a `client_secret` field — the per-runtime
-/// [`OAuth2Client`](connector_framework::OAuth2Client) is
-/// constructed without `.with_client_secret(...)` (see
-/// `runtime.rs`'s `open_store` for the full architectural note).
-/// Confidential-client providers (Notion production, Google,
-/// Atlassian, Microsoft Graph, HubSpot, …) will reject the refresh
-/// grant with `invalid_client` until Phase 4.1 wires a host-side
-/// secret-resolution mechanism. The same gap applies to
-/// [`authenticate_connector`]'s `exchange_code` grant — both paths
-/// share the per-runtime `OAuth2Client`, so Phase 4.1 fixes them
-/// together. Public-client providers (Slack PKCE-only,
-/// authorization-code-without-secret flows) work today against this
-/// entry point as-is.
+/// The substrate resolves the `client_secret` form field through
+/// a three-layer fallback ladder at grant-time (see the framework's
+/// [`ClientSecretResolver`](connector_framework::ClientSecretResolver)
+/// rustdoc):
+///
+/// 1. Host-supplied resolver registered via
+///    [`set_oauth_client_secret_resolver`] (production path —
+///    secret stays in the OS keychain).
+/// 2. `auth_config_json["client_secret"]` (fallback for tests /
+///    dev hosts; the secret persists encrypted under the per-scope
+///    DEK in SQLCipher).
+/// 3. Field omitted entirely (public-client / PKCE-only flows).
+///
+/// Both `authenticate_connector`'s `exchange_code` grant AND this
+/// entry point's `refresh_token` grant share the per-runtime
+/// [`OAuth2Client`](connector_framework::OAuth2Client) so the
+/// resolver registration applies to both. Confidential-client
+/// providers (Notion production, Google, Atlassian, Microsoft
+/// Graph, HubSpot, …) work when EITHER the resolver returns a
+/// secret OR `auth_config_json` carries one; public-client flows
+/// (Slack PKCE-only) work against this entry point as-is with no
+/// resolver registered.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
 pub fn refresh_connector_token(
@@ -1069,6 +1094,205 @@ pub fn remove_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult
                     message: format!("delete_connector_token failed: {e}"),
                 })?;
             Ok(())
+        })
+    })
+}
+
+// ──────────────── OAuth2 client-secret resolver (Phase 4.1) ────────────────
+
+/// Host-implemented callback that the substrate consults at every
+/// OAuth2 grant to fetch the matching `client_secret` from the
+/// host's keychain.
+///
+/// Hosts implement this on their side of the FFI boundary (Swift /
+/// Kotlin via UniFFI's callback-trait infrastructure; JS via the
+/// N-API binding's [`JsFunction`]-backed adapter), then register
+/// the implementation against an open runtime by calling
+/// [`set_oauth_client_secret_resolver`]. The substrate stores the
+/// callback on the per-runtime [`OAuth2Client`] (interior-mutable
+/// resolver slot) so every connector on the same runtime shares one
+/// resolver registration — the host only needs to wire this up
+/// once per `open_store` lifecycle.
+///
+/// # Calling discipline
+///
+/// `resolve` is invoked on the thread that drives the grant — the
+/// host's thread driving `authenticate_connector` /
+/// `refresh_connector_token`, or the `sync_connector` worker
+/// thread. The runtime mutex is NOT held during the call (the FFI
+/// substrate's three-phase locking pattern guarantees this), so
+/// implementations are free to do their own synchronisation /
+/// async work, but they MUST be cheap — the recommended pattern is
+/// to populate an in-memory cache from the host's keychain at
+/// startup and answer `resolve` from the cache.
+///
+/// # Return value semantics
+///
+/// * `Some(secret)` — the resolver has produced a `client_secret`
+///   for the `(kind, scope_id, client_id)` tuple. The framework
+///   uses it verbatim and skips the lower fallback layers.
+/// * `Some("")` — explicit "no-secret" choice. The framework omits
+///   the `client_secret` form field entirely AND short-circuits
+///   the lower fallback layers (this lets a host pin a specific
+///   `(scope_id, client_id)` to public-client mode even when
+///   `auth_config_json` happens to carry a secret).
+/// * `None` — defer to the next layer (`auth_config_json
+///   ["client_secret"]`, then the static `with_client_secret`
+///   value, then field-omitted).
+///
+/// # Threading
+///
+/// The trait requires `Send + Sync` because the framework's
+/// `OAuth2Client` is shared across connector workers. UniFFI
+/// enforces this on the foreign side (Swift `@unchecked Sendable`
+/// / Kotlin `@Synchronized` patterns); the N-API adapter wraps the
+/// host's `JsFunction` in a `Mutex`-guarded slot so the JS engine
+/// only sees one in-flight call at a time even when multiple
+/// connector workers race.
+#[uniffi::export(with_foreign)]
+pub trait OAuthClientSecretResolver: Send + Sync {
+    /// Resolve the `client_secret` for an upcoming OAuth2 grant
+    /// against the substrate's per-runtime `OAuth2Client`. See
+    /// the trait-level docs for the return-value semantics.
+    fn resolve(&self, kind: String, scope_id: String, client_id: String) -> Option<String>;
+}
+
+/// Adapter wrapping the foreign callback trait so it satisfies the
+/// `connector_framework::ClientSecretResolver` trait contract. The
+/// framework layer is bound-incompatible with UniFFI's generated
+/// trait (the framework trait takes `&str` arguments for zero
+/// allocation on the hot path; the FFI trait takes `String` for
+/// UniFFI marshalling compatibility), so we bridge once at the FFI
+/// boundary.
+///
+/// Only used when the `http-client` feature is on — without it,
+/// the per-runtime `OAuth2Client` is absent and
+/// `set_oauth_client_secret_resolver` short-circuits with
+/// `Unavailable` before constructing the adapter.
+#[cfg(feature = "http-client")]
+struct FfiClientSecretResolverAdapter {
+    inner: Arc<dyn OAuthClientSecretResolver>,
+}
+
+#[cfg(feature = "http-client")]
+impl connector_framework::ClientSecretResolver for FfiClientSecretResolverAdapter {
+    fn resolve(&self, kind: &str, scope_id: &str, client_id: &str) -> Option<String> {
+        // Allocate fresh `String` copies because the foreign trait
+        // takes owned strings — UniFFI's marshalling layer takes
+        // ownership of the value as it crosses the language
+        // boundary, so we can't loan `&str` here even though the
+        // framework gave us borrowed input.
+        self.inner.resolve(
+            kind.to_string(),
+            scope_id.to_string(),
+            client_id.to_string(),
+        )
+    }
+}
+
+/// Register a host-supplied [`OAuthClientSecretResolver`] against
+/// `handle`'s per-runtime [`OAuth2Client`].
+///
+/// After this call, every OAuth2 grant (both
+/// `authentication_code` via [`authenticate_connector`] and
+/// `refresh_token` via [`refresh_connector_token`] or
+/// [`sync_connector`]'s auto-refresh path) consults the resolver
+/// before falling through to `auth_config_json["client_secret"]`
+/// and the static `OAuth2Client::with_client_secret` value (see
+/// the framework's `ClientSecretResolver` rustdoc for the full
+/// resolution ladder).
+///
+/// Calling this multiple times REPLACES the previously-registered
+/// resolver; the substrate holds at most one resolver per
+/// runtime. Production hosts typically call this exactly once
+/// per `open_store` lifecycle. If the host wants different
+/// resolver behaviour per `(kind, scope_id, client_id)`, the
+/// resolver implementation itself should branch — registering a
+/// new resolver per call is a sign the host is treating the
+/// resolver as request-scoped, which is the wrong abstraction
+/// (the metrics expose `set_oauth_client_secret_resolver_total`
+/// so operators can spot this).
+///
+/// # Errors
+///
+/// * [`FfiError::Unavailable`] if [`crate::open_store`] has not
+///   been called, OR the build was compiled without the
+///   `http-client` feature (no `OAuth2Client` exists to receive
+///   the registration).
+#[uniffi::export]
+pub fn set_oauth_client_secret_resolver(
+    handle: RuntimeHandle,
+    resolver: Arc<dyn OAuthClientSecretResolver>,
+) -> FfiResult<()> {
+    metrics::instrument(metrics::inc_set_oauth_client_secret_resolver, || {
+        with_runtime(handle, |rt| {
+            #[cfg(feature = "http-client")]
+            {
+                let client = rt
+                    .oauth_client
+                    .as_ref()
+                    .ok_or_else(|| FfiError::Unavailable {
+                        subsystem: "connector-http-client".into(),
+                    })?;
+                client.set_resolver(Arc::new(FfiClientSecretResolverAdapter { inner: resolver }));
+                Ok(())
+            }
+            #[cfg(not(feature = "http-client"))]
+            {
+                // Reference the inputs so they're not flagged as
+                // unused on `--no-default-features` builds; the
+                // `Arc<dyn OAuthClientSecretResolver>` drop here is
+                // the only observable side effect.
+                let _ = (rt, resolver);
+                Err(FfiError::Unavailable {
+                    subsystem: "connector-http-client".into(),
+                })
+            }
+        })
+    })
+}
+
+/// Unregister the previously-registered
+/// [`OAuthClientSecretResolver`].
+///
+/// After this call, subsequent OAuth2 grants fall through to
+/// `auth_config_json["client_secret"]` and the static
+/// `OAuth2Client::with_client_secret` value (see the framework's
+/// `ClientSecretResolver` rustdoc). Hosts call this on keychain-
+/// locked events, on sign-out, or before tearing down their
+/// resolver implementation.
+///
+/// Calling this when no resolver is registered is a no-op (no
+/// error); the substrate holds the resolver slot in an `Option`
+/// that simply becomes `None` again.
+///
+/// # Errors
+///
+/// * [`FfiError::Unavailable`] if [`crate::open_store`] has not
+///   been called, OR the build was compiled without the
+///   `http-client` feature (no `OAuth2Client` exists to clear).
+#[uniffi::export]
+pub fn clear_oauth_client_secret_resolver(handle: RuntimeHandle) -> FfiResult<()> {
+    metrics::instrument(metrics::inc_clear_oauth_client_secret_resolver, || {
+        with_runtime(handle, |rt| {
+            #[cfg(feature = "http-client")]
+            {
+                let client = rt
+                    .oauth_client
+                    .as_ref()
+                    .ok_or_else(|| FfiError::Unavailable {
+                        subsystem: "connector-http-client".into(),
+                    })?;
+                client.clear_resolver();
+                Ok(())
+            }
+            #[cfg(not(feature = "http-client"))]
+            {
+                let _ = rt;
+                Err(FfiError::Unavailable {
+                    subsystem: "connector-http-client".into(),
+                })
+            }
         })
     })
 }

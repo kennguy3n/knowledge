@@ -608,6 +608,14 @@ fn health_check_envelope_includes_connector_subsystem() {
     assert!(detail.contains("total=0"), "detail={detail}");
     assert!(detail.contains("authenticated=0"), "detail={detail}");
     assert!(detail.contains("failed=0"), "detail={detail}");
+    // Phase 4.1: the probe also surfaces the
+    // `ClientSecretResolver` registration state alongside the
+    // per-status counts. A fresh runtime has no resolver wired up,
+    // so the host should see `oauth_resolver=unset` — this is the
+    // signal a host operator looks at first when diagnosing an
+    // `invalid_client` rejection on a confidential-client grant.
+    #[cfg(feature = "http-client")]
+    assert!(detail.contains("oauth_resolver=unset"), "detail={detail}");
 
     // Sanity-check the probe ordering — the Phase 2 wiring appends
     // `connector` after the four Phase 1 subsystems, so a host
@@ -1896,6 +1904,7 @@ use std::thread::JoinHandle;
 struct OAuthTestServer {
     base_url: String,
     request_count: Arc<AtomicUsize>,
+    request_bodies: Arc<std::sync::Mutex<Vec<String>>>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -1912,6 +1921,8 @@ impl OAuthTestServer {
         let base_url = format!("http://127.0.0.1:{port}");
         let request_count = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&request_count);
+        let request_bodies = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let bodies = Arc::clone(&request_bodies);
         let join = std::thread::Builder::new()
             .name("oauth-test-server".into())
             .spawn(move || {
@@ -1919,12 +1930,25 @@ impl OAuthTestServer {
                     let Ok((mut stream, _addr)) = listener.accept() else {
                         return;
                     };
-                    // Read enough of the request to count it; we
-                    // don't validate the body because the
-                    // connector_framework-level tests already cover
-                    // the wire-format of the refresh POST.
+                    // Read enough of the request to count it AND
+                    // capture the urlencoded form body for Phase
+                    // 4.1 tests that assert on `client_secret=` in
+                    // the POST body. We don't fully parse the
+                    // HTTP/1.1 framing — just split on the
+                    // `\r\n\r\n` header boundary and stash the
+                    // remainder. The 4 KiB buffer is comfortably
+                    // larger than any OAuth2 form body produced by
+                    // the substrate.
                     let mut buf = [0u8; 4096];
-                    let _ = stream.read(&mut buf);
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+                    let captured_body = request
+                        .split_once("\r\n\r\n")
+                        .map(|(_, b)| b.to_string())
+                        .unwrap_or_default();
+                    if let Ok(mut g) = bodies.lock() {
+                        g.push(captured_body);
+                    }
                     counter.fetch_add(1, AtomicOrdering::SeqCst);
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1939,6 +1963,7 @@ impl OAuthTestServer {
         Self {
             base_url,
             request_count,
+            request_bodies,
             join: Some(join),
         }
     }
@@ -1977,6 +2002,7 @@ impl OAuthTestServer {
         Self {
             base_url,
             request_count,
+            request_bodies: Arc::new(std::sync::Mutex::new(Vec::new())),
             join: Some(join),
         }
     }
@@ -1987,6 +2013,17 @@ impl OAuthTestServer {
 
     fn request_count(&self) -> usize {
         self.request_count.load(AtomicOrdering::SeqCst)
+    }
+
+    /// Snapshot the captured form bodies (one per accepted request,
+    /// in FIFO order). Used by Phase 4.1 tests to assert that the
+    /// `client_secret=` form field is — or isn't — included in the
+    /// POST body the substrate sent.
+    fn request_bodies(&self) -> Vec<String> {
+        self.request_bodies
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -2276,4 +2313,493 @@ fn refresh_connector_token_short_circuits_when_no_refresh_token_stored() {
     close_store(handle).expect("close_store");
     drop(server);
     drop(dir);
+}
+
+// ───────────────── Phase 4.1: client_secret resolver tests ─────────────────
+
+/// Helper resolver used by the Phase 4.1 tests. Holds a closure that
+/// produces the secret on demand and a counter so tests can assert
+/// on the number of times the resolver was consulted.
+#[cfg(feature = "http-client")]
+struct TestResolver {
+    secret: Option<String>,
+    calls: Arc<AtomicUsize>,
+    last_kind: std::sync::Mutex<Option<String>>,
+    last_client_id: std::sync::Mutex<Option<String>>,
+}
+
+#[cfg(feature = "http-client")]
+impl TestResolver {
+    fn new(secret: Option<&str>) -> Self {
+        Self {
+            secret: secret.map(str::to_owned),
+            calls: Arc::new(AtomicUsize::new(0)),
+            last_kind: std::sync::Mutex::new(None),
+            last_client_id: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+#[cfg(feature = "http-client")]
+impl ffi::OAuthClientSecretResolver for TestResolver {
+    fn resolve(&self, kind: String, _scope_id: String, client_id: String) -> Option<String> {
+        self.calls.fetch_add(1, AtomicOrdering::SeqCst);
+        if let Ok(mut g) = self.last_kind.lock() {
+            *g = Some(kind);
+        }
+        if let Ok(mut g) = self.last_client_id.lock() {
+            *g = Some(client_id);
+        }
+        self.secret.clone()
+    }
+}
+
+/// Set up an instance + initial token row in SQLCipher with the
+/// supplied `auth_config_json` blob and return the path + master key
+/// bytes + scope + instance ids. Centralised so the four Phase 4.1
+/// resolver tests stay focused on the resolver-resolution behaviour
+/// rather than the persistence boilerplate.
+#[cfg(feature = "http-client")]
+fn seed_oauth_refresh_fixture(
+    auth_config: serde_json::Value,
+    kind: connector_framework::ConnectorKind,
+) -> (
+    std::path::PathBuf,
+    [u8; 32],
+    evidence_store::ScopeId,
+    connector_framework::ConnectorInstanceId,
+    tempfile::TempDir,
+) {
+    use chrono::Duration as ChronoDuration;
+    use connector_framework::{ConnectorInstanceId, OAuth2Token};
+    use evidence_store::ScopeId;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let master_key_bytes: [u8; 32] = [0xa5_u8; 32];
+    let scope = ScopeId::new_v4();
+    let instance = ConnectorInstanceId::new_v4();
+    let config = connector_framework::ConnectorConfig::new(
+        kind,
+        connector_framework::AuthKind::OAuth2,
+        scope,
+    )
+    .with_auth_config(auth_config);
+    let sync_state = connector_framework::SyncState::new(instance);
+    let instance_payload = serde_json::json!({
+        "schema": 1u32,
+        "config": config,
+        "sync_state": sync_state,
+    });
+    let initial_token = OAuth2Token::new(
+        "AT-INITIAL",
+        "RT-INITIAL",
+        chrono::Utc::now() + ChronoDuration::seconds(10),
+        "read",
+    );
+    let token_payload = serde_json::to_string(&initial_token).expect("serialize OAuth2Token");
+
+    let cfg = evidence_store::EvidenceStoreConfig::default();
+    let mut store = evidence_store::EvidenceStore::open(
+        path.to_string_lossy().as_ref(),
+        &master_key_bytes,
+        cfg,
+    )
+    .expect("EvidenceStore::open");
+    store.ensure_scope_dek(scope).expect("ensure_scope_dek");
+    store
+        .save_connector_instance(
+            instance.0,
+            scope,
+            kind.as_str(),
+            serde_json::to_vec(&instance_payload)
+                .expect("serialize instance payload")
+                .as_slice(),
+        )
+        .expect("save_connector_instance");
+    store
+        .save_connector_token(instance.0, scope, token_payload.as_bytes())
+        .expect("save_connector_token");
+
+    (path, master_key_bytes, scope, instance, dir)
+}
+
+/// Phase 4.1 layer 1: when a resolver returns `Some(secret)`, that
+/// secret is what appears in the OAuth2 `refresh_token` POST body's
+/// `client_secret=` form field — taking precedence over the
+/// `auth_config_json["client_secret"]` value AND short-circuiting the
+/// fallback ladder entirely. Pins the production path where hosts
+/// keep secrets in the OS keychain and never persist them to the
+/// substrate's SQLCipher.
+#[cfg(feature = "http-client")]
+#[test]
+fn client_secret_resolver_layer_1_wins_over_auth_config_json() {
+    use ffi::{refresh_connector_token, set_oauth_client_secret_resolver};
+
+    let server = OAuthTestServer::start(vec![
+        r#"{"access_token":"AT-1","refresh_token":"RT-1","expires_in":3600,"scope":"read"}"#
+            .to_string(),
+    ]);
+    let token_url = format!("{}/oauth/token", server.base_url());
+    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
+        serde_json::json!({
+            "client_id": "phase4_1-client",
+            "client_secret": "FALLBACK-SECRET-NOT-SENT",
+            "redirect_uri": "https://example.invalid/oauth/callback",
+            "token_url": token_url,
+        }),
+        connector_framework::ConnectorKind::Notion,
+    );
+    let master_key_hex = hex_encode(&master_key_bytes);
+
+    let handle =
+        open_store(path.to_string_lossy().into_owned(), master_key_hex).expect("open_store");
+
+    let resolver = Arc::new(TestResolver::new(Some("RESOLVER-WINS")));
+    let calls = Arc::clone(&resolver.calls);
+    set_oauth_client_secret_resolver(
+        handle,
+        resolver.clone() as Arc<dyn ffi::OAuthClientSecretResolver>,
+    )
+    .expect("set_oauth_client_secret_resolver");
+
+    refresh_connector_token(handle, instance.0.to_string())
+        .expect("refresh_connector_token must succeed against local test server");
+
+    assert!(
+        calls.load(AtomicOrdering::SeqCst) >= 1,
+        "resolver must be consulted at least once during the refresh grant",
+    );
+    let bodies = server.request_bodies();
+    assert_eq!(bodies.len(), 1, "exactly one refresh POST expected");
+    let body = &bodies[0];
+    assert!(
+        body.contains("client_secret=RESOLVER-WINS"),
+        "POST body must carry the resolver-supplied secret; got body={body}",
+    );
+    assert!(
+        !body.contains("FALLBACK-SECRET-NOT-SENT"),
+        "POST body must NOT include the auth_config_json[\"client_secret\"] when the \
+         resolver short-circuited; got body={body}",
+    );
+
+    close_store(handle).expect("close_store");
+    drop(server);
+    drop(dir);
+}
+
+/// Phase 4.1 layer 2: when no resolver is registered, the
+/// substrate falls through to `auth_config_json["client_secret"]`
+/// and includes it as the form field on the refresh POST. Pins the
+/// test / single-tenant dev host path.
+#[cfg(feature = "http-client")]
+#[test]
+fn client_secret_resolver_layer_2_auth_config_json_when_no_resolver() {
+    use ffi::refresh_connector_token;
+
+    let server = OAuthTestServer::start(vec![
+        r#"{"access_token":"AT-1","refresh_token":"RT-1","expires_in":3600,"scope":"read"}"#
+            .to_string(),
+    ]);
+    let token_url = format!("{}/oauth/token", server.base_url());
+    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
+        serde_json::json!({
+            "client_id": "phase4_1-client",
+            "client_secret": "AUTH-CONFIG-SECRET",
+            "redirect_uri": "https://example.invalid/oauth/callback",
+            "token_url": token_url,
+        }),
+        connector_framework::ConnectorKind::Notion,
+    );
+    let master_key_hex = hex_encode(&master_key_bytes);
+
+    let handle =
+        open_store(path.to_string_lossy().into_owned(), master_key_hex).expect("open_store");
+
+    refresh_connector_token(handle, instance.0.to_string())
+        .expect("refresh_connector_token must succeed");
+
+    let bodies = server.request_bodies();
+    assert_eq!(bodies.len(), 1);
+    let body = &bodies[0];
+    assert!(
+        body.contains("client_secret=AUTH-CONFIG-SECRET"),
+        "with no resolver registered the POST body must carry \
+         auth_config_json[\"client_secret\"]; got body={body}",
+    );
+
+    close_store(handle).expect("close_store");
+    drop(server);
+    drop(dir);
+}
+
+/// Phase 4.1 layer 2b: when a resolver IS registered but returns
+/// `None`, the framework falls through to the
+/// `auth_config_json["client_secret"]` layer instead of omitting
+/// the form field. Pins the multi-tenant "secret not yet loaded
+/// into keychain" recovery semantics.
+#[cfg(feature = "http-client")]
+#[test]
+fn client_secret_resolver_layer_2_when_resolver_returns_none() {
+    use ffi::{refresh_connector_token, set_oauth_client_secret_resolver};
+
+    let server = OAuthTestServer::start(vec![
+        r#"{"access_token":"AT-1","refresh_token":"RT-1","expires_in":3600,"scope":"read"}"#
+            .to_string(),
+    ]);
+    let token_url = format!("{}/oauth/token", server.base_url());
+    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
+        serde_json::json!({
+            "client_id": "phase4_1-client",
+            "client_secret": "FALLBACK-SECRET",
+            "redirect_uri": "https://example.invalid/oauth/callback",
+            "token_url": token_url,
+        }),
+        connector_framework::ConnectorKind::Notion,
+    );
+    let master_key_hex = hex_encode(&master_key_bytes);
+
+    let handle =
+        open_store(path.to_string_lossy().into_owned(), master_key_hex).expect("open_store");
+
+    let resolver = Arc::new(TestResolver::new(None));
+    let calls = Arc::clone(&resolver.calls);
+    set_oauth_client_secret_resolver(
+        handle,
+        resolver.clone() as Arc<dyn ffi::OAuthClientSecretResolver>,
+    )
+    .expect("set_oauth_client_secret_resolver");
+
+    refresh_connector_token(handle, instance.0.to_string())
+        .expect("refresh_connector_token must succeed");
+
+    assert!(
+        calls.load(AtomicOrdering::SeqCst) >= 1,
+        "resolver must be consulted at least once even when it returns None",
+    );
+    let bodies = server.request_bodies();
+    assert_eq!(bodies.len(), 1);
+    let body = &bodies[0];
+    assert!(
+        body.contains("client_secret=FALLBACK-SECRET"),
+        "resolver-returns-None must fall through to auth_config_json fallback; got body={body}",
+    );
+
+    close_store(handle).expect("close_store");
+    drop(server);
+    drop(dir);
+}
+
+/// Phase 4.1 layer 3: when no resolver is registered AND
+/// `auth_config_json["client_secret"]` is absent, the substrate
+/// MUST NOT include a `client_secret=` form field at all. Public-
+/// client / PKCE-only providers accept this (Slack legacy);
+/// confidential-client providers reject with `invalid_client` — but
+/// that's the host's misconfiguration, not the substrate's bug.
+/// Pins the public-client path.
+#[cfg(feature = "http-client")]
+#[test]
+fn client_secret_resolver_layer_3_omits_form_field_when_no_secret_available() {
+    use ffi::refresh_connector_token;
+
+    let server = OAuthTestServer::start(vec![
+        r#"{"access_token":"AT-1","refresh_token":"RT-1","expires_in":3600,"scope":"read"}"#
+            .to_string(),
+    ]);
+    let token_url = format!("{}/oauth/token", server.base_url());
+    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
+        serde_json::json!({
+            "client_id": "phase4_1-public-client",
+            "redirect_uri": "https://example.invalid/oauth/callback",
+            "token_url": token_url,
+        }),
+        connector_framework::ConnectorKind::Slack,
+    );
+    let master_key_hex = hex_encode(&master_key_bytes);
+
+    let handle =
+        open_store(path.to_string_lossy().into_owned(), master_key_hex).expect("open_store");
+
+    refresh_connector_token(handle, instance.0.to_string())
+        .expect("refresh_connector_token must succeed (public-client mode)");
+
+    let bodies = server.request_bodies();
+    assert_eq!(bodies.len(), 1);
+    let body = &bodies[0];
+    assert!(
+        !body.contains("client_secret"),
+        "with neither resolver nor auth_config_json secret, the POST body must \
+         OMIT the client_secret form field entirely; got body={body}",
+    );
+
+    close_store(handle).expect("close_store");
+    drop(server);
+    drop(dir);
+}
+
+/// Phase 4.1 lifecycle: registering a resolver, then clearing it,
+/// must restore the auth_config_json fallback semantics. Pins the
+/// `clear_oauth_client_secret_resolver` FFI function's contract.
+#[cfg(feature = "http-client")]
+#[test]
+fn client_secret_resolver_clear_restores_fallback() {
+    use ffi::{
+        clear_oauth_client_secret_resolver, refresh_connector_token,
+        set_oauth_client_secret_resolver,
+    };
+
+    let server = OAuthTestServer::start(vec![
+        r#"{"access_token":"AT-1","refresh_token":"RT-1","expires_in":3600,"scope":"read"}"#
+            .to_string(),
+        r#"{"access_token":"AT-2","refresh_token":"RT-2","expires_in":3600,"scope":"read"}"#
+            .to_string(),
+    ]);
+    let token_url = format!("{}/oauth/token", server.base_url());
+    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
+        serde_json::json!({
+            "client_id": "phase4_1-client",
+            "client_secret": "RESTORED-FALLBACK",
+            "redirect_uri": "https://example.invalid/oauth/callback",
+            "token_url": token_url,
+        }),
+        connector_framework::ConnectorKind::Notion,
+    );
+    let master_key_hex = hex_encode(&master_key_bytes);
+
+    let handle =
+        open_store(path.to_string_lossy().into_owned(), master_key_hex).expect("open_store");
+
+    // First grant: resolver registered, returns "RESOLVER-FIRST".
+    let resolver = Arc::new(TestResolver::new(Some("RESOLVER-FIRST")))
+        as Arc<dyn ffi::OAuthClientSecretResolver>;
+    set_oauth_client_secret_resolver(handle, resolver).expect("set");
+    refresh_connector_token(handle, instance.0.to_string()).expect("first refresh");
+
+    // Second grant: resolver cleared, expect fallback.
+    clear_oauth_client_secret_resolver(handle).expect("clear");
+    refresh_connector_token(handle, instance.0.to_string()).expect("second refresh");
+
+    let bodies = server.request_bodies();
+    assert_eq!(bodies.len(), 2);
+    assert!(
+        bodies[0].contains("client_secret=RESOLVER-FIRST"),
+        "first grant must carry the resolver-supplied secret; got body={}",
+        bodies[0],
+    );
+    assert!(
+        bodies[1].contains("client_secret=RESTORED-FALLBACK"),
+        "second grant (after clear) must carry the auth_config_json fallback; \
+         got body={}",
+        bodies[1],
+    );
+
+    close_store(handle).expect("close_store");
+    drop(server);
+    drop(dir);
+}
+
+/// Phase 4.1 negative path: `set_oauth_client_secret_resolver` on a
+/// runtime that never had an OAuth2 client built (only happens on
+/// `--no-default-features` builds where `http-client` is off) must
+/// surface `Unavailable { subsystem: "connector-http-client" }`. We
+/// can't exercise that arm directly from this test file because the
+/// integration tests run with all features on, but we CAN assert
+/// the happy-path call doesn't error on a freshly-opened store —
+/// the resolver slot is interior-mutable and idempotent across
+/// repeated set/clear cycles.
+#[cfg(feature = "http-client")]
+#[test]
+fn client_secret_resolver_set_and_clear_are_idempotent() {
+    use ffi::{clear_oauth_client_secret_resolver, set_oauth_client_secret_resolver};
+
+    let (h, _dir) = fresh_store();
+
+    let r1 = Arc::new(TestResolver::new(Some("S1"))) as Arc<dyn ffi::OAuthClientSecretResolver>;
+    set_oauth_client_secret_resolver(h, r1).expect("first set");
+
+    let r2 = Arc::new(TestResolver::new(Some("S2"))) as Arc<dyn ffi::OAuthClientSecretResolver>;
+    set_oauth_client_secret_resolver(h, r2).expect("second set replaces first");
+
+    clear_oauth_client_secret_resolver(h).expect("first clear");
+    clear_oauth_client_secret_resolver(h).expect("second clear is a no-op");
+
+    close_store(h).expect("close_store");
+}
+
+/// Phase 4.1 health-probe wiring: the `connector` subsystem must
+/// flip its `oauth_resolver=` field from `unset` to `registered`
+/// after a successful `set_oauth_client_secret_resolver` call, and
+/// back to `unset` after `clear_oauth_client_secret_resolver`.
+/// Pins the diagnostic surface against regression so host
+/// operators debugging `invalid_client` grant rejections can
+/// reliably check the probe to confirm their resolver wired up.
+#[cfg(feature = "http-client")]
+#[test]
+fn health_probe_surfaces_oauth_resolver_registration_state() {
+    use ffi::{clear_oauth_client_secret_resolver, set_oauth_client_secret_resolver};
+
+    let (h, _dir) = fresh_store();
+
+    // Baseline: a fresh runtime has no resolver registered.
+    let env = health_check(Some(h)).expect("health_check (baseline)");
+    let baseline_detail = env
+        .subsystems
+        .iter()
+        .find(|s| s.name == "connector")
+        .and_then(|s| s.detail.clone())
+        .expect("connector subsystem detail (baseline)");
+    assert!(
+        baseline_detail.contains("oauth_resolver=unset"),
+        "baseline detail={baseline_detail}"
+    );
+
+    // Register a resolver — probe must flip to `registered`.
+    let resolver =
+        Arc::new(TestResolver::new(Some("S"))) as Arc<dyn ffi::OAuthClientSecretResolver>;
+    set_oauth_client_secret_resolver(h, resolver).expect("set_oauth_client_secret_resolver");
+
+    let env = health_check(Some(h)).expect("health_check (post-set)");
+    let post_set_detail = env
+        .subsystems
+        .iter()
+        .find(|s| s.name == "connector")
+        .and_then(|s| s.detail.clone())
+        .expect("connector subsystem detail (post-set)");
+    assert!(
+        post_set_detail.contains("oauth_resolver=registered"),
+        "post-set detail={post_set_detail}"
+    );
+    assert!(
+        !post_set_detail.contains("oauth_resolver=unset"),
+        "post-set detail must not contain unset; got {post_set_detail}"
+    );
+
+    // Clear — probe flips back to `unset`. Pins the round-trip.
+    clear_oauth_client_secret_resolver(h).expect("clear_oauth_client_secret_resolver");
+
+    let env = health_check(Some(h)).expect("health_check (post-clear)");
+    let post_clear_detail = env
+        .subsystems
+        .iter()
+        .find(|s| s.name == "connector")
+        .and_then(|s| s.detail.clone())
+        .expect("connector subsystem detail (post-clear)");
+    assert!(
+        post_clear_detail.contains("oauth_resolver=unset"),
+        "post-clear detail={post_clear_detail}"
+    );
+
+    close_store(h).expect("close_store");
+}
+
+/// Phase 4.1 helper: hex-encode `bytes` as a lowercase string.
+/// Mirrors the encoding used by `open_store(master_key_hex)`.
+#[cfg(feature = "http-client")]
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write as _;
+        write!(s, "{:02x}", b).expect("hex encode");
+    }
+    s
 }

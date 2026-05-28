@@ -492,6 +492,38 @@ pub fn refresh_connector_token(
     ffi::refresh_connector_token(RuntimeHandle(handle), instance_id).map_err(NapiError::from)
 }
 
+/// Register a host-supplied OAuth2 client-secret resolver on
+/// `handle`'s per-runtime [`ffi::OAuth2Client`]. Mirrors
+/// [`ffi::set_oauth_client_secret_resolver`].
+///
+/// `resolver` is an `Arc<dyn ffi::OAuthClientSecretResolver>` —
+/// the N-API binding ([`bindings::js_set_oauth_client_secret_resolver`])
+/// constructs this from a JS callback. Pure-Rust callers can pass
+/// any `Arc<dyn OAuthClientSecretResolver>`.
+///
+/// # Errors
+///
+/// Forwards [`ffi::set_oauth_client_secret_resolver`] errors as
+/// [`NapiError`].
+pub fn set_oauth_client_secret_resolver(
+    handle: NapiHandle,
+    resolver: std::sync::Arc<dyn ffi::OAuthClientSecretResolver>,
+) -> NapiResult<()> {
+    ffi::set_oauth_client_secret_resolver(RuntimeHandle(handle), resolver).map_err(NapiError::from)
+}
+
+/// Unregister the previously-registered OAuth2 client-secret
+/// resolver on `handle`. Mirrors
+/// [`ffi::clear_oauth_client_secret_resolver`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::clear_oauth_client_secret_resolver`] errors as
+/// [`NapiError`].
+pub fn clear_oauth_client_secret_resolver(handle: NapiHandle) -> NapiResult<()> {
+    ffi::clear_oauth_client_secret_resolver(RuntimeHandle(handle)).map_err(NapiError::from)
+}
+
 const B64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn encode_b64(bytes: &[u8]) -> String {
