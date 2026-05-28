@@ -50,9 +50,10 @@ pub use error::{NapiError, NapiResult};
 #[cfg(feature = "tracing-subscriber")]
 pub use ffi::try_init_tracing;
 pub use ffi::{
-    AdapterReport, EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, HealthStatus,
-    MemoryFilter, MemoryRecord, MemoryState, MetricsSnapshot, QueryResult, RuntimeHandle,
-    ScopeIdString, SourceKind, SubsystemHealth, SubsystemStatus, SynthesisTrigger,
+    AdapterReport, ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass,
+    FfiKeypair, FfiSignature, HealthStatus, MemoryFilter, MemoryRecord, MemoryState,
+    MetricsSnapshot, QueryResult, RuntimeHandle, ScopeIdString, SourceKind, SubsystemHealth,
+    SubsystemStatus, SyncModeKind, SyncReport, SyncStatusKind, SynthesisTrigger,
 };
 pub use types::{IngestRequest, InitConfig, QueryRequest};
 
@@ -387,6 +388,78 @@ pub fn health_check(handle: Option<NapiHandle>) -> NapiResult<ffi::HealthStatus>
         }
     });
     ffi::health_check(handle).map_err(NapiError::from)
+}
+
+// ---------------------------------------------------------------------------
+// Connector management — mirrors the five connector FFI functions defined in
+// `crates/ffi/src/connector.rs`. The N-API wrappers in
+// `crates/napi/src/bindings.rs` invoke these forwarders so the JS host gets
+// the same lifecycle (`create` → `authenticate` → `sync` → `list` /
+// `remove`) without going through the FFI surface twice.
+// ---------------------------------------------------------------------------
+
+/// Instantiate a connector for `kind`, bound to `scope_id`, with
+/// `config_json` as the connector's `auth_config_json` payload.
+/// Mirrors [`ffi::create_connector`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::create_connector`] errors as [`NapiError`].
+pub fn create_connector(
+    handle: NapiHandle,
+    kind: ConnectorKindTag,
+    scope_id: ScopeIdString,
+    config_json: String,
+) -> NapiResult<String> {
+    ffi::create_connector(RuntimeHandle(handle), kind, scope_id, config_json)
+        .map_err(NapiError::from)
+}
+
+/// Run the OAuth2 `authorization_code` exchange for `instance_id`
+/// and stash the bearer token in the per-runtime token vault.
+/// Mirrors [`ffi::authenticate_connector`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::authenticate_connector`] errors as [`NapiError`].
+pub fn authenticate_connector(
+    handle: NapiHandle,
+    instance_id: String,
+    auth_code: String,
+) -> NapiResult<()> {
+    ffi::authenticate_connector(RuntimeHandle(handle), instance_id, auth_code)
+        .map_err(NapiError::from)
+}
+
+/// Run a sync against the source system and forward emitted
+/// `ConnectorEvent`s into the encrypted evidence store. Mirrors
+/// [`ffi::sync_connector`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::sync_connector`] errors as [`NapiError`].
+pub fn sync_connector(handle: NapiHandle, instance_id: String) -> NapiResult<SyncReport> {
+    ffi::sync_connector(RuntimeHandle(handle), instance_id).map_err(NapiError::from)
+}
+
+/// List configured connector instances on this runtime with their
+/// current sync state. Mirrors [`ffi::list_connectors`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::list_connectors`] errors as [`NapiError`].
+pub fn list_connectors(handle: NapiHandle) -> NapiResult<Vec<ConnectorStatus>> {
+    ffi::list_connectors(RuntimeHandle(handle)).map_err(NapiError::from)
+}
+
+/// Tear down the connector with `instance_id`. Mirrors
+/// [`ffi::remove_connector`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::remove_connector`] errors as [`NapiError`].
+pub fn remove_connector(handle: NapiHandle, instance_id: String) -> NapiResult<()> {
+    ffi::remove_connector(RuntimeHandle(handle), instance_id).map_err(NapiError::from)
 }
 
 const B64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

@@ -1025,6 +1025,8 @@ name = "ffi"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "connector_framework",
+ "connectors",
  "crypto",
  "evidence_store",
  "inference_router",

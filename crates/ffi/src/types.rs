@@ -208,6 +208,151 @@ pub struct FfiSignature {
     pub bytes: Vec<u8>,
 }
 
+// ──────────────────────────── Connector wire types ────────────────────────────
+//
+// Mirrors `connector_framework::ConnectorKind` / `SyncMode` / `SyncStatus`
+// as wire-flat UniFFI enums so the substrate's connector-management
+// FFI surface (see `super::create_connector`,
+// `super::authenticate_connector`, `super::sync_connector`,
+// `super::list_connectors`, `super::remove_connector`) can speak the
+// same vocabulary as the rest of the codebase without forcing
+// mobile / desktop hosts to import the rich types from
+// `connector_framework`.
+//
+// Every type here is `uniffi::Enum` / `uniffi::Record` so it
+// crosses the bridge cleanly on Swift / Kotlin / N-API. Strings
+// are used for ids (UUIDs in canonical hyphenated form) and for
+// the OAuth2 redirect URI / authorisation code arguments.
+
+/// Wire-flat mirror of [`connector_framework::ConnectorKind`].
+///
+/// Kept in sync with the upstream enum — see
+/// `crates/connector_framework/src/config.rs`. Each variant maps
+/// to exactly one source-system connector implementation in the
+/// `connectors` crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectorKindTag {
+    /// Google Drive — Google Workspace files.
+    GoogleDrive,
+    /// Microsoft OneDrive — personal + business document libraries.
+    OneDrive,
+    /// Notion — pages + databases.
+    Notion,
+    /// Atlassian Jira — issues + projects.
+    Jira,
+    /// Atlassian Confluence — wiki spaces + pages.
+    Confluence,
+    /// GitHub — repos + issues + PRs.
+    GitHub,
+    /// Slack — channels + messages + threads.
+    Slack,
+    /// Figma — files + frames.
+    Figma,
+    /// HubSpot — contacts + companies + deals.
+    HubSpot,
+    /// Email — Gmail or Microsoft Graph mailboxes.
+    Email,
+    /// Generic webhook receiver — opaque-payload connector for
+    /// providers that aren't first-class supported.
+    GenericWebhook,
+}
+
+/// Sync direction — full re-walk vs. cursor-based incremental.
+///
+/// Mirrors [`connector_framework::SyncMode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncModeKind {
+    /// First-time pull. Walks the entire source surface and
+    /// returns the cursor to start incremental sync from.
+    Full,
+    /// Steady-state pull. Resumes from the last cursor stored in
+    /// `SyncState`.
+    Incremental,
+}
+
+/// Lifecycle phase of a connector's sync state.
+///
+/// Mirrors [`connector_framework::SyncStatus`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncStatusKind {
+    /// Connector exists but no sync has ever run.
+    NeverRun,
+    /// A sync is currently in flight.
+    InProgress,
+    /// Most recent sync completed without error.
+    Succeeded,
+    /// Most recent sync failed; see
+    /// [`ConnectorStatus::last_error`] for the diagnostic.
+    Failed,
+}
+
+/// Wire-flat status row returned by [`super::list_connectors`].
+///
+/// Carries enough state for the host to render a connectors list
+/// view: kind icon, last-synced timestamp, error banner, current
+/// sync mode (so the UI can show "Incremental sync" vs "Full
+/// sync" badges).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct ConnectorStatus {
+    /// UUID-string identifier — the
+    /// [`connector_framework::ConnectorInstanceId`] this row refers
+    /// to. Stable for the lifetime of the connector instance.
+    pub instance_id: String,
+    /// Which source-system connector this is.
+    pub kind: ConnectorKindTag,
+    /// UUID-string scope id the connector is bound to. Mirrors
+    /// [`connector_framework::ConnectorConfig::scope`].
+    pub scope_id: ScopeIdString,
+    /// Current sync direction (`Full` until the first successful
+    /// sync, `Incremental` thereafter).
+    pub sync_mode: SyncModeKind,
+    /// Most recent lifecycle phase.
+    pub sync_status: SyncStatusKind,
+    /// Unix epoch (seconds) when the last sync completed, or
+    /// `None` if no sync has finished yet.
+    pub last_synced_at: Option<i64>,
+    /// Last-error diagnostic if `sync_status == Failed`, else
+    /// `None`.
+    pub last_error: Option<String>,
+}
+
+/// Wire-flat result returned by [`super::sync_connector`].
+///
+/// Records what happened during a single sync run — useful for
+/// host-side UI ("Synced 42 new documents from Slack") and for
+/// downstream observability.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct SyncReport {
+    /// UUID-string identifier of the connector instance that
+    /// produced the run.
+    pub instance_id: String,
+    /// Which direction this sync ran in.
+    pub mode: SyncModeKind,
+    /// Total number of [`connector_framework::ConnectorEvent`]
+    /// values produced by the run.
+    pub events_total: u32,
+    /// Subset of `events_total` that were ingested into the
+    /// evidence store as new rows (some events — e.g.
+    /// `DocumentDeleted` / `PermissionChanged` — do not produce
+    /// new evidence rows).
+    pub events_ingested: u32,
+    /// UUID-string evidence ids freshly created during this sync.
+    /// Stable order: emission order of the underlying
+    /// `ConnectorEvent` stream.
+    pub ingested_evidence_ids: Vec<String>,
+    /// Opaque cursor the connector returned for the next
+    /// incremental run, or `None` if this connector has no
+    /// cursor (e.g. webhook-only sources).
+    pub next_cursor: Option<String>,
+    /// Unix epoch (seconds) when the run started.
+    pub started_at: i64,
+    /// Unix epoch (seconds) when the run completed.
+    pub completed_at: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

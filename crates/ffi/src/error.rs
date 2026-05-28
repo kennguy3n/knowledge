@@ -114,6 +114,27 @@ pub enum FfiError {
         /// HTTP status, JSON parse error, etc.).
         message: String,
     },
+
+    /// Underlying connector framework failure — auth handshake,
+    /// HTTP transport, sync, token vault, webhook, or attachment
+    /// error from `connector_framework`. Distinct from
+    /// [`Self::Unavailable`] (which is for missing /
+    /// not-yet-initialised subsystems) because the connector
+    /// subsystem IS present and reachable, but the *attempt*
+    /// against it failed.
+    ///
+    /// Mapped from
+    /// [`connector_framework::ConnectorError`]. The substrate
+    /// flattens the rich connector-error union into this single
+    /// FFI variant because host-side recovery is uniform across
+    /// the underlying cases ("show error banner, offer retry"):
+    /// the diagnostic message preserves the original case in
+    /// human-readable form for telemetry.
+    #[error("connector failure: {message}")]
+    Connector {
+        /// Diagnostic from the underlying connector framework.
+        message: String,
+    },
 }
 
 impl FfiError {
@@ -130,6 +151,21 @@ impl FfiError {
             Self::Crypto { .. } => "Crypto",
             Self::Unavailable { .. } => "Unavailable",
             Self::InferenceFailure { .. } => "InferenceFailure",
+            Self::Connector { .. } => "Connector",
+        }
+    }
+}
+
+impl From<connector_framework::ConnectorError> for FfiError {
+    /// Flatten a [`connector_framework::ConnectorError`] into the
+    /// uniform [`FfiError::Connector`] variant. Hosts switch on the
+    /// `Connector` discriminant tag and read the human-readable
+    /// `message` for diagnostics — they should not try to recover
+    /// per sub-case (auth vs. transport vs. sync). See the
+    /// `FfiError::Connector` docs for the rationale.
+    fn from(err: connector_framework::ConnectorError) -> Self {
+        FfiError::Connector {
+            message: err.to_string(),
         }
     }
 }
@@ -198,6 +234,9 @@ mod tests {
             },
             FfiError::InferenceFailure {
                 message: "grammar mismatch".into(),
+            },
+            FfiError::Connector {
+                message: "auth handshake failed".into(),
             },
         ];
         for original in cases {
@@ -270,6 +309,42 @@ mod tests {
             .kind(),
             "InferenceFailure"
         );
+        assert_eq!(
+            FfiError::Connector {
+                message: "x".into()
+            }
+            .kind(),
+            "Connector"
+        );
+    }
+
+    /// Mapping [`connector_framework::ConnectorError`] into the FFI
+    /// surface MUST always come through as
+    /// [`FfiError::Connector`] — never collapse into another
+    /// variant. This pins the contract so a future refactor that
+    /// adds a sibling FFI variant (e.g. `ConnectorAuth`) doesn't
+    /// silently re-route auth failures and break host-side switch
+    /// arms.
+    #[test]
+    fn connector_error_maps_into_connector_variant() {
+        let cases = [
+            connector_framework::ConnectorError::Auth("bad code".into()),
+            connector_framework::ConnectorError::Sync("rate limited".into()),
+            connector_framework::ConnectorError::Transport("tls handshake".into()),
+            connector_framework::ConnectorError::TokenNotFound,
+            connector_framework::ConnectorError::ConnectorNotFound,
+        ];
+        for c in cases {
+            let original_display = c.to_string();
+            let mapped: FfiError = c.into();
+            match mapped {
+                FfiError::Connector { ref message } => {
+                    assert_eq!(message, &original_display);
+                }
+                other => panic!("expected FfiError::Connector, got {other:?}"),
+            }
+            assert_eq!(mapped.kind(), "Connector");
+        }
     }
 
     /// `FfiError::InferenceFailure` and `FfiError::Unavailable` MUST

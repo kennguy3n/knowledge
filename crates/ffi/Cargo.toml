@@ -38,13 +38,24 @@ crate-type = ["lib", "staticlib", "cdylib"]
 
 [features]
 default = []
-# Pulls in `inference_router/http-client`, enabling the real reqwest-based
-# `HttpLlamaServerClient` so the FFI runtime can wire `trigger_synthesis`
-# to a live llama.cpp loopback server. Without this feature the runtime
-# still constructs an `InferenceRouter` (MLX + Fallback adapters) so
-# classification tasks work, but synthesis tasks return `Unavailable`
-# because the llama.cpp adapter has no client.
-http-client = ["inference_router/http-client"]
+# Pulls in `inference_router/http-client` AND
+# `connector_framework/http-client`, enabling:
+#   * the real reqwest-based `HttpLlamaServerClient` so the FFI runtime
+#     can wire `trigger_synthesis` to a live llama.cpp loopback server;
+#   * the real `BlockingHttpTransport` (reqwest blocking client with
+#     retry-with-backoff + Retry-After honoring) and the production
+#     `OAuth2Client` so `create_connector` / `authenticate_connector` /
+#     `sync_connector` actually talk to source providers instead of
+#     synthesizing fixture data.
+# Without this feature the runtime still constructs an
+# `InferenceRouter` (MLX + Fallback adapters) so classification tasks
+# work, and connector-management FFI functions still link, but every
+# connector call returns `FfiError::Unavailable { subsystem: "connector-http-client" }`
+# because the transport / OAuth2 client could not be instantiated.
+http-client = [
+    "inference_router/http-client",
+    "connector_framework/http-client",
+]
 # Pulls in `tracing-subscriber` and exposes `tracing_init::try_init_tracing`
 # so platform hosts can install a global tracing subscriber from the
 # substrate without taking a direct dependency on `tracing-subscriber`
@@ -55,6 +66,18 @@ http-client = ["inference_router/http-client"]
 tracing-subscriber = ["dep:tracing-subscriber"]
 
 [dependencies]
+connectors = { path = "../connectors" }
+# `async-runtime` + `webhook-server` are pulled in unconditionally so
+# the substrate's server-side webhook-reception module (the
+# `connector_framework::webhook_server` axum service that fans
+# incoming provider webhooks to the per-connector
+# `handle_webhook_event` calls) is compiled into every FFI build.
+# `http-client` is gated on this crate's `http-client` feature so the
+# blocking reqwest transport is only linked into production builds.
+connector_framework = { path = "../connector_framework", features = [
+    "async-runtime",
+    "webhook-server",
+] }
 crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }
 inference_router = { path = "../inference_router" }

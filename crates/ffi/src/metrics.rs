@@ -107,6 +107,16 @@ pub(crate) struct Metrics {
     // struct so accidental shadowings on future fields still surface.
     #[allow(clippy::struct_field_names)]
     pub(crate) metrics_snapshot_total: AtomicU64,
+    /// Total `create_connector` calls initiated.
+    pub(crate) create_connector_total: AtomicU64,
+    /// Total `authenticate_connector` calls initiated.
+    pub(crate) authenticate_connector_total: AtomicU64,
+    /// Total `sync_connector` calls initiated.
+    pub(crate) sync_connector_total: AtomicU64,
+    /// Total `list_connectors` calls initiated.
+    pub(crate) list_connectors_total: AtomicU64,
+    /// Total `remove_connector` calls initiated.
+    pub(crate) remove_connector_total: AtomicU64,
     /// Total `health_check` calls initiated. Counted on both the
     /// bridge-only (no-handle) path and the full-probe (valid-handle)
     /// path. The `Err` path (unknown / closed handle) still
@@ -137,9 +147,10 @@ pub(crate) struct Metrics {
     pub(crate) errors_crypto: AtomicU64,
     pub(crate) errors_unavailable: AtomicU64,
     pub(crate) errors_inference_failure: AtomicU64,
+    pub(crate) errors_connector: AtomicU64,
     /// Sum of every per-kind error counter, maintained alongside the
     /// individual counters so [`snapshot`] does not have to fan out
-    /// nine reads to compute the total.
+    /// across the per-kind reads to compute the total.
     pub(crate) errors_total: AtomicU64,
 
     // Gauges (mutable up-and-down).
@@ -222,6 +233,11 @@ counter_inc!(pub(crate) fn inc_generate_keypair => generate_keypair_total);
 counter_inc!(pub(crate) fn inc_escape_fts_query => escape_fts_query_total);
 counter_inc!(pub(crate) fn inc_metrics_snapshot => metrics_snapshot_total);
 counter_inc!(pub(crate) fn inc_health_check => health_check_total);
+counter_inc!(pub(crate) fn inc_create_connector => create_connector_total);
+counter_inc!(pub(crate) fn inc_authenticate_connector => authenticate_connector_total);
+counter_inc!(pub(crate) fn inc_sync_connector => sync_connector_total);
+counter_inc!(pub(crate) fn inc_list_connectors => list_connectors_total);
+counter_inc!(pub(crate) fn inc_remove_connector => remove_connector_total);
 // Feature-gated to match the only call site
 // (`crate::tracing_init::try_init_tracing`). The counter *field*
 // in `MetricsSnapshot` stays unconditional so the wire shape does
@@ -250,6 +266,7 @@ pub(crate) fn inc_error(err: &FfiError) {
         FfiError::Crypto { .. } => &m.errors_crypto,
         FfiError::Unavailable { .. } => &m.errors_unavailable,
         FfiError::InferenceFailure { .. } => &m.errors_inference_failure,
+        FfiError::Connector { .. } => &m.errors_connector,
     };
     counter.fetch_add(1, Ordering::Relaxed);
     m.errors_total.fetch_add(1, Ordering::Relaxed);
@@ -336,6 +353,21 @@ pub struct MetricsSnapshot {
     // emitter's snapshot still round-trips through a newer reader.
     #[serde(default)]
     pub metrics_snapshot_total: u64,
+    /// Total `create_connector` calls initiated.
+    #[serde(default)]
+    pub create_connector_total: u64,
+    /// Total `authenticate_connector` calls initiated.
+    #[serde(default)]
+    pub authenticate_connector_total: u64,
+    /// Total `sync_connector` calls initiated.
+    #[serde(default)]
+    pub sync_connector_total: u64,
+    /// Total `list_connectors` calls initiated.
+    #[serde(default)]
+    pub list_connectors_total: u64,
+    /// Total `remove_connector` calls initiated.
+    #[serde(default)]
+    pub remove_connector_total: u64,
     /// Total `health_check` calls initiated — every probe (bridge
     /// only and full) increments this, including the `Err` path for
     /// an unknown / closed handle (the `Err` path also feeds
@@ -386,6 +418,8 @@ pub struct ErrorCounters {
     pub unavailable: u64,
     /// `FfiError::InferenceFailure`.
     pub inference_failure: u64,
+    /// `FfiError::Connector`.
+    pub connector: u64,
 }
 
 /// Return a wire-flat snapshot of every counter and gauge. Reads
@@ -431,6 +465,11 @@ pub fn snapshot() -> MetricsSnapshot {
         generate_keypair_total: m.generate_keypair_total.load(Ordering::Relaxed),
         escape_fts_query_total: m.escape_fts_query_total.load(Ordering::Relaxed),
         metrics_snapshot_total: m.metrics_snapshot_total.load(Ordering::Relaxed),
+        create_connector_total: m.create_connector_total.load(Ordering::Relaxed),
+        authenticate_connector_total: m.authenticate_connector_total.load(Ordering::Relaxed),
+        sync_connector_total: m.sync_connector_total.load(Ordering::Relaxed),
+        list_connectors_total: m.list_connectors_total.load(Ordering::Relaxed),
+        remove_connector_total: m.remove_connector_total.load(Ordering::Relaxed),
         health_check_total: m.health_check_total.load(Ordering::Relaxed),
         init_tracing_total: m.init_tracing_total.load(Ordering::Relaxed),
         errors_by_kind: ErrorCounters {
@@ -443,6 +482,7 @@ pub fn snapshot() -> MetricsSnapshot {
             crypto: m.errors_crypto.load(Ordering::Relaxed),
             unavailable: m.errors_unavailable.load(Ordering::Relaxed),
             inference_failure: m.errors_inference_failure.load(Ordering::Relaxed),
+            connector: m.errors_connector.load(Ordering::Relaxed),
         },
         errors_total: m.errors_total.load(Ordering::Relaxed),
         open_handles: m.open_handles.load(Ordering::Relaxed),

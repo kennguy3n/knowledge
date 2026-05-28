@@ -36,7 +36,9 @@ use napi_derive::napi;
 
 #[cfg(test)]
 use ffi::RuntimeHandle;
-use ffi::{MemoryFilter, MemoryRecord, SynthesisTrigger};
+use ffi::{
+    ConnectorKindTag, ConnectorStatus, MemoryFilter, MemoryRecord, SyncReport, SynthesisTrigger,
+};
 
 use crate::types::{IngestRequest, QueryRequest};
 use crate::{NapiError, NapiHandle};
@@ -389,6 +391,86 @@ pub fn js_health_check(handle: Option<BigInt>) -> Result<serde_json::Value> {
             message: format!("failed to serialize HealthStatus: {e}"),
         })
     })
+}
+
+// ---------------------------------------------------------------------------
+// Connector management surface — mirrors the five connector FFI functions
+// from `crates/ffi/src/connector.rs` through to the JS host. The JS-side
+// argument shape is:
+//
+//   * `kind` arrives as a JS string matching the snake_case serde tags on
+//     `ConnectorKindTag` (e.g. `"google_drive"`, `"notion"`, `"slack"`).
+//   * `configJson` is a JS string (NOT a JS object) carrying the provider's
+//     OAuth2 config (`client_id`, `redirect_uri`, `token_url`, etc.) so the
+//     same exact bytes get parsed once on the Rust side, matching the
+//     UniFFI signature on iOS / Android.
+//
+// Return shapes:
+//
+//   * `createConnector` returns the new instance UUID as a string.
+//   * `syncConnector` returns the `SyncReport` envelope serialised to JSON
+//     for ergonomic JS-side destructuring.
+//   * `listConnectors` returns the same `ConnectorStatus[]` envelope.
+// ---------------------------------------------------------------------------
+
+/// Instantiate a connector. Mirrors [`crate::create_connector`].
+#[napi(js_name = "createConnector")]
+pub fn js_create_connector(
+    handle: BigInt,
+    kind: serde_json::Value,
+    scope_id: String,
+    config_json: String,
+) -> Result<String> {
+    let h = handle_from_bigint(&handle)?;
+    let kind_tag: ConnectorKindTag = parse_arg(kind)?;
+    crate::create_connector(h, kind_tag, scope_id, config_json).map_err(to_js_error)
+}
+
+/// Run the OAuth2 `authorization_code` exchange for an existing
+/// connector instance. Mirrors [`crate::authenticate_connector`].
+#[napi(js_name = "authenticateConnector")]
+pub fn js_authenticate_connector(
+    handle: BigInt,
+    instance_id: String,
+    auth_code: String,
+) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    crate::authenticate_connector(h, instance_id, auth_code).map_err(to_js_error)
+}
+
+/// Run a connector sync and ingest emitted events into the evidence
+/// store. Mirrors [`crate::sync_connector`]. Returns the
+/// [`SyncReport`] envelope serialised as `serde_json::Value` for JS.
+#[napi(js_name = "syncConnector")]
+pub fn js_sync_connector(handle: BigInt, instance_id: String) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let report: SyncReport = crate::sync_connector(h, instance_id).map_err(to_js_error)?;
+    serde_json::to_value(report).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("failed to serialize SyncReport: {e}"),
+        })
+    })
+}
+
+/// List configured connector instances. Mirrors
+/// [`crate::list_connectors`]. Returns a JSON array of
+/// [`ConnectorStatus`] objects.
+#[napi(js_name = "listConnectors")]
+pub fn js_list_connectors(handle: BigInt) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let rows: Vec<ConnectorStatus> = crate::list_connectors(h).map_err(to_js_error)?;
+    serde_json::to_value(rows).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("failed to serialize ConnectorStatus list: {e}"),
+        })
+    })
+}
+
+/// Tear down a connector. Mirrors [`crate::remove_connector`].
+#[napi(js_name = "removeConnector")]
+pub fn js_remove_connector(handle: BigInt, instance_id: String) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    crate::remove_connector(h, instance_id).map_err(to_js_error)
 }
 
 /// Install a global `tracing` subscriber filtered by the supplied

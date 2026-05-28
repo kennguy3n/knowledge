@@ -100,6 +100,7 @@
 // for the upstream design note).
 uniffi::setup_scaffolding!();
 
+pub mod connector;
 pub mod error;
 pub mod health;
 pub mod metrics;
@@ -108,6 +109,9 @@ pub mod runtime;
 pub mod tracing_init;
 pub mod types;
 
+pub use connector::{
+    authenticate_connector, create_connector, list_connectors, remove_connector, sync_connector,
+};
 pub use error::{FfiError, FfiResult};
 pub use health::{health_check, AdapterReport, HealthStatus, SubsystemHealth, SubsystemStatus};
 pub use metrics::{snapshot as metrics_snapshot, ErrorCounters, MetricsSnapshot};
@@ -115,8 +119,9 @@ pub use runtime::{close_store, open_store, RuntimeHandle};
 #[cfg(feature = "tracing-subscriber")]
 pub use tracing_init::try_init_tracing;
 pub use types::{
-    EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord,
-    MemoryState, QueryResult, ScopeIdString, SourceKind, SynthesisTrigger,
+    ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass, FfiKeypair,
+    FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, ScopeIdString, SourceKind,
+    SyncModeKind, SyncReport, SyncStatusKind, SynthesisTrigger,
 };
 
 use crypto::{

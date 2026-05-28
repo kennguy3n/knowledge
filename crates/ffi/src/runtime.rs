@@ -52,6 +52,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard};
 
 use chrono::{DateTime, TimeZone, Utc};
+use connector_framework::{Connector, ConnectorInstance, ConnectorInstanceId, OAuth2TokenVault};
 use crypto::forgetting::{self, DekRegistry, TombstoneStore};
 use crypto::{CryptoError, MasterKey};
 use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
@@ -253,6 +254,41 @@ pub struct FfiRuntime {
     /// idle-sweep paths only need `&InferenceRouter`, which the
     /// `Deref` impl on `Arc` provides transparently.
     pub(crate) inference_router: Arc<InferenceRouter>,
+    /// Per-runtime connector registry — every
+    /// [`create_connector`](crate::create_connector) call inserts a
+    /// fresh [`ConnectorInstance`] (config + sync state) keyed by
+    /// its [`ConnectorInstanceId`].
+    ///
+    /// The struct is held by value (not behind a lock) because the
+    /// entire `FfiRuntime` is already wrapped in `Arc<Mutex<…>>` at
+    /// the handle registry, which serialises every FFI call against
+    /// the same handle. Connector lifecycle calls (`create_connector`
+    /// / `authenticate_connector` / `sync_connector` /
+    /// `remove_connector`) all run with that mutex held, so adding
+    /// an inner lock would double-lock without buying any extra
+    /// safety.
+    ///
+    /// Phase 2 keeps connector state in-memory only — `close_store`
+    /// drops the registry. Phase 3 will add a
+    /// `connector_instances` SQLCipher table and rehydrate on
+    /// [`open_store`].
+    pub(crate) connector_instances: HashMap<ConnectorInstanceId, ConnectorInstance>,
+    /// Live connector implementors keyed by instance id. Built by
+    /// the connector factory at `create_connector` time and dropped
+    /// at `remove_connector` / `close_store`.
+    ///
+    /// Boxed as `dyn Connector` so the runtime can carry any
+    /// concrete connector (Google Drive, Notion, Slack, …) through
+    /// the same map. The `Send + Sync` supertraits on the
+    /// [`Connector`] trait keep this storage safe for the
+    /// `Arc<Mutex<FfiRuntime>>` cross-thread call pattern; see the
+    /// `Connector` trait docs in `crates/connector_framework`.
+    pub(crate) connectors: HashMap<ConnectorInstanceId, Box<dyn Connector>>,
+    /// OAuth2 token bundles keyed by connector instance id. Stored
+    /// here (in process memory) for Phase 2; Phase 3 will move this
+    /// behind the encrypted `connector_tokens` table so tokens are
+    /// AEAD-encrypted at rest under the tenant DEK.
+    pub(crate) token_vault: OAuth2TokenVault,
 }
 
 impl Drop for FfiRuntime {
@@ -855,6 +891,9 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         user_memories,
         channel_memories,
         inference_router,
+        connector_instances: HashMap::new(),
+        connectors: HashMap::new(),
+        token_vault: OAuth2TokenVault::new(),
     };
 
     // Capture the post-replay tombstone count before moving `runtime`
