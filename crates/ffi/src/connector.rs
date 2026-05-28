@@ -509,14 +509,17 @@ pub fn refresh_connector_token(
         // / scheduling, so the post-round-trip stamp is the
         // honest one to surface.
         let started_at = Utc::now();
-        let force_skew = chrono::Duration::seconds(60 * 60 * 24 * 365);
+        // `skew: None` = force-refresh mode. The helper never
+        // short-circuits on `is_expiring_within` — the explicit
+        // entry point's "always refreshes" contract is
+        // unbreakable regardless of `current_token.expires_at`.
         let (new_token, refreshed) = refresh_token_three_phase(
             handle,
             instance,
             &instance_id,
             token,
-            config,
-            force_skew,
+            &config,
+            None,
             started_at,
         )?;
         Ok(RefreshReport {
@@ -725,13 +728,18 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
         // diagnostic is observable through `list_connectors`
         // post-restart.
         let mut snapshot = snapshot;
+        // `skew: Some(AUTO_REFRESH_SKEW_SECS)` = auto-refresh mode.
+        // The helper short-circuits BEFORE any clone of
+        // `snapshot.config` is taken when the cached token is
+        // still outside the skew window — zero allocation cost on
+        // the typical "sync against a fresh token" hot path.
         match refresh_token_three_phase(
             handle,
             instance,
             &instance_id,
             snapshot.token.clone(),
-            snapshot.config.clone(),
-            chrono::Duration::seconds(AUTO_REFRESH_SKEW_SECS),
+            &snapshot.config,
+            Some(chrono::Duration::seconds(AUTO_REFRESH_SKEW_SECS)),
             Utc::now(),
         ) {
             Ok((new_token, _was_refreshed)) => {
@@ -1100,13 +1108,21 @@ fn lookup_connector_handle(
 /// lock, re-validate the instance + scope, persist the refreshed
 /// token to SQLCipher, update the in-memory vault).
 ///
-/// Skips the refresh entirely (returns the caller's `current_token`
-/// unchanged with `refreshed == false`) when
-/// `!current_token.is_expiring_within(now, skew)`. This lets
-/// [`sync_connector`] invoke the helper unconditionally with a
-/// conservative skew (`AUTO_REFRESH_SKEW_SECS`) while
-/// [`refresh_connector_token`] forces a refresh by passing a skew
-/// larger than any realistic OAuth2 access-token TTL.
+/// Two refresh modes:
+///
+/// * `skew: Some(s)` — **auto-refresh mode.** Skips the refresh
+///   entirely (returns the caller's `current_token` unchanged with
+///   `refreshed == false`) when
+///   `!current_token.is_expiring_within(now, s)`. Used by the
+///   [`sync_connector`] auto-refresh hook so the typical hot path
+///   (token still fresh) pays zero overhead.
+/// * `skew: None` — **force-refresh mode.** Always performs the
+///   refresh round-trip regardless of `current_token.expires_at`.
+///   Used by the explicit [`refresh_connector_token`] entry point
+///   so the contract ("always refreshes") is literally unbreakable
+///   — no risk of a far-future `expires_at` (e.g. a misconfigured
+///   provider returning 100+ year TTL) silently short-circuiting
+///   the host-driven refresh.
 ///
 /// Three-phase locking discipline (matches
 /// `authenticate_connector`):
@@ -1127,10 +1143,12 @@ fn lookup_connector_handle(
 ///   failure surfaces to the host before the vault becomes the
 ///   substrate-side source of truth.
 ///
-/// Hot tokens (still expiring outside `skew`) short-circuit
-/// before the OAuth2 client is built so the typical "sync against
-/// a fresh token" path in [`sync_connector`] pays zero overhead
-/// when no refresh is needed.
+/// Hot tokens (still expiring outside `skew`, in auto-refresh
+/// mode) short-circuit before the OAuth2 client is built AND
+/// before any clone of `config` is taken — so the typical "sync
+/// against a fresh token" path in [`sync_connector`] pays zero
+/// network overhead AND zero allocation overhead when no refresh
+/// is needed.
 ///
 /// # Errors
 ///
@@ -1158,12 +1176,19 @@ fn refresh_token_three_phase(
     instance: ConnectorInstanceId,
     instance_id_display: &str,
     current_token: connector_framework::OAuth2Token,
-    config: ConnectorConfig,
-    skew: chrono::Duration,
+    config: &ConnectorConfig,
+    skew: Option<chrono::Duration>,
     now: DateTime<Utc>,
 ) -> FfiResult<(connector_framework::OAuth2Token, bool)> {
-    if !current_token.is_expiring_within(now, skew) {
-        return Ok((current_token, false));
+    // Auto-refresh mode: short-circuit when the token is still
+    // fresh, BEFORE any clone of `config` is taken. Force-refresh
+    // mode (`skew == None`) always falls through to the refresh
+    // round-trip below — the contract on the explicit
+    // `refresh_connector_token` entry point is unbreakable.
+    if let Some(s) = skew {
+        if !current_token.is_expiring_within(now, s) {
+            return Ok((current_token, false));
+        }
     }
     // No refresh token in the cached bundle → re-auth required.
     // Mirrors `OAuth2TokenVault::refresh_if_expiring`'s rationale:
@@ -1191,10 +1216,17 @@ fn refresh_token_three_phase(
     // here (not inside Phase 2) so the unlocked refresh below
     // doesn't have to revisit the mutex just to grab the client
     // handle.
-    // Capture the scope id (Copy) before moving `config` into the
-    // refresher — Phase 3 re-checks `is_scope_forgotten(scope)` to
-    // bail out if a concurrent `forget_scope` ran while the
-    // unlocked refresh was in flight.
+    //
+    // `config` is cloned INSIDE this `with_runtime` closure (not
+    // at the call site) so the auto-refresh hot path in
+    // `sync_connector` — which short-circuits above when the
+    // token is still fresh — does NOT pay the clone cost. We only
+    // allocate when an actual refresh is happening.
+    //
+    // `scope` (Copy) is read off `config` for Phase 3's
+    // `is_scope_forgotten(scope)` re-check, which guards against a
+    // concurrent `forget_scope` running while the unlocked refresh
+    // is in flight.
     let scope = config.scope_id;
     let refresher: connector_framework::ConfiguredRefresher<
         connector_framework::BlockingHttpTransport,
@@ -1207,7 +1239,7 @@ fn refresh_token_three_phase(
             })?;
         Ok(connector_framework::ConfiguredRefresher::new(
             (**client_arc).clone(),
-            config,
+            config.clone(),
         ))
     })?;
     // ─────────── Phase 2: refresh (UNLOCKED) ────────────
@@ -1269,8 +1301,8 @@ fn refresh_token_three_phase(
     _instance: ConnectorInstanceId,
     _instance_id_display: &str,
     _current_token: connector_framework::OAuth2Token,
-    _config: ConnectorConfig,
-    _skew: chrono::Duration,
+    _config: &ConnectorConfig,
+    _skew: Option<chrono::Duration>,
     _now: DateTime<Utc>,
 ) -> FfiResult<(connector_framework::OAuth2Token, bool)> {
     Err(FfiError::Unavailable {
@@ -2075,8 +2107,8 @@ mod tests {
             instance,
             "irrelevant",
             fresh_token.clone(),
-            config,
-            Duration::seconds(60),
+            &config,
+            Some(Duration::seconds(60)),
             now,
         )
         .expect("short-circuit must succeed");
@@ -2127,8 +2159,8 @@ mod tests {
             instance,
             "instance-display-xyz",
             expiring_token,
-            config,
-            Duration::seconds(60),
+            &config,
+            Some(Duration::seconds(60)),
             now,
         )
         .expect_err("missing refresh_token must error");
@@ -2179,8 +2211,8 @@ mod tests {
             instance,
             "irrelevant",
             token,
-            config,
-            Duration::seconds(60),
+            &config,
+            Some(Duration::seconds(60)),
             now,
         )
         .expect_err("not(http-client) must always error Unavailable");
