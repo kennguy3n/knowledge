@@ -123,25 +123,27 @@ A device cannot read a tenant's Google Drive, a project's Jira board, or a team'
 
 ### What it is
 
-Both the knowledge substrate and the AI model sit on-device. The novel piece is the connector pipeline: ten named connectors — Google Drive, OneDrive / SharePoint, Notion, Jira, Confluence, GitHub, Slack, Figma, HubSpot, Email — plus a `GenericWebhook` extension point for source systems that just push events, all implementing the same contract (`docs/DESIGN.md` §10.2): OAuth2 with refresh-token storage, incremental sync, webhook push, channel-scoped attachment, ACL sync from the source system. The full enum lives in `crates/connector_framework/src/config.rs::ConnectorKind`.
+Both the knowledge substrate and the AI model sit on-device. The novel piece is the connector pipeline. The `ConnectorKind` enum in `crates/connector_framework/src/config.rs` declares ten named connectors (Google Drive, OneDrive / SharePoint, Notion, Jira, Confluence, GitHub, Slack, Figma, HubSpot, Email) plus a `GenericWebhook` extension point. Provider-specific implementations live in `crates/connectors/src/` — nine of the ten are wired today (`google_drive`, `onedrive`, `notion`, `jira`, `confluence`, `slack`, `figma`, `hubspot`, `email`); GitHub is declared at the type level but its provider module is not yet implemented. All connectors implement the same contract (`docs/DESIGN.md` §10.2): OAuth2 with refresh-token storage, incremental sync, webhook push, scope-bound attachment, ACL sync from the source system.
 
 When a connector emits a delta (new doc, ticket update, page edit), the server runs the substrate's standard ingest pipeline on it: importance classification, storage routing, observation extraction, semantic dedup, decay class assignment, channel/domain summary update. The output is structured observations and synthesised memory objects, encrypted to a specific substrate scope, that flow into the substrate alongside chat-derived knowledge. The on-device AI then operates on the enriched scope memory — it queries the channel / user memory object that now contains connector-sourced observations, without ever seeing the raw Drive document or Jira payload.
 
 ### Connector ownership — the key distinction
 
-A single connector — same source code, same observation pipeline, same dedup logic — produces fundamentally different privacy outcomes depending on *who attached it and to what scope*. The attachment registry binds every connector instance to exactly one substrate scope (`ConnectorAttachment.scope_id` in `crates/connector_framework/src/attachment.rs`), and the observation pipeline reads that binding via `AttachmentRegistry::scope_for()` to inherit the correct scope on every emitted observation. There are two patterns:
+A single connector — same source code, same observation pipeline, same dedup logic — produces fundamentally different privacy outcomes depending on *who attached it and to what scope*. The attachment registry binds every connector instance to exactly one substrate scope (`ConnectorAttachment.scope_id` in `crates/connector_framework/src/attachment.rs`), and the observation pipeline reads that binding via `AttachmentRegistry::scope_for()` to inherit the correct scope on every emitted observation. The substrate distinguishes two attachment patterns:
 
-#### (a) Channel-scoped connector (shared knowledge)
+#### (a) Channel-scoped connector (shared knowledge) — wired today
 
-A tenant admin or editor attaches a connector to a channel scope — e.g. Jira to `#product-launch`. The `AttachmentRegistry::attach()` call gates this on the permission graph: `require_admin_or_editor()` rejects the attempt unless the caller holds `Relation::Admin` or `Relation::Editor` on the scope, modelled as a `Channel` object in the Zanzibar-style permission graph.
+A tenant admin or editor attaches a connector to a channel scope — e.g. Jira to `#product-launch`. The `AttachmentRegistry::attach()` call gates this on the permission graph: `require_admin_or_editor()` rejects the attempt unless the caller holds `Relation::Admin` or `Relation::Editor` on the scope, modelled as a `Channel` object in the Zanzibar-style permission graph. This is what ships today — the module docs at `crates/connector_framework/src/attachment.rs:1` literally read "Channel-scoped connector attachments," and the permission check hard-codes `ObjectType::Channel` (with a code-level comment noting that domain attachments use the same path with a `Domain`-typed `ObjectRef`).
 
 Once attached, every Jira-derived observation inherits the channel scope. The synthesised memory feeds the channel summary, rolls up into the domain summary, and is visible to every channel member under MLS group keying. When any team member's on-device AI assistant asks "what's the status of the launch tickets?", it consults the channel memory object — which now contains Jira observations alongside chat observations. The knowledge is *channel knowledge*: shared by design, gated by channel membership, ACL-mirrored from Jira so revoking a user from a Jira project also clamps what the substrate will surface to them about it.
 
-#### (b) User-scoped connector (private knowledge)
+#### (b) User-scoped connector (private knowledge) — architectural intent, not fully wired
 
-A user attaches a connector to their *personal* scope — e.g. their personal Gmail. The attachment binds the connector to a user-owned `ScopeId`. Connector-derived observations inherit that scope and feed into the user's `UserMemoryObject` (`crates/memory_manager/src/user_memory.rs`). Synthesis runs on-device against that personal memory object. Nothing is published into any shared scope. Other users — including channel peers — never see those observations, because the scope binding never references their tenant or channel.
+The substrate already has the data structures for user-scoped memory: `UserMemoryObject` in `crates/memory_manager/src/user_memory.rs` carries `user_id` and a personal `ScopeId` and owns the on-device CRUD over a user's private memory plane. The design intent for Mode 3 is that a user can attach a personal connector (e.g. personal Gmail) to their own `ScopeId`, the connector-derived observations inherit that scope, feed only into the user's `UserMemoryObject`, and are synthesised on-device — never published into any shared scope.
 
-The same code paths, the same dedup, the same decay state machine. The privacy boundary moves entirely with the scope id.
+What ships today is narrower than that intent. `AttachmentRegistry::attach()` is shared code, but `require_admin_or_editor()` constructs `ObjectRef::new(ObjectType::Channel, scope_id.as_uuid())` unconditionally for the permission check. A user's personal scope would need to be modelled as a `User` (or `Domain`) object in the permission graph, or `require_admin_or_editor` extended to accept multiple object types, before the user-scoped attachment path will succeed end-to-end. That refactor is on the roadmap; it is not in `main` today. We mention this here because the rest of this post leans on the channel-vs-user distinction, and the honest framing is: *the channel pattern is wired, the user pattern is architecturally specified and partially wired (the data structures exist, the attachment-permission step does not yet branch on scope type).*
+
+The same code paths, the same dedup, the same decay state machine. The privacy boundary moves entirely with the scope id — once the permission path is generalised to accept non-channel scopes.
 
 ```
 External system (Drive / OneDrive / Notion / Jira / Confluence / GitHub / Slack / Figma / HubSpot / Email)
@@ -271,9 +273,11 @@ Observations derived from the connector inherit the channel scope. They feed cha
 
 ### Pattern B: Personal (user-scoped) connector
 
-A user attaches a connector to their own personal scope. The same `attach()` code path runs, but the scope id is the user's personal scope rather than a channel scope. Observations inherit the user scope and feed only into the user's `UserMemoryObject` (`crates/memory_manager/src/user_memory.rs`). Synthesis runs on-device against that personal memory. Nothing is published into any shared scope.
+The design intent: a user attaches a connector to their own personal scope. The same `attach()` code path runs, but the scope id is the user's personal scope rather than a channel scope. Observations inherit the user scope and feed only into the user's `UserMemoryObject` (`crates/memory_manager/src/user_memory.rs`). Synthesis runs on-device against that personal memory. Nothing is published into any shared scope.
 
 Example: a user attaches their personal Gmail connector. Email-derived observations land in their personal memory. Their on-device AI answers "what did Maria ask me about the contract last week?" from this private memory. No teammate, no channel member, nobody else's substrate ever sees those observations — because the scope binding never references their tenant or channel.
+
+Implementation status, kept honest: `UserMemoryObject` exists and owns the on-device CRUD over a user's personal memory; `ConnectorAttachment.scope_id` and `AttachmentRegistry::scope_for()` are scope-agnostic by signature. The piece that is *not* yet generalised is `require_admin_or_editor()` — it constructs `ObjectRef::new(ObjectType::Channel, scope_id.as_uuid())` unconditionally, so a personal-scope attachment will trip the permission check until that path is broadened (either by routing personal scopes through a `User`/`Domain` object type, or by parameterising the object type the registry checks against). The data and scope plumbing for Pattern B is in place; the permission-graph entry point is the remaining stitch.
 
 ### Same code path, different privacy boundary
 
@@ -408,11 +412,13 @@ Honest gaps, in order of severity:
 
 2. **Observation quality.** The entire value chain depends on the observation engine correctly extracting entities, facts, tasks, and decisions. The lexicon-first extractor is regex/keyword-based. Bad extraction → bad summaries → bad agent answers. No systematic evaluation framework exists yet.
 
-3. **Production server-side connector pipeline.** The connector framework crate (`crates/connector_framework`) is wired end-to-end in-process, but the production HTTP-fronted connector service and webhook ingest layer are scaffolded skeletons. Mode 3 and Mode 5 are architecturally defined and unit-tested at the substrate boundary, but not running against live OAuth2 endpoints yet.
+3. **Production server-side connector pipeline.** The connector framework crate (`crates/connector_framework`) is wired end-to-end in-process, but the production HTTP-fronted connector service and webhook ingest layer are scaffolded skeletons. Mode 3 and Mode 5 are architecturally defined and unit-tested at the substrate boundary, but not running against live OAuth2 endpoints yet. Nine of the ten named providers in `ConnectorKind` have implementations in `crates/connectors/src/` (`google_drive`, `onedrive`, `notion`, `jira`, `confluence`, `slack`, `figma`, `hubspot`, `email`); the GitHub provider module is declared in the enum but not yet implemented.
 
-4. **TEE side-channels.** TEE attestation proves code integrity, not side-channel resistance. Academic attacks against SGX/TDX have been demonstrated. The substrate's TTL-based re-attestation limits exposure but does not eliminate it.
+4. **User-scoped connector permission path.** The data and scope structures for Pattern B (user-scoped connectors) exist, but `require_admin_or_editor()` in `crates/connector_framework/src/attachment.rs` currently hard-codes the permission object to `ObjectType::Channel`. Wiring Pattern B end-to-end needs that check generalised so a personal `ScopeId` can be modelled as a `User` (or `Domain`) object in the permission graph. Until then, the channel-scoped pattern is the only one that succeeds through `AttachmentRegistry::attach()` in `main`.
 
-5. **Pre-v6 legacy keys.** Existing deployments with v5 key schedules need a forward-migration plan before the v6 hybrid PQ KEM rotation is enforced. The migration tool is in design.
+5. **TEE side-channels.** TEE attestation proves code integrity, not side-channel resistance. Academic attacks against SGX/TDX have been demonstrated. The substrate's TTL-based re-attestation limits exposure but does not eliminate it.
+
+6. **Pre-v6 legacy keys.** Existing deployments with v5 key schedules need a forward-migration plan before the v6 hybrid PQ KEM rotation is enforced. The migration tool is in design.
 
 ---
 
