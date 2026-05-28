@@ -51,6 +51,7 @@
 //! mutex — connector calls against the same handle serialise, while
 //! calls against different handles run in parallel.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -158,6 +159,30 @@ pub fn create_connector(
                 config,
                 sync_state: SyncState::new(instance_id),
             };
+            // Register the scope's DEK *before* writing the encrypted
+            // connector row so the new scope gets a random per-scope
+            // key from `OsRng` (via `ensure_scope_dek`) rather than
+            // the legacy HKDF fallback that `EvidenceStore::scope_key`
+            // would synthesise for an unregistered scope. Without
+            // this, `create_connector` would be the first crypto
+            // touch on a fresh scope and would silently bind every
+            // future connector row to the HKDF-derived key — which
+            // `forget_scope_state` can't truly destroy because the
+            // derivation is deterministic from the master key.
+            rt.ensure_scope_registered(scope)?;
+            // Persist BEFORE the in-memory insert so a SQLCipher
+            // write failure leaves the runtime exactly as it was
+            // (no orphan in-memory row, no orphan persisted row).
+            // The unique index on `(scope_id, kind)` pins the
+            // single-instance-per-(scope, kind) contract at the DB
+            // layer; the in-memory check above already rejected the
+            // duplicate, so this insert cannot collide on the
+            // unique constraint under normal operation. A collision
+            // here would indicate a regression of the runtime check
+            // (e.g. someone removing it without dropping the index)
+            // and is surfaced as `FfiError::Evidence` so the host
+            // sees a structured error rather than a panic.
+            persist_connector_instance(rt, &instance)?;
             rt.connector_instances.insert(instance_id, instance);
             rt.connectors.insert(instance_id, connector);
             Ok(instance_id.0.to_string())
@@ -209,14 +234,11 @@ pub fn authenticate_connector(
         // `ingest_message`, `health_check`, …) blocks for the
         // duration of the provider's network round-trip.
         let (connector, mut config_with_code) = with_runtime(handle, |rt| {
-            let connector = rt
-                .connectors
-                .get(&instance)
-                .ok_or_else(|| FfiError::NotFound {
-                    kind: "connector".into(),
-                    id: instance_id.clone(),
-                })?
-                .clone(); // `Arc::clone` — one atomic increment.
+            // `lookup_connector_handle` returns `Unavailable` (not
+            // `NotFound`) when the instance row rehydrated from
+            // SQLCipher but the `Arc<dyn Connector>` could not be
+            // rebuilt — matching the create-time error shape.
+            let connector = lookup_connector_handle(rt, instance, &instance_id)?;
             let config_clone = rt
                 .connector_instances
                 .get(&instance)
@@ -273,12 +295,42 @@ pub fn authenticate_connector(
         // its own schedule) and surface `NotFound` so the host
         // sees a clean diagnostic.
         with_runtime(handle, |rt| {
-            if !rt.connector_instances.contains_key(&instance) {
+            let scope = match rt.connector_instances.get(&instance) {
+                Some(inst) => inst.config.scope_id,
+                None => {
+                    return Err(FfiError::NotFound {
+                        kind: "connector".into(),
+                        id: instance_id.clone(),
+                    })
+                }
+            };
+            // Race with `forget_scope_state` on the same handle: if
+            // the scope was forgotten during Phase 2 the in-memory
+            // instance map is already empty (step 6 of the helper
+            // drops every instance bound to the forgotten scope),
+            // so the `get` above returns `None` and we bail. Still
+            // re-check `is_scope_forgotten` here as defense in depth
+            // — a future refactor could decouple the in-memory map
+            // from `forget_scope_state`'s sweep, and we want the
+            // token to land on a removed-but-not-forgotten instance
+            // (allowed) versus a forgotten-scope leftover (banned)
+            // to keep behaving correctly.
+            if rt.is_scope_forgotten(scope) {
                 return Err(FfiError::NotFound {
-                    kind: "connector".into(),
-                    id: instance_id.clone(),
+                    kind: "scope".into(),
+                    id: scope.as_uuid().to_string(),
                 });
             }
+            // Persist BEFORE the in-memory `put` so a SQLCipher
+            // write failure surfaces to the host before the token
+            // becomes the substrate-side source of truth. The
+            // already-completed OAuth2 token endpoint exchange in
+            // Phase 2 cannot be undone — the access + refresh tokens
+            // are valid against the provider — but at-rest persistence
+            // is what carries the token across `close_store`/`open_store`,
+            // so a host that observes `Ok(())` should be able to rely
+            // on the persisted state surviving the restart.
+            persist_connector_token(rt, instance, scope, &token)?;
             rt.token_vault.put(instance, token);
             Ok(())
         })
@@ -409,18 +461,14 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                 .get(instance)
                 .map_err(FfiError::from)?
                 .clone();
-            let connector = rt
-                .connectors
-                .get(&instance)
-                .ok_or_else(|| FfiError::NotFound {
-                    kind: "connector".into(),
-                    id: instance_id.clone(),
-                })?
-                .clone(); // `Arc::clone` — one atomic increment.
-                          // Flip the per-instance state to `InProgress` *inside*
-                          // the mutex so concurrent `list_connectors` calls see
-                          // the in-flight marker for the duration of the unlocked
-                          // dispatch below.
+            // `lookup_connector_handle` returns `Unavailable` (not
+            // `NotFound`) when the instance rehydrated from SQLCipher
+            // but the `Arc<dyn Connector>` could not be rebuilt.
+            let connector = lookup_connector_handle(rt, instance, &instance_id)?;
+            // Flip the per-instance state to `InProgress` *inside*
+            // the mutex so concurrent `list_connectors` calls see
+            // the in-flight marker for the duration of the unlocked
+            // dispatch below.
             if let Some(inst) = rt.connector_instances.get_mut(&instance) {
                 inst.sync_state.mark_in_progress();
             }
@@ -467,6 +515,24 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                 let _ = with_runtime(handle, |rt| {
                     if let Some(inst) = rt.connector_instances.get_mut(&instance) {
                         inst.sync_state.mark_failed(&msg);
+                    }
+                    // Best-effort flush of the Failed row so the
+                    // post-restart `list_connectors` report reflects
+                    // the failure. Persist errors are logged but do
+                    // not mask the original transport error returned
+                    // to the host — the in-memory `mark_failed` has
+                    // already run so `sync_connector` retries observe
+                    // the same Failed state.
+                    let instance_snapshot =
+                        rt.connector_instances.get(&instance).map(|i| (*i).clone());
+                    if let Some(inst_clone) = instance_snapshot {
+                        if let Err(persist_err) = persist_connector_instance(rt, &inst_clone) {
+                            tracing::warn!(
+                                instance = %instance,
+                                error = %persist_err,
+                                "failed to persist sync_state Failed status after Phase 2 dispatch failure; in-memory state still updated",
+                            );
+                        }
                     }
                     Ok(())
                 });
@@ -533,6 +599,20 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                     inst.sync_state
                         .mark_succeeded(run_result.next_cursor.clone(), completed_at);
                 }
+                // Persist the advanced sync state so the cursor
+                // survives `close_store` / `open_store`. We clone the
+                // instance for the persist call to avoid holding an
+                // immutable borrow on `rt.connector_instances` across
+                // the `&mut rt.store` access inside
+                // `persist_connector_instance`. A failure here rolls
+                // the in-memory state to `Failed` (handled by the
+                // outer match arm below) so the host sees the
+                // persistence gap rather than a "succeeded" run whose
+                // cursor was lost on restart.
+                let instance_snapshot = rt.connector_instances.get(&instance).map(|i| (*i).clone());
+                if let Some(inst_clone) = instance_snapshot {
+                    persist_connector_instance(rt, &inst_clone)?;
+                }
                 Ok((ingested_ids, completed_at))
             })();
             let (ingested_ids, completed_at) = match post_sync_result {
@@ -541,6 +621,24 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                     let msg = err.to_string();
                     if let Some(inst) = rt.connector_instances.get_mut(&instance) {
                         inst.sync_state.mark_failed(&msg);
+                    }
+                    // Best-effort flush of the failed-status row so
+                    // `list_connectors` post-restart reports the
+                    // failure rather than silently rewinding to the
+                    // last persisted Succeeded state. A persistence
+                    // failure here is logged but does not mask the
+                    // original error returned to the host (which is
+                    // what they need to retry against).
+                    let instance_snapshot =
+                        rt.connector_instances.get(&instance).map(|i| (*i).clone());
+                    if let Some(inst_clone) = instance_snapshot {
+                        if let Err(persist_err) = persist_connector_instance(rt, &inst_clone) {
+                            tracing::warn!(
+                                instance = %instance,
+                                error = %persist_err,
+                                "failed to persist sync_state Failed status; in-memory state still updated",
+                            );
+                        }
                     }
                     return Err(err);
                 }
@@ -614,20 +712,28 @@ pub fn list_connectors(handle: RuntimeHandle) -> FfiResult<Vec<ConnectorStatus>>
 }
 
 /// Tear down the connector with `instance_id` — drop the live
-/// `Box<dyn Connector>`, remove the [`ConnectorInstance`] row, and
-/// purge the cached OAuth2 token from the vault. Idempotent within
-/// the lifetime of a single runtime: removing an unknown id is a
-/// no-op and returns `Ok(())`.
+/// `Arc<dyn Connector>`, remove the [`ConnectorInstance`] row, drop
+/// the cached OAuth2 token from the vault, and delete the persisted
+/// `connector_instances` / `connector_tokens` SQLCipher rows.
+/// Idempotent within the lifetime of a single runtime: removing an
+/// unknown id is a no-op and returns `Ok(())`.
 ///
-/// **Phase 2 scope:** no on-disk state is dropped (there is none
-/// yet). Phase 3 will also delete the persisted
-/// `connector_instances` / `connector_tokens` SQLCipher rows here.
+/// The persisted-row deletes are best-effort — if the SQLCipher
+/// delete fails, the in-memory state is still cleared (callers
+/// observing `Ok(())` will see the connector gone from the next
+/// `list_connectors` call) and the dangling row will be picked up
+/// either on the next `remove_connector` retry or, in the
+/// scope-forgetting case, by the cryptographic-forgetting contract
+/// (the row's AEAD payload becomes unrecoverable when the scope DEK
+/// is destroyed). A persistence failure here returns
+/// [`FfiError::Evidence`] so the host can decide whether to retry.
 ///
 /// # Errors
 ///
 /// * [`FfiError::Unavailable`] if [`crate::open_store`] has not been
 ///   called.
 /// * [`FfiError::InvalidId`] if `instance_id` is not a valid UUID.
+/// * [`FfiError::Evidence`] if the persisted-row delete fails.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
 pub fn remove_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<()> {
@@ -641,12 +747,71 @@ pub fn remove_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult
             // we treat that as a benign no-op so `remove_connector`
             // is idempotent.
             let _ = rt.token_vault.remove(instance);
+            // Persisted-row deletes. Both are `DELETE … WHERE
+            // instance_id = ?` so a missing row is a no-op — exactly
+            // matching the idempotency contract.
+            rt.store()
+                .delete_connector_instance(instance.0)
+                .map_err(|e| FfiError::Evidence {
+                    message: format!("delete_connector_instance failed: {e}"),
+                })?;
+            rt.store()
+                .delete_connector_token(instance.0)
+                .map_err(|e| FfiError::Evidence {
+                    message: format!("delete_connector_token failed: {e}"),
+                })?;
             Ok(())
         })
     })
 }
 
 // ──────────────────────────── Internals ──────────────────────────────
+
+/// Resolve the live `Arc<dyn Connector>` for `instance`, distinguishing
+/// the three failure modes the host needs to disambiguate:
+///
+/// * **Live handle present** → returns `Ok(Arc::clone)` (one atomic
+///   refcount bump).
+/// * **Instance row exists but no live handle** → returns
+///   `Err(Unavailable { subsystem: "connector" })`. This happens
+///   when [`rehydrate_connectors`] loaded the persisted
+///   `(config, sync_state)` blob but [`build_connector`] returned
+///   `Unavailable` (e.g. the `http-client` feature is off, or the
+///   runtime's shared `BlockingHttpTransport` failed to construct at
+///   `open_store` time on an exotic platform). The persisted state
+///   is still observable through [`list_connectors`] and the host
+///   can re-`create_connector` to rebuild the handle once the
+///   transport is restored, so surfacing this as a structured
+///   *unavailability* — not *missing* — matches the create-time
+///   error path documented at lines 114–116 and 783–786 of this
+///   file.
+/// * **Instance row absent** → returns `Err(NotFound)`. This is the
+///   "host referenced an instance that was never created or has
+///   been removed" case.
+///
+/// Both call sites (`authenticate_connector` Phase 1 and
+/// `sync_connector` Phase 1) route through this helper so the
+/// asymmetry between the create path (Unavailable on missing
+/// transport) and the post-rehydrate path (was NotFound, now also
+/// Unavailable) is eliminated.
+fn lookup_connector_handle(
+    rt: &FfiRuntime,
+    instance: ConnectorInstanceId,
+    instance_id_display: &str,
+) -> FfiResult<Arc<dyn Connector>> {
+    if let Some(handle) = rt.connectors.get(&instance) {
+        return Ok(Arc::clone(handle));
+    }
+    if rt.connector_instances.contains_key(&instance) {
+        return Err(FfiError::Unavailable {
+            subsystem: "connector".into(),
+        });
+    }
+    Err(FfiError::NotFound {
+        kind: "connector".into(),
+        id: instance_id_display.to_string(),
+    })
+}
 
 /// Build a fresh `Arc<dyn Connector>` for `kind`, wiring it to the
 /// runtime-shared [`BlockingHttpTransport`] + [`OAuth2Client`] pair
@@ -806,6 +971,269 @@ fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::HubSpot => "HubSpot",
         ConnectorKind::Email => "Email",
         ConnectorKind::GenericWebhook => "GenericWebhook",
+    }
+}
+
+// ──────────────────────── Persistence helpers ────────────────────────
+//
+// JSON-serialise the in-memory `(config, sync_state)` tuple and hand
+// the byte payload to `EvidenceStore::save_connector_instance`. The
+// store owns the AEAD round-trip under the per-scope DEK and the
+// SQLCipher upsert; this helper just funnels the borrowed instance
+// into the right shape and translates the evidence-store error type.
+
+/// JSON shape persisted in the encrypted `connector_instances.payload`
+/// column. Distinct from the runtime [`ConnectorInstance`] so we can
+/// add fields (e.g. webhook state) without forcing a schema migration —
+/// the store reads the row, decrypts the blob, and the FFI runtime
+/// owns the `serde_json` round-trip.
+///
+/// Write path takes borrowed references via the lifetime-parameterised
+/// [`PersistedConnectorInstanceRef`] (no allocations beyond the JSON
+/// buffer itself); read path uses the owned [`PersistedConnectorInstance`]
+/// to materialise the deserialised values.
+#[derive(serde::Serialize)]
+struct PersistedConnectorInstanceRef<'a> {
+    schema: u32,
+    config: &'a ConnectorConfig,
+    sync_state: &'a SyncState,
+}
+
+#[derive(serde::Deserialize)]
+struct PersistedConnectorInstance {
+    schema: u32,
+    config: ConnectorConfig,
+    sync_state: SyncState,
+}
+
+/// Current persisted-blob schema version. Bump together with the SQL
+/// schema in `evidence_store::schema` only on **incompatible** shape
+/// changes; additive optional fields can ship without a bump because
+/// `serde` will accept old payloads that lack the new field as long
+/// as the field has a `#[serde(default)]` default.
+const PERSISTED_INSTANCE_SCHEMA: u32 = 1;
+
+pub(crate) fn persist_connector_instance(
+    rt: &FfiRuntime,
+    instance: &ConnectorInstance,
+) -> FfiResult<()> {
+    let payload = PersistedConnectorInstanceRef {
+        schema: PERSISTED_INSTANCE_SCHEMA,
+        config: &instance.config,
+        sync_state: &instance.sync_state,
+    };
+    let json = serde_json::to_vec(&payload).map_err(|e| FfiError::Connector {
+        message: format!("connector instance JSON encode failed: {e}"),
+    })?;
+    rt.store()
+        .save_connector_instance(
+            instance.id.0,
+            instance.config.scope_id,
+            instance.config.kind.as_str(),
+            &json,
+        )
+        .map_err(|e| FfiError::Evidence {
+            message: format!("save_connector_instance failed: {e}"),
+        })
+}
+
+pub(crate) fn persist_connector_token(
+    rt: &FfiRuntime,
+    instance: ConnectorInstanceId,
+    scope: ScopeId,
+    token: &connector_framework::OAuth2Token,
+) -> FfiResult<()> {
+    let json = serde_json::to_vec(token).map_err(|e| FfiError::Connector {
+        message: format!("OAuth2 token JSON encode failed: {e}"),
+    })?;
+    rt.store()
+        .save_connector_token(instance.0, scope, &json)
+        .map_err(|e| FfiError::Evidence {
+            message: format!("save_connector_token failed: {e}"),
+        })
+}
+
+/// Rehydrate persisted connector state from SQLCipher on `open_store`.
+///
+/// Loads every `connector_instances` row, skips ones whose scope is
+/// tombstoned (the row's AEAD payload is unrecoverable anyway, but
+/// we never want to mint an `Arc<dyn Connector>` for a forgotten
+/// scope — `sync_connector` would refuse on the `is_scope_forgotten`
+/// check, just wastes the build), deserialises the
+/// `(config, sync_state)` pair, rebuilds the `Arc<dyn Connector>`
+/// via [`build_connector`], and inserts into the runtime's
+/// `connector_instances` + `connectors` maps. Then loads every
+/// `connector_tokens` row, deserialises the `OAuth2Token`, and
+/// inserts into the runtime's `token_vault`.
+///
+/// Tolerant of partial corruption: a row that fails to decrypt or
+/// deserialise is skipped with a `tracing::warn!` rather than
+/// blocking the open — matching the user_memory / channel_memory
+/// rehydration discipline at `runtime.rs::open_store_inner`. The
+/// host's `health_check` reports the rehydrated count so the
+/// operator can detect rows that fail to come back.
+///
+/// Under `not(http-client)` builds, the data structs are still
+/// loaded (so `list_connectors` returns the persisted state) but the
+/// `Arc<dyn Connector>` rebuild is skipped — `sync_connector` /
+/// `authenticate_connector` will return `Unavailable` for those
+/// instances exactly like the create-time path. This keeps the
+/// no-feature-flag binary observable + queryable without requiring a
+/// real HTTP transport.
+pub(crate) fn rehydrate_connectors(rt: &mut FfiRuntime, tombstones: &HashSet<ScopeId>) {
+    // 1. Instances + (Arc<dyn Connector>) handles.
+    let rows = match rt.store().load_connector_instances() {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "load_connector_instances failed; connector subsystem starts empty for this open",
+            );
+            return;
+        }
+    };
+    for (instance_uuid, scope_id, kind_tag, payload) in rows {
+        if tombstones.contains(&scope_id) {
+            // Best-effort: also purge the dangling row from disk so
+            // the next open does not re-walk it. Tracing-only on
+            // failure — the AEAD payload is unrecoverable anyway.
+            if let Err(e) = rt.store().delete_connector_instance(instance_uuid) {
+                tracing::warn!(
+                    instance = %instance_uuid,
+                    scope = %scope_id.as_uuid(),
+                    error = %e,
+                    "failed to clean up dangling connector_instances row for forgotten scope",
+                );
+            }
+            continue;
+        }
+        let parsed = match serde_json::from_slice::<PersistedConnectorInstance>(&payload) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    instance = %instance_uuid,
+                    scope = %scope_id.as_uuid(),
+                    kind = %kind_tag,
+                    error = %e,
+                    "connector_instances payload failed to deserialise; row skipped",
+                );
+                continue;
+            }
+        };
+        if parsed.schema != PERSISTED_INSTANCE_SCHEMA {
+            tracing::warn!(
+                instance = %instance_uuid,
+                expected = PERSISTED_INSTANCE_SCHEMA,
+                actual = parsed.schema,
+                "connector_instances payload has unexpected schema version; row skipped",
+            );
+            continue;
+        }
+        // Sanity-check the row matches the deserialised payload's
+        // identity. If the kind tag drifts between the row column
+        // and the encrypted blob the AAD check should have caught
+        // it already; this is belt-and-braces.
+        if parsed.config.kind.as_str() != kind_tag {
+            tracing::warn!(
+                instance = %instance_uuid,
+                row_kind = %kind_tag,
+                payload_kind = %parsed.config.kind.as_str(),
+                "connector_instances row kind tag does not match payload; row skipped",
+            );
+            continue;
+        }
+        let instance_id = ConnectorInstanceId::from_uuid(instance_uuid);
+        let connector = match build_connector(rt, parsed.config.kind, instance_id) {
+            Ok(c) => Some(c),
+            Err(FfiError::Unavailable { subsystem }) => {
+                tracing::debug!(
+                    instance = %instance_uuid,
+                    subsystem = %subsystem,
+                    "connector subsystem unavailable at rehydration time; instance loaded without live Arc<dyn Connector>",
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!(
+                    instance = %instance_uuid,
+                    error = %e,
+                    "build_connector failed during rehydration; instance loaded without live Arc<dyn Connector>",
+                );
+                None
+            }
+        };
+        let instance = ConnectorInstance {
+            id: instance_id,
+            config: parsed.config,
+            sync_state: parsed.sync_state,
+        };
+        rt.connector_instances.insert(instance_id, instance);
+        if let Some(c) = connector {
+            rt.connectors.insert(instance_id, c);
+        }
+    }
+
+    // 2. OAuth2 tokens.
+    let token_rows = match rt.store().load_connector_tokens() {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "load_connector_tokens failed; token vault starts empty for this open",
+            );
+            return;
+        }
+    };
+    for (instance_uuid, scope_id, payload) in token_rows {
+        if tombstones.contains(&scope_id) {
+            if let Err(e) = rt.store().delete_connector_token(instance_uuid) {
+                tracing::warn!(
+                    instance = %instance_uuid,
+                    scope = %scope_id.as_uuid(),
+                    error = %e,
+                    "failed to clean up dangling connector_tokens row for forgotten scope",
+                );
+            }
+            continue;
+        }
+        let instance_id = ConnectorInstanceId::from_uuid(instance_uuid);
+        // Skip tokens whose owning instance failed to rehydrate above
+        // (deserialise error, schema mismatch, build_connector miss,
+        // tombstone race). Inserting such a token into the vault is
+        // harmless — no consumer can ask for it without first
+        // resolving the instance — but the orphan would never be
+        // retired and would survive in memory until `close_store`.
+        // Best-effort purge from disk too so the next open doesn't
+        // re-walk it; tracing-only on failure.
+        if !rt.connector_instances.contains_key(&instance_id) {
+            tracing::warn!(
+                instance = %instance_uuid,
+                scope = %scope_id.as_uuid(),
+                "connector_tokens row references an instance that did not rehydrate; skipping",
+            );
+            if let Err(e) = rt.store().delete_connector_token(instance_uuid) {
+                tracing::warn!(
+                    instance = %instance_uuid,
+                    scope = %scope_id.as_uuid(),
+                    error = %e,
+                    "failed to clean up orphaned connector_tokens row",
+                );
+            }
+            continue;
+        }
+        match serde_json::from_slice::<connector_framework::OAuth2Token>(&payload) {
+            Ok(token) => {
+                rt.token_vault.put(instance_id, token);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    instance = %instance_uuid,
+                    scope = %scope_id.as_uuid(),
+                    error = %e,
+                    "connector_tokens payload failed to deserialise; row skipped",
+                );
+            }
+        }
     }
 }
 
@@ -1008,5 +1436,84 @@ mod tests {
         let id = Uuid::new_v4().to_string();
         let scope = parse_scope_id(&id).unwrap();
         assert_eq!(scope.as_uuid().to_string(), id);
+    }
+
+    /// `lookup_connector_handle` must disambiguate the three runtime
+    /// states the host can observe:
+    ///
+    /// * **Instance + Arc both present** → returns the cloned handle.
+    /// * **Instance present, Arc absent** → returns `Unavailable`. This
+    ///   models the post-rehydrate case where `build_connector` failed
+    ///   (e.g. `http-client` feature off, or transport construction
+    ///   failed at `open_store` time). The host can still see the
+    ///   instance through `list_connectors` and re-create it once the
+    ///   transport recovers.
+    /// * **Instance absent** → returns `NotFound`.
+    ///
+    /// Before the helper existed both `sync_connector` and
+    /// `authenticate_connector` returned `NotFound` for the middle
+    /// arm, which contradicted the doc comments on those functions
+    /// (which promise `Unavailable` for the missing-transport case)
+    /// and gave the host a misleading "instance unknown" signal when
+    /// the row is plainly visible in `list_connectors`.
+    #[test]
+    fn lookup_connector_handle_returns_unavailable_when_arc_missing() {
+        use connector_framework::{AuthKind, ConnectorConfig, ConnectorInstance};
+        use evidence_store::ScopeId;
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let master_key_hex = "a5".repeat(32);
+        let handle = crate::open_store(path.to_string_lossy().into_owned(), master_key_hex)
+            .expect("open_store");
+
+        let instance_id = ConnectorInstanceId::new_v4();
+        let scope_id = ScopeId::new_v4();
+        let cfg = ConnectorConfig::new(ConnectorKind::Notion, AuthKind::OAuth2, scope_id);
+        let instance = ConnectorInstance {
+            id: instance_id,
+            config: cfg,
+            sync_state: SyncState::new(instance_id),
+        };
+
+        // Stage the "instance present, Arc absent" state directly
+        // through `with_runtime` — this models what `rehydrate_connectors`
+        // does when `build_connector` returns `Unavailable`: the
+        // instance lives in `connector_instances` for observability but
+        // no entry is created in `connectors`.
+        crate::runtime::with_runtime(handle, |rt| {
+            rt.connector_instances.insert(instance_id, instance.clone());
+            // Deliberately NOT inserting into rt.connectors.
+
+            // `Arc<dyn Connector>` is not `Debug`, so we can't use
+            // `expect_err` here — match the `Result` directly.
+            match lookup_connector_handle(rt, instance_id, "irrelevant") {
+                Ok(_) => panic!("instance present without Arc must error"),
+                Err(FfiError::Unavailable { subsystem }) => {
+                    assert_eq!(subsystem, "connector");
+                }
+                Err(other) => {
+                    panic!("expected Unavailable {{ subsystem: \"connector\" }}; got {other:?}",)
+                }
+            }
+
+            // Sanity: the absent-instance arm still returns NotFound.
+            let other_id = ConnectorInstanceId::new_v4();
+            match lookup_connector_handle(rt, other_id, "missing-id") {
+                Ok(_) => panic!("absent instance must error"),
+                Err(FfiError::NotFound { kind, id }) => {
+                    assert_eq!(kind, "connector");
+                    assert_eq!(id, "missing-id");
+                }
+                Err(other) => panic!("expected NotFound for absent instance; got {other:?}"),
+            }
+            Ok(())
+        })
+        .expect("with_runtime");
+
+        crate::close_store(handle).expect("close_store");
+        // Keep `dir` alive until after `close_store`.
+        drop(dir);
     }
 }
