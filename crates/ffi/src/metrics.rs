@@ -355,8 +355,16 @@ pub struct ErrorCounters {
 /// Return a wire-flat snapshot of every counter and gauge. Reads
 /// each `AtomicU64` with [`Ordering::Relaxed`] — see the module
 /// docs for why that's sufficient.
+///
+/// The UniFFI export name is renamed to `metrics_snapshot` so the
+/// generated Swift / Kotlin surface (`metricsSnapshot()`) matches
+/// the N-API surface (`metricsSnapshot()` — see
+/// `crates/ffi/src/lib.rs` where `snapshot` is re-exported as
+/// `metrics_snapshot`). The bare Rust name stays `snapshot` because
+/// every call site already lives inside the `metrics::` module so
+/// the longer name would be redundant.
 #[must_use]
-#[uniffi::export]
+#[uniffi::export(name = "metrics_snapshot")]
 pub fn snapshot() -> MetricsSnapshot {
     let m = metrics();
     MetricsSnapshot {

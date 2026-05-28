@@ -392,6 +392,17 @@ fn finish_envelope(subsystems: Vec<SubsystemHealth>) -> HealthStatus {
 /// Workspace semver baked into the build. Same source as
 /// `napi_addon::core_version` (which calls this through the FFI
 /// surface).
+///
+/// **Not exported via UniFFI by design.** Mobile (Swift / Kotlin)
+/// hosts read the build version from
+/// [`HealthStatus::core_version`] on the value returned by
+/// [`health_check`], so a standalone `core_version()` entry point
+/// would be a redundant second source of truth in the binding
+/// surface. The N-API side re-exports this as a standalone
+/// `coreVersion()` JS function purely so the Electron bootstrap
+/// path can log the version before any handle is opened (no
+/// `health_check` call would have a real subsystem fan-out to
+/// report anyway).
 #[must_use]
 pub fn core_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
