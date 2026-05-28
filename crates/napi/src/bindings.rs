@@ -588,10 +588,18 @@ impl ffi::OAuthClientSecretResolver for JsClientSecretResolver {
 ///
 /// `resolver` is a JS function with the signature
 /// `(kind: string, scopeId: string, clientId: string) =>
-/// string | null | undefined` (returning `null` / `undefined` /
-/// `""` defers to the next layer of the framework's fallback
-/// ladder; see the trait-level rustdoc on
-/// [`ffi::OAuthClientSecretResolver`] for the full semantics).
+/// string | null | undefined`. Returning `null` / `undefined`
+/// (both map to `None` on the Rust side) defers to the next
+/// layer of the framework's fallback ladder. Returning `""`
+/// (an empty string) is treated as an **explicit "no-secret"
+/// choice** and short-circuits both the `auth_config_json`
+/// fallback and any static `with_client_secret` value — the
+/// substrate then omits the `client_secret` form field entirely
+/// (public-client semantics). Returning a non-empty string uses
+/// that secret. See the trait-level rustdoc on
+/// [`ffi::OAuthClientSecretResolver`] for the full semantics and
+/// [`connector_framework::OAuth2Client::client_secret_for`] for
+/// the resolution ladder.
 ///
 /// The JS callback runs on the JS event loop (the substrate's
 /// connector worker threads `await` the result via a

@@ -363,7 +363,23 @@ impl<T: HttpTransport> OAuth2Client<T> {
             }
         }
         // Layer 3: static client_secret set via with_client_secret.
-        self.client_secret.as_ref().map(|s| s.expose().to_string())
+        //
+        // Mirror layer 2's empty-string filtering for consistency:
+        // an empty static secret is treated as "no secret" rather
+        // than encoding `client_secret=` (empty value) into the
+        // form body, which strict providers reject with
+        // `invalid_client`. This makes the three layers share a
+        // uniform "empty static value = no value" rule; only layer
+        // 1 (the resolver callback) treats `Some("")` as an
+        // explicit short-circuit, because the host has
+        // affirmatively decided to omit the secret for that
+        // `(kind, scope_id, client_id)` tuple — see the
+        // `resolver_returning_empty_string_short_circuits_fallback`
+        // test.
+        self.client_secret
+            .as_ref()
+            .map(|s| s.expose().to_string())
+            .filter(|s| !s.is_empty())
     }
 
     /// Provide the OAuth2 client secret (kept in memory only — the
@@ -1351,6 +1367,41 @@ mod tests {
         assert!(
             body.contains("client_secret=static-only"),
             "static layer must catch when both higher layers come up empty; got {body}"
+        );
+    }
+
+    /// Layer 3 (`with_client_secret("")`) must be treated as
+    /// "no secret" rather than emitting `client_secret=` (empty
+    /// value) into the form body. Mirrors the layer 2 behavior:
+    /// strict providers reject `client_secret=` with
+    /// `invalid_client`, so the three layers share a uniform
+    /// "empty static value = no value" rule. Only the layer 1
+    /// resolver's `Some("")` carries the "explicit short-circuit"
+    /// meaning — and that path is tested separately via
+    /// [`resolver_returning_empty_string_short_circuits_fallback`].
+    #[test]
+    fn empty_static_client_secret_is_treated_as_no_secret() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
+                    .to_vec(),
+            ),
+        );
+        let client = OAuth2Client::new(transport.clone()).with_client_secret("");
+
+        // No resolver, no auth_config_json["client_secret"], only
+        // the explicitly-empty static secret.
+        let _ = client
+            .exchange_code(&cfg(), "code")
+            .expect("exchange succeeds");
+
+        let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
+        assert!(
+            !body.contains("client_secret="),
+            "empty static client_secret must not appear in form body; got {body}"
         );
     }
 
