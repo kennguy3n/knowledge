@@ -64,11 +64,17 @@
 //!   surface `Unavailable` to the host, which is the same recovery
 //!   path as "subsystem not initialised".
 //!
-//! All six functions require a prior successful call to
+//! All eight functions require a prior successful call to
 //! [`crate::open_store`] (enforced by [`with_runtime`]) and operate
 //! synchronously against the per-handle `Arc<Mutex<FfiRuntime>>`
 //! mutex — connector calls against the same handle serialise, while
-//! calls against different handles run in parallel.
+//! calls against different handles run in parallel. The two
+//! resolver-management entry points
+//! ([`set_oauth_client_secret_resolver`] /
+//! [`clear_oauth_client_secret_resolver`]) hold the runtime mutex
+//! only long enough to update the per-runtime
+//! [`connector_framework::OAuth2Client`]'s resolver slot; they do
+//! NOT call the resolver themselves.
 
 use std::collections::HashSet;
 use std::sync::Arc;

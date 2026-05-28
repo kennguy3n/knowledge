@@ -125,7 +125,9 @@ across both bindings) are:
 `list_memories`, `run_decay_sweep`, `get_channel_memory`,
 `escape_fts_query`, `trigger_synthesis`, `health_check`,
 `create_connector`, `authenticate_connector`, `sync_connector`,
-`refresh_connector_token`, `list_connectors`, `remove_connector`.
+`refresh_connector_token`, `list_connectors`, `remove_connector`,
+`set_oauth_client_secret_resolver`,
+`clear_oauth_client_secret_resolver`.
 
 Four entry points are intentionally surface-specific rather than
 mirrored across both bindings:
@@ -206,7 +208,9 @@ embedded in the health envelope. Counters include
 `encrypt_total`, `decrypt_total`, `create_connector_total`,
 `authenticate_connector_total`, `sync_connector_total`,
 `refresh_connector_token_total`, `list_connectors_total`,
-`remove_connector_total`, plus
+`remove_connector_total`,
+`set_oauth_client_secret_resolver_total`,
+`clear_oauth_client_secret_resolver_total`, plus
 per-`FfiError`-kind counters under `errors_by_kind`
 (`unimplemented`, `invalid_id`, `not_found`, `evidence`,
 `memory`, `synthesis`, `crypto`, `unavailable`,

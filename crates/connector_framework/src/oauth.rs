@@ -68,15 +68,27 @@ use crate::token_vault::{
 /// for that combination, in which case the framework falls back to
 /// [`ConnectorConfig::auth_config_json`]`["client_secret"]`).
 ///
-/// The resolver MUST be cheap to call — it is consulted on the
-/// runtime mutex's critical path in the FFI substrate, although
-/// the framework itself does not hold any locks while calling it.
-/// Concretely, the resolver is invoked on the thread that drives
-/// the OAuth2 grant (the `sync_connector` worker or the host's
-/// thread driving `authenticate_connector` /
+/// The resolver SHOULD be cheap to call — it is consulted on the
+/// thread that drives every OAuth2 grant (the `sync_connector`
+/// worker or the host's thread driving `authenticate_connector` /
 /// `refresh_connector_token`). Implementations should resolve the
 /// secret from an in-memory cache populated at startup rather than
-/// hitting the OS keychain on every call.
+/// hitting the OS keychain on every call. The framework holds NO
+/// internal locks while calling the resolver (see
+/// [`OAuth2Client::client_secret_for`]'s rustdoc for the locking
+/// discipline), so implementations MAY block — the only cost of a
+/// slow resolver is that the corresponding grant's HTTP round-trip
+/// is delayed by that amount.
+///
+/// The N-API adapter wraps the host's JavaScript callback in a
+/// `ThreadsafeFunction` and sync-waits the worker thread on a
+/// oneshot channel for the result. This is safe (the framework
+/// drops its read lock before invoking the resolver, and the FFI
+/// substrate's three-phase locking pattern guarantees the runtime
+/// mutex is not held during the grant either), but it does mean
+/// the JS host's resolver function should not itself perform
+/// long-blocking work on the event loop — doing so will stall
+/// other JS-side activity, not the Rust grant.
 ///
 /// # Multi-tenancy & multi-app
 ///
@@ -284,40 +296,61 @@ impl<T: HttpTransport> OAuth2Client<T> {
     /// secret (the framework then omits the `client_secret` form
     /// field).
     ///
-    /// Layer 1 (resolver) holds the read lock for the duration of
-    /// the resolver call. The trait contract documents that
-    /// implementations must be cheap (in-memory cache lookups), so
-    /// the lock is never held across a long-blocking operation. A
-    /// poisoned lock degrades cleanly to layer 2 (auth_config_json)
+    /// **Locking discipline** (load-bearing — see Phase 4.1 review
+    /// finding `BUG_pr-review-job-b54a009cf6d048638e738fc73e9e55c6_0001`):
+    /// the read lock on `self.resolver` is held only long enough to
+    /// `Arc::clone` the resolver handle out of the slot, then
+    /// dropped BEFORE invoking `resolver.resolve(...)`. The N-API
+    /// adapter's resolver implementation is allowed to be
+    /// arbitrarily blocking (it pumps a `ThreadsafeFunction` onto
+    /// the JS event loop and sync-waits on a oneshot channel), and
+    /// holding the read lock across that block would deadlock a
+    /// concurrent `setOauthClientSecretResolver` call on the JS
+    /// thread that needs the write lock. Cloning the `Arc` out and
+    /// dropping the guard before the call breaks that interlock
+    /// — every grant sees a consistent snapshot of "the resolver
+    /// active at the moment we entered the function", and concurrent
+    /// `set_resolver`/`clear_resolver` calls run unblocked.
+    ///
+    /// A poisoned lock degrades cleanly to layer 2 (auth_config_json)
     /// — the framework keeps trying to make progress rather than
     /// surfacing a `RwLockReadGuard` poison to the host as an OAuth2
     /// error.
     fn client_secret_for(&self, config: &ConnectorConfig) -> Option<String> {
         // Layer 1: host-supplied resolver.
-        if let Ok(guard) = self.resolver.read() {
-            if let Some(resolver) = guard.as_ref() {
-                let kind = config.kind.as_str();
-                let scope_id = config.scope_id.as_uuid().to_string();
-                let client_id = config
-                    .auth_config_json
-                    .get("client_id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("");
-                if let Some(secret) = resolver.resolve(kind, &scope_id, client_id) {
-                    if !secret.is_empty() {
-                        return Some(secret);
-                    }
-                    // Empty string from resolver is treated as
-                    // "explicit no-secret" and short-circuits the
-                    // fallback layers — the host has affirmatively
-                    // chosen the public-client form for this
-                    // (kind, scope_id, client_id) tuple, and falling
-                    // back to `auth_config_json` would produce
-                    // confusing precedence semantics.
-                    return None;
+        //
+        // Clone the `Arc<dyn ClientSecretResolver>` out of the
+        // `RwLock` and drop the guard BEFORE calling `resolve`.
+        // The resolver call may block arbitrarily (the N-API
+        // adapter sync-waits on the JS event loop); holding the
+        // read lock across that block deadlocks any concurrent
+        // `set_resolver` / `clear_resolver` call that needs the
+        // write lock — including the JS-side call that triggered
+        // the grant in the first place.
+        let resolver_snapshot: Option<Arc<dyn ClientSecretResolver>> =
+            self.resolver.read().ok().and_then(|g| g.clone());
+        if let Some(resolver) = resolver_snapshot {
+            let kind = config.kind.as_str();
+            let scope_id = config.scope_id.as_uuid().to_string();
+            let client_id = config
+                .auth_config_json
+                .get("client_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if let Some(secret) = resolver.resolve(kind, &scope_id, client_id) {
+                if !secret.is_empty() {
+                    return Some(secret);
                 }
-                // Resolver returned None → fall through to layer 2.
+                // Empty string from resolver is treated as
+                // "explicit no-secret" and short-circuits the
+                // fallback layers — the host has affirmatively
+                // chosen the public-client form for this
+                // (kind, scope_id, client_id) tuple, and falling
+                // back to `auth_config_json` would produce
+                // confusing precedence semantics.
+                return None;
             }
+            // Resolver returned None → fall through to layer 2.
         }
         // Layer 2: auth_config_json["client_secret"] (fallback).
         if let Some(secret) = config
@@ -1425,6 +1458,14 @@ mod tests {
     /// invariant.
     #[test]
     fn debug_indicates_resolver_state_without_invoking_it() {
+        #[derive(Debug)]
+        struct PanickingResolver;
+        impl ClientSecretResolver for PanickingResolver {
+            fn resolve(&self, _: &str, _: &str, _: &str) -> Option<String> {
+                panic!("Debug must not invoke the resolver");
+            }
+        }
+
         let transport = Arc::new(MockHttpTransport::new());
         let client = OAuth2Client::new(transport);
 
@@ -1436,18 +1477,134 @@ mod tests {
         );
 
         // After registering a resolver that would panic if called.
-        #[derive(Debug)]
-        struct PanickingResolver;
-        impl ClientSecretResolver for PanickingResolver {
-            fn resolve(&self, _: &str, _: &str, _: &str) -> Option<String> {
-                panic!("Debug must not invoke the resolver");
-            }
-        }
         client.set_resolver(Arc::new(PanickingResolver));
         let dbg_set = format!("{client:?}");
         assert!(
             dbg_set.contains("<registered>"),
             "Debug must indicate registered resolver; got {dbg_set}"
+        );
+    }
+
+    /// Regression test for Phase 4.1 review finding
+    /// `BUG_pr-review-job-b54a009cf6d048638e738fc73e9e55c6_0001`:
+    /// `client_secret_for` must NOT hold the resolver's read lock
+    /// across the `resolve(...)` call, or a concurrent
+    /// `set_resolver` from another thread (e.g. the JS event loop
+    /// in the N-API path) deadlocks the worker thread.
+    ///
+    /// The test models the deadlock scenario directly: a slow
+    /// resolver signals the test that it's been entered, then waits
+    /// on a channel. While the worker is blocked inside `resolve`,
+    /// a second thread calls `set_resolver` — which requires the
+    /// write lock. If the read lock is still held, this call hangs
+    /// and the test times out at the second join. With the fix in
+    /// place, the read guard is dropped before `resolve` is called,
+    /// so `set_resolver` returns immediately and the test passes.
+    #[test]
+    fn concurrent_set_resolver_does_not_deadlock_in_flight_grant() {
+        use std::sync::mpsc;
+        use std::thread;
+        use std::time::Duration;
+
+        struct BlockingResolver {
+            entered_tx: std::sync::Mutex<Option<mpsc::Sender<()>>>,
+            release_rx: std::sync::Mutex<Option<mpsc::Receiver<()>>>,
+        }
+
+        impl ClientSecretResolver for BlockingResolver {
+            fn resolve(&self, _: &str, _: &str, _: &str) -> Option<String> {
+                if let Some(tx) = self.entered_tx.lock().expect("entered_tx").take() {
+                    tx.send(()).expect("signal entered");
+                }
+                let rx = self
+                    .release_rx
+                    .lock()
+                    .expect("release_rx")
+                    .take()
+                    .expect("rx already consumed");
+                let _ = rx.recv();
+                Some("resolved-after-unblock".into())
+            }
+        }
+
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://provider.invalid/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"a","refresh_token":"r","expires_in":3600,"scope":"read"}"#
+                    .to_vec(),
+            ),
+        );
+        let client = OAuth2Client::new(Arc::clone(&transport));
+
+        let (entered_tx, entered_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        client.set_resolver(Arc::new(BlockingResolver {
+            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
+            release_rx: std::sync::Mutex::new(Some(release_rx)),
+        }));
+
+        // Worker thread: drives a grant; the resolver will block
+        // inside resolve() until we send on `release_tx`.
+        let client_for_worker = client.clone();
+        let worker = thread::spawn(move || {
+            client_for_worker
+                .exchange_code(
+                    &ConnectorConfig::new(
+                        ConnectorKind::Notion,
+                        AuthKind::OAuth2,
+                        ScopeId::new_v4(),
+                    )
+                    .with_auth_config(serde_json::json!({
+                        "client_id": "cid",
+                        "redirect_uri": "https://example.invalid/cb",
+                        "token_url": "https://provider.invalid/oauth/token",
+                    })),
+                    "code",
+                )
+                .expect("grant should complete after resolver unblocks")
+        });
+
+        // Block until the resolver has entered (i.e. read lock would
+        // be held in the buggy version).
+        entered_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("resolver must be entered within 5s");
+
+        // Now race a set_resolver from another thread. With the fix
+        // in place this returns immediately because no read lock is
+        // held by the worker (it was dropped right after the Arc
+        // clone). With the bug, this hangs forever because the
+        // worker is blocked inside resolve() while still holding the
+        // read lock.
+        let client_for_swapper = client.clone();
+        let swapper = thread::spawn(move || {
+            struct AnotherResolver;
+            impl ClientSecretResolver for AnotherResolver {
+                fn resolve(&self, _: &str, _: &str, _: &str) -> Option<String> {
+                    Some("ignored".into())
+                }
+            }
+            client_for_swapper.set_resolver(Arc::new(AnotherResolver));
+        });
+
+        // The swapper must finish quickly; if the read lock is held
+        // across resolve(), this join blocks forever and the test
+        // times out (cargo test default timeout) — failure.
+        swapper
+            .join()
+            .expect("swapper thread must finish; deadlock present if join hangs");
+
+        // Now release the resolver so the worker grant completes.
+        release_tx.send(()).expect("release worker resolver");
+        let token = worker.join().expect("worker thread");
+        assert_eq!(token.access_token.expose(), "a");
+
+        let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
+        assert!(
+            body.contains("client_secret=resolved-after-unblock"),
+            "grant should use the resolver that was active when the call started; got {body}",
         );
     }
 }
