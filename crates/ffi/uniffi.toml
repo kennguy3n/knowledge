@@ -1,10 +1,13 @@
 # UniFFI bindings configuration.
 #
-# Consumed by `cargo run -p ffi --bin uniffi-bindgen -- generate
-# --config crates/ffi/uniffi.toml ...`. The build scripts in
-# `crates/ffi/scripts/` pass this via the `--config` flag so the
-# generated Kotlin / Swift sources land under the namespaces hosts
-# expect.
+# Consumed by `cargo run -p uniffi-bindgen -- generate
+# --config crates/ffi/uniffi.toml ...`. The `uniffi-bindgen` binary
+# lives in its own workspace crate (`crates/uniffi-bindgen/`) so the
+# `cli` feature on `uniffi` (clap / syn / quote) does not leak into
+# the `ffi` crate's `staticlib` / `cdylib` dependency graph. The build
+# scripts in `crates/ffi/scripts/` pass this via the `--config` flag
+# so the generated Kotlin / Swift sources land under the namespaces
+# hosts expect.
 #
 # Per upstream UniFFI docs
 # (https://mozilla.github.io/uniffi-rs/latest/kotlin/configuration.html):

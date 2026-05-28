@@ -33,13 +33,17 @@ path = "src/main.rs"
 # `clap` / `syn` / `quote` into their `staticlib` / `cdylib`
 # dependency graphs.
 #
-# Pinning to the same `0.31` version as the workspace declaration is
-# load-bearing: the bindgen CLI parses scaffolding metadata embedded
-# in the `ffi` crate's compiled `.so` / `.a`, and a version mismatch
-# would manifest as corrupted FFI vtables in the generated Swift /
-# Kotlin bindings. See `crates/ffi/uniffi-bindgen.rs` doc comment
-# history for the original rationale.
-uniffi = { version = "0.31", features = ["cli"] }
+# `workspace = true` pulls the version straight from the workspace-
+# level `uniffi` declaration in the root `Cargo.toml`, so the bindgen
+# binary stays version-locked to the `ffi` crate it introspects. That
+# lock-step is load-bearing: the bindgen CLI parses scaffolding
+# metadata embedded in the `ffi` crate's compiled `.so` / `.a`, and a
+# version mismatch would manifest as corrupted FFI vtables in the
+# generated Swift / Kotlin bindings. Inheriting through `workspace = true`
+# means a workspace-level version bump propagates here automatically
+# instead of silently drifting. See `crates/ffi/uniffi-bindgen.rs`
+# doc comment history for the original rationale.
+uniffi = { workspace = true, features = ["cli"] }
 
 [lints]
 workspace = true
