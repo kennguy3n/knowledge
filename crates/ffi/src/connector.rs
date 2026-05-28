@@ -225,9 +225,12 @@ pub fn authenticate_connector(
             config_with_code.auth_config_json = serde_json::Map::new().into();
         }
         if let Some(obj) = config_with_code.auth_config_json.as_object_mut() {
+            // `auth_code` is owned and never read after this point — move
+            // it into the JSON value instead of cloning. One fewer heap
+            // copy per authenticate call.
             obj.insert(
                 "authorization_code".to_string(),
-                serde_json::Value::String(auth_code.clone()),
+                serde_json::Value::String(auth_code),
             );
         }
         let token = connector.authenticate(&config_with_code)?;
