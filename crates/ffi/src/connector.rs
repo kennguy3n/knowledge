@@ -318,6 +318,32 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                             kind: "connector".into(),
                             id: instance_id.clone(),
                         })?;
+                // Reject a second concurrent `sync_connector` against
+                // the same instance — the existing in-flight call
+                // owns the dispatch (and will Phase-3-ingest its
+                // events). Letting both calls proceed in parallel
+                // would double-ingest the same provider events into
+                // the evidence store (the connector framework's
+                // `incremental_sync` is not idempotent against
+                // overlapping cursors), so the substrate refuses the
+                // race at the call site rather than relying on the
+                // host to serialise.
+                //
+                // Hosts that *want* to abandon a stuck sync can call
+                // `remove_connector(instance_id)` followed by
+                // `create_connector` to get a fresh registration — at
+                // which point the per-instance state machine restarts
+                // from `NeverRun`. This is the intentional escape
+                // hatch from the conflict path.
+                if matches!(inst.sync_state.status, SyncStatus::InProgress) {
+                    return Err(FfiError::Connector {
+                        message: format!(
+                            "sync_connector: another sync is already in progress for connector instance {instance_id} \
+                             (last_synced_at={:?}); call remove_connector + create_connector to abandon a stuck sync",
+                            inst.sync_state.last_synced_at,
+                        ),
+                    });
+                }
                 let mode = if inst.sync_state.can_run_incremental() {
                     SyncMode::Incremental
                 } else {
@@ -372,15 +398,15 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
         //
         // Drive the connector's HTTP round-trip with the runtime
         // mutex released. Concurrent FFI calls against the same
-        // handle (queries, memory reads, even another sync against
-        // a different connector instance) run in parallel with this
-        // network call. Per-instance serialisation is still
-        // preserved by the `SyncStatus::InProgress` marker set in
-        // Phase 1 — a second `sync_connector` against the same id
-        // would still proceed but the existing in-flight call will
-        // overwrite `mark_succeeded` / `mark_failed` based on its
-        // own outcome; the Phase 3 contract (every error path
-        // re-marks `Failed`) preserves correctness.
+        // handle (queries, memory reads, sync against a *different*
+        // connector instance) run in parallel with this network
+        // call. A second `sync_connector` against the **same**
+        // instance is rejected in Phase 1 with
+        // `FfiError::Connector` after the `SyncStatus::InProgress`
+        // check above — the substrate refuses the race at the call
+        // site rather than relying on the host to serialise, which
+        // means we never double-ingest the same provider events
+        // into the evidence store.
         let dispatch_result = if snapshot.mode == SyncMode::Incremental {
             snapshot.connector.incremental_sync(
                 &snapshot.config,

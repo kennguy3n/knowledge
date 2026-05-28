@@ -571,45 +571,16 @@ pub fn forget(handle: RuntimeHandle, id: String) -> FfiResult<()> {
                     kind: "evidence".into(),
                     id: id.clone(),
                 })?;
-            let scope = row.scope_id;
-            // 1. In-memory DEK destruction *and* tombstone persistence
-            //    in one atomic step — the destroy call routes through
-            //    the `TombstoneStore` adapter so the on-disk
-            //    `forgotten_scopes` row is written before the destroy
-            //    returns. 2. Purge the FTS5 / embedding indexes so
-            //    plaintext-derived secondary payloads cannot be
-            //    recovered post-forget.
-            rt.forget_scope(scope)?;
-            // Best-effort DEK deletion: if this fails the tombstone
-            // still blocks access and open_store's recovery path will
-            // retry the deletion on next startup.
-            if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
-                tracing::warn!(
-                    scope = %scope.as_uuid(),
-                    error = %e,
-                    "failed to delete scope DEK; will retry on next open_store",
-                );
-            }
-            rt.store_mut()
-                .purge_fts_for_scope(scope)
-                .map_err(|e| FfiError::Evidence {
-                    message: e.to_string(),
-                })?;
-            rt.store_mut()
-                .purge_body_key_wraps_for_scope(scope)
-                .map_err(|e| FfiError::Evidence {
-                    message: e.to_string(),
-                })?;
-            // Delete persisted memory blobs so forgotten-scope memory
-            // state does not survive the next open_store.
-            rt.store()
-                .delete_memory_blobs_for_scope(scope)
-                .map_err(|e| FfiError::Evidence {
-                    message: e.to_string(),
-                })?;
-            rt.user_memories.remove(&scope);
-            rt.channel_memories.remove(&scope);
-            Ok(())
+            // Both `forget` (by evidence id) and `forget_scope` (by
+            // scope uuid) share the *exact* cryptographic-forgetting
+            // sequence — DEK destroy + tombstone + FTS purge +
+            // body-key wraps purge + memory blob delete + in-memory
+            // memory purge + connector lifecycle purge. Routing both
+            // entry points through `forget_scope_state` is what keeps
+            // the contract honest: any new piece of scope-bound state
+            // added in the future only has to be torn down in *one*
+            // place, and both forget paths inherit the fix.
+            forget_scope_state(rt, row.scope_id)
         })
     })
 }
@@ -637,77 +608,106 @@ pub fn forget(handle: RuntimeHandle, id: String) -> FfiResult<()> {
 pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
     metrics::instrument(metrics::inc_forget_scope, || {
         let scope = parse_scope_id(&scope_id)?;
-        with_runtime(handle, |rt| {
-            // Atomic in-memory + on-disk forgetting (see
-            // `FfiRuntime::forget_scope` for the rationale).
-            rt.forget_scope(scope)?;
-            // Best-effort DEK deletion (see forget() for rationale).
-            if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
-                tracing::warn!(
-                    scope = %scope.as_uuid(),
-                    error = %e,
-                    "failed to delete scope DEK; will retry on next open_store",
-                );
-            }
-            rt.store_mut()
-                .purge_fts_for_scope(scope)
-                .map_err(|e| FfiError::Evidence {
-                    message: e.to_string(),
-                })?;
-            rt.store_mut()
-                .purge_body_key_wraps_for_scope(scope)
-                .map_err(|e| FfiError::Evidence {
-                    message: e.to_string(),
-                })?;
-            // Delete persisted memory blobs for the forgotten scope.
-            rt.store()
-                .delete_memory_blobs_for_scope(scope)
-                .map_err(|e| FfiError::Evidence {
-                    message: e.to_string(),
-                })?;
-            rt.user_memories.remove(&scope);
-            rt.channel_memories.remove(&scope);
-            // Cryptographic-forgetting contract (see the function's
-            // own docstring above and `FfiRuntime::forget_scope`):
-            // every piece of state bound to the forgotten scope MUST
-            // become unrecoverable. Connector lifecycle state lives
-            // outside the encrypted-evidence-store path that the
-            // SQLCipher tombstone covers — without explicit cleanup
-            // here, a forgotten scope's `ConnectorInstance` rows,
-            // live `Arc<dyn Connector>` handles, and cached OAuth2
-            // bearer / refresh tokens would survive the call,
-            // letting a later `sync_connector` (or any token-vault
-            // dump) resurrect plaintext provider credentials and
-            // re-emit fresh evidence onto a tombstoned scope.
-            //
-            // Collect first to release the immutable borrow on
-            // `connector_instances` before the removal loop takes
-            // mutable borrows on the same map plus disjoint
-            // `connectors` / `token_vault` borrows.
-            let connector_ids_to_remove: Vec<connector_framework::ConnectorInstanceId> = rt
-                .connector_instances
-                .iter()
-                .filter_map(|(id, inst)| {
-                    if inst.config.scope_id == scope {
-                        Some(*id)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            for id in connector_ids_to_remove {
-                rt.connector_instances.remove(&id);
-                rt.connectors.remove(&id);
-                // `OAuth2TokenVault::remove` returns
-                // `ConnectorError::TokenNotFound` if no token was
-                // cached for the instance (e.g. a connector created
-                // but never authenticated). Treat that as a benign
-                // no-op so the forgetting path is idempotent.
-                let _ = rt.token_vault.remove(id);
-            }
-            Ok(())
-        })
+        with_runtime(handle, |rt| forget_scope_state(rt, scope))
     })
+}
+
+/// Shared cryptographic-forgetting sequence executed by both
+/// [`forget`] (by evidence id) and [`forget_scope`] (by scope uuid).
+///
+/// Sequencing matters — a partial failure mid-sequence must still
+/// leave the scope unreadable, so the steps are ordered so that the
+/// load-bearing DEK destruction happens first and the secondary
+/// cleanups (FTS, body-key wraps, memory blobs, connector lifecycle)
+/// can be retried on the next `open_store` via the recovery path:
+///
+/// 1. In-memory DEK destruction + on-disk tombstone (atomic via
+///    `FfiRuntime::forget_scope` → `TombstoneStore`).
+/// 2. Best-effort SQLCipher DEK deletion (tombstone still blocks
+///    access on failure).
+/// 3. FTS5 + body-key-wrap purge so plaintext-derived secondary
+///    payloads cannot be recovered post-forget.
+/// 4. Persisted memory blob deletion so forgotten-scope memory
+///    state does not survive the next `open_store`.
+/// 5. In-memory memory map purge.
+/// 6. Connector lifecycle purge — every `ConnectorInstance` row,
+///    live `Arc<dyn Connector>` handle, and cached OAuth2 token
+///    bound to the forgotten scope is dropped so a later
+///    `sync_connector` (or any token-vault dump) cannot resurrect
+///    plaintext provider credentials and re-emit fresh evidence
+///    onto a tombstoned scope.
+///
+/// Any new piece of scope-bound state added in the future MUST be
+/// torn down here — routing both forget entry points through this
+/// helper is what keeps the cryptographic-forgetting contract
+/// honest.
+fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> FfiResult<()> {
+    // 1. Atomic in-memory + on-disk forgetting (see
+    //    `FfiRuntime::forget_scope` for the rationale).
+    rt.forget_scope(scope)?;
+    // 2. Best-effort DEK deletion: if this fails the tombstone
+    //    still blocks access and `open_store`'s recovery path will
+    //    retry the deletion on next startup.
+    if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
+        tracing::warn!(
+            scope = %scope.as_uuid(),
+            error = %e,
+            "failed to delete scope DEK; will retry on next open_store",
+        );
+    }
+    // 3. Purge the FTS5 index + body-store CEK wraps so
+    //    plaintext-derived secondary payloads cannot be recovered
+    //    post-forget.
+    rt.store_mut()
+        .purge_fts_for_scope(scope)
+        .map_err(|e| FfiError::Evidence {
+            message: e.to_string(),
+        })?;
+    rt.store_mut()
+        .purge_body_key_wraps_for_scope(scope)
+        .map_err(|e| FfiError::Evidence {
+            message: e.to_string(),
+        })?;
+    // 4. Delete persisted memory blobs so forgotten-scope memory
+    //    state does not survive the next `open_store`.
+    rt.store()
+        .delete_memory_blobs_for_scope(scope)
+        .map_err(|e| FfiError::Evidence {
+            message: e.to_string(),
+        })?;
+    // 5. In-memory memory maps.
+    rt.user_memories.remove(&scope);
+    rt.channel_memories.remove(&scope);
+    // 6. Connector lifecycle: every `ConnectorInstance` row, live
+    //    `Arc<dyn Connector>` handle, and cached OAuth2 token bound
+    //    to the forgotten scope MUST become unrecoverable.
+    //
+    //    Collect first to release the immutable borrow on
+    //    `connector_instances` before the removal loop takes mutable
+    //    borrows on the same map plus disjoint `connectors` /
+    //    `token_vault` borrows.
+    let connector_ids_to_remove: Vec<connector_framework::ConnectorInstanceId> = rt
+        .connector_instances
+        .iter()
+        .filter_map(|(id, inst)| {
+            if inst.config.scope_id == scope {
+                Some(*id)
+            } else {
+                None
+            }
+        })
+        .collect();
+    for id in connector_ids_to_remove {
+        rt.connector_instances.remove(&id);
+        rt.connectors.remove(&id);
+        // `OAuth2TokenVault::remove` returns
+        // `ConnectorError::TokenNotFound` if no token was cached
+        // for the instance (e.g. a connector created but never
+        // authenticated). Treat that as a benign no-op so the
+        // forgetting path is idempotent.
+        let _ = rt.token_vault.remove(id);
+    }
+    Ok(())
 }
 
 /// List memory records for a scope, optionally filtered by state.

@@ -338,13 +338,24 @@ pub fn core_version() -> String {
 ///   itself is reachable.
 /// * `Some(handle)` for an open runtime returns a full envelope:
 ///   bridge + per-subsystem probes (`evidence_store`, `crypto`,
-///   `memory_manager`, `inference_router`). Each subsystem is probed
-///   with real I/O — `evidence_store` runs a `SELECT COUNT(*)`
-///   against the open SQLCipher connection, `crypto` verifies the
-///   master key is non-zero, `memory_manager` reports the
-///   rehydrated user / channel memory counts, and
-///   `inference_router` returns per-adapter availability via
-///   [`inference_router::InferenceRouter::adapter_states`].
+///   `memory_manager`, `inference_router`, `connector`). Each
+///   subsystem is probed with real I/O —
+///   * `evidence_store` runs a `SELECT COUNT(*)` against the open
+///     SQLCipher connection;
+///   * `crypto` verifies the master key is non-zero;
+///   * `memory_manager` reports the rehydrated user / channel
+///     memory counts;
+///   * `inference_router` returns per-adapter availability via
+///     [`inference_router::InferenceRouter::adapter_states`];
+///   * `connector` reports total / authenticated / per-state
+///     instance counts from the in-memory `connector_instances`
+///     map and, when the `http-client` feature is enabled, also
+///     surfaces whether the shared `BlockingHttpTransport` /
+///     `OAuth2Client` finished initialising (degrading the
+///     subsystem to `Degraded` with `http_transport=unavailable`
+///     if `open_store` soft-failed transport construction). The
+///     same envelope is what hosts use to detect the soft-fail
+///     path without calling `js_create_connector` first.
 ///
 /// Returns a [`ffi::HealthStatus`] which the napi binding wraps as
 /// a `serde_json::Value` for the JS side.

@@ -714,6 +714,88 @@ fn forget_scope_purges_connectors_bound_to_the_forgotten_scope() {
     close_store(h).expect("close_store");
 }
 
+/// `forget(evidence_id)` resolves the row to its scope and MUST run
+/// the *exact same* cryptographic-forgetting sequence as
+/// `forget_scope(scope_uuid)` — including the connector lifecycle
+/// purge. This pins the bug surfaced by Devin Review on PR #54:
+/// before the fix, `forget()` left `ConnectorInstance` rows, live
+/// `Arc<dyn Connector>` handles, and cached OAuth2 tokens behind
+/// for the forgotten scope, while `forget_scope()` cleaned them up
+/// — letting a host resurrect the same provider plaintext by
+/// calling `forget()` (the evidence-id surface) instead of
+/// `forget_scope()` (the scope-uuid surface). Both surfaces now
+/// route through the shared `forget_scope_state` helper, so this
+/// test is what keeps them aligned going forward.
+///
+/// Gated on `http-client` for the same reason as the
+/// sibling `forget_scope_purges_connectors_*` test —
+/// `create_connector` requires a live `BlockingHttpTransport`.
+#[cfg(feature = "http-client")]
+#[test]
+fn forget_by_evidence_id_also_purges_connectors_bound_to_the_resolved_scope() {
+    let (h, _dir) = fresh_store();
+
+    let scope_a = uuid::Uuid::new_v4().to_string();
+    let scope_b = uuid::Uuid::new_v4().to_string();
+
+    // Ingest evidence in scope A so `forget(evidence_id)` has a row
+    // to resolve to. The ingest path registers the per-scope DEK,
+    // which is also what `connector` instances expect to be live.
+    let evidence_id_a = ingest_message(
+        h,
+        scope_a.clone(),
+        "forget-by-evidence-id integration test message".into(),
+        SourceKind::Slack,
+        FfiImportanceClass::Important,
+    )
+    .expect("ingest_message in scope A");
+
+    let cfg = r#"{
+        "client_id": "test-client",
+        "redirect_uri": "https://example.invalid/oauth/callback",
+        "token_url": "https://example.invalid/oauth/token"
+    }"#;
+    let id_a = create_connector(
+        h,
+        ConnectorKindTag::Notion,
+        scope_a.clone(),
+        cfg.to_string(),
+    )
+    .expect("create_connector A");
+    let id_b = create_connector(
+        h,
+        ConnectorKindTag::Notion,
+        scope_b.clone(),
+        cfg.to_string(),
+    )
+    .expect("create_connector B");
+
+    let before = list_connectors(h).expect("list before");
+    assert_eq!(before.len(), 2, "both connectors should be registered");
+
+    // Drive the by-evidence-id surface — NOT the by-scope-uuid one.
+    // The fix routes both through the same shared cleanup helper,
+    // so the connector bound to scope A must disappear here too.
+    forget(h, evidence_id_a).expect("forget by evidence id");
+
+    let after = list_connectors(h).expect("list after forget");
+    assert_eq!(
+        after.len(),
+        1,
+        "exactly one connector should survive — the one bound to scope B"
+    );
+    assert!(
+        after.iter().all(|s| s.instance_id != id_a),
+        "connector A (instance_id={id_a}) must be purged by forget(evidence_id)"
+    );
+    assert!(
+        after.iter().any(|s| s.instance_id == id_b),
+        "connector B (instance_id={id_b}) must survive the forget"
+    );
+
+    close_store(h).expect("close_store");
+}
+
 /// Likewise for `SynthesisTrigger`.
 #[test]
 fn synthesis_trigger_variants_all_round_trip() {
