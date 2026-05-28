@@ -123,8 +123,9 @@ synthesis APIs. The currently live entry points are:
 `generate_keypair`, `get_user_memory`, `pin`, `unpin`,
 `list_memories`, `run_decay_sweep`, `get_channel_memory`,
 `escape_fts_query`, `trigger_synthesis`, `core_version`,
-`health_check`, and — gated by the `tracing-subscriber` Cargo
-feature on `crates/ffi` — `try_init_tracing` (JS: `initTracing`).
+`health_check`, `metrics_snapshot`, and — gated by the
+`tracing-subscriber` Cargo feature on `crates/ffi` —
+`try_init_tracing` (JS: `initTracing`).
 The tracing helper is feature-gated because it's the only entry
 point that pulls a non-trivial dependency (`tracing-subscriber`);
 hosts that install their own subscriber don't pay the cost. See
