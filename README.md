@@ -382,6 +382,13 @@ breakdown.
   process and threat model.
 - [blog/adaptive-memory-storage-for-on-device-ai.md](./blog/adaptive-memory-storage-for-on-device-ai.md)
   — long-form write-up of the adaptive on-device memory model.
+- [blog/ai-privacy-spectrum-across-industries.md](./blog/ai-privacy-spectrum-across-industries.md)
+  — long-form write-up of the five AI processing modes (no AI,
+  local AI, local + managed endpoint, hybrid TEE, full
+  server-side), grounded in B2C and B2B scenarios across
+  industries and jurisdictions, with a threat model covering
+  external attackers, the KChat operator, and the
+  infrastructure operator.
 
 ## Reference repositories
 
