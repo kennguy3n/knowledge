@@ -117,6 +117,8 @@ pub(crate) struct Metrics {
     pub(crate) list_connectors_total: AtomicU64,
     /// Total `remove_connector` calls initiated.
     pub(crate) remove_connector_total: AtomicU64,
+    /// Total `refresh_connector_token` calls initiated.
+    pub(crate) refresh_connector_token_total: AtomicU64,
     /// Total `health_check` calls initiated. Counted on both the
     /// bridge-only (no-handle) path and the full-probe (valid-handle)
     /// path. The `Err` path (unknown / closed handle) still
@@ -238,6 +240,7 @@ counter_inc!(pub(crate) fn inc_authenticate_connector => authenticate_connector_
 counter_inc!(pub(crate) fn inc_sync_connector => sync_connector_total);
 counter_inc!(pub(crate) fn inc_list_connectors => list_connectors_total);
 counter_inc!(pub(crate) fn inc_remove_connector => remove_connector_total);
+counter_inc!(pub(crate) fn inc_refresh_connector_token => refresh_connector_token_total);
 // Feature-gated to match the only call site
 // (`crate::tracing_init::try_init_tracing`). The counter *field*
 // in `MetricsSnapshot` stays unconditional so the wire shape does
@@ -368,6 +371,12 @@ pub struct MetricsSnapshot {
     /// Total `remove_connector` calls initiated.
     #[serde(default)]
     pub remove_connector_total: u64,
+    /// Total `refresh_connector_token` calls initiated. Counts
+    /// every host-driven explicit refresh; the auto-refresh path
+    /// inside `sync_connector` does NOT increment this counter
+    /// (it is part of the `sync_connector_total` accounting).
+    #[serde(default)]
+    pub refresh_connector_token_total: u64,
     /// Total `health_check` calls initiated — every probe (bridge
     /// only and full) increments this, including the `Err` path for
     /// an unknown / closed handle (the `Err` path also feeds
@@ -478,6 +487,7 @@ pub fn snapshot() -> MetricsSnapshot {
         sync_connector_total: m.sync_connector_total.load(Ordering::Relaxed),
         list_connectors_total: m.list_connectors_total.load(Ordering::Relaxed),
         remove_connector_total: m.remove_connector_total.load(Ordering::Relaxed),
+        refresh_connector_token_total: m.refresh_connector_token_total.load(Ordering::Relaxed),
         health_check_total: m.health_check_total.load(Ordering::Relaxed),
         init_tracing_total: m.init_tracing_total.load(Ordering::Relaxed),
         errors_by_kind: ErrorCounters {

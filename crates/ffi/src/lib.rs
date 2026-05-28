@@ -110,7 +110,8 @@ pub mod tracing_init;
 pub mod types;
 
 pub use connector::{
-    authenticate_connector, create_connector, list_connectors, remove_connector, sync_connector,
+    authenticate_connector, create_connector, list_connectors, refresh_connector_token,
+    remove_connector, sync_connector,
 };
 pub use error::{FfiError, FfiResult};
 pub use health::{health_check, AdapterReport, HealthStatus, SubsystemHealth, SubsystemStatus};
@@ -120,8 +121,8 @@ pub use runtime::{close_store, open_store, RuntimeHandle};
 pub use tracing_init::try_init_tracing;
 pub use types::{
     ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass, FfiKeypair,
-    FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, ScopeIdString, SourceKind,
-    SyncModeKind, SyncReport, SyncStatusKind, SynthesisTrigger,
+    FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RefreshReport,
+    ScopeIdString, SourceKind, SyncModeKind, SyncReport, SyncStatusKind, SynthesisTrigger,
 };
 
 use crypto::{
@@ -623,11 +624,11 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
 /// immediately and skip the secondary cleanups (they would race
 /// against a scope that is still readable).
 ///
-/// Steps 2–6 are all *secondary* cleanups against state that the
+/// Steps 2–8 are all *secondary* cleanups against state that the
 /// tombstone already makes unreachable through the public read
 /// path (`open_store` recovery + `is_scope_forgotten` guards).
 /// They are each independently important for the
-/// cryptographic-forgetting contract — in particular step 6 drops
+/// cryptographic-forgetting contract — in particular step 8 drops
 /// **plaintext OAuth2 bearer tokens** out of process memory, which
 /// is the highest-sensitivity secondary state in the substrate.
 /// Letting one failing secondary cleanup short-circuit the others
@@ -635,14 +636,14 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
 /// a forgotten scope, which violates the contract this helper
 /// exists to enforce.
 ///
-/// So steps 2–6 are run *unconditionally* — every step is attempted
+/// So steps 2–8 are run *unconditionally* — every step is attempted
 /// regardless of earlier failures, errors are accumulated, and the
 /// first error encountered is returned to the caller after every
 /// cleanup has had a chance to run. Errors from earlier secondary
 /// steps do NOT mask later secondary steps in any way: each step
 /// owns its own piece of state and runs against that state directly,
 /// so a SQLCipher I/O failure on step 3 does not affect the
-/// in-memory connector teardown on step 6.
+/// in-memory connector teardown on step 8.
 ///
 /// The ordered sequence:
 ///
@@ -688,9 +689,9 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     //    state the host still has the right to read.
     rt.forget_scope(scope)?;
 
-    // Steps 2–6 are best-effort secondary cleanups. Every step
+    // Steps 2–8 are best-effort secondary cleanups. Every step
     // MUST be attempted regardless of earlier failures so that the
-    // in-memory connector teardown (step 6 — which drops plaintext
+    // in-memory connector teardown (step 8 — which drops plaintext
     // OAuth2 tokens) is never skipped because a SQLCipher purge
     // happened to fail upstream. We accumulate the first error
     // encountered and surface it to the caller after every step
@@ -756,15 +757,15 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     rt.user_memories.remove(&scope);
     rt.channel_memories.remove(&scope);
 
-    // 5b. Delete persisted connector instance rows for the scope.
-    //     Best-effort: even if the SQL DELETE fails, the rows are
-    //     AEAD-encrypted under the scope DEK that step 1 destroyed,
-    //     so the payload is cryptographically unrecoverable. The
-    //     dangling rows are also picked up on the next `open_store`'s
-    //     rehydration sweep (which checks `tombstones.contains` and
-    //     deletes any row bound to a forgotten scope). We accumulate
-    //     the first error so callers see the gap while still running
-    //     step 6's infallible in-memory teardown unconditionally.
+    // 6. Delete persisted connector instance rows for the scope.
+    //    Best-effort: even if the SQL DELETE fails, the rows are
+    //    AEAD-encrypted under the scope DEK that step 1 destroyed,
+    //    so the payload is cryptographically unrecoverable. The
+    //    dangling rows are also picked up on the next `open_store`'s
+    //    rehydration sweep (which checks `tombstones.contains` and
+    //    deletes any row bound to a forgotten scope). We accumulate
+    //    the first error so callers see the gap while still running
+    //    step 8's infallible in-memory teardown unconditionally.
     if let Err(e) = rt.store().delete_connector_instances_for_scope(scope) {
         let err = FfiError::Evidence {
             message: e.to_string(),
@@ -777,10 +778,10 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         first_error.get_or_insert(err);
     }
 
-    // 5c. Delete persisted OAuth2 token rows for the scope. Same
-    //     best-effort discipline as 5b — the token ciphertext is
-    //     sealed under the destroyed scope DEK so failure to delete
-    //     the row does not leak plaintext credentials.
+    // 7. Delete persisted OAuth2 token rows for the scope. Same
+    //    best-effort discipline as step 6 — the token ciphertext is
+    //    sealed under the destroyed scope DEK so failure to delete
+    //    the row does not leak plaintext credentials.
     if let Err(e) = rt.store().delete_connector_tokens_for_scope(scope) {
         let err = FfiError::Evidence {
             message: e.to_string(),
@@ -793,7 +794,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         first_error.get_or_insert(err);
     }
 
-    // 6. Connector lifecycle: every `ConnectorInstance` row, live
+    // 8. Connector lifecycle: every `ConnectorInstance` row, live
     //    `Arc<dyn Connector>` handle, and cached OAuth2 token bound
     //    to the forgotten scope MUST become unrecoverable.
     //    Infallible — purely in-memory `HashMap::remove` and

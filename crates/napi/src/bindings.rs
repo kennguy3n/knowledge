@@ -37,7 +37,8 @@ use napi_derive::napi;
 #[cfg(test)]
 use ffi::RuntimeHandle;
 use ffi::{
-    ConnectorKindTag, ConnectorStatus, MemoryFilter, MemoryRecord, SyncReport, SynthesisTrigger,
+    ConnectorKindTag, ConnectorStatus, MemoryFilter, MemoryRecord, RefreshReport, SyncReport,
+    SynthesisTrigger,
 };
 
 use crate::types::{IngestRequest, QueryRequest};
@@ -399,7 +400,7 @@ pub fn js_health_check(handle: Option<BigInt>) -> Result<serde_json::Value> {
 }
 
 // ---------------------------------------------------------------------------
-// Connector management surface — mirrors the five connector FFI functions
+// Connector management surface — mirrors the six connector FFI functions
 // from `crates/ffi/src/connector.rs` through to the JS host. The JS-side
 // argument shape is:
 //
@@ -476,6 +477,45 @@ pub fn js_list_connectors(handle: BigInt) -> Result<serde_json::Value> {
 pub fn js_remove_connector(handle: BigInt, instance_id: String) -> Result<()> {
     let h = handle_from_bigint(&handle)?;
     crate::remove_connector(h, instance_id).map_err(to_js_error)
+}
+
+/// Drive an OAuth2 `grant_type=refresh_token` round-trip against
+/// the provider's token endpoint, persist the refreshed token to
+/// SQLCipher, and update the per-runtime token vault. Mirrors
+/// [`crate::refresh_connector_token`]. Returns the
+/// [`RefreshReport`] envelope serialised as `serde_json::Value`
+/// for JS so callers can destructure `{ instanceId, refreshed,
+/// expiresAt, refreshedAt }` directly.
+///
+/// Failure modes:
+///
+/// * `kind: "connector"` carrying the framework's `TokenRefresh`
+///   diagnostic when the provider rejects the refresh grant
+///   (refresh token revoked / expired). The host should treat
+///   this as "re-authorisation required" and prompt the user
+///   through `authenticateConnector` rather than retrying the
+///   refresh.
+/// * `kind: "connector"` carrying `"no refresh_token stored …"`
+///   when the cached token has no refresh token (Slack legacy,
+///   PKCE-only public clients). Same recovery as above.
+/// * `kind: "not_found"` (`kind = "connector" | "scope"`) when
+///   the instance / scope was removed during the unlocked refresh
+///   round-trip.
+/// * `kind: "unavailable"` (`subsystem: "connector-http-client"`)
+///   when no real HTTP transport is linked into the build.
+#[napi(js_name = "refreshConnectorToken")]
+pub fn js_refresh_connector_token(
+    handle: BigInt,
+    instance_id: String,
+) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let report: RefreshReport =
+        crate::refresh_connector_token(h, instance_id).map_err(to_js_error)?;
+    serde_json::to_value(report).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("failed to serialize RefreshReport: {e}"),
+        })
+    })
 }
 
 /// Install a global `tracing` subscriber filtered by the supplied

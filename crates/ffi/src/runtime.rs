@@ -975,6 +975,57 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
     // host hasn't called `create_connector` yet. Logged at WARN so
     // the host's tracing subscriber surfaces the failure for
     // diagnostics even though the open succeeds.
+    //
+    // ### Confidential-client `client_secret` wiring — pending Phase 4.1
+    //
+    // The `OAuth2Client::new(...)` constructor below intentionally
+    // does NOT call `.with_client_secret(...)`. The connector
+    // framework's design intent (see `OAuth2Client`'s rustdoc) is
+    // that production callers pass the secret in at runtime from
+    // the OS keychain / secrets manager, NOT that it lives on disk.
+    // The FFI substrate does not yet expose a mechanism for the host
+    // to wire the secret through, so EVERY OAuth2 grant
+    // (`authenticate_connector`'s `exchange_code` AND
+    // `refresh_connector_token`'s `refresh_with_config`) currently
+    // posts to the provider's token endpoint WITHOUT a
+    // `client_secret` form field. Public-client providers (Slack
+    // PKCE-only public apps, Notion test mode) work; confidential-
+    // client providers (Notion production, Google, Atlassian,
+    // Microsoft Graph, HubSpot, …) reject the grant with
+    // `invalid_client`.
+    //
+    // This is a pre-existing gap (predates the Phase 4 token-refresh
+    // wiring in PR #56; affects the Phase 2 auth path established in
+    // PR #54). Phase 4.1 will add a host-side secret-resolution
+    // mechanism. Three architecturally-distinct options are on the
+    // table:
+    //
+    // 1. **Per-runtime FFI setter** —
+    //    `set_oauth_client_secret(handle, secret)` called once
+    //    post-`open_store`. Simplest, but breaks multi-tenant hosts
+    //    that serve multiple OAuth2 apps from one runtime.
+    // 2. **Per-instance via `auth_config_json["client_secret"]`** —
+    //    secret persists to SQLCipher under the scope DEK alongside
+    //    the rest of the connector config. Multi-tenant works
+    //    naturally; but the framework's "never stored on disk"
+    //    design intent is violated (mitigated by AEAD encryption at
+    //    rest, but still a deviation worth a deliberate decision).
+    // 3. **Host-supplied secret resolver callback** —
+    //    `set_client_secret_resolver(handle, fn(kind, instance_id)
+    //    -> Option<String>)` that the substrate consults at
+    //    grant-time. Multi-tenant works AND the secret stays in the
+    //    host's keychain; cost is the FFI callback hop on every
+    //    auth / refresh call and the host-side bookkeeping to wire
+    //    the resolver across the language boundary (especially
+    //    awkward over UniFFI which doesn't model Rust closures
+    //    natively).
+    //
+    // The right call for the substrate is probably (3) for the
+    // production path with (2) as a fallback for tests, but it's a
+    // substantive design decision that warrants its own focused PR.
+    // Until Phase 4.1 lands, the substrate is usable only against
+    // public-client OAuth2 providers — documented here so the gap is
+    // discoverable from the call site.
     #[cfg(feature = "http-client")]
     let (http_transport, oauth_client) = match BlockingHttpTransport::new() {
         Ok(transport) => {
