@@ -435,6 +435,27 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     #[cfg(not(feature = "http-client"))]
     let http_transport_available = true;
 
+    // Surface the OAuth2 `ClientSecretResolver` registration state
+    // alongside the transport availability so an operator
+    // diagnosing an `invalid_client` grant rejection can tell at a
+    // glance which `client_secret` resolution layer is wired up.
+    // Pure diagnostic signal — the probe stays `Ok` when no
+    // resolver is registered, because public-client providers
+    // (Slack PKCE-only, Notion test mode) work fine without one;
+    // the host might also be relying on the
+    // `auth_config_json["client_secret"]` fallback layer (Phase
+    // 4.1 layer 2). Only the `failed > 0 || !http_transport`
+    // conditions remain load-bearing for the subsystem status.
+    //
+    // Under `not(http-client)` the resolver slot is
+    // architecturally inert (no `OAuth2Client` is ever
+    // constructed) so we don't compute or surface this signal.
+    #[cfg(feature = "http-client")]
+    let oauth_resolver_registered = rt
+        .oauth_client
+        .as_ref()
+        .is_some_and(|c| c.has_resolver());
+
     let status = if failed > 0 || !http_transport_available {
         SubsystemStatus::Degraded
     } else {
@@ -449,6 +470,22 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
         // Append rather than replace so the per-status counts stay
         // machine-parseable for host UIs that already key off them.
         detail.push_str(", http_transport=unavailable");
+    }
+    // Always append the resolver state when the http-client
+    // feature is on — both `registered` and `unset` are
+    // diagnostically useful (host that wired up a resolver wants
+    // to confirm it stuck across `open_store`; host that hasn't
+    // wants to know why confidential-client grants might be
+    // failing). Under `not(http-client)` the resolver slot is
+    // architecturally inert, so skip the field to keep the detail
+    // string focused on what's actually actionable.
+    #[cfg(feature = "http-client")]
+    {
+        detail.push_str(if oauth_resolver_registered {
+            ", oauth_resolver=registered"
+        } else {
+            ", oauth_resolver=unset"
+        });
     }
     SubsystemHealth {
         name: "connector".into(),

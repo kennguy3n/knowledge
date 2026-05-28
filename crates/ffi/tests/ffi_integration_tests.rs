@@ -608,6 +608,14 @@ fn health_check_envelope_includes_connector_subsystem() {
     assert!(detail.contains("total=0"), "detail={detail}");
     assert!(detail.contains("authenticated=0"), "detail={detail}");
     assert!(detail.contains("failed=0"), "detail={detail}");
+    // Phase 4.1: the probe also surfaces the
+    // `ClientSecretResolver` registration state alongside the
+    // per-status counts. A fresh runtime has no resolver wired up,
+    // so the host should see `oauth_resolver=unset` — this is the
+    // signal a host operator looks at first when diagnosing an
+    // `invalid_client` rejection on a confidential-client grant.
+    #[cfg(feature = "http-client")]
+    assert!(detail.contains("oauth_resolver=unset"), "detail={detail}");
 
     // Sanity-check the probe ordering — the Phase 2 wiring appends
     // `connector` after the four Phase 1 subsystems, so a host
@@ -2714,6 +2722,72 @@ fn client_secret_resolver_set_and_clear_are_idempotent() {
 
     clear_oauth_client_secret_resolver(h).expect("first clear");
     clear_oauth_client_secret_resolver(h).expect("second clear is a no-op");
+
+    close_store(h).expect("close_store");
+}
+
+/// Phase 4.1 health-probe wiring: the `connector` subsystem must
+/// flip its `oauth_resolver=` field from `unset` to `registered`
+/// after a successful `set_oauth_client_secret_resolver` call, and
+/// back to `unset` after `clear_oauth_client_secret_resolver`.
+/// Pins the diagnostic surface against regression so host
+/// operators debugging `invalid_client` grant rejections can
+/// reliably check the probe to confirm their resolver wired up.
+#[cfg(feature = "http-client")]
+#[test]
+fn health_probe_surfaces_oauth_resolver_registration_state() {
+    use ffi::{clear_oauth_client_secret_resolver, set_oauth_client_secret_resolver};
+
+    let (h, _dir) = fresh_store();
+
+    // Baseline: a fresh runtime has no resolver registered.
+    let env = health_check(Some(h)).expect("health_check (baseline)");
+    let baseline_detail = env
+        .subsystems
+        .iter()
+        .find(|s| s.name == "connector")
+        .and_then(|s| s.detail.clone())
+        .expect("connector subsystem detail (baseline)");
+    assert!(
+        baseline_detail.contains("oauth_resolver=unset"),
+        "baseline detail={baseline_detail}"
+    );
+
+    // Register a resolver — probe must flip to `registered`.
+    let resolver =
+        Arc::new(TestResolver::new(Some("S"))) as Arc<dyn ffi::OAuthClientSecretResolver>;
+    set_oauth_client_secret_resolver(h, resolver).expect("set_oauth_client_secret_resolver");
+
+    let env = health_check(Some(h)).expect("health_check (post-set)");
+    let post_set_detail = env
+        .subsystems
+        .iter()
+        .find(|s| s.name == "connector")
+        .and_then(|s| s.detail.clone())
+        .expect("connector subsystem detail (post-set)");
+    assert!(
+        post_set_detail.contains("oauth_resolver=registered"),
+        "post-set detail={post_set_detail}"
+    );
+    assert!(
+        !post_set_detail.contains("oauth_resolver=unset"),
+        "post-set detail must not contain unset; got {post_set_detail}"
+    );
+
+    // Clear — probe flips back to `unset`. Pins the round-trip.
+    clear_oauth_client_secret_resolver(h).expect("clear_oauth_client_secret_resolver");
+
+    let env = health_check(Some(h)).expect("health_check (post-clear)");
+    let post_clear_detail = env
+        .subsystems
+        .iter()
+        .find(|s| s.name == "connector")
+        .and_then(|s| s.detail.clone())
+        .expect("connector subsystem detail (post-clear)");
+    assert!(
+        post_clear_detail.contains("oauth_resolver=unset"),
+        "post-clear detail={post_clear_detail}"
+    );
 
     close_store(h).expect("close_store");
 }

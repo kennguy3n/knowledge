@@ -290,6 +290,21 @@ impl<T: HttpTransport> OAuth2Client<T> {
         *guard = None;
     }
 
+    /// Returns `true` when a [`ClientSecretResolver`] is currently
+    /// registered on this client. Provided for host diagnostics
+    /// (e.g. the FFI health probe surfaces this so an operator
+    /// debugging an `invalid_client` OAuth2 grant can tell at a
+    /// glance whether the resolver layer is wired up or whether
+    /// the substrate is relying on `auth_config_json` / static
+    /// fallbacks). Reads the same `RwLock` slot as
+    /// [`Self::set_resolver`] / [`Self::clear_resolver`]; on a
+    /// poisoned lock (programming bug) returns `false` so the
+    /// diagnostic surface degrades gracefully rather than
+    /// propagating the poison.
+    pub fn has_resolver(&self) -> bool {
+        self.resolver.read().is_ok_and(|g| g.is_some())
+    }
+
     /// Resolve the `client_secret` for a grant against `config`,
     /// walking the 3-layer fallback ladder documented at the
     /// module level. Returns `None` when no layer produces a
