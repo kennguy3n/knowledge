@@ -9,17 +9,34 @@ description = "Workspace-local `uniffi-bindgen` binary that drives the UniFFI CL
 
 # Standalone binary crate. Lives in its own workspace crate so the
 # `cli` feature on `uniffi` (which transitively pulls in `clap`,
-# `syn`, `quote`, `proc-macro2`, …) is only compiled into the
-# bindgen binary's dependency graph — NOT into the `ffi` crate
-# itself, whose `staticlib` (iOS `.xcframework`) and `cdylib`
-# (Android `jniLibs/`) outputs would otherwise carry the
-# compile-time cost on every mobile build.
+# `syn`, `quote`, `proc-macro2`, …) does not enter the `ffi` crate's
+# dependency graph on **per-package builds** — i.e. the
+# `cargo build -p ffi`, `cargo ndk -p ffi`, `cargo swift package -p
+# ffi` invocations the mobile build scripts use. Whose `staticlib`
+# (iOS `.xcframework`) and `cdylib` (Android `jniLibs/`) outputs
+# would otherwise carry the compile-time cost on every mobile
+# build.
 #
-# Reference: the same split is used by the upstream UniFFI examples
-# and by `uneycom/kchat-rust-sdk` (`scripts/mls_uniffi_build_android.sh`
-# invokes a dedicated `uniffi-bindgen` binary that does not share its
-# library crate's dependency graph). See PR #52 review thread on
-# `Cargo.toml:162` for the original finding that motivated this split.
+# Caveat: under Cargo's resolver v2 (set workspace-wide), regular
+# (non-`build-dependencies`) features ARE still unified across
+# workspace members for **workspace-wide builds** like
+# `cargo check --workspace` or `cargo build --workspace`. So when
+# CI runs the workspace-wide MSRV check (`.github/workflows/ci.yml`
+# `msrv` job), the `cli` feature does get compiled into the unified
+# `uniffi` rlib that the `ffi` crate also depends on for that build.
+# This is purely a compile-time cost (the `staticlib` / `cdylib`
+# linker dead-strips unused symbols, so the on-disk artefact is
+# unaffected); the mobile build scripts side-step it entirely by
+# building each crate independently with `-p <crate>`.
+#
+# Reference: the same per-package split is used by the upstream
+# UniFFI examples and by `uneycom/kchat-rust-sdk`
+# (`scripts/mls_uniffi_build_android.sh` invokes a dedicated
+# `uniffi-bindgen` binary that does not share its library crate's
+# per-package dependency graph). See PR #52 review thread on
+# `Cargo.toml:162` for the original finding that motivated this
+# split, and the follow-up review on this file's :46 line for the
+# workspace-wide-build caveat above.
 
 [[bin]]
 name = "uniffi-bindgen"
