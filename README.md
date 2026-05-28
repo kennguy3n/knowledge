@@ -123,7 +123,9 @@ across both bindings) are:
 `get_evidence`, `forget`, `forget_scope`, `encrypt`, `decrypt`,
 `generate_keypair`, `get_user_memory`, `pin`, `unpin`,
 `list_memories`, `run_decay_sweep`, `get_channel_memory`,
-`escape_fts_query`, `trigger_synthesis`, `health_check`.
+`escape_fts_query`, `trigger_synthesis`, `health_check`,
+`create_connector`, `authenticate_connector`, `sync_connector`,
+`list_connectors`, `remove_connector`.
 
 Four entry points are intentionally surface-specific rather than
 mirrored across both bindings:
@@ -172,8 +174,8 @@ from the substrate's metrics + tracing layer (see
 below). `healthCheck()` called without a handle returns a
 bridge-only envelope; called with an open-store handle it
 includes per-subsystem probes (`evidence_store`, `crypto`,
-`memory_manager`, `inference_router`) that run real I/O against
-the open runtime.
+`memory_manager`, `inference_router`, `connector`) that run real
+I/O against the open runtime.
 
 `trigger_synthesis` dispatches a `SynthSummary` task through the
 on-device `InferenceRouter`, persists the resulting recap into
@@ -201,10 +203,13 @@ succeeds, fails, or panics.
 embedded in the health envelope. Counters include
 `ingest_total`, `query_total`, `synthesis_triggered_total`,
 `decay_sweeps_total`, `forgets_total`, `forget_scopes_total`,
-`encrypt_total`, `decrypt_total`, plus per-`FfiError`-kind
-counters under `errors_by_kind` (`unimplemented`, `invalid_id`,
-`not_found`, `evidence`, `memory`, `synthesis`, `crypto`,
-`unavailable`, `inference_failure`). Gauges include
+`encrypt_total`, `decrypt_total`, `create_connector_total`,
+`authenticate_connector_total`, `sync_connector_total`,
+`list_connectors_total`, `remove_connector_total`, plus
+per-`FfiError`-kind counters under `errors_by_kind`
+(`unimplemented`, `invalid_id`, `not_found`, `evidence`,
+`memory`, `synthesis`, `crypto`, `unavailable`,
+`inference_failure`, `connector`). Gauges include
 `open_handles` (live runtime registry size) and
 `tombstone_count` (destroyed-DEK registry size on the most
 recently observed handle).
@@ -218,11 +223,15 @@ snapshot. With an open handle the probe runs real I/O —
 `evidence_store` issues `SELECT COUNT(*)` against the open
 SQLCipher connection, `crypto` verifies the master key is
 non-zero, `memory_manager` reports rehydrated user / channel
-memory counts, and `inference_router` returns per-adapter
-availability via `InferenceRouter::adapter_states()`. Without a
-handle (or with the `0n` sentinel) the probe returns a
-bridge-only envelope suitable for an Electron `app.whenReady`
-liveness check before `openStore`.
+memory counts, `inference_router` returns per-adapter
+availability via `InferenceRouter::adapter_states()`, and
+`connector` reports the per-runtime connector-instance count,
+authenticated-token count, and the per-`SyncStatus` distribution
+across all registered connectors (downgrading to `Degraded` if
+any connector is in `Failed`). Without a handle (or with the
+`0n` sentinel) the probe returns a bridge-only envelope suitable
+for an Electron `app.whenReady` liveness check before
+`openStore`.
 
 **Tracing** events are emitted via the `tracing` facade
 throughout the workspace. To install a global subscriber from

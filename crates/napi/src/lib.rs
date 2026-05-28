@@ -50,9 +50,10 @@ pub use error::{NapiError, NapiResult};
 #[cfg(feature = "tracing-subscriber")]
 pub use ffi::try_init_tracing;
 pub use ffi::{
-    AdapterReport, EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, HealthStatus,
-    MemoryFilter, MemoryRecord, MemoryState, MetricsSnapshot, QueryResult, RuntimeHandle,
-    ScopeIdString, SourceKind, SubsystemHealth, SubsystemStatus, SynthesisTrigger,
+    AdapterReport, ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass,
+    FfiKeypair, FfiSignature, HealthStatus, MemoryFilter, MemoryRecord, MemoryState,
+    MetricsSnapshot, QueryResult, RuntimeHandle, ScopeIdString, SourceKind, SubsystemHealth,
+    SubsystemStatus, SyncModeKind, SyncReport, SyncStatusKind, SynthesisTrigger,
 };
 pub use types::{IngestRequest, InitConfig, QueryRequest};
 
@@ -337,13 +338,24 @@ pub fn core_version() -> String {
 ///   itself is reachable.
 /// * `Some(handle)` for an open runtime returns a full envelope:
 ///   bridge + per-subsystem probes (`evidence_store`, `crypto`,
-///   `memory_manager`, `inference_router`). Each subsystem is probed
-///   with real I/O — `evidence_store` runs a `SELECT COUNT(*)`
-///   against the open SQLCipher connection, `crypto` verifies the
-///   master key is non-zero, `memory_manager` reports the
-///   rehydrated user / channel memory counts, and
-///   `inference_router` returns per-adapter availability via
-///   [`inference_router::InferenceRouter::adapter_states`].
+///   `memory_manager`, `inference_router`, `connector`). Each
+///   subsystem is probed with real I/O —
+///   * `evidence_store` runs a `SELECT COUNT(*)` against the open
+///     SQLCipher connection;
+///   * `crypto` verifies the master key is non-zero;
+///   * `memory_manager` reports the rehydrated user / channel
+///     memory counts;
+///   * `inference_router` returns per-adapter availability via
+///     [`inference_router::InferenceRouter::adapter_states`];
+///   * `connector` reports total / authenticated / per-state
+///     instance counts from the in-memory `connector_instances`
+///     map and, when the `http-client` feature is enabled, also
+///     surfaces whether the shared `BlockingHttpTransport` /
+///     `OAuth2Client` finished initialising (degrading the
+///     subsystem to `Degraded` with `http_transport=unavailable`
+///     if `open_store` soft-failed transport construction). The
+///     same envelope is what hosts use to detect the soft-fail
+///     path without calling `js_create_connector` first.
 ///
 /// Returns a [`ffi::HealthStatus`] which the napi binding wraps as
 /// a `serde_json::Value` for the JS side.
@@ -387,6 +399,78 @@ pub fn health_check(handle: Option<NapiHandle>) -> NapiResult<ffi::HealthStatus>
         }
     });
     ffi::health_check(handle).map_err(NapiError::from)
+}
+
+// ---------------------------------------------------------------------------
+// Connector management — mirrors the five connector FFI functions defined in
+// `crates/ffi/src/connector.rs`. The N-API wrappers in
+// `crates/napi/src/bindings.rs` invoke these forwarders so the JS host gets
+// the same lifecycle (`create` → `authenticate` → `sync` → `list` /
+// `remove`) without going through the FFI surface twice.
+// ---------------------------------------------------------------------------
+
+/// Instantiate a connector for `kind`, bound to `scope_id`, with
+/// `config_json` as the connector's `auth_config_json` payload.
+/// Mirrors [`ffi::create_connector`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::create_connector`] errors as [`NapiError`].
+pub fn create_connector(
+    handle: NapiHandle,
+    kind: ConnectorKindTag,
+    scope_id: ScopeIdString,
+    config_json: String,
+) -> NapiResult<String> {
+    ffi::create_connector(RuntimeHandle(handle), kind, scope_id, config_json)
+        .map_err(NapiError::from)
+}
+
+/// Run the OAuth2 `authorization_code` exchange for `instance_id`
+/// and stash the bearer token in the per-runtime token vault.
+/// Mirrors [`ffi::authenticate_connector`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::authenticate_connector`] errors as [`NapiError`].
+pub fn authenticate_connector(
+    handle: NapiHandle,
+    instance_id: String,
+    auth_code: String,
+) -> NapiResult<()> {
+    ffi::authenticate_connector(RuntimeHandle(handle), instance_id, auth_code)
+        .map_err(NapiError::from)
+}
+
+/// Run a sync against the source system and forward emitted
+/// `ConnectorEvent`s into the encrypted evidence store. Mirrors
+/// [`ffi::sync_connector`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::sync_connector`] errors as [`NapiError`].
+pub fn sync_connector(handle: NapiHandle, instance_id: String) -> NapiResult<SyncReport> {
+    ffi::sync_connector(RuntimeHandle(handle), instance_id).map_err(NapiError::from)
+}
+
+/// List configured connector instances on this runtime with their
+/// current sync state. Mirrors [`ffi::list_connectors`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::list_connectors`] errors as [`NapiError`].
+pub fn list_connectors(handle: NapiHandle) -> NapiResult<Vec<ConnectorStatus>> {
+    ffi::list_connectors(RuntimeHandle(handle)).map_err(NapiError::from)
+}
+
+/// Tear down the connector with `instance_id`. Mirrors
+/// [`ffi::remove_connector`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::remove_connector`] errors as [`NapiError`].
+pub fn remove_connector(handle: NapiHandle, instance_id: String) -> NapiResult<()> {
+    ffi::remove_connector(RuntimeHandle(handle), instance_id).map_err(NapiError::from)
 }
 
 const B64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

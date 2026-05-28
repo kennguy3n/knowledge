@@ -21,10 +21,20 @@
 
 use ffi::{
     close_store, decrypt, encrypt, forget, generate_keypair, get_channel_memory, get_evidence,
-    get_user_memory, ingest_message, list_memories, open_store, pin, query, run_decay_sweep,
-    trigger_synthesis, unpin, EvidenceRecord, FfiError, FfiImportanceClass, FfiKeypair,
-    FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RuntimeHandle, SourceKind,
-    SynthesisTrigger,
+    get_user_memory, health_check, ingest_message, list_memories, open_store, pin, query,
+    run_decay_sweep, trigger_synthesis, unpin, EvidenceRecord, FfiError, FfiImportanceClass,
+    FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RuntimeHandle,
+    SourceKind, SubsystemStatus, SynthesisTrigger,
+};
+// `create_connector` / `list_connectors` / `forget_scope` /
+// `ConnectorKindTag` are only needed by the connector-cleanup
+// integration test, which is itself gated on `http-client` (see
+// the test's own attribute). Gating the imports keeps the
+// default-features `cargo test` warning-free.
+#[cfg(feature = "http-client")]
+use ffi::{
+    authenticate_connector, create_connector, forget_scope, list_connectors, remove_connector,
+    ConnectorKindTag,
 };
 use tempfile::TempDir;
 
@@ -565,6 +575,392 @@ fn source_kind_variants_all_round_trip() {
             serde_json::from_str(&s).expect("SourceKind must round-trip via its tag");
         assert_eq!(variant, back);
     }
+}
+
+/// `health_check` over a freshly-opened runtime must include the
+/// new `connector` subsystem entry. Phase 2 wires the connector
+/// framework into the substrate and `CONTRIBUTING.md` §4 mandates a
+/// matching `health_check` probe per subsystem — this test pins
+/// that wiring contract so a future regression that drops the probe
+/// (or silently downgrades it) is caught locally before reaching
+/// the host shells.
+///
+/// We deliberately do NOT call `create_connector` here: the
+/// substrate's steady state of "zero registered connectors" must
+/// itself produce a healthy `ok` subsystem entry with the
+/// per-status counts at zero, so the host UI's
+/// `(0 ok / 0 failed / …)` rendering is well-defined.
+#[test]
+fn health_check_envelope_includes_connector_subsystem() {
+    let (h, _dir) = fresh_store();
+    let env = health_check(Some(h)).expect("health_check with open handle");
+
+    let connector = env
+        .subsystems
+        .iter()
+        .find(|s| s.name == "connector")
+        .expect("connector subsystem entry must be present in the envelope");
+    assert_eq!(connector.status, SubsystemStatus::Ok);
+    let detail = connector
+        .detail
+        .as_deref()
+        .expect("connector probe always emits a detail string");
+    assert!(detail.contains("total=0"), "detail={detail}");
+    assert!(detail.contains("authenticated=0"), "detail={detail}");
+    assert!(detail.contains("failed=0"), "detail={detail}");
+
+    // Sanity-check the probe ordering — the Phase 2 wiring appends
+    // `connector` after the four Phase 1 subsystems, so a host
+    // rendering subsystems in array order sees the connector tile
+    // last. The exact array order is part of the host UI contract
+    // (Electron / Swift / Kotlin all render subsystems in the order
+    // they appear in the envelope), so changes here are intentional
+    // and require updating the host shells.
+    let names: Vec<&str> = env.subsystems.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "bridge",
+            "evidence_store",
+            "crypto",
+            "memory_manager",
+            "inference_router",
+            "connector",
+        ]
+    );
+
+    close_store(h).expect("close_store");
+}
+
+/// Cryptographic-forgetting contract: every piece of state bound
+/// to the forgotten scope MUST become unrecoverable. This pins the
+/// connector-state cleanup branch of `forget_scope` against
+/// regression — without it, a forgotten scope's `ConnectorInstance`
+/// rows, live `Arc<dyn Connector>` handles, and cached OAuth2
+/// tokens would survive the call, letting a later `sync_connector`
+/// resurrect plaintext provider credentials and re-emit fresh
+/// evidence onto a tombstoned scope.
+///
+/// The test creates two connectors against different scopes,
+/// forgets one scope, and asserts:
+///
+/// 1. The connector bound to the forgotten scope disappears from
+///    `list_connectors`.
+/// 2. The connector bound to the OTHER scope survives.
+///
+/// Direct token-vault inspection lives in the unit test in
+/// `connector.rs`; this test pins the FFI-observable contract.
+///
+/// Gated on `http-client` because `create_connector` requires a
+/// live `BlockingHttpTransport` — without the feature every
+/// connector lifecycle call returns `FfiError::Unavailable`, which
+/// is the surface this test is *not* exercising. The Phase 2 CI
+/// workflow builds + tests this crate with `--all-features` so the
+/// gate keeps the unit test deterministic on every developer's
+/// local `cargo test` while still being exercised by the
+/// release-shape CI matrix.
+#[cfg(feature = "http-client")]
+#[test]
+fn forget_scope_purges_connectors_bound_to_the_forgotten_scope() {
+    let (h, _dir) = fresh_store();
+
+    let scope_a = uuid::Uuid::new_v4().to_string();
+    let scope_b = uuid::Uuid::new_v4().to_string();
+
+    // Use a minimal-but-real auth config so the JSON parses; the
+    // test never authenticates the connector (which would require a
+    // live OAuth2 provider) — `create_connector` allocates the
+    // instance regardless and that's what `forget_scope` must clean
+    // up.
+    let cfg = r#"{
+        "client_id": "test-client",
+        "redirect_uri": "https://example.invalid/oauth/callback",
+        "token_url": "https://example.invalid/oauth/token"
+    }"#;
+    let id_a = create_connector(
+        h,
+        ConnectorKindTag::Notion,
+        scope_a.clone(),
+        cfg.to_string(),
+    )
+    .expect("create_connector A");
+    let id_b = create_connector(
+        h,
+        ConnectorKindTag::Notion,
+        scope_b.clone(),
+        cfg.to_string(),
+    )
+    .expect("create_connector B");
+
+    let before = list_connectors(h).expect("list before");
+    assert_eq!(before.len(), 2, "both connectors should be registered");
+
+    // Forget scope A — the connector bound to scope A must
+    // disappear.
+    forget_scope(h, scope_a.clone()).expect("forget_scope A");
+
+    let after = list_connectors(h).expect("list after forget_scope A");
+    assert_eq!(
+        after.len(),
+        1,
+        "exactly one connector should survive — the one bound to scope B"
+    );
+    assert!(
+        after.iter().all(|s| s.instance_id != id_a),
+        "connector A (instance_id={id_a}) must be purged"
+    );
+    assert!(
+        after.iter().any(|s| s.instance_id == id_b),
+        "connector B (instance_id={id_b}) must survive"
+    );
+
+    close_store(h).expect("close_store");
+}
+
+/// `forget(evidence_id)` resolves the row to its scope and MUST run
+/// the *exact same* cryptographic-forgetting sequence as
+/// `forget_scope(scope_uuid)` — including the connector lifecycle
+/// purge. This pins the bug surfaced by Devin Review on PR #54:
+/// before the fix, `forget()` left `ConnectorInstance` rows, live
+/// `Arc<dyn Connector>` handles, and cached OAuth2 tokens behind
+/// for the forgotten scope, while `forget_scope()` cleaned them up
+/// — letting a host resurrect the same provider plaintext by
+/// calling `forget()` (the evidence-id surface) instead of
+/// `forget_scope()` (the scope-uuid surface). Both surfaces now
+/// route through the shared `forget_scope_state` helper, so this
+/// test is what keeps them aligned going forward.
+///
+/// Gated on `http-client` for the same reason as the
+/// sibling `forget_scope_purges_connectors_*` test —
+/// `create_connector` requires a live `BlockingHttpTransport`.
+#[cfg(feature = "http-client")]
+#[test]
+fn forget_by_evidence_id_also_purges_connectors_bound_to_the_resolved_scope() {
+    let (h, _dir) = fresh_store();
+
+    let scope_a = uuid::Uuid::new_v4().to_string();
+    let scope_b = uuid::Uuid::new_v4().to_string();
+
+    // Ingest evidence in scope A so `forget(evidence_id)` has a row
+    // to resolve to. The ingest path registers the per-scope DEK,
+    // which is also what `connector` instances expect to be live.
+    let evidence_id_a = ingest_message(
+        h,
+        scope_a.clone(),
+        "forget-by-evidence-id integration test message".into(),
+        SourceKind::Slack,
+        FfiImportanceClass::Important,
+    )
+    .expect("ingest_message in scope A");
+
+    let cfg = r#"{
+        "client_id": "test-client",
+        "redirect_uri": "https://example.invalid/oauth/callback",
+        "token_url": "https://example.invalid/oauth/token"
+    }"#;
+    let id_a = create_connector(
+        h,
+        ConnectorKindTag::Notion,
+        scope_a.clone(),
+        cfg.to_string(),
+    )
+    .expect("create_connector A");
+    let id_b = create_connector(
+        h,
+        ConnectorKindTag::Notion,
+        scope_b.clone(),
+        cfg.to_string(),
+    )
+    .expect("create_connector B");
+
+    let before = list_connectors(h).expect("list before");
+    assert_eq!(before.len(), 2, "both connectors should be registered");
+
+    // Drive the by-evidence-id surface — NOT the by-scope-uuid one.
+    // The fix routes both through the same shared cleanup helper,
+    // so the connector bound to scope A must disappear here too.
+    forget(h, evidence_id_a).expect("forget by evidence id");
+
+    let after = list_connectors(h).expect("list after forget");
+    assert_eq!(
+        after.len(),
+        1,
+        "exactly one connector should survive — the one bound to scope B"
+    );
+    assert!(
+        after.iter().all(|s| s.instance_id != id_a),
+        "connector A (instance_id={id_a}) must be purged by forget(evidence_id)"
+    );
+    assert!(
+        after.iter().any(|s| s.instance_id == id_b),
+        "connector B (instance_id={id_b}) must survive the forget"
+    );
+
+    close_store(h).expect("close_store");
+}
+
+/// `authenticate_connector` MUST splice the OAuth2 authorisation
+/// code into `auth_config_json` under the key `"authorization_code"`
+/// — every concrete connector (`crates/connectors/src/{slack,
+/// notion, hubspot, email, onedrive, confluence, jira, figma,
+/// google_drive}.rs`) reads from that exact key in its
+/// `authenticate` impl, surfacing
+/// `ConnectorError::Auth("…auth_config_json.authorization_code is
+/// required")` if the key is missing.
+///
+/// This pins the round-4 Devin Review bug on PR #54: the FFI
+/// previously spliced the code under `"auth_code"`, which would
+/// cause every host `authenticate_connector` call to surface
+/// `auth_config_json.authorization_code is required` even when the
+/// host correctly passed an `auth_code` argument. After the fix,
+/// the connector reaches its HTTP transport and fails with a
+/// network error instead — which is what this test asserts.
+///
+/// Gated on `http-client` because `authenticate_connector` requires
+/// a live `BlockingHttpTransport` to drive the OAuth2 exchange.
+#[cfg(feature = "http-client")]
+#[test]
+fn authenticate_connector_splices_auth_code_under_correct_json_key() {
+    let (h, _dir) = fresh_store();
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    // Point at a reserved-for-testing TLD (RFC 6761 `.invalid`) so
+    // DNS resolution fails fast on every resolver — no real
+    // network round-trip is required, and the test stays
+    // deterministic regardless of the runner's connectivity.
+    let cfg = r#"{
+        "client_id": "test-client",
+        "redirect_uri": "https://example.invalid/oauth/callback",
+        "token_url": "https://example.invalid/oauth/token"
+    }"#;
+    let instance_id = create_connector(h, ConnectorKindTag::Notion, scope.clone(), cfg.to_string())
+        .expect("create_connector");
+
+    // Drive the actual surface this test cares about. Every
+    // concrete connector will reject the call (no live OAuth2
+    // server is reachable), so we expect an error — the question
+    // is *which* error. The pre-fix bug surfaces as
+    // `auth_config_json.authorization_code is required` because
+    // the connector never sees the spliced key; the post-fix
+    // behaviour surfaces as a transport error because the
+    // connector reads the (correctly-spliced) code and tries to
+    // exchange it against `example.invalid`.
+    let err = authenticate_connector(h, instance_id, "test-authorization-code".into())
+        .expect_err("authenticate_connector should fail against example.invalid");
+    let msg = format!("{err}");
+    assert!(
+        !msg.contains("auth_config_json.authorization_code is required"),
+        "regression: authenticate_connector spliced auth code under wrong JSON key; \
+         every concrete connector reads from `authorization_code` and surfaced \
+         the missing-key error — got: {msg}",
+    );
+    // Sanity: confirm we actually reached the connector's HTTP
+    // transport (otherwise the negative assertion above would
+    // pass vacuously e.g. on an `Unavailable` error). Accept any
+    // of: a transport / network diagnostic substring, or the
+    // connector framework's own `Transport` variant tag.
+    let reached_transport = msg.contains("transport")
+        || msg.contains("Transport")
+        || msg.contains("dns")
+        || msg.contains("lookup")
+        || msg.contains("error sending request")
+        || msg.contains("connect")
+        || msg.contains("network");
+    assert!(
+        reached_transport,
+        "authenticate_connector reached neither the connector's HTTP transport \
+         nor the missing-key path — got: {msg}",
+    );
+
+    close_store(h).expect("close_store");
+}
+
+/// Single-instance-per-`(scope, kind)` invariant: a second
+/// `create_connector` against the same `(scope_id, kind)` pair on a
+/// given runtime is rejected with `FfiError::Connector` carrying the
+/// `ConnectorError::DuplicateConnector` message, and the existing
+/// instance is preserved. After the caller `remove_connector`s the
+/// existing one, a fresh `create_connector` for the same pair
+/// succeeds — the constraint is per *currently-registered* instance,
+/// not per ever-existed instance. This pins the product decision
+/// captured on PR #54 (one upstream source = one instance) and
+/// prevents the double-ingest hazard that would otherwise occur if
+/// two instances synced the same provider against the same scope.
+///
+/// Gated on `http-client` because `create_connector` requires a
+/// live `BlockingHttpTransport`.
+#[cfg(feature = "http-client")]
+#[test]
+fn create_connector_rejects_duplicate_scope_and_kind_pair() {
+    let (h, _dir) = fresh_store();
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    let other_scope = uuid::Uuid::new_v4().to_string();
+    let cfg = r#"{
+        "client_id": "test-client",
+        "redirect_uri": "https://example.invalid/oauth/callback",
+        "token_url": "https://example.invalid/oauth/token"
+    }"#;
+
+    // First create succeeds.
+    let id_a = create_connector(h, ConnectorKindTag::Notion, scope.clone(), cfg.to_string())
+        .expect("first create_connector should succeed");
+
+    // Duplicate (same scope, same kind) is rejected.
+    let err = create_connector(h, ConnectorKindTag::Notion, scope.clone(), cfg.to_string())
+        .expect_err("second create_connector for same (scope, kind) must be rejected");
+    assert!(
+        matches!(err, FfiError::Connector { .. }),
+        "duplicate-create must surface as FfiError::Connector, got: {err:?}",
+    );
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("connector instance already exists"),
+        "duplicate-create message must mention the framework's DuplicateConnector \
+         variant — got: {msg}",
+    );
+
+    // Different scope, same kind: allowed (the constraint is per pair).
+    let id_b = create_connector(
+        h,
+        ConnectorKindTag::Notion,
+        other_scope.clone(),
+        cfg.to_string(),
+    )
+    .expect("different-scope create_connector should succeed");
+    assert_ne!(id_a, id_b);
+
+    // Different kind, same scope: allowed (the constraint is per pair).
+    let id_c = create_connector(h, ConnectorKindTag::Slack, scope.clone(), cfg.to_string())
+        .expect("different-kind create_connector on same scope should succeed");
+    assert_ne!(id_a, id_c);
+    assert_ne!(id_b, id_c);
+
+    // Existing instance preserved after the duplicate rejection —
+    // no partial state leaked.
+    let registered = list_connectors(h).expect("list_connectors");
+    assert_eq!(
+        registered.len(),
+        3,
+        "duplicate-create must not leak a partial entry; \
+         expected exactly the three allowed connectors"
+    );
+    assert!(registered.iter().any(|s| s.instance_id == id_a));
+    assert!(registered.iter().any(|s| s.instance_id == id_b));
+    assert!(registered.iter().any(|s| s.instance_id == id_c));
+
+    // After `remove_connector`, a fresh create for the same pair
+    // succeeds — the constraint is over the *currently-registered*
+    // set, not the historical set.
+    remove_connector(h, id_a.clone()).expect("remove_connector(id_a)");
+    let id_a_v2 = create_connector(h, ConnectorKindTag::Notion, scope.clone(), cfg.to_string())
+        .expect("re-create after remove_connector should succeed");
+    assert_ne!(
+        id_a, id_a_v2,
+        "re-created instance must have a fresh id (uuid v4)",
+    );
+
+    close_store(h).expect("close_store");
 }
 
 /// Likewise for `SynthesisTrigger`.

@@ -199,6 +199,7 @@ pub fn health_check(handle: Option<RuntimeHandle>) -> FfiResult<HealthStatus> {
                     subsystems.push(crypto_subsystem(rt, tombstones));
                     subsystems.push(memory_manager_subsystem(rt));
                     subsystems.push(inference_router_subsystem(rt));
+                    subsystems.push(connector_subsystem(rt));
                     Ok(())
                 })?;
                 Ok(finish_envelope(subsystems))
@@ -366,6 +367,94 @@ fn inference_router_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealt
         status,
         detail: Some(detail),
         adapters: Some(adapters),
+    }
+}
+
+/// Connector framework probe. Reports the per-runtime connector
+/// registry size and the current distribution of sync states
+/// across the live instances. Mirrors the wiring contract from
+/// `CONTRIBUTING.md` §4: every new substrate subsystem ships with
+/// a corresponding `health_check` probe so platform hosts can render
+/// a per-subsystem status panel without reaching into substrate-
+/// internal counters.
+///
+/// Status downgrades:
+///
+/// * `Degraded` when one or more connectors are in
+///   [`SyncStatus::Failed`] — the rest of the substrate is fine,
+///   but the host should know that at least one source is not
+///   currently synchronising. The detail string carries the
+///   per-status counts so the host UI can render `(3 ok, 1 failed)`
+///   or similar.
+/// * `Ok` in every other case, including the steady-state of zero
+///   connectors (a runtime that hasn't called [`crate::create_connector`]
+///   yet is a legitimate state, not a fault).
+///
+/// Authenticated count comes from the per-runtime [`OAuth2TokenVault`]
+/// — every successful [`crate::authenticate_connector`] call stashes
+/// a bearer token there, so the count is a proxy for "how many
+/// connectors can run a sync right now". Comparing it against
+/// `total` surfaces dangling registrations (created but never
+/// authenticated) without an extra round-trip through the host.
+fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
+    use connector_framework::SyncStatus;
+
+    let total = rt.connector_instances.len();
+    let authenticated = rt.token_vault.len();
+    let mut never_run = 0u64;
+    let mut in_progress = 0u64;
+    let mut succeeded = 0u64;
+    let mut failed = 0u64;
+    for inst in rt.connector_instances.values() {
+        match inst.sync_state.status {
+            SyncStatus::NeverRun => never_run += 1,
+            SyncStatus::InProgress => in_progress += 1,
+            SyncStatus::Succeeded => succeeded += 1,
+            SyncStatus::Failed => failed += 1,
+        }
+    }
+
+    // Surface the HTTP-transport availability so hosts can detect
+    // the soft-fail-on-open path (see `crate::open_store`) without
+    // calling `create_connector` first and parsing the
+    // `FfiError::Unavailable { subsystem: "connector-http-client" }`
+    // envelope. The transport is the load-bearing dependency for
+    // every connector lifecycle call — when it's missing, the
+    // subsystem is `Degraded` even if zero connectors are
+    // registered, because the host can no longer recover by
+    // registering new ones.
+    #[cfg(feature = "http-client")]
+    let http_transport_available = rt.http_transport.is_some() && rt.oauth_client.is_some();
+    // When the feature is off the transport is *intentionally* absent
+    // and the subsystem still reports `Ok` (it's the
+    // `connector-http-client` `Unavailable` path described on
+    // `crate::FfiError::Unavailable` — degrading the whole probe
+    // would force every offline / ingest-only host to render a red
+    // tile for a behaviour they explicitly opted into via Cargo
+    // features).
+    #[cfg(not(feature = "http-client"))]
+    let http_transport_available = true;
+
+    let status = if failed > 0 || !http_transport_available {
+        SubsystemStatus::Degraded
+    } else {
+        SubsystemStatus::Ok
+    };
+    let mut detail = format!(
+        "total={total}, authenticated={authenticated}, \
+         never_run={never_run}, in_progress={in_progress}, \
+         succeeded={succeeded}, failed={failed}"
+    );
+    if !http_transport_available {
+        // Append rather than replace so the per-status counts stay
+        // machine-parseable for host UIs that already key off them.
+        detail.push_str(", http_transport=unavailable");
+    }
+    SubsystemHealth {
+        name: "connector".into(),
+        status,
+        detail: Some(detail),
+        adapters: None,
     }
 }
 

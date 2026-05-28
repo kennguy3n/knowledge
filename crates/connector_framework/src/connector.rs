@@ -48,7 +48,17 @@ pub struct SyncRunResult {
 ///
 /// Ships only the trait + framework; the individual connectors
 /// live in their own crates.
-pub trait Connector {
+///
+/// The trait is `Send + Sync` so a substrate runtime can keep one
+/// or more connector instances inside an
+/// `Arc<Mutex<…>>` / `Box<dyn Connector + Send + Sync>` and dispatch
+/// calls across worker threads. This mirrors the
+/// [`crate::http::HttpTransport`] supertrait bound — every concrete
+/// connector in this workspace is naturally `Send + Sync` (their
+/// fields are an `Arc<dyn HttpTransport>`, an `Arc<dyn OAuth2CodeExchange>`,
+/// and `Copy` ids), so the supertrait is observation rather than a
+/// new constraint on implementors.
+pub trait Connector: Send + Sync {
     /// Run the auth handshake and return a fresh bearer token.
     fn authenticate(&self, config: &ConnectorConfig) -> Result<OAuth2Token>;
 

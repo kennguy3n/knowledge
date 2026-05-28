@@ -52,6 +52,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard};
 
 use chrono::{DateTime, TimeZone, Utc};
+#[cfg(feature = "http-client")]
+use connector_framework::{BlockingHttpTransport, OAuth2Client};
+use connector_framework::{Connector, ConnectorInstance, ConnectorInstanceId, OAuth2TokenVault};
 use crypto::forgetting::{self, DekRegistry, TombstoneStore};
 use crypto::{CryptoError, MasterKey};
 use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
@@ -253,6 +256,100 @@ pub struct FfiRuntime {
     /// idle-sweep paths only need `&InferenceRouter`, which the
     /// `Deref` impl on `Arc` provides transparently.
     pub(crate) inference_router: Arc<InferenceRouter>,
+    /// Per-runtime connector registry — every
+    /// [`create_connector`](crate::create_connector) call inserts a
+    /// fresh [`ConnectorInstance`] (config + sync state) keyed by
+    /// its [`ConnectorInstanceId`].
+    ///
+    /// The struct is held by value (not behind a lock) because the
+    /// entire `FfiRuntime` is already wrapped in `Arc<Mutex<…>>` at
+    /// the handle registry, which serialises every FFI call against
+    /// the same handle. Connector lifecycle calls (`create_connector`
+    /// / `authenticate_connector` / `sync_connector` /
+    /// `remove_connector`) all run with that mutex held, so adding
+    /// an inner lock would double-lock without buying any extra
+    /// safety.
+    ///
+    /// Phase 2 keeps connector state in-memory only — `close_store`
+    /// drops the registry. Phase 3 will add a
+    /// `connector_instances` SQLCipher table and rehydrate on
+    /// [`open_store`].
+    pub(crate) connector_instances: HashMap<ConnectorInstanceId, ConnectorInstance>,
+    /// Live connector implementors keyed by instance id. Built by
+    /// the connector factory at `create_connector` time and dropped
+    /// at `remove_connector` / `close_store`.
+    ///
+    /// Stored as `Arc<dyn Connector>` so the FFI surface can
+    /// **clone the handle** out of the per-runtime mutex and run
+    /// the connector's HTTP round-trip with the mutex released —
+    /// every other FFI call on the same handle (evidence queries,
+    /// memory reads, health checks, other connector lifecycle
+    /// calls) stays unblocked while the sync is in flight. See
+    /// `crates/ffi/src/connector.rs::sync_connector` for the
+    /// three-phase locking pattern that consumes these `Arc`s. The
+    /// `Send + Sync` supertraits on the [`Connector`] trait are
+    /// what make the `Arc<dyn Connector>` clone safe to ship across
+    /// the FFI surface's cross-thread call pattern; see the
+    /// `Connector` trait docs in `crates/connector_framework`.
+    pub(crate) connectors: HashMap<ConnectorInstanceId, Arc<dyn Connector>>,
+    /// OAuth2 token bundles keyed by connector instance id. Stored
+    /// here (in process memory) for Phase 2; Phase 3 will move this
+    /// behind the encrypted `connector_tokens` table so tokens are
+    /// AEAD-encrypted at rest under the tenant DEK.
+    pub(crate) token_vault: OAuth2TokenVault,
+    /// Shared HTTP transport for every connector on this runtime.
+    ///
+    /// `reqwest::blocking::Client` (which `BlockingHttpTransport`
+    /// wraps) manages a connection pool, TLS session cache, and a
+    /// thread pool internally — building one per `create_connector`
+    /// call would multiply those pools by the number of connectors
+    /// on the runtime even when several connectors target the same
+    /// provider host. Allocating a single transport at
+    /// [`open_store`] time and handing every connector an
+    /// `Arc<dyn HttpTransport>` clone lets reqwest re-use one pool
+    /// across the whole substrate; per-provider host isolation is
+    /// still preserved at the TLS / Host-header layer.
+    ///
+    /// Held as `Arc<dyn HttpTransport>` (rather than the concrete
+    /// `BlockingHttpTransport`) so the same field type can later
+    /// host an `AsyncHttpTransport`-backed implementation without
+    /// reshaping the runtime; today only the blocking transport is
+    /// wired in. Only present when the `http-client` feature is on
+    /// — without it, the connector factory short-circuits to
+    /// `FfiError::Unavailable { subsystem: "connector-http-client" }`
+    /// before reaching this field.
+    ///
+    /// Wrapped in `Option` so a failure to build the transport at
+    /// [`open_store`] time degrades **only** the connector
+    /// subsystem rather than refusing to open the store at all.
+    /// Hosts that do not need connectors (e.g. ingest-only test
+    /// fixtures, offline builds where the network is unavailable)
+    /// stay fully functional; connector calls surface
+    /// [`FfiError::Unavailable { subsystem: "connector-http-client" }`]
+    /// — the same path the `not(http-client)` build takes — so
+    /// hosts see one uniform recovery contract.
+    #[cfg(feature = "http-client")]
+    pub(crate) http_transport: Option<Arc<BlockingHttpTransport>>,
+    /// Shared OAuth2 token-exchange client, wired through
+    /// [`Self::http_transport`]. Same allocation-reuse rationale as
+    /// the transport above — the OAuth2 client itself is a thin
+    /// stateless wrapper that builds requests through whichever
+    /// `Arc<T: HttpTransport>` it was constructed with, so a
+    /// single per-runtime instance is sufficient and saves us a
+    /// fresh `Arc` per connector.
+    ///
+    /// Held as the concrete `OAuth2Client<BlockingHttpTransport>`
+    /// so [`crate::connector::build_connector`] can up-cast the
+    /// `Arc` to the `Arc<dyn OAuth2CodeExchange>` that the
+    /// connector constructors expect via the unsized-coercion the
+    /// standard library provides for `Arc<T>` → `Arc<dyn Trait>`.
+    ///
+    /// `Option<…>` lock-step with [`Self::http_transport`] — the
+    /// OAuth2 client is constructed from the same shared transport
+    /// so the two either populate together or stay `None` together.
+    /// See [`Self::http_transport`] for the soft-fail rationale.
+    #[cfg(feature = "http-client")]
+    pub(crate) oauth_client: Option<Arc<OAuth2Client<BlockingHttpTransport>>>,
 }
 
 impl Drop for FfiRuntime {
@@ -848,6 +945,45 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
     // `wait_for_bootstrap` before dispatch.
     Arc::clone(&inference_router).spawn_bootstrap();
 
+    // Build the per-runtime HTTP transport + OAuth2 client up front
+    // so every connector on this runtime shares one reqwest
+    // connection pool / TLS session cache / thread pool.
+    // Constructing `BlockingHttpTransport` is non-trivial (it builds
+    // a `reqwest::blocking::Client`, which spins up an internal
+    // thread pool, initialises the TLS backend, and resolves the
+    // platform CA bundle) and can legitimately fail on hosts where
+    // the TLS provider is broken, the network stack is sandboxed
+    // away, or the system entropy source is unreachable.
+    //
+    // Soft-fail: degrade ONLY the connector subsystem rather than
+    // refusing to open the store entirely. Hosts that do not need
+    // connectors (ingest-only test fixtures, offline / air-gapped
+    // builds) stay fully functional, and connector calls surface
+    // `FfiError::Unavailable { subsystem: "connector-http-client" }`
+    // — the same path the `not(http-client)` build takes — so the
+    // host sees one uniform recovery contract regardless of whether
+    // the feature is off, the transport failed to build, or the
+    // host hasn't called `create_connector` yet. Logged at WARN so
+    // the host's tracing subscriber surfaces the failure for
+    // diagnostics even though the open succeeds.
+    #[cfg(feature = "http-client")]
+    let (http_transport, oauth_client) = match BlockingHttpTransport::new() {
+        Ok(transport) => {
+            let transport_arc: Arc<BlockingHttpTransport> = Arc::new(transport);
+            let oauth = Arc::new(OAuth2Client::new(Arc::clone(&transport_arc)));
+            (Some(transport_arc), Some(oauth))
+        }
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "open_store: BlockingHttpTransport construction failed; \
+                 connector subsystem disabled for this runtime (connector calls \
+                 will surface FfiError::Unavailable {{ subsystem: \"connector-http-client\" }})",
+            );
+            (None, None)
+        }
+    };
+
     let runtime = FfiRuntime {
         master_key,
         store,
@@ -855,6 +991,13 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         user_memories,
         channel_memories,
         inference_router,
+        connector_instances: HashMap::new(),
+        connectors: HashMap::new(),
+        token_vault: OAuth2TokenVault::new(),
+        #[cfg(feature = "http-client")]
+        http_transport,
+        #[cfg(feature = "http-client")]
+        oauth_client,
     };
 
     // Capture the post-replay tombstone count before moving `runtime`

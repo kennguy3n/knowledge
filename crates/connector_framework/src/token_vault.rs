@@ -196,7 +196,15 @@ pub trait TokenRefresher {
 /// provider's `/token` endpoint with
 /// `grant_type=authorization_code`. The trait keeps the connector
 /// boundary provider-agnostic.
-pub trait OAuth2CodeExchange {
+///
+/// The trait is `Send + Sync` so concrete connector structs that
+/// hold an `Arc<dyn OAuth2CodeExchange>` field are themselves
+/// `Send + Sync` and can be stored behind a `Box<dyn Connector + Send + Sync>`
+/// in the substrate's FFI runtime. Every existing impl in the
+/// workspace (`OAuth2Client<T: HttpTransport>` plus the unit-struct
+/// test fixtures) is naturally `Send + Sync`, so the supertrait is
+/// observation rather than a new constraint on implementors.
+pub trait OAuth2CodeExchange: Send + Sync {
     /// Exchange `auth_code` for an access / refresh token pair.
     /// `redirect_uri` and `client_id` come from
     /// `config.auth_config_json` (see [`crate::config::ConnectorConfig`]).
