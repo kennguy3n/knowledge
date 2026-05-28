@@ -33,7 +33,8 @@ use ffi::{
 // default-features `cargo test` warning-free.
 #[cfg(feature = "http-client")]
 use ffi::{
-    authenticate_connector, create_connector, forget_scope, list_connectors, ConnectorKindTag,
+    authenticate_connector, create_connector, forget_scope, list_connectors, remove_connector,
+    ConnectorKindTag,
 };
 use tempfile::TempDir;
 
@@ -869,6 +870,94 @@ fn authenticate_connector_splices_auth_code_under_correct_json_key() {
         reached_transport,
         "authenticate_connector reached neither the connector's HTTP transport \
          nor the missing-key path — got: {msg}",
+    );
+
+    close_store(h).expect("close_store");
+}
+
+/// Single-instance-per-`(scope, kind)` invariant: a second
+/// `create_connector` against the same `(scope_id, kind)` pair on a
+/// given runtime is rejected with `FfiError::Connector` carrying the
+/// `ConnectorError::DuplicateConnector` message, and the existing
+/// instance is preserved. After the caller `remove_connector`s the
+/// existing one, a fresh `create_connector` for the same pair
+/// succeeds — the constraint is per *currently-registered* instance,
+/// not per ever-existed instance. This pins the product decision
+/// captured on PR #54 (one upstream source = one instance) and
+/// prevents the double-ingest hazard that would otherwise occur if
+/// two instances synced the same provider against the same scope.
+///
+/// Gated on `http-client` because `create_connector` requires a
+/// live `BlockingHttpTransport`.
+#[cfg(feature = "http-client")]
+#[test]
+fn create_connector_rejects_duplicate_scope_and_kind_pair() {
+    let (h, _dir) = fresh_store();
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    let other_scope = uuid::Uuid::new_v4().to_string();
+    let cfg = r#"{
+        "client_id": "test-client",
+        "redirect_uri": "https://example.invalid/oauth/callback",
+        "token_url": "https://example.invalid/oauth/token"
+    }"#;
+
+    // First create succeeds.
+    let id_a = create_connector(h, ConnectorKindTag::Notion, scope.clone(), cfg.to_string())
+        .expect("first create_connector should succeed");
+
+    // Duplicate (same scope, same kind) is rejected.
+    let err = create_connector(h, ConnectorKindTag::Notion, scope.clone(), cfg.to_string())
+        .expect_err("second create_connector for same (scope, kind) must be rejected");
+    assert!(
+        matches!(err, FfiError::Connector { .. }),
+        "duplicate-create must surface as FfiError::Connector, got: {err:?}",
+    );
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("connector instance already exists"),
+        "duplicate-create message must mention the framework's DuplicateConnector \
+         variant — got: {msg}",
+    );
+
+    // Different scope, same kind: allowed (the constraint is per pair).
+    let id_b = create_connector(
+        h,
+        ConnectorKindTag::Notion,
+        other_scope.clone(),
+        cfg.to_string(),
+    )
+    .expect("different-scope create_connector should succeed");
+    assert_ne!(id_a, id_b);
+
+    // Different kind, same scope: allowed (the constraint is per pair).
+    let id_c = create_connector(h, ConnectorKindTag::Slack, scope.clone(), cfg.to_string())
+        .expect("different-kind create_connector on same scope should succeed");
+    assert_ne!(id_a, id_c);
+    assert_ne!(id_b, id_c);
+
+    // Existing instance preserved after the duplicate rejection —
+    // no partial state leaked.
+    let registered = list_connectors(h).expect("list_connectors");
+    assert_eq!(
+        registered.len(),
+        3,
+        "duplicate-create must not leak a partial entry; \
+         expected exactly the three allowed connectors"
+    );
+    assert!(registered.iter().any(|s| s.instance_id == id_a));
+    assert!(registered.iter().any(|s| s.instance_id == id_b));
+    assert!(registered.iter().any(|s| s.instance_id == id_c));
+
+    // After `remove_connector`, a fresh create for the same pair
+    // succeeds — the constraint is over the *currently-registered*
+    // set, not the historical set.
+    remove_connector(h, id_a.clone()).expect("remove_connector(id_a)");
+    let id_a_v2 = create_connector(h, ConnectorKindTag::Notion, scope.clone(), cfg.to_string())
+        .expect("re-create after remove_connector should succeed");
+    assert_ne!(
+        id_a, id_a_v2,
+        "re-created instance must have a fresh id (uuid v4)",
     );
 
     close_store(h).expect("close_store");

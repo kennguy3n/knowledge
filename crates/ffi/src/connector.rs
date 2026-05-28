@@ -88,6 +88,17 @@ use crate::types::{
 /// can extend the surface (e.g. a `create_connector_with_auth` variant)
 /// once a real call site materialises.
 ///
+/// At most one connector instance may exist per `(scope_id, kind)`
+/// pair on a given runtime. A second call against the same scope
+/// and kind is rejected with [`FfiError::Connector`] carrying the
+/// `connector_framework::ConnectorError::DuplicateConnector`
+/// message. Hosts that need to re-create (e.g. to reset the cached
+/// config) must call [`remove_connector`] first. The product
+/// decision behind this constraint: a single source — say one
+/// Slack workspace — is bound to a single scope at a time, and
+/// permitting multiple instances would silently double-ingest the
+/// same upstream events on every sync.
+///
 /// # Errors
 ///
 /// * [`FfiError::Unavailable`] if [`crate::open_store`] has not been
@@ -96,6 +107,9 @@ use crate::types::{
 /// * [`FfiError::NotFound`] if `scope_id` has been cryptographically
 ///   forgotten via [`crate::forget_scope`].
 /// * [`FfiError::Connector`] if `config_json` is not valid JSON.
+/// * [`FfiError::Connector`] (carrying the `DuplicateConnector`
+///   message) if another connector with the same `(scope_id, kind)`
+///   pair is already registered on this runtime.
 /// * [`FfiError::Unavailable { subsystem: "connector-http-client" }`]
 ///   if the build was compiled without the `http-client` feature
 ///   (no real reqwest transport is linked in).
@@ -120,6 +134,20 @@ pub fn create_connector(
                     kind: "scope".into(),
                     id: scope_id.clone(),
                 });
+            }
+            // Uniqueness: reject if a connector of the same
+            // (scope, kind) pair is already registered. Flattened
+            // through the standard `ConnectorError::DuplicateConnector`
+            // → `FfiError::Connector` mapping so hosts see the same
+            // shape they get from any other framework-side error.
+            if rt
+                .connector_instances
+                .values()
+                .any(|inst| inst.config.scope_id == scope && inst.config.kind == kind_framework)
+            {
+                return Err(FfiError::from(
+                    connector_framework::ConnectorError::DuplicateConnector,
+                ));
             }
             let instance_id = ConnectorInstanceId::new_v4();
             let connector = build_connector(rt, kind_framework, instance_id)?;
