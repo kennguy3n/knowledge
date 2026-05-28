@@ -1,0 +1,66 @@
+[package]
+name = "uniffi-bindgen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Workspace-local `uniffi-bindgen` binary that drives the UniFFI CLI for `crates/ffi`."
+
+# Standalone binary crate. Lives in its own workspace crate so the
+# `cli` feature on `uniffi` (which transitively pulls in `clap`,
+# `syn`, `quote`, `proc-macro2`, …) does not enter the `ffi` crate's
+# dependency graph on **per-package builds** — i.e. the
+# `cargo build -p ffi`, `cargo ndk -p ffi`, `cargo swift package -p
+# ffi` invocations the mobile build scripts use. Whose `staticlib`
+# (iOS `.xcframework`) and `cdylib` (Android `jniLibs/`) outputs
+# would otherwise carry the compile-time cost on every mobile
+# build.
+#
+# Caveat: under Cargo's resolver v2 (set workspace-wide), regular
+# (non-`build-dependencies`) features ARE still unified across
+# workspace members for **workspace-wide builds** like
+# `cargo check --workspace` or `cargo build --workspace`. So when
+# CI runs the workspace-wide MSRV check (`.github/workflows/ci.yml`
+# `msrv` job), the `cli` feature does get compiled into the unified
+# `uniffi` rlib that the `ffi` crate also depends on for that build.
+# This is purely a compile-time cost (the `staticlib` / `cdylib`
+# linker dead-strips unused symbols, so the on-disk artefact is
+# unaffected); the mobile build scripts side-step it entirely by
+# building each crate independently with `-p <crate>`.
+#
+# Reference: the same per-package split is used by the upstream
+# UniFFI examples and by `uneycom/kchat-rust-sdk`
+# (`scripts/mls_uniffi_build_android.sh` invokes a dedicated
+# `uniffi-bindgen` binary that does not share its library crate's
+# per-package dependency graph). See PR #52 review thread on
+# `Cargo.toml:162` for the original finding that motivated this
+# split, and the follow-up review on this file's :46 line for the
+# workspace-wide-build caveat above.
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/main.rs"
+
+[dependencies]
+# `cli` feature is enabled ONLY on this binary crate's local
+# `uniffi` dependency — the workspace-level `uniffi` declaration in
+# the root `Cargo.toml` deliberately omits it so library crates
+# (`crates/ffi`) inherit a feature-lean `uniffi` that does not drag
+# `clap` / `syn` / `quote` into their `staticlib` / `cdylib`
+# dependency graphs.
+#
+# `workspace = true` pulls the version straight from the workspace-
+# level `uniffi` declaration in the root `Cargo.toml`, so the bindgen
+# binary stays version-locked to the `ffi` crate it introspects. That
+# lock-step is load-bearing: the bindgen CLI parses scaffolding
+# metadata embedded in the `ffi` crate's compiled `.so` / `.a`, and a
+# version mismatch would manifest as corrupted FFI vtables in the
+# generated Swift / Kotlin bindings. Inheriting through `workspace = true`
+# means a workspace-level version bump propagates here automatically
+# instead of silently drifting. See `crates/ffi/uniffi-bindgen.rs`
+# doc comment history for the original rationale.
+uniffi = { workspace = true, features = ["cli"] }
+
+[lints]
+workspace = true

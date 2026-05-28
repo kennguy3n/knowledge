@@ -23,6 +23,7 @@ members = [
     "crates/synthesis_engine",
     "crates/synthesis_pipeline",
     "crates/tenant_service",
+    "crates/uniffi-bindgen",
 ]
 
 [workspace.package]
@@ -149,6 +150,42 @@ hyper-util = { version = "0.1", default-features = false, features = ["tokio", "
 # write paths so swallowed SQLite errors are observable in
 # `RUST_LOG=evidence_store=debug` traces.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+# UniFFI — bindings generator for the iOS / Android platform
+# integration surface in `crates/ffi`.
+#
+# The workspace-level declaration is intentionally feature-LEAN.
+# Specifically the `cli` feature is NOT enabled here because feature
+# unification under Cargo's resolver v2 still unifies regular
+# (non-`build-dependencies`) features across all workspace members
+# during workspace-wide builds (`cargo build --workspace`,
+# `cargo check --workspace`, the MSRV CI job, …). Enabling `cli` at
+# the workspace level would therefore compile `clap` / `syn` /
+# `quote` / `proc-macro2` into the unified `uniffi` rlib that
+# `crates/ffi` consumes for those builds, inflating the
+# `staticlib` (iOS `.xcframework`) and `cdylib` (Android `jniLibs/`)
+# build's compile time. The `uniffi_bindgen_main()` CLI entry point
+# lives in `crates/uniffi-bindgen` (a dedicated binary crate that
+# takes the `cli` feature on its own local `uniffi` dependency)
+# instead — see `crates/uniffi-bindgen/Cargo.toml` for the
+# rationale and the workspace-wide-build caveat.
+#
+# Per-package builds (`cargo build -p ffi`, `cargo ndk -p ffi`,
+# `cargo swift package -p ffi`) — which the mobile build scripts in
+# `crates/ffi/scripts/build_{ios,android}.sh` use — sidestep feature
+# unification entirely: each crate gets its own per-package
+# resolution, so `crates/ffi` sees a `cli`-feature-free `uniffi`
+# even when `crates/uniffi-bindgen` has `cli` enabled. The
+# linker dead-strips unused symbols from the final on-disk
+# artefact in either build mode, so this is a compile-time
+# optimisation, not a binary-size guarantee.
+#
+# The `tokio` feature is intentionally NOT enabled at workspace
+# level either — the FFI surface is currently fully synchronous and
+# pulling in a tokio dependency through uniffi's async support
+# would bloat the mobile static library. If we add async entry
+# points later, opt in locally on the `ffi` crate.
+uniffi = { version = "0.31" }
 
 # Optional subscriber used by `ffi`'s `tracing-subscriber` feature and
 # the `napi_addon`'s `tracing-subscriber` feature. NOT enabled by

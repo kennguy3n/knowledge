@@ -18,7 +18,16 @@ use thiserror::Error;
 pub type FfiResult<T> = std::result::Result<T, FfiError>;
 
 /// Bridge-friendly error union surfaced to platform hosts.
-#[derive(Debug, Clone, PartialEq, Eq, Error, Serialize, Deserialize)]
+///
+/// `#[uniffi::error(flat_error)]` is intentionally NOT used here:
+/// the variants carry per-kind diagnostic fields (`message`,
+/// `subsystem`, `method`, `kind` / `id`) that platform hosts
+/// inspect to drive their recovery policy (UI surface for
+/// `NotFound`, retry on `Unavailable`, etc.). The default
+/// rich-error mapping preserves those fields across the Swift /
+/// Kotlin bindings; `flat_error` would collapse them to the
+/// `Display` string and lose the structure.
+#[derive(Debug, Clone, PartialEq, Eq, Error, Serialize, Deserialize, uniffi::Error)]
 #[serde(tag = "kind", content = "detail")]
 pub enum FfiError {
     /// Method exists in the contract but is not yet implemented in

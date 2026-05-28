@@ -83,6 +83,23 @@
 // file, which do not cross the FFI boundary and should idiomatically
 // borrow.
 
+// UniFFI scaffolding — emits the `extern "C"` shims, the
+// per-type lift / lower codecs, the metadata blob the
+// `uniffi-bindgen` binary walks when generating Swift / Kotlin
+// from the compiled `staticlib` / `cdylib`, and the
+// `<crate>_uniffi_contract_version()` / `<crate>_checksum_*()`
+// guards that the platform bindings verify on load.
+//
+// MUST be invoked exactly once per UniFFI-exposed crate, at the
+// crate root. The proc-macros (`#[uniffi::export]`,
+// `#[derive(uniffi::Record / Enum / Error)]`,
+// `uniffi::custom_newtype!`) refuse to compile if scaffolding is
+// absent (or if it is invoked under a different crate name than
+// the one the proc-macros stash in their metadata blob — see
+// `https://mozilla.github.io/uniffi-rs/internals/lifting_and_lowering.html`
+// for the upstream design note).
+uniffi::setup_scaffolding!();
+
 pub mod error;
 pub mod health;
 pub mod metrics;
@@ -131,6 +148,7 @@ use runtime::with_runtime;
 /// * [`FfiError::NotFound`] if `scope_id` has been cryptographically
 ///   forgotten via [`forget`].
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
 pub fn ingest_message(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -197,6 +215,7 @@ pub fn ingest_message(
 /// a deliberate "soft" semantic so callers can treat forgotten scopes
 /// the same as scopes that simply have no matching rows.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
 pub fn query(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -268,6 +287,7 @@ pub fn query(
 /// escape_fts_query(r#"hello "world""#) => r#""hello ""world""""#
 /// ```
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
 pub fn escape_fts_query(input: String) -> String {
     // Pure string transform, infallible — no `metrics::instrument`
     // wrapper (which only fits `FfiResult<T>` for `Err` routing),
@@ -307,6 +327,7 @@ fn snippet_clip(body: &str, max_chars: usize) -> String {
 ///   belongs to a forgotten scope.
 /// * [`FfiError::Evidence`] if reading or decrypting the body fails.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
 pub fn get_evidence(handle: RuntimeHandle, evidence_id: String) -> FfiResult<EvidenceRecord> {
     metrics::instrument(metrics::inc_get_evidence, || {
         let id = parse_evidence_id(&evidence_id)?;
@@ -372,6 +393,7 @@ pub fn get_evidence(handle: RuntimeHandle, evidence_id: String) -> FfiResult<Evi
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
 pub fn get_user_memory(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -413,6 +435,7 @@ pub fn get_user_memory(
 /// * [`FfiError::Memory`] if the underlying state-machine transition
 ///   rejects the pin (e.g. the object is in a terminal state).
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
 pub fn pin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
     metrics::instrument(metrics::inc_pin, || {
         let uuid = parse_uuid(&id)?;
@@ -455,6 +478,7 @@ pub fn pin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
 ///   open scope, or if the owning scope has been forgotten.
 /// * [`FfiError::Memory`] if the underlying state-machine rejects.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
 pub fn unpin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
     metrics::instrument(metrics::inc_unpin, || {
         let uuid = parse_uuid(&id)?;
@@ -527,6 +551,7 @@ pub fn unpin(handle: RuntimeHandle, id: String) -> FfiResult<()> {
 ///   `open_store` will not see the tombstone and the FTS index may
 ///   still contain plaintext for the affected scope.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
 pub fn forget(handle: RuntimeHandle, id: String) -> FfiResult<()> {
     metrics::instrument(metrics::inc_forget, || {
         let evidence_id = parse_evidence_id(&id)?;
@@ -603,6 +628,7 @@ pub fn forget(handle: RuntimeHandle, id: String) -> FfiResult<()> {
 /// * [`FfiError::Evidence`] if persisting the tombstone or purging
 ///   secondary indexes fails.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
 pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
     metrics::instrument(metrics::inc_forget_scope, || {
         let scope = parse_scope_id(&scope_id)?;
@@ -652,6 +678,7 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings/structs across the language boundary on every call.
+#[uniffi::export]
 pub fn list_memories(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -695,6 +722,7 @@ pub fn list_memories(
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
 pub fn run_decay_sweep(handle: RuntimeHandle, scope_id: ScopeIdString) -> FfiResult<u32> {
     metrics::instrument(metrics::inc_decay_sweep, || {
         let scope = parse_scope_id(&scope_id)?;
@@ -736,6 +764,7 @@ pub fn run_decay_sweep(handle: RuntimeHandle, scope_id: ScopeIdString) -> FfiRes
 /// * [`FfiError::Unavailable`] if [`open_store`] has not been called.
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
 pub fn get_channel_memory(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -803,6 +832,7 @@ pub fn get_channel_memory(
 /// * [`FfiError::Evidence`] if the underlying store fails (read
 ///   or memory-blob flush).
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
 pub fn trigger_synthesis(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -1118,6 +1148,7 @@ fn synthesize_scope(
 /// Currently infallible; the [`FfiResult`] wrap exists so future
 /// hardware-backed key generators (Secure Enclave, StrongBox) can
 /// surface failures without breaking the FFI contract.
+#[uniffi::export]
 pub fn generate_keypair() -> FfiResult<FfiKeypair> {
     metrics::instrument(metrics::inc_generate_keypair, || {
         let signer = MlDsa65Signer::generate();
@@ -1143,6 +1174,7 @@ pub fn generate_keypair() -> FfiResult<FfiKeypair> {
 /// * [`FfiError::Crypto`] on AEAD or key-derivation failure.
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned byte buffers across the language boundary on every call.
+#[uniffi::export]
 pub fn encrypt(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,
@@ -1186,6 +1218,7 @@ pub fn encrypt(
 ///   fails.
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned byte buffers across the language boundary on every call.
+#[uniffi::export]
 pub fn decrypt(
     handle: RuntimeHandle,
     scope_id: ScopeIdString,

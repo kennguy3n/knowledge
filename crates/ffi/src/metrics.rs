@@ -85,6 +85,28 @@ pub(crate) struct Metrics {
     /// search activity volume, useful when correlating against
     /// `query_total` to see escape-helper-to-query ratio.
     pub(crate) escape_fts_query_total: AtomicU64,
+    /// Total `metrics_snapshot` calls. Pure read of the singleton
+    /// counters (no `Err` path) — a non-zero value here means a host
+    /// is actively polling the diagnostic surface (e.g. an Electron
+    /// status panel, an iOS / Android observability tile). Useful
+    /// when correlating against the host shell's polling cadence to
+    /// catch a runaway-polling regression. The counter is read —
+    /// and incremented — by [`snapshot`] itself, so the value seen
+    /// in any given `MetricsSnapshot` always lags its own counter
+    /// by exactly one (this read).
+    //
+    // `clippy::struct_field_names` flags `metrics_snapshot_total`
+    // because the field shares the struct's `metrics_` prefix.
+    // Every counter on `Metrics` follows the `<function_name>_total`
+    // convention (`ingest_total`, `query_total`, `escape_fts_query_total`,
+    // `health_check_total`, …) and the renaming the lint suggests
+    // (`snapshot_total`) would (a) lose the parallel with the
+    // UniFFI export name `metrics_snapshot`, and (b) be ambiguous
+    // with the local `snapshot()` function in this same module. The
+    // allow is scoped to this single field rather than the whole
+    // struct so accidental shadowings on future fields still surface.
+    #[allow(clippy::struct_field_names)]
+    pub(crate) metrics_snapshot_total: AtomicU64,
     /// Total `health_check` calls initiated. Counted on both the
     /// bridge-only (no-handle) path and the full-probe (valid-handle)
     /// path. The `Err` path (unknown / closed handle) still
@@ -198,6 +220,7 @@ counter_inc!(pub(crate) fn inc_encrypt => encrypt_total);
 counter_inc!(pub(crate) fn inc_decrypt => decrypt_total);
 counter_inc!(pub(crate) fn inc_generate_keypair => generate_keypair_total);
 counter_inc!(pub(crate) fn inc_escape_fts_query => escape_fts_query_total);
+counter_inc!(pub(crate) fn inc_metrics_snapshot => metrics_snapshot_total);
 counter_inc!(pub(crate) fn inc_health_check => health_check_total);
 // Feature-gated to match the only call site
 // (`crate::tracing_init::try_init_tracing`). The counter *field*
@@ -258,7 +281,7 @@ pub(crate) fn set_tombstone_count(n: u64) {
 /// [`Self::tombstone_count`] (gauges). New fields MUST be added as
 /// optional with `#[serde(default)]` to keep the wire contract
 /// additive.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct MetricsSnapshot {
     /// Total `open_store` calls initiated. See the module docs for
     /// why the counter reads as "initiated" and not "completed".
@@ -300,6 +323,19 @@ pub struct MetricsSnapshot {
     /// Total `escape_fts_query` calls. Pure string transform, no
     /// error counter sibling.
     pub escape_fts_query_total: u64,
+    /// Total `metrics_snapshot` calls. Pure read of the counter
+    /// block, no error counter sibling. The counter is incremented
+    /// by [`snapshot`] itself; the value in any one snapshot is
+    /// therefore always one less than the post-call counter.
+    //
+    // `#[serde(default)]` per the struct-level wire-contract note
+    // above. The pre-existing fields predate that rule and stay as
+    // they are (changing them now would re-flow the wire contract
+    // they were shipped under), but every new field added from this
+    // PR onward MUST default to `0` on deserialise so an older
+    // emitter's snapshot still round-trips through a newer reader.
+    #[serde(default)]
+    pub metrics_snapshot_total: u64,
     /// Total `health_check` calls initiated — every probe (bridge
     /// only and full) increments this, including the `Err` path for
     /// an unknown / closed handle (the `Err` path also feeds
@@ -330,7 +366,7 @@ pub struct MetricsSnapshot {
 }
 
 /// Per-kind error counters.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct ErrorCounters {
     /// `FfiError::Unimplemented`.
     pub unimplemented: u64,
@@ -355,8 +391,25 @@ pub struct ErrorCounters {
 /// Return a wire-flat snapshot of every counter and gauge. Reads
 /// each `AtomicU64` with [`Ordering::Relaxed`] — see the module
 /// docs for why that's sufficient.
+///
+/// The UniFFI export name is renamed to `metrics_snapshot` so the
+/// generated Swift / Kotlin surface (`metricsSnapshot()`) matches
+/// the N-API surface (`metricsSnapshot()` — see
+/// `crates/ffi/src/lib.rs` where `snapshot` is re-exported as
+/// `metrics_snapshot`). The bare Rust name stays `snapshot` because
+/// every call site already lives inside the `metrics::` module so
+/// the longer name would be redundant.
 #[must_use]
+#[uniffi::export(name = "metrics_snapshot")]
 pub fn snapshot() -> MetricsSnapshot {
+    // Pure counter read — no `FfiResult<T>` to route through
+    // `metrics::instrument`. Bump the per-function call counter
+    // first so the wire surface matches every other infallible
+    // entry point (`escape_fts_query` follows the same pattern at
+    // `crates/ffi/src/lib.rs:296`). The snapshot value of
+    // `metrics_snapshot_total` therefore lags its own counter by
+    // exactly one read — this is documented on the field.
+    inc_metrics_snapshot();
     let m = metrics();
     MetricsSnapshot {
         open_store_total: m.open_store_total.load(Ordering::Relaxed),
@@ -377,6 +430,7 @@ pub fn snapshot() -> MetricsSnapshot {
         decrypt_total: m.decrypt_total.load(Ordering::Relaxed),
         generate_keypair_total: m.generate_keypair_total.load(Ordering::Relaxed),
         escape_fts_query_total: m.escape_fts_query_total.load(Ordering::Relaxed),
+        metrics_snapshot_total: m.metrics_snapshot_total.load(Ordering::Relaxed),
         health_check_total: m.health_check_total.load(Ordering::Relaxed),
         init_tracing_total: m.init_tracing_total.load(Ordering::Relaxed),
         errors_by_kind: ErrorCounters {
@@ -485,7 +539,14 @@ mod tests {
         inc_encrypt();
         inc_decrypt();
         inc_generate_keypair();
+        inc_escape_fts_query();
 
+        // `snapshot()` itself bumps `metrics_snapshot_total`, so we
+        // capture the lower bound by calling `snapshot()` here too
+        // and asserting the `after` snapshot is strictly greater than
+        // `before` for that field. This catches both wiring directions
+        // (a `snapshot()` that forgot to call `inc_metrics_snapshot`
+        // and a snapshot reader that dropped the new field).
         let after = snapshot();
         assert!(after.ingest_total > before.ingest_total);
         assert!(after.query_total >= before.query_total + 2);
@@ -504,6 +565,13 @@ mod tests {
         assert!(after.encrypt_total > before.encrypt_total);
         assert!(after.decrypt_total > before.decrypt_total);
         assert!(after.generate_keypair_total > before.generate_keypair_total);
+        assert!(after.escape_fts_query_total > before.escape_fts_query_total);
+        // `before = snapshot()` and `after = snapshot()` both bump
+        // this counter, so the after value must be at least
+        // `before + 1` (it's `before + 2` minus whatever concurrent
+        // snapshot calls observe, but the lower bound is enough to
+        // prove the new wiring is live).
+        assert!(after.metrics_snapshot_total > before.metrics_snapshot_total);
     }
 
     #[test]
