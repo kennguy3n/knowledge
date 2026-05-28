@@ -122,10 +122,23 @@ synthesis APIs. The currently live entry points are:
 `get_evidence`, `forget`, `forget_scope`, `encrypt`, `decrypt`,
 `generate_keypair`, `get_user_memory`, `pin`, `unpin`,
 `list_memories`, `run_decay_sweep`, `get_channel_memory`,
-`escape_fts_query`, `trigger_synthesis`, `core_version`,
-`health_check`, `metrics_snapshot`, and — gated by the
-`tracing-subscriber` Cargo feature on `crates/ffi` —
+`escape_fts_query`, `trigger_synthesis`, `health_check`, and — gated
+by the `tracing-subscriber` Cargo feature on `crates/ffi` —
 `try_init_tracing` (JS: `initTracing`).
+
+Two entry points are intentionally surface-specific rather than
+mirrored across both bindings:
+
+* `core_version` — **N-API only.** A JS-facing bootstrap helper
+  (`crates/ffi/src/health.rs:396-405`) that returns the workspace
+  semver baked into the build. Mobile hosts read the same value out
+  of the embedded `Info.plist` / Gradle `BuildConfig`, so there's no
+  UniFFI export.
+* `metrics_snapshot` — **UniFFI only.** A read-only diagnostics
+  surface for mobile observability tiles (iOS / Android). The
+  N-API surface exposes the same data through `health_check`'s
+  envelope, so an extra entry point would be redundant on Electron.
+
 The tracing helper is feature-gated because it's the only entry
 point that pulls a non-trivial dependency (`tracing-subscriber`);
 hosts that install their own subscriber don't pay the cost. See

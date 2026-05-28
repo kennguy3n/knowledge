@@ -327,6 +327,14 @@ pub struct MetricsSnapshot {
     /// block, no error counter sibling. The counter is incremented
     /// by [`snapshot`] itself; the value in any one snapshot is
     /// therefore always one less than the post-call counter.
+    //
+    // `#[serde(default)]` per the struct-level wire-contract note
+    // above. The pre-existing fields predate that rule and stay as
+    // they are (changing them now would re-flow the wire contract
+    // they were shipped under), but every new field added from this
+    // PR onward MUST default to `0` on deserialise so an older
+    // emitter's snapshot still round-trips through a newer reader.
+    #[serde(default)]
     pub metrics_snapshot_total: u64,
     /// Total `health_check` calls initiated — every probe (bridge
     /// only and full) increments this, including the `Err` path for
