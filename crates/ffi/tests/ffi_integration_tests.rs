@@ -1664,3 +1664,108 @@ fn remove_connector_is_idempotent_across_reopen() {
     remove_connector(h2, id.clone()).expect("second remove must be idempotent");
     close_store(h2).expect("close_store re-opened");
 }
+
+/// Token rows whose owning instance row failed to rehydrate (or
+/// was never persisted) MUST be skipped on `open_store` AND
+/// best-effort purged from disk. Otherwise the vault accumulates
+/// orphans that can never be retired and that re-walk every open.
+///
+/// Reproduces the contract by:
+/// 1. Creating a connector + persisting an OAuth2 token row via the
+///    FFI side (real instance + token both on disk).
+/// 2. Reopening the underlying EvidenceStore directly and
+///    overwriting the instance row's payload with garbage JSON so
+///    the rehydrate loop's `serde_json::from_slice` fails and the
+///    in-memory `connector_instances` map stays empty for that
+///    instance — leaving the token row "orphaned" on next open.
+/// 3. Reopening via the FFI and asserting (a) no connectors
+///    rehydrate (instance row tampered), (b) the orphan token row
+///    is purged from disk so subsequent opens do not re-walk it.
+#[cfg(feature = "http-client")]
+#[test]
+fn orphan_token_skipped_and_cleaned_up_on_rehydrate() {
+    use chrono::{TimeZone, Utc};
+    use connector_framework::OAuth2Token;
+    use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("evidence.db");
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    let h1 = open_at(&db_path);
+    let instance_id = create_connector(
+        h1,
+        ConnectorKindTag::Notion,
+        scope.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create_connector");
+    close_store(h1).expect("close_store");
+
+    let instance_uuid = uuid::Uuid::parse_str(&instance_id).expect("uuid parse instance");
+    let scope_id = ScopeId::from_uuid(uuid::Uuid::parse_str(&scope).expect("uuid parse scope"));
+    let master_key: [u8; 32] = [0xa5_u8; 32];
+
+    // Persist a real token row alongside the instance, then
+    // corrupt the instance row's payload so it fails to
+    // deserialise on rehydrate.
+    {
+        let store = EvidenceStore::open(&db_path, &master_key, EvidenceStoreConfig::default())
+            .expect("EvidenceStore::open for setup");
+        let token = OAuth2Token::new(
+            "orphan-access",
+            "orphan-refresh",
+            Utc.with_ymd_and_hms(2030, 1, 1, 0, 0, 0).unwrap(),
+            "drive.readonly",
+        );
+        let token_json = serde_json::to_vec(&token).expect("encode token");
+        store
+            .save_connector_token(instance_uuid, scope_id, &token_json)
+            .expect("save_connector_token");
+        // Corrupt the instance payload — AEAD still seals cleanly,
+        // but the JSON envelope parse fails so rehydrate skips it.
+        store
+            .save_connector_instance(
+                instance_uuid,
+                scope_id,
+                connector_framework::ConnectorKind::Notion.as_str(),
+                b"orphan: not a valid envelope",
+            )
+            .expect("corrupt instance payload");
+        assert_eq!(
+            store
+                .load_connector_tokens()
+                .expect("load before reopen")
+                .len(),
+            1,
+            "setup: token row should be on disk before reopen",
+        );
+    }
+
+    // Reopen via the FFI. The instance fails to rehydrate
+    // (corrupt payload → skipped); the token is now an orphan and
+    // must be (a) skipped (not inserted into token_vault) and (b)
+    // purged from disk.
+    let h2 = open_at(&db_path);
+    let listed = list_connectors(h2).expect("list post-reopen");
+    assert!(
+        listed.is_empty(),
+        "corrupted instance row must skip rehydrate; got {} entries",
+        listed.len(),
+    );
+    close_store(h2).expect("close_store after rehydrate sweep");
+
+    // The orphan token row should have been purged on rehydrate
+    // (best-effort, traced on failure). Verify directly via the
+    // evidence-store API that the row is gone.
+    let store = EvidenceStore::open(&db_path, &master_key, EvidenceStoreConfig::default())
+        .expect("EvidenceStore::open for verify");
+    let remaining = store
+        .load_connector_tokens()
+        .expect("load_connector_tokens post-reopen");
+    assert!(
+        remaining.is_empty(),
+        "orphan token row must be cleaned up by rehydration; {} row(s) remain",
+        remaining.len(),
+    );
+}

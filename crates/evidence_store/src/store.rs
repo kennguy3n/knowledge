@@ -1744,8 +1744,29 @@ impl EvidenceStore {
         let mut out = Vec::new();
         for row in rows {
             let (instance_bytes, scope_bytes, kind_tag, nonce_bytes, ciphertext) = row?;
-            let instance_id = slice_to_uuid(&instance_bytes)?;
-            let scope_id = ScopeId::from_uuid(slice_to_uuid(&scope_bytes)?);
+            let instance_id = match slice_to_uuid(&instance_bytes) {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(
+                        instance_bytes_len = instance_bytes.len(),
+                        error = %e,
+                        "connector_instances row has malformed instance_id; skipping",
+                    );
+                    continue;
+                }
+            };
+            let scope_id = match slice_to_uuid(&scope_bytes) {
+                Ok(id) => ScopeId::from_uuid(id),
+                Err(e) => {
+                    tracing::warn!(
+                        instance = %instance_id,
+                        scope_bytes_len = scope_bytes.len(),
+                        error = %e,
+                        "connector_instances row has malformed scope_id; skipping",
+                    );
+                    continue;
+                }
+            };
             if nonce_bytes.len() != AEAD_NONCE_LEN {
                 tracing::warn!(
                     instance = %instance_id,
@@ -1855,8 +1876,29 @@ impl EvidenceStore {
         let mut out = Vec::new();
         for row in rows {
             let (instance_bytes, scope_bytes, nonce_bytes, ciphertext) = row?;
-            let instance_id = slice_to_uuid(&instance_bytes)?;
-            let scope_id = ScopeId::from_uuid(slice_to_uuid(&scope_bytes)?);
+            let instance_id = match slice_to_uuid(&instance_bytes) {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(
+                        instance_bytes_len = instance_bytes.len(),
+                        error = %e,
+                        "connector_tokens row has malformed instance_id; skipping",
+                    );
+                    continue;
+                }
+            };
+            let scope_id = match slice_to_uuid(&scope_bytes) {
+                Ok(id) => ScopeId::from_uuid(id),
+                Err(e) => {
+                    tracing::warn!(
+                        instance = %instance_id,
+                        scope_bytes_len = scope_bytes.len(),
+                        error = %e,
+                        "connector_tokens row has malformed scope_id; skipping",
+                    );
+                    continue;
+                }
+            };
             if nonce_bytes.len() != AEAD_NONCE_LEN {
                 tracing::warn!(
                     instance = %instance_id,
@@ -2670,9 +2712,11 @@ fn connector_instance_aad(scope_id: ScopeId, instance_id: uuid::Uuid, kind_tag: 
     aad.extend_from_slice(prefix);
     aad.extend_from_slice(scope_id.as_uuid().as_bytes());
     aad.extend_from_slice(instance_id.as_bytes());
-    // Length-prefix the kind tag so `kind_tag == "abc" + scope_bytes`
-    // collisions are not possible across schemes (defense in depth —
-    // the tag is already a closed enum but cheap to guard).
+    // Delimiter-separate the kind tag. All preceding fields are
+    // fixed-width (prefix 22 B + scope 16 B + instance 16 B), so
+    // `kind_tag` starts at a deterministic offset and the colon is
+    // strictly cosmetic — but cheap to keep for readability when
+    // hex-dumping the AAD during debugging.
     aad.push(b':');
     aad.extend_from_slice(kind_tag.as_bytes());
     aad

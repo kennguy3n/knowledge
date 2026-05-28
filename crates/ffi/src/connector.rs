@@ -975,7 +975,7 @@ struct PersistedConnectorInstance {
 const PERSISTED_INSTANCE_SCHEMA: u32 = 1;
 
 pub(crate) fn persist_connector_instance(
-    rt: &mut FfiRuntime,
+    rt: &FfiRuntime,
     instance: &ConnectorInstance,
 ) -> FfiResult<()> {
     let payload = PersistedConnectorInstanceRef {
@@ -999,7 +999,7 @@ pub(crate) fn persist_connector_instance(
 }
 
 pub(crate) fn persist_connector_token(
-    rt: &mut FfiRuntime,
+    rt: &FfiRuntime,
     instance: ConnectorInstanceId,
     scope: ScopeId,
     token: &connector_framework::OAuth2Token,
@@ -1157,10 +1157,34 @@ pub(crate) fn rehydrate_connectors(rt: &mut FfiRuntime, tombstones: &HashSet<Sco
             }
             continue;
         }
+        let instance_id = ConnectorInstanceId::from_uuid(instance_uuid);
+        // Skip tokens whose owning instance failed to rehydrate above
+        // (deserialise error, schema mismatch, build_connector miss,
+        // tombstone race). Inserting such a token into the vault is
+        // harmless — no consumer can ask for it without first
+        // resolving the instance — but the orphan would never be
+        // retired and would survive in memory until `close_store`.
+        // Best-effort purge from disk too so the next open doesn't
+        // re-walk it; tracing-only on failure.
+        if !rt.connector_instances.contains_key(&instance_id) {
+            tracing::warn!(
+                instance = %instance_uuid,
+                scope = %scope_id.as_uuid(),
+                "connector_tokens row references an instance that did not rehydrate; skipping",
+            );
+            if let Err(e) = rt.store().delete_connector_token(instance_uuid) {
+                tracing::warn!(
+                    instance = %instance_uuid,
+                    scope = %scope_id.as_uuid(),
+                    error = %e,
+                    "failed to clean up orphaned connector_tokens row",
+                );
+            }
+            continue;
+        }
         match serde_json::from_slice::<connector_framework::OAuth2Token>(&payload) {
             Ok(token) => {
-                rt.token_vault
-                    .put(ConnectorInstanceId::from_uuid(instance_uuid), token);
+                rt.token_vault.put(instance_id, token);
             }
             Err(e) => {
                 tracing::warn!(
