@@ -199,6 +199,7 @@ pub fn health_check(handle: Option<RuntimeHandle>) -> FfiResult<HealthStatus> {
                     subsystems.push(crypto_subsystem(rt, tombstones));
                     subsystems.push(memory_manager_subsystem(rt));
                     subsystems.push(inference_router_subsystem(rt));
+                    subsystems.push(connector_subsystem(rt));
                     Ok(())
                 })?;
                 Ok(finish_envelope(subsystems))
@@ -366,6 +367,68 @@ fn inference_router_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealt
         status,
         detail: Some(detail),
         adapters: Some(adapters),
+    }
+}
+
+/// Connector framework probe. Reports the per-runtime connector
+/// registry size and the current distribution of sync states
+/// across the live instances. Mirrors the wiring contract from
+/// `CONTRIBUTING.md` §4: every new substrate subsystem ships with
+/// a corresponding `health_check` probe so platform hosts can render
+/// a per-subsystem status panel without reaching into substrate-
+/// internal counters.
+///
+/// Status downgrades:
+///
+/// * `Degraded` when one or more connectors are in
+///   [`SyncStatus::Failed`] — the rest of the substrate is fine,
+///   but the host should know that at least one source is not
+///   currently synchronising. The detail string carries the
+///   per-status counts so the host UI can render `(3 ok, 1 failed)`
+///   or similar.
+/// * `Ok` in every other case, including the steady-state of zero
+///   connectors (a runtime that hasn't called [`crate::create_connector`]
+///   yet is a legitimate state, not a fault).
+///
+/// Authenticated count comes from the per-runtime [`OAuth2TokenVault`]
+/// — every successful [`crate::authenticate_connector`] call stashes
+/// a bearer token there, so the count is a proxy for "how many
+/// connectors can run a sync right now". Comparing it against
+/// `total` surfaces dangling registrations (created but never
+/// authenticated) without an extra round-trip through the host.
+fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
+    use connector_framework::SyncStatus;
+
+    let total = rt.connector_instances.len();
+    let authenticated = rt.token_vault.len();
+    let mut never_run = 0u64;
+    let mut in_progress = 0u64;
+    let mut succeeded = 0u64;
+    let mut failed = 0u64;
+    for inst in rt.connector_instances.values() {
+        match inst.sync_state.status {
+            SyncStatus::NeverRun => never_run += 1,
+            SyncStatus::InProgress => in_progress += 1,
+            SyncStatus::Succeeded => succeeded += 1,
+            SyncStatus::Failed => failed += 1,
+        }
+    }
+
+    let status = if failed > 0 {
+        SubsystemStatus::Degraded
+    } else {
+        SubsystemStatus::Ok
+    };
+    let detail = format!(
+        "total={total}, authenticated={authenticated}, \
+         never_run={never_run}, in_progress={in_progress}, \
+         succeeded={succeeded}, failed={failed}"
+    );
+    SubsystemHealth {
+        name: "connector".into(),
+        status,
+        detail: Some(detail),
+        adapters: None,
     }
 }
 

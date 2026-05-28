@@ -51,7 +51,7 @@
 //! mutex — connector calls against the same handle serialise, while
 //! calls against different handles run in parallel.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use connector_framework::{
     AuthKind, Connector, ConnectorConfig, ConnectorEvent, ConnectorInstance, ConnectorInstanceId,
     ConnectorKind, SyncMode, SyncRunResult, SyncState, SyncStatus,
@@ -119,7 +119,7 @@ pub fn create_connector(
                 });
             }
             let instance_id = ConnectorInstanceId::new_v4();
-            let connector = build_connector(kind_framework, instance_id)?;
+            let connector = build_connector(rt, kind_framework, instance_id)?;
             let mut config = ConnectorConfig::new(kind_framework, AuthKind::OAuth2, scope);
             config.auth_config_json = auth_config_json;
             let instance = ConnectorInstance {
@@ -167,6 +167,20 @@ pub fn authenticate_connector(
     metrics::instrument(metrics::inc_authenticate_connector, || {
         let instance = parse_instance_id(&instance_id)?;
         with_runtime(handle, |rt| {
+            // `connectors` and `connector_instances` are two
+            // separate `HashMap` fields on `FfiRuntime`, so the
+            // borrow checker is happy to lend out one shared
+            // borrow each. We *must* hold the `&connector` borrow
+            // across the `rt.token_vault.put(..)` call below
+            // (the call site immediately after `.authenticate(..)`)
+            // because `connector` is what we're authenticating with;
+            // taking a `&mut rt.token_vault` simultaneously is fine
+            // because field-level disjoint-borrow analysis sees
+            // `token_vault` as a third distinct field. If a future
+            // refactor moves any of these onto the same enclosing
+            // struct, this disjoint-borrow pattern must be replaced
+            // with the snapshot-then-call style used by
+            // `run_connector_sync` (see line ~423 for the template).
             let connector = rt
                 .connectors
                 .get(&instance)
@@ -274,44 +288,83 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
             }
             rt.ensure_scope_registered(scope)?;
             let (mode_run, run_result) = run_connector_sync(rt, instance, &instance_id)?;
-            // Persist events into the evidence store. We hold the
-            // `&mut FfiRuntime` guard for the whole loop so the
-            // per-handle mutex is contended by exactly one sync at
-            // a time — sync calls against the same connector
-            // serialise naturally without needing per-connector
-            // locks.
-            let source_kind = rt
-                .connector_instances
-                .get(&instance)
-                .map(|inst| inst.config.kind)
-                .ok_or_else(|| FfiError::NotFound {
-                    kind: "connector".into(),
-                    id: instance_id.clone(),
-                })?;
-            let mut ingested_ids: Vec<String> = Vec::new();
-            for ev in &run_result.events {
-                if let Some(body) = event_to_evidence_body(ev) {
-                    let source_tag = connector_source_tag(source_kind);
-                    let result = rt
-                        .store_mut()
-                        .ingest(
-                            scope,
-                            body.as_bytes(),
-                            Some(source_tag),
-                            ImportanceClass::Important,
-                        )
-                        .map_err(|e| FfiError::Evidence {
-                            message: e.to_string(),
-                        })?;
-                    ingested_ids.push(result.evidence_id.to_string());
+            // Past this point the connector itself succeeded and
+            // `run_connector_sync` flipped the per-instance state to
+            // `InProgress`. Every error path below MUST roll the
+            // state forward to `Failed` (with a diagnostic) before
+            // bubbling up — otherwise `list_connectors` would keep
+            // surfacing `InProgress` after the substrate already
+            // observed a fatal error, which is the bug fixed in
+            // the Devin Review thread that motivated this block.
+            //
+            // We collect the post-sync work into a closure so the
+            // single match below is the only `mark_failed` site we
+            // need to maintain; new error paths added later inherit
+            // the contract automatically as long as they `?` out of
+            // the closure.
+            let post_sync_result: FfiResult<(Vec<String>, DateTime<Utc>)> = (|| {
+                let source_kind = rt
+                    .connector_instances
+                    .get(&instance)
+                    .map(|inst| inst.config.kind)
+                    .ok_or_else(|| FfiError::NotFound {
+                        kind: "connector".into(),
+                        id: instance_id.clone(),
+                    })?;
+                // Persist events into the evidence store. We hold
+                // the `&mut FfiRuntime` guard for the whole loop so
+                // the per-handle mutex is contended by exactly one
+                // sync at a time — sync calls against the same
+                // connector serialise naturally without needing
+                // per-connector locks.
+                let mut ingested_ids: Vec<String> = Vec::new();
+                for ev in &run_result.events {
+                    if let Some(body) = event_to_evidence_body(ev) {
+                        let source_tag = connector_source_tag(source_kind);
+                        let result = rt
+                            .store_mut()
+                            .ingest(
+                                scope,
+                                body.as_bytes(),
+                                Some(source_tag),
+                                ImportanceClass::Important,
+                            )
+                            .map_err(|e| FfiError::Evidence {
+                                message: e.to_string(),
+                            })?;
+                        ingested_ids.push(result.evidence_id.to_string());
+                    }
                 }
-            }
-            // Advance sync state to reflect the successful run.
-            let completed_at = Utc::now();
-            if let Some(inst) = rt.connector_instances.get_mut(&instance) {
-                inst.sync_state
-                    .mark_succeeded(run_result.next_cursor.clone(), completed_at);
-            }
+                // Advance sync state to reflect the successful
+                // run. Doing this inside the closure (rather than
+                // after the `match`) keeps the success path
+                // single-write — the failure path below performs
+                // its own `mark_failed`.
+                let completed_at = Utc::now();
+                if let Some(inst) = rt.connector_instances.get_mut(&instance) {
+                    inst.sync_state
+                        .mark_succeeded(run_result.next_cursor.clone(), completed_at);
+                }
+                Ok((ingested_ids, completed_at))
+            })();
+            let (ingested_ids, completed_at) = match post_sync_result {
+                Ok(v) => v,
+                Err(err) => {
+                    // Roll the state forward to `Failed` so a
+                    // subsequent `list_connectors` reflects what
+                    // actually happened, and so the next
+                    // `sync_connector` call goes through
+                    // `can_run_incremental() == false` and falls
+                    // back to a fresh `initial_sync` rather than
+                    // racing an incremental against a half-ingested
+                    // cursor.
+                    let msg = err.to_string();
+                    if let Some(inst) = rt.connector_instances.get_mut(&instance) {
+                        inst.sync_state.mark_failed(&msg);
+                    }
+                    return Err(err);
+                }
+            };
             Ok(SyncReport {
                 instance_id: instance.0.to_string(),
                 mode: framework_sync_mode_to_kind(mode_run),
@@ -464,27 +517,44 @@ fn run_connector_sync(
     }
 }
 
-/// Build a fresh `Box<dyn Connector>` for `kind`, wiring it to a
-/// shared [`BlockingHttpTransport`] + [`OAuth2Client`] pair when the
-/// `http-client` feature is enabled. When it is not, every kind
-/// returns
+/// Build a fresh `Box<dyn Connector>` for `kind`, wiring it to the
+/// runtime-shared [`BlockingHttpTransport`] + [`OAuth2Client`] pair
+/// when the `http-client` feature is enabled. When it is not, every
+/// kind returns
 /// [`FfiError::Unavailable { subsystem: "connector-http-client" }`]
 /// so the host can detect the configuration gap explicitly instead
 /// of seeing every call mysteriously fail.
+///
+/// The transport / OAuth2 client are built **once per runtime** at
+/// [`crate::open_store`] time (see `FfiRuntime::http_transport` and
+/// `FfiRuntime::oauth_client`) and cloned here as `Arc` handles, so
+/// every connector on the same runtime shares one reqwest
+/// connection pool / TLS session cache / thread pool. The `Arc<T>`
+/// → `Arc<dyn Trait>` coercion lets the connector constructors
+/// keep their trait-object-typed wiring contract without forcing
+/// every concrete connector to monomorphise on
+/// `BlockingHttpTransport`.
 #[cfg(feature = "http-client")]
 fn build_connector(
+    rt: &FfiRuntime,
     kind: ConnectorKind,
     instance: ConnectorInstanceId,
 ) -> FfiResult<Box<dyn Connector>> {
     use std::sync::Arc;
 
+    use connector_framework::{HttpTransport, OAuth2CodeExchange};
     use connectors::{
         ConfluenceConnector, EmailConnector, FigmaConnector, GoogleDriveConnector,
         HubSpotConnector, JiraConnector, NotionConnector, OneDriveConnector, SlackConnector,
     };
-    let transport =
-        Arc::new(connector_framework::BlockingHttpTransport::new().map_err(FfiError::from)?);
-    let oauth_client = Arc::new(connector_framework::OAuth2Client::new(transport.clone()));
+    // `.clone()` on `Arc<ConcreteT>` returns `Arc<ConcreteT>`; the
+    // let-binding type ascription triggers the standard
+    // `Arc<T>` → `Arc<dyn Trait>` unsize coercion. Using
+    // `Arc::clone(&…)` instead would force the type inference
+    // through `Arc::<dyn Trait>::clone`, which can't see through
+    // the `&Arc<ConcreteT>` argument.
+    let transport: Arc<dyn HttpTransport> = rt.http_transport.clone();
+    let oauth_client: Arc<dyn OAuth2CodeExchange> = rt.oauth_client.clone();
     Ok(match kind {
         ConnectorKind::GoogleDrive => {
             Box::new(GoogleDriveConnector::new(instance, transport, oauth_client))
@@ -522,6 +592,7 @@ fn build_connector(
 #[cfg(not(feature = "http-client"))]
 #[allow(clippy::unnecessary_wraps)] // signature matches the http-client-enabled variant for branch-free callers
 fn build_connector(
+    _rt: &FfiRuntime,
     _kind: ConnectorKind,
     _instance: ConnectorInstanceId,
 ) -> FfiResult<Box<dyn Connector>> {

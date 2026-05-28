@@ -327,12 +327,24 @@ mod tests {
     /// arms.
     #[test]
     fn connector_error_maps_into_connector_variant() {
+        // Exhaustive coverage of every `ConnectorError` variant.
+        // The blanket `From` impl above stringifies via `Display`
+        // and stuffs the result into `FfiError::Connector`, so the
+        // test asserts the variant collapse for every input variant
+        // — including the ones that don't carry a payload
+        // (`TokenNotFound`, `ConnectorNotFound`, `DuplicateConnector`),
+        // and the auth-adjacent ones that future connector code
+        // could plausibly raise during a sync
+        // (`TokenRefresh`, `Webhook`).
         let cases = [
             connector_framework::ConnectorError::Auth("bad code".into()),
-            connector_framework::ConnectorError::Sync("rate limited".into()),
-            connector_framework::ConnectorError::Transport("tls handshake".into()),
+            connector_framework::ConnectorError::TokenRefresh("refresh denied".into()),
             connector_framework::ConnectorError::TokenNotFound,
+            connector_framework::ConnectorError::Sync("rate limited".into()),
+            connector_framework::ConnectorError::Webhook("subscribe failed".into()),
+            connector_framework::ConnectorError::DuplicateConnector,
             connector_framework::ConnectorError::ConnectorNotFound,
+            connector_framework::ConnectorError::Transport("tls handshake".into()),
         ];
         for c in cases {
             let original_display = c.to_string();

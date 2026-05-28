@@ -21,10 +21,10 @@
 
 use ffi::{
     close_store, decrypt, encrypt, forget, generate_keypair, get_channel_memory, get_evidence,
-    get_user_memory, ingest_message, list_memories, open_store, pin, query, run_decay_sweep,
-    trigger_synthesis, unpin, EvidenceRecord, FfiError, FfiImportanceClass, FfiKeypair,
-    FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RuntimeHandle, SourceKind,
-    SynthesisTrigger,
+    get_user_memory, health_check, ingest_message, list_memories, open_store, pin, query,
+    run_decay_sweep, trigger_synthesis, unpin, EvidenceRecord, FfiError, FfiImportanceClass,
+    FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RuntimeHandle,
+    SourceKind, SubsystemStatus, SynthesisTrigger,
 };
 use tempfile::TempDir;
 
@@ -565,6 +565,61 @@ fn source_kind_variants_all_round_trip() {
             serde_json::from_str(&s).expect("SourceKind must round-trip via its tag");
         assert_eq!(variant, back);
     }
+}
+
+/// `health_check` over a freshly-opened runtime must include the
+/// new `connector` subsystem entry. Phase 2 wires the connector
+/// framework into the substrate and `CONTRIBUTING.md` §4 mandates a
+/// matching `health_check` probe per subsystem — this test pins
+/// that wiring contract so a future regression that drops the probe
+/// (or silently downgrades it) is caught locally before reaching
+/// the host shells.
+///
+/// We deliberately do NOT call `create_connector` here: the
+/// substrate's steady state of "zero registered connectors" must
+/// itself produce a healthy `ok` subsystem entry with the
+/// per-status counts at zero, so the host UI's
+/// `(0 ok / 0 failed / …)` rendering is well-defined.
+#[test]
+fn health_check_envelope_includes_connector_subsystem() {
+    let (h, _dir) = fresh_store();
+    let env = health_check(Some(h)).expect("health_check with open handle");
+
+    let connector = env
+        .subsystems
+        .iter()
+        .find(|s| s.name == "connector")
+        .expect("connector subsystem entry must be present in the envelope");
+    assert_eq!(connector.status, SubsystemStatus::Ok);
+    let detail = connector
+        .detail
+        .as_deref()
+        .expect("connector probe always emits a detail string");
+    assert!(detail.contains("total=0"), "detail={detail}");
+    assert!(detail.contains("authenticated=0"), "detail={detail}");
+    assert!(detail.contains("failed=0"), "detail={detail}");
+
+    // Sanity-check the probe ordering — the Phase 2 wiring appends
+    // `connector` after the four Phase 1 subsystems, so a host
+    // rendering subsystems in array order sees the connector tile
+    // last. The exact array order is part of the host UI contract
+    // (Electron / Swift / Kotlin all render subsystems in the order
+    // they appear in the envelope), so changes here are intentional
+    // and require updating the host shells.
+    let names: Vec<&str> = env.subsystems.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "bridge",
+            "evidence_store",
+            "crypto",
+            "memory_manager",
+            "inference_router",
+            "connector",
+        ]
+    );
+
+    close_store(h).expect("close_store");
 }
 
 /// Likewise for `SynthesisTrigger`.

@@ -52,6 +52,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard};
 
 use chrono::{DateTime, TimeZone, Utc};
+#[cfg(feature = "http-client")]
+use connector_framework::{BlockingHttpTransport, OAuth2Client};
 use connector_framework::{Connector, ConnectorInstance, ConnectorInstanceId, OAuth2TokenVault};
 use crypto::forgetting::{self, DekRegistry, TombstoneStore};
 use crypto::{CryptoError, MasterKey};
@@ -289,6 +291,44 @@ pub struct FfiRuntime {
     /// behind the encrypted `connector_tokens` table so tokens are
     /// AEAD-encrypted at rest under the tenant DEK.
     pub(crate) token_vault: OAuth2TokenVault,
+    /// Shared HTTP transport for every connector on this runtime.
+    ///
+    /// `reqwest::blocking::Client` (which `BlockingHttpTransport`
+    /// wraps) manages a connection pool, TLS session cache, and a
+    /// thread pool internally — building one per `create_connector`
+    /// call would multiply those pools by the number of connectors
+    /// on the runtime even when several connectors target the same
+    /// provider host. Allocating a single transport at
+    /// [`open_store`] time and handing every connector an
+    /// `Arc<dyn HttpTransport>` clone lets reqwest re-use one pool
+    /// across the whole substrate; per-provider host isolation is
+    /// still preserved at the TLS / Host-header layer.
+    ///
+    /// Held as `Arc<dyn HttpTransport>` (rather than the concrete
+    /// `BlockingHttpTransport`) so the same field type can later
+    /// host an `AsyncHttpTransport`-backed implementation without
+    /// reshaping the runtime; today only the blocking transport is
+    /// wired in. Only present when the `http-client` feature is on
+    /// — without it, the connector factory short-circuits to
+    /// `FfiError::Unavailable { subsystem: "connector-http-client" }`
+    /// before reaching this field.
+    #[cfg(feature = "http-client")]
+    pub(crate) http_transport: Arc<BlockingHttpTransport>,
+    /// Shared OAuth2 token-exchange client, wired through
+    /// [`Self::http_transport`]. Same allocation-reuse rationale as
+    /// the transport above — the OAuth2 client itself is a thin
+    /// stateless wrapper that builds requests through whichever
+    /// `Arc<T: HttpTransport>` it was constructed with, so a
+    /// single per-runtime instance is sufficient and saves us a
+    /// fresh `Arc` per connector.
+    ///
+    /// Held as the concrete `OAuth2Client<BlockingHttpTransport>`
+    /// so [`crate::connector::build_connector`] can up-cast the
+    /// `Arc` to the `Arc<dyn OAuth2CodeExchange>` that the
+    /// connector constructors expect via the unsized-coercion the
+    /// standard library provides for `Arc<T>` → `Arc<dyn Trait>`.
+    #[cfg(feature = "http-client")]
+    pub(crate) oauth_client: Arc<OAuth2Client<BlockingHttpTransport>>,
 }
 
 impl Drop for FfiRuntime {
@@ -884,6 +924,23 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
     // `wait_for_bootstrap` before dispatch.
     Arc::clone(&inference_router).spawn_bootstrap();
 
+    // Build the per-runtime HTTP transport + OAuth2 client up front
+    // so every connector on this runtime shares one reqwest
+    // connection pool / TLS session cache / thread pool. Constructing
+    // `BlockingHttpTransport` is non-trivial (it builds a
+    // `reqwest::blocking::Client`, which spins up an internal thread
+    // pool), so an `open_store` failure here is mapped into the
+    // standard `FfiError::Connector` surface — the host will see
+    // the same recovery path it would for any other connector-layer
+    // construction failure.
+    #[cfg(feature = "http-client")]
+    let (http_transport, oauth_client) = {
+        let transport: Arc<BlockingHttpTransport> =
+            Arc::new(BlockingHttpTransport::new().map_err(FfiError::from)?);
+        let oauth = Arc::new(OAuth2Client::new(Arc::clone(&transport)));
+        (transport, oauth)
+    };
+
     let runtime = FfiRuntime {
         master_key,
         store,
@@ -894,6 +951,10 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         connector_instances: HashMap::new(),
         connectors: HashMap::new(),
         token_vault: OAuth2TokenVault::new(),
+        #[cfg(feature = "http-client")]
+        http_transport,
+        #[cfg(feature = "http-client")]
+        oauth_client,
     };
 
     // Capture the post-replay tombstone count before moving `runtime`
