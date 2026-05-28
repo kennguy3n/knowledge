@@ -41,12 +41,12 @@ fi
 
 # iOS deployment target — matches the workspace-wide target set in
 # `kchat-rust-sdk`'s mobile build pipeline (iOS 16.0). Hosts that
-# need a different floor can override via the environment, but they
-# MUST keep it at iOS 16.0 or newer because the substrate's
+# need a different floor can override by setting
+# `IPHONEOS_DEPLOYMENT_TARGET` (the same name Xcode honours), but
+# they MUST keep it at iOS 16.0 or newer because the substrate's
 # SQLCipher / `liblzma`-based dependencies do not link cleanly
 # against earlier iOS SDKs in our CI configuration.
-IOS_DEPLOYMENT_TARGET="${IOS_DEPLOYMENT_TARGET:-16.0}"
-export IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET"
+export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-16.0}"
 
 # Clean any previous output to make the build hermetic — `cargo
 # swift package` will fail with confusing errors if a stale

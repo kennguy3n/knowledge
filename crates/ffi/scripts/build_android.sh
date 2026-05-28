@@ -7,10 +7,15 @@
 # Output layout (relative to `crates/ffi/`):
 #
 #   android/
-#     uniffi/knowledge/knowledge.kt           Generated Kotlin bindings
+#     uniffi/knowledge/ffi.kt                  Generated Kotlin bindings
 #     uniffi/knowledge/jniLibs/
 #       arm64-v8a/libffi.so                    JNI lib for ARM64 devices
 #       x86_64/libffi.so                       JNI lib for emulators
+#
+# The Kotlin file is named after the UniFFI namespace (the rlib's
+# crate name, `ffi`), not the `uniffi.toml` `package_name`. The
+# `uniffi.knowledge` package_name controls the `package` declaration
+# inside the file and the on-disk directory it lands in.
 #
 # Consumed by `uneycom/kchat-next-android` via either:
 #   1. Local path Gradle dependency for development builds, or
