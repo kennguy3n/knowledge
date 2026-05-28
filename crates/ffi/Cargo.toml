@@ -7,6 +7,37 @@ license.workspace = true
 repository.workspace = true
 description = "UniFFI bindings surface for iOS / Android platform integration."
 
+# Multiple library kinds:
+#   * `lib` — the standard rlib, used by every downstream Rust crate
+#     in the workspace (`crates/napi`, `crates/integration_tests`, the
+#     in-tree `ffi` unit tests) so they can call the public FFI
+#     functions directly without going through a C ABI shim. The
+#     `napi_addon` crate consumes this via `use ffi::...`, so the
+#     lib name MUST stay at the default (`ffi`, matching the package
+#     name). Renaming the lib here would break that import path.
+#   * `staticlib` — the static `libffi.a` that `cargo swift package`
+#     links into the iOS `.xcframework`. UniFFI's iOS pipeline expects
+#     a static archive (Apple's linker rules around dylibs inside an
+#     `.xcframework` are too strict to use a cdylib here).
+#   * `cdylib` — the shared `libffi.so` that `cargo ndk` packages into
+#     the Android `jniLibs/` directory. UniFFI's generated Kotlin
+#     bindings include `System.loadLibrary("ffi")` matching this name.
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+
+# `uniffi-bindgen` binary — mirrors the `kchat-mls-uniffi`
+# pattern (see `kchat-rust-sdk/crates/kchat-mls-uniffi/Cargo.toml`).
+# Re-exports `uniffi::uniffi_bindgen_main` so `cargo run -p ffi
+# --bin uniffi-bindgen` drives the same CLI as the upstream
+# `uniffi-bindgen` crate, but pinned to the workspace's uniffi
+# version. Android's build script invokes this binary with
+# `--library target/<triple>/release/libffi.so --language kotlin`
+# to generate the Kotlin bindings against the *built* dylib (the
+# "library mode" of bindgen) rather than against a UDL file.
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
 [features]
 default = []
 # Pulls in `inference_router/http-client`, enabling the real reqwest-based
@@ -39,6 +70,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, optional = true }
+uniffi = { workspace = true }
 uuid = { workspace = true }
 zeroize = { workspace = true }
 

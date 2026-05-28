@@ -55,7 +55,7 @@ use crate::runtime::{self, RuntimeHandle};
 /// Top-level health envelope. Wire-flat (every field
 /// `Serialize + Deserialize`) so platform hosts can deserialise it
 /// from the napi JSON / UniFFI bridge without further reshape.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct HealthStatus {
     /// Workspace semver of the Rust core (`CARGO_PKG_VERSION` at
     /// build time). Mirrors the value returned by
@@ -87,7 +87,7 @@ pub struct HealthStatus {
 /// Per-subsystem liveness entry. `status` is a coarse three-state
 /// indicator; `detail` carries a free-form human-readable string
 /// (e.g. "12 user memories rehydrated", "no SLM adapter linked").
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct SubsystemHealth {
     /// Stable subsystem tag (`bridge`, `evidence_store`, `crypto`,
     /// `memory_manager`, `inference_router`).
@@ -107,7 +107,7 @@ pub struct SubsystemHealth {
 /// `SubsystemHealth` payload. Mirrors the snapshot returned by
 /// `inference_router::InferenceRouter::adapter_states` but
 /// serialised through the FFI surface.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct AdapterReport {
     /// Stable adapter tag (`mlx`, `llama_cpp`, `fallback`,
     /// `mock`).
@@ -125,7 +125,7 @@ pub struct AdapterReport {
 
 /// Coarse three-state subsystem status. Maps to render decisions
 /// in the host UI (green / yellow / red).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, uniffi::Enum)]
 #[serde(rename_all = "snake_case")]
 pub enum SubsystemStatus {
     /// Subsystem is fully functional. The detail string (if any)
@@ -164,6 +164,7 @@ pub enum SubsystemStatus {
 ///
 /// Forwards `FfiError::Unavailable` when `handle` is invalid;
 /// otherwise the call is infallible.
+#[uniffi::export]
 pub fn health_check(handle: Option<RuntimeHandle>) -> FfiResult<HealthStatus> {
     // Wrap the body with `metrics::instrument` per the CONTRIBUTING.md
     // observability rule: every public FFI entry point increments

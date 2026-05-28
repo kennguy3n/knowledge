@@ -150,6 +150,17 @@ hyper-util = { version = "0.1", default-features = false, features = ["tokio", "
 # `RUST_LOG=evidence_store=debug` traces.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 
+# UniFFI — bindings generator for the iOS / Android platform
+# integration surface in `crates/ffi`. The `cli` feature pulls in
+# `uniffi::uniffi_bindgen_main`, which the `uniffi-bindgen` binary
+# target in `crates/ffi/Cargo.toml` re-exports as its `main`. The
+# `tokio` feature is intentionally NOT enabled at workspace level —
+# the FFI surface is currently fully synchronous and pulling in a
+# tokio dependency through uniffi's async support would bloat the
+# mobile static library. If we add async entry points later, opt in
+# locally on the `ffi` crate.
+uniffi = { version = "0.31", features = ["cli"] }
+
 # Optional subscriber used by `ffi`'s `tracing-subscriber` feature and
 # the `napi_addon`'s `tracing-subscriber` feature. NOT enabled by
 # default for any crate — the substrate's library-side default is "no

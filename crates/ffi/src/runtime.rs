@@ -101,6 +101,16 @@ impl From<RuntimeHandle> for u64 {
     }
 }
 
+// Tell uniffi how to round-trip `RuntimeHandle` across the FFI
+// boundary. The newtype is `#[repr(transparent)]` over `u64`, so
+// uniffi's standard `u64` codec is byte-compatible — `custom_newtype!`
+// just wires the lift / lower into the existing `From<u64>` /
+// `From<RuntimeHandle> for u64` impls above so Swift and Kotlin see
+// the handle as a plain native `UInt64` / `ULong` instead of a Record
+// wrapper with a `raw` field. The N-API binding in `crates/napi/src/bindings.rs`
+// continues to map this as a `BigInt` over the same `u64` underneath.
+uniffi::custom_newtype!(RuntimeHandle, u64);
+
 /// `crypto::forgetting::TombstoneStore` implementation backed by the
 /// `EvidenceStore`'s SQLCipher tables.
 ///
@@ -560,6 +570,7 @@ where
 /// * [`FfiError::Evidence`] if SQLCipher fails to open the underlying
 ///   database or the tombstone-replay path errors out.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
 pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHandle> {
     crate::metrics::instrument(crate::metrics::inc_open_store, || {
         open_store_inner(path, master_key_hex)
@@ -932,6 +943,7 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
 /// is for a different registry entry, so the per-handle reentrance
 /// guard does not fire and the drain loop on the closed handle
 /// terminates immediately.
+#[uniffi::export]
 pub fn close_store(handle: RuntimeHandle) -> FfiResult<()> {
     crate::metrics::instrument(crate::metrics::inc_close_store, || {
         // Reentrance guard: bail before any state change if this thread

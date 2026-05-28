@@ -258,7 +258,7 @@ pub(crate) fn set_tombstone_count(n: u64) {
 /// [`Self::tombstone_count`] (gauges). New fields MUST be added as
 /// optional with `#[serde(default)]` to keep the wire contract
 /// additive.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct MetricsSnapshot {
     /// Total `open_store` calls initiated. See the module docs for
     /// why the counter reads as "initiated" and not "completed".
@@ -330,7 +330,7 @@ pub struct MetricsSnapshot {
 }
 
 /// Per-kind error counters.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct ErrorCounters {
     /// `FfiError::Unimplemented`.
     pub unimplemented: u64,
@@ -356,6 +356,7 @@ pub struct ErrorCounters {
 /// each `AtomicU64` with [`Ordering::Relaxed`] — see the module
 /// docs for why that's sufficient.
 #[must_use]
+#[uniffi::export]
 pub fn snapshot() -> MetricsSnapshot {
     let m = metrics();
     MetricsSnapshot {

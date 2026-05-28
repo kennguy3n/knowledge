@@ -24,7 +24,7 @@ pub type ScopeIdString = String;
 ///
 /// Mirrors `connector_framework::ConnectorKind` plus a `Manual`
 /// catch-all for sideloaded ingest.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "PascalCase")]
 pub enum SourceKind {
     /// Manually sideloaded by the user.
@@ -52,7 +52,7 @@ pub enum SourceKind {
 /// `Critical` and `Important` rows live in the primary evidence
 /// table; `Useful` rows may be offloaded sooner; `Noise` rows go
 /// directly to the ring buffer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "PascalCase")]
 pub enum FfiImportanceClass {
     /// Must never be evicted (regulatory, compliance).
@@ -66,7 +66,7 @@ pub enum FfiImportanceClass {
 }
 
 /// One row materialised from the encrypted evidence plane.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 pub struct EvidenceRecord {
     /// UUID-string evidence id.
     pub id: String,
@@ -82,7 +82,7 @@ pub struct EvidenceRecord {
 }
 
 /// One hit returned by [`super::query`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, uniffi::Record)]
 pub struct QueryResult {
     /// UUID-string evidence id.
     pub evidence_id: String,
@@ -100,7 +100,7 @@ pub struct QueryResult {
 
 /// Decay state of a memory record. Mirrors
 /// `memory_manager::DecayState` but as a wire-flat enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "PascalCase")]
 pub enum MemoryState {
     /// Newly observed; awaiting reinforcement to promote.
@@ -117,7 +117,7 @@ pub enum MemoryState {
 
 /// One per-user memory bundle row (a "thing the system remembers
 /// about you in this scope").
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, uniffi::Record)]
 pub struct MemoryRecord {
     /// UUID-string memory id.
     pub id: String,
@@ -147,7 +147,7 @@ pub struct MemoryRecord {
 /// empty `state` filter (since `state` is `Option<…>` and would
 /// otherwise default to `None`) and then returning a confusing
 /// over-broad row set.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 #[serde(deny_unknown_fields)]
 pub struct MemoryFilter {
     /// If `Some`, restrict to rows in this state.
@@ -157,7 +157,7 @@ pub struct MemoryFilter {
 }
 
 /// Reason a synthesis cycle was triggered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "PascalCase")]
 pub enum SynthesisTrigger {
     /// User clicked "Synthesise now".
@@ -171,7 +171,7 @@ pub enum SynthesisTrigger {
 }
 
 /// FFI-safe public-key bundle returned by [`super::generate_keypair`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 pub struct FfiKeypair {
     /// Algorithm tag (`"ml-dsa-65"`, `"sphincs-plus-shake-128f-simple"`).
     pub algorithm: String,
@@ -183,7 +183,7 @@ pub struct FfiKeypair {
 }
 
 /// FFI-safe signature blob.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 pub struct FfiSignature {
     /// Algorithm tag (matches `FfiKeypair::algorithm`).
     pub algorithm: String,

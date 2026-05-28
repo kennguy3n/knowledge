@@ -1,0 +1,38 @@
+# UniFFI bindings configuration.
+#
+# Consumed by `cargo run -p ffi --bin uniffi-bindgen -- generate
+# --config crates/ffi/uniffi.toml ...`. The build scripts in
+# `crates/ffi/scripts/` pass this via the `--config` flag so the
+# generated Kotlin / Swift sources land under the namespaces hosts
+# expect.
+#
+# Per upstream UniFFI docs
+# (https://mozilla.github.io/uniffi-rs/latest/kotlin/configuration.html):
+# the `[bindings.kotlin]` and `[bindings.swift]` sections control
+# how the generator emits package / module names; they do NOT
+# affect the Rust ABI in any way — the same compiled `.so` / `.a`
+# can be re-bindgen'd with different `uniffi.toml`s to produce
+# differently-namespaced clients.
+
+[bindings.kotlin]
+# Generated Kotlin lives under `uniffi.knowledge.*`. The Android
+# host module (`uneycom/kchat-next-android`) repackages this into
+# its own internal namespace; keeping the upstream namespace short
+# and unambiguous (no organisation prefix) makes the repackage
+# trivial.
+package_name = "uniffi.knowledge"
+# `android = true` flips on the Android-specific code generator
+# branches in `uniffi-bindgen-kotlin`. Matches the kchat-mls-uniffi
+# configuration which targets the same Android distribution path.
+android = true
+
+[bindings.swift]
+# Generated Swift lands in a module named `Knowledge`. The iOS
+# host module (`uneycom/kchat-next-ios`) consumes this through the
+# emitted `Knowledge.xcframework` produced by `cargo swift package`,
+# which uses this `module_name` as the framework name.
+module_name = "Knowledge"
+# Swift package layout — keep the public surface scoped under the
+# same module name as the framework so callers can `import Knowledge`
+# without a separate `import KnowledgeFFI` for the C bridge symbols.
+ffi_module_name = "KnowledgeFFI"

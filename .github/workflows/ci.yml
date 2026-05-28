@@ -464,6 +464,111 @@ jobs:
           sudo ln -sf "${NDK_TOOLCHAIN}/bin/llvm-ranlib" /usr/local/bin/aarch64-linux-android-ranlib
       - run: cargo check --workspace --target aarch64-linux-android
 
+  # Real iOS build: produces the `.xcframework` + Swift package
+  # consumed by `uneycom/kchat-next-ios`. Mirrors the
+  # `cross-ios` job pattern (macOS runner, aarch64-apple-ios
+  # target) but goes further: invokes `crates/ffi/scripts/build_ios.sh`,
+  # which calls `cargo swift package` to produce the same artefacts the
+  # Phase 1 release pipeline (and the platform host repo) consume.
+  # Uploaded as a workflow artefact so reviewers can download and
+  # smoke-test the generated framework without running the build
+  # locally.
+  ios-build:
+    name: ios-build (.xcframework + Swift package)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # `cargo swift package` walks all the iOS slices it
+          # knows about; pre-installing the targets here saves the
+          # script ~30s of `rustup target add` time on every run.
+          targets: aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            target
+          key: ${{ runner.os }}-ios-build-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-ios-build-
+      - name: Install cargo-swift
+        # `--locked` pins the transitive dep set so the install
+        # is reproducible. Skipped when the binary is already in
+        # the cargo cache from the cache-restore step.
+        run: |
+          if ! command -v cargo-swift >/dev/null 2>&1; then
+            cargo install cargo-swift --locked
+          fi
+      - name: Build iOS Swift package + XCFramework
+        run: crates/ffi/scripts/build_ios.sh
+      - name: Upload iOS artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: knowledge-ios
+          path: crates/ffi/ios
+          if-no-files-found: error
+
+  # Real Android build: cross-compiles the JNI `.so` libraries for
+  # the two Android ABIs the host modules ship (arm64-v8a +
+  # x86_64) and generates the Kotlin bindings. Mirrors the
+  # cross-android `cargo check` job but invokes
+  # `crates/ffi/scripts/build_android.sh` end-to-end, producing
+  # the same `android/uniffi/knowledge/` layout
+  # `uneycom/kchat-next-android` consumes. Uploaded as a workflow
+  # artefact for downstream consumption + reviewer smoke tests.
+  android-build:
+    name: android-build (Kotlin bindings + JNI .so)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            target
+          key: ${{ runner.os }}-android-build-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-android-build-
+      - name: Install cargo-ndk
+        run: |
+          if ! command -v cargo-ndk >/dev/null 2>&1; then
+            cargo install cargo-ndk --locked
+          fi
+      - name: Configure NDK toolchain
+        # Same toolchain wiring as the `cross-android` check job
+        # above. The Android NDK is pre-installed on the
+        # `ubuntu-latest` runner; we just expose the per-target
+        # linker / archiver paths via $GITHUB_ENV so `cargo ndk`
+        # picks them up. API level 24 (Android 7.0+) matches the
+        # min-sdk surface the host app targets.
+        run: |
+          NDK_HOME="${ANDROID_NDK_HOME:-$(ls -d /usr/local/lib/android/sdk/ndk/*/ 2>/dev/null | sort -V | tail -1)}"
+          NDK_TOOLCHAIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
+          for triple_underscored in aarch64_linux_android x86_64_linux_android; do
+            triple_hyphenated="${triple_underscored//_/-}"
+            echo "CC_${triple_underscored}=${NDK_TOOLCHAIN}/bin/${triple_hyphenated}24-clang" >> "$GITHUB_ENV"
+            echo "AR_${triple_underscored}=${NDK_TOOLCHAIN}/bin/llvm-ar" >> "$GITHUB_ENV"
+            echo "RANLIB_${triple_underscored}=${NDK_TOOLCHAIN}/bin/llvm-ranlib" >> "$GITHUB_ENV"
+            # Cargo target linker env var uses uppercased triple
+            # with underscores.
+            upper=$(echo "$triple_underscored" | tr '[:lower:]' '[:upper:]')
+            echo "CARGO_TARGET_${upper}_LINKER=${NDK_TOOLCHAIN}/bin/${triple_hyphenated}24-clang" >> "$GITHUB_ENV"
+          done
+      - name: Build Android JNI .so + Kotlin bindings
+        run: crates/ffi/scripts/build_android.sh
+      - name: Upload Android artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: knowledge-android
+          path: crates/ffi/android
+          if-no-files-found: error
+
   audit:
     name: security audit
     runs-on: ubuntu-latest
