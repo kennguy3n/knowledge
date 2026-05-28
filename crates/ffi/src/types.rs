@@ -353,8 +353,12 @@ pub struct RefreshReport {
     /// refresh (or surface a re-auth prompt if the token has no
     /// `refresh_token`).
     pub expires_at: i64,
-    /// Unix epoch seconds when the refresh completed (close to
-    /// `Utc::now()` at the time of the call).
+    /// Unix epoch seconds when the refresh round-trip completed,
+    /// captured AFTER the provider response was processed in the
+    /// explicit [`super::refresh_connector_token`] entry point.
+    /// Hosts can use this as a correlation / scheduling timestamp
+    /// without worrying about it being stale relative to the
+    /// network round-trip duration.
     pub refreshed_at: i64,
 }
 

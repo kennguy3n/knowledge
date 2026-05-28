@@ -402,11 +402,11 @@ pub fn health_check(handle: Option<NapiHandle>) -> NapiResult<ffi::HealthStatus>
 }
 
 // ---------------------------------------------------------------------------
-// Connector management — mirrors the five connector FFI functions defined in
+// Connector management — mirrors the six connector FFI functions defined in
 // `crates/ffi/src/connector.rs`. The N-API wrappers in
 // `crates/napi/src/bindings.rs` invoke these forwarders so the JS host gets
-// the same lifecycle (`create` → `authenticate` → `sync` → `list` /
-// `remove`) without going through the FFI surface twice.
+// the same lifecycle (`create` → `authenticate` → `sync` /
+// `refresh` → `list` / `remove`) without going through the FFI surface twice.
 // ---------------------------------------------------------------------------
 
 /// Instantiate a connector for `kind`, bound to `scope_id`, with

@@ -389,6 +389,33 @@ pub fn authenticate_connector(
 /// `expires_at` reflecting the new token's expiry so hosts can
 /// schedule the next refresh.
 ///
+/// # Concurrency
+///
+/// Hosts MUST NOT issue concurrent
+/// `refresh_connector_token` / `sync_connector` calls against the
+/// same `instance_id`. The three-phase optimistic-locking pattern
+/// (snapshot under lock → unlocked refresh → re-lock + persist)
+/// intentionally releases the runtime mutex for the duration of
+/// the provider's HTTP round-trip so concurrent FFI calls on the
+/// same handle (`query`, `ingest_message`, …) continue to run.
+/// For providers that rotate the `refresh_token` on every
+/// `grant_type=refresh_token` response (e.g. Notion, Google's
+/// rotated-RT mode, Slack's rotating refresh tokens), the
+/// optimistic snapshot means two concurrent refreshes on the same
+/// instance both capture the SAME `refresh_token`. Whichever call
+/// completes its provider round-trip first wins; the second
+/// receives `invalid_grant` because the snapshotted refresh token
+/// was consumed and invalidated. The losing call surfaces
+/// [`FfiError::Connector`] carrying the framework's `TokenRefresh`
+/// diagnostic — the recovery is clean, the host retries (or
+/// re-authorises if the provider returned `invalid_grant` for a
+/// different reason), and the now-rotated token from the winning
+/// call is already persisted to SQLCipher. Serialise
+/// per-`instance_id` on the host side (e.g. a `Map<instance_id,
+/// Promise>` of in-flight refreshes that subsequent calls await,
+/// or an instance-scoped mutex) to avoid the race in the first
+/// place.
+///
 /// # Errors
 ///
 /// * [`FfiError::Unavailable`] if [`crate::open_store`] has not been
@@ -471,7 +498,17 @@ pub fn refresh_connector_token(
         // always refreshes), so we surface it through the
         // `refreshed` flag for diagnostic clarity rather than
         // asserting.
-        let now = Utc::now();
+        //
+        // `started_at` feeds the helper's `is_expiring_within` skew
+        // check; `refreshed_at` is captured AFTER the helper
+        // returns so `RefreshReport::refreshed_at` reflects when
+        // the round-trip actually completed (per `RefreshReport`'s
+        // doc contract), not when it was initiated. For a
+        // multi-second network call the two timestamps can diverge
+        // noticeably and hosts use `refreshed_at` for correlation
+        // / scheduling, so the post-round-trip stamp is the
+        // honest one to surface.
+        let started_at = Utc::now();
         let force_skew = chrono::Duration::seconds(60 * 60 * 24 * 365);
         let (new_token, refreshed) = refresh_token_three_phase(
             handle,
@@ -480,13 +517,13 @@ pub fn refresh_connector_token(
             token,
             config,
             force_skew,
-            now,
+            started_at,
         )?;
         Ok(RefreshReport {
             instance_id: instance.0.to_string(),
             refreshed,
             expires_at: new_token.expires_at.timestamp(),
-            refreshed_at: now.timestamp(),
+            refreshed_at: Utc::now().timestamp(),
         })
     })
 }

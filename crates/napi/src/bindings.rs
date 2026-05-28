@@ -400,7 +400,7 @@ pub fn js_health_check(handle: Option<BigInt>) -> Result<serde_json::Value> {
 }
 
 // ---------------------------------------------------------------------------
-// Connector management surface — mirrors the five connector FFI functions
+// Connector management surface — mirrors the six connector FFI functions
 // from `crates/ffi/src/connector.rs` through to the JS host. The JS-side
 // argument shape is:
 //
