@@ -1841,3 +1841,439 @@ fn save_connector_instance_propagates_secondary_unique_violation() {
     );
     assert_eq!(loaded_kind.as_str(), kind_tag);
 }
+
+// ───────────── Phase 4: OAuth2 token refresh via FFI ─────────────
+//
+// Phase 4 wires `refresh_connector_token` and the auto-refresh path
+// inside `sync_connector` through the FFI surface. The substrate-side
+// primitives (`OAuth2Client::refresh_with_config`,
+// `ConfiguredRefresher`, `OAuth2TokenVault::refresh_if_expiring`)
+// are exhaustively unit-tested at the connector_framework level;
+// these tests pin the **FFI-level contract**:
+//
+// * `refresh_connector_token` POSTs to the configured `token_url`,
+//   updates the in-memory vault, AND persists the new token to
+//   SQLCipher so it survives `close_store`/`open_store`.
+// * A token without `refresh_token` (Slack legacy / PKCE-only public
+//   clients) short-circuits with an actionable substrate-side
+//   diagnostic — the substrate refuses to POST `refresh_token=`
+//   to the provider because every compliant provider rejects that
+//   with a generic `invalid_grant` whose message names neither the
+//   instance nor the recovery path.
+//
+// Both tests stand up a tiny in-process HTTP/1.1 server pinned to
+// `127.0.0.1:0` (an OS-allocated ephemeral port) so the
+// production-built reqwest blocking transport actually drives the
+// refresh path — we exercise the real wire format, not a mocked
+// trait impl.
+
+#[cfg(feature = "http-client")]
+use std::io::{Read, Write};
+#[cfg(feature = "http-client")]
+use std::net::TcpListener;
+#[cfg(feature = "http-client")]
+use std::sync::{
+    atomic::{AtomicUsize, Ordering as AtomicOrdering},
+    Arc,
+};
+#[cfg(feature = "http-client")]
+use std::thread::JoinHandle;
+
+/// Tiny single-connection HTTP/1.1 server used by the Phase 4
+/// integration tests to back the connector's OAuth2 token endpoint.
+///
+/// Scope is deliberately minimal: each call to
+/// [`OAuthTestServer::enqueue`] queues one canned response body; the
+/// background thread accepts one connection per response, parses
+/// just enough of the request to count `(method, path)`, and writes
+/// back `HTTP/1.1 200 OK` with `Content-Type: application/json`.
+///
+/// Lives in the integration-test file (not the test-support crate)
+/// because Phase 4 is the first test surface that needs it; if a
+/// future test wants the same plumbing the helper graduates to a
+/// shared module.
+#[cfg(feature = "http-client")]
+struct OAuthTestServer {
+    base_url: String,
+    request_count: Arc<AtomicUsize>,
+    join: Option<JoinHandle<()>>,
+}
+
+#[cfg(feature = "http-client")]
+impl OAuthTestServer {
+    /// Bind to `127.0.0.1:0`, return a handle pre-armed with
+    /// `responses` (consumed in FIFO order). The server thread
+    /// exits after handling `responses.len()` connections — keep
+    /// this in sync with how many refresh / authenticate calls the
+    /// test will issue.
+    fn start(responses: Vec<String>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().expect("local_addr").port();
+        let base_url = format!("http://127.0.0.1:{port}");
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&request_count);
+        let join = std::thread::Builder::new()
+            .name("oauth-test-server".into())
+            .spawn(move || {
+                for body in responses {
+                    let Ok((mut stream, _addr)) = listener.accept() else {
+                        return;
+                    };
+                    // Read enough of the request to count it; we
+                    // don't validate the body because the
+                    // connector_framework-level tests already cover
+                    // the wire-format of the refresh POST.
+                    let mut buf = [0u8; 4096];
+                    let _ = stream.read(&mut buf);
+                    counter.fetch_add(1, AtomicOrdering::SeqCst);
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body,
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.flush();
+                }
+            })
+            .expect("spawn oauth test server");
+        Self {
+            base_url,
+            request_count,
+            join: Some(join),
+        }
+    }
+
+    /// Bind to `127.0.0.1:0` but never accept (the listener stays
+    /// open until `Drop`). Used by the "no refresh_token
+    /// short-circuit" test to assert that the substrate refuses
+    /// to make a network call when the cached token has no refresh
+    /// token. If the substrate-side guard regresses, the test will
+    /// see the request_count tick up and fail.
+    fn start_silent() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().expect("local_addr").port();
+        let base_url = format!("http://127.0.0.1:{port}");
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&request_count);
+        let join = std::thread::Builder::new()
+            .name("oauth-test-server-silent".into())
+            .spawn(move || {
+                // Single accept just so the listener stays bound.
+                // If anyone connects we tick the counter and the
+                // test asserts `== 0`.
+                listener
+                    .set_nonblocking(true)
+                    .expect("set_nonblocking on listener");
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while std::time::Instant::now() < deadline {
+                    if let Ok((_, _)) = listener.accept() {
+                        counter.fetch_add(1, AtomicOrdering::SeqCst);
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                    }
+                }
+            })
+            .expect("spawn oauth test server (silent)");
+        Self {
+            base_url,
+            request_count,
+            join: Some(join),
+        }
+    }
+
+    fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    fn request_count(&self) -> usize {
+        self.request_count.load(AtomicOrdering::SeqCst)
+    }
+}
+
+#[cfg(feature = "http-client")]
+impl Drop for OAuthTestServer {
+    fn drop(&mut self) {
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+    }
+}
+
+/// `refresh_connector_token` drives a real OAuth2 refresh round-trip
+/// against a local test server, updates the in-memory token vault,
+/// AND persists the refreshed token to SQLCipher. Pins both halves
+/// of the contract:
+///
+/// * The reqwest blocking transport actually POSTs to the configured
+///   `token_url` (counted by the test server's `request_count`).
+/// * The persisted token survives `close_store` + `open_store` —
+///   verified by reopening the database with a different
+///   `RuntimeHandle` and re-driving a refresh against the same
+///   in-flight server, observing that the rehydrated bundle's
+///   `refresh_token` is the rotated value from the first round-trip.
+#[cfg(feature = "http-client")]
+#[test]
+fn refresh_connector_token_round_trips_and_persists_across_close_store_reopen() {
+    use chrono::Duration as ChronoDuration;
+    use connector_framework::{ConnectorInstanceId, OAuth2Token};
+    use evidence_store::ScopeId;
+    use ffi::refresh_connector_token;
+    use uuid::Uuid;
+
+    // The test server returns two refreshed tokens — the second is
+    // used after we `close_store` + `open_store` to prove the
+    // rotated refresh_token from the first call was actually
+    // persisted (otherwise the rehydrated token would still carry
+    // the original `RT-INITIAL` value and the second call would
+    // hit the server with the wrong refresh_token).
+    let server = OAuthTestServer::start(vec![
+        r#"{"access_token":"AT-1","refresh_token":"RT-ROTATED-1","expires_in":3600,"scope":"read"}"#
+            .to_string(),
+        r#"{"access_token":"AT-2","refresh_token":"RT-ROTATED-2","expires_in":3600,"scope":"read"}"#
+            .to_string(),
+    ]);
+    let token_url = format!("{}/oauth/token", server.base_url());
+
+    // Stage state through the EvidenceStore directly so the test
+    // doesn't depend on a real `authenticate_connector` flow (which
+    // would require the connector's own API to be reachable).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let master_key_hex = "a5".repeat(32);
+    // The FFI's `open_store` decodes `master_key_hex` to a
+    // `[u8; 32]`; the `EvidenceStore::open` setup path here uses
+    // the same bytes (every byte = 0xa5) so both opens see the
+    // same DEK.
+    let master_key_bytes: [u8; 32] = [0xa5_u8; 32];
+
+    let scope = ScopeId::new_v4();
+    let instance = ConnectorInstanceId::new_v4();
+    let kind_tag = connector_framework::ConnectorKind::Notion.as_str();
+    let config = connector_framework::ConnectorConfig::new(
+        connector_framework::ConnectorKind::Notion,
+        connector_framework::AuthKind::OAuth2,
+        scope,
+    )
+    .with_auth_config(serde_json::json!({
+        "client_id": "phase4-client",
+        "client_secret": "s3cret",
+        "redirect_uri": "https://example.invalid/oauth/callback",
+        "token_url": token_url,
+    }));
+    let sync_state = connector_framework::SyncState::new(instance);
+    // Persisted blob schema: `{ schema: 1, config: ConnectorConfig,
+    // sync_state: SyncState }`. Mirrors
+    // `PersistedConnectorInstanceRef` in `crates/ffi/src/connector.rs`
+    // — we re-serialize via `serde_json::json!` rather than depend on
+    // a private struct from the FFI crate.
+    let instance_payload = serde_json::json!({
+        "schema": 1u32,
+        "config": config,
+        "sync_state": sync_state,
+    });
+    let initial_token = OAuth2Token::new(
+        "AT-INITIAL",
+        "RT-INITIAL",
+        chrono::Utc::now() + ChronoDuration::seconds(10),
+        "read",
+    );
+    let token_payload = serde_json::to_string(&initial_token).expect("serialize OAuth2Token");
+
+    // Seed the SQLCipher rows directly via the EvidenceStore API so
+    // they get encrypted under the right scope DEK.
+    {
+        let cfg = evidence_store::EvidenceStoreConfig::default();
+        let mut store = evidence_store::EvidenceStore::open(
+            path.to_string_lossy().as_ref(),
+            &master_key_bytes,
+            cfg,
+        )
+        .expect("EvidenceStore::open");
+        store.ensure_scope_dek(scope).expect("ensure_scope_dek");
+        store
+            .save_connector_instance(
+                instance.0,
+                scope,
+                kind_tag,
+                serde_json::to_vec(&instance_payload)
+                    .expect("serialize instance payload")
+                    .as_slice(),
+            )
+            .expect("save_connector_instance");
+        store
+            .save_connector_token(instance.0, scope, token_payload.as_bytes())
+            .expect("save_connector_token");
+    }
+
+    // First `open_store` rehydrates both rows; refresh against the
+    // local server.
+    let handle = open_store(path.to_string_lossy().into_owned(), master_key_hex.clone())
+        .expect("open_store");
+    let report = refresh_connector_token(handle, instance.0.to_string())
+        .expect("refresh_connector_token must succeed against local test server");
+    assert!(report.refreshed, "first refresh must report refreshed=true");
+    assert_eq!(report.instance_id, instance.0.to_string());
+    assert_eq!(
+        server.request_count(),
+        1,
+        "first refresh must drive exactly one HTTP POST",
+    );
+    close_store(handle).expect("close_store");
+
+    // Reopen — the persisted row must carry RT-ROTATED-1, not
+    // RT-INITIAL. Drive a second refresh; if the rotated refresh
+    // token didn't survive, the test server would still see the
+    // request body, but the substrate would have lost track of
+    // the rotation and a subsequent live refresh would race. Pin
+    // the contract by observing the second request actually fires.
+    let handle = open_store(path.to_string_lossy().into_owned(), master_key_hex)
+        .expect("open_store (post-rotation)");
+    let report2 = refresh_connector_token(handle, instance.0.to_string())
+        .expect("refresh_connector_token must succeed post-reopen");
+    assert!(
+        report2.refreshed,
+        "second refresh must also report refreshed=true",
+    );
+    assert_eq!(
+        server.request_count(),
+        2,
+        "second refresh must drive a second HTTP POST",
+    );
+    close_store(handle).expect("close_store (post-rotation)");
+
+    // Belt-and-suspenders: the persisted token after the second
+    // refresh must hold RT-ROTATED-2.
+    {
+        let cfg = evidence_store::EvidenceStoreConfig::default();
+        let store = evidence_store::EvidenceStore::open(
+            path.to_string_lossy().as_ref(),
+            &master_key_bytes,
+            cfg,
+        )
+        .expect("EvidenceStore::open (verify)");
+        let rows = store
+            .load_connector_tokens()
+            .expect("load_connector_tokens");
+        let (_instance_id, _scope, payload) = rows
+            .iter()
+            .find(|(id, _, _)| *id == instance.0)
+            .expect("token row for instance");
+        let parsed: OAuth2Token = serde_json::from_slice(payload).expect("rehydrate OAuth2Token");
+        assert_eq!(
+            parsed
+                .refresh_token
+                .as_ref()
+                .expect("rotated token must have refresh_token")
+                .expose(),
+            "RT-ROTATED-2",
+            "second refresh's rotated refresh_token must be persisted",
+        );
+        assert_eq!(parsed.access_token.expose(), "AT-2");
+    }
+
+    // Sanity: the instance id we used is a valid Uuid surface.
+    assert!(Uuid::parse_str(&instance.0.to_string()).is_ok());
+    drop(server);
+    drop(dir);
+}
+
+/// `refresh_connector_token` against an instance whose persisted
+/// token has no `refresh_token` (Slack legacy / PKCE-only public
+/// clients) MUST short-circuit with the substrate-side
+/// `no refresh_token stored …` diagnostic — never POST a
+/// `refresh_token=` to the provider's token endpoint.
+///
+/// Pins the contract by standing up a "silent" test server that
+/// would tick a counter on any inbound connection; the test asserts
+/// `request_count == 0`.
+#[cfg(feature = "http-client")]
+#[test]
+fn refresh_connector_token_short_circuits_when_no_refresh_token_stored() {
+    use chrono::Duration as ChronoDuration;
+    use connector_framework::{ConnectorInstanceId, OAuth2Token};
+    use evidence_store::ScopeId;
+    use ffi::refresh_connector_token;
+
+    let server = OAuthTestServer::start_silent();
+    let token_url = format!("{}/oauth/token", server.base_url());
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let master_key_hex = "a5".repeat(32);
+    let master_key_bytes: [u8; 32] = [0xa5_u8; 32];
+    let scope = ScopeId::new_v4();
+    let instance = ConnectorInstanceId::new_v4();
+    let kind_tag = connector_framework::ConnectorKind::Slack.as_str();
+    let config = connector_framework::ConnectorConfig::new(
+        connector_framework::ConnectorKind::Slack,
+        connector_framework::AuthKind::OAuth2,
+        scope,
+    )
+    .with_auth_config(serde_json::json!({
+        "client_id": "phase4-slack-legacy",
+        "redirect_uri": "https://example.invalid/oauth/callback",
+        "token_url": token_url,
+    }));
+    let sync_state = connector_framework::SyncState::new(instance);
+    let instance_payload = serde_json::json!({
+        "schema": 1u32,
+        "config": config,
+        "sync_state": sync_state,
+    });
+    let legacy_token = OAuth2Token::new_without_refresh(
+        "LEGACY-SLACK-AT",
+        chrono::Utc::now() + ChronoDuration::seconds(5),
+        "read",
+    );
+    let token_payload = serde_json::to_string(&legacy_token).expect("serialize OAuth2Token");
+
+    {
+        let cfg = evidence_store::EvidenceStoreConfig::default();
+        let mut store = evidence_store::EvidenceStore::open(
+            path.to_string_lossy().as_ref(),
+            &master_key_bytes,
+            cfg,
+        )
+        .expect("EvidenceStore::open");
+        store.ensure_scope_dek(scope).expect("ensure_scope_dek");
+        store
+            .save_connector_instance(
+                instance.0,
+                scope,
+                kind_tag,
+                serde_json::to_vec(&instance_payload)
+                    .expect("serialize instance payload")
+                    .as_slice(),
+            )
+            .expect("save_connector_instance");
+        store
+            .save_connector_token(instance.0, scope, token_payload.as_bytes())
+            .expect("save_connector_token");
+    }
+
+    let handle =
+        open_store(path.to_string_lossy().into_owned(), master_key_hex).expect("open_store");
+    let err = refresh_connector_token(handle, instance.0.to_string())
+        .expect_err("refresh without refresh_token must short-circuit");
+    match err {
+        FfiError::Connector { message } => {
+            assert!(
+                message.contains("no refresh_token stored")
+                    && message.contains(&instance.0.to_string())
+                    && message.contains("re-authorisation required"),
+                "expected substrate-side `no refresh_token stored` diagnostic naming the \
+                 instance and the recovery path; got: {message:?}",
+            );
+        }
+        other => panic!("expected Connector(no refresh_token …); got {other:?}"),
+    }
+    assert_eq!(
+        server.request_count(),
+        0,
+        "substrate must NOT POST refresh_token= to the provider when none is stored",
+    );
+
+    close_store(handle).expect("close_store");
+    drop(server);
+    drop(dir);
+}

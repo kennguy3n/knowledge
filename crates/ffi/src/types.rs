@@ -319,6 +319,45 @@ pub struct ConnectorStatus {
     pub last_error: Option<String>,
 }
 
+/// Wire-flat result returned by [`super::refresh_connector_token`].
+///
+/// Records what happened during an explicit token refresh —
+/// the host needs `expires_at` so it can schedule the next
+/// proactive refresh (or schedule a re-auth UI prompt for tokens
+/// whose `expires_at` is approaching), and `refreshed_at` so the
+/// host can correlate the refresh event with whatever workflow
+/// triggered it (button click, scheduled job, sync that detected
+/// expiry).
+///
+/// `refreshed == false` is reserved for the auto-refresh path in
+/// [`super::sync_connector`] where the runtime *checked* whether
+/// a refresh was needed and decided no — the explicit refresh
+/// entry point [`super::refresh_connector_token`] forces a refresh
+/// unconditionally and therefore always returns `refreshed: true`
+/// on the success path. Keeping the flag in the wire envelope means
+/// hosts that observe a `RefreshReport` in a callback / event log
+/// can disambiguate "we did real network work" from "we skipped".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct RefreshReport {
+    /// UUID-string identifier of the connector instance whose token
+    /// was refreshed.
+    pub instance_id: String,
+    /// `true` if the token was actually refreshed (a network round
+    /// trip happened); `false` if the runtime decided the current
+    /// token was still fresh enough and short-circuited. The
+    /// explicit [`super::refresh_connector_token`] entry point
+    /// always returns `true` on success.
+    pub refreshed: bool,
+    /// Unix epoch seconds when the new access token expires. The
+    /// host should use this to schedule the next proactive
+    /// refresh (or surface a re-auth prompt if the token has no
+    /// `refresh_token`).
+    pub expires_at: i64,
+    /// Unix epoch seconds when the refresh completed (close to
+    /// `Utc::now()` at the time of the call).
+    pub refreshed_at: i64,
+}
+
 /// Wire-flat result returned by [`super::sync_connector`].
 ///
 /// Records what happened during a single sync run — useful for
@@ -434,6 +473,31 @@ mod tests {
         let s = serde_json::to_string(&r).unwrap();
         let back: QueryResult = serde_json::from_str(&s).unwrap();
         assert_eq!(r, back);
+    }
+
+    #[test]
+    fn refresh_report_round_trips_via_serde() {
+        let r = RefreshReport {
+            instance_id: "00000000-0000-0000-0000-000000000001".into(),
+            refreshed: true,
+            expires_at: 1_900_000_000,
+            refreshed_at: 1_800_000_000,
+        };
+        let s = serde_json::to_string(&r).unwrap();
+        let back: RefreshReport = serde_json::from_str(&s).unwrap();
+        assert_eq!(r, back);
+        // Also pin the `refreshed: false` discriminator the
+        // sync_connector auto-refresh path emits when the token
+        // is still fresh.
+        let skipped = RefreshReport {
+            instance_id: "00000000-0000-0000-0000-000000000002".into(),
+            refreshed: false,
+            expires_at: 1_900_000_000,
+            refreshed_at: 1_800_000_000,
+        };
+        let s = serde_json::to_string(&skipped).unwrap();
+        let back: RefreshReport = serde_json::from_str(&s).unwrap();
+        assert_eq!(skipped, back);
     }
 
     #[test]

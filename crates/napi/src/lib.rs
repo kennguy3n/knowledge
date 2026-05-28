@@ -52,8 +52,8 @@ pub use ffi::try_init_tracing;
 pub use ffi::{
     AdapterReport, ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass,
     FfiKeypair, FfiSignature, HealthStatus, MemoryFilter, MemoryRecord, MemoryState,
-    MetricsSnapshot, QueryResult, RuntimeHandle, ScopeIdString, SourceKind, SubsystemHealth,
-    SubsystemStatus, SyncModeKind, SyncReport, SyncStatusKind, SynthesisTrigger,
+    MetricsSnapshot, QueryResult, RefreshReport, RuntimeHandle, ScopeIdString, SourceKind,
+    SubsystemHealth, SubsystemStatus, SyncModeKind, SyncReport, SyncStatusKind, SynthesisTrigger,
 };
 pub use types::{IngestRequest, InitConfig, QueryRequest};
 
@@ -471,6 +471,25 @@ pub fn list_connectors(handle: NapiHandle) -> NapiResult<Vec<ConnectorStatus>> {
 /// Forwards [`ffi::remove_connector`] errors as [`NapiError`].
 pub fn remove_connector(handle: NapiHandle, instance_id: String) -> NapiResult<()> {
     ffi::remove_connector(RuntimeHandle(handle), instance_id).map_err(NapiError::from)
+}
+
+/// Drive an OAuth2 `grant_type=refresh_token` round-trip against
+/// the provider's token endpoint, persist the refreshed token to
+/// SQLCipher, and update the in-memory token vault. Mirrors
+/// [`ffi::refresh_connector_token`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::refresh_connector_token`] errors as
+/// [`NapiError`]. The host should treat the `Connector` variant
+/// carrying the framework's `TokenRefresh` diagnostic as
+/// "re-authorisation required" and prompt the user through
+/// [`authenticate_connector`] rather than retrying the refresh.
+pub fn refresh_connector_token(
+    handle: NapiHandle,
+    instance_id: String,
+) -> NapiResult<RefreshReport> {
+    ffi::refresh_connector_token(RuntimeHandle(handle), instance_id).map_err(NapiError::from)
 }
 
 const B64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

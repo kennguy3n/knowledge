@@ -10,7 +10,7 @@
 //! [`connector_framework::OAuth2Client`] for `authorization_code`
 //! exchange.
 //!
-//! This module exposes five FFI functions that mirror the connector
+//! This module exposes six FFI functions that mirror the connector
 //! lifecycle:
 //!
 //! 1. [`create_connector`] — instantiate a connector for one source
@@ -18,14 +18,22 @@
 //! 2. [`authenticate_connector`] — run the OAuth2
 //!    `authorization_code` exchange and stash the bearer token in
 //!    the per-runtime [`OAuth2TokenVault`].
-//! 3. [`sync_connector`] — run `initial_sync` or `incremental_sync`
+//! 3. [`refresh_connector_token`] — drive the OAuth2
+//!    `grant_type=refresh_token` flow against the provider's token
+//!    endpoint, persist the refreshed token to SQLCipher, and
+//!    update the in-memory vault. Hosts call this on-demand (e.g.
+//!    a scheduled job before a long-running batch sync); the
+//!    [`sync_connector`] entry point also auto-invokes this path
+//!    transparently when its snapshot of the cached token is close
+//!    to expiry.
+//! 4. [`sync_connector`] — run `initial_sync` or `incremental_sync`
 //!    (chosen by [`SyncState::can_run_incremental`]), forward every
 //!    emitted [`ConnectorEvent`] into the evidence store via
 //!    [`EvidenceStore::ingest`], and advance the per-connector
 //!    [`SyncState`].
-//! 4. [`list_connectors`] — read the in-memory connector registry
+//! 5. [`list_connectors`] — read the in-memory connector registry
 //!    and surface a wire-flat [`ConnectorStatus`] row per instance.
-//! 5. [`remove_connector`] — tear down a connector (drop the
+//! 6. [`remove_connector`] — tear down a connector (drop the
 //!    `Box<dyn Connector>`, drop the cached token, drop the
 //!    `ConnectorInstance` row).
 //!
@@ -45,7 +53,7 @@
 //!   surface `Unavailable` to the host, which is the same recovery
 //!   path as "subsystem not initialised".
 //!
-//! All five functions require a prior successful call to
+//! All six functions require a prior successful call to
 //! [`crate::open_store`] (enforced by [`with_runtime`]) and operate
 //! synchronously against the per-handle `Arc<Mutex<FfiRuntime>>`
 //! mutex — connector calls against the same handle serialise, while
@@ -67,8 +75,21 @@ use crate::metrics;
 use crate::parse_scope_id;
 use crate::runtime::{with_runtime, FfiRuntime, RuntimeHandle};
 use crate::types::{
-    ConnectorKindTag, ConnectorStatus, ScopeIdString, SyncModeKind, SyncReport, SyncStatusKind,
+    ConnectorKindTag, ConnectorStatus, RefreshReport, ScopeIdString, SyncModeKind, SyncReport,
+    SyncStatusKind,
 };
+
+/// Default expiry skew used by [`sync_connector`]'s auto-refresh
+/// path. If the snapshot's `OAuth2Token` is expiring within this
+/// many seconds of `Utc::now()`, the runtime transparently runs
+/// a refresh round-trip before dispatching the sync HTTP call.
+///
+/// Matches [`connector_framework::OAuth2TokenVault`]'s
+/// `default_skew`. Hosts that need a different value for the
+/// explicit refresh entry point can call
+/// [`refresh_connector_token`] which forces a refresh regardless
+/// of skew.
+const AUTO_REFRESH_SKEW_SECS: i64 = 60;
 
 // ──────────────────────────── FFI surface ────────────────────────────
 
@@ -337,6 +358,139 @@ pub fn authenticate_connector(
     })
 }
 
+/// Drive an OAuth2 `grant_type=refresh_token` round-trip against
+/// the provider's token endpoint, persist the refreshed token to
+/// SQLCipher, and update the per-runtime [`OAuth2TokenVault`].
+///
+/// This is the explicit, host-driven counterpart to the auto-refresh
+/// path inside [`sync_connector`]. Hosts call this when they want
+/// to refresh a token proactively — e.g. a scheduled job that runs
+/// 30 minutes before a long batch sync, or a UI action that asks
+/// "warm up the connector before I start using it". The auto-refresh
+/// inside [`sync_connector`] handles the common case of "the token
+/// is about to expire and we're about to need it", but is not a
+/// substitute for the explicit refresh entry point which always
+/// performs the refresh regardless of how fresh the cached token
+/// appears to be.
+///
+/// The function follows the same three-phase locking discipline as
+/// [`authenticate_connector`] (Phase 1: snapshot under lock; Phase 2:
+/// unlocked HTTP refresh round-trip; Phase 3: re-acquire lock,
+/// re-validate the instance + scope are still alive, persist
+/// BEFORE updating the in-memory vault). The runtime mutex is never
+/// held for the duration of the provider's network call, so
+/// concurrent FFI calls on the same handle (`query`,
+/// `ingest_message`, …) continue to run.
+///
+/// On success returns a [`RefreshReport`] with `refreshed: true`
+/// (the explicit entry point always refreshes — the `refreshed`
+/// flag exists for the [`sync_connector`] auto-refresh callback
+/// path which can short-circuit when the token is still fresh) and
+/// `expires_at` reflecting the new token's expiry so hosts can
+/// schedule the next refresh.
+///
+/// # Errors
+///
+/// * [`FfiError::Unavailable`] if [`crate::open_store`] has not been
+///   called.
+/// * [`FfiError::Unavailable { subsystem: "connector-http-client" }`]
+///   if no real HTTP transport is linked in (the `http-client`
+///   feature is off, or the per-runtime transport failed to build
+///   at `open_store` time).
+/// * [`FfiError::InvalidId`] if `instance_id` is not a valid UUID.
+/// * [`FfiError::NotFound`] (`kind: "connector"`) if `instance_id`
+///   is unknown.
+/// * [`FfiError::NotFound`] (`kind: "scope"`) if the connector's
+///   scope was cryptographically forgotten between Phase 1 and
+///   Phase 3.
+/// * [`FfiError::Connector`] (carrying the framework's
+///   `TokenRefresh` diagnostic) if the provider rejects the
+///   refresh grant — typically because the refresh token was
+///   revoked or expired. The host should treat this as
+///   "re-authorisation required" and prompt the user through
+///   [`authenticate_connector`] rather than retrying the refresh.
+/// * [`FfiError::Connector`] (`"no refresh_token stored …"`) if the
+///   cached token was issued without a refresh token (Slack
+///   legacy, PKCE-only public clients, etc.). Same recovery as
+///   above — the host must drive a fresh `authorization_code`
+///   exchange.
+/// * [`FfiError::Evidence`] if the persist call to SQLCipher fails
+///   in Phase 3.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
+pub fn refresh_connector_token(
+    handle: RuntimeHandle,
+    instance_id: String,
+) -> FfiResult<RefreshReport> {
+    metrics::instrument(metrics::inc_refresh_connector_token, || {
+        let instance = parse_instance_id(&instance_id)?;
+        // ─────────────── Phase 1: snapshot (locked) ───────────────
+        //
+        // Mirror `authenticate_connector` / `sync_connector` —
+        // clone every owned value out of the runtime mutex so the
+        // unlocked Phase 2 round-trip in `refresh_token_three_phase`
+        // does NOT block concurrent FFI calls on the same handle.
+        // `lookup_connector_handle` is still consulted so the host
+        // sees the same `Unavailable` vs `NotFound` disambiguation
+        // as the create / authenticate / sync paths when the
+        // instance row rehydrated from SQLCipher but the
+        // `Arc<dyn Connector>` could not be rebuilt.
+        let (config, token) = with_runtime(handle, |rt| -> FfiResult<_> {
+            let _ = lookup_connector_handle(rt, instance, &instance_id)?;
+            let config = rt
+                .connector_instances
+                .get(&instance)
+                .ok_or_else(|| FfiError::NotFound {
+                    kind: "connector".into(),
+                    id: instance_id.clone(),
+                })?
+                .config
+                .clone();
+            if rt.is_scope_forgotten(config.scope_id) {
+                return Err(FfiError::NotFound {
+                    kind: "scope".into(),
+                    id: config.scope_id.as_uuid().to_string(),
+                });
+            }
+            let token = rt
+                .token_vault
+                .get(instance)
+                .map_err(FfiError::from)?
+                .clone();
+            Ok((config, token))
+        })?;
+        // ── Phase 2+3: refresh + persist (delegated helper) ──
+        //
+        // Force the refresh regardless of expiry by passing a skew
+        // larger than any realistic OAuth2 access-token TTL (one
+        // year). The "did we actually refresh?" question is only
+        // meaningful for the `sync_connector` auto-refresh path
+        // where the skew is set to `AUTO_REFRESH_SKEW_SECS`; here
+        // a `false` from the helper would indicate a contract
+        // mismatch with the docs above (the explicit entry point
+        // always refreshes), so we surface it through the
+        // `refreshed` flag for diagnostic clarity rather than
+        // asserting.
+        let now = Utc::now();
+        let force_skew = chrono::Duration::seconds(60 * 60 * 24 * 365);
+        let (new_token, refreshed) = refresh_token_three_phase(
+            handle,
+            instance,
+            &instance_id,
+            token,
+            config,
+            force_skew,
+            now,
+        )?;
+        Ok(RefreshReport {
+            instance_id: instance.0.to_string(),
+            refreshed,
+            expires_at: new_token.expires_at.timestamp(),
+            refreshed_at: now.timestamp(),
+        })
+    })
+}
+
 /// Run a sync against the source system. If the connector's
 /// [`SyncState`] reports `can_run_incremental() == true` (a previous
 /// successful sync produced a cursor), the runtime dispatches
@@ -363,6 +517,21 @@ pub fn authenticate_connector(
 /// `last_synced_at`. On failure the state is marked
 /// [`SyncStatus::Failed`] with the diagnostic message.
 ///
+/// Before the HTTP dispatch (Phase 2 in the locking sequence — see
+/// the module-level docs), `sync_connector` transparently runs the
+/// same three-phase refresh path as [`refresh_connector_token`]
+/// when the cached OAuth2 token is within `AUTO_REFRESH_SKEW_SECS`
+/// of expiry. This recovers from the
+/// long-`close_store`/`open_store` case where the rehydrated token
+/// has lapsed while the substrate was closed — Notion / Slack /
+/// Atlassian / Google Drive access tokens have ~1h TTLs by default,
+/// so any substrate that is closed overnight rehydrates with a
+/// stale token on the next morning's first sync. Auto-refresh
+/// failures (`TokenRefresh` from the provider, no `refresh_token`
+/// stored, transport failure, …) surface as
+/// [`FfiError::Connector`] with the per-instance state rolled to
+/// [`SyncStatus::Failed`] exactly like an HTTP dispatch failure.
+///
 /// # Errors
 ///
 /// * [`FfiError::Unavailable`] if [`crate::open_store`] has not been
@@ -371,6 +540,12 @@ pub fn authenticate_connector(
 ///   connector has not been [`authenticate_connector`]-ed (no token
 ///   in the vault).
 /// * [`FfiError::InvalidId`] if `instance_id` is not a valid UUID.
+/// * [`FfiError::Connector`] if the auto-refresh path tripped
+///   (provider rejected the refresh grant — host should drive a
+///   fresh [`authenticate_connector`] — or the cached token has
+///   no `refresh_token`). The per-connector `SyncState` is also
+///   marked `Failed` and persisted so subsequent `list_connectors`
+///   calls surface the diagnostic across `close_store`/`open_store`.
 /// * [`FfiError::Connector`] if the connector's sync method fails
 ///   (transport, provider rate limit, malformed payload, …). The
 ///   per-connector `SyncState` is also marked `Failed` so subsequent
@@ -482,6 +657,71 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                 connector,
             })
         })?;
+        // ──────── Phase 2a: auto-refresh (delegated helper) ────────
+        //
+        // Before the HTTP dispatch, transparently refresh the
+        // cached OAuth2 access token if it is expiring within
+        // `AUTO_REFRESH_SKEW_SECS` of `Utc::now()`. The helper
+        // short-circuits when the token is still fresh, so the
+        // typical "sync against a fresh token" path pays zero
+        // overhead (no network round-trip, no SQLCipher write).
+        //
+        // This recovers from the long-`close_store`/`open_store`
+        // case where the rehydrated token has lapsed while the
+        // substrate was closed (Notion/Slack/Atlassian/GDrive
+        // access tokens have ~1h TTLs by default). Without this
+        // hook, the first `sync_connector` after a long close
+        // would fail at the connector's `incremental_sync` with
+        // a generic `invalid_token` 401 from the provider, and
+        // the host would have to know to translate that into a
+        // refresh request. Wiring auto-refresh into the substrate
+        // means the host sees `SyncReport` not
+        // `FfiError::Connector` in that flow.
+        //
+        // Failure path: a TokenRefresh error (provider rejected
+        // the refresh grant, no refresh_token in the cached
+        // bundle, transport failure, …) rolls the per-instance
+        // state to `Failed` exactly like the HTTP dispatch failure
+        // path below — the host's recovery contract is uniform
+        // regardless of which phase tripped. The persisted Failed
+        // status survives `close_store`/`open_store` so the
+        // diagnostic is observable through `list_connectors`
+        // post-restart.
+        let mut snapshot = snapshot;
+        match refresh_token_three_phase(
+            handle,
+            instance,
+            &instance_id,
+            snapshot.token.clone(),
+            snapshot.config.clone(),
+            chrono::Duration::seconds(AUTO_REFRESH_SKEW_SECS),
+            Utc::now(),
+        ) {
+            Ok((new_token, _was_refreshed)) => {
+                snapshot.token = new_token;
+            }
+            Err(err) => {
+                let msg = err.to_string();
+                let _ = with_runtime(handle, |rt| {
+                    if let Some(inst) = rt.connector_instances.get_mut(&instance) {
+                        inst.sync_state.mark_failed(&msg);
+                    }
+                    let instance_snapshot =
+                        rt.connector_instances.get(&instance).map(|i| (*i).clone());
+                    if let Some(inst_clone) = instance_snapshot {
+                        if let Err(persist_err) = persist_connector_instance(rt, &inst_clone) {
+                            tracing::warn!(
+                                instance = %instance,
+                                error = %persist_err,
+                                "failed to persist sync_state Failed status after auto-refresh failure; in-memory state still updated",
+                            );
+                        }
+                    }
+                    Ok(())
+                });
+                return Err(err);
+            }
+        }
         // ──────────────── Phase 2: dispatch (UNLOCKED) ────────────────
         //
         // Drive the connector's HTTP round-trip with the runtime
@@ -810,6 +1050,194 @@ fn lookup_connector_handle(
     Err(FfiError::NotFound {
         kind: "connector".into(),
         id: instance_id_display.to_string(),
+    })
+}
+
+/// Drive the three-phase refresh-and-persist sequence for the
+/// OAuth2 token bound to `instance`.
+///
+/// The caller is responsible for Phase 1 (capturing
+/// `current_token` + `config` under the runtime mutex and then
+/// dropping the lock). This helper owns Phase 2 (unlocked refresh
+/// round-trip against the provider) and Phase 3 (re-acquire the
+/// lock, re-validate the instance + scope, persist the refreshed
+/// token to SQLCipher, update the in-memory vault).
+///
+/// Skips the refresh entirely (returns the caller's `current_token`
+/// unchanged with `refreshed == false`) when
+/// `!current_token.is_expiring_within(now, skew)`. This lets
+/// [`sync_connector`] invoke the helper unconditionally with a
+/// conservative skew (`AUTO_REFRESH_SKEW_SECS`) while
+/// [`refresh_connector_token`] forces a refresh by passing a skew
+/// larger than any realistic OAuth2 access-token TTL.
+///
+/// Three-phase locking discipline (matches
+/// `authenticate_connector`):
+///
+/// * **Phase 2 (here, UNLOCKED):** call
+///   [`ConfiguredRefresher::refresh`] (via the
+///   [`TokenRefresher`](connector_framework::TokenRefresher) trait
+///   object) — the provider's network round-trip happens with the
+///   runtime mutex released so concurrent FFI calls on the same
+///   handle (`query`, `ingest_message`, …) keep running.
+/// * **Phase 3 (here, LOCKED):** re-acquire the mutex, re-check
+///   the instance + scope are still alive (TOCTOU: a concurrent
+///   [`forget_scope`](crate::forget_scope) or
+///   [`remove_connector`] may have removed the row during the
+///   unlocked Phase 2). Persist the refreshed token to SQLCipher
+///   BEFORE updating the in-memory vault — mirrors
+///   `authenticate_connector`'s discipline so a SQLCipher write
+///   failure surfaces to the host before the vault becomes the
+///   substrate-side source of truth.
+///
+/// Hot tokens (still expiring outside `skew`) short-circuit
+/// before the OAuth2 client is built so the typical "sync against
+/// a fresh token" path in [`sync_connector`] pays zero overhead
+/// when no refresh is needed.
+///
+/// # Errors
+///
+/// * [`FfiError::Connector`] (`"no refresh_token stored …"`) if the
+///   cached token has `refresh_token = None` — re-authorisation is
+///   required, the substrate refuses to POST `refresh_token=` to
+///   the provider's token endpoint (every compliant provider
+///   rejects that with `invalid_grant`, so the substrate-side
+///   short-circuit returns a more actionable diagnostic instead).
+/// * [`FfiError::Connector`] (carrying the framework's
+///   [`ConnectorError::TokenRefresh`](connector_framework::ConnectorError)
+///   diagnostic) if the provider rejects the refresh grant.
+/// * [`FfiError::NotFound`] (`kind: "connector" | "scope"`) if
+///   the instance was removed or the scope was forgotten during
+///   the unlocked Phase 2 round-trip.
+/// * [`FfiError::Unavailable`] (`subsystem: "connector-http-client"`)
+///   if the per-runtime [`OAuth2Client`] was not built (no
+///   `http-client` feature, or transport construction failed at
+///   `open_store` time — the `not(http-client)` variant of this
+///   function unconditionally returns this error).
+/// * [`FfiError::Evidence`] if the SQLCipher persist call fails.
+#[cfg(feature = "http-client")]
+fn refresh_token_three_phase(
+    handle: RuntimeHandle,
+    instance: ConnectorInstanceId,
+    instance_id_display: &str,
+    current_token: connector_framework::OAuth2Token,
+    config: ConnectorConfig,
+    skew: chrono::Duration,
+    now: DateTime<Utc>,
+) -> FfiResult<(connector_framework::OAuth2Token, bool)> {
+    if !current_token.is_expiring_within(now, skew) {
+        return Ok((current_token, false));
+    }
+    // No refresh token in the cached bundle → re-auth required.
+    // Mirrors `OAuth2TokenVault::refresh_if_expiring`'s rationale:
+    // refusing to POST `refresh_token=` to the provider is strictly
+    // better than letting it come back as a generic `invalid_grant`,
+    // since the substrate-side message names the actionable recovery
+    // path ("re-authorisation required") while the provider's
+    // response would not.
+    let refresh_secret = match current_token.refresh_token.as_ref() {
+        Some(s) => s.expose().to_string(),
+        None => {
+            return Err(FfiError::Connector {
+                message: format!(
+                    "cannot refresh connector token: no refresh_token stored for instance {instance_id_display} \
+                     — re-authorisation required",
+                ),
+            });
+        }
+    };
+    // Build the refresher under the runtime lock. This is cheap —
+    // an `Arc<OAuth2Client>::clone` + an `OAuth2Client::clone`
+    // whose Clone impl is itself an `Arc` refcount bump on the
+    // shared transport plus a fresh allocation for the
+    // `SecretToken`-wrapped client secret. We deliberately do this
+    // here (not inside Phase 2) so the unlocked refresh below
+    // doesn't have to revisit the mutex just to grab the client
+    // handle.
+    // Capture the scope id (Copy) before moving `config` into the
+    // refresher — Phase 3 re-checks `is_scope_forgotten(scope)` to
+    // bail out if a concurrent `forget_scope` ran while the
+    // unlocked refresh was in flight.
+    let scope = config.scope_id;
+    let refresher: connector_framework::ConfiguredRefresher<
+        connector_framework::BlockingHttpTransport,
+    > = with_runtime(handle, |rt| {
+        let client_arc = rt
+            .oauth_client
+            .as_ref()
+            .ok_or_else(|| FfiError::Unavailable {
+                subsystem: "connector-http-client".into(),
+            })?;
+        Ok(connector_framework::ConfiguredRefresher::new(
+            (**client_arc).clone(),
+            config,
+        ))
+    })?;
+    // ─────────── Phase 2: refresh (UNLOCKED) ────────────
+    let refreshed = <connector_framework::ConfiguredRefresher<_> as connector_framework::TokenRefresher>::refresh(
+        &refresher,
+        &refresh_secret,
+    )
+    .map_err(FfiError::from)?;
+    // ─── Phase 3: persist + vault.put (LOCKED) ───
+    let mut new_token = current_token;
+    new_token.access_token = refreshed.access_token;
+    if let Some(rt_tok) = refreshed.refresh_token {
+        new_token.refresh_token = Some(rt_tok);
+    }
+    new_token.expires_at = refreshed.expires_at;
+    if let Some(s) = refreshed.scope {
+        new_token.scope = s;
+    }
+    with_runtime(handle, |rt| {
+        if !rt.connector_instances.contains_key(&instance) {
+            return Err(FfiError::NotFound {
+                kind: "connector".into(),
+                id: instance_id_display.to_string(),
+            });
+        }
+        if rt.is_scope_forgotten(scope) {
+            return Err(FfiError::NotFound {
+                kind: "scope".into(),
+                id: scope.as_uuid().to_string(),
+            });
+        }
+        // Persist BEFORE the in-memory `put` (mirrors
+        // `authenticate_connector` line 354) so a SQLCipher write
+        // failure surfaces to the host before the vault becomes
+        // the substrate-side source of truth. The just-completed
+        // refresh round-trip in Phase 2 cannot be undone — the
+        // provider has already minted the new access + refresh
+        // tokens — but at-rest persistence is what carries the
+        // token across `close_store`/`open_store`, so a host that
+        // observes `Ok(_)` should be able to rely on the persisted
+        // state surviving the restart.
+        persist_connector_token(rt, instance, scope, &new_token)?;
+        rt.token_vault.put(instance, new_token.clone());
+        Ok(())
+    })?;
+    Ok((new_token, true))
+}
+
+/// `http-client`-off fallback for [`refresh_token_three_phase`].
+/// Mirrors [`build_connector`]'s discipline: the signature is
+/// identical across cfg arms so callers don't have to gate every
+/// call site, and the unconditional `Unavailable` return surfaces
+/// the same recovery contract a host gets from any other connector
+/// call on a `not(http-client)` build.
+#[cfg(not(feature = "http-client"))]
+#[allow(clippy::needless_pass_by_value)] // signature matches the http-client-enabled variant for branch-free callers
+fn refresh_token_three_phase(
+    _handle: RuntimeHandle,
+    _instance: ConnectorInstanceId,
+    _instance_id_display: &str,
+    _current_token: connector_framework::OAuth2Token,
+    _config: ConnectorConfig,
+    _skew: chrono::Duration,
+    _now: DateTime<Utc>,
+) -> FfiResult<(connector_framework::OAuth2Token, bool)> {
+    Err(FfiError::Unavailable {
+        subsystem: "connector-http-client".into(),
     })
 }
 
@@ -1494,7 +1922,7 @@ mod tests {
                     assert_eq!(subsystem, "connector");
                 }
                 Err(other) => {
-                    panic!("expected Unavailable {{ subsystem: \"connector\" }}; got {other:?}",)
+                    panic!("expected Unavailable {{ subsystem: \"connector\" }}; got {other:?}")
                 }
             }
 
@@ -1514,6 +1942,219 @@ mod tests {
 
         crate::close_store(handle).expect("close_store");
         // Keep `dir` alive until after `close_store`.
+        drop(dir);
+    }
+
+    /// `refresh_connector_token` must reject a malformed UUID the
+    /// same way every other connector entry point does — with
+    /// `FfiError::InvalidId`, not by silently parsing into a zero
+    /// UUID and surfacing a confusing `NotFound`.
+    #[test]
+    fn refresh_connector_token_rejects_non_uuid_instance_id() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let master_key_hex = "a5".repeat(32);
+        let handle = crate::open_store(path.to_string_lossy().into_owned(), master_key_hex)
+            .expect("open_store");
+
+        let err = crate::refresh_connector_token(handle, "not-a-uuid".to_string())
+            .expect_err("must fail");
+        assert!(matches!(err, FfiError::InvalidId { .. }));
+
+        crate::close_store(handle).expect("close_store");
+        drop(dir);
+    }
+
+    /// `refresh_connector_token` against an unknown instance must
+    /// surface `NotFound { kind: "connector" }`. Mirrors the
+    /// contract that every other instance-keyed FFI function
+    /// (`authenticate_connector`, `sync_connector`,
+    /// `remove_connector`) has.
+    #[test]
+    fn refresh_connector_token_returns_not_found_when_instance_absent() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let master_key_hex = "a5".repeat(32);
+        let handle = crate::open_store(path.to_string_lossy().into_owned(), master_key_hex)
+            .expect("open_store");
+
+        let unknown = ConnectorInstanceId::new_v4().0.to_string();
+        let err =
+            crate::refresh_connector_token(handle, unknown.clone()).expect_err("absent must fail");
+        match err {
+            FfiError::NotFound { kind, id } => {
+                assert_eq!(kind, "connector");
+                assert_eq!(id, unknown);
+            }
+            other => panic!("expected NotFound(connector); got {other:?}"),
+        }
+
+        crate::close_store(handle).expect("close_store");
+        drop(dir);
+    }
+
+    /// `refresh_token_three_phase` is meant to short-circuit
+    /// (zero network I/O, zero SQLCipher writes) when the cached
+    /// token is still fresh. This is the hot path —
+    /// `sync_connector` invokes the helper unconditionally with a
+    /// conservative skew, and the typical "sync against a fresh
+    /// token" run must NOT pay the refresh overhead.
+    ///
+    /// Pins the short-circuit by passing a token whose
+    /// `expires_at` is far enough in the future that
+    /// `is_expiring_within(now, skew)` returns false. The helper
+    /// must return `(original_token, false)` without touching the
+    /// vault or the persistence layer.
+    #[test]
+    #[cfg(feature = "http-client")]
+    fn refresh_token_three_phase_short_circuits_when_token_not_expiring() {
+        use chrono::Duration;
+        use connector_framework::OAuth2Token;
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let master_key_hex = "a5".repeat(32);
+        let handle = crate::open_store(path.to_string_lossy().into_owned(), master_key_hex)
+            .expect("open_store");
+
+        let instance = ConnectorInstanceId::new_v4();
+        let scope_id = ScopeId::new_v4();
+        let config = ConnectorConfig::new(ConnectorKind::Notion, AuthKind::OAuth2, scope_id);
+        let now = Utc::now();
+        // Token expires far outside the skew → no refresh should
+        // happen. We deliberately use `new_without_refresh` here:
+        // if the helper short-circuits correctly it never even
+        // inspects the refresh_token field.
+        let fresh_token =
+            OAuth2Token::new_without_refresh("FRESH-AT", now + Duration::hours(1), "read");
+
+        let (returned, refreshed) = refresh_token_three_phase(
+            handle,
+            instance,
+            "irrelevant",
+            fresh_token.clone(),
+            config,
+            Duration::seconds(60),
+            now,
+        )
+        .expect("short-circuit must succeed");
+        assert!(!refreshed, "fresh token must NOT trigger a refresh");
+        assert_eq!(
+            returned.access_token.expose(),
+            fresh_token.access_token.expose(),
+            "short-circuit must return the original token verbatim",
+        );
+
+        crate::close_store(handle).expect("close_store");
+        drop(dir);
+    }
+
+    /// `refresh_token_three_phase` must reject (without a network
+    /// call) the "expiring token with no refresh_token" case
+    /// — POSTing `refresh_token=` to the provider is doomed and
+    /// would surface as a generic `invalid_grant`. The substrate
+    /// short-circuits with an actionable diagnostic instead.
+    ///
+    /// This pins the contract documented on
+    /// [`refresh_token_three_phase`]'s "no refresh_token in the
+    /// cached bundle → re-auth required" path.
+    #[test]
+    #[cfg(feature = "http-client")]
+    fn refresh_token_three_phase_errors_when_no_refresh_token() {
+        use chrono::Duration;
+        use connector_framework::OAuth2Token;
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let master_key_hex = "a5".repeat(32);
+        let handle = crate::open_store(path.to_string_lossy().into_owned(), master_key_hex)
+            .expect("open_store");
+
+        let instance = ConnectorInstanceId::new_v4();
+        let scope_id = ScopeId::new_v4();
+        let config = ConnectorConfig::new(ConnectorKind::Slack, AuthKind::OAuth2, scope_id);
+        let now = Utc::now();
+        // Token expiring within the skew, AND no refresh_token
+        // stored — substrate must refuse to POST `refresh_token=`.
+        let expiring_token =
+            OAuth2Token::new_without_refresh("EXPIRING-AT", now + Duration::seconds(5), "read");
+
+        let err = refresh_token_three_phase(
+            handle,
+            instance,
+            "instance-display-xyz",
+            expiring_token,
+            config,
+            Duration::seconds(60),
+            now,
+        )
+        .expect_err("missing refresh_token must error");
+        match err {
+            FfiError::Connector { message } => {
+                assert!(
+                    message.contains("no refresh_token stored")
+                        && message.contains("instance-display-xyz")
+                        && message.contains("re-authorisation required"),
+                    "expected substrate-side `no refresh_token stored` diagnostic naming the \
+                     instance + recovery path; got {message:?}",
+                );
+            }
+            other => panic!("expected Connector(no refresh_token); got {other:?}"),
+        }
+
+        crate::close_store(handle).expect("close_store");
+        drop(dir);
+    }
+
+    /// `refresh_token_three_phase` under `not(http-client)` must
+    /// unconditionally surface `Unavailable { subsystem:
+    /// "connector-http-client" }` — same recovery contract as
+    /// `build_connector` / `lookup_connector_handle`. This is
+    /// what `sync_connector` / `refresh_connector_token` rely on
+    /// to keep the no-feature-flag binary observable.
+    #[test]
+    #[cfg(not(feature = "http-client"))]
+    fn refresh_token_three_phase_unavailable_when_http_client_off() {
+        use chrono::Duration;
+        use connector_framework::OAuth2Token;
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let master_key_hex = "a5".repeat(32);
+        let handle = crate::open_store(path.to_string_lossy().into_owned(), master_key_hex)
+            .expect("open_store");
+
+        let instance = ConnectorInstanceId::new_v4();
+        let scope_id = ScopeId::new_v4();
+        let config = ConnectorConfig::new(ConnectorKind::Slack, AuthKind::OAuth2, scope_id);
+        let now = Utc::now();
+        let token = OAuth2Token::new("AT", "RT", now + Duration::seconds(5), "read");
+
+        let err = refresh_token_three_phase(
+            handle,
+            instance,
+            "irrelevant",
+            token,
+            config,
+            Duration::seconds(60),
+            now,
+        )
+        .expect_err("not(http-client) must always error Unavailable");
+        match err {
+            FfiError::Unavailable { subsystem } => {
+                assert_eq!(subsystem, "connector-http-client");
+            }
+            other => panic!("expected Unavailable(connector-http-client); got {other:?}"),
+        }
+
+        crate::close_store(handle).expect("close_store");
         drop(dir);
     }
 }
