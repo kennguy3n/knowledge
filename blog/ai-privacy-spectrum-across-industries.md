@@ -24,7 +24,7 @@ flowchart LR
 |---|---|---|---|
 | **1. No AI** | Nowhere | Nothing (encrypted sync of synthesis objects only) | User |
 | **2. Local AI only** | On-device SLM (Bonsai-1.7B) | Encrypted synthesis objects via CRDT | User |
-| **3. Local AI + external API** | On-device classification + managed AI endpoint | Payload previews (first N bytes, redacted) | User + tenant |
+| **3. Local AI + external API** | On-device classification + managed AI endpoint | Payload previews (first 512 chars, truncation only — PII redaction is a TODO in the current adapter) | User + tenant |
 | **4. Hybrid (TEE)** | On-device + attested enclave | Encrypted channel summaries into TEE; encrypted synthesis back | User + enclave-bound key |
 | **5. Full server-side** | Server (managed endpoint or TEE) | Connector-sourced data (already in tenant cloud) | Tenant |
 
@@ -50,7 +50,7 @@ The substrate runs with the `InferenceRouter` in fallback-only mode. The `Fallba
 
 | Actor | Protection |
 |---|---|
-| **External attacker** | SQLCipher (AES-256-CBC + HMAC-SHA512, 256k KDF iterations), hybrid X25519 + ML-KEM-768 KEM for key exchange |
+| **External attacker** | SQLCipher with `kdf_iter = 256_000` and `cipher_page_size = 4096` set explicitly (cipher mode and HMAC hash inherit SQLCipher 4 defaults: AES-256-CBC + HMAC-SHA512); hybrid X25519 + ML-KEM-768 KEM for key exchange |
 | **KChat operator** | Never possesses master key; raw evidence never syncs to server; no AI endpoint to exfiltrate through |
 | **Infrastructure operator** | No server-side processing; encrypted bytes at rest on user device; cloud provider sees only encrypted CRDT sync blobs |
 
@@ -64,7 +64,9 @@ They don't. The `agent_contract` crate's proposal-only write contract (`crates/a
 
 ### What it is
 
-The full on-device inference stack runs: Bonsai-1.7B (1.7B parameter Qwen3-derived multilingual SLM) via MLX on Apple Silicon or llama.cpp GGUF on Android/Windows/Linux, plus XLM-R for embeddings and classification. The `InferenceRouter` dispatches six task types: importance tagging, entity extraction, observation promotion, summary generation, concept synthesis, and contradiction adjudication — all with GBNF grammar-constrained decoding.
+The full on-device inference stack is designed to run Bonsai-1.7B (1.7B parameter Qwen3-derived multilingual SLM) via MLX on Apple Silicon or llama.cpp GGUF on Android/Windows/Linux, plus XLM-R for embeddings and classification. The `InferenceRouter` dispatches six task types: importance tagging, entity extraction, observation promotion, summary generation, concept synthesis, and contradiction adjudication — all with GBNF grammar-constrained decoding.
+
+Production status today: only the llama.cpp HTTP adapter ships wired into the router. The MLX adapter and the lexicon-only fallback are scaffolded as follow-on integration points (see `README.md` §Status). The architecture and contracts described in this section are the steady state, not what every platform binary ships in the current build.
 
 Raw evidence stays local. Synthesis objects (channel summaries ~2 KB each) sync encrypted via CRDT. The server never sees raw messages or the AI's intermediate outputs.
 
@@ -76,7 +78,7 @@ Raw evidence stays local. Synthesis objects (channel summaries ~2 KB each) sync 
 
 **Financial advisors (US/UK).** A wealth manager using KChat with clients. SEC/FCA rules require records retention but also restrict data sharing. Mode 2 lets the advisor's AI assistant track client preferences, meeting outcomes, and action items locally while the firm's compliance policy controls what syncs to the firm's servers (synthesis objects only, not raw evidence).
 
-**Education in emerging markets.** A teacher in Indonesia or India on a $150 Android phone (2-3 GB RAM). The device tier is `Low` — the SLM is disabled, but XLM-R INT4 (~55 MB) still runs for embeddings and the lexicon classifier handles importance tagging. Channel synthesis falls back to server-side (which means it's deferred unless the school's tenant configures a managed endpoint). The substrate degrades gracefully: the teacher still gets lexical search and basic classification, just not on-device summaries.
+**Education in emerging markets.** A teacher in Indonesia or India on a $150 Android phone (2-3 GB RAM). The device tier is `Low` — the SLM is disabled, but XLM-R INT4 (~55 MB) still runs for embeddings and the lexicon classifier handles importance tagging. Channel synthesis is not produced on-device on `Low`: it is either deferred until a higher-tier device on the same scope generates it, or — if the school's tenant has configured a managed endpoint — explicitly delegated to Mode 3. In other words, a `Low`-tier device that wants channel summaries crosses into Mode 3; pure-Mode-2 deployments simply skip on-device summaries on `Low` and rely on lexical search + basic classification.
 
 ### Threat model
 
@@ -100,7 +102,7 @@ The escalating retrieval cascade controls cost: lexical FTS5 first (milliseconds
 
 ### What it is
 
-On-device classification and observation extraction run locally (same as Mode 2). Heavy synthesis — domain-level and tenant-level aggregation — is delegated to a managed AI endpoint (the tenant's own or vendor-hosted). The `HttpManagedEndpointSynthesizer` sends structured `SynthesisRequest`s containing `InputObjectRef` payloads: each includes a `payload_preview` (first N bytes, redacted of PII), a `scope_id`, and a `tier` tag — not the full evidence body. The API key is stored as a *reference* (`api_key_ref` — an env-var name or secret-store key), never as cleartext in the synthesiser config.
+On-device classification and observation extraction run locally (same as Mode 2). Heavy synthesis — domain-level and tenant-level aggregation — is delegated to a managed AI endpoint (the tenant's own or vendor-hosted). The `HttpManagedEndpointSynthesizer` sends structured `SynthesisRequest`s containing `InputObjectRef` payloads: each includes a `payload_preview` (the first `PAYLOAD_PREVIEW_CHARS = 512` characters of the body — a truncation today, with PII redaction explicitly marked TODO in `crates/synthesis_engine/src/managed_endpoint.rs`), a `scope_id`, and a `tier` tag — not the full evidence body. The API key is stored as a *reference* (`api_key_ref` — an env-var name or secret-store key), never as cleartext in the synthesiser config.
 
 Grammar-constrained decoding runs on both sides: the on-device SLM for channel synthesis, the managed endpoint for domain/tenant synthesis. The hierarchy enforcement is type-system-enforced: `synthesize_domain` accepts only `DomainSynthesisInput` (channel summaries), not raw evidence rows.
 
@@ -122,7 +124,7 @@ Grammar-constrained decoding runs on both sides: the on-device SLM for channel s
 
 ### The honest gap
 
-Mode 3 requires trusting the managed endpoint provider with payload previews. The previews are truncated and the substrate performs PII redaction (the `payload_preview` field docs note "the real adapter will redact PII"), but this is a real trust extension. For tenants who cannot accept this, Mode 4 exists.
+Mode 3 requires trusting the managed endpoint provider with payload previews. Today the preview is a hard 512-char truncation only — the in-tree adapter explicitly marks PII redaction as a TODO (`crates/synthesis_engine/src/managed_endpoint.rs` notes "Lifts the bytes verbatim for now; the real adapter will redact PII"). The truncation bounds exposure but does not erase identifiers within the first 512 characters, and this is a real trust extension on top of Mode 2. For tenants who cannot accept this — or who need the redaction guarantee before it ships — Mode 4 exists.
 
 ---
 
@@ -130,11 +132,11 @@ Mode 3 requires trusting the managed endpoint provider with payload previews. Th
 
 ### What it is
 
-The confidential-compute hybrid mode. On-device AI handles channel-level synthesis. Cross-channel synthesis that cannot use the elected-device path (because the group is too large, devices are heterogeneous, or the workload is too heavy) runs inside an attested Trusted Execution Environment — Intel TDX, AMD SEV-SNP, or AWS Nitro Enclaves. The `TeeWorker` enforces a strict lifecycle:
+The confidential-compute hybrid mode. On-device AI handles channel-level synthesis. Cross-channel synthesis that cannot use the elected-device path (because the group is too large, devices are heterogeneous, or the workload is too heavy) runs inside an attested Trusted Execution Environment — Intel TDX, AMD SEV-SNP, or AWS Nitro Enclaves. The `TeeWorker` exposes two public entry points — `attest()` and `synthesize_domain()` — and enforces a strict lifecycle around them. The named functions below are internal lifecycle steps inside those entry points, not public API; they are described here because each one is the audit-anchor for a specific guarantee:
 
-1. **Attest before processing.** `attest_with_scope()` produces a hardware-backed quote; `verify_attestation()` checks the enclave image hash against the `expected_measurement` from the deployment manifest. Platform mismatch or measurement mismatch → hard failure, audit entry, `Lifecycle::Unattested`.
-2. **Bind synthesiser key.** `bind_synthesizer_key()` ties the attestation report to a specific synthesiser public key. Consumers verify that synthesis outputs came from the attested enclave, not from an operator-controlled process.
-3. **Scope binding.** `assert_scope_allowed()` refuses to process any scope not in the worker's configured `scope_bindings`. An operator cannot repurpose a worker to access a different customer's data.
+1. **Attest before processing.** `attest()` drives the internal `attest_with_scope()` step, which produces a hardware-backed quote; `verify_attestation()` checks the enclave image hash against the `expected_measurement` from the deployment manifest. Platform mismatch or measurement mismatch → hard failure, audit entry, `Lifecycle::Unattested`.
+2. **Bind synthesiser key.** The internal `bind_synthesizer_key()` step ties the attestation report to a specific synthesiser public key. Consumers verify that synthesis outputs came from the attested enclave, not from an operator-controlled process.
+3. **Scope binding.** Before each `synthesize_domain()` call enters the synthesising state, the internal `assert_scope_allowed()` predicate refuses any scope not in the worker's configured `scope_bindings`. An operator cannot repurpose a worker to access a different customer's data, even by calling the public entry point with a foreign scope id.
 4. **TTL-based re-attestation.** Attestation expires after `attestation_ttl` (default 1 hour). The worker must re-attest periodically.
 
 Decryption happens only inside the enclave. The worker publishes encrypted synthesis objects back into the scope. The operator cannot read plaintext even with full host access.
@@ -236,11 +238,11 @@ This is the actor most products don't discuss honestly. The KChat operator runs 
 | Read raw user messages | Raw evidence stays on-device (Modes 1-4); server never possesses user master keys |
 | Read synthesis outputs | Synthesis objects are encrypted with per-scope DEKs the operator doesn't hold |
 | Tamper with AI outputs | Every synthesis output carries a signed PROV bundle (ML-DSA-65); consumers verify |
-| Repurpose TEE worker for another scope | `assert_scope_allowed` refuses unbound scopes; audit trail records every attempt |
+| Repurpose TEE worker for another scope | The public `synthesize_domain()` entry point runs the internal `assert_scope_allowed` predicate, which refuses unbound scopes; the audit trail records every attempt |
 | Forge attestation | Attestation is hardware-backed; `verify_attestation` checks against pinned `expected_measurement` |
 | Access data via the managed endpoint | Endpoint sees only payload previews (truncated, PII-redacted); secret refs (not raw keys) prevent operator key access |
 | Bypass scope bindings via direct synthesiser construction | Documented as a footgun; production must go through `TeeWorker` policy wrapper |
-| Export user data | Deny-by-default export plane; `ExportControlRegistry.allows_concept()` returns `false` for unregistered concepts; sensitivity ceiling blocks critical data by default |
+| Export user data | `PolicyEngine::evaluate()` (`crates/export_plane/src/policy.rs`) gates every export against an `ExportPolicy`. `ExportPolicy::default()` sets `allow_raw_evidence: false` and `sensitivity_ceiling: SensitivityClass::Useful`, which blocks **both `Important` and `Critical`** by default and refuses raw evidence outright; profile constraints can only tighten this, never relax it |
 
 ### 3. Infrastructure Operator (AWS / GCP / Azure)
 
