@@ -304,7 +304,7 @@ pub struct ConnectorStatus {
     /// Which source-system connector this is.
     pub kind: ConnectorKindTag,
     /// UUID-string scope id the connector is bound to. Mirrors
-    /// [`connector_framework::ConnectorConfig::scope`].
+    /// [`connector_framework::ConnectorConfig::scope_id`].
     pub scope_id: ScopeIdString,
     /// Current sync direction (`Full` until the first successful
     /// sync, `Incremental` thereafter).

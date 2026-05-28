@@ -209,15 +209,23 @@ pub fn authenticate_connector(
         // here so concurrent FFI calls against the same handle
         // run in parallel with the network round-trip.
         //
-        // Connectors implementing `authenticate` read the auth
-        // code from `config.auth_config_json.auth_code`, so we
-        // splice it in before the call.
+        // Every concrete connector's `authenticate` impl reads the
+        // OAuth2 authorisation code from
+        // `config.auth_config_json.authorization_code` (search
+        // `crates/connectors/src/*.rs` for `"authorization_code"` —
+        // Slack, Notion, HubSpot, Email, OneDrive, Confluence,
+        // Jira, Figma, and Google Drive all hard-code this key in
+        // their `ConnectorError::Auth` diagnostic strings). The FFI
+        // splice MUST use the same key — otherwise every host
+        // `authenticate_connector` call would surface
+        // `auth_config_json.authorization_code is required` even
+        // when the host correctly passed an `auth_code` argument.
         if !config_with_code.auth_config_json.is_object() {
             config_with_code.auth_config_json = serde_json::Map::new().into();
         }
         if let Some(obj) = config_with_code.auth_config_json.as_object_mut() {
             obj.insert(
-                "auth_code".to_string(),
+                "authorization_code".to_string(),
                 serde_json::Value::String(auth_code.clone()),
             );
         }

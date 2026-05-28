@@ -32,7 +32,9 @@ use ffi::{
 // the test's own attribute). Gating the imports keeps the
 // default-features `cargo test` warning-free.
 #[cfg(feature = "http-client")]
-use ffi::{create_connector, forget_scope, list_connectors, ConnectorKindTag};
+use ffi::{
+    authenticate_connector, create_connector, forget_scope, list_connectors, ConnectorKindTag,
+};
 use tempfile::TempDir;
 
 const SCOPE: &str = "00000000-0000-0000-0000-000000000001";
@@ -791,6 +793,82 @@ fn forget_by_evidence_id_also_purges_connectors_bound_to_the_resolved_scope() {
     assert!(
         after.iter().any(|s| s.instance_id == id_b),
         "connector B (instance_id={id_b}) must survive the forget"
+    );
+
+    close_store(h).expect("close_store");
+}
+
+/// `authenticate_connector` MUST splice the OAuth2 authorisation
+/// code into `auth_config_json` under the key `"authorization_code"`
+/// — every concrete connector (`crates/connectors/src/{slack,
+/// notion, hubspot, email, onedrive, confluence, jira, figma,
+/// google_drive}.rs`) reads from that exact key in its
+/// `authenticate` impl, surfacing
+/// `ConnectorError::Auth("…auth_config_json.authorization_code is
+/// required")` if the key is missing.
+///
+/// This pins the round-4 Devin Review bug on PR #54: the FFI
+/// previously spliced the code under `"auth_code"`, which would
+/// cause every host `authenticate_connector` call to surface
+/// `auth_config_json.authorization_code is required` even when the
+/// host correctly passed an `auth_code` argument. After the fix,
+/// the connector reaches its HTTP transport and fails with a
+/// network error instead — which is what this test asserts.
+///
+/// Gated on `http-client` because `authenticate_connector` requires
+/// a live `BlockingHttpTransport` to drive the OAuth2 exchange.
+#[cfg(feature = "http-client")]
+#[test]
+fn authenticate_connector_splices_auth_code_under_correct_json_key() {
+    let (h, _dir) = fresh_store();
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    // Point at a reserved-for-testing TLD (RFC 6761 `.invalid`) so
+    // DNS resolution fails fast on every resolver — no real
+    // network round-trip is required, and the test stays
+    // deterministic regardless of the runner's connectivity.
+    let cfg = r#"{
+        "client_id": "test-client",
+        "redirect_uri": "https://example.invalid/oauth/callback",
+        "token_url": "https://example.invalid/oauth/token"
+    }"#;
+    let instance_id = create_connector(h, ConnectorKindTag::Notion, scope.clone(), cfg.to_string())
+        .expect("create_connector");
+
+    // Drive the actual surface this test cares about. Every
+    // concrete connector will reject the call (no live OAuth2
+    // server is reachable), so we expect an error — the question
+    // is *which* error. The pre-fix bug surfaces as
+    // `auth_config_json.authorization_code is required` because
+    // the connector never sees the spliced key; the post-fix
+    // behaviour surfaces as a transport error because the
+    // connector reads the (correctly-spliced) code and tries to
+    // exchange it against `example.invalid`.
+    let err = authenticate_connector(h, instance_id, "test-authorization-code".into())
+        .expect_err("authenticate_connector should fail against example.invalid");
+    let msg = format!("{err}");
+    assert!(
+        !msg.contains("auth_config_json.authorization_code is required"),
+        "regression: authenticate_connector spliced auth code under wrong JSON key; \
+         every concrete connector reads from `authorization_code` and surfaced \
+         the missing-key error — got: {msg}",
+    );
+    // Sanity: confirm we actually reached the connector's HTTP
+    // transport (otherwise the negative assertion above would
+    // pass vacuously e.g. on an `Unavailable` error). Accept any
+    // of: a transport / network diagnostic substring, or the
+    // connector framework's own `Transport` variant tag.
+    let reached_transport = msg.contains("transport")
+        || msg.contains("Transport")
+        || msg.contains("dns")
+        || msg.contains("lookup")
+        || msg.contains("error sending request")
+        || msg.contains("connect")
+        || msg.contains("network");
+    assert!(
+        reached_transport,
+        "authenticate_connector reached neither the connector's HTTP transport \
+         nor the missing-key path — got: {msg}",
     );
 
     close_store(h).expect("close_store");
