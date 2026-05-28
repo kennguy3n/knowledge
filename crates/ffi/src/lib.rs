@@ -667,6 +667,44 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
                 })?;
             rt.user_memories.remove(&scope);
             rt.channel_memories.remove(&scope);
+            // Cryptographic-forgetting contract (see the function's
+            // own docstring above and `FfiRuntime::forget_scope`):
+            // every piece of state bound to the forgotten scope MUST
+            // become unrecoverable. Connector lifecycle state lives
+            // outside the encrypted-evidence-store path that the
+            // SQLCipher tombstone covers — without explicit cleanup
+            // here, a forgotten scope's `ConnectorInstance` rows,
+            // live `Arc<dyn Connector>` handles, and cached OAuth2
+            // bearer / refresh tokens would survive the call,
+            // letting a later `sync_connector` (or any token-vault
+            // dump) resurrect plaintext provider credentials and
+            // re-emit fresh evidence onto a tombstoned scope.
+            //
+            // Collect first to release the immutable borrow on
+            // `connector_instances` before the removal loop takes
+            // mutable borrows on the same map plus disjoint
+            // `connectors` / `token_vault` borrows.
+            let connector_ids_to_remove: Vec<connector_framework::ConnectorInstanceId> = rt
+                .connector_instances
+                .iter()
+                .filter_map(|(id, inst)| {
+                    if inst.config.scope_id == scope {
+                        Some(*id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for id in connector_ids_to_remove {
+                rt.connector_instances.remove(&id);
+                rt.connectors.remove(&id);
+                // `OAuth2TokenVault::remove` returns
+                // `ConnectorError::TokenNotFound` if no token was
+                // cached for the instance (e.g. a connector created
+                // but never authenticated). Treat that as a benign
+                // no-op so the forgetting path is idempotent.
+                let _ = rt.token_vault.remove(id);
+            }
             Ok(())
         })
     })

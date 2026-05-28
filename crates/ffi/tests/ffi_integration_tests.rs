@@ -26,6 +26,13 @@ use ffi::{
     FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RuntimeHandle,
     SourceKind, SubsystemStatus, SynthesisTrigger,
 };
+// `create_connector` / `list_connectors` / `forget_scope` /
+// `ConnectorKindTag` are only needed by the connector-cleanup
+// integration test, which is itself gated on `http-client` (see
+// the test's own attribute). Gating the imports keeps the
+// default-features `cargo test` warning-free.
+#[cfg(feature = "http-client")]
+use ffi::{create_connector, forget_scope, list_connectors, ConnectorKindTag};
 use tempfile::TempDir;
 
 const SCOPE: &str = "00000000-0000-0000-0000-000000000001";
@@ -617,6 +624,91 @@ fn health_check_envelope_includes_connector_subsystem() {
             "inference_router",
             "connector",
         ]
+    );
+
+    close_store(h).expect("close_store");
+}
+
+/// Cryptographic-forgetting contract: every piece of state bound
+/// to the forgotten scope MUST become unrecoverable. This pins the
+/// connector-state cleanup branch of `forget_scope` against
+/// regression — without it, a forgotten scope's `ConnectorInstance`
+/// rows, live `Arc<dyn Connector>` handles, and cached OAuth2
+/// tokens would survive the call, letting a later `sync_connector`
+/// resurrect plaintext provider credentials and re-emit fresh
+/// evidence onto a tombstoned scope.
+///
+/// The test creates two connectors against different scopes,
+/// forgets one scope, and asserts:
+///
+/// 1. The connector bound to the forgotten scope disappears from
+///    `list_connectors`.
+/// 2. The connector bound to the OTHER scope survives.
+///
+/// Direct token-vault inspection lives in the unit test in
+/// `connector.rs`; this test pins the FFI-observable contract.
+///
+/// Gated on `http-client` because `create_connector` requires a
+/// live `BlockingHttpTransport` — without the feature every
+/// connector lifecycle call returns `FfiError::Unavailable`, which
+/// is the surface this test is *not* exercising. The Phase 2 CI
+/// workflow builds + tests this crate with `--all-features` so the
+/// gate keeps the unit test deterministic on every developer's
+/// local `cargo test` while still being exercised by the
+/// release-shape CI matrix.
+#[cfg(feature = "http-client")]
+#[test]
+fn forget_scope_purges_connectors_bound_to_the_forgotten_scope() {
+    let (h, _dir) = fresh_store();
+
+    let scope_a = uuid::Uuid::new_v4().to_string();
+    let scope_b = uuid::Uuid::new_v4().to_string();
+
+    // Use a minimal-but-real auth config so the JSON parses; the
+    // test never authenticates the connector (which would require a
+    // live OAuth2 provider) — `create_connector` allocates the
+    // instance regardless and that's what `forget_scope` must clean
+    // up.
+    let cfg = r#"{
+        "client_id": "test-client",
+        "redirect_uri": "https://example.invalid/oauth/callback",
+        "token_url": "https://example.invalid/oauth/token"
+    }"#;
+    let id_a = create_connector(
+        h,
+        ConnectorKindTag::Notion,
+        scope_a.clone(),
+        cfg.to_string(),
+    )
+    .expect("create_connector A");
+    let id_b = create_connector(
+        h,
+        ConnectorKindTag::Notion,
+        scope_b.clone(),
+        cfg.to_string(),
+    )
+    .expect("create_connector B");
+
+    let before = list_connectors(h).expect("list before");
+    assert_eq!(before.len(), 2, "both connectors should be registered");
+
+    // Forget scope A — the connector bound to scope A must
+    // disappear.
+    forget_scope(h, scope_a.clone()).expect("forget_scope A");
+
+    let after = list_connectors(h).expect("list after forget_scope A");
+    assert_eq!(
+        after.len(),
+        1,
+        "exactly one connector should survive — the one bound to scope B"
+    );
+    assert!(
+        after.iter().all(|s| s.instance_id != id_a),
+        "connector A (instance_id={id_a}) must be purged"
+    );
+    assert!(
+        after.iter().any(|s| s.instance_id == id_b),
+        "connector B (instance_id={id_b}) must survive"
     );
 
     close_store(h).expect("close_store");

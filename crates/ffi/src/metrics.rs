@@ -419,6 +419,14 @@ pub struct ErrorCounters {
     /// `FfiError::InferenceFailure`.
     pub inference_failure: u64,
     /// `FfiError::Connector`.
+    //
+    // `#[serde(default)]` per the additive-wire-contract rule
+    // documented on `MetricsSnapshot` (see lines ~297-300 above):
+    // `ErrorCounters` is embedded as `MetricsSnapshot::errors_by_kind`,
+    // so an older emitter's `ErrorCounters` JSON (which lacks the
+    // `connector` key entirely) must still deserialise under a newer
+    // reader without surfacing a `missing field 'connector'` error.
+    #[serde(default)]
     pub connector: u64,
 }
 

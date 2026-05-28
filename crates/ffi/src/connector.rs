@@ -51,10 +51,12 @@
 //! mutex — connector calls against the same handle serialise, while
 //! calls against different handles run in parallel.
 
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use connector_framework::{
     AuthKind, Connector, ConnectorConfig, ConnectorEvent, ConnectorInstance, ConnectorInstanceId,
-    ConnectorKind, SyncMode, SyncRunResult, SyncState, SyncStatus,
+    ConnectorKind, SyncMode, SyncState, SyncStatus,
 };
 use evidence_store::{ImportanceClass, ScopeId};
 use uuid::Uuid;
@@ -166,28 +168,26 @@ pub fn authenticate_connector(
 ) -> FfiResult<()> {
     metrics::instrument(metrics::inc_authenticate_connector, || {
         let instance = parse_instance_id(&instance_id)?;
-        with_runtime(handle, |rt| {
-            // `connectors` and `connector_instances` are two
-            // separate `HashMap` fields on `FfiRuntime`, so the
-            // borrow checker is happy to lend out one shared
-            // borrow each. We *must* hold the `&connector` borrow
-            // across the `rt.token_vault.put(..)` call below
-            // (the call site immediately after `.authenticate(..)`)
-            // because `connector` is what we're authenticating with;
-            // taking a `&mut rt.token_vault` simultaneously is fine
-            // because field-level disjoint-borrow analysis sees
-            // `token_vault` as a third distinct field. If a future
-            // refactor moves any of these onto the same enclosing
-            // struct, this disjoint-borrow pattern must be replaced
-            // with the snapshot-then-call style used by
-            // `run_connector_sync` (see line ~423 for the template).
+        // ─────────────── Phase 1: snapshot (locked) ───────────────
+        //
+        // Clone the `Arc<dyn Connector>` handle + a fresh
+        // `ConnectorConfig` out of the runtime, then drop the
+        // mutex. Mirrors the locking discipline documented on
+        // `synthesize_scope` in `crates/ffi/src/lib.rs`:
+        // long-latency I/O (here the OAuth2 token endpoint
+        // round-trip) MUST NOT hold the per-handle mutex, otherwise
+        // every other FFI call on the same handle (`query`,
+        // `ingest_message`, `health_check`, …) blocks for the
+        // duration of the provider's network round-trip.
+        let (connector, mut config_with_code) = with_runtime(handle, |rt| {
             let connector = rt
                 .connectors
                 .get(&instance)
                 .ok_or_else(|| FfiError::NotFound {
                     kind: "connector".into(),
                     id: instance_id.clone(),
-                })?;
+                })?
+                .clone(); // `Arc::clone` — one atomic increment.
             let config_clone = rt
                 .connector_instances
                 .get(&instance)
@@ -197,26 +197,48 @@ pub fn authenticate_connector(
                 })?
                 .config
                 .clone();
-            // The connector's own `authenticate` impl drives the
-            // OAuth2 exchange through its bundled
-            // `Arc<dyn OAuth2CodeExchange>` — by the time this
-            // returns the bearer token is fully validated against
-            // the provider's token endpoint.
-            //
-            // Connectors implementing `authenticate` read the auth
-            // code from `config.auth_config_json.auth_code`, so we
-            // splice it in before the call.
-            let mut config_with_code = config_clone;
-            if !config_with_code.auth_config_json.is_object() {
-                config_with_code.auth_config_json = serde_json::Map::new().into();
+            Ok((connector, config_clone))
+        })?;
+        // ─────────── Phase 2: OAuth2 exchange (UNLOCKED) ────────────
+        //
+        // The connector's own `authenticate` impl drives the
+        // OAuth2 exchange through its bundled
+        // `Arc<dyn OAuth2CodeExchange>` — by the time this returns
+        // the bearer token is fully validated against the
+        // provider's token endpoint. The runtime mutex is NOT held
+        // here so concurrent FFI calls against the same handle
+        // run in parallel with the network round-trip.
+        //
+        // Connectors implementing `authenticate` read the auth
+        // code from `config.auth_config_json.auth_code`, so we
+        // splice it in before the call.
+        if !config_with_code.auth_config_json.is_object() {
+            config_with_code.auth_config_json = serde_json::Map::new().into();
+        }
+        if let Some(obj) = config_with_code.auth_config_json.as_object_mut() {
+            obj.insert(
+                "auth_code".to_string(),
+                serde_json::Value::String(auth_code.clone()),
+            );
+        }
+        let token = connector.authenticate(&config_with_code)?;
+        // ──────────────── Phase 3: persist (locked) ────────────────
+        //
+        // Re-acquire the mutex. We re-check the instance is still
+        // registered because another thread could have called
+        // `remove_connector` while the mutex was released — racing
+        // the token put against a removed instance would resurrect
+        // dropped state. If the instance is gone we drop the token
+        // on the floor (the provider's OAuth2 token will expire on
+        // its own schedule) and surface `NotFound` so the host
+        // sees a clean diagnostic.
+        with_runtime(handle, |rt| {
+            if !rt.connector_instances.contains_key(&instance) {
+                return Err(FfiError::NotFound {
+                    kind: "connector".into(),
+                    id: instance_id.clone(),
+                });
             }
-            if let Some(obj) = config_with_code.auth_config_json.as_object_mut() {
-                obj.insert(
-                    "auth_code".to_string(),
-                    serde_json::Value::String(auth_code.clone()),
-                );
-            }
-            let token = connector.authenticate(&config_with_code)?;
             rt.token_vault.put(instance, token);
             Ok(())
         })
@@ -270,16 +292,45 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
     metrics::instrument(metrics::inc_sync_connector, || {
         let instance = parse_instance_id(&instance_id)?;
         let started_at = Utc::now();
-        with_runtime(handle, |rt| {
-            let scope = rt
-                .connector_instances
-                .get(&instance)
-                .ok_or_else(|| FfiError::NotFound {
-                    kind: "connector".into(),
-                    id: instance_id.clone(),
-                })?
-                .config
-                .scope_id;
+        // ─────────────── Phase 1: snapshot (locked) ───────────────
+        //
+        // Validate the instance + scope, ensure scope registration,
+        // flip `SyncState` to `InProgress`, and snapshot the data
+        // the unlocked dispatch needs (`Arc<dyn Connector>` clone,
+        // `ConnectorConfig`, `OAuth2Token`, `SyncMode`, source kind
+        // + tag). After this closure returns we drop the runtime
+        // mutex so the (potentially multi-second) HTTP round-trip
+        // does NOT block concurrent `query` / `ingest_message` /
+        // `health_check` calls on the same handle. Mirrors the
+        // locking discipline documented on `synthesize_scope` in
+        // `crates/ffi/src/lib.rs`.
+        let snapshot = with_runtime(handle, |rt| -> FfiResult<SyncSnapshot> {
+            // Read every immutable field out of the connector
+            // instance up front, then drop the immutable borrow
+            // before any `&mut rt.…` call. Avoids the disjoint
+            // borrow collision against `rt.ensure_scope_registered`
+            // and `rt.connector_instances.get_mut` further below.
+            let (scope, config, source_kind, mode, sync_state_snapshot) = {
+                let inst =
+                    rt.connector_instances
+                        .get(&instance)
+                        .ok_or_else(|| FfiError::NotFound {
+                            kind: "connector".into(),
+                            id: instance_id.clone(),
+                        })?;
+                let mode = if inst.sync_state.can_run_incremental() {
+                    SyncMode::Incremental
+                } else {
+                    SyncMode::Full
+                };
+                (
+                    inst.config.scope_id,
+                    inst.config.clone(),
+                    inst.config.kind,
+                    mode,
+                    inst.sync_state.clone(),
+                )
+            };
             if rt.is_scope_forgotten(scope) {
                 return Err(FfiError::NotFound {
                     kind: "scope".into(),
@@ -287,44 +338,117 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                 });
             }
             rt.ensure_scope_registered(scope)?;
-            let (mode_run, run_result) = run_connector_sync(rt, instance, &instance_id)?;
-            // Past this point the connector itself succeeded and
-            // `run_connector_sync` flipped the per-instance state to
-            // `InProgress`. Every error path below MUST roll the
-            // state forward to `Failed` (with a diagnostic) before
-            // bubbling up — otherwise `list_connectors` would keep
-            // surfacing `InProgress` after the substrate already
-            // observed a fatal error, which is the bug fixed in
-            // the Devin Review thread that motivated this block.
-            //
-            // We collect the post-sync work into a closure so the
-            // single match below is the only `mark_failed` site we
-            // need to maintain; new error paths added later inherit
-            // the contract automatically as long as they `?` out of
-            // the closure.
+            let token = rt
+                .token_vault
+                .get(instance)
+                .map_err(FfiError::from)?
+                .clone();
+            let connector = rt
+                .connectors
+                .get(&instance)
+                .ok_or_else(|| FfiError::NotFound {
+                    kind: "connector".into(),
+                    id: instance_id.clone(),
+                })?
+                .clone(); // `Arc::clone` — one atomic increment.
+                          // Flip the per-instance state to `InProgress` *inside*
+                          // the mutex so concurrent `list_connectors` calls see
+                          // the in-flight marker for the duration of the unlocked
+                          // dispatch below.
+            if let Some(inst) = rt.connector_instances.get_mut(&instance) {
+                inst.sync_state.mark_in_progress();
+            }
+            Ok(SyncSnapshot {
+                scope,
+                config,
+                source_kind,
+                mode,
+                sync_state_snapshot,
+                token,
+                connector,
+            })
+        })?;
+        // ──────────────── Phase 2: dispatch (UNLOCKED) ────────────────
+        //
+        // Drive the connector's HTTP round-trip with the runtime
+        // mutex released. Concurrent FFI calls against the same
+        // handle (queries, memory reads, even another sync against
+        // a different connector instance) run in parallel with this
+        // network call. Per-instance serialisation is still
+        // preserved by the `SyncStatus::InProgress` marker set in
+        // Phase 1 — a second `sync_connector` against the same id
+        // would still proceed but the existing in-flight call will
+        // overwrite `mark_succeeded` / `mark_failed` based on its
+        // own outcome; the Phase 3 contract (every error path
+        // re-marks `Failed`) preserves correctness.
+        let dispatch_result = if snapshot.mode == SyncMode::Incremental {
+            snapshot.connector.incremental_sync(
+                &snapshot.config,
+                &snapshot.token,
+                &snapshot.sync_state_snapshot,
+            )
+        } else {
+            snapshot
+                .connector
+                .initial_sync(&snapshot.config, &snapshot.token)
+        };
+        let run_result = match dispatch_result {
+            Ok(r) => r,
+            Err(err) => {
+                // Network / transport failure: roll the state
+                // forward to `Failed` (under the mutex) and bubble.
+                let msg = err.to_string();
+                let _ = with_runtime(handle, |rt| {
+                    if let Some(inst) = rt.connector_instances.get_mut(&instance) {
+                        inst.sync_state.mark_failed(&msg);
+                    }
+                    Ok(())
+                });
+                return Err(FfiError::from(err));
+            }
+        };
+        // ─────────────── Phase 3: persist (locked) ────────────────
+        //
+        // Re-acquire the mutex. TOCTOU defence: another thread may
+        // have called `forget_scope(scope)` or `remove_connector(id)`
+        // during the unlocked dispatch. Re-check both before
+        // ingesting — racing fresh evidence into a forgotten scope
+        // would resurrect deleted state and break the
+        // cryptographic-forgetting guarantee documented on
+        // `crate::forget_scope`. Every error path here is also
+        // responsible for rolling the per-instance state to
+        // `Failed` so a subsequent `sync_connector` call goes
+        // through `can_run_incremental() == false` and falls back
+        // to a fresh `initial_sync` rather than racing an
+        // incremental against a half-ingested cursor.
+        with_runtime(handle, |rt| {
             let post_sync_result: FfiResult<(Vec<String>, DateTime<Utc>)> = (|| {
-                let source_kind = rt
-                    .connector_instances
-                    .get(&instance)
-                    .map(|inst| inst.config.kind)
-                    .ok_or_else(|| FfiError::NotFound {
+                if !rt.connector_instances.contains_key(&instance) {
+                    return Err(FfiError::NotFound {
                         kind: "connector".into(),
                         id: instance_id.clone(),
-                    })?;
-                // Persist events into the evidence store. We hold
-                // the `&mut FfiRuntime` guard for the whole loop so
-                // the per-handle mutex is contended by exactly one
-                // sync at a time — sync calls against the same
-                // connector serialise naturally without needing
-                // per-connector locks.
+                    });
+                }
+                if rt.is_scope_forgotten(snapshot.scope) {
+                    return Err(FfiError::NotFound {
+                        kind: "scope".into(),
+                        id: snapshot.scope.as_uuid().to_string(),
+                    });
+                }
+                // Persist events into the evidence store. Holding
+                // the mutex across the ingest loop is fine — the
+                // ingest is purely local SQLCipher I/O, not a
+                // multi-second network round-trip, so concurrent
+                // calls serialise on the local-only critical
+                // section, not on the network.
                 let mut ingested_ids: Vec<String> = Vec::new();
                 for ev in &run_result.events {
                     if let Some(body) = event_to_evidence_body(ev) {
-                        let source_tag = connector_source_tag(source_kind);
+                        let source_tag = connector_source_tag(snapshot.source_kind);
                         let result = rt
                             .store_mut()
                             .ingest(
-                                scope,
+                                snapshot.scope,
                                 body.as_bytes(),
                                 Some(source_tag),
                                 ImportanceClass::Important,
@@ -336,10 +460,8 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                     }
                 }
                 // Advance sync state to reflect the successful
-                // run. Doing this inside the closure (rather than
-                // after the `match`) keeps the success path
-                // single-write — the failure path below performs
-                // its own `mark_failed`.
+                // run. Single-write success path; the failure path
+                // below performs its own `mark_failed`.
                 let completed_at = Utc::now();
                 if let Some(inst) = rt.connector_instances.get_mut(&instance) {
                     inst.sync_state
@@ -350,14 +472,6 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
             let (ingested_ids, completed_at) = match post_sync_result {
                 Ok(v) => v,
                 Err(err) => {
-                    // Roll the state forward to `Failed` so a
-                    // subsequent `list_connectors` reflects what
-                    // actually happened, and so the next
-                    // `sync_connector` call goes through
-                    // `can_run_incremental() == false` and falls
-                    // back to a fresh `initial_sync` rather than
-                    // racing an incremental against a half-ingested
-                    // cursor.
                     let msg = err.to_string();
                     if let Some(inst) = rt.connector_instances.get_mut(&instance) {
                         inst.sync_state.mark_failed(&msg);
@@ -367,18 +481,35 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
             };
             Ok(SyncReport {
                 instance_id: instance.0.to_string(),
-                mode: framework_sync_mode_to_kind(mode_run),
+                mode: framework_sync_mode_to_kind(snapshot.mode),
                 #[allow(clippy::cast_possible_truncation)] // events_total fits in u32 for any realistic sync window
                 events_total: run_result.events.len() as u32,
                 #[allow(clippy::cast_possible_truncation)] // ingested subset is ≤ events_total
                 events_ingested: ingested_ids.len() as u32,
                 ingested_evidence_ids: ingested_ids,
-                next_cursor: run_result.next_cursor,
+                next_cursor: run_result.next_cursor.clone(),
                 started_at: started_at.timestamp(),
                 completed_at: completed_at.timestamp(),
             })
         })
     })
+}
+
+/// Per-call snapshot captured under the runtime mutex in
+/// [`sync_connector`]'s Phase 1 and consumed by the unlocked
+/// dispatch in Phase 2 + the locked persist in Phase 3.
+///
+/// Owning every field (no borrows back into `FfiRuntime`) is what
+/// lets the mutex drop between Phase 1 and Phase 2 — see the
+/// function-level comments for the locking discipline.
+struct SyncSnapshot {
+    scope: ScopeId,
+    config: ConnectorConfig,
+    source_kind: ConnectorKind,
+    mode: SyncMode,
+    sync_state_snapshot: SyncState,
+    token: connector_framework::OAuth2Token,
+    connector: Arc<dyn Connector>,
 }
 
 /// Return the list of configured connector instances on this
@@ -451,75 +582,12 @@ pub fn remove_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult
 
 // ──────────────────────────── Internals ──────────────────────────────
 
-/// Dispatch the connector's sync method while the runtime mutex is
-/// held. Splitting this out keeps [`sync_connector`] readable and
-/// also gives us a single place to mark the per-instance
-/// `SyncState` as `InProgress` / `Failed` regardless of which branch
-/// of the if/else was taken.
-fn run_connector_sync(
-    rt: &mut FfiRuntime,
-    instance: ConnectorInstanceId,
-    instance_id: &str,
-) -> FfiResult<(SyncMode, SyncRunResult)> {
-    // Mark the sync as in-flight up front. If anything below fails
-    // we will overwrite to `Failed`; on success `mark_succeeded` is
-    // called by the parent.
-    if let Some(inst) = rt.connector_instances.get_mut(&instance) {
-        inst.sync_state.mark_in_progress();
-    }
-    // Snapshot the config + state for the dispatch — we cannot
-    // hold the mutable borrow of `connector_instances` while we
-    // call into `connector.initial_sync(&config, &token)` because
-    // the connector itself may need to recurse into `rt` (it
-    // currently doesn't, but the snapshot pattern keeps the borrow
-    // checker happy without an unsafe reach-around).
-    let snapshot = rt
-        .connector_instances
-        .get(&instance)
-        .ok_or_else(|| FfiError::NotFound {
-            kind: "connector".into(),
-            id: instance_id.to_string(),
-        })?
-        .clone();
-    let token = rt
-        .token_vault
-        .get(instance)
-        .map_err(FfiError::from)?
-        .clone();
-    let connector = rt
-        .connectors
-        .get(&instance)
-        .ok_or_else(|| FfiError::NotFound {
-            kind: "connector".into(),
-            id: instance_id.to_string(),
-        })?;
-    let mode = if snapshot.sync_state.can_run_incremental() {
-        SyncMode::Incremental
-    } else {
-        SyncMode::Full
-    };
-    let result = if mode == SyncMode::Incremental {
-        connector.incremental_sync(&snapshot.config, &token, &snapshot.sync_state)
-    } else {
-        connector.initial_sync(&snapshot.config, &token)
-    };
-    match result {
-        Ok(run) => Ok((mode, run)),
-        Err(err) => {
-            // Capture the diagnostic on the per-instance state so
-            // `list_connectors` surfaces it to the host UI.
-            let msg = err.to_string();
-            if let Some(inst) = rt.connector_instances.get_mut(&instance) {
-                inst.sync_state.mark_failed(&msg);
-            }
-            Err(FfiError::from(err))
-        }
-    }
-}
-
-/// Build a fresh `Box<dyn Connector>` for `kind`, wiring it to the
+/// Build a fresh `Arc<dyn Connector>` for `kind`, wiring it to the
 /// runtime-shared [`BlockingHttpTransport`] + [`OAuth2Client`] pair
-/// when the `http-client` feature is enabled. When it is not, every
+/// when the `http-client` feature is enabled. When it is not, or
+/// when the per-runtime transport failed to build at
+/// [`crate::open_store`] time (see
+/// `FfiRuntime::http_transport`'s soft-fail rationale), every
 /// kind returns
 /// [`FfiError::Unavailable { subsystem: "connector-http-client" }`]
 /// so the host can detect the configuration gap explicitly instead
@@ -534,18 +602,36 @@ fn run_connector_sync(
 /// keep their trait-object-typed wiring contract without forcing
 /// every concrete connector to monomorphise on
 /// `BlockingHttpTransport`.
+///
+/// The returned handle is `Arc<dyn Connector>` rather than
+/// `Box<dyn Connector>` so [`sync_connector`] and
+/// [`authenticate_connector`] can clone the handle out of the
+/// runtime mutex, drop the lock, and run the connector's HTTP
+/// round-trip with the lock released. See those functions for the
+/// three-phase locking pattern.
 #[cfg(feature = "http-client")]
 fn build_connector(
     rt: &FfiRuntime,
     kind: ConnectorKind,
     instance: ConnectorInstanceId,
-) -> FfiResult<Box<dyn Connector>> {
-    use std::sync::Arc;
-
+) -> FfiResult<Arc<dyn Connector>> {
     use connector_framework::{HttpTransport, OAuth2CodeExchange};
     use connectors::{
         ConfluenceConnector, EmailConnector, FigmaConnector, GoogleDriveConnector,
         HubSpotConnector, JiraConnector, NotionConnector, OneDriveConnector, SlackConnector,
+    };
+    // If the per-runtime transport failed to build at
+    // `open_store` time the connector subsystem is disabled —
+    // surface the same `Unavailable` envelope that the
+    // `not(http-client)` build returns so hosts have one uniform
+    // recovery contract regardless of why the transport is absent.
+    let (transport_arc, oauth_arc) = match (rt.http_transport.as_ref(), rt.oauth_client.as_ref()) {
+        (Some(t), Some(o)) => (Arc::clone(t), Arc::clone(o)),
+        _ => {
+            return Err(FfiError::Unavailable {
+                subsystem: "connector-http-client".into(),
+            })
+        }
     };
     // `.clone()` on `Arc<ConcreteT>` returns `Arc<ConcreteT>`; the
     // let-binding type ascription triggers the standard
@@ -553,26 +639,26 @@ fn build_connector(
     // `Arc::clone(&…)` instead would force the type inference
     // through `Arc::<dyn Trait>::clone`, which can't see through
     // the `&Arc<ConcreteT>` argument.
-    let transport: Arc<dyn HttpTransport> = rt.http_transport.clone();
-    let oauth_client: Arc<dyn OAuth2CodeExchange> = rt.oauth_client.clone();
+    let transport: Arc<dyn HttpTransport> = transport_arc;
+    let oauth_client: Arc<dyn OAuth2CodeExchange> = oauth_arc;
     Ok(match kind {
         ConnectorKind::GoogleDrive => {
-            Box::new(GoogleDriveConnector::new(instance, transport, oauth_client))
+            Arc::new(GoogleDriveConnector::new(instance, transport, oauth_client))
         }
         ConnectorKind::OneDrive => {
-            Box::new(OneDriveConnector::new(instance, transport, oauth_client))
+            Arc::new(OneDriveConnector::new(instance, transport, oauth_client))
         }
-        ConnectorKind::Notion => Box::new(NotionConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Jira => Box::new(JiraConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Notion => Arc::new(NotionConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Jira => Arc::new(JiraConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Confluence => {
-            Box::new(ConfluenceConnector::new(instance, transport, oauth_client))
+            Arc::new(ConfluenceConnector::new(instance, transport, oauth_client))
         }
-        ConnectorKind::Figma => Box::new(FigmaConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Figma => Arc::new(FigmaConnector::new(instance, transport, oauth_client)),
         ConnectorKind::HubSpot => {
-            Box::new(HubSpotConnector::new(instance, transport, oauth_client))
+            Arc::new(HubSpotConnector::new(instance, transport, oauth_client))
         }
-        ConnectorKind::Slack => Box::new(SlackConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::Email => Box::new(EmailConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Slack => Arc::new(SlackConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Email => Arc::new(EmailConnector::new(instance, transport, oauth_client)),
         ConnectorKind::GitHub | ConnectorKind::GenericWebhook => {
             // Phase 2 ships the nine listed connector implementations
             // in `crates/connectors/`. GitHub and the generic webhook
@@ -595,7 +681,7 @@ fn build_connector(
     _rt: &FfiRuntime,
     _kind: ConnectorKind,
     _instance: ConnectorInstanceId,
-) -> FfiResult<Box<dyn Connector>> {
+) -> FfiResult<Arc<dyn Connector>> {
     Err(FfiError::Unavailable {
         subsystem: "connector-http-client".into(),
     })

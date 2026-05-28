@@ -373,7 +373,12 @@ pub fn js_core_version() -> String {
 ///   loading the addon, before any [`js_open_store`] call.
 /// * pass a [`BigInt`] returned by [`js_open_store`] to get a full
 ///   probe (`bridge` + `evidence_store` + `crypto` + `memory_manager`
-///   + `inference_router` subsystems, with real per-subsystem I/O).
+///   + `inference_router` + `connector` subsystems, with real
+///   per-subsystem I/O). The `connector` subsystem reports the
+///   in-memory connector-instance count, authenticated-token count,
+///   and per-`SyncStatus` distribution across all registered
+///   connectors (downgrading to `Degraded` if any connector is in
+///   `Failed`).
 ///
 /// Returns the [`ffi::HealthStatus`] envelope serialised to JSON.
 /// JS hosts get a typed object via napi's `serde_json::Value`

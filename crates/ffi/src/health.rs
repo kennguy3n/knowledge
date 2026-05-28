@@ -414,16 +414,42 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
         }
     }
 
-    let status = if failed > 0 {
+    // Surface the HTTP-transport availability so hosts can detect
+    // the soft-fail-on-open path (see `crate::open_store`) without
+    // calling `create_connector` first and parsing the
+    // `FfiError::Unavailable { subsystem: "connector-http-client" }`
+    // envelope. The transport is the load-bearing dependency for
+    // every connector lifecycle call — when it's missing, the
+    // subsystem is `Degraded` even if zero connectors are
+    // registered, because the host can no longer recover by
+    // registering new ones.
+    #[cfg(feature = "http-client")]
+    let http_transport_available = rt.http_transport.is_some() && rt.oauth_client.is_some();
+    // When the feature is off the transport is *intentionally* absent
+    // and the subsystem still reports `Ok` (it's the
+    // `connector-http-client` `Unavailable` path described on
+    // `crate::FfiError::Unavailable` — degrading the whole probe
+    // would force every offline / ingest-only host to render a red
+    // tile for a behaviour they explicitly opted into via Cargo
+    // features).
+    #[cfg(not(feature = "http-client"))]
+    let http_transport_available = true;
+
+    let status = if failed > 0 || !http_transport_available {
         SubsystemStatus::Degraded
     } else {
         SubsystemStatus::Ok
     };
-    let detail = format!(
+    let mut detail = format!(
         "total={total}, authenticated={authenticated}, \
          never_run={never_run}, in_progress={in_progress}, \
          succeeded={succeeded}, failed={failed}"
     );
+    if !http_transport_available {
+        // Append rather than replace so the per-status counts stay
+        // machine-parseable for host UIs that already key off them.
+        detail.push_str(", http_transport=unavailable");
+    }
     SubsystemHealth {
         name: "connector".into(),
         status,
