@@ -123,7 +123,7 @@ A device cannot read a tenant's Google Drive, a project's Jira board, or a team'
 
 ### What it is
 
-Both the knowledge substrate and the AI model sit on-device. The novel piece is the connector pipeline: nine connectors — Google Drive, OneDrive / SharePoint, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email — implement the same contract (`docs/DESIGN.md` §10.2): OAuth2 with refresh-token storage, incremental sync, webhook push, channel-scoped attachment, ACL sync from the source system.
+Both the knowledge substrate and the AI model sit on-device. The novel piece is the connector pipeline: ten named connectors — Google Drive, OneDrive / SharePoint, Notion, Jira, Confluence, GitHub, Slack, Figma, HubSpot, Email — plus a `GenericWebhook` extension point for source systems that just push events, all implementing the same contract (`docs/DESIGN.md` §10.2): OAuth2 with refresh-token storage, incremental sync, webhook push, channel-scoped attachment, ACL sync from the source system. The full enum lives in `crates/connector_framework/src/config.rs::ConnectorKind`.
 
 When a connector emits a delta (new doc, ticket update, page edit), the server runs the substrate's standard ingest pipeline on it: importance classification, storage routing, observation extraction, semantic dedup, decay class assignment, channel/domain summary update. The output is structured observations and synthesised memory objects, encrypted to a specific substrate scope, that flow into the substrate alongside chat-derived knowledge. The on-device AI then operates on the enriched scope memory — it queries the channel / user memory object that now contains connector-sourced observations, without ever seeing the raw Drive document or Jira payload.
 
@@ -144,7 +144,7 @@ A user attaches a connector to their *personal* scope — e.g. their personal Gm
 The same code paths, the same dedup, the same decay state machine. The privacy boundary moves entirely with the scope id.
 
 ```
-External system (Drive / Jira / Notion / Slack / Email / Figma / HubSpot / OneDrive / Confluence)
+External system (Drive / OneDrive / Notion / Jira / Confluence / GitHub / Slack / Figma / HubSpot / Email)
   ↓
 Connector (OAuth2 + webhook)
   ↓
@@ -222,9 +222,9 @@ TEE side-channel attacks have been demonstrated in academic research against SGX
 
 ### What it is
 
-The on-server surface processes data from connected systems exclusively — Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email — through the same substrate pipeline as on-device. The server authenticates via OAuth2, pulls documents through incremental delta sync + webhooks, runs the full observation → semantic → reasoning → export pipeline, and synthesises domain/tenant memory via a managed endpoint or TEE. This is data the tenant already accepts in their cloud; the server processes it because it came from server-accessible systems.
+The on-server surface processes data from connected systems exclusively — Google Drive, OneDrive, Notion, Jira, Confluence, GitHub, Slack, Figma, HubSpot, Email (plus the `GenericWebhook` extension point) — through the same substrate pipeline as on-device. The server authenticates via OAuth2, pulls documents through incremental delta sync + webhooks, runs the full observation → semantic → reasoning → export pipeline, and synthesises domain/tenant memory via a managed endpoint or TEE. This is data the tenant already accepts in their cloud; the server processes it because it came from server-accessible systems.
 
-PostgreSQL with pgvector + MinIO/S3 for blob storage. Per-tenant encryption keys; row-level security by tenant id; physical isolation optional. The nine connectors implement the same shared contract used by Mode 3, just without an on-device companion.
+PostgreSQL with pgvector + MinIO/S3 for blob storage. Per-tenant encryption keys; row-level security by tenant id; physical isolation optional. The connectors implement the same shared contract used by Mode 3, just without an on-device companion.
 
 ### Who needs this
 
@@ -278,7 +278,7 @@ Example: a user attaches their personal Gmail connector. Email-derived observati
 ### Same code path, different privacy boundary
 
 ```
-External system (Drive / Notion / Jira / Confluence / Figma / HubSpot / Slack / Email / OneDrive)
+External system (Drive / OneDrive / Notion / Jira / Confluence / GitHub / Slack / Figma / HubSpot / Email)
   ↓
 Connector (OAuth2 + webhook + ACL sync)        [docs/DESIGN.md §10.2]
   ↓
