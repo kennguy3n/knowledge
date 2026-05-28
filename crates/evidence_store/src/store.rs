@@ -1682,10 +1682,30 @@ impl EvidenceStore {
         let aad = connector_instance_aad(scope_id, instance_id, kind_tag);
         let ciphertext = encrypt_aead(&key, &nonce, plaintext_json, &aad)?;
         let now = chrono::Utc::now().timestamp();
+        // Upsert keyed on `instance_id` only. We do NOT use
+        // `INSERT OR REPLACE` because the table has a *secondary*
+        // unique index on `(scope_id, kind)` — `OR REPLACE` would
+        // silently delete the conflicting row on EITHER unique
+        // constraint, which means a collision against the dedup
+        // index would silently wipe the existing instance row
+        // instead of surfacing as an error. The runtime-side check
+        // in `create_connector` already rejects duplicates, but
+        // this on-conflict spelling is the defense-in-depth: a
+        // future regression of that check (or a stray writer on a
+        // different handle) will hit `UNIQUE constraint failed:
+        // connector_instances.scope_id, connector_instances.kind`
+        // and bubble up as a structured `rusqlite::Error` instead
+        // of silently destroying the existing row.
         self.conn.execute(
-            "INSERT OR REPLACE INTO connector_instances \
+            "INSERT INTO connector_instances \
              (instance_id, scope_id, kind, nonce, payload, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT(instance_id) DO UPDATE SET \
+               scope_id = excluded.scope_id, \
+               kind = excluded.kind, \
+               nonce = excluded.nonce, \
+               payload = excluded.payload, \
+               updated_at = excluded.updated_at",
             params![
                 instance_id.as_bytes().as_slice(),
                 scope_id.as_uuid().as_bytes().as_slice(),
@@ -1819,10 +1839,24 @@ impl EvidenceStore {
         let aad = connector_token_aad(scope_id, instance_id);
         let ciphertext = encrypt_aead(&key, &nonce, plaintext_json, &aad)?;
         let now = chrono::Utc::now().timestamp();
+        // Upsert keyed on `instance_id` only. `connector_tokens` has
+        // no secondary unique indexes today, so `INSERT OR REPLACE`
+        // would be functionally equivalent — but using
+        // `ON CONFLICT(instance_id) DO UPDATE` matches the spelling
+        // used by `save_connector_instance` (where the secondary
+        // `(scope_id, kind)` UNIQUE makes the distinction
+        // safety-critical) and pre-empts a future schema migration
+        // that adds a secondary unique constraint here from silently
+        // becoming a defense-in-depth regression.
         self.conn.execute(
-            "INSERT OR REPLACE INTO connector_tokens \
+            "INSERT INTO connector_tokens \
              (instance_id, scope_id, nonce, payload, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT(instance_id) DO UPDATE SET \
+               scope_id = excluded.scope_id, \
+               nonce = excluded.nonce, \
+               payload = excluded.payload, \
+               updated_at = excluded.updated_at",
             params![
                 instance_id.as_bytes().as_slice(),
                 scope_id.as_uuid().as_bytes().as_slice(),

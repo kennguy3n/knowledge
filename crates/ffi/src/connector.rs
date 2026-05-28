@@ -234,14 +234,11 @@ pub fn authenticate_connector(
         // `ingest_message`, `health_check`, …) blocks for the
         // duration of the provider's network round-trip.
         let (connector, mut config_with_code) = with_runtime(handle, |rt| {
-            let connector = rt
-                .connectors
-                .get(&instance)
-                .ok_or_else(|| FfiError::NotFound {
-                    kind: "connector".into(),
-                    id: instance_id.clone(),
-                })?
-                .clone(); // `Arc::clone` — one atomic increment.
+            // `lookup_connector_handle` returns `Unavailable` (not
+            // `NotFound`) when the instance row rehydrated from
+            // SQLCipher but the `Arc<dyn Connector>` could not be
+            // rebuilt — matching the create-time error shape.
+            let connector = lookup_connector_handle(rt, instance, &instance_id)?;
             let config_clone = rt
                 .connector_instances
                 .get(&instance)
@@ -464,18 +461,14 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                 .get(instance)
                 .map_err(FfiError::from)?
                 .clone();
-            let connector = rt
-                .connectors
-                .get(&instance)
-                .ok_or_else(|| FfiError::NotFound {
-                    kind: "connector".into(),
-                    id: instance_id.clone(),
-                })?
-                .clone(); // `Arc::clone` — one atomic increment.
-                          // Flip the per-instance state to `InProgress` *inside*
-                          // the mutex so concurrent `list_connectors` calls see
-                          // the in-flight marker for the duration of the unlocked
-                          // dispatch below.
+            // `lookup_connector_handle` returns `Unavailable` (not
+            // `NotFound`) when the instance rehydrated from SQLCipher
+            // but the `Arc<dyn Connector>` could not be rebuilt.
+            let connector = lookup_connector_handle(rt, instance, &instance_id)?;
+            // Flip the per-instance state to `InProgress` *inside*
+            // the mutex so concurrent `list_connectors` calls see
+            // the in-flight marker for the duration of the unlocked
+            // dispatch below.
             if let Some(inst) = rt.connector_instances.get_mut(&instance) {
                 inst.sync_state.mark_in_progress();
             }
@@ -773,6 +766,52 @@ pub fn remove_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult
 }
 
 // ──────────────────────────── Internals ──────────────────────────────
+
+/// Resolve the live `Arc<dyn Connector>` for `instance`, distinguishing
+/// the three failure modes the host needs to disambiguate:
+///
+/// * **Live handle present** → returns `Ok(Arc::clone)` (one atomic
+///   refcount bump).
+/// * **Instance row exists but no live handle** → returns
+///   `Err(Unavailable { subsystem: "connector" })`. This happens
+///   when [`rehydrate_connectors`] loaded the persisted
+///   `(config, sync_state)` blob but [`build_connector`] returned
+///   `Unavailable` (e.g. the `http-client` feature is off, or the
+///   runtime's shared `BlockingHttpTransport` failed to construct at
+///   `open_store` time on an exotic platform). The persisted state
+///   is still observable through [`list_connectors`] and the host
+///   can re-`create_connector` to rebuild the handle once the
+///   transport is restored, so surfacing this as a structured
+///   *unavailability* — not *missing* — matches the create-time
+///   error path documented at lines 114–116 and 783–786 of this
+///   file.
+/// * **Instance row absent** → returns `Err(NotFound)`. This is the
+///   "host referenced an instance that was never created or has
+///   been removed" case.
+///
+/// Both call sites (`authenticate_connector` Phase 1 and
+/// `sync_connector` Phase 1) route through this helper so the
+/// asymmetry between the create path (Unavailable on missing
+/// transport) and the post-rehydrate path (was NotFound, now also
+/// Unavailable) is eliminated.
+fn lookup_connector_handle(
+    rt: &FfiRuntime,
+    instance: ConnectorInstanceId,
+    instance_id_display: &str,
+) -> FfiResult<Arc<dyn Connector>> {
+    if let Some(handle) = rt.connectors.get(&instance) {
+        return Ok(Arc::clone(handle));
+    }
+    if rt.connector_instances.contains_key(&instance) {
+        return Err(FfiError::Unavailable {
+            subsystem: "connector".into(),
+        });
+    }
+    Err(FfiError::NotFound {
+        kind: "connector".into(),
+        id: instance_id_display.to_string(),
+    })
+}
 
 /// Build a fresh `Arc<dyn Connector>` for `kind`, wiring it to the
 /// runtime-shared [`BlockingHttpTransport`] + [`OAuth2Client`] pair
@@ -1397,5 +1436,84 @@ mod tests {
         let id = Uuid::new_v4().to_string();
         let scope = parse_scope_id(&id).unwrap();
         assert_eq!(scope.as_uuid().to_string(), id);
+    }
+
+    /// `lookup_connector_handle` must disambiguate the three runtime
+    /// states the host can observe:
+    ///
+    /// * **Instance + Arc both present** → returns the cloned handle.
+    /// * **Instance present, Arc absent** → returns `Unavailable`. This
+    ///   models the post-rehydrate case where `build_connector` failed
+    ///   (e.g. `http-client` feature off, or transport construction
+    ///   failed at `open_store` time). The host can still see the
+    ///   instance through `list_connectors` and re-create it once the
+    ///   transport recovers.
+    /// * **Instance absent** → returns `NotFound`.
+    ///
+    /// Before the helper existed both `sync_connector` and
+    /// `authenticate_connector` returned `NotFound` for the middle
+    /// arm, which contradicted the doc comments on those functions
+    /// (which promise `Unavailable` for the missing-transport case)
+    /// and gave the host a misleading "instance unknown" signal when
+    /// the row is plainly visible in `list_connectors`.
+    #[test]
+    fn lookup_connector_handle_returns_unavailable_when_arc_missing() {
+        use connector_framework::{AuthKind, ConnectorConfig, ConnectorInstance};
+        use evidence_store::ScopeId;
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let master_key_hex = "a5".repeat(32);
+        let handle = crate::open_store(path.to_string_lossy().into_owned(), master_key_hex)
+            .expect("open_store");
+
+        let instance_id = ConnectorInstanceId::new_v4();
+        let scope_id = ScopeId::new_v4();
+        let cfg = ConnectorConfig::new(ConnectorKind::Notion, AuthKind::OAuth2, scope_id);
+        let instance = ConnectorInstance {
+            id: instance_id,
+            config: cfg,
+            sync_state: SyncState::new(instance_id),
+        };
+
+        // Stage the "instance present, Arc absent" state directly
+        // through `with_runtime` — this models what `rehydrate_connectors`
+        // does when `build_connector` returns `Unavailable`: the
+        // instance lives in `connector_instances` for observability but
+        // no entry is created in `connectors`.
+        crate::runtime::with_runtime(handle, |rt| {
+            rt.connector_instances.insert(instance_id, instance.clone());
+            // Deliberately NOT inserting into rt.connectors.
+
+            // `Arc<dyn Connector>` is not `Debug`, so we can't use
+            // `expect_err` here — match the `Result` directly.
+            match lookup_connector_handle(rt, instance_id, "irrelevant") {
+                Ok(_) => panic!("instance present without Arc must error"),
+                Err(FfiError::Unavailable { subsystem }) => {
+                    assert_eq!(subsystem, "connector");
+                }
+                Err(other) => {
+                    panic!("expected Unavailable {{ subsystem: \"connector\" }}; got {other:?}",)
+                }
+            }
+
+            // Sanity: the absent-instance arm still returns NotFound.
+            let other_id = ConnectorInstanceId::new_v4();
+            match lookup_connector_handle(rt, other_id, "missing-id") {
+                Ok(_) => panic!("absent instance must error"),
+                Err(FfiError::NotFound { kind, id }) => {
+                    assert_eq!(kind, "connector");
+                    assert_eq!(id, "missing-id");
+                }
+                Err(other) => panic!("expected NotFound for absent instance; got {other:?}"),
+            }
+            Ok(())
+        })
+        .expect("with_runtime");
+
+        crate::close_store(handle).expect("close_store");
+        // Keep `dir` alive until after `close_store`.
+        drop(dir);
     }
 }

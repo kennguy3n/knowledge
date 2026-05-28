@@ -1769,3 +1769,75 @@ fn orphan_token_skipped_and_cleaned_up_on_rehydrate() {
         remaining.len(),
     );
 }
+
+/// `save_connector_instance` must surface a unique-constraint
+/// violation on the secondary `(scope_id, kind)` index as a
+/// structured error rather than silently deleting the conflicting
+/// row. The runtime-side `create_connector` check rejects duplicates
+/// before they reach the SQL layer, but a regression of that check
+/// (or a stray writer holding a parallel handle to the same
+/// database file) must NOT silently destroy the existing row — the
+/// `INSERT … ON CONFLICT(instance_id) DO UPDATE` spelling lets the
+/// secondary unique constraint propagate the violation upward.
+///
+/// Drives the failure directly through the evidence-store API so
+/// the test isolates the SQL contract from the FFI-level dedup
+/// check. A successful collision under `INSERT OR REPLACE` would
+/// silently overwrite `instance_a` with `instance_b`'s payload; the
+/// `ON CONFLICT(instance_id)` spelling instead surfaces a Sqlite
+/// `UNIQUE constraint failed` error so the operator notices.
+#[cfg(feature = "http-client")]
+#[test]
+fn save_connector_instance_propagates_secondary_unique_violation() {
+    use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("evidence.db");
+    let scope_uuid = uuid::Uuid::new_v4();
+    let scope_id = ScopeId::from_uuid(scope_uuid);
+    let master_key: [u8; 32] = [0xa5_u8; 32];
+
+    let mut store = EvidenceStore::open(&db_path, &master_key, EvidenceStoreConfig::default())
+        .expect("EvidenceStore::open");
+    // Register the scope DEK so the AEAD encrypt succeeds for both
+    // insertions; otherwise the test would fail at `scope_key` before
+    // ever exercising the SQL conflict.
+    store.ensure_scope_dek(scope_id).expect("ensure_scope_dek");
+
+    let instance_a = uuid::Uuid::new_v4();
+    let instance_b = uuid::Uuid::new_v4();
+    let kind_tag = connector_framework::ConnectorKind::Notion.as_str();
+    store
+        .save_connector_instance(instance_a, scope_id, kind_tag, b"{\"schema\":1}")
+        .expect("first save_connector_instance must succeed");
+
+    let err = store
+        .save_connector_instance(instance_b, scope_id, kind_tag, b"{\"schema\":1}")
+        .expect_err("colliding save_connector_instance must error, not silently overwrite");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("UNIQUE constraint failed")
+            && msg.contains("connector_instances")
+            && msg.contains("scope_id")
+            && msg.contains("kind"),
+        "expected a structured UNIQUE-constraint error on (scope_id, kind); got: {msg}",
+    );
+
+    // The original row must still be intact — `INSERT OR REPLACE`
+    // would have silently destroyed it; `ON CONFLICT(instance_id)`
+    // leaves it alone.
+    let rows = store
+        .load_connector_instances()
+        .expect("load_connector_instances after collision");
+    assert_eq!(
+        rows.len(),
+        1,
+        "secondary-unique collision must leave the existing row untouched",
+    );
+    let (loaded_id, _scope, loaded_kind, _payload) = &rows[0];
+    assert_eq!(
+        loaded_id, &instance_a,
+        "the surviving row must be instance_a"
+    );
+    assert_eq!(loaded_kind.as_str(), kind_tag);
+}
