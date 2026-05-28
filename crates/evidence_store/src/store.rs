@@ -1633,6 +1633,267 @@ impl EvidenceStore {
         Ok(out)
     }
 
+    // ─────────────────── Connector persistence (v9) ───────────────────
+    //
+    // The connector lifecycle (`create_connector`, `authenticate_connector`,
+    // `sync_connector`, `remove_connector` over in the FFI surface) needs
+    // three pieces of state to survive process restarts:
+    //
+    //   1. `ConnectorInstance` = `(config, sync_state)` per instance.
+    //   2. `OAuth2Token` bundle per authenticated instance.
+    //   3. The single-instance-per-`(scope_id, kind)` contract — pinned
+    //      by the unique index in `SCHEMA_SQL` so a runtime-side bug
+    //      cannot insert a duplicate even on a different handle.
+    //
+    // Both encrypted blobs are AEAD-sealed under the per-scope DEK so
+    // `forget(scope)` makes them cryptographically unrecoverable even
+    // if the row-level `DELETE` races against the DEK destruction. AAD
+    // binds `scope_id` (both tables) plus `instance_id` (tokens) and
+    // the kind tag (instance row) so a relocated ciphertext fails to
+    // decrypt instead of silently aliasing onto a different identity.
+    //
+    // The methods here intentionally take/return raw JSON byte
+    // payloads so the schema can live in `evidence_store` without
+    // pulling in `connector_framework` as a build dependency — the
+    // FFI runtime is the one place that knows the JSON shape and
+    // owns the `serde_json` round-trip.
+
+    /// Upsert a connector instance row (encrypted `(config, sync_state)`
+    /// JSON blob) for `instance_id`. The `kind_tag` is the stable
+    /// snake_case `ConnectorKind` tag (`"google_drive"`, `"slack"`, …)
+    /// and is stored unencrypted on the row so the unique index on
+    /// `(scope_id, kind)` can enforce the dedup contract without
+    /// decrypting every row first; the same tag is also folded into the
+    /// AAD so a ciphertext relocated to a row with a different `kind`
+    /// fails to decrypt.
+    ///
+    /// Upserts: calling this with the same `instance_id` overwrites the
+    /// previous blob (used by `sync_connector` Phase 3 to advance the
+    /// stored `SyncState` cursor).
+    pub fn save_connector_instance(
+        &self,
+        instance_id: uuid::Uuid,
+        scope_id: ScopeId,
+        kind_tag: &str,
+        plaintext_json: &[u8],
+    ) -> Result<()> {
+        let key = self.scope_key(scope_id)?;
+        let nonce = random_nonce();
+        let aad = connector_instance_aad(scope_id, instance_id, kind_tag);
+        let ciphertext = encrypt_aead(&key, &nonce, plaintext_json, &aad)?;
+        let now = chrono::Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO connector_instances \
+             (instance_id, scope_id, kind, nonce, payload, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                instance_id.as_bytes().as_slice(),
+                scope_id.as_uuid().as_bytes().as_slice(),
+                kind_tag,
+                nonce.as_slice(),
+                ciphertext,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Delete the persisted instance row for `instance_id`. No-op if
+    /// the row does not exist (idempotent — matches the
+    /// `remove_connector` contract on the FFI surface).
+    pub fn delete_connector_instance(&self, instance_id: uuid::Uuid) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM connector_instances WHERE instance_id = ?1",
+            params![instance_id.as_bytes().as_slice()],
+        )?;
+        Ok(())
+    }
+
+    /// Delete every persisted connector instance row bound to
+    /// `scope_id`. Used by `forget_scope_state` to tear down a
+    /// forgotten scope's connector state from disk. Returns the count
+    /// of rows deleted so the caller can log it for diagnostics.
+    pub fn delete_connector_instances_for_scope(&self, scope_id: ScopeId) -> Result<usize> {
+        let n = self.conn.execute(
+            "DELETE FROM connector_instances WHERE scope_id = ?1",
+            params![scope_id.as_uuid().as_bytes().as_slice()],
+        )?;
+        Ok(n)
+    }
+
+    /// Load every persisted connector instance row, decrypting under
+    /// each row's per-scope DEK. Rows that fail to decrypt (corrupt
+    /// payload, tampered ciphertext, missing scope key) are skipped
+    /// with a `tracing::warn!`, so a single bad row never blocks
+    /// `open_store`. Returns `(instance_id, scope_id, kind_tag,
+    /// plaintext_json)` tuples in unspecified order.
+    pub fn load_connector_instances(&self) -> Result<Vec<(uuid::Uuid, ScopeId, String, Vec<u8>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT instance_id, scope_id, kind, nonce, payload \
+             FROM connector_instances",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+                row.get::<_, Vec<u8>>(4)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (instance_bytes, scope_bytes, kind_tag, nonce_bytes, ciphertext) = row?;
+            let instance_id = slice_to_uuid(&instance_bytes)?;
+            let scope_id = ScopeId::from_uuid(slice_to_uuid(&scope_bytes)?);
+            if nonce_bytes.len() != AEAD_NONCE_LEN {
+                tracing::warn!(
+                    instance = %instance_id,
+                    "connector_instances row has malformed nonce; skipping",
+                );
+                continue;
+            }
+            let mut nonce = [0u8; AEAD_NONCE_LEN];
+            nonce.copy_from_slice(&nonce_bytes);
+            let key = match self.scope_key(scope_id) {
+                Ok(k) => k,
+                Err(e) => {
+                    tracing::warn!(
+                        instance = %instance_id,
+                        scope = %scope_id.as_uuid(),
+                        error = %e,
+                        "connector_instances scope key unavailable; skipping row",
+                    );
+                    continue;
+                }
+            };
+            let aad = connector_instance_aad(scope_id, instance_id, &kind_tag);
+            match decrypt_aead(&key, &nonce, &ciphertext, &aad) {
+                Ok(plaintext) => out.push((instance_id, scope_id, kind_tag, plaintext)),
+                Err(e) => {
+                    tracing::warn!(
+                        instance = %instance_id,
+                        scope = %scope_id.as_uuid(),
+                        error = %e,
+                        "connector_instances row failed to decrypt; skipping",
+                    );
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Upsert a connector OAuth2 token blob for `instance_id`. The
+    /// caller supplies an already-JSON-encoded `OAuth2Token`; the AAD
+    /// binds both `scope_id` and `instance_id` so a ciphertext copied
+    /// to a different row fails to decrypt.
+    pub fn save_connector_token(
+        &self,
+        instance_id: uuid::Uuid,
+        scope_id: ScopeId,
+        plaintext_json: &[u8],
+    ) -> Result<()> {
+        let key = self.scope_key(scope_id)?;
+        let nonce = random_nonce();
+        let aad = connector_token_aad(scope_id, instance_id);
+        let ciphertext = encrypt_aead(&key, &nonce, plaintext_json, &aad)?;
+        let now = chrono::Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO connector_tokens \
+             (instance_id, scope_id, nonce, payload, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                instance_id.as_bytes().as_slice(),
+                scope_id.as_uuid().as_bytes().as_slice(),
+                nonce.as_slice(),
+                ciphertext,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Delete the persisted token row for `instance_id`. No-op if the
+    /// row does not exist.
+    pub fn delete_connector_token(&self, instance_id: uuid::Uuid) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM connector_tokens WHERE instance_id = ?1",
+            params![instance_id.as_bytes().as_slice()],
+        )?;
+        Ok(())
+    }
+
+    /// Delete every persisted token row bound to `scope_id`. Used by
+    /// `forget_scope_state` to drop tokens for a forgotten scope from
+    /// disk. Returns the count of rows deleted so the caller can log
+    /// it for diagnostics.
+    pub fn delete_connector_tokens_for_scope(&self, scope_id: ScopeId) -> Result<usize> {
+        let n = self.conn.execute(
+            "DELETE FROM connector_tokens WHERE scope_id = ?1",
+            params![scope_id.as_uuid().as_bytes().as_slice()],
+        )?;
+        Ok(n)
+    }
+
+    /// Load every persisted token row, decrypting under the
+    /// corresponding scope DEK. Rows that fail to decrypt are skipped
+    /// with a `tracing::warn!`. Returns `(instance_id, scope_id,
+    /// plaintext_json)` tuples.
+    pub fn load_connector_tokens(&self) -> Result<Vec<(uuid::Uuid, ScopeId, Vec<u8>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT instance_id, scope_id, nonce, payload \
+             FROM connector_tokens",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (instance_bytes, scope_bytes, nonce_bytes, ciphertext) = row?;
+            let instance_id = slice_to_uuid(&instance_bytes)?;
+            let scope_id = ScopeId::from_uuid(slice_to_uuid(&scope_bytes)?);
+            if nonce_bytes.len() != AEAD_NONCE_LEN {
+                tracing::warn!(
+                    instance = %instance_id,
+                    "connector_tokens row has malformed nonce; skipping",
+                );
+                continue;
+            }
+            let mut nonce = [0u8; AEAD_NONCE_LEN];
+            nonce.copy_from_slice(&nonce_bytes);
+            let key = match self.scope_key(scope_id) {
+                Ok(k) => k,
+                Err(e) => {
+                    tracing::warn!(
+                        instance = %instance_id,
+                        scope = %scope_id.as_uuid(),
+                        error = %e,
+                        "connector_tokens scope key unavailable; skipping row",
+                    );
+                    continue;
+                }
+            };
+            let aad = connector_token_aad(scope_id, instance_id);
+            match decrypt_aead(&key, &nonce, &ciphertext, &aad) {
+                Ok(plaintext) => out.push((instance_id, scope_id, plaintext)),
+                Err(e) => {
+                    tracing::warn!(
+                        instance = %instance_id,
+                        scope = %scope_id.as_uuid(),
+                        error = %e,
+                        "connector_tokens row failed to decrypt; skipping",
+                    );
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Purge every secondary-index row that retains plaintext for
     /// `scope_id`.
     ///
@@ -2212,6 +2473,13 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // v8: add `epoch_tombstones`. Purely additive; handled
         // by SCHEMA_SQL's `CREATE TABLE IF NOT EXISTS`.
         8 => Ok(()),
+        // v9 (Phase 3): add `connector_instances` + `connector_tokens`.
+        // Purely additive; handled by SCHEMA_SQL's
+        // `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`
+        // (the unique index on `(scope_id, kind)` is part of that
+        // bootstrap, so a fresh-DB open and a v8→v9 upgrade both end
+        // up with the same shape).
+        9 => Ok(()),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
         )),
@@ -2385,6 +2653,37 @@ fn ring_buffer_aad(scope_id: ScopeId) -> Vec<u8> {
     let mut aad = Vec::with_capacity(14 + 16);
     aad.extend_from_slice(b"ring_buffer:v1");
     aad.extend_from_slice(scope_id.as_uuid().as_bytes());
+    aad
+}
+
+// AAD for v9 connector persistence. Each row's plaintext is bound to
+// the `(scope_id, instance_id, kind_tag)` triple (instance rows) or
+// `(scope_id, instance_id)` pair (token rows), so a ciphertext copied
+// to a different row fails to decrypt with a structured error instead
+// of silently aliasing onto a different identity. The leading magic
+// prefix (`connector-instance:v1:` / `connector-token:v1:`) gives
+// future schema evolutions a stable namespace to bump for an
+// incompatible AAD format change.
+fn connector_instance_aad(scope_id: ScopeId, instance_id: uuid::Uuid, kind_tag: &str) -> Vec<u8> {
+    let prefix = b"connector-instance:v1:";
+    let mut aad = Vec::with_capacity(prefix.len() + 16 + 16 + 1 + kind_tag.len());
+    aad.extend_from_slice(prefix);
+    aad.extend_from_slice(scope_id.as_uuid().as_bytes());
+    aad.extend_from_slice(instance_id.as_bytes());
+    // Length-prefix the kind tag so `kind_tag == "abc" + scope_bytes`
+    // collisions are not possible across schemes (defense in depth —
+    // the tag is already a closed enum but cheap to guard).
+    aad.push(b':');
+    aad.extend_from_slice(kind_tag.as_bytes());
+    aad
+}
+
+fn connector_token_aad(scope_id: ScopeId, instance_id: uuid::Uuid) -> Vec<u8> {
+    let prefix = b"connector-token:v1:";
+    let mut aad = Vec::with_capacity(prefix.len() + 16 + 16);
+    aad.extend_from_slice(prefix);
+    aad.extend_from_slice(scope_id.as_uuid().as_bytes());
+    aad.extend_from_slice(instance_id.as_bytes());
     aad
 }
 

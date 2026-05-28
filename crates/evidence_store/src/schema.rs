@@ -55,7 +55,19 @@
 ///   replays this table into the in-process [`DekRegistry`] on
 ///   every `open_store` so post-restart calls for forgotten epochs
 ///   continue to short-circuit. Purely additive.
-pub const SCHEMA_VERSION: i32 = 8;
+/// - v9 (Phase 3 connector persistence): added `connector_instances`
+///   for AEAD-encrypted per-instance `(ConnectorConfig, SyncState)`
+///   blobs and `connector_tokens` for AEAD-encrypted per-instance
+///   `OAuth2Token` bundles. Both encrypted under the same per-scope
+///   DEK that protects `memory_objects` and `body_store_key_wraps`,
+///   so `forget(scope)`'s destruction of the scope DEK makes both
+///   tables' ciphertexts cryptographically unrecoverable even if the
+///   row deletion races against the DEK delete. A unique index on
+///   `connector_instances(scope_id, kind)` pins the
+///   single-instance-per-(scope, kind) contract at the DB layer
+///   (defense-in-depth against future regressions of the runtime-
+///   side check). Purely additive.
+pub const SCHEMA_VERSION: i32 = 9;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -230,4 +242,70 @@ CREATE TABLE IF NOT EXISTS epoch_tombstones (
     forgotten_at    INTEGER NOT NULL,
     PRIMARY KEY (scope_id, epoch_id)
 );
+
+-- v9 (Phase 3) — persisted connector instances.
+-- Each row stores one connector's `(ConnectorConfig, SyncState)`
+-- pair as a single AEAD-encrypted JSON blob under the per-scope DEK.
+-- The blob is upserted on `create_connector` (initial state) and on
+-- every `sync_connector` Phase 3 (advancing the `SyncState` cursor /
+-- status). The `kind` column is denormalised out of the encrypted
+-- payload so the unique index below can pin the single-instance-per-
+-- `(scope_id, kind)` contract at the DB layer without first having
+-- to decrypt every row to read the kind tag.
+--
+-- Forgetting deletes rows by `scope_id`; even if that delete fails,
+-- the AEAD payload is unrecoverable once the scope DEK is destroyed
+-- (step 1 of the cryptographic-forgetting sequence in
+-- `crates/ffi/src/lib.rs::forget_scope_state`), so the row purge is
+-- best-effort defense in depth.
+CREATE TABLE IF NOT EXISTS connector_instances (
+    instance_id     BLOB    PRIMARY KEY,
+    scope_id        BLOB    NOT NULL,
+    kind            TEXT    NOT NULL,
+    nonce           BLOB    NOT NULL,
+    payload         BLOB    NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+
+-- `forget_scope_state` deletes connector rows by `scope_id`; the PK
+-- only supports point lookup on `instance_id`, so without this index
+-- the scope-grain delete would degrade to a full table scan.
+CREATE INDEX IF NOT EXISTS idx_connector_instances_scope
+    ON connector_instances (scope_id);
+
+-- Defense-in-depth: the Phase 2 runtime check in `create_connector`
+-- rejects duplicates with `ConnectorError::DuplicateConnector` under
+-- the per-handle mutex (see `crates/ffi/src/connector.rs`). This
+-- unique index pins the same contract at the database layer so a
+-- future regression of the runtime-side check (or a parallel writer
+-- on a different handle pointing at the same SQLCipher file) still
+-- cannot create two rows that violate the single-instance-per-
+-- `(scope_id, kind)` contract.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_instances_scope_kind
+    ON connector_instances (scope_id, kind);
+
+-- v9 (Phase 3) — persisted OAuth2 token bundles.
+-- Held in a separate table from `connector_instances` because the
+-- token lifecycle is independent: created by `authenticate_connector`,
+-- mutated by future background-refresh flows, and dropped by
+-- `remove_connector`. The `scope_id` is denormalised onto the row
+-- (rather than read out of the encrypted payload) so the
+-- `forget(scope)` delete can issue a single indexed scan instead of
+-- decrypting every row first.
+--
+-- AEAD-encrypted under the per-scope DEK with AAD binding both
+-- `scope_id` and `instance_id`, so a ciphertext relocated to a
+-- different row (different scope or different instance) fails to
+-- decrypt and surfaces a structured error rather than silently
+-- returning a stale token from the wrong context.
+CREATE TABLE IF NOT EXISTS connector_tokens (
+    instance_id     BLOB    PRIMARY KEY,
+    scope_id        BLOB    NOT NULL,
+    nonce           BLOB    NOT NULL,
+    payload         BLOB    NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
+    ON connector_tokens (scope_id);
 "#;

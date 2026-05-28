@@ -656,14 +656,25 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
 /// 4. Persisted memory blob deletion so forgotten-scope memory
 ///    state does not survive the next `open_store`.
 /// 5. In-memory memory map purge (infallible — `HashMap::remove`).
-/// 6. Connector lifecycle purge — every `ConnectorInstance` row,
-///    live `Arc<dyn Connector>` handle, and cached OAuth2 token
-///    bound to the forgotten scope is dropped so a later
-///    `sync_connector` (or any token-vault dump) cannot resurrect
-///    plaintext provider credentials and re-emit fresh evidence
-///    onto a tombstoned scope. **Infallible** — purely
-///    in-memory `HashMap::remove` + `OAuth2TokenVault::remove`,
-///    both idempotent.
+/// 6. Persisted connector instance row deletion (`connector_instances`
+///    table). Best-effort — failure logs WARN and accumulates the
+///    error; the row's AEAD ciphertext is sealed under the scope
+///    DEK that step 1 just destroyed, so the payload is
+///    cryptographically unrecoverable. `open_store`'s rehydration
+///    sweep also picks up any orphaned row on next boot.
+/// 7. Persisted OAuth2 token row deletion (`connector_tokens`
+///    table). Same best-effort discipline as step 6 — the token
+///    ciphertext is sealed under the destroyed scope DEK so
+///    failure to delete the row does not leak plaintext
+///    credentials.
+/// 8. Connector lifecycle purge — every in-memory
+///    `ConnectorInstance` row, live `Arc<dyn Connector>` handle,
+///    and cached OAuth2 token bound to the forgotten scope is
+///    dropped so a later `sync_connector` (or any token-vault
+///    dump) cannot resurrect plaintext provider credentials and
+///    re-emit fresh evidence onto a tombstoned scope.
+///    **Infallible** — purely in-memory `HashMap::remove` +
+///    `OAuth2TokenVault::remove`, both idempotent.
 ///
 /// Any new piece of scope-bound state added in the future MUST be
 /// torn down here — routing both forget entry points through this
@@ -744,6 +755,43 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     // 5. In-memory memory maps. Infallible.
     rt.user_memories.remove(&scope);
     rt.channel_memories.remove(&scope);
+
+    // 5b. Delete persisted connector instance rows for the scope.
+    //     Best-effort: even if the SQL DELETE fails, the rows are
+    //     AEAD-encrypted under the scope DEK that step 1 destroyed,
+    //     so the payload is cryptographically unrecoverable. The
+    //     dangling rows are also picked up on the next `open_store`'s
+    //     rehydration sweep (which checks `tombstones.contains` and
+    //     deletes any row bound to a forgotten scope). We accumulate
+    //     the first error so callers see the gap while still running
+    //     step 6's infallible in-memory teardown unconditionally.
+    if let Err(e) = rt.store().delete_connector_instances_for_scope(scope) {
+        let err = FfiError::Evidence {
+            message: e.to_string(),
+        };
+        tracing::warn!(
+            scope = %scope.as_uuid(),
+            error = %err,
+            "forget_scope_state: delete_connector_instances_for_scope failed; rows will be cleaned up on next open_store",
+        );
+        first_error.get_or_insert(err);
+    }
+
+    // 5c. Delete persisted OAuth2 token rows for the scope. Same
+    //     best-effort discipline as 5b — the token ciphertext is
+    //     sealed under the destroyed scope DEK so failure to delete
+    //     the row does not leak plaintext credentials.
+    if let Err(e) = rt.store().delete_connector_tokens_for_scope(scope) {
+        let err = FfiError::Evidence {
+            message: e.to_string(),
+        };
+        tracing::warn!(
+            scope = %scope.as_uuid(),
+            error = %err,
+            "forget_scope_state: delete_connector_tokens_for_scope failed; rows will be cleaned up on next open_store",
+        );
+        first_error.get_or_insert(err);
+    }
 
     // 6. Connector lifecycle: every `ConnectorInstance` row, live
     //    `Arc<dyn Connector>` handle, and cached OAuth2 token bound

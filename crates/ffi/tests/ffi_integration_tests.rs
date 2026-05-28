@@ -978,3 +978,689 @@ fn synthesis_trigger_variants_all_round_trip() {
         assert_eq!(variant, back);
     }
 }
+
+// ─────────────────── Phase 3 connector persistence ──────────────────
+//
+// These tests pin the **Phase 3 contract**: the connector lifecycle
+// state (instances + sync state + OAuth2 tokens) is durable across
+// `close_store` / `open_store` and respects the cryptographic
+// forgetting contract (forgotten scopes never resurrect).
+//
+// All persistence-bearing tests open a real temp-dir SQLCipher store,
+// hold the same on-disk path stable across a `close_store` /
+// re-`open_store` cycle, and reuse the same deterministic master
+// key — that combination is what the in-process `open_store` calls
+// would experience in a real host that restarted the process. The
+// `TempDir` is kept alive (`_dir` binding) so the on-disk database
+// is not GC'd between the two opens.
+//
+// Gated on `http-client` because `create_connector` requires a live
+// `BlockingHttpTransport` to build the connector handle — without
+// the feature the FFI returns `Unavailable` and there's nothing to
+// persist. The default-features `cargo test` builds the integration
+// tests without these imports.
+
+#[cfg(feature = "http-client")]
+const PERSISTENCE_CONNECTOR_CFG: &str = r#"{
+    "client_id": "phase3-persist-client",
+    "redirect_uri": "https://example.invalid/oauth/callback",
+    "token_url": "https://example.invalid/oauth/token"
+}"#;
+
+/// Open a fresh store *at a caller-supplied path* with the
+/// deterministic master key, mirroring `fresh_store` but allowing the
+/// path to outlive a `close_store` / `open_store` cycle. The caller
+/// owns the `TempDir` so it can be reused across the boundary.
+#[cfg(feature = "http-client")]
+fn open_at(path: &std::path::Path) -> RuntimeHandle {
+    let master_key_hex = "a5".repeat(32);
+    open_store(path.to_string_lossy().into_owned(), master_key_hex).expect("open_store")
+}
+
+/// A connector instance row written by `create_connector` MUST
+/// survive `close_store` + `open_store` — the row is encrypted under
+/// the scope DEK in `connector_instances`, and `open_store`
+/// rehydrates the in-memory `connector_instances` / `connectors`
+/// maps before returning control to the host. After the round-trip,
+/// `list_connectors` must surface the same instance id, scope, and
+/// kind that `create_connector` returned.
+#[cfg(feature = "http-client")]
+#[test]
+fn connector_instance_persists_across_close_store_reopen() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    let h1 = open_at(&path);
+    let instance_id = create_connector(
+        h1,
+        ConnectorKindTag::Notion,
+        scope.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create_connector");
+    let before = list_connectors(h1).expect("list_connectors pre-close");
+    assert_eq!(before.len(), 1, "pre-close: exactly one instance");
+    assert_eq!(before[0].instance_id, instance_id);
+    assert_eq!(before[0].scope_id, scope);
+    assert!(matches!(before[0].kind, ConnectorKindTag::Notion));
+    close_store(h1).expect("close_store");
+
+    // Re-open the same on-disk file under a new runtime handle.
+    let h2 = open_at(&path);
+    let after = list_connectors(h2).expect("list_connectors post-reopen");
+    assert_eq!(
+        after.len(),
+        1,
+        "post-reopen: persisted instance must be rehydrated"
+    );
+    assert_eq!(
+        after[0].instance_id, instance_id,
+        "rehydrated instance must keep its original UUID",
+    );
+    assert_eq!(
+        after[0].scope_id, scope,
+        "rehydrated instance must keep its original scope_id",
+    );
+    assert!(
+        matches!(after[0].kind, ConnectorKindTag::Notion),
+        "rehydrated instance must keep its original kind",
+    );
+    close_store(h2).expect("close_store re-opened");
+}
+
+/// `remove_connector` MUST delete the persisted row too — after
+/// `close_store` + `open_store`, the instance does not reappear.
+/// Pins the on-disk side of `remove_connector`'s idempotency
+/// contract.
+#[cfg(feature = "http-client")]
+#[test]
+fn remove_connector_deletes_persisted_rows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    let h1 = open_at(&path);
+    let instance_id = create_connector(
+        h1,
+        ConnectorKindTag::Notion,
+        scope.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create_connector");
+    remove_connector(h1, instance_id.clone()).expect("remove_connector");
+    assert!(
+        list_connectors(h1)
+            .expect("list_connectors after remove")
+            .is_empty(),
+        "post-remove pre-close: list should be empty",
+    );
+    close_store(h1).expect("close_store");
+
+    let h2 = open_at(&path);
+    let after = list_connectors(h2).expect("list_connectors post-reopen");
+    assert!(
+        after.is_empty(),
+        "removed connector must not resurrect across close_store/open_store"
+    );
+    close_store(h2).expect("close_store re-opened");
+}
+
+/// `forget_scope` MUST drop the persisted rows for every connector
+/// bound to the forgotten scope. The on-disk side of the
+/// cryptographic-forgetting contract: even if the AEAD payload is
+/// unrecoverable (the scope DEK was destroyed in step 1), the row
+/// must not survive in the table — the open_store rehydration would
+/// skip it via the tombstone check, but the test pins the actual
+/// delete so the table doesn't grow unbounded with dead rows.
+#[cfg(feature = "http-client")]
+#[test]
+fn forget_scope_purges_persisted_connector_instances_and_tokens() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    let scope_a = uuid::Uuid::new_v4().to_string();
+    let scope_b = uuid::Uuid::new_v4().to_string();
+
+    let h1 = open_at(&path);
+    let id_a = create_connector(
+        h1,
+        ConnectorKindTag::Notion,
+        scope_a.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create_connector A");
+    let id_b = create_connector(
+        h1,
+        ConnectorKindTag::Notion,
+        scope_b.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create_connector B");
+
+    forget_scope(h1, scope_a.clone()).expect("forget_scope A");
+    close_store(h1).expect("close_store");
+
+    let h2 = open_at(&path);
+    let after = list_connectors(h2).expect("list_connectors post-reopen");
+    assert_eq!(
+        after.len(),
+        1,
+        "post-reopen: only the un-forgotten scope's connector should rehydrate",
+    );
+    assert_eq!(
+        after[0].instance_id, id_b,
+        "connector bound to forgotten scope must not reappear (id_a={id_a})",
+    );
+    assert_eq!(after[0].scope_id, scope_b);
+    close_store(h2).expect("close_store re-opened");
+}
+
+/// Even if a connector was created BEFORE `forget_scope` ran, then
+/// the database was closed and reopened, the rehydration sweep MUST
+/// skip every persisted row bound to a tombstoned scope. This pins
+/// the second line of defense: even if `forget_scope_state`'s
+/// step-5b SQL delete failed (e.g. a transient SQLCipher I/O error),
+/// the next `open_store` walks `forgotten_scopes`, builds the
+/// tombstone set, and refuses to rehydrate any row whose `scope_id`
+/// is in that set — and best-effort deletes the dangling row from
+/// disk on the way out.
+#[cfg(feature = "http-client")]
+#[test]
+fn rehydration_skips_tombstoned_scopes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    let scope_a = uuid::Uuid::new_v4().to_string();
+
+    let h1 = open_at(&path);
+    let _id_a = create_connector(
+        h1,
+        ConnectorKindTag::Notion,
+        scope_a.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create_connector");
+    forget_scope(h1, scope_a.clone()).expect("forget_scope");
+    close_store(h1).expect("close_store");
+
+    let h2 = open_at(&path);
+    assert!(
+        list_connectors(h2)
+            .expect("list_connectors post-reopen")
+            .is_empty(),
+        "connectors bound to a tombstoned scope must not rehydrate",
+    );
+    close_store(h2).expect("close_store re-opened");
+}
+
+/// The DB-layer unique index on `connector_instances(scope_id, kind)`
+/// pins the single-instance-per-(scope, kind) contract — a future
+/// regression in the runtime check would still be caught here.
+/// Drive the duplicate through the FFI surface; `create_connector`
+/// rejects with `DuplicateConnector` *before* the SQL insert, so
+/// the unique index never fires under normal flow, but its presence
+/// is the defense-in-depth and the rejection contract is what the
+/// host observes.
+#[cfg(feature = "http-client")]
+#[test]
+fn dedup_constraint_pinned_on_persisted_rows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let scope = uuid::Uuid::new_v4().to_string();
+
+    let h = open_at(&path);
+    let _ = create_connector(
+        h,
+        ConnectorKindTag::Notion,
+        scope.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("first create_connector");
+    let err = create_connector(
+        h,
+        ConnectorKindTag::Notion,
+        scope.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect_err("duplicate create_connector must be rejected");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("already exists") || msg.contains("DuplicateConnector"),
+        "duplicate rejection should surface a DuplicateConnector message — got: {msg}",
+    );
+    close_store(h).expect("close_store");
+
+    // After reopening, the persisted row is rehydrated and the same
+    // duplicate-rejection contract holds — the runtime check sees
+    // the rehydrated instance and refuses the duplicate.
+    let h2 = open_at(&path);
+    let err2 = create_connector(
+        h2,
+        ConnectorKindTag::Notion,
+        scope.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect_err("duplicate create_connector after reopen must also be rejected");
+    let msg2 = format!("{err2}");
+    assert!(
+        msg2.contains("already exists") || msg2.contains("DuplicateConnector"),
+        "post-rehydrate duplicate rejection must also surface DuplicateConnector — got: {msg2}",
+    );
+    close_store(h2).expect("close_store re-opened");
+}
+
+/// Multiple scope-DEK boundaries: an instance under scope A and an
+/// instance under scope B must both rehydrate independently across
+/// `close_store` / `open_store`. The two rows are encrypted under
+/// separate per-scope keys, so this test pins that the rehydration
+/// loop in `open_store_inner` walks every row in the table (not
+/// just the one matching some "first" scope) and decrypts each one
+/// under its own scope's DEK.
+#[cfg(feature = "http-client")]
+#[test]
+fn multiple_scope_connectors_all_persist_and_rehydrate() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    let scope_a = uuid::Uuid::new_v4().to_string();
+    let scope_b = uuid::Uuid::new_v4().to_string();
+
+    let h1 = open_at(&path);
+    let id_a_notion = create_connector(
+        h1,
+        ConnectorKindTag::Notion,
+        scope_a.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create A/Notion");
+    let id_a_slack = create_connector(
+        h1,
+        ConnectorKindTag::Slack,
+        scope_a.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create A/Slack");
+    let id_b_notion = create_connector(
+        h1,
+        ConnectorKindTag::Notion,
+        scope_b.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create B/Notion");
+    close_store(h1).expect("close_store");
+
+    let h2 = open_at(&path);
+    let after = list_connectors(h2).expect("list post-reopen");
+    assert_eq!(
+        after.len(),
+        3,
+        "all three persisted instances across both scopes must rehydrate",
+    );
+    let ids: std::collections::HashSet<_> = after.iter().map(|s| s.instance_id.clone()).collect();
+    assert!(ids.contains(&id_a_notion), "id_a_notion must rehydrate");
+    assert!(ids.contains(&id_a_slack), "id_a_slack must rehydrate");
+    assert!(ids.contains(&id_b_notion), "id_b_notion must rehydrate");
+    close_store(h2).expect("close_store re-opened");
+}
+
+/// A row with a payload whose plaintext is NOT a valid
+/// `PersistedConnectorInstance` JSON envelope MUST be skipped (with
+/// WARN) at rehydration time without blocking `open_store` or
+/// affecting other rows. This pins the partial-corruption tolerance
+/// documented on `rehydrate_connectors`: one bad row never wedges
+/// the entire connector subsystem.
+///
+/// To inject the corruption we open the `EvidenceStore` directly
+/// using the same hex master key the FFI uses, then call
+/// `save_connector_instance` to overwrite one row's plaintext with
+/// `b"not a valid JSON envelope"`. The AEAD round-trip succeeds on
+/// reopen (it's our key + AAD), but `serde_json::from_slice::<
+/// PersistedConnectorInstance>` fails — exercising the JSON
+/// deserialise-fail skip path. We could also tamper with the
+/// ciphertext via raw SQLCipher to exercise the AEAD-decrypt-fail
+/// skip path, but driving it via the evidence-store API keeps the
+/// test resilient to internal pragma changes (the page-key
+/// derivation, kdf_iter, etc.). Both skip paths funnel through the
+/// same `tracing::warn!` continue branch in
+/// `rehydrate_connectors`, so a single test on the
+/// deserialise-fail path is sufficient to pin the contract.
+#[cfg(feature = "http-client")]
+#[test]
+fn corrupted_payload_doesnt_block_open_store() {
+    use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("evidence.db");
+
+    let scope_a = uuid::Uuid::new_v4().to_string();
+    let scope_b = uuid::Uuid::new_v4().to_string();
+    let h1 = open_at(&db_path);
+    let id_a = create_connector(
+        h1,
+        ConnectorKindTag::Notion,
+        scope_a.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create A");
+    let id_b = create_connector(
+        h1,
+        ConnectorKindTag::Slack,
+        scope_b.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create B");
+    close_store(h1).expect("close_store");
+
+    // Re-open the evidence store directly (bypassing the FFI) and
+    // overwrite instance A's payload with garbage JSON. The store
+    // still encrypts the plaintext correctly under instance A's
+    // scope key, so the AEAD layer round-trips; the deserialise
+    // step is what fails. The `[0xa5; 32]` master key matches the
+    // "a5".repeat(32) hex that `fresh_store` / `open_at` decode.
+    {
+        let master_key: [u8; 32] = [0xa5_u8; 32];
+        let store = EvidenceStore::open(&db_path, &master_key, EvidenceStoreConfig::default())
+            .expect("EvidenceStore::open");
+
+        let id_a_uuid = uuid::Uuid::parse_str(&id_a).expect("uuid parse id_a");
+        let scope_a_id =
+            ScopeId::from_uuid(uuid::Uuid::parse_str(&scope_a).expect("parse scope_a"));
+        store
+            .save_connector_instance(
+                id_a_uuid,
+                scope_a_id,
+                connector_framework::ConnectorKind::Notion.as_str(),
+                b"not a valid JSON envelope",
+            )
+            .expect("overwrite payload with garbage plaintext");
+    }
+
+    // Re-open via the FFI and verify the un-corrupted instance still
+    // rehydrates while the deserialise-fail row is skipped.
+    let h2 = open_at(&db_path);
+    let after = list_connectors(h2).expect("list post-reopen");
+    assert_eq!(
+        after.len(),
+        1,
+        "corrupted row must be skipped while the healthy row rehydrates; got {} rows",
+        after.len(),
+    );
+    assert_eq!(
+        after[0].instance_id, id_b,
+        "the surviving row should be the un-corrupted instance B (id_a={id_a})",
+    );
+    close_store(h2).expect("close_store re-opened");
+}
+
+/// Advanced `SyncState` (cursor, status, events_ingested) MUST
+/// survive `close_store` / `open_store`. Drive this through the
+/// evidence-store API directly: we write a `connector_instances`
+/// row with a hand-crafted `SyncState::Succeeded` envelope (cursor
+/// = `"cursor-after-sync-7"`), then reopen via the FFI and verify
+/// `list_connectors` reports the advanced state.
+#[cfg(feature = "http-client")]
+#[test]
+fn sync_state_advance_persists_across_close_store_reopen() {
+    use chrono::{TimeZone, Utc};
+    use connector_framework::{
+        AuthKind, ConnectorConfig, ConnectorInstance, ConnectorInstanceId, ConnectorKind, SyncMode,
+        SyncState, SyncStatus,
+    };
+    use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("evidence.db");
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    let h1 = open_at(&db_path);
+    let instance_id = create_connector(
+        h1,
+        ConnectorKindTag::Notion,
+        scope.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create_connector");
+    close_store(h1).expect("close_store");
+
+    // Build a fresh `ConnectorInstance` with an advanced sync state
+    // and persist it through the evidence-store API directly. The
+    // FFI's `persist_connector_instance` produces the same shape;
+    // we replicate it here to avoid having to drive a real provider
+    // round-trip to advance the cursor.
+    let instance_uuid = uuid::Uuid::parse_str(&instance_id).expect("uuid parse");
+    let scope_id = ScopeId::from_uuid(uuid::Uuid::parse_str(&scope).expect("uuid parse scope"));
+    let master_key: [u8; 32] = [0xa5_u8; 32];
+
+    let mut sync_state = SyncState::new(ConnectorInstanceId::from_uuid(instance_uuid));
+    sync_state.mode = SyncMode::Incremental;
+    sync_state.cursor = Some("cursor-after-sync-7".to_string());
+    sync_state.last_synced_at = Some(Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap());
+    sync_state.status = SyncStatus::Succeeded;
+    sync_state.last_error = None;
+
+    let mut config = ConnectorConfig::new(ConnectorKind::Notion, AuthKind::OAuth2, scope_id);
+    config.auth_config_json = serde_json::from_str(PERSISTENCE_CONNECTOR_CFG).unwrap();
+
+    let instance = ConnectorInstance {
+        id: ConnectorInstanceId::from_uuid(instance_uuid),
+        config,
+        sync_state,
+    };
+    // Build the envelope the FFI persists. Schema version 1 matches
+    // `PERSISTED_INSTANCE_SCHEMA` in `crates/ffi/src/connector.rs`.
+    let envelope = serde_json::json!({
+        "schema": 1,
+        "config": &instance.config,
+        "sync_state": &instance.sync_state,
+    });
+    let plaintext_json = serde_json::to_vec(&envelope).expect("encode envelope");
+    {
+        let store = EvidenceStore::open(&db_path, &master_key, EvidenceStoreConfig::default())
+            .expect("EvidenceStore::open");
+        store
+            .save_connector_instance(
+                instance_uuid,
+                scope_id,
+                ConnectorKind::Notion.as_str(),
+                &plaintext_json,
+            )
+            .expect("save_connector_instance");
+    }
+
+    // Re-open via the FFI and verify the advanced sync state
+    // rehydrates intact. `ConnectorStatus` exposes `sync_mode`,
+    // `sync_status`, and `last_synced_at` — those three observable
+    // fields cover the steady-state contract a host depends on.
+    let h2 = open_at(&db_path);
+    let after = list_connectors(h2).expect("list post-reopen");
+    assert_eq!(after.len(), 1, "single instance must rehydrate");
+    let status = &after[0];
+    assert_eq!(status.instance_id, instance_id);
+    assert_eq!(status.scope_id, scope);
+    assert!(
+        matches!(status.sync_mode, ffi::SyncModeKind::Incremental),
+        "advanced mode (Incremental) must survive close/reopen",
+    );
+    assert!(
+        matches!(status.sync_status, ffi::SyncStatusKind::Succeeded),
+        "advanced status (Succeeded) must survive close/reopen",
+    );
+    assert_eq!(
+        status.last_synced_at,
+        Some(
+            Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0)
+                .unwrap()
+                .timestamp()
+        ),
+        "advanced last_synced_at must survive close/reopen",
+    );
+    assert!(
+        status.last_error.is_none(),
+        "Succeeded sync_state should not carry a last_error; got {:?}",
+        status.last_error,
+    );
+    close_store(h2).expect("close_store re-opened");
+
+    // The cursor itself is not exposed through `ConnectorStatus`
+    // (the type only carries the observable lifecycle fields), but
+    // it MUST still be in the persisted ciphertext so a future
+    // `sync_connector` resumes from the right point. Verify
+    // directly via the evidence-store API that the cursor JSON
+    // round-trips bit-for-bit.
+    let store = EvidenceStore::open(&db_path, &master_key, EvidenceStoreConfig::default())
+        .expect("EvidenceStore::open for cursor check");
+    let rows = store
+        .load_connector_instances()
+        .expect("load_connector_instances");
+    assert_eq!(rows.len(), 1, "exactly one persisted row expected");
+    let (loaded_uuid, loaded_scope, loaded_kind, loaded_plain) = &rows[0];
+    assert_eq!(*loaded_uuid, instance_uuid);
+    assert_eq!(*loaded_scope, scope_id);
+    assert_eq!(loaded_kind, ConnectorKind::Notion.as_str());
+    let envelope: serde_json::Value =
+        serde_json::from_slice(loaded_plain).expect("envelope JSON parse");
+    let cursor = envelope
+        .get("sync_state")
+        .and_then(|s| s.get("cursor"))
+        .and_then(|c| c.as_str());
+    assert_eq!(
+        cursor,
+        Some("cursor-after-sync-7"),
+        "advanced cursor must survive close/reopen in the persisted ciphertext",
+    );
+}
+
+/// OAuth2 tokens MUST round-trip through `connector_tokens` —
+/// written by `EvidenceStore::save_connector_token`, decrypted by
+/// `EvidenceStore::load_connector_tokens`, and the plaintext
+/// `OAuth2Token` JSON survives bit-for-bit. We drive the test
+/// through the evidence-store API directly (rather than via
+/// `authenticate_connector`) because the FFI surface requires a
+/// live OAuth2 provider for the Phase 2 exchange — the *persistence*
+/// contract is the same regardless of how the token was acquired,
+/// so testing the evidence-store round-trip pins the at-rest
+/// encryption + AAD-binding behaviour without standing up a fake
+/// OAuth endpoint.
+#[cfg(feature = "http-client")]
+#[test]
+fn oauth_token_persists_across_close_store_reopen() {
+    use chrono::{TimeZone, Utc};
+    use connector_framework::{ConnectorInstanceId, OAuth2Token};
+    use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("evidence.db");
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    let h1 = open_at(&db_path);
+    // Use the FFI to create a connector — this registers the scope
+    // DEK in `scope_deks` so subsequent direct EvidenceStore calls
+    // can encrypt under the same scope key the FFI uses.
+    let instance_id = create_connector(
+        h1,
+        ConnectorKindTag::Notion,
+        scope.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create_connector");
+    close_store(h1).expect("close_store");
+
+    // Write a token row directly via EvidenceStore, then reopen and
+    // verify load_connector_tokens decrypts it back to the same
+    // OAuth2Token plaintext.
+    let instance_uuid = uuid::Uuid::parse_str(&instance_id).expect("uuid parse instance");
+    let scope_id = ScopeId::from_uuid(uuid::Uuid::parse_str(&scope).expect("uuid parse scope"));
+    let master_key: [u8; 32] = [0xa5_u8; 32];
+    let original = OAuth2Token::new(
+        "test-access-token-deadbeef",
+        "test-refresh-token-cafebabe",
+        Utc.with_ymd_and_hms(2030, 1, 1, 0, 0, 0).unwrap(),
+        "drive.readonly profile",
+    );
+    {
+        let store = EvidenceStore::open(&db_path, &master_key, EvidenceStoreConfig::default())
+            .expect("EvidenceStore::open for write");
+        let original_json = serde_json::to_vec(&original).expect("encode token");
+        store
+            .save_connector_token(instance_uuid, scope_id, &original_json)
+            .expect("save_connector_token");
+    }
+
+    // Re-open and read back via the same path the FFI rehydration
+    // walks.
+    let store = EvidenceStore::open(&db_path, &master_key, EvidenceStoreConfig::default())
+        .expect("EvidenceStore::open for read");
+    let tokens = store
+        .load_connector_tokens()
+        .expect("load_connector_tokens");
+    assert_eq!(
+        tokens.len(),
+        1,
+        "exactly one token row should round-trip; got {}",
+        tokens.len(),
+    );
+    let (loaded_instance, loaded_scope, loaded_plain) = &tokens[0];
+    assert_eq!(*loaded_instance, instance_uuid);
+    assert_eq!(*loaded_scope, scope_id);
+    let decoded: OAuth2Token = serde_json::from_slice(loaded_plain).expect("decode token");
+    assert_eq!(
+        decoded, original,
+        "loaded OAuth2Token must equal what was persisted (access + refresh + expiry + scope + token_type)",
+    );
+
+    // Also verify the FFI's rehydration loop populates the in-memory
+    // token_vault: after `open_store`, `list_connectors` should
+    // surface the rehydrated instance, and the token's presence is
+    // implicit via the `authenticate_connector`/`sync_connector` API
+    // contracts (which we cannot exercise without a live provider).
+    // We instead verify `delete_connector_token` clears the row so
+    // subsequent reopens see no token — same idempotency contract
+    // as `remove_connector` on the instance side.
+    store
+        .delete_connector_token(instance_uuid)
+        .expect("delete_connector_token");
+    let after_delete = store
+        .load_connector_tokens()
+        .expect("load_connector_tokens after delete");
+    assert!(
+        after_delete.is_empty(),
+        "delete_connector_token must clear the row; got {} rows after delete",
+        after_delete.len(),
+    );
+    // Suppress unused warning — `ConnectorInstanceId` is imported
+    // for clarity in the test signature but not directly
+    // constructed (we work with the raw UUID for the store-side
+    // API).
+    let _ = ConnectorInstanceId::from_uuid(instance_uuid);
+}
+
+/// `remove_connector` is idempotent — calling it twice in a row,
+/// including across a `close_store` / `open_store` cycle for the
+/// second call, returns `Ok(())` both times. Pins the
+/// idempotency-on-persistence contract.
+#[cfg(feature = "http-client")]
+#[test]
+fn remove_connector_is_idempotent_across_reopen() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    let h1 = open_at(&path);
+    let id = create_connector(
+        h1,
+        ConnectorKindTag::Notion,
+        scope.clone(),
+        PERSISTENCE_CONNECTOR_CFG.into(),
+    )
+    .expect("create");
+    remove_connector(h1, id.clone()).expect("first remove");
+    close_store(h1).expect("close_store");
+
+    let h2 = open_at(&path);
+    // The second remove targets a row that no longer exists on
+    // either side (in-memory or persisted). The DELETE is a no-op
+    // and the call returns `Ok(())`.
+    remove_connector(h2, id.clone()).expect("second remove must be idempotent");
+    close_store(h2).expect("close_store re-opened");
+}

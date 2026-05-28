@@ -270,10 +270,14 @@ pub struct FfiRuntime {
     /// an inner lock would double-lock without buying any extra
     /// safety.
     ///
-    /// Phase 2 keeps connector state in-memory only — `close_store`
-    /// drops the registry. Phase 3 will add a
-    /// `connector_instances` SQLCipher table and rehydrate on
-    /// [`open_store`].
+    /// Mirrored to disk via the v9 `connector_instances` SQLCipher
+    /// table: every `create_connector` / `sync_connector` /
+    /// `remove_connector` call writes through to the AEAD-encrypted
+    /// row before the in-memory map is touched, and `open_store`
+    /// rehydrates this map by deserialising every row (see
+    /// `crate::connector::rehydrate_connectors`). Tombstoned scopes
+    /// are skipped on rehydrate so a forgotten scope's connector
+    /// state never resurrects across restarts.
     pub(crate) connector_instances: HashMap<ConnectorInstanceId, ConnectorInstance>,
     /// Live connector implementors keyed by instance id. Built by
     /// the connector factory at `create_connector` time and dropped
@@ -292,10 +296,15 @@ pub struct FfiRuntime {
     /// the FFI surface's cross-thread call pattern; see the
     /// `Connector` trait docs in `crates/connector_framework`.
     pub(crate) connectors: HashMap<ConnectorInstanceId, Arc<dyn Connector>>,
-    /// OAuth2 token bundles keyed by connector instance id. Stored
-    /// here (in process memory) for Phase 2; Phase 3 will move this
-    /// behind the encrypted `connector_tokens` table so tokens are
-    /// AEAD-encrypted at rest under the tenant DEK.
+    /// OAuth2 token bundles keyed by connector instance id. Mirrored
+    /// to disk via the v9 `connector_tokens` SQLCipher table:
+    /// `authenticate_connector` writes the AEAD-encrypted token
+    /// payload through to the row before updating the in-memory
+    /// vault, and `open_store` rehydrates the vault by deserialising
+    /// every row's plaintext. The on-disk ciphertext is sealed under
+    /// the per-scope DEK so tokens for a forgotten scope are
+    /// cryptographically unrecoverable even if the row delete races
+    /// against the scope DEK destruction.
     pub(crate) token_vault: OAuth2TokenVault,
     /// Shared HTTP transport for every connector on this runtime.
     ///
@@ -984,7 +993,7 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         }
     };
 
-    let runtime = FfiRuntime {
+    let mut runtime = FfiRuntime {
         master_key,
         store,
         registry,
@@ -999,6 +1008,24 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         #[cfg(feature = "http-client")]
         oauth_client,
     };
+
+    // Rehydrate persisted connector state from the v9
+    // `connector_instances` + `connector_tokens` tables. This walks
+    // both tables, skips tombstoned scopes (whose AEAD payloads are
+    // already unrecoverable from the destroyed scope DEK), and
+    // rebuilds every `Arc<dyn Connector>` via the same factory the
+    // create-time path uses. Rows that fail to decrypt or deserialise
+    // are skipped with a `tracing::warn!` rather than blocking the
+    // open — matching the user_memory / channel_memory rehydration
+    // discipline above.
+    //
+    // The rehydrate call mutates the runtime's `connector_instances`
+    // / `connectors` / `token_vault` maps, so it has to run before
+    // the runtime is moved into the registry below. The mutation is
+    // single-threaded here (no other handle reaches this runtime
+    // until the registry insert lands), so we can simply call it on
+    // the local `runtime` variable without acquiring any mutex.
+    crate::connector::rehydrate_connectors(&mut runtime, &tombstones);
 
     // Capture the post-replay tombstone count before moving `runtime`
     // into the registry; we publish it only after the insert succeeds
