@@ -615,27 +615,55 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
 /// Shared cryptographic-forgetting sequence executed by both
 /// [`forget`] (by evidence id) and [`forget_scope`] (by scope uuid).
 ///
-/// Sequencing matters — a partial failure mid-sequence must still
-/// leave the scope unreadable, so the steps are ordered so that the
-/// load-bearing DEK destruction happens first and the secondary
-/// cleanups (FTS, body-key wraps, memory blobs, connector lifecycle)
-/// can be retried on the next `open_store` via the recovery path:
+/// # Failure model
+///
+/// Step 1 (in-memory DEK destruction + on-disk tombstone) is the
+/// only load-bearing atomic op: if it fails the scope is NOT
+/// forgotten and the caller MUST see the error, so we bail out
+/// immediately and skip the secondary cleanups (they would race
+/// against a scope that is still readable).
+///
+/// Steps 2–6 are all *secondary* cleanups against state that the
+/// tombstone already makes unreachable through the public read
+/// path (`open_store` recovery + `is_scope_forgotten` guards).
+/// They are each independently important for the
+/// cryptographic-forgetting contract — in particular step 6 drops
+/// **plaintext OAuth2 bearer tokens** out of process memory, which
+/// is the highest-sensitivity secondary state in the substrate.
+/// Letting one failing secondary cleanup short-circuit the others
+/// would leave orphaned plaintext credentials in `token_vault` for
+/// a forgotten scope, which violates the contract this helper
+/// exists to enforce.
+///
+/// So steps 2–6 are run *unconditionally* — every step is attempted
+/// regardless of earlier failures, errors are accumulated, and the
+/// first error encountered is returned to the caller after every
+/// cleanup has had a chance to run. Errors from earlier secondary
+/// steps do NOT mask later secondary steps in any way: each step
+/// owns its own piece of state and runs against that state directly,
+/// so a SQLCipher I/O failure on step 3 does not affect the
+/// in-memory connector teardown on step 6.
+///
+/// The ordered sequence:
 ///
 /// 1. In-memory DEK destruction + on-disk tombstone (atomic via
-///    `FfiRuntime::forget_scope` → `TombstoneStore`).
+///    `FfiRuntime::forget_scope` → `TombstoneStore`). **Bail on
+///    failure — the scope is not forgotten.**
 /// 2. Best-effort SQLCipher DEK deletion (tombstone still blocks
-///    access on failure).
+///    access on failure; `open_store`'s recovery path retries).
 /// 3. FTS5 + body-key-wrap purge so plaintext-derived secondary
 ///    payloads cannot be recovered post-forget.
 /// 4. Persisted memory blob deletion so forgotten-scope memory
 ///    state does not survive the next `open_store`.
-/// 5. In-memory memory map purge.
+/// 5. In-memory memory map purge (infallible — `HashMap::remove`).
 /// 6. Connector lifecycle purge — every `ConnectorInstance` row,
 ///    live `Arc<dyn Connector>` handle, and cached OAuth2 token
 ///    bound to the forgotten scope is dropped so a later
 ///    `sync_connector` (or any token-vault dump) cannot resurrect
 ///    plaintext provider credentials and re-emit fresh evidence
-///    onto a tombstoned scope.
+///    onto a tombstoned scope. **Infallible** — purely
+///    in-memory `HashMap::remove` + `OAuth2TokenVault::remove`,
+///    both idempotent.
 ///
 /// Any new piece of scope-bound state added in the future MUST be
 /// torn down here — routing both forget entry points through this
@@ -643,11 +671,26 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
 /// honest.
 fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> FfiResult<()> {
     // 1. Atomic in-memory + on-disk forgetting (see
-    //    `FfiRuntime::forget_scope` for the rationale).
+    //    `FfiRuntime::forget_scope` for the rationale). Bail on
+    //    failure: if this fails the scope is still readable and
+    //    running the secondary cleanups would prematurely tear down
+    //    state the host still has the right to read.
     rt.forget_scope(scope)?;
-    // 2. Best-effort DEK deletion: if this fails the tombstone
-    //    still blocks access and `open_store`'s recovery path will
-    //    retry the deletion on next startup.
+
+    // Steps 2–6 are best-effort secondary cleanups. Every step
+    // MUST be attempted regardless of earlier failures so that the
+    // in-memory connector teardown (step 6 — which drops plaintext
+    // OAuth2 tokens) is never skipped because a SQLCipher purge
+    // happened to fail upstream. We accumulate the first error
+    // encountered and surface it to the caller after every step
+    // has run.
+    let mut first_error: Option<FfiError> = None;
+
+    // 2. Best-effort SQLCipher DEK deletion: if this fails the
+    //    tombstone still blocks access and `open_store`'s recovery
+    //    path will retry the deletion on next startup. Tracing-only
+    //    on failure — we do NOT promote this to `first_error`
+    //    because the documented recovery path handles it.
     if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
         tracing::warn!(
             scope = %scope.as_uuid(),
@@ -655,32 +698,59 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
             "failed to delete scope DEK; will retry on next open_store",
         );
     }
+
     // 3. Purge the FTS5 index + body-store CEK wraps so
     //    plaintext-derived secondary payloads cannot be recovered
-    //    post-forget.
-    rt.store_mut()
-        .purge_fts_for_scope(scope)
-        .map_err(|e| FfiError::Evidence {
+    //    post-forget. Capture the first failure but DO NOT
+    //    short-circuit — the steps below own disjoint state and
+    //    are equally important to the forgetting contract.
+    if let Err(e) = rt.store_mut().purge_fts_for_scope(scope) {
+        let err = FfiError::Evidence {
             message: e.to_string(),
-        })?;
-    rt.store_mut()
-        .purge_body_key_wraps_for_scope(scope)
-        .map_err(|e| FfiError::Evidence {
+        };
+        tracing::warn!(
+            scope = %scope.as_uuid(),
+            error = %err,
+            "forget_scope_state: purge_fts_for_scope failed; continuing to subsequent cleanups",
+        );
+        first_error.get_or_insert(err);
+    }
+    if let Err(e) = rt.store_mut().purge_body_key_wraps_for_scope(scope) {
+        let err = FfiError::Evidence {
             message: e.to_string(),
-        })?;
+        };
+        tracing::warn!(
+            scope = %scope.as_uuid(),
+            error = %err,
+            "forget_scope_state: purge_body_key_wraps_for_scope failed; continuing to subsequent cleanups",
+        );
+        first_error.get_or_insert(err);
+    }
+
     // 4. Delete persisted memory blobs so forgotten-scope memory
     //    state does not survive the next `open_store`.
-    rt.store()
-        .delete_memory_blobs_for_scope(scope)
-        .map_err(|e| FfiError::Evidence {
+    if let Err(e) = rt.store().delete_memory_blobs_for_scope(scope) {
+        let err = FfiError::Evidence {
             message: e.to_string(),
-        })?;
-    // 5. In-memory memory maps.
+        };
+        tracing::warn!(
+            scope = %scope.as_uuid(),
+            error = %err,
+            "forget_scope_state: delete_memory_blobs_for_scope failed; continuing to connector teardown",
+        );
+        first_error.get_or_insert(err);
+    }
+
+    // 5. In-memory memory maps. Infallible.
     rt.user_memories.remove(&scope);
     rt.channel_memories.remove(&scope);
+
     // 6. Connector lifecycle: every `ConnectorInstance` row, live
     //    `Arc<dyn Connector>` handle, and cached OAuth2 token bound
     //    to the forgotten scope MUST become unrecoverable.
+    //    Infallible — purely in-memory `HashMap::remove` and
+    //    `OAuth2TokenVault::remove` (which treats a missing entry
+    //    as a benign no-op).
     //
     //    Collect first to release the immutable borrow on
     //    `connector_instances` before the removal loop takes mutable
@@ -707,7 +777,11 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         // forgetting path is idempotent.
         let _ = rt.token_vault.remove(id);
     }
-    Ok(())
+
+    match first_error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
 /// List memory records for a scope, optionally filtered by state.
