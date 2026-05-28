@@ -93,9 +93,27 @@ pub struct ConnectorConfig {
     pub sync_interval: Duration,
     /// Provider-specific auth config (client id, redirect uri,
     /// scopes, …). Schema-flexible so callers can extend without a
-    /// migration. Secret values (client secrets, API keys) MUST be
-    /// stored separately in the token vault — this field is for
-    /// non-sensitive configuration only.
+    /// migration.
+    ///
+    /// **Secret values belong in the host's keychain, not this
+    /// field.** Production hosts MUST surface OAuth2 `client_secret`
+    /// values through a registered
+    /// [`ClientSecretResolver`](crate::oauth::ClientSecretResolver)
+    /// (see [`crate::oauth::OAuth2Client::set_resolver`]). The
+    /// framework reads `auth_config_json["client_secret"]` as a
+    /// fallback only when the resolver is unset OR returns `None`
+    /// — that fallback exists strictly so test harnesses, single-
+    /// tenant CLI hosts, and migration scripts can stand up the
+    /// OAuth2 round-trip without the resolver FFI ceremony. The
+    /// fallback secret does live on disk (encrypted under the per-
+    /// scope DEK in the substrate's SQLCipher store), which matters
+    /// for at-rest theft and backup-snapshot exposure scenarios.
+    /// Treat its presence here as a deliberate test-or-dev choice,
+    /// not a production pattern.
+    ///
+    /// Long-lived API keys (e.g. HubSpot private app tokens) follow
+    /// the same rule — surface them through the host's keychain via
+    /// the resolver (extension point pending), not via this field.
     pub auth_config_json: serde_json::Value,
 }
 

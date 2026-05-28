@@ -110,8 +110,9 @@ pub mod tracing_init;
 pub mod types;
 
 pub use connector::{
-    authenticate_connector, create_connector, list_connectors, refresh_connector_token,
-    remove_connector, sync_connector,
+    authenticate_connector, clear_oauth_client_secret_resolver, create_connector, list_connectors,
+    refresh_connector_token, remove_connector, set_oauth_client_secret_resolver, sync_connector,
+    OAuthClientSecretResolver,
 };
 pub use error::{FfiError, FfiResult};
 pub use health::{health_check, AdapterReport, HealthStatus, SubsystemHealth, SubsystemStatus};

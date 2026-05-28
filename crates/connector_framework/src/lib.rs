@@ -67,7 +67,9 @@ pub use http_helpers::{
 };
 #[cfg(feature = "http-client")]
 pub use oauth::default_oauth_client;
-pub use oauth::{ConfiguredRefresher, OAuth2Client, DEFAULT_OAUTH_TIMEOUT_SECS};
+pub use oauth::{
+    ClientSecretResolver, ConfiguredRefresher, OAuth2Client, DEFAULT_OAUTH_TIMEOUT_SECS,
+};
 // Deprecated transport-suggestive alias, retained for one minor
 // cycle so external consumers can migrate without an API break.
 // New code should reach for `OAuth2Client` directly.

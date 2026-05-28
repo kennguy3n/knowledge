@@ -13,12 +13,43 @@
 //! The OAuth2 endpoint URL and `client_id` / `redirect_uri` are
 //! read out of [`crate::config::ConnectorConfig::auth_config_json`]
 //! (a flexible JSON blob — see `docs/DESIGN.md` §10.2). The
-//! `client_secret` is **never** stored on disk; production callers
-//! pass it in via [`OAuth2Client::with_client_secret`] at
-//! runtime from the OS keychain / secrets manager.
+//! `client_secret` is resolved per-grant through a three-layer
+//! fallback ladder, in priority order:
+//!
+//! 1. **Host-supplied [`ClientSecretResolver`]** (production path).
+//!    The host registers a resolver callback via the FFI surface;
+//!    the framework consults it at grant-time with
+//!    `(kind, scope_id, client_id)`. The secret stays in the host's
+//!    OS keychain and never lives in the substrate's persisted state.
+//!    This is the architecturally-correct production path because it
+//!    keeps confidential credentials off disk (mitigating both
+//!    at-rest theft and inadvertent backup-snapshot exposure).
+//! 2. **`auth_config_json["client_secret"]`** (fallback for tests /
+//!    dev hosts). When the resolver is unset OR returns `None`, the
+//!    framework reads an optional `client_secret` string field out of
+//!    [`ConnectorConfig::auth_config_json`]. **The framework's
+//!    documented design intent is that secrets DO NOT live in
+//!    `auth_config_json`** (see the doc comment on the field); this
+//!    fallback exists strictly so test harnesses, single-tenant CLI
+//!    hosts, and migration scripts can stand up the OAuth2 round-trip
+//!    without the resolver FFI ceremony. Production hosts SHOULD
+//!    register a resolver and leave this field absent.
+//! 3. **Static [`OAuth2Client::with_client_secret`]** (legacy / test
+//!    convenience). When neither layer above produces a secret, the
+//!    framework falls back to the value optionally set on the client
+//!    at construction time. The framework's existing unit tests use
+//!    this path; new code should prefer the resolver.
+//!
+//! When all three layers come up empty the form field is omitted
+//! entirely — public-client (PKCE-only) providers work as-is;
+//! confidential-client providers reject the grant with
+//! `invalid_client`, which is the actionable signal the host needs
+//! to either register a resolver or thread the secret through
+//! `auth_config_json`.
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Deserialize;
+use std::sync::{Arc, RwLock};
 
 use crate::config::ConnectorConfig;
 use crate::error::{ConnectorError, Result};
@@ -26,6 +57,64 @@ use crate::http::{HttpRequest, HttpResponse, HttpTransport};
 use crate::token_vault::{
     OAuth2CodeExchange, OAuth2Token, RefreshedToken, SecretToken, TokenRefresher,
 };
+
+/// Host-supplied callback for resolving an OAuth2 `client_secret`
+/// at grant-time.
+///
+/// The substrate consults the registered resolver before every
+/// `authorization_code` / `refresh_token` grant; the resolver is
+/// invoked with `(kind, scope_id, client_id)` and returns the
+/// matching `client_secret` (or `None` if the host has no secret
+/// for that combination, in which case the framework falls back to
+/// [`ConnectorConfig::auth_config_json`]`["client_secret"]`).
+///
+/// The resolver MUST be cheap to call — it is consulted on the
+/// runtime mutex's critical path in the FFI substrate, although
+/// the framework itself does not hold any locks while calling it.
+/// Concretely, the resolver is invoked on the thread that drives
+/// the OAuth2 grant (the `sync_connector` worker or the host's
+/// thread driving `authenticate_connector` /
+/// `refresh_connector_token`). Implementations should resolve the
+/// secret from an in-memory cache populated at startup rather than
+/// hitting the OS keychain on every call.
+///
+/// # Multi-tenancy & multi-app
+///
+/// All three arguments are surfaced so hosts can disambiguate
+/// across the dimensions OAuth2 deployments actually vary on:
+///
+/// * `kind`: which provider (`"notion"`, `"google_drive"`, etc.).
+/// * `scope_id`: which tenant / workspace the connector instance is
+///   bound to (Uuid string).
+/// * `client_id`: which OAuth2 app at the provider (one tenant may
+///   register multiple apps for different teams or use cases).
+///
+/// A typical host implementation indexes its secret store by
+/// `(scope_id, client_id)` and ignores `kind` (which is implied by
+/// `client_id`); a single-tenant CLI host indexes by `kind` alone.
+///
+/// # Returning `None`
+///
+/// Returning `None` is NOT an error — it signals "I don't have a
+/// secret for that combination, please fall through to the
+/// `auth_config_json` fallback." Implementations that want to
+/// hard-fail an unknown-secret query should return `None` and let
+/// the provider reject the grant with `invalid_client`; the
+/// resulting `ConnectorError` surfaces to the host with the
+/// actionable diagnostic.
+pub trait ClientSecretResolver: Send + Sync {
+    /// Resolve the `client_secret` for the given grant context.
+    ///
+    /// Returns `Some(secret)` when the host can produce a secret
+    /// matching the `(kind, scope_id, client_id)` tuple; returns
+    /// `None` to defer to the next layer of the framework's
+    /// fallback ladder (see the module-level docs). An empty string
+    /// is treated as an explicit "no-secret" choice and short-
+    /// circuits the fallback layers — see
+    /// [`OAuth2Client::client_secret_for`]'s rustdoc for the
+    /// rationale.
+    fn resolve(&self, kind: &str, scope_id: &str, client_id: &str) -> Option<String>;
+}
 
 /// Transport-agnostic OAuth2 client that drives both
 /// `authorization_code` and `refresh_token` grants over a shared
@@ -58,33 +147,62 @@ use crate::token_vault::{
 /// refresh tokens the same treatment in [`OAuth2Token`] / [`RefreshedToken`]
 /// — the client secret deserves *at least* the same care.
 pub struct OAuth2Client<T: HttpTransport> {
-    transport: std::sync::Arc<T>,
+    transport: Arc<T>,
     client_secret: Option<SecretToken>,
+    /// Host-supplied dynamic resolver consulted before the static
+    /// `client_secret` / `auth_config_json` fallback. Stored behind
+    /// `Arc<RwLock<...>>` so the FFI substrate can hand out
+    /// `Arc<OAuth2Client>` clones to every connector and still let
+    /// the host swap or unset the resolver after `open_store` (e.g.
+    /// on a keychain unlock event). Reads happen on every grant;
+    /// writes happen once per host lifecycle — `RwLock` fits.
+    resolver: Arc<RwLock<Option<Arc<dyn ClientSecretResolver>>>>,
 }
 
 // Manual `Clone` impl: a derived one would synthesise a `T: Clone`
 // bound, but the only field that depends on `T` is `Arc<T>`, which
 // is `Clone` *regardless* of whether `T` is. Cloning produces a
 // second `Arc` handle to the shared transport (no underlying
-// transport copy) and a `Clone` of the `Option<SecretToken>` (which
-// is itself a fresh heap allocation that zeroises on drop).
+// transport copy), a `Clone` of the `Option<SecretToken>` (which is
+// itself a fresh heap allocation that zeroises on drop), and a
+// second `Arc` handle to the shared resolver slot (so clones
+// observe `set_resolver` / `clear_resolver` calls).
 impl<T: HttpTransport> Clone for OAuth2Client<T> {
     fn clone(&self) -> Self {
         Self {
-            transport: std::sync::Arc::clone(&self.transport),
+            transport: Arc::clone(&self.transport),
             client_secret: self.client_secret.clone(),
+            resolver: Arc::clone(&self.resolver),
         }
     }
 }
 
 impl<T: HttpTransport> std::fmt::Debug for OAuth2Client<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Snapshot the resolver behind a non-blocking read for the
+        // diagnostic Debug print. A poisoned lock degrades to the
+        // string "<poisoned>" — we deliberately don't propagate the
+        // poison because Debug must be infallible and the only
+        // poisoning vector (a panic inside set_resolver while the
+        // write lock was held) is already a hard failure visible
+        // elsewhere.
+        let resolver_state = match self.resolver.read() {
+            Ok(guard) => {
+                if guard.is_some() {
+                    "<registered>"
+                } else {
+                    "<unset>"
+                }
+            }
+            Err(_) => "<poisoned>",
+        };
         f.debug_struct("OAuth2Client")
             .field("transport", &"<HttpTransport>")
             .field(
                 "client_secret",
                 &self.client_secret.as_ref().map(|_| "[redacted]"),
             )
+            .field("resolver", &resolver_state)
             .finish()
     }
 }
@@ -93,17 +211,140 @@ impl<T: HttpTransport> OAuth2Client<T> {
     /// Wrap a transport. No client secret is set — callers that
     /// negotiate against providers requiring a confidential client
     /// (most major providers: Google, Microsoft, Atlassian, …)
-    /// must call [`Self::with_client_secret`] before invoking
-    /// `exchange_code` / `refresh`.
-    pub fn new(transport: std::sync::Arc<T>) -> Self {
+    /// must either:
+    ///
+    /// 1. Register a host-supplied [`ClientSecretResolver`] via
+    ///    [`Self::set_resolver`] (recommended for production —
+    ///    secrets stay in the OS keychain).
+    /// 2. Pass `client_secret` through
+    ///    [`ConnectorConfig::auth_config_json`] (fallback for tests
+    ///    / dev hosts only — see the module-level docs for the
+    ///    rationale).
+    /// 3. Call [`Self::with_client_secret`] (legacy / unit-test
+    ///    convenience; the value lives in this client's memory).
+    pub fn new(transport: Arc<T>) -> Self {
         Self {
             transport,
             client_secret: None,
+            resolver: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Register a host-supplied resolver for `client_secret` lookup.
+    ///
+    /// The resolver is consulted on every `authorization_code` /
+    /// `refresh_token` grant before the `auth_config_json` and
+    /// static fallbacks. Calling this method more than once
+    /// REPLACES the previously-registered resolver — the framework
+    /// holds at most one resolver per `OAuth2Client` instance,
+    /// shared by every clone of the client through an internal
+    /// `Arc<RwLock<...>>`.
+    ///
+    /// Takes `&self` (not `&mut self`) so the FFI substrate can
+    /// register a resolver against the `Arc<OAuth2Client>` it
+    /// already shares with every connector — no need to rebuild
+    /// the per-runtime client or re-bind the per-connector
+    /// `Arc<dyn OAuth2CodeExchange>` references.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned (i.e. a previous
+    /// caller of this method panicked while holding the write lock).
+    /// In practice this is impossible — the body of this method
+    /// performs a single assignment and cannot panic — but the
+    /// stdlib's `RwLock::write` returns `Result` so we surface the
+    /// `expect`. A poisoned `RwLock` is a programming bug, not a
+    /// runtime condition the host can recover from.
+    pub fn set_resolver(&self, resolver: Arc<dyn ClientSecretResolver>) {
+        let mut guard = self
+            .resolver
+            .write()
+            .expect("OAuth2Client resolver RwLock poisoned");
+        *guard = Some(resolver);
+    }
+
+    /// Unregister any previously-registered resolver. After this
+    /// call the framework consults `auth_config_json` and the
+    /// static `with_client_secret` value only.
+    ///
+    /// # Panics
+    ///
+    /// Same as [`Self::set_resolver`] — `RwLock` poisoning.
+    pub fn clear_resolver(&self) {
+        let mut guard = self
+            .resolver
+            .write()
+            .expect("OAuth2Client resolver RwLock poisoned");
+        *guard = None;
+    }
+
+    /// Resolve the `client_secret` for a grant against `config`,
+    /// walking the 3-layer fallback ladder documented at the
+    /// module level. Returns `None` when no layer produces a
+    /// secret (the framework then omits the `client_secret` form
+    /// field).
+    ///
+    /// Layer 1 (resolver) holds the read lock for the duration of
+    /// the resolver call. The trait contract documents that
+    /// implementations must be cheap (in-memory cache lookups), so
+    /// the lock is never held across a long-blocking operation. A
+    /// poisoned lock degrades cleanly to layer 2 (auth_config_json)
+    /// — the framework keeps trying to make progress rather than
+    /// surfacing a `RwLockReadGuard` poison to the host as an OAuth2
+    /// error.
+    fn client_secret_for(&self, config: &ConnectorConfig) -> Option<String> {
+        // Layer 1: host-supplied resolver.
+        if let Ok(guard) = self.resolver.read() {
+            if let Some(resolver) = guard.as_ref() {
+                let kind = config.kind.as_str();
+                let scope_id = config.scope_id.as_uuid().to_string();
+                let client_id = config
+                    .auth_config_json
+                    .get("client_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                if let Some(secret) = resolver.resolve(kind, &scope_id, client_id) {
+                    if !secret.is_empty() {
+                        return Some(secret);
+                    }
+                    // Empty string from resolver is treated as
+                    // "explicit no-secret" and short-circuits the
+                    // fallback layers — the host has affirmatively
+                    // chosen the public-client form for this
+                    // (kind, scope_id, client_id) tuple, and falling
+                    // back to `auth_config_json` would produce
+                    // confusing precedence semantics.
+                    return None;
+                }
+                // Resolver returned None → fall through to layer 2.
+            }
+        }
+        // Layer 2: auth_config_json["client_secret"] (fallback).
+        if let Some(secret) = config
+            .auth_config_json
+            .get("client_secret")
+            .and_then(serde_json::Value::as_str)
+        {
+            if !secret.is_empty() {
+                return Some(secret.to_string());
+            }
+        }
+        // Layer 3: static client_secret set via with_client_secret.
+        self.client_secret.as_ref().map(|s| s.expose().to_string())
     }
 
     /// Provide the OAuth2 client secret (kept in memory only — the
     /// substrate never persists it). Chainable.
+    ///
+    /// **Layer-3 fallback only** — the framework's documented
+    /// production path is the host-supplied
+    /// [`ClientSecretResolver`] registered via [`Self::set_resolver`]
+    /// (see the module-level docs). This method is retained for
+    /// backwards compatibility with code that constructs an
+    /// `OAuth2Client` with a known secret at build time (chiefly
+    /// unit-test harnesses), and for hosts that want a single
+    /// fallback secret applied across every grant when neither the
+    /// resolver nor `auth_config_json` produces one.
     ///
     /// The accepted `impl Into<String>` is wrapped in a [`SecretToken`]
     /// before being stored, so its heap buffer is zeroised on drop
@@ -195,30 +436,27 @@ impl<T: HttpTransport + 'static> OAuth2CodeExchange for OAuth2Client<T> {
         let token_url = Self::token_url(config)?;
         let client_id = Self::client_id(config)?;
         let redirect_uri = Self::redirect_uri(config)?;
-        // `SecretToken::expose` is the explicit unwrap point — the
-        // borrowed `&str` only lives long enough to feed the form
-        // body builder below, and `expose` is documented as the
-        // single read accessor (no `Deref<str>` impl exists, so we
-        // cannot accidentally log it).
-        //
-        // When no `client_secret` has been configured we omit the
-        // form field entirely rather than sending `client_secret=`
-        // with an empty value — Azure AD (and some other strict
-        // identity platforms) reject `invalid_client` for an empty
-        // secret on a public-client (PKCE-style) registration. The
-        // confidential-client flow used by Slack / Notion / Atlassian
-        // / Google requires a non-empty secret, so the same omission
-        // also surfaces a misconfigured confidential client as a
-        // 400 from the provider rather than a 401 with a misleading
-        // "empty client_secret" reason.
-        let exposed_secret = self.client_secret.as_ref().map(SecretToken::expose);
+        // Resolve `client_secret` through the 3-layer ladder
+        // documented on [`Self::client_secret_for`]:
+        // 1. host-supplied resolver, 2. `auth_config_json`, 3.
+        // static. When all three come up empty the form field is
+        // omitted entirely rather than sent with an empty value —
+        // Azure AD (and some other strict identity platforms) reject
+        // `invalid_client` for an empty secret on a public-client
+        // (PKCE-style) registration. The confidential-client flow
+        // used by Slack / Notion / Atlassian / Google requires a
+        // non-empty secret, so the same omission also surfaces a
+        // misconfigured confidential client as a 400 from the
+        // provider rather than a 401 with a misleading "empty
+        // client_secret" reason.
+        let resolved_secret = self.client_secret_for(config);
         let mut form: Vec<(&str, &str)> = vec![
             ("grant_type", "authorization_code"),
             ("code", auth_code),
             ("redirect_uri", redirect_uri),
             ("client_id", client_id),
         ];
-        if let Some(secret) = exposed_secret {
+        if let Some(secret) = resolved_secret.as_deref() {
             form.push(("client_secret", secret));
         }
         let resp = self.execute_token_grant(token_url, &form, ConnectorError::Auth)?;
@@ -252,16 +490,15 @@ impl<T: HttpTransport + 'static> OAuth2Client<T> {
         let token_url = Self::token_url(config)?;
         let client_id = Self::client_id(config)?;
         // See [`OAuth2CodeExchange::exchange_code`] for the rationale
-        // on conditionally omitting `client_secret` rather than
-        // sending an empty string — same constraint applies to the
-        // refresh grant.
-        let exposed_secret = self.client_secret.as_ref().map(SecretToken::expose);
+        // on the 3-layer resolution ladder and the omit-on-empty
+        // convention — same constraint applies to the refresh grant.
+        let resolved_secret = self.client_secret_for(config);
         let mut form: Vec<(&str, &str)> = vec![
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
             ("client_id", client_id),
         ];
-        if let Some(secret) = exposed_secret {
+        if let Some(secret) = resolved_secret.as_deref() {
             form.push(("client_secret", secret));
         }
         // Refresh-grant failures must surface as
@@ -895,6 +1132,322 @@ mod tests {
         assert_eq!(
             encoded,
             "grant_type=authorization_code&code=abc%2F123+xyz&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcb%3Fa%3D1"
+        );
+    }
+
+    // ───────── Phase 4.1: ClientSecretResolver resolution-ladder tests ─────────
+
+    /// Test resolver that records every `(kind, scope_id, client_id)`
+    /// tuple it's asked about and returns a preset answer. Mirrors the
+    /// `MockHttpTransport` recording pattern in this module.
+    #[derive(Debug, Default)]
+    struct RecordingResolver {
+        answer: std::sync::Mutex<Option<String>>,
+        calls: std::sync::Mutex<Vec<(String, String, String)>>,
+    }
+
+    impl RecordingResolver {
+        fn with_answer(answer: impl Into<String>) -> Self {
+            Self {
+                answer: std::sync::Mutex::new(Some(answer.into())),
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn no_answer() -> Self {
+            Self::default()
+        }
+
+        fn calls(&self) -> Vec<(String, String, String)> {
+            self.calls.lock().expect("calls poisoned").clone()
+        }
+    }
+
+    impl ClientSecretResolver for RecordingResolver {
+        fn resolve(&self, kind: &str, scope_id: &str, client_id: &str) -> Option<String> {
+            self.calls.lock().expect("calls poisoned").push((
+                kind.to_string(),
+                scope_id.to_string(),
+                client_id.to_string(),
+            ));
+            self.answer.lock().expect("answer poisoned").clone()
+        }
+    }
+
+    /// Layer 1: a registered resolver that returns `Some(secret)` MUST
+    /// supply the value to the grant body — the framework never falls
+    /// through to `auth_config_json` or the static client secret when
+    /// the resolver has answered.
+    #[test]
+    fn resolver_secret_overrides_auth_config_json_and_static_layers() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
+                    .to_vec(),
+            ),
+        );
+        // Build a client with a STATIC secret (layer 3) AND configure
+        // a resolver (layer 1). Resolver must win.
+        let client = OAuth2Client::new(transport.clone()).with_client_secret("static-secret");
+        let resolver = Arc::new(RecordingResolver::with_answer("resolver-secret"));
+        client.set_resolver(resolver.clone());
+
+        // Also stash a layer-2 secret in auth_config_json. Resolver
+        // still wins over both layers below it.
+        let mut config = cfg();
+        config.auth_config_json["client_secret"] = serde_json::json!("auth-config-secret");
+
+        let _ = client
+            .exchange_code(&config, "code-xyz")
+            .expect("exchange succeeds");
+
+        let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
+        assert!(
+            body.contains("client_secret=resolver-secret"),
+            "resolver must override both auth_config_json and static layers; got {body}"
+        );
+        assert!(
+            !body.contains("static-secret"),
+            "static client_secret must be shadowed by resolver"
+        );
+        assert!(
+            !body.contains("auth-config-secret"),
+            "auth_config_json client_secret must be shadowed by resolver"
+        );
+
+        // Resolver received the right context tuple.
+        let calls = resolver.calls();
+        assert_eq!(calls.len(), 1);
+        let (kind, scope_id, client_id) = &calls[0];
+        assert_eq!(kind, "notion");
+        assert_eq!(scope_id, &config.scope_id.as_uuid().to_string());
+        assert_eq!(client_id, "client-abc");
+    }
+
+    /// Layer 2 fallback: when the resolver returns `None`, the
+    /// framework falls through to `auth_config_json["client_secret"]`.
+    /// This is the dev/test/CLI ergonomic path.
+    #[test]
+    fn auth_config_json_client_secret_used_when_resolver_returns_none() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","expires_in":3600,"scope":"s"}"#.to_vec(),
+            ),
+        );
+        let client = OAuth2Client::new(transport.clone());
+        let resolver = Arc::new(RecordingResolver::no_answer());
+        client.set_resolver(resolver.clone());
+
+        let mut config = cfg();
+        config.auth_config_json["client_secret"] = serde_json::json!("from-auth-config");
+
+        let _ = client
+            .refresh_with_config(&config, "RT-OLD")
+            .expect("refresh succeeds");
+
+        let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
+        assert!(
+            body.contains("client_secret=from-auth-config"),
+            "expected layer-2 fallback to populate client_secret; got {body}"
+        );
+        // Resolver was consulted (we don't skip it).
+        assert_eq!(resolver.calls().len(), 1);
+    }
+
+    /// Layer 2 also kicks in when no resolver is registered AT ALL
+    /// (not just when the resolver returns `None`). This is the
+    /// most common test-harness invocation.
+    #[test]
+    fn auth_config_json_client_secret_used_when_no_resolver_registered() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
+                    .to_vec(),
+            ),
+        );
+        let client = OAuth2Client::new(transport.clone());
+
+        let mut config = cfg();
+        config.auth_config_json["client_secret"] = serde_json::json!("ac-only");
+
+        let _ = client
+            .exchange_code(&config, "code")
+            .expect("exchange succeeds");
+
+        let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
+        assert!(
+            body.contains("client_secret=ac-only"),
+            "auth_config_json fallback must fire when no resolver registered; got {body}"
+        );
+    }
+
+    /// Layer 3 fallback: when both the resolver and `auth_config_json`
+    /// come up empty, the static `with_client_secret` value wins.
+    /// Preserves backwards compatibility with existing unit-test
+    /// wiring that constructed `OAuth2Client::new(...).with_client_secret(...)`.
+    #[test]
+    fn static_client_secret_used_when_resolver_and_auth_config_both_empty() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
+                    .to_vec(),
+            ),
+        );
+        let client = OAuth2Client::new(transport.clone()).with_client_secret("static-only");
+        let resolver = Arc::new(RecordingResolver::no_answer());
+        client.set_resolver(resolver);
+
+        // No `client_secret` in auth_config_json.
+        let _ = client
+            .exchange_code(&cfg(), "code")
+            .expect("exchange succeeds");
+
+        let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
+        assert!(
+            body.contains("client_secret=static-only"),
+            "static layer must catch when both higher layers come up empty; got {body}"
+        );
+    }
+
+    /// Empty string from the resolver is treated as "explicit
+    /// public-client, omit the form field"; it short-circuits the
+    /// lower layers rather than falling through. Documents the
+    /// precedence rule in `client_secret_for`.
+    #[test]
+    fn resolver_returning_empty_string_short_circuits_fallback() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","expires_in":3600,"scope":"s"}"#.to_vec(),
+            ),
+        );
+        let client = OAuth2Client::new(transport.clone()).with_client_secret("static-fallback");
+        let resolver = Arc::new(RecordingResolver::with_answer(""));
+        client.set_resolver(resolver);
+
+        let mut config = cfg();
+        config.auth_config_json["client_secret"] = serde_json::json!("ac-fallback");
+
+        let _ = client
+            .exchange_code(&config, "code")
+            .expect("exchange succeeds");
+
+        let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
+        assert!(
+            !body.contains("client_secret"),
+            "empty-string resolver answer must omit client_secret entirely, not fall through; got {body}"
+        );
+    }
+
+    /// `set_resolver` followed by `clear_resolver` returns the client
+    /// to the fallback-only state. Pins the unregister path.
+    #[test]
+    fn clear_resolver_falls_back_to_auth_config_json() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
+                    .to_vec(),
+            ),
+        );
+        let client = OAuth2Client::new(transport.clone());
+        client.set_resolver(Arc::new(RecordingResolver::with_answer("from-resolver")));
+        client.clear_resolver();
+
+        let mut config = cfg();
+        config.auth_config_json["client_secret"] = serde_json::json!("from-auth-config");
+
+        let _ = client
+            .exchange_code(&config, "code")
+            .expect("exchange succeeds");
+
+        let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
+        assert!(
+            body.contains("client_secret=from-auth-config"),
+            "after clear_resolver(), auth_config_json must take over; got {body}"
+        );
+    }
+
+    /// `Clone` of an `OAuth2Client` shares the resolver slot with the
+    /// original — registering a resolver on one clone changes the
+    /// behaviour of every other clone. This is the invariant the FFI
+    /// substrate relies on: it hands an `Arc<OAuth2Client>` to every
+    /// connector, then calls `set_resolver` once on the runtime's
+    /// canonical handle, and every connector observes the new
+    /// resolver on the next grant.
+    #[test]
+    fn resolver_is_shared_across_clones() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Post,
+            "https://api.notion.com/v1/oauth/token",
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
+                    .to_vec(),
+            ),
+        );
+        let client_a = OAuth2Client::new(transport.clone());
+        let client_b = client_a.clone();
+
+        // Register resolver on `client_a`; expect `client_b` to see it.
+        client_a.set_resolver(Arc::new(RecordingResolver::with_answer("shared-secret")));
+
+        let _ = client_b
+            .exchange_code(&cfg(), "code")
+            .expect("clone-driven grant succeeds");
+
+        let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
+        assert!(
+            body.contains("client_secret=shared-secret"),
+            "Clone of OAuth2Client must share the resolver slot; got {body}"
+        );
+    }
+
+    /// `Debug` output indicates whether a resolver is registered but
+    /// MUST NOT call into the resolver (which could panic / block /
+    /// log the secret). Pins the "Debug is infallible and quiet"
+    /// invariant.
+    #[test]
+    fn debug_indicates_resolver_state_without_invoking_it() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let client = OAuth2Client::new(transport);
+
+        // Unset state.
+        let dbg_unset = format!("{client:?}");
+        assert!(
+            dbg_unset.contains("<unset>"),
+            "Debug must indicate unset resolver; got {dbg_unset}"
+        );
+
+        // After registering a resolver that would panic if called.
+        #[derive(Debug)]
+        struct PanickingResolver;
+        impl ClientSecretResolver for PanickingResolver {
+            fn resolve(&self, _: &str, _: &str, _: &str) -> Option<String> {
+                panic!("Debug must not invoke the resolver");
+            }
+        }
+        client.set_resolver(Arc::new(PanickingResolver));
+        let dbg_set = format!("{client:?}");
+        assert!(
+            dbg_set.contains("<registered>"),
+            "Debug must indicate registered resolver; got {dbg_set}"
         );
     }
 }
