@@ -443,6 +443,23 @@ pub fn authenticate_connector(
 ///   exchange.
 /// * [`FfiError::Evidence`] if the persist call to SQLCipher fails
 ///   in Phase 3.
+///
+/// # Confidential-client support (Phase 4.1)
+///
+/// The substrate currently posts the `grant_type=refresh_token`
+/// form WITHOUT a `client_secret` field — the per-runtime
+/// [`OAuth2Client`](connector_framework::OAuth2Client) is
+/// constructed without `.with_client_secret(...)` (see
+/// `runtime.rs`'s `open_store` for the full architectural note).
+/// Confidential-client providers (Notion production, Google,
+/// Atlassian, Microsoft Graph, HubSpot, …) will reject the refresh
+/// grant with `invalid_client` until Phase 4.1 wires a host-side
+/// secret-resolution mechanism. The same gap applies to
+/// [`authenticate_connector`]'s `exchange_code` grant — both paths
+/// share the per-runtime `OAuth2Client`, so Phase 4.1 fixes them
+/// together. Public-client providers (Slack PKCE-only,
+/// authorization-code-without-secret flows) work today against this
+/// entry point as-is.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
 pub fn refresh_connector_token(
