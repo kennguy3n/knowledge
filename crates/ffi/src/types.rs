@@ -430,7 +430,19 @@ impl WebhookServerHandle {
 /// successful dispatches it has fanned, how many dispatches failed.
 /// All counters reset on `start_webhook_server` and remain monotonic
 /// across the server's lifetime.
+///
+/// # Wire format
+///
+/// `Serialize`/`Deserialize` use `rename_all = "camelCase"` so the JSON
+/// surface used by the N-API crate matches the JS naming convention
+/// documented at [`crate::list_webhook_servers`]
+/// (`{ serverHandle, bindAddr, startedAt, registrationCount,
+///    dispatchOkTotal, dispatchBadRequestTotal,
+///    dispatchBadGatewayTotal }`). UniFFI bindings (Swift/Kotlin)
+/// are unaffected — they read Rust field names directly through the
+/// `uniffi::Record` derive and do not pass through `serde`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
 pub struct WebhookServerSummary {
     /// Stable opaque handle this row refers to. Same value the host
     /// originally received from [`super::start_webhook_server`].
@@ -476,7 +488,21 @@ pub struct WebhookServerSummary {
 /// independently. All counters are monotonic across the scheduler's
 /// lifetime and reset to zero on a fresh
 /// [`super::start_sync_scheduler`].
+///
+/// # Wire format
+///
+/// `Serialize`/`Deserialize` use `rename_all = "camelCase"` so the JSON
+/// surface used by the N-API crate matches the JS naming convention
+/// documented at [`crate::sync_scheduler_status`]
+/// (`{ isRunning, startedAtUnix, defaultIntervalSecs,
+///    defaultMaxBackoffSecs, tickIntervalSecs, scheduledInstanceCount,
+///    lastTickAtUnix, ticksCompleted, dispatchesAttempted,
+///    dispatchesSucceeded, dispatchesFailed,
+///    dispatchesSkippedInProgress }`). UniFFI bindings (Swift/Kotlin)
+/// are unaffected — they read Rust field names directly through the
+/// `uniffi::Record` derive and do not pass through `serde`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncSchedulerStatus {
     /// `true` iff a scheduler is currently running on this runtime
     /// handle. `false` includes both "never started" and "started
@@ -722,5 +748,128 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let back: FfiSignature = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
+    }
+
+    /// Pin the JSON wire format `crates/napi/src/bindings.rs::
+    /// js_sync_scheduler_status` documents — every key MUST be the
+    /// camelCase form documented in the rustdoc (`isRunning`,
+    /// `startedAtUnix`, …). The bug surfaced by Devin Review round 3
+    /// was that the doc promised camelCase but the type derived
+    /// `Serialize` without `rename_all`, producing snake_case keys
+    /// that would surface as `undefined` when destructured by a JS
+    /// caller following the documented pattern.
+    #[test]
+    fn sync_scheduler_status_serializes_with_camelcase_keys() {
+        let status = SyncSchedulerStatus {
+            is_running: true,
+            started_at_unix: Some(1_700_000_000),
+            default_interval_secs: 900,
+            default_max_backoff_secs: 28_800,
+            tick_interval_secs: 30,
+            scheduled_instance_count: 3,
+            last_tick_at_unix: Some(1_700_000_030),
+            ticks_completed: 12,
+            dispatches_attempted: 7,
+            dispatches_succeeded: 6,
+            dispatches_failed: 1,
+            dispatches_skipped_in_progress: 0,
+        };
+        let v = serde_json::to_value(&status).expect("serialize");
+        let obj = v.as_object().expect("object");
+        // Every documented camelCase key MUST appear; every
+        // snake_case key MUST NOT.
+        for camel in [
+            "isRunning",
+            "startedAtUnix",
+            "defaultIntervalSecs",
+            "defaultMaxBackoffSecs",
+            "tickIntervalSecs",
+            "scheduledInstanceCount",
+            "lastTickAtUnix",
+            "ticksCompleted",
+            "dispatchesAttempted",
+            "dispatchesSucceeded",
+            "dispatchesFailed",
+            "dispatchesSkippedInProgress",
+        ] {
+            assert!(
+                obj.contains_key(camel),
+                "SyncSchedulerStatus JSON must contain camelCase key `{camel}`; got {v}"
+            );
+        }
+        for snake in [
+            "is_running",
+            "started_at_unix",
+            "default_interval_secs",
+            "default_max_backoff_secs",
+            "tick_interval_secs",
+            "scheduled_instance_count",
+            "last_tick_at_unix",
+            "ticks_completed",
+            "dispatches_attempted",
+            "dispatches_succeeded",
+            "dispatches_failed",
+            "dispatches_skipped_in_progress",
+        ] {
+            assert!(
+                !obj.contains_key(snake),
+                "SyncSchedulerStatus JSON must NOT contain snake_case key `{snake}`; got {v}"
+            );
+        }
+        // Round-trip through Deserialize too — guarantees the
+        // camelCase rename applies symmetrically.
+        let back: SyncSchedulerStatus = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, status);
+    }
+
+    /// Phase 5's `WebhookServerSummary` had the same latent wire
+    /// format mismatch (doc at `crates/napi/src/bindings.rs::
+    /// js_list_webhook_servers` documents camelCase but the type
+    /// originally derived `Serialize` without `rename_all`). Pin the
+    /// post-fix shape so a future change to either the type or the
+    /// doc is caught here.
+    #[test]
+    fn webhook_server_summary_serializes_with_camelcase_keys() {
+        let summary = WebhookServerSummary {
+            server_handle: WebhookServerHandle(42),
+            bind_addr: "127.0.0.1:9001".into(),
+            started_at: 1_700_000_000,
+            registration_count: 2,
+            dispatch_ok_total: 10,
+            dispatch_bad_request_total: 1,
+            dispatch_bad_gateway_total: 0,
+        };
+        let v = serde_json::to_value(&summary).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for camel in [
+            "serverHandle",
+            "bindAddr",
+            "startedAt",
+            "registrationCount",
+            "dispatchOkTotal",
+            "dispatchBadRequestTotal",
+            "dispatchBadGatewayTotal",
+        ] {
+            assert!(
+                obj.contains_key(camel),
+                "WebhookServerSummary JSON must contain camelCase key `{camel}`; got {v}"
+            );
+        }
+        for snake in [
+            "server_handle",
+            "bind_addr",
+            "started_at",
+            "registration_count",
+            "dispatch_ok_total",
+            "dispatch_bad_request_total",
+            "dispatch_bad_gateway_total",
+        ] {
+            assert!(
+                !obj.contains_key(snake),
+                "WebhookServerSummary JSON must NOT contain snake_case key `{snake}`; got {v}"
+            );
+        }
+        let back: WebhookServerSummary = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, summary);
     }
 }
