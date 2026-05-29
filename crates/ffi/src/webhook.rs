@@ -585,8 +585,11 @@ impl RunningWebhookServer {
 /// so intra-doc links from
 /// [`crate::runtime::FfiRuntime::webhook_servers`] resolve. NOT part
 /// of the FFI surface.
-pub(crate) fn drain_all_servers(mut servers: HashMap<WebhookServerHandle, RunningWebhookServer>) {
-    for (sh, mut server) in servers.drain() {
+pub(crate) fn drain_all_servers(servers: HashMap<WebhookServerHandle, RunningWebhookServer>) {
+    // `into_iter` over the owned `HashMap` is the canonical Rust
+    // idiom for "consume and drop"; it avoids the otherwise-needed
+    // `mut servers` binding that `servers.drain()` requires.
+    for (sh, mut server) in servers {
         tracing::debug!(
             server_handle = sh.0,
             "draining webhook server on close_store",
