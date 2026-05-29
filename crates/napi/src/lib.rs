@@ -50,10 +50,10 @@ pub use error::{NapiError, NapiResult};
 #[cfg(feature = "tracing-subscriber")]
 pub use ffi::try_init_tracing;
 pub use ffi::{
-    AdapterReport, ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass,
-    FfiKeypair, FfiSignature, HealthStatus, MemoryFilter, MemoryRecord, MemoryState,
-    MetricsSnapshot, QueryResult, RefreshReport, RuntimeHandle, ScopeIdString, SourceKind,
-    SubsystemHealth, SubsystemStatus, SyncModeKind, SyncReport, SyncSchedulerStatus,
+    AdapterReport, ApprovedDocumentSummary, ConnectorKindTag, ConnectorStatus, EvidenceRecord,
+    FfiImportanceClass, FfiKeypair, FfiSignature, HealthStatus, MemoryFilter, MemoryRecord,
+    MemoryState, MetricsSnapshot, QueryResult, RefreshReport, RuntimeHandle, ScopeIdString,
+    SourceKind, SubsystemHealth, SubsystemStatus, SyncModeKind, SyncReport, SyncSchedulerStatus,
     SyncStatusKind, SynthesisTrigger,
 };
 pub use types::{IngestRequest, InitConfig, QueryRequest};
@@ -752,6 +752,54 @@ pub fn list_recent_syntheses(
     scope_id: ScopeIdString,
 ) -> NapiResult<Vec<ffi::SynthesisStatusRecord>> {
     ffi::list_recent_syntheses(RuntimeHandle(handle), scope_id).map_err(NapiError::from)
+}
+
+/// Admit an approved document onto a tenant memory and persist the
+/// AEAD-encrypted payload alongside (Phase 8). Mirrors
+/// [`ffi::admit_approved_document`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::admit_approved_document`] errors as [`NapiError`].
+pub fn admit_approved_document(
+    handle: NapiHandle,
+    scope_id: ScopeIdString,
+    label: String,
+    approver: String,
+    payload: Vec<u8>,
+) -> NapiResult<ffi::ApprovedDocumentSummary> {
+    ffi::admit_approved_document(RuntimeHandle(handle), scope_id, label, approver, payload)
+        .map_err(NapiError::from)
+}
+
+/// Revoke a previously-admitted approved document and purge the
+/// AEAD-encrypted payload row (Phase 8). Mirrors
+/// [`ffi::revoke_approved_document`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::revoke_approved_document`] errors as [`NapiError`].
+pub fn revoke_approved_document(
+    handle: NapiHandle,
+    scope_id: ScopeIdString,
+    document_id: String,
+) -> NapiResult<()> {
+    ffi::revoke_approved_document(RuntimeHandle(handle), scope_id, document_id)
+        .map_err(NapiError::from)
+}
+
+/// List approved documents admitted onto a tenant memory along
+/// with their persisted payload metadata (Phase 8). Mirrors
+/// [`ffi::list_approved_documents`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::list_approved_documents`] errors as [`NapiError`].
+pub fn list_approved_documents(
+    handle: NapiHandle,
+    scope_id: ScopeIdString,
+) -> NapiResult<Vec<ffi::ApprovedDocumentSummary>> {
+    ffi::list_approved_documents(RuntimeHandle(handle), scope_id).map_err(NapiError::from)
 }
 
 const B64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

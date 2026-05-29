@@ -422,6 +422,95 @@ pub fn js_list_recent_syntheses(handle: BigInt, scope_id: String) -> Result<serd
     })
 }
 
+// ---------------------------------------------------------------------------
+// Approved documents (Phase 8).
+// ---------------------------------------------------------------------------
+
+/// Admit an approved document onto the tenant memory for `scopeId`
+/// and persist its AEAD-encrypted payload alongside. Mirrors
+/// [`crate::admit_approved_document`].
+///
+/// `payload` is the raw plaintext document bytes; the substrate
+/// seals it under the per-scope DEK before writing. The 16 MiB cap
+/// is enforced inside the FFI layer — oversize payloads are
+/// rejected with `Memory` and a message naming both the offending
+/// size and the cap.
+///
+/// Returns the serialised [`ffi::ApprovedDocumentSummary`] with
+/// camelCase keys:
+/// `{ id, scopeId, label, approver, approvedAtMs, payloadBytes,
+///    contentHashHex }`.
+///
+/// # Errors
+///
+/// * `NotFound` if the scope has no tenant memory object
+///   registered (or has been forgotten).
+/// * `Memory` if `label` / `approver` / `payload` are empty or
+///   exceed their documented size caps.
+/// * `InvalidArgument` if `scopeId` is not a UUID.
+#[napi(js_name = "admitApprovedDocument")]
+pub fn js_admit_approved_document(
+    handle: BigInt,
+    scope_id: String,
+    label: String,
+    approver: String,
+    payload: napi::bindgen_prelude::Buffer,
+) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let bytes: Vec<u8> = payload.to_vec();
+    let summary =
+        crate::admit_approved_document(h, scope_id, label, approver, bytes).map_err(to_js_error)?;
+    serde_json::to_value(summary).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("approved-document summary serialization failed: {e}"),
+        })
+    })
+}
+
+/// Revoke an approved document previously admitted via
+/// [`js_admit_approved_document`]. Mirrors
+/// [`crate::revoke_approved_document`]. Removes both the
+/// tenant-memory ref and the persisted AEAD-encrypted payload row.
+///
+/// # Errors
+///
+/// * `NotFound` if the scope has been forgotten or no document
+///   matches `documentId`.
+/// * `InvalidArgument` if `scopeId` or `documentId` is not a UUID.
+#[napi(js_name = "revokeApprovedDocument")]
+pub fn js_revoke_approved_document(
+    handle: BigInt,
+    scope_id: String,
+    document_id: String,
+) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    crate::revoke_approved_document(h, scope_id, document_id).map_err(to_js_error)
+}
+
+/// List approved documents admitted onto the tenant memory for
+/// `scopeId` along with persisted payload metadata. Mirrors
+/// [`crate::list_approved_documents`].
+///
+/// Returns an empty array for a forgotten / never-touched scope
+/// (matching the "soft" semantic shared with
+/// [`js_list_recent_syntheses`]). Orphan refs (a tenant-memory ref
+/// without a persisted payload row, e.g. from legacy admission
+/// paths) surface with `payloadBytes = 0`.
+///
+/// # Errors
+///
+/// * `InvalidArgument` if `scopeId` is not a UUID.
+#[napi(js_name = "listApprovedDocuments")]
+pub fn js_list_approved_documents(handle: BigInt, scope_id: String) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let rows = crate::list_approved_documents(h, scope_id).map_err(to_js_error)?;
+    serde_json::to_value(rows).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("approved-document list serialization failed: {e}"),
+        })
+    })
+}
+
 /// Toggle the post-sync auto-synthesis hook for a connector
 /// instance (Phase 7). Mirrors [`crate::configure_sync_auto_synthesize`].
 ///

@@ -202,6 +202,7 @@ test('every documented function is exported with camelCase name', () => {
   // the alphabetised order that `napi build` emits in `index.js`
   // so the diff on assertion failure is easy to read.
   const required = [
+    'admitApprovedDocument',
     'authenticateConnector',
     'clearOauthClientSecretResolver',
     'clearSyncSchedule',
@@ -223,6 +224,7 @@ test('every documented function is exported with camelCase name', () => {
     'healthCheck',
     'ingestMessage',
     'init',
+    'listApprovedDocuments',
     'listConnectors',
     'listMemories',
     'listRecentSyntheses',
@@ -233,6 +235,7 @@ test('every documented function is exported with camelCase name', () => {
     'refreshConnectorToken',
     'registerWebhookDispatch',
     'removeConnector',
+    'revokeApprovedDocument',
     'runDecaySweep',
     'setOauthClientSecretResolver',
     'startSyncScheduler',
