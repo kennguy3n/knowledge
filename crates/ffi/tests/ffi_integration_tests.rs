@@ -2000,6 +2000,17 @@ impl OAuthTestServer {
     /// continue to match.
     fn read_full_request(stream: &mut std::net::TcpStream) -> String {
         const MAX_REQUEST_BYTES: usize = 64 * 1024;
+        // Defense-in-depth: bound how long any single `stream.read`
+        // can block. Without this a client that connects but never
+        // sends the full request (or a substrate that crashed
+        // mid-request) would wedge this thread, which would in turn
+        // hang `OAuthTestServer::drop` on its `join()`. 10 seconds
+        // is generous for any plausible localhost OAuth2 form-body
+        // exchange while keeping a failing test diagnosable rather
+        // than hung. Ignored if the platform doesn't support the
+        // call (we only ever run on tier-1 targets in CI, all of
+        // which do). See Devin Review ANALYSIS_0003 on PR #60.
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
         let mut buf = [0u8; 4096];
         let mut accumulated: Vec<u8> = Vec::with_capacity(4096);
         let mut content_length: Option<usize> = None;

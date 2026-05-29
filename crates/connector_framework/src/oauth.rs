@@ -420,16 +420,30 @@ impl<T: HttpTransport> OAuth2Client<T> {
         // write lock — including the JS-side call that triggered
         // the grant in the first place.
         let kind = config.kind.as_str();
-        let scope_id = config.scope_id.as_uuid().to_string();
         let client_id = config
             .auth_config_json
             .get("client_id")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
+        // `scope_id` is a UUID rendered to a `String` (~36 bytes)
+        // every time we hand it to the resolver or the WARN log.
+        // Layers 2 and 3 (auth_config_json / static secret) do not
+        // need it, so a host on the common happy path where the
+        // resolver is not registered AND the fallback layer
+        // succeeds should not pay for the allocation. `OnceCell`
+        // gives us compute-on-first-use with at-most-one allocation
+        // across the whole grant — see Devin Review ANALYSIS_0001
+        // on PR #60 for the rationale.
+        let scope_id_cell: std::cell::OnceCell<String> = std::cell::OnceCell::new();
+        let scope_id = || -> &str {
+            scope_id_cell
+                .get_or_init(|| config.scope_id.as_uuid().to_string())
+                .as_str()
+        };
         let resolver_snapshot: Option<Arc<dyn ClientSecretResolver>> =
             self.resolver.read().ok().and_then(|g| g.clone());
         if let Some(resolver) = resolver_snapshot {
-            if let Some(secret) = resolver.resolve(kind, &scope_id, client_id) {
+            if let Some(secret) = resolver.resolve(kind, scope_id(), client_id) {
                 if !secret.is_empty() {
                     return Some(secret);
                 }
@@ -494,7 +508,7 @@ impl<T: HttpTransport> OAuth2Client<T> {
         // wrapper) does not flood the log; `set_resolver` /
         // `clear_resolver` reset the dedup so a host fixing the
         // misconfiguration sees a fresh signal.
-        self.warn_once_missing_client_secret(kind, &scope_id, client_id);
+        self.warn_once_missing_client_secret(kind, scope_id(), client_id);
         None
     }
 
