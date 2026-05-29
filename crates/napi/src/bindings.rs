@@ -1020,10 +1020,17 @@ pub fn js_clear_sync_schedule(handle: BigInt, instance_id: String) -> Result<()>
 /// `serde_json::Value` ([`ffi::SyncSchedulerStatus`]) with
 /// camelCase keys so callers can destructure
 /// `{ isRunning, startedAtUnix, defaultIntervalSecs,
-///    defaultMaxBackoffSecs, tickIntervalSecs,
-///    scheduledInstanceCount, lastTickAtUnix, ticksCompleted,
+///    defaultMaxBackoffSecs, tickIntervalSecs, policyOverrideCount,
+///    totalInstanceCount, lastTickAtUnix, ticksCompleted,
 ///    dispatchesAttempted, dispatchesSucceeded, dispatchesFailed,
 ///    dispatchesSkippedInProgress }` directly.
+///
+/// `policyOverrideCount` reports how many connector instances have
+/// a custom [`crate::configure_sync_schedule`] policy set;
+/// `totalInstanceCount` reports how many connector instances the
+/// scheduler is driving in total. The former is a strict subset of
+/// the latter — a host UI that wants "how many connectors is the
+/// scheduler syncing" should read `totalInstanceCount`.
 ///
 /// A stopped scheduler reports `isRunning=false` and zero
 /// counters; this is NOT an error. The host can call

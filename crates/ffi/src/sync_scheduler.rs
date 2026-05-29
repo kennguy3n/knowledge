@@ -68,7 +68,8 @@
 //! * [`clear_sync_schedule`] — remove a per-instance override so
 //!   the row falls back to the scheduler's defaults.
 //! * [`sync_scheduler_status`] — diagnostic enumeration: running
-//!   state, scheduled instance count, last-tick timestamp, totals.
+//!   state, policy-override count, total instance count, last-tick
+//!   timestamp, totals.
 //!
 //! # Backoff policy
 //!
@@ -698,7 +699,8 @@ pub fn sync_scheduler_status(handle: RuntimeHandle) -> FfiResult<SyncSchedulerSt
                     default_interval_secs: 0,
                     default_max_backoff_secs: 0,
                     tick_interval_secs: 0,
-                    scheduled_instance_count: 0,
+                    policy_override_count: 0,
+                    total_instance_count: 0,
                     last_tick_at_unix: None,
                     ticks_completed: 0,
                     dispatches_attempted: 0,
@@ -707,6 +709,15 @@ pub fn sync_scheduler_status(handle: RuntimeHandle) -> FfiResult<SyncSchedulerSt
                     dispatches_skipped_in_progress: 0,
                 });
             };
+            // `total_instance_count` is captured under the same
+            // `with_runtime` mutex acquisition that lets us reach
+            // `scheduler` at all — the connector_instances map and
+            // the scheduler slot are siblings on the same runtime,
+            // so reading both atomically across the same mutex hold
+            // means the two counts cannot disagree because one was
+            // sampled before a mutation and the other after.
+            let total_instance_count =
+                u32::try_from(rt.connector_instances.len()).unwrap_or(u32::MAX);
             let state = match scheduler.state.lock() {
                 Ok(g) => g,
                 Err(poisoned) => poisoned.into_inner(),
@@ -717,7 +728,8 @@ pub fn sync_scheduler_status(handle: RuntimeHandle) -> FfiResult<SyncSchedulerSt
                 default_interval_secs: scheduler.config.default_interval.as_secs(),
                 default_max_backoff_secs: scheduler.config.default_max_backoff.as_secs(),
                 tick_interval_secs: scheduler.config.tick_interval.as_secs(),
-                scheduled_instance_count: u32::try_from(state.policies.len()).unwrap_or(u32::MAX),
+                policy_override_count: u32::try_from(state.policies.len()).unwrap_or(u32::MAX),
+                total_instance_count,
                 last_tick_at_unix: state.last_tick_at.map(|t| t.timestamp()),
                 ticks_completed: scheduler.counters.ticks_completed.load(Ordering::Relaxed),
                 dispatches_attempted: scheduler
@@ -769,8 +781,9 @@ pub(crate) fn scheduler_health_detail(rt: &crate::runtime::FfiRuntime) -> &'stat
 /// process has ever created (each entry is ~80 bytes), but on a
 /// long-running substrate where hosts churn instances this is a
 /// latent resource concern and the policy-count gauge surfaced
-/// through [`SyncSchedulerStatus::scheduled_instance_count`]
-/// would drift away from the live instance count.
+/// through [`SyncSchedulerStatus::policy_override_count`] would
+/// drift away from the live instance count surfaced by
+/// [`SyncSchedulerStatus::total_instance_count`].
 ///
 /// Pruning here is `pub(crate)` rather than part of the public
 /// FFI: it's a coupling between two substrate-internal modules

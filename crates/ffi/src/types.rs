@@ -525,10 +525,10 @@ pub struct WebhookServerSummary {
 ///
 /// Reports the background scheduler's running state, configuration
 /// echo, and per-counter totals so hosts can render a "Sync
-/// scheduler: running (4 instances scheduled, 12 ticks, 7 dispatches,
-/// 6 succeeded, 1 failed)" badge without enumerating connectors
-/// independently. All counters are monotonic across the scheduler's
-/// lifetime and reset to zero on a fresh
+/// scheduler: running (11 instances driven, 3 with custom policy,
+/// 12 ticks, 7 dispatches, 6 succeeded, 1 failed)" badge without
+/// enumerating connectors independently. All counters are monotonic
+/// across the scheduler's lifetime and reset to zero on a fresh
 /// [`super::start_sync_scheduler`].
 ///
 /// # Wire format
@@ -537,9 +537,9 @@ pub struct WebhookServerSummary {
 /// surface used by the N-API crate matches the JS naming convention
 /// documented at [`crate::sync_scheduler_status`]
 /// (`{ isRunning, startedAtUnix, defaultIntervalSecs,
-///    defaultMaxBackoffSecs, tickIntervalSecs, scheduledInstanceCount,
-///    lastTickAtUnix, ticksCompleted, dispatchesAttempted,
-///    dispatchesSucceeded, dispatchesFailed,
+///    defaultMaxBackoffSecs, tickIntervalSecs, policyOverrideCount,
+///    totalInstanceCount, lastTickAtUnix, ticksCompleted,
+///    dispatchesAttempted, dispatchesSucceeded, dispatchesFailed,
 ///    dispatchesSkippedInProgress }`). UniFFI bindings (Swift/Kotlin)
 /// are unaffected — they read Rust field names directly through the
 /// `uniffi::Record` derive and do not pass through `serde`.
@@ -565,10 +565,30 @@ pub struct SyncSchedulerStatus {
     /// Tick cadence (`0` when not running).
     pub tick_interval_secs: u64,
     /// Number of connector instances with a per-instance policy
-    /// override (set via [`super::configure_sync_schedule`]).
-    /// Instances without an override use the defaults — they still
-    /// participate in dispatch but do not show up in this count.
-    pub scheduled_instance_count: u32,
+    /// override (set via [`super::configure_sync_schedule`]). This
+    /// is a strict subset of [`Self::total_instance_count`] — every
+    /// instance with an override is also a connector instance the
+    /// scheduler considers, but instances without an override are
+    /// counted only in `total_instance_count`.
+    ///
+    /// Was named `scheduled_instance_count` through Phase 6 round 5;
+    /// renamed in round 6 (ANALYSIS_0003) to disambiguate from
+    /// `total_instance_count`. A host UI that wants "how many
+    /// connectors is the scheduler driving" should read
+    /// `total_instance_count`; this field reports the strictly
+    /// smaller "how many connectors have a custom policy set".
+    pub policy_override_count: u32,
+    /// Total number of connector instances the scheduler walks on
+    /// every tick — i.e. the size of
+    /// [`crate::runtime::FfiRuntime::connector_instances`]. Each
+    /// such instance is dispatched on the scheduler's default
+    /// policy unless it appears in [`Self::policy_override_count`]
+    /// (in which case it uses the custom
+    /// [`super::configure_sync_schedule`] policy instead).
+    ///
+    /// `0` when not running (matches the convention used by every
+    /// other numeric field on this struct when `is_running == false`).
+    pub total_instance_count: u32,
     /// Unix epoch seconds of the scheduler's most recent tick.
     /// `None` until the first tick has fired (a freshly-started
     /// scheduler may show `is_running=true, last_tick_at_unix=None`
@@ -808,7 +828,8 @@ mod tests {
             default_interval_secs: 900,
             default_max_backoff_secs: 28_800,
             tick_interval_secs: 30,
-            scheduled_instance_count: 3,
+            policy_override_count: 3,
+            total_instance_count: 11,
             last_tick_at_unix: Some(1_700_000_030),
             ticks_completed: 12,
             dispatches_attempted: 7,
@@ -826,7 +847,8 @@ mod tests {
             "defaultIntervalSecs",
             "defaultMaxBackoffSecs",
             "tickIntervalSecs",
-            "scheduledInstanceCount",
+            "policyOverrideCount",
+            "totalInstanceCount",
             "lastTickAtUnix",
             "ticksCompleted",
             "dispatchesAttempted",
@@ -845,7 +867,8 @@ mod tests {
             "default_interval_secs",
             "default_max_backoff_secs",
             "tick_interval_secs",
-            "scheduled_instance_count",
+            "policy_override_count",
+            "total_instance_count",
             "last_tick_at_unix",
             "ticks_completed",
             "dispatches_attempted",
@@ -858,6 +881,21 @@ mod tests {
                 "SyncSchedulerStatus JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
+        // Round 6 ANALYSIS_0003 — pin that the two count fields
+        // serialize with the post-rename camelCase keys and that
+        // their values come through distinct from each other (so a
+        // future refactor that conflates them in code is caught
+        // here, not by a host reporting wrong telemetry).
+        assert_eq!(
+            obj.get("policyOverrideCount").and_then(serde_json::Value::as_u64),
+            Some(3),
+            "policyOverrideCount must serialize as the configured value, distinct from totalInstanceCount"
+        );
+        assert_eq!(
+            obj.get("totalInstanceCount").and_then(serde_json::Value::as_u64),
+            Some(11),
+            "totalInstanceCount must serialize as the configured value, distinct from policyOverrideCount"
+        );
         // Round-trip through Deserialize too — guarantees the
         // camelCase rename applies symmetrically.
         let back: SyncSchedulerStatus = serde_json::from_value(v).expect("deserialize");

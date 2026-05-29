@@ -3633,7 +3633,12 @@ mod sync_scheduler_tests {
         assert_eq!(running.default_interval_secs, 1);
         assert_eq!(running.default_max_backoff_secs, 2);
         assert_eq!(running.tick_interval_secs, 1);
-        assert_eq!(running.scheduled_instance_count, 0);
+        assert_eq!(running.policy_override_count, 0);
+        // No connectors were created before `start_sync_scheduler`,
+        // so `total_instance_count` must equal zero — distinct from
+        // `policy_override_count` only because the latter measures
+        // a strict subset.
+        assert_eq!(running.total_instance_count, 0);
 
         // Double-start MUST fail with Connector — hosts cannot
         // accidentally replace the running scheduler without an
@@ -3705,7 +3710,13 @@ mod sync_scheduler_tests {
         // Configure with valid policy.
         configure_sync_schedule(h, instance.clone(), 5, 30).expect("configure_sync_schedule");
         let after_config = sync_scheduler_status(h).expect("status after configure");
-        assert_eq!(after_config.scheduled_instance_count, 1);
+        assert_eq!(after_config.policy_override_count, 1);
+        // The instance exists in `connector_instances` AND has an
+        // override, so it shows up in both counts. Pin that the
+        // two fields are correctly populated from independent
+        // sources (the scheduler's `policies` map vs. the runtime's
+        // `connector_instances` map).
+        assert_eq!(after_config.total_instance_count, 1);
 
         // Configure rejects zero interval.
         let err = configure_sync_schedule(h, instance.clone(), 0, 30)
@@ -3725,7 +3736,14 @@ mod sync_scheduler_tests {
         // Clear restores defaults.
         clear_sync_schedule(h, instance.clone()).expect("clear_sync_schedule");
         let after_clear = sync_scheduler_status(h).expect("status after clear");
-        assert_eq!(after_clear.scheduled_instance_count, 0);
+        assert_eq!(after_clear.policy_override_count, 0);
+        // `clear_sync_schedule` removes the explicit override but
+        // does NOT remove the connector instance itself — it is
+        // still in `connector_instances`, still dispatched on the
+        // scheduler's default policy. Pin this distinction here so
+        // a future refactor that confuses "clear override" with
+        // "remove instance" is caught.
+        assert_eq!(after_clear.total_instance_count, 1);
 
         // Clear is idempotent.
         clear_sync_schedule(h, instance.clone()).expect("idempotent clear");
@@ -3971,17 +3989,27 @@ mod sync_scheduler_tests {
         // Configure a per-instance policy.
         configure_sync_schedule(h, instance.clone(), 2, 10).expect("configure");
         let status = sync_scheduler_status(h).expect("status");
+        assert_eq!(status.policy_override_count, 1, "one instance configured",);
         assert_eq!(
-            status.scheduled_instance_count, 1,
-            "one instance configured",
+            status.total_instance_count, 1,
+            "one connector instance exists in the runtime",
         );
 
         // Remove the connector — should prune the scheduler state.
         remove_connector(h, instance.clone()).expect("remove_connector");
         let status2 = sync_scheduler_status(h).expect("status after remove");
         assert_eq!(
-            status2.scheduled_instance_count, 0,
+            status2.policy_override_count, 0,
             "prune_instance must remove the per-instance policy on remove_connector",
+        );
+        // `remove_connector` also drops the instance from
+        // `connector_instances`, so `total_instance_count` must
+        // fall to zero as well. Pin this together with
+        // `policy_override_count` so a regression that prunes only
+        // one of the two maps is caught here.
+        assert_eq!(
+            status2.total_instance_count, 0,
+            "remove_connector must drop the connector from connector_instances",
         );
 
         // Idempotent: clearing a removed instance is a no-op.
@@ -4032,8 +4060,12 @@ mod sync_scheduler_tests {
         configure_sync_schedule(h, i2.clone(), 2, 10).expect("configure 2");
         let status = sync_scheduler_status(h).expect("status");
         assert_eq!(
-            status.scheduled_instance_count, 2,
+            status.policy_override_count, 2,
             "two instances configured before forget_scope",
+        );
+        assert_eq!(
+            status.total_instance_count, 2,
+            "two connector instances exist before forget_scope",
         );
 
         // Forget the scope — should prune BOTH connectors'
@@ -4041,8 +4073,16 @@ mod sync_scheduler_tests {
         forget_scope(h, scope).expect("forget_scope");
         let status2 = sync_scheduler_status(h).expect("status after forget_scope");
         assert_eq!(
-            status2.scheduled_instance_count, 0,
+            status2.policy_override_count, 0,
             "forget_scope must prune scheduler state for every connector in scope",
+        );
+        // The connectors themselves must also be evicted from
+        // `connector_instances` by `forget_scope`. Pin that the
+        // scheduler's `total_instance_count` falls to zero, not
+        // just `policy_override_count`.
+        assert_eq!(
+            status2.total_instance_count, 0,
+            "forget_scope must evict every connector in the scope from connector_instances",
         );
 
         // Idempotent: clearing a removed instance after
