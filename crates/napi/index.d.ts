@@ -211,9 +211,14 @@ export declare function listMemories(handle: bigint, scopeId: string, filter: an
  * `windowEnd` descending and capped at
  * [`ffi::LIST_RECENT_SYNTHESES_CAP`].
  *
+ * Returns an empty array for a scope with no recorded synthesis
+ * history — including the forgotten / unknown / never-touched
+ * cases. This matches the underlying FFI's "soft" semantic and
+ * avoids surfacing tombstone state to the host (mirroring how
+ * `list_channel_facts` etc. handle forgotten scopes).
+ *
  * # Errors
  *
- * * `Unavailable` if the scope has been forgotten.
  * * `InvalidArgument` if `scopeId` is not a UUID.
  */
 export declare function listRecentSyntheses(handle: bigint, scopeId: string): any
