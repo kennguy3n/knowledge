@@ -101,6 +101,20 @@ pub const MAX_SYNTHESIS_OUTPUT_BYTES: usize = 32_768;
 /// serialisation cost on every status poll.
 pub const LIST_RECENT_SYNTHESES_CAP: usize = 50;
 
+/// Upper bound on the HTTP timeout the FFI accepts in
+/// [`SynthesisEngineConfig::timeout_ms`]. Picked at 10 minutes
+/// (600 000 ms): production synthesis dispatches are gated by the
+/// per-(scope, tier) cooldown at [`PER_SCOPE_COOLDOWN_SECS`]
+/// (5 min) and realistic SLM endpoints respond well under 2 min;
+/// 10 min gives generous headroom for slow networks / cold-start
+/// model loads while still bounding pathological values like
+/// `u64::MAX` (which `Duration::from_millis` accepts but which would
+/// effectively disable the request timeout and let a wedged endpoint
+/// hold the dispatch thread indefinitely). Hosts that need a value
+/// above this cap should re-examine the cooldown / scheduling
+/// contracts before raising the bound.
+pub const MAX_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
+
 // ─────────────────────── Public entry points ───────────────────────
 
 /// Install the server-side synthesis engine on `handle`.
@@ -121,9 +135,10 @@ pub const LIST_RECENT_SYNTHESES_CAP: usize = 50;
 /// # Errors
 ///
 /// * [`FfiError::Unavailable`] if compiled without the
-///   `http-client` feature, or if the config-supplied URL /
+///   `http-client` feature, if the config-supplied URL /
 ///   timeout values are rejected by
-///   [`BlockingHttpClientAdapter::new`].
+///   [`BlockingHttpClientAdapter::new`], or if `config.timeout_ms`
+///   exceeds [`MAX_TIMEOUT_MS`].
 /// * [`FfiError::InvalidId`] if any UUID in
 ///   `config.scope_bindings` is malformed.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
@@ -133,7 +148,7 @@ pub fn configure_synthesis_engine(
     config: SynthesisEngineConfig,
 ) -> FfiResult<()> {
     metrics::instrument(metrics::inc_configure_synthesis_engine, || {
-        let endpoint_config = endpoint_config_from_ffi(&config);
+        let endpoint_config = endpoint_config_from_ffi(&config)?;
         let scope_bindings = parse_scope_bindings(config.scope_bindings.as_deref())?;
         configure_engine_impl(handle, endpoint_config, scope_bindings)
     })
@@ -971,7 +986,26 @@ fn parse_scope_bindings(bindings: Option<&[String]>) -> FfiResult<Option<Vec<Uui
     Ok(Some(out))
 }
 
-fn endpoint_config_from_ffi(cfg: &SynthesisEngineConfig) -> EndpointConfig {
+fn endpoint_config_from_ffi(cfg: &SynthesisEngineConfig) -> FfiResult<EndpointConfig> {
+    // Reject obviously-bad timeouts before they reach reqwest. A
+    // host that passes `u64::MAX` (or any value beyond
+    // [`MAX_TIMEOUT_MS`]) would otherwise create a
+    // `Duration::from_millis` of ~584 million years, which
+    // `reqwest::blocking::Client::builder().timeout()` accepts
+    // verbatim — effectively disabling the per-request timeout and
+    // letting a wedged endpoint hold the dispatch thread
+    // indefinitely. The cap is a defence-in-depth guard around the
+    // 5-minute per-(scope, tier) cooldown contract; surfacing
+    // `Unavailable` (rather than silently clamping) keeps host
+    // misconfiguration loud instead of papering over it.
+    if cfg.timeout_ms > MAX_TIMEOUT_MS {
+        return Err(FfiError::Unavailable {
+            subsystem: format!(
+                "synthesis_engine (timeout_ms={} exceeds MAX_TIMEOUT_MS={})",
+                cfg.timeout_ms, MAX_TIMEOUT_MS,
+            ),
+        });
+    }
     let mut endpoint = EndpointConfig::new(
         cfg.url.clone(),
         cfg.api_key_ref.clone(),
@@ -986,7 +1020,7 @@ fn endpoint_config_from_ffi(cfg: &SynthesisEngineConfig) -> EndpointConfig {
     if let Some(grammar) = cfg.grammar.as_ref() {
         endpoint = endpoint.with_grammar(grammar.clone());
     }
-    endpoint
+    Ok(endpoint)
 }
 
 fn window_to_record(
@@ -2073,5 +2107,79 @@ mod tests {
             assert!(w[0].window_end_unix >= w[1].window_end_unix);
         }
         teardown(handle);
+    }
+
+    /// Pathological `timeout_ms` values must be rejected by the FFI
+    /// before they reach `reqwest`. The hand-crafted config below
+    /// exceeds `MAX_TIMEOUT_MS` by one millisecond — the FFI layer
+    /// surfaces `Unavailable` with a message that names the offending
+    /// value so host operators can immediately see why their config
+    /// was refused.
+    #[test]
+    fn endpoint_config_from_ffi_rejects_timeout_above_cap() {
+        let cfg = crate::types::SynthesisEngineConfig {
+            url: "https://example.test/v1/synth".into(),
+            api_key_ref: "SYNTH_KEY_REF".into(),
+            model_id: "slm-recap-v1".into(),
+            max_tokens: 512,
+            timeout_ms: MAX_TIMEOUT_MS + 1,
+            grammar: None,
+            scope_bindings: None,
+        };
+        let err = endpoint_config_from_ffi(&cfg).expect_err("oversize timeout must reject");
+        match err {
+            FfiError::Unavailable { subsystem } => {
+                assert!(
+                    subsystem.contains("timeout_ms="),
+                    "error message must surface the offending value, got: {subsystem}",
+                );
+                assert!(
+                    subsystem.contains(&MAX_TIMEOUT_MS.to_string()),
+                    "error message must surface the cap, got: {subsystem}",
+                );
+            }
+            other => panic!("expected FfiError::Unavailable, got {other:?}"),
+        }
+    }
+
+    /// Boundary case: `timeout_ms == MAX_TIMEOUT_MS` is accepted and
+    /// forwarded to the underlying `EndpointConfig` verbatim.
+    #[test]
+    fn endpoint_config_from_ffi_accepts_timeout_at_cap() {
+        let cfg = crate::types::SynthesisEngineConfig {
+            url: "https://example.test/v1/synth".into(),
+            api_key_ref: "SYNTH_KEY_REF".into(),
+            model_id: "slm-recap-v1".into(),
+            max_tokens: 512,
+            timeout_ms: MAX_TIMEOUT_MS,
+            grammar: None,
+            scope_bindings: None,
+        };
+        let endpoint = endpoint_config_from_ffi(&cfg).expect("at-cap timeout must accept");
+        assert_eq!(
+            endpoint.timeout,
+            Some(Duration::from_millis(MAX_TIMEOUT_MS))
+        );
+    }
+
+    /// `timeout_ms == 0` keeps the documented "fall back to
+    /// `DEFAULT_TIMEOUT`" semantic: the FFI does not forward a custom
+    /// timeout to `EndpointConfig`, so the downstream default applies.
+    #[test]
+    fn endpoint_config_from_ffi_zero_timeout_uses_default() {
+        let cfg = crate::types::SynthesisEngineConfig {
+            url: "https://example.test/v1/synth".into(),
+            api_key_ref: "SYNTH_KEY_REF".into(),
+            model_id: "slm-recap-v1".into(),
+            max_tokens: 512,
+            timeout_ms: 0,
+            grammar: None,
+            scope_bindings: None,
+        };
+        let endpoint = endpoint_config_from_ffi(&cfg).expect("zero timeout must accept");
+        // `EndpointConfig::timeout` is `None` until a custom value
+        // is installed via `with_timeout`; the synthesis_engine layer
+        // applies `DEFAULT_TIMEOUT` when the field is `None`.
+        assert!(endpoint.timeout.is_none());
     }
 }

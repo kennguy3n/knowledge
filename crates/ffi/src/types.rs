@@ -700,7 +700,12 @@ pub struct SynthesisEngineConfig {
     /// [`synthesis_engine::DEFAULT_MAX_TOKENS`].
     pub max_tokens: u32,
     /// Per-request timeout in milliseconds. `0` falls back to
-    /// [`synthesis_engine::DEFAULT_TIMEOUT`].
+    /// [`synthesis_engine::DEFAULT_TIMEOUT`]. Values exceeding
+    /// [`crate::synthesis::MAX_TIMEOUT_MS`] (10 min) are rejected by
+    /// `configure_synthesis_engine` with `FfiError::Unavailable` —
+    /// `Duration::from_millis(u64::MAX)` would otherwise disable
+    /// the timeout entirely and let a wedged endpoint hold the
+    /// dispatch thread.
     pub timeout_ms: u64,
     /// Optional GBNF grammar for constrained decoding.
     pub grammar: Option<String>,
