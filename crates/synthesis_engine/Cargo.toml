@@ -1,6 +1,6 @@
 [package]
 name = "synthesis_engine"
-description = "Server-side synthesis engine skeleton for the Knowledge substrate. Wraps a SynthesisWindowManager with hierarchy-enforced inputs (channel -> domain -> tenant) and exposes a stub managed-endpoint synthesizer."
+description = "Server-side synthesis engine for the Knowledge substrate. Wraps a SynthesisWindowManager with hierarchy-enforced inputs (channel -> domain -> tenant), ships a deterministic test stub, a production HTTP managed-endpoint synthesizer (with a blocking reqwest adapter behind the http-client feature), and a TEE-attested wrapper that adds scope-binding enforcement."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,16 @@ default = []
 # default `cargo build` artifacts so production binaries do not ship
 # the mock TEE runtime.
 test-support = []
+# Pulls in `reqwest::blocking` and exposes
+# [`crate::managed_endpoint::BlockingHttpClientAdapter`] — the
+# production `HttpClient` impl used by the FFI substrate's
+# `configure_synthesis_engine` entry point to dispatch synthesis
+# requests through a real HTTPS endpoint. Gated so cross-checks
+# and offline lints that do not link the network stack can still
+# build the engine; without this feature
+# `configure_synthesis_engine` returns
+# `FfiError::Unavailable { subsystem: "synthesis_engine" }`.
+http-client = ["dep:reqwest"]
 
 [dependencies]
 crypto = { path = "../crypto" }
@@ -26,6 +36,13 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tracing = { workspace = true }
+# Optional: only linked when the `http-client` feature is enabled.
+# We reuse the workspace `reqwest` pin (default-features off, json +
+# rustls-tls on) and additionally request the `blocking` feature so
+# the sync `HttpClient::send` adapter does not need to thread an
+# async runtime through the synthesis engine surface.
+reqwest = { workspace = true, features = ["blocking"], optional = true }
 
 [dev-dependencies]
 concept_graph = { path = "../concept_graph" }

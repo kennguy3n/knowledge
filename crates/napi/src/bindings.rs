@@ -317,6 +317,133 @@ pub fn js_trigger_synthesis(handle: BigInt, scope_id: String, trigger: String) -
 }
 
 // ---------------------------------------------------------------------------
+// Server-side synthesis (Phase 7).
+// ---------------------------------------------------------------------------
+
+/// Install the server-side synthesis engine on the runtime.
+/// Mirrors [`crate::configure_synthesis_engine`].
+///
+/// `config` is the JSON object documented on
+/// [`ffi::SynthesisEngineConfig`] with camelCase keys:
+/// `{ url, apiKeyRef, modelId, maxTokens, timeoutMs, grammar,
+///    scopeBindings }`. `scopeBindings`, if present, is an array
+/// of UUID strings the FFI layer admits for dispatch (production
+/// deployments SHOULD configure it; an absent allow-list logs a
+/// warning on every dispatch).
+///
+/// # Errors
+///
+/// * `Unavailable` if `openStore(handle)` has not been called or
+///   the build lacks the `http-client` feature.
+/// * `InvalidArgument` if `config.url` is empty or any
+///   `scopeBindings` entry fails to parse as a UUID.
+#[napi(js_name = "configureSynthesisEngine")]
+pub fn js_configure_synthesis_engine(handle: BigInt, config: serde_json::Value) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    let typed: ffi::SynthesisEngineConfig = parse_arg(config)?;
+    crate::configure_synthesis_engine(h, typed).map_err(to_js_error)
+}
+
+/// Dispatch a server-side synthesis run for `scopeId` at the
+/// requested `tier`. Mirrors [`crate::trigger_server_synthesis`].
+/// `tier` is `"domain"` or `"tenant"` (matches
+/// [`ffi::SynthesisTierKind`]'s serde rename rules).
+///
+/// Returns the UUID string of the newly-opened synthesis window.
+/// Callers can poll [`js_synthesis_status`] with the same value
+/// to observe state transitions.
+///
+/// # Errors
+///
+/// * `Unavailable` if no engine is configured or the runtime has
+///   been forgotten for this scope.
+/// * `NotFound` if the scope has no domain / tenant memory
+///   object registered.
+/// * `Synthesis` for engine, validation, or persistence
+///   failures.
+/// * `InvalidArgument` if `scopeId` is not a UUID or `tier` is
+///   not one of the documented values.
+#[napi(js_name = "triggerServerSynthesis")]
+pub fn js_trigger_server_synthesis(
+    handle: BigInt,
+    scope_id: String,
+    tier: String,
+) -> Result<String> {
+    let h = handle_from_bigint(&handle)?;
+    let typed: ffi::SynthesisTierKind = parse_arg(serde_json::Value::String(tier))?;
+    crate::trigger_server_synthesis(h, scope_id, typed).map_err(to_js_error)
+}
+
+/// Look up the lifecycle state of a synthesis window. Mirrors
+/// [`crate::synthesis_status`].
+///
+/// Returns the serialised [`ffi::SynthesisStatusRecord`] with
+/// camelCase keys:
+/// `{ synthesisId, scopeId, tier, status, windowStartUnix,
+///    windowEndUnix, objectId }`.
+///
+/// # Errors
+///
+/// * `NotFound` if no window matches `synthesisId`.
+/// * `InvalidArgument` if `synthesisId` is not a UUID.
+#[napi(js_name = "synthesisStatus")]
+pub fn js_synthesis_status(handle: BigInt, synthesis_id: String) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let rec = crate::synthesis_status(h, synthesis_id).map_err(to_js_error)?;
+    serde_json::to_value(rec).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("synthesis status serialization failed: {e}"),
+        })
+    })
+}
+
+/// Enumerate recent synthesis windows for `scopeId`. Mirrors
+/// [`crate::list_recent_syntheses`]. Returns the rows sorted by
+/// `windowEnd` descending and capped at
+/// [`ffi::LIST_RECENT_SYNTHESES_CAP`].
+///
+/// Returns an empty array for a scope with no recorded synthesis
+/// history — including the forgotten / unknown / never-touched
+/// cases. This matches the underlying FFI's "soft" semantic and
+/// avoids surfacing tombstone state to the host (mirroring how
+/// `list_channel_facts` etc. handle forgotten scopes).
+///
+/// # Errors
+///
+/// * `InvalidArgument` if `scopeId` is not a UUID.
+#[napi(js_name = "listRecentSyntheses")]
+pub fn js_list_recent_syntheses(handle: BigInt, scope_id: String) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let rows = crate::list_recent_syntheses(h, scope_id).map_err(to_js_error)?;
+    serde_json::to_value(rows).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("synthesis list serialization failed: {e}"),
+        })
+    })
+}
+
+/// Toggle the post-sync auto-synthesis hook for a connector
+/// instance (Phase 7). Mirrors [`crate::configure_sync_auto_synthesize`].
+///
+/// When `enabled` is `true`, the scheduler dispatches a domain-tier
+/// `triggerServerSynthesis` after every successful sync of this
+/// instance, subject to the per-scope cooldown.
+///
+/// # Errors
+///
+/// * `Connector` if no scheduler is running on this handle.
+/// * `InvalidArgument` if `instanceId` is not a UUID.
+#[napi(js_name = "configureSyncAutoSynthesize")]
+pub fn js_configure_sync_auto_synthesize(
+    handle: BigInt,
+    instance_id: String,
+    enabled: bool,
+) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    crate::configure_sync_auto_synthesize(h, instance_id, enabled).map_err(to_js_error)
+}
+
+// ---------------------------------------------------------------------------
 // Cryptography
 // ---------------------------------------------------------------------------
 

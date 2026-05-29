@@ -202,6 +202,7 @@ pub fn health_check(handle: Option<RuntimeHandle>) -> FfiResult<HealthStatus> {
                     subsystems.push(memory_manager_subsystem(rt));
                     subsystems.push(inference_router_subsystem(rt));
                     subsystems.push(connector_subsystem(rt));
+                    subsystems.push(synthesis_subsystem(rt));
                     Ok(())
                 })?;
                 Ok(finish_envelope(subsystems))
@@ -522,6 +523,66 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
         name: "connector".into(),
         status,
         detail: Some(detail),
+        adapters: None,
+    }
+}
+
+/// Server-side synthesis subsystem probe (Phase 7).
+///
+/// Reports:
+///
+/// * Whether the host has installed an engine via
+///   [`crate::synthesis::configure_synthesis_engine`]
+///   (`Unavailable` when not).
+/// * Window manager population (count of tracked synthesis
+///   windows, regardless of status).
+/// * Number of rehydrated domain / tenant memory objects, which
+///   are the inputs to domain / tenant synthesis respectively.
+/// * Whether a scope-binding allow-list is configured. When the
+///   engine is configured but bindings are absent the probe stays
+///   `Degraded` so an operator can see at a glance that the
+///   substrate is dispatching without scope enforcement (the
+///   recommended production posture is to either configure
+///   bindings or wrap the engine in a TEE worker).
+fn synthesis_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
+    let engine_configured = rt.synthesis_engine.is_some();
+    let total_windows = rt.synthesis_windows.len();
+    let domain_count = rt.domain_memory_count();
+    let tenant_count = rt.tenant_memory_count();
+    let synthesis_objects = rt.synthesis_objects.len();
+    let scope_bindings_configured = rt.synthesis_scope_bindings.is_some();
+    let scope_binding_count = rt
+        .synthesis_scope_bindings
+        .as_ref()
+        .map_or(0, std::vec::Vec::len);
+    let cooldown_count = rt.synthesis_cooldowns.len();
+
+    let status = if !engine_configured {
+        SubsystemStatus::Unavailable
+    } else if !scope_bindings_configured {
+        SubsystemStatus::Degraded
+    } else {
+        SubsystemStatus::Ok
+    };
+
+    SubsystemHealth {
+        name: "synthesis_engine".into(),
+        status,
+        detail: Some(format!(
+            "engine={}, windows={total_windows}, objects={synthesis_objects}, \
+             domain_memories={domain_count}, tenant_memories={tenant_count}, \
+             scope_bindings={}, cooldowns={cooldown_count}",
+            if engine_configured {
+                "configured"
+            } else {
+                "unconfigured"
+            },
+            if scope_bindings_configured {
+                format!("{scope_binding_count} configured")
+            } else {
+                "unconfigured".to_string()
+            },
+        )),
         adapters: None,
     }
 }

@@ -681,6 +681,79 @@ pub fn sync_scheduler_status(handle: NapiHandle) -> NapiResult<ffi::SyncSchedule
     ffi::sync_scheduler_status(RuntimeHandle(handle)).map_err(NapiError::from)
 }
 
+/// Toggle the post-sync auto-synthesis hook for a connector
+/// instance (Phase 7). Mirrors [`ffi::configure_sync_auto_synthesize`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::configure_sync_auto_synthesize`] errors as
+/// [`NapiError`].
+pub fn configure_sync_auto_synthesize(
+    handle: NapiHandle,
+    instance_id: String,
+    enabled: bool,
+) -> NapiResult<()> {
+    ffi::configure_sync_auto_synthesize(RuntimeHandle(handle), instance_id, enabled)
+        .map_err(NapiError::from)
+}
+
+/// Install the server-side synthesis engine on the runtime
+/// (Phase 7). Mirrors [`ffi::configure_synthesis_engine`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::configure_synthesis_engine`] errors as
+/// [`NapiError`].
+#[allow(clippy::needless_pass_by_value)] // FFI: napi-derive hands owned values across the JS boundary on every call.
+pub fn configure_synthesis_engine(
+    handle: NapiHandle,
+    config: ffi::SynthesisEngineConfig,
+) -> NapiResult<()> {
+    ffi::configure_synthesis_engine(RuntimeHandle(handle), config).map_err(NapiError::from)
+}
+
+/// Dispatch a server-side synthesis run (Phase 7). Mirrors
+/// [`ffi::trigger_server_synthesis`]. Returns the UUID of the
+/// newly-opened synthesis window.
+///
+/// # Errors
+///
+/// Forwards [`ffi::trigger_server_synthesis`] errors as
+/// [`NapiError`].
+pub fn trigger_server_synthesis(
+    handle: NapiHandle,
+    scope_id: ScopeIdString,
+    tier: ffi::SynthesisTierKind,
+) -> NapiResult<String> {
+    ffi::trigger_server_synthesis(RuntimeHandle(handle), scope_id, tier).map_err(NapiError::from)
+}
+
+/// Look up the lifecycle state of a synthesis window (Phase 7).
+/// Mirrors [`ffi::synthesis_status`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::synthesis_status`] errors as [`NapiError`].
+pub fn synthesis_status(
+    handle: NapiHandle,
+    synthesis_id: String,
+) -> NapiResult<ffi::SynthesisStatusRecord> {
+    ffi::synthesis_status(RuntimeHandle(handle), synthesis_id).map_err(NapiError::from)
+}
+
+/// Enumerate recent synthesis windows for a scope (Phase 7).
+/// Mirrors [`ffi::list_recent_syntheses`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::list_recent_syntheses`] errors as [`NapiError`].
+pub fn list_recent_syntheses(
+    handle: NapiHandle,
+    scope_id: ScopeIdString,
+) -> NapiResult<Vec<ffi::SynthesisStatusRecord>> {
+    ffi::list_recent_syntheses(RuntimeHandle(handle), scope_id).map_err(NapiError::from)
+}
+
 const B64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn encode_b64(bytes: &[u8]) -> String {

@@ -1,8 +1,21 @@
-//! `synthesis_engine` — server-side synthesis engine skeleton.
+//! `synthesis_engine` — server-side synthesis engine.
 //!
 //! The substrate ships a server-side synthesis service composed of a
 //! Go gateway and a Rust synthesis engine. This crate is the **Rust
 //! side**; the Go gateway is not yet implemented.
+//!
+//! Feature flags:
+//!
+//! * `http-client` — pulls in `reqwest::blocking` and exposes
+//!   [`BlockingHttpClientAdapter`] — the production [`HttpClient`]
+//!   used by the FFI substrate's
+//!   `ffi::configure_synthesis_engine` to dispatch synthesis
+//!   requests against a real HTTPS endpoint. Without it the FFI
+//!   surface still compiles and `configure_synthesis_engine`
+//!   returns `FfiError::Unavailable { subsystem:
+//!   "synthesis_engine" }` so hosts on minimal builds see the
+//!   subsystem as cleanly disabled rather than mysteriously
+//!   missing.
 //!
 //! The engine exposes two methods:
 //!
@@ -53,12 +66,16 @@
 #[cfg(all(feature = "test-support", not(debug_assertions)))]
 compile_error!("test-support must not be enabled in release builds");
 
+#[cfg(feature = "http-client")]
+pub mod blocking_client;
 pub mod engine;
 pub mod error;
 pub mod managed_endpoint;
 pub mod stub;
 pub mod tee_worker;
 
+#[cfg(feature = "http-client")]
+pub use blocking_client::BlockingHttpClientAdapter;
 pub use engine::{DomainSynthesisResult, SynthesisEngine, TenantSynthesisResult};
 pub use error::{EngineError, Result};
 pub use managed_endpoint::{

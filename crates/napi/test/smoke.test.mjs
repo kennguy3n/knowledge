@@ -198,10 +198,19 @@ test('findVersionInSection survives a `#`-containing string before the version l
 
 test('every documented function is exported with camelCase name', () => {
   // The unconditional surface — every entry point that ships in
-  // every build configuration of the addon.
+  // every build configuration of the addon. Kept sorted to mirror
+  // the alphabetised order that `napi build` emits in `index.js`
+  // so the diff on assertion failure is easy to read.
   const required = [
+    'authenticateConnector',
+    'clearOauthClientSecretResolver',
+    'clearSyncSchedule',
     'closeStore',
+    'configureSyncAutoSynthesize',
+    'configureSyncSchedule',
+    'configureSynthesisEngine',
     'coreVersion',
+    'createConnector',
     'decrypt',
     'encrypt',
     'escapeFtsQuery',
@@ -214,13 +223,29 @@ test('every documented function is exported with camelCase name', () => {
     'healthCheck',
     'ingestMessage',
     'init',
+    'listConnectors',
     'listMemories',
+    'listRecentSyntheses',
+    'listWebhookServers',
     'openStore',
     'pin',
     'query',
+    'refreshConnectorToken',
+    'registerWebhookDispatch',
+    'removeConnector',
     'runDecaySweep',
+    'setOauthClientSecretResolver',
+    'startSyncScheduler',
+    'startWebhookServer',
+    'stopSyncScheduler',
+    'stopWebhookServer',
+    'syncConnector',
+    'syncSchedulerStatus',
+    'synthesisStatus',
+    'triggerServerSynthesis',
     'triggerSynthesis',
     'unpin',
+    'unregisterWebhookDispatch',
   ];
   // Feature-gated entry points that MAY or MAY NOT be present
   // depending on which Cargo features the addon was built with.

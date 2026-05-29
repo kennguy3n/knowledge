@@ -133,7 +133,9 @@ across both bindings) are:
 `list_webhook_servers`,
 `start_sync_scheduler`, `stop_sync_scheduler`,
 `configure_sync_schedule`, `clear_sync_schedule`,
-`sync_scheduler_status`.
+`sync_scheduler_status`, `configure_sync_auto_synthesize`,
+`configure_synthesis_engine`, `trigger_server_synthesis`,
+`synthesis_status`, `list_recent_syntheses`.
 
 Four entry points are intentionally surface-specific rather than
 mirrored across both bindings:
@@ -182,8 +184,8 @@ from the substrate's metrics + tracing layer (see
 below). `healthCheck()` called without a handle returns a
 bridge-only envelope; called with an open-store handle it
 includes per-subsystem probes (`evidence_store`, `crypto`,
-`memory_manager`, `inference_router`, `connector`) that run real
-I/O against the open runtime.
+`memory_manager`, `inference_router`, `connector`,
+`synthesis_engine`) that run real I/O against the open runtime.
 
 `trigger_synthesis` dispatches a `SynthSummary` task through the
 on-device `InferenceRouter`, persists the resulting recap into
@@ -197,6 +199,29 @@ local `llama-server`); the MLX and fallback adapters are wired as
 follow-on integration points (callback bridge and lexicon-based
 classifier respectively). Host UI shells (Swift, Kotlin,
 Electron) are out of scope for this repository.
+
+`trigger_server_synthesis` is the server-side counterpart
+(Phase 7). It dispatches a domain- or tenant-tier synthesis run
+for the named scope through the configured
+`HttpManagedEndpointSynthesizer`, gathers admissible inputs
+(channel outputs feeding a domain; domain outputs and approved
+documents feeding a tenant), enforces the hierarchy constraints
+imposed by `synthesis_pipeline`, and persists the resulting
+`SynthesisObject` into the encrypted evidence store. Dispatch
+follows the same gather → dispatch → apply locking discipline as
+`trigger_synthesis` and `sync_connector`: the runtime mutex is
+held while gathering inputs and re-acquired to apply the outcome,
+but the multi-second HTTP call runs unlocked. Returns the
+synthesis window UUID, which the host polls via
+`synthesis_status` or enumerates via `list_recent_syntheses`. The
+engine slot is wired through `configure_synthesis_engine` (which
+supports an optional scope-binding allow-list mirroring the
+`TeeWorker` semantics) and lives behind the `http-client`
+feature; minimal builds reject configuration with
+`FfiError::Unavailable`. The scheduler's per-instance
+`configure_sync_auto_synthesize` toggle dispatches a fire-and-
+forget domain-tier synthesis after every successful sync,
+subject to a per-scope cooldown.
 
 ### Observability — metrics, tracing, health
 
@@ -230,7 +255,11 @@ embedded in the health envelope. Counters include
 `sync_scheduler_dispatches_attempted_total`,
 `sync_scheduler_dispatches_succeeded_total`,
 `sync_scheduler_dispatches_failed_total`,
-`sync_scheduler_dispatches_skipped_in_progress_total`, plus
+`sync_scheduler_dispatches_skipped_in_progress_total`,
+`configure_synthesis_engine_total`,
+`trigger_server_synthesis_total`, `synthesis_status_total`,
+`list_recent_syntheses_total`,
+`configure_sync_auto_synthesize_total`, plus
 per-`FfiError`-kind counters under `errors_by_kind`
 (`unimplemented`, `invalid_id`, `not_found`, `evidence`,
 `memory`, `synthesis`, `crypto`, `unavailable`,
@@ -253,10 +282,14 @@ availability via `InferenceRouter::adapter_states()`, and
 `connector` reports the per-runtime connector-instance count,
 authenticated-token count, and the per-`SyncStatus` distribution
 across all registered connectors (downgrading to `Degraded` if
-any connector is in `Failed`). Without a handle (or with the
-`0n` sentinel) the probe returns a bridge-only envelope suitable
-for an Electron `app.whenReady` liveness check before
-`openStore`.
+any connector is in `Failed`), and `synthesis_engine` reports
+whether the server-side synthesis slot is configured, the
+current window / object / domain-memory / tenant-memory counts,
+and whether a scope-binding allow-list is installed (downgrading
+to `Degraded` if the slot is configured but no allow-list is
+set). Without a handle (or with the `0n` sentinel) the probe
+returns a bridge-only envelope suitable for an Electron
+`app.whenReady` liveness check before `openStore`.
 
 **Tracing** events are emitted via the `tracing` facade
 throughout the workspace. To install a global subscriber from
@@ -288,8 +321,17 @@ response parsing are exercised end-to-end without crossing the
 network. Webhook subscription registration and incremental
 delta sync use the same transport ladder.
 
-The server-side synthesis service is a Rust skeleton in this
-repository; the Go gateway lives outside.
+The server-side synthesis service is a first-class Rust
+subsystem in this repository: `synthesis_engine` implements the
+`SynthesisEngine` trait via `HttpManagedEndpointSynthesizer` (a
+`reqwest::blocking::Client` adapter wrapped in the same retry /
+timeout / `Retry-After` ladder used by connectors), gated behind
+the `http-client` feature. The FFI surface exposes it through
+`configure_synthesis_engine`, `trigger_server_synthesis`,
+`synthesis_status`, and `list_recent_syntheses`, with hierarchy
+enforcement and scope-binding checks applied at the FFI layer
+before the HTTP dispatch. The Go gateway / SLM frontends live
+outside this repository.
 
 ---
 
@@ -320,7 +362,7 @@ knowledge/
 | `memory_manager` | Decay state machine, retention scoring, working memory, channel / domain / tenant memory objects, privacy-strip invariant. |
 | `concept_graph` | Sparse typed concept graph with supersession, contradiction, and typed-edge traversal; encrypted persistence. |
 | `synthesis_pipeline` | Scope-window synthesis (channel / domain / tenant), GBNF schema types, elected-device election, encrypted publish / consume. |
-| `synthesis_engine` | Server-side synthesis skeleton: managed-endpoint synthesizer wrapper and confidential-compute TEE worker scaffold. |
+| `synthesis_engine` | Server-side synthesis engine: `HttpManagedEndpointSynthesizer` (reqwest blocking adapter, gated on `http-client`), deterministic test-stub synthesizer, and confidential-compute `TeeWorker` wrapper with scope-binding enforcement. |
 | `sync_engine` | CRDT add-wins set + append-only operation log with merge; SQLCipher-backed persistence. |
 | `permission_service` | Zanzibar-style relation graph with reachability checks. |
 | `tenant_service` | Tenant lifecycle (create / activate / suspend / delete), per-tenant configuration, member provisioning. |

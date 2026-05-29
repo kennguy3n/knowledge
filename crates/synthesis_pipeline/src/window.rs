@@ -16,6 +16,7 @@ use uuid::Uuid;
 use evidence_store::ScopeId;
 
 use crate::error::{PipelineError, Result};
+use crate::hierarchy::WindowScopeTier;
 
 /// Identifier for a [`SynthesisWindow`] (UUID v4 newtype).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -92,6 +93,22 @@ pub struct SynthesisWindow {
     pub window_end: DateTime<Utc>,
     /// Lifecycle state.
     pub status: WindowStatus,
+    /// Tier the window was opened against, captured at open time so
+    /// callers can report the synthesis tier without needing the
+    /// `Complete` synthesis object to be present.
+    ///
+    /// `None` for windows opened via the low-level
+    /// [`SynthesisWindowManager::open_window`] path (legacy / channel-
+    /// scope use), `Some(tier)` for windows opened via
+    /// [`crate::HierarchyEnforcedWindowManager::open_tiered_window`].
+    ///
+    /// `#[serde(default)]` so blobs persisted before this field was
+    /// introduced rehydrate cleanly — old windows surface as
+    /// `tier: None` and the FFI layer falls back to inferring the
+    /// tier from the associated synthesis object, matching the
+    /// pre-existing behaviour.
+    #[serde(default)]
+    pub tier: Option<WindowScopeTier>,
 }
 
 impl SynthesisWindow {
@@ -115,6 +132,7 @@ impl SynthesisWindow {
             window_start,
             window_end,
             status: WindowStatus::Pending,
+            tier: None,
         })
     }
 
@@ -132,7 +150,32 @@ impl SynthesisWindow {
 }
 
 /// Tracks per-scope synthesis windows and their lifecycle.
-#[derive(Debug, Default, Clone)]
+///
+/// `Serialize` / `Deserialize` so the FFI substrate can flush the
+/// entire manager into the encrypted evidence store under the
+/// `synthesis_windows` memory-blob kind and rehydrate it on
+/// `open_store`.
+///
+/// # Serialization invariant
+///
+/// `serde_json` requires `HashMap` keys to serialise as strings.
+/// Both [`WindowId`] (this crate, see lines above) and
+/// [`ScopeId`] (`evidence_store::ids::ScopeId`) are
+/// `#[serde(transparent)]` newtypes over [`uuid::Uuid`], so they
+/// serialise as the hyphenated-UUID string form that JSON object
+/// keys accept. If a future refactor removes the `transparent`
+/// annotation from either id type, `serde_json` would fall back to
+/// the array-of-pairs encoding which does NOT round-trip through
+/// the deserialiser configured here — the substrate would silently
+/// fail to rehydrate the manager and every restart would discard
+/// the prior window history.
+///
+/// Callers extending this struct with additional `HashMap`-keyed
+/// fields must ensure the new key type either has
+/// `#[serde(transparent)]` over a string-serialisable type or
+/// provides an explicit `#[serde(with = ...)]` adapter that
+/// stringifies the key.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SynthesisWindowManager {
     windows: HashMap<WindowId, SynthesisWindow>,
     by_scope: HashMap<ScopeId, Vec<WindowId>>,
@@ -181,6 +224,40 @@ impl SynthesisWindowManager {
         ids.iter().filter_map(|id| self.windows.get(id)).collect()
     }
 
+    /// Every scope id with at least one tracked window. Used by the
+    /// FFI substrate during `open_store` rehydration to drop windows
+    /// whose scope has been cryptographically forgotten (the
+    /// substrate owns the tombstone set, not the pipeline, so the
+    /// purge is driven externally).
+    ///
+    /// Iteration order is unspecified — callers that need a stable
+    /// order should sort the result themselves.
+    pub fn tracked_scopes(&self) -> Vec<ScopeId> {
+        self.by_scope.keys().copied().collect()
+    }
+
+    /// Set the persisted [`WindowScopeTier`] tag on an existing
+    /// window. Called by
+    /// [`crate::HierarchyEnforcedWindowManager::open_tiered_window`]
+    /// immediately after [`Self::open_window`] so the freshly opened
+    /// window carries the tier in its persisted shape.
+    ///
+    /// # Errors
+    ///
+    /// * [`PipelineError::WindowNotFound`] if no window with `id`
+    ///   exists. The tiered-open path should never trigger this
+    ///   because `open_window` either errors out or inserts the
+    ///   window; the explicit error variant is for completeness when
+    ///   the helper is invoked manually.
+    pub fn set_tier(&mut self, id: WindowId, tier: WindowScopeTier) -> Result<()> {
+        let w = self
+            .windows
+            .get_mut(&id)
+            .ok_or(PipelineError::WindowNotFound(id.0))?;
+        w.tier = Some(tier);
+        Ok(())
+    }
+
     /// Mark a `Pending` window as `InProgress`.
     ///
     /// # Errors
@@ -220,6 +297,51 @@ impl SynthesisWindowManager {
                 Ok(())
             }
             _ => Err(PipelineError::InvalidWindowTransition),
+        }
+    }
+
+    /// Remove every window registered for `scope_id` — both from
+    /// the per-id `windows` map and from the per-scope `by_scope`
+    /// index.
+    ///
+    /// Used by the FFI substrate's cryptographic-forgetting path
+    /// (`forget_scope` / `forget_scope_state`) so synthesis state
+    /// for the forgotten scope is unreachable in-memory as soon as
+    /// the on-disk row is deleted. Idempotent: returns silently
+    /// when the scope has no registered windows.
+    pub fn remove_windows_for_scope(&mut self, scope_id: ScopeId) {
+        if let Some(ids) = self.by_scope.remove(&scope_id) {
+            for id in ids {
+                self.windows.remove(&id);
+            }
+        }
+    }
+
+    /// Remove the supplied `window_ids` for `scope_id` (typically
+    /// the result of a retention-cap prune).
+    ///
+    /// `window_ids` that do not appear in the scope's
+    /// `by_scope` list are silently ignored — the caller may pass
+    /// the output of a separate filter without re-validating each
+    /// id. The remaining ids in the per-scope list preserve their
+    /// original order so callers that depend on insertion order
+    /// (e.g. `windows_for`) keep observing the same sequence.
+    pub fn remove_windows<I>(&mut self, scope_id: ScopeId, window_ids: I)
+    where
+        I: IntoIterator<Item = WindowId>,
+    {
+        let removed: std::collections::HashSet<WindowId> = window_ids.into_iter().collect();
+        if removed.is_empty() {
+            return;
+        }
+        if let Some(ids) = self.by_scope.get_mut(&scope_id) {
+            ids.retain(|id| !removed.contains(id));
+            if ids.is_empty() {
+                self.by_scope.remove(&scope_id);
+            }
+        }
+        for id in &removed {
+            self.windows.remove(id);
         }
     }
 
@@ -291,5 +413,136 @@ mod tests {
         mgr.mark_failed(id).unwrap();
         mgr.mark_in_progress(id).unwrap();
         assert_eq!(mgr.get(id).unwrap().status, WindowStatus::InProgress);
+    }
+
+    /// Regression test for the invariant documented on the
+    /// `SynthesisWindowManager` derive: both `WindowId` and `ScopeId`
+    /// must serialise to strings (via their `#[serde(transparent)]`
+    /// Uuid wrappers) so the manager's `HashMap` fields round-trip
+    /// through `serde_json`. If a future refactor strips
+    /// `#[serde(transparent)]` from either id type, this test fails
+    /// loudly instead of letting the FFI substrate silently lose its
+    /// window history at every `open_store`.
+    #[test]
+    fn manager_round_trips_through_serde_json() {
+        let mut mgr = SynthesisWindowManager::new();
+        let scope_a = ScopeId::new_v4();
+        let scope_b = ScopeId::new_v4();
+        let now = Utc::now();
+
+        let a1 = mgr
+            .open_window(scope_a, now - Duration::hours(2), now - Duration::hours(1))
+            .unwrap();
+        mgr.mark_in_progress(a1).unwrap();
+        mgr.mark_complete(a1).unwrap();
+
+        let a2 = mgr
+            .open_window(scope_a, now - Duration::hours(1), now)
+            .unwrap();
+        mgr.mark_in_progress(a2).unwrap();
+        mgr.mark_failed(a2).unwrap();
+
+        let b1 = mgr
+            .open_window(scope_b, now - Duration::hours(1), now)
+            .unwrap();
+
+        let bytes = serde_json::to_vec(&mgr).expect("serialise");
+        // Sanity-check the wire format: ScopeId / WindowId must
+        // appear as plain UUID-string JSON keys (otherwise
+        // `serde_json` fell back to the array-of-pairs encoding
+        // and the manager is no longer rehydratable).
+        let text = std::str::from_utf8(&bytes).expect("utf8");
+        assert!(
+            text.contains(&format!("\"{}\"", a1.as_uuid())),
+            "WindowId key must serialise as a hyphenated-UUID string",
+        );
+        assert!(
+            text.contains(&format!("\"{}\"", scope_a.as_uuid())),
+            "ScopeId key must serialise as a hyphenated-UUID string",
+        );
+
+        let restored: SynthesisWindowManager = serde_json::from_slice(&bytes).expect("deserialise");
+        assert_eq!(restored.windows_for(scope_a).len(), 2);
+        assert_eq!(restored.windows_for(scope_b).len(), 1);
+        assert_eq!(restored.get(a1).unwrap().status, WindowStatus::Complete);
+        assert_eq!(restored.get(a2).unwrap().status, WindowStatus::Failed);
+        assert_eq!(restored.get(b1).unwrap().status, WindowStatus::Pending);
+        assert_eq!(restored.len(), 3);
+    }
+
+    /// Tier stamping via [`HierarchyEnforcedWindowManager::open_tiered_window`]
+    /// must survive a serde round-trip so the FFI layer can report
+    /// the tier from rehydrated windows without re-deriving it from
+    /// a (possibly absent) [`SynthesisObject`].
+    #[test]
+    fn open_tiered_window_persists_tier_through_serde() {
+        use crate::hierarchy::{HierarchyEnforcedWindowManager, WindowScopeTier};
+
+        let mut mgr = SynthesisWindowManager::new();
+        let scope_domain = ScopeId::new_v4();
+        let scope_tenant = ScopeId::new_v4();
+        let now = Utc::now();
+
+        let dom_handle = mgr
+            .open_tiered_window(
+                scope_domain,
+                WindowScopeTier::Domain,
+                now - Duration::hours(1),
+                now,
+            )
+            .unwrap();
+        let ten_handle = mgr
+            .open_tiered_window(
+                scope_tenant,
+                WindowScopeTier::Tenant,
+                now - Duration::hours(1),
+                now,
+            )
+            .unwrap();
+        // Mark the tenant window in_progress so we exercise the
+        // non-Complete path where the tier could not previously be
+        // inferred from a synthesis object.
+        mgr.mark_in_progress(ten_handle.window_id).unwrap();
+
+        let bytes = serde_json::to_vec(&mgr).expect("serialise");
+        let restored: SynthesisWindowManager = serde_json::from_slice(&bytes).expect("deserialise");
+        assert_eq!(
+            restored.get(dom_handle.window_id).unwrap().tier,
+            Some(WindowScopeTier::Domain),
+        );
+        assert_eq!(
+            restored.get(ten_handle.window_id).unwrap().tier,
+            Some(WindowScopeTier::Tenant),
+        );
+        assert_eq!(
+            restored.get(ten_handle.window_id).unwrap().status,
+            WindowStatus::InProgress,
+        );
+    }
+
+    /// Backwards-compat: blobs serialised before the `tier` field
+    /// was introduced must rehydrate cleanly with `tier: None`
+    /// (driven by `#[serde(default)]` on `SynthesisWindow::tier`).
+    /// If a future refactor accidentally requires the field, this
+    /// test catches the regression rather than letting the FFI
+    /// substrate fail to open every pre-existing database.
+    #[test]
+    fn synthesis_window_without_tier_field_rehydrates_as_none() {
+        let scope = ScopeId::new_v4();
+        let now = Utc::now();
+        let window = SynthesisWindow::new(scope, now - Duration::hours(1), now).unwrap();
+        // Hand-craft a JSON blob omitting the `tier` field — mimics
+        // what an older substrate would have written to disk.
+        let legacy_json = serde_json::json!({
+            "id": window.id.as_uuid().to_string(),
+            "scope_id": scope.as_uuid().to_string(),
+            "window_start": window.window_start,
+            "window_end": window.window_end,
+            "status": "pending",
+        });
+        let restored: SynthesisWindow =
+            serde_json::from_value(legacy_json).expect("legacy blob must rehydrate");
+        assert_eq!(restored.tier, None);
+        assert_eq!(restored.status, WindowStatus::Pending);
     }
 }
