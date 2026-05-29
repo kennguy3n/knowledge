@@ -537,13 +537,7 @@ fn apply_dispatch_outcome(
             Err(err) => {
                 // Best effort: mark the window failed so retries
                 // and diagnostic enumeration can see the outcome.
-                if let Err(e) = rt.synthesis_windows.mark_failed(window_handle.window_id) {
-                    tracing::warn!(
-                        window = %window_handle.window_id.as_uuid(),
-                        error = ?e,
-                        "mark_failed transition refused; window left in current status",
-                    );
-                }
+                fail_window_on_live_manager(rt, window_handle.window_id, "dispatch_error");
                 if let Err(e) = rt.flush_synthesis_windows() {
                     tracing::warn!(
                         error = ?e,
@@ -556,13 +550,11 @@ fn apply_dispatch_outcome(
             }
             Ok(object) => {
                 if object.payload.len() > MAX_SYNTHESIS_OUTPUT_BYTES {
-                    if let Err(e) = rt.synthesis_windows.mark_failed(window_handle.window_id) {
-                        tracing::warn!(
-                            window = %window_handle.window_id.as_uuid(),
-                            error = ?e,
-                            "oversize_output mark_failed transition refused",
-                        );
-                    }
+                    fail_window_on_live_manager(
+                        rt,
+                        window_handle.window_id,
+                        "oversize_output",
+                    );
                     let _ = rt.flush_synthesis_windows();
                     return Err(FfiError::Synthesis {
                         message: format!(
@@ -576,13 +568,11 @@ fn apply_dispatch_outcome(
                 // for the same window/scope we authorised. Defence
                 // in depth against a malicious / buggy engine.
                 if object.scope_id != scope || object.window_id != window_handle.window_id {
-                    if let Err(e) = rt.synthesis_windows.mark_failed(window_handle.window_id) {
-                        tracing::warn!(
-                            window = %window_handle.window_id.as_uuid(),
-                            error = ?e,
-                            "scope/window mismatch mark_failed refused",
-                        );
-                    }
+                    fail_window_on_live_manager(
+                        rt,
+                        window_handle.window_id,
+                        "scope_window_mismatch",
+                    );
                     let _ = rt.flush_synthesis_windows();
                     return Err(FfiError::Synthesis {
                         message: format!(
@@ -602,13 +592,11 @@ fn apply_dispatch_outcome(
                     SynthesisTierKind::Tenant => SynthesisObjectType::TenantSummary,
                 };
                 if object.object_type != expected {
-                    if let Err(e) = rt.synthesis_windows.mark_failed(window_handle.window_id) {
-                        tracing::warn!(
-                            window = %window_handle.window_id.as_uuid(),
-                            error = ?e,
-                            "object_type mismatch mark_failed refused",
-                        );
-                    }
+                    fail_window_on_live_manager(
+                        rt,
+                        window_handle.window_id,
+                        "object_type_mismatch",
+                    );
                     let _ = rt.flush_synthesis_windows();
                     return Err(FfiError::Synthesis {
                         message: format!(
@@ -857,6 +845,37 @@ fn newest_object_for_scope_of_type(
         .filter(|o| o.scope_id == scope && o.object_type == kind)
         .max_by_key(|o| o.created_at)
         .cloned()
+}
+
+/// Transition the live `SynthesisWindowManager` window into `Failed`.
+///
+/// Phase 2 mutates a cloned manager so on the live manager the window
+/// is still in `Pending`. `mark_failed` only accepts the
+/// `InProgress → Failed` transition, so we replay the
+/// `Pending → InProgress → Failed` chain here. Both steps are
+/// best-effort because `apply_dispatch_outcome` is already on a
+/// failure path — surfacing a deeper error from the bookkeeping here
+/// would mask the real synthesis failure that the caller is about
+/// to receive. A `mark_in_progress` refusal logs at `warn`; the
+/// subsequent `mark_failed` will still attempt the transition and
+/// also log on refusal so an operator can correlate stuck windows.
+fn fail_window_on_live_manager(rt: &mut FfiRuntime, window_id: WindowId, reason: &str) {
+    if let Err(e) = rt.synthesis_windows.mark_in_progress(window_id) {
+        tracing::warn!(
+            window = %window_id.as_uuid(),
+            error = ?e,
+            reason,
+            "fail_window_on_live_manager: mark_in_progress refused",
+        );
+    }
+    if let Err(e) = rt.synthesis_windows.mark_failed(window_id) {
+        tracing::warn!(
+            window = %window_id.as_uuid(),
+            error = ?e,
+            reason,
+            "fail_window_on_live_manager: mark_failed refused; window left in current status",
+        );
+    }
 }
 
 fn newest_complete_window(rt: &FfiRuntime, scope: ScopeId) -> Option<WindowId> {
@@ -1345,6 +1364,68 @@ mod tests {
             Ok(())
         })
         .unwrap();
+        teardown(handle);
+    }
+
+    /// Always-failing test engine that returns `EngineError::Engine`
+    /// from both tier dispatchers. Used to drive the Phase 3 failure
+    /// path so we can verify the live `SynthesisWindowManager` ends
+    /// up in `Failed` (not stuck in `Pending`).
+    struct FailingTestEngine;
+    impl SynthesisEngine for FailingTestEngine {
+        fn synthesize_domain(
+            &self,
+            _windows: &mut SynthesisWindowManager,
+            _handle: TieredWindowHandle,
+            _input: synthesis_pipeline::DomainSynthesisInput,
+        ) -> synthesis_engine::Result<synthesis_engine::DomainSynthesisResult> {
+            Err(synthesis_engine::EngineError::engine("test injection"))
+        }
+        fn synthesize_tenant(
+            &self,
+            _windows: &mut SynthesisWindowManager,
+            _handle: TieredWindowHandle,
+            _input: synthesis_pipeline::TenantSynthesisInput,
+        ) -> synthesis_engine::Result<synthesis_engine::TenantSynthesisResult> {
+            Err(synthesis_engine::EngineError::engine("test injection"))
+        }
+    }
+
+    #[test]
+    fn failing_engine_transitions_window_to_failed_not_pending() {
+        // Regression test for the `mark_failed`-on-`Pending` bug.
+        // Phase 2 mutates a cloned manager, so on the live manager
+        // the window is still `Pending` when Phase 3 runs. The fix
+        // replays `Pending → InProgress → Failed` so the live window
+        // ends up `Failed`, surfacing the failure to operators and
+        // letting future retention sweeps reason about the window.
+        let (handle, _dir) = fresh_store();
+        with_runtime(handle, |rt| {
+            let engine: Arc<dyn SynthesisEngine> = Arc::new(FailingTestEngine);
+            rt.synthesis_engine = Some(engine);
+            rt.synthesis_scope_bindings = None;
+            Ok(())
+        })
+        .unwrap();
+        let scope = seed_domain_with_two_channels(handle);
+
+        let err = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect_err("failing engine should bubble Synthesis error");
+        assert!(matches!(err, FfiError::Synthesis { .. }));
+
+        // The Phase-1 window must have transitioned to Failed (not
+        // be stuck in Pending). It's also the only window on the
+        // scope, so `list_recent_syntheses` returns exactly one row.
+        let rows = list_recent_syntheses(handle, scope.as_uuid().to_string()).expect("list");
+        assert_eq!(rows.len(), 1, "exactly one window opened for this scope");
+        assert_eq!(
+            rows[0].status, "failed",
+            "live window must end Failed after dispatch error, not stuck Pending",
+        );
         teardown(handle);
     }
 

@@ -258,7 +258,8 @@ embedded in the health envelope. Counters include
 `sync_scheduler_dispatches_skipped_in_progress_total`,
 `configure_synthesis_engine_total`,
 `trigger_server_synthesis_total`, `synthesis_status_total`,
-`list_recent_syntheses_total`, plus
+`list_recent_syntheses_total`,
+`configure_sync_auto_synthesize_total`, plus
 per-`FfiError`-kind counters under `errors_by_kind`
 (`unimplemented`, `invalid_id`, `not_found`, `evidence`,
 `memory`, `synthesis`, `crypto`, `unavailable`,

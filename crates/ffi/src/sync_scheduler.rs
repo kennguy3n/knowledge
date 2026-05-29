@@ -680,26 +680,28 @@ pub fn configure_sync_auto_synthesize(
     instance_id: String,
     enabled: bool,
 ) -> FfiResult<()> {
-    let instance = parse_instance_id(&instance_id)?;
-    with_runtime(handle, |rt| {
-        let scheduler = rt
-            .sync_scheduler
-            .as_ref()
-            .ok_or_else(|| FfiError::Connector {
-                message: "configure_sync_auto_synthesize: no scheduler is running on this \
-                          runtime; call start_sync_scheduler first"
-                    .into(),
-            })?;
-        let mut state = match scheduler.state.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let policy = state
-            .policies
-            .entry(instance)
-            .or_insert_with(|| SchedulePolicy::from_defaults(&scheduler.config));
-        policy.auto_synthesize = enabled;
-        Ok(())
+    crate::metrics::instrument(crate::metrics::inc_configure_sync_auto_synthesize, || {
+        let instance = parse_instance_id(&instance_id)?;
+        with_runtime(handle, |rt| {
+            let scheduler = rt
+                .sync_scheduler
+                .as_ref()
+                .ok_or_else(|| FfiError::Connector {
+                    message: "configure_sync_auto_synthesize: no scheduler is running on this \
+                              runtime; call start_sync_scheduler first"
+                        .into(),
+                })?;
+            let mut state = match scheduler.state.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let policy = state
+                .policies
+                .entry(instance)
+                .or_insert_with(|| SchedulePolicy::from_defaults(&scheduler.config));
+            policy.auto_synthesize = enabled;
+            Ok(())
+        })
     })
 }
 
