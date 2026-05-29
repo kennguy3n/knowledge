@@ -718,6 +718,47 @@ pub struct SynthesisEngineConfig {
     pub scope_bindings: Option<Vec<String>>,
 }
 
+/// Summary view of an approved-document reference + payload pair,
+/// returned by [`crate::synthesis::admit_approved_document`] and
+/// [`crate::synthesis::list_approved_documents`].
+///
+/// All fields are wire-flat: UUID strings, an `i64` Unix-epoch-ms
+/// timestamp, a hex content hash, and a `u64` byte size. The
+/// substrate never surfaces the raw payload through this surface
+/// (hosts that admitted it already own the original bytes); only
+/// `payload_bytes` and `content_hash_hex` are exposed so a host
+/// can correlate the on-disk row with the bytes it sent.
+///
+/// `payload_bytes == 0` and `content_hash_hex.is_empty()` indicate
+/// a tenant-memory ref that has no corresponding evidence-store
+/// payload row. Under Phase 8 this should only occur transiently
+/// (e.g. between a host's call to `admit_approved_document` and a
+/// crash before tenant memory was flushed), but the substrate
+/// surfaces it explicitly rather than synthesising fake metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovedDocumentSummary {
+    /// UUID-string document id (matches the
+    /// `memory_manager::ApprovedDocumentRef::id` field).
+    pub id: String,
+    /// UUID-string tenant scope the document is admitted onto.
+    pub scope_id: ScopeIdString,
+    /// Stable label / title (e.g. `"Tenant Policy v3.2"`).
+    pub label: String,
+    /// Free-form approver reference (e.g. `"compliance-officer"`).
+    pub approver: String,
+    /// Wall-clock approval time in Unix epoch milliseconds.
+    pub approved_at_ms: i64,
+    /// Plaintext payload size in bytes (NOT the AEAD ciphertext
+    /// size). `0` when the tenant-memory ref has no corresponding
+    /// evidence-store payload row (see struct-level docs).
+    pub payload_bytes: u64,
+    /// BLAKE3 content hash of the plaintext payload, lower-hex
+    /// (64 chars). Empty string when the tenant-memory ref has no
+    /// corresponding evidence-store payload row.
+    pub content_hash_hex: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

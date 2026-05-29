@@ -229,6 +229,18 @@ pub(crate) struct Metrics {
     /// (Phase 7 — host toggles the per-instance auto-synthesise
     /// flag on the sync scheduler).
     pub(crate) configure_sync_auto_synthesize_total: AtomicU64,
+    /// Total `admit_approved_document` calls initiated
+    /// (Phase 8 — host attaches an approved-document payload to
+    /// the tenant memory).
+    pub(crate) admit_approved_document_total: AtomicU64,
+    /// Total `revoke_approved_document` calls initiated
+    /// (Phase 8 — host removes a previously admitted approved
+    /// document from tenant memory).
+    pub(crate) revoke_approved_document_total: AtomicU64,
+    /// Total `list_approved_documents` calls initiated
+    /// (Phase 8 — host enumerates approved-document refs for a
+    /// tenant scope).
+    pub(crate) list_approved_documents_total: AtomicU64,
 
     // Per-kind error counters. The set mirrors `FfiError::kind`
     // exactly so adding a new error variant is a compile error
@@ -352,6 +364,9 @@ counter_inc!(pub(crate) fn inc_trigger_server_synthesis => trigger_server_synthe
 counter_inc!(pub(crate) fn inc_synthesis_status => synthesis_status_total);
 counter_inc!(pub(crate) fn inc_list_recent_syntheses => list_recent_syntheses_total);
 counter_inc!(pub(crate) fn inc_configure_sync_auto_synthesize => configure_sync_auto_synthesize_total);
+counter_inc!(pub(crate) fn inc_admit_approved_document => admit_approved_document_total);
+counter_inc!(pub(crate) fn inc_revoke_approved_document => revoke_approved_document_total);
+counter_inc!(pub(crate) fn inc_list_approved_documents => list_approved_documents_total);
 counter_inc!(pub(crate) fn inc_clear_sync_schedule => clear_sync_schedule_total);
 counter_inc!(pub(crate) fn inc_sync_scheduler_status => sync_scheduler_status_total);
 counter_inc!(pub(crate) fn inc_sync_scheduler_tick => sync_scheduler_ticks_total);
@@ -610,6 +625,15 @@ pub struct MetricsSnapshot {
     /// (Phase 7).
     #[serde(default)]
     pub configure_sync_auto_synthesize_total: u64,
+    /// Total `admit_approved_document` calls initiated (Phase 8).
+    #[serde(default)]
+    pub admit_approved_document_total: u64,
+    /// Total `revoke_approved_document` calls initiated (Phase 8).
+    #[serde(default)]
+    pub revoke_approved_document_total: u64,
+    /// Total `list_approved_documents` calls initiated (Phase 8).
+    #[serde(default)]
+    pub list_approved_documents_total: u64,
     /// Per-kind error counter snapshot.
     pub errors_by_kind: ErrorCounters,
     /// Total errors across all kinds (sum of `errors_by_kind`'s
@@ -758,6 +782,9 @@ pub fn snapshot() -> MetricsSnapshot {
         configure_sync_auto_synthesize_total: m
             .configure_sync_auto_synthesize_total
             .load(Ordering::Relaxed),
+        admit_approved_document_total: m.admit_approved_document_total.load(Ordering::Relaxed),
+        revoke_approved_document_total: m.revoke_approved_document_total.load(Ordering::Relaxed),
+        list_approved_documents_total: m.list_approved_documents_total.load(Ordering::Relaxed),
         errors_by_kind: ErrorCounters {
             unimplemented: m.errors_unimplemented.load(Ordering::Relaxed),
             invalid_id: m.errors_invalid_id.load(Ordering::Relaxed),

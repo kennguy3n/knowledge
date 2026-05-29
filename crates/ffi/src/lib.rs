@@ -127,15 +127,16 @@ pub use sync_scheduler::{
     DEFAULT_SYNC_MAX_BACKOFF_SECS, DEFAULT_SYNC_TICK_SECS,
 };
 pub use synthesis::{
-    configure_synthesis_engine, list_recent_syntheses, synthesis_status, trigger_server_synthesis,
-    LIST_RECENT_SYNTHESES_CAP, MAX_SYNTHESIS_OUTPUT_BYTES, PER_SCOPE_COOLDOWN_SECS,
-    WINDOW_RETENTION_CAP_PER_SCOPE,
+    admit_approved_document, configure_synthesis_engine, list_approved_documents,
+    list_recent_syntheses, revoke_approved_document, synthesis_status, trigger_server_synthesis,
+    LIST_RECENT_SYNTHESES_CAP, MAX_APPROVED_DOCUMENT_BYTES, MAX_APPROVED_DOCUMENT_METADATA_CHARS,
+    MAX_SYNTHESIS_OUTPUT_BYTES, PER_SCOPE_COOLDOWN_SECS, WINDOW_RETENTION_CAP_PER_SCOPE,
 };
 #[cfg(feature = "tracing-subscriber")]
 pub use tracing_init::try_init_tracing;
 pub use types::{
-    ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass, FfiKeypair,
-    FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RefreshReport,
+    ApprovedDocumentSummary, ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass,
+    FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RefreshReport,
     ScopeIdString, SourceKind, SyncModeKind, SyncReport, SyncSchedulerStatus, SyncStatusKind,
     SynthesisEngineConfig, SynthesisStatusRecord, SynthesisTierKind, SynthesisTrigger,
     WebhookServerHandle, WebhookServerSummary,
@@ -789,6 +790,42 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
             "forget_scope_state: delete_memory_blobs_for_scope failed; continuing to connector teardown",
         );
         first_error.get_or_insert(err);
+    }
+
+    // 4b. Phase 8: delete persisted approved-document payload rows
+    //     for the scope. The ciphertext was sealed under the scope
+    //     DEK that step 2 destroyed, so even if this SQL DELETE
+    //     fails the bytes are cryptographically unrecoverable. We
+    //     still attempt the delete so the row count stays bounded
+    //     and `open_store`'s rehydration pass does not load orphan
+    //     metadata for a forgotten scope. Best-effort, accumulates
+    //     the first error so the caller sees the gap without
+    //     interrupting the remaining steps.
+    match rt
+        .store()
+        .delete_approved_document_payloads_for_scope(scope)
+    {
+        Ok(deleted) => {
+            if deleted > 0 {
+                tracing::debug!(
+                    scope = %scope.as_uuid(),
+                    deleted,
+                    "forget_scope_state: purged approved-document payload rows",
+                );
+            }
+        }
+        Err(e) => {
+            let err = FfiError::Evidence {
+                message: e.to_string(),
+            };
+            tracing::warn!(
+                scope = %scope.as_uuid(),
+                error = %err,
+                "forget_scope_state: delete_approved_document_payloads_for_scope failed; \
+                 ciphertext remains unrecoverable because the scope DEK is already destroyed",
+            );
+            first_error.get_or_insert(err);
+        }
     }
 
     // 5. In-memory memory maps. Infallible.
