@@ -388,6 +388,23 @@ pub struct FfiRuntime {
     /// [`with_runtime`].
     pub(crate) webhook_servers:
         HashMap<crate::types::WebhookServerHandle, crate::webhook::RunningWebhookServer>,
+    /// Singleton background sync scheduler (Phase 6).
+    ///
+    /// Exactly one [`crate::sync_scheduler::RunningSyncScheduler`]
+    /// per runtime; [`crate::start_sync_scheduler`] populates this
+    /// slot and [`crate::stop_sync_scheduler`] /
+    /// [`crate::close_store`] consume it. The dispatch worker
+    /// thread re-enters [`with_runtime`] on every tick (briefly
+    /// cloning the entry `Arc`), so the slot MUST be drained
+    /// BEFORE the `Arc::try_unwrap` spin loop the same way
+    /// [`Self::webhook_servers`] is — see the
+    /// [`crate::sync_scheduler::drain_scheduler`] call in
+    /// [`crate::close_store`].
+    ///
+    /// `None` until the host explicitly opts in; most ingest-only
+    /// substrate clients (offline CLI batch tools, Electron status
+    /// panels) never start a scheduler.
+    pub(crate) sync_scheduler: Option<crate::sync_scheduler::RunningSyncScheduler>,
 }
 
 impl Drop for FfiRuntime {
@@ -1067,6 +1084,7 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         #[cfg(feature = "http-client")]
         oauth_client,
         webhook_servers: HashMap::new(),
+        sync_scheduler: None,
     };
 
     // Rehydrate persisted connector state from the v9
@@ -1228,11 +1246,22 @@ pub fn close_store(handle: RuntimeHandle) -> FfiResult<()> {
                 Err(poisoned) => poisoned.into_inner(),
             };
             let servers = std::mem::take(&mut rt_guard.webhook_servers);
+            // Also take the sync scheduler out of its slot under
+            // the same locked section so its worker thread —
+            // which re-enters `with_runtime` on every tick — also
+            // gets joined BEFORE the `Arc::try_unwrap` spin loop
+            // below. Without this the scheduler would race the
+            // unwrap exactly the way an undrained webhook server
+            // would: each tick briefly clones the entry `Arc`,
+            // bumping the strong count and pinning the unwrap at
+            // `Err(returned)`.
+            let scheduler = rt_guard.sync_scheduler.take();
             // Drop the runtime lock BEFORE joining the runtime
             // threads — the runtime mutex is what the joined
             // threads' dispatchers were trying to acquire.
             drop(rt_guard);
             crate::webhook::drain_all_servers(servers);
+            crate::sync_scheduler::drain_scheduler(scheduler);
         }
         // Drain outstanding `with_runtime` calls on this handle. Because
         // step 1 (the `remove` above) already happened, no new clones can

@@ -295,7 +295,23 @@ pub enum SyncStatusKind {
 /// view: kind icon, last-synced timestamp, error banner, current
 /// sync mode (so the UI can show "Incremental sync" vs "Full
 /// sync" badges).
+///
+/// # Wire format
+///
+/// `Serialize`/`Deserialize` use `rename_all = "camelCase"` so
+/// the JSON surface used by the N-API crate stays consistent
+/// with the other JSON-returning entry points
+/// ([`crate::refresh_connector_token`],
+/// [`crate::sync_connector`], [`crate::list_webhook_servers`],
+/// [`crate::sync_scheduler_status`]). A JS host destructuring
+/// the value can use
+/// `{ instanceId, kind, scopeId, syncMode, syncStatus,
+///    lastSyncedAt, lastError }` directly. UniFFI bindings
+/// (Swift/Kotlin) are unaffected — they read Rust field names
+/// directly through the `uniffi::Record` derive and do not
+/// pass through `serde`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
 pub struct ConnectorStatus {
     /// UUID-string identifier — the
     /// [`connector_framework::ConnectorInstanceId`] this row refers
@@ -337,7 +353,18 @@ pub struct ConnectorStatus {
 /// on the success path. Keeping the flag in the wire envelope means
 /// hosts that observe a `RefreshReport` in a callback / event log
 /// can disambiguate "we did real network work" from "we skipped".
+///
+/// # Wire format
+///
+/// `Serialize`/`Deserialize` use `rename_all = "camelCase"` so the
+/// JSON surface used by the N-API crate matches the JS naming
+/// convention documented at [`crate::refresh_connector_token`]
+/// (`{ instanceId, refreshed, expiresAt, refreshedAt }`). UniFFI
+/// bindings (Swift/Kotlin) are unaffected — they read Rust field
+/// names directly through the `uniffi::Record` derive and do not
+/// pass through `serde`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
 pub struct RefreshReport {
     /// UUID-string identifier of the connector instance whose token
     /// was refreshed.
@@ -367,7 +394,22 @@ pub struct RefreshReport {
 /// Records what happened during a single sync run — useful for
 /// host-side UI ("Synced 42 new documents from Slack") and for
 /// downstream observability.
+///
+/// # Wire format
+///
+/// `Serialize`/`Deserialize` use `rename_all = "camelCase"` so the
+/// JSON surface used by the N-API crate stays consistent with the
+/// other JSON-returning entry points
+/// ([`crate::refresh_connector_token`],
+/// [`crate::list_webhook_servers`], [`crate::sync_scheduler_status`]).
+/// A JS host destructuring the value can use
+/// `{ instanceId, mode, eventsTotal, eventsIngested,
+///    ingestedEvidenceIds, nextCursor, startedAt, completedAt }`
+/// directly. UniFFI bindings (Swift/Kotlin) are unaffected —
+/// they read Rust field names directly through the
+/// `uniffi::Record` derive and do not pass through `serde`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncReport {
     /// UUID-string identifier of the connector instance that
     /// produced the run.
@@ -430,7 +472,19 @@ impl WebhookServerHandle {
 /// successful dispatches it has fanned, how many dispatches failed.
 /// All counters reset on `start_webhook_server` and remain monotonic
 /// across the server's lifetime.
+///
+/// # Wire format
+///
+/// `Serialize`/`Deserialize` use `rename_all = "camelCase"` so the JSON
+/// surface used by the N-API crate matches the JS naming convention
+/// documented at [`crate::list_webhook_servers`]
+/// (`{ serverHandle, bindAddr, startedAt, registrationCount,
+///    dispatchOkTotal, dispatchBadRequestTotal,
+///    dispatchBadGatewayTotal }`). UniFFI bindings (Swift/Kotlin)
+/// are unaffected — they read Rust field names directly through the
+/// `uniffi::Record` derive and do not pass through `serde`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
 pub struct WebhookServerSummary {
     /// Stable opaque handle this row refers to. Same value the host
     /// originally received from [`super::start_webhook_server`].
@@ -464,6 +518,102 @@ pub struct WebhookServerSummary {
     /// translating substrate-side failures to a 5xx so the
     /// upstream provider's retry-with-backoff is invoked).
     pub dispatch_bad_gateway_total: u64,
+}
+
+/// Wire-flat diagnostic snapshot returned by
+/// [`super::sync_scheduler_status`] (Phase 6).
+///
+/// Reports the background scheduler's running state, configuration
+/// echo, and per-counter totals so hosts can render a "Sync
+/// scheduler: running (11 instances driven, 3 with custom policy,
+/// 12 ticks, 7 dispatches, 6 succeeded, 1 failed)" badge without
+/// enumerating connectors independently. All counters are monotonic
+/// across the scheduler's lifetime and reset to zero on a fresh
+/// [`super::start_sync_scheduler`].
+///
+/// # Wire format
+///
+/// `Serialize`/`Deserialize` use `rename_all = "camelCase"` so the JSON
+/// surface used by the N-API crate matches the JS naming convention
+/// documented at [`crate::sync_scheduler_status`]
+/// (`{ isRunning, startedAtUnix, defaultIntervalSecs,
+///    defaultMaxBackoffSecs, tickIntervalSecs, policyOverrideCount,
+///    totalInstanceCount, lastTickAtUnix, ticksCompleted,
+///    dispatchesAttempted, dispatchesSucceeded, dispatchesFailed,
+///    dispatchesSkippedInProgress }`). UniFFI bindings (Swift/Kotlin)
+/// are unaffected — they read Rust field names directly through the
+/// `uniffi::Record` derive and do not pass through `serde`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncSchedulerStatus {
+    /// `true` iff a scheduler is currently running on this runtime
+    /// handle. `false` includes both "never started" and "started
+    /// then explicitly stopped"; the host should call
+    /// [`super::start_sync_scheduler`] in either case to start
+    /// dispatching.
+    pub is_running: bool,
+    /// Unix epoch seconds when the most recent
+    /// [`super::start_sync_scheduler`] call returned. `None` when
+    /// `is_running == false`.
+    pub started_at_unix: Option<i64>,
+    /// Default per-instance sync interval (`0` when not running).
+    /// Echo of the `default_interval_secs` argument supplied at
+    /// start time.
+    pub default_interval_secs: u64,
+    /// Default per-instance backoff cap (`0` when not running).
+    pub default_max_backoff_secs: u64,
+    /// Tick cadence (`0` when not running).
+    pub tick_interval_secs: u64,
+    /// Number of connector instances with a per-instance policy
+    /// override (set via [`super::configure_sync_schedule`]). This
+    /// is a strict subset of [`Self::total_instance_count`] — every
+    /// instance with an override is also a connector instance the
+    /// scheduler considers, but instances without an override are
+    /// counted only in `total_instance_count`.
+    ///
+    /// Was named `scheduled_instance_count` through Phase 6 round 5;
+    /// renamed in round 6 (ANALYSIS_0003) to disambiguate from
+    /// `total_instance_count`. A host UI that wants "how many
+    /// connectors is the scheduler driving" should read
+    /// `total_instance_count`; this field reports the strictly
+    /// smaller "how many connectors have a custom policy set".
+    pub policy_override_count: u32,
+    /// Total number of connector instances the scheduler walks on
+    /// every tick — i.e. the size of
+    /// [`crate::runtime::FfiRuntime::connector_instances`]. Each
+    /// such instance is dispatched on the scheduler's default
+    /// policy unless it appears in [`Self::policy_override_count`]
+    /// (in which case it uses the custom
+    /// [`super::configure_sync_schedule`] policy instead).
+    ///
+    /// `0` when not running (matches the convention used by every
+    /// other numeric field on this struct when `is_running == false`).
+    pub total_instance_count: u32,
+    /// Unix epoch seconds of the scheduler's most recent tick.
+    /// `None` until the first tick has fired (a freshly-started
+    /// scheduler may show `is_running=true, last_tick_at_unix=None`
+    /// for up to `tick_interval_secs` seconds).
+    pub last_tick_at_unix: Option<i64>,
+    /// Total ticks the worker thread has completed since
+    /// `start_sync_scheduler`. Includes ticks that found no due
+    /// instances.
+    pub ticks_completed: u64,
+    /// Total dispatch attempts initiated by the scheduler. Counts
+    /// `sync_connector` calls made by the worker, not their
+    /// success/failure.
+    pub dispatches_attempted: u64,
+    /// Total dispatches that completed with `Ok(SyncReport)`.
+    pub dispatches_succeeded: u64,
+    /// Total dispatches that completed with `Err(_)`. Used as the
+    /// exponent in the per-instance backoff curve.
+    pub dispatches_failed: u64,
+    /// Total ticks where the scheduler decided NOT to dispatch a
+    /// candidate instance because it was already in
+    /// [`connector_framework::SyncStatus::InProgress`] (a
+    /// host-driven sync was running concurrently). Distinct from
+    /// `dispatches_failed` because the scheduler never invoked
+    /// `sync_connector` for these.
+    pub dispatches_skipped_in_progress: u64,
 }
 
 #[cfg(test)]
@@ -660,5 +810,322 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let back: FfiSignature = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
+    }
+
+    /// Pin the JSON wire format `crates/napi/src/bindings.rs::
+    /// js_sync_scheduler_status` documents — every key MUST be the
+    /// camelCase form documented in the rustdoc (`isRunning`,
+    /// `startedAtUnix`, …). The bug surfaced by Devin Review round 3
+    /// was that the doc promised camelCase but the type derived
+    /// `Serialize` without `rename_all`, producing snake_case keys
+    /// that would surface as `undefined` when destructured by a JS
+    /// caller following the documented pattern.
+    #[test]
+    fn sync_scheduler_status_serializes_with_camelcase_keys() {
+        let status = SyncSchedulerStatus {
+            is_running: true,
+            started_at_unix: Some(1_700_000_000),
+            default_interval_secs: 900,
+            default_max_backoff_secs: 28_800,
+            tick_interval_secs: 30,
+            policy_override_count: 3,
+            total_instance_count: 11,
+            last_tick_at_unix: Some(1_700_000_030),
+            ticks_completed: 12,
+            dispatches_attempted: 7,
+            dispatches_succeeded: 6,
+            dispatches_failed: 1,
+            dispatches_skipped_in_progress: 0,
+        };
+        let v = serde_json::to_value(&status).expect("serialize");
+        let obj = v.as_object().expect("object");
+        // Every documented camelCase key MUST appear; every
+        // snake_case key MUST NOT.
+        for camel in [
+            "isRunning",
+            "startedAtUnix",
+            "defaultIntervalSecs",
+            "defaultMaxBackoffSecs",
+            "tickIntervalSecs",
+            "policyOverrideCount",
+            "totalInstanceCount",
+            "lastTickAtUnix",
+            "ticksCompleted",
+            "dispatchesAttempted",
+            "dispatchesSucceeded",
+            "dispatchesFailed",
+            "dispatchesSkippedInProgress",
+        ] {
+            assert!(
+                obj.contains_key(camel),
+                "SyncSchedulerStatus JSON must contain camelCase key `{camel}`; got {v}"
+            );
+        }
+        for snake in [
+            "is_running",
+            "started_at_unix",
+            "default_interval_secs",
+            "default_max_backoff_secs",
+            "tick_interval_secs",
+            "policy_override_count",
+            "total_instance_count",
+            "last_tick_at_unix",
+            "ticks_completed",
+            "dispatches_attempted",
+            "dispatches_succeeded",
+            "dispatches_failed",
+            "dispatches_skipped_in_progress",
+        ] {
+            assert!(
+                !obj.contains_key(snake),
+                "SyncSchedulerStatus JSON must NOT contain snake_case key `{snake}`; got {v}"
+            );
+        }
+        // Round 6 ANALYSIS_0003 — pin that the two count fields
+        // serialize with the post-rename camelCase keys and that
+        // their values come through distinct from each other (so a
+        // future refactor that conflates them in code is caught
+        // here, not by a host reporting wrong telemetry).
+        assert_eq!(
+            obj.get("policyOverrideCount").and_then(serde_json::Value::as_u64),
+            Some(3),
+            "policyOverrideCount must serialize as the configured value, distinct from totalInstanceCount"
+        );
+        assert_eq!(
+            obj.get("totalInstanceCount").and_then(serde_json::Value::as_u64),
+            Some(11),
+            "totalInstanceCount must serialize as the configured value, distinct from policyOverrideCount"
+        );
+        // Round-trip through Deserialize too — guarantees the
+        // camelCase rename applies symmetrically.
+        let back: SyncSchedulerStatus = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, status);
+    }
+
+    /// Phase 5's `WebhookServerSummary` had the same latent wire
+    /// format mismatch (doc at `crates/napi/src/bindings.rs::
+    /// js_list_webhook_servers` documents camelCase but the type
+    /// originally derived `Serialize` without `rename_all`). Pin the
+    /// post-fix shape so a future change to either the type or the
+    /// doc is caught here.
+    #[test]
+    fn webhook_server_summary_serializes_with_camelcase_keys() {
+        let summary = WebhookServerSummary {
+            server_handle: WebhookServerHandle(42),
+            bind_addr: "127.0.0.1:9001".into(),
+            started_at: 1_700_000_000,
+            registration_count: 2,
+            dispatch_ok_total: 10,
+            dispatch_bad_request_total: 1,
+            dispatch_bad_gateway_total: 0,
+        };
+        let v = serde_json::to_value(&summary).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for camel in [
+            "serverHandle",
+            "bindAddr",
+            "startedAt",
+            "registrationCount",
+            "dispatchOkTotal",
+            "dispatchBadRequestTotal",
+            "dispatchBadGatewayTotal",
+        ] {
+            assert!(
+                obj.contains_key(camel),
+                "WebhookServerSummary JSON must contain camelCase key `{camel}`; got {v}"
+            );
+        }
+        for snake in [
+            "server_handle",
+            "bind_addr",
+            "started_at",
+            "registration_count",
+            "dispatch_ok_total",
+            "dispatch_bad_request_total",
+            "dispatch_bad_gateway_total",
+        ] {
+            assert!(
+                !obj.contains_key(snake),
+                "WebhookServerSummary JSON must NOT contain snake_case key `{snake}`; got {v}"
+            );
+        }
+        let back: WebhookServerSummary = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, summary);
+    }
+
+    /// `RefreshReport` is the response envelope for
+    /// `crates/napi/src/bindings.rs::js_refresh_connector_token`,
+    /// whose rustdoc documents `{ instanceId, refreshed, expiresAt,
+    /// refreshedAt }` (camelCase). Devin Review round 4 flagged the
+    /// type as still serializing snake_case keys despite the doc
+    /// claim; the rename now aligns the wire format with the doc.
+    /// Pin the camelCase invariant so future drift between doc and
+    /// type is caught at `cargo test` time.
+    #[test]
+    fn refresh_report_serializes_with_camelcase_keys() {
+        let r = RefreshReport {
+            instance_id: "00000000-0000-0000-0000-000000000001".into(),
+            refreshed: true,
+            expires_at: 1_900_000_000,
+            refreshed_at: 1_800_000_000,
+        };
+        let v = serde_json::to_value(&r).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for camel in ["instanceId", "refreshed", "expiresAt", "refreshedAt"] {
+            assert!(
+                obj.contains_key(camel),
+                "RefreshReport JSON must contain camelCase key `{camel}`; got {v}"
+            );
+        }
+        for snake in ["instance_id", "expires_at", "refreshed_at"] {
+            assert!(
+                !obj.contains_key(snake),
+                "RefreshReport JSON must NOT contain snake_case key `{snake}`; got {v}"
+            );
+        }
+        let back: RefreshReport = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, r);
+    }
+
+    /// `SyncReport` is the response envelope for
+    /// `crates/napi/src/bindings.rs::js_sync_connector`. The
+    /// `rename_all` rename keeps it consistent with every other
+    /// N-API JSON-returning entry point.
+    #[test]
+    fn sync_report_serializes_with_camelcase_keys() {
+        let r = SyncReport {
+            instance_id: "00000000-0000-0000-0000-000000000001".into(),
+            mode: SyncModeKind::Incremental,
+            events_total: 42,
+            events_ingested: 40,
+            ingested_evidence_ids: vec![
+                "00000000-0000-0000-0000-0000000000aa".into(),
+                "00000000-0000-0000-0000-0000000000bb".into(),
+            ],
+            next_cursor: Some("cursor-token".into()),
+            started_at: 1_700_000_000,
+            completed_at: 1_700_000_005,
+        };
+        let v = serde_json::to_value(&r).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for camel in [
+            "instanceId",
+            "mode",
+            "eventsTotal",
+            "eventsIngested",
+            "ingestedEvidenceIds",
+            "nextCursor",
+            "startedAt",
+            "completedAt",
+        ] {
+            assert!(
+                obj.contains_key(camel),
+                "SyncReport JSON must contain camelCase key `{camel}`; got {v}"
+            );
+        }
+        for snake in [
+            "instance_id",
+            "events_total",
+            "events_ingested",
+            "ingested_evidence_ids",
+            "next_cursor",
+            "started_at",
+            "completed_at",
+        ] {
+            assert!(
+                !obj.contains_key(snake),
+                "SyncReport JSON must NOT contain snake_case key `{snake}`; got {v}"
+            );
+        }
+        // Nested `SyncModeKind` enum keeps its independent
+        // `rename_all = "snake_case"` discipline — the tag value
+        // for `Incremental` is the lowercase string `"incremental"`,
+        // NOT the camelCase `"Incremental"` the struct-level rename
+        // would suggest. The struct-level `rename_all` only
+        // governs field names, not nested enum variants.
+        assert_eq!(
+            obj.get("mode").and_then(|m| m.as_str()),
+            Some("incremental"),
+            "SyncModeKind variant tag must remain snake_case"
+        );
+        let back: SyncReport = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, r);
+    }
+
+    /// `ConnectorStatus` is the response envelope for
+    /// `crates/napi/src/bindings.rs::js_list_connectors`. Devin
+    /// Review round 5 ANALYSIS_0002 flagged it as the last
+    /// `serde_json`-serialized N-API return type still emitting
+    /// snake_case keys (every peer — `RefreshReport`,
+    /// `SyncReport`, `WebhookServerSummary`,
+    /// `SyncSchedulerStatus` — has been migrated). Pin the
+    /// camelCase invariant so future drift between the
+    /// documented JS-idiomatic surface and the type is caught at
+    /// `cargo test` time.
+    #[test]
+    fn connector_status_serializes_with_camelcase_keys() {
+        let s = ConnectorStatus {
+            instance_id: "00000000-0000-0000-0000-000000000001".into(),
+            kind: ConnectorKindTag::GoogleDrive,
+            scope_id: "00000000-0000-0000-0000-0000000000aa".into(),
+            sync_mode: SyncModeKind::Incremental,
+            sync_status: SyncStatusKind::Succeeded,
+            last_synced_at: Some(1_700_000_000),
+            last_error: None,
+        };
+        let v = serde_json::to_value(&s).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for camel in [
+            "instanceId",
+            "kind",
+            "scopeId",
+            "syncMode",
+            "syncStatus",
+            "lastSyncedAt",
+            "lastError",
+        ] {
+            assert!(
+                obj.contains_key(camel),
+                "ConnectorStatus JSON must contain camelCase key `{camel}`; got {v}"
+            );
+        }
+        for snake in [
+            "instance_id",
+            "scope_id",
+            "sync_mode",
+            "sync_status",
+            "last_synced_at",
+            "last_error",
+        ] {
+            assert!(
+                !obj.contains_key(snake),
+                "ConnectorStatus JSON must NOT contain snake_case key `{snake}`; got {v}"
+            );
+        }
+        // Nested enums keep their independent
+        // `rename_all = "snake_case"` discipline — the struct-level
+        // camelCase rename governs field names only, not the tag
+        // values of nested enums. Pin both nested tags so a future
+        // refactor that flips an enum's own `rename_all` to
+        // `camelCase` (which would silently break every JS
+        // consumer matching `"google_drive"`, `"incremental"`,
+        // `"succeeded"`) gets caught here.
+        assert_eq!(
+            obj.get("kind").and_then(|m| m.as_str()),
+            Some("google_drive"),
+            "ConnectorKindTag variant tag must remain snake_case"
+        );
+        assert_eq!(
+            obj.get("syncMode").and_then(|m| m.as_str()),
+            Some("incremental"),
+            "SyncModeKind variant tag must remain snake_case"
+        );
+        assert_eq!(
+            obj.get("syncStatus").and_then(|m| m.as_str()),
+            Some("succeeded"),
+            "SyncStatusKind variant tag must remain snake_case"
+        );
+        let back: ConnectorStatus = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, s);
     }
 }

@@ -105,6 +105,7 @@ pub mod error;
 pub mod health;
 pub mod metrics;
 pub mod runtime;
+pub mod sync_scheduler;
 #[cfg(feature = "tracing-subscriber")]
 pub mod tracing_init;
 pub mod types;
@@ -119,13 +120,18 @@ pub use error::{FfiError, FfiResult};
 pub use health::{health_check, AdapterReport, HealthStatus, SubsystemHealth, SubsystemStatus};
 pub use metrics::{snapshot as metrics_snapshot, ErrorCounters, MetricsSnapshot};
 pub use runtime::{close_store, open_store, RuntimeHandle};
+pub use sync_scheduler::{
+    clear_sync_schedule, configure_sync_schedule, start_sync_scheduler, stop_sync_scheduler,
+    sync_scheduler_status, DEFAULT_SYNC_INTERVAL_SECS, DEFAULT_SYNC_MAX_BACKOFF_SECS,
+    DEFAULT_SYNC_TICK_SECS,
+};
 #[cfg(feature = "tracing-subscriber")]
 pub use tracing_init::try_init_tracing;
 pub use types::{
     ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass, FfiKeypair,
     FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RefreshReport,
-    ScopeIdString, SourceKind, SyncModeKind, SyncReport, SyncStatusKind, SynthesisTrigger,
-    WebhookServerHandle, WebhookServerSummary,
+    ScopeIdString, SourceKind, SyncModeKind, SyncReport, SyncSchedulerStatus, SyncStatusKind,
+    SynthesisTrigger, WebhookServerHandle, WebhookServerSummary,
 };
 pub use webhook::{
     list_webhook_servers, register_webhook_dispatch, start_webhook_server, stop_webhook_server,
@@ -832,6 +838,16 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         // authenticated). Treat that as a benign no-op so the
         // forgetting path is idempotent.
         let _ = rt.token_vault.remove(id);
+        // Mirror the `remove_connector` cleanup hook
+        // (`crates/ffi/src/connector.rs`) so a `forget_scope` on a
+        // scope whose connectors have per-instance scheduler
+        // policies does not leave stale `SchedulePolicy` /
+        // `InstanceAccounting` entries in the scheduler maps.
+        // No-op when no scheduler is running. Inside the
+        // `with_runtime` closure so the canonical runtime-mutex
+        // → scheduler-state-mutex acquisition order documented at
+        // `sync_scheduler::run_one_tick` is preserved.
+        crate::sync_scheduler::prune_instance(rt, id);
     }
 
     match first_error {
