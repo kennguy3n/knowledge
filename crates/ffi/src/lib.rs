@@ -838,6 +838,16 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         // authenticated). Treat that as a benign no-op so the
         // forgetting path is idempotent.
         let _ = rt.token_vault.remove(id);
+        // Mirror the `remove_connector` cleanup hook
+        // (`crates/ffi/src/connector.rs`) so a `forget_scope` on a
+        // scope whose connectors have per-instance scheduler
+        // policies does not leave stale `SchedulePolicy` /
+        // `InstanceAccounting` entries in the scheduler maps.
+        // No-op when no scheduler is running. Inside the
+        // `with_runtime` closure so the canonical runtime-mutex
+        // → scheduler-state-mutex acquisition order documented at
+        // `sync_scheduler::run_one_tick` is preserved.
+        crate::sync_scheduler::prune_instance(rt, id);
     }
 
     match first_error {

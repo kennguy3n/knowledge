@@ -3578,9 +3578,9 @@ mod sync_scheduler_tests {
 
     use super::{fresh_store, ConnectorKindTag};
     use ffi::{
-        clear_sync_schedule, close_store, configure_sync_schedule, create_connector, health_check,
-        metrics_snapshot, remove_connector, start_sync_scheduler, stop_sync_scheduler,
-        sync_scheduler_status, FfiError, SubsystemStatus,
+        clear_sync_schedule, close_store, configure_sync_schedule, create_connector, forget_scope,
+        health_check, metrics_snapshot, remove_connector, start_sync_scheduler,
+        stop_sync_scheduler, sync_scheduler_status, FfiError, SubsystemStatus,
     };
     use std::time::{Duration, Instant};
 
@@ -3986,6 +3986,69 @@ mod sync_scheduler_tests {
 
         // Idempotent: clearing a removed instance is a no-op.
         clear_sync_schedule(h, instance).expect("clear after remove");
+
+        stop_sync_scheduler(h).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    /// `forget_scope` MUST prune scheduler state for every
+    /// connector instance bound to the forgotten scope. The
+    /// cryptographic-forgetting contract requires that no
+    /// substrate-internal map continues to reference an instance
+    /// after its scope is forgotten; that includes the scheduler's
+    /// `policies` / `accounting` maps. Without the
+    /// `sync_scheduler::prune_instance` call in
+    /// `forget_scope_state` the count would still report `1` after
+    /// `forget_scope` cleared the connector itself.
+    #[test]
+    fn forget_scope_prunes_scheduler_state_for_every_connector_in_scope() {
+        let (h, _dir) = fresh_store();
+
+        // Create two connectors in the same scope so we exercise
+        // the loop body (one-shot would mask an early-break bug).
+        let scope = "00000000-0000-0000-0000-000000005c06".to_string();
+        let i1 = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope.clone(),
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector 1");
+        // Use a different `ConnectorKindTag` for i2 because
+        // (scope, kind) is the duplicate-constraint key —
+        // `(scope, Slack)` is already taken by i1.
+        let i2 = create_connector(
+            h,
+            ConnectorKindTag::Notion,
+            scope.clone(),
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector 2");
+
+        start_sync_scheduler(h, 1, 4, 1).expect("start");
+
+        // Per-instance overrides for both.
+        configure_sync_schedule(h, i1.clone(), 2, 10).expect("configure 1");
+        configure_sync_schedule(h, i2.clone(), 2, 10).expect("configure 2");
+        let status = sync_scheduler_status(h).expect("status");
+        assert_eq!(
+            status.scheduled_instance_count, 2,
+            "two instances configured before forget_scope",
+        );
+
+        // Forget the scope — should prune BOTH connectors'
+        // scheduler state (not just the first one).
+        forget_scope(h, scope).expect("forget_scope");
+        let status2 = sync_scheduler_status(h).expect("status after forget_scope");
+        assert_eq!(
+            status2.scheduled_instance_count, 0,
+            "forget_scope must prune scheduler state for every connector in scope",
+        );
+
+        // Idempotent: clearing a removed instance after
+        // forget_scope is a no-op.
+        clear_sync_schedule(h, i1).expect("clear i1 after forget");
+        clear_sync_schedule(h, i2).expect("clear i2 after forget");
 
         stop_sync_scheduler(h).expect("stop");
         close_store(h).expect("close_store");
