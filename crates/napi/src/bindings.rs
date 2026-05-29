@@ -586,10 +586,14 @@ impl JsClientSecretResolver {
 /// Resolve the recv-timeout from an optional JS-side `timeoutMs`.
 ///
 /// `None` → adapter default (5000 ms). `Some(0)` is rejected with
-/// an `Internal`-kind [`NapiError`] because a zero timeout would
-/// always time out before the JS event loop processed the callback
-/// (a silent footgun masquerading as "no timeout"). `Some(n)`
-/// converts `n` to `Duration::from_millis(n)`.
+/// an `InvalidArgument`-kind [`NapiError`] because a zero timeout
+/// would always time out before the JS event loop processed the
+/// callback (a silent footgun masquerading as "no timeout"). The
+/// rejection is input-validation, not a substrate-side encoding
+/// failure — see [`NapiError::Internal`]'s docs at
+/// `crates/napi/src/error.rs:34` for the contract that
+/// distinguishes the two kinds. `Some(n)` converts `n` to
+/// `Duration::from_millis(n)`.
 ///
 /// Extracted into a `pub(crate)` helper so the validation logic is
 /// unit-testable without standing up a live N-API environment to
@@ -599,7 +603,7 @@ pub(crate) fn resolve_recv_timeout(
 ) -> std::result::Result<std::time::Duration, NapiError> {
     match timeout_ms {
         None => Ok(JsClientSecretResolver::DEFAULT_RECV_TIMEOUT),
-        Some(0) => Err(NapiError::Internal {
+        Some(0) => Err(NapiError::InvalidArgument {
             message: "setOauthClientSecretResolver: timeoutMs must be > 0 (a zero \
                       timeout would always time out before the JS event loop \
                       processed the callback); pass a positive value or omit \
@@ -1022,10 +1026,21 @@ mod tests {
     #[test]
     fn resolve_recv_timeout_rejects_zero_as_silent_footgun() {
         let err = resolve_recv_timeout(Some(0)).expect_err("Some(0) must be rejected");
-        // Internal-kind error with a message guiding the host to a
-        // positive value or to omit the argument.
+        // InvalidArgument-kind error (NOT Internal) — this is a
+        // caller-supplied bad input, not a substrate-side encoding
+        // failure. The error.rs doc on `NapiError::Internal`
+        // explicitly reserves that variant for post-FFI packaging
+        // bugs; routing a pre-FFI input rejection through it would
+        // pollute the host's caller-error vs. substrate-bug
+        // telemetry split. The message must still guide the host
+        // to the correct fix (positive value or omit the argument).
+        assert_eq!(
+            err.kind(),
+            "InvalidArgument",
+            "kind() tag must match the variant; got {err:?}",
+        );
         match err {
-            NapiError::Internal { message } => {
+            NapiError::InvalidArgument { message } => {
                 assert!(
                     message.contains("timeoutMs"),
                     "rejection message should mention the JS argument name; got {message}",
@@ -1035,7 +1050,7 @@ mod tests {
                     "rejection message should explain the constraint; got {message}",
                 );
             }
-            other => panic!("expected NapiError::Internal, got {other:?}"),
+            other => panic!("expected NapiError::InvalidArgument, got {other:?}"),
         }
     }
 
