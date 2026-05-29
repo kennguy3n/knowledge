@@ -49,7 +49,8 @@
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Deserialize;
-use std::sync::{Arc, RwLock};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::config::ConnectorConfig;
 use crate::error::{ConnectorError, Result};
@@ -169,6 +170,30 @@ pub struct OAuth2Client<T: HttpTransport> {
     /// on a keychain unlock event). Reads happen on every grant;
     /// writes happen once per host lifecycle — `RwLock` fits.
     resolver: Arc<RwLock<Option<Arc<dyn ClientSecretResolver>>>>,
+    /// Dedup set for the WARN-once-per-instance log emitted by
+    /// [`Self::client_secret_for`] when every layer of the 3-layer
+    /// fallback ladder comes up empty.
+    ///
+    /// Keyed by `(kind, scope_id, client_id)` — the same tuple the
+    /// resolver receives — so a misconfigured host sees exactly one
+    /// WARN per distinct grant context rather than one per
+    /// attempted grant. Any nontrivial retry strategy (auto-refresh
+    /// inside `sync_connector`, a host-level retry-on-failure
+    /// wrapper) would otherwise flood logs and bury the
+    /// actionable signal.
+    ///
+    /// [`Self::set_resolver`] and [`Self::clear_resolver`] both
+    /// drain this set so a host that fixes its misconfiguration
+    /// (e.g. unlocks the keychain, registers a resolver) sees a
+    /// fresh WARN if the new wiring still fails — rather than
+    /// being silently masked by the previous suppression.
+    ///
+    /// Shared behind `Arc<Mutex<_>>` so every clone of the client
+    /// observes the same dedup set; the lock scope is the WARN
+    /// emission itself (microseconds) so it does not interact with
+    /// the resolver-locking discipline documented on
+    /// [`Self::client_secret_for`].
+    missing_secret_warned: Arc<Mutex<HashSet<(String, String, String)>>>,
 }
 
 // Manual `Clone` impl: a derived one would synthesise a `T: Clone`
@@ -178,13 +203,18 @@ pub struct OAuth2Client<T: HttpTransport> {
 // transport copy), a `Clone` of the `Option<SecretToken>` (which is
 // itself a fresh heap allocation that zeroises on drop), and a
 // second `Arc` handle to the shared resolver slot (so clones
-// observe `set_resolver` / `clear_resolver` calls).
+// observe `set_resolver` / `clear_resolver` calls). The
+// `missing_secret_warned` dedup set is similarly shared via `Arc`
+// so all clones cooperate on the WARN-once-per-instance suppression
+// — without the share, every cloned client would re-emit the WARN
+// once, breaking the once-per-instance contract.
 impl<T: HttpTransport> Clone for OAuth2Client<T> {
     fn clone(&self) -> Self {
         Self {
             transport: Arc::clone(&self.transport),
             client_secret: self.client_secret.clone(),
             resolver: Arc::clone(&self.resolver),
+            missing_secret_warned: Arc::clone(&self.missing_secret_warned),
         }
     }
 }
@@ -208,6 +238,17 @@ impl<T: HttpTransport> std::fmt::Debug for OAuth2Client<T> {
             }
             Err(_) => "<poisoned>",
         };
+        // Surface the WARN dedup set's *size* (not its contents —
+        // the contents are diagnostic identifiers that don't need
+        // to appear in a casual `Debug` print) so the field shows
+        // up in `Debug` output without leaking anything sensitive.
+        // `.lock()` here is safe to attempt because Debug must be
+        // infallible and a poisoned mutex degrades to the literal
+        // string `<poisoned>` — same convention as `resolver`.
+        let warned_count = match self.missing_secret_warned.lock() {
+            Ok(g) => format!("<{} suppressed>", g.len()),
+            Err(_) => "<poisoned>".to_string(),
+        };
         f.debug_struct("OAuth2Client")
             .field("transport", &"<HttpTransport>")
             .field(
@@ -215,6 +256,7 @@ impl<T: HttpTransport> std::fmt::Debug for OAuth2Client<T> {
                 &self.client_secret.as_ref().map(|_| "[redacted]"),
             )
             .field("resolver", &resolver_state)
+            .field("missing_secret_warned", &warned_count)
             .finish()
     }
 }
@@ -239,6 +281,7 @@ impl<T: HttpTransport> OAuth2Client<T> {
             transport,
             client_secret: None,
             resolver: Arc::new(RwLock::new(None)),
+            missing_secret_warned: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -273,6 +316,18 @@ impl<T: HttpTransport> OAuth2Client<T> {
             .write()
             .expect("OAuth2Client resolver RwLock poisoned");
         *guard = Some(resolver);
+        drop(guard);
+        // Drain the WARN-once dedup set so a host that's installing
+        // a fresh resolver sees a fresh WARN if it still resolves
+        // to nothing — the resolver swap is exactly when a host is
+        // attempting to FIX a previous misconfiguration, so the
+        // previous suppression should not silently mask a still-
+        // broken wiring. Poisoned mutex degrades to a no-op (the
+        // WARN dedup is best-effort diagnostic — never propagate
+        // the poison to the OAuth2 hot path).
+        if let Ok(mut warned) = self.missing_secret_warned.lock() {
+            warned.clear();
+        }
     }
 
     /// Unregister any previously-registered resolver. After this
@@ -288,6 +343,14 @@ impl<T: HttpTransport> OAuth2Client<T> {
             .write()
             .expect("OAuth2Client resolver RwLock poisoned");
         *guard = None;
+        drop(guard);
+        // Symmetric with `set_resolver` — clearing the resolver is
+        // the other half of the "host is reconfiguring the wiring"
+        // signal, so re-arm the WARN-once dedup set. See
+        // `set_resolver` for the full rationale.
+        if let Ok(mut warned) = self.missing_secret_warned.lock() {
+            warned.clear();
+        }
     }
 
     /// Returns `true` when a [`ClientSecretResolver`] is currently
@@ -331,6 +394,20 @@ impl<T: HttpTransport> OAuth2Client<T> {
     /// — the framework keeps trying to make progress rather than
     /// surfacing a `RwLockReadGuard` poison to the host as an OAuth2
     /// error.
+    ///
+    /// **WARN-once diagnostic**: when every layer produces no
+    /// secret AND the resolver did not explicitly short-circuit
+    /// (i.e. the host did not affirmatively choose the
+    /// public-client form via an empty-string resolver return),
+    /// the framework emits a one-time `tracing::warn!` per
+    /// `(kind, scope_id, client_id)` tuple before returning
+    /// `None`. This surfaces the actionable signal a host needs
+    /// to diagnose `invalid_client` rejections from confidential-
+    /// client providers without forcing them to enable
+    /// `tracing=debug` or packet-capture the grant body. The
+    /// dedup is reset by [`Self::set_resolver`] /
+    /// [`Self::clear_resolver`] so a host fixing the
+    /// misconfiguration sees a fresh WARN if it still fails.
     fn client_secret_for(&self, config: &ConnectorConfig) -> Option<String> {
         // Layer 1: host-supplied resolver.
         //
@@ -342,16 +419,16 @@ impl<T: HttpTransport> OAuth2Client<T> {
         // `set_resolver` / `clear_resolver` call that needs the
         // write lock — including the JS-side call that triggered
         // the grant in the first place.
+        let kind = config.kind.as_str();
+        let scope_id = config.scope_id.as_uuid().to_string();
+        let client_id = config
+            .auth_config_json
+            .get("client_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
         let resolver_snapshot: Option<Arc<dyn ClientSecretResolver>> =
             self.resolver.read().ok().and_then(|g| g.clone());
         if let Some(resolver) = resolver_snapshot {
-            let kind = config.kind.as_str();
-            let scope_id = config.scope_id.as_uuid().to_string();
-            let client_id = config
-                .auth_config_json
-                .get("client_id")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
             if let Some(secret) = resolver.resolve(kind, &scope_id, client_id) {
                 if !secret.is_empty() {
                     return Some(secret);
@@ -363,6 +440,11 @@ impl<T: HttpTransport> OAuth2Client<T> {
                 // (kind, scope_id, client_id) tuple, and falling
                 // back to `auth_config_json` would produce
                 // confusing precedence semantics.
+                //
+                // No WARN here: the host KNOWS it has no secret
+                // for this tuple and chose this on purpose. The
+                // WARN exists to surface ACCIDENTAL omissions, not
+                // intentional ones.
                 return None;
             }
             // Resolver returned None → fall through to layer 2.
@@ -391,10 +473,79 @@ impl<T: HttpTransport> OAuth2Client<T> {
         // `(kind, scope_id, client_id)` tuple — see the
         // `resolver_returning_empty_string_short_circuits_fallback`
         // test.
-        self.client_secret
+        let layer3 = self
+            .client_secret
             .as_ref()
             .map(|s| s.expose().to_string())
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty());
+        if layer3.is_some() {
+            return layer3;
+        }
+        // All three layers came up empty. This is the actionable
+        // diagnostic surface for "confidential-client provider
+        // returned `invalid_client` because the substrate omitted
+        // `client_secret=` from the grant body" — without this
+        // WARN, hosts diagnosing a sign-in failure have to correlate
+        // the provider's error back through the substrate's grant
+        // body, which requires either packet capture or enabling
+        // `tracing=debug` on the framework crate. The WARN dedup is
+        // keyed by `(kind, scope_id, client_id)` so any retry
+        // strategy (auto-refresh on stale tokens, host-driven retry
+        // wrapper) does not flood the log; `set_resolver` /
+        // `clear_resolver` reset the dedup so a host fixing the
+        // misconfiguration sees a fresh signal.
+        self.warn_once_missing_client_secret(kind, &scope_id, client_id);
+        None
+    }
+
+    /// Test-only accessor: how many distinct
+    /// `(kind, scope_id, client_id)` tuples have triggered the
+    /// WARN-once log so far. Used by tests to pin the dedup
+    /// behaviour without depending on a `tracing` subscriber.
+    /// Returns `0` on a poisoned mutex (mirrors
+    /// [`Self::warn_once_missing_client_secret`]'s degraded
+    /// behaviour).
+    #[cfg(test)]
+    pub(crate) fn warned_missing_secret_count(&self) -> usize {
+        self.missing_secret_warned.lock().map_or(0, |w| w.len())
+    }
+
+    /// Emit a one-time WARN log per `(kind, scope_id, client_id)`
+    /// tuple when [`Self::client_secret_for`] returns `None`
+    /// without an explicit host-chosen short-circuit.
+    ///
+    /// Suppression is best-effort: a poisoned mutex degrades to
+    /// "always emit" (the WARN re-fires on every grant until the
+    /// mutex is re-initialised by a fresh `OAuth2Client::new`),
+    /// because losing the dedup is strictly less harmful than
+    /// hiding the actionable diagnostic. Lock scope is exactly
+    /// one HashSet `insert`, so the mutex never crosses an I/O
+    /// boundary.
+    fn warn_once_missing_client_secret(&self, kind: &str, scope_id: &str, client_id: &str) {
+        let key = (
+            kind.to_string(),
+            scope_id.to_string(),
+            client_id.to_string(),
+        );
+        let should_warn = match self.missing_secret_warned.lock() {
+            Ok(mut warned) => warned.insert(key),
+            // Poisoned mutex: emit anyway (degraded behaviour).
+            Err(_) => true,
+        };
+        if should_warn {
+            tracing::warn!(
+                kind = kind,
+                scope_id = scope_id,
+                client_id = client_id,
+                "OAuth2 client_secret unavailable: resolver returned None and no \
+                 auth_config_json.client_secret / static fallback set. Confidential-client \
+                 providers will reject the grant with `invalid_client`. Register a \
+                 ClientSecretResolver via set_oauth_client_secret_resolver or thread a \
+                 `client_secret` field through auth_config_json. (Suppressed for subsequent \
+                 grants on this (kind, scope_id, client_id) until a resolver is \
+                 (re)registered.)",
+            );
+        }
     }
 
     /// Provide the OAuth2 client secret (kept in memory only — the
@@ -1671,6 +1822,175 @@ mod tests {
         assert!(
             body.contains("client_secret=resolved-after-unblock"),
             "grant should use the resolver that was active when the call started; got {body}",
+        );
+    }
+
+    // ───── Phase 4.2 — WARN-once-per-instance dedup tests ─────
+
+    /// Resolver that always returns `None`. Used to drive
+    /// `client_secret_for` through the layer-2 / layer-3 fallback
+    /// path without short-circuiting on an empty string.
+    struct AlwaysNoneResolver;
+    impl ClientSecretResolver for AlwaysNoneResolver {
+        fn resolve(&self, _kind: &str, _scope_id: &str, _client_id: &str) -> Option<String> {
+            None
+        }
+    }
+
+    /// Resolver that always returns `Some("")` — explicit
+    /// "no-secret" choice that short-circuits the fallback layers
+    /// AND must suppress the WARN-once log (the host has
+    /// affirmatively chosen this path).
+    struct EmptyStringResolver;
+    impl ClientSecretResolver for EmptyStringResolver {
+        fn resolve(&self, _kind: &str, _scope_id: &str, _client_id: &str) -> Option<String> {
+            Some(String::new())
+        }
+    }
+
+    /// Resolver that always returns the same non-empty secret.
+    /// Used to verify the WARN-once dedup is NOT triggered on the
+    /// happy path.
+    struct AlwaysReturnsResolver(&'static str);
+    impl ClientSecretResolver for AlwaysReturnsResolver {
+        fn resolve(&self, _kind: &str, _scope_id: &str, _client_id: &str) -> Option<String> {
+            Some(self.0.to_string())
+        }
+    }
+
+    #[test]
+    fn warn_dedup_is_empty_until_first_missing_secret_grant() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let client = OAuth2Client::new(transport);
+        assert_eq!(
+            client.warned_missing_secret_count(),
+            0,
+            "fresh OAuth2Client should not have any WARN-suppressed tuples"
+        );
+        // Drive `client_secret_for` once with no resolver, no
+        // auth_config secret, and no static secret. The result is
+        // `None` AND the dedup set picks up the (kind, scope, client_id) tuple.
+        let result = client.client_secret_for(&cfg());
+        assert!(result.is_none(), "no layer set → None");
+        assert_eq!(
+            client.warned_missing_secret_count(),
+            1,
+            "first miss should populate the dedup set"
+        );
+    }
+
+    #[test]
+    fn warn_dedup_suppresses_repeat_grants_for_same_tuple() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let client = OAuth2Client::new(transport);
+        let config = cfg();
+        // Three back-to-back grants on the same tuple.
+        for _ in 0..3 {
+            let r = client.client_secret_for(&config);
+            assert!(r.is_none());
+        }
+        assert_eq!(
+            client.warned_missing_secret_count(),
+            1,
+            "repeat grants for the same (kind, scope_id, client_id) should not grow the set",
+        );
+    }
+
+    #[test]
+    fn warn_dedup_distinguishes_different_tuples() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let client = OAuth2Client::new(transport);
+        let cfg_a = cfg();
+        let cfg_b = cfg(); // different scope_id (cfg() generates a new v4)
+        let cfg_c = ConnectorConfig::new(ConnectorKind::Slack, AuthKind::OAuth2, ScopeId::new_v4())
+            .with_auth_config(serde_json::json!({
+                "token_url": "https://slack.com/api/oauth.v2.access",
+                "client_id": "client-slack",
+                "redirect_uri": "https://app.example.com/oauth/callback"
+            }));
+        client.client_secret_for(&cfg_a);
+        client.client_secret_for(&cfg_b);
+        client.client_secret_for(&cfg_c);
+        assert_eq!(
+            client.warned_missing_secret_count(),
+            3,
+            "three distinct (kind, scope_id, client_id) tuples should each WARN once",
+        );
+    }
+
+    #[test]
+    fn warn_dedup_not_triggered_on_happy_path() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let client = OAuth2Client::new(transport).with_client_secret("legit-secret");
+        client.client_secret_for(&cfg());
+        assert_eq!(
+            client.warned_missing_secret_count(),
+            0,
+            "when layer 3 produces a secret, the WARN should not fire",
+        );
+    }
+
+    #[test]
+    fn warn_dedup_not_triggered_on_resolver_explicit_short_circuit() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let client = OAuth2Client::new(transport);
+        client.set_resolver(Arc::new(EmptyStringResolver));
+        let r = client.client_secret_for(&cfg());
+        assert!(r.is_none(), "empty-string resolver short-circuits to None");
+        assert_eq!(
+            client.warned_missing_secret_count(),
+            0,
+            "explicit empty-string short-circuit is a host-affirmed no-secret choice; the WARN should NOT fire",
+        );
+    }
+
+    #[test]
+    fn warn_dedup_resets_on_set_resolver() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let client = OAuth2Client::new(transport);
+        // Populate the dedup set.
+        client.client_secret_for(&cfg());
+        client.client_secret_for(&cfg());
+        assert_eq!(client.warned_missing_secret_count(), 2);
+        // set_resolver should clear the suppression so a host
+        // fixing its wiring sees a fresh WARN if it still fails.
+        client.set_resolver(Arc::new(AlwaysReturnsResolver("now-have-a-secret")));
+        assert_eq!(
+            client.warned_missing_secret_count(),
+            0,
+            "set_resolver should drain the WARN-once dedup set",
+        );
+    }
+
+    #[test]
+    fn warn_dedup_resets_on_clear_resolver() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let client = OAuth2Client::new(transport);
+        client.set_resolver(Arc::new(AlwaysNoneResolver));
+        client.client_secret_for(&cfg());
+        assert_eq!(client.warned_missing_secret_count(), 1);
+        client.clear_resolver();
+        assert_eq!(
+            client.warned_missing_secret_count(),
+            0,
+            "clear_resolver should also drain the WARN-once dedup set",
+        );
+    }
+
+    #[test]
+    fn warn_dedup_is_shared_across_clones() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let client = OAuth2Client::new(transport);
+        let clone = client.clone();
+        client.client_secret_for(&cfg());
+        // The clone shares the dedup set via the Arc<Mutex<...>>,
+        // so its accessor also reports 1. Without the shared Arc,
+        // every clone would re-emit the WARN once on its own
+        // first grant, breaking the once-per-instance contract.
+        assert_eq!(
+            clone.warned_missing_secret_count(),
+            1,
+            "cloned client should observe the original's WARN suppression",
         );
     }
 }

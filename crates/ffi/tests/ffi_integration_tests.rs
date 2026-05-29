@@ -1930,18 +1930,14 @@ impl OAuthTestServer {
                     let Ok((mut stream, _addr)) = listener.accept() else {
                         return;
                     };
-                    // Read enough of the request to count it AND
-                    // capture the urlencoded form body for Phase
-                    // 4.1 tests that assert on `client_secret=` in
-                    // the POST body. We don't fully parse the
-                    // HTTP/1.1 framing — just split on the
-                    // `\r\n\r\n` header boundary and stash the
-                    // remainder. The 4 KiB buffer is comfortably
-                    // larger than any OAuth2 form body produced by
-                    // the substrate.
-                    let mut buf = [0u8; 4096];
-                    let n = stream.read(&mut buf).unwrap_or(0);
-                    let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+                    // Read the full HTTP/1.1 request into `request`
+                    // by looping until either the body is complete
+                    // (per Content-Length) or the peer closes /
+                    // we hit the safety bound. See
+                    // [`Self::read_full_request`] for the
+                    // rationale on switching away from a single
+                    // 4 KiB read.
+                    let request = Self::read_full_request(&mut stream);
                     let captured_body = request
                         .split_once("\r\n\r\n")
                         .map(|(_, b)| b.to_string())
@@ -1966,6 +1962,99 @@ impl OAuthTestServer {
             request_bodies,
             join: Some(join),
         }
+    }
+
+    /// Read an HTTP/1.1 request from `stream` until the body is
+    /// fully received OR the peer closes the connection OR we hit
+    /// the 64 KiB safety bound.
+    ///
+    /// Previously a single 4 KiB `stream.read` was sufficient for
+    /// every Phase 4 / 4.1 test fixture (OAuth2 form bodies over
+    /// localhost loopback never fragment in practice), but the
+    /// single-read pattern silently truncates if a future test
+    /// adds a larger payload OR if the network path ever changes
+    /// from loopback to a kernel that does fragment (Linux WSL2's
+    /// hyper-v vNIC, container bridges with low MTU). The read
+    /// loop is the correctness-preserving way to capture an
+    /// arbitrary HTTP/1.1 message and matches how production
+    /// servers consume a request — see the discussion in Phase 4.1
+    /// Devin Review (`ANALYSIS_0005` on commit b29bc3c).
+    ///
+    /// Parsing strategy:
+    ///
+    /// 1. Append each chunk into a `Vec<u8>`; stop on `Ok(0)` /
+    ///    `Err(_)` (peer closed or transport error).
+    /// 2. Once `\r\n\r\n` is seen, look for `Content-Length:` in
+    ///    the headers (case-insensitive). If found, keep reading
+    ///    until `accumulated >= headers_len + 4 + content_length`.
+    /// 3. If `Content-Length` is absent (rare for OAuth2 POSTs but
+    ///    not formally illegal), read until EOF — the fixture
+    ///    closes after one request so this terminates.
+    /// 4. Cap total bytes at 64 KiB. Any plausible OAuth2 form
+    ///    body is well under this; the cap stops a misbehaving
+    ///    client from looping forever.
+    ///
+    /// Returns the request bytes lossily decoded as UTF-8. The
+    /// caller then splits on `\r\n\r\n` for the body — preserved
+    /// from the original implementation so existing assertions
+    /// continue to match.
+    fn read_full_request(stream: &mut std::net::TcpStream) -> String {
+        const MAX_REQUEST_BYTES: usize = 64 * 1024;
+        let mut buf = [0u8; 4096];
+        let mut accumulated: Vec<u8> = Vec::with_capacity(4096);
+        let mut content_length: Option<usize> = None;
+        let mut headers_end: Option<usize> = None;
+        loop {
+            // Bail on the safety bound before issuing the next
+            // read — once we've already accumulated >= 64 KiB we
+            // have plenty to work with for assertions and any
+            // further read is a sign of a misbehaving peer.
+            if accumulated.len() >= MAX_REQUEST_BYTES {
+                break;
+            }
+            // `Ok(0)` is peer-closed; `Err(_)` is a transport
+            // error. Both terminate the read loop; the captured
+            // bytes accumulated so far are returned as the request.
+            let n = match stream.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            accumulated.extend_from_slice(&buf[..n]);
+            // Re-scan for the header boundary on every read so we
+            // pick it up regardless of where it falls within a
+            // chunk. Once known it doesn't move.
+            if headers_end.is_none() {
+                if let Some(pos) = accumulated.windows(4).position(|w| w == b"\r\n\r\n") {
+                    headers_end = Some(pos);
+                    // Parse Content-Length out of the header
+                    // block (case-insensitive). The fixture's
+                    // assertions only care about the body, but
+                    // knowing the Content-Length lets us terminate
+                    // the loop at the right moment instead of
+                    // waiting for EOF.
+                    let headers = &accumulated[..pos];
+                    let header_str = String::from_utf8_lossy(headers);
+                    for line in header_str.split("\r\n") {
+                        if let Some((name, value)) = line.split_once(':') {
+                            if name.eq_ignore_ascii_case("content-length") {
+                                if let Ok(parsed) = value.trim().parse::<usize>() {
+                                    content_length = Some(parsed);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // If we know the boundary AND the declared body
+            // length, terminate once we've got the full body.
+            if let (Some(end), Some(len)) = (headers_end, content_length) {
+                let body_so_far = accumulated.len().saturating_sub(end + 4);
+                if body_so_far >= len {
+                    break;
+                }
+            }
+        }
+        String::from_utf8_lossy(&accumulated).into_owned()
     }
 
     /// Bind to `127.0.0.1:0` but never accept (the listener stays
@@ -2034,6 +2123,99 @@ impl Drop for OAuthTestServer {
             let _ = j.join();
         }
     }
+}
+
+// ───── Phase 4.2 — OAuthTestServer read-loop self-tests ─────
+
+/// Pin the OAuthTestServer's multi-read loop against TCP
+/// fragmentation: write the HTTP/1.1 request in TWO segments with
+/// a small gap between them, and assert the captured body matches
+/// the full form. Without the read loop (single-`read` snapshot),
+/// the captured body would be truncated to the first chunk and the
+/// `client_secret=` assertion would silently break for any future
+/// test that adds a larger payload over a fragmenting kernel.
+///
+/// This is a self-test of the test fixture itself — it does NOT
+/// drive the substrate's OAuth2 client. Lives in this file
+/// (alongside `OAuthTestServer`) to keep the test scope tight.
+#[cfg(feature = "http-client")]
+#[test]
+fn oauth_test_server_reassembles_fragmented_request() {
+    use std::io::Write;
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let server = OAuthTestServer::start(vec![
+        r#"{"access_token":"AT-fragmented","expires_in":3600,"scope":"read"}"#.to_string(),
+    ]);
+    // Strip the leading `http://` so we can use `addr()` on the
+    // TcpStream::connect; OAuthTestServer's base_url is always
+    // `http://host:port`.
+    let addr = server
+        .base_url()
+        .strip_prefix("http://")
+        .expect("base_url has http:// prefix")
+        .to_string();
+
+    // Hand-craft a POST with a body that requires reassembly.
+    let body = "grant_type=refresh_token&refresh_token=RT-FRAG&client_id=client-abc&client_secret=FRAGMENTED-SECRET";
+    let request = format!(
+        "POST /oauth/token HTTP/1.1\r\n\
+         Host: 127.0.0.1\r\n\
+         Content-Type: application/x-www-form-urlencoded\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {}",
+        body.len(),
+        body,
+    );
+    // Split at a position guaranteed to land MID-body — `headers +
+    // first 32 bytes of body`. Any deeper offset still works; the
+    // important thing is that the body is not delivered atomically.
+    let split_at = request
+        .find("\r\n\r\n")
+        .map(|p| p + 4 + 32)
+        .expect("request contains header boundary");
+    let (a, b) = request.split_at(split_at);
+
+    let mut stream = TcpStream::connect(&addr).expect("connect to oauth-test-server");
+    // Disable Nagle so each `write_all` call actually flushes as a
+    // separate segment — without this, the kernel may coalesce
+    // the two writes into a single segment and the test wouldn't
+    // exercise the multi-read path.
+    stream
+        .set_nodelay(true)
+        .expect("set_nodelay so writes flush as separate segments");
+    stream.write_all(a.as_bytes()).expect("write first chunk");
+    stream.flush().expect("flush first chunk");
+    // Brief sleep to let the server-side read return on the first
+    // chunk before we deliver the second.
+    std::thread::sleep(Duration::from_millis(50));
+    stream.write_all(b.as_bytes()).expect("write second chunk");
+    stream.flush().expect("flush second chunk");
+
+    // Read until EOF so the server thread has time to write its
+    // response and exit cleanly (otherwise its Drop join blocks).
+    let mut resp = Vec::new();
+    let _ = std::io::Read::read_to_end(&mut stream, &mut resp);
+
+    // Drop the server so its background thread is joined and the
+    // captured body becomes observable.
+    let bodies = server.request_bodies();
+    drop(server);
+
+    assert_eq!(bodies.len(), 1, "expected exactly one captured request");
+    assert_eq!(
+        bodies[0], body,
+        "the fragmented request body should be reassembled byte-for-byte; \
+         single-read fixtures would truncate at the first chunk",
+    );
+    assert!(
+        bodies[0].contains("client_secret=FRAGMENTED-SECRET"),
+        "the second-segment field must survive reassembly; got body={}",
+        bodies[0],
+    );
 }
 
 /// `refresh_connector_token` drives a real OAuth2 refresh round-trip

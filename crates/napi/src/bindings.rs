@@ -549,6 +549,65 @@ struct JsClientSecretResolver {
         napi::Status,
         false, // CalleeHandled — false: the JS-side resolver does NOT receive a leading (err, ...) Node-callback shape.
     >,
+    /// Defense-in-depth ceiling on how long the worker thread will
+    /// block on the JS event loop returning a resolver result.
+    ///
+    /// The framework treats the resolver as a SHOULD-be-cheap
+    /// callback; the N-API adapter cannot enforce that contract on
+    /// the JS side, so a host that ships a buggy resolver (infinite
+    /// loop, deadlock on an unrelated JS lock, an event loop choked
+    /// by other long-running work) would otherwise stall the
+    /// connector worker thread permanently — and every subsequent
+    /// grant would queue up behind it. After this timeout we
+    /// abandon the wait and return `None`, which falls through to
+    /// the framework's `auth_config_json` fallback layer and
+    /// emits the WARN-once-per-`(kind, scope_id, client_id)`
+    /// diagnostic on the framework side.
+    ///
+    /// The default value is set in [`Self::DEFAULT_RECV_TIMEOUT`]
+    /// and is generous enough for any plausible cache /
+    /// keychain-cached lookup (the framework's trait doc explicitly
+    /// recommends an in-memory cache); production hosts can
+    /// override via the optional `timeoutMs` argument to
+    /// [`js_set_oauth_client_secret_resolver`].
+    recv_timeout: std::time::Duration,
+}
+
+impl JsClientSecretResolver {
+    /// Default ceiling for the JS resolver callback. Chosen to be
+    /// short enough that a wedged JS event loop surfaces quickly
+    /// (host operators get a WARN log within a few seconds rather
+    /// than an indefinite stall) yet long enough that a cold
+    /// keychain unlock + cache fill on a busy event loop still
+    /// completes successfully on first call.
+    const DEFAULT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+}
+
+/// Resolve the recv-timeout from an optional JS-side `timeoutMs`.
+///
+/// `None` → adapter default (5000 ms). `Some(0)` is rejected with
+/// an `Internal`-kind [`NapiError`] because a zero timeout would
+/// always time out before the JS event loop processed the callback
+/// (a silent footgun masquerading as "no timeout"). `Some(n)`
+/// converts `n` to `Duration::from_millis(n)`.
+///
+/// Extracted into a `pub(crate)` helper so the validation logic is
+/// unit-testable without standing up a live N-API environment to
+/// construct a `Function` argument.
+pub(crate) fn resolve_recv_timeout(
+    timeout_ms: Option<u32>,
+) -> std::result::Result<std::time::Duration, NapiError> {
+    match timeout_ms {
+        None => Ok(JsClientSecretResolver::DEFAULT_RECV_TIMEOUT),
+        Some(0) => Err(NapiError::Internal {
+            message: "setOauthClientSecretResolver: timeoutMs must be > 0 (a zero \
+                      timeout would always time out before the JS event loop \
+                      processed the callback); pass a positive value or omit \
+                      to use the 5000 ms default"
+                .into(),
+        }),
+        Some(n) => Ok(std::time::Duration::from_millis(u64::from(n))),
+    }
 }
 
 impl ffi::OAuthClientSecretResolver for JsClientSecretResolver {
@@ -557,6 +616,9 @@ impl ffi::OAuthClientSecretResolver for JsClientSecretResolver {
         // callback fills it with the resolved value (or `None` on
         // JS exception); the worker thread blocks on `recv()`.
         let (tx, rx) = std::sync::mpsc::sync_channel::<Option<String>>(1);
+        let kind_for_warn = kind.clone();
+        let scope_id_for_warn = scope_id.clone();
+        let client_id_for_warn = client_id.clone();
         let status = self.tsfn.call_with_return_value(
             (kind, scope_id, client_id),
             ThreadsafeFunctionCallMode::Blocking,
@@ -578,7 +640,46 @@ impl ffi::OAuthClientSecretResolver for JsClientSecretResolver {
         if status != napi::Status::Ok {
             return None;
         }
-        rx.recv().unwrap_or(None)
+        // `recv_timeout` bounds the wait — see
+        // [`Self::recv_timeout`]'s doc comment for the rationale.
+        // The two error variants are handled differently:
+        //
+        // * `Timeout`: JS event loop did not deliver the result
+        //   within the budget. Emit a WARN so the operator can
+        //   correlate this with the framework's per-instance
+        //   `client_secret unavailable` WARN, then return `None`
+        //   so the framework's fallback ladder continues.
+        // * `Disconnected`: the sending half was dropped without
+        //   sending — this is the pre-existing path when the
+        //   tsfn is aborted (e.g. process shutdown). Stay silent
+        //   in that case, because the resolver-was-aborted signal
+        //   is uninteresting under teardown.
+        match rx.recv_timeout(self.recv_timeout) {
+            Ok(secret) => secret,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // `Duration::as_millis` returns u128 to handle the
+                // theoretical max-Duration range; the configured
+                // `recv_timeout` is sourced from a `u32` ms value
+                // (see `resolve_recv_timeout`) so the value
+                // ALWAYS fits in u64 — but use `try_into` +
+                // saturating fallback rather than `as` to stay
+                // friendly with clippy's truncation lint.
+                let timeout_ms_for_log: u64 =
+                    self.recv_timeout.as_millis().try_into().unwrap_or(u64::MAX);
+                tracing::warn!(
+                    kind = %kind_for_warn,
+                    scope_id = %scope_id_for_warn,
+                    client_id = %client_id_for_warn,
+                    timeout_ms = timeout_ms_for_log,
+                    "JS OAuth2 client_secret resolver did not return within timeout; \
+                     falling through to auth_config_json / static fallback. Hosts \
+                     should either make the resolver cheaper (in-memory cache) or \
+                     raise `timeoutMs` when calling setOauthClientSecretResolver.",
+                );
+                None
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => None,
+        }
     }
 }
 
@@ -608,6 +709,26 @@ impl ffi::OAuthClientSecretResolver for JsClientSecretResolver {
 /// async source as long as the call returns synchronously to the
 /// substrate's perspective.
 ///
+/// `timeoutMs` is an optional defense-in-depth ceiling on how long
+/// the connector worker thread will block waiting for the JS
+/// resolver callback to deliver its result. When exceeded the
+/// adapter logs a WARN with `(kind, scopeId, clientId,
+/// timeout_ms)` and returns `None` to the framework — which then
+/// falls through to the `auth_config_json["client_secret"]`
+/// fallback layer just as if the resolver had returned `null`.
+/// This prevents a wedged JS event loop (infinite loop in user
+/// code, deadlock on another JS lock, etc.) from stalling the
+/// connector worker thread permanently.
+///
+/// Omit `timeoutMs` (or pass `null`/`undefined`) to use the
+/// adapter's default ceiling (5000 ms) — generous enough for any
+/// in-memory cache / keychain-cached lookup. Pass a larger value
+/// only if a slow cold-path lookup is expected at startup (e.g.
+/// a keychain unlock that prompts the OS for the user's password).
+/// A value of `0` is rejected as ambiguous (would always time out
+/// before the JS event loop drained); pass an explicitly-large
+/// value (e.g. 60_000) for "effectively unbounded" semantics.
+///
 /// Calling this multiple times REPLACES the previously-registered
 /// resolver. Hosts typically call this exactly once per
 /// `open_store` lifecycle.
@@ -615,8 +736,10 @@ impl ffi::OAuthClientSecretResolver for JsClientSecretResolver {
 pub fn js_set_oauth_client_secret_resolver(
     handle: BigInt,
     resolver: Function<(String, String, String), Option<String>>,
+    timeout_ms: Option<u32>,
 ) -> Result<()> {
     let h = handle_from_bigint(&handle)?;
+    let recv_timeout = resolve_recv_timeout(timeout_ms).map_err(to_js_error)?;
     // Build a threadsafe function from the JS callback. The
     // builder defaults to `CalleeHandled = false` which matches
     // our adapter's type annotation.
@@ -630,7 +753,7 @@ pub fn js_set_oauth_client_secret_resolver(
             })
         })?;
     let arc: std::sync::Arc<dyn ffi::OAuthClientSecretResolver> =
-        std::sync::Arc::new(JsClientSecretResolver { tsfn });
+        std::sync::Arc::new(JsClientSecretResolver { tsfn, recv_timeout });
     crate::set_oauth_client_secret_resolver(h, arc).map_err(to_js_error)
 }
 
@@ -859,6 +982,73 @@ mod tests {
     fn js_init_accepts_valid_config() {
         let cfg = r#"{"data_dir":"/tmp/x","log_level":"info"}"#;
         js_init(cfg.into()).expect("valid config should accept");
+    }
+
+    // ───── Phase 4.2 — N-API resolver recv-timeout validation ─────
+    //
+    // The full `JsClientSecretResolver::resolve` path requires a
+    // live napi env to construct a `ThreadsafeFunction`, which is
+    // out of reach from `cargo test -p napi_addon` (no Node host).
+    // We test the timeout-validation helper instead — the rest of
+    // the path is exercised in `crates/ffi/tests/ffi_integration_tests.rs`
+    // through the framework's `OAuth2Client` resolution ladder.
+
+    #[test]
+    fn resolve_recv_timeout_defaults_to_5_seconds_when_unset() {
+        let t = resolve_recv_timeout(None).expect("None should be accepted");
+        assert_eq!(t, std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn resolve_recv_timeout_accepts_positive_milliseconds() {
+        let t = resolve_recv_timeout(Some(2_500)).expect("positive value should be accepted");
+        assert_eq!(t, std::time::Duration::from_millis(2_500));
+    }
+
+    #[test]
+    fn resolve_recv_timeout_accepts_one_millisecond_minimum() {
+        let t = resolve_recv_timeout(Some(1)).expect("Some(1) should be accepted");
+        assert_eq!(t, std::time::Duration::from_millis(1));
+    }
+
+    #[test]
+    fn resolve_recv_timeout_accepts_u32_max_for_effectively_unbounded() {
+        // u32::MAX ms ≈ 49 days. Hosts that want "effectively no
+        // timeout" can pass this safely.
+        let t = resolve_recv_timeout(Some(u32::MAX)).expect("u32::MAX should be accepted");
+        assert_eq!(t, std::time::Duration::from_millis(u64::from(u32::MAX)));
+    }
+
+    #[test]
+    fn resolve_recv_timeout_rejects_zero_as_silent_footgun() {
+        let err = resolve_recv_timeout(Some(0)).expect_err("Some(0) must be rejected");
+        // Internal-kind error with a message guiding the host to a
+        // positive value or to omit the argument.
+        match err {
+            NapiError::Internal { message } => {
+                assert!(
+                    message.contains("timeoutMs"),
+                    "rejection message should mention the JS argument name; got {message}",
+                );
+                assert!(
+                    message.contains("> 0"),
+                    "rejection message should explain the constraint; got {message}",
+                );
+            }
+            other => panic!("expected NapiError::Internal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn js_client_secret_resolver_default_recv_timeout_is_five_seconds() {
+        // Pin the documented default so the contract stays stable
+        // across refactors. If we ever change the default, this
+        // forces an update to the rustdoc on
+        // `js_set_oauth_client_secret_resolver` too.
+        assert_eq!(
+            JsClientSecretResolver::DEFAULT_RECV_TIMEOUT,
+            std::time::Duration::from_secs(5),
+        );
     }
 
     #[test]
