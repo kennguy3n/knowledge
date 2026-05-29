@@ -667,6 +667,25 @@ pub fn configure_sync_schedule(
 /// Defaults to `false` for every instance. The setting persists
 /// across `configure_sync_schedule` calls.
 ///
+/// # Side effects
+///
+/// If `instance_id` has no per-instance policy override yet (i.e.
+/// the host has never called [`configure_sync_schedule`] for it),
+/// this function creates a fresh policy entry seeded from the
+/// scheduler defaults (`scheduler.config`) with `auto_synthesize`
+/// set to `enabled`. As a consequence, the instance shows up in the
+/// `policy_override_count` reported by `sync_scheduler_status` even
+/// when only the auto-synthesis bit was customised. This is
+/// intentional: the alternative would be to require a prior
+/// `configure_sync_schedule` call before toggling auto-synth, which
+/// is needlessly ceremonious for hosts that want to opt in to the
+/// default cadence + auto-synth.
+///
+/// To return an instance to the pure-defaults state (no policy
+/// override), call [`clear_sync_schedule`] — that path removes the
+/// entire policy entry, including the `auto_synthesize` bit, and
+/// drops `policy_override_count` accordingly.
+///
 /// # Errors
 ///
 /// * [`FfiError::Connector`] if no scheduler is running on this

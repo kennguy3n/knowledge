@@ -975,22 +975,42 @@ fn window_to_record(
         .synthesis_objects
         .get(&window.id)
         .map(|o| o.id.as_uuid().to_string());
-    // Derive the tier from the window's recorded outputs. We do
-    // not persist the tier on `SynthesisWindow` itself (the
-    // pipeline keeps the tier outside the storage shape), so we
-    // infer from the matching synthesis object's type. Windows
-    // without a complete object surface as "unknown" so the host
-    // can still display them.
-    let tier = rt
-        .synthesis_objects
-        .get(&window.id)
-        .map_or("unknown", |o| match o.object_type {
-            SynthesisObjectType::ChannelRecap => "channel",
-            SynthesisObjectType::DomainSummary => "domain",
-            SynthesisObjectType::TenantSummary => "tenant",
-            SynthesisObjectType::EpisodicSummary => "episodic",
-        })
-        .to_string();
+    // Tier resolution priority:
+    //
+    // 1. The tier stamped on the window at open time
+    //    (`SynthesisWindow::tier`). This is the authoritative
+    //    source and is populated for every window opened via
+    //    [`HierarchyEnforcedWindowManager::open_tiered_window`]
+    //    (the FFI dispatch path), so windows in `Pending`,
+    //    `InProgress`, or `Failed` status report the correct tier
+    //    without needing the `Complete` synthesis object.
+    //
+    // 2. The matching synthesis object's `object_type`. Used as a
+    //    fallback for blobs persisted before the `tier` field was
+    //    introduced (those rehydrate with `tier: None` per the
+    //    `#[serde(default)]` annotation) and for windows opened via
+    //    the legacy non-tiered `open_window` path.
+    //
+    // 3. `"unknown"` as a last-resort label so the host can still
+    //    surface the window in `list_recent_syntheses` without
+    //    crashing — this can only happen if a window was opened via
+    //    `open_window` (no tier stamp) AND no synthesis object yet
+    //    exists for it.
+    let tier = match window.tier {
+        Some(WindowScopeTier::Channel) => "channel".to_string(),
+        Some(WindowScopeTier::Domain) => "domain".to_string(),
+        Some(WindowScopeTier::Tenant) => "tenant".to_string(),
+        None => rt
+            .synthesis_objects
+            .get(&window.id)
+            .map_or("unknown", |o| match o.object_type {
+                SynthesisObjectType::ChannelRecap => "channel",
+                SynthesisObjectType::DomainSummary => "domain",
+                SynthesisObjectType::TenantSummary => "tenant",
+                SynthesisObjectType::EpisodicSummary => "episodic",
+            })
+            .to_string(),
+    };
     SynthesisStatusRecord {
         synthesis_id: window.id.as_uuid().to_string(),
         scope_id: window.scope_id.as_uuid().to_string(),
@@ -1728,6 +1748,164 @@ mod tests {
         })
         .expect("inspect second-reopen state");
         teardown(handle3);
+    }
+
+    /// ANALYSIS_0006 regression: orphan synthesis objects (whose
+    /// `window_id` no longer corresponds to any tracked window) must
+    /// be purged at `open_store` time AND the divergent on-disk blob
+    /// must be rewritten so subsequent opens don't pay the cleanup
+    /// cost twice.
+    ///
+    /// We simulate the divergent-flush condition by triggering a
+    /// real synthesis (both blobs land on disk), then mutating only
+    /// the in-memory windows manager + flushing windows-only. The
+    /// per-scope synthesis-object blob keeps referencing the now-
+    /// removed window. On the next `open_store` the orphan must be
+    /// dropped in-memory AND the on-disk synthesis-object blob must
+    /// be rewritten.
+    #[test]
+    fn open_store_purges_orphan_synthesis_objects_and_rewrites_blob() {
+        let (handle, dir) = fresh_store();
+        install_test_engine(handle);
+        let scope = seed_domain_with_two_channels(handle);
+
+        // Phase 1: real synthesis dispatch — windows + objects
+        // both land on disk under the per-scope synthesis-object
+        // row.
+        let win = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("synth");
+        let win_id =
+            synthesis_pipeline::WindowId::from_uuid(win.parse::<Uuid>().expect("uuid parse"));
+
+        // Phase 2: simulate the divergent-flush failure mode. The
+        // happy path flushes both blobs after a successful synth;
+        // we mutate only the in-memory windows manager and flush
+        // windows-only so the on-disk state looks exactly like what
+        // a host would observe after `flush_synthesis_windows`
+        // succeeded and `flush_synthesis_objects` failed.
+        with_runtime(handle, |rt| {
+            rt.synthesis_windows.remove_windows_for_scope(scope);
+            rt.flush_synthesis_windows()
+        })
+        .expect("flush windows-only");
+
+        // Phase 3: close + reopen. Orphan-aware cleanup must drop
+        // the synthesis object from the rehydrated map.
+        let path = dir.path().join("evidence.db");
+        teardown(handle);
+        let key_hex = "a5".repeat(32);
+        let handle2 = crate::runtime::open_store(path.to_string_lossy().into_owned(), key_hex)
+            .expect("reopen");
+
+        with_runtime(handle2, |rt| {
+            assert!(
+                !rt.synthesis_objects.contains_key(&win_id),
+                "ANALYSIS_0006 regression: orphan synthesis_object whose window_id is not in \
+                 the rehydrated SynthesisWindowManager must be purged at open_store time",
+            );
+            assert!(
+                rt.synthesis_windows.get(win_id).is_none(),
+                "windows manager state must remain consistent across the orphan cleanup",
+            );
+            Ok(())
+        })
+        .expect("inspect post-reopen state");
+
+        // Phase 4: reopen again — the cleanup must have rewritten
+        // the on-disk synthesis-object blob, so the second reopen
+        // observes the same post-cleanup state. If the rewrite
+        // failed silently this assertion holds anyway (the orphan
+        // cleanup is idempotent), but the tracing log would have
+        // surfaced the rewrite failure on the first reopen.
+        teardown(handle2);
+        let handle3 =
+            crate::runtime::open_store(path.to_string_lossy().into_owned(), "a5".repeat(32))
+                .expect("second reopen");
+        with_runtime(handle3, |rt| {
+            assert!(
+                !rt.synthesis_objects.contains_key(&win_id),
+                "second open_store must observe the persisted orphan-cleanup; the per-scope \
+                 synthesis_object blob should have been rewritten on the first reopen",
+            );
+            Ok(())
+        })
+        .expect("inspect second-reopen state");
+        teardown(handle3);
+    }
+
+    /// ANALYSIS_0007 regression: synthesis status records for
+    /// windows that have NOT reached `Complete` status must still
+    /// report the correct tier, derived from the persisted
+    /// `SynthesisWindow::tier` field. Before the fix, only
+    /// `Complete` windows had a tier (inferred from the associated
+    /// synthesis object's `object_type`); other statuses surfaced
+    /// as `"unknown"`.
+    #[test]
+    fn synthesis_status_reports_tier_for_non_complete_windows() {
+        let (handle, _dir) = fresh_store();
+        let scope = seed_domain_with_two_channels(handle);
+
+        // Open a `Pending` domain window directly via the manager
+        // (skip the engine dispatch so the window never transitions
+        // out of `Pending`).
+        let now = chrono::Utc::now();
+        let window_id = with_runtime(handle, |rt| {
+            let h = rt
+                .synthesis_windows
+                .open_tiered_window(
+                    scope,
+                    synthesis_pipeline::WindowScopeTier::Domain,
+                    now - chrono::Duration::hours(1),
+                    now,
+                )
+                .expect("open_tiered_window");
+            rt.flush_synthesis_windows().expect("flush windows");
+            Ok(h.window_id)
+        })
+        .expect("with_runtime");
+
+        let record =
+            synthesis_status(handle, window_id.as_uuid().to_string()).expect("synthesis_status");
+        assert_eq!(record.status, "pending");
+        assert_eq!(
+            record.tier, "domain",
+            "ANALYSIS_0007 regression: Pending windows must surface the persisted tier",
+        );
+        assert!(record.object_id.is_none());
+
+        // Tenant variant — same code path, different tier.
+        let tenant_scope = ScopeId::new_v4();
+        let tenant_window_id = with_runtime(handle, |rt| {
+            rt.tenant_memory_mut(tenant_scope);
+            let h = rt
+                .synthesis_windows
+                .open_tiered_window(
+                    tenant_scope,
+                    synthesis_pipeline::WindowScopeTier::Tenant,
+                    now - chrono::Duration::hours(1),
+                    now,
+                )
+                .expect("open tenant window");
+            rt.synthesis_windows
+                .mark_in_progress(h.window_id)
+                .expect("mark in_progress");
+            rt.flush_synthesis_windows().expect("flush windows");
+            Ok(h.window_id)
+        })
+        .expect("with_runtime");
+
+        let tenant_record = synthesis_status(handle, tenant_window_id.as_uuid().to_string())
+            .expect("tenant synthesis_status");
+        assert_eq!(tenant_record.status, "in_progress");
+        assert_eq!(
+            tenant_record.tier, "tenant",
+            "ANALYSIS_0007 regression: InProgress windows must surface the persisted tier",
+        );
+        teardown(handle);
     }
 
     #[test]

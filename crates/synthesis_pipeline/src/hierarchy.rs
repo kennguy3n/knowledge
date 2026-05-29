@@ -289,6 +289,19 @@ pub enum WindowScopeTier {
     Tenant,
 }
 
+impl WindowScopeTier {
+    /// Stable lowercase string tag matching the JSON `snake_case`
+    /// representation. Provided so FFI layers and metrics can emit
+    /// the tier without re-deriving the mapping at every call site.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Channel => "channel",
+            Self::Domain => "domain",
+            Self::Tenant => "tenant",
+        }
+    }
+}
+
 /// Hierarchy-aware extension trait on [`SynthesisWindowManager`].
 ///
 /// Keeps the underlying [`SynthesisWindowManager`] storage
@@ -348,6 +361,21 @@ impl HierarchyEnforcedWindowManager for SynthesisWindowManager {
         window_end: DateTime<Utc>,
     ) -> Result<TieredWindowHandle> {
         let id = self.open_window(scope_id, window_start, window_end)?;
+        // Stamp the tier on the freshly opened window so the
+        // persisted shape carries the tier through to rehydration,
+        // letting callers (e.g. the FFI `synthesis_status` /
+        // `list_recent_syntheses` paths) report the synthesis tier
+        // even before the `Complete` synthesis object exists. The
+        // `unwrap_or_else` arm is defensive only: `open_window`
+        // either errors out or inserts the window, so a `None`
+        // lookup here would indicate a manager-internal invariant
+        // break rather than a recoverable runtime condition.
+        if let Err(e) = self.set_tier(id, tier) {
+            debug_assert!(
+                false,
+                "open_window inserted id={id:?} but set_tier failed: {e}"
+            );
+        }
         Ok(TieredWindowHandle {
             window_id: id,
             scope_id,

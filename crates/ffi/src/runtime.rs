@@ -1548,6 +1548,77 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         }
     }
 
+    // Orphan-aware rehydration cleanup. The `synthesis_objects`
+    // blob and the `synthesis_windows` blob are persisted under
+    // separate `memory_objects` rows, so a partial flush
+    // (`flush_synthesis_windows` succeeded, `flush_synthesis_objects`
+    // failed — or vice-versa, or a process crash between the two)
+    // can leave the two stores out of sync: an object whose
+    // `window_id` no longer corresponds to any tracked window.
+    //
+    // Orphan objects are harmless (they're never served to hosts
+    // because `synthesis_status` / `list_recent_syntheses` resolve
+    // through `synthesis_windows`) but they waste evidence-store
+    // bytes indefinitely until a subsequent successful synthesis on
+    // the same scope rewrites the blob. Sweeping them at
+    // `open_store` time makes the divergence self-healing — the
+    // same architectural pattern as the tombstone-aware window
+    // cleanup above.
+    //
+    // Algorithm: walk the rehydrated `synthesis_objects`, collect
+    // ids whose `window_id` is not in the (already-cleaned)
+    // `synthesis_windows` manager, drop them, then rewrite each
+    // affected scope's per-scope blob. Rewrite failures are non-
+    // fatal — the in-memory state is already clean and the next
+    // `open_store` will retry the purge.
+    let orphan_object_window_ids: Vec<synthesis_pipeline::WindowId> = synthesis_objects
+        .iter()
+        .filter(|(wid, _)| synthesis_windows.get(**wid).is_none())
+        .map(|(wid, _)| *wid)
+        .collect();
+    if !orphan_object_window_ids.is_empty() {
+        let mut affected_scopes: HashSet<evidence_store::ScopeId> = HashSet::new();
+        for wid in &orphan_object_window_ids {
+            if let Some(obj) = synthesis_objects.remove(wid) {
+                affected_scopes.insert(obj.scope_id);
+            }
+        }
+        tracing::info!(
+            objects = orphan_object_window_ids.len(),
+            scopes = affected_scopes.len(),
+            "open_store: purged orphan synthesis objects whose window_id is not in the \
+             rehydrated SynthesisWindowManager",
+        );
+        for scope in &affected_scopes {
+            let per_scope: Vec<&synthesis_pipeline::SynthesisObject> = synthesis_objects
+                .values()
+                .filter(|o| o.scope_id == *scope)
+                .collect();
+            match serde_json::to_vec(&per_scope) {
+                Ok(bytes) => {
+                    if let Err(e) = store.save_memory_blob(*scope, SYNTHESIS_OBJECT_KIND, &bytes) {
+                        tracing::warn!(
+                            scope = %scope.as_uuid(),
+                            error = %e,
+                            "open_store: rewrite of cleaned synthesis_object blob failed; \
+                             on-disk blob still references orphan window ids (next open_store \
+                             will retry the purge)",
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        scope = %scope.as_uuid(),
+                        error = %e,
+                        "open_store: could not serialise cleaned synthesis_object blob; \
+                         on-disk blob still references orphan window ids (next open_store \
+                         will retry the purge)",
+                    );
+                }
+            }
+        }
+    }
+
     let router_config = router_config_from_env();
     let inference_router = Arc::new(build_inference_router(router_config));
     // Spawn the adapter probe on a background thread so `open_store`
