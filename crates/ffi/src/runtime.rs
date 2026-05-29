@@ -1227,18 +1227,12 @@ pub fn close_store(handle: RuntimeHandle) -> FfiResult<()> {
                 Ok(g) => g,
                 Err(poisoned) => poisoned.into_inner(),
             };
-            let mut servers = std::mem::take(&mut rt_guard.webhook_servers);
+            let servers = std::mem::take(&mut rt_guard.webhook_servers);
             // Drop the runtime lock BEFORE joining the runtime
             // threads — the runtime mutex is what the joined
             // threads' dispatchers were trying to acquire.
             drop(rt_guard);
-            for (sh, mut server) in servers.drain() {
-                tracing::debug!(
-                    server_handle = sh.0,
-                    "draining webhook server on close_store"
-                );
-                server.shutdown_and_join();
-            }
+            crate::webhook::drain_all_servers(servers);
         }
         // Drain outstanding `with_runtime` calls on this handle. Because
         // step 1 (the `remove` above) already happened, no new clones can

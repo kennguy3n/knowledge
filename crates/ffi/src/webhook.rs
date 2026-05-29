@@ -562,6 +562,42 @@ impl RunningWebhookServer {
     }
 }
 
+/// Synchronously drain every entry in a webhook-server map by
+/// driving each server's graceful shutdown and joining its runtime
+/// thread.
+///
+/// `close_store` calls this with the runtime-mutex-protected
+/// `webhook_servers` map taken out via `std::mem::take`, then drops
+/// the runtime mutex BEFORE invoking this function. That ordering is
+/// load-bearing: each server's runtime thread is blocked inside a
+/// dispatcher closure that re-enters the runtime via [`with_runtime`]
+/// (which acquires the same mutex). Holding the runtime mutex across
+/// the join would deadlock.
+///
+/// The map is consumed by value to make the
+/// "every-server-shut-down" post-condition observable in the type
+/// system — once this function returns, the entries are guaranteed
+/// gone. Individual server panics are logged but do not abort the
+/// drain (one bad server should not block tearing down the rest of
+/// the runtime).
+///
+/// Exposed at `pub(crate)` so [`crate::close_store`] can call it and
+/// so intra-doc links from
+/// [`crate::runtime::FfiRuntime::webhook_servers`] resolve. NOT part
+/// of the FFI surface.
+pub(crate) fn drain_all_servers(servers: HashMap<WebhookServerHandle, RunningWebhookServer>) {
+    // `into_iter` over the owned `HashMap` is the canonical Rust
+    // idiom for "consume and drop"; it avoids the otherwise-needed
+    // `mut servers` binding that `servers.drain()` requires.
+    for (sh, mut server) in servers {
+        tracing::debug!(
+            server_handle = sh.0,
+            "draining webhook server on close_store",
+        );
+        server.shutdown_and_join();
+    }
+}
+
 impl Drop for RunningWebhookServer {
     fn drop(&mut self) {
         // Belt-and-braces shutdown for the case where a server slot
