@@ -137,6 +137,26 @@ impl SynthesisWindow {
 /// entire manager into the encrypted evidence store under the
 /// `synthesis_windows` memory-blob kind and rehydrate it on
 /// `open_store`.
+///
+/// # Serialization invariant
+///
+/// `serde_json` requires `HashMap` keys to serialise as strings.
+/// Both [`WindowId`] (this crate, see lines above) and
+/// [`ScopeId`] (`evidence_store::ids::ScopeId`) are
+/// `#[serde(transparent)]` newtypes over [`uuid::Uuid`], so they
+/// serialise as the hyphenated-UUID string form that JSON object
+/// keys accept. If a future refactor removes the `transparent`
+/// annotation from either id type, `serde_json` would fall back to
+/// the array-of-pairs encoding which does NOT round-trip through
+/// the deserialiser configured here — the substrate would silently
+/// fail to rehydrate the manager and every restart would discard
+/// the prior window history.
+///
+/// Callers extending this struct with additional `HashMap`-keyed
+/// fields must ensure the new key type either has
+/// `#[serde(transparent)]` over a string-serialisable type or
+/// provides an explicit `#[serde(with = ...)]` adapter that
+/// stringifies the key.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SynthesisWindowManager {
     windows: HashMap<WindowId, SynthesisWindow>,
@@ -353,5 +373,60 @@ mod tests {
         mgr.mark_failed(id).unwrap();
         mgr.mark_in_progress(id).unwrap();
         assert_eq!(mgr.get(id).unwrap().status, WindowStatus::InProgress);
+    }
+
+    /// Regression test for the invariant documented on the
+    /// `SynthesisWindowManager` derive: both `WindowId` and `ScopeId`
+    /// must serialise to strings (via their `#[serde(transparent)]`
+    /// Uuid wrappers) so the manager's `HashMap` fields round-trip
+    /// through `serde_json`. If a future refactor strips
+    /// `#[serde(transparent)]` from either id type, this test fails
+    /// loudly instead of letting the FFI substrate silently lose its
+    /// window history at every `open_store`.
+    #[test]
+    fn manager_round_trips_through_serde_json() {
+        let mut mgr = SynthesisWindowManager::new();
+        let scope_a = ScopeId::new_v4();
+        let scope_b = ScopeId::new_v4();
+        let now = Utc::now();
+
+        let a1 = mgr
+            .open_window(scope_a, now - Duration::hours(2), now - Duration::hours(1))
+            .unwrap();
+        mgr.mark_in_progress(a1).unwrap();
+        mgr.mark_complete(a1).unwrap();
+
+        let a2 = mgr
+            .open_window(scope_a, now - Duration::hours(1), now)
+            .unwrap();
+        mgr.mark_in_progress(a2).unwrap();
+        mgr.mark_failed(a2).unwrap();
+
+        let b1 = mgr
+            .open_window(scope_b, now - Duration::hours(1), now)
+            .unwrap();
+
+        let bytes = serde_json::to_vec(&mgr).expect("serialise");
+        // Sanity-check the wire format: ScopeId / WindowId must
+        // appear as plain UUID-string JSON keys (otherwise
+        // `serde_json` fell back to the array-of-pairs encoding
+        // and the manager is no longer rehydratable).
+        let text = std::str::from_utf8(&bytes).expect("utf8");
+        assert!(
+            text.contains(&format!("\"{}\"", a1.as_uuid())),
+            "WindowId key must serialise as a hyphenated-UUID string",
+        );
+        assert!(
+            text.contains(&format!("\"{}\"", scope_a.as_uuid())),
+            "ScopeId key must serialise as a hyphenated-UUID string",
+        );
+
+        let restored: SynthesisWindowManager = serde_json::from_slice(&bytes).expect("deserialise");
+        assert_eq!(restored.windows_for(scope_a).len(), 2);
+        assert_eq!(restored.windows_for(scope_b).len(), 1);
+        assert_eq!(restored.get(a1).unwrap().status, WindowStatus::Complete);
+        assert_eq!(restored.get(a2).unwrap().status, WindowStatus::Failed);
+        assert_eq!(restored.get(b1).unwrap().status, WindowStatus::Pending);
+        assert_eq!(restored.len(), 3);
     }
 }
