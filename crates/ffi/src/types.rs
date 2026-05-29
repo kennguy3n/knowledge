@@ -616,6 +616,103 @@ pub struct SyncSchedulerStatus {
     pub dispatches_skipped_in_progress: u64,
 }
 
+/// Tier of server-side synthesis to dispatch.
+///
+/// Mirrors [`synthesis_pipeline::WindowScopeTier`] for the
+/// hierarchy-enforced server-side tiers exposed by
+/// [`crate::synthesis::trigger_server_synthesis`]. Channel-tier
+/// synthesis is handled by the on-device
+/// [`crate::trigger_synthesis`] path and is therefore not part of
+/// this enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
+#[serde(rename_all = "snake_case")]
+pub enum SynthesisTierKind {
+    /// Domain synthesis — consumes channel outputs registered on
+    /// the target domain's `channel_scopes` list and emits a
+    /// `DomainSummary` synthesis object.
+    Domain,
+    /// Tenant synthesis — consumes domain outputs and approved
+    /// documents registered on the target tenant's
+    /// `domain_scopes` / `approved_documents` lists and emits a
+    /// `TenantSummary` synthesis object.
+    Tenant,
+}
+
+impl SynthesisTierKind {
+    /// Stable wire tag used in status records.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Domain => "domain",
+            Self::Tenant => "tenant",
+        }
+    }
+}
+
+/// Status record for one synthesis window, returned by
+/// [`crate::synthesis::synthesis_status`] and
+/// [`crate::synthesis::list_recent_syntheses`].
+///
+/// All fields are wire-flat: UUID strings, `i64` Unix epoch
+/// timestamps, and a `String`-tagged status field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct SynthesisStatusRecord {
+    /// UUID-string synthesis window id.
+    pub synthesis_id: String,
+    /// UUID-string scope id.
+    pub scope_id: String,
+    /// Tier tag: `"domain"` or `"tenant"`.
+    pub tier: String,
+    /// Lifecycle status: `"pending"`, `"in_progress"`,
+    /// `"complete"`, or `"failed"`.
+    pub status: String,
+    /// Unix epoch seconds for the inclusive window start.
+    pub window_start_unix: i64,
+    /// Unix epoch seconds for the exclusive window end.
+    pub window_end_unix: i64,
+    /// UUID-string synthesis object id, present once the window
+    /// has transitioned to `Complete` and the synthesis object
+    /// has been persisted.
+    pub object_id: Option<String>,
+}
+
+/// Configuration for the server-side synthesis engine endpoint.
+///
+/// Forwarded through to
+/// [`synthesis_engine::EndpointConfig`] inside
+/// [`crate::synthesis::configure_synthesis_engine`]. `api_key_ref`
+/// is **not** the raw API key — it is the name of an environment
+/// variable holding the cleartext token (or a host-resolved key
+/// reference). The substrate never stores the cleartext token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct SynthesisEngineConfig {
+    /// HTTPS URL of the synthesis endpoint.
+    pub url: String,
+    /// Secret-store reference for the API key (NOT the raw key).
+    /// Hosts MUST set the corresponding env var before calling
+    /// `configure_synthesis_engine` or the first dispatch will
+    /// fail with `EndpointError::InvalidRequest`.
+    pub api_key_ref: String,
+    /// Model identifier (e.g. `"slm-recap-v1"`).
+    pub model_id: String,
+    /// Response token cap. `0` falls back to
+    /// [`synthesis_engine::DEFAULT_MAX_TOKENS`].
+    pub max_tokens: u32,
+    /// Per-request timeout in milliseconds. `0` falls back to
+    /// [`synthesis_engine::DEFAULT_TIMEOUT`].
+    pub timeout_ms: u64,
+    /// Optional GBNF grammar for constrained decoding.
+    pub grammar: Option<String>,
+    /// Allow-list of UUID strings the configured non-TEE engine
+    /// is permitted to operate on. `None` disables the
+    /// FFI-layer scope-binding check (a tracing warning is logged
+    /// on every dispatch); `Some(empty)` is a hard refusal of
+    /// every scope, matching the TEE worker's `scope_bindings`
+    /// semantics.
+    pub scope_bindings: Option<Vec<String>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1127,5 +1224,131 @@ mod tests {
         );
         let back: ConnectorStatus = serde_json::from_value(v).expect("deserialize");
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn synthesis_tier_kind_round_trips_via_serde() {
+        for kind in [SynthesisTierKind::Domain, SynthesisTierKind::Tenant] {
+            let serialized = serde_json::to_string(&kind).expect("serialize");
+            // snake_case discipline keeps platform JSON decoders happy.
+            assert!(
+                serialized == "\"domain\"" || serialized == "\"tenant\"",
+                "SynthesisTierKind must serialize as snake_case: {serialized}"
+            );
+            let back: SynthesisTierKind = serde_json::from_str(&serialized).expect("deserialize");
+            assert_eq!(back, kind);
+        }
+    }
+
+    #[test]
+    fn synthesis_tier_kind_as_str_matches_wire_tag() {
+        assert_eq!(SynthesisTierKind::Domain.as_str(), "domain");
+        assert_eq!(SynthesisTierKind::Tenant.as_str(), "tenant");
+    }
+
+    #[test]
+    fn synthesis_status_record_serializes_with_camelcase_keys() {
+        let record = SynthesisStatusRecord {
+            synthesis_id: "11111111-1111-1111-1111-111111111111".into(),
+            scope_id: "22222222-2222-2222-2222-222222222222".into(),
+            tier: "domain".into(),
+            status: "complete".into(),
+            window_start_unix: 1_000,
+            window_end_unix: 2_000,
+            object_id: Some("33333333-3333-3333-3333-333333333333".into()),
+        };
+        let v = serde_json::to_value(&record).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for camel in [
+            "synthesisId",
+            "scopeId",
+            "tier",
+            "status",
+            "windowStartUnix",
+            "windowEndUnix",
+            "objectId",
+        ] {
+            assert!(
+                obj.contains_key(camel),
+                "SynthesisStatusRecord JSON must contain camelCase key `{camel}`: {v}"
+            );
+        }
+        for snake in [
+            "synthesis_id",
+            "scope_id",
+            "window_start_unix",
+            "window_end_unix",
+            "object_id",
+        ] {
+            assert!(
+                !obj.contains_key(snake),
+                "SynthesisStatusRecord JSON must NOT contain snake_case key `{snake}`: {v}"
+            );
+        }
+        let back: SynthesisStatusRecord = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, record);
+    }
+
+    #[test]
+    fn synthesis_engine_config_round_trips_via_serde() {
+        let cfg = SynthesisEngineConfig {
+            url: "https://api.example/synth".into(),
+            api_key_ref: "SYNTH_KEY_REF".into(),
+            model_id: "slm-recap-v1".into(),
+            max_tokens: 1024,
+            timeout_ms: 30_000,
+            grammar: Some("root ::= object".into()),
+            scope_bindings: Some(vec![
+                "44444444-4444-4444-4444-444444444444".into(),
+                "55555555-5555-5555-5555-555555555555".into(),
+            ]),
+        };
+        let v = serde_json::to_value(&cfg).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for camel in [
+            "url",
+            "apiKeyRef",
+            "modelId",
+            "maxTokens",
+            "timeoutMs",
+            "grammar",
+            "scopeBindings",
+        ] {
+            assert!(
+                obj.contains_key(camel),
+                "SynthesisEngineConfig JSON must contain camelCase key `{camel}`: {v}"
+            );
+        }
+        for snake in [
+            "api_key_ref",
+            "model_id",
+            "max_tokens",
+            "timeout_ms",
+            "scope_bindings",
+        ] {
+            assert!(
+                !obj.contains_key(snake),
+                "SynthesisEngineConfig JSON must NOT contain snake_case key `{snake}`: {v}"
+            );
+        }
+        let back: SynthesisEngineConfig = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, cfg);
+    }
+
+    #[test]
+    fn synthesis_engine_config_grammar_is_optional() {
+        let cfg = SynthesisEngineConfig {
+            url: "https://api.example/synth".into(),
+            api_key_ref: "SYNTH_KEY_REF".into(),
+            model_id: "slm-recap-v1".into(),
+            max_tokens: 0,
+            timeout_ms: 0,
+            grammar: None,
+            scope_bindings: None,
+        };
+        let back: SynthesisEngineConfig =
+            serde_json::from_str(&serde_json::to_string(&cfg).expect("serialize"))
+                .expect("deserialize");
+        assert_eq!(back, cfg);
     }
 }

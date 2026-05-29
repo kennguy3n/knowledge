@@ -55,6 +55,7 @@ default = []
 http-client = [
     "inference_router/http-client",
     "connector_framework/http-client",
+    "synthesis_engine/http-client",
 ]
 # Pulls in `tracing-subscriber` and exposes `tracing_init::try_init_tracing`
 # so platform hosts can install a global tracing subscriber from the
@@ -82,6 +83,7 @@ crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }
 inference_router = { path = "../inference_router" }
 memory_manager = { path = "../memory_manager" }
+synthesis_engine = { path = "../synthesis_engine" }
 synthesis_pipeline = { path = "../synthesis_pipeline" }
 
 chrono = { workspace = true }

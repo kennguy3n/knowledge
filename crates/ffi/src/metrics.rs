@@ -210,6 +210,21 @@ pub(crate) struct Metrics {
     /// only call site is in the feature-gated `tracing_init`
     /// module.
     pub(crate) init_tracing_total: AtomicU64,
+    /// Total `configure_synthesis_engine` calls initiated
+    /// (Phase 7 — host installs the server-side synthesis
+    /// endpoint configuration on a runtime).
+    pub(crate) configure_synthesis_engine_total: AtomicU64,
+    /// Total `trigger_server_synthesis` calls initiated
+    /// (Phase 7 — host explicitly dispatches a domain / tenant
+    /// synthesis on a configured engine).
+    pub(crate) trigger_server_synthesis_total: AtomicU64,
+    /// Total `synthesis_status` calls initiated
+    /// (Phase 7 — host polls the status of a previously
+    /// dispatched window).
+    pub(crate) synthesis_status_total: AtomicU64,
+    /// Total `list_recent_syntheses` calls initiated
+    /// (Phase 7 — host enumerates per-scope synthesis history).
+    pub(crate) list_recent_syntheses_total: AtomicU64,
 
     // Per-kind error counters. The set mirrors `FfiError::kind`
     // exactly so adding a new error variant is a compile error
@@ -328,6 +343,10 @@ counter_inc!(pub(crate) fn inc_webhook_dispatch_bad_gateway => webhook_dispatch_
 counter_inc!(pub(crate) fn inc_start_sync_scheduler => start_sync_scheduler_total);
 counter_inc!(pub(crate) fn inc_stop_sync_scheduler => stop_sync_scheduler_total);
 counter_inc!(pub(crate) fn inc_configure_sync_schedule => configure_sync_schedule_total);
+counter_inc!(pub(crate) fn inc_configure_synthesis_engine => configure_synthesis_engine_total);
+counter_inc!(pub(crate) fn inc_trigger_server_synthesis => trigger_server_synthesis_total);
+counter_inc!(pub(crate) fn inc_synthesis_status => synthesis_status_total);
+counter_inc!(pub(crate) fn inc_list_recent_syntheses => list_recent_syntheses_total);
 counter_inc!(pub(crate) fn inc_clear_sync_schedule => clear_sync_schedule_total);
 counter_inc!(pub(crate) fn inc_sync_scheduler_status => sync_scheduler_status_total);
 counter_inc!(pub(crate) fn inc_sync_scheduler_tick => sync_scheduler_ticks_total);
@@ -570,6 +589,18 @@ pub struct MetricsSnapshot {
     /// shape unconditionally to keep the wire contract stable
     /// across features.
     pub init_tracing_total: u64,
+    /// Total `configure_synthesis_engine` calls initiated (Phase 7).
+    #[serde(default)]
+    pub configure_synthesis_engine_total: u64,
+    /// Total `trigger_server_synthesis` calls initiated (Phase 7).
+    #[serde(default)]
+    pub trigger_server_synthesis_total: u64,
+    /// Total `synthesis_status` calls initiated (Phase 7).
+    #[serde(default)]
+    pub synthesis_status_total: u64,
+    /// Total `list_recent_syntheses` calls initiated (Phase 7).
+    #[serde(default)]
+    pub list_recent_syntheses_total: u64,
     /// Per-kind error counter snapshot.
     pub errors_by_kind: ErrorCounters,
     /// Total errors across all kinds (sum of `errors_by_kind`'s
@@ -709,6 +740,12 @@ pub fn snapshot() -> MetricsSnapshot {
             .load(Ordering::Relaxed),
         health_check_total: m.health_check_total.load(Ordering::Relaxed),
         init_tracing_total: m.init_tracing_total.load(Ordering::Relaxed),
+        configure_synthesis_engine_total: m
+            .configure_synthesis_engine_total
+            .load(Ordering::Relaxed),
+        trigger_server_synthesis_total: m.trigger_server_synthesis_total.load(Ordering::Relaxed),
+        synthesis_status_total: m.synthesis_status_total.load(Ordering::Relaxed),
+        list_recent_syntheses_total: m.list_recent_syntheses_total.load(Ordering::Relaxed),
         errors_by_kind: ErrorCounters {
             unimplemented: m.errors_unimplemented.load(Ordering::Relaxed),
             invalid_id: m.errors_invalid_id.load(Ordering::Relaxed),
@@ -817,6 +854,10 @@ mod tests {
         inc_decrypt();
         inc_generate_keypair();
         inc_escape_fts_query();
+        inc_configure_synthesis_engine();
+        inc_trigger_server_synthesis();
+        inc_synthesis_status();
+        inc_list_recent_syntheses();
 
         // `snapshot()` itself bumps `metrics_snapshot_total`, so we
         // capture the lower bound by calling `snapshot()` here too
@@ -843,6 +884,10 @@ mod tests {
         assert!(after.decrypt_total > before.decrypt_total);
         assert!(after.generate_keypair_total > before.generate_keypair_total);
         assert!(after.escape_fts_query_total > before.escape_fts_query_total);
+        assert!(after.configure_synthesis_engine_total > before.configure_synthesis_engine_total);
+        assert!(after.trigger_server_synthesis_total > before.trigger_server_synthesis_total);
+        assert!(after.synthesis_status_total > before.synthesis_status_total);
+        assert!(after.list_recent_syntheses_total > before.list_recent_syntheses_total);
         // `before = snapshot()` and `after = snapshot()` both bump
         // this counter, so the after value must be at least
         // `before + 1` (it's `before + 2` minus whatever concurrent

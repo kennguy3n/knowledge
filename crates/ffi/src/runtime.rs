@@ -61,7 +61,9 @@ use evidence_store::{EvidenceStore, EvidenceStoreConfig, ScopeId};
 use inference_router::{
     FallbackAdapter, InferenceAdapter, InferenceRouter, LlamaCppAdapter, MlxAdapter, RouterConfig,
 };
-use memory_manager::{ChannelMemoryObject, UserMemoryObject};
+use memory_manager::{
+    ChannelMemoryObject, DomainMemoryObject, TenantMemoryObject, UserMemoryObject,
+};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
@@ -405,6 +407,89 @@ pub struct FfiRuntime {
     /// substrate clients (offline CLI batch tools, Electron status
     /// panels) never start a scheduler.
     pub(crate) sync_scheduler: Option<crate::sync_scheduler::RunningSyncScheduler>,
+    /// Per-scope domain memory objects. Persisted to the
+    /// `memory_objects` table under the [`DOMAIN_MEMORY_KIND`] tag
+    /// and rehydrated at `open_store` time alongside the
+    /// channel-memory / user-memory maps.
+    ///
+    /// Read by the server-side synthesis surface
+    /// ([`crate::synthesis::trigger_server_synthesis`]) to build the
+    /// `DomainSynthesisInput` payload from the domain's registered
+    /// channel scopes; written by the post-dispatch apply phase
+    /// when a domain summary completes.
+    pub(crate) domain_memories: HashMap<ScopeId, DomainMemoryObject>,
+    /// Per-scope tenant memory objects. Persisted under
+    /// [`TENANT_MEMORY_KIND`] and rehydrated alongside the other
+    /// memory maps. Drives tenant-tier synthesis.
+    pub(crate) tenant_memories: HashMap<ScopeId, TenantMemoryObject>,
+    /// Server-side synthesis window manager. Tracks per-scope
+    /// window lifecycle (Pending → InProgress → Complete / Failed)
+    /// for the hierarchy-enforced domain / tenant tiers. Flushed to
+    /// disk under [`SYNTHESIS_WINDOWS_KIND`] at the
+    /// well-known [`SYNTHESIS_WINDOWS_SCOPE`] sentinel key so the
+    /// whole manager survives `close_store` / `open_store` cycles.
+    pub(crate) synthesis_windows: synthesis_pipeline::SynthesisWindowManager,
+    /// Slot for the per-runtime synthesis engine.
+    ///
+    /// `None` until the host calls
+    /// [`crate::synthesis::configure_synthesis_engine`]. Wrapped in
+    /// `Arc<dyn SynthesisEngine>` (NOT `Box`) so the three-phase
+    /// locking discipline used by
+    /// [`crate::synthesis::trigger_server_synthesis`] can
+    /// `Arc::clone` the engine out of the per-handle mutex before
+    /// the (potentially multi-second) HTTPS dispatch — keeping
+    /// every other FFI call on the same handle unblocked.
+    ///
+    /// `SynthesisEngine`'s `Send + Sync` supertraits guarantee the
+    /// cloned `Arc` is safe to ship across thread boundaries
+    /// (see the trait docs in
+    /// [`synthesis_engine::engine`]).
+    pub(crate) synthesis_engine: Option<Arc<dyn synthesis_engine::SynthesisEngine>>,
+    /// Per-scope cooldown tracker: maps `scope_id` →
+    /// last-synthesis-completed-at. The synthesis FFI surface
+    /// refuses to redispatch within
+    /// [`crate::synthesis::SYNTHESIS_COOLDOWN`] of the last
+    /// completion to prevent thundering-herd synthesis when many
+    /// connectors finish a sync tick at once.
+    pub(crate) synthesis_cooldowns: HashMap<ScopeId, DateTime<Utc>>,
+    /// Persisted synthesis results: maps `window_id` →
+    /// [`synthesis_pipeline::SynthesisObject`]. Mirrors the
+    /// per-scope `memory_objects` rows under the
+    /// [`SYNTHESIS_OBJECT_KIND`] tag (one row per scope, payload
+    /// = JSON-serialised `Vec<SynthesisObject>`).
+    pub(crate) synthesis_objects:
+        HashMap<synthesis_pipeline::WindowId, synthesis_pipeline::SynthesisObject>,
+    /// Allow-list of scope UUIDs that the configured non-TEE
+    /// synthesis engine is permitted to operate on. `None` means
+    /// "no allow-list configured" — the FFI layer logs a warning
+    /// and proceeds. An empty `Some(vec![])` is a hard refusal of
+    /// every scope, matching the
+    /// [`synthesis_engine::tee_worker::TeeWorkerConfig::scope_bindings`]
+    /// semantics for the TEE-attested path.
+    pub(crate) synthesis_scope_bindings: Option<Vec<uuid::Uuid>>,
+}
+
+/// Memory-blob `kind` tag for persisted domain memory objects.
+pub(crate) const DOMAIN_MEMORY_KIND: &str = "domain_memory";
+
+/// Memory-blob `kind` tag for persisted tenant memory objects.
+pub(crate) const TENANT_MEMORY_KIND: &str = "tenant_memory";
+
+/// Memory-blob `kind` tag for the flushed
+/// [`synthesis_pipeline::SynthesisWindowManager`].
+pub(crate) const SYNTHESIS_WINDOWS_KIND: &str = "synthesis_windows";
+
+/// Memory-blob `kind` tag for per-scope synthesis-object payloads.
+pub(crate) const SYNTHESIS_OBJECT_KIND: &str = "synthesis_object";
+
+/// Sentinel scope id under which the global
+/// [`synthesis_pipeline::SynthesisWindowManager`] is flushed. The
+/// manager is per-runtime (not per-scope), so we serialise it under
+/// the nil UUID and rehydrate it from a single row on
+/// `open_store`. The corresponding row's AEAD AAD still binds the
+/// scope to defeat cross-runtime substitution attacks.
+pub(crate) fn synthesis_windows_scope() -> ScopeId {
+    ScopeId::from_uuid(uuid::Uuid::nil())
 }
 
 impl Drop for FfiRuntime {
@@ -569,6 +654,181 @@ impl FfiRuntime {
                 })?;
         }
         Ok(())
+    }
+
+    // ─────────────────────── Synthesis accessors ───────────────────────
+
+    /// Borrow the per-scope domain memory, if one exists.
+    pub(crate) fn domain_memory(&self, scope: ScopeId) -> Option<&DomainMemoryObject> {
+        self.domain_memories.get(&scope)
+    }
+
+    /// Borrow (or allocate) the per-scope domain memory.
+    ///
+    /// Mirrors [`Self::user_memory_mut`] — only call this on paths
+    /// that intend to persist the result, otherwise prefer
+    /// [`Self::domain_memory`] to keep the map sparse.
+    pub(crate) fn domain_memory_mut(&mut self, scope: ScopeId) -> &mut DomainMemoryObject {
+        self.domain_memories
+            .entry(scope)
+            .or_insert_with(|| DomainMemoryObject::new(scope))
+    }
+
+    /// Borrow the per-scope tenant memory, if one exists.
+    pub(crate) fn tenant_memory(&self, scope: ScopeId) -> Option<&TenantMemoryObject> {
+        self.tenant_memories.get(&scope)
+    }
+
+    /// Borrow (or allocate) the per-scope tenant memory.
+    pub(crate) fn tenant_memory_mut(&mut self, scope: ScopeId) -> &mut TenantMemoryObject {
+        self.tenant_memories
+            .entry(scope)
+            .or_insert_with(|| TenantMemoryObject::new(scope))
+    }
+
+    /// Number of distinct scopes with a rehydrated
+    /// [`DomainMemoryObject`]. Used by the synthesis health probe.
+    pub(crate) fn domain_memory_count(&self) -> usize {
+        self.domain_memories.len()
+    }
+
+    /// Number of distinct scopes with a rehydrated
+    /// [`TenantMemoryObject`]. Used by the synthesis health probe.
+    pub(crate) fn tenant_memory_count(&self) -> usize {
+        self.tenant_memories.len()
+    }
+
+    /// Persist a fully-built [`DomainMemoryObject`] to disk and,
+    /// only on disk-save success, install it into the per-scope
+    /// in-memory map. Follows the
+    /// [`Self::save_channel_memory`] invariant (no in-memory
+    /// allocation on disk-save failure).
+    pub(crate) fn save_domain_memory(
+        &mut self,
+        scope: ScopeId,
+        dmo: DomainMemoryObject,
+    ) -> crate::error::FfiResult<()> {
+        let json = serde_json::to_vec(&dmo).map_err(|e| crate::error::FfiError::Memory {
+            message: format!("failed to serialize domain memory: {e}"),
+        })?;
+        self.store
+            .save_memory_blob(scope, DOMAIN_MEMORY_KIND, &json)
+            .map_err(|e| crate::error::FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        self.domain_memories.insert(scope, dmo);
+        Ok(())
+    }
+
+    /// Persist a fully-built [`TenantMemoryObject`] to disk and,
+    /// only on disk-save success, install it into the per-scope
+    /// in-memory map.
+    pub(crate) fn save_tenant_memory(
+        &mut self,
+        scope: ScopeId,
+        tmo: TenantMemoryObject,
+    ) -> crate::error::FfiResult<()> {
+        let json = serde_json::to_vec(&tmo).map_err(|e| crate::error::FfiError::Memory {
+            message: format!("failed to serialize tenant memory: {e}"),
+        })?;
+        self.store
+            .save_memory_blob(scope, TENANT_MEMORY_KIND, &json)
+            .map_err(|e| crate::error::FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+        self.tenant_memories.insert(scope, tmo);
+        Ok(())
+    }
+
+    /// Serialize and flush the entire
+    /// [`synthesis_pipeline::SynthesisWindowManager`] to the
+    /// encrypted evidence store under the sentinel
+    /// [`synthesis_windows_scope`] / [`SYNTHESIS_WINDOWS_KIND`]
+    /// row. Cheap on the steady state (one AEAD encryption + one
+    /// `INSERT OR REPLACE`); called after every state transition so
+    /// crashes between transitions cannot leave the manager in a
+    /// half-applied state on disk.
+    pub(crate) fn flush_synthesis_windows(&self) -> crate::error::FfiResult<()> {
+        let json = serde_json::to_vec(&self.synthesis_windows).map_err(|e| {
+            crate::error::FfiError::Memory {
+                message: format!("failed to serialize synthesis windows: {e}"),
+            }
+        })?;
+        self.store
+            .save_memory_blob(synthesis_windows_scope(), SYNTHESIS_WINDOWS_KIND, &json)
+            .map_err(|e| crate::error::FfiError::Evidence {
+                message: e.to_string(),
+            })
+    }
+
+    /// Persist `object` under the per-scope `synthesis_object`
+    /// row. The full per-scope object list is rewritten on every
+    /// successful synthesis (`INSERT OR REPLACE`), bounded by the
+    /// window retention cap enforced via
+    /// [`Self::prune_completed_windows`].
+    pub(crate) fn save_synthesis_object(
+        &mut self,
+        scope: ScopeId,
+        object: synthesis_pipeline::SynthesisObject,
+    ) -> crate::error::FfiResult<()> {
+        self.synthesis_objects.insert(object.window_id, object);
+        // Snapshot the per-scope object list so we can persist a
+        // self-contained blob — the in-memory map is keyed by
+        // `WindowId`, but rehydration scans by `ScopeId`.
+        let per_scope: Vec<&synthesis_pipeline::SynthesisObject> = self
+            .synthesis_objects
+            .values()
+            .filter(|o| o.scope_id == scope)
+            .collect();
+        let json = serde_json::to_vec(&per_scope).map_err(|e| crate::error::FfiError::Memory {
+            message: format!("failed to serialize synthesis objects: {e}"),
+        })?;
+        self.store
+            .save_memory_blob(scope, SYNTHESIS_OBJECT_KIND, &json)
+            .map_err(|e| crate::error::FfiError::Evidence {
+                message: e.to_string(),
+            })
+    }
+
+    /// Drop completed windows for `scope` beyond `max_per_scope`
+    /// (oldest first). Called after every successful synthesis to
+    /// keep the per-scope window list from growing unbounded.
+    ///
+    /// In-progress / failed / pending windows are NEVER pruned —
+    /// only `Complete` windows are eligible. Returns the set of
+    /// pruned window ids so the caller can also evict any
+    /// associated [`synthesis_pipeline::SynthesisObject`] rows.
+    pub(crate) fn prune_completed_windows(
+        &mut self,
+        scope: ScopeId,
+        max_per_scope: usize,
+    ) -> Vec<synthesis_pipeline::WindowId> {
+        // Walk the windows backwards by `window_end` so the newest
+        // completions survive.
+        let mut completed: Vec<(synthesis_pipeline::WindowId, chrono::DateTime<chrono::Utc>)> =
+            self.synthesis_windows
+                .windows_for(scope)
+                .iter()
+                .filter(|w| w.status == synthesis_pipeline::WindowStatus::Complete)
+                .map(|w| (w.id, w.window_end))
+                .collect();
+        if completed.len() <= max_per_scope {
+            return Vec::new();
+        }
+        // Sort newest-first; entries beyond `max_per_scope` are the
+        // ones to prune.
+        completed.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+        let prune: Vec<synthesis_pipeline::WindowId> = completed
+            .into_iter()
+            .skip(max_per_scope)
+            .map(|(id, _)| id)
+            .collect();
+        for id in &prune {
+            self.synthesis_objects.remove(id);
+        }
+        self.synthesis_windows
+            .remove_windows(scope, prune.iter().copied());
+        prune
     }
 }
 
@@ -990,6 +1250,156 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         }
     }
 
+    // Rehydrate domain memory objects. Same skip-tombstoned-scopes /
+    // skip-deserialisation-failures discipline as the user / channel
+    // memory rehydration above — a corrupt blob is dropped with a
+    // tracing warning rather than blocking the entire open.
+    let mut domain_memories = HashMap::new();
+    let domain_scopes =
+        store
+            .list_memory_scopes(DOMAIN_MEMORY_KIND)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+    for scope in domain_scopes {
+        if tombstones.contains(&scope) {
+            continue;
+        }
+        match store.load_memory_blob(scope, DOMAIN_MEMORY_KIND) {
+            Ok(Some(blob)) => match serde_json::from_slice::<DomainMemoryObject>(&blob) {
+                Ok(dmo) => {
+                    domain_memories.insert(scope, dmo);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        scope = %scope.as_uuid(),
+                        error = %e,
+                        "failed to deserialize domain_memory blob; blob dropped"
+                    );
+                }
+            },
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    error = %e,
+                    "failed to load domain_memory blob; skipping"
+                );
+            }
+        }
+    }
+
+    // Rehydrate tenant memory objects.
+    let mut tenant_memories = HashMap::new();
+    let tenant_scopes =
+        store
+            .list_memory_scopes(TENANT_MEMORY_KIND)
+            .map_err(|e| FfiError::Evidence {
+                message: e.to_string(),
+            })?;
+    for scope in tenant_scopes {
+        if tombstones.contains(&scope) {
+            continue;
+        }
+        match store.load_memory_blob(scope, TENANT_MEMORY_KIND) {
+            Ok(Some(blob)) => match serde_json::from_slice::<TenantMemoryObject>(&blob) {
+                Ok(tmo) => {
+                    tenant_memories.insert(scope, tmo);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        scope = %scope.as_uuid(),
+                        error = %e,
+                        "failed to deserialize tenant_memory blob; blob dropped"
+                    );
+                }
+            },
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    error = %e,
+                    "failed to load tenant_memory blob; skipping"
+                );
+            }
+        }
+    }
+
+    // Rehydrate the synthesis window manager from the single
+    // sentinel row. The manager is per-runtime (not per-scope), so
+    // we expect at most one row under the `synthesis_windows_scope`
+    // / `SYNTHESIS_WINDOWS_KIND` pair. A missing row simply means
+    // no synthesis has run yet on this database.
+    let synthesis_windows = match store
+        .load_memory_blob(synthesis_windows_scope(), SYNTHESIS_WINDOWS_KIND)
+    {
+        Ok(Some(blob)) => {
+            match serde_json::from_slice::<synthesis_pipeline::SynthesisWindowManager>(&blob) {
+                Ok(mgr) => mgr,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "failed to deserialize synthesis_windows blob; dropping and starting fresh"
+                    );
+                    synthesis_pipeline::SynthesisWindowManager::new()
+                }
+            }
+        }
+        Ok(None) => synthesis_pipeline::SynthesisWindowManager::new(),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "failed to load synthesis_windows blob; starting fresh"
+            );
+            synthesis_pipeline::SynthesisWindowManager::new()
+        }
+    };
+
+    // Rehydrate per-scope synthesis objects. Each scope's row holds
+    // a JSON-serialised `Vec<SynthesisObject>` (one row per scope),
+    // so we collapse them into the by-`WindowId` map the FFI uses
+    // at runtime.
+    let mut synthesis_objects: HashMap<
+        synthesis_pipeline::WindowId,
+        synthesis_pipeline::SynthesisObject,
+    > = HashMap::new();
+    let synthesis_object_scopes = store
+        .list_memory_scopes(SYNTHESIS_OBJECT_KIND)
+        .map_err(|e| FfiError::Evidence {
+            message: e.to_string(),
+        })?;
+    for scope in synthesis_object_scopes {
+        if tombstones.contains(&scope) {
+            continue;
+        }
+        match store.load_memory_blob(scope, SYNTHESIS_OBJECT_KIND) {
+            Ok(Some(blob)) => {
+                match serde_json::from_slice::<Vec<synthesis_pipeline::SynthesisObject>>(&blob) {
+                    Ok(objs) => {
+                        for obj in objs {
+                            synthesis_objects.insert(obj.window_id, obj);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            scope = %scope.as_uuid(),
+                            error = %e,
+                            "failed to deserialize synthesis_object blob; blob dropped"
+                        );
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    error = %e,
+                    "failed to load synthesis_object blob; skipping"
+                );
+            }
+        }
+    }
+
     let router_config = router_config_from_env();
     let inference_router = Arc::new(build_inference_router(router_config));
     // Spawn the adapter probe on a background thread so `open_store`
@@ -1085,6 +1495,13 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         oauth_client,
         webhook_servers: HashMap::new(),
         sync_scheduler: None,
+        domain_memories,
+        tenant_memories,
+        synthesis_windows,
+        synthesis_engine: None,
+        synthesis_cooldowns: HashMap::new(),
+        synthesis_objects,
+        synthesis_scope_bindings: None,
     };
 
     // Rehydrate persisted connector state from the v9
@@ -1256,6 +1673,23 @@ pub fn close_store(handle: RuntimeHandle) -> FfiResult<()> {
             // bumping the strong count and pinning the unwrap at
             // `Err(returned)`.
             let scheduler = rt_guard.sync_scheduler.take();
+            // Best-effort flush of the synthesis-window manager
+            // before the close drains. Synthesis itself runs no
+            // background thread (each `trigger_server_synthesis`
+            // call is fully synchronous), but window state mutated
+            // by the most recent `mark_in_progress` /
+            // `mark_complete` transitions only persists after a
+            // `flush_synthesis_windows` call — without this step a
+            // host that closes the store between dispatch and the
+            // application phase's flush would lose the
+            // window-status update.
+            if let Err(err) = rt_guard.flush_synthesis_windows() {
+                tracing::warn!(
+                    handle = handle.0,
+                    error = ?err,
+                    "close_store: flush_synthesis_windows failed; in-memory window state may not be persisted",
+                );
+            }
             // Drop the runtime lock BEFORE joining the runtime
             // threads — the runtime mutex is what the joined
             // threads' dispatchers were trying to acquire.

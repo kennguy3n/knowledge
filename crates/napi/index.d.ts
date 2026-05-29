@@ -4,6 +4,25 @@
 export declare function closeStore(handle: bigint): void
 
 /**
+ * Toggle the post-sync auto-synthesis hook for a connector
+ * instance (Phase 7). Mirrors
+ * [`crate::configure_sync_auto_synthesize`]. When `enabled` is
+ * `true` the scheduler dispatches a domain-tier
+ * `triggerServerSynthesis` after every successful sync of this
+ * instance, subject to the per-scope cooldown.
+ */
+export declare function configureSyncAutoSynthesize(handle: bigint, instanceId: string, enabled: boolean): void
+
+/**
+ * Install the server-side synthesis engine (Phase 7). Mirrors
+ * [`crate::configure_synthesis_engine`]. `config` is the JSON
+ * object documented on `ffi::SynthesisEngineConfig` with
+ * camelCase keys: `{ url, apiKeyRef, modelId, maxTokens,
+ * timeoutMs, grammar, scopeBindings }`.
+ */
+export declare function configureSynthesisEngine(handle: bigint, config: any): void
+
+/**
  * Return the package version of the Rust core baked into this
  * `.node` artefact. Mirrors [`crate::core_version`]. Lets the JS-side
  * bootstrapper assert against a known-good version before opening
@@ -105,6 +124,14 @@ export declare function init(configJson: string): void
 export declare function listMemories(handle: bigint, scopeId: string, filter: any): any
 
 /**
+ * Enumerate recent synthesis windows for a scope (Phase 7).
+ * Mirrors [`crate::list_recent_syntheses`]. Returns an array of
+ * `SynthesisStatusRecord` objects sorted by `windowEnd`
+ * descending and capped at `LIST_RECENT_SYNTHESES_CAP`.
+ */
+export declare function listRecentSyntheses(handle: bigint, scopeId: string): any
+
+/**
  * Open the SQLCipher-backed evidence store. Mirrors
  * [`crate::open_store`]. Returns a JS `BigInt` handle the caller
  * passes back into every subsequent call.
@@ -122,6 +149,24 @@ export declare function query(handle: bigint, req: any): any
  * [`crate::run_decay_sweep`].
  */
 export declare function runDecaySweep(handle: bigint, scopeId: string): number
+
+/**
+ * Look up the lifecycle state of a synthesis window (Phase 7).
+ * Mirrors [`crate::synthesis_status`]. Returns the serialised
+ * `SynthesisStatusRecord` with camelCase keys:
+ * `{ synthesisId, scopeId, tier, status, windowStartUnix,
+ *    windowEndUnix, objectId }`.
+ */
+export declare function synthesisStatus(handle: bigint, synthesisId: string): any
+
+/**
+ * Dispatch a server-side synthesis run for `scopeId` at the
+ * requested `tier` (Phase 7). Mirrors
+ * [`crate::trigger_server_synthesis`]. `tier` is `"domain"` or
+ * `"tenant"`. Returns the UUID string of the newly-opened
+ * synthesis window.
+ */
+export declare function triggerServerSynthesis(handle: bigint, scopeId: string, tier: string): string
 
 /**
  * Trigger synthesis for a scope. Mirrors

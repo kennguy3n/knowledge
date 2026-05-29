@@ -618,9 +618,10 @@ fn health_check_envelope_includes_connector_subsystem() {
     assert!(detail.contains("oauth_resolver=unset"), "detail={detail}");
 
     // Sanity-check the probe ordering — the Phase 2 wiring appends
-    // `connector` after the four Phase 1 subsystems, so a host
-    // rendering subsystems in array order sees the connector tile
-    // last. The exact array order is part of the host UI contract
+    // `connector` after the four Phase 1 subsystems, and Phase 7
+    // appends `synthesis_engine` after that. A host rendering
+    // subsystems in array order therefore sees the tiles in this
+    // exact order. The array order is part of the host UI contract
     // (Electron / Swift / Kotlin all render subsystems in the order
     // they appear in the envelope), so changes here are intentional
     // and require updating the host shells.
@@ -634,6 +635,7 @@ fn health_check_envelope_includes_connector_subsystem() {
             "memory_manager",
             "inference_router",
             "connector",
+            "synthesis_engine",
         ]
     );
 
@@ -3989,7 +3991,7 @@ mod sync_scheduler_tests {
         // Configure a per-instance policy.
         configure_sync_schedule(h, instance.clone(), 2, 10).expect("configure");
         let status = sync_scheduler_status(h).expect("status");
-        assert_eq!(status.policy_override_count, 1, "one instance configured",);
+        assert_eq!(status.policy_override_count, 1, "one instance configured");
         assert_eq!(
             status.total_instance_count, 1,
             "one connector instance exists in the runtime",

@@ -106,6 +106,7 @@ pub mod health;
 pub mod metrics;
 pub mod runtime;
 pub mod sync_scheduler;
+pub mod synthesis;
 #[cfg(feature = "tracing-subscriber")]
 pub mod tracing_init;
 pub mod types;
@@ -121,9 +122,14 @@ pub use health::{health_check, AdapterReport, HealthStatus, SubsystemHealth, Sub
 pub use metrics::{snapshot as metrics_snapshot, ErrorCounters, MetricsSnapshot};
 pub use runtime::{close_store, open_store, RuntimeHandle};
 pub use sync_scheduler::{
-    clear_sync_schedule, configure_sync_schedule, start_sync_scheduler, stop_sync_scheduler,
-    sync_scheduler_status, DEFAULT_SYNC_INTERVAL_SECS, DEFAULT_SYNC_MAX_BACKOFF_SECS,
-    DEFAULT_SYNC_TICK_SECS,
+    clear_sync_schedule, configure_sync_auto_synthesize, configure_sync_schedule,
+    start_sync_scheduler, stop_sync_scheduler, sync_scheduler_status, DEFAULT_SYNC_INTERVAL_SECS,
+    DEFAULT_SYNC_MAX_BACKOFF_SECS, DEFAULT_SYNC_TICK_SECS,
+};
+pub use synthesis::{
+    configure_synthesis_engine, list_recent_syntheses, synthesis_status, trigger_server_synthesis,
+    LIST_RECENT_SYNTHESES_CAP, MAX_SYNTHESIS_OUTPUT_BYTES, PER_SCOPE_COOLDOWN_SECS,
+    WINDOW_RETENTION_CAP_PER_SCOPE,
 };
 #[cfg(feature = "tracing-subscriber")]
 pub use tracing_init::try_init_tracing;
@@ -131,7 +137,8 @@ pub use types::{
     ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass, FfiKeypair,
     FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RefreshReport,
     ScopeIdString, SourceKind, SyncModeKind, SyncReport, SyncSchedulerStatus, SyncStatusKind,
-    SynthesisTrigger, WebhookServerHandle, WebhookServerSummary,
+    SynthesisEngineConfig, SynthesisStatusRecord, SynthesisTierKind, SynthesisTrigger,
+    WebhookServerHandle, WebhookServerSummary,
 };
 pub use webhook::{
     list_webhook_servers, register_webhook_dispatch, start_webhook_server, stop_webhook_server,
@@ -769,6 +776,49 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     // 5. In-memory memory maps. Infallible.
     rt.user_memories.remove(&scope);
     rt.channel_memories.remove(&scope);
+
+    // 5b. Synthesis state teardown — cryptographic-forgetting
+    //     contract requires every synthesis artefact bound to the
+    //     forgotten scope (domain/tenant memory objects, in-flight
+    //     synthesis windows, completed synthesis objects, cooldown
+    //     bookkeeping) to become unrecoverable in-memory at the
+    //     same time the on-disk row deletion lands.
+    //
+    //     The corresponding on-disk rows are already covered by
+    //     step 4 above — `delete_memory_blobs_for_scope` deletes
+    //     every memory_objects row keyed by the scope regardless
+    //     of `kind`, so domain_memory / tenant_memory /
+    //     synthesis_object blobs are removed by the same SQL DELETE.
+    //
+    //     Infallible: every operation is an in-memory map mutation
+    //     or a `HashMap::remove` over freshly collected ids.
+    rt.domain_memories.remove(&scope);
+    rt.tenant_memories.remove(&scope);
+    rt.synthesis_cooldowns.remove(&scope);
+    let synth_window_ids: Vec<synthesis_pipeline::WindowId> = rt
+        .synthesis_windows
+        .windows_for(scope)
+        .iter()
+        .map(|w| w.id)
+        .collect();
+    for wid in &synth_window_ids {
+        rt.synthesis_objects.remove(wid);
+    }
+    rt.synthesis_windows.remove_windows_for_scope(scope);
+    // The window-manager mutation only persists if we flush. Best
+    // effort — the in-memory state is already correct so a flush
+    // failure does not violate the forgetting contract (the
+    // forgotten scope's DEK has already been destroyed by step 1
+    // so any stale on-disk row would decrypt to nothing).
+    if let Err(e) = rt.flush_synthesis_windows() {
+        tracing::warn!(
+            scope = %scope.as_uuid(),
+            error = ?e,
+            "forget_scope_state: flush_synthesis_windows failed; \
+             stale on-disk window row will be reaped on next open_store \
+             (the scope DEK has already been destroyed by step 1)",
+        );
+    }
 
     // 6. Delete persisted connector instance rows for the scope.
     //    Best-effort: even if the SQL DELETE fails, the rows are

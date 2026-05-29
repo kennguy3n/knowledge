@@ -1037,6 +1037,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "synthesis_engine",
  "synthesis_pipeline",
  "tempfile",
  "thiserror 1.0.69",
@@ -3059,11 +3060,13 @@ dependencies = [
  "evidence_store",
  "memory_manager",
  "permission_service",
+ "reqwest",
  "serde",
  "serde_json",
  "synthesis_pipeline",
  "tempfile",
  "thiserror 1.0.69",
+ "tracing",
  "uuid",
 ]
 

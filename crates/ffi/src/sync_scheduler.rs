@@ -90,6 +90,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{ConnectorInstanceId, SyncStatus};
+use evidence_store::ScopeId;
 use tracing::{debug, info, warn};
 
 use crate::error::{FfiError, FfiResult};
@@ -164,6 +165,15 @@ struct SchedulePolicy {
     /// scheduler never schedules a retry further out than
     /// `now + max_backoff`.
     max_backoff: Duration,
+    /// If `true`, the scheduler fires a domain-tier
+    /// `trigger_server_synthesis` against the connector's scope
+    /// after a successful sync (subject to the per-scope cooldown
+    /// in [`crate::synthesis::PER_SCOPE_COOLDOWN_SECS`]). Defaults
+    /// to `false` so existing hosts opt in explicitly. A host that
+    /// has not called [`crate::synthesis::configure_synthesis_engine`]
+    /// observes the field as a no-op — the post-sync hook short
+    /// circuits when no engine is configured.
+    auto_synthesize: bool,
 }
 
 impl SchedulePolicy {
@@ -172,6 +182,7 @@ impl SchedulePolicy {
         Self {
             sync_interval: cfg.default_interval,
             max_backoff: cfg.default_max_backoff,
+            auto_synthesize: false,
         }
     }
 
@@ -595,10 +606,6 @@ pub fn configure_sync_schedule(
                 ),
             });
         }
-        let policy = SchedulePolicy {
-            sync_interval: Duration::from_secs(sync_interval_secs),
-            max_backoff: Duration::from_secs(max_backoff_secs),
-        };
         with_runtime(handle, |rt| {
             let scheduler = rt
                 .sync_scheduler
@@ -620,6 +627,20 @@ pub fn configure_sync_schedule(
                 Ok(g) => g,
                 Err(poisoned) => poisoned.into_inner(),
             };
+            // Preserve `auto_synthesize` across a `configure_sync_schedule`
+            // call so a host that previously enabled the
+            // post-sync synthesis hook is not silently downgraded
+            // by an interval-only update. Hosts that want to flip
+            // the bit go through `configure_sync_auto_synthesize`.
+            let prior_auto_synth = state
+                .policies
+                .get(&instance)
+                .is_some_and(|p| p.auto_synthesize);
+            let policy = SchedulePolicy {
+                sync_interval: Duration::from_secs(sync_interval_secs),
+                max_backoff: Duration::from_secs(max_backoff_secs),
+                auto_synthesize: prior_auto_synth,
+            };
             state.policies.insert(instance, policy);
             // Reset accounting for the freshly-configured instance.
             // Any prior consecutive_failures counter is for the
@@ -631,6 +652,54 @@ pub fn configure_sync_schedule(
                 .insert(instance, InstanceAccounting::default());
             Ok(())
         })
+    })
+}
+
+/// Toggle the post-sync auto-synthesis hook for `instance_id`.
+///
+/// When `enabled` is `true` the scheduler dispatches a domain-tier
+/// `trigger_server_synthesis` after every successful sync of this
+/// instance (subject to the per-scope cooldown in
+/// [`crate::synthesis::PER_SCOPE_COOLDOWN_SECS`]). The hook is a
+/// no-op if [`crate::synthesis::configure_synthesis_engine`] has
+/// not been called or if the scope has no domain memory registered.
+///
+/// Defaults to `false` for every instance. The setting persists
+/// across `configure_sync_schedule` calls.
+///
+/// # Errors
+///
+/// * [`FfiError::Connector`] if no scheduler is running on this
+///   handle.
+/// * [`FfiError::InvalidId`] if `instance_id` does not parse as a
+///   UUID.
+#[uniffi::export]
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+pub fn configure_sync_auto_synthesize(
+    handle: RuntimeHandle,
+    instance_id: String,
+    enabled: bool,
+) -> FfiResult<()> {
+    let instance = parse_instance_id(&instance_id)?;
+    with_runtime(handle, |rt| {
+        let scheduler = rt
+            .sync_scheduler
+            .as_ref()
+            .ok_or_else(|| FfiError::Connector {
+                message: "configure_sync_auto_synthesize: no scheduler is running on this \
+                          runtime; call start_sync_scheduler first"
+                    .into(),
+            })?;
+        let mut state = match scheduler.state.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let policy = state
+            .policies
+            .entry(instance)
+            .or_insert_with(|| SchedulePolicy::from_defaults(&scheduler.config));
+        policy.auto_synthesize = enabled;
+        Ok(())
     })
 }
 
@@ -1053,6 +1122,16 @@ fn run_one_tick(
                         + chrono::Duration::from_std(delay)
                             .unwrap_or_else(|_| chrono::Duration::seconds(0)),
                 );
+                let auto_synthesize = policy.auto_synthesize;
+                // Drop the scheduler state lock before we re-enter
+                // the runtime mutex to resolve the scope and
+                // dispatch synthesis. Reusing the same lock-order
+                // discipline as the rest of the scheduler: runtime
+                // → scheduler-state, never the reverse.
+                drop(s);
+                if auto_synthesize {
+                    maybe_dispatch_auto_synthesis(handle, instance_id);
+                }
             }
             Err(err) => {
                 counters.dispatches_failed.fetch_add(1, Ordering::Relaxed);
@@ -1078,6 +1157,69 @@ fn run_one_tick(
 }
 
 // ──────────────────────── Helpers ───────────────────────────────
+
+/// Best-effort post-sync synthesis dispatch. Called from the
+/// scheduler's `Ok(_)` arm when the per-instance policy has
+/// `auto_synthesize: true`.
+///
+/// The dispatch is **fire-and-forget** from the scheduler's
+/// perspective — synthesis failure does NOT roll back the sync
+/// success or feed the failure counter; the scheduler is a
+/// best-effort driver, not a transactional coordinator. The
+/// substrate's per-scope cooldown
+/// ([`crate::synthesis::PER_SCOPE_COOLDOWN_SECS`]) prevents a
+/// runaway loop when the scheduler ticks faster than synthesis can
+/// complete.
+fn maybe_dispatch_auto_synthesis(handle: RuntimeHandle, instance_id: ConnectorInstanceId) {
+    // ─── Resolve the scope / engine state under the runtime mutex.
+    let resolved = with_runtime(handle, |rt| -> FfiResult<Option<(ScopeId, bool)>> {
+        if rt.synthesis_engine.is_none() {
+            return Ok(None);
+        }
+        let Some(inst) = rt.connector_instances.get(&instance_id) else {
+            return Ok(None);
+        };
+        let scope = inst.config.scope_id;
+        let domain_registered = rt.domain_memory(scope).is_some();
+        Ok(Some((scope, domain_registered)))
+    });
+    let Ok(Some((scope, domain_registered))) = resolved else {
+        return;
+    };
+    if !domain_registered {
+        // Channel-tier scope — fall back to the on-device
+        // `trigger_synthesis` path. We do not auto-trigger that
+        // here because the host owns the channel-recap policy
+        // (it knows whether the channel has accumulated enough
+        // evidence to warrant a recap).
+        return;
+    }
+    // The actual dispatch runs with the runtime mutex released —
+    // `trigger_server_synthesis` re-acquires it inside its own
+    // three-phase locking discipline.
+    match crate::synthesis::trigger_server_synthesis(
+        handle,
+        scope.as_uuid().to_string(),
+        crate::types::SynthesisTierKind::Domain,
+    ) {
+        Ok(window_id) => {
+            debug!(
+                instance = %instance_id.0,
+                scope = %scope.as_uuid(),
+                window = %window_id,
+                "scheduler: post-sync auto-synthesis dispatched",
+            );
+        }
+        Err(err) => {
+            debug!(
+                instance = %instance_id.0,
+                scope = %scope.as_uuid(),
+                error = %err,
+                "scheduler: post-sync auto-synthesis skipped (best-effort)",
+            );
+        }
+    }
+}
 
 fn parse_instance_id(s: &str) -> FfiResult<ConnectorInstanceId> {
     s.parse::<uuid::Uuid>()
@@ -1137,6 +1279,7 @@ mod tests {
         let p = SchedulePolicy {
             sync_interval: Duration::from_secs(60),
             max_backoff: Duration::from_secs(3600),
+            auto_synthesize: false,
         };
         assert_eq!(p.next_attempt_delay(0), Duration::from_secs(60));
     }
@@ -1146,6 +1289,7 @@ mod tests {
         let p = SchedulePolicy {
             sync_interval: Duration::from_secs(60),
             max_backoff: Duration::from_secs(3600),
+            auto_synthesize: false,
         };
         assert_eq!(p.next_attempt_delay(1), Duration::from_secs(120));
         assert_eq!(p.next_attempt_delay(2), Duration::from_secs(240));
@@ -1157,6 +1301,7 @@ mod tests {
         let p = SchedulePolicy {
             sync_interval: Duration::from_secs(60),
             max_backoff: Duration::from_secs(300),
+            auto_synthesize: false,
         };
         // 60 * 2^10 = 61440s, well past the 300s cap.
         assert_eq!(p.next_attempt_delay(10), Duration::from_secs(300));
@@ -1169,6 +1314,7 @@ mod tests {
         let p = SchedulePolicy {
             sync_interval: Duration::from_secs(60),
             max_backoff: Duration::from_secs(3600),
+            auto_synthesize: false,
         };
         // u32::MAX failures is the worst case. Should saturate
         // cleanly at max_backoff, not panic on shift overflow.

@@ -132,7 +132,12 @@ impl SynthesisWindow {
 }
 
 /// Tracks per-scope synthesis windows and their lifecycle.
-#[derive(Debug, Default, Clone)]
+///
+/// `Serialize` / `Deserialize` so the FFI substrate can flush the
+/// entire manager into the encrypted evidence store under the
+/// `synthesis_windows` memory-blob kind and rehydrate it on
+/// `open_store`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SynthesisWindowManager {
     windows: HashMap<WindowId, SynthesisWindow>,
     by_scope: HashMap<ScopeId, Vec<WindowId>>,
@@ -220,6 +225,51 @@ impl SynthesisWindowManager {
                 Ok(())
             }
             _ => Err(PipelineError::InvalidWindowTransition),
+        }
+    }
+
+    /// Remove every window registered for `scope_id` — both from
+    /// the per-id `windows` map and from the per-scope `by_scope`
+    /// index.
+    ///
+    /// Used by the FFI substrate's cryptographic-forgetting path
+    /// (`forget_scope` / `forget_scope_state`) so synthesis state
+    /// for the forgotten scope is unreachable in-memory as soon as
+    /// the on-disk row is deleted. Idempotent: returns silently
+    /// when the scope has no registered windows.
+    pub fn remove_windows_for_scope(&mut self, scope_id: ScopeId) {
+        if let Some(ids) = self.by_scope.remove(&scope_id) {
+            for id in ids {
+                self.windows.remove(&id);
+            }
+        }
+    }
+
+    /// Remove the supplied `window_ids` for `scope_id` (typically
+    /// the result of a retention-cap prune).
+    ///
+    /// `window_ids` that do not appear in the scope's
+    /// `by_scope` list are silently ignored — the caller may pass
+    /// the output of a separate filter without re-validating each
+    /// id. The remaining ids in the per-scope list preserve their
+    /// original order so callers that depend on insertion order
+    /// (e.g. `windows_for`) keep observing the same sequence.
+    pub fn remove_windows<I>(&mut self, scope_id: ScopeId, window_ids: I)
+    where
+        I: IntoIterator<Item = WindowId>,
+    {
+        let removed: std::collections::HashSet<WindowId> = window_ids.into_iter().collect();
+        if removed.is_empty() {
+            return;
+        }
+        if let Some(ids) = self.by_scope.get_mut(&scope_id) {
+            ids.retain(|id| !removed.contains(id));
+            if ids.is_empty() {
+                self.by_scope.remove(&scope_id);
+            }
+        }
+        for id in &removed {
+            self.windows.remove(id);
         }
     }
 
