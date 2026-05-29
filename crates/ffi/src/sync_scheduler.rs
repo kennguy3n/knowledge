@@ -850,6 +850,21 @@ fn run_scheduler_loop(
 /// re-acquires the policies mutex to update `consecutive_failures`
 /// + `next_attempt_at`.
 ///
+/// # Timestamp discipline (load-bearing — read before refactoring)
+///
+/// `now = Utc::now()` is captured ONCE at tick start and used
+/// only for the Phase 1 due-instance check. Phase 3 captures a
+/// FRESH `dispatch_completed_at = Utc::now()` after each
+/// `sync_connector` call returns and uses that for the
+/// `next_attempt_at` arithmetic. Reusing the tick-start `now`
+/// for Phase 3 would (a) schedule retries in the past whenever
+/// the backoff delay is shorter than the cumulative dispatch
+/// time of preceding instances in the same tick — defeating
+/// exponential backoff entirely — and (b) synchronise every
+/// cohort that first became due on the same tick to a single
+/// future timestamp, producing a persistent thundering herd on
+/// every subsequent tick. The per-dispatch capture fixes both.
+///
 /// # Lock ordering (load-bearing — read before refactoring)
 ///
 /// The worker thread NEVER holds the runtime mutex and the
@@ -921,21 +936,22 @@ fn run_one_tick(
             return;
         };
 
-        // Update last_tick_at now that we know the runtime is
-        // still alive — keeps the diagnostic timestamp accurate
-        // even on a tick that finds no due instances.
-        {
-            let mut s = match state.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            s.last_tick_at = Some(now);
-        }
-
-        let s = match state.lock() {
+        // Single state-mutex acquisition for the whole snapshot
+        // phase: update `last_tick_at` (keeps the diagnostic
+        // timestamp accurate even on a tick that finds no due
+        // instances) and read out the policies / accounting maps
+        // under one critical section. A prior implementation split
+        // these into two consecutive lock-then-drop / lock-then-drop
+        // pairs; the merge is correctness-neutral (no observer can
+        // ever see a state where last_tick_at is updated but the
+        // policy/accounting reads aren't yet — they're racing
+        // counterparts in the same tick) but spares one
+        // lock/unlock cycle per tick.
+        let mut s = match state.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
+        s.last_tick_at = Some(now);
         let mut due = Vec::with_capacity(rows.len());
         for (id, status, last_synced_at) in rows {
             // Skip instances already syncing — a host-driven
@@ -980,12 +996,26 @@ fn run_one_tick(
     //
     // Each `sync_connector` call walks the substrate's three-phase
     // discipline itself; the scheduler is just another client.
+    //
+    // Phase 3 below uses a FRESH `Utc::now()` captured AFTER each
+    // dispatch returns — NOT the tick-start `now`. With small
+    // intervals and slow upstream providers (e.g. 1 s `sync_interval`
+    // against a 10 s dispatch) reusing the tick-start `now` would
+    // schedule `next_attempt_at` in the past for every instance
+    // beyond the first in the tick, defeating exponential backoff
+    // entirely. Capturing the timestamp per-dispatch also breaks
+    // the thundering-herd pattern: instances that first became
+    // due on the same tick will diverge by the dispatch latency of
+    // the previous instances, naturally staggering future ticks
+    // instead of synchronising every cohort on a single future
+    // timestamp.
     for instance_id in due_instances {
         counters
             .dispatches_attempted
             .fetch_add(1, Ordering::Relaxed);
         metrics::inc_sync_scheduler_dispatch_attempted();
         let result = crate::sync_connector(handle, instance_id.0.to_string());
+        let dispatch_completed_at = Utc::now();
         // ─── Phase 3: record result (locked) ─────────────────
         let mut s = match state.lock() {
             Ok(g) => g,
@@ -1006,8 +1036,9 @@ fn run_one_tick(
                 entry.consecutive_failures = 0;
                 let delay = policy.next_attempt_delay(0);
                 entry.next_attempt_at = Some(
-                    now + chrono::Duration::from_std(delay)
-                        .unwrap_or_else(|_| chrono::Duration::seconds(0)),
+                    dispatch_completed_at
+                        + chrono::Duration::from_std(delay)
+                            .unwrap_or_else(|_| chrono::Duration::seconds(0)),
                 );
             }
             Err(err) => {
@@ -1016,8 +1047,9 @@ fn run_one_tick(
                 entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
                 let delay = policy.next_attempt_delay(entry.consecutive_failures);
                 entry.next_attempt_at = Some(
-                    now + chrono::Duration::from_std(delay)
-                        .unwrap_or_else(|_| chrono::Duration::seconds(0)),
+                    dispatch_completed_at
+                        + chrono::Duration::from_std(delay)
+                            .unwrap_or_else(|_| chrono::Duration::seconds(0)),
                 );
                 debug!(
                     handle = handle.0,

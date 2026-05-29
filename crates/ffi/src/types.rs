@@ -295,7 +295,23 @@ pub enum SyncStatusKind {
 /// view: kind icon, last-synced timestamp, error banner, current
 /// sync mode (so the UI can show "Incremental sync" vs "Full
 /// sync" badges).
+///
+/// # Wire format
+///
+/// `Serialize`/`Deserialize` use `rename_all = "camelCase"` so
+/// the JSON surface used by the N-API crate stays consistent
+/// with the other JSON-returning entry points
+/// ([`crate::refresh_connector_token`],
+/// [`crate::sync_connector`], [`crate::list_webhook_servers`],
+/// [`crate::sync_scheduler_status`]). A JS host destructuring
+/// the value can use
+/// `{ instanceId, kind, scopeId, syncMode, syncStatus,
+///    lastSyncedAt, lastError }` directly. UniFFI bindings
+/// (Swift/Kotlin) are unaffected — they read Rust field names
+/// directly through the `uniffi::Record` derive and do not
+/// pass through `serde`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
 pub struct ConnectorStatus {
     /// UUID-string identifier — the
     /// [`connector_framework::ConnectorInstanceId`] this row refers
@@ -996,5 +1012,82 @@ mod tests {
         );
         let back: SyncReport = serde_json::from_value(v).expect("deserialize");
         assert_eq!(back, r);
+    }
+
+    /// `ConnectorStatus` is the response envelope for
+    /// `crates/napi/src/bindings.rs::js_list_connectors`. Devin
+    /// Review round 5 ANALYSIS_0002 flagged it as the last
+    /// `serde_json`-serialized N-API return type still emitting
+    /// snake_case keys (every peer — `RefreshReport`,
+    /// `SyncReport`, `WebhookServerSummary`,
+    /// `SyncSchedulerStatus` — has been migrated). Pin the
+    /// camelCase invariant so future drift between the
+    /// documented JS-idiomatic surface and the type is caught at
+    /// `cargo test` time.
+    #[test]
+    fn connector_status_serializes_with_camelcase_keys() {
+        let s = ConnectorStatus {
+            instance_id: "00000000-0000-0000-0000-000000000001".into(),
+            kind: ConnectorKindTag::GoogleDrive,
+            scope_id: "00000000-0000-0000-0000-0000000000aa".into(),
+            sync_mode: SyncModeKind::Incremental,
+            sync_status: SyncStatusKind::Succeeded,
+            last_synced_at: Some(1_700_000_000),
+            last_error: None,
+        };
+        let v = serde_json::to_value(&s).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for camel in [
+            "instanceId",
+            "kind",
+            "scopeId",
+            "syncMode",
+            "syncStatus",
+            "lastSyncedAt",
+            "lastError",
+        ] {
+            assert!(
+                obj.contains_key(camel),
+                "ConnectorStatus JSON must contain camelCase key `{camel}`; got {v}"
+            );
+        }
+        for snake in [
+            "instance_id",
+            "scope_id",
+            "sync_mode",
+            "sync_status",
+            "last_synced_at",
+            "last_error",
+        ] {
+            assert!(
+                !obj.contains_key(snake),
+                "ConnectorStatus JSON must NOT contain snake_case key `{snake}`; got {v}"
+            );
+        }
+        // Nested enums keep their independent
+        // `rename_all = "snake_case"` discipline — the struct-level
+        // camelCase rename governs field names only, not the tag
+        // values of nested enums. Pin both nested tags so a future
+        // refactor that flips an enum's own `rename_all` to
+        // `camelCase` (which would silently break every JS
+        // consumer matching `"google_drive"`, `"incremental"`,
+        // `"succeeded"`) gets caught here.
+        assert_eq!(
+            obj.get("kind").and_then(|m| m.as_str()),
+            Some("google_drive"),
+            "ConnectorKindTag variant tag must remain snake_case"
+        );
+        assert_eq!(
+            obj.get("syncMode").and_then(|m| m.as_str()),
+            Some("incremental"),
+            "SyncModeKind variant tag must remain snake_case"
+        );
+        assert_eq!(
+            obj.get("syncStatus").and_then(|m| m.as_str()),
+            Some("succeeded"),
+            "SyncStatusKind variant tag must remain snake_case"
+        );
+        let back: ConnectorStatus = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, s);
     }
 }
