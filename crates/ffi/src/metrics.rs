@@ -140,6 +140,47 @@ pub(crate) struct Metrics {
     /// Total `list_webhook_servers` calls initiated
     /// (Phase 5 — diagnostic enumeration of running servers).
     pub(crate) list_webhook_servers_total: AtomicU64,
+    /// Total `start_sync_scheduler` calls initiated
+    /// (Phase 6 — background sync scheduler startup).
+    pub(crate) start_sync_scheduler_total: AtomicU64,
+    /// Total `stop_sync_scheduler` calls initiated
+    /// (Phase 6 — background sync scheduler shutdown).
+    pub(crate) stop_sync_scheduler_total: AtomicU64,
+    /// Total `configure_sync_schedule` calls initiated
+    /// (Phase 6 — per-instance policy override).
+    pub(crate) configure_sync_schedule_total: AtomicU64,
+    /// Total `clear_sync_schedule` calls initiated
+    /// (Phase 6 — per-instance policy clear).
+    pub(crate) clear_sync_schedule_total: AtomicU64,
+    /// Total `sync_scheduler_status` calls initiated
+    /// (Phase 6 — diagnostic snapshot read).
+    pub(crate) sync_scheduler_status_total: AtomicU64,
+    /// Total ticks the scheduler worker thread has completed
+    /// across every scheduler instance the process has ever run
+    /// (Phase 6). Process-singleton sum because per-runtime
+    /// counters live inside the per-runtime
+    /// [`crate::sync_scheduler::RunningSyncScheduler`] and would
+    /// be invisible to a host that polls only `metrics_snapshot`.
+    pub(crate) sync_scheduler_ticks_total: AtomicU64,
+    /// Total scheduler-initiated dispatches attempted across every
+    /// runtime (Phase 6). Counts `sync_connector` calls made by
+    /// scheduler worker threads, not their success/failure.
+    pub(crate) sync_scheduler_dispatches_attempted_total: AtomicU64,
+    /// Total scheduler-initiated dispatches that completed with
+    /// `Ok(SyncReport)` (Phase 6).
+    pub(crate) sync_scheduler_dispatches_succeeded_total: AtomicU64,
+    /// Total scheduler-initiated dispatches that completed with
+    /// `Err(_)` (Phase 6). Drives the per-instance
+    /// exponential-backoff curve.
+    pub(crate) sync_scheduler_dispatches_failed_total: AtomicU64,
+    /// Total candidate instances the scheduler skipped because
+    /// they were already in
+    /// [`connector_framework::SyncStatus::InProgress`] when the
+    /// tick fired (a host-driven sync was running concurrently).
+    /// Distinct from `*_dispatches_failed_total` because the
+    /// scheduler never invoked `sync_connector` for these
+    /// (Phase 6).
+    pub(crate) sync_scheduler_dispatches_skipped_in_progress_total: AtomicU64,
     /// Total webhook dispatches that completed with `200 OK`
     /// across every running server in this process. Tracked as a
     /// process-singleton sum because the per-server counters live
@@ -284,6 +325,16 @@ counter_inc!(pub(crate) fn inc_list_webhook_servers => list_webhook_servers_tota
 counter_inc!(pub(crate) fn inc_webhook_dispatch_ok => webhook_dispatch_ok_total);
 counter_inc!(pub(crate) fn inc_webhook_dispatch_bad_request => webhook_dispatch_bad_request_total);
 counter_inc!(pub(crate) fn inc_webhook_dispatch_bad_gateway => webhook_dispatch_bad_gateway_total);
+counter_inc!(pub(crate) fn inc_start_sync_scheduler => start_sync_scheduler_total);
+counter_inc!(pub(crate) fn inc_stop_sync_scheduler => stop_sync_scheduler_total);
+counter_inc!(pub(crate) fn inc_configure_sync_schedule => configure_sync_schedule_total);
+counter_inc!(pub(crate) fn inc_clear_sync_schedule => clear_sync_schedule_total);
+counter_inc!(pub(crate) fn inc_sync_scheduler_status => sync_scheduler_status_total);
+counter_inc!(pub(crate) fn inc_sync_scheduler_tick => sync_scheduler_ticks_total);
+counter_inc!(pub(crate) fn inc_sync_scheduler_dispatch_attempted => sync_scheduler_dispatches_attempted_total);
+counter_inc!(pub(crate) fn inc_sync_scheduler_dispatch_succeeded => sync_scheduler_dispatches_succeeded_total);
+counter_inc!(pub(crate) fn inc_sync_scheduler_dispatch_failed => sync_scheduler_dispatches_failed_total);
+counter_inc!(pub(crate) fn inc_sync_scheduler_dispatch_skipped_in_progress => sync_scheduler_dispatches_skipped_in_progress_total);
 // Feature-gated to match the only call site
 // (`crate::tracing_init::try_init_tracing`). The counter *field*
 // in `MetricsSnapshot` stays unconditional so the wire shape does
@@ -447,6 +498,47 @@ pub struct MetricsSnapshot {
     /// Total `list_webhook_servers` calls initiated (Phase 5).
     #[serde(default)]
     pub list_webhook_servers_total: u64,
+    /// Total `start_sync_scheduler` calls initiated (Phase 6).
+    #[serde(default)]
+    pub start_sync_scheduler_total: u64,
+    /// Total `stop_sync_scheduler` calls initiated (Phase 6).
+    #[serde(default)]
+    pub stop_sync_scheduler_total: u64,
+    /// Total `configure_sync_schedule` calls initiated (Phase 6).
+    #[serde(default)]
+    pub configure_sync_schedule_total: u64,
+    /// Total `clear_sync_schedule` calls initiated (Phase 6).
+    #[serde(default)]
+    pub clear_sync_schedule_total: u64,
+    /// Total `sync_scheduler_status` calls initiated (Phase 6).
+    #[serde(default)]
+    pub sync_scheduler_status_total: u64,
+    /// Total ticks the scheduler worker thread has completed
+    /// across every scheduler instance in this process (Phase 6).
+    /// Tracked as a process-singleton sum because the per-runtime
+    /// counter lives inside the per-runtime
+    /// [`crate::sync_scheduler::RunningSyncScheduler`] and would
+    /// be invisible to a host that polls only `metrics_snapshot`.
+    #[serde(default)]
+    pub sync_scheduler_ticks_total: u64,
+    /// Total scheduler-initiated dispatches attempted across every
+    /// runtime (Phase 6).
+    #[serde(default)]
+    pub sync_scheduler_dispatches_attempted_total: u64,
+    /// Total scheduler-initiated dispatches that completed with
+    /// `Ok(SyncReport)` (Phase 6).
+    #[serde(default)]
+    pub sync_scheduler_dispatches_succeeded_total: u64,
+    /// Total scheduler-initiated dispatches that completed with
+    /// `Err(_)` (Phase 6).
+    #[serde(default)]
+    pub sync_scheduler_dispatches_failed_total: u64,
+    /// Total candidate instances the scheduler skipped because
+    /// they were already in
+    /// [`connector_framework::SyncStatus::InProgress`] when the
+    /// tick fired (Phase 6).
+    #[serde(default)]
+    pub sync_scheduler_dispatches_skipped_in_progress_total: u64,
     /// Total webhook dispatches that returned `200 OK` across every
     /// running server in this process (Phase 5). The per-server
     /// counters live in
@@ -590,6 +682,24 @@ pub fn snapshot() -> MetricsSnapshot {
             .unregister_webhook_dispatch_total
             .load(Ordering::Relaxed),
         list_webhook_servers_total: m.list_webhook_servers_total.load(Ordering::Relaxed),
+        start_sync_scheduler_total: m.start_sync_scheduler_total.load(Ordering::Relaxed),
+        stop_sync_scheduler_total: m.stop_sync_scheduler_total.load(Ordering::Relaxed),
+        configure_sync_schedule_total: m.configure_sync_schedule_total.load(Ordering::Relaxed),
+        clear_sync_schedule_total: m.clear_sync_schedule_total.load(Ordering::Relaxed),
+        sync_scheduler_status_total: m.sync_scheduler_status_total.load(Ordering::Relaxed),
+        sync_scheduler_ticks_total: m.sync_scheduler_ticks_total.load(Ordering::Relaxed),
+        sync_scheduler_dispatches_attempted_total: m
+            .sync_scheduler_dispatches_attempted_total
+            .load(Ordering::Relaxed),
+        sync_scheduler_dispatches_succeeded_total: m
+            .sync_scheduler_dispatches_succeeded_total
+            .load(Ordering::Relaxed),
+        sync_scheduler_dispatches_failed_total: m
+            .sync_scheduler_dispatches_failed_total
+            .load(Ordering::Relaxed),
+        sync_scheduler_dispatches_skipped_in_progress_total: m
+            .sync_scheduler_dispatches_skipped_in_progress_total
+            .load(Ordering::Relaxed),
         webhook_dispatch_ok_total: m.webhook_dispatch_ok_total.load(Ordering::Relaxed),
         webhook_dispatch_bad_request_total: m
             .webhook_dispatch_bad_request_total

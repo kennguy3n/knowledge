@@ -904,6 +904,145 @@ pub fn js_list_webhook_servers(handle: BigInt) -> Result<serde_json::Value> {
     })
 }
 
+/// Start the background sync scheduler (Phase 6).
+///
+/// Spawns a dedicated OS thread that wakes every
+/// `tickIntervalSecs` seconds, walks the connector instance map,
+/// and dispatches [`js_sync_connector`] for every connector
+/// instance whose `lastSyncedAt + syncInterval` has elapsed.
+///
+/// Per-instance overrides for `syncInterval` and `maxBackoff` are
+/// set via [`js_configure_sync_schedule`]; instances without an
+/// override use the defaults provided here.
+///
+/// # JS argument types
+///
+/// All three numeric arguments are JS `number` (not `BigInt`)
+/// because realistic scheduler intervals fit in `u32` and the JS
+/// `Number` representation is exact for any sub-`2^53` integer.
+/// N-API marshals them through the standard `u32`/`u64` adapters
+/// — values larger than `Number.MAX_SAFE_INTEGER` will round-trip
+/// lossily, but no realistic scheduler config approaches that
+/// bound.
+///
+/// # Errors
+///
+/// * `Unavailable` if `open_store(handle)` has not yet been called.
+/// * `InvalidArgument` if any argument is `0`, or if
+///   `defaultMaxBackoffSecs < defaultIntervalSecs`.
+/// * `Connector` if a scheduler is already running on this handle
+///   (call [`js_stop_sync_scheduler`] first).
+#[napi(js_name = "startSyncScheduler")]
+pub fn js_start_sync_scheduler(
+    handle: BigInt,
+    default_interval_secs: u32,
+    default_max_backoff_secs: u32,
+    tick_interval_secs: u32,
+) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    crate::start_sync_scheduler(
+        h,
+        u64::from(default_interval_secs),
+        u64::from(default_max_backoff_secs),
+        u64::from(tick_interval_secs),
+    )
+    .map_err(to_js_error)
+}
+
+/// Stop the background sync scheduler (Phase 6).
+///
+/// Signals shutdown to the worker thread and synchronously joins
+/// it. Idempotent — calling on a runtime with no scheduler
+/// running returns `Ok(())`. In-flight `sync_connector` dispatches
+/// run to completion under the substrate's three-phase locking
+/// discipline.
+///
+/// # Errors
+///
+/// * `Unavailable` if `open_store(handle)` has not yet been called.
+#[napi(js_name = "stopSyncScheduler")]
+pub fn js_stop_sync_scheduler(handle: BigInt) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    crate::stop_sync_scheduler(h).map_err(to_js_error)
+}
+
+/// Override the scheduler's policy for a specific connector
+/// instance (Phase 6). The override takes precedence over the
+/// defaults supplied at [`js_start_sync_scheduler`] time.
+///
+/// Idempotent: a second call replaces the prior policy. Also
+/// resets the instance's `consecutive_failures` counter to zero —
+/// the new policy starts from a clean slate.
+///
+/// # Errors
+///
+/// * `Unavailable` if `open_store(handle)` has not yet been called.
+/// * `Connector` if no scheduler is running on this handle.
+/// * `InvalidArgument` if `instanceId` is not a UUID,
+///   `syncIntervalSecs` is `0`, or
+///   `maxBackoffSecs < syncIntervalSecs`.
+#[napi(js_name = "configureSyncSchedule")]
+pub fn js_configure_sync_schedule(
+    handle: BigInt,
+    instance_id: String,
+    sync_interval_secs: u32,
+    max_backoff_secs: u32,
+) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    crate::configure_sync_schedule(
+        h,
+        instance_id,
+        u64::from(sync_interval_secs),
+        u64::from(max_backoff_secs),
+    )
+    .map_err(to_js_error)
+}
+
+/// Remove the scheduler's per-instance policy override for
+/// `instanceId` (Phase 6). The instance falls back to the
+/// scheduler's defaults; the accounting state is cleared so a
+/// long-Failing instance gets a fresh chance.
+///
+/// Idempotent: clearing an instance with no override is `Ok(())`.
+///
+/// # Errors
+///
+/// * `Unavailable` if `open_store(handle)` has not yet been called.
+/// * `Connector` if no scheduler is running on this handle.
+/// * `InvalidArgument` if `instanceId` is not a UUID.
+#[napi(js_name = "clearSyncSchedule")]
+pub fn js_clear_sync_schedule(handle: BigInt, instance_id: String) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    crate::clear_sync_schedule(h, instance_id).map_err(to_js_error)
+}
+
+/// Snapshot the scheduler's diagnostic state (Phase 6). Returns a
+/// `serde_json::Value` ([`ffi::SyncSchedulerStatus`]) with
+/// camelCase keys so callers can destructure
+/// `{ isRunning, startedAtUnix, defaultIntervalSecs,
+///    defaultMaxBackoffSecs, tickIntervalSecs,
+///    scheduledInstanceCount, lastTickAtUnix, ticksCompleted,
+///    dispatchesAttempted, dispatchesSucceeded, dispatchesFailed,
+///    dispatchesSkippedInProgress }` directly.
+///
+/// A stopped scheduler reports `isRunning=false` and zero
+/// counters; this is NOT an error. The host can call
+/// [`js_start_sync_scheduler`] to begin dispatching.
+///
+/// # Errors
+///
+/// * `Unavailable` if `open_store(handle)` has not yet been called.
+#[napi(js_name = "syncSchedulerStatus")]
+pub fn js_sync_scheduler_status(handle: BigInt) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let status = crate::sync_scheduler_status(h).map_err(to_js_error)?;
+    serde_json::to_value(status).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("sync scheduler status serialization failed: {e}"),
+        })
+    })
+}
+
 /// Install a global `tracing` subscriber filtered by the supplied
 /// `RUST_LOG`-syntax directive (e.g. `"ffi=debug,evidence_store=info"`).
 ///

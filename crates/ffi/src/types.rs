@@ -466,6 +466,68 @@ pub struct WebhookServerSummary {
     pub dispatch_bad_gateway_total: u64,
 }
 
+/// Wire-flat diagnostic snapshot returned by
+/// [`super::sync_scheduler_status`] (Phase 6).
+///
+/// Reports the background scheduler's running state, configuration
+/// echo, and per-counter totals so hosts can render a "Sync
+/// scheduler: running (4 instances scheduled, 12 ticks, 7 dispatches,
+/// 6 succeeded, 1 failed)" badge without enumerating connectors
+/// independently. All counters are monotonic across the scheduler's
+/// lifetime and reset to zero on a fresh
+/// [`super::start_sync_scheduler`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct SyncSchedulerStatus {
+    /// `true` iff a scheduler is currently running on this runtime
+    /// handle. `false` includes both "never started" and "started
+    /// then explicitly stopped"; the host should call
+    /// [`super::start_sync_scheduler`] in either case to start
+    /// dispatching.
+    pub is_running: bool,
+    /// Unix epoch seconds when the most recent
+    /// [`super::start_sync_scheduler`] call returned. `None` when
+    /// `is_running == false`.
+    pub started_at_unix: Option<i64>,
+    /// Default per-instance sync interval (`0` when not running).
+    /// Echo of the `default_interval_secs` argument supplied at
+    /// start time.
+    pub default_interval_secs: u64,
+    /// Default per-instance backoff cap (`0` when not running).
+    pub default_max_backoff_secs: u64,
+    /// Tick cadence (`0` when not running).
+    pub tick_interval_secs: u64,
+    /// Number of connector instances with a per-instance policy
+    /// override (set via [`super::configure_sync_schedule`]).
+    /// Instances without an override use the defaults — they still
+    /// participate in dispatch but do not show up in this count.
+    pub scheduled_instance_count: u32,
+    /// Unix epoch seconds of the scheduler's most recent tick.
+    /// `None` until the first tick has fired (a freshly-started
+    /// scheduler may show `is_running=true, last_tick_at_unix=None`
+    /// for up to `tick_interval_secs` seconds).
+    pub last_tick_at_unix: Option<i64>,
+    /// Total ticks the worker thread has completed since
+    /// `start_sync_scheduler`. Includes ticks that found no due
+    /// instances.
+    pub ticks_completed: u64,
+    /// Total dispatch attempts initiated by the scheduler. Counts
+    /// `sync_connector` calls made by the worker, not their
+    /// success/failure.
+    pub dispatches_attempted: u64,
+    /// Total dispatches that completed with `Ok(SyncReport)`.
+    pub dispatches_succeeded: u64,
+    /// Total dispatches that completed with `Err(_)`. Used as the
+    /// exponent in the per-instance backoff curve.
+    pub dispatches_failed: u64,
+    /// Total ticks where the scheduler decided NOT to dispatch a
+    /// candidate instance because it was already in
+    /// [`connector_framework::SyncStatus::InProgress`] (a
+    /// host-driven sync was running concurrently). Distinct from
+    /// `dispatches_failed` because the scheduler never invoked
+    /// `sync_connector` for these.
+    pub dispatches_skipped_in_progress: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

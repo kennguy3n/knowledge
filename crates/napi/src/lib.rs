@@ -53,7 +53,8 @@ pub use ffi::{
     AdapterReport, ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass,
     FfiKeypair, FfiSignature, HealthStatus, MemoryFilter, MemoryRecord, MemoryState,
     MetricsSnapshot, QueryResult, RefreshReport, RuntimeHandle, ScopeIdString, SourceKind,
-    SubsystemHealth, SubsystemStatus, SyncModeKind, SyncReport, SyncStatusKind, SynthesisTrigger,
+    SubsystemHealth, SubsystemStatus, SyncModeKind, SyncReport, SyncSchedulerStatus,
+    SyncStatusKind, SynthesisTrigger,
 };
 pub use types::{IngestRequest, InitConfig, QueryRequest};
 
@@ -600,6 +601,84 @@ pub fn unregister_webhook_dispatch(
 /// Forwards [`ffi::list_webhook_servers`] errors as [`NapiError`].
 pub fn list_webhook_servers(handle: NapiHandle) -> NapiResult<Vec<ffi::WebhookServerSummary>> {
     ffi::list_webhook_servers(RuntimeHandle(handle)).map_err(NapiError::from)
+}
+
+/// Start the background sync scheduler (Phase 6).
+///
+/// Spawns a dedicated OS thread that wakes every
+/// `tick_interval_secs` and dispatches [`ffi::sync_connector`] for
+/// every connector instance whose `last_synced_at + sync_interval`
+/// has elapsed. Mirrors [`ffi::start_sync_scheduler`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::start_sync_scheduler`] errors as [`NapiError`].
+pub fn start_sync_scheduler(
+    handle: NapiHandle,
+    default_interval_secs: u64,
+    default_max_backoff_secs: u64,
+    tick_interval_secs: u64,
+) -> NapiResult<()> {
+    ffi::start_sync_scheduler(
+        RuntimeHandle(handle),
+        default_interval_secs,
+        default_max_backoff_secs,
+        tick_interval_secs,
+    )
+    .map_err(NapiError::from)
+}
+
+/// Stop the background sync scheduler (Phase 6).
+///
+/// Idempotent — calling this on a runtime with no scheduler running
+/// returns `Ok(())`. Mirrors [`ffi::stop_sync_scheduler`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::stop_sync_scheduler`] errors as [`NapiError`].
+pub fn stop_sync_scheduler(handle: NapiHandle) -> NapiResult<()> {
+    ffi::stop_sync_scheduler(RuntimeHandle(handle)).map_err(NapiError::from)
+}
+
+/// Override the scheduler's policy for a specific connector
+/// instance (Phase 6). Mirrors [`ffi::configure_sync_schedule`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::configure_sync_schedule`] errors as [`NapiError`].
+pub fn configure_sync_schedule(
+    handle: NapiHandle,
+    instance_id: String,
+    sync_interval_secs: u64,
+    max_backoff_secs: u64,
+) -> NapiResult<()> {
+    ffi::configure_sync_schedule(
+        RuntimeHandle(handle),
+        instance_id,
+        sync_interval_secs,
+        max_backoff_secs,
+    )
+    .map_err(NapiError::from)
+}
+
+/// Remove the per-instance scheduler policy override for
+/// `instance_id` (Phase 6). Mirrors [`ffi::clear_sync_schedule`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::clear_sync_schedule`] errors as [`NapiError`].
+pub fn clear_sync_schedule(handle: NapiHandle, instance_id: String) -> NapiResult<()> {
+    ffi::clear_sync_schedule(RuntimeHandle(handle), instance_id).map_err(NapiError::from)
+}
+
+/// Snapshot the scheduler's diagnostic state (Phase 6). Mirrors
+/// [`ffi::sync_scheduler_status`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::sync_scheduler_status`] errors as [`NapiError`].
+pub fn sync_scheduler_status(handle: NapiHandle) -> NapiResult<ffi::SyncSchedulerStatus> {
+    ffi::sync_scheduler_status(RuntimeHandle(handle)).map_err(NapiError::from)
 }
 
 const B64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

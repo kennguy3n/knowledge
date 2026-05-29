@@ -509,6 +509,15 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
         ", webhook_servers={webhook_server_count}, \
          webhook_registrations={webhook_registration_count}"
     );
+    // Phase 6 — surface the background sync scheduler's running
+    // state. Pure diagnostic: stays `Ok` regardless because most
+    // ingest-only hosts (offline CLI batch tools, Electron status
+    // panels) never start a scheduler, and treating "no scheduler"
+    // as Degraded would force a yellow tile for a deliberate
+    // configuration choice — same rationale as the webhook server
+    // count above.
+    detail.push_str(", ");
+    detail.push_str(crate::sync_scheduler::scheduler_health_detail(rt));
     SubsystemHealth {
         name: "connector".into(),
         status,

@@ -3563,3 +3563,381 @@ mod webhook {
         close_store(h).expect("close_store");
     }
 }
+
+// ───────────────────── Phase 6: background sync scheduler ─────────
+
+#[cfg(feature = "http-client")]
+mod sync_scheduler_tests {
+    //! Integration tests for the Phase 6 background sync scheduler
+    //! FFI surface. Each test stands up a temp-dir SQLCipher store
+    //! and exercises the scheduler entry points end-to-end. The
+    //! scheduler thread is a real `std::thread` — we drive it on
+    //! short tick intervals (1 s minimum, per
+    //! `MIN_TICK_SECS`) and let actual wall-clock time elapse so
+    //! the dispatch path runs the same code shipping to hosts.
+
+    use super::{fresh_store, ConnectorKindTag};
+    use ffi::{
+        clear_sync_schedule, close_store, configure_sync_schedule, create_connector, health_check,
+        metrics_snapshot, start_sync_scheduler, stop_sync_scheduler, sync_scheduler_status,
+        FfiError, SubsystemStatus,
+    };
+    use std::time::{Duration, Instant};
+
+    /// Slack connector config pointed at the `.invalid` TLD so any
+    /// outbound HTTP call (e.g. the scheduler's dispatch through
+    /// `sync_connector`) fails fast and predictably. We never want
+    /// the scheduler tests to take longer than necessary; the
+    /// dispatch failures themselves are part of what we measure.
+    const SLACK_CONNECTOR_CFG: &str = r#"{
+        "client_id": "x",
+        "client_secret": "y",
+        "auth_endpoint": "https://oauth.slack.invalid/authorize",
+        "token_endpoint": "https://oauth.slack.invalid/token",
+        "redirect_uri": "https://example.invalid/callback"
+    }"#;
+
+    /// Spin briefly waiting for a predicate to become true (or
+    /// `timeout` to elapse). The dispatch thread runs on real
+    /// wall-clock time so most assertions need a bounded wait.
+    fn wait_until<F: FnMut() -> bool>(timeout: Duration, mut pred: F) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if pred() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        pred()
+    }
+
+    #[test]
+    fn lifecycle_start_status_stop() {
+        let (h, _dir) = fresh_store();
+
+        // Before start: status reports stopped.
+        let stopped = sync_scheduler_status(h).expect("status when stopped");
+        assert!(!stopped.is_running);
+        assert_eq!(stopped.started_at_unix, None);
+        assert_eq!(stopped.ticks_completed, 0);
+        assert_eq!(stopped.dispatches_attempted, 0);
+
+        // Start with the minimum-resolution config (1s tick, 1s
+        // interval, 2s max backoff) so the test can observe at
+        // least one tick within a couple of seconds.
+        start_sync_scheduler(h, 1, 2, 1).expect("start_sync_scheduler");
+
+        let running = sync_scheduler_status(h).expect("status when running");
+        assert!(running.is_running);
+        assert!(running.started_at_unix.is_some());
+        assert_eq!(running.default_interval_secs, 1);
+        assert_eq!(running.default_max_backoff_secs, 2);
+        assert_eq!(running.tick_interval_secs, 1);
+        assert_eq!(running.scheduled_instance_count, 0);
+
+        // Double-start MUST fail with Connector — hosts cannot
+        // accidentally replace the running scheduler without an
+        // explicit stop.
+        let err = start_sync_scheduler(h, 1, 2, 1).expect_err("double-start must fail");
+        assert!(matches!(err, FfiError::Connector { .. }));
+
+        // Wait for at least one tick to fire so the worker thread
+        // is actually live, then stop.
+        assert!(
+            wait_until(Duration::from_secs(5), || {
+                sync_scheduler_status(h)
+                    .ok()
+                    .is_some_and(|s| s.ticks_completed >= 1)
+            }),
+            "scheduler must produce at least one tick within 5s",
+        );
+
+        stop_sync_scheduler(h).expect("stop_sync_scheduler");
+        let after = sync_scheduler_status(h).expect("status after stop");
+        assert!(!after.is_running);
+
+        // Idempotent: stopping an already-stopped scheduler is
+        // `Ok(())`, not an error.
+        stop_sync_scheduler(h).expect("idempotent stop");
+
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn start_rejects_invalid_arguments() {
+        let (h, _dir) = fresh_store();
+
+        // Zero interval rejected.
+        let err = start_sync_scheduler(h, 0, 10, 1).expect_err("zero interval must reject");
+        assert!(matches!(err, FfiError::InvalidId { .. }));
+
+        // Zero tick rejected.
+        let err = start_sync_scheduler(h, 1, 10, 0).expect_err("zero tick must reject");
+        assert!(matches!(err, FfiError::InvalidId { .. }));
+
+        // max_backoff < interval rejected.
+        let err =
+            start_sync_scheduler(h, 10, 5, 1).expect_err("max_backoff < interval must reject");
+        assert!(matches!(err, FfiError::InvalidId { .. }));
+
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn configure_and_clear_per_instance_policy() {
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-000000005c01".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+
+        // Configure without scheduler running: must fail Connector.
+        let err = configure_sync_schedule(h, instance.clone(), 5, 30)
+            .expect_err("configure pre-start must fail");
+        assert!(matches!(err, FfiError::Connector { .. }));
+
+        start_sync_scheduler(h, 60, 600, 1).expect("start");
+
+        // Configure with valid policy.
+        configure_sync_schedule(h, instance.clone(), 5, 30).expect("configure_sync_schedule");
+        let after_config = sync_scheduler_status(h).expect("status after configure");
+        assert_eq!(after_config.scheduled_instance_count, 1);
+
+        // Configure rejects zero interval.
+        let err = configure_sync_schedule(h, instance.clone(), 0, 30)
+            .expect_err("zero interval must reject");
+        assert!(matches!(err, FfiError::InvalidId { .. }));
+
+        // Configure rejects garbage UUID.
+        let err = configure_sync_schedule(h, "not-a-uuid".into(), 5, 30)
+            .expect_err("garbage UUID must reject");
+        assert!(matches!(err, FfiError::InvalidId { .. }));
+
+        // Configure rejects max_backoff < interval.
+        let err = configure_sync_schedule(h, instance.clone(), 30, 5)
+            .expect_err("max_backoff < interval must reject");
+        assert!(matches!(err, FfiError::InvalidId { .. }));
+
+        // Clear restores defaults.
+        clear_sync_schedule(h, instance.clone()).expect("clear_sync_schedule");
+        let after_clear = sync_scheduler_status(h).expect("status after clear");
+        assert_eq!(after_clear.scheduled_instance_count, 0);
+
+        // Clear is idempotent.
+        clear_sync_schedule(h, instance.clone()).expect("idempotent clear");
+
+        stop_sync_scheduler(h).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn dispatch_failure_is_counted_and_backs_off() {
+        // Create an unauthenticated Slack connector pointed at
+        // `.invalid` — the scheduler's `sync_connector` dispatch
+        // will fail fast, incrementing the failed-dispatch counter
+        // and engaging exponential backoff. We assert the failure
+        // counter rises with at least one dispatch, then stop.
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-000000005c02".to_string();
+        let _instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+
+        // 1s interval + 1s tick: the very first tick should pick
+        // the instance up and dispatch.
+        start_sync_scheduler(h, 1, 4, 1).expect("start");
+
+        // Wait until the scheduler has attempted at least one
+        // dispatch — bounded by 5 s to keep the test snappy even
+        // on a loaded CI host. (Slack at `.invalid` cannot
+        // resolve, so the dispatch errors out quickly.)
+        assert!(
+            wait_until(Duration::from_secs(5), || {
+                sync_scheduler_status(h)
+                    .ok()
+                    .is_some_and(|s| s.dispatches_attempted >= 1)
+            }),
+            "scheduler must attempt at least one dispatch within 5s",
+        );
+
+        let after = sync_scheduler_status(h).expect("status after dispatch");
+        assert!(after.dispatches_attempted >= 1);
+        // Slack at `.invalid` rejects with a connector error — the
+        // dispatch path fails, so failure counter advances. The
+        // succeeded counter stays at zero.
+        assert!(after.dispatches_failed >= 1);
+        assert_eq!(after.dispatches_succeeded, 0);
+
+        stop_sync_scheduler(h).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn process_metrics_record_scheduler_activity() {
+        // Process-wide `metrics_snapshot()` must surface the
+        // scheduler's per-call counters so a host that polls only
+        // the metrics surface sees scheduler activity without
+        // calling `sync_scheduler_status`.
+        let (h, _dir) = fresh_store();
+
+        let before = metrics_snapshot();
+        let baseline_start = before.start_sync_scheduler_total;
+        let baseline_stop = before.stop_sync_scheduler_total;
+        let baseline_status = before.sync_scheduler_status_total;
+
+        start_sync_scheduler(h, 60, 120, 1).expect("start");
+        let _ = sync_scheduler_status(h).expect("status");
+        stop_sync_scheduler(h).expect("stop");
+
+        let after = metrics_snapshot();
+        assert_eq!(
+            after.start_sync_scheduler_total,
+            baseline_start + 1,
+            "start counter must advance by exactly 1",
+        );
+        assert_eq!(
+            after.stop_sync_scheduler_total,
+            baseline_stop + 1,
+            "stop counter must advance by exactly 1",
+        );
+        assert!(
+            after.sync_scheduler_status_total > baseline_status,
+            "status counter must advance",
+        );
+
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn health_probe_surfaces_scheduler_running_state() {
+        // The connector subsystem health detail string must
+        // surface `sync_scheduler=running` when the scheduler is
+        // up and `sync_scheduler=stopped` otherwise. Pure
+        // diagnostic; subsystem status stays `Ok` in both cases
+        // for an empty / non-failing connector map.
+        let (h, _dir) = fresh_store();
+
+        let envelope = health_check(Some(h)).expect("health_check pre-start");
+        let connector = envelope
+            .subsystems
+            .iter()
+            .find(|s| s.name == "connector")
+            .expect("connector subsystem");
+        assert_eq!(connector.status, SubsystemStatus::Ok);
+        let detail = connector.detail.clone().unwrap_or_default();
+        assert!(
+            detail.contains("sync_scheduler=stopped"),
+            "pre-start probe must contain sync_scheduler=stopped, got: {detail}",
+        );
+
+        start_sync_scheduler(h, 60, 120, 1).expect("start");
+        let envelope = health_check(Some(h)).expect("health_check post-start");
+        let connector = envelope
+            .subsystems
+            .iter()
+            .find(|s| s.name == "connector")
+            .expect("connector subsystem");
+        let detail = connector.detail.clone().unwrap_or_default();
+        assert!(
+            detail.contains("sync_scheduler=running"),
+            "post-start probe must contain sync_scheduler=running, got: {detail}",
+        );
+
+        stop_sync_scheduler(h).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn close_store_drains_running_scheduler() {
+        // The drain ordering invariant: a `close_store` call on a
+        // runtime with a running scheduler must NOT hang or panic.
+        // The scheduler worker is joined synchronously before the
+        // `Arc::try_unwrap` spin loop. We pin this by starting a
+        // scheduler, letting it tick a few times to confirm it's
+        // actually running, then dropping straight into
+        // `close_store` without an explicit stop.
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-000000005c03".to_string();
+        let _instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+
+        start_sync_scheduler(h, 1, 4, 1).expect("start");
+
+        // Wait until the scheduler has ticked at least once, so
+        // we know `close_store` is racing a live worker thread,
+        // not a freshly-spawned one that hasn't run yet.
+        assert!(
+            wait_until(Duration::from_secs(5), || {
+                sync_scheduler_status(h)
+                    .ok()
+                    .is_some_and(|s| s.ticks_completed >= 1)
+            }),
+            "scheduler must produce at least one tick within 5s",
+        );
+
+        // No explicit stop_sync_scheduler — close_store must drain
+        // the scheduler thread itself. Bounded by `tick_interval`
+        // for the worker to surface the shutdown signal; should
+        // return cleanly in <2s.
+        let started = Instant::now();
+        close_store(h).expect("close_store must drain scheduler cleanly");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "close_store must not hang on scheduler drain (took {elapsed:?})",
+        );
+    }
+
+    #[test]
+    fn concurrent_configure_does_not_deadlock_with_tick() {
+        // Race-safety pin: concurrent `configure_sync_schedule`
+        // calls from a host thread MUST NOT deadlock with the
+        // scheduler worker thread's tick. Both paths acquire the
+        // policies mutex under the runtime mutex in the same
+        // order (runtime → policies); a buggy reordering would
+        // surface as a hang on this test.
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-000000005c04".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+
+        start_sync_scheduler(h, 1, 4, 1).expect("start");
+
+        // Hammer configure for 2 seconds while the scheduler
+        // ticks on its own thread. Bounded loop count keeps the
+        // test deterministic on slow CI hosts.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut iterations = 0u32;
+        while Instant::now() < deadline {
+            configure_sync_schedule(h, instance.clone(), 2, 10)
+                .expect("configure must not deadlock");
+            clear_sync_schedule(h, instance.clone()).expect("clear must not deadlock");
+            iterations += 1;
+        }
+        assert!(
+            iterations >= 5,
+            "expected configure+clear to round-trip many times; got {iterations}",
+        );
+
+        stop_sync_scheduler(h).expect("stop");
+        close_store(h).expect("close_store");
+    }
+}

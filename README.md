@@ -130,7 +130,10 @@ across both bindings) are:
 `clear_oauth_client_secret_resolver`,
 `start_webhook_server`, `stop_webhook_server`,
 `register_webhook_dispatch`, `unregister_webhook_dispatch`,
-`list_webhook_servers`.
+`list_webhook_servers`,
+`start_sync_scheduler`, `stop_sync_scheduler`,
+`configure_sync_schedule`, `clear_sync_schedule`,
+`sync_scheduler_status`.
 
 Four entry points are intentionally surface-specific rather than
 mirrored across both bindings:
@@ -220,7 +223,14 @@ embedded in the health envelope. Counters include
 `list_webhook_servers_total`,
 `webhook_dispatch_ok_total`,
 `webhook_dispatch_bad_request_total`,
-`webhook_dispatch_bad_gateway_total`, plus
+`webhook_dispatch_bad_gateway_total`,
+`start_sync_scheduler_total`, `stop_sync_scheduler_total`,
+`configure_sync_schedule_total`, `clear_sync_schedule_total`,
+`sync_scheduler_status_total`, `sync_scheduler_ticks_total`,
+`sync_scheduler_dispatches_attempted_total`,
+`sync_scheduler_dispatches_succeeded_total`,
+`sync_scheduler_dispatches_failed_total`,
+`sync_scheduler_dispatches_skipped_in_progress_total`, plus
 per-`FfiError`-kind counters under `errors_by_kind`
 (`unimplemented`, `invalid_id`, `not_found`, `evidence`,
 `memory`, `synthesis`, `crypto`, `unavailable`,
