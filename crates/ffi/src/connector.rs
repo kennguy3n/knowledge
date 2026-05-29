@@ -1671,7 +1671,7 @@ fn build_connector(
 /// and doesn't materialise "the document was deleted" as a new
 /// evidence row. They still count in `events_total` so callers can
 /// reconcile against the source system's change-feed cursor.
-fn event_to_evidence_body(event: &ConnectorEvent) -> Option<String> {
+pub(crate) fn event_to_evidence_body(event: &ConnectorEvent) -> Option<String> {
     // Use `serde_json::Value` so the body round-trips through the
     // evidence store's UTF-8 view and the host can re-parse it.
     // Embedding `kind` + `document_id` + `occurred_at` gives the FTS
@@ -1703,7 +1703,7 @@ fn event_to_evidence_body(event: &ConnectorEvent) -> Option<String> {
 /// `source_ref` as opaque UTF-8 — there's no enum constraint — but
 /// stable tags let downstream filters (`WHERE source_ref = 'Slack'`)
 /// keep working without parsing.
-fn connector_source_tag(kind: ConnectorKind) -> &'static str {
+pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
     match kind {
         ConnectorKind::GoogleDrive => "GoogleWorkspace",
         ConnectorKind::OneDrive => "MicrosoftGraph",
@@ -1991,7 +1991,7 @@ pub(crate) fn rehydrate_connectors(rt: &mut FfiRuntime, tombstones: &HashSet<Sco
 /// a future entry point starts accepting instance ids by string from
 /// outside this module, promote to `pub(crate)` in `lib.rs` next to
 /// `parse_scope_id`.
-fn parse_instance_id(s: &str) -> FfiResult<ConnectorInstanceId> {
+pub(crate) fn parse_instance_id(s: &str) -> FfiResult<ConnectorInstanceId> {
     Uuid::parse_str(s)
         .map(ConnectorInstanceId)
         .map_err(|e| FfiError::InvalidId {

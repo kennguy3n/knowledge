@@ -125,6 +125,33 @@ pub(crate) struct Metrics {
     /// Total `clear_oauth_client_secret_resolver` calls initiated
     /// (Phase 4.1 — host-supplied resolver de-registration).
     pub(crate) clear_oauth_client_secret_resolver_total: AtomicU64,
+    /// Total `start_webhook_server` calls initiated
+    /// (Phase 5 — webhook receiver server startup).
+    pub(crate) start_webhook_server_total: AtomicU64,
+    /// Total `stop_webhook_server` calls initiated
+    /// (Phase 5 — webhook receiver server shutdown).
+    pub(crate) stop_webhook_server_total: AtomicU64,
+    /// Total `register_webhook_dispatch` calls initiated
+    /// (Phase 5 — bind a `provider_id` to a connector instance).
+    pub(crate) register_webhook_dispatch_total: AtomicU64,
+    /// Total `unregister_webhook_dispatch` calls initiated
+    /// (Phase 5 — drop a `(server, provider_id)` binding).
+    pub(crate) unregister_webhook_dispatch_total: AtomicU64,
+    /// Total `list_webhook_servers` calls initiated
+    /// (Phase 5 — diagnostic enumeration of running servers).
+    pub(crate) list_webhook_servers_total: AtomicU64,
+    /// Total webhook dispatches that completed with `200 OK`
+    /// across every running server in this process. Tracked as a
+    /// process-singleton sum because the per-server counters live
+    /// inside the per-runtime `FfiWebhookRouter` and would be
+    /// invisible to a host that polls only `metrics_snapshot`.
+    pub(crate) webhook_dispatch_ok_total: AtomicU64,
+    /// Total webhook dispatches that completed with `400 Bad
+    /// Request` (the dispatcher returned `ConnectorError::Webhook`).
+    pub(crate) webhook_dispatch_bad_request_total: AtomicU64,
+    /// Total webhook dispatches that completed with `502 Bad
+    /// Gateway` (the dispatcher returned any other `ConnectorError`).
+    pub(crate) webhook_dispatch_bad_gateway_total: AtomicU64,
     /// Total `health_check` calls initiated. Counted on both the
     /// bridge-only (no-handle) path and the full-probe (valid-handle)
     /// path. The `Err` path (unknown / closed handle) still
@@ -249,6 +276,14 @@ counter_inc!(pub(crate) fn inc_remove_connector => remove_connector_total);
 counter_inc!(pub(crate) fn inc_refresh_connector_token => refresh_connector_token_total);
 counter_inc!(pub(crate) fn inc_set_oauth_client_secret_resolver => set_oauth_client_secret_resolver_total);
 counter_inc!(pub(crate) fn inc_clear_oauth_client_secret_resolver => clear_oauth_client_secret_resolver_total);
+counter_inc!(pub(crate) fn inc_start_webhook_server => start_webhook_server_total);
+counter_inc!(pub(crate) fn inc_stop_webhook_server => stop_webhook_server_total);
+counter_inc!(pub(crate) fn inc_register_webhook_dispatch => register_webhook_dispatch_total);
+counter_inc!(pub(crate) fn inc_unregister_webhook_dispatch => unregister_webhook_dispatch_total);
+counter_inc!(pub(crate) fn inc_list_webhook_servers => list_webhook_servers_total);
+counter_inc!(pub(crate) fn inc_webhook_dispatch_ok => webhook_dispatch_ok_total);
+counter_inc!(pub(crate) fn inc_webhook_dispatch_bad_request => webhook_dispatch_bad_request_total);
+counter_inc!(pub(crate) fn inc_webhook_dispatch_bad_gateway => webhook_dispatch_bad_gateway_total);
 // Feature-gated to match the only call site
 // (`crate::tracing_init::try_init_tracing`). The counter *field*
 // in `MetricsSnapshot` stays unconditional so the wire shape does
@@ -397,6 +432,40 @@ pub struct MetricsSnapshot {
     /// (Phase 4.1).
     #[serde(default)]
     pub clear_oauth_client_secret_resolver_total: u64,
+    /// Total `start_webhook_server` calls initiated (Phase 5).
+    #[serde(default)]
+    pub start_webhook_server_total: u64,
+    /// Total `stop_webhook_server` calls initiated (Phase 5).
+    #[serde(default)]
+    pub stop_webhook_server_total: u64,
+    /// Total `register_webhook_dispatch` calls initiated (Phase 5).
+    #[serde(default)]
+    pub register_webhook_dispatch_total: u64,
+    /// Total `unregister_webhook_dispatch` calls initiated (Phase 5).
+    #[serde(default)]
+    pub unregister_webhook_dispatch_total: u64,
+    /// Total `list_webhook_servers` calls initiated (Phase 5).
+    #[serde(default)]
+    pub list_webhook_servers_total: u64,
+    /// Total webhook dispatches that returned `200 OK` across every
+    /// running server in this process (Phase 5). The per-server
+    /// counters live in
+    /// [`crate::types::WebhookServerSummary::dispatch_ok_total`];
+    /// this counter is the process-wide sum, surfaced through
+    /// `metrics_snapshot` so a host that polls only the metrics
+    /// surface sees webhook activity without enumerating servers.
+    #[serde(default)]
+    pub webhook_dispatch_ok_total: u64,
+    /// Total webhook dispatches that returned `400 Bad Request`
+    /// across every running server in this process (Phase 5).
+    /// Companion to [`Self::webhook_dispatch_ok_total`].
+    #[serde(default)]
+    pub webhook_dispatch_bad_request_total: u64,
+    /// Total webhook dispatches that returned `502 Bad Gateway`
+    /// across every running server in this process (Phase 5).
+    /// Companion to [`Self::webhook_dispatch_ok_total`].
+    #[serde(default)]
+    pub webhook_dispatch_bad_gateway_total: u64,
     /// Total `health_check` calls initiated — every probe (bridge
     /// only and full) increments this, including the `Err` path for
     /// an unknown / closed handle (the `Err` path also feeds
@@ -513,6 +582,20 @@ pub fn snapshot() -> MetricsSnapshot {
             .load(Ordering::Relaxed),
         clear_oauth_client_secret_resolver_total: m
             .clear_oauth_client_secret_resolver_total
+            .load(Ordering::Relaxed),
+        start_webhook_server_total: m.start_webhook_server_total.load(Ordering::Relaxed),
+        stop_webhook_server_total: m.stop_webhook_server_total.load(Ordering::Relaxed),
+        register_webhook_dispatch_total: m.register_webhook_dispatch_total.load(Ordering::Relaxed),
+        unregister_webhook_dispatch_total: m
+            .unregister_webhook_dispatch_total
+            .load(Ordering::Relaxed),
+        list_webhook_servers_total: m.list_webhook_servers_total.load(Ordering::Relaxed),
+        webhook_dispatch_ok_total: m.webhook_dispatch_ok_total.load(Ordering::Relaxed),
+        webhook_dispatch_bad_request_total: m
+            .webhook_dispatch_bad_request_total
+            .load(Ordering::Relaxed),
+        webhook_dispatch_bad_gateway_total: m
+            .webhook_dispatch_bad_gateway_total
             .load(Ordering::Relaxed),
         health_check_total: m.health_check_total.load(Ordering::Relaxed),
         init_tracing_total: m.init_tracing_total.load(Ordering::Relaxed),

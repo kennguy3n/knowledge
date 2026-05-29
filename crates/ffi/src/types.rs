@@ -396,6 +396,76 @@ pub struct SyncReport {
     pub completed_at: i64,
 }
 
+/// Opaque handle to one running webhook receiver server.
+///
+/// Allocated by [`super::start_webhook_server`] and re-presented to
+/// [`super::stop_webhook_server`] / [`super::register_webhook_dispatch`]
+/// / [`super::unregister_webhook_dispatch`] to identify which server
+/// the call targets. The underlying type is `u64`; hosts treat it as
+/// opaque — every server allocation comes from a monotonically
+/// increasing counter so `0` is never minted as a real handle
+/// (mirrors [`super::RuntimeHandle::NONE`]'s sentinel discipline).
+///
+/// Wrapped in a UniFFI newtype so Swift / Kotlin see it as a
+/// dedicated type (`WebhookServerHandle` rather than a bare `UInt64`)
+/// and can't accidentally swap it with a [`super::RuntimeHandle`] of
+/// the same width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+#[repr(transparent)]
+pub struct WebhookServerHandle(pub u64);
+
+uniffi::custom_newtype!(WebhookServerHandle, u64);
+
+impl WebhookServerHandle {
+    /// Sentinel "no server" handle. Never minted by
+    /// [`super::start_webhook_server`].
+    pub const NONE: WebhookServerHandle = WebhookServerHandle(0);
+}
+
+/// Wire-flat summary row returned by [`super::list_webhook_servers`].
+///
+/// Carries enough state for the host to render a server-list view —
+/// which port is bound, how many registrations are live, how many
+/// successful dispatches it has fanned, how many dispatches failed.
+/// All counters reset on `start_webhook_server` and remain monotonic
+/// across the server's lifetime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct WebhookServerSummary {
+    /// Stable opaque handle this row refers to. Same value the host
+    /// originally received from [`super::start_webhook_server`].
+    pub server_handle: WebhookServerHandle,
+    /// Bound socket address (`ip:port`) — resolved AFTER the OS
+    /// picked the ephemeral port if the caller requested `:0`.
+    /// Hosts whose ingress / NAT setup discovers the live port from
+    /// this field MUST query [`super::list_webhook_servers`] (the
+    /// summary is the only way the caller learns the resolved port).
+    pub bind_addr: String,
+    /// Unix epoch seconds when [`super::start_webhook_server`]
+    /// returned. Useful for the host's audit log + for diagnostics
+    /// that correlate webhook-side activity with start-of-day.
+    pub started_at: i64,
+    /// How many `(provider_id, instance_id)` dispatch rows are
+    /// currently registered against this server.
+    pub registration_count: u32,
+    /// Total dispatches that completed with `200 OK` since the
+    /// server started (i.e. the dispatcher returned
+    /// `Ok(())` from [`connector_framework::WebhookDispatcher::dispatch`]
+    /// and the underlying connector's `handle_webhook_event` produced
+    /// at least one event row — or zero rows, which is also success).
+    pub dispatch_ok_total: u64,
+    /// Total dispatches that completed with `400 Bad Request`
+    /// (the dispatcher returned `ConnectorError::Webhook(_)`,
+    /// translating malformed-payload errors to a 4xx so the
+    /// upstream provider stops re-delivering).
+    pub dispatch_bad_request_total: u64,
+    /// Total dispatches that completed with `502 Bad Gateway`
+    /// (the dispatcher returned any other `ConnectorError`,
+    /// translating substrate-side failures to a 5xx so the
+    /// upstream provider's retry-with-backoff is invoked).
+    pub dispatch_bad_gateway_total: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

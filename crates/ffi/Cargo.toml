@@ -95,6 +95,23 @@ uniffi = { workspace = true }
 uuid = { workspace = true }
 zeroize = { workspace = true }
 
+# Phase 5 webhook receiver wiring — the FFI surface owns the tokio
+# runtime that drives the framework-layer `WebhookServer` (axum) per
+# server instance, builds the `Arc<dyn WebhookDispatcher>` that fans
+# `POST /webhooks/:provider_id` into the in-memory connector
+# registry, and synchronously joins the server thread on
+# `stop_webhook_server` / `close_store` so SQLCipher and the master
+# key are torn down only after every in-flight dispatch has drained.
+# The framework crate already declares these via its `webhook-server`
+# feature, but the FFI uses the types directly (constructing
+# `WebhookServerConfig`, `WebhookDispatch`, implementing
+# `WebhookDispatcher`, awaiting `oneshot::Receiver`, spawning blocking
+# work via `tokio::task::spawn_blocking`) so they need to be direct
+# deps of this crate too.
+async-trait = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+
 [dev-dependencies]
 rusqlite = { workspace = true }
 tempfile = { workspace = true }
