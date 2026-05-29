@@ -98,7 +98,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
 
 use async_trait::async_trait;
@@ -133,9 +133,16 @@ use crate::types::{WebhookServerHandle, WebhookServerSummary};
 /// to a webhook fn on the other and the latter's `webhook_servers`
 /// map lookup will fail-closed with [`FfiError::NotFound`].
 fn next_server_handle() -> u64 {
-    static NEXT: OnceLock<AtomicU64> = OnceLock::new();
-    NEXT.get_or_init(|| AtomicU64::new(1))
-        .fetch_add(1, Ordering::Relaxed)
+    // Matches the bare-static convention used by `runtime::next_handle`
+    // for [`RuntimeHandle`] allocation — no lazy init required because
+    // `AtomicU64::new` is `const`. `Relaxed` suffices for the same
+    // reason as there: `fetch_add` is an atomic RMW so each caller
+    // receives a distinct value, and the runtime mutex taken in
+    // `start_webhook_server` immediately after carries the actual
+    // happens-before edge for inserting the new entry into
+    // `webhook_servers`.
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 // ───────────────────────── Router (the WebhookDispatcher) ──────────
@@ -682,43 +689,30 @@ pub fn start_webhook_server(
         };
 
         // Insert into the runtime's webhook_servers map under the
-        // runtime mutex. The server is already running at this
-        // point — if the insert fails (collision against an
-        // existing handle, which can only happen on a wrapped
-        // counter and is already rejected above) we shut down the
-        // server cleanly before surfacing the error.
-        let insert_result = with_runtime(handle, |rt| {
-            if rt.webhook_servers.contains_key(&server_handle) {
-                return Err(FfiError::Connector {
+        // runtime mutex via a `Vacant`-entry probe. `next_server_handle`
+        // is a monotonic process-global counter, so a collision against
+        // an existing handle is unreachable in practice; the
+        // `Entry::Occupied` arm is defense-in-depth that fails closed
+        // if a future change ever weakens that invariant. On the
+        // `Occupied` early-return the closure-local `server` is
+        // dropped, firing [`RunningWebhookServer::Drop`] which calls
+        // `shutdown_and_join` — so the spawned tokio runtime is torn
+        // down cleanly even when we never inserted it.
+        with_runtime(handle, |rt| {
+            use std::collections::hash_map::Entry;
+            match rt.webhook_servers.entry(server_handle) {
+                Entry::Vacant(slot) => {
+                    slot.insert(server);
+                    Ok(server_handle)
+                }
+                Entry::Occupied(_) => Err(FfiError::Connector {
                     message: format!(
                         "webhook server handle {} collided during allocation",
                         server_handle.0,
                     ),
-                });
+                }),
             }
-            rt.webhook_servers.insert(server_handle, server);
-            Ok(())
-        });
-
-        match insert_result {
-            Ok(()) => Ok(server_handle),
-            Err(e) => {
-                // The insert closure consumed `server` only on
-                // success; on the early-return path the server is
-                // still in scope here — but wait, the closure
-                // captured it by move. So actually on Err, `server`
-                // was moved into the closure's local. We need to
-                // restructure: take the server back out on Err.
-                //
-                // In practice the contains_key collision is
-                // impossible (the counter just minted a fresh u64),
-                // so this path is unreachable. We log and propagate
-                // the error; the dropped runtime thread will
-                // eventually time out when the shutdown_tx Drop
-                // closes the channel.
-                Err(e)
-            }
-        }
+        })
     })
 }
 

@@ -3223,7 +3223,7 @@ mod webhook {
         let (h, _dir) = fresh_store();
         let err = start_webhook_server(h, "definitely not a socket addr".into())
             .expect_err("invalid bind_addr must be rejected");
-        assert!(matches!(err, FfiError::InvalidId { .. }), "got {err:?}",);
+        assert!(matches!(err, FfiError::InvalidId { .. }), "got {err:?}");
         close_store(h).expect("close_store");
     }
 

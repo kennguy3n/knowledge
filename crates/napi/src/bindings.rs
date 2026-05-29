@@ -742,6 +742,26 @@ pub fn js_unregister_webhook_dispatch(
 ///   dispatchOkTotal, dispatchBadRequestTotal, dispatchBadGatewayTotal }`
 /// shapes without an additional `JSON.parse`.
 ///
+/// # JS handle representation
+///
+/// `serverHandle` is serialised as a JSON `number`, not a
+/// `BigInt` — consistent with the rest of the N-API `list*` family
+/// (`listConnectors`, `listConnectorAuthState`, …) which all route
+/// through `serde_json::to_value`. By contrast,
+/// [`js_start_webhook_server`] returns the freshly-minted handle as
+/// a `BigInt` (the canonical FFI representation). Hosts comparing
+/// a handle taken from this list against one returned by
+/// `startWebhookServer` must coerce to a common type: either widen
+/// the list value via `BigInt(row.serverHandle)` or narrow the
+/// start return via `Number(handle)`. Loose `==` works across the
+/// `BigInt`/`Number` pair but strict `===` does NOT. Handles start
+/// at `1` and increment monotonically (`u64` allocator at
+/// `crates/ffi/src/webhook.rs::next_server_handle`); JavaScript
+/// `Number` preserves integer precision up to `2^53 − 1`, so a
+/// `number` representation is exact for any realistic substrate
+/// uptime, but the `BigInt`-vs-`number` asymmetry is still a real
+/// pitfall worth pinning at the call site.
+///
 /// # Errors
 ///
 /// * `Unavailable` if `open_store(handle)` has not yet been called.
