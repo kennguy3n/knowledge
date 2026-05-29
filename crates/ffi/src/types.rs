@@ -337,7 +337,18 @@ pub struct ConnectorStatus {
 /// on the success path. Keeping the flag in the wire envelope means
 /// hosts that observe a `RefreshReport` in a callback / event log
 /// can disambiguate "we did real network work" from "we skipped".
+///
+/// # Wire format
+///
+/// `Serialize`/`Deserialize` use `rename_all = "camelCase"` so the
+/// JSON surface used by the N-API crate matches the JS naming
+/// convention documented at [`crate::refresh_connector_token`]
+/// (`{ instanceId, refreshed, expiresAt, refreshedAt }`). UniFFI
+/// bindings (Swift/Kotlin) are unaffected — they read Rust field
+/// names directly through the `uniffi::Record` derive and do not
+/// pass through `serde`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
 pub struct RefreshReport {
     /// UUID-string identifier of the connector instance whose token
     /// was refreshed.
@@ -367,7 +378,22 @@ pub struct RefreshReport {
 /// Records what happened during a single sync run — useful for
 /// host-side UI ("Synced 42 new documents from Slack") and for
 /// downstream observability.
+///
+/// # Wire format
+///
+/// `Serialize`/`Deserialize` use `rename_all = "camelCase"` so the
+/// JSON surface used by the N-API crate stays consistent with the
+/// other JSON-returning entry points
+/// ([`crate::refresh_connector_token`],
+/// [`crate::list_webhook_servers`], [`crate::sync_scheduler_status`]).
+/// A JS host destructuring the value can use
+/// `{ instanceId, mode, eventsTotal, eventsIngested,
+///    ingestedEvidenceIds, nextCursor, startedAt, completedAt }`
+/// directly. UniFFI bindings (Swift/Kotlin) are unaffected —
+/// they read Rust field names directly through the
+/// `uniffi::Record` derive and do not pass through `serde`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncReport {
     /// UUID-string identifier of the connector instance that
     /// produced the run.
@@ -871,5 +897,104 @@ mod tests {
         }
         let back: WebhookServerSummary = serde_json::from_value(v).expect("deserialize");
         assert_eq!(back, summary);
+    }
+
+    /// `RefreshReport` is the response envelope for
+    /// `crates/napi/src/bindings.rs::js_refresh_connector_token`,
+    /// whose rustdoc documents `{ instanceId, refreshed, expiresAt,
+    /// refreshedAt }` (camelCase). Devin Review round 4 flagged the
+    /// type as still serializing snake_case keys despite the doc
+    /// claim; the rename now aligns the wire format with the doc.
+    /// Pin the camelCase invariant so future drift between doc and
+    /// type is caught at `cargo test` time.
+    #[test]
+    fn refresh_report_serializes_with_camelcase_keys() {
+        let r = RefreshReport {
+            instance_id: "00000000-0000-0000-0000-000000000001".into(),
+            refreshed: true,
+            expires_at: 1_900_000_000,
+            refreshed_at: 1_800_000_000,
+        };
+        let v = serde_json::to_value(&r).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for camel in ["instanceId", "refreshed", "expiresAt", "refreshedAt"] {
+            assert!(
+                obj.contains_key(camel),
+                "RefreshReport JSON must contain camelCase key `{camel}`; got {v}"
+            );
+        }
+        for snake in ["instance_id", "expires_at", "refreshed_at"] {
+            assert!(
+                !obj.contains_key(snake),
+                "RefreshReport JSON must NOT contain snake_case key `{snake}`; got {v}"
+            );
+        }
+        let back: RefreshReport = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, r);
+    }
+
+    /// `SyncReport` is the response envelope for
+    /// `crates/napi/src/bindings.rs::js_sync_connector`. The
+    /// `rename_all` rename keeps it consistent with every other
+    /// N-API JSON-returning entry point.
+    #[test]
+    fn sync_report_serializes_with_camelcase_keys() {
+        let r = SyncReport {
+            instance_id: "00000000-0000-0000-0000-000000000001".into(),
+            mode: SyncModeKind::Incremental,
+            events_total: 42,
+            events_ingested: 40,
+            ingested_evidence_ids: vec![
+                "00000000-0000-0000-0000-0000000000aa".into(),
+                "00000000-0000-0000-0000-0000000000bb".into(),
+            ],
+            next_cursor: Some("cursor-token".into()),
+            started_at: 1_700_000_000,
+            completed_at: 1_700_000_005,
+        };
+        let v = serde_json::to_value(&r).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for camel in [
+            "instanceId",
+            "mode",
+            "eventsTotal",
+            "eventsIngested",
+            "ingestedEvidenceIds",
+            "nextCursor",
+            "startedAt",
+            "completedAt",
+        ] {
+            assert!(
+                obj.contains_key(camel),
+                "SyncReport JSON must contain camelCase key `{camel}`; got {v}"
+            );
+        }
+        for snake in [
+            "instance_id",
+            "events_total",
+            "events_ingested",
+            "ingested_evidence_ids",
+            "next_cursor",
+            "started_at",
+            "completed_at",
+        ] {
+            assert!(
+                !obj.contains_key(snake),
+                "SyncReport JSON must NOT contain snake_case key `{snake}`; got {v}"
+            );
+        }
+        // Nested `SyncModeKind` enum keeps its independent
+        // `rename_all = "snake_case"` discipline — the tag value
+        // for `Incremental` is the lowercase string `"incremental"`,
+        // NOT the camelCase `"Incremental"` the struct-level rename
+        // would suggest. The struct-level `rename_all` only
+        // governs field names, not nested enum variants.
+        assert_eq!(
+            obj.get("mode").and_then(|m| m.as_str()),
+            Some("incremental"),
+            "SyncModeKind variant tag must remain snake_case"
+        );
+        let back: SyncReport = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, r);
     }
 }
