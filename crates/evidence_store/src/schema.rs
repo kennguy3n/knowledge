@@ -67,7 +67,20 @@
 ///   single-instance-per-(scope, kind) contract at the DB layer
 ///   (defense-in-depth against future regressions of the runtime-
 ///   side check). Purely additive.
-pub const SCHEMA_VERSION: i32 = 9;
+/// - v10 (Phase 8 approved-document payloads): added
+///   `approved_document_payloads` for per-(tenant scope, document)
+///   AEAD-encrypted opaque payload bytes attached to a previously
+///   admitted `ApprovedDocumentRef`. Encrypted under the per-scope
+///   DEK with AAD binding both `scope_id` and `document_id`, so a
+///   ciphertext relocated to a different row fails to decrypt and
+///   surfaces a structured error rather than silently feeding a
+///   wrong-document payload into tenant synthesis. A `content_hash`
+///   column (SHA-256 of the plaintext) and a `size_bytes` column
+///   support fast metadata listing without touching the AEAD
+///   payload. `forget(scope)` deletes the rows by `scope_id`; even
+///   if that delete fails, the scope-DEK destruction step makes the
+///   ciphertext unrecoverable. Purely additive.
+pub const SCHEMA_VERSION: i32 = 10;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -308,4 +321,49 @@ CREATE TABLE IF NOT EXISTS connector_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
     ON connector_tokens (scope_id);
+
+-- v10 (Phase 8) — opaque approved-document payloads.
+-- Each row stores the AEAD-encrypted byte payload that backs an
+-- `ApprovedDocumentRef` previously admitted onto a `TenantMemoryObject`.
+-- The ref lives inside the tenant_memory blob; the payload lives
+-- here so it can be:
+--   * Stored larger than the 32 KiB synthesis-output cap without
+--     bloating the tenant_memory blob (and forcing a full
+--     read/encrypt/write on every other tenant-memory mutation).
+--   * Selectively read only when a tenant synthesis run is about
+--     to be dispatched.
+--   * Deleted independently from the ref when the host calls
+--     `revoke_approved_document`.
+--
+-- AEAD AAD binds `scope_id` (16 bytes) AND `document_id` (16 bytes):
+-- a ciphertext relocated to a row with a different document_id (or
+-- a different scope) fails to decrypt. The `content_hash` column
+-- (SHA-256 of the plaintext payload) and the `size_bytes` column
+-- support fast metadata listing without touching the ciphertext;
+-- both are stored alongside the ciphertext, NOT covered by the AAD,
+-- because they are observable plaintext metadata about the row and
+-- not part of the secrecy contract.
+--
+-- `forget(scope)` cleans this table via the scope-grain index below;
+-- even if that delete races the scope-DEK destruction, the
+-- ciphertext is unrecoverable once the DEK is gone, so the row
+-- delete is defense-in-depth rather than a primary security barrier.
+CREATE TABLE IF NOT EXISTS approved_document_payloads (
+    scope_id        BLOB    NOT NULL,
+    document_id     BLOB    NOT NULL,
+    nonce           BLOB    NOT NULL,
+    payload         BLOB    NOT NULL,
+    content_hash    BLOB    NOT NULL,
+    size_bytes      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    PRIMARY KEY (scope_id, document_id)
+);
+
+-- `forget_scope_state` deletes approved-document payload rows by
+-- `scope_id`; the composite PK starts with `scope_id` so this index
+-- is redundant for point lookups but still gives the query planner
+-- a covering index for scope-grain metadata listing in
+-- `list_approved_document_payload_meta_for_scope`.
+CREATE INDEX IF NOT EXISTS idx_approved_doc_payloads_scope
+    ON approved_document_payloads (scope_id);
 "#;
