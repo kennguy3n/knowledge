@@ -702,6 +702,24 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
 /// helper is what keeps the cryptographic-forgetting contract
 /// honest.
 fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> FfiResult<()> {
+    // Defense in depth against the synthesis-windows sentinel
+    // collision (Devin Review ANALYSIS_0001):
+    // `parse_scope_id` already rejects the nil UUID at the host
+    // boundary, but internal callers (tests, future refactors)
+    // can still synthesise a `ScopeId` directly. Forgetting the
+    // sentinel scope would call `delete_memory_blobs_for_scope`
+    // and wipe the entire `SynthesisWindowManager` row, which is
+    // a substrate-wide data-loss event masquerading as a scoped
+    // cleanup. Refuse loudly so the caller fixes the bug instead
+    // of silently corrupting state.
+    if scope == crate::runtime::synthesis_windows_scope() {
+        return Err(FfiError::InvalidId {
+            message: "scope_id: nil UUID is reserved as the synthesis-windows sentinel; \
+                      refusing to forget the substrate-internal scope"
+                .into(),
+        });
+    }
+
     // 1. Atomic in-memory + on-disk forgetting (see
     //    `FfiRuntime::forget_scope` for the rationale). Bail on
     //    failure: if this fails the scope is still readable and
@@ -794,7 +812,13 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     //     or a `HashMap::remove` over freshly collected ids.
     rt.domain_memories.remove(&scope);
     rt.tenant_memories.remove(&scope);
-    rt.synthesis_cooldowns.remove(&scope);
+    // Per-(scope, tier) cooldown map — strip every entry whose
+    // first component matches the forgotten scope. Mirrors the
+    // semantics of the prior `remove(&scope)` over the legacy
+    // scope-only map. `retain` is O(N) over total cooldown
+    // entries which is bounded by 2 × active scopes (Domain +
+    // Tenant tiers) so the cost stays linear in the live runtime.
+    rt.synthesis_cooldowns.retain(|(s, _), _| *s != scope);
     let synth_window_ids: Vec<synthesis_pipeline::WindowId> = rt
         .synthesis_windows
         .windows_for(scope)
@@ -1519,10 +1543,31 @@ pub fn decrypt(
 /// touches exactly one site. `pub(crate)` visibility intentionally
 /// keeps it out of the FFI surface (UniFFI/N-API hosts call the
 /// public entry points, never this helper directly).
+///
+/// # Nil UUID rejection
+///
+/// The nil UUID (`00000000-0000-0000-0000-000000000000`) is
+/// reserved as a substrate-internal sentinel scope under which the
+/// global [`synthesis_pipeline::SynthesisWindowManager`] is
+/// flushed (see [`crate::runtime::synthesis_windows_scope`]).
+/// Accepting it from a host-supplied string would let a caller
+/// collide with that sentinel: for example, `forget_scope` on the
+/// nil scope would call `delete_memory_blobs_for_scope` and wipe
+/// the entire synthesis window history on the next `open_store`.
+/// `Uuid::new_v4()` never produces the nil UUID, so rejecting it
+/// at the FFI boundary closes the collision without removing any
+/// legitimate scope id from the host's namespace.
 pub(crate) fn parse_scope_id(s: &str) -> FfiResult<ScopeId> {
     let uuid = uuid::Uuid::parse_str(s).map_err(|e| FfiError::InvalidId {
         message: format!("scope_id: {e}"),
     })?;
+    if uuid.is_nil() {
+        return Err(FfiError::InvalidId {
+            message: "scope_id: nil UUID is reserved as a substrate sentinel; \
+                      hosts MUST supply a non-nil v4 UUID"
+                .into(),
+        });
+    }
     Ok(ScopeId::from_uuid(uuid))
 }
 
@@ -1808,6 +1853,45 @@ mod tests {
 
     fn teardown(handle: RuntimeHandle) {
         close_store(handle).expect("close_store");
+    }
+
+    /// Regression test for Devin Review ANALYSIS_0001: the nil
+    /// UUID is reserved as the substrate's synthesis-windows
+    /// sentinel scope, so `parse_scope_id` MUST refuse it at the
+    /// FFI boundary. Without this check, a host that passes
+    /// `00000000-0000-0000-0000-000000000000` to `forget_scope`
+    /// would wipe the entire `SynthesisWindowManager` row on the
+    /// next `open_store`.
+    #[test]
+    fn parse_scope_id_rejects_nil_uuid() {
+        let err = parse_scope_id("00000000-0000-0000-0000-000000000000").unwrap_err();
+        match err {
+            FfiError::InvalidId { message } => {
+                assert!(
+                    message.contains("nil UUID"),
+                    "error message should call out the nil-UUID rejection, got: {message}",
+                );
+            }
+            other => panic!("expected InvalidId, got {other:?}"),
+        }
+    }
+
+    /// Defense-in-depth check: even if an internal caller manages
+    /// to construct a sentinel-scoped `ScopeId` (bypassing the
+    /// host-facing `parse_scope_id` guard above),
+    /// `forget_scope_state` MUST refuse rather than silently wipe
+    /// the global synthesis-windows row.
+    #[test]
+    fn forget_scope_state_refuses_synthesis_sentinel() {
+        let (h, _dir) = fresh_store();
+        let sentinel = crate::runtime::synthesis_windows_scope();
+        let err = crate::runtime::with_runtime(h, |rt| forget_scope_state(rt, sentinel))
+            .expect_err("must refuse sentinel scope");
+        assert!(
+            matches!(err, FfiError::InvalidId { ref message } if message.contains("sentinel")),
+            "expected InvalidId with `sentinel` message, got {err:?}",
+        );
+        teardown(h);
     }
 
     #[test]

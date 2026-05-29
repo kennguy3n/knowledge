@@ -445,13 +445,25 @@ pub struct FfiRuntime {
     /// (see the trait docs in
     /// [`synthesis_engine::engine`]).
     pub(crate) synthesis_engine: Option<Arc<dyn synthesis_engine::SynthesisEngine>>,
-    /// Per-scope cooldown tracker: maps `scope_id` →
-    /// last-synthesis-completed-at. The synthesis FFI surface
-    /// refuses to redispatch within
+    /// Per-`(scope, tier)` cooldown tracker: maps
+    /// `(scope_id, tier)` → last-synthesis-completed-at. The
+    /// synthesis FFI surface refuses to redispatch within
     /// [`crate::synthesis::SYNTHESIS_COOLDOWN`] of the last
-    /// completion to prevent thundering-herd synthesis when many
-    /// connectors finish a sync tick at once.
-    pub(crate) synthesis_cooldowns: HashMap<ScopeId, DateTime<Utc>>,
+    /// completion of the *same tier* on the *same scope* to
+    /// prevent thundering-herd synthesis when many connectors
+    /// finish a sync tick at once.
+    ///
+    /// The key is `(scope, tier)` rather than just `scope`
+    /// because Domain and Tenant syntheses are independent
+    /// operations on the same scope: a host that finishes a
+    /// Domain synthesis and immediately requests a Tenant
+    /// synthesis on the same scope MUST NOT be short-circuited
+    /// with the Domain window id — that would return a window of
+    /// the wrong tier to the caller. Per-tier keying isolates the
+    /// short-circuit semantics so each tier carries its own
+    /// cooldown clock.
+    pub(crate) synthesis_cooldowns:
+        HashMap<(ScopeId, crate::types::SynthesisTierKind), DateTime<Utc>>,
     /// Persisted synthesis results: maps `window_id` →
     /// [`synthesis_pipeline::SynthesisObject`]. Mirrors the
     /// per-scope `memory_objects` rows under the
@@ -801,6 +813,37 @@ impl FfiRuntime {
         // values are freshly minted by `open_tiered_window`).
         self.synthesis_objects.insert(object.window_id, object);
         Ok(())
+    }
+
+    /// Rewrite the per-scope `synthesis_object` row on disk from
+    /// the current in-memory `synthesis_objects` map. Called after
+    /// [`Self::prune_completed_windows`] removes entries so the
+    /// on-disk blob matches the in-memory state; without this step
+    /// the next `open_store` would rehydrate the pruned objects,
+    /// creating "orphan" synthesis objects whose `window_id` no
+    /// longer maps to a tracked window (the window manager flush
+    /// runs after the prune and so reflects the post-prune state
+    /// correctly).
+    ///
+    /// Idempotent on the no-objects case: an empty per-scope list
+    /// is still written as the row payload so subsequent reads
+    /// observe the cleared state. If the host wants the row gone
+    /// entirely (e.g. because the scope was forgotten),
+    /// `delete_memory_blobs_for_scope` covers that path.
+    pub(crate) fn flush_synthesis_objects(&self, scope: ScopeId) -> crate::error::FfiResult<()> {
+        let per_scope: Vec<&synthesis_pipeline::SynthesisObject> = self
+            .synthesis_objects
+            .values()
+            .filter(|o| o.scope_id == scope)
+            .collect();
+        let json = serde_json::to_vec(&per_scope).map_err(|e| crate::error::FfiError::Memory {
+            message: format!("failed to serialize synthesis objects: {e}"),
+        })?;
+        self.store
+            .save_memory_blob(scope, SYNTHESIS_OBJECT_KIND, &json)
+            .map_err(|e| crate::error::FfiError::Evidence {
+                message: e.to_string(),
+            })
     }
 
     /// Drop completed windows for `scope` beyond `max_per_scope`

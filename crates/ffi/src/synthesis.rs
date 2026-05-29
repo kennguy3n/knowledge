@@ -24,13 +24,16 @@
 //!   (potentially multi-second) HTTPS call to the managed endpoint.
 //!   The engine is stored as `Arc<dyn SynthesisEngine>` so Phase 1
 //!   can clone the trait object out of the mutex.
-//! * **Per-scope cooldown.** A successful dispatch records
-//!   `synthesis_cooldowns[scope] = Utc::now()`. A subsequent
-//!   dispatch on the same scope within
-//!   [`PER_SCOPE_COOLDOWN_SECS`] returns the most recent window id
-//!   without re-running synthesis. The scheduler's
-//!   auto-synthesis hook uses the same map so a host that triggers
-//!   synthesis manually also throttles the scheduler's next attempt.
+//! * **Per-(scope, tier) cooldown.** A successful dispatch records
+//!   `synthesis_cooldowns[(scope, tier)] = Utc::now()`. A
+//!   subsequent dispatch of the *same tier* on the *same scope*
+//!   within [`PER_SCOPE_COOLDOWN_SECS`] returns the most recent
+//!   `Complete` window of that tier without re-running synthesis.
+//!   The scheduler's auto-synthesis hook uses the same map so a
+//!   host that triggers Domain synthesis manually also throttles
+//!   the scheduler's next Domain attempt. Tenant cooldowns are
+//!   tracked independently so a recent Domain run does NOT
+//!   short-circuit a Tenant request on the same scope.
 //! * **Window retention cap.** After every successful synthesis the
 //!   substrate prunes completed windows beyond
 //!   [`WINDOW_RETENTION_CAP_PER_SCOPE`]. Older completed windows
@@ -407,22 +410,29 @@ fn build_dispatch_plan(
     // Scope-binding allow-list — mirrors `TeeWorker::assert_scope_allowed`.
     enforce_scope_binding(rt, scope)?;
 
-    // Cooldown check. If the scope was synthesised within the
-    // last `PER_SCOPE_COOLDOWN_SECS` seconds, return the most
-    // recent `Complete` window without re-dispatching.
-    if let Some(last_completed) = rt.synthesis_cooldowns.get(&scope).copied() {
+    // Cooldown check. If the (scope, tier) pair was synthesised
+    // within the last `PER_SCOPE_COOLDOWN_SECS` seconds, return
+    // the most recent `Complete` window OF THE REQUESTED TIER
+    // without re-dispatching. The map is keyed by `(scope, tier)`
+    // — not just `scope` — so a recent Domain completion does NOT
+    // short-circuit a Tenant request on the same scope (and vice
+    // versa). See `synthesis_cooldowns` field docs in `runtime.rs`
+    // for the architectural rationale.
+    if let Some(last_completed) = rt.synthesis_cooldowns.get(&(scope, tier)).copied() {
         let elapsed = Utc::now().signed_duration_since(last_completed);
         if elapsed < chrono::Duration::seconds(PER_SCOPE_COOLDOWN_SECS) {
-            if let Some(recent) = newest_complete_window(rt, scope) {
+            if let Some(recent) = newest_complete_window(rt, scope, tier) {
                 return Ok(DispatchPlan::Cooldown(recent));
             }
-            // Cooldown stamp without a `Complete` window is a
-            // bookkeeping bug rather than a host-visible failure —
-            // fall through and dispatch a fresh run.
+            // Cooldown stamp without a matching-tier `Complete`
+            // window is a bookkeeping bug rather than a host-
+            // visible failure — fall through and dispatch a fresh
+            // run.
             tracing::warn!(
                 scope = %scope.as_uuid(),
-                "trigger_server_synthesis: cooldown stamp present but no Complete window; \
-                 dispatching fresh run",
+                tier = tier.as_str(),
+                "trigger_server_synthesis: cooldown stamp present but no matching-tier \
+                 Complete window; dispatching fresh run",
             );
         }
     }
@@ -655,8 +665,11 @@ fn apply_dispatch_outcome(
                 }
                 // Persist window manager state (status transitions).
                 rt.flush_synthesis_windows()?;
-                // Cooldown stamp.
-                rt.synthesis_cooldowns.insert(scope, Utc::now());
+                // Cooldown stamp — keyed by `(scope, tier)` so
+                // Domain and Tenant syntheses on the same scope
+                // track their throttle clocks independently.
+                rt.synthesis_cooldowns
+                    .insert((scope, object_tier), Utc::now());
                 // Retention prune. We don't surface the pruned
                 // ids; the caller only cares about the new window.
                 let pruned = rt.prune_completed_windows(scope, WINDOW_RETENTION_CAP_PER_SCOPE);
@@ -668,21 +681,24 @@ fn apply_dispatch_outcome(
                             "post-prune flush_synthesis_windows failed",
                         );
                     }
-                    // The persisted per-scope object blob now
-                    // contains the post-prune subset. Re-save by
-                    // calling save_synthesis_object with one of
-                    // the remaining objects would rewrite the
-                    // blob; we instead rewrite the blob directly
-                    // via a no-op insert of an existing object so
-                    // the cap is honoured both in-memory and on
-                    // disk. The simplest correct behaviour is to
-                    // serialise the remaining per-scope objects
-                    // and call `save_memory_blob` directly — but
-                    // we already encapsulate that in
-                    // `save_synthesis_object`. To keep the FFI
-                    // module from poking at the store directly,
-                    // we no-op here: the next successful synthesis
-                    // will rewrite the row with the pruned set.
+                    // Rewrite the per-scope `synthesis_object`
+                    // blob from the post-prune in-memory state.
+                    // Without this, a crash before the next
+                    // successful synthesis on the same scope
+                    // would rehydrate the pruned objects from
+                    // disk and surface them as orphans (their
+                    // `window_id` no longer maps to a tracked
+                    // window because the window manager flush
+                    // above already reflects the pruned set).
+                    if let Err(e) = rt.flush_synthesis_objects(scope) {
+                        tracing::warn!(
+                            error = ?e,
+                            scope = %scope.as_uuid(),
+                            "post-prune flush_synthesis_objects failed; on-disk \
+                             synthesis-object blob still references pruned ids and may \
+                             rehydrate orphans on next open_store",
+                        );
+                    }
                     tracing::debug!(
                         scope = %scope.as_uuid(),
                         pruned = pruned.len(),
@@ -874,11 +890,38 @@ fn fail_window_on_live_manager(rt: &mut FfiRuntime, window_id: WindowId, reason:
     }
 }
 
-fn newest_complete_window(rt: &FfiRuntime, scope: ScopeId) -> Option<WindowId> {
+/// Newest `Complete` window for `(scope, tier)`, used by the
+/// cooldown short-circuit so a recent Domain completion cannot
+/// surface as the "result" of a Tenant request (or vice versa).
+///
+/// `SynthesisWindow` does not store the tier directly — the
+/// pipeline keeps tier on the [`TieredWindowHandle`] returned by
+/// `open_tiered_window` rather than on the persisted window
+/// shape. We therefore look up the matching
+/// [`synthesis_pipeline::SynthesisObject`] (one per completed
+/// window) and filter by its `object_type` against the expected
+/// tier-specific output type. `Pending` / `InProgress` / `Failed`
+/// windows are skipped because they have no associated object yet
+/// — and the cooldown contract only short-circuits when a
+/// matching-tier *Complete* window is available.
+fn newest_complete_window(
+    rt: &FfiRuntime,
+    scope: ScopeId,
+    tier: SynthesisTierKind,
+) -> Option<WindowId> {
+    let expected_object_type = match tier {
+        SynthesisTierKind::Domain => SynthesisObjectType::DomainSummary,
+        SynthesisTierKind::Tenant => SynthesisObjectType::TenantSummary,
+    };
     rt.synthesis_windows
         .windows_for(scope)
         .iter()
         .filter(|w| w.status == WindowStatus::Complete)
+        .filter(|w| {
+            rt.synthesis_objects
+                .get(&w.id)
+                .is_some_and(|o| o.object_type == expected_object_type)
+        })
         .max_by_key(|w| w.window_end)
         .map(|w| w.id)
 }
@@ -1273,7 +1316,8 @@ mod tests {
         // Force the cooldown stamp into the past to allow a new run.
         with_runtime(handle, |rt| {
             let past = Utc::now() - ChronoDuration::seconds(PER_SCOPE_COOLDOWN_SECS + 60);
-            rt.synthesis_cooldowns.insert(scope, past);
+            rt.synthesis_cooldowns
+                .insert((scope, SynthesisTierKind::Domain), past);
             Ok(())
         })
         .expect("with_runtime");
@@ -1285,6 +1329,257 @@ mod tests {
         .expect("post-cooldown synthesis");
         assert_ne!(win3, win1, "post-cooldown dispatch must mint a new window");
         teardown(handle);
+    }
+
+    /// Regression test for the cross-tier cooldown short-circuit
+    /// bug: a Domain completion on `scope` must NOT throttle a
+    /// subsequent Tenant request on the same `scope`. The
+    /// cooldown map is keyed by `(scope, tier)` so each tier runs
+    /// its own clock. The test also asserts that the Tenant
+    /// dispatch returns a freshly-minted window id (not the
+    /// recycled Domain window id), which is the user-visible
+    /// symptom the original bug surfaced.
+    #[test]
+    fn cooldown_does_not_leak_across_tiers() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+
+        // Single scope that doubles as Domain + Tenant so the
+        // cooldown map sees `(scope, Domain)` AND `(scope, Tenant)`
+        // back-to-back. In production the host hierarchies map a
+        // scope to a single tier; the FFI still has to behave
+        // correctly when a host registers both, because nothing
+        // in the substrate forbids it and the bug would otherwise
+        // silently return a wrong-tier window.
+        let scope = ScopeId::new_v4();
+        let chan = ScopeId::new_v4();
+        let feeding_domain = ScopeId::new_v4();
+        let feeding_channel = ScopeId::new_v4();
+        with_runtime(handle, |rt| {
+            // Domain side: one channel attached so domain
+            // synthesis has admissible inputs.
+            let mut domain = DomainMemoryObject::new(scope);
+            domain.attach_channel_scope(chan);
+            rt.save_domain_memory(scope, domain)?;
+            let mut cmo = ChannelMemoryObject::new(chan);
+            cmo.update_recap("channel recap for domain tier", None);
+            rt.save_channel_memory(chan, cmo)?;
+
+            // Tenant side: one feeding domain (different scope so
+            // we don't collide with the domain memory above) and
+            // its own channel.
+            let mut tenant = TenantMemoryObject::new(scope);
+            tenant.attach_domain_scope(feeding_domain);
+            rt.save_tenant_memory(scope, tenant)?;
+            let mut feeder = DomainMemoryObject::new(feeding_domain);
+            feeder.attach_channel_scope(feeding_channel);
+            feeder.update_recap("feeder domain recap", None);
+            rt.save_domain_memory(feeding_domain, feeder)?;
+            let mut feeder_chan = ChannelMemoryObject::new(feeding_channel);
+            feeder_chan.update_recap("feeder channel recap", None);
+            rt.save_channel_memory(feeding_channel, feeder_chan)?;
+            Ok(())
+        })
+        .expect("seed cross-tier scope");
+
+        let domain_win = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("domain dispatch");
+
+        // Within the cooldown window: a Tenant request on the
+        // same scope must NOT be short-circuited by the Domain
+        // stamp. The returned window id must be a fresh Tenant
+        // window, not the recycled Domain window.
+        let tenant_win = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Tenant,
+        )
+        .expect("tenant dispatch");
+        assert_ne!(
+            domain_win, tenant_win,
+            "Tenant request must NOT recycle the Domain window via cross-tier cooldown",
+        );
+
+        // Belt and braces: confirm the stored object types match
+        // each request so a future regression that returns the
+        // wrong-tier window still fails this test loudly.
+        with_runtime(handle, |rt| {
+            let domain_win_id =
+                synthesis_pipeline::WindowId::from_uuid(domain_win.parse::<Uuid>().expect("uuid"));
+            let tenant_win_id =
+                synthesis_pipeline::WindowId::from_uuid(tenant_win.parse::<Uuid>().expect("uuid"));
+            let domain_obj = rt
+                .synthesis_objects
+                .get(&domain_win_id)
+                .expect("domain object");
+            let tenant_obj = rt
+                .synthesis_objects
+                .get(&tenant_win_id)
+                .expect("tenant object");
+            assert_eq!(domain_obj.object_type, SynthesisObjectType::DomainSummary);
+            assert_eq!(tenant_obj.object_type, SynthesisObjectType::TenantSummary);
+
+            // Both cooldown stamps must be present and
+            // independent (Domain throttles only Domain,
+            // Tenant throttles only Tenant).
+            assert!(rt
+                .synthesis_cooldowns
+                .contains_key(&(scope, SynthesisTierKind::Domain)));
+            assert!(rt
+                .synthesis_cooldowns
+                .contains_key(&(scope, SynthesisTierKind::Tenant)));
+            Ok(())
+        })
+        .expect("verify cross-tier state");
+
+        // A *second* Domain request on the same scope DOES hit the
+        // Domain cooldown (recycles the original Domain window),
+        // proving the cooldown still works within a single tier.
+        let domain_win_again = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("second domain dispatch");
+        assert_eq!(
+            domain_win, domain_win_again,
+            "Domain cooldown must still recycle within the same tier",
+        );
+
+        teardown(handle);
+    }
+
+    /// Regression test for the persist-after-prune bug: pruning a
+    /// completed window must also rewrite the per-scope
+    /// synthesis-object blob on disk so a subsequent
+    /// `open_store` does NOT rehydrate the pruned objects as
+    /// orphans. We drive the cycle by:
+    ///
+    /// 1. Filling the per-scope window list past
+    ///    `WINDOW_RETENTION_CAP_PER_SCOPE` so pruning will fire,
+    /// 2. Triggering one final synthesis (which prunes the
+    ///    oldest objects in-memory + flushes both windows and
+    ///    objects), and
+    /// 3. Closing + reopening the store to drive rehydration.
+    ///
+    /// Post-rehydrate the in-memory `synthesis_objects` map must
+    /// contain ONLY the post-prune subset — no orphans whose
+    /// `window_id` no longer maps to a tracked window.
+    #[test]
+    fn prune_persists_synthesis_objects_to_disk() {
+        let (handle, dir) = fresh_store();
+        install_test_engine(handle);
+        let scope = seed_domain_with_two_channels(handle);
+
+        // Stuff the per-scope window list past the retention cap
+        // with completed windows + matching synthesis objects.
+        // The values are not exercised by the engine — only
+        // their persistence is.
+        let extra: usize = WINDOW_RETENTION_CAP_PER_SCOPE + 5;
+        let pre_existing: Vec<synthesis_pipeline::WindowId> = with_runtime(handle, |rt| {
+            let mut ids = Vec::with_capacity(extra);
+            let now = Utc::now();
+            for i in 0..extra {
+                let offset = i64::try_from(i + 1).expect("loop index fits i64");
+                let end = now - ChronoDuration::hours(offset);
+                let start = end - ChronoDuration::seconds(30);
+                let h = rt
+                    .synthesis_windows
+                    .open_tiered_window(scope, WindowScopeTier::Domain, start, end)
+                    .expect("open window");
+                rt.synthesis_windows.mark_in_progress(h.window_id).unwrap();
+                rt.synthesis_windows.mark_complete(h.window_id).unwrap();
+                let obj = SynthesisObject::new(
+                    scope,
+                    h.window_id,
+                    SynthesisObjectType::DomainSummary,
+                    format!("preexisting recap #{i}").into_bytes(),
+                    Uuid::nil(),
+                );
+                rt.save_synthesis_object(scope, obj)?;
+                ids.push(h.window_id);
+            }
+            rt.flush_synthesis_windows()?;
+            Ok(ids)
+        })
+        .expect("seed pre-existing windows");
+
+        // Trigger one fresh synthesis. The post-apply prune fires
+        // and must also rewrite the on-disk synthesis-object blob.
+        let fresh = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("fresh synthesis triggers prune");
+        let fresh_id =
+            synthesis_pipeline::WindowId::from_uuid(fresh.parse::<Uuid>().expect("uuid"));
+
+        // After prune, the in-memory map should be at the cap +
+        // the fresh window. The oldest pre-existing object should
+        // be gone.
+        let path = dir.path().join("evidence.db");
+        let (remaining_in_memory, oldest_pre_existing) = with_runtime(handle, |rt| {
+            let remaining: Vec<synthesis_pipeline::WindowId> = rt
+                .synthesis_objects
+                .keys()
+                .filter(|id| pre_existing.contains(id) || **id == fresh_id)
+                .copied()
+                .collect();
+            let oldest = *pre_existing.last().expect("non-empty");
+            Ok((remaining, oldest))
+        })
+        .expect("with_runtime");
+        assert!(
+            !remaining_in_memory.contains(&oldest_pre_existing),
+            "prune must drop the oldest pre-existing object from memory",
+        );
+        assert!(
+            remaining_in_memory.contains(&fresh_id),
+            "fresh window must be present after prune",
+        );
+
+        // Close + reopen the store. The on-disk synthesis-object
+        // blob MUST reflect the post-prune state; without the
+        // flush, rehydration would resurrect every object in
+        // `pre_existing` (the original bug).
+        teardown(handle);
+        let key_hex = "a5".repeat(32);
+        let handle2 = crate::runtime::open_store(path.to_string_lossy().into_owned(), key_hex)
+            .expect("reopen");
+        let resurrected: Vec<synthesis_pipeline::WindowId> = with_runtime(handle2, |rt| {
+            Ok(rt
+                .synthesis_objects
+                .keys()
+                .filter(|id| pre_existing.contains(id))
+                .copied()
+                .collect())
+        })
+        .expect("inspect rehydrated map");
+        assert!(
+            !resurrected.contains(&oldest_pre_existing),
+            "pruned object must NOT resurrect from disk on open_store \
+             (BUG_0002 regression)",
+        );
+        // Belt and braces: no rehydrated object should have a
+        // window_id that is unknown to the rehydrated window
+        // manager.
+        with_runtime(handle2, |rt| {
+            for id in rt.synthesis_objects.keys() {
+                assert!(
+                    rt.synthesis_windows.get(*id).is_some(),
+                    "rehydrated synthesis object {id:?} has no matching window \
+                     — disk blob is out of sync with the window manager",
+                );
+            }
+            Ok(())
+        })
+        .expect("verify no orphans");
+        teardown(handle2);
     }
 
     #[test]
@@ -1305,7 +1600,9 @@ mod tests {
         // Sanity: state present before forgetting.
         with_runtime(handle, |rt| {
             assert!(rt.domain_memories.contains_key(&scope));
-            assert!(rt.synthesis_cooldowns.contains_key(&scope));
+            assert!(rt
+                .synthesis_cooldowns
+                .contains_key(&(scope, SynthesisTierKind::Domain)));
             assert!(rt.synthesis_objects.contains_key(&win_id));
             assert!(rt.synthesis_windows.get(win_id).is_some());
             Ok(())
@@ -1318,7 +1615,10 @@ mod tests {
         with_runtime(handle, |rt| {
             assert!(!rt.domain_memories.contains_key(&scope));
             assert!(!rt.tenant_memories.contains_key(&scope));
-            assert!(!rt.synthesis_cooldowns.contains_key(&scope));
+            // `retain` strips every tier whose first component
+            // matches the forgotten scope, so neither Domain nor
+            // Tenant cooldown stamps survive.
+            assert!(!rt.synthesis_cooldowns.keys().any(|(s, _)| *s == scope));
             assert!(!rt.synthesis_objects.contains_key(&win_id));
             assert!(rt.synthesis_windows.get(win_id).is_none());
             assert!(rt.synthesis_windows.windows_for(scope).is_empty());
