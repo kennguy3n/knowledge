@@ -734,6 +734,22 @@ pub fn configure_sync_auto_synthesize(
 /// Idempotent: clearing an instance with no override returns
 /// `Ok(())`.
 ///
+/// # Auto-synthesis interaction
+///
+/// `clear_sync_schedule` is intentionally asymmetric with
+/// [`configure_sync_schedule`]: the latter preserves the
+/// `auto_synthesize` bit when the host updates only the interval /
+/// backoff (so a host can re-cadence a sync without re-toggling
+/// auto-synth), but `clear_sync_schedule` removes the **entire**
+/// `SchedulePolicy` entry — including any `auto_synthesize: true`
+/// previously set via [`configure_sync_auto_synthesize`]. This
+/// matches the documented semantic ("falls back to the scheduler's
+/// defaults") since the scheduler defaults have
+/// `auto_synthesize: false`, but hosts that want auto-synth to
+/// survive a schedule clear must call
+/// `configure_sync_auto_synthesize(handle, instance_id, true)`
+/// again afterwards.
+///
 /// # Errors
 ///
 /// * [`FfiError::Connector`] if no scheduler is running on this

@@ -64,9 +64,9 @@ use uuid::Uuid;
 
 use synthesis_engine::{EndpointConfig, EngineError, SynthesisEngine};
 use synthesis_pipeline::{
-    ChannelOutput, DomainOutput, DomainSynthesisInput, HierarchyEnforcedWindowManager,
-    SynthesisObject, SynthesisObjectType, SynthesisWindowManager, TenantSynthesisInput,
-    TieredWindowHandle, WindowId, WindowScopeTier, WindowStatus,
+    ApprovedDocument, ChannelOutput, DomainOutput, DomainSynthesisInput,
+    HierarchyEnforcedWindowManager, SynthesisObject, SynthesisObjectType, SynthesisWindowManager,
+    TenantSynthesisInput, TieredWindowHandle, WindowId, WindowScopeTier, WindowStatus,
 };
 
 use crate::error::{FfiError, FfiResult};
@@ -480,7 +480,31 @@ fn build_dispatch_plan(
                 id: scope.as_uuid().to_string(),
             })?;
             let domain_outputs = gather_domain_outputs(rt, tenant);
-            let approved_documents = Vec::new();
+            // Approved-document payloads are NOT yet shipped through
+            // the substrate. `TenantMemoryObject.approved_documents`
+            // stores only [`ApprovedDocumentRef`] (id / label /
+            // approver / approved_at) — the actual document bytes are
+            // never persisted on this side of the FFI boundary. The
+            // synthesis pipeline's [`ApprovedDocument`] type requires
+            // a `payload: Vec<u8>`, so until a Phase 8 follow-up adds
+            // (a) an `admit_approved_document_blob` FFI surface for
+            // hosts to attach payloads, and (b) per-tenant payload
+            // storage in the evidence store, tenant synthesis runs
+            // with an empty approved-documents bundle. If the host has
+            // registered any refs we surface a one-shot warning so the
+            // gap is observable instead of silent.
+            let approved_documents: Vec<ApprovedDocument> = Vec::new();
+            if !tenant.approved_documents.is_empty() {
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    registered = tenant.approved_documents.len(),
+                    "trigger_server_synthesis(tenant): approved-document reference(s) \
+                     registered on the tenant memory but the substrate does not yet \
+                     persist their payloads; synthesis will proceed with an empty \
+                     approved-documents bundle. Phase 8 follow-up will add \
+                     `admit_approved_document_blob` + payload storage.",
+                );
+            }
             let input = TenantSynthesisInput::new(tenant, domain_outputs, approved_documents)
                 .map_err(|e| FfiError::Synthesis {
                     message: format!("tenant input rejected: {e}"),
