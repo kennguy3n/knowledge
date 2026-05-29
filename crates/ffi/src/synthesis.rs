@@ -550,11 +550,7 @@ fn apply_dispatch_outcome(
             }
             Ok(object) => {
                 if object.payload.len() > MAX_SYNTHESIS_OUTPUT_BYTES {
-                    fail_window_on_live_manager(
-                        rt,
-                        window_handle.window_id,
-                        "oversize_output",
-                    );
+                    fail_window_on_live_manager(rt, window_handle.window_id, "oversize_output");
                     let _ = rt.flush_synthesis_windows();
                     return Err(FfiError::Synthesis {
                         message: format!(

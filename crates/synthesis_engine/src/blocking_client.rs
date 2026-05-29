@@ -174,7 +174,10 @@ impl HttpClient for BlockingHttpClientAdapter {
                 .headers()
                 .get(RETRY_AFTER)
                 .and_then(|h| h.to_str().ok())
-                .map_or_else(|| "unspecified".to_string(), std::string::ToString::to_string);
+                .map_or_else(
+                    || "unspecified".to_string(),
+                    std::string::ToString::to_string,
+                );
             let body_excerpt = response.text().unwrap_or_default();
             return Err(EndpointError::RateLimited(format!(
                 "endpoint reported {} (retry-after: {retry_after}): {}",

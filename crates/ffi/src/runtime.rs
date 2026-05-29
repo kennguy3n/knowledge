@@ -771,14 +771,19 @@ impl FfiRuntime {
         scope: ScopeId,
         object: synthesis_pipeline::SynthesisObject,
     ) -> crate::error::FfiResult<()> {
-        self.synthesis_objects.insert(object.window_id, object);
-        // Snapshot the per-scope object list so we can persist a
-        // self-contained blob — the in-memory map is keyed by
-        // `WindowId`, but rehydration scans by `ScopeId`.
+        // Persist-first invariant (mirrors `save_channel_memory` /
+        // `save_domain_memory` / `save_tenant_memory`): the
+        // `synthesis_objects` map is only mutated *after* the
+        // encrypted evidence write returns `Ok`. We assemble the
+        // serialised per-scope blob by referencing the not-yet-
+        // owned `object` alongside the existing per-scope rows, so
+        // a serialisation or SQLCipher failure leaves both disk and
+        // in-memory state untouched.
         let per_scope: Vec<&synthesis_pipeline::SynthesisObject> = self
             .synthesis_objects
             .values()
             .filter(|o| o.scope_id == scope)
+            .chain(std::iter::once(&object))
             .collect();
         let json = serde_json::to_vec(&per_scope).map_err(|e| crate::error::FfiError::Memory {
             message: format!("failed to serialize synthesis objects: {e}"),
@@ -787,7 +792,15 @@ impl FfiRuntime {
             .save_memory_blob(scope, SYNTHESIS_OBJECT_KIND, &json)
             .map_err(|e| crate::error::FfiError::Evidence {
                 message: e.to_string(),
-            })
+            })?;
+        // Disk write succeeded; commit the in-memory insert. Note we
+        // key by `window_id`, which is unique to this synthesis run,
+        // so the prior `chain(once(&object))` cannot have caused a
+        // duplicate row in the serialised list (the existing scan
+        // filters by `scope_id`, not `window_id`, but `window_id`
+        // values are freshly minted by `open_tiered_window`).
+        self.synthesis_objects.insert(object.window_id, object);
+        Ok(())
     }
 
     /// Drop completed windows for `scope` beyond `max_per_scope`

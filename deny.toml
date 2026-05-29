@@ -29,6 +29,13 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
+    # MPL-2.0 is file-level copyleft (modifications to MPL'd source
+    # files must be released under MPL, but linking does NOT taint the
+    # workspace). uniffi and its sub-crates (uniffi, uniffi_bindgen,
+    # uniffi_core, uniffi_internal_macros, uniffi_macros, uniffi_meta,
+    # uniffi_udl) are all MPL-2.0 and are core dependencies of the
+    # FFI substrate (Swift/Kotlin bindings).
+    "MPL-2.0",
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "Zlib",
