@@ -1386,7 +1386,7 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
     // we expect at most one row under the `synthesis_windows_scope`
     // / `SYNTHESIS_WINDOWS_KIND` pair. A missing row simply means
     // no synthesis has run yet on this database.
-    let synthesis_windows = match store
+    let mut synthesis_windows = match store
         .load_memory_blob(synthesis_windows_scope(), SYNTHESIS_WINDOWS_KIND)
     {
         Ok(Some(blob)) => {
@@ -1410,6 +1410,79 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
             synthesis_pipeline::SynthesisWindowManager::new()
         }
     };
+
+    // Tombstone-aware rehydration cleanup. The
+    // `SynthesisWindowManager` is persisted under a single sentinel
+    // row (see `synthesis_windows_scope`) so its blob carries every
+    // scope's windows mixed together. Unlike the per-scope
+    // domain/tenant/user/channel memory paths (which check
+    // `tombstones.contains(&scope)` before inserting), the manager
+    // is deserialised wholesale — so any window belonging to a
+    // forgotten scope would resurrect across restarts unless we
+    // strip it here.
+    //
+    // `forget_scope_state` already drives the same prune on the
+    // live in-memory manager, but its post-prune flush is best-
+    // effort: if the flush fails (disk-full, crash, etc.) the on-
+    // disk blob still references the forgotten scope. Running the
+    // tombstone purge during `open_store` makes the cryptographic-
+    // forgetting contract self-healing at the cost of one
+    // `tracked_scopes()` walk per database open.
+    //
+    // Rewrites the sentinel blob when at least one window was
+    // pruned so subsequent opens do not pay the cleanup cost (and
+    // do not leave stale window ids surfacing through the health
+    // probe's `total_windows` count). A rewrite failure is non-
+    // fatal — the in-memory state is already clean.
+    let tombstoned_scopes: Vec<evidence_store::ScopeId> = synthesis_windows
+        .tracked_scopes()
+        .into_iter()
+        .filter(|scope| tombstones.contains(scope))
+        .collect();
+    if !tombstoned_scopes.is_empty() {
+        let pruned_window_ids: Vec<synthesis_pipeline::WindowId> = tombstoned_scopes
+            .iter()
+            .flat_map(|scope| {
+                synthesis_windows
+                    .windows_for(*scope)
+                    .into_iter()
+                    .map(|w| w.id)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for scope in &tombstoned_scopes {
+            synthesis_windows.remove_windows_for_scope(*scope);
+        }
+        tracing::info!(
+            scopes = tombstoned_scopes.len(),
+            windows = pruned_window_ids.len(),
+            "open_store: purged tombstoned-scope windows from rehydrated SynthesisWindowManager",
+        );
+        match serde_json::to_vec(&synthesis_windows) {
+            Ok(bytes) => {
+                if let Err(e) = store.save_memory_blob(
+                    synthesis_windows_scope(),
+                    SYNTHESIS_WINDOWS_KIND,
+                    &bytes,
+                ) {
+                    tracing::warn!(
+                        error = %e,
+                        "open_store: rewrite of cleaned synthesis_windows blob failed; on-disk \
+                         blob still references forgotten scopes (next open_store will retry the \
+                         purge)",
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "open_store: could not serialise cleaned synthesis_windows blob; on-disk \
+                     blob still references forgotten scopes (next open_store will retry the \
+                     purge)",
+                );
+            }
+        }
+    }
 
     // Rehydrate per-scope synthesis objects. Each scope's row holds
     // a JSON-serialised `Vec<SynthesisObject>` (one row per scope),

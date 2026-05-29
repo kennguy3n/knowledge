@@ -829,18 +829,36 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         rt.synthesis_objects.remove(wid);
     }
     rt.synthesis_windows.remove_windows_for_scope(scope);
-    // The window-manager mutation only persists if we flush. Best
-    // effort — the in-memory state is already correct so a flush
-    // failure does not violate the forgetting contract (the
-    // forgotten scope's DEK has already been destroyed by step 1
-    // so any stale on-disk row would decrypt to nothing).
+    // The window-manager mutation only persists if we flush.
+    //
+    // Important: the `SynthesisWindowManager` is persisted under the
+    // nil-UUID sentinel scope (see
+    // `crate::runtime::synthesis_windows_scope`), NOT under the
+    // forgotten scope. Step 1's DEK destruction therefore does NOT
+    // make the stale row unreadable — the sentinel-scope DEK is
+    // untouched and the blob will still decrypt on the next
+    // `open_store`.
+    //
+    // A flush failure here is recoverable in two ways:
+    //
+    // 1. The in-memory manager has already been pruned, so no
+    //    in-process FFI call can observe the forgotten window
+    //    (`is_scope_forgotten` short-circuits every entry point
+    //    that operates on the scope).
+    // 2. `open_store` runs a tombstone-aware purge over the
+    //    rehydrated manager (`tombstoned_scopes` walk after the
+    //    `load_memory_blob`) and rewrites the sentinel blob on
+    //    disk, so the stale window is dropped on the next restart
+    //    even if this flush never lands.
+    //
+    // Best-effort warn is sufficient.
     if let Err(e) = rt.flush_synthesis_windows() {
         tracing::warn!(
             scope = %scope.as_uuid(),
             error = ?e,
-            "forget_scope_state: flush_synthesis_windows failed; \
-             stale on-disk window row will be reaped on next open_store \
-             (the scope DEK has already been destroyed by step 1)",
+            "forget_scope_state: flush_synthesis_windows failed; in-memory state is clean and \
+             open_store will purge the stale window row on next restart via the \
+             tombstone-aware rehydration cleanup",
         );
     }
 

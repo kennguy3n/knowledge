@@ -1628,6 +1628,108 @@ mod tests {
         teardown(handle);
     }
 
+    /// Regression test for BUG_0001 + ANALYSIS_0004 (Devin Review on
+    /// commit 6456b6f): the `SynthesisWindowManager` is persisted
+    /// under a single sentinel scope, so its on-disk blob contains
+    /// windows for every scope mixed together. When
+    /// `forget_scope_state`'s post-prune `flush_synthesis_windows`
+    /// fails (disk-full, crash before flush, etc.) the tombstone
+    /// landed in `forgotten_scopes` but the windows for the
+    /// forgotten scope remained in the sentinel blob — and the old
+    /// `open_store` did not filter them out, so the orphan windows
+    /// resurrected across restarts.
+    ///
+    /// This test simulates the partial-forget condition by writing
+    /// the tombstone row directly via `record_forgotten_scope`,
+    /// bypassing the in-memory cleanup that `forget_scope_state`
+    /// would otherwise perform. After close + reopen the
+    /// tombstone-aware rehydration cleanup must drop the orphan
+    /// window from the rehydrated manager.
+    #[test]
+    fn open_store_purges_tombstoned_scope_windows_from_rehydrated_manager() {
+        let (handle, dir) = fresh_store();
+        install_test_engine(handle);
+        let scope = seed_domain_with_two_channels(handle);
+
+        // Phase 1: trigger a synthesis so a window lands on disk
+        // under the sentinel-scope blob.
+        let win = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("synth");
+        let win_id =
+            synthesis_pipeline::WindowId::from_uuid(win.parse::<Uuid>().expect("uuid parse"));
+
+        // Phase 2: write the scope tombstone directly to the
+        // `forgotten_scopes` table, bypassing `forget_scope_state`.
+        // This is the exact corruption shape produced when
+        // `forget_scope_state`'s post-cleanup
+        // `flush_synthesis_windows` errors out: the tombstone row
+        // landed but the synthesis-windows blob still references
+        // the window.
+        with_runtime(handle, |rt| {
+            rt.store_mut()
+                .record_forgotten_scope(scope)
+                .expect("record tombstone");
+            Ok(())
+        })
+        .expect("with_runtime");
+
+        // Phase 3: close + reopen the store. The rehydration
+        // cleanup must drop the orphan window.
+        let path = dir.path().join("evidence.db");
+        teardown(handle);
+        let key_hex = "a5".repeat(32);
+        let handle2 = crate::runtime::open_store(path.to_string_lossy().into_owned(), key_hex)
+            .expect("reopen");
+
+        with_runtime(handle2, |rt| {
+            assert!(
+                rt.synthesis_windows.get(win_id).is_none(),
+                "BUG_0001 regression: window for tombstoned scope must NOT resurrect on \
+                 open_store via the rehydrated SynthesisWindowManager",
+            );
+            assert!(
+                rt.synthesis_windows.windows_for(scope).is_empty(),
+                "ANALYSIS_0004 regression: no orphan windows for the tombstoned scope may \
+                 survive the open_store rehydration cleanup",
+            );
+            // Belt-and-braces: the synthesis_objects map must
+            // also be free of orphans pointing at the dropped
+            // window. The pre-existing rehydration path already
+            // skips tombstoned scopes when loading per-scope
+            // synthesis_object rows, so this is a sanity check
+            // on the two paths staying in sync.
+            assert!(
+                !rt.synthesis_objects.contains_key(&win_id),
+                "synthesis_objects must not retain orphan entry for window of tombstoned scope",
+            );
+            Ok(())
+        })
+        .expect("inspect post-reopen state");
+
+        // Reopen a second time. The cleanup should have rewritten
+        // the on-disk blob so the second open observes the same
+        // post-cleanup state — i.e. the fix is durable across
+        // restarts, not just a one-shot in-memory filter.
+        teardown(handle2);
+        let key_hex2 = "a5".repeat(32);
+        let handle3 = crate::runtime::open_store(path.to_string_lossy().into_owned(), key_hex2)
+            .expect("second reopen");
+        with_runtime(handle3, |rt| {
+            assert!(
+                rt.synthesis_windows.windows_for(scope).is_empty(),
+                "second open_store must observe the persisted cleanup; the sentinel blob \
+                 should have been rewritten on the first reopen",
+            );
+            Ok(())
+        })
+        .expect("inspect second-reopen state");
+        teardown(handle3);
+    }
+
     #[test]
     fn prune_completed_windows_caps_at_retention_limit() {
         let (handle, _dir) = fresh_store();

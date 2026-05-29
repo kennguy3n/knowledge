@@ -186,6 +186,18 @@ impl SynthesisWindowManager {
         ids.iter().filter_map(|id| self.windows.get(id)).collect()
     }
 
+    /// Every scope id with at least one tracked window. Used by the
+    /// FFI substrate during `open_store` rehydration to drop windows
+    /// whose scope has been cryptographically forgotten (the
+    /// substrate owns the tombstone set, not the pipeline, so the
+    /// purge is driven externally).
+    ///
+    /// Iteration order is unspecified — callers that need a stable
+    /// order should sort the result themselves.
+    pub fn tracked_scopes(&self) -> Vec<ScopeId> {
+        self.by_scope.keys().copied().collect()
+    }
+
     /// Mark a `Pending` window as `InProgress`.
     ///
     /// # Errors
