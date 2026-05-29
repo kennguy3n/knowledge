@@ -500,6 +500,25 @@ pub(crate) const SYNTHESIS_OBJECT_KIND: &str = "synthesis_object";
 /// the nil UUID and rehydrate it from a single row on
 /// `open_store`. The corresponding row's AEAD AAD still binds the
 /// scope to defeat cross-runtime substitution attacks.
+///
+/// # Encryption model
+///
+/// The sentinel is intentionally never registered via
+/// [`evidence_store::EvidenceStore::ensure_scope_registered`], so
+/// `save_memory_blob` / `load_memory_blob` for this scope fall back
+/// to the HKDF-derived key path (see
+/// [`evidence_store::store::scope_key`]). This is correct and
+/// deliberate:
+///
+/// * The sentinel is internal-only — it is never exposed across the
+///   FFI boundary because `parse_scope_id` rejects the nil UUID.
+/// * It carries only substrate metadata (window lifecycle state),
+///   not user data, so the deterministic HKDF derivation does not
+///   weaken the user-data threat model.
+/// * No DEK destruction is associated with the sentinel — the
+///   cryptographic-forgetting contract operates over user scopes,
+///   and the sentinel blob's contents are filtered through the
+///   tombstone-aware rehydration cleanup in `open_store_inner`.
 pub(crate) fn synthesis_windows_scope() -> ScopeId {
     ScopeId::from_uuid(uuid::Uuid::nil())
 }
