@@ -127,7 +127,10 @@ across both bindings) are:
 `create_connector`, `authenticate_connector`, `sync_connector`,
 `refresh_connector_token`, `list_connectors`, `remove_connector`,
 `set_oauth_client_secret_resolver`,
-`clear_oauth_client_secret_resolver`.
+`clear_oauth_client_secret_resolver`,
+`start_webhook_server`, `stop_webhook_server`,
+`register_webhook_dispatch`, `unregister_webhook_dispatch`,
+`list_webhook_servers`.
 
 Four entry points are intentionally surface-specific rather than
 mirrored across both bindings:
@@ -210,7 +213,14 @@ embedded in the health envelope. Counters include
 `refresh_connector_token_total`, `list_connectors_total`,
 `remove_connector_total`,
 `set_oauth_client_secret_resolver_total`,
-`clear_oauth_client_secret_resolver_total`, plus
+`clear_oauth_client_secret_resolver_total`,
+`start_webhook_server_total`, `stop_webhook_server_total`,
+`register_webhook_dispatch_total`,
+`unregister_webhook_dispatch_total`,
+`list_webhook_servers_total`,
+`webhook_dispatch_ok_total`,
+`webhook_dispatch_bad_request_total`,
+`webhook_dispatch_bad_gateway_total`, plus
 per-`FfiError`-kind counters under `errors_by_kind`
 (`unimplemented`, `invalid_id`, `not_found`, `evidence`,
 `memory`, `synthesis`, `crypto`, `unavailable`,

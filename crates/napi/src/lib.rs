@@ -524,6 +524,84 @@ pub fn clear_oauth_client_secret_resolver(handle: NapiHandle) -> NapiResult<()> 
     ffi::clear_oauth_client_secret_resolver(RuntimeHandle(handle)).map_err(NapiError::from)
 }
 
+// ───────────────────────── Webhook receiver (Phase 5) ─────────────
+
+/// Start a webhook receiver server bound to `bind_addr` (parsed as
+/// a `SocketAddr`). Mirrors [`ffi::start_webhook_server`].
+///
+/// `bind_addr` accepts IPv4 (`"127.0.0.1:9001"`), IPv6
+/// (`"[::1]:9001"`), or `"0.0.0.0:0"` for an ephemeral port (the
+/// resolved port is surfaced via [`list_webhook_servers`]).
+///
+/// # Errors
+///
+/// Forwards [`ffi::start_webhook_server`] errors as [`NapiError`].
+pub fn start_webhook_server(
+    handle: NapiHandle,
+    bind_addr: String,
+) -> NapiResult<ffi::WebhookServerHandle> {
+    ffi::start_webhook_server(RuntimeHandle(handle), bind_addr).map_err(NapiError::from)
+}
+
+/// Stop a previously-started webhook server. Idempotent.
+/// Mirrors [`ffi::stop_webhook_server`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::stop_webhook_server`] errors as [`NapiError`].
+pub fn stop_webhook_server(
+    handle: NapiHandle,
+    server_handle: ffi::WebhookServerHandle,
+) -> NapiResult<()> {
+    ffi::stop_webhook_server(RuntimeHandle(handle), server_handle).map_err(NapiError::from)
+}
+
+/// Bind `provider_id` to `instance_id` on `server_handle`.
+/// Mirrors [`ffi::register_webhook_dispatch`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::register_webhook_dispatch`] errors as [`NapiError`].
+pub fn register_webhook_dispatch(
+    handle: NapiHandle,
+    server_handle: ffi::WebhookServerHandle,
+    provider_id: String,
+    instance_id: String,
+) -> NapiResult<()> {
+    ffi::register_webhook_dispatch(
+        RuntimeHandle(handle),
+        server_handle,
+        provider_id,
+        instance_id,
+    )
+    .map_err(NapiError::from)
+}
+
+/// Drop the binding for `(server_handle, provider_id)`. Idempotent.
+/// Mirrors [`ffi::unregister_webhook_dispatch`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::unregister_webhook_dispatch`] errors as [`NapiError`].
+pub fn unregister_webhook_dispatch(
+    handle: NapiHandle,
+    server_handle: ffi::WebhookServerHandle,
+    provider_id: String,
+) -> NapiResult<()> {
+    ffi::unregister_webhook_dispatch(RuntimeHandle(handle), server_handle, provider_id)
+        .map_err(NapiError::from)
+}
+
+/// Enumerate every running webhook server on `handle` with its
+/// per-server counters. Mirrors [`ffi::list_webhook_servers`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::list_webhook_servers`] errors as [`NapiError`].
+pub fn list_webhook_servers(handle: NapiHandle) -> NapiResult<Vec<ffi::WebhookServerSummary>> {
+    ffi::list_webhook_servers(RuntimeHandle(handle)).map_err(NapiError::from)
+}
+
 const B64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn encode_b64(bytes: &[u8]) -> String {

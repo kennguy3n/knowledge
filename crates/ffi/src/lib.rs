@@ -108,6 +108,7 @@ pub mod runtime;
 #[cfg(feature = "tracing-subscriber")]
 pub mod tracing_init;
 pub mod types;
+pub mod webhook;
 
 pub use connector::{
     authenticate_connector, clear_oauth_client_secret_resolver, create_connector, list_connectors,
@@ -124,6 +125,11 @@ pub use types::{
     ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass, FfiKeypair,
     FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RefreshReport,
     ScopeIdString, SourceKind, SyncModeKind, SyncReport, SyncStatusKind, SynthesisTrigger,
+    WebhookServerHandle, WebhookServerSummary,
+};
+pub use webhook::{
+    list_webhook_servers, register_webhook_dispatch, start_webhook_server, stop_webhook_server,
+    unregister_webhook_dispatch,
 };
 
 use crypto::{

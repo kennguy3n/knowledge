@@ -359,6 +359,35 @@ pub struct FfiRuntime {
     /// See [`Self::http_transport`] for the soft-fail rationale.
     #[cfg(feature = "http-client")]
     pub(crate) oauth_client: Option<Arc<OAuth2Client<BlockingHttpTransport>>>,
+    /// Running webhook receiver servers (Phase 5).
+    ///
+    /// Each entry is one independently-running tokio runtime +
+    /// axum server hosted on a dedicated OS thread; the
+    /// [`crate::webhook::RunningWebhookServer`] struct holds the
+    /// shutdown oneshot, the per-server
+    /// [`crate::webhook::FfiWebhookRouter`] (the single
+    /// [`connector_framework::WebhookDispatcher`] every framework
+    /// route entry points at), and the thread join handle.
+    ///
+    /// **Not** behind an additional lock: the whole `FfiRuntime`
+    /// already lives inside `Arc<Mutex<…>>` at the handle registry,
+    /// which serialises every FFI call against the same handle. The
+    /// dispatcher closures running on each server's tokio runtime
+    /// thread re-enter the substrate through
+    /// [`with_runtime`] (which acquires the same mutex), so the
+    /// only lock the map ever sits under is the per-handle one —
+    /// good enough.
+    ///
+    /// Lifetime contract: every entry is taken out of this map and
+    /// synchronously joined either by an explicit
+    /// [`crate::stop_webhook_server`] call OR by
+    /// [`crate::close_store`]'s pre-drain step
+    /// ([`crate::webhook::drain_all_servers`]) BEFORE the
+    /// `Arc::try_unwrap` spin loop. Without that ordering the spin
+    /// loop would race the in-flight tokio task that's still calling
+    /// [`with_runtime`].
+    pub(crate) webhook_servers:
+        HashMap<crate::types::WebhookServerHandle, crate::webhook::RunningWebhookServer>,
 }
 
 impl Drop for FfiRuntime {
@@ -1037,6 +1066,7 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         http_transport,
         #[cfg(feature = "http-client")]
         oauth_client,
+        webhook_servers: HashMap::new(),
     };
 
     // Rehydrate persisted connector state from the v9
@@ -1172,6 +1202,44 @@ pub fn close_store(handle: RuntimeHandle) -> FfiResult<()> {
         let Some(mut entry) = entry_opt else {
             return Ok(());
         };
+        // Pre-drain phase: synchronously shut down every webhook
+        // receiver server attached to this runtime BEFORE the
+        // `Arc::try_unwrap` spin loop. The dispatcher closures
+        // running on each server's tokio runtime thread re-enter
+        // the substrate through `with_runtime`, briefly cloning the
+        // entry `Arc` (and so blocking the spin loop) every time a
+        // webhook lands. Without this step a server that keeps
+        // receiving webhooks during shutdown would turn the
+        // try_unwrap loop into an unbounded busy-wait.
+        //
+        // We take the inner mutex briefly here — the registry write
+        // lock has already released, so other in-flight FFI calls
+        // can still run; they just block on the mutex for the
+        // duration of the take. Once the webhook_servers map is
+        // taken out of the runtime, the mutex releases and the
+        // shutdown_and_join calls run UNLOCKED so they cannot
+        // deadlock against in-flight dispatchers that are themselves
+        // calling `with_runtime`. Joined threads' last act is to
+        // drop their `Arc` clones of the entry, which lets the
+        // try_unwrap loop below succeed.
+        {
+            let mut rt_guard = match entry.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let mut servers = std::mem::take(&mut rt_guard.webhook_servers);
+            // Drop the runtime lock BEFORE joining the runtime
+            // threads — the runtime mutex is what the joined
+            // threads' dispatchers were trying to acquire.
+            drop(rt_guard);
+            for (sh, mut server) in servers.drain() {
+                tracing::debug!(
+                    server_handle = sh.0,
+                    "draining webhook server on close_store"
+                );
+                server.shutdown_and_join();
+            }
+        }
         // Drain outstanding `with_runtime` calls on this handle. Because
         // step 1 (the `remove` above) already happened, no new clones can
         // be minted — the strong count can only monotonically drop until

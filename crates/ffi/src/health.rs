@@ -48,6 +48,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use std::fmt::Write as _;
+
 use crate::error::{FfiError, FfiResult};
 use crate::metrics::{self, MetricsSnapshot};
 use crate::runtime::{self, RuntimeHandle};
@@ -451,10 +453,7 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     // architecturally inert (no `OAuth2Client` is ever
     // constructed) so we don't compute or surface this signal.
     #[cfg(feature = "http-client")]
-    let oauth_resolver_registered = rt
-        .oauth_client
-        .as_ref()
-        .is_some_and(|c| c.has_resolver());
+    let oauth_resolver_registered = rt.oauth_client.as_ref().is_some_and(|c| c.has_resolver());
 
     let status = if failed > 0 || !http_transport_available {
         SubsystemStatus::Degraded
@@ -487,6 +486,29 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
             ", oauth_resolver=unset"
         });
     }
+    // Surface the Phase 5 webhook receiver state: how many servers
+    // are currently bound + how many `(provider_id, instance_id)`
+    // dispatch rows are registered across them. Tells the operator
+    // at a glance whether the substrate is configured to receive
+    // provider webhooks natively (server count > 0) and whether the
+    // host's boot-wiring of dispatch routes completed (registration
+    // count > 0 when at least one server is up). The probe stays
+    // `Ok` regardless — most ingest-only hosts never start a
+    // webhook server (Electron status panels, offline CLI batch
+    // tools), and treating "no webhook server" as a degraded state
+    // would force them to render a yellow tile for a deliberate
+    // configuration choice.
+    let webhook_server_count = rt.webhook_servers.len();
+    let webhook_registration_count: usize = rt
+        .webhook_servers
+        .values()
+        .map(super::webhook::RunningWebhookServer::router_registration_count)
+        .sum();
+    let _ = write!(
+        &mut detail,
+        ", webhook_servers={webhook_server_count}, \
+         webhook_registrations={webhook_registration_count}"
+    );
     SubsystemHealth {
         name: "connector".into(),
         status,

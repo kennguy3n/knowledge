@@ -645,6 +645,118 @@ pub fn js_clear_oauth_client_secret_resolver(handle: BigInt) -> Result<()> {
     crate::clear_oauth_client_secret_resolver(h).map_err(to_js_error)
 }
 
+// ───────────────────────── Webhook receiver (Phase 5) ─────────────
+
+/// Start a webhook receiver server bound to `bindAddr` (parsed as
+/// a `SocketAddr` — `"127.0.0.1:9001"`, `"0.0.0.0:0"` for an
+/// ephemeral port, `"[::1]:9001"` for IPv6). Mirrors
+/// [`crate::start_webhook_server`]. Returns the opaque server
+/// handle as a `BigInt`.
+///
+/// # Errors
+///
+/// * `Unavailable` if `open_store(handle)` has not yet been called.
+/// * `InvalidArgument` if `bindAddr` is not a valid `host:port`
+///   string.
+/// * `Connector` if the OS rejects the bind (port in use,
+///   permission denied) or the tokio runtime fails to spin up.
+#[napi(js_name = "startWebhookServer")]
+pub fn js_start_webhook_server(handle: BigInt, bind_addr: String) -> Result<BigInt> {
+    let h = handle_from_bigint(&handle)?;
+    let server_handle = crate::start_webhook_server(h, bind_addr).map_err(to_js_error)?;
+    Ok(BigInt {
+        sign_bit: false,
+        words: vec![server_handle.0],
+    })
+}
+
+/// Stop a previously-started webhook server and synchronously join
+/// its runtime thread. Mirrors [`crate::stop_webhook_server`].
+///
+/// Idempotent — stopping an unknown / already-stopped server
+/// returns success with no work.
+///
+/// # Errors
+///
+/// * `Unavailable` if `open_store(handle)` has not yet been called.
+/// * `InvalidArgument` if `serverHandle` cannot be represented as
+///   a u64.
+#[napi(js_name = "stopWebhookServer")]
+pub fn js_stop_webhook_server(handle: BigInt, server_handle: BigInt) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    let sh = ffi::WebhookServerHandle(handle_from_bigint(&server_handle)?);
+    crate::stop_webhook_server(h, sh).map_err(to_js_error)
+}
+
+/// Bind `providerId` (one of the framework's recognised connector
+/// slugs — `"slack"`, `"notion"`, …) to `instanceId` on the
+/// running `serverHandle`. Mirrors
+/// [`crate::register_webhook_dispatch`].
+///
+/// Re-registering an already-bound `providerId` REPLACES the prior
+/// binding (idempotent).
+///
+/// # Errors
+///
+/// * `Unavailable` if `open_store(handle)` has not yet been called.
+/// * `InvalidArgument` if `instanceId` is not a valid UUID.
+/// * `NotFound` if `serverHandle` or `instanceId` does not name a
+///   live entity.
+/// * `Connector` if `providerId` is not one of the framework's
+///   recognised connector slugs.
+#[napi(js_name = "registerWebhookDispatch")]
+pub fn js_register_webhook_dispatch(
+    handle: BigInt,
+    server_handle: BigInt,
+    provider_id: String,
+    instance_id: String,
+) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    let sh = ffi::WebhookServerHandle(handle_from_bigint(&server_handle)?);
+    crate::register_webhook_dispatch(h, sh, provider_id, instance_id).map_err(to_js_error)
+}
+
+/// Drop the binding for `(serverHandle, providerId)`. Mirrors
+/// [`crate::unregister_webhook_dispatch`]. Idempotent.
+///
+/// # Errors
+///
+/// * `Unavailable` if `open_store(handle)` has not yet been called.
+/// * `NotFound` if `serverHandle` does not name a running server.
+#[napi(js_name = "unregisterWebhookDispatch")]
+pub fn js_unregister_webhook_dispatch(
+    handle: BigInt,
+    server_handle: BigInt,
+    provider_id: String,
+) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    let sh = ffi::WebhookServerHandle(handle_from_bigint(&server_handle)?);
+    crate::unregister_webhook_dispatch(h, sh, provider_id).map_err(to_js_error)
+}
+
+/// Enumerate every running webhook server on `handle` with its
+/// per-server counters. Mirrors [`crate::list_webhook_servers`].
+/// Returns a `serde_json::Value` (`Vec<WebhookServerSummary>`) so
+/// callers can destructure
+/// `{ serverHandle, bindAddr, startedAt, registrationCount,
+///   dispatchOkTotal, dispatchBadRequestTotal, dispatchBadGatewayTotal }`
+/// shapes without an additional `JSON.parse`.
+///
+/// # Errors
+///
+/// * `Unavailable` if `open_store(handle)` has not yet been called.
+#[napi(js_name = "listWebhookServers")]
+pub fn js_list_webhook_servers(handle: BigInt) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let summaries: Vec<ffi::WebhookServerSummary> =
+        crate::list_webhook_servers(h).map_err(to_js_error)?;
+    serde_json::to_value(summaries).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("webhook server summary serialization failed: {e}"),
+        })
+    })
+}
+
 /// Install a global `tracing` subscriber filtered by the supplied
 /// `RUST_LOG`-syntax directive (e.g. `"ffi=debug,evidence_store=info"`).
 ///

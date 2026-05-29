@@ -2803,3 +2803,570 @@ fn hex_encode(bytes: &[u8]) -> String {
     }
     s
 }
+
+// ───────────────────── Phase 5: webhook receiver ─────────────────
+
+#[cfg(feature = "http-client")]
+mod webhook {
+    //! Integration tests for the Phase 5 webhook-receiver FFI
+    //! surface. Each test stands up a temp-dir SQLCipher store,
+    //! binds an axum server on `127.0.0.1:0` (ephemeral port), and
+    //! exercises the FFI surface end-to-end through real HTTP
+    //! requests. The framework's `WebhookServer` is the actual
+    //! axum 0.7 server — there are no in-memory shortcuts.
+
+    use super::{fresh_store, ConnectorKindTag};
+    use ffi::{
+        close_store, create_connector, health_check, list_webhook_servers, metrics_snapshot,
+        register_webhook_dispatch, start_webhook_server, stop_webhook_server,
+        unregister_webhook_dispatch, FfiError, SubsystemStatus,
+    };
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::{Duration, Instant};
+
+    /// Minimum config to satisfy `create_connector` for Slack — all
+    /// fields are present but pointed at the `.invalid` TLD so any
+    /// accidental outbound HTTP call fails fast (we never actually
+    /// drive an auth grant on this connector; we only need a live
+    /// instance in the runtime's `connector_instances` map for the
+    /// webhook dispatcher to resolve).
+    const SLACK_CONNECTOR_CFG: &str = r#"{
+        "client_id": "phase5-webhook-client",
+        "redirect_uri": "https://example.invalid/oauth/callback",
+        "token_url": "https://example.invalid/oauth/token",
+        "auth_url": "https://example.invalid/oauth/authorize",
+        "signing_secret": "phase5-webhook-signing-secret"
+    }"#;
+
+    /// Tiny synchronous HTTP/1.1 client. Avoids pulling reqwest's
+    /// blocking feature (which the FFI crate explicitly does not
+    /// link) into the test target — every webhook integration test
+    /// sends one request, reads one response.
+    fn http_post(addr: &str, path: &str, body: &[u8]) -> (u16, String) {
+        let mut stream = TcpStream::connect(addr).expect("TcpStream::connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("set_read_timeout");
+        let req = format!(
+            "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\n\
+             Content-Type: application/json\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        stream
+            .write_all(req.as_bytes())
+            .expect("write request headers");
+        stream.write_all(body).expect("write request body");
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).expect("read response");
+        let text = String::from_utf8_lossy(&raw).into_owned();
+        // Parse the status line — "HTTP/1.1 200 OK\r\n…"
+        let status_line = text.lines().next().unwrap_or("");
+        let code = status_line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(0);
+        let body = text
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        (code, body)
+    }
+
+    /// Send a `GET` instead of a `POST`.
+    fn http_get(addr: &str, path: &str) -> (u16, String) {
+        let mut stream = TcpStream::connect(addr).expect("TcpStream::connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("set_read_timeout");
+        let req = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        stream.write_all(req.as_bytes()).expect("write GET request");
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).expect("read response");
+        let text = String::from_utf8_lossy(&raw).into_owned();
+        let status_line = text.lines().next().unwrap_or("");
+        let code = status_line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(0);
+        let body = text
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        (code, body)
+    }
+
+    #[test]
+    fn webhook_server_lifecycle_start_list_stop() {
+        let (h, _dir) = fresh_store();
+
+        // Bind on ephemeral port — list to discover resolved port.
+        let server = start_webhook_server(h, "127.0.0.1:0".into()).expect("start_webhook_server");
+        assert_ne!(server.0, 0, "server handle must be non-zero");
+
+        let servers = list_webhook_servers(h).expect("list_webhook_servers");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].server_handle, server);
+        assert!(servers[0].bind_addr.starts_with("127.0.0.1:"));
+        assert_ne!(
+            servers[0].bind_addr, "127.0.0.1:0",
+            "list must surface OS-resolved port, not the requested 0",
+        );
+        assert_eq!(servers[0].registration_count, 0);
+        assert_eq!(servers[0].dispatch_ok_total, 0);
+        assert_eq!(servers[0].dispatch_bad_request_total, 0);
+        assert_eq!(servers[0].dispatch_bad_gateway_total, 0);
+        assert!(servers[0].started_at > 0);
+
+        // Healthz endpoint MUST be live on the server immediately
+        // after `start_webhook_server` returns.
+        let (code, body) = http_get(&servers[0].bind_addr, "/healthz");
+        assert_eq!(
+            code, 200,
+            "/healthz must return 200; got {code} body={body}"
+        );
+
+        stop_webhook_server(h, server).expect("stop_webhook_server");
+        let after = list_webhook_servers(h).expect("list_webhook_servers post-stop");
+        assert!(after.is_empty(), "server must be removed after stop");
+
+        // Idempotent: stop again is fine.
+        stop_webhook_server(h, server).expect("idempotent stop");
+
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn webhook_dispatch_routes_to_handle_webhook_event() {
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-00000000beef".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+
+        let server = start_webhook_server(h, "127.0.0.1:0".into()).expect("start_webhook_server");
+        let addr = list_webhook_servers(h).expect("list")[0].bind_addr.clone();
+
+        register_webhook_dispatch(h, server, "slack".into(), instance.clone())
+            .expect("register_webhook_dispatch");
+
+        // Slack URL-verification envelope: handle_webhook_event
+        // returns Ok(Vec::new()) on this, so the dispatcher's
+        // 200-OK counter ticks but no evidence is ingested.
+        let body = br#"{"type":"url_verification","challenge":"phase5-challenge"}"#;
+        let (code, _resp) = http_post(&addr, "/webhooks/slack", body);
+        assert_eq!(code, 200, "url_verification must dispatch with 200");
+
+        // Wait briefly for the atomic counter update — the response
+        // returns from axum's task BEFORE the spawn_blocking
+        // worker's outcome closure runs. Spin-poll up to 2s.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let summary = &list_webhook_servers(h).expect("list")[0];
+            if summary.dispatch_ok_total == 1 {
+                assert_eq!(summary.dispatch_bad_request_total, 0);
+                assert_eq!(summary.dispatch_bad_gateway_total, 0);
+                break;
+            }
+            assert!(
+                Instant::now() <= deadline,
+                "dispatch_ok_total never reached 1: {:?}",
+                summary,
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+
+        // Process-singleton counter should track too.
+        let snap = metrics_snapshot();
+        assert!(
+            snap.webhook_dispatch_ok_total >= 1,
+            "process metric should increment alongside per-server counter",
+        );
+
+        stop_webhook_server(h, server).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn webhook_dispatch_explicit_webhook_error_returns_400() {
+        // The framework's contract: `ConnectorError::Webhook(_)`
+        // maps to 400, ANY OTHER `ConnectorError` (including the
+        // `Json` variant that `?`-bubbles from
+        // `serde_json::from_slice`) maps to 502. This test pins
+        // the 400 leg by sending a payload that the Slack handler
+        // explicitly turns into `ConnectorError::Webhook` (the
+        // "url_verification envelope missing challenge" arm).
+        // The serde-parse-error → 502 leg is pinned by
+        // `webhook_dispatch_serde_failure_returns_502`.
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-00000000cafe".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+        let server = start_webhook_server(h, "127.0.0.1:0".into()).expect("start");
+        let addr = list_webhook_servers(h).expect("list")[0].bind_addr.clone();
+        register_webhook_dispatch(h, server, "slack".into(), instance).expect("register");
+
+        // url_verification missing challenge → ConnectorError::Webhook
+        // → 400.
+        let (code, _) = http_post(&addr, "/webhooks/slack", br#"{"type":"url_verification"}"#);
+        assert_eq!(code, 400, "missing challenge must return 400");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let s = &list_webhook_servers(h).expect("list")[0];
+            if s.dispatch_bad_request_total >= 1 {
+                assert_eq!(s.dispatch_ok_total, 0);
+                break;
+            }
+            assert!(
+                Instant::now() <= deadline,
+                "dispatch_bad_request_total never reached 1: {:?}",
+                s,
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+
+        stop_webhook_server(h, server).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn webhook_dispatch_serde_failure_returns_502() {
+        // `serde_json::from_slice` failures bubble through the
+        // connector's `?` as `ConnectorError::Json`, which the
+        // framework maps to `502 Bad Gateway`. This is by design
+        // — the framework treats malformed payloads as substrate-
+        // side faults (`Json`/`Transport`/`Auth`) and reserves the
+        // 400 mapping for `ConnectorError::Webhook` variants the
+        // connector emits ON PURPOSE (e.g. missing fields,
+        // signature failures). This test pins that contract.
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-00000000c0fe".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+        let server = start_webhook_server(h, "127.0.0.1:0".into()).expect("start");
+        let addr = list_webhook_servers(h).expect("list")[0].bind_addr.clone();
+        register_webhook_dispatch(h, server, "slack".into(), instance).expect("register");
+
+        let (code, _) = http_post(&addr, "/webhooks/slack", b"not even close to json");
+        assert_eq!(code, 502, "serde_json parse failure must return 502");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let s = &list_webhook_servers(h).expect("list")[0];
+            if s.dispatch_bad_gateway_total >= 1 {
+                assert_eq!(s.dispatch_ok_total, 0);
+                break;
+            }
+            assert!(
+                Instant::now() <= deadline,
+                "dispatch_bad_gateway_total never reached 1: {:?}",
+                s,
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+
+        stop_webhook_server(h, server).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn webhook_dispatch_unregistered_provider_returns_400() {
+        let (h, _dir) = fresh_store();
+        let server = start_webhook_server(h, "127.0.0.1:0".into()).expect("start");
+        let addr = list_webhook_servers(h).expect("list")[0].bind_addr.clone();
+
+        // No register_webhook_dispatch call — the router's table
+        // has no entry for "slack". The framework's static route
+        // exists (so 404 is not returned); the FfiWebhookRouter
+        // surfaces ConnectorError::Webhook ("no instance
+        // registered…") which the framework maps to 400.
+        let body = br#"{"type":"url_verification","challenge":"x"}"#;
+        let (code, _) = http_post(&addr, "/webhooks/slack", body);
+        assert_eq!(
+            code, 400,
+            "unregistered provider_id must return 400, not 404",
+        );
+
+        stop_webhook_server(h, server).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn register_then_unregister_round_trip() {
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-00000000a0a0".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+        let server = start_webhook_server(h, "127.0.0.1:0".into()).expect("start");
+
+        assert_eq!(
+            list_webhook_servers(h).expect("list")[0].registration_count,
+            0
+        );
+
+        register_webhook_dispatch(h, server, "slack".into(), instance.clone()).expect("register");
+        assert_eq!(
+            list_webhook_servers(h).expect("list")[0].registration_count,
+            1
+        );
+
+        // Re-register replaces (idempotent), count stays at 1.
+        register_webhook_dispatch(h, server, "slack".into(), instance.clone())
+            .expect("re-register replaces");
+        assert_eq!(
+            list_webhook_servers(h).expect("list")[0].registration_count,
+            1
+        );
+
+        // Unregister returns Ok regardless of prior state.
+        unregister_webhook_dispatch(h, server, "slack".into()).expect("unregister bound provider");
+        assert_eq!(
+            list_webhook_servers(h).expect("list")[0].registration_count,
+            0
+        );
+
+        unregister_webhook_dispatch(h, server, "slack".into())
+            .expect("unregister of unbound provider is a no-op success");
+
+        stop_webhook_server(h, server).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn register_rejects_unknown_provider_id() {
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-00000000b0b0".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+        let server = start_webhook_server(h, "127.0.0.1:0".into()).expect("start");
+
+        let err = register_webhook_dispatch(h, server, "totally-not-a-provider".into(), instance)
+            .expect_err("unknown provider_id must be rejected");
+        assert!(
+            matches!(err, FfiError::Connector { .. }),
+            "unknown provider_id must surface as FfiError::Connector, got {err:?}",
+        );
+
+        stop_webhook_server(h, server).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn register_rejects_unknown_server_handle() {
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-00000000c0c0".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+
+        let bogus = ffi::WebhookServerHandle(99_999_999);
+        let err = register_webhook_dispatch(h, bogus, "slack".into(), instance)
+            .expect_err("unknown server_handle must be rejected");
+        assert!(
+            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "webhook_server"),
+            "got {err:?}",
+        );
+
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn register_rejects_unknown_instance_id() {
+        let (h, _dir) = fresh_store();
+        let server = start_webhook_server(h, "127.0.0.1:0".into()).expect("start");
+
+        let bogus_uuid = "00000000-0000-0000-0000-00000000dead".to_string();
+        let err = register_webhook_dispatch(h, server, "slack".into(), bogus_uuid)
+            .expect_err("unknown instance_id must be rejected");
+        assert!(
+            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "connector_instance"),
+            "got {err:?}",
+        );
+
+        stop_webhook_server(h, server).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn start_rejects_invalid_bind_addr() {
+        let (h, _dir) = fresh_store();
+        let err = start_webhook_server(h, "definitely not a socket addr".into())
+            .expect_err("invalid bind_addr must be rejected");
+        assert!(matches!(err, FfiError::InvalidId { .. }), "got {err:?}",);
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn close_store_drains_running_servers() {
+        // The pre-drain step in close_store must synchronously
+        // join the runtime threads of every running webhook server
+        // BEFORE the try_unwrap spin loop. Without it, a busy
+        // server would deadlock the close.
+        let (h, _dir) = fresh_store();
+        let _server = start_webhook_server(h, "127.0.0.1:0".into()).expect("start");
+        let _server2 = start_webhook_server(h, "127.0.0.1:0".into()).expect("start 2");
+        assert_eq!(list_webhook_servers(h).expect("list").len(), 2);
+
+        // close_store must return cleanly even with running servers.
+        // We do NOT call stop_webhook_server first — the drain step
+        // is the test subject.
+        let t0 = Instant::now();
+        close_store(h).expect("close_store must drain servers, not hang");
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "close_store with drained servers should be sub-10s, took {elapsed:?}",
+        );
+    }
+
+    #[test]
+    fn health_probe_surfaces_webhook_server_count() {
+        let (h, _dir) = fresh_store();
+
+        // Baseline: zero servers.
+        let report = health_check(Some(h)).expect("health_check");
+        let connector = report
+            .subsystems
+            .iter()
+            .find(|s| s.name == "connector")
+            .expect("connector subsystem");
+        assert_eq!(connector.status, SubsystemStatus::Ok);
+        let detail0 = connector.detail.as_deref().unwrap_or("");
+        assert!(
+            detail0.contains("webhook_servers=0"),
+            "baseline detail must include webhook_servers=0: {detail0}",
+        );
+        assert!(
+            detail0.contains("webhook_registrations=0"),
+            "baseline detail must include webhook_registrations=0: {detail0}",
+        );
+
+        // Start two servers, register one dispatch.
+        let s1 = start_webhook_server(h, "127.0.0.1:0".into()).expect("start s1");
+        let _s2 = start_webhook_server(h, "127.0.0.1:0".into()).expect("start s2");
+        let scope = "00000000-0000-0000-0000-00000000d0d0".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+        register_webhook_dispatch(h, s1, "slack".into(), instance).expect("register");
+
+        let report = health_check(Some(h)).expect("health_check");
+        let connector = report
+            .subsystems
+            .iter()
+            .find(|s| s.name == "connector")
+            .expect("connector subsystem");
+        let detail1 = connector.detail.as_deref().unwrap_or("");
+        assert!(
+            detail1.contains("webhook_servers=2"),
+            "post-start detail must include webhook_servers=2: {detail1}",
+        );
+        assert!(
+            detail1.contains("webhook_registrations=1"),
+            "post-register detail must include webhook_registrations=1: {detail1}",
+        );
+
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn metrics_snapshot_includes_webhook_counters() {
+        // Counters are process-singletons and other webhook tests
+        // run in parallel inside the same test binary, so we can
+        // only assert that AT LEAST the counts we drove showed up
+        // — not the exact delta. Pinning `==` here would race the
+        // sibling tests' start/stop calls.
+        let (h, _dir) = fresh_store();
+        let before = metrics_snapshot();
+
+        let server = start_webhook_server(h, "127.0.0.1:0".into()).expect("start");
+        let _ = list_webhook_servers(h).expect("list");
+        stop_webhook_server(h, server).expect("stop");
+
+        let after = metrics_snapshot();
+        assert!(
+            after.start_webhook_server_total > before.start_webhook_server_total,
+            "start counter must increment by at least 1: before={} after={}",
+            before.start_webhook_server_total,
+            after.start_webhook_server_total,
+        );
+        assert!(
+            after.stop_webhook_server_total > before.stop_webhook_server_total,
+            "stop counter must increment by at least 1: before={} after={}",
+            before.stop_webhook_server_total,
+            after.stop_webhook_server_total,
+        );
+        assert!(
+            after.list_webhook_servers_total > before.list_webhook_servers_total,
+            "list counter must increment",
+        );
+
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn graceful_shutdown_drains_in_flight_dispatch() {
+        // The framework's graceful-shutdown contract guarantees
+        // that `shutdown_and_join` blocks until every in-flight
+        // request finishes. Verify by starting a request, kicking
+        // off `stop_webhook_server` from another thread, and
+        // checking the request completes with 200 (NOT a
+        // ConnectionRefused / 503) even though stop was called
+        // mid-flight.
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-00000000e0e0".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+        let server = start_webhook_server(h, "127.0.0.1:0".into()).expect("start");
+        let addr = list_webhook_servers(h).expect("list")[0].bind_addr.clone();
+        register_webhook_dispatch(h, server, "slack".into(), instance).expect("register");
+
+        let body = br#"{"type":"url_verification","challenge":"graceful"}"#;
+        let (code, _) = http_post(&addr, "/webhooks/slack", body);
+        assert_eq!(code, 200);
+
+        // Subsequent stop must drain without panic.
+        stop_webhook_server(h, server).expect("stop after in-flight");
+        close_store(h).expect("close_store");
+    }
+}
