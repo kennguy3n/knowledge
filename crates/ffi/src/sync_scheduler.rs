@@ -756,6 +756,46 @@ pub(crate) fn scheduler_health_detail(rt: &crate::runtime::FfiRuntime) -> &'stat
     }
 }
 
+// ──────────────────────── remove_connector hook ─────────────────
+
+/// Drop the scheduler's per-instance policy + accounting entries
+/// for `instance`. Called from [`crate::remove_connector`] under
+/// the runtime mutex.
+///
+/// Without this hook, an instance removed via `remove_connector`
+/// would leave a stale [`SchedulePolicy`] in `state.policies` and
+/// a stale [`InstanceAccounting`] in `state.accounting`. The leak
+/// is bounded by the number of distinct connector instances the
+/// process has ever created (each entry is ~80 bytes), but on a
+/// long-running substrate where hosts churn instances this is a
+/// latent resource concern and the policy-count gauge surfaced
+/// through [`SyncSchedulerStatus::scheduled_instance_count`]
+/// would drift away from the live instance count.
+///
+/// Pruning here is `pub(crate)` rather than part of the public
+/// FFI: it's a coupling between two substrate-internal modules
+/// (the connector lifecycle and the scheduler state), not a host
+/// observable.
+///
+/// Idempotent — pruning an instance that has no policy or
+/// accounting entry is a no-op.
+pub(crate) fn prune_instance(rt: &crate::runtime::FfiRuntime, instance: ConnectorInstanceId) {
+    let Some(scheduler) = rt.sync_scheduler.as_ref() else {
+        // No scheduler running — nothing to prune.
+        return;
+    };
+    // Same poisoned-mutex discipline as every other policies
+    // mutex acquisition in this module: take the inner state
+    // through `into_inner` so a panic on a previous tick does
+    // not propagate poisoning to a legitimate FFI call.
+    let mut state = match scheduler.state.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    state.policies.remove(&instance);
+    state.accounting.remove(&instance);
+}
+
 // ──────────────────────── Worker thread ─────────────────────────
 
 /// Main loop of the scheduler worker thread.
@@ -809,6 +849,38 @@ fn run_scheduler_loop(
 /// UNLOCKED through `sync_connector`, the result-record phase
 /// re-acquires the policies mutex to update `consecutive_failures`
 /// + `next_attempt_at`.
+///
+/// # Lock ordering (load-bearing — read before refactoring)
+///
+/// The worker thread NEVER holds the runtime mutex and the
+/// scheduler state mutex simultaneously. The acquisition pattern
+/// in this function is:
+///
+/// 1. Acquire runtime mutex via [`with_runtime`] (Phase 1
+///    snapshot). Drop it on closure return.
+/// 2. Acquire scheduler state mutex (read policies + accounting).
+///    Drop it before Phase 2.
+/// 3. Phase 2 dispatch: NO locks held — `sync_connector`
+///    re-acquires the runtime mutex on its own, observing the
+///    substrate's published three-phase discipline.
+/// 4. Phase 3 result-record: re-acquire the scheduler state
+///    mutex briefly to update accounting. Drop it before exit.
+///
+/// The FFI surface (`configure_sync_schedule`, `clear_sync_schedule`,
+/// `prune_instance`) takes the opposite order: it holds the runtime
+/// mutex (via `with_runtime`) and acquires the scheduler state
+/// mutex INSIDE that closure. This is the canonical ordering
+/// documented at the FFI sites (see [`configure_sync_schedule`]).
+///
+/// The worker's reversed order (state mutex outside the runtime
+/// mutex) is deadlock-free ONLY because the worker drops the
+/// runtime mutex before acquiring the state mutex — both locks
+/// are never held simultaneously. A future refactor that pulled
+/// the state-mutex acquisition INSIDE the `with_runtime` closure
+/// here would NOT introduce a deadlock (it would match the FFI
+/// ordering), but a refactor that pulled a `with_runtime` call
+/// INSIDE a `state.lock()` guard WOULD deadlock against the FFI
+/// path. Maintain this invariant when modifying the function.
 fn run_one_tick(
     handle: RuntimeHandle,
     config: &SchedulerConfig,

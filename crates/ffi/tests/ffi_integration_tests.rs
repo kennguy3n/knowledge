@@ -3579,8 +3579,8 @@ mod sync_scheduler_tests {
     use super::{fresh_store, ConnectorKindTag};
     use ffi::{
         clear_sync_schedule, close_store, configure_sync_schedule, create_connector, health_check,
-        metrics_snapshot, start_sync_scheduler, stop_sync_scheduler, sync_scheduler_status,
-        FfiError, SubsystemStatus,
+        metrics_snapshot, remove_connector, start_sync_scheduler, stop_sync_scheduler,
+        sync_scheduler_status, FfiError, SubsystemStatus,
     };
     use std::time::{Duration, Instant};
 
@@ -3798,15 +3798,27 @@ mod sync_scheduler_tests {
         stop_sync_scheduler(h).expect("stop");
 
         let after = metrics_snapshot();
-        assert_eq!(
+        // Monotonic lower-bound assertions: the process-singleton
+        // counters in `crates/ffi/src/metrics.rs` are shared across
+        // every test in this binary (the cargo test runner runs
+        // tests in parallel by default). Other tests in
+        // `sync_scheduler_tests` also invoke `start_sync_scheduler`
+        // / `stop_sync_scheduler` and race the baseline-vs-after
+        // snapshot here. Exact-delta assertions would be flaky for
+        // exactly the reason `metrics.rs:779-796` documents; the
+        // existing `metrics_snapshot_includes_webhook_counters`
+        // test (line 3501) uses the same `>=` discipline.
+        assert!(
+            after.start_sync_scheduler_total > baseline_start,
+            "start counter must advance \
+             (baseline={baseline_start}, after={})",
             after.start_sync_scheduler_total,
-            baseline_start + 1,
-            "start counter must advance by exactly 1",
         );
-        assert_eq!(
+        assert!(
+            after.stop_sync_scheduler_total > baseline_stop,
+            "stop counter must advance \
+             (baseline={baseline_stop}, after={})",
             after.stop_sync_scheduler_total,
-            baseline_stop + 1,
-            "stop counter must advance by exactly 1",
         );
         assert!(
             after.sync_scheduler_status_total > baseline_status,
@@ -3936,6 +3948,44 @@ mod sync_scheduler_tests {
             iterations >= 5,
             "expected configure+clear to round-trip many times; got {iterations}",
         );
+
+        stop_sync_scheduler(h).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn remove_connector_prunes_scheduler_state() {
+        let (h, _dir) = fresh_store();
+
+        let scope = "00000000-0000-0000-0000-000000005c05".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+
+        start_sync_scheduler(h, 1, 4, 1).expect("start");
+
+        // Configure a per-instance policy.
+        configure_sync_schedule(h, instance.clone(), 2, 10).expect("configure");
+        let status = sync_scheduler_status(h).expect("status");
+        assert_eq!(
+            status.scheduled_instance_count, 1,
+            "one instance configured",
+        );
+
+        // Remove the connector — should prune the scheduler state.
+        remove_connector(h, instance.clone()).expect("remove_connector");
+        let status2 = sync_scheduler_status(h).expect("status after remove");
+        assert_eq!(
+            status2.scheduled_instance_count, 0,
+            "prune_instance must remove the per-instance policy on remove_connector",
+        );
+
+        // Idempotent: clearing a removed instance is a no-op.
+        clear_sync_schedule(h, instance).expect("clear after remove");
 
         stop_sync_scheduler(h).expect("stop");
         close_store(h).expect("close_store");

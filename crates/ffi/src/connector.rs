@@ -1080,6 +1080,16 @@ pub fn remove_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult
             // we treat that as a benign no-op so `remove_connector`
             // is idempotent.
             let _ = rt.token_vault.remove(instance);
+            // Drop any sync-scheduler policy + accounting state for
+            // this instance so the scheduler's `state.policies` /
+            // `state.accounting` maps don't accumulate stale entries
+            // across a long-running substrate process. The hook is
+            // a no-op when no scheduler is running. Inside the
+            // `with_runtime` closure so the canonical
+            // runtime-mutex → scheduler-state-mutex acquisition
+            // order documented at `sync_scheduler::run_one_tick`
+            // is preserved.
+            crate::sync_scheduler::prune_instance(rt, instance);
             // Persisted-row deletes. Both are `DELETE … WHERE
             // instance_id = ?` so a missing row is a no-op — exactly
             // matching the idempotency contract.
