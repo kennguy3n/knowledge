@@ -2040,6 +2040,7 @@ dependencies = [
  "serde_json",
  "synthesis_pipeline",
  "thiserror 1.0.69",
+ "tracing",
  "uuid",
 ]
 
