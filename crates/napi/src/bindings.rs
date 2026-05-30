@@ -464,11 +464,26 @@ pub fn js_list_recent_syntheses(handle: BigInt, scope_id: String) -> Result<serd
 ///
 /// # Errors
 ///
-/// * `NotFound` if `scopeId` is unknown or `synthesisId` does
-///   not name a window in the scope.
-/// * `Conflict` if the window is not in `Complete` state.
-/// * `InvalidArgument` if either id is not a UUID.
+/// * `InvalidId` if `scopeId` or `synthesisId` is not a valid
+///   UUID.
+/// * `NotFound` (`kind: "scope"`) if `scopeId` has been
+///   forgotten.
+/// * `NotFound` (`kind: "synthesis_window"`) if the substrate
+///   does not know of a window with that id.
+/// * `NotFound` (`kind: "synthesis_object"`) if the window has
+///   no prior synthesis object to replay (e.g. it only ever
+///   reached `Pending` or `Failed`).
+/// * `Unavailable` if no engine is configured or `scopeId` is
+///   not in the configured `scopeBindings` allow-list.
 /// * `Throttled` if the FFI-wide rate limiter rejects the call.
+/// * `Synthesis` if the window is not currently `Complete`
+///   (replay refuses Pending / InProgress / Failed to avoid
+///   racing in-flight dispatches), if the engine surfaced an
+///   error, or if the response payload exceeds the configured
+///   output cap.
+/// * `Evidence` if persisting the new synthesis object /
+///   archiving the prior version / updating the memory blob
+///   fails.
 #[napi(js_name = "replaySynthesis")]
 pub fn js_replay_synthesis(
     handle: BigInt,
@@ -848,12 +863,15 @@ pub fn js_list_connectors(handle: BigInt) -> Result<serde_json::Value> {
 ///
 /// `isScheduled` is `true` iff `startSyncScheduler` is currently
 /// running on this runtime; the scheduler-side fields
-/// (`syncIntervalSecs`, `maxBackoffSecs`, `nextAttemptUnix`,
-/// `inCooldown`, `consecutiveFailures`) gracefully degrade to
-/// zero / `null` / `false` when the scheduler is stopped. The
-/// `autoSynthesize` flag is preserved across scheduler restarts
-/// because the policy storage lives on the runtime, not the
-/// running worker.
+/// (`syncIntervalSecs`, `maxBackoffSecs`, `autoSynthesize`,
+/// `consecutiveFailures`, `nextAttemptUnix`, `inCooldown`)
+/// gracefully degrade to zero / `null` / `false` when the
+/// scheduler is stopped. None of the per-instance policy state
+/// survives a `stopSyncScheduler` / `startSyncScheduler` cycle —
+/// the `SchedulePolicy` table lives inside the running scheduler
+/// value and is dropped on stop. Hosts must re-apply
+/// `configureSyncAutoSynthesize` / `configureSyncSchedule` after
+/// each restart if they need their per-instance overrides back.
 ///
 /// # Errors
 ///

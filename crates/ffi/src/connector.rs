@@ -1061,12 +1061,18 @@ pub fn list_connectors(handle: RuntimeHandle) -> FfiResult<Vec<ConnectorStatus>>
 ///
 /// The scheduler-side fields gracefully degrade when no scheduler
 /// is running: `is_scheduled=false`, `sync_interval_secs=0`,
-/// `max_backoff_secs=0`, `next_attempt_unix=None`, `in_cooldown=false`.
-/// The `auto_synthesize` flag still reflects the host's
-/// [`crate::sync_scheduler::configure_sync_schedule`] /
+/// `max_backoff_secs=0`, `auto_synthesize=false`,
+/// `consecutive_failures=0`, `next_attempt_unix=None`,
+/// `in_cooldown=false`. The `auto_synthesize` flag does NOT
+/// survive a `stop_sync_scheduler` / `start_sync_scheduler`
+/// cycle — the per-instance `SchedulePolicy` table lives inside
+/// the `RunningSyncScheduler` value and is dropped together with
+/// it on stop. Hosts that need the flag to persist across
+/// restarts must re-apply
 /// [`crate::sync_scheduler::configure_sync_auto_synthesize`]
-/// preference even when the scheduler is stopped, because the
-/// policy storage outlives the running worker.
+/// after each `start_sync_scheduler`. (The same applies to
+/// per-instance interval / max-backoff overrides set via
+/// [`crate::sync_scheduler::configure_sync_schedule`].)
 ///
 /// # Errors
 ///

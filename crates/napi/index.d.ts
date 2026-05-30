@@ -148,12 +148,15 @@ export declare function configureSynthesisEngine(handle: bigint, config: any): v
  *
  * `isScheduled` is `true` iff `startSyncScheduler` is currently
  * running on this runtime; the scheduler-side fields
- * (`syncIntervalSecs`, `maxBackoffSecs`, `nextAttemptUnix`,
- * `inCooldown`, `consecutiveFailures`) gracefully degrade to
- * zero / `null` / `false` when the scheduler is stopped. The
- * `autoSynthesize` flag is preserved across scheduler restarts
- * because the policy storage lives on the runtime, not the
- * running worker.
+ * (`syncIntervalSecs`, `maxBackoffSecs`, `autoSynthesize`,
+ * `consecutiveFailures`, `nextAttemptUnix`, `inCooldown`)
+ * gracefully degrade to zero / `null` / `false` when the
+ * scheduler is stopped. None of the per-instance policy state
+ * survives a `stopSyncScheduler` / `startSyncScheduler` cycle —
+ * the `SchedulePolicy` table lives inside the running scheduler
+ * value and is dropped on stop. Hosts must re-apply
+ * `configureSyncAutoSynthesize` / `configureSyncSchedule` after
+ * each restart if they need their per-instance overrides back.
  *
  * # Errors
  *
@@ -397,22 +400,24 @@ export declare function query(handle: bigint, req: any): any
  * for JS so callers can destructure `{ instanceId, refreshed,
  * expiresAt, refreshedAt }` directly.
  *
- * Failure modes:
+ * # Errors
  *
- * * `kind: "connector"` carrying the framework's `TokenRefresh`
+ * * `Connector` carrying the framework's `TokenRefresh`
  *   diagnostic when the provider rejects the refresh grant
  *   (refresh token revoked / expired). The host should treat
  *   this as "re-authorisation required" and prompt the user
  *   through `authenticateConnector` rather than retrying the
  *   refresh.
- * * `kind: "connector"` carrying `"no refresh_token stored …"`
- *   when the cached token has no refresh token (Slack legacy,
- *   PKCE-only public clients). Same recovery as above.
- * * `kind: "not_found"` (`kind = "connector" | "scope"`) when
- *   the instance / scope was removed during the unlocked refresh
- *   round-trip.
- * * `kind: "unavailable"` (`subsystem: "connector-http-client"`)
- *   when no real HTTP transport is linked into the build.
+ * * `Connector` carrying `"no refresh_token stored …"` when the
+ *   cached token has no refresh token (Slack legacy, PKCE-only
+ *   public clients). Same recovery as above.
+ * * `NotFound` (`kind = "connector" | "scope"`) when the
+ *   instance / scope was removed during the unlocked refresh
+ *   round-trip. (Pre-existing connector surfaces use the shorter
+ *   `"connector"` discriminant rather than `"connector_instance"`
+ *   used by newer surfaces such as `connectorStatus`.)
+ * * `Unavailable` (`subsystem: "connector-http-client"`) when no
+ *   real HTTP transport is linked into the build.
  */
 export declare function refreshConnectorToken(handle: bigint, instanceId: string): any
 
@@ -495,11 +500,26 @@ export declare function replaceApprovedDocument(handle: bigint, scopeId: string,
  *
  * # Errors
  *
- * * `NotFound` if `scopeId` is unknown or `synthesisId` does
- *   not name a window in the scope.
- * * `Conflict` if the window is not in `Complete` state.
- * * `InvalidArgument` if either id is not a UUID.
+ * * `InvalidId` if `scopeId` or `synthesisId` is not a valid
+ *   UUID.
+ * * `NotFound` (`kind: "scope"`) if `scopeId` has been
+ *   forgotten.
+ * * `NotFound` (`kind: "synthesis_window"`) if the substrate
+ *   does not know of a window with that id.
+ * * `NotFound` (`kind: "synthesis_object"`) if the window has
+ *   no prior synthesis object to replay (e.g. it only ever
+ *   reached `Pending` or `Failed`).
+ * * `Unavailable` if no engine is configured or `scopeId` is
+ *   not in the configured `scopeBindings` allow-list.
  * * `Throttled` if the FFI-wide rate limiter rejects the call.
+ * * `Synthesis` if the window is not currently `Complete`
+ *   (replay refuses Pending / InProgress / Failed to avoid
+ *   racing in-flight dispatches), if the engine surfaced an
+ *   error, or if the response payload exceeds the configured
+ *   output cap.
+ * * `Evidence` if persisting the new synthesis object /
+ *   archiving the prior version / updating the memory blob
+ *   fails.
  */
 export declare function replaySynthesis(handle: bigint, scopeId: string, synthesisId: string): any
 

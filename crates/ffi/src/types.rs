@@ -405,10 +405,18 @@ pub struct ConnectorHealthRecord {
     /// host has supplied a per-instance policy override via
     /// [`crate::sync_scheduler::configure_sync_schedule`] (absent
     /// overrides fall back to the scheduler's `default_interval`
-    /// / `default_max_backoff`). A host can configure per-instance
-    /// policy regardless of this flag — the override is stored
-    /// and applied once the scheduler starts; `is_scheduled=false`
-    /// simply means the dispatch worker is not currently running.
+    /// / `default_max_backoff`).
+    ///
+    /// The per-instance `SchedulePolicy` table that backs
+    /// [`crate::sync_scheduler::configure_sync_schedule`] and
+    /// [`crate::sync_scheduler::configure_sync_auto_synthesize`]
+    /// lives inside the running scheduler value and is dropped
+    /// on `stop_sync_scheduler`. Both configuration FFIs require
+    /// the scheduler to be running (they return
+    /// [`FfiError::Connector`] otherwise). After a
+    /// stop/start cycle the per-instance policies are gone —
+    /// hosts that need their overrides back must re-apply them
+    /// after [`crate::sync_scheduler::start_sync_scheduler`].
     pub is_scheduled: bool,
     /// Effective per-instance sync interval in seconds. Reflects
     /// either the host-supplied
@@ -428,6 +436,10 @@ pub struct ConnectorHealthRecord {
     /// connector's scope after each successful sync. Toggled per
     /// instance by
     /// [`crate::sync_scheduler::configure_sync_auto_synthesize`].
+    /// `false` when the scheduler is stopped — the flag lives in
+    /// the running scheduler's policy table and does not survive a
+    /// `stop_sync_scheduler` / `start_sync_scheduler` cycle. See
+    /// [`Self::is_scheduled`] for the full lifetime contract.
     pub auto_synthesize: bool,
     /// Consecutive failures since the last successful sync.
     /// Reset to `0` on success. Used by the scheduler as the
