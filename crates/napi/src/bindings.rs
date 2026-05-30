@@ -1219,6 +1219,64 @@ pub fn js_clear_oauth_client_secret_resolver(handle: BigInt) -> Result<()> {
 /// `set_key_storage_resolver`). So the JS event loop calling back
 /// into other entry points cannot deadlock on the substrate's lock.
 ///
+/// # Maintainer invariant — do NOT invoke a resolver method while holding the runtime mutex
+///
+/// The sync-wait pattern in this adapter
+/// (`mpsc::sync_channel(1)` + `recv_timeout`) is **structurally
+/// incompatible** with calling `KeyStorageResolver::{load_key,
+/// store_key, delete_key}` from inside the `with_runtime` /
+/// `with_runtime_mut` callback. Doing so would create the
+/// classic FFI deadlock topology:
+///
+/// 1. Substrate worker thread enters `with_runtime`, acquires
+///    the runtime mutex.
+/// 2. Substrate worker calls `resolver.load_key(...)` →
+///    `ThreadsafeFunction::call_with_return_value` schedules
+///    the JS callback on the event loop.
+/// 3. Substrate worker blocks on `rx.recv_timeout(...)`.
+/// 4. JS event loop runs the callback. If the JS callback
+///    re-enters the substrate (e.g. calls `health_check(handle)`,
+///    `metrics_snapshot()`, or any other N-API entry point that
+///    takes the same handle), the re-entrant call also tries to
+///    acquire the runtime mutex.
+/// 5. The substrate worker is holding it (step 1) and cannot
+///    release it because it is sync-waiting in step 3 for the
+///    JS callback to complete — but the callback cannot
+///    complete because step 4 is blocked on the mutex.
+/// 6. The 30 s `recv_timeout` ceiling eventually fires and
+///    the adapter surfaces `Unavailable { subsystem: "...
+///    timed out" }`, but only after a 30 s freeze.
+///
+/// The current call sites (`open_store_with_resolver` invokes
+/// `load_key` BEFORE `open_store_inner` enters `with_runtime`;
+/// `set_key_storage_resolver` stashes the resolver via
+/// `with_runtime` but does not invoke any resolver method)
+/// preserve this invariant by construction. Future call sites
+/// (e.g. key-rotation ceremonies, lazy rekey, mid-life
+/// resolver swaps) MUST do one of:
+///
+/// * Read the `Arc<dyn KeyStorageResolver>` out of the runtime
+///   inside `with_runtime`, drop the guard, then invoke the
+///   resolver method outside the lock — the
+///   `open_store_with_resolver` implementation in
+///   `crates/ffi/src/runtime.rs:1318+` documents this shape
+///   (resolver dispatch precedes `open_store_inner` /
+///   `with_runtime_mut`) and the
+///   `open_store_with_resolver_loads_key_and_stashes_resolver`
+///   test verifies the resolver is invoked exactly once on the
+///   cold-boot path.
+/// * Or refactor the operation to a "gather (under lock) →
+///   dispatch (no lock) → apply (under lock)" three-phase shape,
+///   the same pattern documented at `crates/ffi/src/runtime.rs`
+///   for synthesis / sync / observation workers.
+///
+/// Reviewers and the type system cannot detect a violation —
+/// `with_runtime` takes a closure, and a closure that calls
+/// `resolver.load_key(...)` compiles fine. This invariant is
+/// therefore enforceable only by code review + this comment.
+/// If you find yourself wanting to invoke a resolver method
+/// inside `with_runtime`, stop and refactor.
+///
 /// `ThreadsafeFunction` is `Send + Sync` (the napi-rs threadsafe-
 /// function API is explicitly designed for cross-thread call),
 /// satisfying the `KeyStorageResolver: Send + Sync` requirement.
