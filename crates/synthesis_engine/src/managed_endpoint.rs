@@ -609,7 +609,37 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
     }
 
     /// Replace the active config.
+    ///
+    /// The synthesizer's rate limiter slot is **re-derived** from
+    /// `cfg.max_requests_per_minute` to keep [`Self::config`] and
+    /// [`Self::rate_limiter`] in lockstep — otherwise a caller
+    /// could observe a config that says "100 rpm" while the
+    /// limiter is still enforcing an old 10 rpm cap (or vice
+    /// versa). The semantics mirror [`Self::new`]:
+    ///
+    /// * `cfg.max_requests_per_minute = Some(n)` → install a
+    ///   fresh, *unshared* [`RateLimiter`] with cap `n`. Any
+    ///   previously-attached limiter (config-derived **or**
+    ///   shared via [`Self::with_shared_rate_limiter`]) is
+    ///   replaced.
+    /// * `cfg.max_requests_per_minute = None` → clear the limiter
+    ///   slot. The synthesizer now dispatches without throttling.
+    ///
+    /// Callers that want to reconfigure non-rate-limit fields
+    /// while keeping a shared limiter in place should re-attach
+    /// it explicitly after `set_config`:
+    ///
+    /// ```ignore
+    /// synth.set_config(new_cfg);
+    /// synth = synth.with_shared_rate_limiter(shared_limiter);
+    /// ```
     pub fn set_config(&mut self, cfg: EndpointConfig) {
+        // Re-derive the limiter from the *new* config so the two
+        // public observables (`config()` and `rate_limiter()`)
+        // never disagree.
+        self.rate_limiter = cfg
+            .max_requests_per_minute
+            .map(|cap| std::sync::Arc::new(crate::rate_limiter::RateLimiter::new(cap)));
         self.cfg = cfg;
     }
 
@@ -1299,5 +1329,89 @@ mod tests {
             .rate_limiter()
             .expect("config-pinned cap must wire a limiter");
         assert_eq!(limiter.max_per_window(), 7);
+    }
+
+    /// `set_config` must re-derive the rate limiter from the new
+    /// config so `config()` and `rate_limiter()` never disagree.
+    ///
+    /// Regression guard for the latent bug where `set_config`
+    /// only swapped `self.cfg` and left a stale (or absent)
+    /// limiter in place, so a synthesizer reconfigured from
+    /// `Some(10)` to `Some(100)` would keep enforcing the 10 rpm
+    /// cap silently.
+    #[test]
+    fn set_config_re_derives_rate_limiter() {
+        // Start with NO rate limit so `rate_limiter()` is `None`.
+        let mut synth = HttpManagedEndpointSynthesizer::new(cfg(), MockHttpClient::echo());
+        assert!(
+            synth.rate_limiter().is_none(),
+            "precondition: default cfg has no rate limiter"
+        );
+
+        // Reconfigure to add a 42 rpm cap. The limiter must
+        // appear and match the new config's cap.
+        let cfg_with_cap =
+            EndpointConfig::new("https://example.test/synth", "TEST_API_KEY", "slm-recap-v1")
+                .with_max_tokens(64)
+                .with_timeout(Duration::from_secs(5))
+                .with_grammar("{root: 'string'}")
+                .with_max_requests_per_minute(42);
+        synth.set_config(cfg_with_cap);
+        let limiter_after_set = synth
+            .rate_limiter()
+            .expect("set_config(Some) must install a limiter")
+            .clone();
+        assert_eq!(
+            limiter_after_set.max_per_window(),
+            42,
+            "set_config(Some(n)) must install a limiter with cap n"
+        );
+        assert_eq!(
+            synth.config().max_requests_per_minute,
+            Some(42),
+            "config must reflect the new cap"
+        );
+
+        // Reconfigure to a different cap. The previous limiter
+        // must be **replaced** (not mutated in place — that's why
+        // we cloned the Arc above so we can prove it's a new
+        // instance).
+        let cfg_with_other_cap =
+            EndpointConfig::new("https://example.test/synth", "TEST_API_KEY", "slm-recap-v1")
+                .with_max_tokens(64)
+                .with_timeout(Duration::from_secs(5))
+                .with_grammar("{root: 'string'}")
+                .with_max_requests_per_minute(100);
+        synth.set_config(cfg_with_other_cap);
+        let limiter_after_replace = synth
+            .rate_limiter()
+            .expect("set_config(Some) must install a limiter")
+            .clone();
+        assert_eq!(
+            limiter_after_replace.max_per_window(),
+            100,
+            "set_config(Some(n)) must REPLACE the limiter, not retain the old cap"
+        );
+        assert!(
+            !std::sync::Arc::ptr_eq(&limiter_after_set, &limiter_after_replace),
+            "set_config must install a fresh limiter Arc, not mutate the existing one"
+        );
+
+        // Reconfigure to remove the cap. The limiter slot must
+        // clear so dispatch falls back to "no throttling".
+        let cfg_no_cap =
+            EndpointConfig::new("https://example.test/synth", "TEST_API_KEY", "slm-recap-v1")
+                .with_max_tokens(64)
+                .with_timeout(Duration::from_secs(5))
+                .with_grammar("{root: 'string'}");
+        synth.set_config(cfg_no_cap);
+        assert!(
+            synth.rate_limiter().is_none(),
+            "set_config(None) must clear the limiter slot"
+        );
+        assert!(
+            synth.config().max_requests_per_minute.is_none(),
+            "config must reflect the cleared cap"
+        );
     }
 }

@@ -29,7 +29,12 @@
 //!   module is the one and only test-grade backend; it is **not**
 //!   suitable for production use because the key material lives in
 //!   process heap (and so is exposed to any process-level memory
-//!   disclosure bug, never the platform's secure enclave).
+//!   disclosure bug, never the platform's secure enclave). It is
+//!   accordingly gated behind `cfg(any(test, feature = "test-
+//!   support"))` (matching the convention used by
+//!   [`crate::DeterministicEpochKeySource`], [`crate::TestSigner`],
+//!   [`crate::StubKemBackend`]) so it cannot be reachable from a
+//!   release-mode build of the substrate.
 //!
 //! Platform integrations should be registered via FFI callback by
 //! the host shell — see `crates/ffi/src/key_storage.rs`'s
@@ -97,11 +102,13 @@ pub trait KeyStorage: Send + Sync {
 /// on observed bytes after `delete`, but the zeroize is part of
 /// the trait contract and so the reference implementation honours
 /// it explicitly.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Default)]
 pub struct InMemoryKeyStorage {
     keys: Mutex<HashMap<String, MasterKey>>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl InMemoryKeyStorage {
     /// Allocate an empty [`InMemoryKeyStorage`].
     pub fn new() -> Self {
@@ -126,6 +133,7 @@ impl InMemoryKeyStorage {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl KeyStorage for InMemoryKeyStorage {
     fn store_master_key(&self, key_id: &str, key: &MasterKey) -> Result<(), CryptoError> {
         let mut guard = self.keys.lock().map_err(|_| {
@@ -170,6 +178,7 @@ impl KeyStorage for InMemoryKeyStorage {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for InMemoryKeyStorage {
     fn drop(&mut self) {
         // Zeroize every value before the `HashMap` is freed, so the
