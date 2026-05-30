@@ -75,7 +75,8 @@
 ///   ciphertext relocated to a different row fails to decrypt and
 ///   surfaces a structured error rather than silently feeding a
 ///   wrong-document payload into tenant synthesis. A `content_hash`
-///   column (SHA-256 of the plaintext) and a `size_bytes` column
+///   column (BLAKE3 of the plaintext, matching the `crypto::content_hash`
+///   used elsewhere in the substrate) and a `size_bytes` column
 ///   support fast metadata listing without touching the AEAD
 ///   payload. `forget(scope)` deletes the rows by `scope_id`; even
 ///   if that delete fails, the scope-DEK destruction step makes the
@@ -338,16 +339,21 @@ CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
 -- AEAD AAD binds `scope_id` (16 bytes) AND `document_id` (16 bytes):
 -- a ciphertext relocated to a row with a different document_id (or
 -- a different scope) fails to decrypt. The `content_hash` column
--- (SHA-256 of the plaintext payload) and the `size_bytes` column
--- support fast metadata listing without touching the ciphertext;
--- both are stored alongside the ciphertext, NOT covered by the AAD,
--- because they are observable plaintext metadata about the row and
--- not part of the secrecy contract.
+-- (BLAKE3 of the plaintext payload, matching `crypto::content_hash`)
+-- and the `size_bytes` column support fast metadata listing without
+-- touching the ciphertext; both are stored alongside the ciphertext,
+-- NOT covered by the AAD, because they are observable plaintext
+-- metadata about the row and not part of the secrecy contract.
 --
--- `forget(scope)` cleans this table via the scope-grain index below;
--- even if that delete races the scope-DEK destruction, the
--- ciphertext is unrecoverable once the DEK is gone, so the row
--- delete is defense-in-depth rather than a primary security barrier.
+-- `forget(scope)` deletes rows by `scope_id`; even if that delete
+-- races the scope-DEK destruction, the ciphertext is unrecoverable
+-- once the DEK is gone, so the row purge is defense-in-depth rather
+-- than the primary security barrier.
+--
+-- The composite PK `(scope_id, document_id)` already serves prefix
+-- lookups on `scope_id`, so no separate covering index is needed for
+-- the `WHERE scope_id = ?` listing query — SQLite's PK index handles
+-- it directly.
 CREATE TABLE IF NOT EXISTS approved_document_payloads (
     scope_id        BLOB    NOT NULL,
     document_id     BLOB    NOT NULL,
@@ -358,12 +364,4 @@ CREATE TABLE IF NOT EXISTS approved_document_payloads (
     updated_at      INTEGER NOT NULL,
     PRIMARY KEY (scope_id, document_id)
 );
-
--- `forget_scope_state` deletes approved-document payload rows by
--- `scope_id`; the composite PK starts with `scope_id` so this index
--- is redundant for point lookups but still gives the query planner
--- a covering index for scope-grain metadata listing in
--- `list_approved_document_payload_meta_for_scope`.
-CREATE INDEX IF NOT EXISTS idx_approved_doc_payloads_scope
-    ON approved_document_payloads (scope_id);
 "#;

@@ -129,7 +129,7 @@ pub use sync_scheduler::{
 pub use synthesis::{
     admit_approved_document, configure_synthesis_engine, list_approved_documents,
     list_recent_syntheses, revoke_approved_document, synthesis_status, trigger_server_synthesis,
-    LIST_RECENT_SYNTHESES_CAP, MAX_APPROVED_DOCUMENT_BYTES, MAX_APPROVED_DOCUMENT_METADATA_CHARS,
+    LIST_RECENT_SYNTHESES_CAP, MAX_APPROVED_DOCUMENT_BYTES, MAX_APPROVED_DOCUMENT_METADATA_BYTES,
     MAX_SYNTHESIS_OUTPUT_BYTES, PER_SCOPE_COOLDOWN_SECS, WINDOW_RETENTION_CAP_PER_SCOPE,
 };
 #[cfg(feature = "tracing-subscriber")]

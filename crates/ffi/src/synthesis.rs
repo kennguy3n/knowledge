@@ -139,10 +139,12 @@ pub const MAX_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
 pub const MAX_APPROVED_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Upper bound on `label` / `approver` string lengths admitted via
-/// [`admit_approved_document`]. 1 KiB each is far above any
-/// realistic human-readable label, and bounds the worst-case
+/// [`admit_approved_document`], measured in **UTF-8 bytes** (i.e.
+/// the Rust `String::len()` of the field, not the count of Unicode
+/// scalar values). 1 KiB each is far above any realistic
+/// human-readable label, and bounds the worst-case
 /// `TenantMemoryObject` serialisation cost over many refs.
-pub const MAX_APPROVED_DOCUMENT_METADATA_CHARS: usize = 1024;
+pub const MAX_APPROVED_DOCUMENT_METADATA_BYTES: usize = 1024;
 
 // ─────────────────────── Public entry points ───────────────────────
 
@@ -350,7 +352,7 @@ pub fn list_recent_syntheses(
 /// # Validation
 ///
 /// * `label` and `approver` must be non-empty and at most
-///   [`MAX_APPROVED_DOCUMENT_METADATA_CHARS`] bytes. Empty values
+///   [`MAX_APPROVED_DOCUMENT_METADATA_BYTES`] bytes. Empty values
 ///   are rejected with [`FfiError::Memory`].
 /// * `payload` must be non-empty and at most
 ///   [`MAX_APPROVED_DOCUMENT_BYTES`]. Oversize is rejected with
@@ -1327,12 +1329,12 @@ fn validate_approved_document_metadata(field: &'static str, value: &str) -> FfiR
             message: format!("admit_approved_document: {field} must be non-empty"),
         });
     }
-    if value.len() > MAX_APPROVED_DOCUMENT_METADATA_CHARS {
+    if value.len() > MAX_APPROVED_DOCUMENT_METADATA_BYTES {
         return Err(FfiError::Memory {
             message: format!(
                 "admit_approved_document: {field} length {} bytes exceeds the {} byte cap",
                 value.len(),
-                MAX_APPROVED_DOCUMENT_METADATA_CHARS,
+                MAX_APPROVED_DOCUMENT_METADATA_BYTES,
             ),
         });
     }
