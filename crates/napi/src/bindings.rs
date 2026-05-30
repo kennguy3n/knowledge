@@ -1494,8 +1494,11 @@ pub fn js_init_tracing(directive: String) -> Result<()> {
     // so its error type is `FfiError`. Funnel it through the napi error
     // mapper via the `From<FfiError> for NapiError` impl so callers see the
     // same `kind`/`message`/`detail` JSON envelope every other entry point
-    // produces.
-    crate::try_init_tracing(&directive).map_err(|e| to_js_error(crate::NapiError::from(e)))
+    // produces. The Rust signature takes `String` by value (UniFFI requires
+    // an owned parameter for FFI marshalling — see the `# Parameter shape`
+    // section on `ffi::try_init_tracing`), so we hand `directive` over
+    // directly rather than borrowing.
+    crate::try_init_tracing(directive).map_err(|e| to_js_error(crate::NapiError::from(e)))
 }
 
 #[cfg(test)]
