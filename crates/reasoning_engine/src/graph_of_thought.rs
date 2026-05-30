@@ -193,10 +193,13 @@ impl ThoughtGraph {
     /// node and returns its id.
     pub fn add(&mut self, thought: ThoughtNode) -> ThoughtId {
         let id = thought.id;
-        if !self.nodes.contains_key(&id) {
+        // `Entry::Vacant` rather than `contains_key + insert` to
+        // satisfy clippy's `map_entry` lint (and avoid the redundant
+        // hash recomputation that the two-step form pays for).
+        if let std::collections::hash_map::Entry::Vacant(e) = self.nodes.entry(id) {
             self.order.push(id);
             self.children.entry(id).or_default();
-            self.nodes.insert(id, thought);
+            e.insert(thought);
         }
         id
     }
