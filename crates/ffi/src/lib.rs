@@ -129,10 +129,11 @@ pub use sync_scheduler::{
 };
 pub use synthesis::{
     admit_approved_document, configure_synthesis_engine, list_approved_documents,
-    list_recent_syntheses, replace_approved_document, revoke_approved_document, synthesis_status,
-    trigger_server_synthesis, LIST_RECENT_SYNTHESES_CAP, MAX_APPROVED_DOCUMENTS_PER_DISPATCH,
-    MAX_APPROVED_DOCUMENT_BYTES, MAX_APPROVED_DOCUMENT_METADATA_BYTES, MAX_SYNTHESIS_OUTPUT_BYTES,
-    PER_SCOPE_COOLDOWN_SECS, WINDOW_RETENTION_CAP_PER_SCOPE,
+    list_recent_syntheses, list_synthesis_versions, replace_approved_document, replay_synthesis,
+    revoke_approved_document, synthesis_status, trigger_server_synthesis,
+    LIST_RECENT_SYNTHESES_CAP, MAX_APPROVED_DOCUMENTS_PER_DISPATCH, MAX_APPROVED_DOCUMENT_BYTES,
+    MAX_APPROVED_DOCUMENT_METADATA_BYTES, MAX_SYNTHESIS_OUTPUT_BYTES,
+    MAX_SYNTHESIS_VERSIONS_PER_WINDOW, PER_SCOPE_COOLDOWN_SECS, WINDOW_RETENTION_CAP_PER_SCOPE,
 };
 #[cfg(feature = "tracing-subscriber")]
 pub use tracing_init::try_init_tracing;
@@ -141,7 +142,8 @@ pub use types::{
     EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord,
     MemoryState, QueryResult, RefreshReport, ScopeIdString, SourceKind, SyncModeKind, SyncReport,
     SyncSchedulerStatus, SyncStatusKind, SynthesisEngineConfig, SynthesisStatusRecord,
-    SynthesisTierKind, SynthesisTrigger, WebhookServerHandle, WebhookServerSummary,
+    SynthesisTierKind, SynthesisTrigger, SynthesisVersionSummary, WebhookServerHandle,
+    WebhookServerSummary,
 };
 pub use webhook::{
     list_webhook_servers, register_webhook_dispatch, start_webhook_server, stop_webhook_server,
@@ -832,6 +834,40 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
                 scope = %scope.as_uuid(),
                 error = %err,
                 "forget_scope_state: delete_approved_document_payloads_for_scope failed; \
+                 ciphertext remains unrecoverable because the scope DEK is already destroyed",
+            );
+            first_error.get_or_insert(err);
+        }
+    }
+
+    // 5b. Phase-10-Item-4: delete archived synthesis-object version
+    //     rows for the scope. The ciphertext was sealed under the
+    //     scope DEK that step 1 destroyed, so even if this SQL
+    //     DELETE fails the bytes are cryptographically
+    //     unrecoverable. The row bytes themselves are still useful
+    //     to clear so the table stays bounded across the lifetime
+    //     of the substrate and `open_store`'s history-table
+    //     rehydration does not surface stale versions for a
+    //     forgotten scope. Best-effort, accumulates the first
+    //     error.
+    match rt.store().delete_synthesis_object_versions_for_scope(scope) {
+        Ok(deleted) => {
+            if deleted > 0 {
+                tracing::debug!(
+                    scope = %scope.as_uuid(),
+                    deleted,
+                    "forget_scope_state: purged synthesis-object version rows",
+                );
+            }
+        }
+        Err(e) => {
+            let err = FfiError::Evidence {
+                message: e.to_string(),
+            };
+            tracing::warn!(
+                scope = %scope.as_uuid(),
+                error = %err,
+                "forget_scope_state: delete_synthesis_object_versions_for_scope failed; \
                  ciphertext remains unrecoverable because the scope DEK is already destroyed",
             );
             first_error.get_or_insert(err);

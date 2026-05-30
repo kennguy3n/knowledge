@@ -81,7 +81,25 @@
 ///   payload. `forget(scope)` deletes the rows by `scope_id`; even
 ///   if that delete fails, the scope-DEK destruction step makes the
 ///   ciphertext unrecoverable. Purely additive.
-pub const SCHEMA_VERSION: i32 = 10;
+/// - v11 (Phase 10 Item 4 — synthesis replay history): added
+///   `synthesis_object_versions` to record the full prior-version
+///   history of a synthesised window. The current `synthesis_objects`
+///   blob (one row per scope under `memory_objects(kind =
+///   'synthesis_object')`) still carries only the latest version of
+///   each window's object — the new history table holds every prior
+///   version one row at a time keyed by
+///   `(scope_id, window_id, version)`. Each row is AEAD-encrypted
+///   under the same per-scope DEK with AAD binding all three
+///   columns, so a ciphertext relocated to a different row fails
+///   to decrypt rather than silently feeding the wrong-version
+///   payload to a host that called `list_synthesis_versions`.
+///   `forget(scope)` deletes the rows by `scope_id`; even if the
+///   delete fails, the scope-DEK destruction step makes the
+///   ciphertext unrecoverable. Purely additive — pre-v11 databases
+///   simply have no version history rows yet, matching the
+///   pre-Item-4 contract where every synthesis output overwrote
+///   the prior one with no recoverable trail.
+pub const SCHEMA_VERSION: i32 = 11;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -364,4 +382,64 @@ CREATE TABLE IF NOT EXISTS approved_document_payloads (
     updated_at      INTEGER NOT NULL,
     PRIMARY KEY (scope_id, document_id)
 );
+
+-- Per-window synthesis-object version history (Phase 10 Item 4).
+--
+-- The live `synthesis_objects` blob (keyed by `memory_objects.kind
+-- = 'synthesis_object'`, one row per scope) carries only the
+-- *latest* version of each window's synthesis output. Each call to
+-- `replay_synthesis(scope, window)` archives the previous latest
+-- here before installing its own output as the new latest in the
+-- per-scope blob, so the blob's read path stays a single
+-- decrypt-and-iterate over the current state while the history
+-- table grows append-mostly.
+--
+-- Columns:
+--   * `scope_id`     — owning scope (16-byte UUID).
+--   * `window_id`    — synthesis window the version belongs to.
+--   * `version`      — monotonic stamp; first archived row is the
+--                      pre-replay version (e.g. 1 if the window
+--                      had never been replayed), subsequent rows
+--                      increase by 1 per replay.
+--   * `nonce`        — AEAD nonce for this row.
+--   * `payload`      — AEAD ciphertext of the serialised
+--                      `SynthesisObject` JSON bytes.
+--   * `created_at`   — Unix seconds at archive time.
+--
+-- AAD binds `scope_id` (16) + `window_id` (16) + `version` (u32
+-- big-endian) via `synthesis_object_version_aad`, so a ciphertext
+-- relocated to a different row fails to decrypt rather than
+-- silently surfacing the wrong-version payload to a host reading
+-- `list_synthesis_versions`. The magic prefix
+-- `synthesis-object-version:v1:` namespaces future AAD format
+-- bumps.
+--
+-- `forget(scope)` deletes rows by `scope_id`. Even if the delete
+-- races the scope-DEK destruction, the ciphertext is
+-- unrecoverable once the DEK is gone, so the row purge is
+-- defense-in-depth rather than the primary security barrier.
+--
+-- The composite PK `(scope_id, window_id, version)` serves the
+-- two read paths we need:
+--   * `list_synthesis_object_versions(scope, window)` —
+--     `WHERE scope_id = ? AND window_id = ?` is a prefix scan over
+--     the PK index; no separate covering index needed.
+--   * `load_synthesis_object_version(scope, window, version)` —
+--     exact PK lookup.
+-- The supplemental `idx_synthesis_object_versions_scope` index
+-- supports the orphan-sweep walk at `open_store` time, which lists
+-- every `(scope, window)` pair across the table to diff against
+-- live window-manager state.
+CREATE TABLE IF NOT EXISTS synthesis_object_versions (
+    scope_id        BLOB    NOT NULL,
+    window_id       BLOB    NOT NULL,
+    version         INTEGER NOT NULL,
+    nonce           BLOB    NOT NULL,
+    payload         BLOB    NOT NULL,
+    created_at      INTEGER NOT NULL,
+    PRIMARY KEY (scope_id, window_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_synthesis_object_versions_scope
+    ON synthesis_object_versions (scope_id);
 "#;

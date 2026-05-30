@@ -442,6 +442,71 @@ pub fn js_list_recent_syntheses(handle: BigInt, scope_id: String) -> Result<serd
     })
 }
 
+/// Re-run synthesis on an existing `Complete` window (Phase 10
+/// Item 4). The window transitions back through `Complete →
+/// Pending → InProgress → Complete` (or `→ Failed` on engine
+/// error) on the same `(scope, window_id)` pair; the previous
+/// synthesis object is archived to the history table at its
+/// existing version stamp, and the new object lands at
+/// `prior + 1`. Returns the post-replay synthesis status record
+/// (versioned).
+///
+/// Bypasses the per-(scope, tier) cooldown but is still rate-
+/// shaped through the FFI-wide token bucket — bursting replays
+/// across many scopes will surface a `Throttled` error to the
+/// host.
+///
+/// # Errors
+///
+/// * `NotFound` if `scopeId` is unknown or `synthesisId` does
+///   not name a window in the scope.
+/// * `Conflict` if the window is not in `Complete` state.
+/// * `InvalidArgument` if either id is not a UUID.
+/// * `Throttled` if the FFI-wide rate limiter rejects the call.
+#[napi(js_name = "replaySynthesis")]
+pub fn js_replay_synthesis(
+    handle: BigInt,
+    scope_id: String,
+    synthesis_id: String,
+) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let rec = crate::replay_synthesis(h, scope_id, synthesis_id).map_err(to_js_error)?;
+    serde_json::to_value(rec).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("replay synthesis serialization failed: {e}"),
+        })
+    })
+}
+
+/// Enumerate the archived synthesis-object versions for
+/// `synthesisId` (Phase 10 Item 4), newest first. The latest
+/// version is included as the first entry with
+/// `isLatest = true`. Hosts that need to paginate the history
+/// without a separate `synthesisStatus` round trip should use
+/// this surface.
+///
+/// Returns an empty array for a window with no prior synthesis
+/// object (Pending / Failed-without-success window), matching
+/// the "empty for unknown shape" convention used by
+/// [`js_list_recent_syntheses`].
+///
+/// # Errors
+///
+/// * `InvalidArgument` if `synthesisId` is not a UUID.
+#[napi(js_name = "listSynthesisVersions")]
+pub fn js_list_synthesis_versions(
+    handle: BigInt,
+    synthesis_id: String,
+) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let rows = crate::list_synthesis_versions(h, synthesis_id).map_err(to_js_error)?;
+    serde_json::to_value(rows).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("synthesis versions serialization failed: {e}"),
+        })
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Approved documents (Phase 8).
 // ---------------------------------------------------------------------------

@@ -2361,6 +2361,286 @@ impl EvidenceStore {
         Ok(result)
     }
 
+    // ────────── synthesis_object_versions (Phase 10 Item 4) ──────────
+    //
+    // The live `synthesis_objects` blob (memory_objects row keyed by
+    // `kind = 'synthesis_object'`) carries only the latest version
+    // of each window's synthesis output. `replay_synthesis(scope,
+    // window)` archives the previous latest into the
+    // `synthesis_object_versions` table before installing its own
+    // output as the new latest in the per-scope blob.
+    //
+    // AAD binds `scope_id` + `window_id` + `version` (u32 BE) via
+    // `synthesis_object_version_aad`, so a ciphertext relocated to
+    // a different row fails to decrypt rather than surfacing the
+    // wrong-version payload to a host calling
+    // `list_synthesis_versions`.
+    //
+    // `forget(scope)` calls
+    // [`Self::delete_synthesis_object_versions_for_scope`] from the
+    // FFI layer's `forget_scope_state`. Even if the delete fails,
+    // the scope-DEK destruction step makes the ciphertext
+    // cryptographically unrecoverable, so the row purge is
+    // defense-in-depth rather than the primary security barrier.
+
+    /// Archive a prior version of a synthesis object so a future
+    /// `list_synthesis_versions(scope, window)` can replay the
+    /// history. The plaintext is the serialised
+    /// [`synthesis_pipeline::SynthesisObject`] JSON bytes; AEAD AAD
+    /// binds `(scope, window, version)` so cross-row relocation
+    /// fails to decrypt.
+    pub fn save_synthesis_object_version(
+        &self,
+        scope_id: ScopeId,
+        window_id: uuid::Uuid,
+        version: u32,
+        plaintext: &[u8],
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.save_synthesis_object_version_in_tx(&tx, scope_id, window_id, version, plaintext)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Transaction-bound variant of [`Self::save_synthesis_object_version`]
+    /// so callers that need to bundle the version archive with the
+    /// updated `synthesis_objects` blob and `synthesis_windows`
+    /// blob (e.g. the FFI `replay_synthesis` entry point) can group
+    /// all three writes under one SQLCipher transaction via
+    /// [`Self::with_transaction`].
+    pub fn save_synthesis_object_version_in_tx(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        scope_id: ScopeId,
+        window_id: uuid::Uuid,
+        version: u32,
+        plaintext: &[u8],
+    ) -> Result<()> {
+        let key = self.scope_key(scope_id)?;
+        let nonce = random_nonce();
+        let aad = synthesis_object_version_aad(scope_id, window_id, version);
+        let ciphertext = encrypt_aead(&key, &nonce, plaintext, &aad)?;
+        let now = chrono::Utc::now().timestamp();
+        tx.execute(
+            "INSERT INTO synthesis_object_versions \
+             (scope_id, window_id, version, nonce, payload, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT(scope_id, window_id, version) DO UPDATE SET \
+               nonce = excluded.nonce, \
+               payload = excluded.payload, \
+               created_at = excluded.created_at",
+            params![
+                scope_id.as_uuid().as_bytes().as_slice(),
+                window_id.as_bytes().as_slice(),
+                i64::from(version),
+                nonce.as_slice(),
+                ciphertext,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Load and decrypt the synthesis-object-version row at
+    /// `(scope_id, window_id, version)`. Returns the plaintext JSON
+    /// bytes ready to feed into `serde_json::from_slice` on a
+    /// [`synthesis_pipeline::SynthesisObject`]. Returns `Ok(None)`
+    /// if no row exists.
+    ///
+    /// # Errors
+    ///
+    /// * [`EvidenceError::Schema`] if the row is malformed (nonce
+    ///   length wrong) — defensive against on-disk corruption.
+    /// * [`EvidenceError::Crypto`] if the AEAD decrypt fails (e.g.
+    ///   the ciphertext has been relocated to the wrong row or the
+    ///   scope DEK has rotated).
+    pub fn load_synthesis_object_version(
+        &self,
+        scope_id: ScopeId,
+        window_id: uuid::Uuid,
+        version: u32,
+    ) -> Result<Option<Vec<u8>>> {
+        let row: Option<(Vec<u8>, Vec<u8>)> = self
+            .conn
+            .query_row(
+                "SELECT nonce, payload FROM synthesis_object_versions \
+                 WHERE scope_id = ?1 AND window_id = ?2 AND version = ?3",
+                params![
+                    scope_id.as_uuid().as_bytes().as_slice(),
+                    window_id.as_bytes().as_slice(),
+                    i64::from(version),
+                ],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?;
+        let Some((nonce_bytes, ciphertext)) = row else {
+            return Ok(None);
+        };
+        if nonce_bytes.len() != AEAD_NONCE_LEN {
+            return Err(EvidenceError::Schema(
+                "synthesis_object_versions row has malformed nonce length",
+            ));
+        }
+        let mut nonce = [0u8; AEAD_NONCE_LEN];
+        nonce.copy_from_slice(&nonce_bytes);
+        let key = self.scope_key(scope_id)?;
+        let aad = synthesis_object_version_aad(scope_id, window_id, version);
+        let plaintext = decrypt_aead(&key, &nonce, &ciphertext, &aad)?;
+        Ok(Some(plaintext))
+    }
+
+    /// Enumerate metadata for every version row archived against
+    /// `(scope_id, window_id)`, sorted by `version` ascending so
+    /// the caller can present the history oldest-first or reverse
+    /// at will. Each tuple is `(version, created_at_unix_seconds)`.
+    ///
+    /// This is a metadata-only scan — no AEAD decryption — so it is
+    /// safe to call on the hot path of a host listing replay
+    /// history for UI / debugging.
+    pub fn list_synthesis_object_versions(
+        &self,
+        scope_id: ScopeId,
+        window_id: uuid::Uuid,
+    ) -> Result<Vec<(u32, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT version, created_at FROM synthesis_object_versions \
+             WHERE scope_id = ?1 AND window_id = ?2 ORDER BY version ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                scope_id.as_uuid().as_bytes().as_slice(),
+                window_id.as_bytes().as_slice(),
+            ],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (version_i64, created_at) = row?;
+            let version = u32::try_from(version_i64).map_err(|_| {
+                EvidenceError::Schema(
+                    "synthesis_object_versions row has out-of-range version (>= 2^32)",
+                )
+            })?;
+            out.push((version, created_at));
+        }
+        Ok(out)
+    }
+
+    /// Delete the oldest archived version for `(scope_id, window_id)`
+    /// inside an already-open transaction. Used by
+    /// `replay_synthesis` to enforce the
+    /// `MAX_SYNTHESIS_VERSIONS_PER_WINDOW` cap atomically with the
+    /// new-version insert. Returns the number of rows deleted
+    /// (zero if the window had no archived versions yet, one
+    /// otherwise).
+    pub fn delete_oldest_synthesis_object_version_in_tx(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        scope_id: ScopeId,
+        window_id: uuid::Uuid,
+    ) -> Result<usize> {
+        let n = tx.execute(
+            "DELETE FROM synthesis_object_versions \
+             WHERE scope_id = ?1 AND window_id = ?2 \
+               AND version = ( \
+                   SELECT MIN(version) FROM synthesis_object_versions \
+                   WHERE scope_id = ?1 AND window_id = ?2 \
+               )",
+            params![
+                scope_id.as_uuid().as_bytes().as_slice(),
+                window_id.as_bytes().as_slice(),
+            ],
+        )?;
+        Ok(n)
+    }
+
+    /// Delete every version row bound to `scope_id`. Called from
+    /// the FFI layer's `forget_scope_state` after the scope DEK has
+    /// already been destroyed, as a best-effort byte purge.
+    /// Returns the count of rows deleted so the caller can log it.
+    pub fn delete_synthesis_object_versions_for_scope(&self, scope_id: ScopeId) -> Result<usize> {
+        let n = self.conn.execute(
+            "DELETE FROM synthesis_object_versions WHERE scope_id = ?1",
+            params![scope_id.as_uuid().as_bytes().as_slice()],
+        )?;
+        Ok(n)
+    }
+
+    /// Delete every version row bound to a specific
+    /// `(scope_id, window_id)` pair. Used by the `open_store`
+    /// orphan-sweep when the parent window has vanished from the
+    /// live `SynthesisWindowManager`. Returns the row count.
+    pub fn delete_synthesis_object_versions_for_window(
+        &self,
+        scope_id: ScopeId,
+        window_id: uuid::Uuid,
+    ) -> Result<usize> {
+        let n = self.conn.execute(
+            "DELETE FROM synthesis_object_versions \
+             WHERE scope_id = ?1 AND window_id = ?2",
+            params![
+                scope_id.as_uuid().as_bytes().as_slice(),
+                window_id.as_bytes().as_slice(),
+            ],
+        )?;
+        Ok(n)
+    }
+
+    /// List every `(scope_id, window_id)` composite present in
+    /// `synthesis_object_versions`. This is a cheap metadata-only
+    /// scan (no AEAD decryption) used by the orphan-sweep at
+    /// `open_store` time to detect version rows whose parent
+    /// window has vanished from the rehydrated
+    /// `SynthesisWindowManager` (e.g. a crash mid-`forget_scope`
+    /// dropped the window but failed to delete the history).
+    ///
+    /// **Malformed-row policy:** mirrors the same skip-and-warn
+    /// contract as
+    /// [`Self::list_all_approved_document_payload_keys`]. A single
+    /// non-UUID row must not block cleanup of every legitimate
+    /// orphan; surface the corruption to operators via WARN and
+    /// move on.
+    pub fn list_all_synthesis_object_version_window_keys(
+        &self,
+    ) -> Result<Vec<(ScopeId, uuid::Uuid)>> {
+        // SELECT DISTINCT so a window with N archived versions
+        // contributes a single row to the diff set instead of N
+        // identical entries.
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT scope_id, window_id FROM synthesis_object_versions")?;
+        let rows = stmt.query_map([], |row| {
+            let scope_bytes: Vec<u8> = row.get(0)?;
+            let window_bytes: Vec<u8> = row.get(1)?;
+            Ok((scope_bytes, window_bytes))
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            let (scope_bytes, window_bytes) = row?;
+            let Ok(scope_id) = uuid::Uuid::from_slice(&scope_bytes) else {
+                tracing::warn!(
+                    scope_bytes_len = scope_bytes.len(),
+                    "list_all_synthesis_object_version_window_keys: skipping row with \
+                     non-UUID scope_id; orphan sweep will leave this row untouched \
+                     (manual purge required to recover)",
+                );
+                continue;
+            };
+            let Ok(window_id) = uuid::Uuid::from_slice(&window_bytes) else {
+                tracing::warn!(
+                    scope = %scope_id,
+                    window_bytes_len = window_bytes.len(),
+                    "list_all_synthesis_object_version_window_keys: skipping row with \
+                     non-UUID window_id; orphan sweep will leave this row untouched \
+                     (manual purge required to recover)",
+                );
+                continue;
+            };
+            result.push((ScopeId::from_uuid(scope_id), window_id));
+        }
+        Ok(result)
+    }
+
     /// Purge every secondary-index row that retains plaintext for
     /// `scope_id`.
     ///
@@ -2959,6 +3239,15 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // refs but the substrate never persisted payloads" state
         // that Phase 7 shipped.
         10 => Ok(()),
+        // v11 (Phase 10 Item 4): add `synthesis_object_versions`
+        // and the supplemental `idx_synthesis_object_versions_scope`
+        // index. Purely additive; both are handled by SCHEMA_SQL's
+        // `CREATE TABLE / INDEX IF NOT EXISTS` so a v10 -> v11
+        // upgrade and a fresh-DB open end up with the same shape.
+        // Pre-v11 databases have no replay history rows yet, which
+        // matches the pre-Item-4 contract where every synthesis
+        // output overwrote the prior one with no recoverable trail.
+        11 => Ok(()),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
         )),
@@ -3165,6 +3454,16 @@ fn connector_token_aad(scope_id: ScopeId, instance_id: uuid::Uuid) -> Vec<u8> {
     aad.extend_from_slice(prefix);
     aad.extend_from_slice(scope_id.as_uuid().as_bytes());
     aad.extend_from_slice(instance_id.as_bytes());
+    aad
+}
+
+fn synthesis_object_version_aad(scope_id: ScopeId, window_id: uuid::Uuid, version: u32) -> Vec<u8> {
+    let prefix = b"synthesis-object-version:v1:";
+    let mut aad = Vec::with_capacity(prefix.len() + 16 + 16 + 4);
+    aad.extend_from_slice(prefix);
+    aad.extend_from_slice(scope_id.as_uuid().as_bytes());
+    aad.extend_from_slice(window_id.as_bytes());
+    aad.extend_from_slice(&version.to_be_bytes());
     aad
 }
 

@@ -54,7 +54,7 @@ pub use ffi::{
     ConnectorStatus, EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, HealthStatus,
     MemoryFilter, MemoryRecord, MemoryState, MetricsSnapshot, QueryResult, RefreshReport,
     RuntimeHandle, ScopeIdString, SourceKind, SubsystemHealth, SubsystemStatus, SyncModeKind,
-    SyncReport, SyncSchedulerStatus, SyncStatusKind, SynthesisTrigger,
+    SyncReport, SyncSchedulerStatus, SyncStatusKind, SynthesisTrigger, SynthesisVersionSummary,
 };
 pub use types::{IngestRequest, InitConfig, QueryRequest};
 
@@ -775,6 +775,39 @@ pub fn list_recent_syntheses(
     scope_id: ScopeIdString,
 ) -> NapiResult<Vec<ffi::SynthesisStatusRecord>> {
     ffi::list_recent_syntheses(RuntimeHandle(handle), scope_id).map_err(NapiError::from)
+}
+
+/// Re-run synthesis on an existing `Complete` window (Phase 10
+/// Item 4). Mirrors [`ffi::replay_synthesis`]. The window is
+/// re-driven through `Complete → Pending → InProgress →
+/// Complete` (or `→ Failed`) on the same `(scope, window_id)`
+/// pair; the prior synthesis object is archived to the history
+/// table and the new object lands at `prior.version + 1`.
+///
+/// # Errors
+///
+/// Forwards [`ffi::replay_synthesis`] errors as [`NapiError`].
+pub fn replay_synthesis(
+    handle: NapiHandle,
+    scope_id: ScopeIdString,
+    synthesis_id: String,
+) -> NapiResult<ffi::SynthesisStatusRecord> {
+    ffi::replay_synthesis(RuntimeHandle(handle), scope_id, synthesis_id).map_err(NapiError::from)
+}
+
+/// Enumerate the archived synthesis-object versions for
+/// `synthesis_id`, newest first. The current latest version is
+/// included as the first entry with `is_latest = true`. Mirrors
+/// [`ffi::list_synthesis_versions`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::list_synthesis_versions`] errors as [`NapiError`].
+pub fn list_synthesis_versions(
+    handle: NapiHandle,
+    synthesis_id: String,
+) -> NapiResult<Vec<ffi::SynthesisVersionSummary>> {
+    ffi::list_synthesis_versions(RuntimeHandle(handle), synthesis_id).map_err(NapiError::from)
 }
 
 /// Admit an approved document onto a tenant memory and persist the

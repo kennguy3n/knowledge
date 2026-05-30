@@ -175,6 +175,26 @@ pub const DEFAULT_TRIGGER_RATE_REFILL_PER_SEC: f64 = 1.0;
 /// is CPU-bound under the per-handle mutex.
 pub const MAX_APPROVED_DOCUMENTS_PER_DISPATCH: usize = 16;
 
+/// Maximum number of *archived* synthesis-object versions retained
+/// per window in the `synthesis_object_versions` history table
+/// (the current "latest" version lives in the per-scope
+/// `synthesis_objects` blob and is **not** counted toward this cap).
+///
+/// `replay_synthesis` archives the previous latest into history
+/// each time it lands a new version; once the per-window archive
+/// row count exceeds this cap, the oldest archived row is dropped
+/// inside the same SQLCipher transaction that lands the new
+/// version. This keeps the history bounded for hosts that
+/// repeatedly replay the same window (e.g. iterating on an engine
+/// prompt) without unbounded disk growth.
+///
+/// A host that wants to keep a longer audit trail can read off
+/// older versions before they would be evicted (each
+/// [`SynthesisVersionSummary`](crate::types::SynthesisVersionSummary)
+/// returned by [`list_synthesis_versions`] is fetchable via the
+/// underlying store helpers in `evidence_store`).
+pub const MAX_SYNTHESIS_VERSIONS_PER_WINDOW: usize = 8;
+
 // ─────────────────────── Public entry points ───────────────────────
 
 /// Install the server-side synthesis engine on `handle`.
@@ -411,6 +431,192 @@ pub fn list_recent_syntheses(
             records.sort_by_key(|r| std::cmp::Reverse(r.window_end_unix));
             records.truncate(LIST_RECENT_SYNTHESES_CAP);
             Ok(records)
+        })
+    })
+}
+
+/// Re-run server-side synthesis on an existing `Complete` window
+/// (Phase 10 Item 4).
+///
+/// The same hierarchy gather, engine dispatch, and crash-safe
+/// apply pipeline that powers
+/// [`trigger_server_synthesis`] runs against the *existing*
+/// window id rather than minting a new one. The previous
+/// synthesis object (the one currently surfaced via
+/// [`synthesis_status`]) is archived to the
+/// `synthesis_object_versions` history table inside the same
+/// SQLCipher transaction that lands the new object, with the
+/// new object's [`SynthesisObject::version`](synthesis_pipeline::SynthesisObject::version)
+/// bumped to `prior + 1`. At most
+/// [`MAX_SYNTHESIS_VERSIONS_PER_WINDOW`] archived rows are
+/// retained per window; the oldest archive row is evicted in
+/// the same transaction once the cap is exceeded.
+///
+/// The window walks `Complete → Pending → InProgress →
+/// Complete` (or `→ Failed` on dispatch error). All four
+/// transitions are persisted: the `Complete → Pending` flip is
+/// flushed before the unlocked dispatch so a crash mid-replay
+/// is observable, and the final `InProgress → Complete`
+/// commits atomically with the new synthesis object.
+///
+/// Replays are rate-shaped through the same FFI-wide
+/// token-bucket gate as fresh dispatches (returning
+/// [`FfiError::Throttled`] on exhaustion), but they bypass the
+/// per-(scope, tier) cooldown — a replay is explicit "rerun
+/// this window" intent and short-circuiting it to the cached
+/// recap would defeat the purpose.
+///
+/// # Returns
+///
+/// The post-replay [`SynthesisStatusRecord`] for the window,
+/// including the new `object_version` stamp.
+///
+/// # Errors
+///
+/// * [`FfiError::InvalidId`] if `scope_id` or `synthesis_id` is
+///   not a valid UUID.
+/// * [`FfiError::NotFound`] (`kind: "scope"`) if `scope_id` has
+///   been forgotten.
+/// * [`FfiError::NotFound`] (`kind: "synthesis_window"`) if the
+///   substrate does not know of a window with that id.
+/// * [`FfiError::NotFound`] (`kind: "synthesis_object"`) if the
+///   window has no prior synthesis object to replay (e.g. it
+///   only ever reached `Pending` or `Failed`).
+/// * [`FfiError::Unavailable`] if no engine is configured or
+///   `scope_id` is not in the configured `scope_bindings`
+///   allow-list.
+/// * [`FfiError::Throttled`] if the FFI-wide token bucket is
+///   exhausted.
+/// * [`FfiError::Synthesis`] if the window is not currently
+///   `Complete` (replay refuses Pending / InProgress / Failed
+///   to avoid racing in-flight dispatches), if the engine
+///   surfaced an error, or if the response payload exceeds
+///   [`MAX_SYNTHESIS_OUTPUT_BYTES`].
+/// * [`FfiError::Evidence`] if persisting the new synthesis
+///   object / archiving the prior version / updating the
+///   memory blob fails.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
+#[uniffi::export]
+pub fn replay_synthesis(
+    handle: RuntimeHandle,
+    scope_id: ScopeIdString,
+    synthesis_id: String,
+) -> FfiResult<SynthesisStatusRecord> {
+    metrics::instrument(metrics::inc_replay_synthesis, || {
+        let scope = crate::parse_scope_id(&scope_id)?;
+        let window_id = parse_window_id(&synthesis_id)?;
+        tracing::info!(
+            scope = %scope.as_uuid(),
+            window = %window_id.as_uuid(),
+            "replay_synthesis: dispatching",
+        );
+        replay_synthesis_inner(handle, scope, window_id).map_err(|err| {
+            tracing::warn!(
+                scope = %scope.as_uuid(),
+                window = %window_id.as_uuid(),
+                error = ?err,
+                "replay_synthesis: failed",
+            );
+            err
+        })
+    })
+}
+
+/// Enumerate the archived synthesis-object versions for
+/// `synthesis_id` (Phase 10 Item 4), newest first. The current
+/// latest version (the one surfaced via
+/// [`synthesis_status`]) is included as the first entry with
+/// `is_latest = true`. Older versions are read from the
+/// `synthesis_object_versions` history table and rendered in
+/// descending version order.
+///
+/// Returns an empty vector for a window with no prior
+/// synthesis object (Pending / Failed-without-success window),
+/// matching the "empty for unknown shape" convention used by
+/// [`list_recent_syntheses`]. Hosts that need to distinguish
+/// "unknown window" from "known window, no synthesis" should
+/// call [`synthesis_status`] first.
+///
+/// # Errors
+///
+/// * [`FfiError::InvalidId`] if `synthesis_id` is not a valid UUID.
+/// * [`FfiError::Evidence`] if the underlying version table
+///   read fails.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
+#[uniffi::export]
+pub fn list_synthesis_versions(
+    handle: RuntimeHandle,
+    synthesis_id: String,
+) -> FfiResult<Vec<crate::types::SynthesisVersionSummary>> {
+    metrics::instrument(metrics::inc_list_synthesis_versions, || {
+        let window_id = parse_window_id(&synthesis_id)?;
+        with_runtime(handle, |rt| {
+            // Find the owning scope by checking every per-scope
+            // sub-map. `list_synthesis_versions` is rare enough
+            // (host-driven UI history pull) that this O(scopes)
+            // walk is acceptable; the cooldown table key is
+            // `(scope, tier)` so we cannot derive the scope
+            // directly from the window id without a reverse
+            // index, which the runtime intentionally does not
+            // maintain.
+            let Some((owning_scope, latest_object)) = rt
+                .synthesis_objects
+                .iter()
+                .find_map(|(scope, inner)| inner.get(&window_id).map(|o| (*scope, o)))
+            else {
+                // No latest object — either the window was never
+                // completed or the window id is unknown. Match
+                // the `list_recent_syntheses` "empty for
+                // unknown" convention.
+                return Ok(Vec::new());
+            };
+
+            // Read archived versions from the history table.
+            // Returns (version, created_at_unix_secs) pairs.
+            let archive_rows = rt
+                .store()
+                .list_synthesis_object_versions(owning_scope, window_id.as_uuid())
+                .map_err(|e| FfiError::Evidence {
+                    message: format!("list_synthesis_object_versions failed: {e}"),
+                })?;
+
+            let latest_version = latest_object.version;
+            let latest_type = latest_object.object_type.as_str().to_string();
+            let latest_created = latest_object.created_at.timestamp();
+
+            // Compose: latest first (is_latest = true), then
+            // archived versions newest-first. The history table
+            // index `idx_synthesis_object_versions_scope`
+            // bounds the read; the per-row count is capped at
+            // `MAX_SYNTHESIS_VERSIONS_PER_WINDOW`.
+            let mut out: Vec<crate::types::SynthesisVersionSummary> =
+                Vec::with_capacity(1 + archive_rows.len());
+            out.push(crate::types::SynthesisVersionSummary {
+                version: latest_version,
+                created_at_unix: latest_created,
+                object_type: latest_type.clone(),
+                is_latest: true,
+            });
+            // Newest-first inside the archive list.
+            let mut archive_sorted = archive_rows;
+            archive_sorted.sort_by_key(|(v, _)| std::cmp::Reverse(*v));
+            for (version, created_at_unix) in archive_sorted {
+                // Defence in depth: if the history table somehow
+                // carries a row with `version == latest_version`
+                // (would indicate a bug in `apply_dispatch_outcome`'s
+                // version-archive logic), skip it so the caller
+                // never sees a duplicate-stamped entry.
+                if version == latest_version {
+                    continue;
+                }
+                out.push(crate::types::SynthesisVersionSummary {
+                    version,
+                    created_at_unix,
+                    object_type: latest_type.clone(),
+                    is_latest: false,
+                });
+            }
+            Ok(out)
         })
     })
 }
@@ -1147,45 +1353,7 @@ fn build_dispatch_plan(
                 refs_sorted.truncate(MAX_APPROVED_DOCUMENTS_PER_DISPATCH);
             }
 
-            let mut approved_documents: Vec<ApprovedDocument> = Vec::new();
-            let mut missing_payloads: usize = 0;
-            for r in &refs_sorted {
-                match rt.store().load_approved_document_payload(scope, r.id) {
-                    Ok(Some(payload)) => {
-                        approved_documents.push(ApprovedDocument::new(r.clone(), payload));
-                    }
-                    Ok(None) => {
-                        missing_payloads += 1;
-                        tracing::warn!(
-                            scope = %scope.as_uuid(),
-                            document_id = %r.id,
-                            label = %r.label,
-                            "trigger_server_synthesis(tenant): approved-document ref has no \
-                             persisted payload; skipping. Re-admit the document via \
-                             `admit_approved_document` to attach a payload, or call \
-                             `revoke_approved_document` to drop the orphan ref.",
-                        );
-                    }
-                    Err(e) => {
-                        return Err(FfiError::Evidence {
-                            message: format!(
-                                "load_approved_document_payload failed for document {}: {e}",
-                                r.id
-                            ),
-                        });
-                    }
-                }
-            }
-            if missing_payloads > 0 {
-                tracing::warn!(
-                    scope = %scope.as_uuid(),
-                    refs_total = refs_sorted.len(),
-                    payloads_attached = approved_documents.len(),
-                    missing_payloads,
-                    "trigger_server_synthesis(tenant): dispatching with partial \
-                     approved-documents bundle",
-                );
-            }
+            let approved_documents = materialise_approved_documents(rt, scope, &refs_sorted)?;
             let input = TenantSynthesisInput::new(tenant, domain_outputs, approved_documents)
                 .map_err(|e| FfiError::Synthesis {
                     message: format!("tenant input rejected: {e}"),
@@ -1274,7 +1442,7 @@ fn apply_dispatch_outcome(
                     message: format!("server synthesis failed: {err}"),
                 })
             }
-            Ok(object) => {
+            Ok(mut object) => {
                 if object.payload.len() > MAX_SYNTHESIS_OUTPUT_BYTES {
                     fail_window_on_live_manager(rt, window_handle.window_id, "oversize_output");
                     let _ = rt.flush_synthesis_windows();
@@ -1348,6 +1516,62 @@ fn apply_dispatch_outcome(
                 // malformed adapter can never wedge the apply phase.
                 let recap_text = String::from_utf8(object.payload.clone())
                     .unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned());
+
+                // Phase-10-Item-4 versioning. If a prior synthesis
+                // object exists for `(scope, window_id)` — which is
+                // the case on every `replay_synthesis` call and is
+                // *not* the case on a fresh `trigger_server_synthesis`
+                // — capture its serialised form so we can archive
+                // it inside the same SQLCipher tx that lands the
+                // new object, and bump the new object's `version`
+                // stamp to `prior.version + 1`. Original fresh
+                // dispatches keep `version = 1` (the default
+                // assigned by `SynthesisObject::new`).
+                //
+                // Serialising the prior object outside the tx means
+                // a `serde_json` failure aborts before any disk
+                // mutation — consistent with the rest of the apply
+                // path's pre-tx serialise / inside-tx persist
+                // discipline.
+                // The archive carries `(prior_version, prior_json,
+                // should_evict_oldest)` so the tx body itself
+                // contains no SELECTs — the cap test is computed
+                // here against the metadata-only
+                // `list_synthesis_object_versions` read.
+                let prior_archive: Option<(u32, Vec<u8>, bool)> =
+                    match rt.synthesis_object_in(scope, object.window_id) {
+                        None => None,
+                        Some(prior) => {
+                            let prior_version = prior.version;
+                            let prior_json =
+                                serde_json::to_vec(prior).map_err(|e| FfiError::Memory {
+                                    message: format!(
+                                    "failed to serialize prior synthesis object for archive: {e}"
+                                ),
+                                })?;
+                            // u32 is bounded — overflow at 2^32 replays
+                            // would take ~140 millennia at one replay /
+                            // second per window, so the saturating add
+                            // is purely defensive against future
+                            // refactors that might leak a wrap.
+                            object.version = prior_version.saturating_add(1);
+                            // Decide eviction *before* the tx so the
+                            // tx body itself stays write-only. After
+                            // the upcoming insert the row count will
+                            // be `existing_archive_count + 1`; if that
+                            // would exceed the cap, mark for eviction.
+                            let existing_archive_count = rt
+                                .store()
+                                .list_synthesis_object_versions(scope, object.window_id.as_uuid())
+                                .map_err(|e| FfiError::Evidence {
+                                    message: format!("list_synthesis_object_versions failed: {e}"),
+                                })?
+                                .len();
+                            let should_evict_oldest =
+                                existing_archive_count + 1 > MAX_SYNTHESIS_VERSIONS_PER_WINDOW;
+                            Some((prior_version, prior_json, should_evict_oldest))
+                        }
+                    };
 
                 // 1. Clone the window manager and replay
                 //    Pending → InProgress → Complete on the clone.
@@ -1490,6 +1714,35 @@ fn apply_dispatch_outcome(
                         crate::runtime::SYNTHESIS_WINDOWS_KIND,
                         &windows_json,
                     )?;
+                    // Phase-10-Item-4 archive + cap enforcement.
+                    // The archive write only fires when a prior
+                    // object existed (i.e. a replay). Eviction of
+                    // the oldest archive row was computed
+                    // *outside* the tx so the tx body itself
+                    // remains write-only. Both operations are
+                    // atomic with the main blob writes — a crash
+                    // mid-tx leaves the database in its
+                    // pre-replay shape (window still Complete
+                    // with the prior object, no archive row
+                    // added).
+                    if let Some((prior_version, ref prior_json, should_evict_oldest)) =
+                        prior_archive
+                    {
+                        if should_evict_oldest {
+                            let _ = rt.store().delete_oldest_synthesis_object_version_in_tx(
+                                tx,
+                                scope,
+                                object_window_id.as_uuid(),
+                            )?;
+                        }
+                        rt.store().save_synthesis_object_version_in_tx(
+                            tx,
+                            scope,
+                            object_window_id.as_uuid(),
+                            prior_version,
+                            prior_json,
+                        )?;
+                    }
                     Ok(())
                 }) {
                     // Tx commit failure recovery (Phase 10 Item 1).
@@ -1591,6 +1844,269 @@ fn apply_dispatch_outcome(
     })
 }
 
+/// Phase 1 plan for [`replay_synthesis_inner`]. Mirrors
+/// [`DispatchPlan`] but the window handle re-uses the existing
+/// `(scope, window_id)` rather than opening a fresh one — the
+/// replay walks the *same* window through
+/// `Complete → Pending → InProgress → Complete`.
+enum ReplayPlan {
+    Domain(DomainDispatchPlan),
+    Tenant(TenantDispatchPlan),
+}
+
+/// Internal implementation for [`replay_synthesis`]. Mirrors
+/// [`dispatch_server_synthesis`]'s three-phase
+/// gather/dispatch/apply structure but with two key differences:
+///
+/// 1. Phase 1 reads the existing window instead of opening a new
+///    one. The window must be in `Complete` state — Pending,
+///    InProgress, and Failed all surface `Conflict`. The
+///    `Complete → Pending` transition is persisted before the
+///    unlocked Phase 2 dispatch so a crash mid-replay rehydrates
+///    as Pending (the host can either trigger fresh synthesis or
+///    rely on the stuck-Pending sweep to mark it Failed).
+/// 2. Phase 3 archives the prior synthesis object inside the
+///    same SQLCipher tx that lands the new one. The bump from
+///    `prior.version` to `prior.version + 1` is computed under
+///    the runtime mutex; the eviction-of-oldest decision is
+///    computed pre-tx so the tx body itself stays write-only.
+///
+/// Returns the same `(scope, window_id)` pair on success — the
+/// host's already-recorded window id remains the canonical
+/// reference for `synthesis_status` and `list_synthesis_versions`
+/// queries.
+fn replay_synthesis_inner(
+    handle: RuntimeHandle,
+    scope: ScopeId,
+    window_id: WindowId,
+) -> FfiResult<SynthesisStatusRecord> {
+    // ─────────────── Phase 1: gather (locked) ───────────────
+    let plan = with_runtime(handle, |rt| build_replay_plan(rt, scope, window_id))?;
+    let (engine, window_handle, tier, dispatch_result) = match plan {
+        ReplayPlan::Domain(p) => {
+            let DomainDispatchPlan {
+                engine,
+                window_handle,
+                input,
+                mut windows_clone,
+            } = p;
+            // ─────────── Phase 2: dispatch (UNLOCKED) ───────────
+            let outcome = engine.synthesize_domain(&mut windows_clone, window_handle, input);
+            (
+                engine,
+                window_handle,
+                SynthesisTierKind::Domain,
+                outcome.map(|r| r.object),
+            )
+        }
+        ReplayPlan::Tenant(p) => {
+            let TenantDispatchPlan {
+                engine,
+                window_handle,
+                input,
+                mut windows_clone,
+            } = p;
+            let outcome = engine.synthesize_tenant(&mut windows_clone, window_handle, input);
+            (
+                engine,
+                window_handle,
+                SynthesisTierKind::Tenant,
+                outcome.map(|r| r.object),
+            )
+        }
+    };
+    drop(engine);
+
+    // ─────────────── Phase 3: apply (locked) ───────────────
+    // Re-uses `apply_dispatch_outcome` because the archive
+    // pathway is symmetric: every apply that sees a pre-existing
+    // synthesis object for `(scope, window_id)` archives the
+    // prior version and bumps the new one — whether the original
+    // call was a fresh `trigger_server_synthesis` or a replay.
+    apply_dispatch_outcome(handle, scope, tier, window_handle, dispatch_result)?;
+
+    // Fetch the post-replay status record (versioned) for the
+    // caller. The status pull is locked but cheap (in-memory
+    // map lookup; no disk IO).
+    with_runtime(handle, |rt| {
+        let window = rt
+            .synthesis_windows
+            .windows_for(scope)
+            .iter()
+            .find(|w| w.id == window_id)
+            .map(|w| (*w).clone())
+            .ok_or_else(|| FfiError::NotFound {
+                kind: "synthesis_window".into(),
+                id: window_id.as_uuid().to_string(),
+            })?;
+        Ok(window_to_record(&window, rt))
+    })
+}
+
+/// Phase 1 body for replay. Holds the runtime mutex. Validates
+/// the window is `Complete`, infers the tier from the existing
+/// `TieredWindowHandle`, gathers the appropriate hierarchy
+/// input, flips the window to `Pending` (persisted), and clones
+/// the engine `Arc` and window manager for the unlocked Phase 2.
+fn build_replay_plan(
+    rt: &mut FfiRuntime,
+    scope: ScopeId,
+    window_id: WindowId,
+) -> FfiResult<ReplayPlan> {
+    if rt.is_scope_forgotten(scope) {
+        return Err(FfiError::NotFound {
+            kind: "scope".into(),
+            id: scope.as_uuid().to_string(),
+        });
+    }
+    enforce_scope_binding(rt, scope)?;
+    let engine = rt
+        .synthesis_engine
+        .as_ref()
+        .ok_or_else(|| FfiError::Unavailable {
+            subsystem: "synthesis_engine".into(),
+        })?
+        .clone();
+
+    // Locate the window and validate Complete state.
+    let window = rt
+        .synthesis_windows
+        .windows_for(scope)
+        .iter()
+        .find(|w| w.id == window_id)
+        .map(|w| (*w).clone())
+        .ok_or_else(|| FfiError::NotFound {
+            kind: "synthesis_window".into(),
+            id: window_id.as_uuid().to_string(),
+        })?;
+    if window.status != WindowStatus::Complete {
+        return Err(FfiError::Synthesis {
+            message: format!(
+                "replay_synthesis: window {} is in {:?} state; only Complete \
+                 windows can be replayed",
+                window_id.as_uuid(),
+                window.status,
+            ),
+        });
+    }
+    let window_tier = window.tier.ok_or_else(|| FfiError::Synthesis {
+        message: format!(
+            "replay_synthesis: window {} has no persisted tier (legacy \
+             pre-tiered-open window); cannot replay safely",
+            window_id.as_uuid(),
+        ),
+    })?;
+    let tier_kind = window_scope_tier_to_synthesis_tier(window_tier);
+
+    // Rate-shape replay through the same FFI-wide token bucket
+    // that fresh dispatch uses. A burst of replays can starve
+    // the engine just as a burst of triggers can.
+    if let Err(retry_after_ms) = rt.synthesis_rate_limiter.try_acquire(Utc::now()) {
+        crate::metrics::inc_trigger_server_synthesis_throttled();
+        return Err(FfiError::Throttled {
+            subsystem: "synthesis_engine".into(),
+            retry_after_ms,
+        });
+    }
+    // Replay intentionally BYPASSES the per-(scope, tier)
+    // cooldown — the cooldown exists to prevent flapping on
+    // fresh dispatches that race the engine; replays are
+    // host-driven and infrequent (operator intervention shape).
+
+    // Build the gather input matching the original tier.
+    let now = Utc::now();
+    let window_start = now - chrono::Duration::seconds(DEFAULT_WINDOW_DURATION_SECS);
+    let window_end = now;
+    let tiered_handle = TieredWindowHandle {
+        window_id,
+        scope_id: scope,
+        tier: window_tier,
+    };
+
+    // Flip Complete → Pending on the live manager and persist so
+    // a crash mid-replay rehydrates as Pending (the same shape as
+    // a crashed fresh dispatch — the stuck-Pending sweep can mark
+    // it Failed if the host crashes before retry).
+    if let Err(e) = rt.synthesis_windows.mark_replay_pending(window_id) {
+        return Err(FfiError::Synthesis {
+            message: format!("mark_replay_pending failed: {e}"),
+        });
+    }
+    rt.flush_synthesis_windows()?;
+    let _ = (window_start, window_end); // reserved for future replay-side window bounds
+
+    match tier_kind {
+        SynthesisTierKind::Domain => {
+            let domain = rt.domain_memory(scope).ok_or_else(|| FfiError::NotFound {
+                kind: "domain_memory".into(),
+                id: scope.as_uuid().to_string(),
+            })?;
+            let channel_outputs = gather_channel_outputs(rt, domain);
+            let input = DomainSynthesisInput::new(domain, channel_outputs).map_err(|e| {
+                FfiError::Synthesis {
+                    message: format!("domain input rejected: {e}"),
+                }
+            })?;
+            let windows_clone = rt.synthesis_windows.clone();
+            Ok(ReplayPlan::Domain(DomainDispatchPlan {
+                engine,
+                window_handle: tiered_handle,
+                input,
+                windows_clone,
+            }))
+        }
+        SynthesisTierKind::Tenant => {
+            let tenant = rt.tenant_memory(scope).ok_or_else(|| FfiError::NotFound {
+                kind: "tenant_memory".into(),
+                id: scope.as_uuid().to_string(),
+            })?;
+            let domain_outputs = gather_domain_outputs(rt, tenant);
+            let mut refs_sorted: Vec<_> = tenant.approved_documents.clone();
+            refs_sorted.sort_by_key(|d| std::cmp::Reverse(d.approved_at));
+            let dropped_count = refs_sorted
+                .len()
+                .saturating_sub(MAX_APPROVED_DOCUMENTS_PER_DISPATCH);
+            if dropped_count > 0 {
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    total_refs = refs_sorted.len(),
+                    cap = MAX_APPROVED_DOCUMENTS_PER_DISPATCH,
+                    dropped = dropped_count,
+                    "replay_synthesis(tenant): approved-documents count exceeds \
+                     MAX_APPROVED_DOCUMENTS_PER_DISPATCH; dropping the oldest {dropped_count} \
+                     documents from this replay",
+                );
+                refs_sorted.truncate(MAX_APPROVED_DOCUMENTS_PER_DISPATCH);
+            }
+            let approved_documents = materialise_approved_documents(rt, scope, &refs_sorted)?;
+            let input = TenantSynthesisInput::new(tenant, domain_outputs, approved_documents)
+                .map_err(|e| FfiError::Synthesis {
+                    message: format!("tenant input rejected: {e}"),
+                })?;
+            let windows_clone = rt.synthesis_windows.clone();
+            Ok(ReplayPlan::Tenant(TenantDispatchPlan {
+                engine,
+                window_handle: tiered_handle,
+                input,
+                windows_clone,
+            }))
+        }
+    }
+}
+
+/// Map the persisted [`WindowScopeTier`] back to the engine
+/// dispatch tier. `Channel` rolls up into a Domain synthesis
+/// (the channel summarisation is the *output* of a Domain-tier
+/// synthesis run, not a tier in its own right at engine level);
+/// `Domain` and `Tenant` map to themselves.
+fn window_scope_tier_to_synthesis_tier(t: WindowScopeTier) -> SynthesisTierKind {
+    match t {
+        // channel-tier rolls up into Domain synthesis at engine level
+        WindowScopeTier::Channel | WindowScopeTier::Domain => SynthesisTierKind::Domain,
+        WindowScopeTier::Tenant => SynthesisTierKind::Tenant,
+    }
+}
+
 fn enforce_scope_binding(rt: &FfiRuntime, scope: ScopeId) -> FfiResult<()> {
     match rt.synthesis_scope_bindings.as_deref() {
         None => {
@@ -1670,6 +2186,68 @@ fn gather_channel_outputs(
         }
     }
     outputs
+}
+
+/// Decrypt every approved-document payload referenced by
+/// `refs_sorted` and bundle each into an [`ApprovedDocument`] for
+/// the tenant-synthesis input (Phase 8).
+///
+/// Refs without a persisted payload row are skipped with a
+/// `warn!` so the gap is observable on the dispatch path rather
+/// than silently feeding an empty bundle to the SLM. The
+/// dispatch still proceeds if at least one ref had a payload.
+/// AEAD decrypt failures bubble up as
+/// [`FfiError::Evidence`] — defence in depth against on-disk
+/// corruption.
+///
+/// Extracted from the dispatch and replay paths so both surface
+/// identical materialisation semantics; mutating one (e.g.
+/// tightening the missing-payload policy) automatically updates
+/// the other.
+fn materialise_approved_documents(
+    rt: &FfiRuntime,
+    scope: ScopeId,
+    refs_sorted: &[ApprovedDocumentRef],
+) -> FfiResult<Vec<ApprovedDocument>> {
+    let mut approved_documents: Vec<ApprovedDocument> = Vec::new();
+    let mut missing_payloads: usize = 0;
+    for r in refs_sorted {
+        match rt.store().load_approved_document_payload(scope, r.id) {
+            Ok(Some(payload)) => {
+                approved_documents.push(ApprovedDocument::new(r.clone(), payload));
+            }
+            Ok(None) => {
+                missing_payloads += 1;
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    document_id = %r.id,
+                    label = %r.label,
+                    "tenant synthesis: approved-document ref has no persisted payload; \
+                     skipping. Re-admit the document via `admit_approved_document` to \
+                     attach a payload, or call `revoke_approved_document` to drop the \
+                     orphan ref.",
+                );
+            }
+            Err(e) => {
+                return Err(FfiError::Evidence {
+                    message: format!(
+                        "load_approved_document_payload failed for document {}: {e}",
+                        r.id
+                    ),
+                });
+            }
+        }
+    }
+    if missing_payloads > 0 {
+        tracing::warn!(
+            scope = %scope.as_uuid(),
+            refs_total = refs_sorted.len(),
+            payloads_attached = approved_documents.len(),
+            missing_payloads,
+            "tenant synthesis: dispatching with partial approved-documents bundle",
+        );
+    }
+    Ok(approved_documents)
 }
 
 /// Collect [`DomainOutput`]s for every domain scope registered
@@ -1965,9 +2543,15 @@ fn window_to_record(
     //
     // `window.scope_id` is the owning scope, so the per-scope
     // accessor is exact (no need to walk other tenants' sub-maps).
-    let object_id = rt
-        .synthesis_object_in(window.scope_id, window.id)
-        .map(|o| o.id.as_uuid().to_string());
+    //
+    // Phase-10-Item-4: also surface the live object's `version`
+    // stamp so hosts can detect that a previously cached recap is
+    // stale relative to a `replay_synthesis` that landed since
+    // their last poll.
+    let (object_id, object_version) = match rt.synthesis_object_in(window.scope_id, window.id) {
+        Some(o) => (Some(o.id.as_uuid().to_string()), Some(o.version)),
+        None => (None, None),
+    };
     // Tier resolution priority:
     //
     // 1. The tier stamped on the window at open time
@@ -2011,6 +2595,7 @@ fn window_to_record(
         window_start_unix: window.window_start.timestamp(),
         window_end_unix: window.window_end.timestamp(),
         object_id,
+        object_version,
     }
 }
 
@@ -4411,6 +4996,245 @@ mod tests {
             status,
             Some(synthesis_pipeline::WindowStatus::Pending),
             "fresh-Pending window must remain Pending after open_store",
+        );
+
+        teardown(handle);
+    }
+
+    // ─────────────────────── replay_synthesis ────────────────────
+
+    /// Fresh dispatch must land at version = 1 (the default the
+    /// synthesis engine assigns to a brand-new
+    /// [`SynthesisObject::new`]). `synthesis_status` and the live
+    /// `synthesis_objects` map agree on the same stamp.
+    #[test]
+    fn fresh_trigger_server_synthesis_yields_version_one() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+        let scope = seed_domain_with_two_channels(handle);
+
+        let window_id_str = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("fresh dispatch");
+        let rec = synthesis_status(handle, window_id_str.clone()).expect("status");
+        assert_eq!(rec.status, "complete");
+        assert_eq!(
+            rec.object_version,
+            Some(1),
+            "fresh dispatch must stamp version = 1"
+        );
+
+        let live_version = with_runtime(handle, |rt| {
+            let wid = parse_window_id(&window_id_str)?;
+            Ok(rt.synthesis_object_in(scope, wid).map(|o| o.version))
+        })
+        .expect("with_runtime");
+        assert_eq!(live_version, Some(1));
+
+        teardown(handle);
+    }
+
+    /// `replay_synthesis` on a `Complete` window bumps the live
+    /// object's version to 2 and archives the previous version
+    /// to the history table. `list_synthesis_versions` surfaces
+    /// both rows in the expected ordering.
+    #[test]
+    fn replay_synthesis_bumps_version_and_archives_prior() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+        let scope = seed_domain_with_two_channels(handle);
+
+        let window_id_str = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("fresh dispatch");
+
+        // The same window id round-trips through replay.
+        let rec = replay_synthesis(handle, scope.as_uuid().to_string(), window_id_str.clone())
+            .expect("replay");
+        assert_eq!(rec.synthesis_id, window_id_str);
+        assert_eq!(rec.status, "complete");
+        assert_eq!(rec.object_version, Some(2), "replay must bump to version 2");
+
+        // History surfaces both rows: latest first, then the
+        // archived prior version.
+        let versions =
+            list_synthesis_versions(handle, window_id_str.clone()).expect("list versions");
+        assert_eq!(versions.len(), 2, "current + 1 archived = 2 entries");
+        assert_eq!(versions[0].version, 2);
+        assert!(versions[0].is_latest);
+        assert_eq!(versions[1].version, 1);
+        assert!(!versions[1].is_latest);
+
+        teardown(handle);
+    }
+
+    /// Refusing replay on non-`Complete` windows. Pending,
+    /// InProgress, and Failed all surface `Synthesis` errors.
+    /// (We can't easily fabricate an InProgress window without
+    /// poking the live manager, so this test covers the
+    /// post-fresh-dispatch-before-completion edge by failing the
+    /// window explicitly.)
+    #[test]
+    fn replay_synthesis_refuses_non_complete_window() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+        let scope = seed_domain_with_two_channels(handle);
+
+        let window_id_str = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("fresh dispatch");
+        let wid = parse_window_id(&window_id_str).unwrap();
+
+        // Drive the window to Failed via the live manager. The
+        // pipeline only accepts `InProgress → Failed`, so go
+        // back through Pending → InProgress → Failed.
+        with_runtime(handle, |rt| {
+            // Roll back to Pending via the replay helper, then
+            // to InProgress, then to Failed.
+            rt.synthesis_windows.mark_replay_pending(wid).unwrap();
+            rt.synthesis_windows.mark_in_progress(wid).unwrap();
+            rt.synthesis_windows.mark_failed(wid).unwrap();
+            rt.flush_synthesis_windows()
+        })
+        .expect("force-fail");
+
+        let err = replay_synthesis(handle, scope.as_uuid().to_string(), window_id_str).unwrap_err();
+        assert!(
+            matches!(err, FfiError::Synthesis { .. }),
+            "replay on non-Complete must surface Synthesis error, got {err:?}",
+        );
+
+        teardown(handle);
+    }
+
+    /// `replay_synthesis` on an unknown window returns
+    /// `NotFound`.
+    #[test]
+    fn replay_synthesis_unknown_window_returns_not_found() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+        let scope = seed_domain_with_two_channels(handle);
+
+        let unknown = Uuid::new_v4().to_string();
+        let err = replay_synthesis(handle, scope.as_uuid().to_string(), unknown).unwrap_err();
+        assert!(
+            matches!(err, FfiError::NotFound { .. }),
+            "unknown window must surface NotFound, got {err:?}",
+        );
+        teardown(handle);
+    }
+
+    /// `replay_synthesis` on a forgotten scope returns
+    /// `NotFound`. The replay path must reject before mutating
+    /// any state, just like `trigger_server_synthesis`.
+    #[test]
+    fn replay_synthesis_forgotten_scope_returns_not_found() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+        let scope = seed_domain_with_two_channels(handle);
+
+        let window_id_str = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("fresh dispatch");
+
+        // Forget the scope.
+        crate::forget_scope(handle, scope.as_uuid().to_string()).expect("forget");
+
+        let err = replay_synthesis(handle, scope.as_uuid().to_string(), window_id_str).unwrap_err();
+        assert!(
+            matches!(err, FfiError::NotFound { .. }),
+            "forgotten scope must surface NotFound, got {err:?}",
+        );
+
+        teardown(handle);
+    }
+
+    /// `list_synthesis_versions` on an unknown window returns an
+    /// empty list (the "soft" semantic, matching
+    /// `list_recent_syntheses`).
+    #[test]
+    fn list_synthesis_versions_unknown_window_returns_empty() {
+        let (handle, _dir) = fresh_store();
+        let unknown = Uuid::new_v4().to_string();
+        let rows = list_synthesis_versions(handle, unknown).expect("list");
+        assert!(rows.is_empty());
+        teardown(handle);
+    }
+
+    /// Cap enforcement: replaying the same window more than
+    /// `MAX_SYNTHESIS_VERSIONS_PER_WINDOW + 1` times must evict
+    /// the oldest archived versions so the history stays
+    /// bounded. The retained slice always covers the latest plus
+    /// the most-recent N archive rows.
+    #[test]
+    fn replay_synthesis_caps_archived_versions_at_max() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+        let scope = seed_domain_with_two_channels(handle);
+
+        // Fresh dispatch at version 1.
+        let window_id_str = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("fresh dispatch");
+
+        // Bypass the FFI-wide rate limiter so the burst-replay
+        // does not surface `Throttled` mid-test (the limiter is
+        // global and lives across test cases).
+        with_runtime(handle, |rt| {
+            rt.synthesis_rate_limiter.reconfigure(
+                u32::try_from(MAX_SYNTHESIS_VERSIONS_PER_WINDOW * 4)
+                    .expect("cap fits in u32"),
+                1_000.0,
+            );
+            Ok(())
+        })
+        .expect("reconfigure");
+
+        // Replay enough times to overflow the cap. Each replay
+        // archives the previous latest, so after the (N+1)-th
+        // replay the history holds the latest + N archived rows.
+        for _ in 0..(MAX_SYNTHESIS_VERSIONS_PER_WINDOW + 2) {
+            replay_synthesis(handle, scope.as_uuid().to_string(), window_id_str.clone())
+                .expect("replay");
+        }
+
+        let versions =
+            list_synthesis_versions(handle, window_id_str.clone()).expect("list versions");
+        assert_eq!(
+            versions.len(),
+            MAX_SYNTHESIS_VERSIONS_PER_WINDOW + 1,
+            "current + cap archived = {} entries; got {versions:#?}",
+            MAX_SYNTHESIS_VERSIONS_PER_WINDOW + 1,
+        );
+
+        // First entry is always the live (latest) version with
+        // is_latest=true.
+        assert!(versions[0].is_latest);
+        // Versions are sorted descending; the oldest survivor's
+        // version must be `latest - cap` (everything older was
+        // evicted by the in-tx delete-oldest step).
+        let latest_version = versions[0].version;
+        let oldest_archive_version = versions.last().expect("at least one entry").version;
+        assert_eq!(
+            oldest_archive_version,
+            latest_version
+                - u32::try_from(MAX_SYNTHESIS_VERSIONS_PER_WINDOW).expect("cap fits in u32"),
+            "evicting from the head must keep exactly cap archived rows",
         );
 
         teardown(handle);

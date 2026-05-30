@@ -269,6 +269,14 @@ pub(crate) struct Metrics {
     /// throttles separately from any future throttled
     /// surfaces.
     pub(crate) trigger_server_synthesis_throttled_total: AtomicU64,
+    /// Total `replay_synthesis` calls initiated (Phase 10 Item 4).
+    /// Counts entries to the surface — both successful replays
+    /// AND failure paths (engine error, transaction commit
+    /// failure, invalid-state refusal). Per-kind error counters
+    /// can be cross-referenced to disambiguate.
+    pub(crate) replay_synthesis_total: AtomicU64,
+    /// Total `list_synthesis_versions` calls (Phase 10 Item 4).
+    pub(crate) list_synthesis_versions_total: AtomicU64,
 
     // Per-kind error counters. The set mirrors `FfiError::kind`
     // exactly so adding a new error variant is a compile error
@@ -400,6 +408,8 @@ counter_inc!(pub(crate) fn inc_replace_approved_document => replace_approved_doc
 counter_inc!(pub(crate) fn inc_list_approved_documents => list_approved_documents_total);
 counter_inc!(pub(crate) fn inc_stuck_pending_window_recovered => stuck_pending_window_recovered_total);
 counter_inc!(pub(crate) fn inc_trigger_server_synthesis_throttled => trigger_server_synthesis_throttled_total);
+counter_inc!(pub(crate) fn inc_replay_synthesis => replay_synthesis_total);
+counter_inc!(pub(crate) fn inc_list_synthesis_versions => list_synthesis_versions_total);
 counter_inc!(pub(crate) fn inc_clear_sync_schedule => clear_sync_schedule_total);
 counter_inc!(pub(crate) fn inc_sync_scheduler_status => sync_scheduler_status_total);
 counter_inc!(pub(crate) fn inc_sync_scheduler_tick => sync_scheduler_ticks_total);
@@ -693,6 +703,15 @@ pub struct MetricsSnapshot {
     /// minting a new one.
     #[serde(default)]
     pub trigger_server_synthesis_throttled_total: u64,
+    /// Total `replay_synthesis` calls (Phase 10 Item 4). Counts
+    /// every entry to the surface, regardless of outcome — pair
+    /// with `errors_by_kind.synthesis` / `.evidence` for failure
+    /// rates.
+    #[serde(default)]
+    pub replay_synthesis_total: u64,
+    /// Total `list_synthesis_versions` calls (Phase 10 Item 4).
+    #[serde(default)]
+    pub list_synthesis_versions_total: u64,
     /// Per-kind error counter snapshot.
     pub errors_by_kind: ErrorCounters,
     /// Total errors across all kinds (sum of `errors_by_kind`'s
@@ -859,6 +878,8 @@ pub fn snapshot() -> MetricsSnapshot {
         trigger_server_synthesis_throttled_total: m
             .trigger_server_synthesis_throttled_total
             .load(Ordering::Relaxed),
+        replay_synthesis_total: m.replay_synthesis_total.load(Ordering::Relaxed),
+        list_synthesis_versions_total: m.list_synthesis_versions_total.load(Ordering::Relaxed),
         errors_by_kind: ErrorCounters {
             unimplemented: m.errors_unimplemented.load(Ordering::Relaxed),
             invalid_id: m.errors_invalid_id.load(Ordering::Relaxed),
@@ -976,6 +997,8 @@ mod tests {
         inc_configure_sync_auto_synthesize();
         inc_stuck_pending_window_recovered();
         inc_trigger_server_synthesis_throttled();
+        inc_replay_synthesis();
+        inc_list_synthesis_versions();
 
         // `snapshot()` itself bumps `metrics_snapshot_total`, so we
         // capture the lower bound by calling `snapshot()` here too
@@ -1019,6 +1042,8 @@ mod tests {
             after.trigger_server_synthesis_throttled_total
                 > before.trigger_server_synthesis_throttled_total
         );
+        assert!(after.replay_synthesis_total > before.replay_synthesis_total);
+        assert!(after.list_synthesis_versions_total > before.list_synthesis_versions_total);
         // `before = snapshot()` and `after = snapshot()` both bump
         // this counter, so the after value must be at least
         // `before + 1` (it's `before + 2` minus whatever concurrent

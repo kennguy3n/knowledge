@@ -341,6 +341,7 @@ fn inner_routing_mismatch_with_matched_aead_is_rejected() {
         provenance_ref: Uuid::new_v4(),
         created_at: chrono::Utc::now(),
         supersedes: None,
+        version: synthesis_pipeline::default_synthesis_object_version(),
     };
     let plain = serde_json::to_vec(&inner).expect("serialise");
 

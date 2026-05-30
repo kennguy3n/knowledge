@@ -99,16 +99,65 @@ pub struct SynthesisObject {
     /// supersedes pointer into an add; the presence into a
     /// supersession marker.
     pub supersedes: Option<ObjectId>,
+    /// Monotonically increasing version stamp for the window. The
+    /// original dispatch lands at `version = 1`; each
+    /// `replay_synthesis` call on the same `(scope_id, window_id)`
+    /// pair bumps the stamp by 1 and stores the previous object in
+    /// the `synthesis_object_versions` history table before
+    /// installing itself as the new "latest" version in
+    /// `synthesis_objects`.
+    ///
+    /// `#[serde(default = "default_synthesis_object_version")]` so
+    /// blobs persisted before this field was introduced rehydrate
+    /// cleanly as `version: 1`, matching the implicit pre-versioning
+    /// contract.
+    #[serde(default = "default_synthesis_object_version")]
+    pub version: u32,
+}
+
+/// Initial / serde-fallback version stamp for `SynthesisObject`.
+///
+/// Exposed as a free function (rather than `Default::default`) so
+/// the `#[serde(default = ...)]` derive on the `version` field can
+/// reference it directly, and so callers can spell out the intent
+/// "this is the first version" without sprinkling the magic literal
+/// `1u32` across the codebase.
+pub const fn default_synthesis_object_version() -> u32 {
+    1
 }
 
 impl SynthesisObject {
-    /// Construct a fresh synthesis object.
+    /// Construct a fresh synthesis object with the initial version
+    /// stamp (`version = 1`).
     pub fn new(
         scope_id: ScopeId,
         window_id: WindowId,
         object_type: SynthesisObjectType,
         payload: Vec<u8>,
         provenance_ref: Uuid,
+    ) -> Self {
+        Self::with_version(
+            scope_id,
+            window_id,
+            object_type,
+            payload,
+            provenance_ref,
+            default_synthesis_object_version(),
+        )
+    }
+
+    /// Construct a synthesis object at an explicit version stamp.
+    /// Used by `replay_synthesis` (and its tests) to mint a fresh
+    /// `ObjectId` while carrying a non-default version. New objects
+    /// outside the replay path should call [`Self::new`] instead so
+    /// the version-stamp invariant stays implicit in the type.
+    pub fn with_version(
+        scope_id: ScopeId,
+        window_id: WindowId,
+        object_type: SynthesisObjectType,
+        payload: Vec<u8>,
+        provenance_ref: Uuid,
+        version: u32,
     ) -> Self {
         Self {
             id: ObjectId::new_v4(),
@@ -119,6 +168,7 @@ impl SynthesisObject {
             provenance_ref,
             created_at: Utc::now(),
             supersedes: None,
+            version,
         }
     }
 

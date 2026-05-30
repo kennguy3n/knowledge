@@ -1975,6 +1975,93 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         }
     }
 
+    // ─── Synthesis-object version orphan sweep (Phase-10-Item-4) ──
+    //
+    // Symmetric to the approved-doc payload sweep above. The
+    // `synthesis_object_versions` history table accumulates rows
+    // whenever `replay_synthesis` archives the previous synthesis
+    // object. Two failure modes can leak versions:
+    //
+    //   1. A half-failed `forget_scope_state` that destroyed the
+    //      DEK before step 5b reached the version-deletion line.
+    //      The version rows are cryptographically unreadable
+    //      (their AEAD bundle was sealed under the destroyed DEK)
+    //      but the table-row footprint is still useful to clear
+    //      so the schema stays bounded.
+    //
+    //   2. A retention prune on `synthesis_objects` that removed
+    //      the live window from the per-scope sub-map but did not
+    //      flow through to the version table (e.g. a crash
+    //      between `prune_completed_windows_on` and the
+    //      enclosing flush). Without this sweep the version rows
+    //      remain queryable via `list_synthesis_versions` but
+    //      point at a window that the host can no longer
+    //      enumerate via `list_recent_syntheses`.
+    //
+    // Source of truth is the rehydrated `synthesis_objects` map:
+    // any `(scope_id, window_id)` key in the history table that
+    // is NOT in the live per-scope sub-map is an orphan. We
+    // diff and delete the orphan window's entire version range
+    // in a single call so the per-row cost is bounded by
+    // `MAX_SYNTHESIS_VERSIONS_PER_WINDOW`. Delete failures are
+    // non-fatal — next `open_store` retries.
+    //
+    // ── Tombstoned-scope coverage ──
+    // Same defense-in-depth shape as the approved-doc sweep: the
+    // rehydration loop above excludes tombstoned scopes, so their
+    // version rows fall out of `valid_keys` automatically. The
+    // dependency on tombstones-skipped rehydration is load-bearing.
+    {
+        let mut valid_keys: HashSet<(evidence_store::ScopeId, uuid::Uuid)> = HashSet::new();
+        for (scope, inner) in &synthesis_objects {
+            for window_id in inner.keys() {
+                valid_keys.insert((*scope, window_id.as_uuid()));
+            }
+        }
+        match store.list_all_synthesis_object_version_window_keys() {
+            Ok(all_keys) => {
+                let orphans: Vec<_> = all_keys
+                    .into_iter()
+                    .filter(|k| !valid_keys.contains(k))
+                    .collect();
+                if !orphans.is_empty() {
+                    let count = orphans.len();
+                    let mut deleted = 0usize;
+                    for (scope_id, window_uuid) in &orphans {
+                        match store
+                            .delete_synthesis_object_versions_for_window(*scope_id, *window_uuid)
+                        {
+                            Ok(n) => deleted += n,
+                            Err(e) => {
+                                tracing::warn!(
+                                    scope = %scope_id.as_uuid(),
+                                    window = %window_uuid,
+                                    error = %e,
+                                    "open_store: failed to delete orphan synthesis-object \
+                                     version rows (next open_store will retry)",
+                                );
+                            }
+                        }
+                    }
+                    tracing::info!(
+                        orphans = count,
+                        deleted,
+                        "open_store: purged orphan synthesis-object version rows whose \
+                         (scope_id, window_id) is not in any rehydrated synthesis_objects \
+                         sub-map",
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "open_store: could not list synthesis-object version keys for orphan \
+                     sweep; skipping (next open_store will retry)",
+                );
+            }
+        }
+    }
+
     let router_config = router_config_from_env();
     let inference_router = Arc::new(build_inference_router(router_config));
     // Spawn the adapter probe on a background thread so `open_store`

@@ -336,6 +336,32 @@ impl SynthesisWindowManager {
         }
     }
 
+    /// Re-open a `Complete` window so a `replay_synthesis` call can
+    /// walk it back through `Pending → InProgress → Complete` with
+    /// a fresh synthesis output, without minting a new window id.
+    ///
+    /// Only `Complete` is accepted: replaying a `Pending` /
+    /// `InProgress` window would race the original dispatch, and
+    /// replaying a `Failed` window is already covered by
+    /// [`Self::mark_in_progress`] (which accepts `Failed` as a
+    /// starting state).
+    ///
+    /// # Errors
+    ///
+    /// * [`PipelineError::WindowNotFound`] if no such window.
+    /// * [`PipelineError::InvalidWindowTransition`] if the window is
+    ///   not currently `Complete`.
+    pub fn mark_replay_pending(&mut self, id: WindowId) -> Result<()> {
+        let w = self.find_mut(id)?;
+        match w.status {
+            WindowStatus::Complete => {
+                w.status = WindowStatus::Pending;
+                Ok(())
+            }
+            _ => Err(PipelineError::InvalidWindowTransition),
+        }
+    }
+
     /// Transition every `Pending` window whose [`SynthesisWindow::created_at`]
     /// is older than `now - threshold` straight to `Failed`, bypassing
     /// the usual `Pending → InProgress → Failed` chain that

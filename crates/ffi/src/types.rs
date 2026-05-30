@@ -790,6 +790,43 @@ pub struct SynthesisStatusRecord {
     /// has transitioned to `Complete` and the synthesis object
     /// has been persisted.
     pub object_id: Option<String>,
+    /// Monotonically increasing version stamp of the synthesis
+    /// object currently associated with the window. The original
+    /// dispatch produces `version = 1`; each `replay_synthesis`
+    /// call on the same window bumps the stamp by 1.
+    ///
+    /// Present whenever `object_id` is — both come from the
+    /// underlying [`synthesis_pipeline::SynthesisObject`]. Hosts
+    /// can use this to detect that a previously cached recap is
+    /// stale relative to a new replay landing.
+    pub object_version: Option<u32>,
+}
+
+/// One entry in the per-window synthesis-version history returned
+/// by [`crate::synthesis::list_synthesis_versions`]. The latest
+/// version exposed via [`SynthesisStatusRecord::object_version`]
+/// is **also** included in this list (so a host can paginate the
+/// history without a separate "current" round trip).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct SynthesisVersionSummary {
+    /// Monotonically increasing version stamp (1-based).
+    pub version: u32,
+    /// Unix epoch seconds at which the version was archived to
+    /// the history table. For the *current* latest version the
+    /// timestamp is read from the live `SynthesisObject`'s
+    /// `created_at`; for prior versions it is the archive time
+    /// recorded by `save_synthesis_object_version`.
+    pub created_at_unix: i64,
+    /// Synthesis object kind tag (`"domain_summary"` /
+    /// `"tenant_summary"`) so a host UI can render the history
+    /// without re-loading every payload.
+    pub object_type: String,
+    /// `true` if this is the latest version (the one a host
+    /// would receive from `synthesis_status` / the in-memory
+    /// `synthesis_objects` map). At most one entry in any list
+    /// returned by `list_synthesis_versions` has this flag set.
+    pub is_latest: bool,
 }
 
 /// Configuration for the server-side synthesis engine endpoint.
@@ -1559,6 +1596,7 @@ mod tests {
             window_start_unix: 1_000,
             window_end_unix: 2_000,
             object_id: Some("33333333-3333-3333-3333-333333333333".into()),
+            object_version: Some(2),
         };
         let v = serde_json::to_value(&record).expect("serialize");
         let obj = v.as_object().expect("object");
@@ -1570,6 +1608,7 @@ mod tests {
             "windowStartUnix",
             "windowEndUnix",
             "objectId",
+            "objectVersion",
         ] {
             assert!(
                 obj.contains_key(camel),
@@ -1582,6 +1621,7 @@ mod tests {
             "window_start_unix",
             "window_end_unix",
             "object_id",
+            "object_version",
         ] {
             assert!(
                 !obj.contains_key(snake),
@@ -1590,6 +1630,32 @@ mod tests {
         }
         let back: SynthesisStatusRecord = serde_json::from_value(v).expect("deserialize");
         assert_eq!(back, record);
+    }
+
+    #[test]
+    fn synthesis_version_summary_serializes_with_camelcase_keys() {
+        let summary = SynthesisVersionSummary {
+            version: 3,
+            created_at_unix: 1_700_000_000,
+            object_type: "domain_summary".into(),
+            is_latest: true,
+        };
+        let v = serde_json::to_value(&summary).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for camel in ["version", "createdAtUnix", "objectType", "isLatest"] {
+            assert!(
+                obj.contains_key(camel),
+                "SynthesisVersionSummary JSON must contain camelCase key `{camel}`: {v}"
+            );
+        }
+        for snake in ["created_at_unix", "object_type", "is_latest"] {
+            assert!(
+                !obj.contains_key(snake),
+                "SynthesisVersionSummary JSON must NOT contain snake_case key `{snake}`: {v}"
+            );
+        }
+        let back: SynthesisVersionSummary = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, summary);
     }
 
     #[test]
