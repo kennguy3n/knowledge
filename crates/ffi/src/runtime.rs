@@ -1651,6 +1651,21 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
     // the rehydrated tenant-memory refs, and delete orphans. Delete
     // failures are non-fatal (logged) — the next `open_store` will
     // retry.
+    //
+    // ── Tombstoned-scope coverage (defense in depth) ──
+    // Note that the rehydration loop above explicitly skips
+    // tombstoned scopes (`if tombstones.contains(&scope) { continue; }`)
+    // when loading tenant-memory blobs, so any payload row whose
+    // scope was forgotten via `forget_scope_state` is also caught
+    // by this sweep — its `(scope_id, document_id)` is absent from
+    // `valid_keys` because the owning `TenantMemoryObject` is never
+    // rehydrated. This gives us a second-chance cleanup if
+    // `forget_scope_state`'s own payload-deletion step (step 5 in
+    // its enumeration) crashed after the DEK destruction. The
+    // dependency on the rehydration loop excluding tombstones is
+    // load-bearing — any future change that rehydrates tombstoned
+    // scope memory objects (even as empty shells) would silently
+    // break this defense in depth.
     {
         let mut valid_keys: HashSet<(evidence_store::ScopeId, uuid::Uuid)> = HashSet::new();
         for tmo in tenant_memories.values() {
