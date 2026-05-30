@@ -1368,6 +1368,7 @@ mod tests {
             "timeoutMs",
             "grammar",
             "scopeBindings",
+            "singleTenant",
         ] {
             assert!(
                 obj.contains_key(camel),
@@ -1380,6 +1381,7 @@ mod tests {
             "max_tokens",
             "timeout_ms",
             "scope_bindings",
+            "single_tenant",
         ] {
             assert!(
                 !obj.contains_key(snake),
