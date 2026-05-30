@@ -28,7 +28,7 @@
 
 use chrono::{DateTime, Utc};
 #[cfg(any(test, feature = "test-support"))]
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 #[cfg(any(test, feature = "test-support"))]
 use sha2::Sha256;

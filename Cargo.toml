@@ -53,11 +53,23 @@ thiserror = "1"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 
 # Hashing / AEAD / KDF / MAC
+#
+# `hmac` / `hkdf` / `sha2` are bumped in lockstep because they share
+# the same underlying `digest` trait surface. The RustCrypto family
+# moved from `digest 0.10` (hmac 0.12 / hkdf 0.12 / sha2 0.10) to
+# `digest 0.11` (hmac 0.13 / hkdf 0.13 / sha2 0.11), so any partial
+# bump would force two incompatible `digest` versions into the build
+# (already partially the case via `ml-dsa`/`shake` which pull in
+# `digest 0.11`; the lockstep bump on the user-facing crates lets us
+# consume the same generic surface). The only source change required
+# by the bump is that `hmac 0.13` moved `Hmac::new_from_slice` from
+# an inherent method to a `KeyInit` trait method, so callers must
+# `use hmac::KeyInit;` (see `crates/crypto/src/provenance.rs`).
 blake3 = "1"
 chacha20poly1305 = "0.10"
-hkdf = "0.12"
-hmac = "0.12"
-sha2 = "0.10"
+hkdf = "0.13"
+hmac = "0.13"
+sha2 = "0.11"
 zeroize = { version = "1", features = ["derive"] }
 rand_core = { version = "0.6", features = ["std"] }
 rand = "0.8"

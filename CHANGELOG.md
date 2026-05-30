@@ -154,6 +154,24 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   `0.7` (not `0.8`) because criterion `0.8.0` raised its MSRV to
   `1.86` and the workspace's `MSRV (1.85.0)` CI gate pins us to
   `1.85`; bumping to `0.8` is gated on a workspace MSRV bump.
+- Bumped `hmac` 0.12 → 0.13, `hkdf` 0.12 → 0.13, `sha2` 0.10 →
+  0.11 in lockstep. These three crates share the same underlying
+  `digest` trait, and `digest 0.10` → `digest 0.11` is the only
+  ABI change driving the major-version bumps. The single source
+  change required is that `hmac 0.13` moved
+  `Hmac::new_from_slice` from an inherent method to a `KeyInit`
+  trait method; `crates/crypto/src/provenance.rs` now imports
+  `hmac::KeyInit`. All other call sites (`Hmac<Sha256>::new`,
+  `Mac::update`, `Mac::finalize`, `Hkdf::<Sha256>::new`,
+  `Hkdf::expand`) are unchanged. Workspace `Cargo.toml` carries a
+  lockstep-bump comment to keep future Dependabot bumps from
+  inadvertently splitting the trio.
+- Bumped `tokenizers` 0.21 → 0.23 (gated behind the
+  `evidence_store/onnx-runtime` feature). API surface used
+  (`Tokenizer::from_file`, `tokenizer.encode(text, true)`) is
+  unchanged between the two versions; no source changes
+  required. The bump also pulls in `fancy-regex` 0.14 → 0.17
+  transitively.
 
 <!--
   No tagged release exists yet, so the Keep-a-Changelog
