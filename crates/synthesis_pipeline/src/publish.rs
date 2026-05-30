@@ -15,7 +15,11 @@
 //!   window. The AAD is reconstructed at decrypt time and any
 //!   mismatch surfaces as [`crypto::CryptoError::AeadDecryption`].
 
-use rand::RngCore;
+// `TryRngCore` is needed alongside `RngCore` because rand 0.9 made
+// `OsRng` fallible-only. See SECURITY.md §"Random number
+// generation" for the rationale behind the workspace-wide
+// `OsRng`-for-everything policy.
+use rand::{RngCore, TryRngCore};
 use serde::{Deserialize, Serialize};
 
 use crypto::{decrypt_aead, encrypt_aead, AeadCiphertext, AeadKey, AeadNonce, AEAD_NONCE_LEN};
@@ -55,8 +59,8 @@ fn aad_for(scope_id: ScopeId, window_id: WindowId, object_id: ObjectId) -> Vec<u
 
 fn random_nonce() -> AeadNonce {
     let mut nonce = [0u8; AEAD_NONCE_LEN];
-    // `rand::thread_rng()` was renamed to `rand::rng()` in rand 0.9.
-    rand::rng().fill_bytes(&mut nonce);
+    // See SECURITY.md §"Random number generation".
+    rand::rngs::OsRng.unwrap_err().fill_bytes(&mut nonce);
     nonce
 }
 

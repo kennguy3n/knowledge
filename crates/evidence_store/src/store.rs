@@ -3896,10 +3896,14 @@ fn migrate_evidence_embeddings_to_composite_pk(conn: &Connection) -> Result<()> 
 }
 
 fn random_nonce() -> AeadNonce {
-    use rand::RngCore;
+    use rand::rngs::OsRng;
+    use rand::{RngCore, TryRngCore};
     let mut nonce = [0u8; AEAD_NONCE_LEN];
-    // `rand::thread_rng()` was renamed to `rand::rng()` in rand 0.9.
-    rand::rng().fill_bytes(&mut nonce);
+    // See SECURITY.md §"Random number generation" for why the
+    // substrate uses `OsRng` (not `ThreadRng`) for every per-row
+    // AEAD nonce. Panicking on OS RNG failure is intentional — a
+    // substrate that cannot draw entropy cannot encrypt safely.
+    OsRng.unwrap_err().fill_bytes(&mut nonce);
     nonce
 }
 
