@@ -323,10 +323,7 @@ fn approved_doc_payload_wrap_cipher_tampering_fails_aead() {
         .query_row(
             "SELECT wrapped_cek, nonce FROM body_store_key_wraps \
              WHERE content_hash = ?1 AND scope_id = ?2",
-            params![
-                hash.as_slice(),
-                scope_a.as_uuid().as_bytes().as_slice(),
-            ],
+            params![hash.as_slice(), scope_a.as_uuid().as_bytes().as_slice(),],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("read scope_a wrap");

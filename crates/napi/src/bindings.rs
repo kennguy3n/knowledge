@@ -383,6 +383,12 @@ pub fn js_configure_synthesis_engine(handle: BigInt, config: serde_json::Value) 
 ///   failures.
 /// * `InvalidArgument` if `scopeId` is not a UUID or `tier` is
 ///   not one of the documented values.
+/// * `Throttled` (Phase 10 Item 5) if the global token-bucket
+///   rate limiter rejects the call. The error carries a
+///   `retryAfterMs` field — the host SHOULD wait that long and
+///   retry the same call rather than treating this as a
+///   permanent failure. Tune the limiter via `configureSynthesisEngine`'s
+///   `rateCapacity` / `rateRefillPerSec` keys.
 #[napi(js_name = "triggerServerSynthesis")]
 pub fn js_trigger_server_synthesis(
     handle: BigInt,
@@ -849,15 +855,18 @@ pub fn js_list_connectors(handle: BigInt) -> Result<serde_json::Value> {
 /// because the policy storage lives on the runtime, not the
 /// running worker.
 ///
-/// # Failure modes
+/// # Errors
 ///
-/// * `kind: "connector_instance"` if `instanceId` is a valid UUID
-///   but the runtime has no instance with that id (host called
-///   [`js_remove_connector`] previously, or never created one).
-/// * `kind: "scope"` if the instance row exists but its bound
-///   scope has been tombstoned by [`js_forget_scope`] — same
-///   tombstoned-scope shield other connector surfaces apply.
-/// * `kind: "invalidArgument"` if `instanceId` is not a UUID.
+/// * `NotFound` (`kind: "connector_instance"`) if `instanceId` is
+///   a valid UUID but the runtime has no instance with that id
+///   (host called [`js_remove_connector`] previously, or never
+///   created one).
+/// * `NotFound` (`kind: "scope"`) if the instance row exists but
+///   its bound scope has been tombstoned by [`js_forget_scope`]
+///   — same tombstoned-scope shield other connector surfaces
+///   apply.
+/// * `InvalidId` if `instanceId` is not a UUID.
+/// * `Unavailable` if [`js_open_store`] has not been called.
 #[napi(js_name = "connectorStatus")]
 pub fn js_connector_status(handle: BigInt, instance_id: String) -> Result<serde_json::Value> {
     let h = handle_from_bigint(&handle)?;
@@ -885,22 +894,24 @@ pub fn js_remove_connector(handle: BigInt, instance_id: String) -> Result<()> {
 /// for JS so callers can destructure `{ instanceId, refreshed,
 /// expiresAt, refreshedAt }` directly.
 ///
-/// Failure modes:
+/// # Errors
 ///
-/// * `kind: "connector"` carrying the framework's `TokenRefresh`
+/// * `Connector` carrying the framework's `TokenRefresh`
 ///   diagnostic when the provider rejects the refresh grant
 ///   (refresh token revoked / expired). The host should treat
 ///   this as "re-authorisation required" and prompt the user
 ///   through `authenticateConnector` rather than retrying the
 ///   refresh.
-/// * `kind: "connector"` carrying `"no refresh_token stored …"`
-///   when the cached token has no refresh token (Slack legacy,
-///   PKCE-only public clients). Same recovery as above.
-/// * `kind: "not_found"` (`kind = "connector" | "scope"`) when
-///   the instance / scope was removed during the unlocked refresh
-///   round-trip.
-/// * `kind: "unavailable"` (`subsystem: "connector-http-client"`)
-///   when no real HTTP transport is linked into the build.
+/// * `Connector` carrying `"no refresh_token stored …"` when the
+///   cached token has no refresh token (Slack legacy, PKCE-only
+///   public clients). Same recovery as above.
+/// * `NotFound` (`kind = "connector" | "scope"`) when the
+///   instance / scope was removed during the unlocked refresh
+///   round-trip. (Pre-existing connector surfaces use the shorter
+///   `"connector"` discriminant rather than `"connector_instance"`
+///   used by newer surfaces such as `connectorStatus`.)
+/// * `Unavailable` (`subsystem: "connector-http-client"`) when no
+///   real HTTP transport is linked into the build.
 #[napi(js_name = "refreshConnectorToken")]
 pub fn js_refresh_connector_token(
     handle: BigInt,

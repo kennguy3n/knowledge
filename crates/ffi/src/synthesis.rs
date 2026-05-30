@@ -5197,8 +5197,7 @@ mod tests {
         // global and lives across test cases).
         with_runtime(handle, |rt| {
             rt.synthesis_rate_limiter.reconfigure(
-                u32::try_from(MAX_SYNTHESIS_VERSIONS_PER_WINDOW * 4)
-                    .expect("cap fits in u32"),
+                u32::try_from(MAX_SYNTHESIS_VERSIONS_PER_WINDOW * 4).expect("cap fits in u32"),
                 1_000.0,
             );
             Ok(())

@@ -2580,9 +2580,7 @@ impl EvidenceStore {
             return Ok(None);
         };
         if body_nonce_bytes.len() != AEAD_NONCE_LEN {
-            return Err(EvidenceError::Schema(
-                "body_store row has malformed nonce",
-            ));
+            return Err(EvidenceError::Schema("body_store row has malformed nonce"));
         }
         let mut body_nonce = [0u8; AEAD_NONCE_LEN];
         body_nonce.copy_from_slice(&body_nonce_bytes);
@@ -3458,21 +3456,20 @@ impl EvidenceStore {
             // Decrypt under the legacy per-scope DEK + AAD.
             let scope_key = self.scope_key(row.scope_id)?;
             let aad = approved_doc_payload_aad(row.scope_id, row.document_id);
-            let plaintext =
-                match decrypt_aead(&scope_key, &nonce, &row.ciphertext, &aad) {
-                    Ok(pt) => pt,
-                    Err(e) => {
-                        tracing::warn!(
-                            scope = %row.scope_id.as_uuid(),
-                            document_id = %row.document_id,
-                            error = %e,
-                            "v11→v12 migration: approved_document_payloads row failed to \
-                             decrypt; skipping (row will be visible as orphan metadata at \
-                             next open_store)",
-                        );
-                        continue;
-                    }
-                };
+            let plaintext = match decrypt_aead(&scope_key, &nonce, &row.ciphertext, &aad) {
+                Ok(pt) => pt,
+                Err(e) => {
+                    tracing::warn!(
+                        scope = %row.scope_id.as_uuid(),
+                        document_id = %row.document_id,
+                        error = %e,
+                        "v11→v12 migration: approved_document_payloads row failed to \
+                         decrypt; skipping (row will be visible as orphan metadata at \
+                         next open_store)",
+                    );
+                    continue;
+                }
+            };
 
             // Defensive content_hash recheck: a row whose stored
             // content_hash does not match its decrypted plaintext
@@ -3493,12 +3490,7 @@ impl EvidenceStore {
             // Admit through the v12 body-store pipeline. Dedup is
             // automatic: identical content across scopes collapses
             // to one body row + per-scope wraps.
-            self.admit_approved_doc_body_in_tx(
-                &tx,
-                row.scope_id,
-                &plaintext,
-                &stored_hash,
-            )?;
+            self.admit_approved_doc_body_in_tx(&tx, row.scope_id, &plaintext, &stored_hash)?;
         }
 
         // Retire the legacy inline columns. `ALTER TABLE ... DROP

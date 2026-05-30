@@ -155,15 +155,18 @@ export declare function configureSynthesisEngine(handle: bigint, config: any): v
  * because the policy storage lives on the runtime, not the
  * running worker.
  *
- * # Failure modes
+ * # Errors
  *
- * * `kind: "connector_instance"` if `instanceId` is a valid UUID
- *   but the runtime has no instance with that id (host called
- *   [`js_remove_connector`] previously, or never created one).
- * * `kind: "scope"` if the instance row exists but its bound
- *   scope has been tombstoned by [`js_forget_scope`] — same
- *   tombstoned-scope shield other connector surfaces apply.
- * * `kind: "invalidArgument"` if `instanceId` is not a UUID.
+ * * `NotFound` (`kind: "connector_instance"`) if `instanceId` is
+ *   a valid UUID but the runtime has no instance with that id
+ *   (host called [`js_remove_connector`] previously, or never
+ *   created one).
+ * * `NotFound` (`kind: "scope"`) if the instance row exists but
+ *   its bound scope has been tombstoned by [`js_forget_scope`]
+ *   — same tombstoned-scope shield other connector surfaces
+ *   apply.
+ * * `InvalidId` if `instanceId` is not a UUID.
+ * * `Unavailable` if [`js_open_store`] has not been called.
  */
 export declare function connectorStatus(handle: bigint, instanceId: string): any
 
@@ -319,6 +322,25 @@ export declare function listMemories(handle: bigint, scopeId: string, filter: an
 export declare function listRecentSyntheses(handle: bigint, scopeId: string): any
 
 /**
+ * Enumerate the archived synthesis-object versions for
+ * `synthesisId` (Phase 10 Item 4), newest first. The latest
+ * version is included as the first entry with
+ * `isLatest = true`. Hosts that need to paginate the history
+ * without a separate `synthesisStatus` round trip should use
+ * this surface.
+ *
+ * Returns an empty array for a window with no prior synthesis
+ * object (Pending / Failed-without-success window), matching
+ * the "empty for unknown shape" convention used by
+ * [`js_list_recent_syntheses`].
+ *
+ * # Errors
+ *
+ * * `InvalidArgument` if `synthesisId` is not a UUID.
+ */
+export declare function listSynthesisVersions(handle: bigint, synthesisId: string): any
+
+/**
  * Enumerate every running webhook server on `handle` with its
  * per-server counters. Mirrors [`crate::list_webhook_servers`].
  * Returns a `serde_json::Value` (`Vec<WebhookServerSummary>`) so
@@ -455,6 +477,31 @@ export declare function removeConnector(handle: bigint, instanceId: string): voi
  * both functions.
  */
 export declare function replaceApprovedDocument(handle: bigint, scopeId: string, documentId: string, label: string, approver: string, payload: Buffer): any
+
+/**
+ * Re-run synthesis on an existing `Complete` window (Phase 10
+ * Item 4). The window transitions back through `Complete →
+ * Pending → InProgress → Complete` (or `→ Failed` on engine
+ * error) on the same `(scope, window_id)` pair; the previous
+ * synthesis object is archived to the history table at its
+ * existing version stamp, and the new object lands at
+ * `prior + 1`. Returns the post-replay synthesis status record
+ * (versioned).
+ *
+ * Bypasses the per-(scope, tier) cooldown but is still rate-
+ * shaped through the FFI-wide token bucket — bursting replays
+ * across many scopes will surface a `Throttled` error to the
+ * host.
+ *
+ * # Errors
+ *
+ * * `NotFound` if `scopeId` is unknown or `synthesisId` does
+ *   not name a window in the scope.
+ * * `Conflict` if the window is not in `Complete` state.
+ * * `InvalidArgument` if either id is not a UUID.
+ * * `Throttled` if the FFI-wide rate limiter rejects the call.
+ */
+export declare function replaySynthesis(handle: bigint, scopeId: string, synthesisId: string): any
 
 /**
  * Revoke an approved document previously admitted via
@@ -678,6 +725,12 @@ export declare function synthesisStatus(handle: bigint, synthesisId: string): an
  *   failures.
  * * `InvalidArgument` if `scopeId` is not a UUID or `tier` is
  *   not one of the documented values.
+ * * `Throttled` (Phase 10 Item 5) if the global token-bucket
+ *   rate limiter rejects the call. The error carries a
+ *   `retryAfterMs` field — the host SHOULD wait that long and
+ *   retry the same call rather than treating this as a
+ *   permanent failure. Tune the limiter via `configureSynthesisEngine`'s
+ *   `rateCapacity` / `rateRefillPerSec` keys.
  */
 export declare function triggerServerSynthesis(handle: bigint, scopeId: string, tier: string): string
 
