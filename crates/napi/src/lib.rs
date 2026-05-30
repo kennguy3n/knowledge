@@ -772,6 +772,32 @@ pub fn admit_approved_document(
         .map_err(NapiError::from)
 }
 
+/// Replace the payload + metadata of an existing approved document
+/// while keeping its document id stable (Phase 9). Mirrors
+/// [`ffi::replace_approved_document`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::replace_approved_document`] errors as [`NapiError`].
+pub fn replace_approved_document(
+    handle: NapiHandle,
+    scope_id: ScopeIdString,
+    document_id: String,
+    label: String,
+    approver: String,
+    payload: Vec<u8>,
+) -> NapiResult<ffi::ApprovedDocumentSummary> {
+    ffi::replace_approved_document(
+        RuntimeHandle(handle),
+        scope_id,
+        document_id,
+        label,
+        approver,
+        payload,
+    )
+    .map_err(NapiError::from)
+}
+
 /// Revoke a previously-admitted approved document and purge the
 /// AEAD-encrypted payload row (Phase 8). Mirrors
 /// [`ffi::revoke_approved_document`].

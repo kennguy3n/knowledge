@@ -1562,6 +1562,27 @@ impl EvidenceStore {
 
     // ─────────────── Memory-object persistence (C10) ───────────────
 
+    /// Run `f` inside a SQLCipher transaction, committing on `Ok` and
+    /// rolling back on `Err`. Uses `unchecked_transaction` so the
+    /// caller only needs `&self` (the runtime mutex already serialises
+    /// access; `Connection` is not `Sync` so the borrow checker can't
+    /// see this externally).
+    ///
+    /// Intended for grouping multiple `*_in_tx` writes that must
+    /// either all land on disk or none — see
+    /// `apply_dispatch_outcome` in the FFI crate for the canonical
+    /// caller. Returning `Err` from `f` aborts the transaction;
+    /// returning `Ok` commits before the result is propagated.
+    pub fn with_transaction<F, R>(&self, f: F) -> Result<R>
+    where
+        F: FnOnce(&rusqlite::Transaction<'_>) -> Result<R>,
+    {
+        let tx = self.conn.unchecked_transaction()?;
+        let value = f(&tx)?;
+        tx.commit()?;
+        Ok(value)
+    }
+
     /// Persist a serializable memory object (user or channel) for
     /// `scope_id`. The `kind` tag discriminates between different
     /// memory types ("user_memory" / "channel_memory"). The object
@@ -1569,8 +1590,30 @@ impl EvidenceStore {
     ///
     /// Upserts: calling this with the same `(scope_id, kind)` pair
     /// overwrites the previous blob.
+    ///
+    /// Wraps the single-statement insert in an implicit autocommit;
+    /// callers that need to bundle this write with others under one
+    /// transaction must use [`Self::with_transaction`] +
+    /// [`Self::save_memory_blob_in_tx`].
     pub fn save_memory_blob(
         &self,
+        scope_id: ScopeId,
+        kind: &str,
+        plaintext_json: &[u8],
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.save_memory_blob_in_tx(&tx, scope_id, kind, plaintext_json)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Transactional variant of [`Self::save_memory_blob`] that runs
+    /// inside an existing `Transaction<'_>` so multiple writes can be
+    /// grouped atomically. Identical AEAD framing (scope-bound AAD,
+    /// random nonce, `INSERT OR REPLACE`) to the autocommit path.
+    pub fn save_memory_blob_in_tx(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
         scope_id: ScopeId,
         kind: &str,
         plaintext_json: &[u8],
@@ -1585,7 +1628,7 @@ impl EvidenceStore {
         aad.extend_from_slice(scope_id.as_uuid().as_bytes());
         let ciphertext = encrypt_aead(&key, &nonce, plaintext_json, &aad)?;
         let now = chrono::Utc::now().timestamp();
-        self.conn.execute(
+        tx.execute(
             "INSERT OR REPLACE INTO memory_objects \
              (scope_id, kind, nonce, payload, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -2037,13 +2080,39 @@ impl EvidenceStore {
         plaintext: &[u8],
         content_hash: &ContentHash,
     ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.save_approved_document_payload_in_tx(
+            &tx,
+            scope_id,
+            document_id,
+            plaintext,
+            content_hash,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Transaction-bound variant of [`Self::save_approved_document_payload`]
+    /// so callers that need to bundle this write with the tenant
+    /// memory blob (e.g. the FFI `replace_approved_document` entry
+    /// point) can group both under one SQLCipher transaction via
+    /// [`Self::with_transaction`]. Identical AEAD framing (scope-bound
+    /// AAD, random nonce, `INSERT OR REPLACE`) to the autocommit path.
+    pub fn save_approved_document_payload_in_tx(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        scope_id: ScopeId,
+        document_id: uuid::Uuid,
+        plaintext: &[u8],
+        content_hash: &ContentHash,
+    ) -> Result<()> {
         let key = self.scope_key(scope_id)?;
         let nonce = random_nonce();
         let aad = approved_doc_payload_aad(scope_id, document_id);
         let ciphertext = encrypt_aead(&key, &nonce, plaintext, &aad)?;
         let now = chrono::Utc::now().timestamp();
         let size_bytes = i64::try_from(plaintext.len()).unwrap_or(i64::MAX);
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO approved_document_payloads \
              (scope_id, document_id, nonce, payload, content_hash, size_bytes, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
@@ -2178,6 +2247,59 @@ impl EvidenceStore {
             params![scope_id.as_uuid().as_bytes().as_slice()],
         )?;
         Ok(n)
+    }
+
+    /// List every `(scope_id, document_id)` composite key present in
+    /// `approved_document_payloads`. This is a cheap metadata-only
+    /// scan (no AEAD decryption) used by the orphan-sweep at
+    /// `open_store` time to compare against the set of refs
+    /// rehydrated from tenant memory.
+    ///
+    /// **Malformed-row policy:** because the caller is a best-effort
+    /// orphan sweep — not a rehydration path that requires every row
+    /// — rows whose `scope_id` or `document_id` columns do not parse
+    /// as 16-byte UUIDs are logged at WARN and skipped rather than
+    /// aborting the whole scan. The alternative (hard error) would
+    /// let a single corrupt row block cleanup of every legitimate
+    /// orphan until the row was manually purged, which is a worse
+    /// operational outcome than tolerating the corrupt row's payload
+    /// staying behind (it is already unreachable through the
+    /// tenant-memory join). Surfaceable error paths (the SQL
+    /// `prepare` / `query_map` / per-row `Result`) still bubble up
+    /// because those indicate the table or connection itself is in
+    /// a state the sweep cannot reason about.
+    pub fn list_all_approved_document_payload_keys(&self) -> Result<Vec<(ScopeId, uuid::Uuid)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT scope_id, document_id FROM approved_document_payloads")?;
+        let rows = stmt.query_map([], |row| {
+            let scope_bytes: Vec<u8> = row.get(0)?;
+            let doc_bytes: Vec<u8> = row.get(1)?;
+            Ok((scope_bytes, doc_bytes))
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            let (scope_bytes, doc_bytes) = row?;
+            let Ok(scope_id) = uuid::Uuid::from_slice(&scope_bytes) else {
+                tracing::warn!(
+                    scope_bytes_len = scope_bytes.len(),
+                    "list_all_approved_document_payload_keys: skipping row with non-UUID scope_id; \
+                     orphan sweep will leave this row untouched (manual purge required to recover)",
+                );
+                continue;
+            };
+            let Ok(doc_id) = uuid::Uuid::from_slice(&doc_bytes) else {
+                tracing::warn!(
+                    scope = %scope_id,
+                    doc_bytes_len = doc_bytes.len(),
+                    "list_all_approved_document_payload_keys: skipping row with non-UUID document_id; \
+                     orphan sweep will leave this row untouched (manual purge required to recover)",
+                );
+                continue;
+            };
+            result.push((ScopeId::from_uuid(scope_id), doc_id));
+        }
+        Ok(result)
     }
 
     /// Purge every secondary-index row that retains plaintext for

@@ -4095,4 +4095,61 @@ mod sync_scheduler_tests {
         stop_sync_scheduler(h).expect("stop");
         close_store(h).expect("close_store");
     }
+
+    /// Phase 9: `clear_sync_schedule` must preserve the
+    /// `auto_synthesize` flag set via
+    /// `configure_sync_auto_synthesize`. Without the Phase 9 fix
+    /// the flag was lost on clear, silently disabling post-sync
+    /// synthesis.
+    #[test]
+    fn clear_sync_schedule_preserves_auto_synthesize() {
+        use ffi::configure_sync_auto_synthesize;
+
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-000000005d01".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+
+        start_sync_scheduler(h, 60, 120, 1).expect("start");
+
+        // Set a per-instance override + auto-synthesize.
+        configure_sync_schedule(h, instance.clone(), 10, 60).expect("configure");
+        configure_sync_auto_synthesize(h, instance.clone(), true).expect("enable auto-synth");
+
+        let before = sync_scheduler_status(h).expect("status before clear");
+        assert_eq!(
+            before.policy_override_count, 1,
+            "instance has a policy override",
+        );
+
+        // Clear the schedule — interval/backoff revert to defaults
+        // but auto_synthesize must survive.
+        clear_sync_schedule(h, instance.clone()).expect("clear");
+
+        let after = sync_scheduler_status(h).expect("status after clear");
+        // The policy entry stays because auto_synthesize is true.
+        assert_eq!(
+            after.policy_override_count, 1,
+            "policy entry must survive clear when auto_synthesize was true",
+        );
+
+        // Disabling auto-synthesize + clearing again must now
+        // remove the entry entirely.
+        configure_sync_auto_synthesize(h, instance.clone(), false).expect("disable auto-synth");
+        clear_sync_schedule(h, instance).expect("clear again");
+
+        let final_status = sync_scheduler_status(h).expect("status after full clear");
+        assert_eq!(
+            final_status.policy_override_count, 0,
+            "policy entry must be removed when auto_synthesize is false",
+        );
+
+        stop_sync_scheduler(h).expect("stop");
+        close_store(h).expect("close_store");
+    }
 }

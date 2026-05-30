@@ -146,6 +146,16 @@ pub const MAX_APPROVED_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 /// `TenantMemoryObject` serialisation cost over many refs.
 pub const MAX_APPROVED_DOCUMENT_METADATA_BYTES: usize = 1024;
 
+/// Maximum number of approved documents materialised per tenant
+/// dispatch. When a tenant scope carries more refs than this cap,
+/// the documents are sorted by `approved_at` descending (most
+/// recently approved first) and the excess tail is dropped with a
+/// structured `tracing::warn!`. This bounds worst-case gather-lock
+/// hold time during AEAD payload decryption — each payload can be
+/// up to [`MAX_APPROVED_DOCUMENT_BYTES`] (16 MiB) and decryption
+/// is CPU-bound under the per-handle mutex.
+pub const MAX_APPROVED_DOCUMENTS_PER_DISPATCH: usize = 16;
+
 // ─────────────────────── Public entry points ───────────────────────
 
 /// Install the server-side synthesis engine on `handle`.
@@ -181,7 +191,8 @@ pub fn configure_synthesis_engine(
     metrics::instrument(metrics::inc_configure_synthesis_engine, || {
         let endpoint_config = endpoint_config_from_ffi(&config)?;
         let scope_bindings = parse_scope_bindings(config.scope_bindings.as_deref())?;
-        configure_engine_impl(handle, endpoint_config, scope_bindings)
+        let single_tenant = config.single_tenant;
+        configure_engine_impl(handle, endpoint_config, scope_bindings, single_tenant)
     })
 }
 
@@ -190,6 +201,7 @@ fn configure_engine_impl(
     handle: RuntimeHandle,
     endpoint_config: EndpointConfig,
     scope_bindings: Option<Vec<Uuid>>,
+    single_tenant: bool,
 ) -> FfiResult<()> {
     let client =
         BlockingHttpClientAdapter::new(&endpoint_config).map_err(|e| FfiError::Unavailable {
@@ -200,9 +212,11 @@ fn configure_engine_impl(
     with_runtime(handle, |rt| {
         rt.synthesis_engine = Some(engine);
         rt.synthesis_scope_bindings = scope_bindings;
+        rt.synthesis_single_tenant = single_tenant;
         tracing::info!(
             handle = handle.0,
             scope_bindings_configured = rt.synthesis_scope_bindings.is_some(),
+            single_tenant,
             "configure_synthesis_engine: synthesis engine installed",
         );
         Ok(())
@@ -214,6 +228,7 @@ fn configure_engine_impl(
     _handle: RuntimeHandle,
     _endpoint_config: EndpointConfig,
     _scope_bindings: Option<Vec<Uuid>>,
+    _single_tenant: bool,
 ) -> FfiResult<()> {
     Err(FfiError::Unavailable {
         subsystem: "synthesis_engine (built without http-client feature)".into(),
@@ -422,14 +437,42 @@ pub fn admit_approved_document(
                 });
             }
             rt.ensure_scope_registered(scope)?;
-            // Persist-first invariant: write the AEAD payload row to
-            // SQLCipher BEFORE mutating the tenant-memory map so a
-            // crash between the two steps leaves the substrate in
-            // the pre-admission state (the orphan payload row is
-            // harmless — `list_approved_documents` joins on the
-            // tenant-memory ref list, so an orphan row is filtered
-            // out; the next `forget_scope` on this scope also purges
-            // it).
+            // ────────── Persist-first (intentionally non-transactional) ──────────
+            //
+            // Write the AEAD payload row to SQLCipher BEFORE mutating
+            // the tenant-memory map so a crash between the two steps
+            // leaves the substrate in the pre-admission state. The
+            // orphan payload row is harmless:
+            //   * `list_approved_documents` joins on the tenant-memory
+            //     ref list, so an orphan row is filtered out.
+            //   * `forget_scope_state` on this scope purges it.
+            //   * The Phase-9 `open_store` orphan sweep diffs
+            //     `list_all_approved_document_payload_keys()` against
+            //     the rehydrated tenant-memory ref set and deletes the
+            //     stragglers on the next restart, even without an
+            //     intervening `forget_scope_state`.
+            //
+            // **Why not wrap both in `with_transaction` like
+            // `replace_approved_document` does?** Because the failure
+            // modes are categorically different:
+            //   * `admit` failure → orphan payload row, ref not added →
+            //     document is *unreachable* (every join filters it out).
+            //     The sweep cleans it up; no host can observe stale
+            //     state through the API.
+            //   * `replace` failure → ref still points at the payload
+            //     row, but with stale label / approver / `approved_at`
+            //     on the ref and new `payload` / `content_hash` / size
+            //     on the row → document is *reachable* with internally
+            //     inconsistent metadata. The sweep can't catch this
+            //     (the ref exists), so `replace` must bundle both
+            //     writes in one tx.
+            //
+            // Adding a transaction here would cost an extra BEGIN /
+            // COMMIT round-trip on the hot admit path for zero
+            // correctness gain. `revoke_approved_document` follows
+            // the same persist-first discipline (ref removed first,
+            // payload row deleted second — same unreachable-orphan
+            // shape).
             rt.store()
                 .save_approved_document_payload(scope, doc_id, &payload, &content_hash)
                 .map_err(|e| FfiError::Evidence {
@@ -528,6 +571,180 @@ pub fn revoke_approved_document(
                 "revoke_approved_document: removed tenant ref and payload row",
             );
             Ok(())
+        })
+    })
+}
+
+/// Replace the payload (and optionally the label / approver) of a
+/// previously admitted approved document (Phase 9).
+///
+/// The document id remains stable — callers need not revoke and
+/// re-admit to update a document's content. A fresh `approved_at`
+/// timestamp is stamped so the LRU dispatch cap
+/// ([`MAX_APPROVED_DOCUMENTS_PER_DISPATCH`]) considers the document
+/// recently touched.
+///
+/// The same validation constraints as [`admit_approved_document`]
+/// apply: payload must be non-empty, ≤ [`MAX_APPROVED_DOCUMENT_BYTES`],
+/// and metadata strings ≤ [`MAX_APPROVED_DOCUMENT_METADATA_BYTES`].
+///
+/// # Atomicity
+///
+/// Both the encrypted payload row and the updated tenant-memory
+/// blob are written inside a single SQLCipher transaction via
+/// [`evidence_store::EvidenceStore::with_transaction`]. Either both
+/// land on disk or neither does, so a crash mid-replace can never
+/// leave the document with stale metadata (label / approver /
+/// `approved_at`) paired with the new payload content. The
+/// in-memory tenant map is only swapped in *after* commit so any
+/// concurrent reader sees a coherent point-in-time view of the
+/// document.
+///
+/// # Errors
+///
+/// * [`FfiError::Unavailable`] if [`crate::open_store`] has not
+///   been called.
+/// * [`FfiError::InvalidId`] if `scope_id` or `document_id` is not
+///   a valid UUID.
+/// * [`FfiError::NotFound`] if (a) the scope has been forgotten
+///   (`kind = "scope"`), (b) no tenant memory exists for the scope
+///   (`kind = "tenant_memory"`), or (c) the document id is not
+///   registered on the tenant memory (`kind = "approved_document"`).
+///   The `kind` distinctions mirror [`revoke_approved_document`] so
+///   hosts that pattern-match on the error can handle the two
+///   functions uniformly.
+/// * [`FfiError::Memory`] if the payload is empty, oversized, or
+///   metadata exceeds the cap.
+/// * [`FfiError::Evidence`] if the underlying store fails to
+///   persist the new payload row or the updated tenant memory blob
+///   (the transaction rolls back on any inner error).
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
+#[uniffi::export]
+pub fn replace_approved_document(
+    handle: RuntimeHandle,
+    scope_id: ScopeIdString,
+    document_id: String,
+    label: String,
+    approver: String,
+    payload: Vec<u8>,
+) -> FfiResult<ApprovedDocumentSummary> {
+    metrics::instrument(metrics::inc_replace_approved_document, || {
+        let scope = crate::parse_scope_id(&scope_id)?;
+        let doc_uuid = document_id
+            .parse::<Uuid>()
+            .map_err(|e| FfiError::InvalidId {
+                message: format!("document_id: {e}"),
+            })?;
+        validate_approved_document_metadata("label", &label)?;
+        validate_approved_document_metadata("approver", &approver)?;
+        if payload.is_empty() {
+            return Err(FfiError::Memory {
+                message: "replace_approved_document: payload must be non-empty".into(),
+            });
+        }
+        if payload.len() > MAX_APPROVED_DOCUMENT_BYTES {
+            return Err(FfiError::Memory {
+                message: format!(
+                    "replace_approved_document: payload size {} bytes exceeds the {} byte cap \
+                     ({MAX_APPROVED_DOCUMENT_BYTES_MIB} MiB); compress or split client-side \
+                     before admission",
+                    payload.len(),
+                    MAX_APPROVED_DOCUMENT_BYTES,
+                    MAX_APPROVED_DOCUMENT_BYTES_MIB = MAX_APPROVED_DOCUMENT_BYTES / (1024 * 1024),
+                ),
+            });
+        }
+        let content_hash = crypto::content_hash(&payload);
+        let payload_bytes = payload.len() as u64;
+        with_runtime(handle, |rt| {
+            if rt.is_scope_forgotten(scope) {
+                return Err(FfiError::NotFound {
+                    kind: "scope".into(),
+                    id: scope_id.clone(),
+                });
+            }
+            // Aligned with `revoke_approved_document`: surface
+            // missing tenant memory as `tenant_memory` and a missing
+            // ref as `approved_document`, so hosts that pattern-match
+            // on `kind` can handle revoke and replace uniformly.
+            let tmo = rt
+                .tenant_memory(scope)
+                .cloned()
+                .ok_or_else(|| FfiError::NotFound {
+                    kind: "tenant_memory".into(),
+                    id: scope_id.clone(),
+                })?;
+            let existing_idx = tmo
+                .approved_documents
+                .iter()
+                .position(|d| d.id == doc_uuid)
+                .ok_or_else(|| FfiError::NotFound {
+                    kind: "approved_document".into(),
+                    id: document_id.clone(),
+                })?;
+            // Build the post-replace tenant memory on an owned clone
+            // so the live in-memory map remains untouched until the
+            // disk-write transaction commits.
+            let mut tmo_after = tmo;
+            tmo_after.approved_documents[existing_idx].label = label;
+            tmo_after.approved_documents[existing_idx].approver = approver;
+            // Fresh `approved_at` so the LRU dispatch cap treats the
+            // replacement as recently touched.
+            tmo_after.approved_documents[existing_idx].approved_at = chrono::Utc::now();
+            tmo_after.updated_at = chrono::Utc::now();
+            let updated_ref = &tmo_after.approved_documents[existing_idx];
+            let summary = ApprovedDocumentSummary {
+                id: updated_ref.id.to_string(),
+                scope_id: scope_id.clone(),
+                label: updated_ref.label.clone(),
+                approver: updated_ref.approver.clone(),
+                approved_at_ms: updated_ref.approved_at.timestamp_millis(),
+                payload_bytes,
+                content_hash_hex: encode_content_hash_hex(&content_hash),
+            };
+            let tmo_json = serde_json::to_vec(&tmo_after).map_err(|e| FfiError::Memory {
+                message: format!("failed to serialize tenant memory: {e}"),
+            })?;
+            // ────────── Persist both blobs in one tx ──────────
+            //
+            // SQLCipher transaction: the encrypted payload row and
+            // the updated tenant-memory blob either both commit or
+            // both roll back. A crash mid-replace can never leave
+            // the document with stale metadata + new content (or
+            // vice versa); the next `open_store` rehydrates the
+            // pre-replace shape and the host can retry.
+            rt.store()
+                .with_transaction(|tx| {
+                    rt.store().save_approved_document_payload_in_tx(
+                        tx,
+                        scope,
+                        doc_uuid,
+                        &payload,
+                        &content_hash,
+                    )?;
+                    rt.store().save_memory_blob_in_tx(
+                        tx,
+                        scope,
+                        crate::runtime::TENANT_MEMORY_KIND,
+                        &tmo_json,
+                    )?;
+                    Ok(())
+                })
+                .map_err(|e| FfiError::Evidence {
+                    message: format!("replace_approved_document transaction failed: {e}"),
+                })?;
+
+            // Tx committed — install the post-replace tenant memory
+            // into the live runtime map. HashMap insert is
+            // infallible so no rollback path is needed here.
+            rt.tenant_memories.insert(scope, tmo_after);
+            tracing::info!(
+                scope = %scope.as_uuid(),
+                document_id = %doc_uuid,
+                payload_bytes,
+                "replace_approved_document: replaced payload + updated tenant ref",
+            );
+            Ok(summary)
         })
     })
 }
@@ -815,9 +1032,32 @@ fn build_dispatch_plan(
             // bundle to the SLM. The synthesis run still proceeds —
             // the host may have registered other documents that DO
             // have payloads.
+            // LRU cap: sort by `approved_at` desc (most-recently
+            // approved first), take at most
+            // `MAX_APPROVED_DOCUMENTS_PER_DISPATCH`, warn if any were
+            // dropped. This bounds worst-case gather-lock hold time
+            // during the AEAD-decryption loop below.
+            let mut refs_sorted: Vec<_> = tenant.approved_documents.clone();
+            refs_sorted.sort_by_key(|d| std::cmp::Reverse(d.approved_at));
+            let dropped_count = refs_sorted
+                .len()
+                .saturating_sub(MAX_APPROVED_DOCUMENTS_PER_DISPATCH);
+            if dropped_count > 0 {
+                tracing::warn!(
+                    scope = %scope.as_uuid(),
+                    total_refs = refs_sorted.len(),
+                    cap = MAX_APPROVED_DOCUMENTS_PER_DISPATCH,
+                    dropped = dropped_count,
+                    "trigger_server_synthesis(tenant): approved-documents count exceeds \
+                     MAX_APPROVED_DOCUMENTS_PER_DISPATCH; dropping the oldest {dropped_count} \
+                     documents from this dispatch",
+                );
+                refs_sorted.truncate(MAX_APPROVED_DOCUMENTS_PER_DISPATCH);
+            }
+
             let mut approved_documents: Vec<ApprovedDocument> = Vec::new();
             let mut missing_payloads: usize = 0;
-            for r in &tenant.approved_documents {
+            for r in &refs_sorted {
                 match rt.store().load_approved_document_payload(scope, r.id) {
                     Ok(Some(payload)) => {
                         approved_documents.push(ApprovedDocument::new(r.clone(), payload));
@@ -847,7 +1087,7 @@ fn build_dispatch_plan(
             if missing_payloads > 0 {
                 tracing::warn!(
                     scope = %scope.as_uuid(),
-                    refs_total = tenant.approved_documents.len(),
+                    refs_total = refs_sorted.len(),
                     payloads_attached = approved_documents.len(),
                     missing_payloads,
                     "trigger_server_synthesis(tenant): dispatching with partial \
@@ -874,6 +1114,17 @@ fn build_dispatch_plan(
             }))
         }
     }
+}
+
+/// Carries the post-recap memory clone through the transaction
+/// commit boundary in [`apply_dispatch_outcome`]. Hoisted to the
+/// module scope so the per-tier clones can be built before the
+/// transaction starts and swapped into the live map only after
+/// commit succeeds, preserving the plan-on-clone / commit-after-tx
+/// invariant.
+enum MemoryAfter {
+    Domain(memory_manager::DomainMemoryObject),
+    Tenant(memory_manager::TenantMemoryObject),
 }
 
 /// Phase 3 body. Holds the runtime mutex.
@@ -985,96 +1236,189 @@ fn apply_dispatch_outcome(
                         ),
                     });
                 }
-                // Replay the in-progress → complete transition on
-                // the real window manager. Both transitions can
-                // refuse if the host called `forget_scope` and
-                // recreated state mid-flight — surface as
-                // `Synthesis` rather than panicking.
-                rt.synthesis_windows
+                // ────────── Plan the post-dispatch state ──────────
+                //
+                // All state transitions are computed on owned
+                // *clones* of the runtime's in-memory maps so the
+                // live runtime is untouched until the disk-write
+                // transaction commits. The crash-safety contract:
+                // either every blob (synthesis object, domain/tenant
+                // memory, window manager) lands on disk atomically,
+                // or none of them do. Until commit-or-rollback
+                // resolves, the live runtime continues to see the
+                // pre-dispatch state, so any concurrent reader
+                // observes a coherent point-in-time view.
+                let window_id_str = object.window_id.as_uuid().to_string();
+                let window_uuid = object.window_id.as_uuid();
+                let object_tier = tier;
+                // Payload is UTF-8 enforced upstream by the
+                // synthesizer; fall back to lossy decode so a
+                // malformed adapter can never wedge the apply phase.
+                let recap_text = String::from_utf8(object.payload.clone())
+                    .unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned());
+
+                // 1. Clone the window manager and replay
+                //    Pending → InProgress → Complete on the clone.
+                //    Both transitions can refuse if the host called
+                //    `forget_scope` and recreated state mid-flight —
+                //    surface as `Synthesis` rather than panicking,
+                //    without mutating the live manager.
+                let mut windows_after = rt.synthesis_windows.clone();
+                windows_after
                     .mark_in_progress(window_handle.window_id)
                     .map_err(|e| FfiError::Synthesis {
                         message: format!("mark_in_progress failed: {e}"),
                     })?;
-                rt.synthesis_windows
+                windows_after
                     .mark_complete(window_handle.window_id)
                     .map_err(|e| FfiError::Synthesis {
                         message: format!("mark_complete failed: {e}"),
                     })?;
-                let window_id_str = object.window_id.as_uuid().to_string();
-                let window_uuid = object.window_id.as_uuid();
-                // Copy the payload text into the memory_manager
-                // recap field before we move the object into the
-                // store. Payload is UTF-8 enforced upstream by the
-                // synthesizer; we fall back to lossy decode here
-                // so a malformed adapter can never wedge the apply
-                // phase.
-                let recap_text = String::from_utf8(object.payload.clone())
-                    .unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned());
-                let object_tier = tier;
-                // Persist the synthesis object — install into the
-                // in-memory map and the encrypted evidence store.
-                rt.save_synthesis_object(scope, object)?;
-                // Mirror the recap into the domain / tenant memory
-                // object so the next synthesis run (and any host
-                // consuming the memory object directly) reflects
-                // the latest output. We persist the updated memory
-                // object before flushing the window manager so a
-                // crash between the two leaves the windows
-                // referencing the old recap rather than a partial
-                // one.
-                match object_tier {
+
+                // 2. Clone the synthesis-objects map and insert
+                //    the new object, then apply the retention
+                //    prune on both the windows clone and the
+                //    objects clone so the disk write reflects the
+                //    final post-prune state in one shot.
+                let mut objects_after = rt.synthesis_objects.clone();
+                // Move `object` into the map — every subsequent read
+                // (the per-scope serialisation below) goes through
+                // `objects_after.values()`, so cloning the payload
+                // (up to MAX_SYNTHESIS_OUTPUT_BYTES) would be wasted.
+                let object_window_id = object.window_id;
+                objects_after.insert(object_window_id, object);
+                let pruned_ids = prune_completed_windows_on(
+                    &mut windows_after,
+                    &mut objects_after,
+                    scope,
+                    WINDOW_RETENTION_CAP_PER_SCOPE,
+                );
+
+                // 3. Build the updated domain/tenant memory clone
+                //    with the new recap. The legacy
+                //    `*_memory_mut` accessors mutate the live map
+                //    in-place (which would break the
+                //    plan-on-clone, commit-after-tx invariant), so
+                //    we read-then-clone and only swap in after
+                //    commit.
+                let memory_after = match object_tier {
                     SynthesisTierKind::Domain => {
-                        let domain = rt.domain_memory_mut(scope);
-                        domain.update_recap(recap_text, Some(window_uuid));
-                        let domain_clone = domain.clone();
-                        rt.save_domain_memory(scope, domain_clone)?;
+                        let mut updated = rt
+                            .domain_memory(scope)
+                            .cloned()
+                            .unwrap_or_else(|| memory_manager::DomainMemoryObject::new(scope));
+                        updated.update_recap(recap_text, Some(window_uuid));
+                        MemoryAfter::Domain(updated)
                     }
                     SynthesisTierKind::Tenant => {
-                        let tenant = rt.tenant_memory_mut(scope);
-                        tenant.update_summary(recap_text, Some(window_uuid));
-                        let tenant_clone = tenant.clone();
-                        rt.save_tenant_memory(scope, tenant_clone)?;
+                        let mut updated = rt
+                            .tenant_memory(scope)
+                            .cloned()
+                            .unwrap_or_else(|| memory_manager::TenantMemoryObject::new(scope));
+                        updated.update_summary(recap_text, Some(window_uuid));
+                        MemoryAfter::Tenant(updated)
+                    }
+                };
+
+                // ────────── Persist all blobs in one tx ──────────
+                //
+                // SQLCipher transaction: synthesis-object blob,
+                // domain/tenant memory blob, and window manager
+                // blob either all commit or all roll back. A crash
+                // mid-sequence leaves the database in the
+                // pre-dispatch state (window still Pending, no
+                // synthesis object, no recap update) and the next
+                // `open_store` rehydrates that consistent shape;
+                // the host can retry the dispatch on the recovered
+                // Pending window without orphaning any partial
+                // state. Pre-tx serialisation failures abort
+                // before any disk write so they cannot leave the
+                // tx in an indeterminate state.
+                let synthesis_obj_json = {
+                    let per_scope: Vec<&synthesis_pipeline::SynthesisObject> = objects_after
+                        .values()
+                        .filter(|o| o.scope_id == scope)
+                        .collect();
+                    serde_json::to_vec(&per_scope).map_err(|e| FfiError::Memory {
+                        message: format!("failed to serialize synthesis objects: {e}"),
+                    })?
+                };
+                let memory_blob_json = match &memory_after {
+                    MemoryAfter::Domain(m) => {
+                        serde_json::to_vec(m).map_err(|e| FfiError::Memory {
+                            message: format!("failed to serialize domain memory: {e}"),
+                        })?
+                    }
+                    MemoryAfter::Tenant(m) => {
+                        serde_json::to_vec(m).map_err(|e| FfiError::Memory {
+                            message: format!("failed to serialize tenant memory: {e}"),
+                        })?
+                    }
+                };
+                let memory_kind = match &memory_after {
+                    MemoryAfter::Domain(_) => crate::runtime::DOMAIN_MEMORY_KIND,
+                    MemoryAfter::Tenant(_) => crate::runtime::TENANT_MEMORY_KIND,
+                };
+                let windows_json =
+                    serde_json::to_vec(&windows_after).map_err(|e| FfiError::Memory {
+                        message: format!("failed to serialize synthesis windows: {e}"),
+                    })?;
+
+                rt.store()
+                    .with_transaction(|tx| {
+                        rt.store().save_memory_blob_in_tx(
+                            tx,
+                            scope,
+                            crate::runtime::SYNTHESIS_OBJECT_KIND,
+                            &synthesis_obj_json,
+                        )?;
+                        rt.store().save_memory_blob_in_tx(
+                            tx,
+                            scope,
+                            memory_kind,
+                            &memory_blob_json,
+                        )?;
+                        rt.store().save_memory_blob_in_tx(
+                            tx,
+                            crate::runtime::synthesis_windows_scope(),
+                            crate::runtime::SYNTHESIS_WINDOWS_KIND,
+                            &windows_json,
+                        )?;
+                        Ok(())
+                    })
+                    .map_err(|e| FfiError::Evidence {
+                        message: format!("synthesis-apply transaction failed: {e}"),
+                    })?;
+
+                // ────────── Tx committed — swap in-memory state ──────────
+                //
+                // Disk now reflects the post-dispatch shape; mirror
+                // it into the live runtime maps. None of these
+                // mutations can fail (HashMap inserts, owned
+                // assignments) so we do not need a rollback path.
+                rt.synthesis_objects = objects_after;
+                rt.synthesis_windows = windows_after;
+                match memory_after {
+                    MemoryAfter::Domain(m) => {
+                        rt.domain_memories.insert(scope, m);
+                    }
+                    MemoryAfter::Tenant(m) => {
+                        rt.tenant_memories.insert(scope, m);
                     }
                 }
-                // Persist window manager state (status transitions).
-                rt.flush_synthesis_windows()?;
                 // Cooldown stamp — keyed by `(scope, tier)` so
                 // Domain and Tenant syntheses on the same scope
-                // track their throttle clocks independently.
+                // track their throttle clocks independently. Kept
+                // outside the tx because the cooldown map is
+                // in-memory only and a missed stamp at most
+                // permits one extra dispatch on next call (the
+                // existing window check still short-circuits).
                 rt.synthesis_cooldowns
                     .insert((scope, object_tier), Utc::now());
-                // Retention prune. We don't surface the pruned
-                // ids; the caller only cares about the new window.
-                let pruned = rt.prune_completed_windows(scope, WINDOW_RETENTION_CAP_PER_SCOPE);
-                if !pruned.is_empty() {
-                    // Pruning mutated the manager — flush again.
-                    if let Err(e) = rt.flush_synthesis_windows() {
-                        tracing::warn!(
-                            error = ?e,
-                            "post-prune flush_synthesis_windows failed",
-                        );
-                    }
-                    // Rewrite the per-scope `synthesis_object`
-                    // blob from the post-prune in-memory state.
-                    // Without this, a crash before the next
-                    // successful synthesis on the same scope
-                    // would rehydrate the pruned objects from
-                    // disk and surface them as orphans (their
-                    // `window_id` no longer maps to a tracked
-                    // window because the window manager flush
-                    // above already reflects the pruned set).
-                    if let Err(e) = rt.flush_synthesis_objects(scope) {
-                        tracing::warn!(
-                            error = ?e,
-                            scope = %scope.as_uuid(),
-                            "post-prune flush_synthesis_objects failed; on-disk \
-                             synthesis-object blob still references pruned ids and may \
-                             rehydrate orphans on next open_store",
-                        );
-                    }
+                if !pruned_ids.is_empty() {
                     tracing::debug!(
                         scope = %scope.as_uuid(),
-                        pruned = pruned.len(),
+                        pruned = pruned_ids.len(),
                         "trigger_server_synthesis: pruned completed windows beyond retention cap",
                     );
                 }
@@ -1216,6 +1560,46 @@ fn gather_domain_outputs(
     outputs
 }
 
+/// Free-function variant of
+/// [`FfiRuntime::prune_completed_windows`](crate::runtime::FfiRuntime::prune_completed_windows)
+/// that operates on owned clones of the window manager and the
+/// synthesis-objects map. Used by `apply_dispatch_outcome` to plan
+/// the post-prune state inside an SQLCipher transaction without
+/// mutating the live runtime until the commit succeeds.
+///
+/// Same retention semantics: walks `Complete` windows for `scope`,
+/// keeps the newest `max_per_scope` by `window_end`, and removes
+/// the remainder from both the window manager and the objects map.
+/// Returns the ids of every window that was pruned (empty when no
+/// pruning was required).
+pub(crate) fn prune_completed_windows_on(
+    windows: &mut SynthesisWindowManager,
+    objects: &mut std::collections::HashMap<WindowId, SynthesisObject>,
+    scope: ScopeId,
+    max_per_scope: usize,
+) -> Vec<WindowId> {
+    let mut completed: Vec<(WindowId, chrono::DateTime<chrono::Utc>)> = windows
+        .windows_for(scope)
+        .iter()
+        .filter(|w| w.status == WindowStatus::Complete)
+        .map(|w| (w.id, w.window_end))
+        .collect();
+    if completed.len() <= max_per_scope {
+        return Vec::new();
+    }
+    completed.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+    let prune: Vec<WindowId> = completed
+        .into_iter()
+        .skip(max_per_scope)
+        .map(|(id, _)| id)
+        .collect();
+    for id in &prune {
+        objects.remove(id);
+    }
+    windows.remove_windows(scope, prune.iter().copied());
+    prune
+}
+
 fn newest_channel_recap_for_scope(rt: &FfiRuntime, scope: ScopeId) -> Option<SynthesisObject> {
     newest_object_for_scope_of_type(rt, scope, SynthesisObjectType::ChannelRecap)
 }
@@ -1319,20 +1703,23 @@ fn encode_content_hash_hex(hash: &crypto::ContentHash) -> String {
 }
 
 /// Validate a Phase-8 approved-document metadata field
-/// (`label` or `approver`). Empty / overlong strings are rejected
-/// with [`FfiError::Memory`] whose message names the field, the
-/// observed length, and the cap so the host can fix the call site
-/// without guessing which input was rejected.
+/// (`label` or `approver`). Shared by `admit_approved_document`
+/// and `replace_approved_document` so the error messages MUST NOT
+/// hardcode an entry-point name; the field name plus the observed
+/// length and cap give the host enough context to pinpoint the
+/// offending call site, and the `FfiError::Memory` variant
+/// itself carries the entry-point identity through the wider
+/// error chain.
 fn validate_approved_document_metadata(field: &'static str, value: &str) -> FfiResult<()> {
     if value.is_empty() {
         return Err(FfiError::Memory {
-            message: format!("admit_approved_document: {field} must be non-empty"),
+            message: format!("approved-document {field} must be non-empty"),
         });
     }
     if value.len() > MAX_APPROVED_DOCUMENT_METADATA_BYTES {
         return Err(FfiError::Memory {
             message: format!(
-                "admit_approved_document: {field} length {} bytes exceeds the {} byte cap",
+                "approved-document {field} length {} bytes exceeds the {} byte cap",
                 value.len(),
                 MAX_APPROVED_DOCUMENT_METADATA_BYTES,
             ),
@@ -2501,6 +2888,7 @@ mod tests {
             timeout_ms: MAX_TIMEOUT_MS + 1,
             grammar: None,
             scope_bindings: None,
+            single_tenant: false,
         };
         let err = endpoint_config_from_ffi(&cfg).expect_err("oversize timeout must reject");
         match err {
@@ -2530,6 +2918,7 @@ mod tests {
             timeout_ms: MAX_TIMEOUT_MS,
             grammar: None,
             scope_bindings: None,
+            single_tenant: false,
         };
         let endpoint = endpoint_config_from_ffi(&cfg).expect("at-cap timeout must accept");
         assert_eq!(
@@ -2551,6 +2940,7 @@ mod tests {
             timeout_ms: 0,
             grammar: None,
             scope_bindings: None,
+            single_tenant: false,
         };
         let endpoint = endpoint_config_from_ffi(&cfg).expect("zero timeout must accept");
         // `EndpointConfig::timeout` is `None` until a custom value
@@ -2931,6 +3321,362 @@ mod tests {
         let revoke_err =
             revoke_approved_document(handle, scope_str, Uuid::new_v4().to_string()).unwrap_err();
         assert!(matches!(revoke_err, FfiError::NotFound { ref kind, .. } if kind == "scope"));
+
+        teardown(handle);
+    }
+
+    // ────────── Phase 9: approved-document orphan sweep ──────────────
+
+    /// Approved-document payload rows whose `(scope_id, document_id)`
+    /// is not in any rehydrated `TenantMemoryObject.approved_documents`
+    /// must be purged at `open_store` time. Simulates a half-failed
+    /// `revoke_approved_document` by deleting the ref from tenant
+    /// memory, flushing tenant memory, but NOT deleting the payload
+    /// row. On reopen, the orphan must be gone.
+    #[test]
+    fn open_store_purges_orphan_approved_document_payloads() {
+        let (handle, dir) = fresh_store();
+        let scope_str = "00000000-0000-0000-0000-000000009d01".to_string();
+        let scope = crate::parse_scope_id(&scope_str).expect("scope");
+
+        // 1. Admit a document (creates both ref + payload row).
+        let summary = admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "test-doc".into(),
+            "tester".into(),
+            b"orphan-payload-content".to_vec(),
+        )
+        .expect("admit");
+
+        // 2. Simulate a half-failed revoke: remove the ref from
+        //    tenant memory but leave the payload row on disk.
+        with_runtime(handle, |rt| {
+            let mut tmo = rt
+                .tenant_memory(scope)
+                .cloned()
+                .unwrap_or_else(|| memory_manager::TenantMemoryObject::new(scope));
+            tmo.revoke_approved_document(summary.id.parse::<Uuid>().expect("doc_id parse"))
+                .expect("revoke ref");
+            rt.save_tenant_memory(scope, tmo)
+        })
+        .expect("flush tenant memory without payload deletion");
+
+        // Verify the payload row still exists on disk.
+        with_runtime(handle, |rt| {
+            let keys = rt
+                .store()
+                .list_all_approved_document_payload_keys()
+                .expect("list keys");
+            assert!(
+                keys.iter()
+                    .any(|(s, d)| *s == scope && d.to_string() == summary.id),
+                "payload row must still exist before reopen",
+            );
+            Ok(())
+        })
+        .expect("check payload");
+
+        // 3. Close + reopen — orphan sweep must delete the row.
+        let path = dir.path().join("evidence.db");
+        teardown(handle);
+        let key_hex = "a5".repeat(32);
+        let handle2 = crate::runtime::open_store(path.to_string_lossy().into_owned(), key_hex)
+            .expect("reopen");
+
+        with_runtime(handle2, |rt| {
+            let keys = rt
+                .store()
+                .list_all_approved_document_payload_keys()
+                .expect("list keys");
+            assert!(
+                !keys
+                    .iter()
+                    .any(|(s, d)| *s == scope && d.to_string() == summary.id),
+                "orphan approved-document payload row must be purged at open_store time",
+            );
+            Ok(())
+        })
+        .expect("verify orphan purged");
+
+        teardown(handle2);
+    }
+
+    // ────────── Phase 9: health-probe single-tenant posture ─────────
+
+    /// When `synthesis_single_tenant` is false (default), the health
+    /// probe reports `Degraded` for an engine-configured runtime with
+    /// no scope bindings.
+    #[test]
+    fn health_probe_reports_degraded_without_single_tenant() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+
+        let env = crate::health_check(Some(handle)).expect("health_check");
+        let synth = env
+            .subsystems
+            .iter()
+            .find(|s| s.name == "synthesis_engine")
+            .expect("synthesis_engine subsystem must be present");
+        assert_eq!(
+            synth.status,
+            crate::SubsystemStatus::Degraded,
+            "engine configured w/o scope_bindings must be Degraded by default",
+        );
+
+        teardown(handle);
+    }
+
+    /// When `synthesis_single_tenant` is true, the health probe
+    /// reports `Ok` even without scope bindings — single-tenant /
+    /// dev deployments don't need scope enforcement.
+    #[test]
+    fn health_probe_reports_ok_with_single_tenant() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+
+        // Poke the flag directly — `configure_synthesis_engine`
+        // sets this from `SynthesisEngineConfig::single_tenant`, but
+        // unit tests bypass that entry point.
+        with_runtime(handle, |rt| {
+            rt.synthesis_single_tenant = true;
+            Ok(())
+        })
+        .expect("set single_tenant");
+
+        let env = crate::health_check(Some(handle)).expect("health_check");
+        let synth = env
+            .subsystems
+            .iter()
+            .find(|s| s.name == "synthesis_engine")
+            .expect("synthesis_engine subsystem must be present");
+        assert_eq!(
+            synth.status,
+            crate::SubsystemStatus::Ok,
+            "engine configured w/o scope_bindings must be Ok when single_tenant=true",
+        );
+
+        teardown(handle);
+    }
+
+    // ────────── Phase 9: replace_approved_document ──────────────────
+
+    /// Happy path: replace updates the payload, label, approver, and
+    /// approved_at on an existing document. The document id remains
+    /// stable.
+    #[test]
+    fn replace_approved_document_happy_path() {
+        let (handle, _dir) = fresh_store();
+        let scope_str = "00000000-0000-0000-0000-000000009e01".to_string();
+        let scope = crate::parse_scope_id(&scope_str).expect("scope");
+
+        let original = admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "v1-label".into(),
+            "v1-approver".into(),
+            b"v1-payload".to_vec(),
+        )
+        .expect("admit");
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let replaced = replace_approved_document(
+            handle,
+            scope_str.clone(),
+            original.id.clone(),
+            "v2-label".into(),
+            "v2-approver".into(),
+            b"v2-payload-updated".to_vec(),
+        )
+        .expect("replace");
+
+        // Document id must be stable.
+        assert_eq!(replaced.id, original.id);
+        // Metadata must be updated.
+        assert_eq!(replaced.label, "v2-label");
+        assert_eq!(replaced.approver, "v2-approver");
+        // approved_at must be refreshed.
+        assert!(
+            replaced.approved_at_ms >= original.approved_at_ms,
+            "approved_at must be refreshed on replace",
+        );
+        // Content hash must change.
+        assert_ne!(
+            replaced.content_hash_hex, original.content_hash_hex,
+            "content hash must reflect the new payload",
+        );
+        assert_eq!(replaced.payload_bytes, 18); // "v2-payload-updated"
+
+        // Verify the payload row on disk contains the new content.
+        with_runtime(handle, |rt| {
+            let loaded = rt
+                .store()
+                .load_approved_document_payload(scope, original.id.parse::<Uuid>().unwrap())
+                .expect("load payload")
+                .expect("payload must exist");
+            assert_eq!(loaded, b"v2-payload-updated");
+            Ok(())
+        })
+        .expect("verify payload");
+
+        // list_approved_documents reflects the update.
+        let listed = list_approved_documents(handle, scope_str).expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].label, "v2-label");
+
+        teardown(handle);
+    }
+
+    /// Replacing when the tenant memory itself is missing (no document
+    /// has ever been admitted on this scope) surfaces
+    /// `NotFound { kind = "tenant_memory" }`, matching
+    /// `revoke_approved_document` so hosts get a uniform error shape.
+    #[test]
+    fn replace_approved_document_missing_tenant_memory() {
+        let (handle, _dir) = fresh_store();
+        let scope_str = "00000000-0000-0000-0000-000000009e02".to_string();
+        let _scope = crate::parse_scope_id(&scope_str).expect("scope");
+
+        let err = replace_approved_document(
+            handle,
+            scope_str,
+            Uuid::new_v4().to_string(),
+            "label".into(),
+            "approver".into(),
+            b"payload".to_vec(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "tenant_memory"),
+            "expected NotFound for tenant_memory, got {err:?}",
+        );
+
+        teardown(handle);
+    }
+
+    /// Replacing a document id that does not match any admitted ref
+    /// (the scope DOES have tenant memory, but not this document)
+    /// surfaces `NotFound { kind = "approved_document" }`, matching
+    /// `revoke_approved_document`.
+    #[test]
+    fn replace_approved_document_missing_ref() {
+        let (handle, _dir) = fresh_store();
+        let scope_str = "00000000-0000-0000-0000-000000009e04".to_string();
+        // Admit one document so the tenant memory exists, then try
+        // to replace a *different* document id.
+        admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "label".into(),
+            "approver".into(),
+            b"payload".to_vec(),
+        )
+        .expect("admit");
+
+        let err = replace_approved_document(
+            handle,
+            scope_str,
+            Uuid::new_v4().to_string(),
+            "label".into(),
+            "approver".into(),
+            b"payload".to_vec(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "approved_document"),
+            "expected NotFound for approved_document, got {err:?}",
+        );
+
+        teardown(handle);
+    }
+
+    /// Replacing on a forgotten scope returns NotFound(scope).
+    #[test]
+    fn replace_approved_document_on_forgotten_scope() {
+        let (handle, _dir) = fresh_store();
+        let scope_str = "00000000-0000-0000-0000-000000009e03".to_string();
+
+        let original = admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "label".into(),
+            "approver".into(),
+            b"payload".to_vec(),
+        )
+        .expect("admit");
+
+        crate::forget_scope(handle, scope_str.clone()).expect("forget");
+
+        let err = replace_approved_document(
+            handle,
+            scope_str,
+            original.id,
+            "label".into(),
+            "approver".into(),
+            b"new".to_vec(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, FfiError::NotFound { ref kind, .. } if kind == "scope"));
+
+        teardown(handle);
+    }
+
+    /// Oversized payload on replace is rejected.
+    #[test]
+    fn replace_approved_document_rejects_oversized_payload() {
+        let (handle, _dir) = fresh_store();
+        let scope_str = "00000000-0000-0000-0000-000000009e04".to_string();
+
+        let original = admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "label".into(),
+            "approver".into(),
+            b"payload".to_vec(),
+        )
+        .expect("admit");
+
+        let big = vec![0u8; MAX_APPROVED_DOCUMENT_BYTES + 1];
+        let err = replace_approved_document(
+            handle,
+            scope_str,
+            original.id,
+            "label".into(),
+            "approver".into(),
+            big,
+        )
+        .unwrap_err();
+        assert!(matches!(err, FfiError::Memory { .. }));
+
+        teardown(handle);
+    }
+
+    /// Empty payload on replace is rejected.
+    #[test]
+    fn replace_approved_document_rejects_empty_payload() {
+        let (handle, _dir) = fresh_store();
+        let scope_str = "00000000-0000-0000-0000-000000009e05".to_string();
+
+        let original = admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "label".into(),
+            "approver".into(),
+            b"payload".to_vec(),
+        )
+        .expect("admit");
+
+        let err = replace_approved_document(
+            handle,
+            scope_str,
+            original.id,
+            "label".into(),
+            "approver".into(),
+            vec![],
+        )
+        .unwrap_err();
+        assert!(matches!(err, FfiError::Memory { .. }));
 
         teardown(handle);
     }

@@ -576,3 +576,51 @@ fn cek_wrap_same_scope_reingest_is_idempotent() {
     assert_eq!(store.read_body(r1.evidence_id).unwrap(), body);
     assert_eq!(store.read_body(r2.evidence_id).unwrap(), body);
 }
+
+// ─────────────── with_transaction rollback / commit ───────────────
+
+#[test]
+fn with_transaction_commits_on_ok() {
+    let (_dir, store) = fresh_store();
+    let scope = ScopeId::new_v4();
+
+    store
+        .with_transaction(|tx| {
+            store.save_memory_blob_in_tx(tx, scope, "kind_a", b"{\"a\":1}")?;
+            store.save_memory_blob_in_tx(tx, scope, "kind_b", b"{\"b\":2}")?;
+            Ok(())
+        })
+        .expect("tx commit");
+
+    // Both rows must be readable after commit.
+    let a = store.load_memory_blob(scope, "kind_a").unwrap();
+    let b = store.load_memory_blob(scope, "kind_b").unwrap();
+    assert!(a.is_some(), "kind_a must survive commit");
+    assert!(b.is_some(), "kind_b must survive commit");
+}
+
+#[test]
+fn with_transaction_rolls_back_on_err() {
+    let (_dir, store) = fresh_store();
+    let scope = ScopeId::new_v4();
+
+    // Write one blob successfully, then inject an error before the
+    // second write can land. The entire transaction must roll back.
+    let result: evidence_store::Result<()> = store.with_transaction(|tx| {
+        store.save_memory_blob_in_tx(tx, scope, "kind_ok", b"{\"ok\":true}")?;
+        // Simulate a mid-sequence failure — the specific error
+        // variant is irrelevant; only the rollback semantics matter.
+        Err(evidence_store::EvidenceError::Schema(
+            "injected failure for rollback test",
+        ))
+    });
+    assert!(result.is_err(), "tx must propagate the injected error");
+
+    // Neither the successful first write NOR the failed second write
+    // may be readable — the entire transaction rolled back.
+    let blob = store.load_memory_blob(scope, "kind_ok").unwrap();
+    assert!(
+        blob.is_none(),
+        "rolled-back write must not be visible after tx abort"
+    );
+}

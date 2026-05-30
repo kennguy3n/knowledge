@@ -326,10 +326,19 @@ pub fn js_trigger_synthesis(handle: BigInt, scope_id: String, trigger: String) -
 /// `config` is the JSON object documented on
 /// [`ffi::SynthesisEngineConfig`] with camelCase keys:
 /// `{ url, apiKeyRef, modelId, maxTokens, timeoutMs, grammar,
-///    scopeBindings }`. `scopeBindings`, if present, is an array
-/// of UUID strings the FFI layer admits for dispatch (production
-/// deployments SHOULD configure it; an absent allow-list logs a
-/// warning on every dispatch).
+///    scopeBindings, singleTenant }`.
+///
+/// * `scopeBindings`, if present, is an array of UUID strings the
+///   FFI layer admits for dispatch (production multi-tenant
+///   deployments SHOULD configure it; an absent allow-list logs a
+///   warning on every dispatch).
+/// * `singleTenant` (defaults to `false`) is a host-supplied
+///   posture flag. When `true`, the health probe reports
+///   `Nominal` instead of `Degraded` if the engine is configured
+///   without `scopeBindings` — appropriate for dev / single-tenant
+///   deployments where there is no cross-scope allow-list to
+///   enforce. Multi-tenant production deployments should leave
+///   this `false` (the default) and provide `scopeBindings`.
 ///
 /// # Errors
 ///
@@ -460,6 +469,62 @@ pub fn js_admit_approved_document(
     let bytes: Vec<u8> = payload.to_vec();
     let summary =
         crate::admit_approved_document(h, scope_id, label, approver, bytes).map_err(to_js_error)?;
+    serde_json::to_value(summary).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("approved-document summary serialization failed: {e}"),
+        })
+    })
+}
+
+/// Replace the payload and metadata of an existing approved
+/// document while keeping its `documentId` stable. Mirrors
+/// [`crate::replace_approved_document`].
+///
+/// Use this when the host wants to publish a new revision of a
+/// previously-admitted document without changing the id that
+/// downstream synthesis / audit consumers reference. The
+/// `documentId` and `scopeId` remain identical; `label`,
+/// `approver`, `payload`, `contentHashHex`, `payloadBytes`, and
+/// `approvedAtMs` are refreshed. A fresh `approvedAtMs` means the
+/// replaced document is treated as "recently touched" by the
+/// per-dispatch LRU cap.
+///
+/// Returns the serialised [`ffi::ApprovedDocumentSummary`] with
+/// camelCase keys, identical in shape to
+/// [`js_admit_approved_document`].
+///
+/// # Errors
+///
+/// * `NotFound { kind: "scope" }` if the scope has been forgotten
+///   via `forgetScope`.
+/// * `NotFound { kind: "tenant_memory" }` if no tenant memory
+///   object exists for the scope (no document has ever been
+///   admitted on it). Hosts must `admitApprovedDocument` first.
+/// * `NotFound { kind: "approved_document" }` if `documentId` is
+///   not currently admitted on this scope's tenant memory.
+/// * `Memory` if `label` / `approver` / `payload` are empty or
+///   exceed their documented size caps (see
+///   [`crate::MAX_APPROVED_DOCUMENT_BYTES`] and
+///   [`crate::MAX_APPROVED_DOCUMENT_METADATA_BYTES`]).
+/// * `InvalidArgument` if `scopeId` or `documentId` is not a UUID.
+///
+/// The three-way `kind` distinction mirrors `revokeApprovedDocument`
+/// so JS/TS hosts can pattern-match on `err.kind` uniformly across
+/// both functions.
+#[napi(js_name = "replaceApprovedDocument")]
+pub fn js_replace_approved_document(
+    handle: BigInt,
+    scope_id: String,
+    document_id: String,
+    label: String,
+    approver: String,
+    payload: napi::bindgen_prelude::Buffer,
+) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let bytes: Vec<u8> = payload.to_vec();
+    let summary =
+        crate::replace_approved_document(h, scope_id, document_id, label, approver, bytes)
+            .map_err(to_js_error)?;
     serde_json::to_value(summary).map_err(|e| {
         to_js_error(NapiError::Internal {
             message: format!("approved-document summary serialization failed: {e}"),

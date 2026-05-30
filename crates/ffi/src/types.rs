@@ -716,6 +716,14 @@ pub struct SynthesisEngineConfig {
     /// every scope, matching the TEE worker's `scope_bindings`
     /// semantics.
     pub scope_bindings: Option<Vec<String>>,
+    /// When `true`, the synthesis health-probe reports `Nominal`
+    /// instead of `Degraded` when `scope_bindings` is absent.
+    /// Single-tenant / dev deployments do not require scope
+    /// enforcement, so the `Degraded` signal is noise in those
+    /// environments. Defaults to `false` for back-compat with
+    /// the multi-tenant production posture.
+    #[serde(default)]
+    pub single_tenant: bool,
 }
 
 /// Summary view of an approved-document reference + payload pair,
@@ -1348,6 +1356,7 @@ mod tests {
                 "44444444-4444-4444-4444-444444444444".into(),
                 "55555555-5555-5555-5555-555555555555".into(),
             ]),
+            single_tenant: false,
         };
         let v = serde_json::to_value(&cfg).expect("serialize");
         let obj = v.as_object().expect("object");
@@ -1359,6 +1368,7 @@ mod tests {
             "timeoutMs",
             "grammar",
             "scopeBindings",
+            "singleTenant",
         ] {
             assert!(
                 obj.contains_key(camel),
@@ -1371,6 +1381,7 @@ mod tests {
             "max_tokens",
             "timeout_ms",
             "scope_bindings",
+            "single_tenant",
         ] {
             assert!(
                 !obj.contains_key(snake),
@@ -1391,6 +1402,7 @@ mod tests {
             timeout_ms: 0,
             grammar: None,
             scope_bindings: None,
+            single_tenant: false,
         };
         let back: SynthesisEngineConfig =
             serde_json::from_str(&serde_json::to_string(&cfg).expect("serialize"))

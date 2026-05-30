@@ -609,6 +609,7 @@ module.exports.query = nativeBinding.query
 module.exports.refreshConnectorToken = nativeBinding.refreshConnectorToken
 module.exports.registerWebhookDispatch = nativeBinding.registerWebhookDispatch
 module.exports.removeConnector = nativeBinding.removeConnector
+module.exports.replaceApprovedDocument = nativeBinding.replaceApprovedDocument
 module.exports.revokeApprovedDocument = nativeBinding.revokeApprovedDocument
 module.exports.runDecaySweep = nativeBinding.runDecaySweep
 module.exports.setOauthClientSecretResolver = nativeBinding.setOauthClientSecretResolver

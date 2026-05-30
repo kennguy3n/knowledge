@@ -366,6 +366,45 @@ export declare function registerWebhookDispatch(handle: bigint, serverHandle: bi
 export declare function removeConnector(handle: bigint, instanceId: string): void
 
 /**
+ * Replace the payload and metadata of an existing approved
+ * document while keeping its `documentId` stable. Mirrors
+ * [`crate::replace_approved_document`].
+ *
+ * Use this when the host wants to publish a new revision of a
+ * previously-admitted document without changing the id that
+ * downstream synthesis / audit consumers reference. The
+ * `documentId` and `scopeId` remain identical; `label`,
+ * `approver`, `payload`, `contentHashHex`, `payloadBytes`, and
+ * `approvedAtMs` are refreshed. A fresh `approvedAtMs` means the
+ * replaced document is treated as "recently touched" by the
+ * per-dispatch LRU cap.
+ *
+ * Returns the serialised [`ffi::ApprovedDocumentSummary`] with
+ * camelCase keys, identical in shape to
+ * [`js_admit_approved_document`].
+ *
+ * # Errors
+ *
+ * * `NotFound { kind: "scope" }` if the scope has been forgotten
+ *   via `forgetScope`.
+ * * `NotFound { kind: "tenant_memory" }` if no tenant memory
+ *   object exists for the scope (no document has ever been
+ *   admitted on it). Hosts must `admitApprovedDocument` first.
+ * * `NotFound { kind: "approved_document" }` if `documentId` is
+ *   not currently admitted on this scope's tenant memory.
+ * * `Memory` if `label` / `approver` / `payload` are empty or
+ *   exceed their documented size caps (see
+ *   [`crate::MAX_APPROVED_DOCUMENT_BYTES`] and
+ *   [`crate::MAX_APPROVED_DOCUMENT_METADATA_BYTES`]).
+ * * `InvalidArgument` if `scopeId` or `documentId` is not a UUID.
+ *
+ * The three-way `kind` distinction mirrors `revokeApprovedDocument`
+ * so JS/TS hosts can pattern-match on `err.kind` uniformly across
+ * both functions.
+ */
+export declare function replaceApprovedDocument(handle: bigint, scopeId: string, documentId: string, label: string, approver: string, payload: Buffer): any
+
+/**
  * Revoke an approved document previously admitted via
  * [`js_admit_approved_document`]. Mirrors
  * [`crate::revoke_approved_document`]. Removes both the
