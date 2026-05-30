@@ -804,15 +804,20 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         first_error.get_or_insert(err);
     }
 
-    // 5. Phase 8: delete persisted approved-document payload rows
-    //     for the scope. The ciphertext was sealed under the scope
-    //     DEK that step 1 destroyed, so even if this SQL DELETE
-    //     fails the bytes are cryptographically unrecoverable. We
-    //     still attempt the delete so the row count stays bounded
-    //     and `open_store`'s rehydration pass does not load orphan
-    //     metadata for a forgotten scope. Best-effort, accumulates
-    //     the first error so the caller sees the gap without
-    //     interrupting the remaining steps.
+    // 5. Phase 8 / Phase 10 Item 6: delete persisted approved-
+    //     document metadata rows for the scope. As of v12 these are
+    //     metadata-only — the actual payload bytes live in
+    //     `body_store` and the per-scope CEK wrap (already destroyed
+    //     in step 3 by `purge_body_key_wraps_for_scope`, which also
+    //     GCs the body row when its last wrap goes away). Even if
+    //     this DELETE fails, the bytes are cryptographically
+    //     unrecoverable because step 1 destroyed the scope DEK that
+    //     wraps the CEK and step 3 destroyed the wrap itself. We
+    //     still attempt the delete so the metadata row count stays
+    //     bounded and `open_store`'s rehydration pass does not load
+    //     orphan metadata for a forgotten scope. Best-effort,
+    //     accumulates the first error so the caller sees the gap
+    //     without interrupting the remaining steps.
     match rt
         .store()
         .delete_approved_document_payloads_for_scope(scope)

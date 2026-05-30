@@ -331,6 +331,22 @@ impl EvidenceStore {
             store.backfill_legacy_body_wraps()?;
         }
 
+        // v11→v12 (Phase 10 Item 6) — move every existing inline
+        // approved-document payload ciphertext into the deduplicated
+        // `body_store` table, then drop the legacy `nonce` + `payload`
+        // columns from `approved_document_payloads`. This is
+        // self-detecting and idempotent: on a v12-or-newer database
+        // the legacy columns are already gone and the function is a
+        // no-op. We trigger it whenever the detected version is
+        // below 12 so a fresh v11 database that just stamped its
+        // `user_version = 12` via the bootstrap path still goes
+        // through the data-shape detection (defense-in-depth against
+        // a future schema regression that recreates the legacy
+        // columns).
+        if detected_version > 0 && detected_version < 12 {
+            store.migrate_approved_doc_payloads_to_body_store()?;
+        }
+
         Ok(store)
     }
 
@@ -1642,6 +1658,78 @@ impl EvidenceStore {
             .take()
     }
 
+    /// Test-only helper that surgically reshapes
+    /// `approved_document_payloads` back to its pre-v12 (Phase 8 /
+    /// v10) inline layout and writes a single legacy-shape row.
+    ///
+    /// The post-bootstrap migration
+    /// [`Self::migrate_approved_doc_payloads_to_body_store`] runs
+    /// from [`Self::open`] on every reopen and is self-detecting via
+    /// `PRAGMA table_info`, so this helper lets the
+    /// `migration_v11_to_v12_round_trips_legacy_payloads` regression
+    /// test plant a real pre-v12 row, close + reopen the store, and
+    /// verify the migration moves the bytes through the body-store
+    /// pipeline before dropping the legacy columns.
+    ///
+    /// Encrypts under the same scope DEK + AAD discipline the
+    /// pre-v12 `save_approved_document_payload_in_tx` used, so the
+    /// migration's `decrypt_aead` call sees an authentic ciphertext.
+    ///
+    /// Only available with the `test-support` feature (or in unit
+    /// tests of this crate). Do not call from production code paths
+    /// — the legacy table shape is unsupported under v12 and the
+    /// next [`Self::open`] will silently re-migrate it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn write_legacy_approved_doc_payload_for_tests(
+        &self,
+        scope_id: ScopeId,
+        document_id: uuid::Uuid,
+        plaintext: &[u8],
+        content_hash: &ContentHash,
+    ) -> Result<()> {
+        let scope_key = self.scope_key(scope_id)?;
+        let aad = approved_doc_payload_aad(scope_id, document_id);
+        let nonce = random_nonce();
+        let ciphertext = encrypt_aead(&scope_key, &nonce, plaintext, &aad)?;
+
+        // Reshape the table back to its pre-v12 layout. ALTER TABLE
+        // ADD COLUMN tolerates re-adding a dropped column on a v12
+        // database, and SQLCipher's transactional DDL keeps the
+        // reshape atomic. Default expressions keep any existing v12
+        // metadata-only rows valid for the duration of the test.
+        self.conn.execute_batch(
+            "ALTER TABLE approved_document_payloads \
+                 ADD COLUMN nonce BLOB NOT NULL DEFAULT x'';\n\
+             ALTER TABLE approved_document_payloads \
+                 ADD COLUMN payload BLOB NOT NULL DEFAULT x'';",
+        )?;
+
+        let size_bytes = i64::try_from(plaintext.len()).unwrap_or(i64::MAX);
+        let updated_at = chrono::Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO approved_document_payloads \
+             (scope_id, document_id, content_hash, size_bytes, updated_at, nonce, payload) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                scope_id.as_uuid().as_bytes().as_slice(),
+                document_id.as_bytes().as_slice(),
+                content_hash.as_slice(),
+                size_bytes,
+                updated_at,
+                nonce.as_slice(),
+                ciphertext.as_slice(),
+            ],
+        )?;
+
+        // Rewind `user_version` so the next `Self::open` sees a
+        // pre-v12 database and runs the migration. Without this
+        // step the migration is gated out (detected_version >= 12
+        // means "already migrated") and the legacy row stays
+        // unmoved.
+        self.conn.pragma_update(None, "user_version", 11_i32)?;
+        Ok(())
+    }
+
     /// Persist a serializable memory object (user or channel) for
     /// `scope_id`. The `kind` tag discriminates between different
     /// memory types ("user_memory" / "channel_memory"). The object
@@ -2096,42 +2184,72 @@ impl EvidenceStore {
         Ok(out)
     }
 
-    // ───────────── Approved-document payloads (v10 / Phase 8) ──────────
+    // ───────────── Approved-document payloads (v10 / Phase 8;
+    //               v12 / Phase 10 Item 6: body-store dedup) ──────────
     //
     // Tenant memory carries the *reference* (id / label / approver /
     // approved_at) for every admitted approved document, but the
     // payload bytes themselves are too large to keep inline in the
     // tenant_memory JSON blob (every mutation would force a full
-    // read / encrypt / write of every doc payload). They live here
-    // instead, one row per `(scope_id, document_id)`, AEAD-encrypted
-    // under the per-scope DEK.
+    // read / encrypt / write of every doc payload).
     //
-    // AAD binds `scope_id` (16 bytes) AND `document_id` (16 bytes)
-    // through `approved_doc_payload_aad`, so a ciphertext relocated
-    // to a different row fails to decrypt instead of silently
-    // surfacing the wrong payload to tenant synthesis. The leading
-    // magic prefix (`approved-doc-payload:v1:`) gives a future
-    // schema evolution a stable namespace to bump for an
-    // incompatible AAD format change.
+    // **v12 layout (current).** A row in `approved_document_payloads`
+    // is metadata-only: `(scope_id, document_id) -> (content_hash,
+    // size_bytes, updated_at)`. The plaintext bytes live in the
+    // content-hash-deduplicated `body_store` table (encrypted under
+    // a random per-row CEK), and each scope that references the
+    // content owns a CEK wrap in `body_store_key_wraps` (encrypted
+    // under that scope's DEK). Admitting the same content into N
+    // tenant scopes therefore costs one body row + N wraps instead
+    // of N inline ciphertexts. The body row's `ref_count` is
+    // informational; the orphan-body GC trigger is "no wraps exist
+    // for this content_hash", implemented in
+    // [`Self::purge_body_key_wraps_for_scope`].
+    //
+    // **Pre-v12 layout (legacy).** Rows used to carry inline
+    // `nonce` + `payload` columns AEAD-encrypted directly under the
+    // per-scope DEK with AAD binding (scope_id, document_id). That
+    // layout still appears in v11 databases on disk; the v11 -> v12
+    // migration (`migrate_approved_doc_payloads_to_body_store` in
+    // this file, run as a post-bootstrap step from `open`) decrypts
+    // every legacy row under
+    // [`approved_doc_payload_aad`] and admits the plaintext through
+    // the v12 body-store pipeline before dropping the inline
+    // columns. The legacy AAD helper is retained for that migration
+    // path only.
     //
     // `forget(scope)` calls
-    // [`Self::delete_approved_document_payloads_for_scope`] from
-    // `forget_scope_state` (FFI layer). Even if that delete fails
-    // the scope-DEK destruction step makes the ciphertext
-    // cryptographically unrecoverable, so the row purge is
+    // [`Self::purge_body_key_wraps_for_scope`] (drops every wrap
+    // owned by the scope and GCs orphan body rows) followed by
+    // [`Self::delete_approved_document_payloads_for_scope`] (drops
+    // the metadata rows). Even if either delete fails, the scope-DEK
+    // destruction step makes any retained ciphertext
+    // cryptographically unrecoverable — the row purges are
     // defense-in-depth rather than the primary security barrier.
 
     /// Upsert an opaque approved-document payload for
-    /// `(scope_id, document_id)`. The plaintext is AEAD-encrypted
-    /// under the per-scope DEK with AAD binding both ids; the
-    /// `content_hash` and `size_bytes` columns are stored as
-    /// observable plaintext metadata for fast listing.
+    /// `(scope_id, document_id)`.
+    ///
+    /// As of v12 (Phase 10 Item 6) the plaintext is stored in the
+    /// content-hash-deduplicated `body_store` table — admitting the
+    /// same content into N tenant scopes costs one body row + N
+    /// per-scope CEK wraps in `body_store_key_wraps` instead of N
+    /// inline ciphertexts. The `approved_document_payloads` row
+    /// itself is now metadata-only (content_hash + size_bytes +
+    /// updated_at); it joins to the body via `content_hash`. See
+    /// [`Self::admit_approved_doc_body_in_tx`] for the body-store
+    /// admission logic and the schema-history note for v12 on
+    /// [`crate::schema::SCHEMA_VERSION`] for the rationale.
     ///
     /// Re-calling with the same `(scope_id, document_id)` overwrites
-    /// the previous payload, hash, and size (e.g. a host that
-    /// re-uploads a corrected PDF for an existing ref). The caller
-    /// is responsible for enforcing any size cap before invoking
-    /// this method — the store does not impose one.
+    /// the previous metadata row (e.g. a host that re-uploads a
+    /// corrected PDF for an existing ref) and, if the content_hash
+    /// changes, admits the new body separately — the old body's
+    /// wrap is retained until [`Self::purge_body_key_wraps_for_scope`]
+    /// runs (at `forget_scope` time), at which point the body row
+    /// is GCed if no other scope still wraps it. The caller is
+    /// responsible for enforcing any size cap before invoking this
+    /// method — the store does not impose one.
     pub fn save_approved_document_payload(
         &self,
         scope_id: ScopeId,
@@ -2151,12 +2269,18 @@ impl EvidenceStore {
         Ok(())
     }
 
-    /// Transaction-bound variant of [`Self::save_approved_document_payload`]
-    /// so callers that need to bundle this write with the tenant
-    /// memory blob (e.g. the FFI `replace_approved_document` entry
-    /// point) can group both under one SQLCipher transaction via
-    /// [`Self::with_transaction`]. Identical AEAD framing (scope-bound
-    /// AAD, random nonce, `INSERT OR REPLACE`) to the autocommit path.
+    /// Transaction-bound variant of
+    /// [`Self::save_approved_document_payload`] so callers that need
+    /// to bundle this write with the tenant memory blob (e.g. the
+    /// FFI `replace_approved_document` entry point) can group both
+    /// under one SQLCipher transaction via [`Self::with_transaction`].
+    ///
+    /// Admits the body to the deduplicated `body_store` table
+    /// (creating a per-scope CEK wrap if this is the first time
+    /// `scope_id` references the content), then upserts the
+    /// metadata row. Both writes happen under the caller's `tx`,
+    /// so a host-level crash between the two — or any sub-call
+    /// failure — rolls everything back atomically.
     pub fn save_approved_document_payload_in_tx(
         &self,
         tx: &rusqlite::Transaction<'_>,
@@ -2165,27 +2289,20 @@ impl EvidenceStore {
         plaintext: &[u8],
         content_hash: &ContentHash,
     ) -> Result<()> {
-        let key = self.scope_key(scope_id)?;
-        let nonce = random_nonce();
-        let aad = approved_doc_payload_aad(scope_id, document_id);
-        let ciphertext = encrypt_aead(&key, &nonce, plaintext, &aad)?;
+        self.admit_approved_doc_body_in_tx(tx, scope_id, plaintext, content_hash)?;
         let now = chrono::Utc::now().timestamp();
         let size_bytes = i64::try_from(plaintext.len()).unwrap_or(i64::MAX);
         tx.execute(
             "INSERT INTO approved_document_payloads \
-             (scope_id, document_id, nonce, payload, content_hash, size_bytes, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             (scope_id, document_id, content_hash, size_bytes, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5) \
              ON CONFLICT(scope_id, document_id) DO UPDATE SET \
-               nonce = excluded.nonce, \
-               payload = excluded.payload, \
                content_hash = excluded.content_hash, \
                size_bytes = excluded.size_bytes, \
                updated_at = excluded.updated_at",
             params![
                 scope_id.as_uuid().as_bytes().as_slice(),
                 document_id.as_bytes().as_slice(),
-                nonce.as_slice(),
-                ciphertext,
                 content_hash.as_slice(),
                 size_bytes,
                 now,
@@ -2194,40 +2311,283 @@ impl EvidenceStore {
         Ok(())
     }
 
+    /// Admit `plaintext` (with pre-computed BLAKE3 `content_hash`)
+    /// into the deduplicated `body_store` table on behalf of
+    /// `scope_id`, creating a per-scope CEK wrap in
+    /// `body_store_key_wraps` if one does not already exist.
+    ///
+    /// Three cases:
+    ///   1. **New body** — no existing `body_store` row. Generate a
+    ///      random CEK, AEAD-encrypt the body under it (AAD binds
+    ///      the content_hash via [`body_table_aad`]), insert the
+    ///      row with `ref_count = 1`, and wrap the CEK under the
+    ///      ingesting scope's DEK.
+    ///   2. **Dedup hit, scope already wrapped** — the same scope
+    ///      previously admitted (or ingested) this content. The
+    ///      ciphertext is already decryptable; do nothing. `ref_count`
+    ///      is intentionally NOT bumped because the existing wrap
+    ///      counts the scope's reference.
+    ///   3. **Dedup hit, scope not yet wrapped** — another scope
+    ///      already admitted this content. Read any existing wrap
+    ///      from `body_store_key_wraps` to find the donor scope,
+    ///      derive the donor's DEK, unwrap the CEK, re-wrap under
+    ///      this scope's DEK, and insert the new wrap. `ref_count`
+    ///      is incremented so the body row's counter reflects the
+    ///      total per-scope references. (`ref_count` is
+    ///      informational; the orphan-body GC trigger is
+    ///      "no wraps exist for this content_hash", as implemented
+    ///      in [`Self::purge_body_key_wraps_for_scope`].)
+    ///
+    /// A pathological fourth case — body row present but ALL wraps
+    /// have been purged (forgetting the only admitting scope races
+    /// the body GC) — falls through to the new-body path after
+    /// deleting the stale body row. This matches the same
+    /// defense-in-depth handling in [`Self::ingest_body_table`].
+    fn admit_approved_doc_body_in_tx(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        scope_id: ScopeId,
+        plaintext: &[u8],
+        hash: &ContentHash,
+    ) -> Result<()> {
+        let scope_key = self.scope_key(scope_id)?;
+
+        let existing: Option<i64> = tx
+            .query_row(
+                "SELECT ref_count FROM body_store WHERE content_hash = ?1",
+                params![hash.as_slice()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+
+        if existing.is_some() {
+            let already_has_wrap: bool = tx
+                .query_row(
+                    "SELECT 1 FROM body_store_key_wraps \
+                     WHERE content_hash = ?1 AND scope_id = ?2",
+                    params![hash.as_slice(), scope_id.as_uuid().as_bytes().as_slice(),],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if already_has_wrap {
+                // Case 2: same-scope re-admit, ciphertext already
+                // decryptable under existing wrap. No change.
+                return Ok(());
+            }
+
+            // Case 3: cross-scope dedup. Locate any donor wrap.
+            let donor: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = tx
+                .query_row(
+                    "SELECT w.wrapped_cek, w.nonce, w.scope_id \
+                     FROM body_store_key_wraps w \
+                     WHERE w.content_hash = ?1 \
+                       AND w.scope_id != ?2 \
+                     LIMIT 1",
+                    params![hash.as_slice(), scope_id.as_uuid().as_bytes().as_slice(),],
+                    |row| {
+                        Ok((
+                            row.get::<_, Vec<u8>>(0)?,
+                            row.get::<_, Vec<u8>>(1)?,
+                            row.get::<_, Vec<u8>>(2)?,
+                        ))
+                    },
+                )
+                .optional()?;
+
+            if let Some((wrapped_cek, donor_wrap_nonce_bytes, donor_scope_bytes)) = donor {
+                if donor_wrap_nonce_bytes.len() != AEAD_NONCE_LEN {
+                    return Err(EvidenceError::Schema(
+                        "body_store_key_wraps row has malformed nonce",
+                    ));
+                }
+                let mut donor_wrap_nonce = [0u8; AEAD_NONCE_LEN];
+                donor_wrap_nonce.copy_from_slice(&donor_wrap_nonce_bytes);
+                let donor_scope = ScopeId::from_uuid(slice_to_uuid(&donor_scope_bytes)?);
+                let donor_key = self.scope_key(donor_scope)?;
+                let cek = unwrap_cek(&donor_key, &wrapped_cek, &donor_wrap_nonce, hash)?;
+                let new_wrap_nonce = random_nonce();
+                let new_wrapped = wrap_cek(&scope_key, &cek, &new_wrap_nonce, hash)?;
+                tx.execute(
+                    "INSERT INTO body_store_key_wraps \
+                     (content_hash, scope_id, wrapped_cek, nonce) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        hash.as_slice(),
+                        scope_id.as_uuid().as_bytes().as_slice(),
+                        new_wrapped,
+                        new_wrap_nonce.as_slice(),
+                    ],
+                )?;
+                tx.execute(
+                    "UPDATE body_store SET ref_count = ref_count + 1 \
+                     WHERE content_hash = ?1",
+                    params![hash.as_slice()],
+                )?;
+            } else {
+                // Pathological: body row exists but every wrap has
+                // been purged. Treat as orphan — delete the stale
+                // ciphertext and admit the new plaintext from
+                // scratch under a fresh CEK.
+                tx.execute(
+                    "DELETE FROM body_store WHERE content_hash = ?1",
+                    params![hash.as_slice()],
+                )?;
+                Self::insert_new_approved_doc_body_in_tx(
+                    tx, scope_id, &scope_key, plaintext, hash,
+                )?;
+            }
+        } else {
+            // Case 1: new body.
+            Self::insert_new_approved_doc_body_in_tx(tx, scope_id, &scope_key, plaintext, hash)?;
+        }
+
+        Ok(())
+    }
+
+    /// Insert a fresh `body_store` row + a wrap for `scope_id` under
+    /// the supplied `scope_key`. Used by
+    /// [`Self::admit_approved_doc_body_in_tx`] for the new-body and
+    /// orphan-recovery paths.
+    ///
+    /// Free-function rather than `&self`-method because this is pure
+    /// SQL + crypto over the borrowed `tx` — taking `&self` would
+    /// confuse the borrow checker for no benefit (clippy flags it as
+    /// `unused_self`).
+    fn insert_new_approved_doc_body_in_tx(
+        tx: &rusqlite::Transaction<'_>,
+        scope_id: ScopeId,
+        scope_key: &AeadKey,
+        plaintext: &[u8],
+        hash: &ContentHash,
+    ) -> Result<()> {
+        let cek = random_cek();
+        let body_nonce = random_nonce();
+        let aad = body_table_aad(hash);
+        let ciphertext = encrypt_aead(&cek, &body_nonce, plaintext, &aad)?;
+        tx.execute(
+            "INSERT INTO body_store (content_hash, body, nonce, ref_count) \
+             VALUES (?1, ?2, ?3, 1)",
+            params![hash.as_slice(), ciphertext, body_nonce.as_slice()],
+        )?;
+        let wrap_nonce = random_nonce();
+        let wrapped = wrap_cek(scope_key, &cek, &wrap_nonce, hash)?;
+        tx.execute(
+            "INSERT INTO body_store_key_wraps \
+             (content_hash, scope_id, wrapped_cek, nonce) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                hash.as_slice(),
+                scope_id.as_uuid().as_bytes().as_slice(),
+                wrapped,
+                wrap_nonce.as_slice(),
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Load the plaintext payload bytes for `(scope_id, document_id)`.
-    /// Returns `None` if no row exists. Fails with
-    /// [`EvidenceError::Schema`] on a malformed nonce / hash row
-    /// (defensive — a fresh DB should never produce this).
+    /// Returns `None` if no metadata row exists.
+    ///
+    /// As of v12 (Phase 10 Item 6) the read path joins
+    /// `approved_document_payloads` (metadata: content_hash, size,
+    /// updated_at) against the deduplicated `body_store` table via
+    /// the per-scope CEK wrap in `body_store_key_wraps`. Returns
+    /// [`EvidenceError::Schema`] on a malformed nonce / hash row or
+    /// when the metadata row references a content_hash that the
+    /// scope no longer wraps (defensive — a healthy DB should never
+    /// produce this, but a forget-races-rehydrate edge case would
+    /// surface here rather than silently returning corrupt bytes).
     pub fn load_approved_document_payload(
         &self,
         scope_id: ScopeId,
         document_id: uuid::Uuid,
     ) -> Result<Option<Vec<u8>>> {
-        let row: Option<(Vec<u8>, Vec<u8>)> = self
+        let row: Option<Vec<u8>> = self
             .conn
             .query_row(
-                "SELECT nonce, payload FROM approved_document_payloads \
+                "SELECT content_hash FROM approved_document_payloads \
                  WHERE scope_id = ?1 AND document_id = ?2",
                 params![
                     scope_id.as_uuid().as_bytes().as_slice(),
                     document_id.as_bytes().as_slice(),
                 ],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get::<_, Vec<u8>>(0),
             )
             .optional()?;
-        let Some((nonce_bytes, ciphertext)) = row else {
+        let Some(content_hash_bytes) = row else {
             return Ok(None);
         };
-        if nonce_bytes.len() != AEAD_NONCE_LEN {
+        if content_hash_bytes.len() != crypto::CONTENT_HASH_LEN {
             return Err(EvidenceError::Schema(
-                "approved_document_payloads nonce has wrong length",
+                "approved_document_payloads content_hash has wrong length",
             ));
         }
-        let mut nonce = [0u8; AEAD_NONCE_LEN];
-        nonce.copy_from_slice(&nonce_bytes);
-        let key = self.scope_key(scope_id)?;
-        let aad = approved_doc_payload_aad(scope_id, document_id);
-        let plaintext = decrypt_aead(&key, &nonce, &ciphertext, &aad)?;
+        let mut content_hash = [0u8; crypto::CONTENT_HASH_LEN];
+        content_hash.copy_from_slice(&content_hash_bytes);
+        let plaintext = self
+            .load_approved_doc_body(scope_id, &content_hash)?
+            .ok_or(EvidenceError::Schema(
+                "approved_document_payloads row references a body that is no longer wrapped \
+                 for this scope (body_store row gone, or wrap purged before metadata)",
+            ))?;
+        Ok(Some(plaintext))
+    }
+
+    /// Decrypt the `body_store` row for `content_hash` under
+    /// `scope_id`'s CEK wrap. Returns `None` when the wrap or the
+    /// body row is absent — caller decides whether absence is an
+    /// error (e.g. read path) or normal (e.g. cleanup path).
+    fn load_approved_doc_body(
+        &self,
+        scope_id: ScopeId,
+        content_hash: &ContentHash,
+    ) -> Result<Option<Vec<u8>>> {
+        let wrap_row: Option<(Vec<u8>, Vec<u8>)> = self
+            .conn
+            .query_row(
+                "SELECT wrapped_cek, nonce FROM body_store_key_wraps \
+                 WHERE content_hash = ?1 AND scope_id = ?2",
+                params![
+                    content_hash.as_slice(),
+                    scope_id.as_uuid().as_bytes().as_slice(),
+                ],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?;
+        let Some((wrapped_cek, wrap_nonce_bytes)) = wrap_row else {
+            return Ok(None);
+        };
+        if wrap_nonce_bytes.len() != AEAD_NONCE_LEN {
+            return Err(EvidenceError::Schema(
+                "body_store_key_wraps row has malformed nonce",
+            ));
+        }
+        let mut wrap_nonce = [0u8; AEAD_NONCE_LEN];
+        wrap_nonce.copy_from_slice(&wrap_nonce_bytes);
+        let scope_key = self.scope_key(scope_id)?;
+        let cek = unwrap_cek(&scope_key, &wrapped_cek, &wrap_nonce, content_hash)?;
+
+        let body_row: Option<(Vec<u8>, Vec<u8>)> = self
+            .conn
+            .query_row(
+                "SELECT body, nonce FROM body_store WHERE content_hash = ?1",
+                params![content_hash.as_slice()],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?;
+        let Some((ciphertext, body_nonce_bytes)) = body_row else {
+            return Ok(None);
+        };
+        if body_nonce_bytes.len() != AEAD_NONCE_LEN {
+            return Err(EvidenceError::Schema(
+                "body_store row has malformed nonce",
+            ));
+        }
+        let mut body_nonce = [0u8; AEAD_NONCE_LEN];
+        body_nonce.copy_from_slice(&body_nonce_bytes);
+        let aad = body_table_aad(content_hash);
+        let plaintext = decrypt_aead(&cek, &body_nonce, &ciphertext, &aad)?;
         Ok(Some(plaintext))
     }
 
@@ -2990,6 +3350,174 @@ impl EvidenceStore {
         Ok(())
     }
 
+    /// v11→v12 migration (Phase 10 Item 6) — move every existing
+    /// inline approved-document payload ciphertext into the
+    /// deduplicated `body_store` table and drop the legacy `nonce` +
+    /// `payload` columns from `approved_document_payloads`.
+    ///
+    /// Self-detecting + idempotent: inspects the live table shape
+    /// via `PRAGMA table_info` and returns `Ok(())` immediately if
+    /// the legacy columns are already gone (e.g. on a v12 fresh
+    /// database). When the legacy columns exist:
+    ///   1. Read every row's `(scope_id, document_id, nonce,
+    ///      payload, content_hash)` tuple.
+    ///   2. Decrypt the payload under the per-scope DEK with AAD
+    ///      via [`approved_doc_payload_aad`].
+    ///   3. Verify the decrypted plaintext hashes to the stored
+    ///      `content_hash` (defensive; a corrupted row is logged
+    ///      and skipped rather than aborting the whole migration —
+    ///      the row will surface as an orphan at the next
+    ///      `open_store` once the legacy columns are gone and the
+    ///      metadata row points at nothing in `body_store`).
+    ///   4. Admit the plaintext into `body_store` via
+    ///      [`Self::admit_approved_doc_body_in_tx`] so the dedup
+    ///      pipeline naturally collapses identical content across
+    ///      scopes into one body row + N wraps.
+    ///   5. `ALTER TABLE ... DROP COLUMN nonce / payload` to retire
+    ///      the legacy columns.
+    ///
+    /// The whole thing runs inside one SQLCipher transaction so a
+    /// crash mid-migration rolls everything back; the next
+    /// `open_store` retries from the same legacy shape.
+    fn migrate_approved_doc_payloads_to_body_store(&mut self) -> Result<()> {
+        // Detect legacy shape via `PRAGMA table_info`. If the
+        // `payload` column is missing, the table is already in v12
+        // shape and there is nothing to do.
+        let has_payload_column = {
+            let mut stmt = self.conn.prepare(
+                "SELECT 1 FROM pragma_table_info('approved_document_payloads') \
+                 WHERE name = 'payload'",
+            )?;
+            stmt.query_row([], |_| Ok(())).optional()?.is_some()
+        };
+        if !has_payload_column {
+            return Ok(());
+        }
+
+        // Read every legacy row up front so the migration tx does
+        // not hold a long-lived statement open. `Vec<Vec<u8>>` is
+        // intentional — the rows are about to be re-encrypted into
+        // a new shape so we own the bytes from here on.
+        let legacy_rows: Vec<LegacyRow> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT scope_id, document_id, nonce, payload, content_hash \
+                 FROM approved_document_payloads",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (scope_id_bytes, doc_id_bytes, nonce_bytes, ciphertext, content_hash_bytes) =
+                    row?;
+                let scope_id = ScopeId::from_uuid(slice_to_uuid(&scope_id_bytes)?);
+                let document_id = slice_to_uuid(&doc_id_bytes)?;
+                out.push(LegacyRow {
+                    scope_id,
+                    document_id,
+                    nonce_bytes,
+                    ciphertext,
+                    content_hash_bytes,
+                });
+            }
+            out
+        };
+
+        let tx = self.conn.unchecked_transaction()?;
+        for row in &legacy_rows {
+            if row.nonce_bytes.len() != AEAD_NONCE_LEN {
+                tracing::warn!(
+                    scope = %row.scope_id.as_uuid(),
+                    document_id = %row.document_id,
+                    "v11→v12 migration: approved_document_payloads row has malformed nonce; \
+                     skipping (row will be visible as orphan metadata at next open_store)",
+                );
+                continue;
+            }
+            if row.content_hash_bytes.len() != crypto::CONTENT_HASH_LEN {
+                tracing::warn!(
+                    scope = %row.scope_id.as_uuid(),
+                    document_id = %row.document_id,
+                    "v11→v12 migration: approved_document_payloads row has malformed \
+                     content_hash; skipping (row will be visible as orphan metadata at \
+                     next open_store)",
+                );
+                continue;
+            }
+            let mut nonce = [0u8; AEAD_NONCE_LEN];
+            nonce.copy_from_slice(&row.nonce_bytes);
+            let mut stored_hash = [0u8; crypto::CONTENT_HASH_LEN];
+            stored_hash.copy_from_slice(&row.content_hash_bytes);
+
+            // Decrypt under the legacy per-scope DEK + AAD.
+            let scope_key = self.scope_key(row.scope_id)?;
+            let aad = approved_doc_payload_aad(row.scope_id, row.document_id);
+            let plaintext =
+                match decrypt_aead(&scope_key, &nonce, &row.ciphertext, &aad) {
+                    Ok(pt) => pt,
+                    Err(e) => {
+                        tracing::warn!(
+                            scope = %row.scope_id.as_uuid(),
+                            document_id = %row.document_id,
+                            error = %e,
+                            "v11→v12 migration: approved_document_payloads row failed to \
+                             decrypt; skipping (row will be visible as orphan metadata at \
+                             next open_store)",
+                        );
+                        continue;
+                    }
+                };
+
+            // Defensive content_hash recheck: a row whose stored
+            // content_hash does not match its decrypted plaintext
+            // would silently corrupt the body_store dedup index.
+            // Recompute and verify before admitting.
+            let computed = content_hash(&plaintext);
+            if computed != stored_hash {
+                tracing::warn!(
+                    scope = %row.scope_id.as_uuid(),
+                    document_id = %row.document_id,
+                    "v11→v12 migration: approved_document_payloads row has stored content_hash \
+                     that does not match the decrypted plaintext; skipping (row will be \
+                     visible as orphan metadata at next open_store)",
+                );
+                continue;
+            }
+
+            // Admit through the v12 body-store pipeline. Dedup is
+            // automatic: identical content across scopes collapses
+            // to one body row + per-scope wraps.
+            self.admit_approved_doc_body_in_tx(
+                &tx,
+                row.scope_id,
+                &plaintext,
+                &stored_hash,
+            )?;
+        }
+
+        // Retire the legacy inline columns. `ALTER TABLE ... DROP
+        // COLUMN` is supported on SQLite 3.35.0+ and SQLCipher
+        // builds against modern SQLite; both are required by the
+        // substrate so a downlevel SQLCipher would fail open_store
+        // earlier on a SCHEMA mismatch.
+        tx.execute(
+            "ALTER TABLE approved_document_payloads DROP COLUMN payload",
+            [],
+        )?;
+        tx.execute(
+            "ALTER TABLE approved_document_payloads DROP COLUMN nonce",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Wire an [`EmbeddingModel`] into the store so subsequent
     /// [`Self::ingest`] calls populate the `evidence_embeddings`
     /// cache. `model_tag` is stamped on every persisted
@@ -3248,6 +3776,27 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // matches the pre-Item-4 contract where every synthesis
         // output overwrote the prior one with no recoverable trail.
         11 => Ok(()),
+        // v12 (Phase 10 Item 6): destructive shape change to
+        // `approved_document_payloads` — drop the inline `nonce` +
+        // `payload` columns and route the bytes through the
+        // deduplicated `body_store` table. The actual data move +
+        // ALTER TABLE DROP COLUMN run in a post-bootstrap step
+        // (`migrate_approved_doc_payloads_to_body_store` in
+        // `store.rs`) called from `Self::open` once the scope-DEK
+        // cache has been hydrated; that step is self-detecting and
+        // idempotent. This arm is intentionally a no-op so the
+        // bootstrap loop simply walks past v12 — the destructive
+        // work lives where the scope keys are available.
+        //
+        // Pre-v12 databases on a fresh `open_store` still have the
+        // legacy `nonce` + `payload` columns because
+        // `CREATE TABLE IF NOT EXISTS` cannot retract them; the
+        // post-bootstrap step is what actually moves them off.
+        // A v12 fresh database (one whose `user_version` was set
+        // to 12 by the bootstrap path before any data was written)
+        // skips the post-bootstrap step because the legacy columns
+        // never exist.
+        12 => Ok(()),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
         )),
@@ -3501,6 +4050,18 @@ pub(crate) fn clamp_limit_to_sqlite(n: usize) -> i64 {
 /// truncating.
 fn i64_count_to_usize(n: i64) -> usize {
     usize::try_from(n.max(0)).unwrap_or(usize::MAX)
+}
+
+/// Row shape read from a pre-v12 `approved_document_payloads`
+/// table during the v11→v12 migration. Lives at module scope so
+/// `migrate_approved_doc_payloads_to_body_store` can keep its body
+/// flat without tripping clippy's `items_after_statements` lint.
+struct LegacyRow {
+    scope_id: ScopeId,
+    document_id: Uuid,
+    nonce_bytes: Vec<u8>,
+    ciphertext: Vec<u8>,
+    content_hash_bytes: Vec<u8>,
 }
 
 fn slice_to_uuid(bytes: &[u8]) -> Result<Uuid> {

@@ -1,20 +1,22 @@
 //! Integration tests for the `approved_document_payloads` table
-//! (Phase 8 / schema v10).
+//! (Phase 8 / schema v10; reshaped in Phase 10 Item 6 / schema v12
+//! to back the payload bytes with the deduplicated `body_store`
+//! table + per-scope CEK wraps in `body_store_key_wraps`).
 //!
 //! Each test exercises one slice of the contract the FFI surface
 //! (`admit_approved_document`, `revoke_approved_document`,
 //! `list_approved_documents`, and the tenant-synthesis dispatch
 //! materialization step) leans on:
 //!
-//! * AEAD roundtrip under the per-scope DEK with AAD binding
-//!   `(scope_id, document_id)`.
-//! * Upsert overwrites the previous ciphertext / hash / size.
+//! * AEAD roundtrip through the body_store + per-scope wrap pair.
+//! * Upsert overwrites the previous metadata row.
 //! * Point and scope-grain deletes.
 //! * Metadata listing returns id / size / hash without paying the
 //!   decryption cost.
-//! * Tampering with the row key (relocating a ciphertext to a
-//!   different `document_id` or `scope_id`) fails AEAD decryption
-//!   instead of silently aliasing onto a different identity.
+//! * Tampering with the body or wrap ciphertext fails AEAD
+//!   decryption (defense-in-depth #1 + #2).
+//! * Cross-scope content dedup: the same plaintext admitted into N
+//!   scopes produces ONE body row + N wraps.
 
 use evidence_store::{ApprovedDocumentPayloadMeta, EvidenceStore, EvidenceStoreConfig, ScopeId};
 use rusqlite::params;
@@ -237,131 +239,119 @@ fn list_approved_document_payload_meta_returns_size_and_hash_without_decrypting(
 }
 
 #[test]
-fn approved_doc_payload_aad_rejects_cross_document_cipher_relocation() {
-    // Defense-in-depth: an attacker (or a buggy migration) that
-    // copies a ciphertext payload from row (scope, doc_a) into
-    // (scope, doc_b) must NOT be able to silently feed doc_a's
-    // payload into a tenant-synthesis run keyed by doc_b. The AAD
-    // includes the document id, so the AEAD `decrypt_aead` call
-    // surfaces a structured `Crypto` failure on the relocated row.
+fn approved_doc_payload_body_cipher_tampering_fails_aead() {
+    // v12 defense-in-depth #1: the AEAD on every `body_store` row
+    // binds the BLAKE3 content_hash via `body_table_aad`, so an
+    // attacker (or buggy migration) that corrupts the ciphertext
+    // — without also forging a matching nonce + tag under the
+    // randomly-generated CEK — must NOT be able to silently feed
+    // garbage into a tenant-synthesis run.
+    //
+    // Pre-v12 this property was enforced per-row in
+    // `approved_document_payloads` via `approved_doc_payload_aad`;
+    // post-v12 it moves to the shared body table where the same
+    // AAD discipline applies to every Phase-5 body row.
     let (_dir, store) = fresh_store();
     let scope = ScopeId::new_v4();
-    let doc_a = uuid::Uuid::new_v4();
-    let doc_b = uuid::Uuid::new_v4();
+    let doc = uuid::Uuid::new_v4();
 
-    let payload_a = fake_payload(0x99, 1024);
-    let payload_b = fake_payload(0xAA, 1024);
+    let payload = fake_payload(0x99, 1024);
+    let hash = crypto::content_hash(&payload);
     store
-        .save_approved_document_payload(scope, doc_a, &payload_a, &crypto::content_hash(&payload_a))
-        .expect("save a");
-    store
-        .save_approved_document_payload(scope, doc_b, &payload_b, &crypto::content_hash(&payload_b))
-        .expect("save b");
+        .save_approved_document_payload(scope, doc, &payload, &hash)
+        .expect("save");
 
-    // Surgically copy doc_a's ciphertext into doc_b's row. This is
-    // exactly the silent-aliasing attack the AAD is supposed to
-    // prevent.
-    let (nonce_a, payload_a_cipher): (Vec<u8>, Vec<u8>) = store
-        .raw_conn()
-        .query_row(
-            "SELECT nonce, payload FROM approved_document_payloads \
-             WHERE scope_id = ?1 AND document_id = ?2",
-            params![
-                scope.as_uuid().as_bytes().as_slice(),
-                doc_a.as_bytes().as_slice(),
-            ],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .expect("read a");
+    // Flip a single byte of the stored ciphertext. The CEK + the
+    // AEAD tag still claim integrity over the original plaintext +
+    // AAD, so the tag check must reject the modified row.
     store
         .raw_conn()
         .execute(
-            "UPDATE approved_document_payloads SET nonce = ?1, payload = ?2 \
-             WHERE scope_id = ?3 AND document_id = ?4",
-            params![
-                nonce_a.as_slice(),
-                payload_a_cipher.as_slice(),
-                scope.as_uuid().as_bytes().as_slice(),
-                doc_b.as_bytes().as_slice(),
-            ],
+            "UPDATE body_store \
+             SET body = substr(body, 1, length(body) - 1) || x'00' \
+             WHERE content_hash = ?1",
+            params![hash.as_slice()],
         )
-        .expect("relocate cipher");
+        .expect("corrupt body ciphertext");
 
     let err = store
-        .load_approved_document_payload(scope, doc_b)
-        .expect_err("relocated cipher must fail AEAD");
-    // The error kind itself is not part of the public contract;
-    // the load-time check that matters is that we do NOT return
-    // `Ok(Some(payload_a))` from a `doc_b` query.
+        .load_approved_document_payload(scope, doc)
+        .expect_err("tampered body ciphertext must fail AEAD");
     let msg = err.to_string();
     assert!(
         !msg.is_empty(),
-        "AAD mismatch must surface a descriptive error, got empty: {msg}",
+        "body-cipher tamper must surface a descriptive error, got empty: {msg}",
     );
 }
 
 #[test]
-fn approved_doc_payload_aad_rejects_cross_scope_cipher_relocation() {
-    // Same defense-in-depth check as the cross-document test, but
-    // for the scope axis: a ciphertext from scope_a's row must not
-    // decrypt under scope_b's DEK even if the row blob is moved
-    // across (different DEK means the AEAD tag check fails before
-    // AAD enters the picture, but the AAD scope binding is the
-    // belt-and-braces layer that catches a future regression of
-    // scope-key derivation collapse).
+fn approved_doc_payload_wrap_cipher_tampering_fails_aead() {
+    // v12 defense-in-depth #2: the AEAD on every
+    // `body_store_key_wraps` row binds content_hash via `wrap_cek`,
+    // so a wrap relocated to a different content_hash row — or
+    // corrupted in place — must NOT silently unwrap a CEK that
+    // decrypts the original body. The AAD scope binding adds the
+    // belt-and-braces guarantee that a wrap forged by another
+    // scope cannot be unwrapped under this scope's DEK.
     let (_dir, store) = fresh_store();
     let scope_a = ScopeId::new_v4();
     let scope_b = ScopeId::new_v4();
     let doc = uuid::Uuid::new_v4();
 
     let payload = fake_payload(0xBB, 512);
+    let hash = crypto::content_hash(&payload);
     store
-        .save_approved_document_payload(scope_a, doc, &payload, &crypto::content_hash(&payload))
-        .expect("save a");
-    // Plant a second row for scope_b with the same document_id so we
-    // have somewhere to relocate the ciphertext into.
+        .save_approved_document_payload(scope_a, doc, &payload, &hash)
+        .expect("save under scope_a");
+    // Plant a *different* admitted payload under scope_b so the row
+    // we copy onto exists. Reuse the same `doc` id; under v12 the
+    // metadata row is (scope, doc)-keyed but the body is dedup'd by
+    // content_hash so the bodies live in separate `body_store` rows.
+    let placeholder = b"placeholder content for scope_b's metadata row" as &[u8];
+    let placeholder_hash = crypto::content_hash(placeholder);
     store
-        .save_approved_document_payload(
-            scope_b,
-            doc,
-            b"placeholder",
-            &crypto::content_hash(b"placeholder"),
-        )
-        .expect("save b placeholder");
+        .save_approved_document_payload(scope_b, doc, placeholder, &placeholder_hash)
+        .expect("save placeholder under scope_b");
 
-    let (nonce_a, cipher_a): (Vec<u8>, Vec<u8>) = store
+    // Copy scope_a's wrapped CEK over scope_b's wrap. The wrap_cek
+    // AAD binds (content_hash, scope_id) so even though scope_b's
+    // metadata row now points at scope_a's body content, scope_b's
+    // wrap of `placeholder`'s CEK cannot be unwrapped after this
+    // tamper.
+    let (wrapped_a, nonce_a): (Vec<u8>, Vec<u8>) = store
         .raw_conn()
         .query_row(
-            "SELECT nonce, payload FROM approved_document_payloads \
-             WHERE scope_id = ?1 AND document_id = ?2",
+            "SELECT wrapped_cek, nonce FROM body_store_key_wraps \
+             WHERE content_hash = ?1 AND scope_id = ?2",
             params![
+                hash.as_slice(),
                 scope_a.as_uuid().as_bytes().as_slice(),
-                doc.as_bytes().as_slice(),
             ],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .expect("read a");
+        .expect("read scope_a wrap");
     store
         .raw_conn()
         .execute(
-            "UPDATE approved_document_payloads SET nonce = ?1, payload = ?2 \
-             WHERE scope_id = ?3 AND document_id = ?4",
+            "UPDATE body_store_key_wraps \
+             SET wrapped_cek = ?1, nonce = ?2 \
+             WHERE content_hash = ?3 AND scope_id = ?4",
             params![
+                wrapped_a.as_slice(),
                 nonce_a.as_slice(),
-                cipher_a.as_slice(),
+                placeholder_hash.as_slice(),
                 scope_b.as_uuid().as_bytes().as_slice(),
-                doc.as_bytes().as_slice(),
             ],
         )
-        .expect("relocate cipher across scopes");
+        .expect("relocate scope_a wrap into scope_b row");
 
     let err = store
         .load_approved_document_payload(scope_b, doc)
-        .expect_err("cross-scope relocated cipher must fail AEAD");
+        .expect_err("cross-scope wrap relocation must fail AEAD");
     let msg = err.to_string();
     assert!(
         !msg.is_empty(),
-        "cross-scope AAD mismatch must surface a descriptive error",
+        "wrap-cipher tamper must surface a descriptive error, got empty: {msg}",
     );
 }
 
@@ -398,4 +388,226 @@ fn approved_doc_payload_survives_store_close_and_reopen() {
         .expect("list after reopen");
     assert_eq!(meta.len(), 1);
     assert_eq!(meta[0].content_hash, hash);
+}
+
+#[test]
+fn approved_doc_payload_dedups_identical_content_across_scopes() {
+    // v12 contract: admitting identical content into N tenant scopes
+    // costs one `body_store` row + N wraps. Verify that:
+    //   1. Both scopes can decrypt the payload independently.
+    //   2. Only ONE `body_store` row exists for the shared hash.
+    //   3. Exactly N rows exist in `body_store_key_wraps`.
+    let (_dir, store) = fresh_store();
+    let scope_a = ScopeId::new_v4();
+    let scope_b = ScopeId::new_v4();
+    let scope_c = ScopeId::new_v4();
+    let doc = uuid::Uuid::new_v4();
+    let payload = fake_payload(0xDD, 4096);
+    let hash = crypto::content_hash(&payload);
+
+    for scope in [scope_a, scope_b, scope_c] {
+        store
+            .save_approved_document_payload(scope, doc, &payload, &hash)
+            .unwrap_or_else(|e| panic!("save for {}: {e}", scope.as_uuid()));
+    }
+
+    for scope in [scope_a, scope_b, scope_c] {
+        let loaded = store
+            .load_approved_document_payload(scope, doc)
+            .unwrap_or_else(|e| panic!("load for {}: {e}", scope.as_uuid()))
+            .expect("row exists");
+        assert_eq!(
+            loaded,
+            payload,
+            "payload must roundtrip via dedup for {}",
+            scope.as_uuid(),
+        );
+    }
+
+    let body_rows: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM body_store WHERE content_hash = ?1",
+            params![hash.as_slice()],
+            |row| row.get(0),
+        )
+        .expect("count bodies");
+    assert_eq!(body_rows, 1, "dedup must collapse to one body row");
+
+    let wrap_rows: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM body_store_key_wraps WHERE content_hash = ?1",
+            params![hash.as_slice()],
+            |row| row.get(0),
+        )
+        .expect("count wraps");
+    assert_eq!(
+        wrap_rows, 3,
+        "each scope must own its own wrap, three scopes admitted",
+    );
+
+    let ref_count: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT ref_count FROM body_store WHERE content_hash = ?1",
+            params![hash.as_slice()],
+            |row| row.get(0),
+        )
+        .expect("read ref_count");
+    assert_eq!(
+        ref_count, 3,
+        "ref_count tracks total per-scope wrap admissions",
+    );
+}
+
+#[test]
+fn approved_doc_payload_migration_v11_to_v12_round_trips_legacy_payloads() {
+    // Plant a real v11-shape row (inline nonce + payload columns,
+    // PRAGMA user_version = 11), close the store, and verify the
+    // post-bootstrap migration in `Self::open` moves the bytes
+    // through the v12 body-store pipeline and drops the legacy
+    // columns.
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let scope = ScopeId::new_v4();
+    let doc = uuid::Uuid::new_v4();
+    let plaintext = fake_payload(0xEE, 3071);
+    let hash = crypto::content_hash(&plaintext);
+
+    {
+        let store =
+            EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).expect("open");
+        store
+            .write_legacy_approved_doc_payload_for_tests(scope, doc, &plaintext, &hash)
+            .expect("plant legacy row");
+    }
+
+    // Reopen — migration runs as a post-bootstrap step.
+    let store =
+        EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).expect("reopen");
+
+    let loaded = store
+        .load_approved_document_payload(scope, doc)
+        .expect("load after migration")
+        .expect("row exists after migration");
+    assert_eq!(
+        loaded, plaintext,
+        "v11 -> v12 migration must roundtrip plaintext",
+    );
+
+    // The legacy columns must be gone after the migration ran.
+    let has_payload_column: bool = store
+        .raw_conn()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 \
+             FROM pragma_table_info('approved_document_payloads') \
+             WHERE name = 'payload')",
+            [],
+            |row| row.get(0),
+        )
+        .expect("check column");
+    assert!(
+        !has_payload_column,
+        "legacy `payload` column must be dropped after v12 migration",
+    );
+    let has_nonce_column: bool = store
+        .raw_conn()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 \
+             FROM pragma_table_info('approved_document_payloads') \
+             WHERE name = 'nonce')",
+            [],
+            |row| row.get(0),
+        )
+        .expect("check column");
+    assert!(
+        !has_nonce_column,
+        "legacy `nonce` column must be dropped after v12 migration",
+    );
+
+    // body_store + wrap must exist for the migrated row.
+    let body_count: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM body_store WHERE content_hash = ?1",
+            params![hash.as_slice()],
+            |row| row.get(0),
+        )
+        .expect("count body rows");
+    assert_eq!(
+        body_count, 1,
+        "migration must admit one body_store row for the migrated content",
+    );
+    let wrap_count: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM body_store_key_wraps \
+             WHERE content_hash = ?1 AND scope_id = ?2",
+            params![hash.as_slice(), scope.as_uuid().as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .expect("count wraps");
+    assert_eq!(
+        wrap_count, 1,
+        "migration must admit a per-scope wrap for the migrated content",
+    );
+}
+
+#[test]
+fn approved_doc_payload_replace_admits_new_body_and_leaves_old_wrap_for_forget() {
+    // When a scope admits content C1 and then replaces it with C2,
+    // the v12 design intentionally leaves the C1 wrap in place
+    // until `purge_body_key_wraps_for_scope` (forget_scope step 3)
+    // runs. The C2 admission adds a new wrap; the body_store table
+    // ends up with both rows.
+    let (_dir, store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let doc = uuid::Uuid::new_v4();
+
+    let c1 = fake_payload(0x11, 1024);
+    let c2 = fake_payload(0x22, 2048);
+    let h1 = crypto::content_hash(&c1);
+    let h2 = crypto::content_hash(&c2);
+
+    store
+        .save_approved_document_payload(scope, doc, &c1, &h1)
+        .expect("save c1");
+    store
+        .save_approved_document_payload(scope, doc, &c2, &h2)
+        .expect("save c2 (replace)");
+
+    // Read-back must surface c2.
+    let loaded = store
+        .load_approved_document_payload(scope, doc)
+        .expect("load")
+        .expect("row exists");
+    assert_eq!(loaded, c2, "replace must surface the new content");
+
+    // Both body rows present (no eager GC on replace; forget cycle
+    // handles it).
+    for (hash, label) in [(h1, "c1"), (h2, "c2")] {
+        let body_count: i64 = store
+            .raw_conn()
+            .query_row(
+                "SELECT COUNT(*) FROM body_store WHERE content_hash = ?1",
+                params![hash.as_slice()],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|e| panic!("count {label}: {e}"));
+        assert_eq!(body_count, 1, "{label} body row must remain after replace");
+        let wrap_count: i64 = store
+            .raw_conn()
+            .query_row(
+                "SELECT COUNT(*) FROM body_store_key_wraps \
+                 WHERE content_hash = ?1 AND scope_id = ?2",
+                params![hash.as_slice(), scope.as_uuid().as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|e| panic!("count {label} wrap: {e}"));
+        assert_eq!(
+            wrap_count, 1,
+            "{label} per-scope wrap must remain after replace",
+        );
+    }
 }
