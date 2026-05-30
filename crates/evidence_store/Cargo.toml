@@ -53,7 +53,7 @@ rand_core = { workspace = true }
 ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["load-dynamic", "ndarray"] }
 # `fancy-regex` is the pure-Rust regex backend; the default `onig`
 # backend pulls in a C library (libonig) that isn't part of CI.
-tokenizers = { version = "0.21", optional = true, default-features = false, features = ["fancy-regex"] }
+tokenizers = { version = "0.23", optional = true, default-features = false, features = ["fancy-regex"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
