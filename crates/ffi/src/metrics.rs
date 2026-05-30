@@ -76,6 +76,14 @@ pub(crate) struct Metrics {
     pub(crate) pin_total: AtomicU64,
     pub(crate) unpin_total: AtomicU64,
     pub(crate) open_store_total: AtomicU64,
+    /// Total `open_store_with_resolver` calls initiated. Mirrors
+    /// `open_store_total` so operators can see how many cold-boots
+    /// went through the resolver-driven master-key path vs the
+    /// legacy direct-master-key-hex path. A non-trivial ratio in
+    /// favour of `open_store_total` after the resolver consumer
+    /// has shipped is a signal that some host still has not
+    /// migrated.
+    pub(crate) open_store_with_resolver_total: AtomicU64,
     pub(crate) close_store_total: AtomicU64,
     pub(crate) encrypt_total: AtomicU64,
     pub(crate) decrypt_total: AtomicU64,
@@ -379,6 +387,7 @@ counter_inc!(pub(crate) fn inc_list_memories => list_memories_total);
 counter_inc!(pub(crate) fn inc_pin => pin_total);
 counter_inc!(pub(crate) fn inc_unpin => unpin_total);
 counter_inc!(pub(crate) fn inc_open_store => open_store_total);
+counter_inc!(pub(crate) fn inc_open_store_with_resolver => open_store_with_resolver_total);
 counter_inc!(pub(crate) fn inc_close_store => close_store_total);
 counter_inc!(pub(crate) fn inc_encrypt => encrypt_total);
 counter_inc!(pub(crate) fn inc_decrypt => decrypt_total);
@@ -494,6 +503,13 @@ pub struct MetricsSnapshot {
     /// Total `open_store` calls initiated. See the module docs for
     /// why the counter reads as "initiated" and not "completed".
     pub open_store_total: u64,
+    /// Total `open_store_with_resolver` calls initiated. Mirrors
+    /// `open_store_total` for the resolver-driven cold-boot path.
+    /// Added in the v10 surface bump; older snapshots deserialise
+    /// to `0` via `#[serde(default)]` so this field is additive on
+    /// the wire.
+    #[serde(default)]
+    pub open_store_with_resolver_total: u64,
     /// Total `close_store` calls initiated.
     pub close_store_total: u64,
     /// Total `ingest_message` calls initiated.
@@ -813,6 +829,7 @@ pub fn snapshot() -> MetricsSnapshot {
     let m = metrics();
     MetricsSnapshot {
         open_store_total: m.open_store_total.load(Ordering::Relaxed),
+        open_store_with_resolver_total: m.open_store_with_resolver_total.load(Ordering::Relaxed),
         close_store_total: m.close_store_total.load(Ordering::Relaxed),
         ingest_total: m.ingest_total.load(Ordering::Relaxed),
         query_total: m.query_total.load(Ordering::Relaxed),

@@ -132,6 +132,33 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Changed — FFI surface
 
+- Added `open_store_with_resolver(path: String, key_id: String,
+  resolver: Arc<dyn KeyStorageResolver>) -> FfiResult<RuntimeHandle>`
+  on the UniFFI surface. This is the substrate-side consumer of
+  the `KeyStorageResolver` contract — hardware-backed hosts now
+  call `open_store_with_resolver` instead of `open_store(path,
+  master_key_hex)` so the 32-byte master key never enters the
+  host's address space as a long-lived plaintext hex string. The
+  resolver is consulted exactly once during open (the substrate
+  reuses the existing `open_store_inner` path with the resolved
+  hex) and is then stashed on the freshly-allocated runtime so
+  subsequent operations reach the same backing store without a
+  second `set_key_storage_resolver` call. A new
+  `open_store_with_resolver_total` metric counter mirrors
+  `open_store_total` for ratio-tracking. Unknown `key_id`s are
+  re-tagged from the resolver's `NotFound { kind: "key" }`
+  envelope to `NotFound { kind: "master_key" }` so the host can
+  distinguish a master-key provisioning miss from a generic
+  key-id miss; invalid hex from the resolver surfaces as
+  `FfiError::InvalidId` via the shared `parse_master_key_hex`
+  validation; every other `FfiError` from the resolver
+  propagates verbatim. `crates/ffi/src/key_storage.rs` no
+  longer documents the registration as a "forward-compatibility
+  plumbing hook"; `SECURITY.md` §"Key storage" and `README.md`
+  surface-specific list have been updated to reflect the new
+  resolver-driven cold-boot path. N-API wrappers for
+  `set_key_storage_resolver`, `clear_key_storage_resolver`, and
+  `open_store_with_resolver` are deferred to a follow-up PR.
 - Wired `try_init_tracing` through the UniFFI export so iOS /
   Android hosts can install the substrate's
   `Registry::default().with(fmt::Layer).with(EnvFilter)` stack
