@@ -239,10 +239,40 @@ where
     /// the threshold check fires. (The next explicit
     /// [`Self::compact`] call still surfaces the underlying
     /// `SyncError`.)
+    ///
+    /// # Observability
+    ///
+    /// Auto-compaction failures emit a [`tracing::warn`] event
+    /// under the `sync_engine::auto_compact` target with the
+    /// `error` field set to the underlying `SyncError`. Operators
+    /// monitoring the substrate via `tracing-subscriber` /
+    /// Datadog / Honeycomb / etc. see one warn per failed pass
+    /// (so persistent failures show up as a rising rate, not as
+    /// silence). The op-log remains untouched on failure (the
+    /// `OpLog::compact` contract preserves the original log when
+    /// `materialise` errors), so the *next* mutation still trips
+    /// the threshold and emits another warn — repeated failures
+    /// are inherently visible, not silent.
     fn maybe_auto_compact(&mut self) {
         if let Some(threshold) = self.compact_threshold {
             if self.log.ops.len() > threshold {
-                let _ = self.compact();
+                if let Err(err) = self.compact() {
+                    // Auto-compaction is best-effort housekeeping;
+                    // the mutator's `Ok(())` has already been
+                    // returned by the time we get here, so we
+                    // cannot propagate the failure. We surface it
+                    // via tracing so operator dashboards (logs ->
+                    // metric pipelines) can alert on a rising
+                    // failure rate rather than discover the
+                    // unbounded op-log growth at the next OOM.
+                    tracing::warn!(
+                        target: "sync_engine::auto_compact",
+                        op_log_len = self.log.ops.len(),
+                        threshold = threshold,
+                        error = %err,
+                        "auto-compaction pass failed; op-log will keep growing until the next successful compact() call"
+                    );
+                }
             }
         }
     }

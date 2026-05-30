@@ -101,9 +101,31 @@ impl NitroTeeRuntime {
     }
 }
 
-impl TeeRuntime for NitroTeeRuntime {
-    fn quote(&self, enclave_image: &[u8], nonce: &[u8]) -> AttestationReport {
-        // 1. Open NSM device.
+/// RAII guard that owns a `/dev/nsm` file descriptor returned by
+/// [`driver::nsm_init`] and calls [`driver::nsm_exit`] on drop.
+///
+/// Why a guard instead of an inline `driver::nsm_exit(fd)`: panics
+/// can fire at *any* point between `nsm_init` and `nsm_exit` —
+/// including from inside the nsm-api crate's
+/// [`driver::nsm_process_request`] itself (e.g. an upstream
+/// `expect` on a malformed CBOR response, or a `From<i32>`
+/// implementation that asserts on an out-of-range error code).
+/// Without the guard, any such panic skips `nsm_exit` and leaks
+/// the host-side fd into the next attestation call (and, over
+/// time, exhausts the enclave's fd table — even more painful
+/// inside the very limited Nitro filesystem). With the guard,
+/// stack unwinding (or `abort=panic`'s equivalent landing pads
+/// for trait-object Drop impls) still runs the destructor.
+struct NsmGuard {
+    fd: i32,
+}
+
+impl NsmGuard {
+    /// Open `/dev/nsm` and wrap the resulting fd. Panics if the
+    /// driver reports the device is unavailable — see
+    /// [`NitroTeeRuntime::quote`] for the "panic on deployment
+    /// bug" rationale.
+    fn open() -> Self {
         let fd = driver::nsm_init();
         assert!(
             fd >= 0,
@@ -112,6 +134,30 @@ impl TeeRuntime for NitroTeeRuntime {
              but /dev/nsm is unavailable — this build must only run inside \
              a Nitro Enclave"
         );
+        Self { fd }
+    }
+
+    fn fd(&self) -> i32 {
+        self.fd
+    }
+}
+
+impl Drop for NsmGuard {
+    fn drop(&mut self) {
+        // `nsm_exit` is documented as infallible (it issues a
+        // single `close` on the kernel-side fd); we cannot
+        // propagate an error from a destructor anyway.
+        driver::nsm_exit(self.fd);
+    }
+}
+
+impl TeeRuntime for NitroTeeRuntime {
+    fn quote(&self, enclave_image: &[u8], nonce: &[u8]) -> AttestationReport {
+        // 1. Open NSM device through an RAII guard. The guard's
+        //    Drop impl calls `nsm_exit` even if any of the
+        //    subsequent steps panic — including a panic from
+        //    inside `nsm_process_request` itself.
+        let guard = NsmGuard::open();
 
         // 2. Send an Attestation request. We bind the caller's
         //    enclave_image bytes as user_data and the caller's
@@ -125,10 +171,14 @@ impl TeeRuntime for NitroTeeRuntime {
             nonce: Some(serde_bytes::ByteBuf::from(nonce.to_vec())),
             public_key: None,
         };
-        let response = driver::nsm_process_request(fd, request);
-        // Always release the fd before we surface a panic so we do
-        // not leak the file handle into the next attestation call.
-        driver::nsm_exit(fd);
+        let response = driver::nsm_process_request(guard.fd(), request);
+        // Drop the guard explicitly here — the request is over,
+        // and we want the fd back in the table before we start
+        // CBOR-parsing the (potentially large) response document.
+        // If any of the parse / decode steps below panic, the
+        // fd has already been returned to the kernel, so the
+        // enclave does not leak a host-side handle on unwind.
+        drop(guard);
 
         let document_bytes: Vec<u8> = match response {
             Response::Attestation { document } => document,
