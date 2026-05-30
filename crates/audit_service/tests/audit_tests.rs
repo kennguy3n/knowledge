@@ -207,3 +207,90 @@ fn key_destruction_event_is_recordable() {
     assert_eq!(recorded.scope_id, Some(scope));
     assert!(matches!(recorded.actor, Actor::System));
 }
+
+/// Round-trips a populated [`AuditLog`] through serde_json. The
+/// derived `Serialize` writes only `entries` + `next_sequence`
+/// (the four `*_index` fields are `#[serde(skip)]`); the custom
+/// `Deserialize` rehydrates the indexes from `entries` via
+/// `rebuild_indexes()`. This test pins the rebuild path end-to-end
+/// — i.e. that every entry remains queryable by scope, action,
+/// actor, and id after a serialize-and-deserialise round-trip,
+/// which is the only invariant `rebuild_indexes()` is responsible
+/// for and which would silently regress if the field-disjoint
+/// borrow refactor lost an index field.
+#[test]
+fn deserialize_round_trip_rebuilds_all_indexes() {
+    let mut log = AuditLog::new();
+    let scope_a = ScopeId::new_v4();
+    let scope_b = ScopeId::new_v4();
+    let alice = Uuid::new_v4();
+    let bob = Uuid::new_v4();
+    let agent = Uuid::new_v4();
+
+    // Mix of scopes, actions, actor kinds (including System,
+    // which is never indexed by actor), and rich `details`
+    // payloads to exercise every index branch in
+    // `index_entry_into`.
+    let id_a = log.append(entry(AuditActionType::CanonicalPromotion, scope_a, alice));
+    let _id_b = log.append(entry(AuditActionType::Export, scope_a, bob));
+    let id_c = log.append(
+        AuditEntryBuilder::new()
+            .actor(Actor::Agent(agent))
+            .action(AuditActionType::AgentProposalPromoted)
+            .target(TargetRef::new(TargetType::Tenant, Uuid::new_v4()))
+            .scope(scope_b)
+            .details(serde_json::json!({ "rich": vec![0u8; 1024] }))
+            .build()
+            .unwrap(),
+    );
+    let _id_d = log.append({
+        AuditEntryBuilder::new()
+            .actor(Actor::System)
+            .action(AuditActionType::KeyDestruction)
+            .target(TargetRef::new(TargetType::Key, Uuid::new_v4()))
+            .scope(scope_b)
+            .build()
+            .unwrap()
+    });
+
+    let bytes = serde_json::to_vec(&log).expect("AuditLog serialises cleanly");
+    let restored: AuditLog = serde_json::from_slice(&bytes).expect("AuditLog deserialises cleanly");
+
+    // id_index — by-id lookup must work after rebuild.
+    assert_eq!(restored.get(id_a).map(|e| e.id), Some(id_a));
+    assert_eq!(restored.get(id_c).map(|e| e.id), Some(id_c));
+    assert_eq!(restored.len(), 4);
+
+    // scope_index — query by scope returns only matching entries.
+    let q_scope_a = AuditQuery::default().with_scope(scope_a);
+    let by_scope_a: Vec<_> = restored.query(&q_scope_a).collect();
+    assert_eq!(by_scope_a.len(), 2);
+    let q_scope_b = AuditQuery::default().with_scope(scope_b);
+    let by_scope_b: Vec<_> = restored.query(&q_scope_b).collect();
+    assert_eq!(by_scope_b.len(), 2);
+
+    // action_index — query by action returns only matching entries.
+    let q_action = AuditQuery::default().with_action(AuditActionType::AgentProposalPromoted);
+    let by_action: Vec<_> = restored.query(&q_action).collect();
+    assert_eq!(by_action.len(), 1);
+    assert_eq!(by_action[0].id, id_c);
+
+    // actor_index — `User` / `Agent` actors are indexed; `System`
+    // actors deliberately are not (matching query semantics).
+    let q_actor_alice = AuditQuery::default().with_actor(alice);
+    let by_actor_alice: Vec<_> = restored.query(&q_actor_alice).collect();
+    assert_eq!(by_actor_alice.len(), 1);
+    let q_actor_agent = AuditQuery::default().with_actor(agent);
+    let by_actor_agent: Vec<_> = restored.query(&q_actor_agent).collect();
+    assert_eq!(by_actor_agent.len(), 1);
+
+    // sequence numbers and other entry-level fields survive too.
+    assert_eq!(
+        restored
+            .entries()
+            .iter()
+            .map(|e| e.sequence)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 3]
+    );
+}

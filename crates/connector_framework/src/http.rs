@@ -361,6 +361,48 @@ mod blocking_impl {
     /// failures (transport-level errors and `is_transient()`
     /// responses) up to [`RetryPolicy::max_retries`] times,
     /// respecting `Retry-After` on 429 / 503.
+    ///
+    /// # Rate-limit accounting contract
+    ///
+    /// The optional [`ProviderRateLimiter`] is consumed **once per
+    /// logical [`HttpTransport::execute`] call** — i.e. one token
+    /// is deducted from the provider's bucket per *logical*
+    /// operation requested by the caller, regardless of how many
+    /// *physical* HTTP attempts that operation expands into via
+    /// the retry loop. The deduction happens *before* the first
+    /// physical attempt; subsequent retries on the same logical
+    /// call do not consume additional tokens.
+    ///
+    /// This intentional asymmetry exists because:
+    ///
+    /// * Provider-published quotas (e.g. Slack's `Tier 3` 50 rpm,
+    ///   Notion's 3 rps) are documented per *successful logical
+    ///   request*; the provider's *own* 429 / Retry-After
+    ///   mechanism already throttles per *physical* attempt, so
+    ///   double-counting attempts here would conflict with the
+    ///   provider's intent.
+    /// * Charging retries against the bucket would let a single
+    ///   misbehaving endpoint exhaust the entire provider quota
+    ///   via repeated 429s, starving other endpoints on the same
+    ///   host (e.g. a flaky `users.list` would starve `chat.post`).
+    /// * Operators reason about cost in terms of *logical
+    ///   operations performed by the substrate*, not the
+    ///   `reqwest`-level packet count, so per-logical accounting
+    ///   matches what they see in dashboards and bill lines.
+    ///
+    /// Implications for operators:
+    ///
+    /// * If your bucket is calibrated to a provider's published
+    ///   per-second quota, actual outbound QPS *can* briefly
+    ///   exceed it during a retry burst — the spike is bounded
+    ///   by `1 + RetryPolicy::max_retries` extra packets per
+    ///   logical call, and is *intentionally* gated by the
+    ///   provider's own back-pressure rather than the local
+    ///   bucket.
+    /// * If you need strict per-packet rate-limiting (e.g. for a
+    ///   provider that itself bills per attempt), use
+    ///   `RetryPolicy::default()` with `max_retries = 0`, which
+    ///   collapses logical-and-physical 1:1.
     #[derive(Debug, Clone)]
     pub struct BlockingHttpTransport {
         client: reqwest::blocking::Client,

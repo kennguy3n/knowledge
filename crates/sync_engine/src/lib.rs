@@ -139,6 +139,78 @@ where
     pub set: AddWinsSet<T>,
     /// History of supersession events (predecessor → successor).
     pub supersessions: Vec<(T, T)>,
+    /// Authoring engine's [`SyncEngine::compact_threshold`] at
+    /// snapshot time, encoded as a tagged
+    /// [`CompactThresholdSetting`] so the snapshot wire format
+    /// can unambiguously distinguish "field absent" (old
+    /// snapshot) from "field present and explicitly disabled".
+    ///
+    /// A flat `Option<Option<usize>>` would collide on the wire:
+    /// `Some(None)` serialises to `null`, which deserialises back
+    /// to the outer `None`, losing the "explicitly disabled"
+    /// signal. The tagged enum (`enabled` / `disabled`) preserves
+    /// the trichotomy through `serde_json`:
+    ///
+    /// * Outer `None` — the field was absent on the wire
+    ///   (pre-versioning snapshot). [`SyncEngine::restore_snapshot`]
+    ///   falls back to [`DEFAULT_COMPACT_THRESHOLD`], preserving
+    ///   the original behaviour for old on-disk snapshots.
+    /// * Outer `Some(Enabled(n))` — the authoring engine had an
+    ///   explicit threshold of `n`; the restorer re-applies it
+    ///   via [`SyncEngine::with_compact_threshold(Some(n))`].
+    /// * Outer `Some(Disabled)` — the authoring engine had
+    ///   auto-compaction explicitly disabled
+    ///   (`with_compact_threshold(None)`); the restorer re-applies
+    ///   the disabled state via
+    ///   [`SyncEngine::with_compact_threshold(None)`].
+    ///
+    /// `#[serde(default)]` populates the outer `None` cleanly on
+    /// deserialise of pre-versioning payloads;
+    /// `skip_serializing_if = "Option::is_none"` keeps the field
+    /// out of newly-written snapshots only if it was deliberately
+    /// omitted (which [`SyncEngine::snapshot`] never does — it
+    /// always populates the field from the engine's configured
+    /// value, so snapshot/restore round-trips are lossless).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_threshold: Option<CompactThresholdSetting>,
+}
+
+/// Tagged wire encoding of [`SyncEngine`]'s `compact_threshold`
+/// runtime configuration inside [`EngineSnapshot`]. Distinguishes
+/// the two on-engine states (`Some(n)` enabled, `None` disabled)
+/// without colliding with "field absent on the wire" the way a
+/// flat `Option<usize>` would.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", content = "value", rename_all = "snake_case")]
+pub enum CompactThresholdSetting {
+    /// Auto-compaction is enabled, with the carried threshold.
+    Enabled(usize),
+    /// Auto-compaction is explicitly disabled — the engine will
+    /// only compact when [`SyncEngine::compact`] is called
+    /// directly.
+    Disabled,
+}
+
+impl CompactThresholdSetting {
+    /// Wrap an engine-level `compact_threshold` (`Option<usize>`)
+    /// in its tagged snapshot encoding. `Some(n)` becomes
+    /// `Enabled(n)`; `None` becomes `Disabled`.
+    pub fn from_engine(value: Option<usize>) -> Self {
+        match value {
+            Some(n) => Self::Enabled(n),
+            None => Self::Disabled,
+        }
+    }
+
+    /// Unwrap the tagged snapshot encoding back into an
+    /// engine-level `Option<usize>` suitable for
+    /// [`SyncEngine::with_compact_threshold`].
+    pub fn into_engine(self) -> Option<usize> {
+        match self {
+            Self::Enabled(n) => Some(n),
+            Self::Disabled => None,
+        }
+    }
 }
 
 /// CRDT-based delta sync engine.
@@ -605,6 +677,14 @@ where
             log: self.log.clone(),
             set: set.clone(),
             supersessions: supersessions.clone(),
+            // Always emit the configured threshold so a same-
+            // version restore round-trips losslessly. Old
+            // readers ignore the field (it has
+            // `#[serde(default)]`). The tagged enum encoding
+            // distinguishes "enabled with value" from
+            // "explicitly disabled" without ambiguity — see the
+            // doc on [`EngineSnapshot::compact_threshold`].
+            compact_threshold: Some(CompactThresholdSetting::from_engine(self.compact_threshold)),
         };
         serde_json::to_vec(&snap)
             .map_err(|_| SyncError::Serialisation("could not serialise engine snapshot"))
@@ -629,17 +709,16 @@ where
     /// peer in the cluster. Use [`Self::bootstrap_from_snapshot`]
     /// for that case.
     ///
-    /// **Note on `compact_threshold`**: the auto-compaction trigger
-    /// is **runtime configuration**, not persistent engine state —
-    /// it is *not* serialised into [`EngineSnapshot`]. The restored
-    /// engine therefore starts with the default threshold
-    /// ([`DEFAULT_COMPACT_THRESHOLD`]); callers that rely on a
-    /// non-default value (e.g. set via
-    /// [`Self::with_compact_threshold`]) must re-apply it after
-    /// `restore_snapshot` returns. This is by design: the threshold
-    /// is a tuning knob, not part of the engine's CRDT semantics,
-    /// and operators may legitimately want to change it between
-    /// runs.
+    /// **Note on `compact_threshold`**: a snapshot carries the
+    /// authoring engine's configured threshold in its
+    /// [`EngineSnapshot::compact_threshold`] field, so a
+    /// same-version snapshot/restore round-trip preserves the
+    /// threshold losslessly (a custom value re-applies; an
+    /// explicit `None` re-applies as disabled). Snapshots
+    /// produced by an older engine that did not carry the field
+    /// fall back to [`DEFAULT_COMPACT_THRESHOLD`] — this is the
+    /// previous behaviour and so is fully back-compatible with
+    /// on-disk snapshots written before the field was added.
     pub fn restore_snapshot(bytes: &[u8]) -> Result<Self>
     where
         T: for<'de> Deserialize<'de> + Serialize,
@@ -653,7 +732,16 @@ where
             ));
         }
 
-        let engine = Self::from_log(snap.replica_id, snap.log);
+        let mut engine = Self::from_log(snap.replica_id, snap.log);
+        // Re-apply the authoring engine's compact_threshold if it
+        // was preserved in the snapshot. Outer `None` = field
+        // absent on the wire (pre-versioning snapshot) → leave
+        // the default in place. Outer `Some(setting)` = present
+        // → re-apply (`setting` carries the explicit enabled
+        // value or the explicit "disabled" state).
+        if let Some(setting) = snap.compact_threshold {
+            engine = engine.with_compact_threshold(setting.into_engine());
+        }
         *engine.cached_state.borrow_mut() = Some((snap.set, snap.supersessions));
         engine.cache_watermark.set(engine.log.ops.len());
         Ok(engine)
@@ -676,11 +764,16 @@ where
     /// so the receiver does not accept stale deltas authored
     /// before the author's last compaction.
     ///
-    /// Same `compact_threshold` caveat as
-    /// [`Self::restore_snapshot`]: the bootstrapped engine starts
-    /// with [`DEFAULT_COMPACT_THRESHOLD`] regardless of what the
-    /// snapshot author had configured. Callers that need a
-    /// non-default threshold must re-apply it after this returns.
+    /// Like [`Self::restore_snapshot`], the bootstrapped engine
+    /// inherits the authoring engine's `compact_threshold` from
+    /// the snapshot if the snapshot carries it (snapshots
+    /// produced by this or any newer engine always do; snapshots
+    /// produced by an older engine fall back to
+    /// [`DEFAULT_COMPACT_THRESHOLD`]). The inherited value is a
+    /// reasonable starting point for the new peer, but operators
+    /// running a different cluster-wide compaction policy should
+    /// re-apply [`Self::with_compact_threshold`] after this
+    /// returns to override the inherited value.
     pub fn bootstrap_from_snapshot(bytes: &[u8]) -> Result<Self>
     where
         T: for<'de> Deserialize<'de> + Serialize,
@@ -720,7 +813,13 @@ where
         }
         local_log.compaction_epoch = snap.log.compaction_epoch;
 
-        let engine = Self::from_log(new_replica_id, local_log);
+        let mut engine = Self::from_log(new_replica_id, local_log);
+        // Inherit the authoring engine's compact_threshold (if
+        // the snapshot carried one) — see
+        // [`Self::bootstrap_from_snapshot`] for the rationale.
+        if let Some(setting) = snap.compact_threshold {
+            engine = engine.with_compact_threshold(setting.into_engine());
+        }
         *engine.cached_state.borrow_mut() = Some((snap.set, snap.supersessions));
         engine.cache_watermark.set(engine.log.ops.len());
         Ok(engine)
@@ -929,6 +1028,98 @@ mod auto_compact_tests {
             set.elements_count(),
             total_mutations,
             "all live values survived"
+        );
+    }
+
+    /// Snapshot / restore round-trip preserves a non-default
+    /// `compact_threshold`. Pre-fix, the restorer always reset to
+    /// [`DEFAULT_COMPACT_THRESHOLD`], silently dropping any
+    /// operator-set value.
+    #[test]
+    fn snapshot_round_trip_preserves_non_default_compact_threshold() {
+        let mut engine: SyncEngine<u64> = SyncEngine::new().with_compact_threshold(Some(42));
+        engine.add(1);
+        engine.add(2);
+        let bytes = engine.snapshot().unwrap();
+        let restored: SyncEngine<u64> = SyncEngine::restore_snapshot(&bytes).unwrap();
+        assert_eq!(
+            restored.compact_threshold(),
+            Some(42),
+            "non-default threshold must survive snapshot/restore round-trip"
+        );
+    }
+
+    /// Snapshot / restore round-trip preserves the explicit
+    /// `None` (auto-compaction disabled) setting. Pre-fix, the
+    /// restorer always reset to [`DEFAULT_COMPACT_THRESHOLD`],
+    /// silently re-enabling auto-compaction for an engine the
+    /// operator had explicitly disabled.
+    #[test]
+    fn snapshot_round_trip_preserves_explicit_disabled_compact_threshold() {
+        let mut engine: SyncEngine<u64> = SyncEngine::new().with_compact_threshold(None);
+        engine.add(1);
+        let bytes = engine.snapshot().unwrap();
+        let restored: SyncEngine<u64> = SyncEngine::restore_snapshot(&bytes).unwrap();
+        assert_eq!(
+            restored.compact_threshold(),
+            None,
+            "explicit `None` (auto-compaction disabled) must survive snapshot/restore"
+        );
+    }
+
+    /// Snapshots produced by a pre-versioning engine (no
+    /// `compact_threshold` field on the wire) must still
+    /// deserialise correctly and fall back to
+    /// [`DEFAULT_COMPACT_THRESHOLD`]. Simulated by snapshotting,
+    /// stripping the field from the wire JSON, then restoring.
+    #[test]
+    fn restore_falls_back_to_default_for_pre_versioning_snapshot() {
+        let mut engine: SyncEngine<u64> = SyncEngine::new().with_compact_threshold(Some(42));
+        engine.add(1);
+        let bytes = engine.snapshot().unwrap();
+
+        // Strip the `compact_threshold` field from the wire JSON
+        // to simulate a snapshot written by an older engine that
+        // did not know about the field.
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        value
+            .as_object_mut()
+            .expect("snapshot is a JSON object at the top level")
+            .remove("compact_threshold");
+        let stripped = serde_json::to_vec(&value).unwrap();
+
+        let restored: SyncEngine<u64> = SyncEngine::restore_snapshot(&stripped).unwrap();
+        assert_eq!(
+            restored.compact_threshold(),
+            Some(DEFAULT_COMPACT_THRESHOLD),
+            "pre-versioning snapshot must fall back to the default threshold, \
+             not silently re-apply some stale value"
+        );
+    }
+
+    /// `bootstrap_from_snapshot_with_replica_id` inherits the
+    /// snapshot's `compact_threshold` (when present) under the
+    /// receiver's own `replica_id`. Pre-fix, the bootstrapped
+    /// engine always reset to [`DEFAULT_COMPACT_THRESHOLD`].
+    #[test]
+    fn bootstrap_inherits_compact_threshold_from_snapshot() {
+        let mut author: SyncEngine<u64> = SyncEngine::new().with_compact_threshold(Some(7));
+        author.add(1);
+        author.add(2);
+        let bytes = author.snapshot().unwrap();
+
+        let receiver_id = Uuid::new_v4();
+        let receiver: SyncEngine<u64> =
+            SyncEngine::bootstrap_from_snapshot_with_replica_id(&bytes, receiver_id).unwrap();
+        assert_eq!(
+            receiver.compact_threshold(),
+            Some(7),
+            "bootstrap must inherit the snapshot's compact_threshold as a starting point"
+        );
+        assert_eq!(
+            receiver.replica_id(),
+            receiver_id,
+            "bootstrap must keep the receiver's own replica_id, not the author's"
         );
     }
 }
