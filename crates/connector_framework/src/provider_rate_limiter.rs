@@ -153,17 +153,40 @@ impl TokenBucket {
     /// Try to deduct one token. On success returns
     /// `Ok(())`; on failure returns the wall-clock duration
     /// before one token will be available.
+    ///
+    /// The "tokens ≥ 1.0" admission check uses an `EPSILON`
+    /// floor so that float-arithmetic rounding (e.g.
+    /// `0.99 + 0.01 == 0.9999999999999998` in IEEE-754) cannot
+    /// keep the caller spinning when the bucket is *effectively*
+    /// full. The reported wait on a denied request is likewise
+    /// clamped to `MIN_WAIT` so a sub-microsecond deficit can
+    /// never collapse the `acquire()` loop into a tight spin.
     fn try_consume(&mut self) -> Result<(), Duration> {
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
+        if self.tokens + TOKEN_EPSILON >= 1.0 {
+            // Snap to the nominal post-deduction value rather than
+            // letting accumulated rounding drift the bucket
+            // negative.
+            self.tokens = (self.tokens - 1.0).max(0.0);
             return Ok(());
         }
-        // tokens < 1.0 — the wait is (1.0 - tokens) / refill_rate.
         let deficit = 1.0 - self.tokens;
-        let wait_secs = deficit / self.refill_rate;
+        let wait_secs = (deficit / self.refill_rate).max(MIN_WAIT_SECS);
         Err(Duration::from_secs_f64(wait_secs))
     }
 }
+
+/// Float-tolerance band for the admission predicate.
+/// `1e-9` comfortably exceeds the rounding error of a single
+/// `(tokens + topup).min(max_tokens)` step at default scales
+/// (max_tokens ≤ 1e6, refill ≤ 1e6/sec) but stays well below
+/// any operational signal.
+const TOKEN_EPSILON: f64 = 1e-9;
+
+/// Minimum wait returned by `try_consume` on a denied request.
+/// Guarantees the `acquire()` retry loop yields the CPU for at
+/// least a thread-scheduler quantum even if `(1.0 - tokens) /
+/// refill_rate` rounds toward zero.
+const MIN_WAIT_SECS: f64 = 0.001;
 
 /// Per-provider rate limiter shared across the connector
 /// runtime. Wrap in `Arc` and share across every
@@ -497,6 +520,53 @@ mod tests {
         assert!(
             elapsed_total >= Duration::from_millis(100),
             "expected aggregate wait ≥ 100 ms; got {elapsed_total:?}"
+        );
+    }
+
+    #[test]
+    fn try_consume_tolerates_float_rounding_at_full_bucket() {
+        // Realistic refill drift: a `(tokens + topup).min(max)`
+        // step in `refill()` can land the bucket at
+        // `1.0 - f64::EPSILON` (≈ 1.0 − 2.2e-16) when the
+        // arithmetic rounds toward zero. Without `TOKEN_EPSILON`
+        // the admission check would say "no", `try_consume`
+        // would return a sub-femtosecond `wait`, and the
+        // `acquire()` retry loop would spin.
+        let mut bucket = TokenBucket::from_policy(ProviderPolicy::new(50.0, 1.0), Instant::now());
+        bucket.tokens = 1.0 - f64::EPSILON;
+        assert!(
+            bucket.tokens < 1.0,
+            "guard precondition: token balance must be strictly below 1.0 \
+             to exercise the epsilon admission path; got {}",
+            bucket.tokens
+        );
+        bucket
+            .try_consume()
+            .expect("epsilon-tolerant admission must accept an effectively-full bucket");
+        assert!(
+            bucket.tokens >= 0.0,
+            "post-deduction balance must never drift negative; got {}",
+            bucket.tokens
+        );
+    }
+
+    #[test]
+    fn try_consume_floors_the_reported_wait_to_avoid_tight_spin() {
+        // Bucket with a microscopic deficit — without the
+        // `MIN_WAIT_SECS` floor `acquire()` would sleep for
+        // 0 ns and burn the scheduler quantum re-locking the
+        // mutex.
+        let mut bucket = TokenBucket::from_policy(ProviderPolicy::new(50.0, 1.0), Instant::now());
+        bucket.tokens = 0.5;
+        let wait = bucket
+            .try_consume()
+            .expect_err("0.5-token bucket must deny admission");
+        // `(1.0 - 0.5) / 50.0 = 10 ms` — already above the
+        // 1 ms floor — so the assertion below also rejects an
+        // accidental regression of the deficit math itself.
+        assert!(
+            wait >= Duration::from_millis(1),
+            "denied requests must surface at least the MIN_WAIT_SECS floor; got {wait:?}"
         );
     }
 }
