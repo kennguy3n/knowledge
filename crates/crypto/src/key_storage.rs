@@ -40,9 +40,12 @@
 //! the host shell — see `crates/ffi/src/key_storage.rs`'s
 //! `KeyStorageResolver` for the cross-language contract.
 
+#[cfg(any(test, feature = "test-support"))]
 use std::collections::HashMap;
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::Mutex;
 
+#[cfg(any(test, feature = "test-support"))]
 use zeroize::Zeroize;
 
 use crate::errors::CryptoError;
