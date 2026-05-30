@@ -682,11 +682,24 @@ pub fn configure_sync_schedule(
 /// default cadence + auto-synth.
 ///
 /// To return an instance to the pure-defaults state (no policy
-/// override **and** no auto-synth), call [`clear_sync_schedule`]
-/// followed by
-/// `configure_sync_auto_synthesize(handle, instance_id, false)`.
-/// Note that [`clear_sync_schedule`] alone preserves the
-/// `auto_synthesize` flag — see its docs for the rationale.
+/// override **and** no auto-synth), call **in this order**:
+///
+/// 1. `configure_sync_auto_synthesize(handle, instance_id, false)`
+/// 2. [`clear_sync_schedule(handle, instance_id)`](clear_sync_schedule)
+///
+/// The order matters. [`clear_sync_schedule`] preserves the
+/// `auto_synthesize` flag by re-inserting a defaults-seeded policy
+/// when it was `true`, so calling `clear` *first* leaves a
+/// defaults-seeded entry behind and a subsequent
+/// `configure_sync_auto_synthesize(false)` only mutates that
+/// entry's flag — `policy_override_count` stays at 1. Setting
+/// `auto_synthesize = false` *before* `clear` lets `clear` see
+/// `prior_auto_synth = false` and remove the entry entirely,
+/// dropping `policy_override_count` to 0. See
+/// [`clear_sync_schedule`]'s "Auto-synthesis interaction" section
+/// for the underlying mechanic and the integration test
+/// `clear_sync_schedule_preserves_auto_synthesize` for a
+/// runnable example of both orderings.
 ///
 /// # Errors
 ///

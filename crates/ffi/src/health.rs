@@ -571,7 +571,7 @@ fn synthesis_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
         detail: Some(format!(
             "engine={}, windows={total_windows}, objects={synthesis_objects}, \
              domain_memories={domain_count}, tenant_memories={tenant_count}, \
-             scope_bindings={}, cooldowns={cooldown_count}",
+             scope_bindings={}, single_tenant={}, cooldowns={cooldown_count}",
             if engine_configured {
                 "configured"
             } else {
@@ -582,6 +582,7 @@ fn synthesis_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
             } else {
                 "unconfigured".to_string()
             },
+            rt.synthesis_single_tenant,
         )),
         adapters: None,
     }
