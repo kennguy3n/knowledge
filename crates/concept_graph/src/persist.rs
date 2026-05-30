@@ -514,15 +514,31 @@ impl PersistentConceptGraph {
 
     /// Resolve every persisted edge incident to `node` for `scope`
     /// directly from disk, without loading the full graph into
-    /// memory. Returns the decrypted edges in `created_at` order;
-    /// duplicates are deduped by edge id (a self-loop satisfies both
-    /// `from_id = ?2` and `to_id = ?2` and would otherwise be
-    /// returned twice).
+    /// memory. Returns the decrypted edges in `created_at` order.
     ///
     /// This is the read path power-user devices use after
     /// [`Self::load_scope_paginated`]: the in-memory graph holds
     /// only the loaded window, but neighbour expansion for a single
     /// node can still resolve through this method.
+    ///
+    /// ## Dedup contract
+    ///
+    /// The returned `Vec<ConceptEdge>` is guaranteed to contain
+    /// each `EdgeId` at most once, even though the current SQL
+    /// (`WHERE (from_node = ?2 OR to_node = ?2)`) already
+    /// satisfies that property — SQLite evaluates `OR` row-by-row
+    /// and so a row matching both predicates (a self-loop)
+    /// appears exactly once. The HashSet-based dedup is therefore
+    /// **defensive against future refactors**, not load-bearing
+    /// for the current query: rewriting the SELECT as a UNION of
+    /// two single-side index lookups (a common refactor once the
+    /// `from_node` and `to_node` columns gain separate covering
+    /// indexes), or a JOIN against an edge-side lookup table,
+    /// would otherwise silently double up self-loop rows and
+    /// quietly break callers that walk the result assuming
+    /// distinct ids. The cost is one `HashSet::insert` per row in
+    /// a function that already does a prepare + per-row AEAD
+    /// decrypt, so the relative overhead is well under a percent.
     pub fn query_neighbors_from_disk(
         &mut self,
         scope: ScopeId,
