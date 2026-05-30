@@ -2768,8 +2768,11 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         9 => Ok(()),
         // v10 (Phase 8): add `approved_document_payloads`. Purely
         // additive; handled by SCHEMA_SQL's
-        // `CREATE TABLE IF NOT EXISTS` (table) and
-        // `CREATE INDEX IF NOT EXISTS` (per-scope covering index).
+        // `CREATE TABLE IF NOT EXISTS`. No separate covering index
+        // is created: the composite PK `(scope_id, document_id)`
+        // already serves the `WHERE scope_id = ?` listing query via
+        // SQLite's PK index, so an additional index would be pure
+        // write/disk overhead with no read-side benefit.
         // Pre-v10 databases simply do not have any approved-document
         // payload rows yet, which matches the "tenant memory carries
         // refs but the substrate never persisted payloads" state
