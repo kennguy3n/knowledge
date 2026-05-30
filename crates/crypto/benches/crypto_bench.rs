@@ -22,7 +22,8 @@
 //!
 //! HTML reports land in `target/criterion/`.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
 
 use crypto::signer_backend::{MlDsa65Signer, SignerBackend};
 use crypto::sphincs::SphincsPlusSigner;
