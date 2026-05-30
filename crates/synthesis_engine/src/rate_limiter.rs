@@ -126,12 +126,15 @@ impl RateLimiter {
             self.request_count.store(0, Ordering::Relaxed);
         }
 
-        // Try to claim the next slot in the current window. We use
-        // `fetch_add` + post-condition test rather than a
-        // `compare_exchange` loop because the lock above already
-        // serialises rotation; the only race left is N concurrent
-        // checks against a non-rotated window, and the
-        // `fetch_add` accurately serialises those.
+        // Claim the next slot in the current window. The mutex
+        // above already serialises every write to
+        // `request_count`, so a plain `u64` behind the same lock
+        // would also be sound. We keep the atomic so that
+        // `current_window_count()` (the observability hook used by
+        // tests and operator dashboards) can `load(Relaxed)` the
+        // counter **without** contending the write path's mutex.
+        // The asymmetry — writes-under-lock, reads-lock-free — is
+        // intentional and the only reason this field is atomic.
         let prev = self.request_count.fetch_add(1, Ordering::Relaxed);
         if prev < self.max_requests_per_window {
             return Ok(());
