@@ -65,7 +65,7 @@ use memory_manager::{
     ChannelMemoryObject, DomainMemoryObject, TenantMemoryObject, UserMemoryObject,
 };
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::{FfiError, FfiResult};
 
@@ -1234,6 +1234,18 @@ where
 #[uniffi::export]
 pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHandle> {
     crate::metrics::instrument(crate::metrics::inc_open_store, || {
+        // Wrap the hex in `Zeroizing` so the 64-char ASCII
+        // representation of the master key is wiped from the
+        // allocator's freelist on every drop path — success,
+        // `parse_master_key_hex` validation failure, SQLCipher
+        // open failure, tombstone-replay failure, registry
+        // collision, etc. The parsed `MasterKey` bytes inside
+        // `FfiRuntime` are independently zeroized via
+        // `FfiRuntime::Drop` (see `Zeroize` on line 645); this
+        // wrapper closes the analogous hole on the transient hex
+        // String that lives between the FFI boundary and the
+        // parser.
+        let master_key_hex = Zeroizing::new(master_key_hex);
         open_store_inner(path, master_key_hex)
     })
 }
@@ -1257,11 +1269,13 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHand
 ///
 /// # Resolution contract
 ///
-/// `key_id` is opaque to the resolver — the host is responsible
-/// for mapping it to the underlying platform handle (Keychain
-/// label, KeyAlias, DPAPI descriptor, etc.). The same id MUST
-/// resolve to the same 32-byte key across process restarts; the
-/// substrate uses it only as a lookup token.
+/// `key_id` is opaque to the **substrate** — the runtime never
+/// interprets it and only forwards it verbatim to the resolver.
+/// The resolver (host-owned) is the component that maps `key_id`
+/// to the underlying platform handle (Keychain label, KeyAlias,
+/// DPAPI descriptor, etc.). The same id MUST resolve to the same
+/// 32-byte key across process restarts; the substrate uses it
+/// only as a lookup token.
 ///
 /// The resolver MUST return [`FfiError::NotFound`] when `key_id`
 /// is unknown — fabricating zero bytes or returning an empty
@@ -1318,9 +1332,20 @@ pub fn open_store_with_resolver(
         // The resolver may also surface platform-specific errors
         // (biometric prompt cancelled, hardware-backed slot
         // revoked) via `FfiError::Unavailable` /
-        // `FfiError::Storage`; those propagate verbatim — see the
-        // `# Errors` section above.
-        let master_key_hex = resolver.load_key(key_id).map_err(|e| match e {
+        // `FfiError::Evidence`; those propagate verbatim — see
+        // the `# Errors` section above. (There is no
+        // `FfiError::Storage` variant in the substrate; the
+        // closest match for a storage-class error from the host
+        // resolver is `FfiError::Evidence`.)
+        //
+        // Wrap the resolver's return value in `Zeroizing` so the
+        // 64-char ASCII master-key hex string is wiped on every
+        // drop path (success, parser failure, SQLCipher open
+        // failure) and never lingers in the allocator's freelist.
+        // The parsed `MasterKey` bytes inside `FfiRuntime` are
+        // independently zeroized via `FfiRuntime::Drop`; this
+        // wrapper closes the transient-hex hole.
+        let master_key_hex = Zeroizing::new(resolver.load_key(key_id).map_err(|e| match e {
             // Re-tag the resolver's `NotFound { kind: "key", id }`
             // as `NotFound { kind: "master_key", id }` so the
             // host can distinguish a master-key resolution miss
@@ -1332,7 +1357,7 @@ pub fn open_store_with_resolver(
                 id,
             },
             other => other,
-        })?;
+        })?);
 
         // Reuse the existing `open_store_inner` pathway. This
         // shares the `parse_master_key_hex` validation, the
@@ -1370,9 +1395,9 @@ pub fn open_store_with_resolver(
     })
 }
 
-#[allow(clippy::needless_pass_by_value)] // Mirror of [`open_store`]: forwards the owned strings the FFI boundary handed to the outer wrapper.
-fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHandle> {
-    let master_key = parse_master_key_hex(&master_key_hex)?;
+#[allow(clippy::needless_pass_by_value)] // Mirror of [`open_store`]: forwards the owned strings the FFI boundary handed to the outer wrapper. `Zeroizing<String>` zeroizes the hex on drop.
+fn open_store_inner(path: String, master_key_hex: Zeroizing<String>) -> FfiResult<RuntimeHandle> {
+    let master_key = parse_master_key_hex(master_key_hex.as_str())?;
 
     // Allocate and validate the handle *before* doing any expensive
     // SQLCipher work. `next_handle` is `AtomicU64::fetch_add`, so

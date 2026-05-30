@@ -73,12 +73,15 @@ use crate::runtime::{with_runtime, RuntimeHandle};
 /// [`FfiError`] taxonomy without leaking platform-specific error
 /// shapes.
 ///
-/// `key_id` is an opaque identifier chosen by the substrate. It
-/// is **not** a Keychain item label, an Android `KeyAlias`, or a
-/// DPAPI descriptor — those are private to the implementation.
-/// The substrate uses the same id consistently across `store` /
-/// `load` / `delete` so the host's mapping table can be a simple
-/// `HashMap<String, PlatformHandle>`.
+/// `key_id` is an opaque identifier chosen by the **host** and
+/// passed through the substrate unchanged. The substrate never
+/// interprets `key_id` — it only forwards the same id consistently
+/// across `store` / `load` / `delete` so the host's mapping table
+/// can be a simple `HashMap<String, PlatformHandle>`. The host's
+/// resolver implementation is the only component that maps the
+/// id to the underlying platform key handle (Keychain item label,
+/// Android `KeyAlias`, DPAPI descriptor, etc.); none of those
+/// shapes leak into the substrate.
 ///
 /// `key_hex` is a hex-encoded representation of the 32-byte
 /// master key. Hex is preferred over base64 because UniFFI's
