@@ -139,7 +139,7 @@ async-trait = "0.1"
 # specific features are chosen so the webhook server compiles
 # without pulling in tokio macros that the rest of the workspace
 # doesn't need.
-axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 hyper = { version = "1", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio", "service", "server-auto"] }
