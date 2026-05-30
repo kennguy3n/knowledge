@@ -576,6 +576,7 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
+module.exports.admitApprovedDocument = nativeBinding.admitApprovedDocument
 module.exports.authenticateConnector = nativeBinding.authenticateConnector
 module.exports.clearOauthClientSecretResolver = nativeBinding.clearOauthClientSecretResolver
 module.exports.clearSyncSchedule = nativeBinding.clearSyncSchedule
@@ -597,6 +598,7 @@ module.exports.getUserMemory = nativeBinding.getUserMemory
 module.exports.healthCheck = nativeBinding.healthCheck
 module.exports.ingestMessage = nativeBinding.ingestMessage
 module.exports.init = nativeBinding.init
+module.exports.listApprovedDocuments = nativeBinding.listApprovedDocuments
 module.exports.listConnectors = nativeBinding.listConnectors
 module.exports.listMemories = nativeBinding.listMemories
 module.exports.listRecentSyntheses = nativeBinding.listRecentSyntheses
@@ -607,6 +609,7 @@ module.exports.query = nativeBinding.query
 module.exports.refreshConnectorToken = nativeBinding.refreshConnectorToken
 module.exports.registerWebhookDispatch = nativeBinding.registerWebhookDispatch
 module.exports.removeConnector = nativeBinding.removeConnector
+module.exports.revokeApprovedDocument = nativeBinding.revokeApprovedDocument
 module.exports.runDecaySweep = nativeBinding.runDecaySweep
 module.exports.setOauthClientSecretResolver = nativeBinding.setOauthClientSecretResolver
 module.exports.startSyncScheduler = nativeBinding.startSyncScheduler

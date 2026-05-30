@@ -96,6 +96,30 @@ pub struct RingBufferEntry {
     pub created_at: i64,
 }
 
+/// Plaintext metadata returned by
+/// [`EvidenceStore::list_approved_document_payload_meta_for_scope`].
+///
+/// Lets the FFI surface (`list_approved_documents`) display
+/// document id / size / content-hash without paying the AEAD
+/// decryption cost on every list call. The ciphertext itself is
+/// only decrypted by [`EvidenceStore::load_approved_document_payload`]
+/// when the tenant-synthesis dispatch is about to send the bundle
+/// to the SLM endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovedDocumentPayloadMeta {
+    /// Document id (matches `ApprovedDocumentRef::id` on the
+    /// tenant-memory side).
+    pub document_id: uuid::Uuid,
+    /// BLAKE3 content hash of the plaintext payload bytes. Same
+    /// hash function used by `body_store` rows for evidence claims.
+    pub content_hash: ContentHash,
+    /// Plaintext payload size in bytes (NOT the AEAD ciphertext
+    /// size, which is `payload + 16` for the AES-GCM auth tag).
+    pub size_bytes: u64,
+    /// Unix epoch seconds at last upsert. Mostly diagnostic.
+    pub updated_at: i64,
+}
+
 /// SQLCipher-backed encrypted local evidence store.
 pub struct EvidenceStore {
     conn: Connection,
@@ -1970,6 +1994,192 @@ impl EvidenceStore {
         Ok(out)
     }
 
+    // ───────────── Approved-document payloads (v10 / Phase 8) ──────────
+    //
+    // Tenant memory carries the *reference* (id / label / approver /
+    // approved_at) for every admitted approved document, but the
+    // payload bytes themselves are too large to keep inline in the
+    // tenant_memory JSON blob (every mutation would force a full
+    // read / encrypt / write of every doc payload). They live here
+    // instead, one row per `(scope_id, document_id)`, AEAD-encrypted
+    // under the per-scope DEK.
+    //
+    // AAD binds `scope_id` (16 bytes) AND `document_id` (16 bytes)
+    // through `approved_doc_payload_aad`, so a ciphertext relocated
+    // to a different row fails to decrypt instead of silently
+    // surfacing the wrong payload to tenant synthesis. The leading
+    // magic prefix (`approved-doc-payload:v1:`) gives a future
+    // schema evolution a stable namespace to bump for an
+    // incompatible AAD format change.
+    //
+    // `forget(scope)` calls
+    // [`Self::delete_approved_document_payloads_for_scope`] from
+    // `forget_scope_state` (FFI layer). Even if that delete fails
+    // the scope-DEK destruction step makes the ciphertext
+    // cryptographically unrecoverable, so the row purge is
+    // defense-in-depth rather than the primary security barrier.
+
+    /// Upsert an opaque approved-document payload for
+    /// `(scope_id, document_id)`. The plaintext is AEAD-encrypted
+    /// under the per-scope DEK with AAD binding both ids; the
+    /// `content_hash` and `size_bytes` columns are stored as
+    /// observable plaintext metadata for fast listing.
+    ///
+    /// Re-calling with the same `(scope_id, document_id)` overwrites
+    /// the previous payload, hash, and size (e.g. a host that
+    /// re-uploads a corrected PDF for an existing ref). The caller
+    /// is responsible for enforcing any size cap before invoking
+    /// this method — the store does not impose one.
+    pub fn save_approved_document_payload(
+        &self,
+        scope_id: ScopeId,
+        document_id: uuid::Uuid,
+        plaintext: &[u8],
+        content_hash: &ContentHash,
+    ) -> Result<()> {
+        let key = self.scope_key(scope_id)?;
+        let nonce = random_nonce();
+        let aad = approved_doc_payload_aad(scope_id, document_id);
+        let ciphertext = encrypt_aead(&key, &nonce, plaintext, &aad)?;
+        let now = chrono::Utc::now().timestamp();
+        let size_bytes = i64::try_from(plaintext.len()).unwrap_or(i64::MAX);
+        self.conn.execute(
+            "INSERT INTO approved_document_payloads \
+             (scope_id, document_id, nonce, payload, content_hash, size_bytes, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             ON CONFLICT(scope_id, document_id) DO UPDATE SET \
+               nonce = excluded.nonce, \
+               payload = excluded.payload, \
+               content_hash = excluded.content_hash, \
+               size_bytes = excluded.size_bytes, \
+               updated_at = excluded.updated_at",
+            params![
+                scope_id.as_uuid().as_bytes().as_slice(),
+                document_id.as_bytes().as_slice(),
+                nonce.as_slice(),
+                ciphertext,
+                content_hash.as_slice(),
+                size_bytes,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Load the plaintext payload bytes for `(scope_id, document_id)`.
+    /// Returns `None` if no row exists. Fails with
+    /// [`EvidenceError::Schema`] on a malformed nonce / hash row
+    /// (defensive — a fresh DB should never produce this).
+    pub fn load_approved_document_payload(
+        &self,
+        scope_id: ScopeId,
+        document_id: uuid::Uuid,
+    ) -> Result<Option<Vec<u8>>> {
+        let row: Option<(Vec<u8>, Vec<u8>)> = self
+            .conn
+            .query_row(
+                "SELECT nonce, payload FROM approved_document_payloads \
+                 WHERE scope_id = ?1 AND document_id = ?2",
+                params![
+                    scope_id.as_uuid().as_bytes().as_slice(),
+                    document_id.as_bytes().as_slice(),
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((nonce_bytes, ciphertext)) = row else {
+            return Ok(None);
+        };
+        if nonce_bytes.len() != AEAD_NONCE_LEN {
+            return Err(EvidenceError::Schema(
+                "approved_document_payloads nonce has wrong length",
+            ));
+        }
+        let mut nonce = [0u8; AEAD_NONCE_LEN];
+        nonce.copy_from_slice(&nonce_bytes);
+        let key = self.scope_key(scope_id)?;
+        let aad = approved_doc_payload_aad(scope_id, document_id);
+        let plaintext = decrypt_aead(&key, &nonce, &ciphertext, &aad)?;
+        Ok(Some(plaintext))
+    }
+
+    /// List every persisted approved-document payload row for
+    /// `scope_id`, returning plaintext metadata only (no
+    /// ciphertext decryption). Order is unspecified — the caller
+    /// joins against the tenant-memory ref list (which IS ordered)
+    /// to produce a stable host-facing view.
+    pub fn list_approved_document_payload_meta_for_scope(
+        &self,
+        scope_id: ScopeId,
+    ) -> Result<Vec<ApprovedDocumentPayloadMeta>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT document_id, content_hash, size_bytes, updated_at \
+             FROM approved_document_payloads WHERE scope_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![scope_id.as_uuid().as_bytes().as_slice()], |row| {
+            let document_id_bytes: Vec<u8> = row.get(0)?;
+            let content_hash_bytes: Vec<u8> = row.get(1)?;
+            let size_bytes: i64 = row.get(2)?;
+            let updated_at: i64 = row.get(3)?;
+            Ok((
+                document_id_bytes,
+                content_hash_bytes,
+                size_bytes,
+                updated_at,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (document_id_bytes, content_hash_bytes, size_bytes, updated_at) = row?;
+            let document_id = slice_to_uuid(&document_id_bytes)?;
+            if content_hash_bytes.len() != crypto::CONTENT_HASH_LEN {
+                return Err(EvidenceError::Schema(
+                    "approved_document_payloads content_hash has wrong length",
+                ));
+            }
+            let mut content_hash = [0u8; crypto::CONTENT_HASH_LEN];
+            content_hash.copy_from_slice(&content_hash_bytes);
+            out.push(ApprovedDocumentPayloadMeta {
+                document_id,
+                content_hash,
+                size_bytes: u64::try_from(size_bytes).unwrap_or(0),
+                updated_at,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Delete the payload row for `(scope_id, document_id)`. No-op
+    /// if the row does not exist. Returns the count of rows deleted
+    /// so the caller can log it for diagnostics.
+    pub fn delete_approved_document_payload(
+        &self,
+        scope_id: ScopeId,
+        document_id: uuid::Uuid,
+    ) -> Result<usize> {
+        let n = self.conn.execute(
+            "DELETE FROM approved_document_payloads \
+             WHERE scope_id = ?1 AND document_id = ?2",
+            params![
+                scope_id.as_uuid().as_bytes().as_slice(),
+                document_id.as_bytes().as_slice(),
+            ],
+        )?;
+        Ok(n)
+    }
+
+    /// Delete every payload row bound to `scope_id`. Called from
+    /// the FFI layer's `forget_scope_state` after the scope DEK has
+    /// already been destroyed, as a best-effort byte purge.
+    /// Returns the count of rows deleted so the caller can log it.
+    pub fn delete_approved_document_payloads_for_scope(&self, scope_id: ScopeId) -> Result<usize> {
+        let n = self.conn.execute(
+            "DELETE FROM approved_document_payloads WHERE scope_id = ?1",
+            params![scope_id.as_uuid().as_bytes().as_slice()],
+        )?;
+        Ok(n)
+    }
+
     /// Purge every secondary-index row that retains plaintext for
     /// `scope_id`.
     ///
@@ -2556,6 +2766,18 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // bootstrap, so a fresh-DB open and a v8→v9 upgrade both end
         // up with the same shape).
         9 => Ok(()),
+        // v10 (Phase 8): add `approved_document_payloads`. Purely
+        // additive; handled by SCHEMA_SQL's
+        // `CREATE TABLE IF NOT EXISTS`. No separate covering index
+        // is created: the composite PK `(scope_id, document_id)`
+        // already serves the `WHERE scope_id = ?` listing query via
+        // SQLite's PK index, so an additional index would be pure
+        // write/disk overhead with no read-side benefit.
+        // Pre-v10 databases simply do not have any approved-document
+        // payload rows yet, which matches the "tenant memory carries
+        // refs but the substrate never persisted payloads" state
+        // that Phase 7 shipped.
+        10 => Ok(()),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
         )),
@@ -2762,6 +2984,15 @@ fn connector_token_aad(scope_id: ScopeId, instance_id: uuid::Uuid) -> Vec<u8> {
     aad.extend_from_slice(prefix);
     aad.extend_from_slice(scope_id.as_uuid().as_bytes());
     aad.extend_from_slice(instance_id.as_bytes());
+    aad
+}
+
+fn approved_doc_payload_aad(scope_id: ScopeId, document_id: uuid::Uuid) -> Vec<u8> {
+    let prefix = b"approved-doc-payload:v1:";
+    let mut aad = Vec::with_capacity(prefix.len() + 16 + 16);
+    aad.extend_from_slice(prefix);
+    aad.extend_from_slice(scope_id.as_uuid().as_bytes());
+    aad.extend_from_slice(document_id.as_bytes());
     aad
 }
 

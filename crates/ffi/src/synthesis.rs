@@ -59,7 +59,8 @@ use synthesis_engine::BlockingHttpClientAdapter;
 use synthesis_engine::HttpManagedEndpointSynthesizer;
 
 use chrono::Utc;
-use evidence_store::ScopeId;
+use evidence_store::{ApprovedDocumentPayloadMeta, ScopeId};
+use memory_manager::ApprovedDocumentRef;
 use uuid::Uuid;
 
 use synthesis_engine::{EndpointConfig, EngineError, SynthesisEngine};
@@ -72,7 +73,10 @@ use synthesis_pipeline::{
 use crate::error::{FfiError, FfiResult};
 use crate::metrics;
 use crate::runtime::{with_runtime, FfiRuntime, RuntimeHandle};
-use crate::types::{SynthesisEngineConfig, SynthesisStatusRecord, SynthesisTierKind};
+use crate::types::{
+    ApprovedDocumentSummary, ScopeIdString, SynthesisEngineConfig, SynthesisStatusRecord,
+    SynthesisTierKind,
+};
 
 /// Per-scope cooldown between explicit `trigger_server_synthesis`
 /// calls. Matches the scheduler's auto-synthesis throttle so the
@@ -114,6 +118,33 @@ pub const LIST_RECENT_SYNTHESES_CAP: usize = 50;
 /// above this cap should re-examine the cooldown / scheduling
 /// contracts before raising the bound.
 pub const MAX_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
+
+/// Hard cap on the plaintext size of a single approved-document
+/// payload admitted via [`admit_approved_document`].
+///
+/// Picked at 16 MiB. The substrate stores each payload as a single
+/// AEAD row in `evidence_store::approved_document_payloads` keyed
+/// by `(scope_id, document_id)`. Above this cap a host should
+/// either compress / split client-side or layer a content-addressed
+/// storage adapter on top — the substrate refuses oversize payloads
+/// rather than silently clamping them. The same defense-in-depth
+/// rationale that drives [`MAX_SYNTHESIS_OUTPUT_BYTES`] applies
+/// here: a misbehaving / compromised host cannot fill the SQLCipher
+/// database with a single admission call.
+///
+/// The cap covers the *plaintext* size — AEAD ciphertext is 16
+/// bytes longer than the plaintext (AES-GCM auth tag) plus a
+/// 12-byte random nonce stored alongside the ciphertext, so a
+/// 16 MiB payload becomes ~16.7 MB on disk.
+pub const MAX_APPROVED_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Upper bound on `label` / `approver` string lengths admitted via
+/// [`admit_approved_document`], measured in **UTF-8 bytes** (i.e.
+/// the Rust `String::len()` of the field, not the count of Unicode
+/// scalar values). 1 KiB each is far above any realistic
+/// human-readable label, and bounds the worst-case
+/// `TenantMemoryObject` serialisation cost over many refs.
+pub const MAX_APPROVED_DOCUMENT_METADATA_BYTES: usize = 1024;
 
 // ─────────────────────── Public entry points ───────────────────────
 
@@ -297,6 +328,278 @@ pub fn list_recent_syntheses(
             records.sort_by_key(|r| std::cmp::Reverse(r.window_end_unix));
             records.truncate(LIST_RECENT_SYNTHESES_CAP);
             Ok(records)
+        })
+    })
+}
+
+/// Admit an approved official document onto the tenant memory at
+/// `scope_id` (Phase 8).
+///
+/// The substrate stores the AEAD-encrypted payload bytes in
+/// `evidence_store::approved_document_payloads` under the per-scope
+/// DEK, mints a fresh [`ApprovedDocumentRef`] (with the freshly
+/// generated UUID, supplied `label` / `approver`, and `Utc::now()`),
+/// admits the ref onto the tenant memory, and flushes the tenant
+/// memory blob. A subsequent
+/// [`trigger_server_synthesis`] at `tier = Tenant` rehydrates the
+/// payload, joins it with the ref by id, and ships the resulting
+/// [`ApprovedDocument`] bundle to the configured engine.
+///
+/// Re-admitting a document is a *new ref* (new UUID, new payload
+/// row). Hosts that want to overwrite an existing document should
+/// [`revoke_approved_document`] first, then call this.
+///
+/// # Validation
+///
+/// * `label` and `approver` must be non-empty and at most
+///   [`MAX_APPROVED_DOCUMENT_METADATA_BYTES`] bytes. Empty values
+///   are rejected with [`FfiError::Memory`].
+/// * `payload` must be non-empty and at most
+///   [`MAX_APPROVED_DOCUMENT_BYTES`]. Oversize is rejected with
+///   [`FfiError::Memory`] whose message names both the supplied
+///   size and the cap so the host can size its admission flow
+///   correctly.
+///
+/// # Errors
+///
+/// * [`FfiError::Unavailable`] if [`crate::open_store`] has not
+///   been called.
+/// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+/// * [`FfiError::NotFound`] if `scope_id` has been
+///   cryptographically forgotten via [`crate::forget_scope`].
+/// * [`FfiError::Memory`] for the validation cases above, or if
+///   the tenant memory cannot be serialised.
+/// * [`FfiError::Evidence`] if the underlying evidence store fails
+///   to persist the payload row or the tenant memory blob.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
+#[uniffi::export]
+pub fn admit_approved_document(
+    handle: RuntimeHandle,
+    scope_id: ScopeIdString,
+    label: String,
+    approver: String,
+    payload: Vec<u8>,
+) -> FfiResult<ApprovedDocumentSummary> {
+    metrics::instrument(metrics::inc_admit_approved_document, || {
+        let scope = crate::parse_scope_id(&scope_id)?;
+        validate_approved_document_metadata("label", &label)?;
+        validate_approved_document_metadata("approver", &approver)?;
+        if payload.is_empty() {
+            return Err(FfiError::Memory {
+                message: "admit_approved_document: payload must be non-empty".into(),
+            });
+        }
+        if payload.len() > MAX_APPROVED_DOCUMENT_BYTES {
+            return Err(FfiError::Memory {
+                message: format!(
+                    "admit_approved_document: payload size {} bytes exceeds the {} byte cap \
+                     ({MAX_APPROVED_DOCUMENT_BYTES_MIB} MiB); compress or split client-side \
+                     before admission",
+                    payload.len(),
+                    MAX_APPROVED_DOCUMENT_BYTES,
+                    MAX_APPROVED_DOCUMENT_BYTES_MIB = MAX_APPROVED_DOCUMENT_BYTES / (1024 * 1024),
+                ),
+            });
+        }
+        let content_hash = crypto::content_hash(&payload);
+        let payload_bytes = payload.len() as u64;
+        let reference = ApprovedDocumentRef::new(label, approver);
+        let summary = ApprovedDocumentSummary {
+            id: reference.id.to_string(),
+            scope_id: scope_id.clone(),
+            label: reference.label.clone(),
+            approver: reference.approver.clone(),
+            approved_at_ms: reference.approved_at.timestamp_millis(),
+            payload_bytes,
+            content_hash_hex: encode_content_hash_hex(&content_hash),
+        };
+        let doc_id = reference.id;
+        with_runtime(handle, |rt| {
+            if rt.is_scope_forgotten(scope) {
+                return Err(FfiError::NotFound {
+                    kind: "scope".into(),
+                    id: scope_id.clone(),
+                });
+            }
+            rt.ensure_scope_registered(scope)?;
+            // Persist-first invariant: write the AEAD payload row to
+            // SQLCipher BEFORE mutating the tenant-memory map so a
+            // crash between the two steps leaves the substrate in
+            // the pre-admission state (the orphan payload row is
+            // harmless — `list_approved_documents` joins on the
+            // tenant-memory ref list, so an orphan row is filtered
+            // out; the next `forget_scope` on this scope also purges
+            // it).
+            rt.store()
+                .save_approved_document_payload(scope, doc_id, &payload, &content_hash)
+                .map_err(|e| FfiError::Evidence {
+                    message: format!("save_approved_document_payload failed: {e}"),
+                })?;
+            let mut tmo = rt
+                .tenant_memory(scope)
+                .cloned()
+                .unwrap_or_else(|| memory_manager::TenantMemoryObject::new(scope));
+            tmo.admit_approved_document(reference);
+            rt.save_tenant_memory(scope, tmo)?;
+            tracing::info!(
+                scope = %scope.as_uuid(),
+                document_id = %doc_id,
+                payload_bytes,
+                "admit_approved_document: persisted payload + tenant ref",
+            );
+            Ok(summary.clone())
+        })
+    })
+}
+
+/// Revoke a previously admitted approved document (Phase 8).
+///
+/// Removes both the tenant-memory ref and the persisted payload
+/// row. The tenant memory blob is re-flushed so the revocation
+/// survives a restart. Tenant synthesis windows opened *after* this
+/// call will not see the revoked document; in-flight windows are
+/// unaffected (the Phase-1 gather snapshot captured the input
+/// before the revocation).
+///
+/// Idempotent on a fully revoked document: a second call returns
+/// [`FfiError::NotFound`] because the ref is gone from tenant
+/// memory.
+///
+/// # Errors
+///
+/// * [`FfiError::Unavailable`] if [`crate::open_store`] has not
+///   been called.
+/// * [`FfiError::InvalidId`] if `scope_id` or `document_id` is not
+///   a valid UUID.
+/// * [`FfiError::NotFound`] if the scope has been forgotten, no
+///   tenant memory exists for the scope, or the document id is
+///   not registered on the tenant memory.
+/// * [`FfiError::Evidence`] if the underlying evidence store fails
+///   to delete the payload row or persist the updated tenant
+///   memory.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
+#[uniffi::export]
+pub fn revoke_approved_document(
+    handle: RuntimeHandle,
+    scope_id: ScopeIdString,
+    document_id: String,
+) -> FfiResult<()> {
+    metrics::instrument(metrics::inc_revoke_approved_document, || {
+        let scope = crate::parse_scope_id(&scope_id)?;
+        let doc_uuid = Uuid::parse_str(&document_id).map_err(|e| FfiError::InvalidId {
+            message: format!("document_id: {e}"),
+        })?;
+        with_runtime(handle, |rt| {
+            if rt.is_scope_forgotten(scope) {
+                return Err(FfiError::NotFound {
+                    kind: "scope".into(),
+                    id: scope_id.clone(),
+                });
+            }
+            let mut tmo = rt
+                .tenant_memory(scope)
+                .cloned()
+                .ok_or_else(|| FfiError::NotFound {
+                    kind: "tenant_memory".into(),
+                    id: scope_id.clone(),
+                })?;
+            tmo.revoke_approved_document(doc_uuid)
+                .map_err(|_| FfiError::NotFound {
+                    kind: "approved_document".into(),
+                    id: document_id.clone(),
+                })?;
+            // Persist-first invariant (mirror of `admit_approved_document`):
+            // flush the updated tenant memory FIRST so a crash before the
+            // payload-row delete leaves the host-observable contract
+            // consistent — the ref is gone, the orphan payload row is
+            // unreachable through the tenant-memory join and will be
+            // purged on the next `forget_scope` for this scope.
+            rt.save_tenant_memory(scope, tmo)?;
+            let deleted = rt
+                .store()
+                .delete_approved_document_payload(scope, doc_uuid)
+                .map_err(|e| FfiError::Evidence {
+                    message: format!("delete_approved_document_payload failed: {e}"),
+                })?;
+            tracing::info!(
+                scope = %scope.as_uuid(),
+                document_id = %doc_uuid,
+                rows_deleted = deleted,
+                "revoke_approved_document: removed tenant ref and payload row",
+            );
+            Ok(())
+        })
+    })
+}
+
+/// List approved-document refs admitted to the tenant memory at
+/// `scope_id`, joined with each ref's persisted payload metadata
+/// (Phase 8).
+///
+/// The order matches `TenantMemoryObject.approved_documents`
+/// insertion order. Returns an empty vector for a forgotten scope
+/// or a scope with no tenant memory (no `Err`) so callers can
+/// treat both cases the same as "nothing admitted".
+///
+/// Refs without a persisted payload row (e.g. legacy refs created
+/// before the Phase 8 admission path, or a payload row that was
+/// purged out-of-band) are still surfaced with
+/// `payload_bytes = 0` and `content_hash_hex = ""` so the host can
+/// detect and act on the gap rather than silently dropping the
+/// row.
+///
+/// # Errors
+///
+/// * [`FfiError::Unavailable`] if [`crate::open_store`] has not
+///   been called.
+/// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
+/// * [`FfiError::Evidence`] if the underlying metadata query
+///   fails (does NOT decrypt any ciphertext).
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
+#[uniffi::export]
+pub fn list_approved_documents(
+    handle: RuntimeHandle,
+    scope_id: ScopeIdString,
+) -> FfiResult<Vec<ApprovedDocumentSummary>> {
+    metrics::instrument(metrics::inc_list_approved_documents, || {
+        let scope = crate::parse_scope_id(&scope_id)?;
+        with_runtime(handle, |rt| {
+            if rt.is_scope_forgotten(scope) {
+                return Ok(Vec::new());
+            }
+            let Some(tmo) = rt.tenant_memory(scope) else {
+                return Ok(Vec::new());
+            };
+            let meta_rows = rt
+                .store()
+                .list_approved_document_payload_meta_for_scope(scope)
+                .map_err(|e| FfiError::Evidence {
+                    message: format!("list_approved_document_payload_meta_for_scope failed: {e}"),
+                })?;
+            let meta_by_id: std::collections::HashMap<Uuid, ApprovedDocumentPayloadMeta> =
+                meta_rows.into_iter().map(|m| (m.document_id, m)).collect();
+            let summaries: Vec<ApprovedDocumentSummary> = tmo
+                .approved_documents
+                .iter()
+                .map(|r| {
+                    let (payload_bytes, content_hash_hex) = match meta_by_id.get(&r.id) {
+                        Some(meta) => {
+                            (meta.size_bytes, encode_content_hash_hex(&meta.content_hash))
+                        }
+                        None => (0u64, String::new()),
+                    };
+                    ApprovedDocumentSummary {
+                        id: r.id.to_string(),
+                        scope_id: scope_id.clone(),
+                        label: r.label.clone(),
+                        approver: r.approver.clone(),
+                        approved_at_ms: r.approved_at.timestamp_millis(),
+                        payload_bytes,
+                        content_hash_hex,
+                    }
+                })
+                .collect();
+            Ok(summaries)
         })
     })
 }
@@ -495,29 +798,60 @@ fn build_dispatch_plan(
                 id: scope.as_uuid().to_string(),
             })?;
             let domain_outputs = gather_domain_outputs(rt, tenant);
-            // Approved-document payloads are NOT yet shipped through
-            // the substrate. `TenantMemoryObject.approved_documents`
-            // stores only [`ApprovedDocumentRef`] (id / label /
-            // approver / approved_at) — the actual document bytes are
-            // never persisted on this side of the FFI boundary. The
-            // synthesis pipeline's [`ApprovedDocument`] type requires
-            // a `payload: Vec<u8>`, so until a Phase 8 follow-up adds
-            // (a) an `admit_approved_document_blob` FFI surface for
-            // hosts to attach payloads, and (b) per-tenant payload
-            // storage in the evidence store, tenant synthesis runs
-            // with an empty approved-documents bundle. If the host has
-            // registered any refs we surface a one-shot warning so the
-            // gap is observable instead of silent.
-            let approved_documents: Vec<ApprovedDocument> = Vec::new();
-            if !tenant.approved_documents.is_empty() {
+            // Phase 8: materialise approved-document payloads from
+            // the evidence store for every ref admitted onto the
+            // tenant memory. This runs under the gather lock so the
+            // payload bundle is a consistent point-in-time view of
+            // both the ref list and the persisted ciphertext; a
+            // concurrent `admit_approved_document` /
+            // `revoke_approved_document` on the same scope must wait
+            // for the runtime mutex before mutating either side.
+            //
+            // A ref without a corresponding payload row (e.g. a host
+            // that admitted a ref via the legacy pre-Phase-8 path,
+            // or a payload row that was purged out-of-band) is
+            // skipped with a `warn!` so the gap is observable on the
+            // dispatch path rather than silently feeding an empty
+            // bundle to the SLM. The synthesis run still proceeds —
+            // the host may have registered other documents that DO
+            // have payloads.
+            let mut approved_documents: Vec<ApprovedDocument> = Vec::new();
+            let mut missing_payloads: usize = 0;
+            for r in &tenant.approved_documents {
+                match rt.store().load_approved_document_payload(scope, r.id) {
+                    Ok(Some(payload)) => {
+                        approved_documents.push(ApprovedDocument::new(r.clone(), payload));
+                    }
+                    Ok(None) => {
+                        missing_payloads += 1;
+                        tracing::warn!(
+                            scope = %scope.as_uuid(),
+                            document_id = %r.id,
+                            label = %r.label,
+                            "trigger_server_synthesis(tenant): approved-document ref has no \
+                             persisted payload; skipping. Re-admit the document via \
+                             `admit_approved_document` to attach a payload, or call \
+                             `revoke_approved_document` to drop the orphan ref.",
+                        );
+                    }
+                    Err(e) => {
+                        return Err(FfiError::Evidence {
+                            message: format!(
+                                "load_approved_document_payload failed for document {}: {e}",
+                                r.id
+                            ),
+                        });
+                    }
+                }
+            }
+            if missing_payloads > 0 {
                 tracing::warn!(
                     scope = %scope.as_uuid(),
-                    registered = tenant.approved_documents.len(),
-                    "trigger_server_synthesis(tenant): approved-document reference(s) \
-                     registered on the tenant memory but the substrate does not yet \
-                     persist their payloads; synthesis will proceed with an empty \
-                     approved-documents bundle. Phase 8 follow-up will add \
-                     `admit_approved_document_blob` + payload storage.",
+                    refs_total = tenant.approved_documents.len(),
+                    payloads_attached = approved_documents.len(),
+                    missing_payloads,
+                    "trigger_server_synthesis(tenant): dispatching with partial \
+                     approved-documents bundle",
                 );
             }
             let input = TenantSynthesisInput::new(tenant, domain_outputs, approved_documents)
@@ -963,6 +1297,48 @@ fn newest_complete_window(
         })
         .max_by_key(|w| w.window_end)
         .map(|w| w.id)
+}
+
+/// Lower-hex encode a BLAKE3 content hash for the FFI surface.
+/// Produced once per row by [`admit_approved_document`] /
+/// [`list_approved_documents`]; the 64-char output is wire-flat
+/// and stable across host languages.
+///
+/// Inlined here rather than pulling the `hex` crate as a dep —
+/// the FFI surface only formats fixed-size BLAKE3 hashes, and a
+/// 0.5 KiB lookup table is faster than the generic `hex::encode`
+/// for this single shape.
+fn encode_content_hash_hex(hash: &crypto::ContentHash) -> String {
+    const TABLE: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(crypto::CONTENT_HASH_LEN * 2);
+    for byte in hash {
+        out.push(TABLE[(byte >> 4) as usize] as char);
+        out.push(TABLE[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+/// Validate a Phase-8 approved-document metadata field
+/// (`label` or `approver`). Empty / overlong strings are rejected
+/// with [`FfiError::Memory`] whose message names the field, the
+/// observed length, and the cap so the host can fix the call site
+/// without guessing which input was rejected.
+fn validate_approved_document_metadata(field: &'static str, value: &str) -> FfiResult<()> {
+    if value.is_empty() {
+        return Err(FfiError::Memory {
+            message: format!("admit_approved_document: {field} must be non-empty"),
+        });
+    }
+    if value.len() > MAX_APPROVED_DOCUMENT_METADATA_BYTES {
+        return Err(FfiError::Memory {
+            message: format!(
+                "admit_approved_document: {field} length {} bytes exceeds the {} byte cap",
+                value.len(),
+                MAX_APPROVED_DOCUMENT_METADATA_BYTES,
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn parse_window_id(s: &str) -> FfiResult<WindowId> {
@@ -2181,5 +2557,381 @@ mod tests {
         // is installed via `with_timeout`; the synthesis_engine layer
         // applies `DEFAULT_TIMEOUT` when the field is `None`.
         assert!(endpoint.timeout.is_none());
+    }
+
+    // ───────────────── Phase 8: approved-document payloads ────────
+
+    /// Happy path: admitting an approved document persists the
+    /// AEAD payload row, returns a populated
+    /// [`ApprovedDocumentSummary`], and admits a matching ref onto
+    /// the tenant memory. A subsequent `list_approved_documents`
+    /// surfaces the ref joined with its payload metadata.
+    #[test]
+    fn admit_approved_document_persists_ref_and_payload() {
+        let (handle, _dir) = fresh_store();
+        let scope = seed_tenant_with_domain(handle);
+        let scope_str = scope.as_uuid().to_string();
+
+        let payload = b"OFFICIAL POLICY v3.2 - confidential".to_vec();
+        let summary = admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "Tenant Policy v3.2".into(),
+            "compliance-officer".into(),
+            payload.clone(),
+        )
+        .expect("admit_approved_document");
+
+        // Summary mirrors the on-disk row.
+        assert_eq!(summary.scope_id, scope_str);
+        assert_eq!(summary.label, "Tenant Policy v3.2");
+        assert_eq!(summary.approver, "compliance-officer");
+        assert_eq!(summary.payload_bytes, payload.len() as u64);
+        assert_eq!(summary.content_hash_hex.len(), 64);
+        assert!(summary
+            .content_hash_hex
+            .chars()
+            .all(|c| c.is_ascii_hexdigit()));
+        let doc_id_uuid = Uuid::parse_str(&summary.id).expect("doc id is a UUID");
+
+        // Tenant memory holds the ref.
+        let admitted_id = with_runtime(handle, |rt| {
+            let tmo = rt.tenant_memory(scope).expect("tenant memory present");
+            assert_eq!(tmo.approved_documents.len(), 1);
+            Ok(tmo.approved_documents[0].id)
+        })
+        .expect("with_runtime");
+        assert_eq!(admitted_id, doc_id_uuid);
+
+        // Evidence store holds the encrypted payload row.
+        let rehydrated = with_runtime(handle, |rt| {
+            Ok(rt
+                .store()
+                .load_approved_document_payload(scope, doc_id_uuid)
+                .expect("load_approved_document_payload"))
+        })
+        .expect("with_runtime");
+        assert_eq!(rehydrated, Some(payload.clone()));
+
+        // list_approved_documents returns the joined view.
+        let listed =
+            list_approved_documents(handle, scope_str.clone()).expect("list_approved_documents");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, summary.id);
+        assert_eq!(listed[0].payload_bytes, payload.len() as u64);
+        assert_eq!(listed[0].content_hash_hex, summary.content_hash_hex);
+
+        teardown(handle);
+    }
+
+    /// Oversize payload is rejected at the FFI boundary with
+    /// [`FfiError::Memory`] whose message names both the offending
+    /// size and the cap. No row is written, no ref is admitted.
+    #[test]
+    fn admit_approved_document_oversize_rejected_with_descriptive_error() {
+        let (handle, _dir) = fresh_store();
+        let scope = seed_tenant_with_domain(handle);
+        let scope_str = scope.as_uuid().to_string();
+
+        let oversize = vec![0u8; MAX_APPROVED_DOCUMENT_BYTES + 1];
+        let err = admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "label".into(),
+            "approver".into(),
+            oversize,
+        )
+        .expect_err("oversize must reject");
+        match err {
+            FfiError::Memory { message } => {
+                assert!(
+                    message.contains(&(MAX_APPROVED_DOCUMENT_BYTES + 1).to_string()),
+                    "error message must surface the offending size, got: {message}",
+                );
+                assert!(
+                    message.contains(&MAX_APPROVED_DOCUMENT_BYTES.to_string()),
+                    "error message must surface the cap, got: {message}",
+                );
+            }
+            other => panic!("expected FfiError::Memory, got {other:?}"),
+        }
+
+        // No ref admitted.
+        let listed = list_approved_documents(handle, scope_str).expect("list");
+        assert!(listed.is_empty(), "no ref must be admitted on oversize");
+
+        teardown(handle);
+    }
+
+    /// Empty payload / empty metadata strings are rejected
+    /// individually.
+    #[test]
+    fn admit_approved_document_rejects_empty_inputs() {
+        let (handle, _dir) = fresh_store();
+        let scope = seed_tenant_with_domain(handle);
+        let scope_str = scope.as_uuid().to_string();
+
+        for (label, approver, payload, expect_field) in [
+            (
+                String::new(),
+                "approver".to_string(),
+                b"x".to_vec(),
+                "label",
+            ),
+            (
+                "label".to_string(),
+                String::new(),
+                b"x".to_vec(),
+                "approver",
+            ),
+            (
+                "label".to_string(),
+                "approver".to_string(),
+                vec![],
+                "payload",
+            ),
+        ] {
+            let err = admit_approved_document(handle, scope_str.clone(), label, approver, payload)
+                .expect_err("empty input must reject");
+            match err {
+                FfiError::Memory { message } => assert!(
+                    message.contains(expect_field),
+                    "expected field `{expect_field}` in error, got: {message}",
+                ),
+                other => panic!("expected FfiError::Memory, got {other:?}"),
+            }
+        }
+
+        teardown(handle);
+    }
+
+    /// Revoking a previously admitted document removes both the
+    /// tenant-memory ref and the persisted payload row.
+    #[test]
+    fn revoke_approved_document_purges_ref_and_payload_row() {
+        let (handle, _dir) = fresh_store();
+        let scope = seed_tenant_with_domain(handle);
+        let scope_str = scope.as_uuid().to_string();
+
+        let summary = admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "Tenant Policy".into(),
+            "approver".into(),
+            b"payload".to_vec(),
+        )
+        .expect("admit");
+
+        revoke_approved_document(handle, scope_str.clone(), summary.id.clone()).expect("revoke");
+
+        // Tenant memory ref is gone.
+        with_runtime(handle, |rt| {
+            let tmo = rt.tenant_memory(scope).expect("tenant memory present");
+            assert!(tmo.approved_documents.is_empty());
+            Ok(())
+        })
+        .expect("with_runtime");
+
+        // Payload row is gone.
+        let payload_after = with_runtime(handle, |rt| {
+            Ok(rt
+                .store()
+                .load_approved_document_payload(scope, Uuid::parse_str(&summary.id).unwrap())
+                .unwrap())
+        })
+        .expect("with_runtime");
+        assert!(payload_after.is_none());
+
+        // Listing is empty.
+        let listed = list_approved_documents(handle, scope_str.clone()).expect("list");
+        assert!(listed.is_empty());
+
+        // Second revoke is NotFound (the ref is gone).
+        let err = revoke_approved_document(handle, scope_str, summary.id).unwrap_err();
+        assert!(matches!(err, FfiError::NotFound { .. }));
+
+        teardown(handle);
+    }
+
+    /// Tenant synthesis materialises the per-tenant payload bundle
+    /// from the evidence store under the Phase-1 gather lock. The
+    /// stub `ManagedEndpointSynthesizer` concatenates
+    /// `doc:<payload>` for every supplied [`ApprovedDocument`], so we
+    /// can assert the payload bytes appear verbatim in the resulting
+    /// `SynthesisObject.payload`.
+    #[test]
+    fn trigger_server_synthesis_tenant_sends_approved_documents() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+        let scope = seed_tenant_with_domain(handle);
+        let scope_str = scope.as_uuid().to_string();
+
+        let payload_bytes = b"OFFICIAL CHARTER payload bytes".to_vec();
+        admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "Charter".into(),
+            "approver".into(),
+            payload_bytes.clone(),
+        )
+        .expect("admit");
+
+        let window_id_str =
+            trigger_server_synthesis(handle, scope_str.clone(), SynthesisTierKind::Tenant)
+                .expect("tenant synthesis");
+        let rec = synthesis_status(handle, window_id_str.clone()).expect("status");
+        assert_eq!(rec.status, "complete");
+
+        // The persisted synthesis object's payload should contain
+        // the document bytes (stub format: `doc:<payload>`).
+        let window_uuid: Uuid = window_id_str.parse().unwrap();
+        let synth_payload = with_runtime(handle, |rt| {
+            let obj = rt
+                .synthesis_objects
+                .get(&synthesis_pipeline::WindowId::from_uuid(window_uuid))
+                .expect("synthesis object present");
+            Ok(obj.payload.clone())
+        })
+        .expect("with_runtime");
+        let payload_str = String::from_utf8_lossy(&synth_payload);
+        assert!(
+            payload_str.contains("doc:OFFICIAL CHARTER payload bytes"),
+            "stub-synthesised payload must include the approved-document bytes; got: {payload_str:?}",
+        );
+
+        teardown(handle);
+    }
+
+    /// A tenant-memory ref without a persisted payload row is
+    /// skipped with a warning (the dispatch must NOT fail). This
+    /// guards the graceful degradation path: legacy refs or
+    /// out-of-band purges should not break the dispatch contract.
+    #[test]
+    fn trigger_server_synthesis_tenant_tolerates_missing_payload_row() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+        let scope = seed_tenant_with_domain(handle);
+
+        // Synthesise an orphan ref by mutating the tenant memory
+        // directly — no `save_approved_document_payload` call.
+        let orphan_id = Uuid::new_v4();
+        with_runtime(handle, |rt| {
+            let mut tmo = rt
+                .tenant_memory(scope)
+                .cloned()
+                .expect("tenant memory present");
+            tmo.admit_approved_document(memory_manager::ApprovedDocumentRef {
+                id: orphan_id,
+                label: "orphan".into(),
+                approver: "approver".into(),
+                approved_at: Utc::now(),
+            });
+            rt.save_tenant_memory(scope, tmo)?;
+            Ok(())
+        })
+        .expect("with_runtime");
+
+        // Dispatch must succeed.
+        let window_id_str = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Tenant,
+        )
+        .expect("tenant synthesis with orphan ref must succeed");
+        let rec = synthesis_status(handle, window_id_str).expect("status");
+        assert_eq!(rec.status, "complete");
+
+        teardown(handle);
+    }
+
+    /// `forget_scope_state` purges every approved-document payload
+    /// row bound to the forgotten scope. We invoke
+    /// [`crate::forget_scope`] (the public entry point) to make sure
+    /// the integration is wired end-to-end, not just the inner
+    /// helper.
+    #[test]
+    fn forget_scope_wipes_approved_document_payloads() {
+        let (handle, _dir) = fresh_store();
+        let scope = seed_tenant_with_domain(handle);
+        let scope_str = scope.as_uuid().to_string();
+
+        let summary_a = admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "A".into(),
+            "ap".into(),
+            b"a".to_vec(),
+        )
+        .expect("admit A");
+        let summary_b = admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "B".into(),
+            "ap".into(),
+            b"b".to_vec(),
+        )
+        .expect("admit B");
+
+        // Sanity-check pre-forget metadata count.
+        let metas_before = with_runtime(handle, |rt| {
+            Ok(rt
+                .store()
+                .list_approved_document_payload_meta_for_scope(scope)
+                .unwrap())
+        })
+        .expect("with_runtime");
+        assert_eq!(metas_before.len(), 2);
+
+        crate::forget_scope(handle, scope_str.clone()).expect("forget_scope");
+
+        let metas_after = with_runtime(handle, |rt| {
+            Ok(rt
+                .store()
+                .list_approved_document_payload_meta_for_scope(scope)
+                .unwrap())
+        })
+        .expect("with_runtime");
+        assert!(
+            metas_after.is_empty(),
+            "all approved-document payload rows must be purged by forget_scope; \
+             survivors: {metas_after:?} (admitted summaries: {summary_a:?}, {summary_b:?})",
+        );
+
+        teardown(handle);
+    }
+
+    /// Admit / list / revoke calls on a forgotten scope behave per
+    /// the documented contract: admit returns `NotFound`, list
+    /// returns an empty Vec (soft-empty), revoke returns
+    /// `NotFound`.
+    #[test]
+    fn approved_document_calls_on_forgotten_scope() {
+        let (handle, _dir) = fresh_store();
+        let scope = seed_tenant_with_domain(handle);
+        let scope_str = scope.as_uuid().to_string();
+        crate::forget_scope(handle, scope_str.clone()).expect("forget_scope");
+
+        let admit_err = admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "label".into(),
+            "approver".into(),
+            b"payload".to_vec(),
+        )
+        .unwrap_err();
+        assert!(matches!(admit_err, FfiError::NotFound { ref kind, .. } if kind == "scope"));
+
+        let listed =
+            list_approved_documents(handle, scope_str.clone()).expect("list on forgotten scope");
+        assert!(
+            listed.is_empty(),
+            "list on a forgotten scope must be soft-empty",
+        );
+
+        let revoke_err =
+            revoke_approved_document(handle, scope_str, Uuid::new_v4().to_string()).unwrap_err();
+        assert!(matches!(revoke_err, FfiError::NotFound { ref kind, .. } if kind == "scope"));
+
+        teardown(handle);
     }
 }

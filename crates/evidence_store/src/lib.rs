@@ -39,6 +39,6 @@ pub use routing::{
     route_storage, route_storage_with_threshold, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES,
 };
 pub use store::{
-    EvidenceRow, EvidenceStore, EvidenceStoreConfig, IngestResult, RingBufferEntry,
-    DEFAULT_RING_BUFFER_MAX_BYTES,
+    ApprovedDocumentPayloadMeta, EvidenceRow, EvidenceStore, EvidenceStoreConfig, IngestResult,
+    RingBufferEntry, DEFAULT_RING_BUFFER_MAX_BYTES,
 };

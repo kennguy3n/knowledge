@@ -135,7 +135,9 @@ across both bindings) are:
 `configure_sync_schedule`, `clear_sync_schedule`,
 `sync_scheduler_status`, `configure_sync_auto_synthesize`,
 `configure_synthesis_engine`, `trigger_server_synthesis`,
-`synthesis_status`, `list_recent_syntheses`.
+`synthesis_status`, `list_recent_syntheses`,
+`admit_approved_document`, `revoke_approved_document`,
+`list_approved_documents`.
 
 Four entry points are intentionally surface-specific rather than
 mirrored across both bindings:
@@ -259,7 +261,10 @@ embedded in the health envelope. Counters include
 `configure_synthesis_engine_total`,
 `trigger_server_synthesis_total`, `synthesis_status_total`,
 `list_recent_syntheses_total`,
-`configure_sync_auto_synthesize_total`, plus
+`configure_sync_auto_synthesize_total`,
+`admit_approved_document_total`,
+`revoke_approved_document_total`,
+`list_approved_documents_total`, plus
 per-`FfiError`-kind counters under `errors_by_kind`
 (`unimplemented`, `invalid_id`, `not_found`, `evidence`,
 `memory`, `synthesis`, `crypto`, `unavailable`,
