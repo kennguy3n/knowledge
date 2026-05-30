@@ -667,14 +667,19 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
         }
     }
 
-    fn dispatch(&self, req: &SynthesisRequest) -> Result<SynthesisResponse> {
-        // Cost-control gate. We check the limiter *before* the HTTP
-        // dispatch so a rejected call costs zero outbound bytes
-        // and zero upstream-billed tokens. Surfacing the remaining
-        // wait duration in the error message lets the audit log
-        // attribute the refusal to the rate limit (rather than a
-        // transport hiccup) and lets retry-aware callers compute a
-        // sensible back-off.
+    /// Cost-control admission gate. Called *before* the window is
+    /// marked `InProgress` (and therefore before any
+    /// audit-log transition fires) so a rate-limited request never
+    /// cycles a window through `Pending → InProgress → Failed`
+    /// purely for billing reasons — it stays `Pending` and can be
+    /// reopened by the next retry without a stale `Failed` event
+    /// in the audit trail.
+    ///
+    /// Returning the remaining wait in the error message lets
+    /// retry-aware callers compute a sensible back-off and lets the
+    /// audit log attribute the refusal to the rate limit (rather
+    /// than a transport hiccup).
+    fn check_rate_limit(&self) -> Result<()> {
         if let Some(limiter) = self.rate_limiter.as_ref() {
             if let Err(remaining) = limiter.check() {
                 return Err(EngineError::engine(format!(
@@ -684,7 +689,16 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
                 )));
             }
         }
+        Ok(())
+    }
 
+    fn dispatch(&self, req: &SynthesisRequest) -> Result<SynthesisResponse> {
+        // The rate-limit gate is enforced earlier (in
+        // `synthesize_domain` / `synthesize_tenant`) before the
+        // window is marked `InProgress`, so by the time we reach
+        // `dispatch` the call is admitted and any remaining
+        // failure is a true transport / endpoint condition that
+        // does warrant a `Failed` window transition.
         let resp = self
             .client
             .send(&self.cfg, req)
@@ -725,6 +739,10 @@ impl<C: HttpClient> SynthesisEngine for HttpManagedEndpointSynthesizer<C> {
                 "domain synthesis requires at least one channel output".into(),
             ));
         }
+        // Rate-limit admission *before* the window transitions so
+        // a refused call stays `Pending` rather than churning
+        // through `InProgress → Failed`.
+        self.check_rate_limit()?;
         windows.mark_in_progress(handle.window_id)?;
 
         let inputs: Vec<InputObjectRef> = input
@@ -782,6 +800,10 @@ impl<C: HttpClient> SynthesisEngine for HttpManagedEndpointSynthesizer<C> {
                 "tenant synthesis requires at least one domain output".into(),
             ));
         }
+        // Same admission-before-transition discipline as
+        // `synthesize_domain` — see `check_rate_limit` for the
+        // rationale.
+        self.check_rate_limit()?;
         windows.mark_in_progress(handle.window_id)?;
 
         let mut inputs: Vec<InputObjectRef> = input
@@ -1297,6 +1319,73 @@ mod tests {
                 .current_window_count(),
             2
         );
+    }
+
+    /// A rate-limited request must never transition its window
+    /// through `Pending → InProgress → Failed`. The
+    /// audit-trail invariant is: `Failed` means "the upstream
+    /// endpoint or the transport refused or errored", and a
+    /// purely-billing-driven refusal at the local cost-control
+    /// gate is none of those — the window must stay `Pending`
+    /// so the next retry can re-attempt without a stale `Failed`
+    /// event polluting the operator's dashboard.
+    #[test]
+    fn rate_limited_window_stays_pending_not_failed() {
+        let domain_scope = ScopeId::new_v4();
+        let channel = ScopeId::new_v4();
+        let mut mgr = SynthesisWindowManager::new();
+        // `cap = 1` so the *second* call is the rate-limit
+        // refusal we want to observe.
+        let synth =
+            HttpManagedEndpointSynthesizer::new(cfg(), MockHttpClient::echo()).with_rate_limit(1);
+
+        // Admit one call to exhaust the cap.
+        {
+            let mut domain = DomainMemoryObject::new(domain_scope);
+            domain.attach_channel_scope(channel);
+            let outputs =
+                vec![ChannelOutput::from_channel_object(channel_recap(channel, b"prime")).unwrap()];
+            let input = DomainSynthesisInput::new(&domain, outputs).unwrap();
+            let handle = open_domain_window(&mut mgr, domain_scope);
+            synth
+                .synthesize_domain(&mut mgr, handle, input)
+                .expect("first request inside the cap must succeed");
+        }
+
+        // The second call must hit the rate-limit gate.
+        let mut domain = DomainMemoryObject::new(domain_scope);
+        domain.attach_channel_scope(channel);
+        let outputs =
+            vec![ChannelOutput::from_channel_object(channel_recap(channel, b"deny")).unwrap()];
+        let input = DomainSynthesisInput::new(&domain, outputs).unwrap();
+        let handle = open_domain_window(&mut mgr, domain_scope);
+        let denied_window_id = handle.window_id;
+        let err = synth
+            .synthesize_domain(&mut mgr, handle, input)
+            .expect_err("call beyond cap must be refused at the rate-limit gate");
+        assert!(
+            err.to_string().contains("rate limited"),
+            "refusal must surface as the local rate-limit error; got: {err}"
+        );
+
+        // The denied window must remain `Pending` — the
+        // long-term-correct outcome of the 2026-05-30 review
+        // fix that hoisted the rate-limit check out of
+        // `dispatch` and ahead of `mark_in_progress`.
+        let after = mgr.get(denied_window_id).expect("denied window present");
+        assert_eq!(
+            after.status,
+            WindowStatus::Pending,
+            "rate-limited window must stay Pending (never cycle through \
+             InProgress → Failed for a purely-billing-driven refusal); \
+             got: {:?}",
+            after.status
+        );
+        // And the next mutation can still take it through the
+        // normal `Pending → InProgress` transition once the
+        // window resets and the cap reopens.
+        mgr.mark_in_progress(denied_window_id)
+            .expect("denied window must still be in the `Pending` lifecycle state");
     }
 
     /// Constructing a synthesizer **without** `with_rate_limit`
