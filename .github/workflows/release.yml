@@ -60,13 +60,15 @@ jobs:
             ${{ runner.os }}-cargo-release-
             ${{ runner.os }}-cargo-
 
-      - name: Install SQLCipher / OpenSSL system deps
-        # SQLCipher links against the system OpenSSL — same step as
-        # ci.yml. Kept in the release workflow so the tag build
-        # does not silently miss the bundled SQLCipher build path.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsqlite3-dev libssl-dev pkg-config
+      # No `apt-get install libsqlite3-dev / libssl-dev / pkg-config`
+      # step: the workspace pins `rusqlite` with the
+      # `bundled-sqlcipher-vendored-openssl` feature (see the root
+      # `Cargo.toml`), which vendors both SQLCipher and OpenSSL and
+      # links statically. `ci.yml` runs the same `cargo test
+      # --all --all-features` matrix on every PR without those
+      # system packages installed, so a tag build never needs them
+      # either. Keeping the step out avoids confusing future
+      # readers about whether SQLCipher is system-linked here.
 
       - name: cargo test --all-features
         run: cargo test --all-features --workspace
