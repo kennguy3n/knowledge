@@ -30,7 +30,7 @@ jobs:
           - fuzz_hkdf_derive
           - fuzz_sphincs_sign_verify
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@nightly
       - uses: actions/cache@v4
         with:

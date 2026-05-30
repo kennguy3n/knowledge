@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the tagged commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Fetch full history so action-gh-release can compute the
           # "since last tag" commit range for its auto-generated
