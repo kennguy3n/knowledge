@@ -130,6 +130,27 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   release workflow that runs `cargo test --all-features` and
   publishes a GitHub release with auto-generated notes.
 
+### Changed — FFI surface
+
+- Wired `try_init_tracing` through the UniFFI export so iOS /
+  Android hosts can install the substrate's
+  `Registry::default().with(fmt::Layer).with(EnvFilter)` stack
+  from the UniFFI-generated Swift / Kotlin bindings instead of
+  shipping their own `tracing-subscriber` configuration. The
+  Rust signature is now
+  `pub fn try_init_tracing(directive: String) -> FfiResult<()>`
+  — UniFFI marshals owned `String`s but cannot bridge `&str`,
+  so the borrowed-parameter shape this function used to carry
+  was the one blocker on a `#[uniffi::export]`. The function is
+  re-exported from `napi_addon` as `initTracing(directive)`
+  (signature unchanged from the JS caller's perspective) and
+  remains feature-gated behind the `tracing-subscriber` Cargo
+  feature on `ffi`. Idempotency, metrics wiring
+  (`init_tracing_total` counter + `tracing_initialized` flag),
+  and the "first-directive wins" concurrency contract are
+  unchanged. Closes the "deferred to a follow-up" note that
+  previously appeared in `README.md`'s surface-specific list.
+
 ### Changed — Dependencies
 
 - Bumped `axum` from `0.7` to `0.8` (workspace pin). Axum 0.8

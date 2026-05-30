@@ -137,9 +137,10 @@ across both bindings) are:
 `configure_synthesis_engine`, `trigger_server_synthesis`,
 `synthesis_status`, `list_recent_syntheses`,
 `admit_approved_document`, `revoke_approved_document`,
-`replace_approved_document`, `list_approved_documents`.
+`replace_approved_document`, `list_approved_documents`,
+`try_init_tracing`.
 
-Six entry points are intentionally surface-specific rather than
+Five entry points are intentionally surface-specific rather than
 mirrored across both bindings:
 
 * `init` — **N-API only.** A JS-facing bootstrap helper
@@ -148,15 +149,6 @@ mirrored across both bindings:
   Android) drive the equivalent setup through their native shell
   init sequence (Swift `init` / Kotlin `Application.onCreate`), so
   there's no UniFFI export.
-* `try_init_tracing` (JS: `initTracing`) — **N-API only**, gated by
-  the `tracing-subscriber` Cargo feature on `crates/ffi`. The
-  underlying function (`crates/ffi/src/tracing_init.rs:137`) takes
-  a `&str` directive which UniFFI cannot bridge as a parameter
-  (UniFFI requires `String` for owned wire transfer), so adding a
-  `#[uniffi::export]` shim would require changing the Rust
-  signature — deferred to a follow-up. Mobile hosts that need
-  in-process tracing install their own `tracing-subscriber` from
-  Swift / Kotlin instead.
 * `core_version` — **N-API only.** A JS-facing bootstrap helper
   (`crates/ffi/src/health.rs:396-405`) that returns the workspace
   semver baked into the build. Mobile hosts read the same value out
@@ -321,7 +313,12 @@ returns a bridge-only envelope suitable for an Electron
 throughout the workspace. To install a global subscriber from
 the host enable the `tracing-subscriber` feature on `ffi` /
 `napi_addon` and call `ffi::try_init_tracing(directive)` (Rust)
-or `initTracing(directive)` (JS). The directive uses
+or `initTracing(directive)` (JS / N-API), or
+`tryInitTracing(directive)` from the UniFFI-generated
+Swift / Kotlin bindings (iOS / Android hosts that prefer the
+substrate's `fmt::Layer + EnvFilter` stack over installing
+`tracing-subscriber` directly from Swift / Kotlin). The
+directive uses
 [`tracing_subscriber::EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)'s
 `RUST_LOG` syntax — `EnvFilter` uses `::` as the hierarchy
 separator (not `_` or `-`), and each workspace crate is its own

@@ -76,6 +76,17 @@ static INSTALLED: OnceLock<()> = OnceLock::new();
 /// environment variable. Examples: `"info"`,
 /// `"ffi=debug,evidence_store=debug"`, `"warn,inference_router=info"`.
 ///
+/// # Parameter shape
+///
+/// `directive` is taken by **owned `String`**, not `&str`. The
+/// owned shape is what UniFFI requires for parameter marshalling
+/// (UniFFI can only bridge owned `String` across the FFI boundary,
+/// not borrowed `&str`), and the cost — one allocation per
+/// early-boot call — is irrelevant against the substrate's
+/// once-per-process call frequency. Rust-side callers can pass
+/// either `String::from("info")`, a `String` they already own, or
+/// a `&str` via `.to_string()` / `.into()`.
+///
 /// # Errors
 ///
 /// * [`FfiError::InvalidId`] (re-using the existing variant for a
@@ -134,7 +145,17 @@ static INSTALLED: OnceLock<()> = OnceLock::new();
 /// calling this helper; the `tracing` crate's global-default
 /// dispatcher will pick up whichever subscriber is installed
 /// first.
-pub fn try_init_tracing(directive: &str) -> FfiResult<()> {
+// FFI: UniFFI requires an owned `String` for parameter marshalling
+// (the wire ABI for `RustBuffer`-backed strings only models
+// ownership transfer), so the borrowed-`&str` shape this function
+// used to carry would not roundtrip. The owned parameter is then
+// consumed only by an `&directive` borrow inside the body — that
+// is what trips clippy::needless_pass_by_value. Suppress the lint
+// here rather than refactor to `&str`: the FFI boundary contract
+// is what dictates the shape, not the body's borrow pattern.
+#[allow(clippy::needless_pass_by_value)]
+#[uniffi::export]
+pub fn try_init_tracing(directive: String) -> FfiResult<()> {
     // Wire through the same metrics::instrument pattern every other
     // public FFI entry point uses: increments `init_tracing_total`
     // before the body runs, and routes the `Err` path through
@@ -147,7 +168,7 @@ pub fn try_init_tracing(directive: &str) -> FfiResult<()> {
             return Ok(());
         }
 
-        let filter = EnvFilter::try_new(directive).map_err(|e| FfiError::InvalidId {
+        let filter = EnvFilter::try_new(&directive).map_err(|e| FfiError::InvalidId {
             message: format!("invalid tracing directive `{directive}`: {e}"),
         })?;
 
@@ -195,11 +216,24 @@ mod tests {
         // whether another test in the same process already
         // installed a subscriber); the second call MUST be
         // `Ok(())`. We don't care about the directive's level here.
-        let _ = try_init_tracing("info");
-        let second = try_init_tracing("debug");
+        let _ = try_init_tracing("info".to_string());
+        let second = try_init_tracing("debug".to_string());
         assert!(second.is_ok());
         // After at least one successful or short-circuited call
         // the metrics flag must be set.
         assert!(metrics::tracing_initialized());
+    }
+
+    #[test]
+    fn try_init_tracing_accepts_owned_string() {
+        // Pin the public signature: the function takes `String`
+        // (not `&str`) so UniFFI can bridge the parameter across
+        // the FFI boundary. If a future refactor regresses this
+        // back to `&str`, the UniFFI scaffolding will fail to
+        // compile — but this test gives the regression a clearer
+        // message at the function-signature level.
+        let directive: String = String::from("info");
+        let result = try_init_tracing(directive);
+        assert!(result.is_ok());
     }
 }
