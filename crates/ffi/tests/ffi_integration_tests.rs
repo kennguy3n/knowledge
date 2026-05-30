@@ -4153,3 +4153,193 @@ mod sync_scheduler_tests {
         close_store(h).expect("close_store");
     }
 }
+
+/// Phase 10 Item 3 — `connector_status` is the per-instance health
+/// probe symmetric with `synthesis_status`. The Phase 6 surfaces
+/// (`list_connectors`, `sync_scheduler_status`) only expose
+/// fleet-wide views; hosts that want to render a single
+/// connector's health page were forced to fetch both and reassemble
+/// by hand. `connector_status` returns one record covering:
+///
+/// * the [`ConnectorStatus`] view (kind / scope / sync state /
+///   last error / last-synced timestamp), and
+/// * the scheduler-side posture (effective interval / max-backoff,
+///   `auto_synthesize`, consecutive failures, next-attempt-at,
+///   `in_cooldown`).
+///
+/// The integration tests below pin the four scenarios that matter
+/// for the wire contract:
+///
+/// 1. Scheduler stopped — scheduler fields gracefully degrade to
+///    zeros / `None` / `false`.
+/// 2. Scheduler running with default policy — fields reflect the
+///    scheduler defaults; no explicit policy override.
+/// 3. Scheduler running with a per-instance policy override —
+///    fields reflect the override.
+/// 4. Error cases — bad UUID, missing instance, forgotten scope.
+///
+/// Gated on `http-client` because `create_connector` requires the
+/// real `BlockingHttpTransport`. The Phase 2 CI workflow builds
+/// with `--all-features` so this test still runs in CI; local
+/// `cargo test` developers see it skip the way the rest of the
+/// connector-lifecycle tests do.
+#[cfg(feature = "http-client")]
+mod connector_status_tests {
+    use super::{fresh_store, ConnectorKindTag};
+    use ffi::{
+        clear_sync_schedule, close_store, configure_sync_schedule, connector_status,
+        create_connector, forget_scope, start_sync_scheduler, stop_sync_scheduler, FfiError,
+        SyncStatusKind,
+    };
+
+    /// Slack connector config pointed at the `.invalid` TLD — same
+    /// rationale as `sync_scheduler_tests::SLACK_CONNECTOR_CFG`.
+    /// Duplicated here rather than re-exported to keep the
+    /// scheduler-tests module's `use super::*` discipline intact.
+    const SLACK_CONNECTOR_CFG: &str = r#"{
+        "client_id": "x",
+        "client_secret": "y",
+        "auth_endpoint": "https://oauth.slack.invalid/authorize",
+        "token_endpoint": "https://oauth.slack.invalid/token",
+        "redirect_uri": "https://example.invalid/callback"
+    }"#;
+
+    #[test]
+    fn returns_graceful_defaults_when_scheduler_is_stopped() {
+        // Spec: with the scheduler stopped, `is_scheduled` must be
+        // `false` and every scheduler-side numeric must read zero
+        // (so JS hosts using `??` / falsy checks see the
+        // "scheduler off" posture without having to inspect
+        // `is_scheduled` separately).
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-00000000c001".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope.clone(),
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+
+        let probe = connector_status(h, instance.clone()).expect("connector_status");
+        assert_eq!(probe.instance_id, instance);
+        assert_eq!(probe.scope_id, scope);
+        assert!(matches!(probe.kind, ConnectorKindTag::Slack));
+        assert!(matches!(probe.sync_status, SyncStatusKind::NeverRun));
+        assert!(probe.last_synced_at.is_none());
+        assert!(probe.last_error.is_none());
+
+        // Scheduler-side fields must all be in the "off" posture.
+        assert!(!probe.is_scheduled, "is_scheduled must be false");
+        assert_eq!(probe.sync_interval_secs, 0);
+        assert_eq!(probe.max_backoff_secs, 0);
+        assert!(!probe.auto_synthesize);
+        assert_eq!(probe.consecutive_failures, 0);
+        assert!(probe.next_attempt_unix.is_none());
+        assert!(
+            !probe.in_cooldown,
+            "in_cooldown must be false when scheduler isn't running",
+        );
+
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn reflects_scheduler_defaults_then_override_then_clear() {
+        // Spec: a created instance with no explicit policy must
+        // surface the scheduler defaults; configure_sync_schedule
+        // must flip those fields to the override; clear_sync_schedule
+        // must revert them to defaults (and DROP `auto_synthesize`
+        // unless it was previously set — same Phase-9 contract as
+        // `configure_sync_auto_synthesize`).
+        let (h, _dir) = fresh_store();
+        let scope = "00000000-0000-0000-0000-00000000c002".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope,
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+
+        // Start with 60s interval / 600s max-backoff defaults.
+        start_sync_scheduler(h, 60, 600, 1).expect("start");
+
+        let probe = connector_status(h, instance.clone()).expect("status before override");
+        assert!(probe.is_scheduled);
+        assert_eq!(probe.sync_interval_secs, 60);
+        assert_eq!(probe.max_backoff_secs, 600);
+        assert!(!probe.auto_synthesize);
+        assert_eq!(probe.consecutive_failures, 0);
+        assert!(probe.next_attempt_unix.is_none());
+        assert!(!probe.in_cooldown);
+
+        // Override to 5s / 30s.
+        configure_sync_schedule(h, instance.clone(), 5, 30).expect("configure");
+        let probe = connector_status(h, instance.clone()).expect("status after override");
+        assert!(probe.is_scheduled);
+        assert_eq!(probe.sync_interval_secs, 5);
+        assert_eq!(probe.max_backoff_secs, 30);
+
+        // Clear must drop the override — fields go back to
+        // scheduler defaults.
+        clear_sync_schedule(h, instance.clone()).expect("clear");
+        let probe = connector_status(h, instance.clone()).expect("status after clear");
+        assert!(probe.is_scheduled);
+        assert_eq!(probe.sync_interval_secs, 60);
+        assert_eq!(probe.max_backoff_secs, 600);
+
+        stop_sync_scheduler(h).expect("stop");
+        close_store(h).expect("close_store");
+    }
+
+    #[test]
+    fn rejects_garbage_uuid_and_unknown_instance_and_forgotten_scope() {
+        // Spec: the three NotFound / InvalidId cases must match
+        // the rest of the connector-FFI surface (same `kind`
+        // strings, same `id` echo).
+        let (h, _dir) = fresh_store();
+
+        // Garbage UUID.
+        let err = connector_status(h, "not-a-uuid".into())
+            .expect_err("garbage UUID must reject as InvalidId");
+        assert!(matches!(err, FfiError::InvalidId { .. }));
+
+        // Unknown instance (well-formed UUID, just not registered).
+        let err = connector_status(h, "00000000-0000-0000-0000-00000000beef".into())
+            .expect_err("unknown instance must reject as NotFound");
+        assert!(matches!(
+            err,
+            FfiError::NotFound { ref kind, .. } if kind == "connector_instance"
+        ));
+
+        // Forgotten-scope: create a connector, forget its scope,
+        // then probe — the tombstoned-scope shield must surface as
+        // NotFound { kind = "scope" } matching the rest of the FFI.
+        let scope = "00000000-0000-0000-0000-00000000c003".to_string();
+        let instance = create_connector(
+            h,
+            ConnectorKindTag::Slack,
+            scope.clone(),
+            SLACK_CONNECTOR_CFG.into(),
+        )
+        .expect("create_connector");
+        forget_scope(h, scope.clone()).expect("forget_scope");
+        // After forget_scope, the connector is purged outright by
+        // the scope-cleanup path — probing must return
+        // NotFound { kind = "connector_instance" }. (The
+        // tombstoned-scope shield in `connector_status` is the
+        // defense-in-depth path that fires when scope-state cleanup
+        // races with the runtime's connector purge — exercised by
+        // the connector.rs unit test rather than this integration
+        // test.)
+        let err = connector_status(h, instance.clone())
+            .expect_err("probing a purged connector must reject");
+        assert!(matches!(
+            err,
+            FfiError::NotFound { ref kind, .. } if kind == "connector_instance"
+        ));
+
+        close_store(h).expect("close_store");
+    }
+}

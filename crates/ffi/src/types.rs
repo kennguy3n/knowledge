@@ -335,6 +335,122 @@ pub struct ConnectorStatus {
     pub last_error: Option<String>,
 }
 
+/// Wire-flat result returned by [`super::connector_status`]
+/// (Phase 10 Item 3 — single-instance health probe symmetric with
+/// [`super::synthesis_status`]).
+///
+/// Bundles three independent slices of per-connector state that
+/// previously required three FFI calls + a manual join:
+///
+/// 1. The base [`ConnectorStatus`] fields (kind, scope, sync mode
+///    / status, last-synced timestamp, last error) — same source
+///    of truth as the entry in [`super::list_connectors`].
+/// 2. Scheduler posture from
+///    [`crate::sync_scheduler::sync_scheduler_status`] — whether
+///    the dispatch worker is running, the effective
+///    `sync_interval` / `max_backoff` for this instance (host
+///    override if [`super::configure_sync_schedule`] supplied
+///    one, otherwise the scheduler defaults), and the
+///    `auto_synthesize` flag.
+/// 3. Backoff posture — `consecutive_failures` since the last
+///    successful sync, `next_attempt_unix` for the next scheduled
+///    dispatch (or `None` if the scheduler is stopped / the
+///    instance has never been scheduled), and an `in_cooldown`
+///    convenience flag (`true` iff the instance is past its
+///    first failure and the scheduler is actively backing off).
+///
+/// `is_scheduled` separates "scheduler is running and this
+/// instance is registered with it" from the legacy
+/// `ConnectorStatus` view — a host that calls
+/// [`super::create_connector`] but never starts the scheduler
+/// will see `is_scheduled=false` even though `last_synced_at`
+/// may be populated from host-driven [`super::sync_connector`]
+/// calls.
+///
+/// # Wire format
+///
+/// `Serialize`/`Deserialize` use `rename_all = "camelCase"` so the
+/// JSON surface matches the other connector-shaped records.
+/// `{ instanceId, kind, scopeId, syncMode, syncStatus,
+///    lastSyncedAt, lastError, isScheduled, syncIntervalSecs,
+///    maxBackoffSecs, autoSynthesize, consecutiveFailures,
+///    nextAttemptUnix, inCooldown }` is the JS-idiomatic shape.
+/// UniFFI bindings (Swift/Kotlin) are unaffected — they read
+/// Rust field names directly through the `uniffi::Record` derive
+/// and do not pass through `serde`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectorHealthRecord {
+    /// UUID-string identifier — the
+    /// [`connector_framework::ConnectorInstanceId`] this row refers to.
+    pub instance_id: String,
+    /// Which source-system connector this is.
+    pub kind: ConnectorKindTag,
+    /// UUID-string scope id the connector is bound to.
+    pub scope_id: ScopeIdString,
+    /// Current sync direction.
+    pub sync_mode: SyncModeKind,
+    /// Most recent lifecycle phase.
+    pub sync_status: SyncStatusKind,
+    /// Unix epoch seconds when the last sync completed, or `None`
+    /// if no sync has finished yet.
+    pub last_synced_at: Option<i64>,
+    /// Last-error diagnostic if `sync_status == Failed`, else
+    /// `None`.
+    pub last_error: Option<String>,
+    /// `true` iff [`crate::sync_scheduler::start_sync_scheduler`]
+    /// is currently running on this runtime. When `true`, the
+    /// scheduler will fire this instance on the next tick that
+    /// matches its `next_attempt_at` — regardless of whether the
+    /// host has supplied a per-instance policy override via
+    /// [`crate::sync_scheduler::configure_sync_schedule`] (absent
+    /// overrides fall back to the scheduler's `default_interval`
+    /// / `default_max_backoff`). A host can configure per-instance
+    /// policy regardless of this flag — the override is stored
+    /// and applied once the scheduler starts; `is_scheduled=false`
+    /// simply means the dispatch worker is not currently running.
+    pub is_scheduled: bool,
+    /// Effective per-instance sync interval in seconds. Reflects
+    /// either the host-supplied
+    /// [`crate::sync_scheduler::configure_sync_schedule`]
+    /// override, or — absent an override — the scheduler's
+    /// `default_interval` configured at
+    /// [`crate::sync_scheduler::start_sync_scheduler`] time.
+    /// `0` iff the scheduler is not running on this runtime
+    /// (no default to report against).
+    pub sync_interval_secs: u64,
+    /// Effective per-instance max backoff cap in seconds. Same
+    /// override-then-default semantics as [`Self::sync_interval_secs`];
+    /// `0` iff the scheduler is not running.
+    pub max_backoff_secs: u64,
+    /// `true` iff the scheduler will fire a domain-tier
+    /// [`crate::synthesis::trigger_server_synthesis`] against the
+    /// connector's scope after each successful sync. Toggled per
+    /// instance by
+    /// [`crate::sync_scheduler::configure_sync_auto_synthesize`].
+    pub auto_synthesize: bool,
+    /// Consecutive failures since the last successful sync.
+    /// Reset to `0` on success. Used by the scheduler as the
+    /// exponent in the next-attempt-delay calculation. Mirrors
+    /// the value reported in
+    /// [`crate::sync_scheduler::sync_scheduler_status`].
+    pub consecutive_failures: u32,
+    /// Unix epoch seconds for the next scheduled dispatch
+    /// attempt, or `None` if the scheduler is stopped or has
+    /// never dispatched this instance (in which case the next
+    /// tick fires it immediately).
+    pub next_attempt_unix: Option<i64>,
+    /// Convenience flag for hosts that want a single
+    /// "is this connector currently backing off?" check.
+    /// `true` iff [`Self::is_scheduled`] is `true` AND
+    /// [`Self::consecutive_failures`] is greater than zero.
+    /// A successful-but-pending instance (failures==0,
+    /// next_attempt_unix in the future) is NOT in cooldown — the
+    /// scheduler is just waiting for the regular `sync_interval`
+    /// to elapse.
+    pub in_cooldown: bool,
+}
+
 /// Wire-flat result returned by [`super::refresh_connector_token`].
 ///
 /// Records what happened during an explicit token refresh —
@@ -684,7 +800,14 @@ pub struct SynthesisStatusRecord {
 /// is **not** the raw API key — it is the name of an environment
 /// variable holding the cleartext token (or a host-resolved key
 /// reference). The substrate never stores the cleartext token.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+// `Eq` is intentionally NOT derived because `rate_refill_per_sec`
+// is `f64`. The serde round-trip test uses `assert_eq!` on the
+// struct, which `PartialEq` is sufficient for — `NaN` values
+// would already break round-trip elsewhere (JSON has no NaN
+// representation), so the lost reflexivity is not a real
+// regression. See the user-knowledge note on f64-on-serde
+// structs in this repo's session memory.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct SynthesisEngineConfig {
     /// HTTPS URL of the synthesis endpoint.
@@ -724,6 +847,30 @@ pub struct SynthesisEngineConfig {
     /// the multi-tenant production posture.
     #[serde(default)]
     pub single_tenant: bool,
+
+    /// Burst capacity for the global rate-shaping token bucket
+    /// gating [`crate::synthesis::trigger_server_synthesis`]
+    /// (Phase 10 Item 5). `0` falls back to
+    /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY`] (8) —
+    /// the same sentinel-zero pattern used by `max_tokens` and
+    /// `timeout_ms`. Hosts that want to disable rate-shaping
+    /// outright cannot — the bucket is always on so a
+    /// misconfigured host can never race past the cap. Use a
+    /// large value (e.g. `1_000`) to effectively disable.
+    #[serde(default)]
+    pub rate_capacity: u32,
+
+    /// Refill rate (tokens per second) for the global
+    /// rate-shaping token bucket gating
+    /// [`crate::synthesis::trigger_server_synthesis`]
+    /// (Phase 10 Item 5). `0.0` falls back to
+    /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC`]
+    /// (1.0). Fractional values are supported (e.g. `0.5` ==
+    /// one token every 2 seconds). Negative values are rejected
+    /// by [`crate::synthesis::configure_synthesis_engine`] with
+    /// `FfiError::Unavailable`.
+    #[serde(default)]
+    pub rate_refill_per_sec: f64,
 }
 
 /// Summary view of an approved-document reference + payload pair,
@@ -1280,6 +1427,108 @@ mod tests {
         assert_eq!(back, s);
     }
 
+    /// Phase 10 Item 3 — `ConnectorHealthRecord` is the new
+    /// single-instance probe envelope returned by
+    /// [`crate::connector::connector_status`], symmetric with
+    /// [`crate::synthesis::synthesis_status`]. Pin the camelCase
+    /// invariant on every field of the wire format so a future
+    /// drift between the documented JS-idiomatic surface (read
+    /// by N-API hosts directly off the JSON object) and the Rust
+    /// type's `#[serde(rename_all = "camelCase")]` is caught at
+    /// `cargo test` time.
+    ///
+    /// Also pins the round-trip `assert_eq!(back, s)` so a
+    /// regression that drops a field (or changes a default) is
+    /// caught — `ConnectorHealthRecord` has no `#[serde(default)]`
+    /// fields today, so any missing key on deserialize would
+    /// surface as a panic.
+    #[test]
+    fn connector_health_record_serializes_with_camelcase_keys() {
+        let s = ConnectorHealthRecord {
+            instance_id: "00000000-0000-0000-0000-000000000001".into(),
+            kind: ConnectorKindTag::GoogleDrive,
+            scope_id: "00000000-0000-0000-0000-0000000000aa".into(),
+            sync_mode: SyncModeKind::Incremental,
+            sync_status: SyncStatusKind::Failed,
+            last_synced_at: Some(1_700_000_000),
+            last_error: Some("HTTP 503 from googleapis.com".into()),
+            is_scheduled: true,
+            sync_interval_secs: 900,
+            max_backoff_secs: 28_800,
+            auto_synthesize: true,
+            consecutive_failures: 3,
+            next_attempt_unix: Some(1_700_010_000),
+            in_cooldown: true,
+        };
+        let v = serde_json::to_value(&s).expect("serialize");
+        let obj = v.as_object().expect("object");
+        for camel in [
+            "instanceId",
+            "kind",
+            "scopeId",
+            "syncMode",
+            "syncStatus",
+            "lastSyncedAt",
+            "lastError",
+            "isScheduled",
+            "syncIntervalSecs",
+            "maxBackoffSecs",
+            "autoSynthesize",
+            "consecutiveFailures",
+            "nextAttemptUnix",
+            "inCooldown",
+        ] {
+            assert!(
+                obj.contains_key(camel),
+                "ConnectorHealthRecord JSON must contain camelCase key `{camel}`; got {v}"
+            );
+        }
+        for snake in [
+            "instance_id",
+            "scope_id",
+            "sync_mode",
+            "sync_status",
+            "last_synced_at",
+            "last_error",
+            "is_scheduled",
+            "sync_interval_secs",
+            "max_backoff_secs",
+            "auto_synthesize",
+            "consecutive_failures",
+            "next_attempt_unix",
+            "in_cooldown",
+        ] {
+            assert!(
+                !obj.contains_key(snake),
+                "ConnectorHealthRecord JSON must NOT contain snake_case key `{snake}`; got {v}"
+            );
+        }
+        // Nested-enum tag pins — same defense-in-depth as
+        // `connector_status_serializes_with_camelcase_keys`. A
+        // future refactor that flips `ConnectorKindTag` /
+        // `SyncModeKind` / `SyncStatusKind` from `snake_case` to
+        // `camelCase` would silently break every JS consumer
+        // matching on `"google_drive"` / `"incremental"` /
+        // `"failed"`.
+        assert_eq!(
+            obj.get("kind").and_then(|m| m.as_str()),
+            Some("google_drive"),
+            "ConnectorKindTag variant tag must remain snake_case"
+        );
+        assert_eq!(
+            obj.get("syncMode").and_then(|m| m.as_str()),
+            Some("incremental"),
+            "SyncModeKind variant tag must remain snake_case"
+        );
+        assert_eq!(
+            obj.get("syncStatus").and_then(|m| m.as_str()),
+            Some("failed"),
+            "SyncStatusKind variant tag must remain snake_case"
+        );
+        let back: ConnectorHealthRecord = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(back, s);
+    }
+
     #[test]
     fn synthesis_tier_kind_round_trips_via_serde() {
         for kind in [SynthesisTierKind::Domain, SynthesisTierKind::Tenant] {
@@ -1357,6 +1606,8 @@ mod tests {
                 "55555555-5555-5555-5555-555555555555".into(),
             ]),
             single_tenant: false,
+            rate_capacity: 16,
+            rate_refill_per_sec: 2.5,
         };
         let v = serde_json::to_value(&cfg).expect("serialize");
         let obj = v.as_object().expect("object");
@@ -1369,6 +1620,8 @@ mod tests {
             "grammar",
             "scopeBindings",
             "singleTenant",
+            "rateCapacity",
+            "rateRefillPerSec",
         ] {
             assert!(
                 obj.contains_key(camel),
@@ -1382,6 +1635,8 @@ mod tests {
             "timeout_ms",
             "scope_bindings",
             "single_tenant",
+            "rate_capacity",
+            "rate_refill_per_sec",
         ] {
             assert!(
                 !obj.contains_key(snake),
@@ -1403,6 +1658,8 @@ mod tests {
             grammar: None,
             scope_bindings: None,
             single_tenant: false,
+            rate_capacity: 0,
+            rate_refill_per_sec: 0.0,
         };
         let back: SynthesisEngineConfig =
             serde_json::from_str(&serde_json::to_string(&cfg).expect("serialize"))

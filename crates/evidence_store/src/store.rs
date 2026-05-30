@@ -143,6 +143,17 @@ pub struct EvidenceStore {
     /// inserted into `evidence_embeddings`. Used to invalidate the
     /// cache when the model is swapped.
     embedding_model_tag: String,
+    /// Test-only "next [`Self::with_transaction`] call should fail"
+    /// hook. Populated by
+    /// [`Self::inject_with_transaction_failure_for_tests`] and
+    /// consumed (one-shot) by [`Self::with_transaction`] before it
+    /// opens a real SQLCipher transaction. Lets downstream crates
+    /// (chiefly the `ffi` crate's `apply_dispatch_outcome` commit-
+    /// failure regression test) exercise the tx-failure path without
+    /// inducing a real SQLCipher I/O error — see the `test-support`
+    /// feature comment in `Cargo.toml` for the contract.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) injected_with_transaction_failure: std::sync::Mutex<Option<String>>,
 }
 
 impl Drop for EvidenceStore {
@@ -293,6 +304,8 @@ impl EvidenceStore {
             master_key: *master_key,
             embedding_model: None,
             embedding_model_tag: String::new(),
+            #[cfg(any(test, feature = "test-support"))]
+            injected_with_transaction_failure: std::sync::Mutex::new(None),
         };
         // No-op for now, but keeps the borrow checker happy if we add
         // post-open prepared statements.
@@ -1577,10 +1590,56 @@ impl EvidenceStore {
     where
         F: FnOnce(&rusqlite::Transaction<'_>) -> Result<R>,
     {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(reason) = self.take_injected_with_transaction_failure() {
+            // Surface the synthetic failure through the same variant
+            // path that real disk-write failures use so callers
+            // (`apply_dispatch_outcome`, `replace_approved_document`)
+            // exercise their `EvidenceError::Sqlite` handling rather
+            // than a synthetic-only code path. `SQLITE_FULL` mirrors
+            // the most plausible cause of a real commit failure
+            // (disk full); the injected `reason` is preserved in the
+            // `Option<String>` slot so it surfaces in the rendered
+            // error message.
+            return Err(EvidenceError::Sqlite(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+                Some(reason),
+            )));
+        }
         let tx = self.conn.unchecked_transaction()?;
         let value = f(&tx)?;
         tx.commit()?;
         Ok(value)
+    }
+
+    /// Arm a one-shot failure on the next [`Self::with_transaction`]
+    /// call. The next invocation pops the slot, returns
+    /// [`EvidenceError::Schema(reason)`] without opening a real
+    /// transaction, and subsequent calls behave normally until the
+    /// slot is armed again.
+    ///
+    /// Only available with the `test-support` feature (or in unit
+    /// tests of this crate). Used by the `ffi` crate's
+    /// `apply_dispatch_outcome_tx_failure_marks_window_failed`
+    /// regression test to verify the commit-failure recovery path.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn inject_with_transaction_failure_for_tests(&self, reason: impl Into<String>) {
+        *self
+            .injected_with_transaction_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(reason.into());
+    }
+
+    /// Atomically take the armed failure (if any). Internal helper
+    /// for the `with_transaction` hot path — holds the mutex only
+    /// long enough to swap `None` into the slot so the caller never
+    /// double-fires.
+    #[cfg(any(test, feature = "test-support"))]
+    fn take_injected_with_transaction_failure(&self) -> Option<String> {
+        self.injected_with_transaction_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 
     /// Persist a serializable memory object (user or channel) for

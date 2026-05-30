@@ -210,6 +210,7 @@ test('every documented function is exported with camelCase name', () => {
     'configureSyncAutoSynthesize',
     'configureSyncSchedule',
     'configureSynthesisEngine',
+    'connectorStatus',
     'coreVersion',
     'createConnector',
     'decrypt',

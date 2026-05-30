@@ -146,6 +146,25 @@ pub const MAX_APPROVED_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 /// `TenantMemoryObject` serialisation cost over many refs.
 pub const MAX_APPROVED_DOCUMENT_METADATA_BYTES: usize = 1024;
 
+/// Default burst capacity for the global
+/// [`crate::synthesis_rate::TokenBucket`] gating
+/// [`trigger_server_synthesis`] (Phase 10 Item 5). Picked at 8
+/// to allow a small fan-out across scopes without throttling
+/// the steady-state case while still bounding pathological
+/// bursts; hosts can override by setting
+/// [`crate::types::SynthesisEngineConfig::rate_capacity`].
+pub const DEFAULT_TRIGGER_RATE_CAPACITY: u32 = 8;
+
+/// Default refill rate (tokens per second) for the global
+/// [`crate::synthesis_rate::TokenBucket`] gating
+/// [`trigger_server_synthesis`] (Phase 10 Item 5). Picked at
+/// 1.0 — one dispatch per second steady-state, matching the
+/// upper end of realistic engine throughput while leaving the
+/// per-scope [`PER_SCOPE_COOLDOWN_SECS`] (300 s) as the
+/// dominant per-scope cap. Hosts override via
+/// [`crate::types::SynthesisEngineConfig::rate_refill_per_sec`].
+pub const DEFAULT_TRIGGER_RATE_REFILL_PER_SEC: f64 = 1.0;
+
 /// Maximum number of approved documents materialised per tenant
 /// dispatch. When a tenant scope carries more refs than this cap,
 /// the documents are sorted by `approved_at` descending (most
@@ -192,8 +211,49 @@ pub fn configure_synthesis_engine(
         let endpoint_config = endpoint_config_from_ffi(&config)?;
         let scope_bindings = parse_scope_bindings(config.scope_bindings.as_deref())?;
         let single_tenant = config.single_tenant;
-        configure_engine_impl(handle, endpoint_config, scope_bindings, single_tenant)
+        let (rate_capacity, rate_refill_per_sec) =
+            resolve_rate_limiter_config(config.rate_capacity, config.rate_refill_per_sec)?;
+        configure_engine_impl(
+            handle,
+            endpoint_config,
+            scope_bindings,
+            single_tenant,
+            rate_capacity,
+            rate_refill_per_sec,
+        )
     })
+}
+
+/// Sentinel-zero resolution + validation for the rate-limiter
+/// knobs on [`SynthesisEngineConfig`]. Splits the parse from the
+/// runtime mutation so the validation surface is unit-testable
+/// without spinning up an `FfiRuntime`.
+fn resolve_rate_limiter_config(
+    rate_capacity: u32,
+    rate_refill_per_sec: f64,
+) -> FfiResult<(u32, f64)> {
+    // Sentinel-zero fallback matches the established pattern used
+    // by `max_tokens` / `timeout_ms`. Callers that want to
+    // "disable" rate-shaping must pass a very large positive
+    // value — the bucket is always on (see field docs).
+    let capacity = if rate_capacity == 0 {
+        DEFAULT_TRIGGER_RATE_CAPACITY
+    } else {
+        rate_capacity
+    };
+    let refill = if rate_refill_per_sec == 0.0 {
+        DEFAULT_TRIGGER_RATE_REFILL_PER_SEC
+    } else {
+        rate_refill_per_sec
+    };
+    if !refill.is_finite() || refill <= 0.0 {
+        return Err(FfiError::Unavailable {
+            subsystem: format!(
+                "synthesis_engine (rate_refill_per_sec must be finite and positive, got {refill})",
+            ),
+        });
+    }
+    Ok((capacity, refill))
 }
 
 #[cfg(feature = "http-client")]
@@ -202,6 +262,8 @@ fn configure_engine_impl(
     endpoint_config: EndpointConfig,
     scope_bindings: Option<Vec<Uuid>>,
     single_tenant: bool,
+    rate_capacity: u32,
+    rate_refill_per_sec: f64,
 ) -> FfiResult<()> {
     let client =
         BlockingHttpClientAdapter::new(&endpoint_config).map_err(|e| FfiError::Unavailable {
@@ -213,10 +275,14 @@ fn configure_engine_impl(
         rt.synthesis_engine = Some(engine);
         rt.synthesis_scope_bindings = scope_bindings;
         rt.synthesis_single_tenant = single_tenant;
+        rt.synthesis_rate_limiter
+            .reconfigure(rate_capacity, rate_refill_per_sec);
         tracing::info!(
             handle = handle.0,
             scope_bindings_configured = rt.synthesis_scope_bindings.is_some(),
             single_tenant,
+            rate_capacity,
+            rate_refill_per_sec,
             "configure_synthesis_engine: synthesis engine installed",
         );
         Ok(())
@@ -229,6 +295,8 @@ fn configure_engine_impl(
     _endpoint_config: EndpointConfig,
     _scope_bindings: Option<Vec<Uuid>>,
     _single_tenant: bool,
+    _rate_capacity: u32,
+    _rate_refill_per_sec: f64,
 ) -> FfiResult<()> {
     Err(FfiError::Unavailable {
         subsystem: "synthesis_engine (built without http-client feature)".into(),
@@ -972,6 +1040,30 @@ fn build_dispatch_plan(
         }
     }
 
+    // Global rate-shaping gate (Phase 10 Item 5). Consumes one
+    // token from the FFI-wide token bucket — distinct from and
+    // complementary to the per-(scope, tier) cooldown above. The
+    // cooldown stops the SAME tenant from hammering the engine
+    // on the SAME tier; this bucket stops a host from fanning
+    // out across many tenants concurrently and starving the
+    // engine. Placed AFTER the cooldown short-circuit so cached
+    // returns don't burn tokens — a host doing read-mostly
+    // polling on a busy scope should not be charged for the
+    // engine work it isn't actually performing.
+    if let Err(retry_after_ms) = rt.synthesis_rate_limiter.try_acquire(Utc::now()) {
+        metrics::inc_trigger_server_synthesis_throttled();
+        tracing::warn!(
+            scope = %scope.as_uuid(),
+            tier = tier.as_str(),
+            retry_after_ms,
+            "trigger_server_synthesis: rate-limited, returning Throttled",
+        );
+        return Err(FfiError::Throttled {
+            subsystem: "synthesis_engine".into(),
+            retry_after_ms,
+        });
+    }
+
     let now = Utc::now();
     let window_start = now - chrono::Duration::seconds(DEFAULT_WINDOW_DURATION_SECS);
     let window_end = now;
@@ -1364,31 +1456,66 @@ fn apply_dispatch_outcome(
                         message: format!("failed to serialize synthesis windows: {e}"),
                     })?;
 
-                rt.store()
-                    .with_transaction(|tx| {
-                        rt.store().save_memory_blob_in_tx(
-                            tx,
-                            scope,
-                            crate::runtime::SYNTHESIS_OBJECT_KIND,
-                            &synthesis_obj_json,
-                        )?;
-                        rt.store().save_memory_blob_in_tx(
-                            tx,
-                            scope,
-                            memory_kind,
-                            &memory_blob_json,
-                        )?;
-                        rt.store().save_memory_blob_in_tx(
-                            tx,
-                            crate::runtime::synthesis_windows_scope(),
-                            crate::runtime::SYNTHESIS_WINDOWS_KIND,
-                            &windows_json,
-                        )?;
-                        Ok(())
-                    })
-                    .map_err(|e| FfiError::Evidence {
-                        message: format!("synthesis-apply transaction failed: {e}"),
-                    })?;
+                if let Err(tx_err) = rt.store().with_transaction(|tx| {
+                    rt.store().save_memory_blob_in_tx(
+                        tx,
+                        scope,
+                        crate::runtime::SYNTHESIS_OBJECT_KIND,
+                        &synthesis_obj_json,
+                    )?;
+                    rt.store()
+                        .save_memory_blob_in_tx(tx, scope, memory_kind, &memory_blob_json)?;
+                    rt.store().save_memory_blob_in_tx(
+                        tx,
+                        crate::runtime::synthesis_windows_scope(),
+                        crate::runtime::SYNTHESIS_WINDOWS_KIND,
+                        &windows_json,
+                    )?;
+                    Ok(())
+                }) {
+                    // Tx commit failure recovery (Phase 10 Item 1).
+                    // The transaction rolled back so every blob row
+                    // is in its pre-dispatch shape; the live
+                    // in-memory maps were intentionally not mutated
+                    // yet (plan-on-clone / commit-after-tx). The
+                    // only piece of mutable state that did move
+                    // forward is the on-disk window manager flushed
+                    // at the start of `trigger_server_synthesis`
+                    // (Phase 1), which still has this window
+                    // marked `Pending`. Without explicit recovery
+                    // the host would never see a failure signal
+                    // for this window — `synthesis_status` would
+                    // report it as in-flight forever.
+                    //
+                    // Use the existing `fail_window_on_live_manager`
+                    // helper (Pending → InProgress → Failed, both
+                    // best-effort) then flush so the on-disk row
+                    // reflects the failure. The flush itself is
+                    // best-effort: if it fails too, the
+                    // `open_store` stuck-Pending recovery sweep
+                    // (Phase 10 Item 1) will catch the window on
+                    // the next start.
+                    fail_window_on_live_manager(rt, window_handle.window_id, "tx_commit_failed");
+                    if let Err(flush_err) = rt.flush_synthesis_windows() {
+                        tracing::warn!(
+                            error = ?flush_err,
+                            tx_error = %tx_err,
+                            window = %window_handle.window_id.as_uuid(),
+                            "apply_dispatch_outcome: post-tx-failure flush failed; window will \
+                             be reconciled by next open_store stuck-Pending sweep",
+                        );
+                    } else {
+                        tracing::warn!(
+                            tx_error = %tx_err,
+                            window = %window_handle.window_id.as_uuid(),
+                            "apply_dispatch_outcome: tx commit failed; window transitioned to \
+                             Failed via in-process recovery",
+                        );
+                    }
+                    return Err(FfiError::Evidence {
+                        message: format!("synthesis-apply transaction failed: {tx_err}"),
+                    });
+                }
 
                 // ────────── Tx committed — swap in-memory state ──────────
                 //
@@ -1869,6 +1996,18 @@ mod tests {
     use super::*;
     use crate::runtime::{close_store, open_store, with_runtime};
 
+    /// Near-zero refill rate used by the rate-limiter regression
+    /// tests below. Mathematically positive (so
+    /// [`TokenBucket::reconfigure`]'s `refill_per_sec > 0.0`
+    /// `debug_assert!` holds) but small enough that, within a
+    /// single test's wall-clock window (< 1 s), no tokens refill —
+    /// the test exercises burst behaviour without racing against
+    /// the refill clock.
+    ///
+    /// `clippy::items-after-statements` would fire if each test
+    /// defined this inline, so the constant lives at module scope.
+    const TEST_NO_REFILL: f64 = 0.000_001;
+
     /// Open a fresh evidence store backed by a temp dir. The
     /// returned `TempDir` MUST outlive the handle.
     fn fresh_store() -> (RuntimeHandle, tempfile::TempDir) {
@@ -2289,6 +2428,168 @@ mod tests {
         assert_eq!(
             domain_win, domain_win_again,
             "Domain cooldown must still recycle within the same tier",
+        );
+
+        teardown(handle);
+    }
+
+    // ─────────── Phase 10 Item 5: rate-shaping gate ──────────────
+
+    /// End-to-end test for the global token-bucket rate limiter:
+    /// configure a tight bucket (capacity 2, near-zero refill
+    /// — see `TEST_NO_REFILL` below), fan dispatches out across
+    /// N distinct scopes (no per-scope cooldown collision), and
+    /// verify that calls past the burst capacity return
+    /// `Throttled` with a non-zero `retry_after_ms` while calls
+    /// within the burst succeed. Also verifies the
+    /// `trigger_server_synthesis_throttled_total` metric and the
+    /// per-kind `errors_throttled` counter both tick.
+    ///
+    /// `TEST_NO_REFILL` is `0.000_001` tokens/sec —
+    /// mathematically positive (so the `refill_per_sec > 0.0`
+    /// invariant inside [`TokenBucket::reconfigure`] holds) but
+    /// small enough that the next-token wait is on the order of
+    /// `10^6` seconds, far outside the wall-clock window of the
+    /// test. This isolates the burst-capacity dimension from
+    /// clock progression without poking the bucket's invariants.
+    #[test]
+    fn rate_limiter_throttles_dispatch_past_burst_capacity() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+
+        // Three scopes, each a fully-seeded domain memory so the
+        // per-(scope, tier) cooldown never short-circuits us
+        // (each (scope, Domain) pair is fresh, no prior stamp).
+        let scope_a = seed_domain_with_two_channels(handle);
+        let scope_b = seed_domain_with_two_channels(handle);
+        let scope_c = seed_domain_with_two_channels(handle);
+
+        // Reconfigure the rate limiter to capacity=2 with a
+        // near-zero refill so the burst is the only knob being
+        // exercised (see test docs for the rate rationale). We
+        // poke the field directly because the public
+        // `configure_synthesis_engine` would treat a tiny
+        // refill < the sentinel as a host-provided value to
+        // forward verbatim, but we don't want to risk a future
+        // tightening of the validation cutoff invalidating this
+        // test; the unit-test path is stable and bypasses the
+        // FFI boundary.
+        with_runtime(handle, |rt| {
+            rt.synthesis_rate_limiter.reconfigure(2, TEST_NO_REFILL);
+            Ok(())
+        })
+        .expect("reconfigure rate limiter");
+
+        let metrics_before = crate::metrics::snapshot();
+
+        // First two dispatches consume the entire burst.
+        let _win_a = trigger_server_synthesis(
+            handle,
+            scope_a.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("first dispatch must succeed (burst slot 1/2)");
+        let _win_b = trigger_server_synthesis(
+            handle,
+            scope_b.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("second dispatch must succeed (burst slot 2/2)");
+
+        // Third dispatch must Throttle.
+        let err = trigger_server_synthesis(
+            handle,
+            scope_c.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect_err("third dispatch must throttle (burst exhausted)");
+
+        match err {
+            FfiError::Throttled {
+                subsystem,
+                retry_after_ms,
+            } => {
+                assert_eq!(subsystem, "synthesis_engine");
+                // No-refill bucket — retry_after_ms reflects the
+                // configured refill (effectively infinite), so the
+                // helper clamps to a minimum of 1 ms; in practice
+                // it returns the worst-case bucket-empty estimate.
+                // We only assert the floor: at least 1 ms must be
+                // surfaced so the host can back off.
+                assert!(retry_after_ms >= 1, "retry_after_ms must be >= 1 ms");
+            }
+            other => panic!("expected Throttled, got {other:?}"),
+        }
+
+        let metrics_after = crate::metrics::snapshot();
+        assert!(
+            metrics_after.trigger_server_synthesis_throttled_total
+                > metrics_before.trigger_server_synthesis_throttled_total,
+            "trigger_server_synthesis_throttled_total must tick on Throttled return",
+        );
+        assert!(
+            metrics_after.errors_by_kind.throttled > metrics_before.errors_by_kind.throttled,
+            "errors_by_kind.throttled must tick on Throttled return",
+        );
+
+        teardown(handle);
+    }
+
+    /// Cooldown short-circuit must NOT consume a rate-limit
+    /// token. A host doing a read-mostly poll on a busy scope
+    /// (cooldown stamp present, no new engine work) cannot be
+    /// allowed to drain the bucket — that would let the cooldown
+    /// path race past the cap. We verify this by configuring a
+    /// capacity-1 bucket, taking the initial dispatch, then
+    /// driving 5 cooldown short-circuit returns and confirming
+    /// the per-surface throttle counter is unchanged.
+    #[test]
+    fn rate_limiter_does_not_consume_on_cooldown_short_circuit() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+        let scope = seed_domain_with_two_channels(handle);
+
+        // Capacity 1 with the same near-zero refill rationale as
+        // `rate_limiter_throttles_dispatch_past_burst_capacity`
+        // — only one dispatch fits in the bucket. If cooldown
+        // short-circuit incorrectly consumed tokens, the 2nd-5th
+        // calls below would Throttle.
+        with_runtime(handle, |rt| {
+            rt.synthesis_rate_limiter.reconfigure(1, TEST_NO_REFILL);
+            Ok(())
+        })
+        .expect("reconfigure rate limiter");
+
+        let metrics_before = crate::metrics::snapshot();
+
+        let win1 = trigger_server_synthesis(
+            handle,
+            scope.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("first dispatch must succeed");
+
+        // Subsequent calls hit the cooldown short-circuit (same
+        // scope + tier). Each must return Ok(same window id),
+        // NOT Throttled.
+        for i in 0..5 {
+            let win = trigger_server_synthesis(
+                handle,
+                scope.as_uuid().to_string(),
+                SynthesisTierKind::Domain,
+            )
+            .unwrap_or_else(|e| panic!("cooldown short-circuit #{i} must not Throttle: {e:?}"));
+            assert_eq!(
+                win, win1,
+                "cooldown short-circuit must reuse window id, not Throttle",
+            );
+        }
+
+        let metrics_after = crate::metrics::snapshot();
+        assert_eq!(
+            metrics_after.trigger_server_synthesis_throttled_total,
+            metrics_before.trigger_server_synthesis_throttled_total,
+            "cooldown short-circuit must NOT consume a rate-limit token",
         );
 
         teardown(handle);
@@ -2889,6 +3190,8 @@ mod tests {
             grammar: None,
             scope_bindings: None,
             single_tenant: false,
+            rate_capacity: 0,
+            rate_refill_per_sec: 0.0,
         };
         let err = endpoint_config_from_ffi(&cfg).expect_err("oversize timeout must reject");
         match err {
@@ -2919,6 +3222,8 @@ mod tests {
             grammar: None,
             scope_bindings: None,
             single_tenant: false,
+            rate_capacity: 0,
+            rate_refill_per_sec: 0.0,
         };
         let endpoint = endpoint_config_from_ffi(&cfg).expect("at-cap timeout must accept");
         assert_eq!(
@@ -2941,12 +3246,72 @@ mod tests {
             grammar: None,
             scope_bindings: None,
             single_tenant: false,
+            rate_capacity: 0,
+            rate_refill_per_sec: 0.0,
         };
         let endpoint = endpoint_config_from_ffi(&cfg).expect("zero timeout must accept");
         // `EndpointConfig::timeout` is `None` until a custom value
         // is installed via `with_timeout`; the synthesis_engine layer
         // applies `DEFAULT_TIMEOUT` when the field is `None`.
         assert!(endpoint.timeout.is_none());
+    }
+
+    // ─────────── Phase 10 Item 5: rate-limiter validation ────────
+
+    /// Zero values must fall back to the published defaults.
+    #[test]
+    fn resolve_rate_limiter_config_zero_falls_back_to_defaults() {
+        let (cap, refill) = resolve_rate_limiter_config(0, 0.0).expect("zero must succeed");
+        assert_eq!(cap, DEFAULT_TRIGGER_RATE_CAPACITY);
+        // f64 equality is unsafe in general but the published
+        // default constant flows verbatim through the
+        // sentinel-zero fallback (no arithmetic), so a bit-exact
+        // comparison is the right assertion here.
+        #[allow(clippy::float_cmp)]
+        {
+            assert_eq!(refill, DEFAULT_TRIGGER_RATE_REFILL_PER_SEC);
+        }
+    }
+
+    /// Non-zero host-provided values must be threaded through verbatim.
+    #[test]
+    fn resolve_rate_limiter_config_threads_host_values() {
+        let (cap, refill) =
+            resolve_rate_limiter_config(64, 5.0).expect("positive values must succeed");
+        assert_eq!(cap, 64);
+        // Same bit-exact rationale as
+        // `resolve_rate_limiter_config_zero_falls_back_to_defaults`
+        // — the value is forwarded without arithmetic.
+        #[allow(clippy::float_cmp)]
+        {
+            assert_eq!(refill, 5.0);
+        }
+    }
+
+    /// Negative refill rates are rejected with `Unavailable` because
+    /// they would deadlock the bucket (`tokens` would refill negative
+    /// and never reach the threshold for `try_acquire`).
+    #[test]
+    fn resolve_rate_limiter_config_rejects_negative_refill() {
+        let err = resolve_rate_limiter_config(16, -1.0).expect_err("negative refill must reject");
+        assert!(
+            matches!(&err, FfiError::Unavailable { subsystem } if subsystem.contains("rate_refill_per_sec")),
+            "unexpected error variant: {err:?}",
+        );
+    }
+
+    /// Non-finite refill rates (NaN, infinity) must be rejected for
+    /// the same reason — the bucket arithmetic is undefined under
+    /// these inputs.
+    #[test]
+    fn resolve_rate_limiter_config_rejects_non_finite_refill() {
+        for refill in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let outcome = resolve_rate_limiter_config(16, refill);
+            assert!(
+                matches!(&outcome, Err(FfiError::Unavailable { .. })),
+                "refill={refill} must reject with Unavailable, got {outcome:?}",
+            );
+        }
     }
 
     // ───────────────── Phase 8: approved-document payloads ────────
@@ -3677,6 +4042,214 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, FfiError::Memory { .. }));
+
+        teardown(handle);
+    }
+
+    // ─────────── apply_dispatch_outcome tx-failure recovery (Phase 10 Item 1) ─────────
+
+    /// When the Phase-3 `with_transaction` commit fails, the
+    /// per-window recovery path inside `apply_dispatch_outcome` must
+    /// (a) surface the error, (b) transition the window to `Failed`
+    /// on the live manager, and (c) flush the manager so the on-
+    /// disk row is also `Failed`. Drives the failure via the
+    /// `inject_with_transaction_failure_for_tests` hook from
+    /// evidence_store's `test-support` feature.
+    #[test]
+    fn apply_dispatch_outcome_tx_failure_marks_window_failed() {
+        let (handle, _dir) = fresh_store();
+        install_test_engine(handle);
+        let scope = seed_tenant_with_domain(handle);
+        let scope_str = scope.as_uuid().to_string();
+
+        // Arm the one-shot failure on the next `with_transaction`
+        // call — that will be Phase-3's apply commit (Phase 1 flush
+        // uses `save_memory_blob` autocommit; Phase 2 dispatch does
+        // not touch the store).
+        with_runtime(handle, |rt| {
+            rt.store()
+                .inject_with_transaction_failure_for_tests("synthetic tx commit failure");
+            Ok(())
+        })
+        .expect("inject failure");
+
+        let err = trigger_server_synthesis(handle, scope_str, SynthesisTierKind::Tenant)
+            .expect_err("dispatch must surface the tx-commit failure");
+        match &err {
+            FfiError::Evidence { message } => {
+                assert!(
+                    message.contains("synthetic tx commit failure"),
+                    "expected the injected failure reason to propagate; got {message:?}",
+                );
+            }
+            other => panic!("expected FfiError::Evidence, got {other:?}"),
+        }
+
+        // In-memory: every window for the scope must be `Failed`
+        // (the dispatch opened exactly one window before failing).
+        let (in_memory_failed, on_disk_failed) = with_runtime(handle, |rt| {
+            let in_memory_failed = rt
+                .synthesis_windows
+                .windows_for(scope)
+                .iter()
+                .all(|w| w.status == synthesis_pipeline::WindowStatus::Failed);
+            // On disk: re-load the windows blob and check the same.
+            let blob = rt
+                .store()
+                .load_memory_blob(
+                    crate::runtime::synthesis_windows_scope(),
+                    crate::runtime::SYNTHESIS_WINDOWS_KIND,
+                )
+                .expect("synthesis_windows blob")
+                .expect("synthesis_windows blob present");
+            let on_disk: synthesis_pipeline::SynthesisWindowManager =
+                serde_json::from_slice(&blob).expect("parse synthesis_windows blob");
+            let on_disk_failed = on_disk
+                .windows_for(scope)
+                .iter()
+                .all(|w| w.status == synthesis_pipeline::WindowStatus::Failed);
+            Ok((in_memory_failed, on_disk_failed))
+        })
+        .expect("with_runtime");
+        assert!(
+            in_memory_failed,
+            "live manager must transition window to Failed on tx commit failure",
+        );
+        assert!(
+            on_disk_failed,
+            "on-disk window blob must also reflect Failed (recovery flush landed)",
+        );
+
+        // The synthesis-object map and tenant-memory map must NOT
+        // have been mutated — the plan-on-clone discipline says the
+        // live runtime maps are only swapped in after the
+        // transaction commits, so a rolled-back tx must leave them
+        // in their pre-dispatch shape.
+        with_runtime(handle, |rt| {
+            assert!(
+                rt.synthesis_objects.is_empty(),
+                "synthesis_objects must remain empty on tx commit failure",
+            );
+            // Tenant memory was seeded but no synthesis output is
+            // attached to it — `last_synthesis_window` should still
+            // be `None` (set by `update_summary` only on a
+            // successful dispatch).
+            let tmo = rt.tenant_memory(scope).expect("tenant memory");
+            assert!(
+                tmo.last_synthesis_window.is_none(),
+                "tenant memory last_synthesis_window must not advance on tx commit failure",
+            );
+            Ok(())
+        })
+        .expect("with_runtime");
+
+        teardown(handle);
+    }
+
+    /// The `open_store` stuck-Pending recovery sweep must transition
+    /// `Pending` windows older than [`STUCK_PENDING_THRESHOLD_SECS`]
+    /// to `Failed` on the next open, even if no live manager exists
+    /// to recover them in-process. This simulates the "host crashed
+    /// mid-dispatch" scenario: a `Pending` window with a backdated
+    /// `created_at` is flushed to disk, the store is closed, and
+    /// the next `open_store` must surface it as `Failed`.
+    #[test]
+    fn open_store_recovers_stuck_pending_window() {
+        use crate::runtime::{close_store, open_store, STUCK_PENDING_THRESHOLD_SECS};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let key_hex = "a5".repeat(32);
+
+        let handle =
+            open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open_store");
+        let scope = ScopeId::new_v4();
+        let window_id = with_runtime(handle, |rt| {
+            // Open a fresh `Pending` window directly on the live
+            // manager.
+            let now = Utc::now();
+            let wid = rt
+                .synthesis_windows
+                .open_window(scope, now - ChronoDuration::hours(1), now)
+                .expect("open_window");
+            // Backdate `created_at` past the threshold so the next
+            // sweep on `open_store` picks it up.
+            let win = rt.synthesis_windows.get_mut(wid).expect("window present");
+            win.created_at = Some(now - ChronoDuration::seconds(STUCK_PENDING_THRESHOLD_SECS + 1));
+            rt.flush_synthesis_windows().expect("flush");
+            Ok(wid)
+        })
+        .expect("with_runtime");
+        close_store(handle).expect("close_store");
+
+        // Re-open the store. The sweep should fire during
+        // `open_store_inner` and transition the backdated `Pending`
+        // window to `Failed`.
+        let before_metric = crate::metrics::snapshot().stuck_pending_window_recovered_total;
+        let handle = open_store(path.to_string_lossy().into_owned(), key_hex).expect("re-open");
+        let after_metric = crate::metrics::snapshot().stuck_pending_window_recovered_total;
+        assert!(
+            after_metric > before_metric,
+            "stuck_pending_window_recovered_total counter must advance (before={before_metric}, \
+             after={after_metric})",
+        );
+
+        let status = with_runtime(handle, |rt| {
+            Ok(rt.synthesis_windows.get(window_id).map(|w| w.status))
+        })
+        .expect("with_runtime");
+        assert_eq!(
+            status,
+            Some(synthesis_pipeline::WindowStatus::Failed),
+            "stuck Pending window must rehydrate as Failed after open_store sweep",
+        );
+
+        teardown(handle);
+    }
+
+    /// A fresh `Pending` window (created_at within the threshold)
+    /// must be left alone by the `open_store` sweep — sweeping
+    /// in-flight dispatches would discard real synthesis work.
+    #[test]
+    fn open_store_leaves_fresh_pending_window_alone() {
+        use crate::runtime::{close_store, open_store};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let key_hex = "a5".repeat(32);
+
+        let handle =
+            open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open_store");
+        let scope = ScopeId::new_v4();
+        let window_id = with_runtime(handle, |rt| {
+            let now = Utc::now();
+            let wid = rt
+                .synthesis_windows
+                .open_window(scope, now - ChronoDuration::hours(1), now)
+                .expect("open_window");
+            rt.flush_synthesis_windows().expect("flush");
+            Ok(wid)
+        })
+        .expect("with_runtime");
+        close_store(handle).expect("close_store");
+
+        let before_metric = crate::metrics::snapshot().stuck_pending_window_recovered_total;
+        let handle = open_store(path.to_string_lossy().into_owned(), key_hex).expect("re-open");
+        let after_metric = crate::metrics::snapshot().stuck_pending_window_recovered_total;
+        assert_eq!(
+            after_metric, before_metric,
+            "fresh-Pending window must NOT be swept (counter must not advance)",
+        );
+
+        let status = with_runtime(handle, |rt| {
+            Ok(rt.synthesis_windows.get(window_id).map(|w| w.status))
+        })
+        .expect("with_runtime");
+        assert_eq!(
+            status,
+            Some(synthesis_pipeline::WindowStatus::Pending),
+            "fresh-Pending window must remain Pending after open_store",
+        );
 
         teardown(handle);
     }

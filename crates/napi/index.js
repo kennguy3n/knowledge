@@ -584,6 +584,7 @@ module.exports.closeStore = nativeBinding.closeStore
 module.exports.configureSyncAutoSynthesize = nativeBinding.configureSyncAutoSynthesize
 module.exports.configureSyncSchedule = nativeBinding.configureSyncSchedule
 module.exports.configureSynthesisEngine = nativeBinding.configureSynthesisEngine
+module.exports.connectorStatus = nativeBinding.connectorStatus
 module.exports.coreVersion = nativeBinding.coreVersion
 module.exports.createConnector = nativeBinding.createConnector
 module.exports.decrypt = nativeBinding.decrypt

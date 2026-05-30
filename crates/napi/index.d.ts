@@ -101,19 +101,71 @@ export declare function configureSyncSchedule(handle: bigint, instanceId: string
  * `config` is the JSON object documented on
  * [`ffi::SynthesisEngineConfig`] with camelCase keys:
  * `{ url, apiKeyRef, modelId, maxTokens, timeoutMs, grammar,
- *    scopeBindings }`. `scopeBindings`, if present, is an array
- * of UUID strings the FFI layer admits for dispatch (production
- * deployments SHOULD configure it; an absent allow-list logs a
- * warning on every dispatch).
+ *    scopeBindings, singleTenant, rateCapacity, rateRefillPerSec }`.
+ *
+ * * `scopeBindings`, if present, is an array of UUID strings the
+ *   FFI layer admits for dispatch (production multi-tenant
+ *   deployments SHOULD configure it; an absent allow-list logs a
+ *   warning on every dispatch).
+ * * `singleTenant` (defaults to `false`) is a host-supplied
+ *   posture flag. When `true`, the health probe reports
+ *   `Nominal` instead of `Degraded` if the engine is configured
+ *   without `scopeBindings` — appropriate for dev / single-tenant
+ *   deployments where there is no cross-scope allow-list to
+ *   enforce. Multi-tenant production deployments should leave
+ *   this `false` (the default) and provide `scopeBindings`.
+ * * `rateCapacity` (Phase 10 Item 5) is the burst capacity of
+ *   the global token-bucket rate limiter on
+ *   `triggerServerSynthesis`. `0` (the default if the key is
+ *   omitted) falls back to
+ *   [`ffi::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY`] (`8`).
+ * * `rateRefillPerSec` (Phase 10 Item 5) is the token refill
+ *   rate in tokens/second. `0.0` falls back to
+ *   [`ffi::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC`]
+ *   (`1.0`). Fractional values are supported; non-finite or
+ *   negative values are rejected with `Unavailable`.
  *
  * # Errors
  *
- * * `Unavailable` if `openStore(handle)` has not been called or
- *   the build lacks the `http-client` feature.
+ * * `Unavailable` if `openStore(handle)` has not been called,
+ *   the build lacks the `http-client` feature, or
+ *   `rateRefillPerSec` is non-finite / non-positive.
  * * `InvalidArgument` if `config.url` is empty or any
  *   `scopeBindings` entry fails to parse as a UUID.
  */
 export declare function configureSynthesisEngine(handle: bigint, config: any): void
+
+/**
+ * Single-instance connector health probe (Phase 10 Item 3) —
+ * symmetric with [`js_synthesis_status`]. Mirrors
+ * [`crate::connector_status`] and returns a JSON object with the
+ * shape:
+ *
+ * `{ instanceId, kind, scopeId, syncMode, syncStatus,
+ *    lastSyncedAt, lastError, isScheduled, syncIntervalSecs,
+ *    maxBackoffSecs, autoSynthesize, consecutiveFailures,
+ *    nextAttemptUnix, inCooldown }`.
+ *
+ * `isScheduled` is `true` iff `startSyncScheduler` is currently
+ * running on this runtime; the scheduler-side fields
+ * (`syncIntervalSecs`, `maxBackoffSecs`, `nextAttemptUnix`,
+ * `inCooldown`, `consecutiveFailures`) gracefully degrade to
+ * zero / `null` / `false` when the scheduler is stopped. The
+ * `autoSynthesize` flag is preserved across scheduler restarts
+ * because the policy storage lives on the runtime, not the
+ * running worker.
+ *
+ * # Failure modes
+ *
+ * * `kind: "connector_instance"` if `instanceId` is a valid UUID
+ *   but the runtime has no instance with that id (host called
+ *   [`js_remove_connector`] previously, or never created one).
+ * * `kind: "scope"` if the instance row exists but its bound
+ *   scope has been tombstoned by [`js_forget_scope`] — same
+ *   tombstoned-scope shield other connector surfaces apply.
+ * * `kind: "invalidArgument"` if `instanceId` is not a UUID.
+ */
+export declare function connectorStatus(handle: bigint, instanceId: string): any
 
 /**
  * Return the package version of the Rust core baked into this

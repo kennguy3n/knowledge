@@ -565,13 +565,22 @@ fn synthesis_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
         SubsystemStatus::Ok
     };
 
+    // Phase 10 Item 5: surface the rate-limiter's configured
+    // posture on the detail string so operators can confirm
+    // `configure_synthesis_engine` actually landed the host's
+    // rate-shaping values. Same diagnostic-gap rationale as the
+    // `single_tenant=` token added in Phase 9 (Round 3).
+    let rate_capacity = rt.synthesis_rate_limiter.capacity();
+    let rate_refill_per_sec = rt.synthesis_rate_limiter.refill_per_sec();
+
     SubsystemHealth {
         name: "synthesis_engine".into(),
         status,
         detail: Some(format!(
             "engine={}, windows={total_windows}, objects={synthesis_objects}, \
              domain_memories={domain_count}, tenant_memories={tenant_count}, \
-             scope_bindings={}, single_tenant={}, cooldowns={cooldown_count}",
+             scope_bindings={}, single_tenant={}, cooldowns={cooldown_count}, \
+             rate_capacity={rate_capacity}, rate_refill_per_sec={rate_refill_per_sec}",
             if engine_configured {
                 "configured"
             } else {

@@ -50,11 +50,11 @@ pub use error::{NapiError, NapiResult};
 #[cfg(feature = "tracing-subscriber")]
 pub use ffi::try_init_tracing;
 pub use ffi::{
-    AdapterReport, ApprovedDocumentSummary, ConnectorKindTag, ConnectorStatus, EvidenceRecord,
-    FfiImportanceClass, FfiKeypair, FfiSignature, HealthStatus, MemoryFilter, MemoryRecord,
-    MemoryState, MetricsSnapshot, QueryResult, RefreshReport, RuntimeHandle, ScopeIdString,
-    SourceKind, SubsystemHealth, SubsystemStatus, SyncModeKind, SyncReport, SyncSchedulerStatus,
-    SyncStatusKind, SynthesisTrigger,
+    AdapterReport, ApprovedDocumentSummary, ConnectorHealthRecord, ConnectorKindTag,
+    ConnectorStatus, EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, HealthStatus,
+    MemoryFilter, MemoryRecord, MemoryState, MetricsSnapshot, QueryResult, RefreshReport,
+    RuntimeHandle, ScopeIdString, SourceKind, SubsystemHealth, SubsystemStatus, SyncModeKind,
+    SyncReport, SyncSchedulerStatus, SyncStatusKind, SynthesisTrigger,
 };
 pub use types::{IngestRequest, InitConfig, QueryRequest};
 
@@ -462,6 +462,29 @@ pub fn sync_connector(handle: NapiHandle, instance_id: String) -> NapiResult<Syn
 /// Forwards [`ffi::list_connectors`] errors as [`NapiError`].
 pub fn list_connectors(handle: NapiHandle) -> NapiResult<Vec<ConnectorStatus>> {
     ffi::list_connectors(RuntimeHandle(handle)).map_err(NapiError::from)
+}
+
+/// Probe one connector instance's health — symmetric with
+/// [`synthesis_status`]. Bundles the
+/// [`ConnectorStatus`] view with the scheduler-side posture
+/// (effective interval / max backoff, auto-synthesize flag,
+/// consecutive failures, next-attempt-at, cooldown flag) so the
+/// host can answer "is this connector healthy?" in one FFI call.
+/// Mirrors [`ffi::connector_status`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::connector_status`] errors as [`NapiError`]:
+///
+/// * [`ffi::FfiError::InvalidId`] if `instance_id` is not a UUID.
+/// * [`ffi::FfiError::NotFound`] with `kind = "connector_instance"`
+///   if no row matches `instance_id`, or `kind = "scope"` if the
+///   instance's bound scope has been tombstoned.
+pub fn connector_status(
+    handle: NapiHandle,
+    instance_id: String,
+) -> NapiResult<ffi::ConnectorHealthRecord> {
+    ffi::connector_status(RuntimeHandle(handle), instance_id).map_err(NapiError::from)
 }
 
 /// Tear down the connector with `instance_id`. Mirrors

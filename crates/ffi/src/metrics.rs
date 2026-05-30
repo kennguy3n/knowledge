@@ -115,6 +115,10 @@ pub(crate) struct Metrics {
     pub(crate) sync_connector_total: AtomicU64,
     /// Total `list_connectors` calls initiated.
     pub(crate) list_connectors_total: AtomicU64,
+    /// Total `connector_status` calls initiated
+    /// (Phase 10 Item 3 — single-instance health probe symmetric
+    /// with [`Self::synthesis_status_total`]).
+    pub(crate) connector_status_total: AtomicU64,
     /// Total `remove_connector` calls initiated.
     pub(crate) remove_connector_total: AtomicU64,
     /// Total `refresh_connector_token` calls initiated.
@@ -245,6 +249,26 @@ pub(crate) struct Metrics {
     /// (Phase 8 — host enumerates approved-document refs for a
     /// tenant scope).
     pub(crate) list_approved_documents_total: AtomicU64,
+    /// Total synthesis windows transitioned from `Pending` → `Failed`
+    /// by the `open_store` stuck-Pending recovery sweep (Phase 10
+    /// Item 1). Incremented once per swept window. A non-zero value
+    /// here indicates a prior host run crashed mid-dispatch (between
+    /// the Phase-1 `flush_synthesis_windows` and the Phase-3
+    /// `apply_dispatch_outcome` commit) OR a Phase-3 commit failed
+    /// and the in-process recovery flush also failed to land. Either
+    /// way the next `open_store` reclaimed the stranded window so
+    /// the host can retry it.
+    pub(crate) stuck_pending_window_recovered_total: AtomicU64,
+    /// Total `trigger_server_synthesis` calls rejected by the
+    /// global token-bucket rate limiter (Phase 10 Item 5).
+    /// Incremented once per `Throttled` return. Distinct from
+    /// the per-kind [`Self::errors_throttled`] counter — that
+    /// one ticks on every `FfiError::Throttled` regardless of
+    /// surface, while this one isolates the synthesis-trigger
+    /// surface so operators can spot rate-shaping-driven
+    /// throttles separately from any future throttled
+    /// surfaces.
+    pub(crate) trigger_server_synthesis_throttled_total: AtomicU64,
 
     // Per-kind error counters. The set mirrors `FfiError::kind`
     // exactly so adding a new error variant is a compile error
@@ -259,6 +283,7 @@ pub(crate) struct Metrics {
     pub(crate) errors_unavailable: AtomicU64,
     pub(crate) errors_inference_failure: AtomicU64,
     pub(crate) errors_connector: AtomicU64,
+    pub(crate) errors_throttled: AtomicU64,
     /// Sum of every per-kind error counter, maintained alongside the
     /// individual counters so [`snapshot`] does not have to fan out
     /// across the per-kind reads to compute the total.
@@ -348,6 +373,7 @@ counter_inc!(pub(crate) fn inc_create_connector => create_connector_total);
 counter_inc!(pub(crate) fn inc_authenticate_connector => authenticate_connector_total);
 counter_inc!(pub(crate) fn inc_sync_connector => sync_connector_total);
 counter_inc!(pub(crate) fn inc_list_connectors => list_connectors_total);
+counter_inc!(pub(crate) fn inc_connector_status => connector_status_total);
 counter_inc!(pub(crate) fn inc_remove_connector => remove_connector_total);
 counter_inc!(pub(crate) fn inc_refresh_connector_token => refresh_connector_token_total);
 counter_inc!(pub(crate) fn inc_set_oauth_client_secret_resolver => set_oauth_client_secret_resolver_total);
@@ -372,6 +398,8 @@ counter_inc!(pub(crate) fn inc_admit_approved_document => admit_approved_documen
 counter_inc!(pub(crate) fn inc_revoke_approved_document => revoke_approved_document_total);
 counter_inc!(pub(crate) fn inc_replace_approved_document => replace_approved_document_total);
 counter_inc!(pub(crate) fn inc_list_approved_documents => list_approved_documents_total);
+counter_inc!(pub(crate) fn inc_stuck_pending_window_recovered => stuck_pending_window_recovered_total);
+counter_inc!(pub(crate) fn inc_trigger_server_synthesis_throttled => trigger_server_synthesis_throttled_total);
 counter_inc!(pub(crate) fn inc_clear_sync_schedule => clear_sync_schedule_total);
 counter_inc!(pub(crate) fn inc_sync_scheduler_status => sync_scheduler_status_total);
 counter_inc!(pub(crate) fn inc_sync_scheduler_tick => sync_scheduler_ticks_total);
@@ -408,6 +436,7 @@ pub(crate) fn inc_error(err: &FfiError) {
         FfiError::Unavailable { .. } => &m.errors_unavailable,
         FfiError::InferenceFailure { .. } => &m.errors_inference_failure,
         FfiError::Connector { .. } => &m.errors_connector,
+        FfiError::Throttled { .. } => &m.errors_throttled,
     };
     counter.fetch_add(1, Ordering::Relaxed);
     m.errors_total.fetch_add(1, Ordering::Relaxed);
@@ -506,6 +535,11 @@ pub struct MetricsSnapshot {
     /// Total `list_connectors` calls initiated.
     #[serde(default)]
     pub list_connectors_total: u64,
+    /// Total `connector_status` calls initiated
+    /// (Phase 10 Item 3 — single-instance health probe symmetric
+    /// with [`Self::synthesis_status_total`]).
+    #[serde(default)]
+    pub connector_status_total: u64,
     /// Total `remove_connector` calls initiated.
     #[serde(default)]
     pub remove_connector_total: u64,
@@ -642,6 +676,23 @@ pub struct MetricsSnapshot {
     /// Total `list_approved_documents` calls initiated (Phase 8).
     #[serde(default)]
     pub list_approved_documents_total: u64,
+    /// Total synthesis windows transitioned from `Pending` → `Failed`
+    /// by the `open_store` stuck-Pending recovery sweep (Phase 10
+    /// Item 1). A non-zero value indicates a prior run left at least
+    /// one window stranded mid-dispatch and the next `open_store`
+    /// reclaimed it; the host can retry the recovered window via the
+    /// normal trigger path.
+    #[serde(default)]
+    pub stuck_pending_window_recovered_total: u64,
+    /// Total `trigger_server_synthesis` calls rejected by the
+    /// FFI-wide rate-shaping token bucket (Phase 10 Item 5).
+    /// Distinct from `errors_by_kind.throttled` because that
+    /// total covers every surface returning
+    /// `FfiError::Throttled` — currently only this one, but
+    /// future surfaces should reuse the variant rather than
+    /// minting a new one.
+    #[serde(default)]
+    pub trigger_server_synthesis_throttled_total: u64,
     /// Per-kind error counter snapshot.
     pub errors_by_kind: ErrorCounters,
     /// Total errors across all kinds (sum of `errors_by_kind`'s
@@ -690,6 +741,13 @@ pub struct ErrorCounters {
     // reader without surfacing a `missing field 'connector'` error.
     #[serde(default)]
     pub connector: u64,
+    /// `FfiError::Throttled` (Phase 10 Item 5). `#[serde(default)]`
+    /// per the additive-wire-contract rule — older emitters'
+    /// `ErrorCounters` JSON lacks the `throttled` key and must
+    /// still deserialise without surfacing a missing-field
+    /// error.
+    #[serde(default)]
+    pub throttled: u64,
 }
 
 /// Return a wire-flat snapshot of every counter and gauge. Reads
@@ -739,6 +797,7 @@ pub fn snapshot() -> MetricsSnapshot {
         authenticate_connector_total: m.authenticate_connector_total.load(Ordering::Relaxed),
         sync_connector_total: m.sync_connector_total.load(Ordering::Relaxed),
         list_connectors_total: m.list_connectors_total.load(Ordering::Relaxed),
+        connector_status_total: m.connector_status_total.load(Ordering::Relaxed),
         remove_connector_total: m.remove_connector_total.load(Ordering::Relaxed),
         refresh_connector_token_total: m.refresh_connector_token_total.load(Ordering::Relaxed),
         set_oauth_client_secret_resolver_total: m
@@ -794,6 +853,12 @@ pub fn snapshot() -> MetricsSnapshot {
         revoke_approved_document_total: m.revoke_approved_document_total.load(Ordering::Relaxed),
         replace_approved_document_total: m.replace_approved_document_total.load(Ordering::Relaxed),
         list_approved_documents_total: m.list_approved_documents_total.load(Ordering::Relaxed),
+        stuck_pending_window_recovered_total: m
+            .stuck_pending_window_recovered_total
+            .load(Ordering::Relaxed),
+        trigger_server_synthesis_throttled_total: m
+            .trigger_server_synthesis_throttled_total
+            .load(Ordering::Relaxed),
         errors_by_kind: ErrorCounters {
             unimplemented: m.errors_unimplemented.load(Ordering::Relaxed),
             invalid_id: m.errors_invalid_id.load(Ordering::Relaxed),
@@ -805,6 +870,7 @@ pub fn snapshot() -> MetricsSnapshot {
             unavailable: m.errors_unavailable.load(Ordering::Relaxed),
             inference_failure: m.errors_inference_failure.load(Ordering::Relaxed),
             connector: m.errors_connector.load(Ordering::Relaxed),
+            throttled: m.errors_throttled.load(Ordering::Relaxed),
         },
         errors_total: m.errors_total.load(Ordering::Relaxed),
         open_handles: m.open_handles.load(Ordering::Relaxed),
@@ -905,8 +971,11 @@ mod tests {
         inc_configure_synthesis_engine();
         inc_trigger_server_synthesis();
         inc_synthesis_status();
+        inc_connector_status();
         inc_list_recent_syntheses();
         inc_configure_sync_auto_synthesize();
+        inc_stuck_pending_window_recovered();
+        inc_trigger_server_synthesis_throttled();
 
         // `snapshot()` itself bumps `metrics_snapshot_total`, so we
         // capture the lower bound by calling `snapshot()` here too
@@ -936,10 +1005,19 @@ mod tests {
         assert!(after.configure_synthesis_engine_total > before.configure_synthesis_engine_total);
         assert!(after.trigger_server_synthesis_total > before.trigger_server_synthesis_total);
         assert!(after.synthesis_status_total > before.synthesis_status_total);
+        assert!(after.connector_status_total > before.connector_status_total);
         assert!(after.list_recent_syntheses_total > before.list_recent_syntheses_total);
         assert!(
             after.configure_sync_auto_synthesize_total
                 > before.configure_sync_auto_synthesize_total
+        );
+        assert!(
+            after.stuck_pending_window_recovered_total
+                > before.stuck_pending_window_recovered_total
+        );
+        assert!(
+            after.trigger_server_synthesis_throttled_total
+                > before.trigger_server_synthesis_throttled_total
         );
         // `before = snapshot()` and `after = snapshot()` both bump
         // this counter, so the after value must be at least
@@ -971,13 +1049,18 @@ mod tests {
         inc_error(&FfiError::InferenceFailure {
             message: "timeout".into(),
         });
+        inc_error(&FfiError::Throttled {
+            subsystem: "synthesis_engine".into(),
+            retry_after_ms: 50,
+        });
 
         let after = snapshot();
         assert!(after.errors_by_kind.invalid_id > before.errors_by_kind.invalid_id);
         assert!(after.errors_by_kind.evidence >= before.errors_by_kind.evidence + 2);
         assert!(after.errors_by_kind.unavailable > before.errors_by_kind.unavailable);
         assert!(after.errors_by_kind.inference_failure > before.errors_by_kind.inference_failure);
-        assert!(after.errors_total >= before.errors_total + 5);
+        assert!(after.errors_by_kind.throttled > before.errors_by_kind.throttled);
+        assert!(after.errors_total >= before.errors_total + 6);
     }
 
     #[test]

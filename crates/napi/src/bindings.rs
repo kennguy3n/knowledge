@@ -38,8 +38,8 @@ use napi_derive::napi;
 #[cfg(test)]
 use ffi::RuntimeHandle;
 use ffi::{
-    ConnectorKindTag, ConnectorStatus, MemoryFilter, MemoryRecord, RefreshReport, SyncReport,
-    SynthesisTrigger,
+    ConnectorHealthRecord, ConnectorKindTag, ConnectorStatus, MemoryFilter, MemoryRecord,
+    RefreshReport, SyncReport, SynthesisTrigger,
 };
 
 use crate::types::{IngestRequest, QueryRequest};
@@ -326,7 +326,7 @@ pub fn js_trigger_synthesis(handle: BigInt, scope_id: String, trigger: String) -
 /// `config` is the JSON object documented on
 /// [`ffi::SynthesisEngineConfig`] with camelCase keys:
 /// `{ url, apiKeyRef, modelId, maxTokens, timeoutMs, grammar,
-///    scopeBindings, singleTenant }`.
+///    scopeBindings, singleTenant, rateCapacity, rateRefillPerSec }`.
 ///
 /// * `scopeBindings`, if present, is an array of UUID strings the
 ///   FFI layer admits for dispatch (production multi-tenant
@@ -339,11 +339,22 @@ pub fn js_trigger_synthesis(handle: BigInt, scope_id: String, trigger: String) -
 ///   deployments where there is no cross-scope allow-list to
 ///   enforce. Multi-tenant production deployments should leave
 ///   this `false` (the default) and provide `scopeBindings`.
+/// * `rateCapacity` (Phase 10 Item 5) is the burst capacity of
+///   the global token-bucket rate limiter on
+///   `triggerServerSynthesis`. `0` (the default if the key is
+///   omitted) falls back to
+///   [`ffi::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY`] (`8`).
+/// * `rateRefillPerSec` (Phase 10 Item 5) is the token refill
+///   rate in tokens/second. `0.0` falls back to
+///   [`ffi::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC`]
+///   (`1.0`). Fractional values are supported; non-finite or
+///   negative values are rejected with `Unavailable`.
 ///
 /// # Errors
 ///
-/// * `Unavailable` if `openStore(handle)` has not been called or
-///   the build lacks the `http-client` feature.
+/// * `Unavailable` if `openStore(handle)` has not been called,
+///   the build lacks the `http-client` feature, or
+///   `rateRefillPerSec` is non-finite / non-positive.
 /// * `InvalidArgument` if `config.url` is empty or any
 ///   `scopeBindings` entry fails to parse as a UUID.
 #[napi(js_name = "configureSynthesisEngine")]
@@ -750,6 +761,46 @@ pub fn js_list_connectors(handle: BigInt) -> Result<serde_json::Value> {
     serde_json::to_value(rows).map_err(|e| {
         to_js_error(NapiError::Internal {
             message: format!("failed to serialize ConnectorStatus list: {e}"),
+        })
+    })
+}
+
+/// Single-instance connector health probe (Phase 10 Item 3) —
+/// symmetric with [`js_synthesis_status`]. Mirrors
+/// [`crate::connector_status`] and returns a JSON object with the
+/// shape:
+///
+/// `{ instanceId, kind, scopeId, syncMode, syncStatus,
+///    lastSyncedAt, lastError, isScheduled, syncIntervalSecs,
+///    maxBackoffSecs, autoSynthesize, consecutiveFailures,
+///    nextAttemptUnix, inCooldown }`.
+///
+/// `isScheduled` is `true` iff `startSyncScheduler` is currently
+/// running on this runtime; the scheduler-side fields
+/// (`syncIntervalSecs`, `maxBackoffSecs`, `nextAttemptUnix`,
+/// `inCooldown`, `consecutiveFailures`) gracefully degrade to
+/// zero / `null` / `false` when the scheduler is stopped. The
+/// `autoSynthesize` flag is preserved across scheduler restarts
+/// because the policy storage lives on the runtime, not the
+/// running worker.
+///
+/// # Failure modes
+///
+/// * `kind: "connector_instance"` if `instanceId` is a valid UUID
+///   but the runtime has no instance with that id (host called
+///   [`js_remove_connector`] previously, or never created one).
+/// * `kind: "scope"` if the instance row exists but its bound
+///   scope has been tombstoned by [`js_forget_scope`] — same
+///   tombstoned-scope shield other connector surfaces apply.
+/// * `kind: "invalidArgument"` if `instanceId` is not a UUID.
+#[napi(js_name = "connectorStatus")]
+pub fn js_connector_status(handle: BigInt, instance_id: String) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let rec: ConnectorHealthRecord =
+        crate::connector_status(h, instance_id).map_err(to_js_error)?;
+    serde_json::to_value(rec).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("failed to serialize ConnectorHealthRecord: {e}"),
         })
     })
 }

@@ -903,6 +903,97 @@ pub(crate) fn scheduler_health_detail(rt: &crate::runtime::FfiRuntime) -> &'stat
     }
 }
 
+// ──────────── Per-instance scheduler-state probe ───────────────
+
+/// Snapshot of one connector instance's scheduler-side state for
+/// the Phase 10 Item 3 [`crate::connector::connector_status`]
+/// surface. Bundled into a single record so the caller can build
+/// the wire-flat `ConnectorHealthRecord` without holding the
+/// scheduler-state mutex across the rest of the assembly logic.
+///
+/// `None` for either field means "scheduler is not running on
+/// this runtime": when the dispatch worker is stopped the
+/// `default_interval` / `default_max_backoff` configured at
+/// [`start_sync_scheduler`] time are not available either, so a
+/// `0` interval is reported by the caller (the
+/// `ConnectorHealthRecord` documents the `0`-iff-stopped
+/// convention explicitly).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct InstanceSchedulerSnapshot {
+    /// `true` iff a [`RunningSyncScheduler`] is currently
+    /// installed on this runtime.
+    pub(crate) is_scheduler_running: bool,
+    /// Effective per-instance sync interval in seconds. Reflects
+    /// the host-supplied [`configure_sync_schedule`] override if
+    /// present, or the scheduler-default
+    /// [`SchedulerConfig::default_interval`] otherwise. `0` iff
+    /// the scheduler is not running.
+    pub(crate) sync_interval_secs: u64,
+    /// Effective per-instance max-backoff cap in seconds. Same
+    /// override-then-default precedence as
+    /// [`Self::sync_interval_secs`]; `0` iff the scheduler is not
+    /// running.
+    pub(crate) max_backoff_secs: u64,
+    /// `true` iff the per-instance policy is configured to fire a
+    /// domain-tier
+    /// [`crate::synthesis::trigger_server_synthesis`] after each
+    /// successful sync. Mirrors
+    /// [`SchedulePolicy::auto_synthesize`].
+    pub(crate) auto_synthesize: bool,
+    /// Consecutive failures since the last successful sync.
+    /// Reset to `0` on success. `0` if the scheduler has never
+    /// dispatched this instance OR if the scheduler is stopped.
+    pub(crate) consecutive_failures: u32,
+    /// Unix epoch seconds for the next scheduled dispatch
+    /// attempt, or `None` if the scheduler is stopped / has never
+    /// dispatched this instance (in which case the next tick
+    /// fires it immediately).
+    pub(crate) next_attempt_unix: Option<i64>,
+}
+
+/// Probe the scheduler's per-instance state for one
+/// [`ConnectorInstanceId`]. Used by
+/// [`crate::connector::connector_status`] to fold the
+/// scheduler-side fields into the [`ConnectorHealthRecord`] without
+/// duplicating the policy + accounting lookup logic.
+///
+/// Acquires the scheduler-state mutex briefly to read both the
+/// policy override (if any) and the accounting entry (if any).
+/// The mutex is dropped before this function returns so the
+/// caller does NOT hold scheduler-state across the rest of the
+/// `connector_status` assembly.
+///
+/// Returns an all-zero / `is_scheduler_running=false` snapshot
+/// when the scheduler is stopped — `connector_status` is meant
+/// to remain useful even on hosts that never call
+/// [`start_sync_scheduler`].
+pub(crate) fn instance_scheduler_snapshot(
+    rt: &crate::runtime::FfiRuntime,
+    instance: ConnectorInstanceId,
+) -> InstanceSchedulerSnapshot {
+    let Some(scheduler) = rt.sync_scheduler.as_ref() else {
+        return InstanceSchedulerSnapshot::default();
+    };
+    let state = match scheduler.state.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let policy = state
+        .policies
+        .get(&instance)
+        .cloned()
+        .unwrap_or_else(|| SchedulePolicy::from_defaults(&scheduler.config));
+    let accounting = state.accounting.get(&instance).cloned().unwrap_or_default();
+    InstanceSchedulerSnapshot {
+        is_scheduler_running: true,
+        sync_interval_secs: policy.sync_interval.as_secs(),
+        max_backoff_secs: policy.max_backoff.as_secs(),
+        auto_synthesize: policy.auto_synthesize,
+        consecutive_failures: accounting.consecutive_failures,
+        next_attempt_unix: accounting.next_attempt_at.map(|t| t.timestamp()),
+    }
+}
+
 // ──────────────────────── remove_connector hook ─────────────────
 
 /// Drop the scheduler's per-instance policy + accounting entries

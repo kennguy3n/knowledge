@@ -92,8 +92,8 @@ use crate::metrics;
 use crate::parse_scope_id;
 use crate::runtime::{with_runtime, FfiRuntime, RuntimeHandle};
 use crate::types::{
-    ConnectorKindTag, ConnectorStatus, RefreshReport, ScopeIdString, SyncModeKind, SyncReport,
-    SyncStatusKind,
+    ConnectorHealthRecord, ConnectorKindTag, ConnectorStatus, RefreshReport, ScopeIdString,
+    SyncModeKind, SyncReport, SyncStatusKind,
 };
 
 /// Default expiry skew used by [`sync_connector`]'s auto-refresh
@@ -1040,6 +1040,99 @@ pub fn list_connectors(handle: RuntimeHandle) -> FfiResult<Vec<ConnectorStatus>>
                 });
             }
             Ok(out)
+        })
+    })
+}
+
+/// Single-instance health probe (Phase 10 Item 3) — symmetric with
+/// [`crate::synthesis::synthesis_status`]. Returns a wire-flat
+/// [`ConnectorHealthRecord`] that bundles the per-connector
+/// `ConnectorStatus` view (kind, scope, sync mode / status,
+/// last-synced timestamp, last error) WITH the scheduler-side
+/// posture (effective interval / max backoff, auto-synthesize
+/// flag, consecutive failures, next-attempt-at, cooldown flag).
+///
+/// This closes the symmetric gap the connector framework had
+/// against the synthesis subsystem: synthesis already had a
+/// single-window probe ([`crate::synthesis::synthesis_status`]),
+/// but the only per-connector probe was [`list_connectors`] which
+/// requires a linear scan + manual scheduler join when the host
+/// just wants the state of one instance.
+///
+/// The scheduler-side fields gracefully degrade when no scheduler
+/// is running: `is_scheduled=false`, `sync_interval_secs=0`,
+/// `max_backoff_secs=0`, `next_attempt_unix=None`, `in_cooldown=false`.
+/// The `auto_synthesize` flag still reflects the host's
+/// [`crate::sync_scheduler::configure_sync_schedule`] /
+/// [`crate::sync_scheduler::configure_sync_auto_synthesize`]
+/// preference even when the scheduler is stopped, because the
+/// policy storage outlives the running worker.
+///
+/// # Errors
+///
+/// * [`FfiError::InvalidId`] if `instance_id` is not a valid
+///   UUID. Mirrors [`parse_instance_id`]'s contract.
+/// * [`FfiError::NotFound`] with `kind = "connector_instance"`
+///   if the parsed UUID is not present in
+///   [`FfiRuntime::connector_instances`] (the host called
+///   [`remove_connector`] or never created one with this id).
+/// * [`FfiError::NotFound`] with `kind = "scope"` if the instance
+///   exists but its bound scope has been tombstoned by
+///   [`crate::forget_scope`] — matching the same
+///   tombstoned-scope-shielding behavior the other connector
+///   surfaces ([`sync_connector`],
+///   [`authenticate_connector`]) apply.
+/// * [`FfiError::Unavailable`] if [`crate::open_store`] has not
+///   been called.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
+#[uniffi::export]
+pub fn connector_status(
+    handle: RuntimeHandle,
+    instance_id: String,
+) -> FfiResult<ConnectorHealthRecord> {
+    metrics::instrument(metrics::inc_connector_status, || {
+        let instance = parse_instance_id(&instance_id)?;
+        with_runtime(handle, |rt| {
+            let inst = rt
+                .connector_instances
+                .get(&instance)
+                .ok_or_else(|| FfiError::NotFound {
+                    kind: "connector_instance".into(),
+                    id: instance_id.clone(),
+                })?;
+            // Shield tombstoned-scope leftovers — the connector
+            // row may still be hanging around after a partial
+            // `forget_scope` (the SQLCipher delete cascade is
+            // best-effort, see the matching guard in
+            // `sync_connector` Phase 1). Surfacing a stale
+            // connector row past tombstoning would let the host
+            // act on a logically-removed scope.
+            if rt.is_scope_forgotten(inst.config.scope_id) {
+                return Err(FfiError::NotFound {
+                    kind: "scope".into(),
+                    id: inst.config.scope_id.as_uuid().to_string(),
+                });
+            }
+            let scheduler_snapshot =
+                crate::sync_scheduler::instance_scheduler_snapshot(rt, instance);
+            let in_cooldown = scheduler_snapshot.is_scheduler_running
+                && scheduler_snapshot.consecutive_failures > 0;
+            Ok(ConnectorHealthRecord {
+                instance_id: inst.id.0.to_string(),
+                kind: framework_kind_to_ffi(inst.config.kind),
+                scope_id: inst.config.scope_id.as_uuid().to_string(),
+                sync_mode: framework_sync_mode_to_kind(inst.sync_state.mode),
+                sync_status: framework_sync_status_to_kind(inst.sync_state.status),
+                last_synced_at: inst.sync_state.last_synced_at.map(|t| t.timestamp()),
+                last_error: inst.sync_state.last_error.clone(),
+                is_scheduled: scheduler_snapshot.is_scheduler_running,
+                sync_interval_secs: scheduler_snapshot.sync_interval_secs,
+                max_backoff_secs: scheduler_snapshot.max_backoff_secs,
+                auto_synthesize: scheduler_snapshot.auto_synthesize,
+                consecutive_failures: scheduler_snapshot.consecutive_failures,
+                next_attempt_unix: scheduler_snapshot.next_attempt_unix,
+                in_cooldown,
+            })
         })
     })
 }

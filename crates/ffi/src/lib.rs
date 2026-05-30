@@ -107,15 +107,16 @@ pub mod metrics;
 pub mod runtime;
 pub mod sync_scheduler;
 pub mod synthesis;
+pub(crate) mod synthesis_rate;
 #[cfg(feature = "tracing-subscriber")]
 pub mod tracing_init;
 pub mod types;
 pub mod webhook;
 
 pub use connector::{
-    authenticate_connector, clear_oauth_client_secret_resolver, create_connector, list_connectors,
-    refresh_connector_token, remove_connector, set_oauth_client_secret_resolver, sync_connector,
-    OAuthClientSecretResolver,
+    authenticate_connector, clear_oauth_client_secret_resolver, connector_status, create_connector,
+    list_connectors, refresh_connector_token, remove_connector, set_oauth_client_secret_resolver,
+    sync_connector, OAuthClientSecretResolver,
 };
 pub use error::{FfiError, FfiResult};
 pub use health::{health_check, AdapterReport, HealthStatus, SubsystemHealth, SubsystemStatus};
@@ -136,11 +137,11 @@ pub use synthesis::{
 #[cfg(feature = "tracing-subscriber")]
 pub use tracing_init::try_init_tracing;
 pub use types::{
-    ApprovedDocumentSummary, ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass,
-    FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RefreshReport,
-    ScopeIdString, SourceKind, SyncModeKind, SyncReport, SyncSchedulerStatus, SyncStatusKind,
-    SynthesisEngineConfig, SynthesisStatusRecord, SynthesisTierKind, SynthesisTrigger,
-    WebhookServerHandle, WebhookServerSummary,
+    ApprovedDocumentSummary, ConnectorHealthRecord, ConnectorKindTag, ConnectorStatus,
+    EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord,
+    MemoryState, QueryResult, RefreshReport, ScopeIdString, SourceKind, SyncModeKind, SyncReport,
+    SyncSchedulerStatus, SyncStatusKind, SynthesisEngineConfig, SynthesisStatusRecord,
+    SynthesisTierKind, SynthesisTrigger, WebhookServerHandle, WebhookServerSummary,
 };
 pub use webhook::{
     list_webhook_servers, register_webhook_dispatch, start_webhook_server, stop_webhook_server,

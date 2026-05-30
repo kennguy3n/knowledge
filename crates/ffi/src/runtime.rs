@@ -485,6 +485,23 @@ pub struct FfiRuntime {
     /// [`crate::synthesis::configure_synthesis_engine`] from
     /// [`crate::types::SynthesisEngineConfig::single_tenant`].
     pub(crate) synthesis_single_tenant: bool,
+
+    /// Global token-bucket rate limiter gating
+    /// [`crate::synthesis::trigger_server_synthesis`]
+    /// (Phase 10 Item 5). Created at `open_store` with the
+    /// defaults from
+    /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY`] and
+    /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC`];
+    /// reconfigured by
+    /// [`crate::synthesis::configure_synthesis_engine`] when the
+    /// host supplies non-zero
+    /// [`crate::types::SynthesisEngineConfig::rate_capacity`] /
+    /// `rate_refill_per_sec`. Lives outside `synthesis_engine`
+    /// (which can be `None` during bootstrap) so the limiter
+    /// applies even before the host configures an engine —
+    /// callers still pay a rate-shaping cost so a host can't
+    /// race past the cap by stalling configure.
+    pub(crate) synthesis_rate_limiter: crate::synthesis_rate::TokenBucket,
 }
 
 /// Memory-blob `kind` tag for persisted domain memory objects.
@@ -499,6 +516,32 @@ pub(crate) const SYNTHESIS_WINDOWS_KIND: &str = "synthesis_windows";
 
 /// Memory-blob `kind` tag for per-scope synthesis-object payloads.
 pub(crate) const SYNTHESIS_OBJECT_KIND: &str = "synthesis_object";
+
+/// Age threshold (seconds) after which a `Pending`
+/// [`synthesis_pipeline::SynthesisWindow`] is considered stuck and
+/// transitioned to `Failed` by the `open_store` recovery sweep.
+///
+/// `Pending` windows under this age are left alone — the in-flight
+/// `trigger_server_synthesis` dispatcher (if any) is the rightful
+/// owner and must be allowed to complete. Windows older than this
+/// threshold whose [`synthesis_pipeline::SynthesisWindow::created_at`]
+/// is `Some(...)` are transitioned via
+/// [`synthesis_pipeline::SynthesisWindowManager::sweep_stuck_pending`].
+///
+/// 3600 s (1 h) is intentionally generous: the worst-case synthesis
+/// dispatch (full tenant memory, large LLM, slow disk) measured in
+/// pipeline benchmarks completes in tens of seconds, so a window
+/// `Pending` for an hour almost certainly belongs to a prior host run
+/// that crashed mid-dispatch (e.g. between the Phase-1 flush and the
+/// Phase-3 commit in `apply_dispatch_outcome`) or whose Phase-3
+/// commit failure left the in-memory recovery flush stranded.
+///
+/// Tuned conservatively because the cost of leaving a stuck window
+/// alive for one extra hour is small (the host simply doesn't get a
+/// retry signal) while the cost of failing an in-flight dispatcher
+/// prematurely is large (the synthesis output is discarded and the
+/// host has to recompute it).
+pub(crate) const STUCK_PENDING_THRESHOLD_SECS: i64 = 3600;
 
 /// Sentinel scope id under which the global
 /// [`synthesis_pipeline::SynthesisWindowManager`] is flushed. The
@@ -1512,6 +1555,96 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         }
     }
 
+    // Stuck-Pending recovery sweep (Phase 10 Item 1). After the
+    // tombstone purge has had its say, walk the rehydrated manager
+    // for `Pending` windows older than
+    // [`STUCK_PENDING_THRESHOLD_SECS`] and transition them to
+    // `Failed`. This closes two related crash-safety gaps:
+    //
+    //   * **Host-crashed mid-dispatch**: the Phase-1
+    //     `flush_synthesis_windows` call inside
+    //     `trigger_server_synthesis` lands a `Pending` window on
+    //     disk, but the host process is killed before the Phase-3
+    //     `apply_dispatch_outcome` commit transitions it to
+    //     `Complete` / `Failed`. On the next `open_store` the
+    //     window rehydrates as `Pending` and would otherwise stay
+    //     stranded indefinitely — no live dispatcher exists, so
+    //     `synthesis_status` would report it as "in-flight" and
+    //     hosts would either retry-while-orphan or grow an
+    //     unbounded backlog.
+    //   * **`apply_dispatch_outcome` commit failure + flush
+    //     failure**: the in-process recovery path
+    //     (`fail_window_on_live_manager` + best-effort
+    //     `flush_synthesis_windows` on tx-commit failure) covers
+    //     the first cycle, but if the recovery flush itself fails
+    //     (disk-full, encryption error) the on-disk row remains
+    //     `Pending` while the in-memory state already moved on.
+    //     This sweep reconciles by transitioning the on-disk row.
+    //
+    // The transition is deliberately direct (`Pending` →
+    // `Failed`, bypassing `InProgress`) — see
+    // `SynthesisWindowManager::sweep_stuck_pending` for why this
+    // sidesteps the regular `mark_in_progress` / `mark_failed`
+    // chain that live dispatchers use.
+    //
+    // Windows with `created_at: None` (blobs persisted before the
+    // field was added in Phase 10) are conservatively left alone —
+    // we cannot prove their age without a creation timestamp.
+    // Subsequent `trigger_server_synthesis` calls on those scopes
+    // will re-fail the windows via the live `mark_in_progress` /
+    // `mark_failed` path; or the host can explicitly forget the
+    // scope to drop them. Once the Phase-10 fleet has been alive
+    // for at least one `STUCK_PENDING_THRESHOLD_SECS` window, all
+    // legitimate `Pending` windows carry `created_at: Some(...)`
+    // by construction (every `SynthesisWindow::new` stamps it),
+    // so this conservatism is a transitional-only blind spot.
+    //
+    // A flush failure here is non-fatal: the in-memory state is
+    // already swept, every counter has been incremented, and the
+    // next `open_store` retry will idempotently re-sweep + retry
+    // the flush (recovered windows stay `Failed` once flushed).
+    let swept_window_ids = synthesis_windows.sweep_stuck_pending(
+        chrono::Utc::now(),
+        chrono::Duration::seconds(STUCK_PENDING_THRESHOLD_SECS),
+    );
+    if !swept_window_ids.is_empty() {
+        for _ in &swept_window_ids {
+            crate::metrics::inc_stuck_pending_window_recovered();
+        }
+        tracing::warn!(
+            recovered = swept_window_ids.len(),
+            threshold_secs = STUCK_PENDING_THRESHOLD_SECS,
+            "open_store: stuck-Pending recovery sweep transitioned windows to Failed (prior run \
+             likely crashed mid-dispatch or commit-failure recovery did not land)",
+        );
+        match serde_json::to_vec(&synthesis_windows) {
+            Ok(bytes) => {
+                if let Err(e) = store.save_memory_blob(
+                    synthesis_windows_scope(),
+                    SYNTHESIS_WINDOWS_KIND,
+                    &bytes,
+                ) {
+                    tracing::warn!(
+                        error = %e,
+                        recovered = swept_window_ids.len(),
+                        "open_store: flush of stuck-Pending sweep result failed; on-disk blob \
+                         still references Pending windows (next open_store will retry the sweep \
+                         + flush)",
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    recovered = swept_window_ids.len(),
+                    "open_store: could not serialise swept synthesis_windows blob; on-disk blob \
+                     still references Pending windows (next open_store will retry the sweep + \
+                     flush)",
+                );
+            }
+        }
+    }
+
     // Rehydrate per-scope synthesis objects. Each scope's row holds
     // a JSON-serialised `Vec<SynthesisObject>` (one row per scope),
     // so we collapse them into the by-`WindowId` map the FFI uses
@@ -1817,6 +1950,11 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         synthesis_objects,
         synthesis_scope_bindings: None,
         synthesis_single_tenant: false,
+        synthesis_rate_limiter: crate::synthesis_rate::TokenBucket::new(
+            crate::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY,
+            crate::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC,
+            chrono::Utc::now(),
+        ),
     };
 
     // Rehydrate persisted connector state from the v9
