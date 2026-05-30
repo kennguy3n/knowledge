@@ -866,15 +866,16 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     // entries which is bounded by 2 × active scopes (Domain +
     // Tenant tiers) so the cost stays linear in the live runtime.
     rt.synthesis_cooldowns.retain(|(s, _), _| *s != scope);
-    let synth_window_ids: Vec<synthesis_pipeline::WindowId> = rt
-        .synthesis_windows
-        .windows_for(scope)
-        .iter()
-        .map(|w| w.id)
-        .collect();
-    for wid in &synth_window_ids {
-        rt.synthesis_objects.remove(wid);
-    }
+    // Phase-10-Item-2 nested shape: drop the whole sub-map for the
+    // forgotten scope in one O(1) outer-map removal. Before the
+    // refactor we walked every window id owned by the scope and
+    // removed each from the flat map; now the scope's entire object
+    // set is a single value addressable by `scope`. Window ids stay
+    // globally unique so no other scope's objects can be caught by
+    // this — but as a defense-in-depth measure (and to match the
+    // documented invariant in the runtime's `synthesis_objects`
+    // rustdoc) we never touch other scopes' sub-maps here.
+    rt.synthesis_objects.remove(&scope);
     rt.synthesis_windows.remove_windows_for_scope(scope);
     // The window-manager mutation only persists if we flush.
     //

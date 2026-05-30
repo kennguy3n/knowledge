@@ -1367,21 +1367,37 @@ fn apply_dispatch_outcome(
                         message: format!("mark_complete failed: {e}"),
                     })?;
 
-                // 2. Clone the synthesis-objects map and insert
-                //    the new object, then apply the retention
-                //    prune on both the windows clone and the
-                //    objects clone so the disk write reflects the
-                //    final post-prune state in one shot.
-                let mut objects_after = rt.synthesis_objects.clone();
-                // Move `object` into the map — every subsequent read
-                // (the per-scope serialisation below) goes through
-                // `objects_after.values()`, so cloning the payload
-                // (up to MAX_SYNTHESIS_OUTPUT_BYTES) would be wasted.
+                // 2. Clone the per-scope synthesis-objects sub-map
+                //    and insert the new object, then apply the
+                //    retention prune on both the windows clone and
+                //    the (per-scope) objects clone so the disk
+                //    write reflects the final post-prune state in
+                //    one shot.
+                //
+                //    Phase-10-Item-2 change: the runtime stores
+                //    synthesis objects nested by scope
+                //    (`HashMap<ScopeId, HashMap<WindowId, _>>`), so
+                //    the clone here only carries the dispatching
+                //    scope's payloads rather than every scope's
+                //    payloads. The previous flat-map clone scaled
+                //    as O(total scopes × retention cap × payload
+                //    size); the per-scope clone is O(per-scope
+                //    object count × payload size) and is bounded
+                //    by [`WINDOW_RETENTION_CAP_PER_SCOPE`].
+                let mut scope_objects_after = rt
+                    .synthesis_objects_for_scope(scope)
+                    .cloned()
+                    .unwrap_or_default();
+                // Move `object` into the per-scope sub-map — every
+                // subsequent read (the per-scope serialisation
+                // below) goes through `scope_objects_after.values()`,
+                // so cloning the payload (up to
+                // MAX_SYNTHESIS_OUTPUT_BYTES) would be wasted.
                 let object_window_id = object.window_id;
-                objects_after.insert(object_window_id, object);
+                scope_objects_after.insert(object_window_id, object);
                 let pruned_ids = prune_completed_windows_on(
                     &mut windows_after,
-                    &mut objects_after,
+                    &mut scope_objects_after,
                     scope,
                     WINDOW_RETENTION_CAP_PER_SCOPE,
                 );
@@ -1427,10 +1443,13 @@ fn apply_dispatch_outcome(
                 // before any disk write so they cannot leave the
                 // tx in an indeterminate state.
                 let synthesis_obj_json = {
-                    let per_scope: Vec<&synthesis_pipeline::SynthesisObject> = objects_after
-                        .values()
-                        .filter(|o| o.scope_id == scope)
-                        .collect();
+                    // `scope_objects_after` is already nested by
+                    // scope (`Item-2`'s shape), so the
+                    // serialisation no longer needs a `scope_id`
+                    // filter — every object in the sub-map is by
+                    // construction owned by `scope`.
+                    let per_scope: Vec<&synthesis_pipeline::SynthesisObject> =
+                        scope_objects_after.values().collect();
                     serde_json::to_vec(&per_scope).map_err(|e| FfiError::Memory {
                         message: format!("failed to serialize synthesis objects: {e}"),
                     })?
@@ -1523,7 +1542,24 @@ fn apply_dispatch_outcome(
                 // it into the live runtime maps. None of these
                 // mutations can fail (HashMap inserts, owned
                 // assignments) so we do not need a rollback path.
-                rt.synthesis_objects = objects_after;
+                //
+                // For `synthesis_objects` we install the per-scope
+                // sub-map under the dispatching scope's key. If the
+                // sub-map is empty (every prior `Complete` window
+                // was pruned and the new object did not land — not
+                // possible on the success path, but defensive
+                // against future refactors), drop the empty entry
+                // entirely so the runtime's outer map does not
+                // carry a zero-sized bucket. The orphan sweep at
+                // `open_store` time relies on the same invariant
+                // ([`runtime::open_store_inner`] runs a
+                // `retain(|_, inner| !inner.is_empty())` after
+                // purging).
+                if scope_objects_after.is_empty() {
+                    rt.synthesis_objects.remove(&scope);
+                } else {
+                    rt.synthesis_objects.insert(scope, scope_objects_after);
+                }
                 rt.synthesis_windows = windows_after;
                 match memory_after {
                     MemoryAfter::Domain(m) => {
@@ -1736,9 +1772,13 @@ fn newest_object_for_scope_of_type(
     scope: ScopeId,
     kind: SynthesisObjectType,
 ) -> Option<SynthesisObject> {
-    rt.synthesis_objects
+    // The runtime's `synthesis_objects` is nested by scope
+    // (Phase-10 Item 2). Read off the per-scope sub-map directly so
+    // we walk only the objects owned by `scope` rather than every
+    // tenant's per-scope sub-map.
+    rt.synthesis_objects_for_scope(scope)?
         .values()
-        .filter(|o| o.scope_id == scope && o.object_type == kind)
+        .filter(|o| o.object_type == kind)
         .max_by_key(|o| o.created_at)
         .cloned()
 }
@@ -1802,8 +1842,11 @@ fn newest_complete_window(
         .iter()
         .filter(|w| w.status == WindowStatus::Complete)
         .filter(|w| {
-            rt.synthesis_objects
-                .get(&w.id)
+            // O(1) lookup through the nested-map helper: every
+            // `Complete` window has its object owned by the same
+            // `scope`, so the `(scope, window_id)` accessor is
+            // exact here.
+            rt.synthesis_object_in(scope, w.id)
                 .is_some_and(|o| o.object_type == expected_object_type)
         })
         .max_by_key(|w| w.window_end)
@@ -1919,9 +1962,11 @@ fn window_to_record(
 ) -> SynthesisStatusRecord {
     // Look up the synthesis object for this window so callers can
     // pull the artefact id without a second round trip.
+    //
+    // `window.scope_id` is the owning scope, so the per-scope
+    // accessor is exact (no need to walk other tenants' sub-maps).
     let object_id = rt
-        .synthesis_objects
-        .get(&window.id)
+        .synthesis_object_in(window.scope_id, window.id)
         .map(|o| o.id.as_uuid().to_string());
     // Tier resolution priority:
     //
@@ -1949,8 +1994,7 @@ fn window_to_record(
         Some(WindowScopeTier::Domain) => "domain".to_string(),
         Some(WindowScopeTier::Tenant) => "tenant".to_string(),
         None => rt
-            .synthesis_objects
-            .get(&window.id)
+            .synthesis_object_in(window.scope_id, window.id)
             .map_or("unknown", |o| match o.object_type {
                 SynthesisObjectType::ChannelRecap => "channel",
                 SynthesisObjectType::DomainSummary => "domain",
@@ -2393,12 +2437,10 @@ mod tests {
             let tenant_win_id =
                 synthesis_pipeline::WindowId::from_uuid(tenant_win.parse::<Uuid>().expect("uuid"));
             let domain_obj = rt
-                .synthesis_objects
-                .get(&domain_win_id)
+                .synthesis_object_in(scope, domain_win_id)
                 .expect("domain object");
             let tenant_obj = rt
-                .synthesis_objects
-                .get(&tenant_win_id)
+                .synthesis_object_in(scope, tenant_win_id)
                 .expect("tenant object");
             assert_eq!(domain_obj.object_type, SynthesisObjectType::DomainSummary);
             assert_eq!(tenant_obj.object_type, SynthesisObjectType::TenantSummary);
@@ -2666,11 +2708,14 @@ mod tests {
         // be gone.
         let path = dir.path().join("evidence.db");
         let (remaining_in_memory, oldest_pre_existing) = with_runtime(handle, |rt| {
+            // Per-scope sub-map post-Phase-10-Item-2: the
+            // dispatching scope owns every relevant object.
             let remaining: Vec<synthesis_pipeline::WindowId> = rt
-                .synthesis_objects
-                .keys()
-                .filter(|id| pre_existing.contains(id) || **id == fresh_id)
-                .copied()
+                .synthesis_objects_for_scope(scope)
+                .map(|m| m.keys().copied().collect::<Vec<_>>())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|id| pre_existing.contains(id) || *id == fresh_id)
                 .collect();
             let oldest = *pre_existing.last().expect("non-empty");
             Ok((remaining, oldest))
@@ -2695,10 +2740,11 @@ mod tests {
             .expect("reopen");
         let resurrected: Vec<synthesis_pipeline::WindowId> = with_runtime(handle2, |rt| {
             Ok(rt
-                .synthesis_objects
-                .keys()
+                .synthesis_objects_for_scope(scope)
+                .map(|m| m.keys().copied().collect::<Vec<_>>())
+                .unwrap_or_default()
+                .into_iter()
                 .filter(|id| pre_existing.contains(id))
-                .copied()
                 .collect())
         })
         .expect("inspect rehydrated map");
@@ -2711,12 +2757,17 @@ mod tests {
         // window_id that is unknown to the rehydrated window
         // manager.
         with_runtime(handle2, |rt| {
-            for id in rt.synthesis_objects.keys() {
-                assert!(
-                    rt.synthesis_windows.get(*id).is_some(),
-                    "rehydrated synthesis object {id:?} has no matching window \
-                     — disk blob is out of sync with the window manager",
-                );
+            // Walk the nested sub-maps; every object that
+            // rehydrated must still have a matching window
+            // post-prune-flush.
+            for inner in rt.synthesis_objects.values() {
+                for id in inner.keys() {
+                    assert!(
+                        rt.synthesis_windows.get(*id).is_some(),
+                        "rehydrated synthesis object {id:?} has no matching window \
+                         — disk blob is out of sync with the window manager",
+                    );
+                }
             }
             Ok(())
         })
@@ -2745,7 +2796,7 @@ mod tests {
             assert!(rt
                 .synthesis_cooldowns
                 .contains_key(&(scope, SynthesisTierKind::Domain)));
-            assert!(rt.synthesis_objects.contains_key(&win_id));
+            assert!(rt.synthesis_object_in(scope, win_id).is_some());
             assert!(rt.synthesis_windows.get(win_id).is_some());
             Ok(())
         })
@@ -2761,7 +2812,11 @@ mod tests {
             // matches the forgotten scope, so neither Domain nor
             // Tenant cooldown stamps survive.
             assert!(!rt.synthesis_cooldowns.keys().any(|(s, _)| *s == scope));
-            assert!(!rt.synthesis_objects.contains_key(&win_id));
+            assert!(rt.synthesis_object_in(scope, win_id).is_none());
+            // Forgetting a scope must also drop its entire
+            // sub-map entry from the outer `synthesis_objects`
+            // — no zero-sized buckets should linger.
+            assert!(!rt.synthesis_objects.contains_key(&scope));
             assert!(rt.synthesis_windows.get(win_id).is_none());
             assert!(rt.synthesis_windows.windows_for(scope).is_empty());
             Ok(())
@@ -2844,8 +2899,14 @@ mod tests {
             // skips tombstoned scopes when loading per-scope
             // synthesis_object rows, so this is a sanity check
             // on the two paths staying in sync.
+            //
+            // Post-Phase-10-Item-2 the runtime stores objects in
+            // per-scope sub-maps; `synthesis_object_by_window` is
+            // the cross-scope lookup that walks every bucket, so
+            // it's the right tool for asserting "no inner map
+            // contains this window".
             assert!(
-                !rt.synthesis_objects.contains_key(&win_id),
+                rt.synthesis_object_by_window(win_id).is_none(),
                 "synthesis_objects must not retain orphan entry for window of tombstoned scope",
             );
             Ok(())
@@ -2925,7 +2986,7 @@ mod tests {
 
         with_runtime(handle2, |rt| {
             assert!(
-                !rt.synthesis_objects.contains_key(&win_id),
+                rt.synthesis_object_by_window(win_id).is_none(),
                 "ANALYSIS_0006 regression: orphan synthesis_object whose window_id is not in \
                  the rehydrated SynthesisWindowManager must be purged at open_store time",
             );
@@ -2949,7 +3010,7 @@ mod tests {
                 .expect("second reopen");
         with_runtime(handle3, |rt| {
             assert!(
-                !rt.synthesis_objects.contains_key(&win_id),
+                rt.synthesis_object_by_window(win_id).is_none(),
                 "second open_store must observe the persisted orphan-cleanup; the per-scope \
                  synthesis_object blob should have been rewritten on the first reopen",
             );
@@ -2957,6 +3018,99 @@ mod tests {
         })
         .expect("inspect second-reopen state");
         teardown(handle3);
+    }
+
+    /// Phase-10 Item 2 regression: dispatching synthesis on one
+    /// scope must NEVER touch another scope's per-scope sub-map in
+    /// the nested `synthesis_objects` shape, AND every accessor on
+    /// the runtime must report values consistent with the nested
+    /// layout. This pins the per-scope clone optimisation
+    /// (`apply_dispatch_outcome` only clones the dispatching
+    /// scope's sub-map) by exercising two unrelated scopes and
+    /// asserting cross-tenant isolation along with each of the
+    /// helpers added in this phase.
+    #[test]
+    fn synthesis_objects_per_scope_isolation_and_accessors() {
+        let (handle, dir) = fresh_store();
+        install_test_engine(handle);
+        let scope_a = seed_domain_with_two_channels(handle);
+        let scope_b = seed_domain_with_two_channels(handle);
+
+        let win_a_str = trigger_server_synthesis(
+            handle,
+            scope_a.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("domain dispatch on scope A");
+        let win_b_str = trigger_server_synthesis(
+            handle,
+            scope_b.as_uuid().to_string(),
+            SynthesisTierKind::Domain,
+        )
+        .expect("domain dispatch on scope B");
+        let win_a =
+            synthesis_pipeline::WindowId::from_uuid(win_a_str.parse::<Uuid>().expect("uuid A"));
+        let win_b =
+            synthesis_pipeline::WindowId::from_uuid(win_b_str.parse::<Uuid>().expect("uuid B"));
+
+        with_runtime(handle, |rt| {
+            // Sub-maps are scope-local: A's bucket contains only A's
+            // window, B's only B's.
+            let sub_a = rt
+                .synthesis_objects_for_scope(scope_a)
+                .expect("scope A sub-map");
+            let sub_b = rt
+                .synthesis_objects_for_scope(scope_b)
+                .expect("scope B sub-map");
+            assert!(sub_a.contains_key(&win_a));
+            assert!(!sub_a.contains_key(&win_b));
+            assert!(sub_b.contains_key(&win_b));
+            assert!(!sub_b.contains_key(&win_a));
+
+            // `synthesis_object_in` is the O(1) per-scope lookup.
+            assert!(rt.synthesis_object_in(scope_a, win_a).is_some());
+            assert!(rt.synthesis_object_in(scope_b, win_b).is_some());
+            // Cross-scope lookups must miss — the sub-maps are
+            // strictly isolated by owning scope.
+            assert!(rt.synthesis_object_in(scope_a, win_b).is_none());
+            assert!(rt.synthesis_object_in(scope_b, win_a).is_none());
+
+            // `synthesis_object_by_window` walks every bucket and
+            // returns the unique owner. Used only by tests / debug
+            // surfaces.
+            assert!(rt.synthesis_object_by_window(win_a).is_some());
+            assert!(rt.synthesis_object_by_window(win_b).is_some());
+
+            // `synthesis_object_count` aggregates every bucket. Two
+            // scopes, one object each.
+            assert_eq!(rt.synthesis_object_count(), 2);
+
+            // Sentinel for non-existent scope: `for_scope` returns
+            // `None` rather than allocating an empty bucket.
+            let bogus = ScopeId::new_v4();
+            assert!(rt.synthesis_objects_for_scope(bogus).is_none());
+            Ok(())
+        })
+        .expect("with_runtime accessor checks");
+
+        // Close + reopen: rehydration must preserve the nested
+        // shape — both scopes regain their own sub-map, no objects
+        // get reassigned to the wrong tenant.
+        let path = dir.path().join("evidence.db");
+        teardown(handle);
+        let key_hex = "a5".repeat(32);
+        let handle2 = crate::runtime::open_store(path.to_string_lossy().into_owned(), key_hex)
+            .expect("reopen");
+        with_runtime(handle2, |rt| {
+            assert!(rt.synthesis_object_in(scope_a, win_a).is_some());
+            assert!(rt.synthesis_object_in(scope_b, win_b).is_some());
+            assert!(rt.synthesis_object_in(scope_a, win_b).is_none());
+            assert!(rt.synthesis_object_in(scope_b, win_a).is_none());
+            assert_eq!(rt.synthesis_object_count(), 2);
+            Ok(())
+        })
+        .expect("post-reopen verification");
+        teardown(handle2);
     }
 
     /// ANALYSIS_0007 regression: synthesis status records for
@@ -3157,7 +3311,12 @@ mod tests {
                     b"recap".to_vec(),
                     Uuid::nil(),
                 );
-                rt.synthesis_objects.insert(h.window_id, obj);
+                // Phase-10-Item-2 nested shape: insert under the
+                // owning scope's sub-map (creating it on demand).
+                rt.synthesis_objects
+                    .entry(scope)
+                    .or_default()
+                    .insert(h.window_id, obj);
             }
             Ok(())
         })
@@ -3541,9 +3700,11 @@ mod tests {
         // the document bytes (stub format: `doc:<payload>`).
         let window_uuid: Uuid = window_id_str.parse().unwrap();
         let synth_payload = with_runtime(handle, |rt| {
+            // We know the owning scope from the dispatch above, so
+            // take the O(1) per-scope accessor rather than the
+            // cross-scope walker.
             let obj = rt
-                .synthesis_objects
-                .get(&synthesis_pipeline::WindowId::from_uuid(window_uuid))
+                .synthesis_object_in(scope, synthesis_pipeline::WindowId::from_uuid(window_uuid))
                 .expect("synthesis object present");
             Ok(obj.payload.clone())
         })
@@ -4127,8 +4288,9 @@ mod tests {
         // in their pre-dispatch shape.
         with_runtime(handle, |rt| {
             assert!(
-                rt.synthesis_objects.is_empty(),
-                "synthesis_objects must remain empty on tx commit failure",
+                rt.synthesis_object_count() == 0,
+                "synthesis_objects must remain empty on tx commit failure (across every \
+                 per-scope sub-map)",
             );
             // Tenant memory was seeded but no synthesis output is
             // attached to it — `last_synthesis_window` should still

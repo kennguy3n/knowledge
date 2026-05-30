@@ -145,7 +145,7 @@ impl TokenBucket {
             #[allow(
                 clippy::cast_possible_truncation,
                 clippy::cast_sign_loss,
-                clippy::cast_precision_loss,
+                clippy::cast_precision_loss
             )]
             let retry_after_ms = (wait_secs * 1000.0).ceil() as u64;
             Err(retry_after_ms.max(1))

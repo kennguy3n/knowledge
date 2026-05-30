@@ -464,13 +464,35 @@ pub struct FfiRuntime {
     /// cooldown clock.
     pub(crate) synthesis_cooldowns:
         HashMap<(ScopeId, crate::types::SynthesisTierKind), DateTime<Utc>>,
-    /// Persisted synthesis results: maps `window_id` →
-    /// [`synthesis_pipeline::SynthesisObject`]. Mirrors the
-    /// per-scope `memory_objects` rows under the
-    /// [`SYNTHESIS_OBJECT_KIND`] tag (one row per scope, payload
-    /// = JSON-serialised `Vec<SynthesisObject>`).
-    pub(crate) synthesis_objects:
+    /// Persisted synthesis results, nested by scope. The outer
+    /// key is the owning `ScopeId`; the inner key is the
+    /// `window_id` of the synthesis run that produced the
+    /// object. The on-disk shape under the
+    /// [`SYNTHESIS_OBJECT_KIND`] tag has always been per-scope
+    /// (one row per scope, payload = JSON-serialised
+    /// `Vec<SynthesisObject>`); Phase 10 Item 2 brought the
+    /// in-memory shape into alignment so the per-dispatch clone
+    /// in [`crate::synthesis::apply_dispatch_outcome`] only
+    /// touches the scope being updated. Before the refactor,
+    /// `apply_dispatch_outcome` cloned the global
+    /// `HashMap<WindowId, SynthesisObject>` which carried every
+    /// scope's payloads (up to `MAX_SYNTHESIS_OUTPUT_BYTES` each)
+    /// just to install the one new object for the dispatching
+    /// scope.
+    ///
+    /// Window ids are globally unique UUIDs so the per-scope
+    /// nesting cannot lose a lookup — but the indirection means
+    /// cross-scope lookup helpers ([`Self::synthesis_object`])
+    /// walk all scope buckets, which is O(scopes) rather than
+    /// O(1). Hosts that already know the owning scope (every
+    /// dispatch path) take the O(1) [`Self::synthesis_object_in`]
+    /// route. The orphan sweep and the health-probe object count
+    /// are bounded by the number of `Complete` windows, which is
+    /// in turn bounded by [`crate::synthesis::WINDOW_RETENTION_CAP_PER_SCOPE`].
+    pub(crate) synthesis_objects: HashMap<
+        ScopeId,
         HashMap<synthesis_pipeline::WindowId, synthesis_pipeline::SynthesisObject>,
+    >,
     /// Allow-list of scope UUIDs that the configured non-TEE
     /// synthesis engine is permitted to operate on. `None` means
     /// "no allow-list configured" — the FFI layer logs a warning
@@ -869,10 +891,17 @@ impl FfiRuntime {
         // owned `object` alongside the existing per-scope rows, so
         // a serialisation or SQLCipher failure leaves both disk and
         // in-memory state untouched.
-        let per_scope: Vec<&synthesis_pipeline::SynthesisObject> = self
-            .synthesis_objects
+        //
+        // Post-Phase-10-Item-2 the in-memory shape is
+        // already per-scope, so we read straight off the
+        // matching sub-map (empty if this is the first object
+        // for `scope`) and chain the new owned-but-not-yet-
+        // inserted `object` onto it.
+        let empty: HashMap<synthesis_pipeline::WindowId, synthesis_pipeline::SynthesisObject> =
+            HashMap::new();
+        let scope_objects = self.synthesis_objects.get(&scope).unwrap_or(&empty);
+        let per_scope: Vec<&synthesis_pipeline::SynthesisObject> = scope_objects
             .values()
-            .filter(|o| o.scope_id == scope)
             .chain(std::iter::once(&object))
             .collect();
         let json = serde_json::to_vec(&per_scope).map_err(|e| crate::error::FfiError::Memory {
@@ -883,13 +912,14 @@ impl FfiRuntime {
             .map_err(|e| crate::error::FfiError::Evidence {
                 message: e.to_string(),
             })?;
-        // Disk write succeeded; commit the in-memory insert. Note we
-        // key by `window_id`, which is unique to this synthesis run,
-        // so the prior `chain(once(&object))` cannot have caused a
-        // duplicate row in the serialised list (the existing scan
-        // filters by `scope_id`, not `window_id`, but `window_id`
-        // values are freshly minted by `open_tiered_window`).
-        self.synthesis_objects.insert(object.window_id, object);
+        // Disk write succeeded; commit the in-memory insert into
+        // the per-scope sub-map. Window ids are globally unique
+        // UUIDs so the insert cannot accidentally collide with an
+        // object owned by a different scope.
+        self.synthesis_objects
+            .entry(scope)
+            .or_default()
+            .insert(object.window_id, object);
         Ok(())
     }
 
@@ -915,11 +945,10 @@ impl FfiRuntime {
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn flush_synthesis_objects(&self, scope: ScopeId) -> crate::error::FfiResult<()> {
-        let per_scope: Vec<&synthesis_pipeline::SynthesisObject> = self
-            .synthesis_objects
-            .values()
-            .filter(|o| o.scope_id == scope)
-            .collect();
+        let empty: HashMap<synthesis_pipeline::WindowId, synthesis_pipeline::SynthesisObject> =
+            HashMap::new();
+        let scope_objects = self.synthesis_objects.get(&scope).unwrap_or(&empty);
+        let per_scope: Vec<&synthesis_pipeline::SynthesisObject> = scope_objects.values().collect();
         let json = serde_json::to_vec(&per_scope).map_err(|e| crate::error::FfiError::Memory {
             message: format!("failed to serialize synthesis objects: {e}"),
         })?;
@@ -950,12 +979,76 @@ impl FfiRuntime {
         scope: ScopeId,
         max_per_scope: usize,
     ) -> Vec<synthesis_pipeline::WindowId> {
+        // The prune helper takes a `&mut HashMap<WindowId, _>`
+        // (the per-scope inner map). Operate on the existing
+        // entry directly when one is present; allocate (and tidy
+        // up) only if the scope had no prior objects — in
+        // practice the test-only callers always run after at
+        // least one `save_synthesis_object`, so the entry is
+        // there.
+        let mut empty: HashMap<synthesis_pipeline::WindowId, synthesis_pipeline::SynthesisObject> =
+            HashMap::new();
+        let objects = self.synthesis_objects.get_mut(&scope).unwrap_or(&mut empty);
         crate::synthesis::prune_completed_windows_on(
             &mut self.synthesis_windows,
-            &mut self.synthesis_objects,
+            objects,
             scope,
             max_per_scope,
         )
+    }
+
+    // ───────── Synthesis-object cross-scope accessors ──────────
+
+    /// Look up a synthesis object by `(scope, window_id)`. O(1)
+    /// against the nested map shape; this is the preferred entry
+    /// point for any caller that already knows the owning scope.
+    pub(crate) fn synthesis_object_in(
+        &self,
+        scope: ScopeId,
+        window_id: synthesis_pipeline::WindowId,
+    ) -> Option<&synthesis_pipeline::SynthesisObject> {
+        self.synthesis_objects.get(&scope)?.get(&window_id)
+    }
+
+    /// Look up a synthesis object by `window_id` alone. Walks the
+    /// per-scope sub-maps (O(scopes)) because window ids are
+    /// globally unique but the runtime no longer maintains a flat
+    /// reverse index.
+    ///
+    /// Test-only after the Phase-10 Item 2 refactor: every
+    /// production caller (the dispatch path, the status surface,
+    /// the cooldown short-circuit) already knows the owning scope
+    /// and takes the O(1) [`Self::synthesis_object_in`] route. The
+    /// orphan-cleanup tests use this helper to assert "no inner
+    /// map holds `window_id`" across every scope without
+    /// hard-coding which scope owned the now-orphaned window.
+    #[cfg(test)]
+    pub(crate) fn synthesis_object_by_window(
+        &self,
+        window_id: synthesis_pipeline::WindowId,
+    ) -> Option<&synthesis_pipeline::SynthesisObject> {
+        self.synthesis_objects
+            .values()
+            .find_map(|inner| inner.get(&window_id))
+    }
+
+    /// Borrow the per-scope sub-map (empty if the scope has no
+    /// objects). Returned by reference so cold-path readers
+    /// (health-probe object count, `newest_*` filters) can iterate
+    /// without cloning.
+    pub(crate) fn synthesis_objects_for_scope(
+        &self,
+        scope: ScopeId,
+    ) -> Option<&HashMap<synthesis_pipeline::WindowId, synthesis_pipeline::SynthesisObject>> {
+        self.synthesis_objects.get(&scope)
+    }
+
+    /// Total number of persisted synthesis objects across all
+    /// scopes. Sum over the per-scope sub-map lengths. Used by the
+    /// synthesis health probe to populate the `objects=` field of
+    /// the detail string.
+    pub(crate) fn synthesis_object_count(&self) -> usize {
+        self.synthesis_objects.values().map(HashMap::len).sum()
     }
 }
 
@@ -1646,12 +1739,13 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
     }
 
     // Rehydrate per-scope synthesis objects. Each scope's row holds
-    // a JSON-serialised `Vec<SynthesisObject>` (one row per scope),
-    // so we collapse them into the by-`WindowId` map the FFI uses
-    // at runtime.
+    // a JSON-serialised `Vec<SynthesisObject>`; the in-memory shape
+    // (post-Phase-10-Item-2) mirrors that nesting so per-dispatch
+    // clones in `apply_dispatch_outcome` only touch the scope being
+    // updated.
     let mut synthesis_objects: HashMap<
-        synthesis_pipeline::WindowId,
-        synthesis_pipeline::SynthesisObject,
+        evidence_store::ScopeId,
+        HashMap<synthesis_pipeline::WindowId, synthesis_pipeline::SynthesisObject>,
     > = HashMap::new();
     let synthesis_object_scopes = store
         .list_memory_scopes(SYNTHESIS_OBJECT_KIND)
@@ -1666,8 +1760,29 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
             Ok(Some(blob)) => {
                 match serde_json::from_slice::<Vec<synthesis_pipeline::SynthesisObject>>(&blob) {
                     Ok(objs) => {
+                        let inner = synthesis_objects.entry(scope).or_default();
                         for obj in objs {
-                            synthesis_objects.insert(obj.window_id, obj);
+                            // Defense-in-depth: the on-disk
+                            // payload was always per-scope (one
+                            // row per scope under
+                            // `SYNTHESIS_OBJECT_KIND`), so every
+                            // object inside this blob must
+                            // belong to `scope`. Drop the
+                            // mismatch with a warn instead of
+                            // letting a corrupt blob mask the
+                            // owning scope under a different
+                            // key.
+                            if obj.scope_id != scope {
+                                tracing::warn!(
+                                    row_scope = %scope.as_uuid(),
+                                    object_scope = %obj.scope_id.as_uuid(),
+                                    window = %obj.window_id.as_uuid(),
+                                    "synthesis_object blob carries an object whose \
+                                     scope_id does not match the owning row scope; dropping",
+                                );
+                                continue;
+                            }
+                            inner.insert(obj.window_id, obj);
                         }
                     }
                     Err(e) => {
@@ -1720,29 +1835,38 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
     // affected scope's per-scope blob. Rewrite failures are non-
     // fatal — the in-memory state is already clean and the next
     // `open_store` will retry the purge.
-    let orphan_object_window_ids: Vec<synthesis_pipeline::WindowId> = synthesis_objects
-        .iter()
-        .filter(|(wid, _)| synthesis_windows.get(**wid).is_none())
-        .map(|(wid, _)| *wid)
-        .collect();
-    if !orphan_object_window_ids.is_empty() {
-        let mut affected_scopes: HashSet<evidence_store::ScopeId> = HashSet::new();
-        for wid in &orphan_object_window_ids {
-            if let Some(obj) = synthesis_objects.remove(wid) {
-                affected_scopes.insert(obj.scope_id);
-            }
+    let mut affected_scopes: HashSet<evidence_store::ScopeId> = HashSet::new();
+    let mut orphan_count: usize = 0;
+    for (scope, inner) in synthesis_objects.iter_mut() {
+        let drop_ids: Vec<synthesis_pipeline::WindowId> = inner
+            .keys()
+            .copied()
+            .filter(|wid| synthesis_windows.get(*wid).is_none())
+            .collect();
+        if drop_ids.is_empty() {
+            continue;
         }
+        for wid in &drop_ids {
+            inner.remove(wid);
+        }
+        orphan_count += drop_ids.len();
+        affected_scopes.insert(*scope);
+    }
+    if orphan_count > 0 {
         tracing::info!(
-            objects = orphan_object_window_ids.len(),
+            objects = orphan_count,
             scopes = affected_scopes.len(),
             "open_store: purged orphan synthesis objects whose window_id is not in the \
              rehydrated SynthesisWindowManager",
         );
         for scope in &affected_scopes {
+            // Borrow the (possibly now empty) sub-map; even an
+            // empty list must be rewritten so the on-disk blob
+            // catches up with the in-memory state.
             let per_scope: Vec<&synthesis_pipeline::SynthesisObject> = synthesis_objects
-                .values()
-                .filter(|o| o.scope_id == *scope)
-                .collect();
+                .get(scope)
+                .map(|m| m.values().collect())
+                .unwrap_or_default();
             match serde_json::to_vec(&per_scope) {
                 Ok(bytes) => {
                     if let Err(e) = store.save_memory_blob(*scope, SYNTHESIS_OBJECT_KIND, &bytes) {
@@ -1767,6 +1891,10 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
             }
         }
     }
+    // Drop empty sub-maps so the runtime doesn't carry zero-sized
+    // buckets for scopes whose every object was just purged. Keeps
+    // the health-probe `synthesis_object_count()` accurate.
+    synthesis_objects.retain(|_, inner| !inner.is_empty());
 
     // ─── Approved-document payload orphan sweep ───────────────────
     //

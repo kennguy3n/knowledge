@@ -549,7 +549,12 @@ fn synthesis_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     let total_windows = rt.synthesis_windows.len();
     let domain_count = rt.domain_memory_count();
     let tenant_count = rt.tenant_memory_count();
-    let synthesis_objects = rt.synthesis_objects.len();
+    // Post-Phase-10-Item-2 the in-memory shape is nested
+    // (`HashMap<ScopeId, HashMap<WindowId, SynthesisObject>>`), so
+    // `.len()` would report the number of *scopes* with at least one
+    // object rather than the total object count surfaced in the
+    // probe detail. Sum over the per-scope sub-maps via the helper.
+    let synthesis_objects = rt.synthesis_object_count();
     let scope_bindings_configured = rt.synthesis_scope_bindings.is_some();
     let scope_binding_count = rt
         .synthesis_scope_bindings
