@@ -139,7 +139,7 @@ across both bindings) are:
 `admit_approved_document`, `revoke_approved_document`,
 `replace_approved_document`, `list_approved_documents`.
 
-Four entry points are intentionally surface-specific rather than
+Six entry points are intentionally surface-specific rather than
 mirrored across both bindings:
 
 * `init` — **N-API only.** A JS-facing bootstrap helper
@@ -166,6 +166,18 @@ mirrored across both bindings:
   surface for mobile observability tiles (iOS / Android). The
   N-API surface exposes the same data through `health_check`'s
   envelope, so an extra entry point would be redundant on Electron.
+* `set_key_storage_resolver` / `clear_key_storage_resolver` —
+  **UniFFI only.** Registers a host-supplied master-key storage
+  callback (Keychain on iOS, Keystore on Android, DPAPI on Windows)
+  that the substrate will consult once the `crypto`-side migration
+  to resolver-driven `open_store` lands. The UniFFI surface is
+  shipped today so platform shells can implement the contract in
+  parallel with the substrate-side consumer (see
+  `crates/ffi/src/key_storage.rs:26-43` for the contract). An N-API
+  wrapper is deferred until the substrate actually drives the
+  resolver — without real call traffic to calibrate against, the
+  JS-side error mapping (`FfiResult<String>` → JS throw vs.
+  `null` return) cannot be tested end-to-end.
 
 See
 [Observability — metrics, tracing, health](#observability--metrics-tracing-health)
@@ -244,6 +256,8 @@ embedded in the health envelope. Counters include
 `remove_connector_total`,
 `set_oauth_client_secret_resolver_total`,
 `clear_oauth_client_secret_resolver_total`,
+`set_key_storage_resolver_total`,
+`clear_key_storage_resolver_total`,
 `start_webhook_server_total`, `stop_webhook_server_total`,
 `register_webhook_dispatch_total`,
 `unregister_webhook_dispatch_total`,

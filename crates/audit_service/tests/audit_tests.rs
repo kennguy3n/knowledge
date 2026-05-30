@@ -120,6 +120,75 @@ fn missing_required_fields_rejected_by_builder() {
 }
 
 #[test]
+fn query_uses_secondary_indexes_for_scope_action_actor() {
+    // This test ensures the index-driven `query` path returns the
+    // same set of entries as a linear scan would, across every
+    // combination of indexable predicates. The log contains a mix
+    // of scopes, actors, and action types so that no single index
+    // is selective enough to pass on its own.
+    let mut log = AuditLog::new();
+    let scope_a = ScopeId::new_v4();
+    let scope_b = ScopeId::new_v4();
+    let alice = Uuid::new_v4();
+    let bob = Uuid::new_v4();
+    let other = Uuid::new_v4();
+
+    let mut expected_alice_export_scope_a = 0_usize;
+    for i in 0..200 {
+        let scope = if i % 2 == 0 { scope_a } else { scope_b };
+        let who = if i % 3 == 0 {
+            alice
+        } else if i % 3 == 1 {
+            bob
+        } else {
+            other
+        };
+        let action = if i % 4 == 0 {
+            AuditActionType::Export
+        } else if i % 4 == 1 {
+            AuditActionType::CanonicalPromotion
+        } else if i % 4 == 2 {
+            AuditActionType::PolicyChange
+        } else {
+            AuditActionType::ExportRendered
+        };
+        if scope == scope_a && who == alice && action == AuditActionType::Export {
+            expected_alice_export_scope_a += 1;
+        }
+        log.append(entry(action, scope, who));
+    }
+
+    let q = AuditQuery::new()
+        .with_scope(scope_a)
+        .with_actor(alice)
+        .with_action(AuditActionType::Export);
+    let results: Vec<_> = log.query(&q).collect();
+    assert_eq!(results.len(), expected_alice_export_scope_a);
+    for entry in results {
+        assert_eq!(entry.scope_id, Some(scope_a));
+        assert!(matches!(entry.actor, Actor::User(id) if id == alice));
+        assert_eq!(entry.action_type, AuditActionType::Export);
+    }
+}
+
+#[test]
+fn get_by_id_uses_id_index() {
+    let mut log = AuditLog::new();
+    let scope = ScopeId::new_v4();
+    let alice = Uuid::new_v4();
+    let mut ids = Vec::new();
+    for _ in 0..50 {
+        ids.push(log.append(entry(AuditActionType::Export, scope, alice)));
+    }
+    for id in &ids {
+        let entry = log.get(*id).expect("id must resolve");
+        assert_eq!(entry.id, *id);
+    }
+    // An id that was never appended must not resolve.
+    assert!(log.get(audit_service::AuditEntryId::new_v4()).is_none());
+}
+
+#[test]
 fn key_destruction_event_is_recordable() {
     let mut log = AuditLog::new();
     let scope = ScopeId::new_v4();

@@ -61,6 +61,55 @@ are tracked openly:
    shells live in sibling repositories and are not audited by
    this policy.
 
+## Third-party audit
+
+The project has not yet undergone an independent security audit.
+The planned audit scope covers:
+
+- `crates/crypto/` — hybrid KEM combiner (X25519 + ML-KEM-768),
+  HKDF key derivation, XChaCha20-Poly1305 AEAD usage, zeroize
+  discipline, ML-DSA-65 provenance signatures, SPHINCS+
+  co-signing, and the `KeyStorage` trait surface that bounds
+  hardware-backed key material (Keychain / Keystore / DPAPI /
+  TEE) so the audit's threat model can include the host-shell
+  storage boundary without re-deriving it from scratch.
+- `crates/evidence_store/` — cryptographic forgetting via DEK
+  destruction, FTS5 plaintext purge on tombstone, ring-buffer
+  eviction, schema migrations (v1 → current).
+- `crates/permission_service/` — Zanzibar-style reachability
+  check, including the secondary-index path used on every
+  permission lookup, and the audit-log integration that records
+  every grant / revoke.
+
+Candidate audit firms: NCC Group, Trail of Bits, Cure53. Audit
+artefacts (engagement letter, scoping memo, reports, remediation
+log) will be published alongside the corresponding release in
+this repository once an engagement begins.
+
+### Key storage
+
+The substrate consumes a 32-byte master key as opaque bytes — see
+[`crypto::MasterKey`](crates/crypto/src/kdf.rs). The *storage* of
+that key is host-specific and must be hardware-backed wherever
+the platform supports it:
+
+| Platform        | Backing store                                              |
+| --------------- | ---------------------------------------------------------- |
+| iOS / macOS     | Keychain (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`)  |
+| Android         | Keystore / StrongBox (Pixel 6+)                            |
+| Windows         | DPAPI; TPM via `NCryptOpenStorageProvider` on Win 11+      |
+| Linux desktop   | `libsecret` (SecretService) where available                |
+| Server / TEE    | Nitro / SEV-SNP sealed memory                              |
+
+Host shells register an implementation of
+[`crypto::KeyStorage`](crates/crypto/src/key_storage.rs) and the
+matching FFI callback
+[`ffi::KeyStorageResolver`](crates/ffi/src/key_storage.rs) at
+startup. The substrate currently still receives the master key
+through the FFI `open_store` call — the resolver registration is
+a forward-compatibility plumbing hook for the migration that
+removes the raw-bytes parameter from the public surface.
+
 ## Supported versions
 
 The project is pre-1.0 and does not yet have a stable release.

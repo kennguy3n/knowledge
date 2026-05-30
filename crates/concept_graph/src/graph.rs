@@ -3,7 +3,7 @@
 //! A pure in-memory `HashMap` adjacency list. Persistence to the
 //! encrypted store and CRDT delta sync are not yet wired.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::edge::{ConceptEdge, EdgeId, RelationType};
 use crate::error::{GraphError, Result};
@@ -280,9 +280,9 @@ impl ConceptGraph {
         max_depth: Option<usize>,
     ) -> Vec<NodeId> {
         let mut visited: HashSet<NodeId> = HashSet::from([start]);
-        let mut frontier: Vec<(NodeId, usize)> = vec![(start, 0)];
+        let mut frontier: VecDeque<(NodeId, usize)> = VecDeque::from([(start, 0)]);
         let mut out: Vec<NodeId> = Vec::new();
-        while let Some((node, depth)) = frontier.pop() {
+        while let Some((node, depth)) = frontier.pop_front() {
             if max_depth.is_some_and(|max| depth >= max) {
                 continue;
             }
@@ -290,7 +290,7 @@ impl ConceptGraph {
             for n in self.neighbors(node, Some(relation)) {
                 if visited.insert(n) {
                     out.push(n);
-                    frontier.insert(0, (n, next_depth));
+                    frontier.push_back((n, next_depth));
                 }
             }
         }

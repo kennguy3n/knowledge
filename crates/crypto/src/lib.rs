@@ -52,8 +52,17 @@
 //!   [`forgetting::EpochKeySource`] for `EpochManager` rotation
 //!   tests; derives keys as
 //!   `BLAKE3("test-epoch-key" || scope_uuid || epoch_id_le_u64)`.
+//! * `key_storage::InMemoryKeyStorage` — reference
+//!   [`key_storage::KeyStorage`] implementation backed by an
+//!   in-process `HashMap`. The substrate itself is platform-
+//!   agnostic, so production hosts register a platform-backed
+//!   `KeyStorage` (iOS Keychain, Android Keystore, Windows DPAPI,
+//!   etc.) via the FFI `KeyStorageResolver`; the in-process
+//!   implementation is *only* appropriate for tests and the demo
+//!   binary because heap-resident master keys are exposed to any
+//!   process-level memory-disclosure bug.
 //!
-//! The three types above are referenced as plain code spans rather
+//! The four types above are referenced as plain code spans rather
 //! than intra-doc links because their re-exports are themselves
 //! gated behind `cfg(any(test, feature = "test-support"))`, so the
 //! links would be unresolved under default-features `cargo doc`.
@@ -77,6 +86,7 @@ pub mod hybrid_enforcement;
 pub mod hybrid_kem;
 pub mod kdf;
 pub mod kem;
+pub mod key_storage;
 pub mod mls;
 pub mod provenance;
 pub mod signer_backend;
@@ -101,6 +111,9 @@ pub use kem::{
     KemBackend, KemCiphertext, KemPublicKey, KemSecretKey, KemSharedSecret, MlKem768Backend,
     KEM_CIPHERTEXT_LEN, KEM_PUBLIC_KEY_LEN, KEM_SECRET_KEY_LEN, KEM_SHARED_SECRET_LEN,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use key_storage::InMemoryKeyStorage;
+pub use key_storage::KeyStorage;
 pub use provenance::{
     AgentKind, EvidenceRef, ProvenanceAgent, ProvenanceBundle, ProvenanceSignature,
     ProvenanceSigner, SignedBundle, SynthesisActivity,

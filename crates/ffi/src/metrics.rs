@@ -129,6 +129,15 @@ pub(crate) struct Metrics {
     /// Total `clear_oauth_client_secret_resolver` calls initiated
     /// (Phase 4.1 — host-supplied resolver de-registration).
     pub(crate) clear_oauth_client_secret_resolver_total: AtomicU64,
+    /// Total `set_key_storage_resolver` calls initiated. Increments
+    /// every time a host (re-)registers a [`crate::key_storage::
+    /// KeyStorageResolver`]; high frequency indicates the host is
+    /// treating the resolver as request-scoped rather than as a
+    /// once-per-`open_store` lifecycle event — worth
+    /// investigating, mirroring the OAuth resolver metric.
+    pub(crate) set_key_storage_resolver_total: AtomicU64,
+    /// Total `clear_key_storage_resolver` calls initiated.
+    pub(crate) clear_key_storage_resolver_total: AtomicU64,
     /// Total `start_webhook_server` calls initiated
     /// (Phase 5 — webhook receiver server startup).
     pub(crate) start_webhook_server_total: AtomicU64,
@@ -386,6 +395,8 @@ counter_inc!(pub(crate) fn inc_remove_connector => remove_connector_total);
 counter_inc!(pub(crate) fn inc_refresh_connector_token => refresh_connector_token_total);
 counter_inc!(pub(crate) fn inc_set_oauth_client_secret_resolver => set_oauth_client_secret_resolver_total);
 counter_inc!(pub(crate) fn inc_clear_oauth_client_secret_resolver => clear_oauth_client_secret_resolver_total);
+counter_inc!(pub(crate) fn inc_set_key_storage_resolver => set_key_storage_resolver_total);
+counter_inc!(pub(crate) fn inc_clear_key_storage_resolver => clear_key_storage_resolver_total);
 counter_inc!(pub(crate) fn inc_start_webhook_server => start_webhook_server_total);
 counter_inc!(pub(crate) fn inc_stop_webhook_server => stop_webhook_server_total);
 counter_inc!(pub(crate) fn inc_register_webhook_dispatch => register_webhook_dispatch_total);
@@ -571,6 +582,14 @@ pub struct MetricsSnapshot {
     /// (Phase 4.1).
     #[serde(default)]
     pub clear_oauth_client_secret_resolver_total: u64,
+    /// Total `set_key_storage_resolver` calls initiated. Mirrors
+    /// the OAuth resolver counter so operators can spot hosts that
+    /// treat the key-storage resolver as request-scoped.
+    #[serde(default)]
+    pub set_key_storage_resolver_total: u64,
+    /// Total `clear_key_storage_resolver` calls initiated.
+    #[serde(default)]
+    pub clear_key_storage_resolver_total: u64,
     /// Total `start_webhook_server` calls initiated (Phase 5).
     #[serde(default)]
     pub start_webhook_server_total: u64,
@@ -824,6 +843,10 @@ pub fn snapshot() -> MetricsSnapshot {
             .load(Ordering::Relaxed),
         clear_oauth_client_secret_resolver_total: m
             .clear_oauth_client_secret_resolver_total
+            .load(Ordering::Relaxed),
+        set_key_storage_resolver_total: m.set_key_storage_resolver_total.load(Ordering::Relaxed),
+        clear_key_storage_resolver_total: m
+            .clear_key_storage_resolver_total
             .load(Ordering::Relaxed),
         start_webhook_server_total: m.start_webhook_server_total.load(Ordering::Relaxed),
         stop_webhook_server_total: m.stop_webhook_server_total.load(Ordering::Relaxed),

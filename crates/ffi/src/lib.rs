@@ -103,6 +103,7 @@ uniffi::setup_scaffolding!();
 pub mod connector;
 pub mod error;
 pub mod health;
+pub mod key_storage;
 pub mod metrics;
 pub mod runtime;
 pub mod sync_scheduler;
@@ -120,6 +121,7 @@ pub use connector::{
 };
 pub use error::{FfiError, FfiResult};
 pub use health::{health_check, AdapterReport, HealthStatus, SubsystemHealth, SubsystemStatus};
+pub use key_storage::{clear_key_storage_resolver, set_key_storage_resolver, KeyStorageResolver};
 pub use metrics::{snapshot as metrics_snapshot, ErrorCounters, MetricsSnapshot};
 pub use runtime::{close_store, open_store, RuntimeHandle};
 pub use sync_scheduler::{

@@ -34,6 +34,7 @@ pub mod event;
 pub mod http;
 pub mod http_helpers;
 pub mod oauth;
+pub mod provider_rate_limiter;
 pub mod sync;
 pub mod token_vault;
 pub mod webhook;
@@ -75,6 +76,10 @@ pub use oauth::{
 // New code should reach for `OAuth2Client` directly.
 #[allow(deprecated)]
 pub use oauth::ReqwestOAuth2Client;
+pub use provider_rate_limiter::{
+    provider_key_for_url, ProviderPolicy, ProviderRateLimiter, DEFAULT_MAX_TOKENS,
+    DEFAULT_REFILL_RATE_PER_SEC,
+};
 pub use sync::{SyncMode, SyncState, SyncStatus};
 pub use token_vault::{
     ConnectorInstanceId, OAuth2CodeExchange, OAuth2Token, OAuth2TokenVault, RefreshedToken,

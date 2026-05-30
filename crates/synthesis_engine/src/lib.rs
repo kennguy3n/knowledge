@@ -66,13 +66,22 @@
 #[cfg(all(feature = "test-support", not(debug_assertions)))]
 compile_error!("test-support must not be enabled in release builds");
 
+pub mod batcher;
 #[cfg(feature = "http-client")]
 pub mod blocking_client;
 pub mod engine;
 pub mod error;
 pub mod managed_endpoint;
+pub mod rate_limiter;
 pub mod stub;
 pub mod tee_worker;
+
+// Production `TeeRuntime` for AWS Nitro Enclaves. Only compiled
+// when the `nitro-tee` feature is on — `mod` declaration sits
+// behind the cfg so default builds neither try to link the nsm-
+// api kernel-driver shim nor pull in the CBOR codec.
+#[cfg(feature = "nitro-tee")]
+pub mod tee_runtime_nitro;
 
 #[cfg(feature = "http-client")]
 pub use blocking_client::BlockingHttpClientAdapter;
