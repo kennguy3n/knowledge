@@ -504,7 +504,7 @@ jobs:
       - name: Build iOS Swift package + XCFramework
         run: crates/ffi/scripts/build_ios.sh
       - name: Upload iOS artefacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: knowledge-ios
           path: crates/ffi/ios
@@ -585,7 +585,7 @@ jobs:
       - name: Build Android JNI .so + Kotlin bindings
         run: crates/ffi/scripts/build_android.sh
       - name: Upload Android artefacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: knowledge-android
           path: crates/ffi/android
@@ -662,7 +662,7 @@ jobs:
         run: cargo +nightly fuzz run fuzz_sphincs_sign_verify -- -max_total_time=120
       - name: Upload fuzz artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crypto-fuzz-artifacts
           path: crates/crypto/fuzz/artifacts/
@@ -864,7 +864,7 @@ jobs:
         working-directory: crates/napi
         run: node --test 'test/*.test.mjs'
       - name: Upload .node artefact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: napi-addon-${{ matrix.target }}
           path: crates/napi/knowledge.*.node
