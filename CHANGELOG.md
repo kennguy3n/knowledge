@@ -130,6 +130,28 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   release workflow that runs `cargo test --all-features` and
   publishes a GitHub release with auto-generated notes.
 
+### Changed — Dependencies
+
+- Bumped `axum` from `0.7` to `0.8` (workspace pin). Axum 0.8
+  changed the router path-pattern syntax: a leading `:` on a
+  segment now panics at registration time
+  (`Path segments must not start with ':'. For capture groups,
+  use '{capture}'.`). Updated the webhook receiver's provider-id
+  capture in
+  `crates/connector_framework/src/webhook_server.rs::build_router`
+  from `/webhooks/:provider_id` to `/webhooks/{provider_id}`. The
+  `Path<String>` extractor in `webhook_handler` keeps the same
+  signature — only the route pattern changed.
+- Bumped `criterion` from `0.5` to `0.8` (workspace pin).
+  `criterion::black_box` was deprecated in 0.6 in favour of the
+  standard-library `std::hint::black_box`, and `-D warnings`
+  turns the deprecation lint into a hard error. The four
+  workspace bench files now import `black_box` from
+  `std::hint::` directly: `crates/crypto/benches/crypto_bench.rs`,
+  `crates/concept_graph/benches/graph_bench.rs`,
+  `crates/evidence_store/benches/store_bench.rs`,
+  `crates/integration_tests/benches/load_bench.rs`.
+
 <!--
   No tagged release exists yet, so the Keep-a-Changelog
   `compare/v<last>...HEAD` link cannot resolve. Until the first tag

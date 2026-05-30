@@ -236,20 +236,19 @@ impl WebhookServer {
 /// dev-dep graph honest by not pulling reqwest (and its async
 /// `idna_adapter` → `icu_normalizer 2.2` chain that raises MSRV).
 fn build_router(state: ServerState) -> Router {
-    // NB: The `:provider_id` capture syntax is the *only* form
-    // accepted by axum 0.7 (which routes through `matchit` 0.7;
-    // see https://docs.rs/matchit/0.7.3/matchit/struct.Router.html
-    // — it parses `:name` and `*name`, treating `{` / `}` as
-    // literal path characters). The newer `{provider_id}` form is
-    // an axum 0.8 / matchit 0.8 feature; using it here would route
-    // `POST /webhooks/{provider_id}` literally and every real
-    // `POST /webhooks/slack` request would 404. Verified
-    // empirically while triaging Devin Review feedback. Bump this
-    // to `{provider_id}` only in the same commit that bumps the
-    // workspace's `axum` pin to 0.8+.
+    // NB: The `{provider_id}` capture syntax is the *only* form
+    // accepted by axum 0.8 (which routes through `matchit` 0.8 —
+    // see https://docs.rs/matchit/0.8.4/matchit/struct.Router.html
+    // — and now treats a leading `:` on a segment as a hard error:
+    // `Path segments must not start with ':'. For capture groups,
+    // use '{capture}'.`). The older axum-0.7 / matchit-0.7 form
+    // (`:provider_id`) was the inverse: it parsed `:name`/`*name`
+    // and treated `{` / `}` as literal path characters. We are now
+    // on axum 0.8 (see workspace `Cargo.toml`), so the curly-brace
+    // form is required.
     Router::new()
         .route("/healthz", get(healthz_handler))
-        .route("/webhooks/:provider_id", post(webhook_handler))
+        .route("/webhooks/{provider_id}", post(webhook_handler))
         .with_state(state)
 }
 

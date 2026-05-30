@@ -90,11 +90,17 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # Tests
 tempfile = "3"
 
-# Benchmarks. Pinned major version `0.5` to match the criterion API the
+# Benchmarks. Pinned major version `0.8` to match the criterion API the
 # `crates/*/benches/*.rs` harnesses target. `html_reports` emits the
 # per-bench HTML output to `target/criterion/` so reviewers can pull a
 # self-contained report from a CI artifact without re-running locally.
-criterion = { version = "0.5", features = ["html_reports"] }
+#
+# Note on `black_box`: criterion 0.6 deprecated `criterion::black_box` in
+# favour of `std::hint::black_box`, and 0.8 still emits the deprecation
+# warning. The bench files import `black_box` from `std::hint::` directly
+# to stay forward-compatible without forcing every bench to disable a
+# deprecation lint.
+criterion = { version = "0.8", features = ["html_reports"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -139,7 +145,14 @@ async-trait = "0.1"
 # specific features are chosen so the webhook server compiles
 # without pulling in tokio macros that the rest of the workspace
 # doesn't need.
-axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
+#
+# Axum 0.8 changed the path-pattern syntax: `:capture` is no longer
+# accepted at runtime and now panics with "Path segments must not
+# start with `:`. For capture groups, use `{capture}`.". The webhook
+# router in `connector_framework::webhook_server::build_router`
+# defines its provider-id capture as `{provider_id}` to match the
+# new syntax.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 hyper = { version = "1", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio", "service", "server-auto"] }

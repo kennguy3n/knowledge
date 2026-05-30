@@ -30,7 +30,8 @@
 
 use std::time::Duration;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use std::hint::black_box;
 use tempfile::TempDir;
 
 use evidence_store::{EvidenceStore, EvidenceStoreConfig, ImportanceClass, ScopeId};
