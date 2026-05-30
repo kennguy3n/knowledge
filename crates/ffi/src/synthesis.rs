@@ -560,19 +560,36 @@ pub fn revoke_approved_document(
 /// apply: payload must be non-empty, ≤ [`MAX_APPROVED_DOCUMENT_BYTES`],
 /// and metadata strings ≤ [`MAX_APPROVED_DOCUMENT_METADATA_BYTES`].
 ///
+/// # Atomicity
+///
+/// Both the encrypted payload row and the updated tenant-memory
+/// blob are written inside a single SQLCipher transaction via
+/// [`evidence_store::EvidenceStore::with_transaction`]. Either both
+/// land on disk or neither does, so a crash mid-replace can never
+/// leave the document with stale metadata (label / approver /
+/// `approved_at`) paired with the new payload content. The
+/// in-memory tenant map is only swapped in *after* commit so any
+/// concurrent reader sees a coherent point-in-time view of the
+/// document.
+///
 /// # Errors
 ///
 /// * [`FfiError::Unavailable`] if [`crate::open_store`] has not
 ///   been called.
 /// * [`FfiError::InvalidId`] if `scope_id` or `document_id` is not
 ///   a valid UUID.
-/// * [`FfiError::NotFound`] if the scope has been forgotten, or
-///   the document was never admitted (i.e. the ref is not in
-///   tenant memory). Hosts must `admit_approved_document` first.
+/// * [`FfiError::NotFound`] if (a) the scope has been forgotten
+///   (`kind = "scope"`), (b) no tenant memory exists for the scope
+///   (`kind = "tenant_memory"`), or (c) the document id is not
+///   registered on the tenant memory (`kind = "approved_document"`).
+///   The `kind` distinctions mirror [`revoke_approved_document`] so
+///   hosts that pattern-match on the error can handle the two
+///   functions uniformly.
 /// * [`FfiError::Memory`] if the payload is empty, oversized, or
 ///   metadata exceeds the cap.
 /// * [`FfiError::Evidence`] if the underlying store fails to
-///   persist the new payload row or the updated tenant memory blob.
+///   persist the new payload row or the updated tenant memory blob
+///   (the transaction rolls back on any inner error).
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
 #[uniffi::export]
 pub fn replace_approved_document(
@@ -618,25 +635,36 @@ pub fn replace_approved_document(
                     id: scope_id.clone(),
                 });
             }
-            let tmo = rt.tenant_memory(scope).ok_or_else(|| FfiError::NotFound {
-                kind: "document".into(),
-                id: document_id.clone(),
-            })?;
+            // Aligned with `revoke_approved_document`: surface
+            // missing tenant memory as `tenant_memory` and a missing
+            // ref as `approved_document`, so hosts that pattern-match
+            // on `kind` can handle revoke and replace uniformly.
+            let tmo = rt
+                .tenant_memory(scope)
+                .cloned()
+                .ok_or_else(|| FfiError::NotFound {
+                    kind: "tenant_memory".into(),
+                    id: scope_id.clone(),
+                })?;
             let existing_idx = tmo
                 .approved_documents
                 .iter()
                 .position(|d| d.id == doc_uuid)
                 .ok_or_else(|| FfiError::NotFound {
-                    kind: "document".into(),
+                    kind: "approved_document".into(),
                     id: document_id.clone(),
                 })?;
-            // Build the updated ref: keep `id`, refresh everything
-            // else so the ref's `approved_at` matches the
-            // replacement moment (important for LRU dispatch cap).
-            let mut updated_ref = tmo.approved_documents[existing_idx].clone();
-            updated_ref.label = label;
-            updated_ref.approver = approver;
-            updated_ref.approved_at = chrono::Utc::now();
+            // Build the post-replace tenant memory on an owned clone
+            // so the live in-memory map remains untouched until the
+            // disk-write transaction commits.
+            let mut tmo_after = tmo;
+            tmo_after.approved_documents[existing_idx].label = label;
+            tmo_after.approved_documents[existing_idx].approver = approver;
+            // Fresh `approved_at` so the LRU dispatch cap treats the
+            // replacement as recently touched.
+            tmo_after.approved_documents[existing_idx].approved_at = chrono::Utc::now();
+            tmo_after.updated_at = chrono::Utc::now();
+            let updated_ref = &tmo_after.approved_documents[existing_idx];
             let summary = ApprovedDocumentSummary {
                 id: updated_ref.id.to_string(),
                 scope_id: scope_id.clone(),
@@ -646,16 +674,42 @@ pub fn replace_approved_document(
                 payload_bytes,
                 content_hash_hex: encode_content_hash_hex(&content_hash),
             };
-            // Persist-first: write payload, then update tenant memory.
+            let tmo_json = serde_json::to_vec(&tmo_after).map_err(|e| FfiError::Memory {
+                message: format!("failed to serialize tenant memory: {e}"),
+            })?;
+            // ────────── Persist both blobs in one tx ──────────
+            //
+            // SQLCipher transaction: the encrypted payload row and
+            // the updated tenant-memory blob either both commit or
+            // both roll back. A crash mid-replace can never leave
+            // the document with stale metadata + new content (or
+            // vice versa); the next `open_store` rehydrates the
+            // pre-replace shape and the host can retry.
             rt.store()
-                .save_approved_document_payload(scope, doc_uuid, &payload, &content_hash)
+                .with_transaction(|tx| {
+                    rt.store().save_approved_document_payload_in_tx(
+                        tx,
+                        scope,
+                        doc_uuid,
+                        &payload,
+                        &content_hash,
+                    )?;
+                    rt.store().save_memory_blob_in_tx(
+                        tx,
+                        scope,
+                        crate::runtime::TENANT_MEMORY_KIND,
+                        &tmo_json,
+                    )?;
+                    Ok(())
+                })
                 .map_err(|e| FfiError::Evidence {
-                    message: format!("save_approved_document_payload failed: {e}"),
+                    message: format!("replace_approved_document transaction failed: {e}"),
                 })?;
-            let mut tmo = tmo.clone();
-            tmo.approved_documents[existing_idx] = updated_ref;
-            tmo.updated_at = chrono::Utc::now();
-            rt.save_tenant_memory(scope, tmo)?;
+
+            // Tx committed — install the post-replace tenant memory
+            // into the live runtime map. HashMap insert is
+            // infallible so no rollback path is needed here.
+            rt.tenant_memories.insert(scope, tmo_after);
             tracing::info!(
                 scope = %scope.as_uuid(),
                 document_id = %doc_uuid,
@@ -1199,7 +1253,12 @@ fn apply_dispatch_outcome(
                 //    objects clone so the disk write reflects the
                 //    final post-prune state in one shot.
                 let mut objects_after = rt.synthesis_objects.clone();
-                objects_after.insert(object.window_id, object.clone());
+                // Move `object` into the map — every subsequent read
+                // (the per-scope serialisation below) goes through
+                // `objects_after.values()`, so cloning the payload
+                // (up to MAX_SYNTHESIS_OUTPUT_BYTES) would be wasted.
+                let object_window_id = object.window_id;
+                objects_after.insert(object_window_id, object);
                 let pruned_ids = prune_completed_windows_on(
                     &mut windows_after,
                     &mut objects_after,
@@ -1616,20 +1675,23 @@ fn encode_content_hash_hex(hash: &crypto::ContentHash) -> String {
 }
 
 /// Validate a Phase-8 approved-document metadata field
-/// (`label` or `approver`). Empty / overlong strings are rejected
-/// with [`FfiError::Memory`] whose message names the field, the
-/// observed length, and the cap so the host can fix the call site
-/// without guessing which input was rejected.
+/// (`label` or `approver`). Shared by `admit_approved_document`
+/// and `replace_approved_document` so the error messages MUST NOT
+/// hardcode an entry-point name; the field name plus the observed
+/// length and cap give the host enough context to pinpoint the
+/// offending call site, and the `FfiError::Memory` variant
+/// itself carries the entry-point identity through the wider
+/// error chain.
 fn validate_approved_document_metadata(field: &'static str, value: &str) -> FfiResult<()> {
     if value.is_empty() {
         return Err(FfiError::Memory {
-            message: format!("admit_approved_document: {field} must be non-empty"),
+            message: format!("approved-document {field} must be non-empty"),
         });
     }
     if value.len() > MAX_APPROVED_DOCUMENT_METADATA_BYTES {
         return Err(FfiError::Memory {
             message: format!(
-                "admit_approved_document: {field} length {} bytes exceeds the {} byte cap",
+                "approved-document {field} length {} bytes exceeds the {} byte cap",
                 value.len(),
                 MAX_APPROVED_DOCUMENT_METADATA_BYTES,
             ),
@@ -3438,9 +3500,12 @@ mod tests {
         teardown(handle);
     }
 
-    /// Replacing a nonexistent document returns NotFound.
+    /// Replacing when the tenant memory itself is missing (no document
+    /// has ever been admitted on this scope) surfaces
+    /// `NotFound { kind = "tenant_memory" }`, matching
+    /// `revoke_approved_document` so hosts get a uniform error shape.
     #[test]
-    fn replace_approved_document_not_found() {
+    fn replace_approved_document_missing_tenant_memory() {
         let (handle, _dir) = fresh_store();
         let scope_str = "00000000-0000-0000-0000-000000009e02".to_string();
         let _scope = crate::parse_scope_id(&scope_str).expect("scope");
@@ -3455,8 +3520,44 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "document"),
-            "expected NotFound for document, got {err:?}",
+            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "tenant_memory"),
+            "expected NotFound for tenant_memory, got {err:?}",
+        );
+
+        teardown(handle);
+    }
+
+    /// Replacing a document id that does not match any admitted ref
+    /// (the scope DOES have tenant memory, but not this document)
+    /// surfaces `NotFound { kind = "approved_document" }`, matching
+    /// `revoke_approved_document`.
+    #[test]
+    fn replace_approved_document_missing_ref() {
+        let (handle, _dir) = fresh_store();
+        let scope_str = "00000000-0000-0000-0000-000000009e04".to_string();
+        // Admit one document so the tenant memory exists, then try
+        // to replace a *different* document id.
+        admit_approved_document(
+            handle,
+            scope_str.clone(),
+            "label".into(),
+            "approver".into(),
+            b"payload".to_vec(),
+        )
+        .expect("admit");
+
+        let err = replace_approved_document(
+            handle,
+            scope_str,
+            Uuid::new_v4().to_string(),
+            "label".into(),
+            "approver".into(),
+            b"payload".to_vec(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "approved_document"),
+            "expected NotFound for approved_document, got {err:?}",
         );
 
         teardown(handle);

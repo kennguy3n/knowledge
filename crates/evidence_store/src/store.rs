@@ -2080,13 +2080,39 @@ impl EvidenceStore {
         plaintext: &[u8],
         content_hash: &ContentHash,
     ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.save_approved_document_payload_in_tx(
+            &tx,
+            scope_id,
+            document_id,
+            plaintext,
+            content_hash,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Transaction-bound variant of [`Self::save_approved_document_payload`]
+    /// so callers that need to bundle this write with the tenant
+    /// memory blob (e.g. the FFI `replace_approved_document` entry
+    /// point) can group both under one SQLCipher transaction via
+    /// [`Self::with_transaction`]. Identical AEAD framing (scope-bound
+    /// AAD, random nonce, `INSERT OR REPLACE`) to the autocommit path.
+    pub fn save_approved_document_payload_in_tx(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        scope_id: ScopeId,
+        document_id: uuid::Uuid,
+        plaintext: &[u8],
+        content_hash: &ContentHash,
+    ) -> Result<()> {
         let key = self.scope_key(scope_id)?;
         let nonce = random_nonce();
         let aad = approved_doc_payload_aad(scope_id, document_id);
         let ciphertext = encrypt_aead(&key, &nonce, plaintext, &aad)?;
         let now = chrono::Utc::now().timestamp();
         let size_bytes = i64::try_from(plaintext.len()).unwrap_or(i64::MAX);
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO approved_document_payloads \
              (scope_id, document_id, nonce, payload, content_hash, size_bytes, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
