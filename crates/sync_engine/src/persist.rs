@@ -48,7 +48,12 @@
 use std::hash::Hash;
 use std::path::Path;
 
-use rand::RngCore;
+// `TryRngCore` is needed alongside `RngCore` because rand 0.9 made
+// `OsRng` fallible-only. `.unwrap_err()` turns it back into an
+// infallible `RngCore` that panics on OS RNG failure (the correct
+// posture for a substrate that cannot continue safely without
+// entropy).
+use rand::{RngCore, TryRngCore};
 use rusqlite::{params, Connection};
 use serde::{de::DeserializeOwned, Serialize};
 use uuid::Uuid;
@@ -549,7 +554,9 @@ where
 
 fn random_nonce() -> [u8; AEAD_NONCE_LEN] {
     let mut n = [0u8; AEAD_NONCE_LEN];
-    rand::rngs::OsRng.fill_bytes(&mut n);
+    // See the import comment for why `.unwrap_err()` is required
+    // under rand 0.9.
+    rand::rngs::OsRng.unwrap_err().fill_bytes(&mut n);
     n
 }
 

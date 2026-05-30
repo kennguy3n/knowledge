@@ -16,7 +16,15 @@
 //! plus the four buffer-length constants. Swapping in an `liboqs`
 //! backend later is a one-file change.
 
-use rand::rngs::OsRng;
+// `OsRng` is imported from `rand_core` (kept at 0.6) rather than
+// `rand::rngs` (now 0.9) because `ml-kem 0.2` and `x25519-dalek 2`
+// consume the `rand_core 0.6 CryptoRngCore` / `CryptoRng + RngCore`
+// trait bounds. Mixing in a `rand 0.9 OsRng` produces an
+// `OsRng: rand_core::CryptoRngCore` trait-bound error because the two
+// `rand_core` versions have parallel, non-interconvertible trait
+// hierarchies. See the workspace `Cargo.toml` comment for the full
+// rationale on why `rand_core` stays at 0.6 while `rand` moves to 0.9.
+use rand_core::OsRng;
 
 use crate::errors::CryptoError;
 
@@ -158,7 +166,12 @@ pub struct StubKemBackend;
 #[cfg(any(test, feature = "test-support"))]
 impl KemBackend for StubKemBackend {
     fn keypair(&self) -> Result<(KemPublicKey, KemSecretKey), CryptoError> {
-        use rand::RngCore;
+        // `RngCore` is imported from `rand_core` (0.6) because the
+        // `OsRng` we're calling here is the `rand_core 0.6` variant
+        // (see the import comment at the top of this file). The
+        // `rand 0.9::RngCore` trait would not be implemented for
+        // this `OsRng` type, so the bound would fail to resolve.
+        use rand_core::RngCore;
         let mut rng = OsRng;
         let mut pk = [0u8; KEM_PUBLIC_KEY_LEN];
         let mut sk = [0u8; KEM_SECRET_KEY_LEN];
@@ -174,7 +187,9 @@ impl KemBackend for StubKemBackend {
         &self,
         recipient_pk: &KemPublicKey,
     ) -> Result<(KemSharedSecret, KemCiphertext), CryptoError> {
-        use rand::RngCore;
+        // See keypair() above for why this import targets `rand_core`
+        // 0.6 rather than `rand` 0.9.
+        use rand_core::RngCore;
         let mut rng = OsRng;
         let mut ct = [0u8; KEM_CIPHERTEXT_LEN];
         rng.fill_bytes(&mut ct);

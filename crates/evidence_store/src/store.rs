@@ -1584,7 +1584,19 @@ impl EvidenceStore {
 
         // 4. Genuinely new scope: generate a fresh random DEK.
         let mut dek = [0u8; AEAD_KEY_LEN];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut dek);
+        // rand 0.9 made `OsRng` fallible-only (impls `TryRngCore`,
+        // not `RngCore`). `TryRngCore::unwrap_err` produces
+        // `UnwrapErr<OsRng>` which impls infallible `RngCore` by
+        // panicking on OS RNG failure — the correct behavior for
+        // DEK generation: a substrate that cannot draw entropy
+        // cannot safely create new encrypted scopes, so panicking
+        // surfaces the breakage rather than silently producing weak
+        // keys. Called via UFCS to avoid a mid-function `use` that
+        // clippy's `items-after-statements` lint would flag.
+        rand::RngCore::fill_bytes(
+            &mut rand::TryRngCore::unwrap_err(rand::rngs::OsRng),
+            &mut dek,
+        );
         self.store_scope_dek(scope_id, &dek)?;
         Ok(dek)
     }
@@ -3886,15 +3898,21 @@ fn migrate_evidence_embeddings_to_composite_pk(conn: &Connection) -> Result<()> 
 fn random_nonce() -> AeadNonce {
     use rand::RngCore;
     let mut nonce = [0u8; AEAD_NONCE_LEN];
-    rand::thread_rng().fill_bytes(&mut nonce);
+    // `rand::thread_rng()` was renamed to `rand::rng()` in rand 0.9.
+    rand::rng().fill_bytes(&mut nonce);
     nonce
 }
 
 fn random_cek() -> AeadKey {
     use rand::rngs::OsRng;
-    use rand::RngCore;
+    // `TryRngCore` is needed because rand 0.9 made `OsRng` fallible.
+    // The `.unwrap_err()` adapter restores the infallible `RngCore`
+    // surface that this CEK generator depends on (panics on OS RNG
+    // failure, which is the correct behavior — a substrate that
+    // cannot draw entropy cannot wrap content safely).
+    use rand::{RngCore, TryRngCore};
     let mut key = [0u8; AEAD_KEY_LEN];
-    OsRng.fill_bytes(&mut key);
+    OsRng.unwrap_err().fill_bytes(&mut key);
     key
 }
 

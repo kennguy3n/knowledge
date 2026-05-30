@@ -490,7 +490,8 @@ fn tenant_aad(id: Uuid) -> Vec<u8> {
 
 fn random_nonce() -> [u8; AEAD_NONCE_LEN] {
     let mut n = [0u8; AEAD_NONCE_LEN];
-    rand::thread_rng().fill_bytes(&mut n);
+    // `rand::thread_rng()` was renamed to `rand::rng()` in rand 0.9.
+    rand::rng().fill_bytes(&mut n);
     n
 }
 

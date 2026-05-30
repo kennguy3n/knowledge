@@ -1566,7 +1566,11 @@ pub fn encrypt(
             rt.ensure_scope_registered(scope)?;
             let key = rt.scope_encrypt_key(scope)?;
             let mut nonce: AeadNonce = [0u8; AEAD_NONCE_LEN];
-            rand::thread_rng().fill_bytes(&mut nonce);
+            // `rand::thread_rng()` was renamed to `rand::rng()` in
+            // rand 0.9. The returned `ThreadRng` (a userspace ChaCha12
+            // CSPRNG reseeded from the OS entropy pool) is unchanged
+            // and remains appropriate for AEAD nonce generation.
+            rand::rng().fill_bytes(&mut nonce);
             let aad = scope_aad(scope);
             let ciphertext =
                 encrypt_aead(&key, &nonce, &plaintext, &aad).map_err(|e| FfiError::Crypto {

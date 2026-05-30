@@ -11,7 +11,8 @@ use synthesis_pipeline::{
 
 fn fresh_key() -> AeadKey {
     let mut key = [0u8; AEAD_KEY_LEN];
-    rand::thread_rng().fill_bytes(&mut key);
+    // `rand::thread_rng()` was renamed to `rand::rng()` in rand 0.9.
+    rand::rng().fill_bytes(&mut key);
     key
 }
 
