@@ -90,17 +90,24 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # Tests
 tempfile = "3"
 
-# Benchmarks. Pinned major version `0.8` to match the criterion API the
-# `crates/*/benches/*.rs` harnesses target. `html_reports` emits the
-# per-bench HTML output to `target/criterion/` so reviewers can pull a
-# self-contained report from a CI artifact without re-running locally.
+# Benchmarks. Pinned to `0.7` because criterion `0.8.0` raised its MSRV
+# to `1.86` (`criterion@0.8.2 requires rustc 1.86`), which would break
+# the workspace's `MSRV (1.85.0)` CI gate. `0.7.0` is the latest
+# release that still compiles under our `1.85.0` MSRV (its own
+# `rust-version` is `1.80`). `html_reports` emits the per-bench HTML
+# output to `target/criterion/` so reviewers can pull a self-contained
+# report from a CI artifact without re-running locally.
 #
-# Note on `black_box`: criterion 0.6 deprecated `criterion::black_box` in
-# favour of `std::hint::black_box`, and 0.8 still emits the deprecation
-# warning. The bench files import `black_box` from `std::hint::` directly
-# to stay forward-compatible without forcing every bench to disable a
-# deprecation lint.
-criterion = { version = "0.8", features = ["html_reports"] }
+# Note on `black_box`: criterion `0.6` deprecated `criterion::black_box`
+# in favour of `std::hint::black_box`. The bench files import
+# `black_box` from `std::hint::` directly, which is forward-compatible
+# with `0.6` / `0.7` / `0.8` and avoids the deprecation warning under
+# `-D warnings`.
+#
+# Bumping to criterion `0.8` is gated on a workspace MSRV bump to
+# `1.86`, which is itself gated by the Dependabot pin in
+# `.github/workflows/ci.yml::MSRV (1.85.0)`.
+criterion = { version = "0.7", features = ["html_reports"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

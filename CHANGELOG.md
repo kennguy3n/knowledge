@@ -142,15 +142,18 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   from `/webhooks/:provider_id` to `/webhooks/{provider_id}`. The
   `Path<String>` extractor in `webhook_handler` keeps the same
   signature — only the route pattern changed.
-- Bumped `criterion` from `0.5` to `0.8` (workspace pin).
-  `criterion::black_box` was deprecated in 0.6 in favour of the
+- Bumped `criterion` from `0.5` to `0.7` (workspace pin).
+  `criterion::black_box` was deprecated in `0.6` in favour of the
   standard-library `std::hint::black_box`, and `-D warnings`
   turns the deprecation lint into a hard error. The four
   workspace bench files now import `black_box` from
   `std::hint::` directly: `crates/crypto/benches/crypto_bench.rs`,
   `crates/concept_graph/benches/graph_bench.rs`,
   `crates/evidence_store/benches/store_bench.rs`,
-  `crates/integration_tests/benches/load_bench.rs`.
+  `crates/integration_tests/benches/load_bench.rs`. Stopped at
+  `0.7` (not `0.8`) because criterion `0.8.0` raised its MSRV to
+  `1.86` and the workspace's `MSRV (1.85.0)` CI gate pins us to
+  `1.85`; bumping to `0.8` is gated on a workspace MSRV bump.
 
 <!--
   No tagged release exists yet, so the Keep-a-Changelog
