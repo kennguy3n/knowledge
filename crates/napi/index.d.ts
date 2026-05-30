@@ -386,14 +386,21 @@ export declare function removeConnector(handle: bigint, instanceId: string): voi
  * # Errors
  *
  * * `NotFound { kind: "scope" }` if the scope has been forgotten
- *   or has no tenant memory object.
- * * `NotFound { kind: "document" }` if `documentId` is not
- *   currently admitted on this scope.
+ *   via `forgetScope`.
+ * * `NotFound { kind: "tenant_memory" }` if no tenant memory
+ *   object exists for the scope (no document has ever been
+ *   admitted on it). Hosts must `admitApprovedDocument` first.
+ * * `NotFound { kind: "approved_document" }` if `documentId` is
+ *   not currently admitted on this scope's tenant memory.
  * * `Memory` if `label` / `approver` / `payload` are empty or
  *   exceed their documented size caps (see
  *   [`crate::MAX_APPROVED_DOCUMENT_BYTES`] and
  *   [`crate::MAX_APPROVED_DOCUMENT_METADATA_BYTES`]).
  * * `InvalidArgument` if `scopeId` or `documentId` is not a UUID.
+ *
+ * The three-way `kind` distinction mirrors `revokeApprovedDocument`
+ * so JS/TS hosts can pattern-match on `err.kind` uniformly across
+ * both functions.
  */
 export declare function replaceApprovedDocument(handle: bigint, scopeId: string, documentId: string, label: string, approver: string, payload: Buffer): any
 

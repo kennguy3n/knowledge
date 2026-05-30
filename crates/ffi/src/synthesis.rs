@@ -437,14 +437,42 @@ pub fn admit_approved_document(
                 });
             }
             rt.ensure_scope_registered(scope)?;
-            // Persist-first invariant: write the AEAD payload row to
-            // SQLCipher BEFORE mutating the tenant-memory map so a
-            // crash between the two steps leaves the substrate in
-            // the pre-admission state (the orphan payload row is
-            // harmless — `list_approved_documents` joins on the
-            // tenant-memory ref list, so an orphan row is filtered
-            // out; the next `forget_scope` on this scope also purges
-            // it).
+            // ────────── Persist-first (intentionally non-transactional) ──────────
+            //
+            // Write the AEAD payload row to SQLCipher BEFORE mutating
+            // the tenant-memory map so a crash between the two steps
+            // leaves the substrate in the pre-admission state. The
+            // orphan payload row is harmless:
+            //   * `list_approved_documents` joins on the tenant-memory
+            //     ref list, so an orphan row is filtered out.
+            //   * `forget_scope_state` on this scope purges it.
+            //   * The Phase-9 `open_store` orphan sweep diffs
+            //     `list_all_approved_document_payload_keys()` against
+            //     the rehydrated tenant-memory ref set and deletes the
+            //     stragglers on the next restart, even without an
+            //     intervening `forget_scope_state`.
+            //
+            // **Why not wrap both in `with_transaction` like
+            // `replace_approved_document` does?** Because the failure
+            // modes are categorically different:
+            //   * `admit` failure → orphan payload row, ref not added →
+            //     document is *unreachable* (every join filters it out).
+            //     The sweep cleans it up; no host can observe stale
+            //     state through the API.
+            //   * `replace` failure → ref still points at the payload
+            //     row, but with stale label / approver / `approved_at`
+            //     on the ref and new `payload` / `content_hash` / size
+            //     on the row → document is *reachable* with internally
+            //     inconsistent metadata. The sweep can't catch this
+            //     (the ref exists), so `replace` must bundle both
+            //     writes in one tx.
+            //
+            // Adding a transaction here would cost an extra BEGIN /
+            // COMMIT round-trip on the hot admit path for zero
+            // correctness gain. `revoke_approved_document` follows
+            // the same persist-first discipline (ref removed first,
+            // payload row deleted second — same unreachable-orphan
+            // shape).
             rt.store()
                 .save_approved_document_payload(scope, doc_id, &payload, &content_hash)
                 .map_err(|e| FfiError::Evidence {

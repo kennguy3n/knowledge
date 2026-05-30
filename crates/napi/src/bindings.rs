@@ -326,10 +326,19 @@ pub fn js_trigger_synthesis(handle: BigInt, scope_id: String, trigger: String) -
 /// `config` is the JSON object documented on
 /// [`ffi::SynthesisEngineConfig`] with camelCase keys:
 /// `{ url, apiKeyRef, modelId, maxTokens, timeoutMs, grammar,
-///    scopeBindings }`. `scopeBindings`, if present, is an array
-/// of UUID strings the FFI layer admits for dispatch (production
-/// deployments SHOULD configure it; an absent allow-list logs a
-/// warning on every dispatch).
+///    scopeBindings, singleTenant }`.
+///
+/// * `scopeBindings`, if present, is an array of UUID strings the
+///   FFI layer admits for dispatch (production multi-tenant
+///   deployments SHOULD configure it; an absent allow-list logs a
+///   warning on every dispatch).
+/// * `singleTenant` (defaults to `false`) is a host-supplied
+///   posture flag. When `true`, the health probe reports
+///   `Nominal` instead of `Degraded` if the engine is configured
+///   without `scopeBindings` — appropriate for dev / single-tenant
+///   deployments where there is no cross-scope allow-list to
+///   enforce. Multi-tenant production deployments should leave
+///   this `false` (the default) and provide `scopeBindings`.
 ///
 /// # Errors
 ///
@@ -487,14 +496,21 @@ pub fn js_admit_approved_document(
 /// # Errors
 ///
 /// * `NotFound { kind: "scope" }` if the scope has been forgotten
-///   or has no tenant memory object.
-/// * `NotFound { kind: "document" }` if `documentId` is not
-///   currently admitted on this scope.
+///   via `forgetScope`.
+/// * `NotFound { kind: "tenant_memory" }` if no tenant memory
+///   object exists for the scope (no document has ever been
+///   admitted on it). Hosts must `admitApprovedDocument` first.
+/// * `NotFound { kind: "approved_document" }` if `documentId` is
+///   not currently admitted on this scope's tenant memory.
 /// * `Memory` if `label` / `approver` / `payload` are empty or
 ///   exceed their documented size caps (see
 ///   [`crate::MAX_APPROVED_DOCUMENT_BYTES`] and
 ///   [`crate::MAX_APPROVED_DOCUMENT_METADATA_BYTES`]).
 /// * `InvalidArgument` if `scopeId` or `documentId` is not a UUID.
+///
+/// The three-way `kind` distinction mirrors `revokeApprovedDocument`
+/// so JS/TS hosts can pattern-match on `err.kind` uniformly across
+/// both functions.
 #[napi(js_name = "replaceApprovedDocument")]
 pub fn js_replace_approved_document(
     handle: BigInt,

@@ -2254,6 +2254,20 @@ impl EvidenceStore {
     /// scan (no AEAD decryption) used by the orphan-sweep at
     /// `open_store` time to compare against the set of refs
     /// rehydrated from tenant memory.
+    ///
+    /// **Malformed-row policy:** because the caller is a best-effort
+    /// orphan sweep — not a rehydration path that requires every row
+    /// — rows whose `scope_id` or `document_id` columns do not parse
+    /// as 16-byte UUIDs are logged at WARN and skipped rather than
+    /// aborting the whole scan. The alternative (hard error) would
+    /// let a single corrupt row block cleanup of every legitimate
+    /// orphan until the row was manually purged, which is a worse
+    /// operational outcome than tolerating the corrupt row's payload
+    /// staying behind (it is already unreachable through the
+    /// tenant-memory join). Surfaceable error paths (the SQL
+    /// `prepare` / `query_map` / per-row `Result`) still bubble up
+    /// because those indicate the table or connection itself is in
+    /// a state the sweep cannot reason about.
     pub fn list_all_approved_document_payload_keys(&self) -> Result<Vec<(ScopeId, uuid::Uuid)>> {
         let mut stmt = self
             .conn
@@ -2266,12 +2280,23 @@ impl EvidenceStore {
         let mut result = Vec::new();
         for row in rows {
             let (scope_bytes, doc_bytes) = row?;
-            let scope_id = uuid::Uuid::from_slice(&scope_bytes).map_err(|_| {
-                EvidenceError::Schema("approved_document_payloads scope_id not a valid UUID")
-            })?;
-            let doc_id = uuid::Uuid::from_slice(&doc_bytes).map_err(|_| {
-                EvidenceError::Schema("approved_document_payloads document_id not a valid UUID")
-            })?;
+            let Ok(scope_id) = uuid::Uuid::from_slice(&scope_bytes) else {
+                tracing::warn!(
+                    scope_bytes_len = scope_bytes.len(),
+                    "list_all_approved_document_payload_keys: skipping row with non-UUID scope_id; \
+                     orphan sweep will leave this row untouched (manual purge required to recover)",
+                );
+                continue;
+            };
+            let Ok(doc_id) = uuid::Uuid::from_slice(&doc_bytes) else {
+                tracing::warn!(
+                    scope = %scope_id,
+                    doc_bytes_len = doc_bytes.len(),
+                    "list_all_approved_document_payload_keys: skipping row with non-UUID document_id; \
+                     orphan sweep will leave this row untouched (manual purge required to recover)",
+                );
+                continue;
+            };
             result.push((ScopeId::from_uuid(scope_id), doc_id));
         }
         Ok(result)
