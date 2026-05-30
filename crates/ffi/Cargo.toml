@@ -115,6 +115,13 @@ axum = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+# Enable `evidence_store/test-support` for the dev profile so unit
+# tests in this crate can drive
+# `EvidenceStore::inject_with_transaction_failure_for_tests` (see the
+# `apply_dispatch_outcome_tx_failure_marks_window_failed` regression
+# test in `synthesis.rs`). The production dependency above stays on
+# the default feature set so release builds never compile the hook.
+evidence_store = { path = "../evidence_store", features = ["test-support"] }
 rusqlite = { workspace = true }
 tempfile = { workspace = true }
 

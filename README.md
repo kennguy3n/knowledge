@@ -259,18 +259,24 @@ embedded in the health envelope. Counters include
 `sync_scheduler_dispatches_failed_total`,
 `sync_scheduler_dispatches_skipped_in_progress_total`,
 `configure_synthesis_engine_total`,
-`trigger_server_synthesis_total`, `synthesis_status_total`,
-`list_recent_syntheses_total`,
+`trigger_server_synthesis_total`,
+`trigger_server_synthesis_throttled_total` (Phase 10 Item 5 — rate-
+shaping token-bucket rejections), `synthesis_status_total`,
+`list_recent_syntheses_total`, `replay_synthesis_total` (Phase 10
+Item 4 — versioned re-run of an existing window),
 `configure_sync_auto_synthesize_total`,
 `admit_approved_document_total`,
 `revoke_approved_document_total`,
 `replace_approved_document_total`,
-`list_approved_documents_total`, plus
-per-`FfiError`-kind counters under `errors_by_kind`
-(`unimplemented`, `invalid_id`, `not_found`, `evidence`,
-`memory`, `synthesis`, `crypto`, `unavailable`,
-`inference_failure`, `connector`). Gauges include
-`open_handles` (live runtime registry size) and
+`list_approved_documents_total`, `connector_status_total` (Phase 10
+Item 3 — per-instance health probe symmetric with
+`synthesis_status`), `stuck_pending_window_recovered_total` (Phase
+10 Item 1 — age-based open_store sweep marking unrecoverable
+Pending windows Failed-with-retry), plus per-`FfiError`-kind
+counters under `errors_by_kind` (`unimplemented`, `invalid_id`,
+`not_found`, `evidence`, `memory`, `synthesis`, `crypto`,
+`unavailable`, `inference_failure`, `connector`, `throttled`).
+Gauges include `open_handles` (live runtime registry size) and
 `tombstone_count` (destroyed-DEK registry size on the most
 recently observed handle).
 
@@ -333,11 +339,18 @@ subsystem in this repository: `synthesis_engine` implements the
 `reqwest::blocking::Client` adapter wrapped in the same retry /
 timeout / `Retry-After` ladder used by connectors), gated behind
 the `http-client` feature. The FFI surface exposes it through
-`configure_synthesis_engine`, `trigger_server_synthesis`,
-`synthesis_status`, and `list_recent_syntheses`, with hierarchy
-enforcement and scope-binding checks applied at the FFI layer
-before the HTTP dispatch. The Go gateway / SLM frontends live
-outside this repository.
+`configure_synthesis_engine`, `trigger_server_synthesis`
+(rate-shaped by a token-bucket gate that surfaces
+`FfiError::Throttled` with the `Retry-After` window the host
+should honour), `synthesis_status`, `list_recent_syntheses`, and
+`replay_synthesis` (Phase 10 Item 4 — re-runs an existing window
+through the engine and writes a versioned
+`synthesis_object_versions` row so callers can inspect every
+historical output for a given window). Hierarchy enforcement and
+scope-binding checks are applied at the FFI layer before the HTTP
+dispatch. Connector instances expose a symmetric per-instance
+health probe via `connector_status` (Phase 10 Item 3). The Go
+gateway / SLM frontends live outside this repository.
 
 ---
 

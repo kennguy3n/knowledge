@@ -53,7 +53,9 @@ pub use hierarchy::{
     open_tenant_window, ApprovedDocument, ChannelOutput, DomainOutput, DomainSynthesisInput,
     HierarchyEnforcedWindowManager, TenantSynthesisInput, TieredWindowHandle, WindowScopeTier,
 };
-pub use object::{ObjectId, SynthesisObject, SynthesisObjectType};
+pub use object::{
+    default_synthesis_object_version, ObjectId, SynthesisObject, SynthesisObjectType,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub use pipeline::NoOpSynthesizer;
 pub use pipeline::{LlamaCppSynthesizer, SynthesisInputs, SynthesisPipeline};

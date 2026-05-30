@@ -38,8 +38,8 @@ use napi_derive::napi;
 #[cfg(test)]
 use ffi::RuntimeHandle;
 use ffi::{
-    ConnectorKindTag, ConnectorStatus, MemoryFilter, MemoryRecord, RefreshReport, SyncReport,
-    SynthesisTrigger,
+    ConnectorHealthRecord, ConnectorKindTag, ConnectorStatus, MemoryFilter, MemoryRecord,
+    RefreshReport, SyncReport, SynthesisTrigger,
 };
 
 use crate::types::{IngestRequest, QueryRequest};
@@ -326,7 +326,7 @@ pub fn js_trigger_synthesis(handle: BigInt, scope_id: String, trigger: String) -
 /// `config` is the JSON object documented on
 /// [`ffi::SynthesisEngineConfig`] with camelCase keys:
 /// `{ url, apiKeyRef, modelId, maxTokens, timeoutMs, grammar,
-///    scopeBindings, singleTenant }`.
+///    scopeBindings, singleTenant, rateCapacity, rateRefillPerSec }`.
 ///
 /// * `scopeBindings`, if present, is an array of UUID strings the
 ///   FFI layer admits for dispatch (production multi-tenant
@@ -339,11 +339,22 @@ pub fn js_trigger_synthesis(handle: BigInt, scope_id: String, trigger: String) -
 ///   deployments where there is no cross-scope allow-list to
 ///   enforce. Multi-tenant production deployments should leave
 ///   this `false` (the default) and provide `scopeBindings`.
+/// * `rateCapacity` (Phase 10 Item 5) is the burst capacity of
+///   the global token-bucket rate limiter on
+///   `triggerServerSynthesis`. `0` (the default if the key is
+///   omitted) falls back to
+///   [`ffi::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY`] (`8`).
+/// * `rateRefillPerSec` (Phase 10 Item 5) is the token refill
+///   rate in tokens/second. `0.0` falls back to
+///   [`ffi::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC`]
+///   (`1.0`). Fractional values are supported; non-finite or
+///   negative values are rejected with `Unavailable`.
 ///
 /// # Errors
 ///
-/// * `Unavailable` if `openStore(handle)` has not been called or
-///   the build lacks the `http-client` feature.
+/// * `Unavailable` if `openStore(handle)` has not been called,
+///   the build lacks the `http-client` feature, or
+///   `rateRefillPerSec` is non-finite / non-positive.
 /// * `InvalidArgument` if `config.url` is empty or any
 ///   `scopeBindings` entry fails to parse as a UUID.
 #[napi(js_name = "configureSynthesisEngine")]
@@ -372,6 +383,12 @@ pub fn js_configure_synthesis_engine(handle: BigInt, config: serde_json::Value) 
 ///   failures.
 /// * `InvalidArgument` if `scopeId` is not a UUID or `tier` is
 ///   not one of the documented values.
+/// * `Throttled` (Phase 10 Item 5) if the global token-bucket
+///   rate limiter rejects the call. The error carries a
+///   `retryAfterMs` field — the host SHOULD wait that long and
+///   retry the same call rather than treating this as a
+///   permanent failure. Tune the limiter via `configureSynthesisEngine`'s
+///   `rateCapacity` / `rateRefillPerSec` keys.
 #[napi(js_name = "triggerServerSynthesis")]
 pub fn js_trigger_server_synthesis(
     handle: BigInt,
@@ -427,6 +444,86 @@ pub fn js_list_recent_syntheses(handle: BigInt, scope_id: String) -> Result<serd
     serde_json::to_value(rows).map_err(|e| {
         to_js_error(NapiError::Internal {
             message: format!("synthesis list serialization failed: {e}"),
+        })
+    })
+}
+
+/// Re-run synthesis on an existing `Complete` window (Phase 10
+/// Item 4). The window transitions back through `Complete →
+/// Pending → InProgress → Complete` (or `→ Failed` on engine
+/// error) on the same `(scope, window_id)` pair; the previous
+/// synthesis object is archived to the history table at its
+/// existing version stamp, and the new object lands at
+/// `prior + 1`. Returns the post-replay synthesis status record
+/// (versioned).
+///
+/// Bypasses the per-(scope, tier) cooldown but is still rate-
+/// shaped through the FFI-wide token bucket — bursting replays
+/// across many scopes will surface a `Throttled` error to the
+/// host.
+///
+/// # Errors
+///
+/// * `InvalidId` if `scopeId` or `synthesisId` is not a valid
+///   UUID.
+/// * `NotFound` (`kind: "scope"`) if `scopeId` has been
+///   forgotten.
+/// * `NotFound` (`kind: "synthesis_window"`) if the substrate
+///   does not know of a window with that id.
+/// * `NotFound` (`kind: "synthesis_object"`) if the window has
+///   no prior synthesis object to replay (e.g. it only ever
+///   reached `Pending` or `Failed`).
+/// * `Unavailable` if no engine is configured or `scopeId` is
+///   not in the configured `scopeBindings` allow-list.
+/// * `Throttled` if the FFI-wide rate limiter rejects the call.
+/// * `Synthesis` if the window is not currently `Complete`
+///   (replay refuses Pending / InProgress / Failed to avoid
+///   racing in-flight dispatches), if the engine surfaced an
+///   error, or if the response payload exceeds the configured
+///   output cap.
+/// * `Evidence` if persisting the new synthesis object /
+///   archiving the prior version / updating the memory blob
+///   fails.
+#[napi(js_name = "replaySynthesis")]
+pub fn js_replay_synthesis(
+    handle: BigInt,
+    scope_id: String,
+    synthesis_id: String,
+) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let rec = crate::replay_synthesis(h, scope_id, synthesis_id).map_err(to_js_error)?;
+    serde_json::to_value(rec).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("replay synthesis serialization failed: {e}"),
+        })
+    })
+}
+
+/// Enumerate the archived synthesis-object versions for
+/// `synthesisId` (Phase 10 Item 4), newest first. The latest
+/// version is included as the first entry with
+/// `isLatest = true`. Hosts that need to paginate the history
+/// without a separate `synthesisStatus` round trip should use
+/// this surface.
+///
+/// Returns an empty array for a window with no prior synthesis
+/// object (Pending / Failed-without-success window), matching
+/// the "empty for unknown shape" convention used by
+/// [`js_list_recent_syntheses`].
+///
+/// # Errors
+///
+/// * `InvalidArgument` if `synthesisId` is not a UUID.
+#[napi(js_name = "listSynthesisVersions")]
+pub fn js_list_synthesis_versions(
+    handle: BigInt,
+    synthesis_id: String,
+) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let rows = crate::list_synthesis_versions(h, synthesis_id).map_err(to_js_error)?;
+    serde_json::to_value(rows).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("synthesis versions serialization failed: {e}"),
         })
     })
 }
@@ -754,6 +851,52 @@ pub fn js_list_connectors(handle: BigInt) -> Result<serde_json::Value> {
     })
 }
 
+/// Single-instance connector health probe (Phase 10 Item 3) —
+/// symmetric with [`js_synthesis_status`]. Mirrors
+/// [`crate::connector_status`] and returns a JSON object with the
+/// shape:
+///
+/// `{ instanceId, kind, scopeId, syncMode, syncStatus,
+///    lastSyncedAt, lastError, isScheduled, syncIntervalSecs,
+///    maxBackoffSecs, autoSynthesize, consecutiveFailures,
+///    nextAttemptUnix, inCooldown }`.
+///
+/// `isScheduled` is `true` iff `startSyncScheduler` is currently
+/// running on this runtime; the scheduler-side fields
+/// (`syncIntervalSecs`, `maxBackoffSecs`, `autoSynthesize`,
+/// `consecutiveFailures`, `nextAttemptUnix`, `inCooldown`)
+/// gracefully degrade to zero / `null` / `false` when the
+/// scheduler is stopped. None of the per-instance policy state
+/// survives a `stopSyncScheduler` / `startSyncScheduler` cycle —
+/// the `SchedulePolicy` table lives inside the running scheduler
+/// value and is dropped on stop. Hosts must re-apply
+/// `configureSyncAutoSynthesize` / `configureSyncSchedule` after
+/// each restart if they need their per-instance overrides back.
+///
+/// # Errors
+///
+/// * `NotFound` (`kind: "connector_instance"`) if `instanceId` is
+///   a valid UUID but the runtime has no instance with that id
+///   (host called [`js_remove_connector`] previously, or never
+///   created one).
+/// * `NotFound` (`kind: "scope"`) if the instance row exists but
+///   its bound scope has been tombstoned by [`js_forget_scope`]
+///   — same tombstoned-scope shield other connector surfaces
+///   apply.
+/// * `InvalidId` if `instanceId` is not a UUID.
+/// * `Unavailable` if [`js_open_store`] has not been called.
+#[napi(js_name = "connectorStatus")]
+pub fn js_connector_status(handle: BigInt, instance_id: String) -> Result<serde_json::Value> {
+    let h = handle_from_bigint(&handle)?;
+    let rec: ConnectorHealthRecord =
+        crate::connector_status(h, instance_id).map_err(to_js_error)?;
+    serde_json::to_value(rec).map_err(|e| {
+        to_js_error(NapiError::Internal {
+            message: format!("failed to serialize ConnectorHealthRecord: {e}"),
+        })
+    })
+}
+
 /// Tear down a connector. Mirrors [`crate::remove_connector`].
 #[napi(js_name = "removeConnector")]
 pub fn js_remove_connector(handle: BigInt, instance_id: String) -> Result<()> {
@@ -769,22 +912,24 @@ pub fn js_remove_connector(handle: BigInt, instance_id: String) -> Result<()> {
 /// for JS so callers can destructure `{ instanceId, refreshed,
 /// expiresAt, refreshedAt }` directly.
 ///
-/// Failure modes:
+/// # Errors
 ///
-/// * `kind: "connector"` carrying the framework's `TokenRefresh`
+/// * `Connector` carrying the framework's `TokenRefresh`
 ///   diagnostic when the provider rejects the refresh grant
 ///   (refresh token revoked / expired). The host should treat
 ///   this as "re-authorisation required" and prompt the user
 ///   through `authenticateConnector` rather than retrying the
 ///   refresh.
-/// * `kind: "connector"` carrying `"no refresh_token stored …"`
-///   when the cached token has no refresh token (Slack legacy,
-///   PKCE-only public clients). Same recovery as above.
-/// * `kind: "not_found"` (`kind = "connector" | "scope"`) when
-///   the instance / scope was removed during the unlocked refresh
-///   round-trip.
-/// * `kind: "unavailable"` (`subsystem: "connector-http-client"`)
-///   when no real HTTP transport is linked into the build.
+/// * `Connector` carrying `"no refresh_token stored …"` when the
+///   cached token has no refresh token (Slack legacy, PKCE-only
+///   public clients). Same recovery as above.
+/// * `NotFound` (`kind = "connector" | "scope"`) when the
+///   instance / scope was removed during the unlocked refresh
+///   round-trip. (Pre-existing connector surfaces use the shorter
+///   `"connector"` discriminant rather than `"connector_instance"`
+///   used by newer surfaces such as `connectorStatus`.)
+/// * `Unavailable` (`subsystem: "connector-http-client"`) when no
+///   real HTTP transport is linked into the build.
 #[napi(js_name = "refreshConnectorToken")]
 pub fn js_refresh_connector_token(
     handle: BigInt,

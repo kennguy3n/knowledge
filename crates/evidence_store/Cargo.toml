@@ -16,6 +16,19 @@ default = []
 # system search paths). Without this feature the crate builds with no
 # ONNX dependency and only the stub / mock runtimes are available.
 onnx-runtime = ["dep:ort", "dep:tokenizers"]
+# Exposes test-only hooks for downstream integration crates (chiefly
+# the `ffi` crate's unit + integration tests) to drive otherwise
+# inaccessible failure paths. Currently surfaces:
+#   * `EvidenceStore::inject_with_transaction_failure_for_tests` /
+#     `take_injected_with_transaction_failure` — lets tests force
+#     [`EvidenceStore::with_transaction`] to fail on its next call so
+#     callers (e.g. `apply_dispatch_outcome`'s commit path) can be
+#     exercised against a synthetic disk-write failure without a real
+#     SQLCipher I/O error.
+# Gated `cfg(any(test, feature = "test-support"))` so production
+# builds never compile the hook nor pay the runtime cost of checking
+# the injection slot on every `with_transaction` call.
+test-support = []
 
 [dependencies]
 crypto = { path = "../crypto" }

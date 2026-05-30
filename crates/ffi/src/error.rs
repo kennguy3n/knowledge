@@ -135,6 +135,35 @@ pub enum FfiError {
         /// Diagnostic from the underlying connector framework.
         message: String,
     },
+
+    /// A rate-shaping limiter at the FFI boundary rejected the
+    /// call (Phase 10 Item 5). Hosts SHOULD wait `retry_after_ms`
+    /// and retry the same call — the rejection is purely
+    /// rate-driven, the request itself is valid.
+    ///
+    /// Distinct from [`Self::Unavailable`] (the subsystem is
+    /// missing or not yet initialised) and [`Self::Synthesis`]
+    /// (the algorithm itself failed): when `Throttled` is
+    /// returned, the subsystem is present, the input is
+    /// well-formed, and the host is simply calling it too
+    /// quickly. Currently surfaced by
+    /// [`crate::synthesis::trigger_server_synthesis`] when the
+    /// global token bucket has no tokens; future rate-limited
+    /// surfaces should reuse this variant rather than overloading
+    /// `Unavailable`.
+    #[error("subsystem `{subsystem}` throttled (retry after {retry_after_ms} ms)")]
+    Throttled {
+        /// Name of the rate-limited subsystem (e.g.
+        /// `"synthesis_engine"`). Mirrors the
+        /// [`Self::Unavailable::subsystem`] field for symmetry.
+        subsystem: String,
+        /// Milliseconds the host should wait before retrying.
+        /// Derived from the token bucket's current deficit and
+        /// refill rate — a fresh retry at the indicated time
+        /// will have at least one token available (modulo other
+        /// concurrent callers draining the bucket first).
+        retry_after_ms: u64,
+    },
 }
 
 impl FfiError {
@@ -152,6 +181,7 @@ impl FfiError {
             Self::Unavailable { .. } => "Unavailable",
             Self::InferenceFailure { .. } => "InferenceFailure",
             Self::Connector { .. } => "Connector",
+            Self::Throttled { .. } => "Throttled",
         }
     }
 }
@@ -238,6 +268,10 @@ mod tests {
             FfiError::Connector {
                 message: "auth handshake failed".into(),
             },
+            FfiError::Throttled {
+                subsystem: "synthesis_engine".into(),
+                retry_after_ms: 250,
+            },
         ];
         for original in cases {
             let s = serde_json::to_string(&original).unwrap();
@@ -315,6 +349,14 @@ mod tests {
             }
             .kind(),
             "Connector"
+        );
+        assert_eq!(
+            FfiError::Throttled {
+                subsystem: "x".into(),
+                retry_after_ms: 250,
+            }
+            .kind(),
+            "Throttled"
         );
     }
 

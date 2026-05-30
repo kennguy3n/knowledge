@@ -109,6 +109,26 @@ pub struct SynthesisWindow {
     /// pre-existing behaviour.
     #[serde(default)]
     pub tier: Option<WindowScopeTier>,
+    /// Wall-clock instant the window was opened.
+    ///
+    /// Captured by [`SynthesisWindow::new`] at construction time and
+    /// used by [`SynthesisWindowManager::sweep_stuck_pending`] (and
+    /// the FFI `open_store` recovery sweep that wraps it) to detect
+    /// `Pending` windows that have outlived the host's expected
+    /// dispatch latency — typically because the host crashed mid-
+    /// dispatch between the Phase-1 `flush_synthesis_windows` and
+    /// the Phase-3 `apply_dispatch_outcome` commit, leaving the
+    /// window stranded in `Pending` on disk with no in-flight
+    /// worker. Distinct from [`window_start`] / [`window_end`],
+    /// which describe the synthesis *interval* (often backfilled
+    /// relative to wall clock).
+    ///
+    /// `#[serde(default)]` so blobs persisted before this field was
+    /// introduced rehydrate cleanly — `None` is interpreted by
+    /// `sweep_stuck_pending` as "unknown age, conservatively leave
+    /// alone" so legacy windows are never swept on age grounds.
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 impl SynthesisWindow {
@@ -133,6 +153,7 @@ impl SynthesisWindow {
             window_end,
             status: WindowStatus::Pending,
             tier: None,
+            created_at: Some(Utc::now()),
         })
     }
 
@@ -214,6 +235,21 @@ impl SynthesisWindowManager {
     /// Look up a window by id.
     pub fn get(&self, id: WindowId) -> Option<&SynthesisWindow> {
         self.windows.get(&id)
+    }
+
+    /// Mutable variant of [`Self::get`].
+    ///
+    /// Intended for tests and recovery paths that need to adjust
+    /// fields on a tracked window without going through the
+    /// [`Self::mark_in_progress`] / [`Self::mark_failed`] state
+    /// machine — e.g. the FFI crate's `open_store` stuck-Pending
+    /// recovery test backdates [`SynthesisWindow::created_at`] to
+    /// drive [`Self::sweep_stuck_pending`] without a live clock
+    /// shift, and the same hook lets crash-recovery code path
+    /// reconcile fields (e.g. clear stale `last_synth_at` cursors)
+    /// without re-creating the window.
+    pub fn get_mut(&mut self, id: WindowId) -> Option<&mut SynthesisWindow> {
+        self.windows.get_mut(&id)
     }
 
     /// All windows for `scope_id`, in insertion order.
@@ -298,6 +334,79 @@ impl SynthesisWindowManager {
             }
             _ => Err(PipelineError::InvalidWindowTransition),
         }
+    }
+
+    /// Re-open a `Complete` window so a `replay_synthesis` call can
+    /// walk it back through `Pending → InProgress → Complete` with
+    /// a fresh synthesis output, without minting a new window id.
+    ///
+    /// Only `Complete` is accepted: replaying a `Pending` /
+    /// `InProgress` window would race the original dispatch, and
+    /// replaying a `Failed` window is already covered by
+    /// [`Self::mark_in_progress`] (which accepts `Failed` as a
+    /// starting state).
+    ///
+    /// # Errors
+    ///
+    /// * [`PipelineError::WindowNotFound`] if no such window.
+    /// * [`PipelineError::InvalidWindowTransition`] if the window is
+    ///   not currently `Complete`.
+    pub fn mark_replay_pending(&mut self, id: WindowId) -> Result<()> {
+        let w = self.find_mut(id)?;
+        match w.status {
+            WindowStatus::Complete => {
+                w.status = WindowStatus::Pending;
+                Ok(())
+            }
+            _ => Err(PipelineError::InvalidWindowTransition),
+        }
+    }
+
+    /// Transition every `Pending` window whose [`SynthesisWindow::created_at`]
+    /// is older than `now - threshold` straight to `Failed`, bypassing
+    /// the usual `Pending → InProgress → Failed` chain that
+    /// [`Self::mark_in_progress`] / [`Self::mark_failed`] enforce.
+    ///
+    /// Returns the swept window ids so callers can flush / log /
+    /// increment counters per recovered window. Windows whose
+    /// `created_at` is `None` (blobs persisted before that field
+    /// was added) are *not* swept — we cannot prove they are stuck
+    /// without an opening timestamp, so the conservative choice is
+    /// to leave them alone until the host explicitly fails or
+    /// retries them.
+    ///
+    /// Used by the FFI `open_store` recovery sweep to clean up the
+    /// state described in the docstring on [`SynthesisWindow::created_at`]:
+    /// `Pending` windows whose Phase-1 flush landed but whose
+    /// Phase-3 commit never did, either because the host crashed
+    /// mid-dispatch or because the synthesis-apply transaction
+    /// failed and the in-process recovery (`apply_dispatch_outcome`'s
+    /// `fail_window_on_live_manager` on commit failure) also failed
+    /// to flush. The direct `Pending → Failed` transition exists
+    /// specifically for this sweep — it is not part of the normal
+    /// dispatcher lifecycle and must not be used from
+    /// `fail_window_on_live_manager` (which keeps the
+    /// `Pending → InProgress → Failed` chain so a live operator can
+    /// correlate refusals in the warn log).
+    pub fn sweep_stuck_pending(
+        &mut self,
+        now: DateTime<Utc>,
+        threshold: Duration,
+    ) -> Vec<WindowId> {
+        let mut swept = Vec::new();
+        for window in self.windows.values_mut() {
+            if window.status != WindowStatus::Pending {
+                continue;
+            }
+            let Some(created) = window.created_at else {
+                continue;
+            };
+            if now - created > threshold {
+                window.status = WindowStatus::Failed;
+                swept.push(window.id);
+            }
+        }
+        swept
     }
 
     /// Remove every window registered for `scope_id` — both from
@@ -399,6 +508,74 @@ mod tests {
         // Cannot transition out of Complete.
         let err = mgr.mark_in_progress(id).unwrap_err();
         assert!(matches!(err, PipelineError::InvalidWindowTransition));
+    }
+
+    #[test]
+    fn sweep_stuck_pending_transitions_old_pending_to_failed() {
+        let mut mgr = SynthesisWindowManager::new();
+        let scope = ScopeId::new_v4();
+        let now = Utc::now();
+        let id = mgr
+            .open_window(scope, now - Duration::hours(1), now)
+            .unwrap();
+        // Backdate `created_at` past the threshold.
+        mgr.find_mut(id).unwrap().created_at = Some(now - Duration::hours(2));
+        let swept = mgr.sweep_stuck_pending(now, Duration::hours(1));
+        assert_eq!(swept, vec![id]);
+        assert_eq!(mgr.get(id).unwrap().status, WindowStatus::Failed);
+    }
+
+    #[test]
+    fn sweep_stuck_pending_leaves_fresh_pending_alone() {
+        let mut mgr = SynthesisWindowManager::new();
+        let scope = ScopeId::new_v4();
+        let now = Utc::now();
+        let id = mgr
+            .open_window(scope, now - Duration::hours(1), now)
+            .unwrap();
+        // `created_at` is auto-stamped to ~now — comfortably under
+        // the one-hour threshold.
+        let swept = mgr.sweep_stuck_pending(now, Duration::hours(1));
+        assert!(swept.is_empty());
+        assert_eq!(mgr.get(id).unwrap().status, WindowStatus::Pending);
+    }
+
+    #[test]
+    fn sweep_stuck_pending_leaves_in_progress_alone_even_when_old() {
+        // `InProgress` is owned by a live dispatcher — sweeping it
+        // out from under one would discard real synthesis output.
+        // The sweep must touch only `Pending` windows even if they
+        // are technically older than the threshold.
+        let mut mgr = SynthesisWindowManager::new();
+        let scope = ScopeId::new_v4();
+        let now = Utc::now();
+        let id = mgr
+            .open_window(scope, now - Duration::hours(1), now)
+            .unwrap();
+        mgr.mark_in_progress(id).unwrap();
+        // Backdate to before the threshold — sweep must still skip.
+        mgr.find_mut(id).unwrap().created_at = Some(now - Duration::hours(2));
+        let swept = mgr.sweep_stuck_pending(now, Duration::hours(1));
+        assert!(swept.is_empty());
+        assert_eq!(mgr.get(id).unwrap().status, WindowStatus::InProgress);
+    }
+
+    #[test]
+    fn sweep_stuck_pending_leaves_legacy_no_created_at_alone() {
+        // Blobs persisted before the `created_at` field was added
+        // (`#[serde(default)]`-induced `None`) cannot be aged. The
+        // sweep must conservatively leave them in `Pending` so the
+        // host can decide when to retry or forget them.
+        let mut mgr = SynthesisWindowManager::new();
+        let scope = ScopeId::new_v4();
+        let now = Utc::now();
+        let id = mgr
+            .open_window(scope, now - Duration::hours(1), now)
+            .unwrap();
+        mgr.find_mut(id).unwrap().created_at = None;
+        let swept = mgr.sweep_stuck_pending(now, Duration::hours(1));
+        assert!(swept.is_empty());
+        assert_eq!(mgr.get(id).unwrap().status, WindowStatus::Pending);
     }
 
     #[test]

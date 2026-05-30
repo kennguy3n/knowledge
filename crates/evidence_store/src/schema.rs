@@ -81,7 +81,42 @@
 ///   payload. `forget(scope)` deletes the rows by `scope_id`; even
 ///   if that delete fails, the scope-DEK destruction step makes the
 ///   ciphertext unrecoverable. Purely additive.
-pub const SCHEMA_VERSION: i32 = 10;
+/// - v11 (Phase 10 Item 4 — synthesis replay history): added
+///   `synthesis_object_versions` to record the full prior-version
+///   history of a synthesised window. The current `synthesis_objects`
+///   blob (one row per scope under `memory_objects(kind =
+///   'synthesis_object')`) still carries only the latest version of
+///   each window's object — the new history table holds every prior
+///   version one row at a time keyed by
+///   `(scope_id, window_id, version)`. Each row is AEAD-encrypted
+///   under the same per-scope DEK with AAD binding all three
+///   columns, so a ciphertext relocated to a different row fails
+///   to decrypt rather than silently feeding the wrong-version
+///   payload to a host that called `list_synthesis_versions`.
+///   `forget(scope)` deletes the rows by `scope_id`; even if the
+///   delete fails, the scope-DEK destruction step makes the
+///   ciphertext unrecoverable. Purely additive — pre-v11 databases
+///   simply have no version history rows yet, matching the
+///   pre-Item-4 contract where every synthesis output overwrote
+///   the prior one with no recoverable trail.
+/// - v12 (Phase 10 Item 6 — body-store dedup for approved-document
+///   payloads): the `approved_document_payloads` table loses its
+///   inline `nonce` + `payload` columns and becomes metadata-only.
+///   The plaintext bytes now live in the shared content-hash-
+///   deduplicated `body_store` table, encrypted under a random
+///   per-row CEK that is wrapped under each referencing scope's DEK
+///   via the existing `body_store_key_wraps` machinery. Admitting
+///   the same content into N tenant scopes therefore costs one
+///   `body_store` row + N wraps instead of N inline ciphertexts,
+///   and `forget(scope)` drops the scope's wrap (the existing
+///   `purge_body_key_wraps_for_scope` path then GCs the body row
+///   when its `ref_count` reaches zero). The migration is
+///   destructive (cannot be expressed with `CREATE * IF NOT EXISTS`)
+///   so the v11 -> v12 data move and the subsequent
+///   `ALTER TABLE ... DROP COLUMN` calls are implemented in
+///   `migrate_approved_doc_payloads_to_body_store` (a post-bootstrap
+///   step run from `open` after the scope-DEK cache is hydrated).
+pub const SCHEMA_VERSION: i32 = 12;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -324,31 +359,42 @@ CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
     ON connector_tokens (scope_id);
 
 -- v10 (Phase 8) — opaque approved-document payloads.
--- Each row stores the AEAD-encrypted byte payload that backs an
--- `ApprovedDocumentRef` previously admitted onto a `TenantMemoryObject`.
--- The ref lives inside the tenant_memory blob; the payload lives
--- here so it can be:
---   * Stored larger than the 32 KiB synthesis-output cap without
---     bloating the tenant_memory blob (and forcing a full
---     read/encrypt/write on every other tenant-memory mutation).
---   * Selectively read only when a tenant synthesis run is about
---     to be dispatched.
---   * Deleted independently from the ref when the host calls
---     `revoke_approved_document`.
+-- v12 (Phase 10 Item 6) — content-hash dedup via `body_store`.
 --
--- AEAD AAD binds `scope_id` (16 bytes) AND `document_id` (16 bytes):
--- a ciphertext relocated to a row with a different document_id (or
--- a different scope) fails to decrypt. The `content_hash` column
--- (BLAKE3 of the plaintext payload, matching `crypto::content_hash`)
--- and the `size_bytes` column support fast metadata listing without
--- touching the ciphertext; both are stored alongside the ciphertext,
--- NOT covered by the AAD, because they are observable plaintext
--- metadata about the row and not part of the secrecy contract.
+-- Each row attaches metadata to an `ApprovedDocumentRef` previously
+-- admitted onto a `TenantMemoryObject`. The ref lives inside the
+-- tenant_memory blob; this row carries the *metadata* (content_hash,
+-- size_bytes, updated_at) and points — through `content_hash` — at
+-- the actual plaintext bytes stored in the deduplicated `body_store`
+-- table. The payload bytes themselves are AEAD-encrypted under a
+-- random per-row CEK that is wrapped under each referencing scope's
+-- DEK in `body_store_key_wraps`, identical to how Phase 5
+-- (WS1) handles the evidence body-table content.
 --
--- `forget(scope)` deletes rows by `scope_id`; even if that delete
--- races the scope-DEK destruction, the ciphertext is unrecoverable
--- once the DEK is gone, so the row purge is defense-in-depth rather
--- than the primary security barrier.
+-- The pre-v12 schema carried inline `nonce` + `payload` columns
+-- here, encrypted directly under the scope DEK with AAD binding
+-- (scope_id, document_id). That layout could not deduplicate the
+-- same content across multiple tenant scopes: admitting the same
+-- 1 MiB onboarding doc into N tenants cost N copies of the
+-- ciphertext. The v12 layout costs one `body_store` row + N wraps.
+-- The destructive v11 -> v12 migration (decrypt every legacy row,
+-- admit the plaintext via `body_store`, then ALTER TABLE DROP COLUMN)
+-- lives in `migrate_approved_doc_payloads_to_body_store` in
+-- `store.rs`.
+--
+-- Selective read still applies: the metadata-only row is cheap to
+-- list (no AEAD), and the actual payload bytes are only decrypted
+-- when a tenant synthesis run is about to dispatch the document.
+-- Deletion is independent from the ref: `revoke_approved_document`
+-- drops the metadata row and the wrap (the body row itself is GCed
+-- by the shared `purge_body_key_wraps_for_scope` logic when its
+-- ref_count reaches zero).
+--
+-- `forget(scope)` deletes rows by `scope_id` (defense-in-depth);
+-- the durable forgetting comes from destroying the scope DEK + the
+-- per-(scope, body) wrap in `body_store_key_wraps`, which makes
+-- the body ciphertext unrecoverable even if the body row stays
+-- referenced from another scope.
 --
 -- The composite PK `(scope_id, document_id)` already serves prefix
 -- lookups on `scope_id`, so no separate covering index is needed for
@@ -357,11 +403,69 @@ CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
 CREATE TABLE IF NOT EXISTS approved_document_payloads (
     scope_id        BLOB    NOT NULL,
     document_id     BLOB    NOT NULL,
-    nonce           BLOB    NOT NULL,
-    payload         BLOB    NOT NULL,
     content_hash    BLOB    NOT NULL,
     size_bytes      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL,
     PRIMARY KEY (scope_id, document_id)
 );
+
+-- Per-window synthesis-object version history (Phase 10 Item 4).
+--
+-- The live `synthesis_objects` blob (keyed by `memory_objects.kind
+-- = 'synthesis_object'`, one row per scope) carries only the
+-- *latest* version of each window's synthesis output. Each call to
+-- `replay_synthesis(scope, window)` archives the previous latest
+-- here before installing its own output as the new latest in the
+-- per-scope blob, so the blob's read path stays a single
+-- decrypt-and-iterate over the current state while the history
+-- table grows append-mostly.
+--
+-- Columns:
+--   * `scope_id`     — owning scope (16-byte UUID).
+--   * `window_id`    — synthesis window the version belongs to.
+--   * `version`      — monotonic stamp; first archived row is the
+--                      pre-replay version (e.g. 1 if the window
+--                      had never been replayed), subsequent rows
+--                      increase by 1 per replay.
+--   * `nonce`        — AEAD nonce for this row.
+--   * `payload`      — AEAD ciphertext of the serialised
+--                      `SynthesisObject` JSON bytes.
+--   * `created_at`   — Unix seconds at archive time.
+--
+-- AAD binds `scope_id` (16) + `window_id` (16) + `version` (u32
+-- big-endian) via `synthesis_object_version_aad`, so a ciphertext
+-- relocated to a different row fails to decrypt rather than
+-- silently surfacing the wrong-version payload to a host reading
+-- `list_synthesis_versions`. The magic prefix
+-- `synthesis-object-version:v1:` namespaces future AAD format
+-- bumps.
+--
+-- `forget(scope)` deletes rows by `scope_id`. Even if the delete
+-- races the scope-DEK destruction, the ciphertext is
+-- unrecoverable once the DEK is gone, so the row purge is
+-- defense-in-depth rather than the primary security barrier.
+--
+-- The composite PK `(scope_id, window_id, version)` serves the
+-- two read paths we need:
+--   * `list_synthesis_object_versions(scope, window)` —
+--     `WHERE scope_id = ? AND window_id = ?` is a prefix scan over
+--     the PK index; no separate covering index needed.
+--   * `load_synthesis_object_version(scope, window, version)` —
+--     exact PK lookup.
+-- The supplemental `idx_synthesis_object_versions_scope` index
+-- supports the orphan-sweep walk at `open_store` time, which lists
+-- every `(scope, window)` pair across the table to diff against
+-- live window-manager state.
+CREATE TABLE IF NOT EXISTS synthesis_object_versions (
+    scope_id        BLOB    NOT NULL,
+    window_id       BLOB    NOT NULL,
+    version         INTEGER NOT NULL,
+    nonce           BLOB    NOT NULL,
+    payload         BLOB    NOT NULL,
+    created_at      INTEGER NOT NULL,
+    PRIMARY KEY (scope_id, window_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_synthesis_object_versions_scope
+    ON synthesis_object_versions (scope_id);
 "#;

@@ -107,15 +107,16 @@ pub mod metrics;
 pub mod runtime;
 pub mod sync_scheduler;
 pub mod synthesis;
+pub(crate) mod synthesis_rate;
 #[cfg(feature = "tracing-subscriber")]
 pub mod tracing_init;
 pub mod types;
 pub mod webhook;
 
 pub use connector::{
-    authenticate_connector, clear_oauth_client_secret_resolver, create_connector, list_connectors,
-    refresh_connector_token, remove_connector, set_oauth_client_secret_resolver, sync_connector,
-    OAuthClientSecretResolver,
+    authenticate_connector, clear_oauth_client_secret_resolver, connector_status, create_connector,
+    list_connectors, refresh_connector_token, remove_connector, set_oauth_client_secret_resolver,
+    sync_connector, OAuthClientSecretResolver,
 };
 pub use error::{FfiError, FfiResult};
 pub use health::{health_check, AdapterReport, HealthStatus, SubsystemHealth, SubsystemStatus};
@@ -128,19 +129,21 @@ pub use sync_scheduler::{
 };
 pub use synthesis::{
     admit_approved_document, configure_synthesis_engine, list_approved_documents,
-    list_recent_syntheses, replace_approved_document, revoke_approved_document, synthesis_status,
-    trigger_server_synthesis, LIST_RECENT_SYNTHESES_CAP, MAX_APPROVED_DOCUMENTS_PER_DISPATCH,
-    MAX_APPROVED_DOCUMENT_BYTES, MAX_APPROVED_DOCUMENT_METADATA_BYTES, MAX_SYNTHESIS_OUTPUT_BYTES,
-    PER_SCOPE_COOLDOWN_SECS, WINDOW_RETENTION_CAP_PER_SCOPE,
+    list_recent_syntheses, list_synthesis_versions, replace_approved_document, replay_synthesis,
+    revoke_approved_document, synthesis_status, trigger_server_synthesis,
+    LIST_RECENT_SYNTHESES_CAP, MAX_APPROVED_DOCUMENTS_PER_DISPATCH, MAX_APPROVED_DOCUMENT_BYTES,
+    MAX_APPROVED_DOCUMENT_METADATA_BYTES, MAX_SYNTHESIS_OUTPUT_BYTES,
+    MAX_SYNTHESIS_VERSIONS_PER_WINDOW, PER_SCOPE_COOLDOWN_SECS, WINDOW_RETENTION_CAP_PER_SCOPE,
 };
 #[cfg(feature = "tracing-subscriber")]
 pub use tracing_init::try_init_tracing;
 pub use types::{
-    ApprovedDocumentSummary, ConnectorKindTag, ConnectorStatus, EvidenceRecord, FfiImportanceClass,
-    FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord, MemoryState, QueryResult, RefreshReport,
-    ScopeIdString, SourceKind, SyncModeKind, SyncReport, SyncSchedulerStatus, SyncStatusKind,
-    SynthesisEngineConfig, SynthesisStatusRecord, SynthesisTierKind, SynthesisTrigger,
-    WebhookServerHandle, WebhookServerSummary,
+    ApprovedDocumentSummary, ConnectorHealthRecord, ConnectorKindTag, ConnectorStatus,
+    EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord,
+    MemoryState, QueryResult, RefreshReport, ScopeIdString, SourceKind, SyncModeKind, SyncReport,
+    SyncSchedulerStatus, SyncStatusKind, SynthesisEngineConfig, SynthesisStatusRecord,
+    SynthesisTierKind, SynthesisTrigger, SynthesisVersionSummary, WebhookServerHandle,
+    WebhookServerSummary,
 };
 pub use webhook::{
     list_webhook_servers, register_webhook_dispatch, start_webhook_server, stop_webhook_server,
@@ -801,15 +804,20 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         first_error.get_or_insert(err);
     }
 
-    // 5. Phase 8: delete persisted approved-document payload rows
-    //     for the scope. The ciphertext was sealed under the scope
-    //     DEK that step 1 destroyed, so even if this SQL DELETE
-    //     fails the bytes are cryptographically unrecoverable. We
-    //     still attempt the delete so the row count stays bounded
-    //     and `open_store`'s rehydration pass does not load orphan
-    //     metadata for a forgotten scope. Best-effort, accumulates
-    //     the first error so the caller sees the gap without
-    //     interrupting the remaining steps.
+    // 5. Phase 8 / Phase 10 Item 6: delete persisted approved-
+    //     document metadata rows for the scope. As of v12 these are
+    //     metadata-only — the actual payload bytes live in
+    //     `body_store` and the per-scope CEK wrap (already destroyed
+    //     in step 3 by `purge_body_key_wraps_for_scope`, which also
+    //     GCs the body row when its last wrap goes away). Even if
+    //     this DELETE fails, the bytes are cryptographically
+    //     unrecoverable because step 1 destroyed the scope DEK that
+    //     wraps the CEK and step 3 destroyed the wrap itself. We
+    //     still attempt the delete so the metadata row count stays
+    //     bounded and `open_store`'s rehydration pass does not load
+    //     orphan metadata for a forgotten scope. Best-effort,
+    //     accumulates the first error so the caller sees the gap
+    //     without interrupting the remaining steps.
     match rt
         .store()
         .delete_approved_document_payloads_for_scope(scope)
@@ -831,6 +839,40 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
                 scope = %scope.as_uuid(),
                 error = %err,
                 "forget_scope_state: delete_approved_document_payloads_for_scope failed; \
+                 ciphertext remains unrecoverable because the scope DEK is already destroyed",
+            );
+            first_error.get_or_insert(err);
+        }
+    }
+
+    // 5b. Phase-10-Item-4: delete archived synthesis-object version
+    //     rows for the scope. The ciphertext was sealed under the
+    //     scope DEK that step 1 destroyed, so even if this SQL
+    //     DELETE fails the bytes are cryptographically
+    //     unrecoverable. The row bytes themselves are still useful
+    //     to clear so the table stays bounded across the lifetime
+    //     of the substrate and `open_store`'s history-table
+    //     rehydration does not surface stale versions for a
+    //     forgotten scope. Best-effort, accumulates the first
+    //     error.
+    match rt.store().delete_synthesis_object_versions_for_scope(scope) {
+        Ok(deleted) => {
+            if deleted > 0 {
+                tracing::debug!(
+                    scope = %scope.as_uuid(),
+                    deleted,
+                    "forget_scope_state: purged synthesis-object version rows",
+                );
+            }
+        }
+        Err(e) => {
+            let err = FfiError::Evidence {
+                message: e.to_string(),
+            };
+            tracing::warn!(
+                scope = %scope.as_uuid(),
+                error = %err,
+                "forget_scope_state: delete_synthesis_object_versions_for_scope failed; \
                  ciphertext remains unrecoverable because the scope DEK is already destroyed",
             );
             first_error.get_or_insert(err);
@@ -865,15 +907,16 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     // entries which is bounded by 2 × active scopes (Domain +
     // Tenant tiers) so the cost stays linear in the live runtime.
     rt.synthesis_cooldowns.retain(|(s, _), _| *s != scope);
-    let synth_window_ids: Vec<synthesis_pipeline::WindowId> = rt
-        .synthesis_windows
-        .windows_for(scope)
-        .iter()
-        .map(|w| w.id)
-        .collect();
-    for wid in &synth_window_ids {
-        rt.synthesis_objects.remove(wid);
-    }
+    // Phase-10-Item-2 nested shape: drop the whole sub-map for the
+    // forgotten scope in one O(1) outer-map removal. Before the
+    // refactor we walked every window id owned by the scope and
+    // removed each from the flat map; now the scope's entire object
+    // set is a single value addressable by `scope`. Window ids stay
+    // globally unique so no other scope's objects can be caught by
+    // this — but as a defense-in-depth measure (and to match the
+    // documented invariant in the runtime's `synthesis_objects`
+    // rustdoc) we never touch other scopes' sub-maps here.
+    rt.synthesis_objects.remove(&scope);
     rt.synthesis_windows.remove_windows_for_scope(scope);
     // The window-manager mutation only persists if we flush.
     //
