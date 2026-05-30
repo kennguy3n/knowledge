@@ -246,11 +246,7 @@ impl AuditLog {
         // order so we start the intersection from the smallest one.
         let mut sets: Vec<&[usize]> = Vec::new();
         if let Some(scope) = q.scope_id {
-            sets.push(
-                self.scope_index
-                    .get(&scope)
-                    .map_or(&[][..], Vec::as_slice),
-            );
+            sets.push(self.scope_index.get(&scope).map_or(&[][..], Vec::as_slice));
         }
         if !q.action_types.is_empty() {
             // Gather the union of every requested action's positions
