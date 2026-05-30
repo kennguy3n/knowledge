@@ -149,7 +149,9 @@ as the OAuth-secret resolver: hosts hand in a callback object
 backed by Keychain (iOS), Keystore (Android), DPAPI (Windows),
 or any platform-specific secure-element wrapper, and the
 substrate consumes it via the `KeyStorageResolver` contract
-documented at `crates/ffi/src/key_storage.rs:26-94`. The
+documented at `crates/ffi/src/key_storage.rs:26-110` (module
+docs at 26-60, trait declaration + three method signatures —
+`store_key` / `load_key` / `delete_key` — at 92-110). The
 cold-boot integration point is `open_store_with_resolver(path,
 key_id, resolver)` — hardware-backed hosts call this instead
 of `open_store(path, master_key_hex)` so the 32-byte master
