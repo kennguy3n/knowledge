@@ -50,7 +50,7 @@ rand_core = { workspace = true }
 # rc.12's `vitis` execution provider references a field that does not
 # exist on the bundled `OrtApi` struct, so the build breaks under
 # `cargo build --all-features`.
-ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["load-dynamic", "ndarray"] }
+ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, features = ["load-dynamic", "ndarray"] }
 # `fancy-regex` is the pure-Rust regex backend; the default `onig`
 # backend pulls in a C library (libonig) that isn't part of CI.
 tokenizers = { version = "0.21", optional = true, default-features = false, features = ["fancy-regex"] }
