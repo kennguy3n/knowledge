@@ -74,7 +74,7 @@ jobs:
         run: cargo test --all-features --workspace
 
       - name: Publish GitHub Release with auto-generated notes
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # `generate_release_notes: true` makes GitHub assemble the
           # release body from the merged-PR list between this tag
