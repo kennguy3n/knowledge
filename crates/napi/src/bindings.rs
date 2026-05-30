@@ -31,14 +31,14 @@
 // napi-derive hands owned values across the JS boundary every call; borrowing would force an extra copy in generated code.
 #![allow(unsafe_code)] // napi-derive's `#[napi]` proc-macro expands into FFI module-init stubs that necessarily touch raw C pointers (napi_env, napi_callback_info, napi_value). The expansion includes its own `#[allow(unsafe_code)]` on every generated `extern "C"` function; for the workspace-level `deny(unsafe_code)` to be overridable we mirror the allow here. The hand-written code in this module remains `unsafe`-free.
 
-use napi::bindgen_prelude::{BigInt, Error as JsError, Function, Result};
+use napi::bindgen_prelude::{BigInt, Error as JsError, Function, Object, Result};
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
 
 #[cfg(test)]
 use ffi::RuntimeHandle;
 use ffi::{
-    ConnectorHealthRecord, ConnectorKindTag, ConnectorStatus, MemoryFilter, MemoryRecord,
+    ConnectorHealthRecord, ConnectorKindTag, ConnectorStatus, FfiError, MemoryFilter, MemoryRecord,
     RefreshReport, SyncReport, SynthesisTrigger,
 };
 
@@ -1198,6 +1198,512 @@ pub fn js_clear_oauth_client_secret_resolver(handle: BigInt) -> Result<()> {
     crate::clear_oauth_client_secret_resolver(h).map_err(to_js_error)
 }
 
+// ─────────────── Master-key storage resolver (Track B-2) ────────────────
+
+/// Adapter that bridges a JS resolver object (with three callable
+/// methods: `loadKey`, `storeKey`, `deleteKey`) into the substrate's
+/// [`ffi::KeyStorageResolver`] trait.
+///
+/// The Rust trait methods are invoked from the FFI cold-boot path
+/// ([`crate::open_store_with_resolver`]) and the mid-life rotation
+/// path — never the JS main thread — so each JS callback is held as
+/// a [`ThreadsafeFunction`] which `napi-rs` will dispatch on the JS
+/// event loop. We then sync-wait the substrate caller on a
+/// `std::sync::mpsc` channel that the JS-side callback fills in.
+///
+/// Sync waits on JS from a worker / FFI caller thread are safe here
+/// because the substrate's three-phase locking pattern guarantees
+/// the runtime mutex is NOT held while a resolver call is in flight
+/// — the resolver dispatch happens before `with_runtime` is entered
+/// (on `open_store_with_resolver`) or outside its scope (on
+/// `set_key_storage_resolver`). So the JS event loop calling back
+/// into other entry points cannot deadlock on the substrate's lock.
+///
+/// `ThreadsafeFunction` is `Send + Sync` (the napi-rs threadsafe-
+/// function API is explicitly designed for cross-thread call),
+/// satisfying the `KeyStorageResolver: Send + Sync` requirement.
+struct JsKeyStorageResolver {
+    /// `loadKey(keyId: string) -> string | null | undefined`.
+    ///
+    /// Returns the hex-encoded 32-byte master key on success.
+    /// Returns `null` / `undefined` to signal `NotFound`. A JS
+    /// exception or non-string return collapses to
+    /// `FfiError::Unavailable` so the substrate can distinguish a
+    /// host-side misconfiguration (e.g. the JS callback threw on
+    /// Keychain unlock denial) from a clean "no such key" miss.
+    load_key_tsfn: ThreadsafeFunction<(String,), Option<String>, (String,), napi::Status, false>,
+    /// `storeKey(keyId: string, keyHex: string) -> void`.
+    ///
+    /// Resolves to `Ok(())` if the call returned normally (any
+    /// JS return value is treated as success — the substrate
+    /// ignores it). A JS exception maps to
+    /// `FfiError::Unavailable`.
+    store_key_tsfn:
+        ThreadsafeFunction<(String, String), Option<String>, (String, String), napi::Status, false>,
+    /// `deleteKey(keyId: string) -> void`.
+    ///
+    /// Resolves to `Ok(())` if the call returned normally. A JS
+    /// exception maps to `FfiError::Unavailable`. Per the trait
+    /// contract, deleting an unknown id is a success, not an
+    /// error — so the substrate does NOT re-tag this as
+    /// `NotFound` even if the host's resolver does (idempotent
+    /// delete is the trait's documented behaviour).
+    delete_key_tsfn: ThreadsafeFunction<(String,), Option<String>, (String,), napi::Status, false>,
+    /// Defense-in-depth ceiling on how long the substrate will
+    /// block on the JS event loop returning a resolver result.
+    ///
+    /// Matches [`JsClientSecretResolver`]'s rationale: a host that
+    /// ships a buggy resolver (infinite loop, deadlock on an
+    /// unrelated JS lock, an event loop choked by other long-
+    /// running work) would otherwise stall the FFI cold-boot
+    /// indefinitely. After this timeout the adapter abandons the
+    /// wait and surfaces `FfiError::Unavailable { subsystem:
+    /// "host-key-store: <method> timed out" }` to the substrate.
+    ///
+    /// The default value is [`Self::DEFAULT_RECV_TIMEOUT`] and is
+    /// generous enough for a cold keychain unlock that prompts the
+    /// OS for the user's password. Production hosts can override
+    /// via the optional `timeoutMs` argument to
+    /// [`js_set_key_storage_resolver`] /
+    /// [`js_open_store_with_resolver`].
+    recv_timeout: std::time::Duration,
+}
+
+impl JsKeyStorageResolver {
+    /// Default ceiling for each JS resolver callback. Chosen to
+    /// be long enough for a cold keychain unlock that prompts the
+    /// OS for biometric / password input (these prompts can take
+    /// a user 10–20 seconds to satisfy in the worst case) yet
+    /// short enough that a genuinely wedged JS event loop
+    /// surfaces visibly rather than hanging the FFI forever.
+    /// 30000 ms is the same ceiling used by the OAuth secret
+    /// resolver in spirit, but bumped from 5 s → 30 s because
+    /// master-key unlocks involve user interaction whereas
+    /// client-secret resolution is meant to be a hot-cache hit.
+    const DEFAULT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+}
+
+/// Resolve the recv-timeout for the key-storage resolver from an
+/// optional JS-side `timeoutMs`.
+///
+/// `None` → adapter default (30000 ms). `Some(0)` is rejected
+/// with an `InvalidArgument`-kind [`NapiError`] for the same
+/// reason as [`resolve_recv_timeout`] (a zero timeout would
+/// always time out before the JS event loop processed the
+/// callback). `Some(n)` converts `n` to `Duration::from_millis(n)`.
+///
+/// Extracted into a `pub(crate)` helper so the validation logic
+/// is unit-testable without standing up a live N-API environment.
+pub(crate) fn resolve_key_storage_recv_timeout(
+    timeout_ms: Option<u32>,
+) -> std::result::Result<std::time::Duration, NapiError> {
+    match timeout_ms {
+        None => Ok(JsKeyStorageResolver::DEFAULT_RECV_TIMEOUT),
+        Some(0) => Err(NapiError::InvalidArgument {
+            message: "key storage resolver: timeoutMs must be > 0 (a zero \
+                      timeout would always time out before the JS event loop \
+                      processed the callback); pass a positive value or omit \
+                      to use the 30000 ms default"
+                .into(),
+        }),
+        Some(n) => Ok(std::time::Duration::from_millis(u64::from(n))),
+    }
+}
+
+/// Extract a named `Function` property from a JS object, returning
+/// a typed `NapiError::InvalidArgument` when the property is
+/// missing. The four call sites
+/// (`js_set_key_storage_resolver` and `js_open_store_with_resolver`,
+/// each extracting three methods) all need identical
+/// "missing-method" diagnostics, so the helper centralises that
+/// validation.
+///
+/// `entry_point` is the calling JS function name (e.g.
+/// `"setKeyStorageResolver"`) and is embedded into the error
+/// message so the host knows which call site rejected.
+fn extract_resolver_method<'env, Args, Return>(
+    obj: &Object<'env>,
+    method_name: &str,
+    entry_point: &str,
+) -> std::result::Result<Function<'env, Args, Return>, NapiError>
+where
+    Args: napi::bindgen_prelude::JsValuesTupleIntoVec,
+    Return: napi::bindgen_prelude::FromNapiValue,
+    Function<'env, Args, Return>: napi::bindgen_prelude::FromNapiValue,
+{
+    match obj.get::<Function<'env, Args, Return>>(method_name) {
+        Ok(Some(f)) => Ok(f),
+        Ok(None) => Err(NapiError::InvalidArgument {
+            message: format!(
+                "{entry_point}: resolver object is missing required \
+                 `{method_name}` method (expected a function, found nothing)"
+            ),
+        }),
+        Err(e) => Err(NapiError::InvalidArgument {
+            message: format!(
+                "{entry_point}: resolver object's `{method_name}` property \
+                 is not a function: {e}"
+            ),
+        }),
+    }
+}
+
+/// Build a [`JsKeyStorageResolver`] from a JS object with `loadKey`,
+/// `storeKey`, `deleteKey` methods + an optional `timeoutMs`.
+/// Shared by `setKeyStorageResolver` and `openStoreWithResolver`
+/// so the JS shape is consistent across both entry points and the
+/// extraction errors look identical.
+fn build_js_key_storage_resolver(
+    resolver: &Object<'_>,
+    timeout_ms: Option<u32>,
+    entry_point: &str,
+) -> Result<JsKeyStorageResolver> {
+    let recv_timeout = resolve_key_storage_recv_timeout(timeout_ms).map_err(to_js_error)?;
+
+    let load_key_fn =
+        extract_resolver_method::<(String,), Option<String>>(resolver, "loadKey", entry_point)
+            .map_err(to_js_error)?;
+    let store_key_fn = extract_resolver_method::<(String, String), Option<String>>(
+        resolver,
+        "storeKey",
+        entry_point,
+    )
+    .map_err(to_js_error)?;
+    let delete_key_fn =
+        extract_resolver_method::<(String,), Option<String>>(resolver, "deleteKey", entry_point)
+            .map_err(to_js_error)?;
+
+    let load_key_tsfn = load_key_fn
+        .build_threadsafe_function::<(String,)>()
+        .callee_handled::<false>()
+        .build()
+        .map_err(|e| {
+            to_js_error(NapiError::Internal {
+                message: format!("{entry_point}: failed to build loadKey tsfn: {e}"),
+            })
+        })?;
+    let store_key_tsfn = store_key_fn
+        .build_threadsafe_function::<(String, String)>()
+        .callee_handled::<false>()
+        .build()
+        .map_err(|e| {
+            to_js_error(NapiError::Internal {
+                message: format!("{entry_point}: failed to build storeKey tsfn: {e}"),
+            })
+        })?;
+    let delete_key_tsfn = delete_key_fn
+        .build_threadsafe_function::<(String,)>()
+        .callee_handled::<false>()
+        .build()
+        .map_err(|e| {
+            to_js_error(NapiError::Internal {
+                message: format!("{entry_point}: failed to build deleteKey tsfn: {e}"),
+            })
+        })?;
+
+    Ok(JsKeyStorageResolver {
+        load_key_tsfn,
+        store_key_tsfn,
+        delete_key_tsfn,
+        recv_timeout,
+    })
+}
+
+impl ffi::KeyStorageResolver for JsKeyStorageResolver {
+    fn load_key(&self, key_id: String) -> ffi::FfiResult<String> {
+        // `sync_channel(1)` gives a single-slot oneshot — the JS
+        // callback fills it with `Ok(hex_string)`, `Ok(None)` for
+        // NotFound, or the napi error for a JS exception.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Option<String>>>(1);
+        let key_id_for_call = key_id.clone();
+        let status = self.load_key_tsfn.call_with_return_value(
+            (key_id_for_call,),
+            ThreadsafeFunctionCallMode::Blocking,
+            move |result: Result<Option<String>>, _env| {
+                let _ = tx.send(result);
+                Ok(())
+            },
+        );
+        if status != napi::Status::Ok {
+            return Err(FfiError::Unavailable {
+                subsystem: format!(
+                    "host-key-store: loadKey dispatch failed with napi status {status:?}"
+                ),
+            });
+        }
+        match rx.recv_timeout(self.recv_timeout) {
+            // Hex string returned — substrate validates the hex
+            // shape further down the cold-boot path via
+            // `parse_master_key_hex`. We deliberately do NOT
+            // pre-validate here so the surface error mapping
+            // (InvalidId vs Unavailable) is owned by exactly one
+            // place in the codebase.
+            Ok(Ok(Some(hex))) => Ok(hex),
+            // `null` / `undefined` — clean miss, host doesn't
+            // know about this id. The substrate's
+            // `open_store_with_resolver` then re-tags this
+            // `NotFound { kind: "key" }` as
+            // `NotFound { kind: "master_key" }` for the cold-
+            // boot path.
+            Ok(Ok(None)) => Err(FfiError::NotFound {
+                kind: "key".into(),
+                id: key_id,
+            }),
+            // JS exception inside the callback. Surface as
+            // `Unavailable` so the host can pattern-match on
+            // `Unavailable { subsystem }` vs `NotFound`.
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    key_id = %key_id,
+                    error = %e,
+                    "JS key-storage resolver loadKey threw; surfacing as Unavailable",
+                );
+                Err(FfiError::Unavailable {
+                    subsystem: format!("host-key-store: loadKey threw: {e}"),
+                })
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let timeout_ms: u64 = self.recv_timeout.as_millis().try_into().unwrap_or(u64::MAX);
+                tracing::warn!(
+                    key_id = %key_id,
+                    timeout_ms,
+                    "JS key-storage resolver loadKey did not return within timeout",
+                );
+                Err(FfiError::Unavailable {
+                    subsystem: format!("host-key-store: loadKey timed out after {timeout_ms}ms"),
+                })
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                // The sending half was dropped without sending
+                // — the tsfn was aborted (e.g. process teardown).
+                Err(FfiError::Unavailable {
+                    subsystem: "host-key-store: loadKey dispatch aborted (tsfn closed)".into(),
+                })
+            }
+        }
+    }
+
+    fn store_key(&self, key_id: String, key_hex: String) -> ffi::FfiResult<()> {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Option<String>>>(1);
+        let key_id_for_warn = key_id.clone();
+        let status = self.store_key_tsfn.call_with_return_value(
+            (key_id, key_hex),
+            ThreadsafeFunctionCallMode::Blocking,
+            move |result: Result<Option<String>>, _env| {
+                let _ = tx.send(result);
+                Ok(())
+            },
+        );
+        if status != napi::Status::Ok {
+            return Err(FfiError::Unavailable {
+                subsystem: format!(
+                    "host-key-store: storeKey dispatch failed with napi status {status:?}"
+                ),
+            });
+        }
+        match rx.recv_timeout(self.recv_timeout) {
+            // Any return value (string, null, undefined) is treated
+            // as success — `void` JS functions return `undefined`
+            // which deserialises as `None`. The substrate doesn't
+            // consume the return value.
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    key_id = %key_id_for_warn,
+                    error = %e,
+                    "JS key-storage resolver storeKey threw; surfacing as Unavailable",
+                );
+                Err(FfiError::Unavailable {
+                    subsystem: format!("host-key-store: storeKey threw: {e}"),
+                })
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let timeout_ms: u64 = self.recv_timeout.as_millis().try_into().unwrap_or(u64::MAX);
+                tracing::warn!(
+                    key_id = %key_id_for_warn,
+                    timeout_ms,
+                    "JS key-storage resolver storeKey did not return within timeout",
+                );
+                Err(FfiError::Unavailable {
+                    subsystem: format!("host-key-store: storeKey timed out after {timeout_ms}ms"),
+                })
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(FfiError::Unavailable {
+                subsystem: "host-key-store: storeKey dispatch aborted (tsfn closed)".into(),
+            }),
+        }
+    }
+
+    fn delete_key(&self, key_id: String) -> ffi::FfiResult<()> {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Option<String>>>(1);
+        let key_id_for_call = key_id.clone();
+        let key_id_for_warn = key_id;
+        let status = self.delete_key_tsfn.call_with_return_value(
+            (key_id_for_call,),
+            ThreadsafeFunctionCallMode::Blocking,
+            move |result: Result<Option<String>>, _env| {
+                let _ = tx.send(result);
+                Ok(())
+            },
+        );
+        if status != napi::Status::Ok {
+            return Err(FfiError::Unavailable {
+                subsystem: format!(
+                    "host-key-store: deleteKey dispatch failed with napi status {status:?}"
+                ),
+            });
+        }
+        match rx.recv_timeout(self.recv_timeout) {
+            // Delete is idempotent per the trait contract: any
+            // normal return (including "no such id") is success.
+            // The host's JS resolver MUST follow the same
+            // contract — i.e. don't throw on a missing-id delete,
+            // just return.
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    key_id = %key_id_for_warn,
+                    error = %e,
+                    "JS key-storage resolver deleteKey threw; surfacing as Unavailable",
+                );
+                Err(FfiError::Unavailable {
+                    subsystem: format!("host-key-store: deleteKey threw: {e}"),
+                })
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let timeout_ms: u64 = self.recv_timeout.as_millis().try_into().unwrap_or(u64::MAX);
+                tracing::warn!(
+                    key_id = %key_id_for_warn,
+                    timeout_ms,
+                    "JS key-storage resolver deleteKey did not return within timeout",
+                );
+                Err(FfiError::Unavailable {
+                    subsystem: format!("host-key-store: deleteKey timed out after {timeout_ms}ms"),
+                })
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(FfiError::Unavailable {
+                subsystem: "host-key-store: deleteKey dispatch aborted (tsfn closed)".into(),
+            }),
+        }
+    }
+}
+
+/// Register a host-supplied master-key storage resolver against
+/// `handle`'s per-runtime slot. Mirrors
+/// [`crate::set_key_storage_resolver`].
+///
+/// `resolver` is a JS object with three callable methods:
+///
+/// * `loadKey(keyId: string) -> string | null | undefined` — return
+///   the hex-encoded 32-byte master key, or `null` / `undefined` to
+///   signal `NotFound`. The substrate's `open_store_with_resolver`
+///   re-tags the `NotFound { kind: "key" }` it sees here as
+///   `NotFound { kind: "master_key" }` for the cold-boot path so the
+///   host can distinguish a master-key provisioning miss from a
+///   generic key-id miss surfaced by future resolver call sites.
+/// * `storeKey(keyId: string, keyHex: string) -> void` — persist
+///   `keyHex` under `keyId`. Throw on persistence failure. The
+///   substrate ignores the return value.
+/// * `deleteKey(keyId: string) -> void` — drop the key registered
+///   under `keyId`. MUST be idempotent — deleting a missing id is a
+///   success, not an exception. The substrate ignores the return
+///   value.
+///
+/// Any JS exception in a callback surfaces to the substrate as
+/// [`ffi::FfiError::Unavailable`] with `subsystem` containing the
+/// method name and the exception message. The substrate does NOT
+/// re-tag JS exceptions as `NotFound` — that variant is reserved
+/// for the explicit `null` / `undefined` return from `loadKey`.
+///
+/// `timeoutMs` is an optional defense-in-depth ceiling on how long
+/// the substrate will block on a JS callback returning. Default is
+/// 30000 ms (long enough for a cold keychain unlock that prompts the
+/// OS for biometric / password input). Pass `0` is rejected as
+/// ambiguous (would always time out); pass a larger value
+/// (e.g. 60_000 or 120_000) for slow cold-path lookups.
+///
+/// Calling this multiple times REPLACES the previously-registered
+/// resolver. Hosts typically call this exactly once per
+/// `open_store` lifecycle.
+///
+/// This is the **mid-life registration path**. For the cold-boot
+/// integration point that consumes `loadKey` to derive the master
+/// key during `open_store`, see [`js_open_store_with_resolver`].
+#[napi(js_name = "setKeyStorageResolver")]
+pub fn js_set_key_storage_resolver(
+    handle: BigInt,
+    resolver: Object<'_>,
+    timeout_ms: Option<u32>,
+) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    let adapter = build_js_key_storage_resolver(&resolver, timeout_ms, "setKeyStorageResolver")?;
+    let arc: std::sync::Arc<dyn ffi::KeyStorageResolver> = std::sync::Arc::new(adapter);
+    crate::set_key_storage_resolver(h, arc).map_err(to_js_error)
+}
+
+/// Unregister the previously-registered master-key storage
+/// resolver on `handle`. Mirrors
+/// [`crate::clear_key_storage_resolver`].
+///
+/// Calling this when no resolver is registered is a no-op (the
+/// trait's documented "last-write-wins" semantics).
+#[napi(js_name = "clearKeyStorageResolver")]
+pub fn js_clear_key_storage_resolver(handle: BigInt) -> Result<()> {
+    let h = handle_from_bigint(&handle)?;
+    crate::clear_key_storage_resolver(h).map_err(to_js_error)
+}
+
+/// Open the SQLCipher-backed evidence store at `path` using a
+/// master key fetched from a host-supplied resolver object
+/// (instead of passing the hex string directly to
+/// [`js_open_store`]). Mirrors [`crate::open_store_with_resolver`].
+///
+/// This is the cold-boot integration point hardware-backed hosts
+/// SHOULD use so the master key never enters the host's address
+/// space as a long-lived plaintext hex string — the resolver pulls
+/// it from Keychain / Keystore / DPAPI / TEE on demand, the
+/// substrate consumes it and stashes the resolver on the runtime
+/// so subsequent operations reach the same backing store, and the
+/// resolver is dropped when [`js_close_store`] tears the runtime
+/// down.
+///
+/// `resolver` follows the same JS shape as
+/// [`js_set_key_storage_resolver`] (three methods: `loadKey`,
+/// `storeKey`, `deleteKey`). On this call the substrate invokes
+/// `loadKey(keyId)` exactly once.
+///
+/// Error mapping (see [`ffi::open_store_with_resolver`] for the
+/// authoritative contract):
+///
+/// * `loadKey` returns `null` / `undefined` → `NotFound { kind:
+///   "master_key", id: <keyId> }` (re-tagged from the
+///   resolver's own `NotFound { kind: "key" }`).
+/// * `loadKey` returns a string that is not 64 lowercase hex
+///   chars → `InvalidId`.
+/// * `loadKey` throws a JS exception → `Unavailable { subsystem:
+///   "host-key-store: loadKey threw: ..." }`.
+/// * `loadKey` does not return within `timeoutMs` →
+///   `Unavailable { subsystem: "host-key-store: loadKey timed
+///   out after Xms" }`.
+/// * SQLCipher fails to open the underlying database with the
+///   resolved key → `Evidence` (same as
+///   [`js_open_store`]).
+///
+/// Returns the same opaque `BigInt` handle shape as
+/// [`js_open_store`].
+#[napi(js_name = "openStoreWithResolver")]
+pub fn js_open_store_with_resolver(
+    path: String,
+    key_id: String,
+    resolver: Object<'_>,
+    timeout_ms: Option<u32>,
+) -> Result<BigInt> {
+    let adapter = build_js_key_storage_resolver(&resolver, timeout_ms, "openStoreWithResolver")?;
+    let arc: std::sync::Arc<dyn ffi::KeyStorageResolver> = std::sync::Arc::new(adapter);
+    let handle = crate::open_store_with_resolver(path, key_id, arc).map_err(to_js_error)?;
+    Ok(BigInt::from(handle))
+}
+
 // ───────────────────────── Webhook receiver (Phase 5) ─────────────
 
 /// Start a webhook receiver server bound to `bindAddr` (parsed as
@@ -1638,6 +2144,85 @@ mod tests {
         assert_eq!(
             JsClientSecretResolver::DEFAULT_RECV_TIMEOUT,
             std::time::Duration::from_secs(5),
+        );
+    }
+
+    // ──────────────────── JsKeyStorageResolver ────────────────────
+    //
+    // Same caveat as the OAuth client-secret resolver tests: the
+    // full `JsKeyStorageResolver::{load_key, store_key, delete_key}`
+    // path requires a live napi env to construct a
+    // `ThreadsafeFunction`, which is out of reach from
+    // `cargo test -p napi_addon` (no Node host). We test the
+    // timeout-validation helper and the documented-default
+    // constants; the end-to-end path is exercised by the
+    // FFI-level resolver tests in `crates/ffi/src/runtime.rs`
+    // (`open_store_with_resolver_*`).
+
+    #[test]
+    fn resolve_key_storage_recv_timeout_defaults_to_30_seconds_when_unset() {
+        let t = resolve_key_storage_recv_timeout(None).expect("None should be accepted");
+        assert_eq!(t, std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn resolve_key_storage_recv_timeout_accepts_positive_milliseconds() {
+        let t = resolve_key_storage_recv_timeout(Some(15_000))
+            .expect("positive value should be accepted");
+        assert_eq!(t, std::time::Duration::from_millis(15_000));
+    }
+
+    #[test]
+    fn resolve_key_storage_recv_timeout_accepts_one_millisecond_minimum() {
+        let t = resolve_key_storage_recv_timeout(Some(1)).expect("Some(1) should be accepted");
+        assert_eq!(t, std::time::Duration::from_millis(1));
+    }
+
+    #[test]
+    fn resolve_key_storage_recv_timeout_accepts_u32_max_for_effectively_unbounded() {
+        let t =
+            resolve_key_storage_recv_timeout(Some(u32::MAX)).expect("u32::MAX should be accepted");
+        assert_eq!(t, std::time::Duration::from_millis(u64::from(u32::MAX)));
+    }
+
+    #[test]
+    fn resolve_key_storage_recv_timeout_rejects_zero_as_silent_footgun() {
+        let err = resolve_key_storage_recv_timeout(Some(0))
+            .expect_err("Some(0) must be rejected — same rationale as the OAuth resolver");
+        assert_eq!(
+            err.kind(),
+            "InvalidArgument",
+            "kind() tag must match the variant; got {err:?}",
+        );
+        match err {
+            NapiError::InvalidArgument { message } => {
+                assert!(
+                    message.contains("timeoutMs"),
+                    "rejection message should mention the JS argument name; got {message}",
+                );
+                assert!(
+                    message.contains("> 0"),
+                    "rejection message should explain the constraint; got {message}",
+                );
+                assert!(
+                    message.contains("30000"),
+                    "rejection message should mention the documented default ms; got {message}",
+                );
+            }
+            other => panic!("expected NapiError::InvalidArgument, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn js_key_storage_resolver_default_recv_timeout_is_thirty_seconds() {
+        // Pin the documented default so the contract stays stable
+        // across refactors. The 30 s ceiling is longer than the
+        // OAuth resolver's 5 s because master-key lookups can prompt
+        // the OS for biometric/password input — see the rustdoc on
+        // `js_set_key_storage_resolver` for the rationale.
+        assert_eq!(
+            JsKeyStorageResolver::DEFAULT_RECV_TIMEOUT,
+            std::time::Duration::from_secs(30),
         );
     }
 
