@@ -130,4 +130,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   release workflow that runs `cargo test --all-features` and
   publishes a GitHub release with auto-generated notes.
 
-[Unreleased]: https://github.com/kennguy3n/knowledge/compare/HEAD...HEAD
+<!--
+  No tagged release exists yet, so the Keep-a-Changelog
+  `compare/v<last>...HEAD` link cannot resolve. Until the first tag
+  is cut, the `[Unreleased]` link points at the full commit history
+  on the default branch — which is the only honest "everything that
+  has happened" view in the pre-1.0 state. The first release should
+  replace this with `compare/v<first-tag>...HEAD`.
+-->
+[Unreleased]: https://github.com/kennguy3n/knowledge/commits/main

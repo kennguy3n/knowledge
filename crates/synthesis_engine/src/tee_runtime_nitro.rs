@@ -190,65 +190,14 @@ impl TeeRuntime for NitroTeeRuntime {
             ),
         };
 
-        // 3. Parse COSE_Sign1. RFC 8152 §4.2 fixes the shape as a
-        //    4-element CBOR array.
-        let cose: CborValue = ciborium::de::from_reader(document_bytes.as_slice())
-            .expect("nitro-tee: NSM Attestation response was not valid CBOR");
-        let cose_array = match cose {
-            CborValue::Array(arr) => arr,
-            other => panic!("nitro-tee: COSE_Sign1 envelope was not a CBOR array; got {other:?}"),
-        };
-        assert!(
-            cose_array.len() == 4,
-            "nitro-tee: COSE_Sign1 envelope must have exactly 4 elements per RFC 8152 §4.2; got {}",
-            cose_array.len()
-        );
-        // Index 2 is the payload (the AttestationDocument), wrapped
-        // as a CBOR byte string.
-        let payload_bytes: Vec<u8> = match &cose_array[2] {
-            CborValue::Bytes(b) => b.clone(),
-            other => {
-                panic!("nitro-tee: COSE_Sign1 payload slot must be a byte string; got {other:?}")
-            }
-        };
+        // 3. Parse the COSE_Sign1 envelope + AttestationDocument
+        //    via a free helper so unit tests can exercise the CBOR
+        //    decode against synthetic fixtures — both the
+        //    production `COSE_Sign1_Tagged` (CBOR tag 18) shape and
+        //    the bare-array shape — without needing `/dev/nsm`.
+        let pcr0_bytes = parse_pcr0_from_attestation_document(&document_bytes);
 
-        // 4. Decode the AttestationDocument and pull PCR0.
-        let doc: CborValue = ciborium::de::from_reader(payload_bytes.as_slice())
-            .expect("nitro-tee: COSE payload was not valid CBOR");
-        let doc_map = match doc {
-            CborValue::Map(m) => m,
-            other => panic!("nitro-tee: AttestationDocument was not a CBOR map; got {other:?}"),
-        };
-        let pcrs_value = doc_map
-            .iter()
-            .find_map(|(k, v)| match k {
-                CborValue::Text(name) if name == "pcrs" => Some(v),
-                _ => None,
-            })
-            .expect("nitro-tee: AttestationDocument missing required `pcrs` field");
-        let pcr_map = match pcrs_value {
-            CborValue::Map(m) => m,
-            other => panic!("nitro-tee: `pcrs` field was not a CBOR map; got {other:?}"),
-        };
-        let pcr0_bytes: Vec<u8> = pcr_map
-            .iter()
-            .find_map(|(k, v)| {
-                // Nitro emits PCR indices as CBOR unsigned integers.
-                let idx_i128: i128 = match k {
-                    CborValue::Integer(i) => (*i).into(),
-                    _ => return None,
-                };
-                if idx_i128 != 0 {
-                    return None;
-                }
-                match v {
-                    CborValue::Bytes(b) => Some(b.clone()),
-                    _ => None,
-                }
-            })
-            .expect("nitro-tee: AttestationDocument missing PCR0 entry");
-
-        // 5. Build the AttestationReport.
+        // 4. Build the AttestationReport.
         //
         // `ContentHash` is a fixed-width 32-byte array. Nitro PCRs
         // are 48 bytes by default (SHA-384) but firmware-configured
@@ -268,6 +217,93 @@ impl TeeRuntime for NitroTeeRuntime {
             document_bytes,
         )
     }
+}
+
+/// Parse the COSE_Sign1 attestation envelope returned by the NSM
+/// driver and extract PCR0.
+///
+/// Factored out of [`NitroTeeRuntime::quote`] so the CBOR-decode
+/// path is testable without `/dev/nsm` access. The function is
+/// `pub(crate)` so the in-crate tests can drive it directly; the
+/// public API is still [`NitroTeeRuntime::quote`].
+///
+/// ## Envelope shape
+///
+/// Per RFC 8152 §4.2 a COSE_Sign1 message is a 4-element CBOR
+/// array `[protected, unprotected, payload, signature]`. The same
+/// section defines `COSE_Sign1_Tagged = #6.18(COSE_Sign1)` — i.e.
+/// the same array wrapped in CBOR tag 18. AWS Nitro's NSM driver
+/// returns the *tagged* form on the wire (the
+/// `aws-nitro-enclaves-cose` reference verifier expects tag 18).
+/// We accept both: the tagged shape is the production path; the
+/// bare-array shape lets test fixtures that pre-strip the tag flow
+/// through the same parser. A parser that only matched a bare
+/// array would panic on every real attestation — exactly the bug
+/// the unit tests guard against.
+pub(crate) fn parse_pcr0_from_attestation_document(document_bytes: &[u8]) -> Vec<u8> {
+    let cose: CborValue = ciborium::de::from_reader(document_bytes)
+        .expect("nitro-tee: NSM Attestation response was not valid CBOR");
+    let cose_array = match cose {
+        CborValue::Array(arr) => arr,
+        CborValue::Tag(18, inner) => match *inner {
+            CborValue::Array(arr) => arr,
+            other => panic!(
+                "nitro-tee: COSE_Sign1_Tagged (CBOR tag 18) inner value was not a CBOR array; got {other:?}"
+            ),
+        },
+        other => panic!(
+            "nitro-tee: COSE_Sign1 envelope was neither a bare CBOR array nor a CBOR tag 18 (COSE_Sign1_Tagged); got {other:?}"
+        ),
+    };
+    assert!(
+        cose_array.len() == 4,
+        "nitro-tee: COSE_Sign1 envelope must have exactly 4 elements per RFC 8152 §4.2; got {}",
+        cose_array.len()
+    );
+    // Index 2 is the payload (the AttestationDocument), wrapped
+    // as a CBOR byte string.
+    let payload_bytes: Vec<u8> = match &cose_array[2] {
+        CborValue::Bytes(b) => b.clone(),
+        other => {
+            panic!("nitro-tee: COSE_Sign1 payload slot must be a byte string; got {other:?}")
+        }
+    };
+
+    // Decode the AttestationDocument and pull PCR0.
+    let doc: CborValue = ciborium::de::from_reader(payload_bytes.as_slice())
+        .expect("nitro-tee: COSE payload was not valid CBOR");
+    let doc_map = match doc {
+        CborValue::Map(m) => m,
+        other => panic!("nitro-tee: AttestationDocument was not a CBOR map; got {other:?}"),
+    };
+    let pcrs_value = doc_map
+        .iter()
+        .find_map(|(k, v)| match k {
+            CborValue::Text(name) if name == "pcrs" => Some(v),
+            _ => None,
+        })
+        .expect("nitro-tee: AttestationDocument missing required `pcrs` field");
+    let pcr_map = match pcrs_value {
+        CborValue::Map(m) => m,
+        other => panic!("nitro-tee: `pcrs` field was not a CBOR map; got {other:?}"),
+    };
+    pcr_map
+        .iter()
+        .find_map(|(k, v)| {
+            // Nitro emits PCR indices as CBOR unsigned integers.
+            let idx_i128: i128 = match k {
+                CborValue::Integer(i) => (*i).into(),
+                _ => return None,
+            };
+            if idx_i128 != 0 {
+                return None;
+            }
+            match v {
+                CborValue::Bytes(b) => Some(b.clone()),
+                _ => None,
+            }
+        })
+        .expect("nitro-tee: AttestationDocument missing PCR0 entry")
 }
 
 /// Convert a PCR digest of arbitrary length to a [`ContentHash`].
@@ -312,6 +348,89 @@ mod tests {
     fn nitro_runtime_implements_tee_runtime_trait() {
         fn assert_tee_runtime<T: TeeRuntime>(_t: T) {}
         assert_tee_runtime(NitroTeeRuntime::new());
+    }
+
+    /// Construct a synthetic AttestationDocument (CBOR map with a
+    /// `pcrs` field whose entry 0 is `pcr0`) and wrap it as the
+    /// payload of a 4-element COSE_Sign1 array. Returns the
+    /// raw bytes of the bare-array form. The `wrap_in_tag18`
+    /// helper below applies CBOR tag 18 to produce the production
+    /// `COSE_Sign1_Tagged` shape.
+    fn build_synthetic_attestation_document(pcr0: &[u8]) -> Vec<u8> {
+        // Inner payload: a CBOR map { "pcrs": { 0u32: bstr(pcr0) } }.
+        let payload = CborValue::Map(vec![(
+            CborValue::Text("pcrs".into()),
+            CborValue::Map(vec![(
+                CborValue::Integer(0u32.into()),
+                CborValue::Bytes(pcr0.to_vec()),
+            )]),
+        )]);
+        let mut payload_bytes = Vec::new();
+        ciborium::ser::into_writer(&payload, &mut payload_bytes).unwrap();
+
+        // COSE_Sign1: [protected_header, unprotected_header,
+        // payload (bstr-wrapped), signature]. We pin protected and
+        // unprotected to empty / minimal stubs since the parser
+        // only consumes index 2 (the payload bstr).
+        let envelope = CborValue::Array(vec![
+            CborValue::Bytes(Vec::new()), // protected_header
+            CborValue::Map(Vec::new()),   // unprotected_header
+            CborValue::Bytes(payload_bytes),
+            CborValue::Bytes(vec![0u8; 96]), // signature stub (ECDSA P-384 width)
+        ]);
+        let mut envelope_bytes = Vec::new();
+        ciborium::ser::into_writer(&envelope, &mut envelope_bytes).unwrap();
+        envelope_bytes
+    }
+
+    fn wrap_in_tag18(envelope_bytes: &[u8]) -> Vec<u8> {
+        // Decode the bare envelope back into a CborValue, re-wrap
+        // it as Tag(18, ...), and re-serialize. This matches the
+        // shape AWS Nitro's NSM driver emits on the wire
+        // (`COSE_Sign1_Tagged` per RFC 8152 §4.2).
+        let envelope: CborValue = ciborium::de::from_reader(envelope_bytes).unwrap();
+        let tagged = CborValue::Tag(18, Box::new(envelope));
+        let mut tagged_bytes = Vec::new();
+        ciborium::ser::into_writer(&tagged, &mut tagged_bytes).unwrap();
+        tagged_bytes
+    }
+
+    /// Production attestation documents are CBOR-tag-18 wrapped
+    /// (`COSE_Sign1_Tagged` per RFC 8152 §4.2). The parser must
+    /// accept the tagged form — a prior implementation only matched
+    /// a bare `CborValue::Array` and would have panicked on every
+    /// real attestation. This test guards against that regression.
+    #[test]
+    fn parses_pcr0_from_tag18_wrapped_cose_sign1() {
+        let pcr0: Vec<u8> = (0..48u8).collect(); // SHA-384 width
+        let bare = build_synthetic_attestation_document(&pcr0);
+        let tagged = wrap_in_tag18(&bare);
+        let extracted = parse_pcr0_from_attestation_document(&tagged);
+        assert_eq!(extracted, pcr0);
+    }
+
+    /// The bare-array form is accepted too so fixtures that pre-
+    /// strip the tag (and unit tests that bypass the wrapper) flow
+    /// through the same parser.
+    #[test]
+    fn parses_pcr0_from_bare_array_cose_sign1() {
+        let pcr0: Vec<u8> = (100..132u8).collect(); // ContentHash width exactly
+        let bare = build_synthetic_attestation_document(&pcr0);
+        let extracted = parse_pcr0_from_attestation_document(&bare);
+        assert_eq!(extracted, pcr0);
+    }
+
+    /// A non-array, non-tag-18 outer value must produce a loud
+    /// panic rather than silently fabricating an
+    /// `AttestationReport`.
+    #[test]
+    #[should_panic(expected = "neither a bare CBOR array nor a CBOR tag 18")]
+    fn rejects_non_cose_outer_shape() {
+        // A bare text string at the top level.
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&CborValue::Text("not-a-cose-envelope".into()), &mut bytes)
+            .unwrap();
+        let _ = parse_pcr0_from_attestation_document(&bytes);
     }
 
     /// Verify the PCR → ContentHash adapter handles the three
