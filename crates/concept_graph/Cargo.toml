@@ -19,7 +19,6 @@ serde_json = { workspace = true }
 rusqlite = { workspace = true }
 zeroize = { workspace = true }
 rand = { workspace = true }
-rand_core = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

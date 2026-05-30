@@ -157,7 +157,11 @@ use crypto::{
     AEAD_NONCE_LEN,
 };
 use evidence_store::{EvidenceId, ImportanceClass, ScopeId};
-use rand::RngCore;
+// `TryRngCore` is needed alongside `RngCore` because rand 0.9 made
+// `OsRng` fallible-only. See SECURITY.md §"Random number
+// generation" for the rationale behind the workspace-wide
+// `OsRng`-for-everything policy.
+use rand::{RngCore, TryRngCore};
 
 use runtime::with_runtime;
 
@@ -1566,11 +1570,10 @@ pub fn encrypt(
             rt.ensure_scope_registered(scope)?;
             let key = rt.scope_encrypt_key(scope)?;
             let mut nonce: AeadNonce = [0u8; AEAD_NONCE_LEN];
-            // `rand::thread_rng()` was renamed to `rand::rng()` in
-            // rand 0.9. The returned `ThreadRng` (a userspace ChaCha12
-            // CSPRNG reseeded from the OS entropy pool) is unchanged
-            // and remains appropriate for AEAD nonce generation.
-            rand::rng().fill_bytes(&mut nonce);
+            // See SECURITY.md §"Random number generation" for why
+            // the substrate uses `OsRng` (not `ThreadRng`) for every
+            // per-encrypt AEAD nonce, even on the hot FFI path.
+            rand::rngs::OsRng.unwrap_err().fill_bytes(&mut nonce);
             let aad = scope_aad(scope);
             let ciphertext =
                 encrypt_aead(&key, &nonce, &plaintext, &aad).map_err(|e| FfiError::Crypto {

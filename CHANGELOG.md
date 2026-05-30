@@ -172,6 +172,43 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   unchanged between the two versions; no source changes
   required. The bump also pulls in `fancy-regex` 0.14 → 0.17
   transitively.
+- Bumped `rand` 0.8 → 0.9. `OsRng` is now fallible-only
+  (`TryRngCore` / `TryCryptoRng`); call sites that want the
+  old infallible surface use `OsRng.unwrap_err()` to restore
+  it via panic-on-failure. `rand::thread_rng()` was renamed to
+  `rand::rng()`. The workspace deliberately keeps `rand_core`
+  at `0.6` because `x25519-dalek 2`'s
+  `X25519Secret::random_from_rng` and `ml-kem 0.2`'s
+  `KemCore::generate` both consume the `rand_core 0.6`
+  `CryptoRngCore` trait; `rand 0.9` coexists fine with
+  `rand_core 0.6` (parallel `RngCore` hierarchies).
+
+### Changed — Security posture
+
+- Standardised every production AEAD-nonce generation site on
+  `rand::rngs::OsRng.unwrap_err()` (direct OS CSPRNG) so that
+  every cryptographic byte the substrate emits — long-lived
+  keys *and* per-encryption nonces — comes from the same
+  audited source. Previously a subset of nonce sites
+  (`audit_service`, `evidence_store`, `ffi::encrypt`,
+  `permission_service`, `synthesis_pipeline`, `tenant_service`)
+  used `rand::rng()` (`ThreadRng = ReseedingRng<ChaCha12Core,
+  OsRng>`), which is cryptographically suitable for nonces but
+  added a userspace CSPRNG layer to the audit story without
+  benefit on the hot path. The remaining `rand::rng()` call
+  sites are all `#[cfg(test)]` helpers or in `tests/` files
+  and are intentional (test-only key/nonce fabrication).
+  Documented the policy and the rationale in `SECURITY.md`
+  §"Random number generation".
+- Dropped the unused `rand_core` workspace dependency from
+  `crates/concept_graph/Cargo.toml`. The crate's `persist.rs`
+  imports `RngCore` and `TryRngCore` from `rand` (0.9), not
+  `rand_core` directly; no source / test / bench file in
+  `crates/concept_graph/` references the crate. The
+  `rand_core = "0.6"` workspace pin is still required and
+  still active for `crates/crypto/` (`kem.rs`, `hybrid_kem.rs`)
+  which DOES import `rand_core::OsRng` directly to pass to
+  `ml-kem 0.2` / `x25519-dalek 2`.
 
 <!--
   No tagged release exists yet, so the Keep-a-Changelog
