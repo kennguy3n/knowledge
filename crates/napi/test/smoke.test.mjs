@@ -235,6 +235,7 @@ test('every documented function is exported with camelCase name', () => {
     'refreshConnectorToken',
     'registerWebhookDispatch',
     'removeConnector',
+    'replaceApprovedDocument',
     'revokeApprovedDocument',
     'runDecaySweep',
     'setOauthClientSecretResolver',

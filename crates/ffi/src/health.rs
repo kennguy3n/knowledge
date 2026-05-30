@@ -559,7 +559,7 @@ fn synthesis_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
 
     let status = if !engine_configured {
         SubsystemStatus::Unavailable
-    } else if !scope_bindings_configured {
+    } else if !scope_bindings_configured && !rt.synthesis_single_tenant {
         SubsystemStatus::Degraded
     } else {
         SubsystemStatus::Ok

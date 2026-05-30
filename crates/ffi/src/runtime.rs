@@ -479,6 +479,12 @@ pub struct FfiRuntime {
     /// [`synthesis_engine::tee_worker::TeeWorkerConfig::scope_bindings`]
     /// semantics for the TEE-attested path.
     pub(crate) synthesis_scope_bindings: Option<Vec<uuid::Uuid>>,
+    /// Single-tenant posture flag. When `true`, the synthesis
+    /// health-probe reports `Nominal` instead of `Degraded` when
+    /// `scope_bindings` is absent. Set by
+    /// [`crate::synthesis::configure_synthesis_engine`] from
+    /// [`crate::types::SynthesisEngineConfig::single_tenant`].
+    pub(crate) synthesis_single_tenant: bool,
 }
 
 /// Memory-blob `kind` tag for persisted domain memory objects.
@@ -694,23 +700,21 @@ impl FfiRuntime {
         self.domain_memories.get(&scope)
     }
 
-    /// Borrow (or allocate) the per-scope domain memory.
-    ///
-    /// Mirrors [`Self::user_memory_mut`] — only call this on paths
-    /// that intend to persist the result, otherwise prefer
-    /// [`Self::domain_memory`] to keep the map sparse.
-    pub(crate) fn domain_memory_mut(&mut self, scope: ScopeId) -> &mut DomainMemoryObject {
-        self.domain_memories
-            .entry(scope)
-            .or_insert_with(|| DomainMemoryObject::new(scope))
-    }
-
     /// Borrow the per-scope tenant memory, if one exists.
     pub(crate) fn tenant_memory(&self, scope: ScopeId) -> Option<&TenantMemoryObject> {
         self.tenant_memories.get(&scope)
     }
 
     /// Borrow (or allocate) the per-scope tenant memory.
+    ///
+    /// Test-only fixture helper. Phase 9 transactional
+    /// `apply_dispatch_outcome` builds post-synthesis state on
+    /// owned clones rather than mutating the live map in-place;
+    /// production callers go through [`Self::tenant_memory`] +
+    /// `.cloned()` and write back via the transactional path or
+    /// the persist-first inline pattern used in
+    /// `admit_approved_document` / `revoke_approved_document`.
+    #[cfg(test)]
     pub(crate) fn tenant_memory_mut(&mut self, scope: ScopeId) -> &mut TenantMemoryObject {
         self.tenant_memories
             .entry(scope)
@@ -734,6 +738,14 @@ impl FfiRuntime {
     /// in-memory map. Follows the
     /// [`Self::save_channel_memory`] invariant (no in-memory
     /// allocation on disk-save failure).
+    ///
+    /// Test-only fixture helper post-Phase-9: production callers
+    /// now bundle the synthesis-object / domain-memory / window
+    /// writes under the SQLCipher transaction managed by
+    /// `apply_dispatch_outcome`. Retained because integration
+    /// tests seed memory fixtures directly without going through
+    /// the dispatch pipeline.
+    #[cfg(test)]
     pub(crate) fn save_domain_memory(
         &mut self,
         scope: ScopeId,
@@ -797,6 +809,10 @@ impl FfiRuntime {
     /// successful synthesis (`INSERT OR REPLACE`), bounded by the
     /// window retention cap enforced via
     /// [`Self::prune_completed_windows`].
+    ///
+    /// Test-only fixture helper post-Phase-9 (see
+    /// [`Self::save_domain_memory`] for the rationale).
+    #[cfg(test)]
     pub(crate) fn save_synthesis_object(
         &mut self,
         scope: ScopeId,
@@ -849,6 +865,12 @@ impl FfiRuntime {
     /// observe the cleared state. If the host wants the row gone
     /// entirely (e.g. because the scope was forgotten),
     /// `delete_memory_blobs_for_scope` covers that path.
+    ///
+    /// Test-only fixture helper post-Phase-9 (production callers
+    /// inline the equivalent serialise + `save_memory_blob_in_tx`
+    /// inside the transactional `apply_dispatch_outcome`).
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn flush_synthesis_objects(&self, scope: ScopeId) -> crate::error::FfiResult<()> {
         let per_scope: Vec<&synthesis_pipeline::SynthesisObject> = self
             .synthesis_objects
@@ -873,37 +895,24 @@ impl FfiRuntime {
     /// only `Complete` windows are eligible. Returns the set of
     /// pruned window ids so the caller can also evict any
     /// associated [`synthesis_pipeline::SynthesisObject`] rows.
+    ///
+    /// Test-only fixture helper post-Phase-9 — production callers
+    /// invoke [`crate::synthesis::prune_completed_windows_on`]
+    /// directly on the cloned manager / objects-map inside the
+    /// transactional `apply_dispatch_outcome` so the prune
+    /// commits atomically with the synthesis-object install.
+    #[cfg(test)]
     pub(crate) fn prune_completed_windows(
         &mut self,
         scope: ScopeId,
         max_per_scope: usize,
     ) -> Vec<synthesis_pipeline::WindowId> {
-        // Walk the windows backwards by `window_end` so the newest
-        // completions survive.
-        let mut completed: Vec<(synthesis_pipeline::WindowId, chrono::DateTime<chrono::Utc>)> =
-            self.synthesis_windows
-                .windows_for(scope)
-                .iter()
-                .filter(|w| w.status == synthesis_pipeline::WindowStatus::Complete)
-                .map(|w| (w.id, w.window_end))
-                .collect();
-        if completed.len() <= max_per_scope {
-            return Vec::new();
-        }
-        // Sort newest-first; entries beyond `max_per_scope` are the
-        // ones to prune.
-        completed.sort_by_key(|entry| std::cmp::Reverse(entry.1));
-        let prune: Vec<synthesis_pipeline::WindowId> = completed
-            .into_iter()
-            .skip(max_per_scope)
-            .map(|(id, _)| id)
-            .collect();
-        for id in &prune {
-            self.synthesis_objects.remove(id);
-        }
-        self.synthesis_windows
-            .remove_windows(scope, prune.iter().copied());
-        prune
+        crate::synthesis::prune_completed_windows_on(
+            &mut self.synthesis_windows,
+            &mut self.synthesis_objects,
+            scope,
+            max_per_scope,
+        )
     }
 }
 
@@ -1550,11 +1559,18 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
 
     // Orphan-aware rehydration cleanup. The `synthesis_objects`
     // blob and the `synthesis_windows` blob are persisted under
-    // separate `memory_objects` rows, so a partial flush
-    // (`flush_synthesis_windows` succeeded, `flush_synthesis_objects`
-    // failed — or vice-versa, or a process crash between the two)
-    // can leave the two stores out of sync: an object whose
-    // `window_id` no longer corresponds to any tracked window.
+    // separate `memory_objects` rows. The Phase-9 transactional
+    // `apply_dispatch_outcome` bundles both writes under one
+    // SQLCipher transaction so the success path can no longer
+    // diverge them, but two scenarios still benefit from this
+    // sweep: (1) databases that pre-date Phase-9 may carry
+    // divergence accumulated under the older autocommit flushes;
+    // (2) the failure-path `flush_synthesis_windows` calls in
+    // `apply_dispatch_outcome` and `fail_window_on_live_manager`
+    // run outside a transaction, so a crash between the windows
+    // flush and the dispatch-error return can leave an object
+    // whose `window_id` no longer corresponds to any tracked
+    // window.
     //
     // Orphan objects are harmless (they're never served to hosts
     // because `synthesis_status` / `list_recent_syntheses` resolve
@@ -1615,6 +1631,70 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
                          will retry the purge)",
                     );
                 }
+            }
+        }
+    }
+
+    // ─── Approved-document payload orphan sweep ───────────────────
+    //
+    // Symmetric to the synthesis-object sweep above. The
+    // `approved_document_payloads` table may contain rows whose
+    // owning ref was lost via a half-failed `revoke_approved_document`
+    // (crash between tenant-memory flush and payload-row deletion)
+    // or a `forget_scope_state` that destroyed the DEK before the
+    // payload-deletion step completed. The refs in
+    // `TenantMemoryObject.approved_documents` are the source of
+    // truth; any payload row whose `(scope_id, document_id)` is NOT
+    // in the rehydrated ref set is an orphan.
+    //
+    // We scan the payload table for composite keys, diff against
+    // the rehydrated tenant-memory refs, and delete orphans. Delete
+    // failures are non-fatal (logged) — the next `open_store` will
+    // retry.
+    {
+        let mut valid_keys: HashSet<(evidence_store::ScopeId, uuid::Uuid)> = HashSet::new();
+        for tmo in tenant_memories.values() {
+            for doc in &tmo.approved_documents {
+                valid_keys.insert((tmo.scope_id, doc.id));
+            }
+        }
+        match store.list_all_approved_document_payload_keys() {
+            Ok(all_keys) => {
+                let orphans: Vec<_> = all_keys
+                    .into_iter()
+                    .filter(|k| !valid_keys.contains(k))
+                    .collect();
+                if !orphans.is_empty() {
+                    let count = orphans.len();
+                    let mut deleted = 0usize;
+                    for (scope_id, doc_id) in &orphans {
+                        match store.delete_approved_document_payload(*scope_id, *doc_id) {
+                            Ok(n) => deleted += n,
+                            Err(e) => {
+                                tracing::warn!(
+                                    scope = %scope_id.as_uuid(),
+                                    doc_id = %doc_id,
+                                    error = %e,
+                                    "open_store: failed to delete orphan approved-document \
+                                     payload row (next open_store will retry)",
+                                );
+                            }
+                        }
+                    }
+                    tracing::info!(
+                        orphans = count,
+                        deleted,
+                        "open_store: purged orphan approved-document payload rows whose \
+                         (scope_id, document_id) is not in any rehydrated TenantMemoryObject",
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "open_store: could not list approved-document payload keys for orphan \
+                     sweep; skipping (next open_store will retry)",
+                );
             }
         }
     }
@@ -1721,6 +1801,7 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
         synthesis_cooldowns: HashMap::new(),
         synthesis_objects,
         synthesis_scope_bindings: None,
+        synthesis_single_tenant: false,
     };
 
     // Rehydrate persisted connector state from the v9

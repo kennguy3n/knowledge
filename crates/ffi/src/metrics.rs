@@ -237,6 +237,10 @@ pub(crate) struct Metrics {
     /// (Phase 8 — host removes a previously admitted approved
     /// document from tenant memory).
     pub(crate) revoke_approved_document_total: AtomicU64,
+    /// Total `replace_approved_document` calls initiated
+    /// (Phase 9 — host replaces payload on an existing
+    /// approved document without revoking and re-admitting).
+    pub(crate) replace_approved_document_total: AtomicU64,
     /// Total `list_approved_documents` calls initiated
     /// (Phase 8 — host enumerates approved-document refs for a
     /// tenant scope).
@@ -366,6 +370,7 @@ counter_inc!(pub(crate) fn inc_list_recent_syntheses => list_recent_syntheses_to
 counter_inc!(pub(crate) fn inc_configure_sync_auto_synthesize => configure_sync_auto_synthesize_total);
 counter_inc!(pub(crate) fn inc_admit_approved_document => admit_approved_document_total);
 counter_inc!(pub(crate) fn inc_revoke_approved_document => revoke_approved_document_total);
+counter_inc!(pub(crate) fn inc_replace_approved_document => replace_approved_document_total);
 counter_inc!(pub(crate) fn inc_list_approved_documents => list_approved_documents_total);
 counter_inc!(pub(crate) fn inc_clear_sync_schedule => clear_sync_schedule_total);
 counter_inc!(pub(crate) fn inc_sync_scheduler_status => sync_scheduler_status_total);
@@ -631,6 +636,9 @@ pub struct MetricsSnapshot {
     /// Total `revoke_approved_document` calls initiated (Phase 8).
     #[serde(default)]
     pub revoke_approved_document_total: u64,
+    /// Total `replace_approved_document` calls initiated (Phase 9).
+    #[serde(default)]
+    pub replace_approved_document_total: u64,
     /// Total `list_approved_documents` calls initiated (Phase 8).
     #[serde(default)]
     pub list_approved_documents_total: u64,
@@ -784,6 +792,7 @@ pub fn snapshot() -> MetricsSnapshot {
             .load(Ordering::Relaxed),
         admit_approved_document_total: m.admit_approved_document_total.load(Ordering::Relaxed),
         revoke_approved_document_total: m.revoke_approved_document_total.load(Ordering::Relaxed),
+        replace_approved_document_total: m.replace_approved_document_total.load(Ordering::Relaxed),
         list_approved_documents_total: m.list_approved_documents_total.load(Ordering::Relaxed),
         errors_by_kind: ErrorCounters {
             unimplemented: m.errors_unimplemented.load(Ordering::Relaxed),

@@ -682,9 +682,11 @@ pub fn configure_sync_schedule(
 /// default cadence + auto-synth.
 ///
 /// To return an instance to the pure-defaults state (no policy
-/// override), call [`clear_sync_schedule`] — that path removes the
-/// entire policy entry, including the `auto_synthesize` bit, and
-/// drops `policy_override_count` accordingly.
+/// override **and** no auto-synth), call [`clear_sync_schedule`]
+/// followed by
+/// `configure_sync_auto_synthesize(handle, instance_id, false)`.
+/// Note that [`clear_sync_schedule`] alone preserves the
+/// `auto_synthesize` flag — see its docs for the rationale.
 ///
 /// # Errors
 ///
@@ -736,19 +738,17 @@ pub fn configure_sync_auto_synthesize(
 ///
 /// # Auto-synthesis interaction
 ///
-/// `clear_sync_schedule` is intentionally asymmetric with
-/// [`configure_sync_schedule`]: the latter preserves the
-/// `auto_synthesize` bit when the host updates only the interval /
-/// backoff (so a host can re-cadence a sync without re-toggling
-/// auto-synth), but `clear_sync_schedule` removes the **entire**
-/// `SchedulePolicy` entry — including any `auto_synthesize: true`
-/// previously set via [`configure_sync_auto_synthesize`]. This
-/// matches the documented semantic ("falls back to the scheduler's
-/// defaults") since the scheduler defaults have
-/// `auto_synthesize: false`, but hosts that want auto-synth to
-/// survive a schedule clear must call
-/// `configure_sync_auto_synthesize(handle, instance_id, true)`
-/// again afterwards.
+/// `clear_sync_schedule` resets the instance’s interval / backoff
+/// to the scheduler’s defaults while **preserving** the
+/// `auto_synthesize` flag set via
+/// [`configure_sync_auto_synthesize`]. This is symmetric with
+/// [`configure_sync_schedule`], which also carries the
+/// `auto_synthesize` bit forward on interval-only updates.
+///
+/// If the instance never had `auto_synthesize: true`, the policy
+/// entry is removed entirely (bringing `policy_override_count`
+/// down by one); if it *did*, the entry is replaced by a
+/// defaults-seeded policy that keeps `auto_synthesize: true`.
 ///
 /// # Errors
 ///
@@ -774,8 +774,24 @@ pub fn clear_sync_schedule(handle: RuntimeHandle, instance_id: String) -> FfiRes
                 Ok(g) => g,
                 Err(poisoned) => poisoned.into_inner(),
             };
+            let prior_auto_synth = state
+                .policies
+                .get(&instance)
+                .is_some_and(|p| p.auto_synthesize);
             state.policies.remove(&instance);
             state.accounting.remove(&instance);
+            // Preserve the `auto_synthesize` flag so a clear /
+            // re-cadence cycle does not silently disable
+            // post-sync synthesis.  If the flag was false (or
+            // never set), the remove above already restored
+            // pure-defaults semantics.
+            if prior_auto_synth {
+                state
+                    .policies
+                    .entry(instance)
+                    .or_insert_with(|| SchedulePolicy::from_defaults(&scheduler.config))
+                    .auto_synthesize = true;
+            }
             Ok(())
         })
     })
