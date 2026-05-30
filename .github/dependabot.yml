@@ -1,0 +1,42 @@
+# Dependabot configuration for the Knowledge workspace.
+#
+# Tracks two ecosystems:
+#
+# 1. `cargo` — every workspace member resolves its dependencies
+#    through the root `Cargo.lock`, so a single root entry catches
+#    bumps across all ~20 crates. Limited to 10 open PRs at a time
+#    so a noisy week of upstream releases does not bury the review
+#    queue.
+#
+# 2. `github-actions` — every workflow file under `.github/workflows/`
+#    is scanned for `uses:` lines, so action bumps stay current
+#    without manual chasing. Capped at 5 concurrent PRs.
+#
+# Both schedules are weekly to amortise the review cost; raising
+# either to `daily` is a noise-vs-freshness decision the maintainers
+# can make later. Security-update PRs are unaffected by the weekly
+# cadence — Dependabot dispatches those as soon as the upstream
+# advisory lands.
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps(cargo)"
+    labels:
+      - "dependencies"
+      - "rust"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(actions)"
+    labels:
+      - "dependencies"
+      - "github-actions"

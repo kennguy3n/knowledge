@@ -88,6 +88,15 @@ pub struct EndpointConfig {
     /// compile it into the model-specific schema slot.
     #[serde(default)]
     pub default_grammar: Option<String>,
+    /// Cost-control cap on requests per minute against this
+    /// endpoint. When `Some`, [`HttpManagedEndpointSynthesizer`]
+    /// builds a [`crate::rate_limiter::RateLimiter`] from the value
+    /// at construction time and rejects further requests once the
+    /// per-minute cap is hit. When `None`, no rate limiting is
+    /// applied at the synthesizer layer (a wrapping
+    /// `SynthesisBatcher` may still enforce its own cap).
+    #[serde(default)]
+    pub max_requests_per_minute: Option<u64>,
 }
 
 impl EndpointConfig {
@@ -104,7 +113,14 @@ impl EndpointConfig {
             max_tokens: None,
             timeout: None,
             default_grammar: None,
+            max_requests_per_minute: None,
         }
+    }
+
+    /// Pin a per-minute request cap on this endpoint config.
+    pub fn with_max_requests_per_minute(mut self, max_per_minute: u64) -> Self {
+        self.max_requests_per_minute = Some(max_per_minute);
+        self
     }
 
     /// Set the response token cap.
@@ -512,18 +528,79 @@ pub struct HttpManagedEndpointSynthesizer<C: HttpClient> {
     /// Override prompt template for tenant synthesis. Defaults to
     /// [`DEFAULT_TENANT_PROMPT`].
     pub tenant_prompt: Option<String>,
+    /// Optional fixed-window rate limiter. When `Some`, every
+    /// `synthesize_domain` / `synthesize_tenant` call is gated
+    /// against it before the upstream HTTP dispatch — rejections
+    /// surface as [`EngineError::Engine`] with the remaining wait
+    /// duration spelled out in the message so audit-log
+    /// correlators can correlate the refusal against the upstream
+    /// invoice line item. Wrapped in `Arc` so the same limiter
+    /// can be shared across multiple synthesizers (e.g. the
+    /// `SynthesisBatcher` flushes one shared limiter across the
+    /// batch).
+    rate_limiter: Option<std::sync::Arc<crate::rate_limiter::RateLimiter>>,
 }
 
 impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
     /// Construct a fresh synthesizer.
+    ///
+    /// The synthesizer is created **without** rate limiting; wire
+    /// one in with [`Self::with_rate_limit`] or attach an existing
+    /// limiter via [`Self::with_shared_rate_limiter`]. The default
+    /// `None` state preserves backwards compatibility for callers
+    /// that already enforce throttling at a higher level (e.g.
+    /// `SynthesisBatcher`).
     pub fn new(cfg: EndpointConfig, client: C) -> Self {
+        // Honour the per-endpoint cap declared in the
+        // `EndpointConfig` (added in Item 19) so a freshly-built
+        // synthesizer respects whatever throttle the caller already
+        // pinned in config. Operators that want to disable rate
+        // limiting leave `max_requests_per_minute` as `None` and
+        // the synthesizer's limiter slot stays `None`.
+        let rate_limiter = cfg
+            .max_requests_per_minute
+            .map(|cap| std::sync::Arc::new(crate::rate_limiter::RateLimiter::new(cap)));
         Self {
             cfg,
             client,
             provenance_ref: Uuid::nil(),
             domain_prompt: None,
             tenant_prompt: None,
+            rate_limiter,
         }
+    }
+
+    /// Pin a per-minute request cap on the synthesizer.
+    ///
+    /// Replaces any previously-attached limiter — there is
+    /// intentionally no add-vs-replace distinction because the
+    /// synthesizer slot is single-tenant. To share one limiter
+    /// across multiple synthesizers (e.g. the
+    /// `SynthesisBatcher`'s `Arc<RateLimiter>` pool), use
+    /// [`Self::with_shared_rate_limiter`] instead.
+    pub fn with_rate_limit(mut self, max_per_minute: u64) -> Self {
+        self.rate_limiter = Some(std::sync::Arc::new(crate::rate_limiter::RateLimiter::new(
+            max_per_minute,
+        )));
+        self
+    }
+
+    /// Attach a shared rate limiter.
+    ///
+    /// Used by the synthesis batcher to enforce one cap across
+    /// every synthesizer instance it dispatches through, so a
+    /// many-scope flush respects the operator's per-minute cap.
+    pub fn with_shared_rate_limiter(
+        mut self,
+        limiter: std::sync::Arc<crate::rate_limiter::RateLimiter>,
+    ) -> Self {
+        self.rate_limiter = Some(limiter);
+        self
+    }
+
+    /// Borrow the active rate limiter, if any.
+    pub fn rate_limiter(&self) -> Option<&std::sync::Arc<crate::rate_limiter::RateLimiter>> {
+        self.rate_limiter.as_ref()
     }
 
     /// Borrow the active config.
@@ -561,6 +638,23 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
     }
 
     fn dispatch(&self, req: &SynthesisRequest) -> Result<SynthesisResponse> {
+        // Cost-control gate. We check the limiter *before* the HTTP
+        // dispatch so a rejected call costs zero outbound bytes
+        // and zero upstream-billed tokens. Surfacing the remaining
+        // wait duration in the error message lets the audit log
+        // attribute the refusal to the rate limit (rather than a
+        // transport hiccup) and lets retry-aware callers compute a
+        // sensible back-off.
+        if let Some(limiter) = self.rate_limiter.as_ref() {
+            if let Err(remaining) = limiter.check() {
+                return Err(EngineError::engine(format!(
+                    "rate limited; retry after {:?} (cap {} req/min)",
+                    remaining,
+                    limiter.max_per_window()
+                )));
+            }
+        }
+
         let resp = self
             .client
             .send(&self.cfg, req)
@@ -1112,5 +1206,98 @@ mod tests {
         let bin = [0x00u8, 0xff, 0xab, 0xcd];
         let p = render_preview(&bin, 8);
         assert_eq!(p, "00ffabcd");
+    }
+
+    /// `with_rate_limit` must reject the request that crosses the
+    /// per-minute cap with an `EngineError::Engine("rate limited;
+    /// retry after …")` message — the audit log relies on that
+    /// prefix to attribute the refusal to the cost-control gate
+    /// (rather than a transport hiccup). The first `cap` requests
+    /// must still pass.
+    #[test]
+    fn rate_limit_rejects_calls_beyond_the_cap() {
+        let domain_scope = ScopeId::new_v4();
+        let channel = ScopeId::new_v4();
+
+        let mut mgr = SynthesisWindowManager::new();
+        let synth =
+            HttpManagedEndpointSynthesizer::new(cfg(), MockHttpClient::echo()).with_rate_limit(2);
+
+        // Open three windows and bind them to three input objects
+        // so each `synthesize_domain` call is independently valid;
+        // the rate limit (not the hierarchy) is what we want to
+        // exercise here.
+        let mut last_err: Option<EngineError> = None;
+        let mut admitted = 0;
+        for i in 0..3 {
+            let mut domain = DomainMemoryObject::new(domain_scope);
+            domain.attach_channel_scope(channel);
+            let body = format!("recap-{i}");
+            let outputs =
+                vec![
+                    ChannelOutput::from_channel_object(channel_recap(channel, body.as_bytes()))
+                        .unwrap(),
+                ];
+            let input = DomainSynthesisInput::new(&domain, outputs).unwrap();
+            let handle = open_domain_window(&mut mgr, domain_scope);
+
+            match synth.synthesize_domain(&mut mgr, handle, input) {
+                Ok(_) => admitted += 1,
+                Err(e) => last_err = Some(e),
+            }
+        }
+
+        assert_eq!(
+            admitted, 2,
+            "rate limiter must admit exactly `cap` requests inside one window"
+        );
+        let err = last_err.expect("third call must be rejected by the rate limiter");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("rate limited"),
+            "rate-limit refusal must surface a `rate limited` message; got: {msg}"
+        );
+        // The synthesizer's limiter slot is observable for
+        // operator dashboards; verify the count matches what we
+        // admitted.
+        assert_eq!(
+            synth
+                .rate_limiter()
+                .expect("limiter is wired")
+                .current_window_count(),
+            2
+        );
+    }
+
+    /// Constructing a synthesizer **without** `with_rate_limit`
+    /// (and with `EndpointConfig::max_requests_per_minute = None`)
+    /// must keep the limiter slot empty so callers can opt out
+    /// without paying the lock overhead on every dispatch.
+    #[test]
+    fn rate_limit_is_opt_in() {
+        let synth = HttpManagedEndpointSynthesizer::new(cfg(), MockHttpClient::echo());
+        assert!(
+            synth.rate_limiter().is_none(),
+            "default synthesizer must have no rate limiter attached"
+        );
+    }
+
+    /// When the rate limit is pinned in `EndpointConfig` rather
+    /// than via the builder, the synthesizer must still apply it.
+    /// This is the path that operator-side config files take.
+    #[test]
+    fn rate_limit_in_config_is_honoured() {
+        let cfg_with_limit =
+            EndpointConfig::new("https://example.test/synth", "TEST_API_KEY", "slm-recap-v1")
+                .with_max_tokens(64)
+                .with_timeout(Duration::from_secs(5))
+                .with_grammar("{root: 'string'}")
+                .with_max_requests_per_minute(7);
+
+        let synth = HttpManagedEndpointSynthesizer::new(cfg_with_limit, MockHttpClient::echo());
+        let limiter = synth
+            .rate_limiter()
+            .expect("config-pinned cap must wire a limiter");
+        assert_eq!(limiter.max_per_window(), 7);
     }
 }

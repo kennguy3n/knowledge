@@ -24,6 +24,16 @@ test-support = []
 # `configure_synthesis_engine` returns
 # `FfiError::Unavailable { subsystem: "synthesis_engine" }`.
 http-client = ["dep:reqwest"]
+# Pulls in `aws-nitro-enclaves-nsm-api` + `ciborium` and exposes
+# [`crate::tee_runtime_nitro::NitroTeeRuntime`] — the production
+# `TeeRuntime` impl that talks to the on-host Nitro Secure Module
+# (NSM) and parses the returned COSE_Sign1 attestation document
+# to extract PCR0 as the report's measurement. Gated because the
+# nsm-api crate links the NSM kernel-driver shim which is only
+# meaningful inside a running enclave; non-enclave builds keep
+# `MockTeeRuntime` as the only `TeeRuntime` impl and stay free
+# of the linker dependency.
+nitro-tee = ["dep:aws-nitro-enclaves-nsm-api", "dep:ciborium", "dep:serde_bytes"]
 
 [dependencies]
 crypto = { path = "../crypto" }
@@ -43,6 +53,25 @@ tracing = { workspace = true }
 # the sync `HttpClient::send` adapter does not need to thread an
 # async runtime through the synthesis engine surface.
 reqwest = { workspace = true, features = ["blocking"], optional = true }
+# Optional: only linked when the `nitro-tee` feature is enabled.
+# Talks to /dev/nsm to request attestation documents from the AWS
+# Nitro Secure Module. Pinned to the 0.4.x line — the same minor
+# the upstream `aws-nitro-enclaves-cose` crate targets — so future
+# bumps stay coordinated.
+aws-nitro-enclaves-nsm-api = { version = "0.4", optional = true }
+# Optional: only linked when the `nitro-tee` feature is enabled.
+# Used to decode the CBOR-encoded COSE_Sign1 attestation document
+# returned by the NSM driver so we can extract PCR0 (the enclave
+# measurement) and the nonce echo. `ciborium` is the
+# de-serde-team maintained CBOR codec; chosen over the archived
+# `serde_cbor` crate.
+ciborium = { version = "0.2", optional = true }
+# Optional: only linked when the `nitro-tee` feature is enabled.
+# `aws-nitro-enclaves-nsm-api`'s `Request::Attestation` variant is
+# typed against `serde_bytes::ByteBuf`, so we add the matching
+# `serde_bytes 0.11` line directly rather than relying on the
+# transitive resolve picking the right minor.
+serde_bytes = { version = "0.11", optional = true }
 
 [dev-dependencies]
 concept_graph = { path = "../concept_graph" }

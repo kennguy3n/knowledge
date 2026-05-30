@@ -21,6 +21,14 @@ use evidence_store::ScopeId;
 const ADD_NODE_COUNT: usize = 10_000;
 /// Number of nodes in the chain traversal bench.
 const TRAVERSAL_NODE_COUNT: usize = 10_000;
+/// Number of nodes inserted by the large-scale `add_node` bench.
+/// Power-user devices can accumulate this many concepts after
+/// months of synthesis activity — the bench keeps us honest about
+/// the `HashMap` + per-node edge bucket allocation overhead at
+/// that scale.
+const LARGE_ADD_NODE_COUNT: usize = 100_000;
+/// Number of nodes in the large-scale chain traversal bench.
+const LARGE_TRAVERSAL_NODE_COUNT: usize = 100_000;
 /// Number of nodes round-tripped through SQLCipher persistence.
 const PERSIST_NODE_COUNT: usize = 1_000;
 
@@ -108,6 +116,55 @@ fn bench_traversal(c: &mut Criterion) {
     });
 }
 
+fn bench_add_node_100k(c: &mut Criterion) {
+    let scope = ScopeId::new_v4();
+    let mut group = c.benchmark_group("concept_graph/add_node/100k");
+    // 100K-node add takes meaningfully longer than the 10K version;
+    // sample size is reduced so the bench wall time stays bounded
+    // (Criterion's default is 100 iterations, which would multiply
+    // the wall time by ~10× vs the 10K bench).
+    group.sample_size(10);
+    group.bench_function("insert_only", |b| {
+        b.iter_with_setup(ConceptGraph::new, |mut g| {
+            for i in 0..LARGE_ADD_NODE_COUNT {
+                let n = ConceptNode::new_candidate(format!("bench-node-{i}"), "definition", scope);
+                g.add_node(black_box(n))
+                    .expect("add_node must not fail with fresh ids");
+            }
+            black_box(g);
+        });
+    });
+    group.finish();
+}
+
+fn bench_traversal_100k(c: &mut Criterion) {
+    let scope = ScopeId::new_v4();
+
+    // Build a chain of `LARGE_TRAVERSAL_NODE_COUNT` nodes once;
+    // every iteration only times the traversal, not the build.
+    let mut g = ConceptGraph::new();
+    let mut ids: Vec<NodeId> = Vec::with_capacity(LARGE_TRAVERSAL_NODE_COUNT);
+    for i in 0..LARGE_TRAVERSAL_NODE_COUNT {
+        let n = ConceptNode::new_candidate(format!("n-{i}"), "definition", scope);
+        ids.push(g.add_node(n).expect("add_node"));
+    }
+    for w in ids.windows(2) {
+        g.add_edge(ConceptEdge::new(w[0], w[1], RelationType::IsA, scope))
+            .expect("add IsA edge");
+    }
+
+    let root = ids[0];
+    let mut group = c.benchmark_group("concept_graph/traversal/typed_chain_100k");
+    group.sample_size(10);
+    group.bench_function("isa_full_chain", |b| {
+        b.iter(|| {
+            let reached = g.traverse_typed(black_box(root), RelationType::IsA, None);
+            black_box(reached);
+        });
+    });
+    group.finish();
+}
+
 fn bench_persist_load(c: &mut Criterion) {
     let scope = ScopeId::new_v4();
     let key = fixture_master_key();
@@ -167,6 +224,8 @@ criterion_group!(
     graph_benches,
     bench_add_node,
     bench_traversal,
+    bench_add_node_100k,
+    bench_traversal_100k,
     bench_persist_load,
 );
 criterion_main!(graph_benches);

@@ -77,6 +77,7 @@ pub mod hybrid_enforcement;
 pub mod hybrid_kem;
 pub mod kdf;
 pub mod kem;
+pub mod key_storage;
 pub mod mls;
 pub mod provenance;
 pub mod signer_backend;
@@ -101,6 +102,7 @@ pub use kem::{
     KemBackend, KemCiphertext, KemPublicKey, KemSecretKey, KemSharedSecret, MlKem768Backend,
     KEM_CIPHERTEXT_LEN, KEM_PUBLIC_KEY_LEN, KEM_SECRET_KEY_LEN, KEM_SHARED_SECRET_LEN,
 };
+pub use key_storage::{InMemoryKeyStorage, KeyStorage};
 pub use provenance::{
     AgentKind, EvidenceRef, ProvenanceAgent, ProvenanceBundle, ProvenanceSignature,
     ProvenanceSigner, SignedBundle, SynthesisActivity,

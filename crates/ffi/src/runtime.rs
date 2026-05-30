@@ -524,6 +524,25 @@ pub struct FfiRuntime {
     /// callers still pay a rate-shaping cost so a host can't
     /// race past the cap by stalling configure.
     pub(crate) synthesis_rate_limiter: crate::synthesis_rate::TokenBucket,
+
+    /// Host-supplied [`crate::key_storage::KeyStorageResolver`].
+    ///
+    /// `None` until the host calls
+    /// [`crate::key_storage::set_key_storage_resolver`]; while
+    /// `None`, the substrate continues to consume the raw master
+    /// key passed at [`crate::open_store`] time. Registration is
+    /// a pure cross-language plumbing hook today — the substrate
+    /// does not yet read the resolver on its hot path (per the
+    /// migration plan in `SECURITY.md` §"Key storage"). Holding
+    /// the slot now lets `crypto`'s migration story land in a
+    /// single follow-up without re-plumbing the FFI surface.
+    ///
+    /// Mirrors the [`Self::oauth_client`] slot's "one resolver per
+    /// runtime, last-write-wins" contract; metrics under
+    /// `set_key_storage_resolver_total` /
+    /// `clear_key_storage_resolver_total` surface re-registration
+    /// frequency for diagnostics.
+    pub(crate) key_storage_resolver: Option<Arc<dyn crate::key_storage::KeyStorageResolver>>,
 }
 
 /// Memory-blob `kind` tag for persisted domain memory objects.
@@ -2170,6 +2189,7 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
             crate::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC,
             chrono::Utc::now(),
         ),
+        key_storage_resolver: None,
     };
 
     // Rehydrate persisted connector state from the v9

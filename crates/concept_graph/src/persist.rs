@@ -420,6 +420,151 @@ impl PersistentConceptGraph {
         Ok(i64_count_to_usize(n))
     }
 
+    /// Alias for [`Self::persisted_node_count`] kept for callers that
+    /// reason about "the read-only count for a scope" without the
+    /// persistence connotation.
+    pub fn node_count_for_scope(&self, scope: ScopeId) -> Result<usize> {
+        self.persisted_node_count(scope)
+    }
+
+    /// Same as [`Self::load_scope`] but loads at most `limit` nodes
+    /// and `limit` edges, skipping the first `offset` of each. Used
+    /// by power-user devices to avoid loading 100K+ concepts at
+    /// once. Returns `(nodes_loaded, edges_loaded)`.
+    ///
+    /// `offset` is applied independently to nodes and edges — the
+    /// returned graph may therefore be missing edges whose endpoints
+    /// did not land in the loaded node window, in which case the
+    /// graph's referential integrity check skips them rather than
+    /// fail. Callers that need a topologically consistent slice
+    /// should follow up with [`Self::query_neighbors_from_disk`] for
+    /// out-of-window neighbours.
+    pub fn load_scope_paginated(
+        &mut self,
+        scope: ScopeId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(usize, usize)> {
+        self.graph = ConceptGraph::new();
+        let key = self.scope_key(scope)?;
+        let scope_bytes = scope.as_uuid().as_bytes().to_vec();
+        let limit_i = i64_from_usize(limit);
+        let offset_i = i64_from_usize(offset);
+
+        let mut node_rows: Vec<(NodeId, [u8; AEAD_NONCE_LEN], Vec<u8>)> = Vec::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, nonce, payload FROM concept_nodes WHERE scope_id = ?1
+                 ORDER BY created_at ASC, id ASC LIMIT ?2 OFFSET ?3",
+            )?;
+            let mut rows = stmt.query(params![scope_bytes, limit_i, offset_i])?;
+            while let Some(row) = rows.next()? {
+                let id_bytes: Vec<u8> = row.get(0)?;
+                let nonce_bytes: Vec<u8> = row.get(1)?;
+                let ct: Vec<u8> = row.get(2)?;
+                let id = NodeId::from_uuid(slice_to_uuid(&id_bytes)?);
+                let nonce = slice_to_nonce(&nonce_bytes)?;
+                node_rows.push((id, nonce, ct));
+            }
+        }
+        let mut node_count = 0usize;
+        for (id, nonce, ct) in node_rows {
+            let aad = node_aad(scope, id);
+            let pt = decrypt_aead(&key, &nonce, &ct, &aad)?;
+            let node: ConceptNode = serde_json::from_slice(&pt)
+                .map_err(|_| GraphError::Persistence("node payload is not valid JSON"))?;
+            self.graph.add_node(node)?;
+            node_count += 1;
+        }
+
+        let mut edge_rows: Vec<(EdgeId, [u8; AEAD_NONCE_LEN], Vec<u8>)> = Vec::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, nonce, payload FROM concept_edges WHERE scope_id = ?1
+                 ORDER BY created_at ASC, id ASC LIMIT ?2 OFFSET ?3",
+            )?;
+            let mut rows = stmt.query(params![scope_bytes, limit_i, offset_i])?;
+            while let Some(row) = rows.next()? {
+                let id_bytes: Vec<u8> = row.get(0)?;
+                let nonce_bytes: Vec<u8> = row.get(1)?;
+                let ct: Vec<u8> = row.get(2)?;
+                let id = EdgeId::from_uuid(slice_to_uuid(&id_bytes)?);
+                let nonce = slice_to_nonce(&nonce_bytes)?;
+                edge_rows.push((id, nonce, ct));
+            }
+        }
+        let mut edge_count = 0usize;
+        for (id, nonce, ct) in edge_rows {
+            let aad = edge_aad(scope, id);
+            let pt = decrypt_aead(&key, &nonce, &ct, &aad)?;
+            let edge: ConceptEdge = serde_json::from_slice(&pt)
+                .map_err(|_| GraphError::Persistence("edge payload is not valid JSON"))?;
+            // Skip edges whose endpoints didn't make it into this
+            // pagination window — referential integrity on the
+            // partial graph would otherwise raise `DanglingEdge`.
+            if self.graph.get_node(edge.from).is_none() || self.graph.get_node(edge.to).is_none() {
+                continue;
+            }
+            self.graph.add_edge(edge)?;
+            edge_count += 1;
+        }
+
+        Ok((node_count, edge_count))
+    }
+
+    /// Resolve every persisted edge incident to `node` for `scope`
+    /// directly from disk, without loading the full graph into
+    /// memory. Returns the decrypted edges in `created_at` order;
+    /// duplicates are deduped by edge id (a self-loop satisfies both
+    /// `from_id = ?2` and `to_id = ?2` and would otherwise be
+    /// returned twice).
+    ///
+    /// This is the read path power-user devices use after
+    /// [`Self::load_scope_paginated`]: the in-memory graph holds
+    /// only the loaded window, but neighbour expansion for a single
+    /// node can still resolve through this method.
+    pub fn query_neighbors_from_disk(
+        &mut self,
+        scope: ScopeId,
+        node: NodeId,
+    ) -> Result<Vec<ConceptEdge>> {
+        let key = self.scope_key(scope)?;
+        let scope_bytes = scope.as_uuid().as_bytes().to_vec();
+        let node_bytes = node.as_uuid().as_bytes().to_vec();
+
+        let mut rows_buf: Vec<(EdgeId, [u8; AEAD_NONCE_LEN], Vec<u8>)> = Vec::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, nonce, payload FROM concept_edges
+                 WHERE scope_id = ?1 AND (from_node = ?2 OR to_node = ?2)
+                 ORDER BY created_at ASC, id ASC",
+            )?;
+            let mut rows = stmt.query(params![scope_bytes, node_bytes])?;
+            while let Some(row) = rows.next()? {
+                let id_bytes: Vec<u8> = row.get(0)?;
+                let nonce_bytes: Vec<u8> = row.get(1)?;
+                let ct: Vec<u8> = row.get(2)?;
+                let id = EdgeId::from_uuid(slice_to_uuid(&id_bytes)?);
+                let nonce = slice_to_nonce(&nonce_bytes)?;
+                rows_buf.push((id, nonce, ct));
+            }
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::with_capacity(rows_buf.len());
+        for (id, nonce, ct) in rows_buf {
+            if !seen.insert(id) {
+                continue;
+            }
+            let aad = edge_aad(scope, id);
+            let pt = decrypt_aead(&key, &nonce, &ct, &aad)?;
+            let edge: ConceptEdge = serde_json::from_slice(&pt)
+                .map_err(|_| GraphError::Persistence("edge payload is not valid JSON"))?;
+            out.push(edge);
+        }
+        Ok(out)
+    }
+
     /// Number of persisted edges for `scope`.
     pub fn persisted_edge_count(&self, scope: ScopeId) -> Result<usize> {
         let scope_bytes = scope.as_uuid().as_bytes().to_vec();
@@ -537,6 +682,14 @@ impl PersistentConceptGraph {
 /// exceeds the address space.
 fn i64_count_to_usize(n: i64) -> usize {
     usize::try_from(n.max(0)).unwrap_or(usize::MAX)
+}
+
+/// Coerce a `usize` LIMIT/OFFSET into a SQLite-friendly `i64`. SQLite
+/// rejects negative integer parameters in LIMIT/OFFSET and silently
+/// treats LIMIT > i64::MAX as undefined; clamp at i64::MAX to keep
+/// the query well-defined regardless of platform pointer width.
+fn i64_from_usize(n: usize) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
 }
 
 fn random_nonce() -> [u8; AEAD_NONCE_LEN] {

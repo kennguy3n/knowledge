@@ -345,6 +345,8 @@ impl RetryPolicy {
 mod blocking_impl {
     use super::{HttpMethod, HttpRequest, HttpResponse, HttpTransport, RetryPolicy};
     use crate::error::{ConnectorError, Result};
+    use crate::provider_rate_limiter::{provider_key_for_url, ProviderRateLimiter};
+    use std::sync::Arc;
     use std::time::Duration;
 
     /// Default request timeout. Connector list / delta endpoints
@@ -363,6 +365,17 @@ mod blocking_impl {
     pub struct BlockingHttpTransport {
         client: reqwest::blocking::Client,
         retry: RetryPolicy,
+        /// Optional per-provider rate limiter (Item 21).
+        ///
+        /// When `Some`, every `execute` call calls
+        /// `limiter.acquire(provider_key_for_url(&request.url))`
+        /// before dispatching the underlying HTTP request — so the
+        /// connector runtime can pin one token bucket per provider
+        /// host (e.g. `api.notion.com`, `graph.microsoft.com`) and
+        /// keep aggregate outbound QPS inside the provider's
+        /// published per-tenant quota. Wrapped in `Arc` so the same
+        /// limiter can be shared across many transports.
+        rate_limiter: Option<Arc<ProviderRateLimiter>>,
     }
 
     impl BlockingHttpTransport {
@@ -391,6 +404,7 @@ mod blocking_impl {
             Ok(Self {
                 client,
                 retry: RetryPolicy::default(),
+                rate_limiter: None,
             })
         }
 
@@ -399,6 +413,25 @@ mod blocking_impl {
         pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
             self.retry = retry;
             self
+        }
+
+        /// Attach a shared per-provider rate limiter. Chainable.
+        ///
+        /// Every `execute` call will call
+        /// `limiter.acquire(provider_key_for_url(&request.url))`
+        /// before dispatching, so aggregate outbound traffic
+        /// against each provider host stays inside the operator's
+        /// per-tenant quota.
+        #[must_use]
+        pub fn with_provider_rate_limiter(mut self, limiter: Arc<ProviderRateLimiter>) -> Self {
+            self.rate_limiter = Some(limiter);
+            self
+        }
+
+        /// Borrow the attached rate limiter, if any.
+        #[must_use]
+        pub fn rate_limiter(&self) -> Option<&Arc<ProviderRateLimiter>> {
+            self.rate_limiter.as_ref()
         }
 
         /// Borrow the underlying reqwest client. Exposed for
@@ -456,6 +489,15 @@ mod blocking_impl {
 
     impl HttpTransport for BlockingHttpTransport {
         fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
+            // Cost-control gate. The limiter blocks (sleeps) until
+            // a token is available for `provider_key_for_url(&url)`;
+            // we hold no inner lock across the sleep so other
+            // transports targeting a *different* provider host
+            // continue to make progress.
+            if let Some(limiter) = &self.rate_limiter {
+                let key = provider_key_for_url(&request.url);
+                limiter.acquire(&key);
+            }
             for attempt in 0..=self.retry.max_retries {
                 match self.execute_once(&request) {
                     Ok(resp) if resp.is_transient() && attempt < self.retry.max_retries => {

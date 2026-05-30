@@ -224,3 +224,106 @@ fn raw_sqlite_view_is_encrypted() {
         "plaintext label leaked into the on-disk database"
     );
 }
+
+#[test]
+fn load_scope_paginated_returns_only_the_requested_window() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("concepts.db");
+    let key = fixture_master_key();
+
+    let scope = ScopeId::new_v4();
+    {
+        let mut g = PersistentConceptGraph::open(&path, &key).unwrap();
+        for i in 0..50 {
+            g.add_node(ConceptNode::new_candidate(
+                format!("node_{i}"),
+                "fixture",
+                scope,
+            ))
+            .unwrap();
+        }
+    }
+
+    let mut g = PersistentConceptGraph::open(&path, &key).unwrap();
+    assert_eq!(g.persisted_node_count(scope).unwrap(), 50);
+    assert_eq!(g.node_count_for_scope(scope).unwrap(), 50);
+
+    let (loaded_nodes, _) = g.load_scope_paginated(scope, 10, 0).unwrap();
+    assert_eq!(loaded_nodes, 10);
+    assert_eq!(g.graph().node_count(), 10);
+
+    let (loaded_nodes, _) = g.load_scope_paginated(scope, 10, 40).unwrap();
+    assert_eq!(loaded_nodes, 10);
+    assert_eq!(g.graph().node_count(), 10);
+
+    let (loaded_nodes, _) = g.load_scope_paginated(scope, 100, 0).unwrap();
+    assert_eq!(loaded_nodes, 50);
+    assert_eq!(g.graph().node_count(), 50);
+}
+
+#[test]
+fn query_neighbors_from_disk_returns_incident_edges_without_loading_graph() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("concepts.db");
+    let key = fixture_master_key();
+
+    let scope = ScopeId::new_v4();
+    let (center, neighbor_a, neighbor_b) = {
+        let mut graph = PersistentConceptGraph::open(&path, &key).unwrap();
+        let center = graph
+            .add_node(ConceptNode::new_candidate("center", "x", scope))
+            .unwrap();
+        let neighbor_a = graph
+            .add_node(ConceptNode::new_candidate("a", "x", scope))
+            .unwrap();
+        let neighbor_b = graph
+            .add_node(ConceptNode::new_candidate("b", "x", scope))
+            .unwrap();
+        graph
+            .add_edge(ConceptEdge::new(
+                center,
+                neighbor_a,
+                RelationType::PartOf,
+                scope,
+            ))
+            .unwrap();
+        graph
+            .add_edge(ConceptEdge::new(
+                neighbor_b,
+                center,
+                RelationType::PartOf,
+                scope,
+            ))
+            .unwrap();
+        // Add an unrelated edge so the query has to filter.
+        let unrelated = graph
+            .add_node(ConceptNode::new_candidate("z", "x", scope))
+            .unwrap();
+        graph
+            .add_edge(ConceptEdge::new(
+                neighbor_a,
+                unrelated,
+                RelationType::PartOf,
+                scope,
+            ))
+            .unwrap();
+        (center, neighbor_a, neighbor_b)
+    };
+
+    let mut g = PersistentConceptGraph::open(&path, &key).unwrap();
+    let edges = g.query_neighbors_from_disk(scope, center).unwrap();
+    assert_eq!(edges.len(), 2);
+    // The in-memory graph was NOT populated.
+    assert_eq!(g.graph().node_count(), 0);
+
+    // Each returned edge must touch `center`.
+    for edge in edges {
+        assert!(edge.from == center || edge.to == center);
+        assert!(
+            edge.from == neighbor_a
+                || edge.to == neighbor_a
+                || edge.from == neighbor_b
+                || edge.to == neighbor_b
+        );
+    }
+}

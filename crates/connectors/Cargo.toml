@@ -21,6 +21,14 @@ http-client = ["connector_framework/http-client"]
 # JSON responses. The framework also gates `MockHttpTransport`
 # under `test-support`, so this feature is a thin pass-through.
 test-support = ["connector_framework/test-support"]
+# Opt-in flag for the live-integration test harness
+# (`tests/live_integration.rs`). Without this feature, the live
+# tests are gated out at compile time so a default `cargo test`
+# never accidentally hits a real provider API or trips on a
+# missing reqwest dependency. With it on, the harness compiles
+# against the framework's `BlockingHttpTransport` and short-
+# circuits at runtime if the per-provider env var is unset.
+live-integration = ["http-client"]
 
 [dependencies]
 connector_framework = { path = "../connector_framework" }
@@ -35,7 +43,22 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-connector_framework = { path = "../connector_framework", features = ["test-support"] }
+# Re-pin the framework with both test-support (MockHttpTransport)
+# and http-client (BlockingHttpTransport) so the unit-test layer
+# keeps using mocks while `tests/live_integration.rs` can opt into
+# the real reqwest-backed transport when the `live-integration`
+# feature is on.
+connector_framework = { path = "../connector_framework", features = ["test-support", "http-client"] }
+chrono = { workspace = true }
+uuid = { workspace = true }
 
 [lints]
 workspace = true
+
+# Cargo refuses to build an integration test if its source file is
+# missing on disk for the feature combo currently selected, so we
+# leave the file present but the test bodies gate themselves out
+# with `#[cfg(feature = "live-integration")]`.
+[[test]]
+name = "live_integration"
+path = "tests/live_integration.rs"

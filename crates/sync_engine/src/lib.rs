@@ -56,6 +56,12 @@ pub use crdt::AddWinsSet;
 pub use error::{Result, SyncError};
 pub use op_log::{merge_logs, OpLog, SyncOp, SyncOpKind};
 
+/// Default auto-compaction threshold for [`SyncEngine`]. Devices
+/// running steady-state CRDT workloads accumulate tombstones at the
+/// rate of one per `remove`/`supersede`; 10K covers typical day-long
+/// activity for a power user before compaction kicks in.
+pub const DEFAULT_COMPACT_THRESHOLD: usize = 10_000;
+
 /// Identifier for a sync scope (channel / domain / tenant memory
 /// object).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -159,6 +165,13 @@ where
     /// is up to date; otherwise the cache must be rebuilt or
     /// incrementally extended before serving [`Self::state`].
     cache_watermark: std::cell::Cell<usize>,
+    /// Auto-compaction threshold. When the op-log size strictly
+    /// exceeds this value after a mutating call (`add`, `remove`,
+    /// `supersede`, `merge`, `merge_delta_envelope`), the engine
+    /// runs [`Self::compact`] in-place to keep tombstones bounded.
+    /// `None` disables auto-compaction (callers must invoke
+    /// [`Self::compact`] explicitly); the default is `Some(10_000)`.
+    compact_threshold: Option<usize>,
 }
 
 impl<T> std::fmt::Debug for SyncEngine<T>
@@ -199,6 +212,38 @@ where
             log,
             cached_state: RefCell::new(None),
             cache_watermark: std::cell::Cell::new(0),
+            compact_threshold: Some(DEFAULT_COMPACT_THRESHOLD),
+        }
+    }
+
+    /// Configure the auto-compaction threshold. `Some(n)` triggers
+    /// [`Self::compact`] automatically whenever the op-log grows
+    /// beyond `n` entries after a mutation; `None` disables
+    /// auto-compaction. Default: `Some(10_000)`.
+    pub fn with_compact_threshold(mut self, threshold: Option<usize>) -> Self {
+        self.compact_threshold = threshold;
+        self
+    }
+
+    /// Currently-configured auto-compaction threshold (see
+    /// [`Self::with_compact_threshold`]).
+    pub fn compact_threshold(&self) -> Option<usize> {
+        self.compact_threshold
+    }
+
+    /// Internal hook: run a compaction pass if the configured
+    /// threshold has been exceeded. Errors from `compact` are
+    /// swallowed — compaction is best-effort housekeeping, never a
+    /// correctness requirement, and callers of the public
+    /// mutators have already received their `Ok(())` by the time
+    /// the threshold check fires. (The next explicit
+    /// [`Self::compact`] call still surfaces the underlying
+    /// `SyncError`.)
+    fn maybe_auto_compact(&mut self) {
+        if let Some(threshold) = self.compact_threshold {
+            if self.log.ops.len() > threshold {
+                let _ = self.compact();
+            }
         }
     }
 
@@ -242,6 +287,7 @@ where
             set.add_with_tag(value, tag);
             self.cache_watermark.set(self.log.ops.len());
         }
+        self.maybe_auto_compact();
         tag
     }
 
@@ -292,6 +338,7 @@ where
             set.remove_tags(&value, &observed);
             self.cache_watermark.set(self.log.ops.len());
         }
+        self.maybe_auto_compact();
     }
 
     /// Record a `Supersede(value, successor)` op observing all
@@ -320,6 +367,7 @@ where
             supers.push((value, successor));
             self.cache_watermark.set(self.log.ops.len());
         }
+        self.maybe_auto_compact();
     }
 
     /// Replay the op log and return the current materialised state.
@@ -398,6 +446,7 @@ where
             }
             self.cache_watermark.set(after);
         }
+        self.maybe_auto_compact();
     }
 
     /// Absorb every op in a [`crate::delta::DeltaEnvelope`] into the
@@ -426,7 +475,9 @@ where
             }
             self.cache_watermark.set(after);
         }
-        after - before
+        let absorbed = after - before;
+        self.maybe_auto_compact();
+        absorbed
     }
 
     /// Compact the underlying op log, dropping every historical
@@ -612,5 +663,102 @@ where
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod auto_compact_tests {
+    //! Auto-compaction is engaged through `add`/`remove`/`supersede`/
+    //! `merge`/`merge_delta_envelope`. These tests exercise the real
+    //! mutators and verify that:
+    //!   1. The op-log is compacted (length drops below the
+    //!      threshold) once the configured threshold is exceeded.
+    //!   2. The materialised set is preserved across the compaction
+    //!      (which is the invariant `compact` already guarantees).
+    //!   3. `with_compact_threshold(None)` disables the trigger.
+
+    use super::*;
+
+    #[test]
+    fn auto_compact_fires_once_threshold_exceeded_for_remove_heavy_workload() {
+        let mut engine: SyncEngine<u64> = SyncEngine::new().with_compact_threshold(Some(8));
+
+        // Add + remove repeatedly. Each remove appends a Remove op
+        // (with observed tags) and a fresh Add op had already been
+        // appended for the value. After ~10 iterations the op-log
+        // length is well above 8 and the threshold trigger must
+        // fire on the next mutation, dropping the historical
+        // Removes.
+        for v in 0..16u64 {
+            engine.add(v);
+            engine.remove(v);
+        }
+
+        // Compaction shrinks the log. The set should be empty
+        // (everything was removed) and the log should be shorter
+        // than the unmodified path's length (32 ops without
+        // compaction).
+        let (set, _supers) = engine.state().unwrap();
+        assert_eq!(
+            set.elements_count(),
+            0,
+            "all values were removed; set must be empty"
+        );
+        assert!(
+            engine.op_log().ops.len() < 32,
+            "auto-compaction must drop superseded Add/Remove pairs; got log_len={}",
+            engine.op_log().ops.len()
+        );
+        assert!(
+            engine.compaction_epoch() >= 1,
+            "compaction must have run, bumping the epoch"
+        );
+    }
+
+    #[test]
+    fn auto_compact_threshold_none_disables_trigger() {
+        let mut engine: SyncEngine<u64> = SyncEngine::new().with_compact_threshold(None);
+        let epoch_before = engine.compaction_epoch();
+
+        for v in 0..100u64 {
+            engine.add(v);
+            engine.remove(v);
+        }
+
+        assert_eq!(
+            engine.compaction_epoch(),
+            epoch_before,
+            "compaction_epoch must not bump when auto-compaction is disabled"
+        );
+        // 100 adds + 100 removes; the log keeps every op verbatim.
+        assert_eq!(engine.op_log().ops.len(), 200);
+    }
+
+    #[test]
+    fn auto_compact_fires_on_merge_when_combined_log_exceeds_threshold() {
+        let mut a: SyncEngine<u64> = SyncEngine::new().with_compact_threshold(Some(5));
+        let mut b: SyncEngine<u64> = SyncEngine::new().with_compact_threshold(None);
+        for v in 0..4u64 {
+            b.add(v);
+            b.remove(v);
+        }
+        // a is empty, threshold 5; merging in b's 8 ops should
+        // overshoot and trigger.
+        a.merge(&b);
+        assert!(
+            a.op_log().ops.len() <= 5,
+            "post-merge auto-compaction must drop tombstones; got log_len={}",
+            a.op_log().ops.len()
+        );
+    }
+
+    #[test]
+    fn with_compact_threshold_round_trips_the_value() {
+        let engine: SyncEngine<u64> = SyncEngine::new();
+        assert_eq!(engine.compact_threshold(), Some(DEFAULT_COMPACT_THRESHOLD));
+        let engine = engine.with_compact_threshold(Some(42));
+        assert_eq!(engine.compact_threshold(), Some(42));
+        let engine = engine.with_compact_threshold(None);
+        assert_eq!(engine.compact_threshold(), None);
     }
 }

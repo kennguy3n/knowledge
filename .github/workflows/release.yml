@@ -1,0 +1,84 @@
+# Minimal tag-triggered release workflow.
+#
+# Triggers on tags matching `v*` (the substrate's SemVer scheme).
+# Runs the full `--all-features` test matrix one more time on the
+# tagged commit so a release never ships a build that failed CI on
+# main, then publishes a GitHub Release whose body is auto-
+# generated from the merged-PR list since the previous tag.
+#
+# Platform artifacts (the iOS xcframework, the JNI .so bundles,
+# the N-API addon for Electron) are NOT built here yet. The
+# matrix jobs that produce them live in `ci.yml` and can be
+# promoted to release artifacts in a follow-up patch by adding a
+# matrix step that uploads its build output via the
+# `softprops/action-gh-release` `files:` input. This release
+# workflow is intentionally minimal so the very first tagged
+# release does not block on cross-compilation infrastructure.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# `contents: write` is required so `softprops/action-gh-release` can
+# create the release object. No other tokens are needed because the
+# workflow does not push to crates.io, npm, or any other registry.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Test and publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so action-gh-release can compute the
+          # "since last tag" commit range for its auto-generated
+          # release notes.
+          fetch-depth: 0
+
+      - name: Install the pinned Rust toolchain
+        # Match `dtolnay/rust-toolchain@stable` used by ci.yml so
+        # the release path uses the same compiler the merge gate
+        # has already exercised. The `ci.yml` MSRV job at 1.85.0
+        # covers the lower bound; here we use stable to also
+        # surface upstream regressions before they ship.
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the cargo registry, git index, and target/
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+            ${{ runner.os }}-cargo-
+
+      - name: Install SQLCipher / OpenSSL system deps
+        # SQLCipher links against the system OpenSSL — same step as
+        # ci.yml. Kept in the release workflow so the tag build
+        # does not silently miss the bundled SQLCipher build path.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev libssl-dev pkg-config
+
+      - name: cargo test --all-features
+        run: cargo test --all-features --workspace
+
+      - name: Publish GitHub Release with auto-generated notes
+        uses: softprops/action-gh-release@v2
+        with:
+          # `generate_release_notes: true` makes GitHub assemble the
+          # release body from the merged-PR list between this tag
+          # and the previous one. The repo's PR template gives that
+          # auto-generated body its high-signal shape.
+          generate_release_notes: true
+          # Leave `files:` empty for now — platform artifacts will
+          # be added when the cross-compile jobs are promoted out
+          # of ci.yml.

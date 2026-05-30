@@ -1,0 +1,42 @@
+# Code owners for the Knowledge workspace.
+#
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# The crates listed here are the security-critical surfaces that
+# need explicit review before a merge — the cryptography stack,
+# the FFI surface that other languages link against, the
+# persistent evidence store, and the security policy document.
+#
+# Order matters: later patterns override earlier ones. The catch-
+# all at the very bottom is intentionally absent so we do not
+# inadvertently expand the codeowner contract to crates the
+# maintainers have not opted into.
+
+# ---- Crypto crate ----
+# Hybrid X25519 + ML-KEM-768 KEM, HKDF, XChaCha20-Poly1305 AEAD,
+# zeroize discipline, ML-DSA-65 provenance signatures, SPHINCS+
+# archival co-signing, and the new KeyStorage trait that sits in
+# front of every hardware-backed key store the substrate uses.
+# All changes require explicit review.
+/crates/crypto/ @kennguy3n
+
+# ---- FFI surface ----
+# The UniFFI exports and the NAPI bindings together form the
+# substrate's public contract against host platforms (Swift,
+# Kotlin, TypeScript / Node). Breaking changes here propagate to
+# every embedder; require explicit review.
+/crates/ffi/  @kennguy3n
+/crates/napi/ @kennguy3n
+
+# ---- Evidence store ----
+# SQLCipher-backed durable storage, FTS5 indexing, cryptographic
+# forgetting via DEK destruction, ring buffer, schema migrations.
+# Every change touches user data at rest; require explicit review.
+/crates/evidence_store/ @kennguy3n
+
+# ---- Security policy ----
+# The threat model, audit scope, and vulnerability disclosure
+# process. Required reviewer matches the crypto/ffi/storage
+# triad so disclosure decisions stay coupled to the surfaces
+# under review.
+/SECURITY.md @kennguy3n
