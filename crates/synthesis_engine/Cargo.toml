@@ -58,7 +58,7 @@ reqwest = { workspace = true, features = ["blocking"], optional = true }
 # Nitro Secure Module. Pinned to the 0.4.x line — the same minor
 # the upstream `aws-nitro-enclaves-cose` crate targets — so future
 # bumps stay coordinated.
-aws-nitro-enclaves-nsm-api = { version = "0.4", optional = true }
+aws-nitro-enclaves-nsm-api = { version = "0.5", optional = true }
 # Optional: only linked when the `nitro-tee` feature is enabled.
 # Used to decode the CBOR-encoded COSE_Sign1 attestation document
 # returned by the NSM driver so we can extract PCR0 (the enclave
