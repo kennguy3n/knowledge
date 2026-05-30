@@ -156,9 +156,31 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   longer documents the registration as a "forward-compatibility
   plumbing hook"; `SECURITY.md` §"Key storage" and `README.md`
   surface-specific list have been updated to reflect the new
-  resolver-driven cold-boot path. N-API wrappers for
-  `set_key_storage_resolver`, `clear_key_storage_resolver`, and
-  `open_store_with_resolver` are deferred to a follow-up PR.
+  resolver-driven cold-boot path.
+- Wired N-API counterparts for the three master-key resolver
+  entry points so the Electron host can now drive the
+  resolver-backed cold-boot path symmetrically with iOS / Android:
+  `setKeyStorageResolver(handle, resolver, timeoutMs?)`,
+  `clearKeyStorageResolver(handle)`,
+  `openStoreWithResolver(path, keyId, resolver, timeoutMs?)`.
+  The JS-callback adapter (`JsKeyStorageResolver` in
+  `crates/napi/src/bindings.rs`) mirrors the OAuth-secret resolver
+  precedent — three `ThreadsafeFunction` slots for `loadKey` /
+  `storeKey` / `deleteKey`, a `std::sync::mpsc::sync_channel(1)`
+  one-shot to ferry each result back to the substrate, and a
+  configurable `recv_timeout` (default 30 s, vs OAuth's 5 s,
+  because master-key unlocks can involve a Keychain biometric /
+  password prompt that takes the user 10–20 s to satisfy).
+  Pass `timeoutMs: 0` is rejected as an `InvalidArgument` (a zero
+  timeout would always race the JS event loop). Sync-waiting the
+  substrate on a JS callback is safe here because the substrate's
+  three-phase locking pattern guarantees the runtime mutex is
+  NOT held while a resolver call is in flight. A JS exception
+  inside a callback surfaces as `FfiError::Unavailable {
+  subsystem: "host-key-store: <method> threw: ..." }`; a
+  callback that does not return within `recv_timeout` surfaces
+  as `FfiError::Unavailable { subsystem: "host-key-store:
+  <method> timed out after Xms" }`.
 - Wired `try_init_tracing` through the UniFFI export so iOS /
   Android hosts can install the substrate's
   `Registry::default().with(fmt::Layer).with(EnvFilter)` stack

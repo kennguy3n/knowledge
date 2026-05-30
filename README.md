@@ -128,6 +128,8 @@ across both bindings) are:
 `refresh_connector_token`, `list_connectors`, `remove_connector`,
 `set_oauth_client_secret_resolver`,
 `clear_oauth_client_secret_resolver`,
+`set_key_storage_resolver`, `clear_key_storage_resolver`,
+`open_store_with_resolver`,
 `start_webhook_server`, `stop_webhook_server`,
 `register_webhook_dispatch`, `unregister_webhook_dispatch`,
 `list_webhook_servers`,
@@ -140,7 +142,24 @@ across both bindings) are:
 `replace_approved_document`, `list_approved_documents`,
 `try_init_tracing`.
 
-Six entry points are intentionally surface-specific rather than
+The three master-key resolver entry points
+(`set_key_storage_resolver`, `clear_key_storage_resolver`,
+`open_store_with_resolver`) follow the same registration shape
+as the OAuth-secret resolver: hosts hand in a callback object
+backed by Keychain (iOS), Keystore (Android), DPAPI (Windows),
+or any platform-specific secure-element wrapper, and the
+substrate consumes it via the `KeyStorageResolver` contract
+documented at `crates/ffi/src/key_storage.rs:26-94`. The
+cold-boot integration point is `open_store_with_resolver(path,
+key_id, resolver)` — hardware-backed hosts call this instead
+of `open_store(path, master_key_hex)` so the 32-byte master
+key never enters the host's address space as a long-lived
+plaintext string. See `crates/ffi/src/runtime.rs`
+`open_store_with_resolver` for the substrate consumer and
+`crates/napi/src/bindings.rs` `js_open_store_with_resolver` for
+the N-API adapter.
+
+Three entry points are intentionally surface-specific rather than
 mirrored across both bindings:
 
 * `init` — **N-API only.** A JS-facing bootstrap helper
@@ -158,24 +177,6 @@ mirrored across both bindings:
   surface for mobile observability tiles (iOS / Android). The
   N-API surface exposes the same data through `health_check`'s
   envelope, so an extra entry point would be redundant on Electron.
-* `set_key_storage_resolver` / `clear_key_storage_resolver` /
-  `open_store_with_resolver` — **UniFFI only.** Registers a
-  host-supplied master-key storage callback (Keychain on iOS,
-  Keystore on Android, DPAPI on Windows) and opens an evidence
-  store with the master key fetched from that callback. The
-  resolver-driven cold-boot path is the substrate-side consumer
-  of the `KeyStorageResolver` contract — hardware-backed hosts
-  call `open_store_with_resolver(path, key_id, resolver)`
-  instead of `open_store(path, master_key_hex)` so the master
-  key never enters the host's address space as a long-lived
-  plaintext string. See `crates/ffi/src/key_storage.rs:26-43`
-  for the resolver contract and
-  `crates/ffi/src/runtime.rs` `open_store_with_resolver` for
-  the substrate consumer. N-API wrappers for the resolver and
-  the resolver-driven `open_store` are deferred to a follow-up
-  PR — the substrate-side consumer landed first so the JS-side
-  error mapping (`FfiResult<String>` → JS throw vs. `null`
-  return) can be calibrated against real call traffic.
 
 See
 [Observability — metrics, tracing, health](#observability--metrics-tracing-health)
