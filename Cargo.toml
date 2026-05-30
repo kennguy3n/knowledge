@@ -128,7 +128,7 @@ tempfile = "3"
 # Bumping to criterion `0.8` is gated on a workspace MSRV bump to
 # `1.86`, which is itself gated by the Dependabot pin in
 # `.github/workflows/ci.yml::MSRV (1.85.0)`.
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
