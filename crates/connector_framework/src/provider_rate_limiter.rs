@@ -226,15 +226,21 @@ impl ProviderRateLimiter {
                     .state
                     .lock()
                     .expect("provider rate limiter state mutex poisoned");
-                let policy = state
-                    .overrides
-                    .get(provider_key)
-                    .copied()
-                    .unwrap_or(self.default_policy);
-                let bucket = state
-                    .buckets
-                    .entry(provider_key.to_string())
-                    .or_insert_with(|| TokenBucket::from_policy(policy, Instant::now()));
+                // Destructure so the policy lookup (which borrows
+                // `overrides`) and the bucket insertion (which
+                // borrows `buckets`) are seen as disjoint borrows
+                // by the borrow checker — lets the policy be
+                // evaluated **only on bucket creation** rather than
+                // on every acquire.
+                let State { overrides, buckets } = &mut *state;
+                let default_policy = self.default_policy;
+                let bucket = buckets.entry(provider_key.to_string()).or_insert_with(|| {
+                    let policy = overrides
+                        .get(provider_key)
+                        .copied()
+                        .unwrap_or(default_policy);
+                    TokenBucket::from_policy(policy, Instant::now())
+                });
                 bucket.refill(Instant::now());
                 match bucket.try_consume() {
                     Ok(()) => return,
@@ -255,15 +261,15 @@ impl ProviderRateLimiter {
             .state
             .lock()
             .expect("provider rate limiter state mutex poisoned");
-        let policy = state
-            .overrides
-            .get(provider_key)
-            .copied()
-            .unwrap_or(self.default_policy);
-        let bucket = state
-            .buckets
-            .entry(provider_key.to_string())
-            .or_insert_with(|| TokenBucket::from_policy(policy, Instant::now()));
+        let State { overrides, buckets } = &mut *state;
+        let default_policy = self.default_policy;
+        let bucket = buckets.entry(provider_key.to_string()).or_insert_with(|| {
+            let policy = overrides
+                .get(provider_key)
+                .copied()
+                .unwrap_or(default_policy);
+            TokenBucket::from_policy(policy, Instant::now())
+        });
         bucket.refill(Instant::now());
         bucket.try_consume()
     }
