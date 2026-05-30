@@ -10,10 +10,10 @@
 //! container — want the substrate to terminate webhooks itself.
 //!
 //! This module ships a real, working webhook receiver on top of
-//! `axum` 0.7 (`hyper` 1.x + `tower`):
+//! `axum` 0.8 (`hyper` 1.x + `tower`):
 //!
 //! * binds a `tokio::net::TcpListener` on the configured address,
-//! * registers a `POST /webhooks/:provider_id` route that reads
+//! * registers a `POST /webhooks/{provider_id}` route that reads
 //!   the request body, looks up the matching
 //!   [`WebhookDispatch`] entry, and hands the body to the
 //!   registered [`WebhookDispatcher`],
@@ -75,7 +75,7 @@ pub trait WebhookDispatcher: Send + Sync {
 }
 
 /// Lookup row used by the receiver to route incoming `POST
-/// /webhooks/:provider_id` requests. Each row carries the
+/// /webhooks/{provider_id}` requests. Each row carries the
 /// dispatcher to invoke for that provider id; in production the
 /// substrate populates one row per registered connector instance
 /// so connector-A's dispatcher never sees connector-B's payloads.

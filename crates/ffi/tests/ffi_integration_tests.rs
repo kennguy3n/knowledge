@@ -3008,7 +3008,7 @@ mod webhook {
     //! binds an axum server on `127.0.0.1:0` (ephemeral port), and
     //! exercises the FFI surface end-to-end through real HTTP
     //! requests. The framework's `WebhookServer` is the actual
-    //! axum 0.7 server — there are no in-memory shortcuts.
+    //! axum 0.8 server — there are no in-memory shortcuts.
 
     use super::{fresh_store, ConnectorKindTag};
     use ffi::{

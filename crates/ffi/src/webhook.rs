@@ -4,7 +4,7 @@
 //! module docs, the substrate ships its own in-process HTTP receiver
 //! so providers (Slack `events_api`, Notion webhooks, Atlassian
 //! Connect, …) can POST directly to the substrate without an
-//! intermediary edge service. The framework crate ships the axum 0.7
+//! intermediary edge service. The framework crate ships the axum 0.8
 //! router, the [`WebhookDispatcher`] trait, and the graceful-shutdown
 //! plumbing; this module is the **FFI wiring** that:
 //!
@@ -14,7 +14,7 @@
 //!    `await`.
 //! 2. Builds an [`FfiWebhookRouter`] (the single
 //!    [`WebhookDispatcher`] the framework's static-table router
-//!    forwards every `POST /webhooks/:provider_id` to) that resolves
+//!    forwards every `POST /webhooks/{provider_id}` to) that resolves
 //!    `provider_id` → [`ConnectorInstanceId`] through an interior
 //!    [`RwLock`]-protected map, then fans the payload to the
 //!    matching connector's `handle_webhook_event` impl under the
@@ -156,7 +156,7 @@ fn next_server_handle() -> u64 {
 /// `Arc` references live in two places:
 ///
 /// * Inside the framework's [`WebhookServer`] state (the axum
-///   `with_state` mount that powers `POST /webhooks/:provider_id`).
+///   `with_state` mount that powers `POST /webhooks/{provider_id}`).
 /// * Inside the [`RunningWebhookServer`] slot on
 ///   [`crate::runtime::FfiRuntime::webhook_servers`] so
 ///   [`register_webhook_dispatch`] / [`unregister_webhook_dispatch`]
@@ -1037,7 +1037,7 @@ fn run_server_thread(
 // ───────────────────────── Provider-id helpers ─────────────────────
 
 /// Canonical ASCII slug the framework's static router uses for
-/// `kind`'s `/webhooks/:provider_id` path. Mirrors the
+/// `kind`'s `/webhooks/{provider_id}` path. Mirrors the
 /// `ConnectorKind` enum exhaustively so adding a new kind in the
 /// framework forces a compile-time update here.
 ///
