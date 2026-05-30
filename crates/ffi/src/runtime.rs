@@ -527,21 +527,31 @@ pub struct FfiRuntime {
 
     /// Host-supplied [`crate::key_storage::KeyStorageResolver`].
     ///
-    /// `None` until the host calls
-    /// [`crate::key_storage::set_key_storage_resolver`]; while
-    /// `None`, the substrate continues to consume the raw master
-    /// key passed at [`crate::open_store`] time. Registration is
-    /// a pure cross-language plumbing hook today — the substrate
-    /// does not yet read the resolver on its hot path (per the
-    /// migration plan in `SECURITY.md` §"Key storage"). Holding
-    /// the slot now lets `crypto`'s migration story land in a
-    /// single follow-up without re-plumbing the FFI surface.
+    /// Populated on either of two cold-boot entry points:
+    ///
+    /// * [`crate::open_store_with_resolver`] — the substrate
+    ///   consumes `load_key(key_id)` once, opens the SQLCipher
+    ///   handle with the returned hex, and stashes the resolver
+    ///   here so subsequent operations (key rotation, future
+    ///   multi-key migrations) reach the same platform store
+    ///   without a second registration call.
+    /// * [`crate::key_storage::set_key_storage_resolver`] — the
+    ///   mid-life registration path used by hosts that opened
+    ///   with a direct hex master key (legacy or test-fixture
+    ///   flow) but later want to enrol the resolver for key
+    ///   rotation. Re-registration replaces the previous slot;
+    ///   the substrate logs both `set_key_storage_resolver_total`
+    ///   and `clear_key_storage_resolver_total` so operators can
+    ///   spot hosts that treat registration as request-scoped.
+    ///
+    /// `None` means no resolver has been registered yet; in that
+    /// state the substrate continues to operate on the raw master
+    /// key passed at [`crate::open_store`] time. The resolver is
+    /// dropped when [`crate::close_store`] tears the runtime down
+    /// (the `Arc` count returns to the host).
     ///
     /// Mirrors the [`Self::oauth_client`] slot's "one resolver per
-    /// runtime, last-write-wins" contract; metrics under
-    /// `set_key_storage_resolver_total` /
-    /// `clear_key_storage_resolver_total` surface re-registration
-    /// frequency for diagnostics.
+    /// runtime, last-write-wins" contract.
     pub(crate) key_storage_resolver: Option<Arc<dyn crate::key_storage::KeyStorageResolver>>,
 }
 
@@ -1310,7 +1320,7 @@ pub fn open_store_with_resolver(
         // revoked) via `FfiError::Unavailable` /
         // `FfiError::Storage`; those propagate verbatim — see the
         // `# Errors` section above.
-        let master_key_hex = resolver.load_key(key_id.clone()).map_err(|e| match e {
+        let master_key_hex = resolver.load_key(key_id).map_err(|e| match e {
             // Re-tag the resolver's `NotFound { kind: "key", id }`
             // as `NotFound { kind: "master_key", id }` so the
             // host can distinguish a master-key resolution miss
