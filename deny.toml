@@ -39,6 +39,17 @@ allow = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "Zlib",
+    # CDLA-Permissive-2.0 is the Community Data License Agreement
+    # Permissive 2.0 — an SPDX-recognised permissive data license
+    # used by Mozilla for the trusted-CA bundle that ships with
+    # `webpki-roots`. `webpki-roots` is pulled in transitively by
+    # `hyper-rustls -> reqwest` once the connectors crate's
+    # dev-dep activates the `http-client` feature on
+    # `connector_framework`. The license has no copyleft or share-
+    # alike clause — distribution under any terms is permitted —
+    # so it's safe to ship alongside the rest of the workspace's
+    # MIT/Apache code.
+    "CDLA-Permissive-2.0",
 ]
 # Any license outside the allow-list above fails the build (the
 # default once `version = 2` is set).

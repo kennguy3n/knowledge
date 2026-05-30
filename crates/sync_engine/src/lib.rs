@@ -551,6 +551,18 @@ where
     /// writes to them, corrupting the dedup table on every other
     /// peer in the cluster. Use [`Self::bootstrap_from_snapshot`]
     /// for that case.
+    ///
+    /// **Note on `compact_threshold`**: the auto-compaction trigger
+    /// is **runtime configuration**, not persistent engine state —
+    /// it is *not* serialised into [`EngineSnapshot`]. The restored
+    /// engine therefore starts with the default threshold
+    /// ([`DEFAULT_COMPACT_THRESHOLD`]); callers that rely on a
+    /// non-default value (e.g. set via
+    /// [`Self::with_compact_threshold`]) must re-apply it after
+    /// `restore_snapshot` returns. This is by design: the threshold
+    /// is a tuning knob, not part of the engine's CRDT semantics,
+    /// and operators may legitimately want to change it between
+    /// runs.
     pub fn restore_snapshot(bytes: &[u8]) -> Result<Self>
     where
         T: for<'de> Deserialize<'de> + Serialize,
@@ -586,6 +598,12 @@ where
     /// stream. The compaction epoch is inherited from the snapshot
     /// so the receiver does not accept stale deltas authored
     /// before the author's last compaction.
+    ///
+    /// Same `compact_threshold` caveat as
+    /// [`Self::restore_snapshot`]: the bootstrapped engine starts
+    /// with [`DEFAULT_COMPACT_THRESHOLD`] regardless of what the
+    /// snapshot author had configured. Callers that need a
+    /// non-default threshold must re-apply it after this returns.
     pub fn bootstrap_from_snapshot(bytes: &[u8]) -> Result<Self>
     where
         T: for<'de> Deserialize<'de> + Serialize,
