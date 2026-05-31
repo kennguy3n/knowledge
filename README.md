@@ -140,7 +140,7 @@ across both bindings) are:
 `replace_approved_document`, `list_approved_documents`,
 `try_init_tracing`.
 
-Five entry points are intentionally surface-specific rather than
+Six entry points are intentionally surface-specific rather than
 mirrored across both bindings:
 
 * `init` — **N-API only.** A JS-facing bootstrap helper
@@ -158,18 +158,24 @@ mirrored across both bindings:
   surface for mobile observability tiles (iOS / Android). The
   N-API surface exposes the same data through `health_check`'s
   envelope, so an extra entry point would be redundant on Electron.
-* `set_key_storage_resolver` / `clear_key_storage_resolver` —
-  **UniFFI only.** Registers a host-supplied master-key storage
-  callback (Keychain on iOS, Keystore on Android, DPAPI on Windows)
-  that the substrate will consult once the `crypto`-side migration
-  to resolver-driven `open_store` lands. The UniFFI surface is
-  shipped today so platform shells can implement the contract in
-  parallel with the substrate-side consumer (see
-  `crates/ffi/src/key_storage.rs:26-43` for the contract). An N-API
-  wrapper is deferred until the substrate actually drives the
-  resolver — without real call traffic to calibrate against, the
-  JS-side error mapping (`FfiResult<String>` → JS throw vs.
-  `null` return) cannot be tested end-to-end.
+* `set_key_storage_resolver` / `clear_key_storage_resolver` /
+  `open_store_with_resolver` — **UniFFI only.** Registers a
+  host-supplied master-key storage callback (Keychain on iOS,
+  Keystore on Android, DPAPI on Windows) and opens an evidence
+  store with the master key fetched from that callback. The
+  resolver-driven cold-boot path is the substrate-side consumer
+  of the `KeyStorageResolver` contract — hardware-backed hosts
+  call `open_store_with_resolver(path, key_id, resolver)`
+  instead of `open_store(path, master_key_hex)` so the master
+  key never enters the host's address space as a long-lived
+  plaintext string. See `crates/ffi/src/key_storage.rs:26-43`
+  for the resolver contract and
+  `crates/ffi/src/runtime.rs` `open_store_with_resolver` for
+  the substrate consumer. N-API wrappers for the resolver and
+  the resolver-driven `open_store` are deferred to a follow-up
+  PR — the substrate-side consumer landed first so the JS-side
+  error mapping (`FfiResult<String>` → JS throw vs. `null`
+  return) can be calibrated against real call traffic.
 
 See
 [Observability — metrics, tracing, health](#observability--metrics-tracing-health)

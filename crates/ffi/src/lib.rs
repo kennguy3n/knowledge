@@ -123,7 +123,7 @@ pub use error::{FfiError, FfiResult};
 pub use health::{health_check, AdapterReport, HealthStatus, SubsystemHealth, SubsystemStatus};
 pub use key_storage::{clear_key_storage_resolver, set_key_storage_resolver, KeyStorageResolver};
 pub use metrics::{snapshot as metrics_snapshot, ErrorCounters, MetricsSnapshot};
-pub use runtime::{close_store, open_store, RuntimeHandle};
+pub use runtime::{close_store, open_store, open_store_with_resolver, RuntimeHandle};
 pub use sync_scheduler::{
     clear_sync_schedule, configure_sync_auto_synthesize, configure_sync_schedule,
     start_sync_scheduler, stop_sync_scheduler, sync_scheduler_status, DEFAULT_SYNC_INTERVAL_SECS,

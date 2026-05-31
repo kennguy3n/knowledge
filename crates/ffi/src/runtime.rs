@@ -65,7 +65,7 @@ use memory_manager::{
     ChannelMemoryObject, DomainMemoryObject, TenantMemoryObject, UserMemoryObject,
 };
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::{FfiError, FfiResult};
 
@@ -527,21 +527,31 @@ pub struct FfiRuntime {
 
     /// Host-supplied [`crate::key_storage::KeyStorageResolver`].
     ///
-    /// `None` until the host calls
-    /// [`crate::key_storage::set_key_storage_resolver`]; while
-    /// `None`, the substrate continues to consume the raw master
-    /// key passed at [`crate::open_store`] time. Registration is
-    /// a pure cross-language plumbing hook today — the substrate
-    /// does not yet read the resolver on its hot path (per the
-    /// migration plan in `SECURITY.md` §"Key storage"). Holding
-    /// the slot now lets `crypto`'s migration story land in a
-    /// single follow-up without re-plumbing the FFI surface.
+    /// Populated on either of two cold-boot entry points:
+    ///
+    /// * [`crate::open_store_with_resolver`] — the substrate
+    ///   consumes `load_key(key_id)` once, opens the SQLCipher
+    ///   handle with the returned hex, and stashes the resolver
+    ///   here so subsequent operations (key rotation, future
+    ///   multi-key migrations) reach the same platform store
+    ///   without a second registration call.
+    /// * [`crate::key_storage::set_key_storage_resolver`] — the
+    ///   mid-life registration path used by hosts that opened
+    ///   with a direct hex master key (legacy or test-fixture
+    ///   flow) but later want to enrol the resolver for key
+    ///   rotation. Re-registration replaces the previous slot;
+    ///   the substrate logs both `set_key_storage_resolver_total`
+    ///   and `clear_key_storage_resolver_total` so operators can
+    ///   spot hosts that treat registration as request-scoped.
+    ///
+    /// `None` means no resolver has been registered yet; in that
+    /// state the substrate continues to operate on the raw master
+    /// key passed at [`crate::open_store`] time. The resolver is
+    /// dropped when [`crate::close_store`] tears the runtime down
+    /// (the `Arc` count returns to the host).
     ///
     /// Mirrors the [`Self::oauth_client`] slot's "one resolver per
-    /// runtime, last-write-wins" contract; metrics under
-    /// `set_key_storage_resolver_total` /
-    /// `clear_key_storage_resolver_total` surface re-registration
-    /// frequency for diagnostics.
+    /// runtime, last-write-wins" contract.
     pub(crate) key_storage_resolver: Option<Arc<dyn crate::key_storage::KeyStorageResolver>>,
 }
 
@@ -1224,13 +1234,184 @@ where
 #[uniffi::export]
 pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHandle> {
     crate::metrics::instrument(crate::metrics::inc_open_store, || {
-        open_store_inner(path, master_key_hex)
+        // Wrap the hex in `Zeroizing` so the 64-char ASCII
+        // representation of the master key is wiped from the
+        // allocator's freelist on every drop path — success,
+        // `parse_master_key_hex` validation failure, SQLCipher
+        // open failure, tombstone-replay failure, registry
+        // collision, etc. The parsed `MasterKey` bytes inside
+        // `FfiRuntime` are independently zeroized via
+        // `FfiRuntime::Drop` (see `Zeroize` on line 645); this
+        // wrapper closes the analogous hole on the transient hex
+        // String that lives between the FFI boundary and the
+        // parser.
+        let master_key_hex = Zeroizing::new(master_key_hex);
+        // Direct-hex open: no resolver to stash on the runtime.
+        // The mid-life [`crate::key_storage::set_key_storage_resolver`]
+        // path remains available for hosts that want to enrol a
+        // resolver after the fact (key rotation, future multi-key
+        // migration).
+        open_store_inner(path, master_key_hex, None)
     })
 }
 
-#[allow(clippy::needless_pass_by_value)] // Mirror of [`open_store`]: forwards the owned strings the FFI boundary handed to the outer wrapper.
-fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHandle> {
-    let master_key = parse_master_key_hex(&master_key_hex)?;
+/// Open the SQLCipher-backed evidence store at `path` with the
+/// master key fetched from a host-supplied
+/// [`crate::key_storage::KeyStorageResolver`] instead of a
+/// direct hex parameter. The resolver is then **registered on
+/// the returned runtime** so subsequent operations (key
+/// rotation, multi-key migration) reach the same backing store
+/// without a separate [`crate::set_key_storage_resolver`] call.
+///
+/// This is the resolver-driven counterpart of [`open_store`].
+/// Hosts that have a platform key store available
+/// (iOS Keychain, Android Keystore, Windows DPAPI, macOS
+/// Keychain, TEE) should prefer this entry point so the master
+/// key never enters the host's address space as a plaintext
+/// hex string — the resolver is consulted by the substrate,
+/// the hex transits through one FFI call, and is zeroized when
+/// the runtime is closed.
+///
+/// # Resolution contract
+///
+/// `key_id` is opaque to the **substrate** — the runtime never
+/// interprets it and only forwards it verbatim to the resolver.
+/// The resolver (host-owned) is the component that maps `key_id`
+/// to the underlying platform handle (Keychain label, KeyAlias,
+/// DPAPI descriptor, etc.). The same id MUST resolve to the same
+/// 32-byte key across process restarts; the substrate uses it
+/// only as a lookup token.
+///
+/// The resolver MUST return [`FfiError::NotFound`] when `key_id`
+/// is unknown — fabricating zero bytes or returning an empty
+/// string would silently corrupt the SQLCipher pragma negotiation
+/// at open time and surface as an opaque "file is not a
+/// database" error several layers up. The substrate maps
+/// [`FfiError::NotFound`] from the resolver into a top-level
+/// [`FfiError::NotFound`] with `kind = "master_key"` so the host
+/// sees the same shape it would have got from a direct
+/// [`crate::key_storage::KeyStorageResolver::load_key`] call.
+///
+/// # Errors
+///
+/// * [`FfiError::NotFound`] (`kind = "master_key"`) if the
+///   resolver does not know `key_id`.
+/// * [`FfiError::InvalidId`] if the resolver returned a string
+///   that is not exactly 64 hex characters (the master key
+///   serialisation contract is shared with [`open_store`] —
+///   see [`parse_master_key_hex`]).
+/// * [`FfiError::Evidence`] if SQLCipher fails to open the
+///   underlying database with the resolved key, or the
+///   tombstone-replay path errors out (same conditions as
+///   [`open_store`]).
+/// * Any other [`FfiError`] the resolver itself produces (e.g.
+///   [`FfiError::Unavailable`] for a hardware-backed store that
+///   refused biometric authentication) propagates verbatim.
+///
+/// # Lifecycle of the resolver `Arc`
+///
+/// `resolver` is consumed by value (per UniFFI's owned-`Arc`
+/// marshalling contract — see the
+/// `crate::key_storage::set_key_storage_resolver` docs for the
+/// same shape). On success the resolver is attached to the
+/// freshly-constructed [`FfiRuntime`] **before** the registry
+/// insert (single-phase atomic open — see the body comment
+/// below), so the resolver is observable from the very first
+/// [`with_runtime`] call that succeeds against the returned
+/// handle; it is dropped when [`close_store`] tears the runtime
+/// down. On failure the [`Arc`] is dropped at the end of this
+/// function, releasing the host's reference count.
+#[allow(clippy::needless_pass_by_value)] // FFI: UniFFI hands owned strings + Arc<dyn> across the language boundary on every call.
+#[uniffi::export]
+pub fn open_store_with_resolver(
+    path: String,
+    key_id: String,
+    resolver: Arc<dyn crate::key_storage::KeyStorageResolver>,
+) -> FfiResult<RuntimeHandle> {
+    crate::metrics::instrument(crate::metrics::inc_open_store_with_resolver, || {
+        // Hand the substrate-owned `key_id` to the resolver and
+        // receive the 64-char hex master key. `load_key` borrows
+        // `&self`, so the `Arc` is still owned after the call and
+        // is moved into `open_store_inner` below to be attached
+        // to the runtime atomically with the registry insert.
+        //
+        // The resolver's own `load_key` contract already maps an
+        // unknown id to `FfiError::NotFound { kind: "key", id: <id> }`,
+        // so the host sees a consistent `NotFound` envelope whether
+        // the miss happens at the FFI surface or inside the host's
+        // own resolver implementation.
+        //
+        // The resolver may also surface platform-specific errors
+        // (biometric prompt cancelled, hardware-backed slot
+        // revoked) via `FfiError::Unavailable` /
+        // `FfiError::Evidence`; those propagate verbatim — see
+        // the `# Errors` section above. (There is no
+        // `FfiError::Storage` variant in the substrate; the
+        // closest match for a storage-class error from the host
+        // resolver is `FfiError::Evidence`.)
+        //
+        // Wrap the resolver's return value in `Zeroizing` so the
+        // 64-char ASCII master-key hex string is wiped on every
+        // drop path (success, parser failure, SQLCipher open
+        // failure) and never lingers in the allocator's freelist.
+        // The parsed `MasterKey` bytes inside `FfiRuntime` are
+        // independently zeroized via `FfiRuntime::Drop`; this
+        // wrapper closes the transient-hex hole.
+        let master_key_hex = Zeroizing::new(resolver.load_key(key_id).map_err(|e| match e {
+            // Re-tag the resolver's `NotFound { kind: "key", id }`
+            // as `NotFound { kind: "master_key", id }` so the
+            // host can distinguish a master-key resolution miss
+            // (a configuration / provisioning bug) from a
+            // generic key-id miss surfaced by future
+            // resolver call sites.
+            FfiError::NotFound { kind, id } if kind == "key" => FfiError::NotFound {
+                kind: "master_key".into(),
+                id,
+            },
+            other => other,
+        })?);
+
+        // Single-phase atomic open. The resolver is plumbed into
+        // `open_store_inner` and attached to the local
+        // `FfiRuntime` **before** the registry insert under the
+        // write lock, so the resolver is part of the same atomic
+        // publish step that makes the handle observable to other
+        // threads. Any host that successfully takes the handle
+        // (via `with_runtime`, key rotation, future multi-key
+        // operations) already sees the resolver in place — no
+        // second registration call required, and no theoretical
+        // window where the registry holds a runtime without its
+        // resolver.
+        //
+        // The earlier two-phase shape (open_store_inner → second
+        // `with_runtime` to stash) had a theoretical handle-leak
+        // window on the stash failure path: if the second
+        // `with_runtime` failed, the handle was already in the
+        // registry but never returned to the caller, so the host
+        // could not call `close_store`. The closure was infallible
+        // by construction, so in practice the window was zero,
+        // but the structural fix (this single-phase shape)
+        // eliminates it for future maintainers who add fallible
+        // operations to the post-open path.
+        open_store_inner(path, master_key_hex, Some(resolver))
+    })
+}
+
+#[allow(clippy::needless_pass_by_value)] // Mirror of [`open_store`]: forwards the owned strings the FFI boundary handed to the outer wrapper. `Zeroizing<String>` zeroizes the hex on drop.
+fn open_store_inner(
+    path: String,
+    master_key_hex: Zeroizing<String>,
+    // `Some(resolver)` for the `open_store_with_resolver` cold-boot
+    // path; `None` for the direct-hex `open_store` path. Attached
+    // to the freshly-constructed `FfiRuntime` *before* the registry
+    // insert under the write lock so the resolver is observable
+    // from the very first `with_runtime` call against the returned
+    // handle — see the body comment in `open_store_with_resolver`
+    // for the rationale (single-phase atomic open, no handle-leak
+    // window if a future post-open step turns fallible).
+    key_storage_resolver: Option<Arc<dyn crate::key_storage::KeyStorageResolver>>,
+) -> FfiResult<RuntimeHandle> {
+    let master_key = parse_master_key_hex(master_key_hex.as_str())?;
 
     // Allocate and validate the handle *before* doing any expensive
     // SQLCipher work. `next_handle` is `AtomicU64::fetch_add`, so
@@ -2189,7 +2370,7 @@ fn open_store_inner(path: String, master_key_hex: String) -> FfiResult<RuntimeHa
             crate::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC,
             chrono::Utc::now(),
         ),
-        key_storage_resolver: None,
+        key_storage_resolver,
     };
 
     // Rehydrate persisted connector state from the v9
@@ -2697,5 +2878,257 @@ mod tests {
 
         drop(a);
         assert!(!thread_holds_runtime_handle(1));
+    }
+
+    // ─────────────────── open_store_with_resolver ───────────────────
+
+    /// Deterministic in-memory key store for the
+    /// `open_store_with_resolver` tests. The substrate's only
+    /// requirement is that `load_key` returns the same 64-char hex
+    /// string the host previously persisted, and that an unknown
+    /// id surfaces as `FfiError::NotFound { kind: "key", .. }` —
+    /// this resolver is intentionally the simplest possible
+    /// implementation of that contract.
+    struct TestKeyStore {
+        slots: std::sync::Mutex<std::collections::HashMap<String, String>>,
+        load_calls: std::sync::atomic::AtomicU64,
+    }
+
+    impl TestKeyStore {
+        fn new() -> Self {
+            Self {
+                slots: std::sync::Mutex::new(std::collections::HashMap::new()),
+                load_calls: std::sync::atomic::AtomicU64::new(0),
+            }
+        }
+
+        fn seeded(key_id: &str, key_hex: &str) -> Self {
+            let store = Self::new();
+            store
+                .slots
+                .lock()
+                .unwrap()
+                .insert(key_id.to_string(), key_hex.to_string());
+            store
+        }
+
+        fn load_call_count(&self) -> u64 {
+            self.load_calls.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    impl crate::key_storage::KeyStorageResolver for TestKeyStore {
+        fn store_key(&self, key_id: String, key_hex: String) -> FfiResult<()> {
+            self.slots
+                .lock()
+                .map_err(|_| FfiError::Unavailable {
+                    subsystem: "test-key-store".into(),
+                })?
+                .insert(key_id, key_hex);
+            Ok(())
+        }
+
+        fn load_key(&self, key_id: String) -> FfiResult<String> {
+            self.load_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.slots
+                .lock()
+                .map_err(|_| FfiError::Unavailable {
+                    subsystem: "test-key-store".into(),
+                })?
+                .get(&key_id)
+                .cloned()
+                .ok_or_else(|| FfiError::NotFound {
+                    kind: "key".into(),
+                    id: key_id,
+                })
+        }
+
+        fn delete_key(&self, key_id: String) -> FfiResult<()> {
+            self.slots
+                .lock()
+                .map_err(|_| FfiError::Unavailable {
+                    subsystem: "test-key-store".into(),
+                })?
+                .remove(&key_id);
+            Ok(())
+        }
+    }
+
+    /// Resolver-driven open opens the same SQLCipher database the
+    /// direct-hex `open_store` would have opened with the same
+    /// master key; the resolver is then stashed on the runtime so
+    /// the host does not have to re-register it via
+    /// `set_key_storage_resolver`.
+    #[test]
+    fn open_store_with_resolver_loads_key_and_stashes_resolver() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let key_hex = "5a".repeat(32);
+        let resolver = Arc::new(TestKeyStore::seeded("primary", &key_hex));
+        let load_calls_before = resolver.load_call_count();
+
+        let handle = open_store_with_resolver(
+            path.to_string_lossy().into_owned(),
+            "primary".into(),
+            resolver.clone(),
+        )
+        .expect("open_store_with_resolver");
+
+        // The resolver was consulted exactly once — opening should
+        // not re-query the resolver for the same key id on the
+        // same call (the inner `open_store_inner` uses the hex
+        // we already loaded).
+        assert_eq!(resolver.load_call_count() - load_calls_before, 1);
+
+        // The runtime now carries the resolver — verify via the
+        // private accessor that `with_runtime` is happy and the
+        // slot is populated. Compare `Arc` identity (not just
+        // presence) so a future refactor that accidentally wraps
+        // the resolver in a new `Arc::new(_)` fails the test.
+        with_runtime(handle, |rt| {
+            let stashed = rt
+                .key_storage_resolver
+                .as_ref()
+                .expect("resolver stashed on runtime");
+            assert!(Arc::ptr_eq(
+                &(stashed.clone() as Arc<dyn crate::key_storage::KeyStorageResolver>),
+                &(resolver.clone() as Arc<dyn crate::key_storage::KeyStorageResolver>),
+            ));
+            Ok(())
+        })
+        .expect("with_runtime after open_store_with_resolver");
+
+        // Tear down so the registry does not hold a dangling
+        // handle across tests.
+        close_store(handle).expect("close_store");
+    }
+
+    /// An unknown `key_id` surfaces as
+    /// `FfiError::NotFound { kind: "master_key", id }` — the
+    /// substrate re-tags the resolver's `kind: "key"` envelope
+    /// (see the `open_store_with_resolver` `# Errors` docs).
+    #[test]
+    fn open_store_with_resolver_retags_missing_key_as_master_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        // Resolver knows nothing — every load is a miss.
+        let resolver = Arc::new(TestKeyStore::new());
+
+        let err = open_store_with_resolver(
+            path.to_string_lossy().into_owned(),
+            "missing".into(),
+            resolver,
+        )
+        .expect_err("missing key must error");
+
+        match err {
+            FfiError::NotFound { kind, id } => {
+                assert_eq!(kind, "master_key");
+                assert_eq!(id, "missing");
+            }
+            other => panic!("expected NotFound {{ kind: \"master_key\" }}, got {other:?}"),
+        }
+    }
+
+    /// A resolver that returns a malformed hex string surfaces as
+    /// `FfiError::InvalidId` via the shared `parse_master_key_hex`
+    /// validation that `open_store` also uses.
+    #[test]
+    fn open_store_with_resolver_rejects_invalid_hex_from_resolver() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        // Resolver returns a string that is the right shape
+        // (64 chars) but contains non-hex bytes.
+        let resolver = Arc::new(TestKeyStore::seeded("primary", &"zz".repeat(32)));
+
+        let err = open_store_with_resolver(
+            path.to_string_lossy().into_owned(),
+            "primary".into(),
+            resolver,
+        )
+        .expect_err("invalid hex must error");
+
+        assert!(
+            matches!(err, FfiError::InvalidId { .. }),
+            "expected InvalidId, got {err:?}"
+        );
+    }
+
+    /// Resolver that always returns `Unavailable` — models a
+    /// host whose biometric prompt was cancelled or whose
+    /// hardware-backed slot was revoked between calls. Used by
+    /// the `_propagates_non_notfound_errors_verbatim` test below.
+    struct UnavailableResolver;
+
+    impl crate::key_storage::KeyStorageResolver for UnavailableResolver {
+        fn store_key(&self, _key_id: String, _key_hex: String) -> FfiResult<()> {
+            Err(FfiError::Unavailable {
+                subsystem: "platform-key-store".into(),
+            })
+        }
+        fn load_key(&self, _key_id: String) -> FfiResult<String> {
+            Err(FfiError::Unavailable {
+                subsystem: "platform-key-store".into(),
+            })
+        }
+        fn delete_key(&self, _key_id: String) -> FfiResult<()> {
+            Err(FfiError::Unavailable {
+                subsystem: "platform-key-store".into(),
+            })
+        }
+    }
+
+    /// Non-`NotFound` resolver errors propagate verbatim — the
+    /// substrate only re-tags `NotFound { kind: "key" }` because
+    /// that is the resolver-contract envelope; everything else
+    /// (host-side `Unavailable` for a denied biometric prompt,
+    /// `Storage` for a corrupt Keychain item, etc.) is passed
+    /// through untouched so the host can pattern-match the same
+    /// error shape it would have got from a direct resolver call.
+    #[test]
+    fn open_store_with_resolver_propagates_non_notfound_errors_verbatim() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+
+        let err = open_store_with_resolver(
+            path.to_string_lossy().into_owned(),
+            "primary".into(),
+            Arc::new(UnavailableResolver),
+        )
+        .expect_err("Unavailable must propagate");
+
+        match err {
+            FfiError::Unavailable { subsystem } => {
+                assert_eq!(subsystem, "platform-key-store");
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+
+    /// The `open_store_with_resolver_total` metric counter
+    /// increments on every entry, matching the
+    /// `inc_open_store_total` accounting on the direct-hex path.
+    #[test]
+    fn open_store_with_resolver_increments_metric_counter() {
+        use crate::metrics::snapshot;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let key_hex = "7c".repeat(32);
+        let resolver = Arc::new(TestKeyStore::seeded("k1", &key_hex));
+
+        let before = snapshot().open_store_with_resolver_total;
+        let handle =
+            open_store_with_resolver(path.to_string_lossy().into_owned(), "k1".into(), resolver)
+                .expect("open_store_with_resolver");
+        let after = snapshot().open_store_with_resolver_total;
+
+        assert!(
+            after > before,
+            "expected open_store_with_resolver_total to advance, before={before} after={after}",
+        );
+
+        close_store(handle).expect("close_store");
     }
 }

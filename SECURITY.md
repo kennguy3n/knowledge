@@ -156,10 +156,35 @@ Host shells register an implementation of
 [`crypto::KeyStorage`](crates/crypto/src/key_storage.rs) and the
 matching FFI callback
 [`ffi::KeyStorageResolver`](crates/ffi/src/key_storage.rs) at
-startup. The substrate currently still receives the master key
-through the FFI `open_store` call — the resolver registration is
-a forward-compatibility plumbing hook for the migration that
-removes the raw-bytes parameter from the public surface.
+startup. Two cold-boot entry points are supported:
+
+* [`ffi::open_store`](crates/ffi/src/runtime.rs) takes the
+  32-byte master key as a 64-char hex string directly. Hosts
+  that hold the key in-process (e.g. a desktop with a
+  passphrase-derived key) can use this path; the master key
+  is zeroized when [`ffi::close_store`] tears the runtime
+  down.
+
+* [`ffi::open_store_with_resolver`](crates/ffi/src/runtime.rs)
+  takes a `key_id` opaque to the substrate and looks up the
+  hex via the host-registered
+  [`ffi::KeyStorageResolver::load_key`]. The resolver is
+  stashed on the returned runtime so subsequent operations
+  (key rotation, future migration paths) reach the same
+  backing store without a second
+  [`ffi::set_key_storage_resolver`] call. **This is the path
+  hardware-backed hosts must use** — the master key never
+  enters the host's address space as a long-lived plaintext
+  string; the resolver pulls it from Keychain / Keystore /
+  DPAPI / TEE on demand, the substrate consumes it, and it is
+  zeroized on `close_store`.
+
+The resolver registration is therefore no longer a
+forward-compatibility plumbing hook — it is the substrate-side
+consumer that hardware-backed hosts hit on every cold boot, and
+the `open_store_with_resolver_total` metric counter exposes how
+many cold boots went through the resolver-driven path vs the
+direct-hex path.
 
 ## Supported versions
 

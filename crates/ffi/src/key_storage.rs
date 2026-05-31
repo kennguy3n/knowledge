@@ -1,13 +1,16 @@
 //! FFI surface for host-supplied master-key storage.
 //!
 //! This module exposes the cross-language counterpart of
-//! [`crypto::key_storage::KeyStorage`]. The substrate itself does
-//! not yet read the resolver on the hot path — the registration
-//! hook is added now so the platform shells (UniFFI clients on
-//! iOS / Android / Windows; N-API on Electron) can already
-//! implement the contract while `crypto`'s migration story (move
-//! the master-key bytes out of the FFI surface entirely and into
-//! Keychain / Keystore / DPAPI) lands separately.
+//! [`crypto::key_storage::KeyStorage`]. The substrate consumes the
+//! resolver at cold-boot time via
+//! [`crate::open_store_with_resolver`] — hardware-backed hosts
+//! (iOS Keychain, Android Keystore, Windows DPAPI, macOS Keychain,
+//! TEE-backed slots) call that entry point instead of
+//! [`crate::open_store`] so the master key never enters the host's
+//! address space as a long-lived plaintext hex string. The
+//! resolver pulls it from the platform store on demand, the
+//! substrate consumes it, and it is zeroized when
+//! [`crate::close_store`] tears the runtime down.
 //!
 //! # Resolution model
 //!
@@ -23,24 +26,26 @@
 //! * The substrate **unregisters** via
 //!   [`clear_key_storage_resolver`]. Counters under
 //!   `clear_key_storage_resolver_total` mirror the OAuth side.
-//! * The substrate **does not yet call into the resolver** on its
-//!   hot path. Today, the wired master key is consumed at
-//!   [`crate::open_store`] time and the resolver is informational
-//!   only. The follow-up migration (tracked in `SECURITY.md`
-//!   §"Key storage") will replace `crate::open_store`'s direct
-//!   master-key parameter with a resolver-driven lookup.
+//! * The substrate **calls into the resolver** on the cold-boot
+//!   path: [`crate::open_store_with_resolver`] consumes
+//!   [`KeyStorageResolver::load_key`] to resolve the master key
+//!   from the host's platform store, then stashes the resolver
+//!   on the freshly-allocated runtime so subsequent operations
+//!   (key rotation, multi-key migration) reach the same backing
+//!   store without a second `set_key_storage_resolver` call. The
+//!   `open_store_with_resolver_total` metric exposes how many
+//!   cold boots went through this resolver-driven path vs the
+//!   direct-hex [`crate::open_store`] path.
 //!
-//! Why register without calling? Two reasons:
-//!
-//! 1. Foreign bindings (UniFFI / N-API) have to ship the resolver
-//!    type on the same release cadence as the substrate. Adding
-//!    the FFI surface now lets host implementations land in
-//!    parallel with the `crypto` migration.
-//! 2. It surfaces the contract publicly. Hosts get compile-time
-//!    feedback on the resolver shape, and there is no risk of a
-//!    silent behavioural divergence between a draft host-side
-//!    implementation and the substrate-side consumer that lands
-//!    later.
+//! [`set_key_storage_resolver`] and [`clear_key_storage_resolver`]
+//! remain available for hosts that want to register / unregister
+//! a resolver outside the cold-boot flow (e.g. registering before
+//! [`crate::open_store_with_resolver`] is reached so the resolver
+//! is available for diagnostics; or swapping the resolver mid-life
+//! during a key-rotation ceremony). The two entry points are
+//! complementary — `open_store_with_resolver` is the
+//! cold-boot integration point; `set_key_storage_resolver` is the
+//! mid-life adjustment hook.
 //!
 //! # Threading
 //!
@@ -68,12 +73,15 @@ use crate::runtime::{with_runtime, RuntimeHandle};
 /// [`FfiError`] taxonomy without leaking platform-specific error
 /// shapes.
 ///
-/// `key_id` is an opaque identifier chosen by the substrate. It
-/// is **not** a Keychain item label, an Android `KeyAlias`, or a
-/// DPAPI descriptor — those are private to the implementation.
-/// The substrate uses the same id consistently across `store` /
-/// `load` / `delete` so the host's mapping table can be a simple
-/// `HashMap<String, PlatformHandle>`.
+/// `key_id` is an opaque identifier chosen by the **host** and
+/// passed through the substrate unchanged. The substrate never
+/// interprets `key_id` — it only forwards the same id consistently
+/// across `store` / `load` / `delete` so the host's mapping table
+/// can be a simple `HashMap<String, PlatformHandle>`. The host's
+/// resolver implementation is the only component that maps the
+/// id to the underlying platform key handle (Keychain item label,
+/// Android `KeyAlias`, DPAPI descriptor, etc.); none of those
+/// shapes leak into the substrate.
 ///
 /// `key_hex` is a hex-encoded representation of the 32-byte
 /// master key. Hex is preferred over base64 because UniFFI's
@@ -149,12 +157,23 @@ pub fn clear_key_storage_resolver(handle: RuntimeHandle) -> FfiResult<()> {
 
 #[cfg(test)]
 mod tests {
-    //! Resolver registration is purely cross-language plumbing —
-    //! the substrate does not call into the resolver from any hot
-    //! path yet (per the module-level docs). The tests exercise
-    //! the registration / unregistration lifecycle through a
-    //! deterministic in-memory backing store and verify the
-    //! metric counters fire as expected.
+    //! These tests cover the **mid-life registration / clearing
+    //! lifecycle** that the [`set_key_storage_resolver`] /
+    //! [`clear_key_storage_resolver`] entry points expose
+    //! independently of the cold-boot resolver-driven open.
+    //!
+    //! The substrate's **active consumption** of the resolver — the
+    //! cold-boot `load_key` call that drives
+    //! [`crate::open_store_with_resolver`] — is covered by the
+    //! resolver-path unit tests in `crate::runtime::tests`
+    //! (`open_store_with_resolver_*`), which exercise the
+    //! end-to-end flow (resolver consulted once, hex parsed,
+    //! SQLCipher opened, resolver attached to the runtime before
+    //! the registry insert). The tests below intentionally exercise
+    //! the trait directly without a live `RuntimeHandle` so the
+    //! registration-side wiring (metric counters, slot replacement,
+    //! cleared-slot idempotency) can be observed without standing
+    //! up a full open.
     use super::*;
     use crate::metrics::snapshot;
 
