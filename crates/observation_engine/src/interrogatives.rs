@@ -241,6 +241,22 @@ pub fn interrogatives_for(
         // Bahasa Indonesia §11. Standard Indonesian + cross-applies
         // to Malay (Bahasa Melayu), which whatlang merges into
         // `Ind` for the trigram model.
+        //
+        // Deliberately omitted: `di` and `yang`. The compound
+        // forms `di mana` ("where") and `yang mana` ("which one")
+        // are real question openers, but `di` is one of the most
+        // common Indonesian / Malay prepositions ("in / at" —
+        // `Di Jakarta...`, `Di kantor...`, `Di rumah...`) and
+        // `yang` is an extremely common relative pronoun
+        // ("that / which" — `Yang penting...`, `Yang menarik...`,
+        // `Yang lebih baik...`). A FirstToken match on either
+        // would mis-classify a large fraction of declarative
+        // sentences that happen to start with these high-frequency
+        // function words. The bare interrogative `mana` is still
+        // in the list, which catches the canonical
+        // `Mana yang lebih baik?` form; the `?` terminator handles
+        // the sentence-final cases (`Bagus, di mana?`) on its own.
+        // See Devin Review finding #FLAG-0005b.
         "id" | "ms" => Some((
             &[
                 "siapa",
@@ -251,8 +267,6 @@ pub fn interrogatives_for(
                 "bagaimana",
                 "mana",
                 "berapa",
-                "yang",
-                "di",
             ],
             InterrogativeMatch::FirstToken,
         )),
@@ -609,5 +623,32 @@ mod tests {
             !fr_list.contains(&"est-ce"),
             "french list must not contain unreachable 'est-ce' entry"
         );
+    }
+
+    #[test]
+    fn indonesian_malay_omits_high_frequency_prepositions() {
+        // Devin Review #FLAG-0005b: `di` ("in / at") and `yang`
+        // ("that / which") are extremely common Indonesian / Malay
+        // function words. FirstToken matching on either would
+        // mis-classify every declarative starting with the
+        // preposition or the relative pronoun as a question. Guard
+        // against accidental re-addition.
+        for tag in ["id", "ms"] {
+            let (list, _) = interrogatives_for(tag).unwrap();
+            assert!(
+                !list.contains(&"di"),
+                "{tag} list must not contain high-frequency preposition 'di'"
+            );
+            assert!(
+                !list.contains(&"yang"),
+                "{tag} list must not contain high-frequency relative pronoun 'yang'"
+            );
+            // The bare `mana` should remain so `Mana yang lebih baik?`
+            // and similar canonical openers still classify.
+            assert!(
+                list.contains(&"mana"),
+                "{tag} list must still contain bare interrogative 'mana'"
+            );
+        }
     }
 }

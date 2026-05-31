@@ -162,6 +162,12 @@ serde_json = "1"
 # embedded model, compatible with the workspace MSRV (1.85).
 whatlang = "0.18"
 
+# Unicode NFC normalization (Phase 1.4) — used by the interrogative
+# first-token extractor to handle NFD-decomposed input (e.g. `qué` as
+# `q u e \u{0301}`) so accented interrogatives match the NFC-composed
+# table entries. Pure Rust, no_std-compatible, MIT.
+unicode-normalization = "0.1"
+
 # HTTP client. The blocking client is used by the synchronous
 # inference path (`inference_router`'s `http-client` feature talks
 # to the llama.cpp loopback `llama-server`); the async client is

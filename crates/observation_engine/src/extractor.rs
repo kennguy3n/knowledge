@@ -38,6 +38,7 @@
 //! the short sentence.
 
 use evidence_store::ScopeId;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::interrogatives::{interrogatives_for, InterrogativeMatch};
 use crate::language::{detect_language, LanguageTag};
@@ -75,6 +76,48 @@ use crate::types::{Observation, ObservationType};
 /// default — downstream consumers treat `None` as "unknown" and
 /// fail-closed on language-dependent operations (Phase 1.1
 /// `LexiconRegistry` lookup, Phase 1.2 FTS5 tokenizer selection).
+///
+/// # Mutual-delegation hazard ⚠
+///
+/// `extract_with_dominant_language` has a default implementation
+/// that delegates to [`Self::extract`] (dropping the hint). This
+/// is convenient for legacy implementors who only know about the
+/// single-arg form, but it creates an **infinite recursion trap**
+/// for implementors that try to mirror [`LexiconExtractor`]'s
+/// previous pattern of having `extract` delegate to
+/// `extract_with_dominant_language(None)`:
+///
+/// ```text
+/// // ⚠ INFINITE RECURSION — do NOT do this:
+/// impl ObservationExtractor for MyExtractor {
+///     fn extract(&self, text: &str, scope: ScopeId) -> Vec<Observation> {
+///         self.extract_with_dominant_language(text, scope, None) // calls default
+///     }                                                          // → calls self.extract() → loop
+///     // ... no override of extract_with_dominant_language
+/// }
+/// ```
+///
+/// **Correct pattern** (what `LexiconExtractor` does internally):
+/// route both trait methods to a single private helper on the
+/// concrete type. That keeps the trait surface flexible (callers
+/// can pick either entry point) without coupling the two trait
+/// methods to each other:
+///
+/// ```text
+/// impl MyExtractor {
+///     fn do_extract(&self, text: &str, scope: ScopeId, hint: Option<&LanguageTag>) -> Vec<Observation> {
+///         // ... actual work, hint is honoured or ignored as appropriate
+///     }
+/// }
+/// impl ObservationExtractor for MyExtractor {
+///     fn extract(&self, text: &str, scope: ScopeId) -> Vec<Observation> {
+///         self.do_extract(text, scope, None)
+///     }
+///     fn extract_with_dominant_language(&self, text: &str, scope: ScopeId, hint: Option<&LanguageTag>) -> Vec<Observation> {
+///         self.do_extract(text, scope, hint)
+///     }
+/// }
+/// ```
 pub trait ObservationExtractor {
     /// Run the extractor over `text`, returning all observations
     /// found in the supplied `scope`. Implementations must stamp
@@ -94,6 +137,10 @@ pub trait ObservationExtractor {
     /// to be updated. Implementations that care about the
     /// dominant tag (e.g. for entity-class stamping) should
     /// override this method to honour the hint.
+    ///
+    /// **Do not** delegate back to [`Self::extract`] from a custom
+    /// [`Self::extract`] override — see the mutual-delegation
+    /// hazard noted in the trait-level documentation above.
     fn extract_with_dominant_language(
         &self,
         text: &str,
@@ -340,7 +387,18 @@ fn looks_like_question(
         return true;
     }
 
-    let lower = sentence.trim().to_lowercase();
+    // NFC-normalise before lowercasing so that NFD-decomposed input
+    // (e.g. macOS file-system paths that decompose `é` into
+    // `e + U+0301`) matches the NFC-composed table entries. The
+    // `split` predicate below treats non-alphabetic codepoints —
+    // including category-Mn combining marks like `U+0301` — as
+    // token boundaries, so without NFC the Latin / Cyrillic
+    // accented interrogatives (`qué`, `cómo`, `pourquoi`, `où`,
+    // ...) and the Arabic tashkeel-marked forms would split into
+    // pieces that never match the table. NFC is the standard input
+    // form for chat protocols, so this is mostly defence-in-depth.
+    // See Devin Review finding #ANALYSIS-0003b.
+    let lower: String = sentence.trim().nfc().collect::<String>().to_lowercase();
     if lower.is_empty() {
         return false;
     }
@@ -744,12 +802,16 @@ fn is_thai_codepoint(c: char) -> bool {
     matches!(c, '\u{0E00}'..='\u{0E7F}')
 }
 
-impl ObservationExtractor for LexiconExtractor {
-    fn extract(&self, text: &str, scope: ScopeId) -> Vec<Observation> {
-        self.extract_with_dominant_language(text, scope, None)
-    }
-
-    fn extract_with_dominant_language(
+impl LexiconExtractor {
+    /// Shared implementation behind both [`ObservationExtractor::extract`]
+    /// and [`ObservationExtractor::extract_with_dominant_language`].
+    ///
+    /// Routing both trait methods through this private helper
+    /// instead of having one trait method call the other avoids
+    /// the mutual-delegation infinite-recursion trap documented on
+    /// the [`ObservationExtractor`] trait. See Devin Review
+    /// finding #ANALYSIS-0002b.
+    fn do_extract(
         &self,
         text: &str,
         scope: ScopeId,
@@ -891,6 +953,21 @@ impl ObservationExtractor for LexiconExtractor {
         }
 
         out
+    }
+}
+
+impl ObservationExtractor for LexiconExtractor {
+    fn extract(&self, text: &str, scope: ScopeId) -> Vec<Observation> {
+        self.do_extract(text, scope, None)
+    }
+
+    fn extract_with_dominant_language(
+        &self,
+        text: &str,
+        scope: ScopeId,
+        dominant_language: Option<&LanguageTag>,
+    ) -> Vec<Observation> {
+        self.do_extract(text, scope, dominant_language)
     }
 }
 
@@ -1133,6 +1210,44 @@ mod tests {
             Some('.'),
             Some(&en)
         ));
+    }
+
+    #[test]
+    fn looks_like_question_handles_nfd_decomposed_input() {
+        // Devin Review #ANALYSIS-0003b: NFD-decomposed input (e.g.
+        // accented Spanish text coming from a macOS file system or
+        // some IME pipelines) decomposes `é` into `e + U+0301`
+        // (COMBINING ACUTE ACCENT). The FirstToken tokeniser
+        // splits on non-alphabetic codepoints, and `U+0301`
+        // (category Mn) is non-alphabetic. Without NFC
+        // normalisation the tokeniser would split `qué` into
+        // `que` + the empty tail after the combining mark, so
+        // `que` would never match the NFC-composed table entry
+        // `qué`. Confirm both forms now match.
+        let es = LanguageTag::new("es").unwrap();
+        let nfc = "qué pasa";
+        // Manually construct the NFD form (e + COMBINING ACUTE ACCENT).
+        let nfd = "que\u{0301} pasa";
+        assert_ne!(nfc, nfd, "NFC and NFD forms must differ at the byte level");
+        assert!(
+            looks_like_question(nfc, Some('.'), Some(&es)),
+            "NFC form should match"
+        );
+        assert!(
+            looks_like_question(nfd, Some('.'), Some(&es)),
+            "NFD form should match after NFC normalisation"
+        );
+
+        // Same check for French `où` (NFD: `o + U+0300` GRAVE).
+        let fr = LanguageTag::new("fr").unwrap();
+        assert!(
+            looks_like_question("où est le bureau", Some('.'), Some(&fr)),
+            "french NFC form should match"
+        );
+        assert!(
+            looks_like_question("ou\u{0300} est le bureau", Some('.'), Some(&fr)),
+            "french NFD form should match after NFC normalisation"
+        );
     }
 
     #[test]
