@@ -33,6 +33,16 @@ export declare function admitApprovedDocument(handle: bigint, scopeId: string, l
 export declare function authenticateConnector(handle: bigint, instanceId: string, authCode: string): void
 
 /**
+ * Unregister the previously-registered master-key storage
+ * resolver on `handle`. Mirrors
+ * [`crate::clear_key_storage_resolver`].
+ *
+ * Calling this when no resolver is registered is a no-op (the
+ * trait's documented "last-write-wins" semantics).
+ */
+export declare function clearKeyStorageResolver(handle: bigint): void
+
+/**
  * Unregister the previously-registered OAuth2 client-secret
  * resolver on `handle`. Mirrors
  * [`crate::clear_oauth_client_secret_resolver`].
@@ -385,6 +395,48 @@ export declare function listWebhookServers(handle: bigint): any
  */
 export declare function openStore(path: string, masterKeyHex: string): bigint
 
+/**
+ * Open the SQLCipher-backed evidence store at `path` using a
+ * master key fetched from a host-supplied resolver object
+ * (instead of passing the hex string directly to
+ * [`js_open_store`]). Mirrors [`crate::open_store_with_resolver`].
+ *
+ * This is the cold-boot integration point hardware-backed hosts
+ * SHOULD use so the master key never enters the host's address
+ * space as a long-lived plaintext hex string — the resolver pulls
+ * it from Keychain / Keystore / DPAPI / TEE on demand, the
+ * substrate consumes it and stashes the resolver on the runtime
+ * so subsequent operations reach the same backing store, and the
+ * resolver is dropped when [`js_close_store`] tears the runtime
+ * down.
+ *
+ * `resolver` follows the same JS shape as
+ * [`js_set_key_storage_resolver`] (three methods: `loadKey`,
+ * `storeKey`, `deleteKey`). On this call the substrate invokes
+ * `loadKey(keyId)` exactly once.
+ *
+ * Error mapping (see [`ffi::open_store_with_resolver`] for the
+ * authoritative contract):
+ *
+ * * `loadKey` returns `null` / `undefined` → `NotFound { kind:
+ *   "master_key", id: <keyId> }` (re-tagged from the
+ *   resolver's own `NotFound { kind: "key" }`).
+ * * `loadKey` returns a string that is not 64 lowercase hex
+ *   chars → `InvalidId`.
+ * * `loadKey` throws a JS exception → `Unavailable { subsystem:
+ *   "host-key-store: loadKey threw: ..." }`.
+ * * `loadKey` does not return within `timeoutMs` →
+ *   `Unavailable { subsystem: "host-key-store: loadKey timed
+ *   out after Xms" }`.
+ * * SQLCipher fails to open the underlying database with the
+ *   resolved key → `Evidence` (same as
+ *   [`js_open_store`]).
+ *
+ * Returns the same opaque `BigInt` handle shape as
+ * [`js_open_store`].
+ */
+export declare function openStoreWithResolver(path: string, keyId: string, resolver: object, timeoutMs?: number | undefined | null): bigint
+
 /** Pin a memory record. Mirrors [`crate::pin`]. */
 export declare function pin(handle: bigint, id: string): void
 
@@ -542,6 +594,51 @@ export declare function revokeApprovedDocument(handle: bigint, scopeId: string, 
  * [`crate::run_decay_sweep`].
  */
 export declare function runDecaySweep(handle: bigint, scopeId: string): number
+
+/**
+ * Register a host-supplied master-key storage resolver against
+ * `handle`'s per-runtime slot. Mirrors
+ * [`crate::set_key_storage_resolver`].
+ *
+ * `resolver` is a JS object with three callable methods:
+ *
+ * * `loadKey(keyId: string) -> string | null | undefined` — return
+ *   the hex-encoded 32-byte master key, or `null` / `undefined` to
+ *   signal `NotFound`. The substrate's `open_store_with_resolver`
+ *   re-tags the `NotFound { kind: "key" }` it sees here as
+ *   `NotFound { kind: "master_key" }` for the cold-boot path so the
+ *   host can distinguish a master-key provisioning miss from a
+ *   generic key-id miss surfaced by future resolver call sites.
+ * * `storeKey(keyId: string, keyHex: string) -> void` — persist
+ *   `keyHex` under `keyId`. Throw on persistence failure. The
+ *   substrate ignores the return value.
+ * * `deleteKey(keyId: string) -> void` — drop the key registered
+ *   under `keyId`. MUST be idempotent — deleting a missing id is a
+ *   success, not an exception. The substrate ignores the return
+ *   value.
+ *
+ * Any JS exception in a callback surfaces to the substrate as
+ * [`ffi::FfiError::Unavailable`] with `subsystem` containing the
+ * method name and the exception message. The substrate does NOT
+ * re-tag JS exceptions as `NotFound` — that variant is reserved
+ * for the explicit `null` / `undefined` return from `loadKey`.
+ *
+ * `timeoutMs` is an optional defense-in-depth ceiling on how long
+ * the substrate will block on a JS callback returning. Default is
+ * 30000 ms (long enough for a cold keychain unlock that prompts the
+ * OS for biometric / password input). Pass `0` is rejected as
+ * ambiguous (would always time out); pass a larger value
+ * (e.g. 60_000 or 120_000) for slow cold-path lookups.
+ *
+ * Calling this multiple times REPLACES the previously-registered
+ * resolver. Hosts typically call this exactly once per
+ * `open_store` lifecycle.
+ *
+ * This is the **mid-life registration path**. For the cold-boot
+ * integration point that consumes `loadKey` to derive the master
+ * key during `open_store`, see [`js_open_store_with_resolver`].
+ */
+export declare function setKeyStorageResolver(handle: bigint, resolver: object, timeoutMs?: number | undefined | null): void
 
 /**
  * Register a host-supplied OAuth2 client-secret resolver against
