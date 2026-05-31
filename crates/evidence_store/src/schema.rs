@@ -99,6 +99,23 @@
 ///   simply have no version history rows yet, matching the
 ///   pre-Item-4 contract where every synthesis output overwrote
 ///   the prior one with no recoverable trail.
+/// - v12 (Phase 10 Item 6 — body-store dedup for approved-document
+///   payloads): the `approved_document_payloads` table loses its
+///   inline `nonce` + `payload` columns and becomes metadata-only.
+///   The plaintext bytes now live in the shared content-hash-
+///   deduplicated `body_store` table, encrypted under a random
+///   per-row CEK that is wrapped under each referencing scope's DEK
+///   via the existing `body_store_key_wraps` machinery. Admitting
+///   the same content into N tenant scopes therefore costs one
+///   `body_store` row + N wraps instead of N inline ciphertexts,
+///   and `forget(scope)` drops the scope's wrap (the existing
+///   `purge_body_key_wraps_for_scope` path then GCs the body row
+///   when its `ref_count` reaches zero). The migration is
+///   destructive (cannot be expressed with `CREATE * IF NOT EXISTS`)
+///   so the v11 -> v12 data move and the subsequent
+///   `ALTER TABLE ... DROP COLUMN` calls are implemented in
+///   `migrate_approved_doc_payloads_to_body_store` (a post-bootstrap
+///   step run from `open` after the scope-DEK cache is hydrated).
 /// - v13 (Phase 1.3 — multilingual ingestion): added the optional
 ///   `language_tag` column to the `evidence` table. The column
 ///   stores the BCP-47 primary subtag detected on the row's
@@ -117,23 +134,6 @@
 ///   `ALTER TABLE ADD COLUMN` does not run the append-only
 ///   triggers (DDL bypasses row triggers), so the addition is
 ///   safe against the existing `evidence_no_update` trigger.
-/// - v12 (Phase 10 Item 6 — body-store dedup for approved-document
-///   payloads): the `approved_document_payloads` table loses its
-///   inline `nonce` + `payload` columns and becomes metadata-only.
-///   The plaintext bytes now live in the shared content-hash-
-///   deduplicated `body_store` table, encrypted under a random
-///   per-row CEK that is wrapped under each referencing scope's DEK
-///   via the existing `body_store_key_wraps` machinery. Admitting
-///   the same content into N tenant scopes therefore costs one
-///   `body_store` row + N wraps instead of N inline ciphertexts,
-///   and `forget(scope)` drops the scope's wrap (the existing
-///   `purge_body_key_wraps_for_scope` path then GCs the body row
-///   when its `ref_count` reaches zero). The migration is
-///   destructive (cannot be expressed with `CREATE * IF NOT EXISTS`)
-///   so the v11 -> v12 data move and the subsequent
-///   `ALTER TABLE ... DROP COLUMN` calls are implemented in
-///   `migrate_approved_doc_payloads_to_body_store` (a post-bootstrap
-///   step run from `open` after the scope-DEK cache is hydrated).
 pub const SCHEMA_VERSION: i32 = 13;
 
 /// Schema bootstrap statements executed inside a transaction at

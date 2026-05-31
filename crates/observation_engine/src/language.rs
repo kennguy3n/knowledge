@@ -33,7 +33,7 @@
 //! is extended — fail-closed rather than silently emit an
 //! unmapped 3-letter code into [`crate::types::Observation::language_tag`].
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// BCP-47 primary language subtag (e.g. `"en"`, `"ja"`, `"zh"`).
 ///
@@ -41,9 +41,34 @@ use serde::{Deserialize, Serialize};
 /// raw String into a place that expects a normalised tag. Inputs
 /// are trimmed and lower-cased on construction; equality and
 /// hashing are case-sensitive on the normalised form.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// `Deserialize` is implemented by hand (rather than derived as
+/// `#[serde(transparent)]`) so that round-tripping a tag through
+/// any serde format — SQLCipher BLOB columns, observation JSON
+/// payloads emitted by connectors, FFI bridges, structured log
+/// records — enforces the exact same `trim` + lower-case + empty
+/// check that [`LanguageTag::new`] applies. Without this an
+/// adversarial or malformed payload (`"language_tag": ""`,
+/// `"language_tag": "   "`, `"language_tag": "EN-US"`) would
+/// otherwise materialise as an un-normalised tag and silently
+/// derail the per-locale lexicon / FTS5 tokenizer selection.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct LanguageTag(String);
+
+impl<'de> Deserialize<'de> for LanguageTag {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        LanguageTag::new(&raw).ok_or_else(|| {
+            serde::de::Error::custom(
+                "language_tag must be a non-empty BCP-47 primary subtag after trim",
+            )
+        })
+    }
+}
 
 impl LanguageTag {
     /// Construct a [`LanguageTag`] from a raw BCP-47 primary
@@ -112,8 +137,18 @@ pub fn detect_language(text: &str) -> Option<LanguageDetection> {
         return None;
     }
     let tag = whatlang_lang_to_bcp47(info.lang())?;
+    // Route through `LanguageTag::new` (rather than `LanguageTag(tag.to_string())`)
+    // so the empty / whitespace guard is enforced on every
+    // construction path. Defensive against a future addition to
+    // `whatlang_lang_to_bcp47` that accidentally maps a variant
+    // to `Some("")` — the substrate would refuse to classify
+    // rather than emit an empty tag downstream. In practice every
+    // current arm returns a non-empty static, so this is
+    // unreachable today; we still pay the one branch to keep the
+    // single-construction-path invariant honest.
+    let tag = LanguageTag::new(tag)?;
     Some(LanguageDetection {
-        tag: LanguageTag(tag.to_string()),
+        tag,
         confidence: info.confidence(),
         is_reliable: true,
     })
@@ -372,9 +407,42 @@ mod tests {
     fn serde_roundtrip_language_tag() {
         let tag = LanguageTag::new("ja").unwrap();
         let json = serde_json::to_string(&tag).unwrap();
-        // `#[serde(transparent)]` renders as the inner string.
+        // Serialize is `#[serde(transparent)]` so the wire form
+        // is the bare inner string. The custom Deserialize impl
+        // still funnels it through `LanguageTag::new` on the way
+        // back in to enforce trim + lowercase + non-empty.
         assert_eq!(json, "\"ja\"");
         let decoded: LanguageTag = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, tag);
+    }
+
+    #[test]
+    fn deserialize_normalises_and_rejects_invalid_tags() {
+        // Mixed case round-trips to normalised lowercase rather than
+        // materialising as `LanguageTag("EN-US")`. This is the
+        // invariant the custom Deserialize impl is defending: the
+        // SQLCipher row, FFI bridge, connector JSON payload, or
+        // structured log entry that hands us back a tag MUST end up
+        // bit-equal to what `LanguageTag::new()` would have produced
+        // on the same raw string.
+        let decoded: LanguageTag = serde_json::from_str("\"EN-US\"").unwrap();
+        assert_eq!(decoded.as_str(), "en-us");
+        assert_eq!(decoded.primary(), "en");
+
+        // Surrounding whitespace is trimmed.
+        let decoded: LanguageTag = serde_json::from_str("\"  ja  \"").unwrap();
+        assert_eq!(decoded.as_str(), "ja");
+
+        // Empty / whitespace-only inputs are rejected (rather than
+        // becoming `LanguageTag("")` which would semantically
+        // collide with the "language unknown" state that callers
+        // represent as `Option<LanguageTag>::None`).
+        for empty in ["\"\"", "\"   \""] {
+            let res: Result<LanguageTag, _> = serde_json::from_str(empty);
+            assert!(
+                res.is_err(),
+                "deserialising empty / whitespace-only input must fail: {empty}"
+            );
+        }
     }
 }

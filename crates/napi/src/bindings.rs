@@ -2227,7 +2227,13 @@ mod tests {
     fn resolve_key_storage_recv_timeout_accepts_positive_milliseconds() {
         let t = resolve_key_storage_recv_timeout(Some(15_000))
             .expect("positive value should be accepted");
-        assert_eq!(t, std::time::Duration::from_millis(15_000));
+        // Spelled in seconds rather than `from_millis(15_000)` to
+        // appease clippy 1.96's `duration_suboptimal_units` lint
+        // (released 2026-04-14 with stable). The input here is in
+        // milliseconds (matching the public N-API contract), the
+        // output is a Duration, so the assertion is just checking
+        // the unit conversion landed at 15 s of wall time.
+        assert_eq!(t, std::time::Duration::from_secs(15));
     }
 
     #[test]
