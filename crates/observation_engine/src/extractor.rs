@@ -81,6 +81,27 @@ pub trait ObservationExtractor {
     /// each observation's `language_tag` per the trait-level
     /// contract above.
     fn extract(&self, text: &str, scope: ScopeId) -> Vec<Observation>;
+
+    /// Same as [`Self::extract`], but accepts a pre-computed
+    /// **dominant** language hint to avoid re-running
+    /// [`crate::language::detect_language`] on the whole input
+    /// when the caller already detected it (e.g. for row-level
+    /// metadata). Per-sentence detection still runs inside the
+    /// extractor — only the whole-input call is skipped.
+    ///
+    /// The default implementation ignores the hint and calls
+    /// [`Self::extract`] so existing implementations don't need
+    /// to be updated. Implementations that care about the
+    /// dominant tag (e.g. for entity-class stamping) should
+    /// override this method to honour the hint.
+    fn extract_with_dominant_language(
+        &self,
+        text: &str,
+        scope: ScopeId,
+        _dominant_language: Option<&LanguageTag>,
+    ) -> Vec<Observation> {
+        self.extract(text, scope)
+    }
 }
 
 /// Lexicon extractor (`docs/DESIGN.md` §3.2 first pass).
@@ -725,6 +746,15 @@ fn is_thai_codepoint(c: char) -> bool {
 
 impl ObservationExtractor for LexiconExtractor {
     fn extract(&self, text: &str, scope: ScopeId) -> Vec<Observation> {
+        self.extract_with_dominant_language(text, scope, None)
+    }
+
+    fn extract_with_dominant_language(
+        &self,
+        text: &str,
+        scope: ScopeId,
+        dominant_language: Option<&LanguageTag>,
+    ) -> Vec<Observation> {
         let mut out = Vec::new();
         let mut seen_entities: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -732,7 +762,15 @@ impl ObservationExtractor for LexiconExtractor {
         // (mentions / URLs / dates / numerics span the whole input,
         // so the dominant language is the only language that makes
         // semantic sense to stamp on them).
-        let dominant_language = detect_language(text).map(|d| d.tag);
+        // Re-use the caller's pre-computed dominant language when
+        // one was supplied (the pipeline runs detect_language
+        // once to populate row-level metadata and threads that
+        // result through this hint); only fall back to running
+        // detect_language ourselves when no hint was provided
+        // (direct callers of `extract`, tests, etc.).
+        let dominant_language = dominant_language
+            .cloned()
+            .or_else(|| detect_language(text).map(|d| d.tag));
 
         // Entity extraction over the entire input.
         for mention in extract_at_mentions(text) {
@@ -1349,6 +1387,63 @@ mod tests {
                 "{c:?} (U+{:04X}) must NOT be a sentence terminator",
                 c as u32
             );
+        }
+    }
+
+    #[test]
+    fn extract_with_dominant_language_hint_is_honoured_for_entity_class() {
+        // Devin Review #ANALYSIS-0001: pipeline + extractor used
+        // to detect the dominant language twice on the same
+        // text. The new `extract_with_dominant_language` hint
+        // skips the extractor's whole-input detect_language when
+        // the caller supplies a tag. Verify (a) the hinted tag
+        // wins on entity-class observations, and (b) supplying a
+        // contrived non-canonical tag changes the entity-class
+        // language, proving the hint actually flows through.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        let text = "Hello team please review the migration plan and ship Friday. \
+                    @sara can you draft the rollout schedule by tomorrow?";
+        // Hint a deliberately wrong tag so we can distinguish
+        // "extractor honoured the hint" from "extractor
+        // re-detected and got the same answer by coincidence".
+        let hint = LanguageTag::new("xq").expect("contrived tag must construct");
+        let obs = ext.extract_with_dominant_language(text, scope, Some(&hint));
+        let mention = obs
+            .iter()
+            .find(|o| o.observation_type == ObservationType::Entity && o.content == "@sara")
+            .expect("@sara mention should be extracted");
+        assert_eq!(
+            mention.language_tag.as_ref(),
+            Some(&hint),
+            "@mention must inherit the supplied dominant-language hint \
+             instead of re-detecting (got {:?})",
+            mention.language_tag
+        );
+    }
+
+    #[test]
+    fn extract_with_no_hint_matches_extract() {
+        // The default `extract_with_dominant_language(..., None)`
+        // path must produce the same observations as the legacy
+        // `extract()` entry point so existing callers see no
+        // behavioural change.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        let text = "Approved the rollout. @alice please draft the agenda by Friday. \
+                    今日は晴れですか。";
+        let a = ext.extract(text, scope);
+        let b = ext.extract_with_dominant_language(text, scope, None);
+        assert_eq!(
+            a.len(),
+            b.len(),
+            "extract and extract_with_dominant_language(None) must return \
+             the same number of observations"
+        );
+        for (lhs, rhs) in a.iter().zip(b.iter()) {
+            assert_eq!(lhs.observation_type, rhs.observation_type);
+            assert_eq!(lhs.content, rhs.content);
+            assert_eq!(lhs.language_tag, rhs.language_tag);
         }
     }
 }

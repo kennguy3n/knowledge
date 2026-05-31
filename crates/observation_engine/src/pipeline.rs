@@ -96,8 +96,17 @@ where
         // onto every produced observation (sentence-class
         // observations get the sentence language, entity-class
         // observations get the dominant language). Trust those
-        // stamps and pass them through.
-        let observations: Vec<Observation> = self.extractor.extract(text, scope);
+        // stamps and pass them through. We hand the pre-computed
+        // dominant tag to `extract_with_dominant_language` so the
+        // extractor does not redundantly re-run
+        // `detect_language(text)` on the whole input — the
+        // per-sentence detection inside the extractor remains
+        // independent of this hint.
+        let observations: Vec<Observation> = self.extractor.extract_with_dominant_language(
+            text,
+            scope,
+            language.as_ref().map(|d| &d.tag),
+        );
         Ok(PipelineRunOutput {
             observations,
             language,
