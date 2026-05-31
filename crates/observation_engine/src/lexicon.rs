@@ -192,19 +192,36 @@ pub struct LanguageLexicon {
     /// Strategy for matching [`Self::task_keywords`].
     pub task_strategy: MatchStrategy,
     /// Imperative verbs for task detection. Matched via
-    /// [`KeywordClass::TaskImperative`], which uses
-    /// [`MatchStrategy::FirstBigram`] unconditionally so that
-    /// single-word imperatives (English `please`, German
-    /// `bitte`, Vietnamese `vui`) still match via the
-    /// first-token arm while multi-syllable Vietnamese
-    /// imperatives (`triển khai`, `chuẩn bị`, `cập nhật`)
-    /// match via the bigram arm. Bigram entries must be written
-    /// with a single ASCII space separating the two alphabetic
-    /// tokens; see
+    /// [`KeywordClass::TaskImperative`] using
+    /// [`Self::task_imperative_strategy`].
+    ///
+    /// Bigram entries (for the [`MatchStrategy::FirstBigram`]
+    /// arm) must be written with a single ASCII space
+    /// separating the two alphabetic tokens; see
     /// [`first_alphabetic_bigram`](crate::lexicon::first_alphabetic_bigram).
     /// See Devin Review finding #BUG-0002 (Phase 1.1) — the
     /// strategy is now documented to match the code.
     pub task_imperative_verbs: &'static [&'static str],
+    /// Strategy for matching [`Self::task_imperative_verbs`].
+    ///
+    /// Most languages use [`MatchStrategy::FirstBigram`] (a
+    /// strict superset of [`MatchStrategy::FirstToken`]: single-
+    /// word imperatives still match via the first-token arm,
+    /// while multi-syllable imperatives such as Vietnamese
+    /// `triển khai` / `chuẩn bị` / `cập nhật` match via the
+    /// bigram arm). Languages with scripts that put
+    /// non-alphabetic combining marks *inside* the imperative
+    /// verb — notably Devanagari (Hindi) with the virama
+    /// `U+094D` (Category Mn) embedded in `मर्ज` / `समीक्षा` /
+    /// `प्रकाशित` / `अद्यतन` — must use
+    /// [`MatchStrategy::Substring`] instead, because the
+    /// alphabetic-tokeniser ([`alphabetic_tokens`]) splits at
+    /// every non-alphabetic char and would never produce the
+    /// virama-spanning token. Per-language override structurally
+    /// prevents the unreachable-entry class of bug for future
+    /// languages — see Devin Review findings #BUG-0001 +
+    /// #ANALYSIS-0003 (Phase 1.1).
+    pub task_imperative_strategy: MatchStrategy,
     /// Stop-words for the capitalised-token entity extractor.
     /// Only relevant for languages with case distinction —
     /// CJK / Arabic / Thai lexicons leave this empty.
@@ -222,25 +239,51 @@ impl LanguageLexicon {
         match class {
             KeywordClass::Decision => Some((self.decision_keywords, self.decision_strategy)),
             KeywordClass::Task => Some((self.task_keywords, self.task_strategy)),
-            // TaskImperative uses FirstBigram unconditionally:
-            // FirstBigram is a strict superset of FirstToken
-            // (it tries FirstToken first, then the bigram), so
-            // single-word imperative verbs in en / es / fr /
-            // de / pt / it / ru still match via the FirstToken
-            // arm, while Vietnamese-style multi-syllable
-            // imperative verbs (`triển khai`, `chuẩn bị`,
-            // `cập nhật`) match via the bigram arm. This
-            // unifies the imperative-verb path so the lexicon
-            // doesn't need a per-language strategy field for
-            // imperatives.
+            // TaskImperative now uses the per-language
+            // `task_imperative_strategy` field. Most languages
+            // set this to `FirstBigram` (a strict superset of
+            // `FirstToken`: it tries `FirstToken` first, then
+            // the bigram), so single-word imperative verbs in
+            // en / es / fr / de / pt / it / ru still match via
+            // the FirstToken arm, while Vietnamese-style
+            // multi-syllable imperative verbs (`triển khai`,
+            // `chuẩn bị`, `cập nhật`) match via the bigram arm.
+            // Devanagari (Hindi) sets this to `Substring`
+            // because the virama `U+094D` is non-alphabetic and
+            // splits intra-word imperatives like `मर्ज` /
+            // `समीक्षा` that no first-token / first-bigram check
+            // could ever reassemble. See Devin Review findings
+            // #BUG-0001 + #ANALYSIS-0003 (Phase 1.1).
             KeywordClass::TaskImperative => {
-                Some((self.task_imperative_verbs, MatchStrategy::FirstBigram))
+                Some((self.task_imperative_verbs, self.task_imperative_strategy))
             }
-            KeywordClass::Stopword => Some((self.stop_words, MatchStrategy::FirstToken)),
-            // Interrogatives are served via `interrogatives_for`
-            // (Phase 1.4 module) — see `interrogatives_for` on
-            // the registry.
-            KeywordClass::Interrogative => None,
+            // Stopwords AND Interrogatives both return `None`
+            // here, but for different reasons documented per-
+            // class below:
+            //
+            // * `Stopword`: the capitalised-token entity
+            //   extractor checks each candidate directly via
+            //   [`crate::extractor::LexiconExtractor::is_stop_word`],
+            //   which uses Unicode-aware [`str::to_lowercase`]
+            //   equality. Stop-words are deliberately NOT
+            //   routed through `table_matches` /
+            //   `sentence_matches_class` because the
+            //   sentence-shaped matcher's semantics
+            //   (`FirstToken` against the SENTENCE START)
+            //   don't match what stop-word filtering needs
+            //   (per-candidate equality, anywhere in text).
+            //   Returning `None` here makes that contract
+            //   explicit at the type level so a future caller
+            //   can't accidentally route stop-words through
+            //   the wrong matcher. See Devin Review finding
+            //   #ANALYSIS-0004 (Phase 1.1 sweep 2).
+            // * `Interrogative`: served by
+            //   [`LexiconRegistry::interrogatives_for`] —
+            //   the interrogative tables live in
+            //   [`crate::interrogatives`] for historical
+            //   reasons and to avoid duplicating the Phase
+            //   1.4 data on the [`LanguageLexicon`] struct.
+            KeywordClass::Stopword | KeywordClass::Interrogative => None,
         }
     }
 }
@@ -574,6 +617,7 @@ const EN_LEXICON: LanguageLexicon = LanguageLexicon {
         "update",
         "merge",
     ],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &[
         "the",
         "this",
@@ -651,6 +695,7 @@ const ES_LEXICON: LanguageLexicon = LanguageLexicon {
         "fusiona",
         "verifica",
     ],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &[
         "el", "la", "los", "las", "un", "una", "esto", "esta", "eso", "esa", "hoy", "mañana",
         "ayer",
@@ -711,6 +756,7 @@ const FR_LEXICON: LanguageLexicon = LanguageLexicon {
         "mets",
         "fusionne",
     ],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &[
         "le",
         "la",
@@ -775,6 +821,7 @@ const DE_LEXICON: LanguageLexicon = LanguageLexicon {
         "aktualisiere",
         "merge",
     ],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &[
         "der", "die", "das", "den", "dem", "ein", "eine", "einen", "dieser", "diese", "dieses",
         "heute", "morgen", "gestern",
@@ -825,6 +872,7 @@ const PT_LEXICON: LanguageLexicon = LanguageLexicon {
         "mescla",
         "lança",
     ],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &[
         "o", "a", "os", "as", "um", "uma", "este", "esta", "isso", "essa", "hoje", "amanhã",
         "ontem",
@@ -873,6 +921,7 @@ const IT_LEXICON: LanguageLexicon = LanguageLexicon {
         "unisci",
         "lancia",
     ],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &[
         "il", "la", "lo", "i", "gli", "le", "un", "una", "questo", "questa", "quello", "oggi",
         "domani", "ieri",
@@ -921,6 +970,7 @@ const RU_LEXICON: LanguageLexicon = LanguageLexicon {
         "обнови",
         "слей",
     ],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &[
         "это",
         "эта",
@@ -971,6 +1021,7 @@ const AR_LEXICON: LanguageLexicon = LanguageLexicon {
     task_imperative_verbs: &[
         "اكتب", "أرسل", "جدول", "راجع", "انشر", "أصلح", "وزع", "تحقق", "حضر", "حدث", "ادمج",
     ],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &[],
 };
 
@@ -1035,6 +1086,7 @@ const VI_LEXICON: LanguageLexicon = LanguageLexicon {
     // running text — the capitalised-token entity heuristic
     // only fires on capitalised tokens, so lowercase `hôm` and
     // `nay` never become candidate entities in the first place.
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &["này", "kia", "đó", "đây"],
 };
 
@@ -1081,6 +1133,7 @@ const ID_LEXICON: LanguageLexicon = LanguageLexicon {
     // Single-token only — see Vietnamese stop-words note. `hari
     // ini` ("today") is multi-word and is handled by the
     // lowercase-fast-path observation above.
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &["ini", "itu", "kemarin", "besok"],
 };
 
@@ -1097,6 +1150,7 @@ const MS_LEXICON: LanguageLexicon = LanguageLexicon {
     task_keywords: ID_LEXICON.task_keywords,
     task_strategy: ID_LEXICON.task_strategy,
     task_imperative_verbs: ID_LEXICON.task_imperative_verbs,
+    task_imperative_strategy: ID_LEXICON.task_imperative_strategy,
     stop_words: ID_LEXICON.stop_words,
 };
 
@@ -1135,6 +1189,7 @@ const HI_LEXICON: LanguageLexicon = LanguageLexicon {
         "अद्यतन",
         "मर्ज",
     ],
+    task_imperative_strategy: MatchStrategy::Substring,
     stop_words: &["यह", "वह", "ये", "वे", "आज", "कल", "परसों"],
 };
 
@@ -1174,6 +1229,7 @@ const JA_LEXICON: LanguageLexicon = LanguageLexicon {
     // languages; the substring task-keyword table is the
     // only path that fires for CJK task sentences.
     task_imperative_verbs: &[],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &[],
 };
 
@@ -1201,6 +1257,7 @@ const KO_LEXICON: LanguageLexicon = LanguageLexicon {
     task_keywords: &["작업", "업무", "부탁합니다", "해주세요", "팔로업"],
     task_strategy: MatchStrategy::Substring,
     task_imperative_verbs: &[],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &[],
 };
 
@@ -1220,6 +1277,7 @@ const ZH_LEXICON: LanguageLexicon = LanguageLexicon {
     task_keywords: &["任务", "任務", "请", "請", "麻烦", "麻煩", "跟进", "跟進"],
     task_strategy: MatchStrategy::Substring,
     task_imperative_verbs: &[],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &[],
 };
 
@@ -1237,6 +1295,7 @@ const TH_LEXICON: LanguageLexicon = LanguageLexicon {
     task_keywords: &["งาน", "กรุณา", "โปรด", "ติดตาม"],
     task_strategy: MatchStrategy::Substring,
     task_imperative_verbs: &[],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
     stop_words: &[],
 };
 

@@ -37,6 +37,8 @@
 //! one terse `"Yes."` reply doesn't lose the language stamp on
 //! the short sentence.
 
+use std::borrow::Cow;
+
 use evidence_store::ScopeId;
 
 use crate::interrogatives::interrogatives_for;
@@ -392,21 +394,62 @@ fn split_sentences_with_terminator(text: &str) -> Vec<SentenceSlice<'_>> {
 /// with tashkeel (‏كَيْفَ ‏) now match the canonical table
 /// entries (‏كيف ‏) consistently with how decision / task /
 /// imperative matching already worked.
+///
+/// The hot-path caller in [`LexiconExtractor::do_extract`]
+/// already normalises every sentence once (for decision / task
+/// matching) and calls [`looks_like_question_normalised`]
+/// directly with the pre-computed normalised string + primary
+/// tag, so the second-sweep #ANALYSIS-0002 finding ("double
+/// normalisation per sentence on the question path") no longer
+/// holds. The raw-sentence convenience wrapper below is gated
+/// on `cfg(test)` because it has no production caller after
+/// the closure: the in-tree unit tests use it to keep their
+/// arrange phase a one-liner, but every production-shaped
+/// matcher path goes through [`looks_like_question_normalised`]
+/// with the pre-normalised string the rest of `do_extract`
+/// already shares.
+#[cfg(test)]
 fn looks_like_question(
     sentence: &str,
     terminator: Option<char>,
     language: Option<&LanguageTag>,
 ) -> bool {
+    let primary_tag = language.map(LanguageTag::primary);
+    // Short-circuit on terminator before normalising, mirroring
+    // the pre-normalised hot path; normalisation costs an
+    // allocation we don't need if `?` / `？` / `؟` already
+    // resolved the question.
     if terminator.is_some_and(is_question_terminator) {
         return true;
     }
-
-    let primary_tag = language.map(LanguageTag::primary);
     let normalised = normalize_for_lookup(sentence, primary_tag);
+    looks_like_question_normalised(&normalised, terminator, primary_tag)
+}
+
+/// Pre-normalised-input variant of [`looks_like_question`].
+///
+/// Accepts the sentence after it has already been passed
+/// through [`normalize_for_lookup`], plus the primary BCP-47
+/// subtag used to perform that normalisation. The hot-path
+/// caller in [`LexiconExtractor::do_extract`] computes both
+/// values once per sentence (for decision / task matching) and
+/// reuses them here. The pre-normalised signature exists
+/// specifically to close Devin Review finding #ANALYSIS-0002
+/// (Phase 1.1 sweep 2): the per-sentence question path was
+/// re-running the NFC + lowercase + tashkeel/bidi-strip pass
+/// over the same sentence that decision/task matching had
+/// already normalised.
+fn looks_like_question_normalised(
+    normalised: &str,
+    terminator: Option<char>,
+    primary_tag: Option<&str>,
+) -> bool {
+    if terminator.is_some_and(is_question_terminator) {
+        return true;
+    }
     if normalised.is_empty() {
         return false;
     }
-
     // Look up per-language interrogatives; fall back to English
     // when the tag is unknown or unconfigured. Promote the
     // Phase 1.4 InterrogativeMatch into the unified
@@ -418,7 +461,7 @@ fn looks_like_question(
         .or_else(|| interrogatives_for("en"))
         .expect("english fallback must always be configured in interrogatives table");
     let strategy = MatchStrategy::from_interrogative_match(strategy);
-    table_matches(table, &normalised, strategy)
+    table_matches(table, normalised, strategy)
 }
 
 fn extract_urls(text: &str) -> Vec<String> {
@@ -745,8 +788,36 @@ fn extract_at_mentions(text: &str) -> Vec<String> {
 /// `Vec<String>` allocation the previous shape required for the
 /// registry-backed path.
 fn extract_capitalised_words(text: &str, is_stop_word: impl Fn(&str) -> bool) -> Vec<String> {
+    // Phase 1.1 sweep 2 #ANALYSIS-0005 closure: fold
+    // typographic / modifier apostrophe variants — U+2019 RIGHT
+    // SINGLE QUOTATION MARK (the standard French / English IME
+    // / typographically-correct apostrophe used by Word /
+    // macOS smart-quotes / iOS), U+2018 LEFT SINGLE QUOTATION
+    // MARK (smart-quote rendering of an opening apostrophe),
+    // and U+02BC MODIFIER LETTER APOSTROPHE (used in some
+    // Romanisations and African-language orthographies) — to
+    // ASCII U+0027 before tokenising. The split predicate
+    // below treats ASCII `'` as part of a token but treats
+    // U+2019 / U+2018 / U+02BC as non-alphabetic separators
+    // (U+02BC is technically `Lm` / alphabetic per Unicode but
+    // we still fold it for table consistency). Without
+    // folding, French `Aujourd\u{2019}hui` would tokenise as
+    // `["Aujourd", "hui"]` and `Aujourd` would not match the
+    // `aujourd'hui` stop-word entry written with ASCII `'`,
+    // emitting it as a false-positive entity. Folding once
+    // here also normalises the returned entity form so
+    // downstream consumers see the canonical ASCII shape. Same
+    // benefit applies to English contractions (`Don\u{2019}t`),
+    // Italian elisions (`L\u{2019}altro`), Catalan / Occitan,
+    // and any other language whose IME produces typographic
+    // apostrophes by default. The cross-language stop-word
+    // invariant test
+    // [`no_stop_word_entry_contains_typographic_apostrophe`]
+    // pins the contract that stop-word entries use ASCII `'`
+    // only, so the fold-then-compare path always converges.
+    let folded = fold_typographic_apostrophes(text);
     let mut out = Vec::new();
-    for raw in text.split(|c: char| !c.is_alphabetic() && c != '\'') {
+    for raw in folded.split(|c: char| !c.is_alphabetic() && c != '\'') {
         if raw.is_empty() {
             continue;
         }
@@ -757,6 +828,30 @@ fn extract_capitalised_words(text: &str, is_stop_word: impl Fn(&str) -> bool) ->
         }
     }
     out
+}
+
+/// Fold typographic / modifier apostrophe variants (U+2019,
+/// U+2018, U+02BC) to ASCII U+0027 so the lexicon tokeniser and
+/// stop-word lookup see a single canonical apostrophe shape
+/// regardless of input source. Allocates a new `String` only
+/// when at least one variant is present; otherwise returns the
+/// input by borrow.
+fn fold_typographic_apostrophes(text: &str) -> Cow<'_, str> {
+    if text
+        .chars()
+        .any(|c| matches!(c, '\u{2019}' | '\u{2018}' | '\u{02BC}'))
+    {
+        Cow::Owned(
+            text.chars()
+                .map(|c| match c {
+                    '\u{2019}' | '\u{2018}' | '\u{02BC}' => '\'',
+                    other => other,
+                })
+                .collect(),
+        )
+    } else {
+        Cow::Borrowed(text)
+    }
 }
 
 /// A sentence is considered "shaped" enough to be a Fact
@@ -1109,7 +1204,17 @@ impl LexiconExtractor {
             // sentences like "We decided to please everyone"
             // (decision-class) should not become tasks because
             // they happen to contain the substring `please`.
-            if looks_like_question(sentence, slice.terminator, sentence_language.as_ref()) {
+            // Phase 1.1 #ANALYSIS-0002 closure: pass the
+            // already-normalised sentence + primary tag into the
+            // pre-normalised variant so the question path
+            // doesn't re-run NFC + lowercase + tashkeel/bidi-
+            // strip on the same string that decision/task
+            // matching just normalised. The wrapper
+            // [`looks_like_question`] is still available for
+            // test callers and external users that want the
+            // raw-sentence convenience.
+            if looks_like_question_normalised(&normalised, slice.terminator, primary_tag.as_deref())
+            {
                 out.push(
                     Observation::new_candidate(
                         ObservationType::Question,
@@ -2403,5 +2508,138 @@ mod tests {
             "Vietnamese bare interrogative `ai` must still classify via FirstBigram's \
              first-token arm"
         );
+    }
+
+    #[test]
+    fn hindi_devanagari_virama_imperatives_match_via_substring() {
+        // Phase 1.1 sweep 2 #BUG-0001 + #ANALYSIS-0003 closure.
+        // Hindi `task_imperative_verbs` containing the Devanagari
+        // virama `U+094D` (Category Mn) — `मर्ज` (merge),
+        // `समीक्षा` (review), `प्रकाशित` (publish), `अद्यतन`
+        // (update) — are unreachable under the FirstBigram
+        // matcher because `alphabetic_tokens` splits at every
+        // non-alphabetic character (the virama qualifies). The
+        // structural fix promotes `task_imperative_strategy` to a
+        // per-language [`LanguageLexicon`] field and sets it to
+        // [`MatchStrategy::Substring`] for Hindi specifically,
+        // matching how `decision_strategy` and `task_strategy`
+        // are already overridden per-language. This test exercises
+        // each affected verb through the full pipeline-shaped
+        // [`LexiconExtractor`] surface so a future regression in
+        // either the field plumbing or the strategy choice will
+        // produce zero Task observations for these sentences.
+        let extractor = LexiconExtractor::default();
+        let hi = LanguageTag::new("hi").unwrap();
+        let scope = ScopeId::new_v4();
+
+        // Each sentence ends with a Devanagari purna virama `।`
+        // so the multilingual sentence splitter sees a single
+        // sentence per input, and Hindi imperatives sit
+        // mid-sentence (where FirstToken / FirstBigram would
+        // still fail even without the virama issue, so this
+        // also tests that Substring catches non-leading
+        // positions).
+        let cases = [
+            ("कृपया इस PR की समीक्षा करें।", "समीक्षा (review)"),
+            ("इस ब्रांच को मर्ज करें।", "मर्ज (merge)"),
+            ("रिपोर्ट प्रकाशित करें।", "प्रकाशित (publish)"),
+            ("दस्तावेज़ अद्यतन करें।", "अद्यतन (update)"),
+        ];
+        for (sentence, label) in cases {
+            let obs = extractor.extract_with_dominant_language(sentence, scope, Some(&hi));
+            assert!(
+                obs.iter()
+                    .any(|o| matches!(o.observation_type, ObservationType::Task)),
+                "Hindi imperative containing virama {label:?} must produce a Task \
+                 observation under MatchStrategy::Substring (Devin Review #BUG-0001 + \
+                 #ANALYSIS-0003)"
+            );
+        }
+    }
+
+    #[test]
+    fn french_aujourdhui_with_typographic_apostrophe_is_recognised_as_stop_word() {
+        // Phase 1.1 sweep 2 #ANALYSIS-0005 closure. The French
+        // stop-word `aujourd'hui` is stored in `FR_LEXICON` with
+        // ASCII apostrophe `U+0027`, but most French IMEs
+        // (macOS smart-quotes, iOS, Word) emit `U+2019` RIGHT
+        // SINGLE QUOTATION MARK by default. Before the fix the
+        // capitalised-token splitter only treated ASCII `'` as
+        // in-token, so `Aujourd\u{2019}hui` tokenised as
+        // `["Aujourd", "hui"]` and `Aujourd` (no match against
+        // `aujourd'hui`) was emitted as an entity. The fix folds
+        // the three apostrophe variants (U+2019, U+2018, U+02BC)
+        // to ASCII `'` before tokenisation and entity extraction.
+        let extractor = LexiconExtractor::default();
+        let fr = LanguageTag::new("fr").unwrap();
+        let scope = ScopeId::new_v4();
+
+        // Both inputs must end up extracting `Paris` and NOT
+        // extracting `Aujourd` / `aujourd'hui` / any apostrophe
+        // fragment as an entity.
+        let ascii = "Aujourd'hui Paris est ensoleillé.";
+        let typographic = "Aujourd\u{2019}hui Paris est ensoleillé.";
+
+        let entities_ascii: Vec<String> = extractor
+            .extract_with_dominant_language(ascii, scope, Some(&fr))
+            .into_iter()
+            .filter(|o| matches!(o.observation_type, ObservationType::Entity))
+            .map(|o| o.content)
+            .collect();
+        let entities_typographic: Vec<String> = extractor
+            .extract_with_dominant_language(typographic, scope, Some(&fr))
+            .into_iter()
+            .filter(|o| matches!(o.observation_type, ObservationType::Entity))
+            .map(|o| o.content)
+            .collect();
+
+        assert_eq!(
+            entities_ascii, entities_typographic,
+            "French Aujourd\u{2019}hui (typographic U+2019) must produce the same \
+             entity set as Aujourd'hui (ASCII U+0027) after typographic-apostrophe \
+             folding in extract_capitalised_words \
+             (Devin Review #ANALYSIS-0005 sweep 2)"
+        );
+        assert!(
+            entities_typographic.iter().any(|e| e == "Paris"),
+            "Paris must be emitted as an entity from the typographic-apostrophe input"
+        );
+        assert!(
+            !entities_typographic
+                .iter()
+                .any(|e| e.starts_with("Aujourd")),
+            "No Aujourd-prefixed fragment may be emitted as an entity — the stop-word \
+             check must converge for both apostrophe shapes (entities: {:?})",
+            entities_typographic
+        );
+    }
+
+    #[test]
+    fn no_stop_word_entry_contains_typographic_apostrophe() {
+        // Cross-language invariant pinning the contract that
+        // every stop-word entry in every registry lexicon uses
+        // ASCII U+0027 (and never U+2019 / U+2018 / U+02BC).
+        // The capitalised-token splitter folds typographic
+        // apostrophes in the INPUT to ASCII before lookup; the
+        // lookup table itself must mirror that canonical form
+        // or the fold-then-compare path would silently miss.
+        // See `extract_capitalised_words` doc + Devin Review
+        // sweep 2 #ANALYSIS-0005.
+        for lexicon in default_registry().iter() {
+            for entry in lexicon.stop_words {
+                for c in entry.chars() {
+                    assert!(
+                        !matches!(c, '\u{2019}' | '\u{2018}' | '\u{02BC}'),
+                        "Stop-word entry {:?} in lexicon {:?} contains a non-ASCII \
+                         apostrophe variant U+{:04X}. Stop-word entries must use ASCII \
+                         apostrophe `'` (U+0027) so the fold-then-compare path in \
+                         extract_capitalised_words converges. Replace it with U+0027.",
+                        entry,
+                        lexicon.primary_tag,
+                        c as u32
+                    );
+                }
+            }
+        }
     }
 }
