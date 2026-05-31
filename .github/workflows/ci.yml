@@ -13,7 +13,7 @@ concurrency:
 
 # Principle of least privilege: every job in this workflow only needs
 # read access to the repo contents. The `fuzz` job's
-# `actions/upload-artifact@v4` step uploads to the per-run actions
+# `actions/upload-artifact@v7` step uploads to the per-run actions
 # scope, which is granted automatically and does not require an
 # additional permission grant.
 permissions:
