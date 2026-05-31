@@ -103,7 +103,7 @@ pqcrypto-sphincsplus = "0.7"
 pqcrypto-traits = "0.3"
 
 # Storage
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl", "blob"] }
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl", "blob"] }
 
 # Time
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
