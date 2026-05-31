@@ -15,9 +15,32 @@
 //! Confidence values are intentionally fixed per type; the next
 //! pipeline stage (XLM-R + SLM-assisted extraction)
 //! refines them.
+//!
+//! ## Phase 1.4 — multilingual sentence + question handling
+//!
+//! [`split_sentences_with_terminator`] recognises CJK
+//! (`。！？`), Arabic (`؟ ۔`), Devanagari (`।`), Armenian (`։`),
+//! Ethiopic (`።`) sentence terminators alongside ASCII
+//! (`. ! ? \n`). [`looks_like_question`] consults the per-language
+//! interrogative tables in [`crate::interrogatives`] and falls
+//! back to first-token English matching when the sentence's
+//! detected language is unknown.
+//!
+//! [`LexiconExtractor::extract`] runs [`crate::language::detect_language`]
+//! once on the whole input as the *dominant* language (stamped
+//! onto entity-class observations whose source spans the whole
+//! text), and once per sentence as the *sentence* language
+//! (stamped onto sentence-class observations — Task / Decision /
+//! Question / Fact). Per-sentence detection that comes back
+//! `None` (whatlang refused to classify a short sentence) falls
+//! back to the dominant language, so a long English message with
+//! one terse `"Yes."` reply doesn't lose the language stamp on
+//! the short sentence.
 
 use evidence_store::ScopeId;
 
+use crate::interrogatives::{interrogatives_for, InterrogativeMatch};
+use crate::language::{detect_language, LanguageTag};
 use crate::types::{Observation, ObservationType};
 
 /// Extract structured observations from raw evidence text.
@@ -135,28 +158,94 @@ impl LexiconExtractor {
     }
 }
 
-/// One sentence and the punctuation that ended it (`'.'`, `'!'`,
-/// `'?'`, or `'\n'`).
+/// One sentence and the punctuation `char` that ended it.
+///
+/// The terminator is `None` for the trailing fragment of
+/// unterminated input. Stored as a `char` (not a `u8`) because
+/// Phase 1.4 supports multi-byte UTF-8 terminators — CJK `。`,
+/// Arabic `؟`, Devanagari `।`, etc. — that don't fit in a single
+/// byte.
 #[derive(Debug, Clone, Copy)]
 struct SentenceSlice<'a> {
     text: &'a str,
-    terminator: Option<u8>,
+    terminator: Option<char>,
+}
+
+/// All sentence-terminator code points the splitter recognises.
+///
+/// Coverage rationale (per Phase 1.4 of the multilingual
+/// roadmap):
+///
+/// * `. ! ? \n` — Latin script (English, Spanish, French,
+///   German, Portuguese, Italian, Vietnamese, Indonesian, Malay,
+///   …) and any line-terminated text.
+/// * `。` (U+3002 IDEOGRAPHIC FULL STOP) — CJK (Japanese,
+///   Chinese, sometimes Korean).
+/// * `！` (U+FF01 FULLWIDTH EXCLAMATION MARK),
+///   `？` (U+FF1F FULLWIDTH QUESTION MARK) — CJK; the
+///   fullwidth forms are the canonical CJK question /
+///   exclamation terminators.
+/// * `؟` (U+061F ARABIC QUESTION MARK),
+///   `۔` (U+06D4 ARABIC FULL STOP) — Arabic, Persian, Urdu.
+///   (Arabic does not use the ASCII `!` as a sentence
+///   terminator, but tolerates ASCII `.`; both ASCII and Arabic
+///   terminators are accepted.)
+/// * `।` (U+0964 DEVANAGARI DANDA),
+///   `॥` (U+0965 DEVANAGARI DOUBLE DANDA) — Hindi, Marathi,
+///   Nepali, Sanskrit.
+/// * `։` (U+0589 ARMENIAN FULL STOP) — Armenian. The Armenian
+///   question mark `՞` is a *combining* mark placed on the
+///   stressed vowel of the interrogative word, so it is *not*
+///   used as a sentence terminator and is intentionally absent
+///   here.
+/// * `።` (U+1362 ETHIOPIC FULL STOP) — Amharic, Tigrinya.
+fn is_sentence_terminator(c: char) -> bool {
+    matches!(
+        c,
+        // ASCII / Latin
+        '.' | '!' | '?' | '\n'
+        // CJK
+        | '\u{3002}' // 。
+        | '\u{FF01}' // ！
+        | '\u{FF1F}' // ？
+        // Arabic / Persian / Urdu
+        | '\u{061F}' // ؟
+        | '\u{06D4}' // ۔
+        // Devanagari
+        | '\u{0964}' // ।
+        | '\u{0965}' // ॥
+        // Armenian
+        | '\u{0589}' // ։
+        // Ethiopic
+        | '\u{1362}' // ።
+    )
+}
+
+/// All recognised question-terminator code points. A subset of
+/// the sentence terminators — only those that unambiguously
+/// signal a question.
+fn is_question_terminator(c: char) -> bool {
+    matches!(
+        c,
+        '?'
+        | '\u{FF1F}' // ？  CJK fullwidth question
+        | '\u{061F}' // ؟   Arabic question
+    )
 }
 
 fn split_sentences_with_terminator(text: &str) -> Vec<SentenceSlice<'_>> {
     let mut out = Vec::new();
-    let mut start = 0;
-    let bytes = text.as_bytes();
-    for (i, b) in bytes.iter().enumerate() {
-        if matches!(b, b'.' | b'!' | b'?' | b'\n') {
+    let mut start = 0_usize;
+    for (i, c) in text.char_indices() {
+        if is_sentence_terminator(c) {
             let s = text[start..i].trim();
             if !s.is_empty() {
                 out.push(SentenceSlice {
                     text: s,
-                    terminator: Some(*b),
+                    terminator: Some(c),
                 });
             }
-            start = i + 1;
+            start = i + c.len_utf8();
         }
     }
     let tail = text[start..].trim();
@@ -169,22 +258,57 @@ fn split_sentences_with_terminator(text: &str) -> Vec<SentenceSlice<'_>> {
     out
 }
 
-/// Interrogative words that mark a sentence as a question even
-/// without a `?` terminator.
-const INTERROGATIVES: &[&str] = &[
-    "who", "what", "when", "where", "why", "how", "which", "whose", "whom",
-];
-
-fn looks_like_question(sentence: &str, terminator: Option<u8>) -> bool {
-    if terminator == Some(b'?') {
+/// Phase 1.4 question detector — consults the per-language
+/// interrogative tables in [`crate::interrogatives`] keyed by the
+/// sentence's detected language tag.
+///
+/// Three signals are checked, in priority order:
+///
+/// 1. **Question-mark terminator** — ASCII `?`, CJK fullwidth
+///    `？`, or Arabic `؟`. An unambiguous question marker; if
+///    present, return `true` regardless of language.
+/// 2. **Language-specific interrogative** — looked up via
+///    [`crate::interrogatives::interrogatives_for`] on the
+///    sentence's primary BCP-47 subtag. CJK + Thai use
+///    [`InterrogativeMatch::Substring`] (the interrogative may
+///    appear anywhere in the sentence); space-separated
+///    languages use [`InterrogativeMatch::FirstToken`].
+/// 3. **Fallback** — when the language tag is `None` or no
+///    table is configured for the language, fall back to the
+///    English first-token check so substantive English
+///    questions in unknown-language threads still get caught.
+fn looks_like_question(
+    sentence: &str,
+    terminator: Option<char>,
+    language: Option<&LanguageTag>,
+) -> bool {
+    if terminator.is_some_and(is_question_terminator) {
         return true;
     }
+
     let lower = sentence.trim().to_lowercase();
-    let first = lower
-        .split(|c: char| !c.is_alphabetic())
-        .find(|s| !s.is_empty())
-        .unwrap_or("");
-    INTERROGATIVES.contains(&first)
+    if lower.is_empty() {
+        return false;
+    }
+
+    // Look up per-language interrogatives; fall back to English
+    // when the tag is unknown or unconfigured.
+    let (table, strategy) = language
+        .map(LanguageTag::primary)
+        .and_then(interrogatives_for)
+        .or_else(|| interrogatives_for("en"))
+        .expect("english fallback must always be configured in interrogatives table");
+
+    match strategy {
+        InterrogativeMatch::FirstToken => {
+            let first = lower
+                .split(|c: char| !c.is_alphabetic())
+                .find(|s| !s.is_empty())
+                .unwrap_or("");
+            table.contains(&first)
+        }
+        InterrogativeMatch::Substring => table.iter().any(|i| lower.contains(*i)),
+    }
 }
 
 fn extract_urls(text: &str) -> Vec<String> {
@@ -520,117 +644,161 @@ fn extract_capitalised_words(text: &str, stop_words: &[String]) -> Vec<String> {
     out
 }
 
+/// A sentence is considered "shaped" enough to be a Fact
+/// candidate when it has either a whitespace separator (Latin /
+/// Cyrillic / Arabic / Devanagari / etc.) **or** is a CJK script
+/// run of at least 4 codepoints. CJK scripts don't use
+/// inter-word whitespace, so the "contains space" gate would
+/// silently drop every CJK sentence as not-fact-shaped.
+fn is_sentence_shaped_for_fact(sentence: &str) -> bool {
+    if sentence.contains(' ') {
+        return true;
+    }
+    let cjk_chars = sentence.chars().filter(|c| is_cjk_codepoint(*c)).count();
+    cjk_chars >= 4
+}
+
+/// True for code points in the CJK script blocks: CJK Unified
+/// Ideographs (`U+4E00..U+9FFF`), Hiragana (`U+3040..U+309F`),
+/// Katakana (`U+30A0..U+30FF`), Hangul Syllables
+/// (`U+AC00..U+D7AF`). Used by the sentence-shape heuristic and
+/// by the per-sentence-language fallback path.
+fn is_cjk_codepoint(c: char) -> bool {
+    matches!(c,
+        '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
+        | '\u{3040}'..='\u{309F}' // Hiragana
+        | '\u{30A0}'..='\u{30FF}' // Katakana
+        | '\u{AC00}'..='\u{D7AF}' // Hangul Syllables
+        | '\u{3400}'..='\u{4DBF}' // CJK Unified Ideographs Extension A
+    )
+}
+
 impl ObservationExtractor for LexiconExtractor {
     fn extract(&self, text: &str, scope: ScopeId) -> Vec<Observation> {
         let mut out = Vec::new();
         let mut seen_entities: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+        // Phase 1.4: dominant language for entity-class observations
+        // (mentions / URLs / dates / numerics span the whole input,
+        // so the dominant language is the only language that makes
+        // semantic sense to stamp on them).
+        let dominant_language = detect_language(text).map(|d| d.tag);
+
         // Entity extraction over the entire input.
         for mention in extract_at_mentions(text) {
             if seen_entities.insert(mention.clone()) {
-                out.push(Observation::new_candidate(
-                    ObservationType::Entity,
-                    mention,
-                    scope,
-                    0.85,
-                ));
+                out.push(
+                    Observation::new_candidate(ObservationType::Entity, mention, scope, 0.85)
+                        .with_language_tag(dominant_language.clone()),
+                );
             }
         }
         for word in extract_capitalised_words(text, &self.stop_words) {
             if seen_entities.insert(word.clone()) {
-                out.push(Observation::new_candidate(
-                    ObservationType::Entity,
-                    word,
-                    scope,
-                    0.55,
-                ));
+                out.push(
+                    Observation::new_candidate(ObservationType::Entity, word, scope, 0.55)
+                        .with_language_tag(dominant_language.clone()),
+                );
             }
         }
         for url in extract_urls(text) {
             if seen_entities.insert(url.clone()) {
-                out.push(Observation::new_candidate(
-                    ObservationType::Entity,
-                    url,
-                    scope,
-                    0.9,
-                ));
+                out.push(
+                    Observation::new_candidate(ObservationType::Entity, url, scope, 0.9)
+                        .with_language_tag(dominant_language.clone()),
+                );
             }
         }
         for email in extract_emails(text) {
             if seen_entities.insert(email.clone()) {
-                out.push(Observation::new_candidate(
-                    ObservationType::Entity,
-                    email,
-                    scope,
-                    0.9,
-                ));
+                out.push(
+                    Observation::new_candidate(ObservationType::Entity, email, scope, 0.9)
+                        .with_language_tag(dominant_language.clone()),
+                );
             }
         }
         for date_ref in extract_date_refs(text) {
             if seen_entities.insert(date_ref.clone()) {
-                out.push(Observation::new_candidate(
-                    ObservationType::Entity,
-                    date_ref,
-                    scope,
-                    0.6,
-                ));
+                out.push(
+                    Observation::new_candidate(ObservationType::Entity, date_ref, scope, 0.6)
+                        .with_language_tag(dominant_language.clone()),
+                );
             }
         }
         for numeric in extract_numeric_refs(text) {
             if seen_entities.insert(numeric.clone()) {
-                out.push(Observation::new_candidate(
-                    ObservationType::Entity,
-                    numeric,
-                    scope,
-                    0.7,
-                ));
+                out.push(
+                    Observation::new_candidate(ObservationType::Entity, numeric, scope, 0.7)
+                        .with_language_tag(dominant_language.clone()),
+                );
             }
         }
 
         // Sentence-level extraction for tasks / decisions / questions
-        // / facts.
+        // / facts. Phase 1.4: each sentence is independently
+        // language-detected so a bilingual chat message
+        // (`"Hello. 안녕하세요. Let's ship Friday."`) gets per-sentence
+        // tags. When whatlang refuses to classify a short sentence,
+        // fall back to the dominant language so a single `"Yes."`
+        // reply in a long English message still inherits `en`.
         for slice in split_sentences_with_terminator(text) {
             let sentence = slice.text;
+            let sentence_language = detect_language(sentence)
+                .map(|d| d.tag)
+                .or_else(|| dominant_language.clone());
             let lower = sentence.to_lowercase();
             if lower_contains_any(&lower, &self.decision_keywords) {
-                out.push(Observation::new_candidate(
-                    ObservationType::Decision,
-                    sentence.to_string(),
-                    scope,
-                    0.75,
-                ));
+                out.push(
+                    Observation::new_candidate(
+                        ObservationType::Decision,
+                        sentence.to_string(),
+                        scope,
+                        0.75,
+                    )
+                    .with_language_tag(sentence_language),
+                );
                 continue;
             }
             if lower_contains_any(&lower, &self.task_keywords)
                 || starts_with_imperative(&lower, &self.task_imperative_verbs)
             {
-                out.push(Observation::new_candidate(
-                    ObservationType::Task,
-                    sentence.to_string(),
-                    scope,
-                    0.7,
-                ));
+                out.push(
+                    Observation::new_candidate(
+                        ObservationType::Task,
+                        sentence.to_string(),
+                        scope,
+                        0.7,
+                    )
+                    .with_language_tag(sentence_language),
+                );
                 continue;
             }
-            if looks_like_question(sentence, slice.terminator) {
-                out.push(Observation::new_candidate(
-                    ObservationType::Question,
-                    sentence.to_string(),
-                    scope,
-                    0.7,
-                ));
+            if looks_like_question(sentence, slice.terminator, sentence_language.as_ref()) {
+                out.push(
+                    Observation::new_candidate(
+                        ObservationType::Question,
+                        sentence.to_string(),
+                        scope,
+                        0.7,
+                    )
+                    .with_language_tag(sentence_language),
+                );
                 continue;
             }
-            // Anything sentence-shaped (>= 6 chars, contains a space) and
-            // not picked up as a task / decision / question is a Fact
-            // candidate.
-            if sentence.len() >= 6 && sentence.contains(' ') {
-                out.push(Observation::new_candidate(
-                    ObservationType::Fact,
-                    sentence.to_string(),
-                    scope,
-                    0.5,
-                ));
+            // Anything sentence-shaped — Latin/Cyrillic/Arabic
+            // sentences with whitespace OR CJK sentences with at
+            // least 4 ideographs — and not picked up as a task /
+            // decision / question is a Fact candidate.
+            if sentence.len() >= 6 && is_sentence_shaped_for_fact(sentence) {
+                out.push(
+                    Observation::new_candidate(
+                        ObservationType::Fact,
+                        sentence.to_string(),
+                        scope,
+                        0.5,
+                    )
+                    .with_language_tag(sentence_language),
+                );
             }
         }
 
@@ -691,5 +859,397 @@ mod tests {
         assert!(obs
             .iter()
             .any(|o| o.observation_type == ObservationType::Fact));
+    }
+
+    // ===================================================================
+    // Phase 1.4 — multilingual sentence terminator + question detection
+    // tests. These exercise the new char-based splitter, the per-language
+    // interrogative tables, and per-sentence language stamping.
+    // ===================================================================
+
+    #[test]
+    fn split_sentences_recognises_cjk_terminators() {
+        // 3 Japanese sentences ending in 。 ！ ？ with no spaces
+        // between them. The byte-based splitter would have read
+        // these as one big sentence; the char-based splitter must
+        // produce 3 slices.
+        let text = "今日は晴れです。とても暑い！明日はどうですか？";
+        let slices = split_sentences_with_terminator(text);
+        assert_eq!(
+            slices.len(),
+            3,
+            "expected 3 CJK sentences, got {}: {slices:?}",
+            slices.len()
+        );
+        assert_eq!(slices[0].terminator, Some('。'));
+        assert_eq!(slices[1].terminator, Some('！'));
+        assert_eq!(slices[2].terminator, Some('？'));
+    }
+
+    #[test]
+    fn split_sentences_recognises_arabic_terminators() {
+        // Arabic uses ؟ (U+061F) for questions and ۔ (U+06D4) /
+        // ASCII `.` for statements. RTL display order in the source
+        // doesn't change the logical sentence boundaries.
+        let text = "مرحبا. كيف حالك؟ أنا بخير۔";
+        let slices = split_sentences_with_terminator(text);
+        assert_eq!(slices.len(), 3, "expected 3 Arabic sentences: {slices:?}");
+        assert_eq!(slices[0].terminator, Some('.'));
+        assert_eq!(slices[1].terminator, Some('؟'));
+        assert_eq!(slices[2].terminator, Some('۔'));
+    }
+
+    #[test]
+    fn split_sentences_recognises_devanagari_danda() {
+        // Hindi sentences end in । (danda) or ॥ (double danda).
+        let text = "मैं ठीक हूँ। आप कैसे हैं॥";
+        let slices = split_sentences_with_terminator(text);
+        assert_eq!(slices.len(), 2);
+        assert_eq!(slices[0].terminator, Some('।'));
+        assert_eq!(slices[1].terminator, Some('॥'));
+    }
+
+    #[test]
+    fn split_sentences_recognises_armenian_full_stop() {
+        // Armenian uses ։ (U+0589) as the sentence-ending full stop.
+        let text = "Բարև։ Ինչպես ես։";
+        let slices = split_sentences_with_terminator(text);
+        assert_eq!(slices.len(), 2);
+        assert_eq!(slices[0].terminator, Some('։'));
+        assert_eq!(slices[1].terminator, Some('։'));
+    }
+
+    #[test]
+    fn split_sentences_recognises_ethiopic_full_stop() {
+        // Amharic / Tigrinya use ። (U+1362).
+        let text = "ሰላም። እንዴት ነህ።";
+        let slices = split_sentences_with_terminator(text);
+        assert_eq!(slices.len(), 2);
+        assert_eq!(slices[0].terminator, Some('።'));
+        assert_eq!(slices[1].terminator, Some('።'));
+    }
+
+    #[test]
+    fn split_sentences_mixed_script_message() {
+        // The motivating Phase 1.4 example: a bilingual chat
+        // message ("Hello. 안녕하세요. Let's ship Friday.") splits
+        // into 3 sentences across Latin + Hangul scripts.
+        let text = "Hello. 안녕하세요. Let's ship Friday.";
+        let slices = split_sentences_with_terminator(text);
+        assert_eq!(slices.len(), 3, "expected 3 sentences: {slices:?}");
+        assert_eq!(slices[0].text, "Hello");
+        assert_eq!(slices[1].text, "안녕하세요");
+        assert!(slices[2].text.contains("Friday"));
+    }
+
+    #[test]
+    fn cjk_question_terminator_detected_as_question() {
+        // The fullwidth ？ alone is enough to mark the sentence
+        // as a question even with no interrogative word lookup.
+        assert!(looks_like_question("今日は晴れですか", Some('？'), None));
+    }
+
+    #[test]
+    fn arabic_question_terminator_detected_as_question() {
+        assert!(looks_like_question("كيف حالك", Some('؟'), None));
+    }
+
+    #[test]
+    fn japanese_interrogative_substring_match() {
+        // The sentence ends without `？` but contains the
+        // interrogative `何`. Substring matching for ja must
+        // catch this.
+        let ja = LanguageTag::new("ja").unwrap();
+        assert!(looks_like_question(
+            "今日は何曜日ですか",
+            Some('。'),
+            Some(&ja)
+        ));
+    }
+
+    #[test]
+    fn japanese_sentence_final_ka_particle_detected() {
+        // The Japanese question construction `〜ですか。` ends
+        // with `か` before the full stop, with no `？` terminator.
+        // Our table includes `ですか` as an interrogative so
+        // substring match catches it.
+        let ja = LanguageTag::new("ja").unwrap();
+        assert!(looks_like_question(
+            "明日は晴れですか",
+            Some('。'),
+            Some(&ja)
+        ));
+    }
+
+    #[test]
+    fn korean_interrogative_substring_match() {
+        let ko = LanguageTag::new("ko").unwrap();
+        // No `?`; the interrogative `무엇` (what) is in the middle.
+        assert!(looks_like_question(
+            "오늘은 무엇을 먹을까요",
+            Some('.'),
+            Some(&ko)
+        ));
+    }
+
+    #[test]
+    fn mandarin_yesno_particle_ma_detected() {
+        let zh = LanguageTag::new("zh").unwrap();
+        // Mandarin yes/no question with `吗` particle, no `？`.
+        assert!(looks_like_question("你好吗", Some('。'), Some(&zh)));
+    }
+
+    #[test]
+    fn spanish_first_token_interrogative_with_inverted_question_open() {
+        let es = LanguageTag::new("es").unwrap();
+        // `¿Cómo estás` — the leading `¿` is *not* a sentence
+        // terminator (it's an opening punctuation). The
+        // interrogative `cómo` is the first alphabetic token.
+        assert!(looks_like_question("¿Cómo estás", Some('.'), Some(&es)));
+    }
+
+    #[test]
+    fn french_first_token_interrogative_no_question_mark() {
+        let fr = LanguageTag::new("fr").unwrap();
+        assert!(looks_like_question(
+            "Pourquoi tu fais ça",
+            Some('.'),
+            Some(&fr)
+        ));
+    }
+
+    #[test]
+    fn german_first_token_interrogative_no_question_mark() {
+        let de = LanguageTag::new("de").unwrap();
+        assert!(looks_like_question(
+            "Wer hat das gemacht",
+            Some('.'),
+            Some(&de)
+        ));
+    }
+
+    #[test]
+    fn english_first_token_does_not_substring_match_unrelated_words() {
+        // Regression: ensure FirstToken strategy doesn't false-
+        // positive on words that *contain* an interrogative as a
+        // substring ("whole" contains "who", "whether" contains
+        // "when's" stem, etc.).
+        let en = LanguageTag::new("en").unwrap();
+        assert!(!looks_like_question(
+            "The whole team approved this",
+            Some('.'),
+            Some(&en)
+        ));
+        assert!(!looks_like_question(
+            "Whether we ship Friday is up to legal",
+            Some('.'),
+            Some(&en)
+        ));
+    }
+
+    #[test]
+    fn extractor_stamps_per_sentence_language_in_bilingual_message() {
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        // A bilingual chat message: long English intro + long
+        // Japanese question + long English task. Each sentence
+        // is long enough on its own that whatlang reliably
+        // classifies it — that's the per-sentence guarantee
+        // Phase 1.4 makes.
+        let text = "Please review the migration plan for the deadline this Friday. \
+                    今日の会議では何時に開始する予定でしょうか、教えてください。 \
+                    Please send the agenda document to the entire team today.";
+        let obs = ext.extract(text, scope);
+
+        let question = obs
+            .iter()
+            .find(|o| o.observation_type == ObservationType::Question)
+            .expect("japanese question should be detected (interrogative 何 substring match)");
+        assert_eq!(
+            question
+                .language_tag
+                .as_ref()
+                .map(|t| t.primary().to_string()),
+            Some("ja".to_string()),
+            "japanese question observation should be tagged `ja`, got {:?}",
+            question.language_tag
+        );
+
+        // At least one English task observation should be tagged
+        // `en`. (Multiple English sentences in the input may both
+        // become tasks via the "please" keyword; we just need one
+        // to confirm per-sentence detection ran on the English
+        // sentences independently of the Japanese sentence.)
+        let en_task = obs
+            .iter()
+            .find(|o| {
+                o.observation_type == ObservationType::Task
+                    && o.language_tag.as_ref().is_some_and(|t| t.primary() == "en")
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected at least one english-tagged task observation; got tags: {:?}",
+                    obs.iter()
+                        .filter(|o| o.observation_type == ObservationType::Task)
+                        .map(|o| o.language_tag.clone())
+                        .collect::<Vec<_>>()
+                )
+            });
+        let _ = en_task;
+    }
+
+    #[test]
+    fn cjk_fact_shaped_without_whitespace() {
+        // Regression: pre-Phase-1.4 the fact gate required a
+        // space character. A CJK declarative sentence has no
+        // spaces, so it would have been silently dropped. Verify
+        // CJK declaratives now produce Fact candidates.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        // "Tokyo Tower is 333 meters tall."
+        let obs = ext.extract("東京タワーの高さは三百三十三メートルです。", scope);
+        assert!(
+            obs.iter()
+                .any(|o| o.observation_type == ObservationType::Fact),
+            "expected at least one Fact from CJK declarative; got {:?}",
+            obs.iter().map(|o| o.observation_type).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn cjk_sentence_too_short_does_not_become_fact() {
+        // The CJK fact gate requires ≥ 4 ideographs to avoid
+        // tagging "は" or "です" alone as facts.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        // Short single-clause utterances — should NOT produce
+        // facts.
+        let obs = ext.extract("はい。", scope);
+        assert!(
+            !obs.iter()
+                .any(|o| o.observation_type == ObservationType::Fact),
+            "expected no Fact from very short CJK utterance"
+        );
+    }
+
+    #[test]
+    fn short_sentence_falls_back_to_dominant_language() {
+        // A long English message with a short `"Yes."` sentence.
+        // whatlang refuses to classify `"Yes."` alone; the
+        // sentence-level tag falls back to the dominant `en`.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        let text = "The migration is on track and the team approved the rollout plan. Yes.";
+        let obs = ext.extract(text, scope);
+        // Every observation should be tagged `en` (either via
+        // per-sentence detection on the long sentence, or via
+        // the fallback for `"Yes."`).
+        for o in &obs {
+            if let Some(tag) = o.language_tag.as_ref() {
+                assert_eq!(
+                    tag.primary(),
+                    "en",
+                    "observation {o:?} should fall back to en"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn extractor_entity_class_uses_dominant_language() {
+        // @mentions span the whole message, not a single
+        // sentence, so they must inherit the *whole-input*
+        // dominant language regardless of what individual
+        // sentences are tagged with. We compute the expected
+        // dominant via the same `detect_language(text)` call the
+        // extractor uses, then assert the mention's tag matches.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        let text = "Hello team please review the migration plan and ship Friday. \
+                    @sara can you draft the rollout schedule by tomorrow?";
+        let obs = ext.extract(text, scope);
+        let mention = obs
+            .iter()
+            .find(|o| o.observation_type == ObservationType::Entity && o.content == "@sara")
+            .expect("@sara mention should be extracted");
+        let dominant = detect_language(text).map(|d| d.tag);
+        assert_eq!(
+            mention.language_tag, dominant,
+            "@mention must carry the dominant-language tag computed from the whole input \
+             (got {:?}, expected {:?})",
+            mention.language_tag, dominant
+        );
+        // And separately: when the dominant is reliable, the
+        // mention should carry that exact tag.
+        assert!(
+            mention.language_tag.is_some(),
+            "english input should produce a reliable dominant tag"
+        );
+        assert_eq!(mention.language_tag.as_ref().unwrap().primary(), "en");
+    }
+
+    #[test]
+    fn extractor_entity_dominant_can_be_none_when_input_is_unclassifiable() {
+        // Inverse of the above: a short bilingual message that
+        // whatlang refuses to classify as a whole. The mention
+        // still gets `None`, but per-sentence-detected sentences
+        // may still get a confident tag (e.g. a long pure-CJK
+        // sentence in the same input). This documents the
+        // asymmetry: entity-class tag follows the *dominant*
+        // (whole-input) detection; sentence-class tag follows
+        // the per-sentence detection. They can diverge.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        let text = "@bob hi. 今日は会議の時間を変更してもらってもいいですか。";
+        let obs = ext.extract(text, scope);
+        let mention = obs
+            .iter()
+            .find(|o| o.observation_type == ObservationType::Entity && o.content == "@bob")
+            .expect("@bob mention should be extracted");
+        let dominant = detect_language(text).map(|d| d.tag);
+        assert_eq!(
+            mention.language_tag, dominant,
+            "@mention must carry the dominant tag exactly, whatever it is (got {:?}, \
+             expected {:?})",
+            mention.language_tag, dominant
+        );
+    }
+
+    #[test]
+    fn is_cjk_codepoint_classifies_correctly() {
+        // Spot-check the CJK detector.
+        assert!(is_cjk_codepoint('東')); // CJK Unified Ideograph
+        assert!(is_cjk_codepoint('あ')); // Hiragana
+        assert!(is_cjk_codepoint('カ')); // Katakana
+        assert!(is_cjk_codepoint('한')); // Hangul Syllables
+        assert!(!is_cjk_codepoint('a')); // ASCII
+        assert!(!is_cjk_codepoint('ä')); // Latin Extended
+        assert!(!is_cjk_codepoint('م')); // Arabic
+        assert!(!is_cjk_codepoint('क')); // Devanagari
+    }
+
+    #[test]
+    fn is_sentence_terminator_covers_phase_1_4_set() {
+        // Defensive: pin the exact terminator set so accidental
+        // additions/removals fail tests instead of silently
+        // changing behaviour.
+        let terminators = [
+            '.', '!', '?', '\n', '。', '！', '？', '؟', '۔', '।', '॥', '։', '።',
+        ];
+        for c in terminators {
+            assert!(
+                is_sentence_terminator(c),
+                "{c:?} (U+{:04X}) must be a sentence terminator",
+                c as u32
+            );
+        }
+        let non_terminators = ['a', 'あ', ',', ';', '¿', '¡', ':', '\t'];
+        for c in non_terminators {
+            assert!(
+                !is_sentence_terminator(c),
+                "{c:?} (U+{:04X}) must NOT be a sentence terminator",
+                c as u32
+            );
+        }
     }
 }

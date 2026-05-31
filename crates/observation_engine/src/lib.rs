@@ -21,6 +21,7 @@ pub mod citation;
 pub mod document;
 pub mod error;
 pub mod extractor;
+pub mod interrogatives;
 pub mod language;
 pub mod pipeline;
 pub mod promotion;
@@ -36,6 +37,9 @@ pub use document::{
 };
 pub use error::{ObservationError, Result};
 pub use extractor::{LexiconExtractor, ObservationExtractor};
+pub use interrogatives::{
+    interrogatives_for, matching_strategy_for, InterrogativeMatch, SUPPORTED_PRIMARY_TAGS,
+};
 pub use language::{detect_language, LanguageDetection, LanguageTag};
 pub use pipeline::{default_pipeline, ObservationPipeline, PipelineRunOutput};
 pub use promotion::{should_promote, ChannelPromotionPolicy, PromotionReason, PromotionResult};

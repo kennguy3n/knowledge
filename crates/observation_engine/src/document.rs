@@ -315,14 +315,19 @@ where
             if extracted.is_empty() {
                 continue;
             }
-            // Detect language *per chunk* — long documents may
-            // genuinely change language between sections (an
-            // English README that quotes a Japanese release note,
-            // a multilingual policy doc, …) so re-running
-            // detection on each chunk's text gives a tighter
-            // language stamp than a single document-level detect
-            // would.
-            let chunk_language = crate::language::detect_language(&chunk.text).map(|d| d.tag);
+            // Phase 1.4: the lexicon extractor now stamps
+            // per-sentence language tags inside each chunk (CJK
+            // `。`, Arabic `؟`, Devanagari `।` etc. are recognised
+            // by `split_sentences_with_terminator`, and
+            // `detect_language` runs per sentence with the
+            // chunk-level dominant tag as the fallback). The
+            // resulting observations carry tighter language stamps
+            // than the chunk-level single tag we used in Phase 1.3
+            // — so we *do not* overwrite them here. The previous
+            // `obs.language_tag.clone_from(&chunk_language)` would
+            // have clobbered, for instance, a Japanese sentence's
+            // `ja` tag with the chunk's dominant `en` tag.
+            //
             // Carry chunk-level evidence id and citation onto
             // every observation extracted from this chunk.
             let evidence_id = chunk_evidence_ids.get(chunk.metadata.chunk_index).copied();
@@ -332,7 +337,6 @@ where
                         obs.source_evidence_ids.push(eid);
                     }
                 }
-                obs.language_tag.clone_from(&chunk_language);
                 citations.insert(
                     obs.id,
                     ObservationCitation {
@@ -520,6 +524,60 @@ mod tests {
         assert_eq!(
             c.overlap_chars,
             SlidingWindowChunker::default().overlap_chars
+        );
+    }
+
+    #[test]
+    fn document_pipeline_preserves_per_sentence_language_tags_in_chunk() {
+        // Phase 1.4 contract: the document pipeline must NOT
+        // overwrite per-sentence language tags with the
+        // chunk-level dominant tag. A document chunk containing
+        // bilingual prose should yield observations with
+        // per-sentence tags.
+        let pipeline = default_document_pipeline().with_min_importance(ImportanceClass::Noise);
+        let scope = ScopeId::new_v4();
+        // Long enough that it stays a single chunk (under the
+        // default 1500-char window), but covers two languages so
+        // per-sentence detection produces distinct tags.
+        let text = "Please review the migration plan and ship the rollout this Friday. \
+                    今日の会議では何時に開始する予定でしょうか、ご確認お願いします。 \
+                    Approved the rollout schedule on Monday for the entire team.";
+        let res = pipeline
+            .process(
+                text,
+                &doc_ref(),
+                DocumentKind::PlainText,
+                scope,
+                &[EvidenceId::new_v4()],
+            )
+            .unwrap();
+        assert!(!res.observations.is_empty(), "expected observations");
+
+        let ja_tag_count = res
+            .observations
+            .iter()
+            .filter(|o| o.language_tag.as_ref().is_some_and(|t| t.primary() == "ja"))
+            .count();
+        let en_tag_count = res
+            .observations
+            .iter()
+            .filter(|o| o.language_tag.as_ref().is_some_and(|t| t.primary() == "en"))
+            .count();
+        assert!(
+            ja_tag_count >= 1,
+            "expected at least one ja-tagged observation from the JA sentence, got tags: {:?}",
+            res.observations
+                .iter()
+                .map(|o| o.language_tag.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            en_tag_count >= 1,
+            "expected at least one en-tagged observation from the EN sentences, got tags: {:?}",
+            res.observations
+                .iter()
+                .map(|o| o.language_tag.clone())
+                .collect::<Vec<_>>()
         );
     }
 }

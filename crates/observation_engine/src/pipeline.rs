@@ -5,7 +5,7 @@ use evidence_store::{ImportanceClass, ImportanceClassifier, ScopeId};
 
 use crate::error::{ObservationError, Result};
 use crate::extractor::{LexiconExtractor, ObservationExtractor};
-use crate::language::{detect_language, LanguageDetection, LanguageTag};
+use crate::language::{detect_language, LanguageDetection};
 use crate::types::Observation;
 
 /// One pass of the observation pipeline.
@@ -75,12 +75,15 @@ where
         if text.trim().is_empty() {
             return Err(ObservationError::EmptyInput);
         }
-        // Detect language *before* classification / extraction so
-        // the result is available to stamp onto every produced
-        // observation and so any future multilingual lexicon /
-        // tokenizer selection inside the classifier or extractor
-        // can read it off `PipelineRunOutput::language` without
-        // re-running detection.
+        // Detect the *dominant* (whole-input) language for the
+        // row-level metadata. The per-sentence language tag that
+        // gets stamped onto each observation is computed by the
+        // extractor itself (Phase 1.4) — it runs `detect_language`
+        // per sentence and falls back to the dominant language
+        // when whatlang refuses to classify a short sentence. We
+        // therefore *do not* re-stamp observations with the
+        // whole-input tag here: that would clobber the finer
+        // per-sentence tags from the extractor.
         let language = detect_language(text);
         let class = self.classifier.classify(text);
         if class.as_tag() < self.min_importance_tag {
@@ -89,13 +92,12 @@ where
                 language,
             });
         }
-        let language_tag: Option<LanguageTag> = language.as_ref().map(|d| d.tag.clone());
-        let observations: Vec<Observation> = self
-            .extractor
-            .extract(text, scope)
-            .into_iter()
-            .map(|obs| obs.with_language_tag(language_tag.clone()))
-            .collect();
+        // Extractor has already stamped per-sentence language tags
+        // onto every produced observation (sentence-class
+        // observations get the sentence language, entity-class
+        // observations get the dominant language). Trust those
+        // stamps and pass them through.
+        let observations: Vec<Observation> = self.extractor.extract(text, scope);
         Ok(PipelineRunOutput {
             observations,
             language,
@@ -134,6 +136,7 @@ pub fn default_pipeline() -> ObservationPipeline<LexiconExtractor, evidence_stor
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ObservationType;
 
     #[test]
     fn empty_input_is_an_error() {
@@ -218,5 +221,60 @@ mod tests {
         // importance classifier drops it (length-based noise). The
         // detection contract is exercised in `language.rs` tests.
         assert!(obs.is_empty());
+    }
+
+    #[test]
+    fn run_with_language_preserves_per_sentence_stamps_in_bilingual_input() {
+        // Phase 1.4 contract: the pipeline runs `detect_language`
+        // on the WHOLE input to set the row-level `language`
+        // field, but it MUST NOT overwrite the per-sentence
+        // language tags the extractor already attached to each
+        // observation. In a bilingual EN / JA message, the JA
+        // sentence's question observation should keep its `ja`
+        // tag even when the whole-input dominant detection picks
+        // `en` (or `None`).
+        let pipeline = default_pipeline();
+        let scope = ScopeId::new_v4();
+        let text = "Please review the migration plan for this Friday deadline. \
+                    今日の会議では何時に開始する予定でしょうか、ご確認お願いします。 \
+                    Please send the agenda to the entire team today.";
+        let out = pipeline.run_with_language(text, scope).unwrap();
+
+        // The Japanese sentence's interrogative `何` should
+        // produce a question observation tagged `ja`.
+        let question = out
+            .observations
+            .iter()
+            .find(|o| o.observation_type == ObservationType::Question)
+            .expect("japanese question must be detected through pipeline");
+        assert_eq!(
+            question
+                .language_tag
+                .as_ref()
+                .map(|t| t.primary().to_string()),
+            Some("ja".to_string()),
+            "japanese question observation must keep its per-sentence `ja` tag through \
+             the pipeline, got {:?}",
+            question.language_tag
+        );
+
+        // The English task sentences must keep their `en` tag —
+        // not get clobbered by the dominant-detection result.
+        let en_task_count = out
+            .observations
+            .iter()
+            .filter(|o| o.observation_type == ObservationType::Task)
+            .filter(|o| o.language_tag.as_ref().is_some_and(|t| t.primary() == "en"))
+            .count();
+        assert!(
+            en_task_count >= 1,
+            "expected at least one english-tagged task observation through the pipeline; \
+             got tags: {:?}",
+            out.observations
+                .iter()
+                .filter(|o| o.observation_type == ObservationType::Task)
+                .map(|o| o.language_tag.clone())
+                .collect::<Vec<_>>()
+        );
     }
 }
