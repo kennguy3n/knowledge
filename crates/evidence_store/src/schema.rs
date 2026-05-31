@@ -134,7 +134,38 @@
 ///   `ALTER TABLE ADD COLUMN` does not run the append-only
 ///   triggers (DDL bypasses row triggers), so the addition is
 ///   safe against the existing `evidence_no_update` trigger.
-pub const SCHEMA_VERSION: i32 = 13;
+/// - v14 (Phase 1.2 — CJK-aware FTS5 tokeniser): added the
+///   `evidence_fts_cjk` virtual table indexed with FTS5's built-in
+///   `trigram` tokeniser. The pre-v14 `evidence_fts` table
+///   (`tokenize='unicode61 remove_diacritics 2'`) returns zero hits
+///   for any pure-CJK or pure-Thai query because `unicode61`
+///   classifies CJK Han / Hiragana / Katakana / Thai codepoints as
+///   non-letter separators and never emits a token; the substrate
+///   was effectively script-blind for those languages. The new
+///   `evidence_fts_cjk` table indexes overlapping 3-codepoint
+///   windows of the same plaintext, so queries of ≥3 CJK / Thai
+///   characters now hit. Both tables coexist: the write path
+///   routes per-row by body-script content (every row goes into
+///   `evidence_fts` as before; rows whose body contains any CJK or
+///   Thai codepoint *additionally* go into `evidence_fts_cjk`) and
+///   the read path UNIONs both. The v13 -> v14 migration
+///   (`migrate_v14_backfill_evidence_fts_cjk`) replays
+///   `evidence_fts.content` row-by-row into the new table for
+///   pre-existing CJK / Thai content. The table itself is
+///   bootstrapped by `SCHEMA_SQL`'s `CREATE VIRTUAL TABLE IF NOT
+///   EXISTS` (idempotent — a fresh v14 database picks it up
+///   directly; a v13 -> v14 upgrade hits the same statement and
+///   then walks the backfill).
+///
+///   Known limitation: SQLite's built-in `trigram` tokeniser has
+///   a hard 3-codepoint minimum for both indexed substrings and
+///   query strings — 2-character CJK queries like `天気` return ∅
+///   even when the substring is present in the indexed text. A
+///   future phase can register a Rust-side custom FTS5 bigram
+///   tokeniser via the `fts5_api` FFI to close that gap; doing so
+///   does not require another schema bump because a tokeniser
+///   swap is an FTS5 table option, not a column.
+pub const SCHEMA_VERSION: i32 = 14;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -202,12 +233,33 @@ CREATE INDEX IF NOT EXISTS idx_ring_buffer_scope_created
 
 -- FTS5 index over plaintext content for non-noise rows. Tokenizer is
 -- the substrate canonical 'unicode61 remove_diacritics 2'
--- (ARCHITECTURE.md §2.2).
+-- (ARCHITECTURE.md §2.2). This table catches all whitespace-
+-- segmented scripts (Latin, Cyrillic, Greek, Arabic, Hebrew,
+-- Devanagari, Hangul) including any Latin terms embedded inside a
+-- CJK or Thai document. CJK Han / Hiragana / Katakana / Thai
+-- substrings are routed *additionally* into `evidence_fts_cjk`
+-- below (Phase 1.2 / v14) — `unicode61` produces no tokens for
+-- those codepoints because it classifies them as separators.
 CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(
     content,
     evidence_id UNINDEXED,
     scope_id    UNINDEXED,
     tokenize    = 'unicode61 remove_diacritics 2'
+);
+
+-- v14 (Phase 1.2): trigram-tokenised FTS5 index used for CJK and
+-- Thai content where the `unicode61` tokeniser of `evidence_fts`
+-- emits zero tokens. The write path inserts a row here *in
+-- addition to* `evidence_fts` whenever the body contains any
+-- CJK Han / Hiragana / Katakana / Thai codepoint; the read path
+-- UNIONs both tables and dedupes on `evidence_id`. Forget /
+-- purge / rebuild paths touch both tables in the same
+-- transaction so the two indexes can never drift apart.
+CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_cjk USING fts5(
+    content,
+    evidence_id UNINDEXED,
+    scope_id    UNINDEXED,
+    tokenize    = 'trigram'
 );
 
 -- Embedding cache used by the hybrid retriever's semantic-vector

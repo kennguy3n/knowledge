@@ -142,6 +142,22 @@ impl<'a> HybridRetriever<'a> {
     /// relevant); we project it into `0.0 ..= 1.0` via
     /// `1 / (1 + (-rank))` so that the most relevant row scores
     /// closest to `1.0`.
+    ///
+    /// Per Phase 1.2 / schema v14 the search fans out across **both**
+    /// lexical indexes — `evidence_fts` (unicode61) for whitespace-
+    /// segmented scripts and `evidence_fts_cjk` (trigram) for CJK
+    /// Han / Hiragana / Katakana / Thai content — and de-duplicates
+    /// on `evidence_id` taking the best (smallest, i.e. most
+    /// relevant) rank across the two tokenisers. The two ranks are
+    /// each table's own BM25 score and are not strictly comparable
+    /// across tokenisers, but both are negative-and-smaller-is-
+    /// better so `MIN(rank)` is the correct dedupe rule. A row that
+    /// matches both indexes (mixed-script body with a query term
+    /// findable in either tokenisation) appears once with its best
+    /// rank rather than twice with separate scores. The
+    /// `fts_score` field surfaced on
+    /// [`RetrievalResult`] is the unified projected score derived
+    /// from that best rank.
     pub fn search_fts(
         &self,
         scope_id: ScopeId,
@@ -152,10 +168,15 @@ impl<'a> HybridRetriever<'a> {
             return Ok(Vec::new());
         }
         let mut stmt = self.store.raw_conn().prepare(
-            "SELECT evidence_id, rank
-             FROM evidence_fts
-             WHERE evidence_fts MATCH ?1 AND scope_id = ?2
-             ORDER BY rank
+            "SELECT evidence_id, MIN(rank) AS best_rank FROM (
+                 SELECT evidence_id, rank FROM evidence_fts
+                  WHERE evidence_fts MATCH ?1 AND scope_id = ?2
+                 UNION ALL
+                 SELECT evidence_id, rank FROM evidence_fts_cjk
+                  WHERE evidence_fts_cjk MATCH ?1 AND scope_id = ?2
+             ) merged
+             GROUP BY evidence_id
+             ORDER BY best_rank
              LIMIT ?3",
         )?;
         let rows = stmt.query_map(

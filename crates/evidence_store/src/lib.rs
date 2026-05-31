@@ -28,6 +28,7 @@ pub mod importance;
 pub mod retrieval;
 pub mod routing;
 pub mod schema;
+pub mod script;
 pub mod store;
 
 pub use crypto::{ContentHash, MasterKey, MASTER_KEY_LEN};

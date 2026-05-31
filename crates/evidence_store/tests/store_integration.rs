@@ -38,7 +38,13 @@ fn schema_creates_required_tables() {
     let fts: i64 = conn
         .query_row("SELECT COUNT(*) FROM evidence_fts", [], |r| r.get(0))
         .unwrap();
-    assert_eq!((evidence, body_store, ring, fts), (0, 0, 0, 0));
+    // Phase 1.2 / schema v14: trigram-tokenised companion FTS5
+    // table for CJK / Thai content. Bootstrapped alongside
+    // `evidence_fts` by `SCHEMA_SQL`.
+    let fts_cjk: i64 = conn
+        .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!((evidence, body_store, ring, fts, fts_cjk), (0, 0, 0, 0, 0));
 }
 
 #[test]
@@ -694,4 +700,252 @@ fn with_transaction_rolls_back_on_err() {
         blob.is_none(),
         "rolled-back write must not be visible after tx abort"
     );
+}
+
+// ============================================================
+// Phase 1.2 / schema v14 — CJK-aware FTS5 tokeniser tests.
+//
+// Pre-v14 the substrate's only lexical index used the FTS5
+// `unicode61 remove_diacritics 2` tokeniser, which classifies CJK
+// Han / Hiragana / Katakana / Thai codepoints as non-letter
+// separators and emits zero tokens for those scripts. The new
+// `evidence_fts_cjk` table indexes the same bodies with the
+// built-in `trigram` tokeniser (overlapping 3-codepoint windows),
+// so queries of ≥3 CJK / Thai characters can now hit. These tests
+// pin the read / write / forget / rebuild contract of the
+// dual-index design.
+// ============================================================
+
+#[test]
+fn fts5_cjk_japanese_query_returns_hit() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "今日は良い天気です".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "良い天気", 10).unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "trigram index must find 4-char CJK substring"
+    );
+    assert_eq!(hits[0], r.evidence_id);
+}
+
+#[test]
+fn fts5_cjk_chinese_query_returns_hit() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "今天天气很好".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "今天天气", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0], r.evidence_id);
+}
+
+#[test]
+fn fts5_thai_query_returns_hit() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(scope, "อากาศวันนี้ดี".as_bytes(), None, ImportanceClass::Useful)
+        .unwrap();
+    let hits = store.search_fts(scope, "วันนี้", 10).unwrap();
+    assert_eq!(hits.len(), 1, "trigram must segment Thai");
+    assert_eq!(hits[0], r.evidence_id);
+}
+
+#[test]
+fn fts5_pre_v14_latin_path_still_works_unchanged() {
+    // Regression pin: the unicode61 lexical path that the v0..v13
+    // substrate has always exposed must remain bit-identical
+    // — same hit set, same exact-id, same ASCII case-folding.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            b"The launch deadline for the export pipeline is May",
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "deadline", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0], r.evidence_id);
+    let hits_case = store.search_fts(scope, "DEADLINE", 10).unwrap();
+    assert_eq!(hits_case.len(), 1);
+}
+
+#[test]
+fn fts5_mixed_script_doc_searchable_by_both_scripts() {
+    // A row whose body mixes Latin and CJK should be findable
+    // via either tokeniser: the Latin term goes through
+    // `evidence_fts` (unicode61) and the CJK substring through
+    // `evidence_fts_cjk` (trigram). UNION dedupe on evidence_id
+    // ensures the same row is returned exactly once.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "Project 計画書 review on Friday".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+
+    let hits_latin = store.search_fts(scope, "Project", 10).unwrap();
+    assert_eq!(hits_latin.len(), 1);
+    assert_eq!(hits_latin[0], r.evidence_id);
+
+    let hits_cjk = store.search_fts(scope, "計画書", 10).unwrap();
+    assert_eq!(hits_cjk.len(), 1);
+    assert_eq!(hits_cjk[0], r.evidence_id);
+}
+
+#[test]
+fn fts5_cjk_routing_is_body_derived_not_language_tag_derived() {
+    // A row ingested without any language tag still gets routed
+    // into the CJK FTS table iff its body contains CJK / Thai
+    // codepoints — the write path keys off body content, not the
+    // (Phase 1.3) `language_tag` column. This is what makes the
+    // CJK index robust to a NULL or mis-detected language tag.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "今天天气很好".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+
+    // Sanity: the row was inserted without a language tag.
+    let language_tag: Option<String> = store
+        .raw_conn()
+        .query_row(
+            "SELECT language_tag FROM evidence WHERE id = ?1",
+            rusqlite::params![r.evidence_id.as_uuid().as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        language_tag.is_none(),
+        "ingest() must not stamp a language tag"
+    );
+
+    // Despite the NULL tag, the body landed in evidence_fts_cjk:
+    let cjk_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(cjk_rows, 1);
+}
+
+#[test]
+fn fts5_pure_latin_does_not_consume_cjk_table_storage() {
+    // A pure-Latin body must NOT be written to evidence_fts_cjk —
+    // unicode61 already handles whitespace-segmented scripts and
+    // adding a redundant trigram row would inflate the CJK index
+    // size without recall benefit.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let _ = store
+        .ingest(
+            scope,
+            b"The launch deadline for the export pipeline is May",
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let cjk_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        cjk_rows, 0,
+        "pure-Latin body must not be written to evidence_fts_cjk"
+    );
+}
+
+#[test]
+fn fts5_trigram_2char_cjk_query_is_documented_floor() {
+    // SQLite's built-in `trigram` tokeniser has a hard 3-codepoint
+    // minimum for both indexed substrings and queries. A 2-char
+    // CJK query like `天気` returns ∅ even when the substring is
+    // present in the body. This is the known limitation flagged
+    // in the schema v14 doc-comment; a future phase can register
+    // a custom Rust-side bigram tokeniser via the `fts5_api` FFI
+    // to close the gap. This test pins the current floor so any
+    // future bigram-tokeniser work has a regression signal.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let _ = store
+        .ingest(
+            scope,
+            "今日は良い天気です".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "天気", 10).unwrap();
+    assert_eq!(
+        hits.len(),
+        0,
+        "2-char CJK query is below the trigram floor — \
+         change this assertion only when a bigram-tokeniser \
+         lands"
+    );
+    // …and the same query 1 char longer crosses the floor:
+    let hits = store.search_fts(scope, "良い天気", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+}
+
+#[test]
+fn fts5_search_dedupes_when_both_tables_match_same_row() {
+    // A mixed-script body where the Latin substring matches
+    // unicode61 AND a CJK trigram substring matches trigram is
+    // returned exactly once by `search_fts` — the UNION ALL +
+    // GROUP BY contract in `EvidenceStore::search_fts` dedupes
+    // on evidence_id.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "Project 計画書 launch review meeting".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    // A query that pure-unicode61 would match (`launch`)…
+    let hits = store.search_fts(scope, "launch", 10).unwrap();
+    assert_eq!(hits.len(), 1, "unicode61 branch returns single hit");
+    assert_eq!(hits[0], r.evidence_id);
+
+    // …and a multi-term query that hits BOTH branches
+    // (`launch` against unicode61, `計画書` against trigram) must
+    // still return the row exactly once.
+    //
+    // FTS5 boolean OR syntax: `term1 OR term2`.
+    let hits = store.search_fts(scope, "launch OR 計画書", 10).unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "row matched by both branches must dedupe to single hit"
+    );
+    assert_eq!(hits[0], r.evidence_id);
 }

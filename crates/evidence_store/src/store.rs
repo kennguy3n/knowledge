@@ -726,14 +726,37 @@ impl EvidenceStore {
         // Only index UTF-8 content. Binary blobs (files, media) are
         // not indexed at this layer — observation-plane extraction
         // handles those in a future update.
-        if let Ok(text) = std::str::from_utf8(body) {
+        let Ok(text) = std::str::from_utf8(body) else {
+            return Ok(());
+        };
+        let evidence_uuid = evidence_id.as_uuid();
+        let scope_uuid = scope_id.as_uuid();
+        let evidence_id_bytes = evidence_uuid.as_bytes().as_slice();
+        let scope_id_bytes = scope_uuid.as_bytes().as_slice();
+        // Every UTF-8 row goes into `evidence_fts` (unicode61). The
+        // tokeniser segments whitespace-bounded scripts (Latin,
+        // Cyrillic, Greek, Arabic, Hangul, Devanagari) including any
+        // Latin terms embedded inside an otherwise-CJK document, so
+        // this is the universal lexical index.
+        tx.execute(
+            "INSERT INTO evidence_fts (content, evidence_id, scope_id) VALUES (?1, ?2, ?3)",
+            params![text, evidence_id_bytes, scope_id_bytes],
+        )?;
+        // Phase 1.2 / schema v14: rows whose body contains any CJK
+        // Han / Hiragana / Katakana / Thai codepoint *additionally*
+        // go into `evidence_fts_cjk` (trigram). `unicode61` emits
+        // zero tokens for those codepoints, so without this branch
+        // a pure-CJK or pure-Thai document is invisible to lexical
+        // search. The routing decision is body-derived (not
+        // language-tag-derived) so a row with `language_tag = NULL`
+        // or a mis-detected dominant tag still lands in the right
+        // table. See `crate::script::contains_cjk_or_thai` for the
+        // codepoint membership rationale.
+        if crate::script::contains_cjk_or_thai(text) {
             tx.execute(
-                "INSERT INTO evidence_fts (content, evidence_id, scope_id) VALUES (?1, ?2, ?3)",
-                params![
-                    text,
-                    evidence_id.as_uuid().as_bytes().as_slice(),
-                    scope_id.as_uuid().as_bytes().as_slice(),
-                ],
+                "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
+                 VALUES (?1, ?2, ?3)",
+                params![text, evidence_id_bytes, scope_id_bytes],
             )?;
         }
         Ok(())
@@ -1097,6 +1120,17 @@ impl EvidenceStore {
     /// The query is passed straight through to FTS5; callers should
     /// pre-process per FTS5's syntax (e.g. quote phrases). The result
     /// is the matching evidence ids ordered by FTS5 rank.
+    ///
+    /// Per Phase 1.2 / schema v14 the search fans out across **both**
+    /// lexical indexes — `evidence_fts` (unicode61) for whitespace-
+    /// segmented scripts and `evidence_fts_cjk` (trigram) for CJK
+    /// Han / Hiragana / Katakana / Thai content — and de-duplicates
+    /// on `evidence_id`, taking the best (smallest, since FTS5 rank
+    /// is negative-and-smaller-is-better) of the two ranks. Both
+    /// tokenisers accept the same FTS5 query syntax; either branch
+    /// returning zero rows for queries it cannot serve (e.g. a
+    /// 2-codepoint CJK query against trigram, or a CJK query
+    /// against unicode61) is the expected non-error path.
     pub fn search_fts(
         &self,
         scope_id: ScopeId,
@@ -1104,9 +1138,15 @@ impl EvidenceStore {
         limit: usize,
     ) -> Result<Vec<EvidenceId>> {
         let mut stmt = self.conn.prepare(
-            "SELECT evidence_id FROM evidence_fts
-             WHERE evidence_fts MATCH ?1 AND scope_id = ?2
-             ORDER BY rank
+            "SELECT evidence_id, MIN(rank) AS best_rank FROM (
+                 SELECT evidence_id, rank FROM evidence_fts
+                  WHERE evidence_fts MATCH ?1 AND scope_id = ?2
+                 UNION ALL
+                 SELECT evidence_id, rank FROM evidence_fts_cjk
+                  WHERE evidence_fts_cjk MATCH ?1 AND scope_id = ?2
+             ) merged
+             GROUP BY evidence_id
+             ORDER BY best_rank
              LIMIT ?3",
         )?;
         let rows = stmt.query_map(
@@ -3077,6 +3117,11 @@ impl EvidenceStore {
     ///   *plaintext* of every body, regardless of the row's AEAD
     ///   key. This is the gap pinned by
     ///   `crates/evidence_store/tests/forgetting_fts.rs`.
+    /// * `evidence_fts_cjk` — the v14 trigram-tokenised companion
+    ///   index for CJK / Thai content. Same property: the shadow
+    ///   tables retain tokenised plaintext for any row whose body
+    ///   contains a CJK Han / Hiragana / Katakana / Thai
+    ///   codepoint, regardless of AEAD key.
     /// * `evidence_embeddings` — cached `f32` vectors derived from
     ///   the plaintext body via an on-device embedding model. They
     ///   are not strictly plaintext but are still
@@ -3085,18 +3130,24 @@ impl EvidenceStore {
     /// This method runs a single transaction:
     ///
     /// 1. Look up every `evidence_id` belonging to `scope_id`.
-    /// 2. `DELETE FROM evidence_fts WHERE evidence_id IN (...)` —
-    ///    FTS5 supports `DELETE` on the virtual table (it does NOT
-    ///    have the append-only trigger that protects `evidence`).
+    /// 2. `DELETE FROM evidence_fts WHERE evidence_id IN (...)`
+    ///    *and* `DELETE FROM evidence_fts_cjk WHERE evidence_id
+    ///    IN (...)` — FTS5 supports `DELETE` on virtual tables
+    ///    (they do NOT have the append-only trigger that protects
+    ///    `evidence`). Both tables are deleted in the same
+    ///    transaction so they can never drift apart.
     /// 3. `DELETE FROM evidence_embeddings WHERE evidence_id IN (...)`.
     /// 4. If — and only if — step 2 actually removed at least one
-    ///    FTS row, issue `INSERT INTO evidence_fts(evidence_fts)
-    ///    VALUES('rebuild')` to truncate the FTS5 shadow tables and
-    ///    re-tokenise from the surviving content rows. Skipping
-    ///    this when zero FTS rows were deleted is what makes the
-    ///    function genuinely idempotent: re-purging an
+    ///    FTS row across either table, issue `INSERT INTO
+    ///    evidence_fts(evidence_fts) VALUES('rebuild')` and
+    ///    `INSERT INTO evidence_fts_cjk(evidence_fts_cjk)
+    ///    VALUES('rebuild')` to truncate the FTS5 shadow tables
+    ///    and re-tokenise from the surviving content rows.
+    ///    Skipping this when zero FTS rows were deleted is what
+    ///    makes the function genuinely idempotent: re-purging an
     ///    already-purged scope on startup costs one `SELECT` plus
-    ///    one zero-row `DELETE`, not a full O(total_fts_rows)
+    ///    one zero-row `DELETE` per table, not a full
+    ///    O(total_fts_rows)
     ///    rebuild.
     ///
     /// The `evidence` rows themselves are intentionally left in
@@ -3188,6 +3239,17 @@ impl EvidenceStore {
         // `IN (?, ?, ...)` clause that exceeds SQLite's parameter
         // cap. `SQLITE_MAX_VARIABLE_NUMBER` is 999 on the default
         // build; we stay well under it.
+        //
+        // Per Phase 1.2 / schema v14, `evidence_fts_cjk` (trigram-
+        // tokenised CJK / Thai index) is purged alongside the
+        // primary `evidence_fts` (unicode61) in the same
+        // transaction so the two indexes can never drift apart
+        // under crash-recovery, and so a forgotten scope leaves
+        // zero plaintext tokens in either FTS shadow table after
+        // the subsequent `REBUILD`. The returned count is the sum
+        // across both tables — if either tokeniser still has rows
+        // for the scope, the caller-side `if rows_deleted > 0`
+        // gate still triggers a rebuild.
         let mut fts_rows_deleted: usize = 0;
         for chunk in evidence_ids.chunks(DELETE_BATCH) {
             let placeholders = (0..chunk.len())
@@ -3195,29 +3257,38 @@ impl EvidenceStore {
                 .collect::<Vec<_>>()
                 .join(", ");
             let fts_sql = format!("DELETE FROM evidence_fts WHERE evidence_id IN ({placeholders})");
+            let fts_cjk_sql =
+                format!("DELETE FROM evidence_fts_cjk WHERE evidence_id IN ({placeholders})");
             let emb_sql =
                 format!("DELETE FROM evidence_embeddings WHERE evidence_id IN ({placeholders})");
             let params: Vec<&dyn rusqlite::ToSql> =
                 chunk.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
             fts_rows_deleted +=
                 tx.execute(&fts_sql, rusqlite::params_from_iter(params.iter().copied()))?;
+            fts_rows_deleted += tx.execute(
+                &fts_cjk_sql,
+                rusqlite::params_from_iter(params.iter().copied()),
+            )?;
             tx.execute(&emb_sql, rusqlite::params_from_iter(params.iter().copied()))?;
         }
         Ok(fts_rows_deleted)
     }
 
-    /// Issue the FTS5 `REBUILD` command on `evidence_fts`,
-    /// truncating the shadow tables (`%_data`, `%_idx`,
-    /// `%_docsize`, …) and re-tokenising from the surviving
-    /// content rows.
+    /// Issue the FTS5 `REBUILD` command on **both** lexical
+    /// indexes — `evidence_fts` (unicode61) and `evidence_fts_cjk`
+    /// (trigram, schema v14) — truncating their shadow tables
+    /// (`%_data`, `%_idx`, `%_docsize`, …) and re-tokenising from
+    /// the surviving content rows.
     ///
     /// `OPTIMIZE` only merges segments and can leave tokenised
     /// plaintext fragments behind in the `%_data` segment B-tree
     /// for rows that were `DELETE`'d in this same transaction.
-    /// `REBUILD` re-tokenises from the FTS table's stored
-    /// `content` column — which now no longer references the
-    /// purged scopes — so no residual plaintext tokens survive on
-    /// disk for the forgotten scopes.
+    /// `REBUILD` re-tokenises from each table's stored `content`
+    /// column — which now no longer references the purged scopes
+    /// — so no residual plaintext tokens survive on disk for the
+    /// forgotten scopes in either tokeniser's shadow store. Both
+    /// rebuilds run inside the caller's transaction so the two
+    /// tables are committed atomically.
     ///
     /// This is the strongest in-engine guarantee SQLite FTS5
     /// exposes; the alternative would be a full `VACUUM` at a
@@ -3225,6 +3296,10 @@ impl EvidenceStore {
     fn rebuild_evidence_fts_in_tx(tx: &rusqlite::Transaction<'_>) -> Result<()> {
         tx.execute(
             "INSERT INTO evidence_fts(evidence_fts) VALUES('rebuild')",
+            [],
+        )?;
+        tx.execute(
+            "INSERT INTO evidence_fts_cjk(evidence_fts_cjk) VALUES('rebuild')",
             [],
         )?;
         Ok(())
@@ -3868,6 +3943,19 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // EXISTS`; only the v12 -> v13 upgrade path needs the
         // explicit ALTER.
         13 => migrate_v13_add_evidence_language_tag(conn),
+        // v14 (Phase 1.2 — CJK-aware FTS5 tokeniser): add the
+        // `evidence_fts_cjk` virtual table and backfill it from the
+        // pre-existing `evidence_fts.content` rows whose plaintext
+        // body contains any CJK Han / Hiragana / Katakana / Thai
+        // codepoint. The `CREATE VIRTUAL TABLE IF NOT EXISTS` lives
+        // in SCHEMA_SQL so a fresh v14 database picks the table up
+        // directly; a v13 -> v14 upgrade hits the same statement
+        // (no-op) and then walks the backfill below.
+        //
+        // Backfill is gated on `evidence_fts_cjk` being empty so
+        // re-running the migration on an already-populated v14
+        // database is a no-op rather than producing duplicate rows.
+        14 => migrate_v14_backfill_evidence_fts_cjk(conn),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
         )),
@@ -3897,6 +3985,86 @@ fn migrate_v13_add_evidence_language_tag(conn: &Connection) -> Result<()> {
     if !has_column {
         conn.execute("ALTER TABLE evidence ADD COLUMN language_tag TEXT", [])?;
     }
+    Ok(())
+}
+
+/// v13 -> v14 additive migration: backfill `evidence_fts_cjk` from
+/// pre-existing `evidence_fts.content` rows whose body contains any
+/// CJK Han / Hiragana / Katakana / Thai codepoint.
+///
+/// The `evidence_fts_cjk` virtual table itself is created by
+/// `SCHEMA_SQL`'s `CREATE VIRTUAL TABLE IF NOT EXISTS` so this
+/// function does not need to issue the DDL — `Self::open` runs
+/// `SCHEMA_SQL` before walking the migration ladder, so by the time
+/// we are called the table exists (possibly empty for a v13 -> v14
+/// upgrade, possibly already populated for a fresh v14 database).
+///
+/// Idempotency: the function first checks whether
+/// `evidence_fts_cjk` already has any rows. If it does we return
+/// without doing any work — the table is either freshly populated
+/// (fresh v14 open) or the migration has already run successfully
+/// against this database (re-applied v13 -> v14 upgrade after a
+/// crash before the `user_version` write hit disk). The check is
+/// O(1) at the SQLite level because FTS5 maintains row-count
+/// metadata in `evidence_fts_cjk_docsize`.
+///
+/// Per-row routing matches the write path
+/// ([`EvidenceStore::index_fts`]): a body is backfilled into
+/// `evidence_fts_cjk` iff `script::contains_cjk_or_thai` returns
+/// true for its plaintext content. The pre-existing
+/// `evidence_fts` rows themselves are untouched.
+///
+/// Crash-safety: the backfill runs inside an explicit
+/// `unchecked_transaction` so partial progress is rolled back on
+/// crash. The `user_version` write that records "migration v14
+/// applied" lives in [`EvidenceStore::open`] *after* the
+/// `apply_migration` loop completes, so a crash mid-backfill leaves
+/// the database at `user_version = 13` and the next open re-walks
+/// this function from scratch over an empty `evidence_fts_cjk`. The
+/// idempotency check ("already have rows in evidence_fts_cjk?") is
+/// what makes a successful re-walk on an already-migrated database
+/// — for example after a crash *between* the backfill commit and
+/// the `user_version` write — a single O(1) `COUNT(*)` rather than
+/// a duplicate-row producer.
+///
+/// We use `unchecked_transaction` because the migration entry
+/// point [`apply_migration`] receives `&Connection` (not `&mut`),
+/// matching the contract of the sibling migrations
+/// ([`migrate_v13_add_evidence_language_tag`],
+/// [`migrate_evidence_embeddings_to_composite_pk`]).
+fn migrate_v14_backfill_evidence_fts_cjk(conn: &Connection) -> Result<()> {
+    let existing_cjk_rows: i64 =
+        conn.query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |row| {
+            row.get(0)
+        })?;
+    if existing_cjk_rows > 0 {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    let rows: Vec<(String, Vec<u8>, Vec<u8>)> = {
+        let mut stmt = tx.prepare("SELECT content, evidence_id, scope_id FROM evidence_fts")?;
+        let mapped = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        mapped
+    };
+    for (content, evidence_id, scope_id) in rows {
+        if !crate::script::contains_cjk_or_thai(&content) {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
+             VALUES (?1, ?2, ?3)",
+            params![content, evidence_id, scope_id],
+        )?;
+    }
+    tx.commit()?;
     Ok(())
 }
 

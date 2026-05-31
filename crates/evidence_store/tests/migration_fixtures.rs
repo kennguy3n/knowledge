@@ -361,3 +361,204 @@ fn rejects_database_written_by_a_newer_binary() {
         }
     }
 }
+
+#[test]
+fn opens_v13_database_and_upgrades_to_current_with_evidence_fts_cjk_backfilled() {
+    // v13 -> v14 specifically exercises the
+    // `evidence_fts_cjk` (trigram) virtual table + the
+    // `migrate_v14_backfill_evidence_fts_cjk` backfill that
+    // walks every row of `evidence_fts.content` and re-inserts
+    // any row whose plaintext contains a CJK Han / Hiragana /
+    // Katakana / Thai codepoint.
+    //
+    // `build_legacy_fixture` re-uses the modern `SCHEMA_SQL`,
+    // which already includes the `CREATE VIRTUAL TABLE IF NOT
+    // EXISTS evidence_fts_cjk` statement, so a freshly ingested
+    // CJK body would already be present in `evidence_fts_cjk`
+    // and the v14 migration's idempotent skip branch would
+    // short-circuit (`existing_cjk_rows > 0`). To meaningfully
+    // exercise the backfill arm we ingest some CJK content
+    // under the modern schema (so it lives in `evidence_fts`
+    // *and* `evidence_fts_cjk`), then explicitly DROP the v14
+    // table to put the database in a true pre-v14 shape on
+    // disk before re-stamping `user_version = 13` and re-opening.
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let scope = ScopeId::new_v4();
+    let cjk_body = "今日の重要な会議の議事録です";
+    let latin_body = b"shipment ETA monday morning sharp";
+
+    // Seed the database under modern schema, then reshape.
+    {
+        let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+            .expect("open fresh store at SCHEMA_VERSION");
+        store
+            .ingest(
+                scope,
+                cjk_body.as_bytes(),
+                Some("source:cjk"),
+                ImportanceClass::Important,
+            )
+            .expect("ingest cjk row");
+        store
+            .ingest(
+                scope,
+                latin_body,
+                Some("source:latin"),
+                ImportanceClass::Important,
+            )
+            .expect("ingest latin row");
+    }
+
+    // Drop the v14 companion table so the database is back to a
+    // true pre-v14 shape on disk (only `evidence_fts` exists).
+    // The v13 store wouldn't have had this table at all, so the
+    // backfill arm of `migrate_v14_backfill_evidence_fts_cjk`
+    // must re-discover every CJK row from `evidence_fts.content`.
+    {
+        let conn = open_sqlcipher(&path);
+        conn.execute_batch("DROP TABLE evidence_fts_cjk;")
+            .expect("drop evidence_fts_cjk to reach v13 shape");
+        // Confirm the table really is gone before re-opening.
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type = 'table' AND name = 'evidence_fts_cjk'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query sqlite_master for evidence_fts_cjk");
+        assert_eq!(
+            exists, 0,
+            "test setup must leave the schema without evidence_fts_cjk before reopen"
+        );
+        conn.pragma_update(None, "user_version", 13_i64)
+            .expect("re-stamp user_version=13 after reshape");
+    }
+
+    // Re-open: SCHEMA_SQL bootstraps the empty evidence_fts_cjk,
+    // then apply_migration(14) walks evidence_fts.content and
+    // re-inserts the CJK row.
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("re-open v13 db (post-reshape) must run v14 migration");
+
+    // user_version stamped forward, original rows still readable,
+    // FTS index over the Latin row still works.
+    assert_eq!(
+        read_user_version(&path),
+        SCHEMA_VERSION,
+        "post-migration user_version must equal SCHEMA_VERSION"
+    );
+    let evidence: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence", [], |r| r.get(0))
+        .expect("count evidence rows");
+    assert_eq!(
+        evidence, 2,
+        "both seeded rows must survive the v13 -> v14 upgrade"
+    );
+    let fts_hits: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH 'shipment'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("FTS query after upgrade");
+    assert!(
+        fts_hits >= 1,
+        "FTS5 unicode61 index over the Latin row must still match after v14 upgrade"
+    );
+
+    // The migration must have created `evidence_fts_cjk` and
+    // back-filled it with the CJK row from `evidence_fts.content`.
+    let cjk_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
+        .expect("count cjk rows after upgrade");
+    assert_eq!(
+        cjk_rows, 1,
+        "v13 -> v14 backfill must re-insert the CJK row into evidence_fts_cjk"
+    );
+
+    // And the pure-Latin row must NOT have been backfilled
+    // (it has no CJK / Thai codepoints, so it would only
+    // inflate the trigram index for no recall benefit).
+    let latin_in_cjk: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_fts_cjk \
+             WHERE evidence_fts_cjk MATCH 'shipment'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("query cjk table for latin term");
+    assert_eq!(
+        latin_in_cjk, 0,
+        "v13 -> v14 backfill must skip pure-Latin rows"
+    );
+
+    // End-to-end: the public search_fts API now returns the
+    // CJK row for a CJK substring query that pre-v14 returned
+    // nothing.
+    let hits = store
+        .search_fts(scope, "重要な会議", 10)
+        .expect("search_fts post-upgrade");
+    assert_eq!(
+        hits.len(),
+        1,
+        "search_fts must hit the back-filled CJK row after v14 upgrade"
+    );
+}
+
+#[test]
+fn v14_migration_is_idempotent_on_already_populated_database() {
+    // The v14 migration's idempotency guard
+    // (`existing_cjk_rows > 0`) is what makes re-running the
+    // migration safe on a database where SCHEMA_SQL already
+    // bootstrapped `evidence_fts_cjk` directly (fresh-DB path
+    // or a previously-completed v14 upgrade). This test pins
+    // the contract: re-stamping `user_version = 13` on a
+    // v14-shaped database with rows in `evidence_fts_cjk`
+    // re-runs the migration on next open *without* producing
+    // duplicate rows.
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let scope = ScopeId::new_v4();
+    let cjk_body = "今日の重要な会議の議事録です";
+
+    {
+        let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+            .expect("open fresh store");
+        store
+            .ingest(
+                scope,
+                cjk_body.as_bytes(),
+                Some("source:cjk-idem"),
+                ImportanceClass::Important,
+            )
+            .expect("ingest cjk row");
+        // Sanity: row is in evidence_fts_cjk.
+        let cjk_before: i64 = store
+            .raw_conn()
+            .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
+            .expect("count cjk rows before downgrade");
+        assert_eq!(cjk_before, 1);
+    }
+
+    // Re-stamp user_version=13 so the next open re-runs the v14
+    // migration despite `evidence_fts_cjk` already being populated.
+    stamp_user_version(&path, 13);
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("re-open with user_version=13 must re-run v14 migration");
+
+    let cjk_after: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
+        .expect("count cjk rows after re-migration");
+    assert_eq!(
+        cjk_after, 1,
+        "idempotent v14 re-migration must not duplicate evidence_fts_cjk rows"
+    );
+    assert_eq!(read_user_version(&path), SCHEMA_VERSION);
+}
