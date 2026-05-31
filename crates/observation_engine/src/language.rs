@@ -33,7 +33,9 @@
 //! is extended — fail-closed rather than silently emit an
 //! unmapped 3-letter code into [`crate::types::Observation::language_tag`].
 
-use serde::{Deserialize, Deserializer, Serialize};
+use std::sync::Arc;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// BCP-47 primary language subtag (e.g. `"en"`, `"ja"`, `"zh"`).
 ///
@@ -41,6 +43,24 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// raw String into a place that expects a normalised tag. Inputs
 /// are trimmed and lower-cased on construction; equality and
 /// hashing are case-sensitive on the normalised form.
+///
+/// ## Internal storage: `Arc<str>` (not `String`)
+///
+/// The inner field is an [`Arc<str>`] rather than a [`String`] so
+/// that [`Clone`] is an O(1) refcount bump rather than a heap
+/// allocation + memcpy of the underlying 2-5 byte tag. The Phase
+/// 1.4 extractor clones the dominant `Option<LanguageTag>` once
+/// per entity-class observation (6+ classes per call: `@mentions`,
+/// capitalised words, URLs, emails, date refs, numeric refs), and
+/// it also clones the per-sentence tag once per sentence in the
+/// inner loop. With `String` storage every clone allocates on the
+/// global allocator — measurable in bulk document ingestion. With
+/// `Arc<str>` storage every clone is a relaxed atomic increment
+/// on the strong-count. The public surface — `as_str`, `primary`,
+/// `Display`, `PartialEq`, `Eq`, `Hash`, `Serialize`,
+/// `Deserialize` — is unaffected because [`Arc<str>`] derefs to
+/// [`str`] and inherits its equality / hashing semantics. See
+/// Devin Review finding #ANALYSIS-0002.
 ///
 /// `Deserialize` is implemented by hand (rather than derived as
 /// `#[serde(transparent)]`) so that round-tripping a tag through
@@ -52,9 +72,28 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// `"language_tag": "   "`, `"language_tag": "EN-US"`) would
 /// otherwise materialise as an un-normalised tag and silently
 /// derail the per-locale lexicon / FTS5 tokenizer selection.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-#[serde(transparent)]
-pub struct LanguageTag(String);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LanguageTag(Arc<str>);
+
+impl Serialize for LanguageTag {
+    /// Serialise transparently as the bare BCP-47 string (e.g.
+    /// `"ja"`). We can't `#[derive(Serialize)]` with
+    /// `#[serde(transparent)]` because `Arc<str>` does not
+    /// implement [`Serialize`] by default — serde only implements
+    /// it for `Arc<T>` when the `rc` feature is enabled, which the
+    /// workspace deliberately does not enable (the substrate also
+    /// uses `Arc` for in-flight, non-persisted values and we don't
+    /// want every `Arc<T>` to silently become serializable). Hand
+    /// off to `str::serialize` instead so the wire format is bit-
+    /// for-bit identical to what `#[serde(transparent)]` on a
+    /// `String`-backed tuple struct would produce.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
 
 impl<'de> Deserialize<'de> for LanguageTag {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -85,7 +124,10 @@ impl LanguageTag {
         if lower.is_empty() {
             return None;
         }
-        Some(Self(lower))
+        // `String -> Arc<str>` is a single allocation that copies
+        // the bytes into the Arc inline; subsequent `Clone` calls
+        // are O(1) refcount bumps rather than another heap copy.
+        Some(Self(Arc::from(lower)))
     }
 
     /// Borrow the BCP-47 tag string.
@@ -401,6 +443,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn clone_shares_allocation_via_arc() {
+        // Devin Review #ANALYSIS-0002: `LanguageTag` clones happen
+        // in the extractor entity-class loops (~6+ per call) and in
+        // the doc pipeline's per-chunk threading. The internal
+        // representation was switched from `String` to `Arc<str>`
+        // so that `Clone` is a refcount bump rather than a heap
+        // allocation. Verify the contract by asserting that two
+        // cloned tags share the same underlying byte allocation:
+        // `str::as_ptr` returns the data pointer of the slice, and
+        // for two `Arc<str>` clones it must point at the same
+        // location (the single Arc'd buffer).
+        let a = LanguageTag::new("ja").unwrap();
+        let b = a.clone();
+        assert_eq!(
+            a.as_str().as_ptr(),
+            b.as_str().as_ptr(),
+            "LanguageTag::clone must share the underlying Arc<str> allocation \
+             (got distinct data pointers — Clone is allocating again, which \
+             defeats the Arc<str> refactor for ANALYSIS-0002)"
+        );
+        // Equality + hashing still behave as `str`-based comparison
+        // (a fresh-construction "ja" allocates a separate buffer
+        // but must still compare equal).
+        let c = LanguageTag::new("ja").unwrap();
+        assert_eq!(a, c, "tags with identical content must compare equal");
+        let mut hasher_a = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher_c = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&a, &mut hasher_a);
+        std::hash::Hash::hash(&c, &mut hasher_c);
+        assert_eq!(
+            std::hash::Hasher::finish(&hasher_a),
+            std::hash::Hasher::finish(&hasher_c),
+            "tags with identical content must hash equal regardless of Arc identity"
+        );
     }
 
     #[test]

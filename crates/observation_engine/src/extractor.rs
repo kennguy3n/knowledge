@@ -940,6 +940,28 @@ impl LexiconExtractor {
             // sentences with whitespace OR CJK sentences with at
             // least 4 ideographs — and not picked up as a task /
             // decision / question is a Fact candidate.
+            //
+            // Two-gate design (Devin Review #ANALYSIS-0003):
+            //
+            // * `sentence.len() >= 6` is a **byte-length** lower bound
+            //   targeting Latin scripts. It rejects very short ASCII
+            //   fragments (`"Hi"`, `"Yes"`, `"OK"`) that are too short
+            //   to carry factual content. For 3-byte-per-char scripts
+            //   (CJK / Thai) this gate is redundant — any 2-character
+            //   run already passes — but it is harmless because the
+            //   second gate below tightens the contract for those
+            //   scripts.
+            // * `is_sentence_shaped_for_fact` is the **codepoint** gate:
+            //   for whitespace-bearing scripts (Latin / Cyrillic /
+            //   Arabic / Devanagari) it just checks for a space, and
+            //   for no-inter-word-whitespace scripts (CJK / Thai) it
+            //   requires at least 4 codepoints. The 4-codepoint floor
+            //   is what actually rejects short CJK / Thai fragments.
+            //
+            // Both gates must pass; together they reject both
+            // "ASCII fragment too short to be a fact" AND "CJK / Thai
+            // fragment too short to be a fact" without needing
+            // per-script length thresholds.
             if sentence.len() >= 6 && is_sentence_shaped_for_fact(sentence) {
                 out.push(
                     Observation::new_candidate(
