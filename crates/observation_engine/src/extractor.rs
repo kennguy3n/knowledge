@@ -42,6 +42,10 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::interrogatives::{interrogatives_for, InterrogativeMatch};
 use crate::language::{detect_language, LanguageTag};
+use crate::lexicon::{
+    default_registry, normalize_for_lookup, table_matches, KeywordClass, LanguageLexicon,
+    LexiconRegistry,
+};
 use crate::types::{Observation, ObservationType};
 
 /// Extract structured observations from raw evidence text.
@@ -152,15 +156,44 @@ pub trait ObservationExtractor {
 }
 
 /// Lexicon extractor (`docs/DESIGN.md` §3.2 first pass).
+///
+/// Phase 1.1: keyword tables come from a
+/// [`LexiconRegistry`] indexed by BCP-47 primary subtag, so
+/// each sentence is classified against keywords from the
+/// sentence's detected language rather than against a single
+/// hard-coded English keyword set. The legacy single-language
+/// inline constructor [`Self::new`] still exists for callers
+/// that want fully custom keyword lists.
 #[derive(Debug, Clone)]
 pub struct LexiconExtractor {
-    decision_keywords: Vec<String>,
-    task_keywords: Vec<String>,
-    task_imperative_verbs: Vec<String>,
-    /// English stop-words to strip from capitalised-token entity
-    /// extraction (so we don't promote "The" / "This" / "Today" to
-    /// entities).
-    stop_words: Vec<String>,
+    /// Per-sentence keyword source. See [`LexiconSource`] for
+    /// the two supported variants.
+    source: LexiconSource,
+}
+
+/// Where [`LexiconExtractor`] gets its per-sentence keyword
+/// tables from. Internal — exposed via the public
+/// [`LexiconExtractor::with_registry`] (registry-backed) and
+/// [`LexiconExtractor::new`] (inline single-language) ctors.
+#[derive(Debug, Clone)]
+enum LexiconSource {
+    /// Registry-backed: per-sentence lookup of
+    /// [`LanguageLexicon`] by detected language tag, falling
+    /// back to the English lexicon when the tag is `None` or
+    /// unconfigured.
+    Registry(&'static LexiconRegistry),
+    /// Legacy single-language inline keywords. Applied to
+    /// every sentence regardless of detected language —
+    /// equivalent to a single-language registry containing
+    /// only an English lexicon with the supplied entries.
+    /// Preserved for back-compat with pre-Phase-1.1 callers
+    /// of [`LexiconExtractor::new`].
+    Inline {
+        decision_keywords: Vec<String>,
+        task_keywords: Vec<String>,
+        task_imperative_verbs: Vec<String>,
+        stop_words: Vec<String>,
+    },
 }
 
 impl Default for LexiconExtractor {
@@ -170,7 +203,15 @@ impl Default for LexiconExtractor {
 }
 
 impl LexiconExtractor {
-    /// Build with explicit lexicons.
+    /// Build with explicit single-language lexicons. The
+    /// supplied keyword lists are applied to every sentence
+    /// regardless of detected language — equivalent to a
+    /// single-language registry.
+    ///
+    /// New callers should prefer [`Self::with_registry`] for
+    /// multilingual matching. This constructor is retained
+    /// for back-compat with pre-Phase-1.1 call sites that
+    /// pass tenant-specific keyword overrides.
     pub fn new(
         decision_keywords: Vec<&str>,
         task_keywords: Vec<&str>,
@@ -178,84 +219,40 @@ impl LexiconExtractor {
         stop_words: Vec<&str>,
     ) -> Self {
         Self {
-            decision_keywords: decision_keywords
-                .into_iter()
-                .map(str::to_lowercase)
-                .collect(),
-            task_keywords: task_keywords.into_iter().map(str::to_lowercase).collect(),
-            task_imperative_verbs: task_imperative_verbs
-                .into_iter()
-                .map(str::to_lowercase)
-                .collect(),
-            stop_words: stop_words.into_iter().map(str::to_lowercase).collect(),
+            source: LexiconSource::Inline {
+                decision_keywords: decision_keywords
+                    .into_iter()
+                    .map(str::to_lowercase)
+                    .collect(),
+                task_keywords: task_keywords.into_iter().map(str::to_lowercase).collect(),
+                task_imperative_verbs: task_imperative_verbs
+                    .into_iter()
+                    .map(str::to_lowercase)
+                    .collect(),
+                stop_words: stop_words.into_iter().map(str::to_lowercase).collect(),
+            },
         }
     }
 
-    /// Default English lexicon. Production deployments should
-    /// override per-tenant.
+    /// Build with a registry-backed source. Per-sentence
+    /// language detection picks the right [`LanguageLexicon`]
+    /// from the registry; sentences whose detected language
+    /// has no configured lexicon fall back to the registry's
+    /// English lexicon.
+    pub fn with_registry(registry: &'static LexiconRegistry) -> Self {
+        Self {
+            source: LexiconSource::Registry(registry),
+        }
+    }
+
+    /// Default extractor: registry-backed with the built-in
+    /// [`default_registry`]. Replaces the pre-Phase-1.1
+    /// English-only inline lexicon — the built-in registry's
+    /// English lexicon carries the same keyword entries as
+    /// the pre-Phase-1.1 inline default, plus 15 additional
+    /// languages with their own keyword tables.
     pub fn english_default() -> Self {
-        Self::new(
-            vec![
-                "decided",
-                "decision",
-                "agreed",
-                "approved",
-                "ratified",
-                "signed off",
-                "sign-off",
-                "go-live approved",
-                "rejected",
-            ],
-            // Multi-word entries belong here (lower_contains_any does
-            // substring matching) — `starts_with_imperative` only
-            // compares the first alphabetic-only token of a sentence
-            // against the imperative-verb list, so multi-word verbs
-            // would otherwise be unreachable.
-            vec![
-                "todo",
-                "action",
-                "task",
-                "please",
-                "fyi action",
-                "follow up",
-                "follow-up",
-            ],
-            vec![
-                "draft",
-                "send",
-                "schedule",
-                "review",
-                "publish",
-                "fix",
-                "deploy",
-                "ship",
-                "investigate",
-                "prepare",
-                "update",
-                "merge",
-            ],
-            vec![
-                "The",
-                "This",
-                "That",
-                "These",
-                "Those",
-                "It",
-                "Today",
-                "Tomorrow",
-                "Yesterday",
-                "Friday",
-                "Monday",
-                "Tuesday",
-                "Wednesday",
-                "Thursday",
-                "Saturday",
-                "Sunday",
-                "May",
-                "June",
-                "July",
-            ],
-        )
+        Self::with_registry(default_registry())
     }
 }
 
@@ -705,18 +702,6 @@ fn extract_numeric_refs(text: &str) -> Vec<String> {
     out
 }
 
-fn lower_contains_any(haystack_lower: &str, needles: &[String]) -> bool {
-    needles.iter().any(|n| haystack_lower.contains(n.as_str()))
-}
-
-fn starts_with_imperative(haystack_lower: &str, verbs: &[String]) -> bool {
-    let first = haystack_lower
-        .split(|c: char| !c.is_alphabetic())
-        .find(|s| !s.is_empty())
-        .unwrap_or("");
-    verbs.iter().any(|v| v == first)
-}
-
 fn extract_at_mentions(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let bytes = text.as_bytes();
@@ -855,6 +840,99 @@ fn is_myanmar_codepoint(c: char) -> bool {
 }
 
 impl LexiconExtractor {
+    /// Look up the per-sentence [`LanguageLexicon`] for a
+    /// detected primary BCP-47 subtag. Returns `None` when the
+    /// extractor is in legacy inline-keywords mode (which
+    /// doesn't carry per-language lexicons).
+    fn lexicon_for(&self, primary_tag: Option<&str>) -> Option<&'static LanguageLexicon> {
+        match &self.source {
+            LexiconSource::Registry(reg) => Some(reg.lexicon_for_or_english(primary_tag)),
+            LexiconSource::Inline { .. } => None,
+        }
+    }
+
+    /// True when `normalised_sentence` matches the keyword
+    /// table for the requested class.
+    ///
+    /// In registry-backed mode the lookup is per-sentence-language
+    /// (with English fallback for unconfigured tags). In legacy
+    /// inline mode the inline keyword list is applied
+    /// regardless of language (matching pre-Phase-1.1 behaviour
+    /// exactly, including the substring-style match for the
+    /// inline decision / task lists).
+    fn sentence_matches_class(
+        &self,
+        normalised_sentence: &str,
+        primary_tag: Option<&str>,
+        class: KeywordClass,
+    ) -> bool {
+        match &self.source {
+            LexiconSource::Registry(_) => {
+                let Some(lex) = self.lexicon_for(primary_tag) else {
+                    return false;
+                };
+                let Some((table, strategy)) = lex.entries(class) else {
+                    return false;
+                };
+                table_matches(table, normalised_sentence, strategy)
+            }
+            LexiconSource::Inline {
+                decision_keywords,
+                task_keywords,
+                task_imperative_verbs,
+                stop_words: _,
+            } => match class {
+                KeywordClass::Decision => {
+                    // Legacy behaviour was substring match across
+                    // the whole lowercased sentence; reproduce that
+                    // here rather than switching inline-mode callers
+                    // to FirstToken silently.
+                    decision_keywords
+                        .iter()
+                        .any(|n| normalised_sentence.contains(n.as_str()))
+                }
+                KeywordClass::Task => task_keywords
+                    .iter()
+                    .any(|n| normalised_sentence.contains(n.as_str())),
+                KeywordClass::TaskImperative => {
+                    let first = normalised_sentence
+                        .split(|c: char| !c.is_alphabetic())
+                        .find(|s| !s.is_empty())
+                        .unwrap_or("");
+                    !first.is_empty() && task_imperative_verbs.iter().any(|v| v == first)
+                }
+                KeywordClass::Stopword | KeywordClass::Interrogative => false,
+            },
+        }
+    }
+
+    /// Stop-word list for the capitalised-token entity
+    /// extractor. In registry-backed mode this returns the
+    /// `dominant_language` lexicon's stop-words (or the
+    /// English lexicon's stop-words if that language has none
+    /// configured); in legacy inline mode it returns the inline
+    /// stop-word list.
+    ///
+    /// The capitalised-token extractor is itself only
+    /// meaningful for case-bearing scripts, so the returned
+    /// list is mostly relevant for Latin / Cyrillic /
+    /// Greek / Armenian — CJK / Arabic / Thai naturally emit
+    /// no capitalised-token candidates and therefore consult
+    /// the list zero times for those scripts.
+    fn stop_words_for_entity_extraction(
+        &self,
+        dominant_language: Option<&LanguageTag>,
+    ) -> Vec<String> {
+        match &self.source {
+            LexiconSource::Registry(reg) => {
+                let primary = dominant_language.map(|t| t.primary().to_string());
+                let lex = reg.lexicon_for_or_english(primary.as_deref());
+                lex.stop_words.iter().copied().map(str::to_string).collect()
+            }
+            LexiconSource::Inline { stop_words, .. } => stop_words.clone(),
+        }
+    }
+
     /// Shared implementation behind both [`ObservationExtractor::extract`]
     /// and [`ObservationExtractor::extract_with_dominant_language`].
     ///
@@ -896,7 +974,20 @@ impl LexiconExtractor {
                 );
             }
         }
-        for word in extract_capitalised_words(text, &self.stop_words) {
+        // Phase 1.1: stop-word list comes from the per-message
+        // dominant language's lexicon when registry-backed, falling
+        // back to the English lexicon's stop-words for unconfigured
+        // languages, falling back to the inline list when the
+        // extractor was constructed via the legacy
+        // [`LexiconExtractor::new`] path. The capitalised-token
+        // entity heuristic is itself only meaningful for case-bearing
+        // scripts (Latin / Cyrillic / Greek / Armenian / …), but we
+        // run it unconditionally — sentences in CJK / Arabic / Thai
+        // contain no capitalised tokens, so the heuristic naturally
+        // emits no results for those scripts and the stop-word list
+        // is irrelevant there.
+        let stop_words = self.stop_words_for_entity_extraction(dominant_language.as_ref());
+        for word in extract_capitalised_words(text, &stop_words) {
             if seen_entities.insert(word.clone()) {
                 out.push(
                     Observation::new_candidate(ObservationType::Entity, word, scope, 0.55)
@@ -949,8 +1040,52 @@ impl LexiconExtractor {
             let sentence_language = detect_language(sentence)
                 .map(|d| d.tag)
                 .or_else(|| dominant_language.clone());
-            let lower = sentence.to_lowercase();
-            if lower_contains_any(&lower, &self.decision_keywords) {
+            // Phase 1.1: normalise the sentence ONCE through
+            // [`normalize_for_lookup`] (NFC + lowercase +
+            // script-aware combining-mark strip) and reuse the
+            // result for every keyword class. This is the
+            // single normalisation primitive every matcher path
+            // shares — see the [`crate::lexicon`] module doc.
+            let primary_tag = sentence_language.as_ref().map(|t| t.primary().to_string());
+            let normalised = normalize_for_lookup(sentence, primary_tag.as_deref());
+
+            // Class precedence (Phase 1.1): Question first, then
+            // Decision, then Task. Speech-act signals (question
+            // terminator `?` / `？` / `؟` + per-language
+            // interrogative words) are unambiguous — a sentence
+            // that ends in `？` or contains a language-specific
+            // interrogative is a question, even when it also
+            // contains a polite-request opener like Japanese
+            // `お願い`, Spanish `por favor` or Vietnamese
+            // `vui lòng` that would otherwise route to the Task
+            // class. Pre-Phase-1.1 the inline English keyword set
+            // never overlapped this way (English `please` is in
+            // the task list but rarely co-occurs with a `?`-
+            // terminator), but per-language Phase 1.1 lexicons
+            // include polite-request openers that ARE common in
+            // interrogative sentences, so question-first
+            // precedence is required to avoid mis-routing.
+            // Decision still wins over Task because announcement
+            // sentences like "We decided to please everyone"
+            // (decision-class) should not become tasks because
+            // they happen to contain the substring `please`.
+            if looks_like_question(sentence, slice.terminator, sentence_language.as_ref()) {
+                out.push(
+                    Observation::new_candidate(
+                        ObservationType::Question,
+                        sentence.to_string(),
+                        scope,
+                        0.7,
+                    )
+                    .with_language_tag(sentence_language),
+                );
+                continue;
+            }
+            if self.sentence_matches_class(
+                &normalised,
+                primary_tag.as_deref(),
+                KeywordClass::Decision,
+            ) {
                 out.push(
                     Observation::new_candidate(
                         ObservationType::Decision,
@@ -962,24 +1097,16 @@ impl LexiconExtractor {
                 );
                 continue;
             }
-            if lower_contains_any(&lower, &self.task_keywords)
-                || starts_with_imperative(&lower, &self.task_imperative_verbs)
+            if self.sentence_matches_class(&normalised, primary_tag.as_deref(), KeywordClass::Task)
+                || self.sentence_matches_class(
+                    &normalised,
+                    primary_tag.as_deref(),
+                    KeywordClass::TaskImperative,
+                )
             {
                 out.push(
                     Observation::new_candidate(
                         ObservationType::Task,
-                        sentence.to_string(),
-                        scope,
-                        0.7,
-                    )
-                    .with_language_tag(sentence_language),
-                );
-                continue;
-            }
-            if looks_like_question(sentence, slice.terminator, sentence_language.as_ref()) {
-                out.push(
-                    Observation::new_candidate(
-                        ObservationType::Question,
                         sentence.to_string(),
                         scope,
                         0.7,
@@ -1799,6 +1926,291 @@ mod tests {
             "@mention must inherit the authoritative None hint, NOT re-detect \
              the dominant language inside do_extract (got {:?})",
             mention.language_tag
+        );
+    }
+
+    // ====================================================================
+    // Phase 1.1: per-language registry-backed sentence classification
+    // ====================================================================
+
+    /// Helper: find observations of a given type.
+    fn find_obs_by_type(obs: &[Observation], t: ObservationType) -> Vec<&Observation> {
+        obs.iter().filter(|o| o.observation_type == t).collect()
+    }
+
+    #[test]
+    fn french_decision_keyword_matches_through_registry() {
+        // Phase 1.1: French sentence with `approuvé` (past
+        // participle of `approuver` — "approve") must route to
+        // Decision via the FR lexicon. Pre-Phase-1.1 this was
+        // never matched because the inline English lexicon
+        // didn't carry `approuvé`.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        let text = "Le plan de lancement a été approuvé par l'équipe lors de la réunion d'hier.";
+        let obs = ext.extract(text, scope);
+        let decisions = find_obs_by_type(&obs, ObservationType::Decision);
+        assert!(
+            !decisions.is_empty(),
+            "expected a Decision from French `approuvé`; got {:?}",
+            obs.iter()
+                .map(|o| (o.observation_type, o.content.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            decisions[0]
+                .language_tag
+                .as_ref()
+                .map(|t| t.primary().to_string()),
+            Some("fr".to_string()),
+            "decision tag must be `fr` (got {:?})",
+            decisions[0].language_tag
+        );
+    }
+
+    #[test]
+    fn spanish_task_imperative_matches_through_registry() {
+        // Phase 1.1: Spanish sentence opening with the
+        // 2nd-person-singular imperative `envía` ("send") must
+        // route to Task via FirstBigram-strategy lookup against
+        // the ES imperative-verb table. Inline English
+        // imperatives (draft / send / …) would not have caught
+        // `envía`.
+        //
+        // We supply an explicit `es` dominant hint via
+        // [`ObservationExtractor::extract_with_dominant_language`]
+        // so the test isolates the *registry-matching* behaviour
+        // from whatlang's per-sentence-reliability heuristic
+        // (whatlang often returns `None` for individual short
+        // sentences — we already cover the per-sentence-detection
+        // path in the bilingual pipeline test). When the per-
+        // sentence detection on this single sentence returns
+        // `None`, the extractor falls back to the dominant hint,
+        // which here pins the ES lexicon.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        let es = LanguageTag::new("es").unwrap();
+        let text = "Envía el informe de migración al equipo de operaciones antes del viernes.";
+        let obs = ext.extract_with_dominant_language(text, scope, Some(&es));
+        let tasks = find_obs_by_type(&obs, ObservationType::Task);
+        assert!(
+            !tasks.is_empty(),
+            "expected a Task from Spanish imperative `envía`; got {:?}",
+            obs.iter()
+                .map(|o| (o.observation_type, o.content.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            tasks[0]
+                .language_tag
+                .as_ref()
+                .map(|t| t.primary().to_string()),
+            Some("es".to_string())
+        );
+    }
+
+    #[test]
+    fn vietnamese_task_imperative_matches_through_first_bigram() {
+        // Phase 1.1 closes Phase 1.4 deferred FLAG-0002d /
+        // BUG-0001: multi-word collocations need
+        // FirstBigram-strategy matching. Vietnamese
+        // `triển khai` ("deploy", "roll out") is a single
+        // semantic verb spelt as two tokens — FirstToken would
+        // miss it. FirstBigram tries first-token first
+        // (so single-word `chốt`-style verbs still match) then
+        // joins the first two tokens with a single ASCII space
+        // and retries.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        let text = "Triển khai bản kế hoạch di trú vào sáng thứ Sáu này nhé.";
+        let obs = ext.extract(text, scope);
+        let tasks = find_obs_by_type(&obs, ObservationType::Task);
+        assert!(
+            !tasks.is_empty(),
+            "expected a Task from Vietnamese `triển khai`; got {:?}",
+            obs.iter()
+                .map(|o| (o.observation_type, o.content.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            tasks[0]
+                .language_tag
+                .as_ref()
+                .map(|t| t.primary().to_string()),
+            Some("vi".to_string())
+        );
+    }
+
+    #[test]
+    fn arabic_decision_keyword_matches_after_tashkeel_strip() {
+        // Phase 1.1 closes Phase 1.4 deferred ANALYSIS-0001:
+        // Arabic combining marks (tashkeel) like fatha / kasra
+        // would otherwise split the FirstToken matcher's view
+        // of the word boundary because the marks are category
+        // Mn (non-alphabetic). The
+        // [`normalize_for_lookup`] primitive — called once per
+        // sentence by the extractor — strips tashkeel and
+        // tatweel when the detected primary tag is `ar` before
+        // matching runs, so a fully-vocalised input matches the
+        // unvocalised lexicon entry.
+        //
+        // Whatlang frequently returns `None` on short fully-
+        // vocalised Arabic sentences (the diacritics break its
+        // trigram model), so this test supplies an explicit
+        // `ar` dominant hint via
+        // [`ObservationExtractor::extract_with_dominant_language`]
+        // to isolate the tashkeel-strip + lexicon-matching
+        // behaviour from whatlang's per-sentence-reliability
+        // heuristic. The Phase 1.4 bilingual pipeline test
+        // already exercises end-to-end whatlang detection.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        let ar = LanguageTag::new("ar").unwrap();
+        // "We decided the plan in the meeting." — `قررنا`
+        // ("we decided") is an AR lexicon decision-class
+        // lemma. The input here adds a tashkeel mark (fatha)
+        // and the tatweel elongation character to the verb to
+        // test the tashkeel-strip path (without the strip,
+        // Substring matching on the raw input would not find
+        // the unvocalised lexicon entry `قررنا`).
+        let text = "قَررـنا الخطة في الاجتماع.";
+        let obs = ext.extract_with_dominant_language(text, scope, Some(&ar));
+        let decisions = find_obs_by_type(&obs, ObservationType::Decision);
+        assert!(
+            !decisions.is_empty(),
+            "expected a Decision from Arabic `قررنا` (tashkeel+tatweel-stripped); got {:?}",
+            obs.iter()
+                .map(|o| (o.observation_type, o.content.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            decisions[0]
+                .language_tag
+                .as_ref()
+                .map(|t| t.primary().to_string()),
+            Some("ar".to_string())
+        );
+    }
+
+    #[test]
+    fn japanese_task_keyword_matches_via_substring_strategy() {
+        // Phase 1.1: CJK lexicons use Substring strategy
+        // because there is no inter-word whitespace to split
+        // into tokens. Japanese `お願い` ("please" / polite
+        // request opener) must match anywhere in the sentence.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        // Pure Japanese declarative ending in `。` (no
+        // interrogative terminator) carrying `お願い`. Pre-
+        // Phase-1.1 this would have fallen through to Fact
+        // because the inline English keyword set never matched
+        // `お願い`.
+        let text = "明日の朝までに移行プランをレビューしてくださいお願いします。";
+        let obs = ext.extract(text, scope);
+        let tasks = find_obs_by_type(&obs, ObservationType::Task);
+        assert!(
+            !tasks.is_empty(),
+            "expected a Task from Japanese `お願い`; got {:?}",
+            obs.iter()
+                .map(|o| (o.observation_type, o.content.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            tasks[0]
+                .language_tag
+                .as_ref()
+                .map(|t| t.primary().to_string()),
+            Some("ja".to_string())
+        );
+    }
+
+    #[test]
+    fn unsupported_language_falls_back_to_english_lexicon() {
+        // Phase 1.1: a primary subtag NOT in
+        // [`BUILTIN_LEXICONS`] must transparently fall back to
+        // the English lexicon (so English keywords still work
+        // in an `xx`-tagged or unconfigured-language sentence,
+        // and the fallback is silent — no panic, no error
+        // observation).
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        let xx = LanguageTag::new("xx").unwrap();
+        // English content; supply `xx` as the dominant hint to
+        // simulate a detector that produced an unsupported
+        // BCP-47 tag. The whole-sentence detection on this
+        // ASCII English sentence will also return `en`, but
+        // since per-sentence detection runs first inside the
+        // extractor it will override the dominant hint — to
+        // really exercise the fallback we need an input that
+        // detects as `xx` per-sentence too, which whatlang
+        // can't produce. So we settle for asserting the no-
+        // panic path under an `xx` dominant hint and that
+        // English content STILL extracts (proving the per-
+        // sentence detection works orthogonally to the hint).
+        let text = "Please review the migration plan and ship by Friday.";
+        let obs = ext.extract_with_dominant_language(text, scope, Some(&xx));
+        let tasks = find_obs_by_type(&obs, ObservationType::Task);
+        assert!(
+            !tasks.is_empty(),
+            "english `please` must still trigger Task even with `xx` dominant hint; got {:?}",
+            obs.iter()
+                .map(|o| (o.observation_type, o.content.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn legacy_inline_constructor_preserves_pre_phase_1_1_behaviour() {
+        // Back-compat: callers of [`LexiconExtractor::new`]
+        // (pre-Phase-1.1 single-language inline keyword
+        // overrides) get exactly the pre-Phase-1.1
+        // substring-match semantics regardless of detected
+        // language. This pins the API contract so future
+        // refactors don't silently drop the inline path.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::new(
+            vec!["wir haben entschieden"], // German decision phrase
+            vec!["bitte"],                 // German task opener
+            vec!["beschicke"],             // German imperative
+            vec!["The", "Today"],
+        );
+        let text = "Wir haben entschieden, das Migrationsdokument zu veröffentlichen.";
+        let obs = ext.extract(text, scope);
+        let decisions = find_obs_by_type(&obs, ObservationType::Decision);
+        assert!(
+            !decisions.is_empty(),
+            "inline German decision phrase must still match through legacy constructor; got {:?}",
+            obs.iter()
+                .map(|o| (o.observation_type, o.content.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn class_precedence_question_beats_task_keyword() {
+        // Phase 1.1 ordering invariant: question detection
+        // (sentence terminator + per-language interrogative
+        // table) runs BEFORE task-keyword detection so that a
+        // sentence that ends in `？` or contains an
+        // interrogative is classified as Question even when it
+        // also contains a polite-request opener (`お願い`,
+        // `por favor`, `vui lòng`) that would otherwise route
+        // to Task.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        // Japanese sentence with both `お願い` (task keyword)
+        // AND interrogative semantics (`何時に`, `か`
+        // terminator).
+        let text = "今日の会議では何時に開始する予定でしょうかご確認お願いします。";
+        let obs = ext.extract(text, scope);
+        let questions = find_obs_by_type(&obs, ObservationType::Question);
+        assert!(
+            !questions.is_empty(),
+            "Japanese interrogative containing polite-request opener must be a Question \
+             (question-first precedence); got {:?}",
+            obs.iter()
+                .map(|o| (o.observation_type, o.content.clone()))
+                .collect::<Vec<_>>()
         );
     }
 }
