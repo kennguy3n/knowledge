@@ -548,6 +548,80 @@ pub fn clear_oauth_client_secret_resolver(handle: NapiHandle) -> NapiResult<()> 
     ffi::clear_oauth_client_secret_resolver(RuntimeHandle(handle)).map_err(NapiError::from)
 }
 
+// ───────────────────── Master-key storage resolver ─────────────────────
+
+/// Register a host-supplied master-key storage resolver on
+/// `handle`'s per-runtime slot. Mirrors
+/// [`ffi::set_key_storage_resolver`].
+///
+/// `resolver` is an `Arc<dyn ffi::KeyStorageResolver>` — the
+/// N-API binding ([`bindings::js_set_key_storage_resolver`])
+/// constructs this from a JS object with `loadKey` / `storeKey`
+/// / `deleteKey` methods. Pure-Rust callers can pass any
+/// `Arc<dyn KeyStorageResolver>`.
+///
+/// This is the mid-life registration hook — for the cold-boot
+/// integration point see [`open_store_with_resolver`]. The two
+/// entry points are complementary: `open_store_with_resolver`
+/// stashes the resolver during open; `set_key_storage_resolver`
+/// is for hosts that need to register or replace the resolver
+/// outside the cold-boot flow (e.g. a key-rotation ceremony).
+///
+/// # Errors
+///
+/// Forwards [`ffi::set_key_storage_resolver`] errors as
+/// [`NapiError`].
+pub fn set_key_storage_resolver(
+    handle: NapiHandle,
+    resolver: std::sync::Arc<dyn ffi::KeyStorageResolver>,
+) -> NapiResult<()> {
+    ffi::set_key_storage_resolver(RuntimeHandle(handle), resolver).map_err(NapiError::from)
+}
+
+/// Unregister the previously-registered master-key storage
+/// resolver on `handle`. Mirrors
+/// [`ffi::clear_key_storage_resolver`].
+///
+/// # Errors
+///
+/// Forwards [`ffi::clear_key_storage_resolver`] errors as
+/// [`NapiError`].
+pub fn clear_key_storage_resolver(handle: NapiHandle) -> NapiResult<()> {
+    ffi::clear_key_storage_resolver(RuntimeHandle(handle)).map_err(NapiError::from)
+}
+
+/// Open the SQLCipher-backed evidence store at `path` with the
+/// 32-byte master key fetched from a host-supplied
+/// [`ffi::KeyStorageResolver`] rather than passed as a direct
+/// hex string. The resolver is stashed on the returned runtime
+/// so subsequent operations (key rotation, future migration
+/// paths) reach the same backing store without a second
+/// [`set_key_storage_resolver`] call. Mirrors
+/// [`ffi::open_store_with_resolver`].
+///
+/// This is the cold-boot integration point hardware-backed hosts
+/// must use so the master key never enters the host's address
+/// space as a long-lived plaintext hex string — the resolver
+/// pulls it from Keychain / Keystore / DPAPI / TEE on demand,
+/// the substrate consumes it, and it is zeroized when
+/// [`close_store`] tears the runtime down.
+///
+/// # Errors
+///
+/// Forwards [`ffi::open_store_with_resolver`] errors as
+/// [`NapiError`]. See that function's doc comment for the
+/// resolver contract (unknown-id re-tagging, invalid-hex
+/// rejection, verbatim propagation of non-`NotFound` errors).
+pub fn open_store_with_resolver(
+    path: String,
+    key_id: String,
+    resolver: std::sync::Arc<dyn ffi::KeyStorageResolver>,
+) -> NapiResult<NapiHandle> {
+    ffi::open_store_with_resolver(path, key_id, resolver)
+        .map(|h| h.0)
+        .map_err(NapiError::from)
+}
+
 // ───────────────────────── Webhook receiver (Phase 5) ─────────────
 
 /// Start a webhook receiver server bound to `bind_addr` (parsed as
