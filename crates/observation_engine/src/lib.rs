@@ -23,6 +23,7 @@ pub mod error;
 pub mod extractor;
 pub mod interrogatives;
 pub mod language;
+pub mod lexicon;
 pub mod pipeline;
 pub mod promotion;
 pub mod types;
@@ -41,6 +42,12 @@ pub use interrogatives::{
     interrogatives_for, matching_strategy_for, InterrogativeMatch, SUPPORTED_PRIMARY_TAGS,
 };
 pub use language::{detect_language, LanguageDetection, LanguageTag};
+pub use lexicon::{
+    default_registry, first_alphabetic_bigram, first_alphabetic_token,
+    is_arabic_combining_or_tatweel, is_bidi_or_zwj_format, normalize_for_lookup, table_matches,
+    KeywordClass, LanguageLexicon, LexiconRegistry, MatchStrategy, BUILTIN_LEXICONS,
+    SUPPORTED_LEXICON_TAGS,
+};
 pub use pipeline::{default_pipeline, ObservationPipeline, PipelineRunOutput};
 pub use promotion::{should_promote, ChannelPromotionPolicy, PromotionReason, PromotionResult};
 pub use types::{Observation, ObservationType};
