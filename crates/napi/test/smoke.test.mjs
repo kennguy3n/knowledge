@@ -204,6 +204,7 @@ test('every documented function is exported with camelCase name', () => {
   const required = [
     'admitApprovedDocument',
     'authenticateConnector',
+    'clearKeyStorageResolver',
     'clearOauthClientSecretResolver',
     'clearSyncSchedule',
     'closeStore',
@@ -232,6 +233,7 @@ test('every documented function is exported with camelCase name', () => {
     'listSynthesisVersions',
     'listWebhookServers',
     'openStore',
+    'openStoreWithResolver',
     'pin',
     'query',
     'refreshConnectorToken',
@@ -241,6 +243,7 @@ test('every documented function is exported with camelCase name', () => {
     'replaySynthesis',
     'revokeApprovedDocument',
     'runDecaySweep',
+    'setKeyStorageResolver',
     'setOauthClientSecretResolver',
     'startSyncScheduler',
     'startWebhookServer',
