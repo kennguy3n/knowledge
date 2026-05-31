@@ -248,52 +248,80 @@ succeeds, fails, or panics.
 
 **Counters and gauges** are exposed via
 [`ffi::metrics::snapshot()`](crates/ffi/src/metrics.rs) and
-embedded in the health envelope. Counters include
-`ingest_total`, `query_total`, `synthesis_triggered_total`,
-`decay_sweeps_total`, `forgets_total`, `forget_scopes_total`,
-`encrypt_total`, `decrypt_total`, `create_connector_total`,
-`authenticate_connector_total`, `sync_connector_total`,
-`refresh_connector_token_total`, `list_connectors_total`,
-`remove_connector_total`,
-`set_oauth_client_secret_resolver_total`,
-`clear_oauth_client_secret_resolver_total`,
-`set_key_storage_resolver_total`,
-`clear_key_storage_resolver_total`,
-`start_webhook_server_total`, `stop_webhook_server_total`,
-`register_webhook_dispatch_total`,
-`unregister_webhook_dispatch_total`,
-`list_webhook_servers_total`,
-`webhook_dispatch_ok_total`,
-`webhook_dispatch_bad_request_total`,
-`webhook_dispatch_bad_gateway_total`,
-`start_sync_scheduler_total`, `stop_sync_scheduler_total`,
-`configure_sync_schedule_total`, `clear_sync_schedule_total`,
-`sync_scheduler_status_total`, `sync_scheduler_ticks_total`,
-`sync_scheduler_dispatches_attempted_total`,
-`sync_scheduler_dispatches_succeeded_total`,
-`sync_scheduler_dispatches_failed_total`,
-`sync_scheduler_dispatches_skipped_in_progress_total`,
-`configure_synthesis_engine_total`,
-`trigger_server_synthesis_total`,
-`trigger_server_synthesis_throttled_total` (Phase 10 Item 5 — rate-
-shaping token-bucket rejections), `synthesis_status_total`,
-`list_recent_syntheses_total`, `replay_synthesis_total` (Phase 10
-Item 4 — versioned re-run of an existing window),
-`configure_sync_auto_synthesize_total`,
-`admit_approved_document_total`,
-`revoke_approved_document_total`,
-`replace_approved_document_total`,
-`list_approved_documents_total`, `connector_status_total` (Phase 10
-Item 3 — per-instance health probe symmetric with
-`synthesis_status`), `stuck_pending_window_recovered_total` (Phase
-10 Item 1 — age-based open_store sweep marking unrecoverable
-Pending windows Failed-with-retry), plus per-`FfiError`-kind
-counters under `errors_by_kind` (`unimplemented`, `invalid_id`,
-`not_found`, `evidence`, `memory`, `synthesis`, `crypto`,
-`unavailable`, `inference_failure`, `connector`, `throttled`).
-Gauges include `open_handles` (live runtime registry size) and
-`tombstone_count` (destroyed-DEK registry size on the most
-recently observed handle).
+embedded in the health envelope. The list below is the
+authoritative catalogue — every public FFI entry point has a
+matching counter, grouped here by responsibility:
+
+- **Runtime lifecycle.** `open_store_total`,
+  `open_store_with_resolver_total` (substrate-side
+  `KeyStorageResolver` consumer; see "Key storage" in
+  `SECURITY.md`), `close_store_total`, `init_tracing_total`,
+  `health_check_total`, `metrics_snapshot_total`, and
+  `errors_total` (aggregate `FfiError` counter; per-kind
+  breakdown below).
+- **Memory ingest / query / state.** `ingest_total`,
+  `query_total`, `get_evidence_total`, `get_user_memory_total`,
+  `get_channel_memory_total`, `list_memories_total`,
+  `pin_total`, `unpin_total`, `escape_fts_query_total`
+  (utility helper for FTS5 query escaping).
+- **Synthesis pipeline.** `synthesis_triggered_total` (any
+  trigger path), `configure_synthesis_engine_total` (server-side
+  slot configuration), `trigger_server_synthesis_total`,
+  `trigger_server_synthesis_throttled_total` (Phase 10 Item 5
+  — rate-shaping token-bucket rejections),
+  `synthesis_status_total`, `list_recent_syntheses_total`,
+  `replay_synthesis_total` (Phase 10 Item 4 — versioned re-run
+  of an existing window), `list_synthesis_versions_total`, and
+  `stuck_pending_window_recovered_total` (Phase 10 Item 1 —
+  age-based `open_store` sweep marking unrecoverable Pending
+  windows Failed-with-retry).
+- **Decay & cryptographic forgetting.** `decay_sweeps_total`,
+  `forgets_total` (per-evidence forget), `forget_scopes_total`
+  (per-scope forget).
+- **Crypto operations.** `encrypt_total`, `decrypt_total`,
+  `generate_keypair_total` (ML-KEM-768 / X25519-MLKEM-768
+  hybrid keypair generation).
+- **Approved-document admission.**
+  `admit_approved_document_total`,
+  `revoke_approved_document_total`,
+  `replace_approved_document_total`,
+  `list_approved_documents_total`.
+- **Connectors.** `create_connector_total`,
+  `authenticate_connector_total`, `sync_connector_total`,
+  `refresh_connector_token_total`, `list_connectors_total`,
+  `remove_connector_total`, `connector_status_total` (Phase 10
+  Item 3 — per-instance health probe symmetric with
+  `synthesis_status`).
+- **Host-supplied resolvers.**
+  `set_oauth_client_secret_resolver_total`,
+  `clear_oauth_client_secret_resolver_total`,
+  `set_key_storage_resolver_total`,
+  `clear_key_storage_resolver_total`.
+- **Webhook receivers.** `start_webhook_server_total`,
+  `stop_webhook_server_total`,
+  `register_webhook_dispatch_total`,
+  `unregister_webhook_dispatch_total`,
+  `list_webhook_servers_total`, `webhook_dispatch_ok_total`,
+  `webhook_dispatch_bad_request_total`,
+  `webhook_dispatch_bad_gateway_total`.
+- **Sync scheduler.** `start_sync_scheduler_total`,
+  `stop_sync_scheduler_total`, `configure_sync_schedule_total`,
+  `clear_sync_schedule_total`, `sync_scheduler_status_total`,
+  `sync_scheduler_ticks_total`,
+  `sync_scheduler_dispatches_attempted_total`,
+  `sync_scheduler_dispatches_succeeded_total`,
+  `sync_scheduler_dispatches_failed_total`,
+  `sync_scheduler_dispatches_skipped_in_progress_total`,
+  `configure_sync_auto_synthesize_total` (per-instance
+  post-sync domain-tier synthesis toggle).
+
+Per-`FfiError`-kind counters live under `errors_by_kind` and
+mirror the `FfiError` variants exactly: `unimplemented`,
+`invalid_id`, `not_found`, `evidence`, `memory`, `synthesis`,
+`crypto`, `unavailable`, `inference_failure`, `connector`,
+`throttled`. Gauges include `open_handles` (live runtime
+registry size) and `tombstone_count` (destroyed-DEK registry
+size on the most recently observed handle).
 
 **Health probe** is exposed as `ffi::health_check(handle:
 Option<RuntimeHandle>)` and surfaced to JS as

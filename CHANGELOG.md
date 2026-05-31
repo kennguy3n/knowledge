@@ -114,6 +114,19 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   the B2C (on-device only), Hybrid (tenant synthesis), and
   Enterprise (connector polling) deployment tiers, plus the
   comparison table vs. server-side competitors.
+- `README.md` "Observability — metrics, tracing, health":
+  reorganised the counter catalogue from a prose-flow list (47
+  counters, ~15 silently omitted) into a grouped exhaustive
+  inventory of all 65 counters defined in
+  [`crates/ffi/src/metrics.rs`](crates/ffi/src/metrics.rs). The
+  10 sub-headings (Runtime lifecycle, Memory, Synthesis, Decay,
+  Crypto, Approved-document, Connectors, Resolvers, Webhook,
+  Sync scheduler) mirror the responsibility partition of the
+  FFI surface, so a future contributor adding a new entry point
+  has an unambiguous home for the matching counter. Verified
+  exhaustively with `diff <(grep '^\s\+pub\s\+[a-z_]\+_total'
+  crates/ffi/src/metrics.rs | extract-names) <(grep -oE
+  '\`[a-z_]+_total\`' README.md | sort -u)` returning empty.
 
 ### Added — CI / release engineering
 
