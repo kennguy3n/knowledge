@@ -87,6 +87,17 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
     assert_eq!(record.body, body);
     assert_eq!(record.source, SourceKind::Slack);
     assert_eq!(record.scope_id, scope);
+    // Phase 1.3 / schema v13: the FFI bridge must surface the
+    // `language_tag` column end-to-end. `ingest_message` goes
+    // through the legacy `EvidenceStore::ingest()` shim which
+    // passes `None`, so this assertion pins the documented
+    // "legacy shim leaves NULL" contract and acts as a
+    // regression guard against future re-introduction of a
+    // silently dropped column.
+    assert_eq!(
+        record.language_tag, None,
+        "legacy ingest_message FFI path must leave language_tag NULL"
+    );
 
     forget(h, evidence_id.clone()).expect("forget");
 
@@ -495,10 +506,15 @@ fn evidence_round_trip_via_wire_types() {
         body: "a sample evidence body with unicode: 한글 / café".into(),
         source: SourceKind::Slack,
         created_at: 1_700_000_000,
+        // Schema v13 (Phase 1.3): the bridge MUST surface the
+        // detected BCP-47 tag end-to-end so host shells don't
+        // re-run detection on the read side. NULL stays NULL.
+        language_tag: Some("ko".into()),
     };
     let json = serde_json::to_string(&original).expect("EvidenceRecord must serialize");
     let back: EvidenceRecord = serde_json::from_str(&json).expect("EvidenceRecord must round-trip");
     assert_eq!(original, back);
+    assert_eq!(back.language_tag.as_deref(), Some("ko"));
 }
 
 /// `MemoryRecord` is the canonical wire shape every host UI renders

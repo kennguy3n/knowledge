@@ -400,6 +400,12 @@ pub fn get_evidence(handle: RuntimeHandle, evidence_id: String) -> FfiResult<Evi
                     .as_deref()
                     .map_or(SourceKind::Other, parse_source_kind),
                 created_at: row.created_at,
+                // Forward the BCP-47 primary subtag the substrate
+                // stamped on the row at ingest (schema v13, Phase
+                // 1.3). NULL stays NULL across the bridge so host
+                // shells can distinguish "no detection" from a
+                // concrete tag like `"en"`.
+                language_tag: row.language_tag.clone(),
             })
         })
     })

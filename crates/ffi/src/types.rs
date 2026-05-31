@@ -79,6 +79,25 @@ pub struct EvidenceRecord {
     pub source: SourceKind,
     /// Unix epoch (seconds) when the row was ingested.
     pub created_at: i64,
+    /// BCP-47 primary language subtag detected on the plaintext
+    /// body at ingest time (schema v13, Phase 1.3). `None` when
+    /// the row was ingested via the legacy
+    /// `EvidenceStore::ingest()` shim, when the language detector
+    /// declined to classify (empty / pure-punctuation / pure-emoji
+    /// / unreliable short input), or when the row predates schema
+    /// v13.
+    ///
+    /// Host bindings (Swift / Kotlin / Electron) MUST treat `None`
+    /// as *language unknown* rather than substitute a default —
+    /// see [`EvidenceStore::ingest_with_language`]. The
+    /// `#[serde(default)]` attribute keeps the field
+    /// forward-compatible with pre-v13 host bridges that emit
+    /// `EvidenceRecord` JSON without the key.
+    ///
+    /// [`EvidenceStore::ingest_with_language`]:
+    ///     ../../evidence_store/struct.EvidenceStore.html#method.ingest_with_language
+    #[serde(default)]
+    pub language_tag: Option<String>,
 }
 
 /// One hit returned by [`super::query`].
@@ -1025,10 +1044,59 @@ mod tests {
             body: "hello world".into(),
             source: SourceKind::Slack,
             created_at: 1_700_000_000,
+            language_tag: Some("en".into()),
         };
         let s = serde_json::to_string(&r).unwrap();
         let back: EvidenceRecord = serde_json::from_str(&s).unwrap();
         assert_eq!(r, back);
+    }
+
+    /// Schema-v13 backward-compat (Phase 1.3): an
+    /// `EvidenceRecord` JSON blob emitted by a pre-v13 host
+    /// bridge — i.e. one that doesn't know about the
+    /// `language_tag` key — must still deserialise. The
+    /// `#[serde(default)]` attribute on the field makes the
+    /// absent-key case resolve to `None` rather than failing
+    /// with `missing field`.
+    #[test]
+    fn evidence_record_deserialises_pre_v13_payload_without_language_tag() {
+        let pre_v13 = r#"{
+            "id": "00000000-0000-0000-0000-000000000001",
+            "scope_id": "00000000-0000-0000-0000-000000000002",
+            "body": "hello world",
+            "source": "Slack",
+            "created_at": 1700000000
+        }"#;
+        let r: EvidenceRecord = serde_json::from_str(pre_v13).unwrap();
+        assert_eq!(r.language_tag, None);
+        assert_eq!(r.id, "00000000-0000-0000-0000-000000000001");
+        assert_eq!(r.body, "hello world");
+    }
+
+    /// `EvidenceRecord` carries the BCP-47 tag end-to-end so
+    /// host bindings (Swift / Kotlin / Electron) can pick a
+    /// per-locale render pipeline without re-running detection
+    /// on the read side. NULL must stay NULL across the bridge.
+    #[test]
+    fn evidence_record_preserves_language_tag_round_trip() {
+        for tag in [
+            None,
+            Some("en".to_string()),
+            Some("ja".to_string()),
+            Some("zh".to_string()),
+        ] {
+            let r = EvidenceRecord {
+                id: "00000000-0000-0000-0000-000000000001".into(),
+                scope_id: "00000000-0000-0000-0000-000000000002".into(),
+                body: "round trip".into(),
+                source: SourceKind::Slack,
+                created_at: 1_700_000_000,
+                language_tag: tag.clone(),
+            };
+            let s = serde_json::to_string(&r).unwrap();
+            let back: EvidenceRecord = serde_json::from_str(&s).unwrap();
+            assert_eq!(back.language_tag, tag);
+        }
     }
 
     #[test]
