@@ -130,10 +130,26 @@ pub fn interrogatives_for(
         // sufficient signal; the alternative (a hyphen-tolerant
         // tokeniser) would degrade the strategy for every other
         // language. See Devin Review finding #BUG-0001.
+        //
+        // Deliberately omitted: `que`. Unlike Spanish (which has
+        // the accented interrogative `qué` vs. the unaccented
+        // conjunction `que`), French has no orthographic
+        // distinction between the interrogative `que` (`Que veux-tu?`
+        // — "What do you want?") and the high-frequency conjunction
+        // / relative pronoun `que` (`Je crois que tu as raison`, `Que
+        // la lumière soit` — subjunctive opener, `Le livre que je
+        // lis`, ...). A FirstToken match on bare `que` would
+        // mis-classify a large fraction of subjunctive openers,
+        // exclamations (`Que c'est beau!`), and embedded-clause
+        // sentences as questions. The alternative `quoi` is
+        // interrogative-only and stays in the list; combined with
+        // the `?` terminator on `que ...?` openers, recall stays
+        // adequate. Same class of bug as Spanish / Portuguese
+        // `por` (FLAG-0003), Indonesian / Malay `di` / `yang`
+        // (FLAG-0005b). See Devin Review finding #FLAG-0001c.
         "fr" => Some((
             &[
                 "qui",
-                "que",
                 "quoi",
                 "quand",
                 "où",
@@ -179,9 +195,23 @@ pub fn interrogatives_for(
         // accented-`porquê` interrogative variants below cover
         // the cases where the preposition fuses into a single
         // word). See Devin Review finding #FLAG-0003.
+        //
+        // Deliberately omitted: bare `que`. Portuguese has the
+        // accented `quê` (kept) as the canonical sentence-final
+        // / stressed-position interrogative, but unaccented `que`
+        // is overwhelmingly used as a relative pronoun /
+        // conjunction / exclamation opener (`Que pena!` — "What a
+        // shame!", `Que dia chato!` — "What a boring day!",
+        // `Que ele venha amanhã` — "(I hope) he comes tomorrow",
+        // `O livro que li`, ...). The FirstToken false-positive
+        // surface is the same as French `que` and Italian `che`
+        // (FLAG-0001c). The accented `quê` and the bare `o que`
+        // (which tokenises to `o`, missed regardless) combined
+        // with the `?` terminator on `que ...?` openers give
+        // adequate recall. See Devin Review finding #FLAG-0001c.
         "pt" => Some((
             &[
-                "quem", "quê", "que", "qual", "quais", "quando", "onde", "aonde", "como", "porquê",
+                "quem", "quê", "qual", "quais", "quando", "onde", "aonde", "como", "porquê",
                 "porque", "quanto", "quanta", "quantos", "quantas",
             ],
             InterrogativeMatch::FirstToken,
@@ -191,10 +221,25 @@ pub fn interrogatives_for(
         // ("Pronomi e aggettivi interrogativi"). `perché` covers
         // both `why` and `because`; the question terminator
         // disambiguates downstream.
+        //
+        // Deliberately omitted: `che`. Italian has no orthographic
+        // distinction between interrogative `che` (`Che fai?` —
+        // "What are you doing?") and the high-frequency
+        // conjunction / relative pronoun `che` (`Penso che sia
+        // vero`, `Il libro che leggo`, `Che bello!` — exclamation,
+        // `Che peccato!` — "What a pity!"). A FirstToken match on
+        // bare `che` would mis-classify exclamations, embedded
+        // clauses, and relative-pronoun openers as questions. The
+        // bare interrogative `cosa` (`Cosa fai?` is exactly
+        // equivalent to `Che fai?`) stays in the list and catches
+        // the common interrogative form; combined with the `?`
+        // terminator on `che ...?` openers, recall stays adequate.
+        // Same class of bug as French `que` and Portuguese `que`.
+        // See Devin Review finding #FLAG-0001c.
         "it" => Some((
             &[
-                "chi", "che", "cosa", "quando", "dove", "come", "perché", "quale", "quali",
-                "quanto", "quanta", "quanti", "quante",
+                "chi", "cosa", "quando", "dove", "come", "perché", "quale", "quali", "quanto",
+                "quanta", "quanti", "quante",
             ],
             InterrogativeMatch::FirstToken,
         )),
@@ -650,5 +695,63 @@ mod tests {
                 "{tag} list must still contain bare interrogative 'mana'"
             );
         }
+    }
+
+    #[test]
+    fn romance_languages_omit_bare_que_che_function_words() {
+        // Devin Review #FLAG-0001c: bare `que` (French, Portuguese)
+        // and `che` (Italian) are far more common as relative
+        // pronouns / conjunctions / exclamation openers than as
+        // interrogatives, and the FirstToken strategy can't
+        // distinguish the uses. Spanish is safe because the
+        // orthography distinguishes interrogative `qué` (kept) from
+        // conjunction `que` (never in the table). Portuguese keeps
+        // accented `quê`. French / Italian have no such
+        // distinction. Guard against accidental re-addition of the
+        // unaccented forms.
+        let (fr_list, _) = interrogatives_for("fr").unwrap();
+        assert!(
+            !fr_list.contains(&"que"),
+            "french list must not contain bare 'que' (high false-positive risk on \
+             relative-pronoun / subjunctive-opener / exclamation declaratives)"
+        );
+        assert!(
+            fr_list.contains(&"quoi"),
+            "french list must still contain interrogative-only 'quoi'"
+        );
+
+        let (pt_list, _) = interrogatives_for("pt").unwrap();
+        assert!(
+            !pt_list.contains(&"que"),
+            "portuguese list must not contain bare 'que' (high false-positive risk on \
+             relative-pronoun / subjunctive-opener / exclamation declaratives)"
+        );
+        assert!(
+            pt_list.contains(&"quê"),
+            "portuguese list must still contain accented interrogative 'quê'"
+        );
+
+        let (it_list, _) = interrogatives_for("it").unwrap();
+        assert!(
+            !it_list.contains(&"che"),
+            "italian list must not contain bare 'che' (high false-positive risk on \
+             relative-pronoun / conjunction / exclamation declaratives)"
+        );
+        assert!(
+            it_list.contains(&"cosa"),
+            "italian list must still contain bare interrogative 'cosa' (equivalent to 'che')"
+        );
+
+        // Spanish is the orthographically distinct case: `qué` is
+        // kept, bare `que` is never present.
+        let (es_list, _) = interrogatives_for("es").unwrap();
+        assert!(
+            es_list.contains(&"qué"),
+            "spanish list must still contain accented interrogative 'qué'"
+        );
+        assert!(
+            !es_list.contains(&"que"),
+            "spanish list must not contain unaccented 'que' (only 'qué' is interrogative)"
+        );
     }
 }
