@@ -1246,7 +1246,12 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHand
         // String that lives between the FFI boundary and the
         // parser.
         let master_key_hex = Zeroizing::new(master_key_hex);
-        open_store_inner(path, master_key_hex)
+        // Direct-hex open: no resolver to stash on the runtime.
+        // The mid-life [`crate::key_storage::set_key_storage_resolver`]
+        // path remains available for hosts that want to enrol a
+        // resolver after the fact (key rotation, future multi-key
+        // migration).
+        open_store_inner(path, master_key_hex, None)
     })
 }
 
@@ -1308,11 +1313,14 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHand
 /// `resolver` is consumed by value (per UniFFI's owned-`Arc`
 /// marshalling contract — see the
 /// `crate::key_storage::set_key_storage_resolver` docs for the
-/// same shape). On success the resolver is stashed in
-/// [`FfiRuntime::key_storage_resolver`] for the lifetime of the
-/// returned handle and dropped when [`close_store`] tears the
-/// runtime down. On failure the [`Arc`] is dropped at the end of
-/// this function, releasing the host's reference count.
+/// same shape). On success the resolver is attached to the
+/// freshly-constructed [`FfiRuntime`] **before** the registry
+/// insert (single-phase atomic open — see the body comment
+/// below), so the resolver is observable from the very first
+/// [`with_runtime`] call that succeeds against the returned
+/// handle; it is dropped when [`close_store`] tears the runtime
+/// down. On failure the [`Arc`] is dropped at the end of this
+/// function, releasing the host's reference count.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI hands owned strings + Arc<dyn> across the language boundary on every call.
 #[uniffi::export]
 pub fn open_store_with_resolver(
@@ -1322,11 +1330,15 @@ pub fn open_store_with_resolver(
 ) -> FfiResult<RuntimeHandle> {
     crate::metrics::instrument(crate::metrics::inc_open_store_with_resolver, || {
         // Hand the substrate-owned `key_id` to the resolver and
-        // receive the 64-char hex master key. The resolver's own
-        // `load_key` contract already maps an unknown id to
-        // `FfiError::NotFound { kind: "key", id: <id> }`, so the
-        // host sees a consistent `NotFound` envelope whether the
-        // miss happens at the FFI surface or inside the host's
+        // receive the 64-char hex master key. `load_key` borrows
+        // `&self`, so the `Arc` is still owned after the call and
+        // is moved into `open_store_inner` below to be attached
+        // to the runtime atomically with the registry insert.
+        //
+        // The resolver's own `load_key` contract already maps an
+        // unknown id to `FfiError::NotFound { kind: "key", id: <id> }`,
+        // so the host sees a consistent `NotFound` envelope whether
+        // the miss happens at the FFI surface or inside the host's
         // own resolver implementation.
         //
         // The resolver may also surface platform-specific errors
@@ -1359,44 +1371,46 @@ pub fn open_store_with_resolver(
             other => other,
         })?);
 
-        // Reuse the existing `open_store_inner` pathway. This
-        // shares the `parse_master_key_hex` validation, the
-        // `RuntimeHandle::NONE` sentinel guard, the tombstone
-        // replay, the FTS-purge sweep, the registry insert under
-        // the write lock, and the `connector_instances`
-        // rehydration. Resolver-driven and direct-hex opens are
-        // therefore indistinguishable from the substrate's
-        // perspective once we have the hex string in hand — only
-        // the entrypoint accounting (the `_total` counter) and
-        // the post-open resolver stash differ.
-        let handle = open_store_inner(path, master_key_hex)?;
-
-        // Stash the resolver on the freshly-allocated runtime so
-        // every other operation finds it without a separate
-        // `set_key_storage_resolver` call. `with_runtime`
-        // re-acquires the per-handle `Arc<Mutex<FfiRuntime>>`
-        // from the registry; the lock is uncontended here
-        // because no other thread can have observed `handle`
-        // yet (the only path that surfaces a `RuntimeHandle` to
-        // the caller is the `Ok` arm of `open_store_inner`
-        // above, and `open_store_inner` returned synchronously
-        // before this line).
+        // Single-phase atomic open. The resolver is plumbed into
+        // `open_store_inner` and attached to the local
+        // `FfiRuntime` **before** the registry insert under the
+        // write lock, so the resolver is part of the same atomic
+        // publish step that makes the handle observable to other
+        // threads. Any host that successfully takes the handle
+        // (via `with_runtime`, key rotation, future multi-key
+        // operations) already sees the resolver in place — no
+        // second registration call required, and no theoretical
+        // window where the registry holds a runtime without its
+        // resolver.
         //
-        // Failing to stash would still leave a usable runtime,
-        // but the host would have to call
-        // `set_key_storage_resolver(handle, resolver.clone())`
-        // immediately on return — which defeats the point of
-        // a single resolver-driven open. We therefore treat the
-        // stash as part of the atomic open contract.
-        with_runtime(handle, |rt| {
-            rt.key_storage_resolver = Some(resolver);
-            Ok(handle)
-        })
+        // The earlier two-phase shape (open_store_inner → second
+        // `with_runtime` to stash) had a theoretical handle-leak
+        // window on the stash failure path: if the second
+        // `with_runtime` failed, the handle was already in the
+        // registry but never returned to the caller, so the host
+        // could not call `close_store`. The closure was infallible
+        // by construction, so in practice the window was zero,
+        // but the structural fix (this single-phase shape)
+        // eliminates it for future maintainers who add fallible
+        // operations to the post-open path.
+        open_store_inner(path, master_key_hex, Some(resolver))
     })
 }
 
 #[allow(clippy::needless_pass_by_value)] // Mirror of [`open_store`]: forwards the owned strings the FFI boundary handed to the outer wrapper. `Zeroizing<String>` zeroizes the hex on drop.
-fn open_store_inner(path: String, master_key_hex: Zeroizing<String>) -> FfiResult<RuntimeHandle> {
+fn open_store_inner(
+    path: String,
+    master_key_hex: Zeroizing<String>,
+    // `Some(resolver)` for the `open_store_with_resolver` cold-boot
+    // path; `None` for the direct-hex `open_store` path. Attached
+    // to the freshly-constructed `FfiRuntime` *before* the registry
+    // insert under the write lock so the resolver is observable
+    // from the very first `with_runtime` call against the returned
+    // handle — see the body comment in `open_store_with_resolver`
+    // for the rationale (single-phase atomic open, no handle-leak
+    // window if a future post-open step turns fallible).
+    key_storage_resolver: Option<Arc<dyn crate::key_storage::KeyStorageResolver>>,
+) -> FfiResult<RuntimeHandle> {
     let master_key = parse_master_key_hex(master_key_hex.as_str())?;
 
     // Allocate and validate the handle *before* doing any expensive
@@ -2356,7 +2370,7 @@ fn open_store_inner(path: String, master_key_hex: Zeroizing<String>) -> FfiResul
             crate::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC,
             chrono::Utc::now(),
         ),
-        key_storage_resolver: None,
+        key_storage_resolver,
     };
 
     // Rehydrate persisted connector state from the v9
