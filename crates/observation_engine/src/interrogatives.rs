@@ -95,18 +95,41 @@ pub fn interrogatives_for(
         // accent (qué vs. que). We match the lowercase canonical
         // forms; callers feed lowercased text in so the diacritic
         // is preserved (Spanish lowercase keeps acutes).
+        //
+        // Deliberately omitted: `por`. The high-frequency RAE
+        // construction `¿por qué?` ("why?") tokenises to a leading
+        // `por`, but `por` is one of the most common prepositions
+        // in Spanish (`por favor`, `por la mañana`, `por
+        // supuesto`, `por ejemplo`, `por ahora`, ...) and a
+        // FirstToken match on `por` would mis-classify every
+        // declarative starting with the preposition as a
+        // question. The `¿` opener and `?` terminator are strong
+        // enough signals for `¿por qué?` on their own — the
+        // sentence-shape gate elsewhere in the extractor already
+        // surfaces these via the `?` terminator. See Devin Review
+        // finding #FLAG-0003.
         "es" => Some((
             &[
                 "qué", "quién", "quiénes", "cuándo", "dónde", "adónde", "cómo", "cuál", "cuáles",
-                "cuánto", "cuánta", "cuántos", "cuántas", "por",
+                "cuánto", "cuánta", "cuántos", "cuántas",
             ],
             InterrogativeMatch::FirstToken,
         )),
 
         // French — Grevisse, Le Bon Usage §382 ("Mots
-        // interrogatifs"). `est-ce` is the sentence-initial half
-        // of `est-ce que`; we match the first token so `est-ce`
-        // alone is the trigger.
+        // interrogatifs").
+        //
+        // Deliberately omitted: `est-ce`. The `est-ce que ...?`
+        // construction is the most common French question opener,
+        // but the FirstToken strategy splits on non-alphabetic
+        // characters (including the hyphen), so `est-ce` would
+        // tokenise to `est` — not to the multi-character literal
+        // we'd be looking up. Adding `est-ce` to this list is
+        // unreachable dead code. `est-ce que` questions almost
+        // always end with `?` and the `?` terminator alone is
+        // sufficient signal; the alternative (a hyphen-tolerant
+        // tokeniser) would degrade the strategy for every other
+        // language. See Devin Review finding #BUG-0001.
         "fr" => Some((
             &[
                 "qui",
@@ -125,7 +148,6 @@ pub fn interrogatives_for(
                 "laquelle",
                 "lesquels",
                 "lesquelles",
-                "est-ce",
             ],
             InterrogativeMatch::FirstToken,
         )),
@@ -145,10 +167,22 @@ pub fn interrogatives_for(
         // Portuguese — Cunha & Cintra, Nova Gramática do
         // Português Contemporâneo §13.5 ("Pronomes
         // interrogativos"). Brazilian and European share these.
+        //
+        // Deliberately omitted: `por`. Identical reasoning to
+        // Spanish above — the `por que ...?` construction is a
+        // real question opener, but `por` is an extremely common
+        // Portuguese preposition (`por favor`, `por agora`, `por
+        // enquanto`, `por isso`, `por aqui`, ...) and a FirstToken
+        // match on `por` causes high-volume false positives on
+        // declaratives. The `?` terminator is sufficient signal
+        // for `por que ...?` (and the bare `porque` /
+        // accented-`porquê` interrogative variants below cover
+        // the cases where the preposition fuses into a single
+        // word). See Devin Review finding #FLAG-0003.
         "pt" => Some((
             &[
                 "quem", "quê", "que", "qual", "quais", "quando", "onde", "aonde", "como", "porquê",
-                "porque", "por", "quanto", "quanta", "quantos", "quantas",
+                "porque", "quanto", "quanta", "quantos", "quantas",
             ],
             InterrogativeMatch::FirstToken,
         )),
@@ -198,7 +232,7 @@ pub fn interrogatives_for(
         // sentence-final case.
         "vi" => Some((
             &[
-                "ai", "gì", "nào", "đâu", "khi", "bao", "sao", "tại", "vì", "thế", "bao",
+                "ai", "gì", "nào", "đâu", "khi", "bao", "sao", "tại", "vì", "thế",
             ],
             InterrogativeMatch::FirstToken,
         )),
@@ -249,6 +283,18 @@ pub fn interrogatives_for(
         // ("Interrogative pronouns"). Devanagari script;
         // Devanagari case-folding is a no-op (no case in
         // Devanagari) so the substring forms below are stable.
+        //
+        // Substring (not FirstToken) for two reasons: (1) Hindi
+        // freely permits non-initial interrogative placement
+        // (`तुम कहाँ जा रहे हो?` — "where are you going?",
+        // with the interrogative in the middle), and (2) the
+        // FirstToken extractor tokeniser splits on every
+        // non-alphabetic codepoint, but the Devanagari virama
+        // `्` (U+094D, category Mn) is not Unicode-alphabetic,
+        // so conjunct interrogatives like `क्या` ("what") would
+        // tokenise to `क` + `या` and never match the literal.
+        // Substring matching sidesteps both problems and still
+        // catches the canonical initial-position questions.
         "hi" => Some((
             &[
                 "कौन",
@@ -262,7 +308,7 @@ pub fn interrogatives_for(
                 "कितनी",
                 "किसका",
             ],
-            InterrogativeMatch::FirstToken,
+            InterrogativeMatch::Substring,
         )),
 
         // Japanese — 国語学大辞典 entry for 疑問詞. CJK has no
@@ -472,14 +518,17 @@ mod tests {
     }
 
     #[test]
-    fn substring_languages_are_cjk_or_thai() {
+    fn substring_languages_are_cjk_thai_or_hindi() {
         // Defends the design contract: the only languages that
-        // use Substring matching are CJK + Thai (the
-        // no-word-boundary scripts). Any future change to this
-        // invariant should be intentional and update both this
-        // test and the module-level docstring.
+        // use Substring matching are CJK + Thai (no inter-word
+        // whitespace) and Hindi (Devanagari virama interferes
+        // with the FirstToken tokeniser and Hindi permits
+        // non-initial interrogative placement anyway). Any
+        // future change to this invariant should be intentional
+        // and update both this test and the module-level
+        // docstring.
         let expected_substring: std::collections::HashSet<&str> =
-            ["ja", "ko", "zh", "th"].into_iter().collect();
+            ["ja", "ko", "zh", "th", "hi"].into_iter().collect();
         for tag in SUPPORTED_PRIMARY_TAGS {
             let strat = matching_strategy_for(tag).unwrap();
             let is_substring = strat == InterrogativeMatch::Substring;
@@ -491,5 +540,74 @@ mod tests {
                 strat
             );
         }
+    }
+
+    #[test]
+    fn no_first_token_entry_contains_tokeniser_boundary_chars() {
+        // Devin Review #BUG-0001: an interrogative entry that
+        // contains a non-alphabetic character is unreachable
+        // under the FirstToken strategy, because the extractor's
+        // tokeniser splits on every non-alphabetic char. Guard
+        // against future regressions by scanning every FirstToken
+        // language's entries.
+        for tag in SUPPORTED_PRIMARY_TAGS {
+            let (list, strat) = interrogatives_for(tag).unwrap();
+            if strat != InterrogativeMatch::FirstToken {
+                continue;
+            }
+            for entry in list {
+                assert!(
+                    entry.chars().all(char::is_alphabetic),
+                    "tag {tag}: interrogative {entry:?} contains a non-alphabetic char \
+                     and is unreachable under FirstToken matching"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_entry_is_duplicated_within_a_language() {
+        // Devin Review #INFO-0002: Vietnamese previously listed
+        // `bao` twice. Guard against future cut-and-paste
+        // duplications across every language.
+        for tag in SUPPORTED_PRIMARY_TAGS {
+            let (list, _) = interrogatives_for(tag).unwrap();
+            let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            for entry in list {
+                assert!(
+                    seen.insert(*entry),
+                    "tag {tag}: entry {entry:?} appears more than once in the table"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn spanish_and_portuguese_omit_preposition_por() {
+        // Devin Review #FLAG-0003: `por` is too common a
+        // preposition in both languages to use as a FirstToken
+        // question trigger. Guard against accidental re-addition.
+        let (es_list, _) = interrogatives_for("es").unwrap();
+        assert!(
+            !es_list.contains(&"por"),
+            "spanish list must not contain 'por' (high false-positive risk)"
+        );
+        let (pt_list, _) = interrogatives_for("pt").unwrap();
+        assert!(
+            !pt_list.contains(&"por"),
+            "portuguese list must not contain 'por' (high false-positive risk)"
+        );
+    }
+
+    #[test]
+    fn french_omits_unreachable_est_ce_entry() {
+        // Devin Review #BUG-0001: the FirstToken tokeniser would
+        // split `est-ce` on the hyphen, so the entry was dead
+        // code. Verify it stays removed.
+        let (fr_list, _) = interrogatives_for("fr").unwrap();
+        assert!(
+            !fr_list.contains(&"est-ce"),
+            "french list must not contain unreachable 'est-ce' entry"
+        );
     }
 }

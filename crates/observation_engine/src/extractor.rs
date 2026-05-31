@@ -44,9 +44,42 @@ use crate::language::{detect_language, LanguageTag};
 use crate::types::{Observation, ObservationType};
 
 /// Extract structured observations from raw evidence text.
+///
+/// # Language stamping contract (Phase 1.4)
+///
+/// Implementations of `extract` are responsible for stamping each
+/// returned [`Observation`]'s `language_tag` field. Phase 1.4 of
+/// the multilingual roadmap moved language detection from the
+/// pipeline level (one tag per whole message) to the extractor
+/// level (per-sentence for sentence-class observations, dominant
+/// for entity-class observations) so that mixed-language messages
+/// preserve the per-fragment language of each observation.
+///
+/// Implementors should follow the convention used by
+/// [`LexiconExtractor`]:
+///
+/// * **Sentence-class observations** ([`ObservationType::Decision`],
+///   [`ObservationType::Task`], [`ObservationType::Question`],
+///   [`ObservationType::Fact`]) — call
+///   [`crate::language::detect_language`] on the individual
+///   sentence the observation was extracted from. Falling back to
+///   the whole-message dominant tag when the sentence is too
+///   short to classify is acceptable and documented.
+/// * **Entity-class observations** ([`ObservationType::Entity`]) —
+///   span the whole message rather than a single sentence; use
+///   the whole-input dominant tag computed once over `text`.
+///
+/// Both are nullable: when `detect_language` returns `None` (text
+/// not classifiable / not reliable), the observation's
+/// `language_tag` must remain `None` rather than substituting a
+/// default — downstream consumers treat `None` as "unknown" and
+/// fail-closed on language-dependent operations (Phase 1.1
+/// `LexiconRegistry` lookup, Phase 1.2 FTS5 tokenizer selection).
 pub trait ObservationExtractor {
     /// Run the extractor over `text`, returning all observations
-    /// found in the supplied `scope`.
+    /// found in the supplied `scope`. Implementations must stamp
+    /// each observation's `language_tag` per the trait-level
+    /// contract above.
     fn extract(&self, text: &str, scope: ScopeId) -> Vec<Observation>;
 }
 
@@ -646,16 +679,24 @@ fn extract_capitalised_words(text: &str, stop_words: &[String]) -> Vec<String> {
 
 /// A sentence is considered "shaped" enough to be a Fact
 /// candidate when it has either a whitespace separator (Latin /
-/// Cyrillic / Arabic / Devanagari / etc.) **or** is a CJK script
-/// run of at least 4 codepoints. CJK scripts don't use
-/// inter-word whitespace, so the "contains space" gate would
-/// silently drop every CJK sentence as not-fact-shaped.
+/// Cyrillic / Arabic / Devanagari / etc.) **or** is a run of at
+/// least 4 codepoints in a no-inter-word-whitespace script (CJK
+/// or Thai). Without this fallback, the "contains space" gate
+/// would silently drop every CJK / Thai sentence as
+/// not-fact-shaped, since those scripts run words together with
+/// no separator. Phase 1.4 added the CJK arm; the Thai arm was
+/// added in the Devin Review fixup pass so Thai declaratives
+/// like `กรุงเทพมหานครเป็นเมืองหลวงของประเทศไทย` can become Fact
+/// observations.
 fn is_sentence_shaped_for_fact(sentence: &str) -> bool {
     if sentence.contains(' ') {
         return true;
     }
-    let cjk_chars = sentence.chars().filter(|c| is_cjk_codepoint(*c)).count();
-    cjk_chars >= 4
+    let unsegmented_chars = sentence
+        .chars()
+        .filter(|c| is_cjk_codepoint(*c) || is_thai_codepoint(*c))
+        .count();
+    unsegmented_chars >= 4
 }
 
 /// True for code points in the CJK script blocks: CJK Unified
@@ -671,6 +712,15 @@ fn is_cjk_codepoint(c: char) -> bool {
         | '\u{AC00}'..='\u{D7AF}' // Hangul Syllables
         | '\u{3400}'..='\u{4DBF}' // CJK Unified Ideographs Extension A
     )
+}
+
+/// True for code points in the Thai script block
+/// (`U+0E00..U+0E7F`). Thai is the other major living script in
+/// the multilingual roadmap that does not use inter-word
+/// whitespace, so the fact-shape heuristic accepts a Thai
+/// codepoint run on the same terms as a CJK run.
+fn is_thai_codepoint(c: char) -> bool {
+    matches!(c, '\u{0E00}'..='\u{0E7F}')
 }
 
 impl ObservationExtractor for LexiconExtractor {
@@ -1226,6 +1276,55 @@ mod tests {
         assert!(!is_cjk_codepoint('ä')); // Latin Extended
         assert!(!is_cjk_codepoint('م')); // Arabic
         assert!(!is_cjk_codepoint('क')); // Devanagari
+        assert!(!is_cjk_codepoint('ก')); // Thai (handled separately)
+    }
+
+    #[test]
+    fn is_thai_codepoint_classifies_correctly() {
+        // Spot-check the Thai detector.
+        assert!(is_thai_codepoint('ก')); // Thai consonant ko kai
+        assert!(is_thai_codepoint('ท')); // Thai consonant tho thahan
+        assert!(is_thai_codepoint('ย')); // Thai consonant yo yak
+        assert!(is_thai_codepoint('ไ')); // Thai vowel sara ai mai malai
+        assert!(is_thai_codepoint('๛')); // Thai khomut (end-of-text marker)
+        assert!(!is_thai_codepoint('a')); // ASCII
+        assert!(!is_thai_codepoint('東')); // CJK (handled separately)
+        assert!(!is_thai_codepoint('म')); // Devanagari
+    }
+
+    #[test]
+    fn thai_fact_shaped_without_whitespace() {
+        // Regression for Devin Review #BUG-0002: Phase 1.4
+        // shipped CJK fact-shape support but missed Thai, the
+        // other major no-inter-word-whitespace script. A Thai
+        // declarative sentence (no spaces, ≥ 4 Thai codepoints)
+        // must now produce a Fact candidate.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        // "Bangkok is the capital of Thailand."
+        let obs = ext.extract("กรุงเทพมหานครเป็นเมืองหลวงของประเทศไทย", scope);
+        assert!(
+            obs.iter()
+                .any(|o| o.observation_type == ObservationType::Fact),
+            "expected at least one Fact from Thai declarative; got {:?}",
+            obs.iter().map(|o| o.observation_type).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn thai_sentence_too_short_does_not_become_fact() {
+        // Symmetric with the CJK gate: < 4 Thai codepoints +
+        // no spaces should not become a Fact, to avoid spurious
+        // very-short Thai utterances getting promoted.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        // "ใช่" — "yes" in Thai, 3 Thai codepoints, no spaces.
+        let obs = ext.extract("ใช่", scope);
+        assert!(
+            !obs.iter()
+                .any(|o| o.observation_type == ObservationType::Fact),
+            "expected no Fact from very short Thai utterance"
+        );
     }
 
     #[test]
