@@ -42,21 +42,25 @@ updates:
     # the gated range.
     ignore:
       # rusqlite >=0.37 (via libsqlite3-sys >=0.36) requires Rust
-      # 1.94+ for the stable `cfg_select!` macro. Cargo.toml line
-      # 105-119 explains the pin in detail. We still allow patch
-      # bumps within the 0.32.x line and minor bumps up to (but
-      # not including) 0.37 so the substrate-side rusqlite
-      # surface can be migrated incrementally if a future maint
-      # sweep targets an intermediate.
+      # 1.94+ for the stable `cfg_select!` macro. See the comment
+      # block immediately above the `rusqlite = ` line in the
+      # workspace `Cargo.toml` for the full rationale. We still
+      # allow patch bumps within the 0.32.x line and minor bumps
+      # up to (but not including) 0.37 so the substrate-side
+      # rusqlite surface can be migrated incrementally if a future
+      # maint sweep targets an intermediate.
       - dependency-name: "rusqlite"
         versions: [">=0.37"]
       # aws-nitro-enclaves-nsm-api >=0.5 sets rust-version=1.92.
-      # crates/synthesis_engine/Cargo.toml line 56-65 explains
-      # the pin in detail.
+      # See the comment block immediately above the
+      # `aws-nitro-enclaves-nsm-api = ` line in
+      # `crates/synthesis_engine/Cargo.toml` for the full
+      # rationale.
       - dependency-name: "aws-nitro-enclaves-nsm-api"
         versions: [">=0.5"]
-      # criterion >=0.8 requires Rust 1.86. Cargo.toml line
-      # 127-143 explains the pin in detail.
+      # criterion >=0.8 requires Rust 1.86. See the comment block
+      # immediately above the `criterion = ` line in the
+      # workspace `Cargo.toml` for the full rationale.
       - dependency-name: "criterion"
         versions: [">=0.8"]
 
