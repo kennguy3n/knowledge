@@ -158,6 +158,17 @@ impl<'a> HybridRetriever<'a> {
     /// `fts_score` field surfaced on
     /// [`RetrievalResult`] is the unified projected score derived
     /// from that best rank.
+    ///
+    /// Both branches accept the same FTS5 query *grammar*
+    /// (bareword / `"phrase"` / `term OR term` / `NEAR(…)` /
+    /// column-filter / prefix-star), but trigram has a 3-codepoint
+    /// per-term floor that `unicode61` does not — terms shorter
+    /// than 3 codepoints silently match nothing in the CJK branch
+    /// rather than producing an error, so 2-codepoint CJK queries
+    /// like `天気` return an empty result set (a future-phase
+    /// custom bigram FFI tokeniser is the recall fix). See
+    /// [`crate::EvidenceStore::search_fts`] for the full
+    /// query-grammar / per-tokeniser-recall contract.
     pub fn search_fts(
         &self,
         scope_id: ScopeId,

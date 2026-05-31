@@ -1126,11 +1126,35 @@ impl EvidenceStore {
     /// segmented scripts and `evidence_fts_cjk` (trigram) for CJK
     /// Han / Hiragana / Katakana / Thai content — and de-duplicates
     /// on `evidence_id`, taking the best (smallest, since FTS5 rank
-    /// is negative-and-smaller-is-better) of the two ranks. Both
-    /// tokenisers accept the same FTS5 query syntax; either branch
-    /// returning zero rows for queries it cannot serve (e.g. a
-    /// 2-codepoint CJK query against trigram, or a CJK query
-    /// against unicode61) is the expected non-error path.
+    /// is negative-and-smaller-is-better) of the two ranks.
+    ///
+    /// **Query-syntax compatibility, not equivalence.** Both branches
+    /// accept the same FTS5 query *grammar* (the bareword / `"phrase"`
+    /// / `term1 OR term2` / `NEAR(…)` / column-filter / prefix-star
+    /// syntax described in <https://sqlite.org/fts5.html#full_text_query_syntax>).
+    /// They differ in what terms each tokeniser is able to match:
+    ///
+    /// * `unicode61` (universal table) splits on Unicode whitespace
+    ///   and punctuation and is happy with single-codepoint terms.
+    ///   A query like `"to OR deadline"` is well-formed and may
+    ///   match real rows.
+    /// * `trigram` (CJK table) only stores overlapping 3-codepoint
+    ///   windows of `content`, so any **individual** query term that
+    ///   is fewer than 3 codepoints will simply never match a row in
+    ///   that branch — it is silently and validly empty. This is
+    ///   the documented Phase 1.2 floor and is what enables the
+    ///   `天気` (2-codepoint) test case to round-trip as
+    ///   `Ok(vec![])` instead of erroring (a custom FFI bigram
+    ///   tokeniser is the future-phase fix). Compound queries
+    ///   with at least one term ≥ 3 codepoints (e.g.
+    ///   `"to OR 良い天気"`) match in `trigram` on the long term
+    ///   and in `unicode61` on the short term; the UNION then
+    ///   surfaces the row from whichever index found it.
+    ///
+    /// Either branch returning zero rows for queries it cannot serve
+    /// (a < 3-codepoint term against trigram, or a pure-CJK term
+    /// against unicode61 with no Latin context) is the expected
+    /// non-error path, not a tokeniser mismatch.
     pub fn search_fts(
         &self,
         scope_id: ScopeId,
