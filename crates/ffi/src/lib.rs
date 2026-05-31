@@ -423,8 +423,13 @@ pub fn get_evidence(handle: RuntimeHandle, evidence_id: String) -> FfiResult<Evi
                 // stamped on the row at ingest (schema v13, Phase
                 // 1.3). NULL stays NULL across the bridge so host
                 // shells can distinguish "no detection" from a
-                // concrete tag like `"en"`.
-                language_tag: row.language_tag.clone(),
+                // concrete tag like `"en"`. `row` is owned and not
+                // borrowed after this expression, and `source_ref`'s
+                // borrow above has already been consumed by
+                // `map_or`, so a partial move of `row.language_tag`
+                // (rather than a clone of the inner `String`) is
+                // sound and saves the allocation.
+                language_tag: row.language_tag,
             })
         })
     })
