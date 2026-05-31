@@ -4008,6 +4008,13 @@ fn migrate_v13_add_evidence_language_tag(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Chunk size for [`migrate_v14_backfill_evidence_fts_cjk`]'s
+/// streaming read of `evidence_fts`. Bounded so peak migration
+/// memory is O(chunk * row_size) regardless of how many evidence
+/// rows the user has accumulated (sweep-2 Devin Review
+/// ANALYSIS-0004).
+const V14_MIGRATION_CHUNK_SIZE: i64 = 1_000;
+
 /// v13 -> v14 additive migration: backfill `evidence_fts_cjk` from
 /// pre-existing `evidence_fts.content` rows whose body contains any
 /// CJK Han / Hiragana / Katakana / Thai codepoint.
@@ -4052,6 +4059,18 @@ fn migrate_v13_add_evidence_language_tag(conn: &Connection) -> Result<()> {
 /// matching the contract of the sibling migrations
 /// ([`migrate_v13_add_evidence_language_tag`],
 /// [`migrate_evidence_embeddings_to_composite_pk`]).
+///
+/// Memory bound: the backfill iterates `evidence_fts` in
+/// rowid-ordered chunks of [`V14_MIGRATION_CHUNK_SIZE`] rows, so
+/// peak memory is O(chunk * row_size) rather than O(total_rows *
+/// row_size). This was the architectural fix for sweep-2 Devin
+/// Review ANALYSIS-0004 — on a large pre-v14 database the
+/// "materialise everything into a single `Vec`" version would
+/// have allocated proportional to the entire body corpus, which
+/// is unbounded on desktop substrates and a real OOM risk during
+/// the one-time migration. The chunked version makes the
+/// migration's worst-case memory footprint independent of the
+/// database size.
 fn migrate_v14_backfill_evidence_fts_cjk(conn: &Connection) -> Result<()> {
     let existing_cjk_rows: i64 =
         conn.query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |row| {
@@ -4061,28 +4080,71 @@ fn migrate_v14_backfill_evidence_fts_cjk(conn: &Connection) -> Result<()> {
         return Ok(());
     }
     let tx = conn.unchecked_transaction()?;
-    let rows: Vec<(String, Vec<u8>, Vec<u8>)> = {
-        let mut stmt = tx.prepare("SELECT content, evidence_id, scope_id FROM evidence_fts")?;
-        let mapped = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, Vec<u8>>(2)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        mapped
-    };
-    for (content, evidence_id, scope_id) in rows {
-        if !crate::script::contains_cjk_or_thai(&content) {
-            continue;
+
+    // Stream the backfill in rowid-ordered chunks of
+    // `V14_MIGRATION_CHUNK_SIZE` rows rather than materialising the
+    // whole `evidence_fts` table into a single `Vec`. This bounds
+    // peak migration memory to O(chunk * row_size) regardless of
+    // how many evidence rows the user has accumulated, addressing
+    // sweep-2 Devin Review ANALYSIS-0004 (memory pressure during
+    // one-time v13→v14 migration on large databases).
+    //
+    // We page on the FTS5 virtual table's implicit `rowid` rather
+    // than `evidence_id` so the chunking is independent of how
+    // evidence_id values are distributed (uuid bytes are not
+    // monotonic). The page is fully drained before the next
+    // SELECT is prepared so the read statement is never alive at
+    // the same time as the INSERT statements — rusqlite cannot
+    // safely keep two prepared statements alive on the same
+    // `&Connection` when one is iterating, which is what forced
+    // the original "materialise everything first" pattern.
+    //
+    // Strictly increasing `last_rowid` cursor guarantees we make
+    // forward progress on every iteration even though the
+    // INSERTs into `evidence_fts_cjk` happen on the same
+    // connection; we are ordering on `evidence_fts.rowid`, not
+    // `evidence_fts_cjk.rowid`, so the new inserts cannot
+    // perturb the read cursor.
+    let mut last_rowid: i64 = 0;
+    loop {
+        let chunk: Vec<(i64, String, Vec<u8>, Vec<u8>)> = {
+            let mut stmt = tx.prepare(
+                "SELECT rowid, content, evidence_id, scope_id FROM evidence_fts
+                 WHERE rowid > ?1
+                 ORDER BY rowid
+                 LIMIT ?2",
+            )?;
+            let collected = stmt
+                .query_map(params![last_rowid, V14_MIGRATION_CHUNK_SIZE], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            collected
+        };
+        if chunk.is_empty() {
+            break;
         }
-        tx.execute(
-            "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
-             VALUES (?1, ?2, ?3)",
-            params![content, evidence_id, scope_id],
-        )?;
+        // Update cursor to the largest rowid in this page BEFORE
+        // we drop the chunk via the `for` loop's move semantics.
+        last_rowid = chunk
+            .last()
+            .map(|(rowid, _, _, _)| *rowid)
+            .expect("chunk is non-empty by the early break above");
+        for (_rowid, content, evidence_id, scope_id) in chunk {
+            if !crate::script::contains_cjk_or_thai(&content) {
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
+                 VALUES (?1, ?2, ?3)",
+                params![content, evidence_id, scope_id],
+            )?;
+        }
     }
     tx.commit()?;
     Ok(())
@@ -4398,13 +4460,25 @@ pub(crate) fn dual_fts_search(
 
     // Branch 2: trigram (additive recall). Errors swallowed.
     //
-    // The closure captures every rusqlite error path (prepare,
-    // query_map, per-row mapping) so any failure from the trigram
-    // tokeniser — including the documented short-term rejection,
-    // `NEAR(…)`, column filters, and short prefix-star matches —
-    // is observed as `Err(_)` here and treated as an empty
-    // contribution. We only consume the `Ok` arm.
-    let trigram_attempt: rusqlite::Result<Vec<(Vec<u8>, f64)>> = (|| {
+    // The closure captures every error path inside the trigram
+    // branch — `prepare`, `query_map`, per-row column mapping,
+    // AND the post-retrieval `slice_to_uuid` UUID parse — so any
+    // failure from the trigram tokeniser OR any malformed
+    // evidence-id payload is observed locally and treated as an
+    // empty contribution. We only consume the `Ok` arm, so the
+    // unicode61 branch remains the sole source of truth for
+    // query validity even if `evidence_fts_cjk` ever returned a
+    // corrupted UUID (e.g. external database tampering). This is
+    // the long-form fix for sweep-3 Devin Review INFO-0001 —
+    // moving the UUID parse inside the swallow-scope means the
+    // doc-comment's "errors swallowed" contract holds without
+    // any post-closure exception.
+    //
+    // The inner closure returns a `Vec<(EvidenceId, f64)>` so the
+    // caller never has to re-parse a `Vec<u8>` — and so the only
+    // post-closure code is the `MIN(rank)` merge, which is
+    // infallible.
+    let trigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
         let mut stmt = conn.prepare(
             "SELECT evidence_id, rank FROM evidence_fts_cjk
              WHERE evidence_fts_cjk MATCH ?1 AND scope_id = ?2
@@ -4415,13 +4489,24 @@ pub(crate) fn dual_fts_search(
         })?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(row?);
+            let (id_bytes, rank) = row?;
+            // A malformed UUID in `evidence_fts_cjk` can only come
+            // from external corruption (the write path at
+            // `index_fts` always writes a valid 16-byte
+            // `Uuid::as_bytes`). Skip the offending row rather
+            // than aborting the whole trigram branch so the rest
+            // of the recall lane still merges into the unicode61
+            // result set. This matches the broader contract that
+            // the trigram lane is *purely additive*.
+            match slice_to_uuid(&id_bytes) {
+                Ok(uuid) => out.push((EvidenceId(uuid), rank)),
+                Err(_) => continue,
+            }
         }
         Ok(out)
     })();
     if let Ok(trigram_rows) = trigram_attempt {
-        for (id_bytes, rank) in trigram_rows {
-            let id = EvidenceId(slice_to_uuid(&id_bytes)?);
+        for (id, rank) in trigram_rows {
             merge_min_rank(&mut best_rank, id, rank);
         }
     }

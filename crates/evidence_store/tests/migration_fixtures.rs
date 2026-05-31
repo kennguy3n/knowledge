@@ -562,3 +562,144 @@ fn v14_migration_is_idempotent_on_already_populated_database() {
     );
     assert_eq!(read_user_version(&path), SCHEMA_VERSION);
 }
+
+#[test]
+fn v14_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
+    // Regression test for sweep-2 Devin Review ANALYSIS-0004
+    // (`migrate_v14_backfill_evidence_fts_cjk` previously loaded
+    // the entire `evidence_fts` table into a single `Vec`). The
+    // fix paginates the read in chunks of `MIGRATION_CHUNK_SIZE`
+    // (1_000 rows). This test seeds `MIGRATION_CHUNK_SIZE + 500`
+    // (1_500) distinct CJK rows directly into `evidence_fts` to
+    // force the backfill loop to traverse at least two chunk
+    // boundaries, then verifies:
+    //
+    //   * every seeded CJK row appears in `evidence_fts_cjk`
+    //     after the migration (no rows dropped at the chunk
+    //     boundary),
+    //   * no duplicate rows are emitted (rowid cursor advances
+    //     strictly forward across chunks),
+    //   * the public `search_fts` API still works against the
+    //     migrated index for a CJK query.
+    //
+    // The seeded rows are written directly via the raw SQLCipher
+    // connection rather than the full `EvidenceStore::ingest`
+    // pipeline because the migration only reads
+    // `evidence_fts.content` / `evidence_fts.evidence_id` /
+    // `evidence_fts.scope_id` and never joins back to the
+    // `evidence` table — so an FTS-table-only seed is a faithful
+    // proxy for a pre-v14 corpus and runs in well under a second
+    // even at 1_500 rows.
+    use uuid::Uuid;
+
+    // The v14 backfill streams in chunks of 1_000 rows; 1_500
+    // rows guarantees the loop straddles at least one chunk
+    // boundary. Tracked as an `i64` from the start so we can
+    // compare to `SELECT COUNT(*)` results without a usize→i64
+    // cast (which clippy correctly flags as a potential wrap
+    // hazard on 32-bit targets).
+    const SEEDED_ROWS: i64 = 1_500;
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let scope = ScopeId::new_v4();
+    let scope_bytes = scope.as_uuid().as_bytes().to_vec();
+
+    // Bring the database to its modern shape, then strip the v14
+    // companion table so the migration must actually run on next
+    // open. Mirrors the setup used by
+    // `opens_v13_database_and_upgrades_to_current_with_evidence_fts_cjk_backfilled`.
+    {
+        let _store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+            .expect("open fresh store at SCHEMA_VERSION");
+    }
+    {
+        let conn = open_sqlcipher(&path);
+        conn.execute_batch("DROP TABLE evidence_fts_cjk;")
+            .expect("drop evidence_fts_cjk to reach v13 shape");
+        // Direct-INSERT a CJK body per row. Each body shares the
+        // common substring `重要な会議` so a single search query
+        // can sweep all of them; the suffix `#{n}` makes every
+        // body unique so a duplicate-emit bug in the migration
+        // would inflate `evidence_fts_cjk` past the SEEDED_ROWS
+        // count.
+        let tx = conn
+            .unchecked_transaction()
+            .expect("begin tx for bulk seed");
+        {
+            let mut insert = tx
+                .prepare(
+                    "INSERT INTO evidence_fts (content, evidence_id, scope_id) \
+                     VALUES (?1, ?2, ?3)",
+                )
+                .expect("prepare bulk-seed insert");
+            for n in 0..SEEDED_ROWS {
+                let eid = Uuid::new_v4().as_bytes().to_vec();
+                let body = format!("重要な会議の議事録 #{n}");
+                insert
+                    .execute(rusqlite::params![body, eid, scope_bytes])
+                    .expect("seed evidence_fts row");
+            }
+        }
+        tx.commit().expect("commit bulk seed");
+
+        // Re-stamp user_version=13 so the next open re-walks the
+        // v14 migration over the seeded rows.
+        conn.pragma_update(None, "user_version", 13_i64)
+            .expect("re-stamp user_version=13 after bulk seed");
+
+        // Sanity: confirm we actually wrote SEEDED_ROWS into
+        // evidence_fts and that the companion table is gone.
+        let fts_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM evidence_fts", [], |r| r.get(0))
+            .expect("count evidence_fts after seed");
+        assert_eq!(
+            fts_count, SEEDED_ROWS,
+            "bulk seed must populate evidence_fts with SEEDED_ROWS rows"
+        );
+        let companion_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type = 'table' AND name = 'evidence_fts_cjk'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("inspect sqlite_master for evidence_fts_cjk");
+        assert_eq!(
+            companion_exists, 0,
+            "evidence_fts_cjk must be absent before re-open so the migration backfill arm runs"
+        );
+    }
+
+    // Re-open. SCHEMA_SQL re-creates `evidence_fts_cjk` empty;
+    // `migrate_v14_backfill_evidence_fts_cjk` walks
+    // `evidence_fts` in chunks and inserts every CJK row.
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("re-open v13-shaped db with SEEDED_ROWS rows must run v14 migration");
+
+    // Every seeded row must have been backfilled. Strict
+    // equality (not >=) is what catches a chunk-boundary drop or
+    // a duplicate-emit bug.
+    let cjk_total: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
+        .expect("count evidence_fts_cjk after multi-chunk backfill");
+    assert_eq!(
+        cjk_total, SEEDED_ROWS,
+        "multi-chunk v14 backfill must produce exactly one evidence_fts_cjk row per seeded \
+         evidence_fts row (rowid cursor advanced past a chunk boundary, no rows dropped, no rows \
+         duplicated)"
+    );
+
+    // Search via the public API on the shared substring — every
+    // seeded row should be a hit.
+    let seeded_rows_usize = usize::try_from(SEEDED_ROWS).expect("SEEDED_ROWS fits in usize");
+    let hits = store
+        .search_fts(scope, "重要な会議", seeded_rows_usize)
+        .expect("search_fts post-multi-chunk migration");
+    assert_eq!(
+        hits.len(),
+        seeded_rows_usize,
+        "public search_fts must surface every back-filled CJK row after multi-chunk migration"
+    );
+}
