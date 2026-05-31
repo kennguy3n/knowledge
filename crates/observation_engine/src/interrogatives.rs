@@ -55,8 +55,20 @@ pub enum InterrogativeMatch {
     /// exactly equal one of the interrogatives. Used for languages
     /// where the question word is canonically sentence-initial and
     /// word boundaries are clear from whitespace (English, German,
-    /// Romance languages, Arabic, Vietnamese, Indonesian).
+    /// Romance languages, Arabic, Indonesian).
     FirstToken,
+    /// The first alphabetic token OR the space-joined first two
+    /// alphabetic tokens (case-folded) must equal an entry.
+    /// Strict superset of [`Self::FirstToken`]: single-word entries
+    /// still match via the first-token arm; multi-word entries
+    /// (`tại sao`, `khi nào`, `vì sao`) match via the bigram arm.
+    /// Used for languages whose canonical interrogatives include
+    /// short two-token collocations whose bare leading token is
+    /// too high-frequency to use on its own (Vietnamese, where
+    /// `tại` / `khi` / `vì` are common prepositions /
+    /// conjunctions in declaratives — see Devin Review finding
+    /// #ANALYSIS-0004 / #FLAG-0002d).
+    FirstBigram,
     /// Any interrogative appearing as a substring of the
     /// case-folded sentence counts as a match. Used for languages
     /// where the question word can appear anywhere in the
@@ -276,30 +288,38 @@ pub fn interrogatives_for(
         // initial case and rely on `?`/`?` terminator for the
         // sentence-final case.
         //
-        // Deliberately omitted: `khi`, `tại`, `vì`. These are
-        // extremely high-frequency Vietnamese conjunctions /
-        // prepositions whose interrogative readings only manifest
-        // as part of two-word bigrams — `khi nào` ("when?"),
-        // `tại sao` ("why?"), `vì sao` ("why?"). The bare forms
-        // overwhelmingly open declaratives: `Khi tôi đến...`
-        // ("When I arrived..."), `Tại Hà Nội...` ("At Hanoi..."),
-        // `Vì tôi bận...` ("Because I'm busy..."). A FirstToken
-        // match on bare `khi`/`tại`/`vì` would mis-classify a
-        // huge fraction of declaratives as questions — same class
-        // of bug as Spanish/Portuguese `por` (FLAG-0003),
-        // Indonesian/Malay `di`/`yang` (FLAG-0005b), French `que`
-        // / Italian `che` / Portuguese `que` (FLAG-0001c). The
-        // `?` terminator catches the sentence-final cases
-        // (`Khi nào?`, `Tại sao?`, `Vì sao?`), and the bare
-        // interrogatives `ai`/`gì`/`nào`/`đâu`/`sao` are kept to
-        // catch initial-position questions without `?`. Future
-        // work could add two-token bigram matching to recover the
-        // `khi nào`/`tại sao`/`vì sao` recall — deferred to the
-        // Phase 1.1 LexiconRegistry, which has a richer matcher
-        // surface. See Devin Review finding #FLAG-0002d.
+        // Phase 1.1 (Devin Review finding #ANALYSIS-0004,
+        // closing the deferred #FLAG-0002d): Vietnamese now uses
+        // FirstBigram so the high-frequency leading prepositions
+        // / conjunctions `tại` / `khi` / `vì` recover their
+        // interrogative readings via the two-token collocations
+        // (`tại sao` "why?", `khi nào` "when?", `vì sao` "why?")
+        // without re-introducing the false positives the bare
+        // forms caused (`Khi tôi đến...` "When I arrived...",
+        // `Tại Hà Nội...` "At Hanoi...", `Vì tôi bận...`
+        // "Because I'm busy..."). FirstBigram is a strict
+        // superset of FirstToken — the bare unambiguous
+        // interrogatives (`ai`, `gì`, `nào`, `đâu`, `bao`,
+        // `sao`, `thế`) still match via the first-token arm; the
+        // bigram entries `tại sao` / `khi nào` / `vì sao` match
+        // via the bigram arm. Bigram entries are written with a
+        // single ASCII space and checked against the space-joined
+        // first two alphabetic tokens; see
+        // [`crate::lexicon::first_alphabetic_bigram`].
         "vi" => Some((
-            &["ai", "gì", "nào", "đâu", "bao", "sao", "thế"],
-            InterrogativeMatch::FirstToken,
+            &[
+                "ai",
+                "gì",
+                "nào",
+                "đâu",
+                "bao",
+                "sao",
+                "thế",
+                "tại sao",
+                "khi nào",
+                "vì sao",
+            ],
+            InterrogativeMatch::FirstBigram,
         )),
 
         // Indonesian / Malay — Kridalaksana, Kelas Kata dalam
@@ -639,6 +659,29 @@ mod tests {
     }
 
     #[test]
+    fn first_bigram_languages_are_vietnamese_only_for_now() {
+        // FirstBigram is the Phase 1.1 strategy introduced for
+        // languages whose canonical interrogatives include
+        // two-token collocations whose bare leading token is too
+        // high-frequency to use on its own. Today only Vietnamese
+        // uses it (`tại sao` / `khi nào` / `vì sao`). Pin the
+        // contract so adding a second FirstBigram language is an
+        // intentional decision.
+        let expected_first_bigram: std::collections::HashSet<&str> = ["vi"].into_iter().collect();
+        for tag in SUPPORTED_PRIMARY_TAGS {
+            let strat = matching_strategy_for(tag).unwrap();
+            let is_first_bigram = strat == InterrogativeMatch::FirstBigram;
+            assert_eq!(
+                is_first_bigram,
+                expected_first_bigram.contains(tag),
+                "tag {tag}: first-bigram expected={}, got strategy={:?}",
+                expected_first_bigram.contains(tag),
+                strat
+            );
+        }
+    }
+
+    #[test]
     fn no_first_token_entry_contains_tokeniser_boundary_chars() {
         // Devin Review #BUG-0001: an interrogative entry that
         // contains a non-alphabetic character is unreachable
@@ -656,6 +699,37 @@ mod tests {
                     entry.chars().all(char::is_alphabetic),
                     "tag {tag}: interrogative {entry:?} contains a non-alphabetic char \
                      and is unreachable under FirstToken matching"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn first_bigram_entries_are_alphabetic_with_one_internal_space() {
+        // FirstBigram entries are either a single alphabetic
+        // token (matched via the FirstToken arm) or two
+        // alphabetic tokens space-joined by a single ASCII
+        // space (matched via the bigram arm). Anything else
+        // is unreachable under the FirstBigram matcher.
+        for tag in SUPPORTED_PRIMARY_TAGS {
+            let (list, strat) = interrogatives_for(tag).unwrap();
+            if strat != InterrogativeMatch::FirstBigram {
+                continue;
+            }
+            for entry in list {
+                let space_count = entry.chars().filter(|c| *c == ' ').count();
+                assert!(
+                    space_count <= 1,
+                    "tag {tag}: FirstBigram entry {entry:?} has more than one space \
+                     (would never match a two-token bigram)"
+                );
+                let valid = entry
+                    .split(' ')
+                    .all(|part| !part.is_empty() && part.chars().all(char::is_alphabetic));
+                assert!(
+                    valid,
+                    "tag {tag}: FirstBigram entry {entry:?} contains a non-alphabetic char or \
+                     an empty part — the matcher would never reach it"
                 );
             }
         }
@@ -848,37 +922,37 @@ mod tests {
     }
 
     #[test]
-    fn vietnamese_omits_high_frequency_conjunctions() {
-        // Devin Review #FLAG-0002d: `khi`, `tại`, `vì` are
-        // extremely common Vietnamese conjunctions / prepositions
-        // (\"when [in declarative]\", \"at\", \"because\") whose
-        // interrogative readings only manifest as part of bigrams
-        // (`khi nào`, `tại sao`, `vì sao`). FirstToken matching on
-        // the bare forms mis-classifies a huge fraction of
-        // declaratives as questions \u2014 same class of false-positive
-        // as Spanish/Portuguese `por`, Indonesian/Malay `di`/`yang`,
-        // French `que`, Italian `che`, Portuguese `que`.
+    fn vietnamese_omits_high_frequency_bare_conjunctions_but_keeps_bigrams() {
+        // Devin Review #FLAG-0002d / #ANALYSIS-0004 (Phase 1.1):
+        // `khi`, `tại`, `vì` are extremely common Vietnamese
+        // conjunctions / prepositions whose interrogative
+        // readings only manifest as part of bigrams (`khi nào`,
+        // `tại sao`, `vì sao`). The bare forms remain absent so
+        // `Khi tôi đến...` / `Tại Hà Nội...` / `Vì tôi bận...`
+        // declaratives do not mis-classify, but Phase 1.1 added
+        // the bigram entries themselves so `Tại sao bạn buồn?` /
+        // `Khi nào chúng ta đi?` / `Vì sao trời mưa?` recover
+        // their interrogative reading under FirstBigram.
         let (vi_list, strat) = interrogatives_for("vi").unwrap();
-        assert_eq!(strat, InterrogativeMatch::FirstToken);
-        assert!(
-            !vi_list.contains(&"khi"),
-            "vietnamese list must not contain high-frequency conjunction 'khi' (\
-             'Khi tôi đến...' would mis-classify as a question)"
-        );
-        assert!(
-            !vi_list.contains(&"tại"),
-            "vietnamese list must not contain high-frequency preposition 'tại' (\
-             'Tại Hà Nội...' would mis-classify as a question)"
-        );
-        assert!(
-            !vi_list.contains(&"vì"),
-            "vietnamese list must not contain high-frequency conjunction 'vì' (\
-             'Vì tôi bận...' would mis-classify as a question)"
-        );
+        assert_eq!(strat, InterrogativeMatch::FirstBigram);
+        for bare in ["khi", "tại", "vì"] {
+            assert!(
+                !vi_list.contains(&bare),
+                "vietnamese list must not contain bare high-frequency function word {bare:?} \
+                 (matches all declaratives starting with the conjunction/preposition)"
+            );
+        }
+        for bigram in ["tại sao", "khi nào", "vì sao"] {
+            assert!(
+                vi_list.contains(&bigram),
+                "vietnamese list must contain bigram interrogative {bigram:?} (Phase 1.1 \
+                 #ANALYSIS-0004 closure)"
+            );
+        }
         // The bare unambiguous interrogatives should remain so
         // sentence-initial `Ai là...?` / `Gì xảy ra...?` /
         // `Nào là...?` / `Đâu là...?` / `Sao thế?` / `Bao nhiêu?`
-        // still classify under FirstToken.
+        // still classify (via the FirstToken arm of FirstBigram).
         for kept in ["ai", "gì", "nào", "đâu", "bao", "sao", "thế"] {
             assert!(
                 vi_list.contains(&kept),

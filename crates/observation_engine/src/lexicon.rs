@@ -147,13 +147,20 @@ pub enum MatchStrategy {
 }
 
 impl MatchStrategy {
-    /// Promote the [`InterrogativeMatch`] strategy used by the
-    /// Phase 1.4 interrogatives table into this enum. The
-    /// FirstBigram strategy is opt-in per Phase 1.1 lexicon and
-    /// is not produced by this conversion.
+    /// Bridge from the Phase 1.4 interrogative-strategy enum to
+    /// the Phase 1.1 registry strategy enum. Used by
+    /// [`LexiconRegistry::interrogatives_for`] to expose the
+    /// per-language interrogative matcher through the unified
+    /// [`table_matches`] entry point. Phase 1.1
+    /// (#ANALYSIS-0004): now maps
+    /// [`InterrogativeMatch::FirstBigram`] (Vietnamese) to
+    /// [`MatchStrategy::FirstBigram`] so the Vietnamese
+    /// bigram interrogatives (`tại sao`, `khi nào`, `vì sao`)
+    /// reach the matcher.
     pub fn from_interrogative_match(strategy: InterrogativeMatch) -> Self {
         match strategy {
             InterrogativeMatch::FirstToken => MatchStrategy::FirstToken,
+            InterrogativeMatch::FirstBigram => MatchStrategy::FirstBigram,
             InterrogativeMatch::Substring => MatchStrategy::Substring,
         }
     }
@@ -184,9 +191,19 @@ pub struct LanguageLexicon {
     pub task_keywords: &'static [&'static str],
     /// Strategy for matching [`Self::task_keywords`].
     pub task_strategy: MatchStrategy,
-    /// Imperative verbs for task detection (only consulted on
-    /// the first token after normalisation). Always
-    /// [`MatchStrategy::FirstToken`] semantics.
+    /// Imperative verbs for task detection. Matched via
+    /// [`KeywordClass::TaskImperative`], which uses
+    /// [`MatchStrategy::FirstBigram`] unconditionally so that
+    /// single-word imperatives (English `please`, German
+    /// `bitte`, Vietnamese `vui`) still match via the
+    /// first-token arm while multi-syllable Vietnamese
+    /// imperatives (`triển khai`, `chuẩn bị`, `cập nhật`)
+    /// match via the bigram arm. Bigram entries must be written
+    /// with a single ASCII space separating the two alphabetic
+    /// tokens; see
+    /// [`first_alphabetic_bigram`](crate::lexicon::first_alphabetic_bigram).
+    /// See Devin Review finding #BUG-0002 (Phase 1.1) — the
+    /// strategy is now documented to match the code.
     pub task_imperative_verbs: &'static [&'static str],
     /// Stop-words for the capitalised-token entity extractor.
     /// Only relevant for languages with case distinction —

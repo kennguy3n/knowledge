@@ -38,13 +38,12 @@
 //! the short sentence.
 
 use evidence_store::ScopeId;
-use unicode_normalization::UnicodeNormalization;
 
-use crate::interrogatives::{interrogatives_for, InterrogativeMatch};
+use crate::interrogatives::interrogatives_for;
 use crate::language::{detect_language, LanguageTag};
 use crate::lexicon::{
     default_registry, normalize_for_lookup, table_matches, KeywordClass, LanguageLexicon,
-    LexiconRegistry,
+    LexiconRegistry, MatchStrategy,
 };
 use crate::types::{Observation, ObservationType};
 
@@ -367,14 +366,32 @@ fn split_sentences_with_terminator(text: &str) -> Vec<SentenceSlice<'_>> {
 ///    present, return `true` regardless of language.
 /// 2. **Language-specific interrogative** — looked up via
 ///    [`crate::interrogatives::interrogatives_for`] on the
-///    sentence's primary BCP-47 subtag. CJK + Thai use
-///    [`InterrogativeMatch::Substring`] (the interrogative may
-///    appear anywhere in the sentence); space-separated
-///    languages use [`InterrogativeMatch::FirstToken`].
+///    sentence's primary BCP-47 subtag, then matched through the
+///    unified [`crate::lexicon::table_matches`] entry point.
+///    CJK + Thai + Hindi use
+///    [`crate::lexicon::MatchStrategy::Substring`] (the
+///    interrogative may appear anywhere in the sentence);
+///    Vietnamese uses
+///    [`crate::lexicon::MatchStrategy::FirstBigram`] (Phase 1.1
+///    #ANALYSIS-0004 closure — `tại sao` / `khi nào` / `vì sao`
+///    are bigram entries while the bare unambiguous
+///    interrogatives still match via the first-token arm); the
+///    remaining space-separated languages use
+///    [`crate::lexicon::MatchStrategy::FirstToken`].
 /// 3. **Fallback** — when the language tag is `None` or no
 ///    table is configured for the language, fall back to the
 ///    English first-token check so substantive English
 ///    questions in unknown-language threads still get caught.
+///
+/// Phase 1.1 #ANALYSIS-0002 closure: normalisation is delegated
+/// to the registry's [`normalize_for_lookup`] primitive, which
+/// strips Arabic tashkeel + tatweel (when the language tag is
+/// Arabic-script), strips bidi/ZWJ format controls, then
+/// NFC-composes + lowercases. Routing the question path through
+/// the same primitive means Arabic interrogatives decorated
+/// with tashkeel (‏كَيْفَ ‏) now match the canonical table
+/// entries (‏كيف ‏) consistently with how decision / task /
+/// imperative matching already worked.
 fn looks_like_question(
     sentence: &str,
     terminator: Option<char>,
@@ -384,40 +401,24 @@ fn looks_like_question(
         return true;
     }
 
-    // NFC-normalise before lowercasing so that NFD-decomposed input
-    // (e.g. macOS file-system paths that decompose `é` into
-    // `e + U+0301`) matches the NFC-composed table entries. The
-    // `split` predicate below treats non-alphabetic codepoints —
-    // including category-Mn combining marks like `U+0301` — as
-    // token boundaries, so without NFC the Latin / Cyrillic
-    // accented interrogatives (`qué`, `cómo`, `pourquoi`, `où`,
-    // ...) and the Arabic tashkeel-marked forms would split into
-    // pieces that never match the table. NFC is the standard input
-    // form for chat protocols, so this is mostly defence-in-depth.
-    // See Devin Review finding #ANALYSIS-0003b.
-    let lower: String = sentence.trim().nfc().collect::<String>().to_lowercase();
-    if lower.is_empty() {
+    let primary_tag = language.map(LanguageTag::primary);
+    let normalised = normalize_for_lookup(sentence, primary_tag);
+    if normalised.is_empty() {
         return false;
     }
 
     // Look up per-language interrogatives; fall back to English
-    // when the tag is unknown or unconfigured.
-    let (table, strategy) = language
-        .map(LanguageTag::primary)
+    // when the tag is unknown or unconfigured. Promote the
+    // Phase 1.4 InterrogativeMatch into the unified
+    // Phase 1.1 MatchStrategy so the shared table_matches entry
+    // point handles the FirstToken / FirstBigram / Substring
+    // semantics in one place.
+    let (table, strategy) = primary_tag
         .and_then(interrogatives_for)
         .or_else(|| interrogatives_for("en"))
         .expect("english fallback must always be configured in interrogatives table");
-
-    match strategy {
-        InterrogativeMatch::FirstToken => {
-            let first = lower
-                .split(|c: char| !c.is_alphabetic())
-                .find(|s| !s.is_empty())
-                .unwrap_or("");
-            table.contains(&first)
-        }
-        InterrogativeMatch::Substring => table.iter().any(|i| lower.contains(*i)),
-    }
+    let strategy = MatchStrategy::from_interrogative_match(strategy);
+    table_matches(table, &normalised, strategy)
 }
 
 fn extract_urls(text: &str) -> Vec<String> {
@@ -723,7 +724,27 @@ fn extract_at_mentions(text: &str) -> Vec<String> {
     out
 }
 
-fn extract_capitalised_words(text: &str, stop_words: &[String]) -> Vec<String> {
+/// Extract capitalised tokens from `text`, skipping any that
+/// match the caller-supplied `is_stop_word` predicate. The
+/// predicate receives each candidate token in its original
+/// (mixed) case and is responsible for any case folding it
+/// needs to do internally.
+///
+/// Phase 1.1 #BUG-0001 closure: this used to take
+/// `stop_words: &[String]` and compare via
+/// `str::eq_ignore_ascii_case`, which only folds the ASCII
+/// A–Z / a–z range. That silently failed for stop-words
+/// outside ASCII — e.g. Russian Cyrillic (Это vs. это), or
+/// Vietnamese with prefixed `Đ` / `đ` (Đó vs. đó). Routing the
+/// stop-word check through a caller-owned predicate lets
+/// [`LexiconExtractor::is_stop_word`] use the Unicode-aware
+/// [`str::to_lowercase`] fold against the lexicon's
+/// already-lowercase entries, which is the same normalisation
+/// the rest of the lexicon matcher uses. The signature change
+/// also closes #ANALYSIS-0005 by removing the per-call
+/// `Vec<String>` allocation the previous shape required for the
+/// registry-backed path.
+fn extract_capitalised_words(text: &str, is_stop_word: impl Fn(&str) -> bool) -> Vec<String> {
     let mut out = Vec::new();
     for raw in text.split(|c: char| !c.is_alphabetic() && c != '\'') {
         if raw.is_empty() {
@@ -731,10 +752,7 @@ fn extract_capitalised_words(text: &str, stop_words: &[String]) -> Vec<String> {
         }
         let mut chars = raw.chars();
         let first = chars.next().unwrap();
-        if first.is_uppercase()
-            && raw.chars().count() >= 2
-            && !stop_words.iter().any(|s| s.eq_ignore_ascii_case(raw))
-        {
+        if first.is_uppercase() && raw.chars().count() >= 2 && !is_stop_word(raw) {
             out.push(raw.to_string());
         }
     }
@@ -906,30 +924,46 @@ impl LexiconExtractor {
         }
     }
 
-    /// Stop-word list for the capitalised-token entity
-    /// extractor. In registry-backed mode this returns the
-    /// `dominant_language` lexicon's stop-words (or the
-    /// English lexicon's stop-words if that language has none
-    /// configured); in legacy inline mode it returns the inline
-    /// stop-word list.
+    /// True when `raw` (in its original mixed case) matches a
+    /// stop-word entry for `dominant_language`'s lexicon under
+    /// Unicode-aware lowercase folding. Used by the
+    /// capitalised-token entity extractor to skip candidates
+    /// that are actually function words.
+    ///
+    /// In registry-backed mode the lookup uses the dominant
+    /// language's lexicon, falling back to the English lexicon's
+    /// stop-words for unconfigured languages. In legacy inline
+    /// mode it uses the inline stop-word list (already
+    /// lowercased by [`LexiconExtractor::new`]).
+    ///
+    /// Phase 1.1 #BUG-0001 closure: the pre-Phase-1.1 path
+    /// compared via `str::eq_ignore_ascii_case` which silently
+    /// failed for non-ASCII stop-words. We now lowercase the
+    /// raw candidate once via [`str::to_lowercase`] (Unicode-
+    /// aware) and compare against the already-lowercase entries,
+    /// matching what the rest of the lexicon matcher does.
+    ///
+    /// Phase 1.1 #ANALYSIS-0005 closure: the predicate shape
+    /// avoids the per-call `Vec<String>` allocation the previous
+    /// `stop_words_for_entity_extraction` returned for the
+    /// registry path. The lowercase allocation per candidate is
+    /// the minimum required for Unicode-correct case folding.
     ///
     /// The capitalised-token extractor is itself only
-    /// meaningful for case-bearing scripts, so the returned
-    /// list is mostly relevant for Latin / Cyrillic /
-    /// Greek / Armenian — CJK / Arabic / Thai naturally emit
-    /// no capitalised-token candidates and therefore consult
-    /// the list zero times for those scripts.
-    fn stop_words_for_entity_extraction(
-        &self,
-        dominant_language: Option<&LanguageTag>,
-    ) -> Vec<String> {
+    /// meaningful for case-bearing scripts, so this predicate is
+    /// mostly relevant for Latin / Cyrillic / Greek / Armenian —
+    /// CJK / Arabic / Thai naturally emit no capitalised-token
+    /// candidates and therefore reach this method zero times for
+    /// those scripts.
+    fn is_stop_word(&self, raw: &str, dominant_language: Option<&LanguageTag>) -> bool {
+        let lowered = raw.to_lowercase();
         match &self.source {
             LexiconSource::Registry(reg) => {
-                let primary = dominant_language.map(|t| t.primary().to_string());
-                let lex = reg.lexicon_for_or_english(primary.as_deref());
-                lex.stop_words.iter().copied().map(str::to_string).collect()
+                let primary = dominant_language.map(LanguageTag::primary);
+                let lex = reg.lexicon_for_or_english(primary);
+                lex.stop_words.iter().any(|s| *s == lowered)
             }
-            LexiconSource::Inline { stop_words, .. } => stop_words.clone(),
+            LexiconSource::Inline { stop_words, .. } => stop_words.iter().any(|s| s == &lowered),
         }
     }
 
@@ -974,20 +1008,26 @@ impl LexiconExtractor {
                 );
             }
         }
-        // Phase 1.1: stop-word list comes from the per-message
-        // dominant language's lexicon when registry-backed, falling
-        // back to the English lexicon's stop-words for unconfigured
-        // languages, falling back to the inline list when the
-        // extractor was constructed via the legacy
-        // [`LexiconExtractor::new`] path. The capitalised-token
-        // entity heuristic is itself only meaningful for case-bearing
-        // scripts (Latin / Cyrillic / Greek / Armenian / …), but we
-        // run it unconditionally — sentences in CJK / Arabic / Thai
-        // contain no capitalised tokens, so the heuristic naturally
-        // emits no results for those scripts and the stop-word list
-        // is irrelevant there.
-        let stop_words = self.stop_words_for_entity_extraction(dominant_language.as_ref());
-        for word in extract_capitalised_words(text, &stop_words) {
+        // Phase 1.1: stop-word check uses
+        // [`Self::is_stop_word`], which routes to the per-message
+        // dominant language's lexicon when registry-backed, falls
+        // back to the English lexicon's stop-words for
+        // unconfigured languages, and falls back to the inline
+        // list when the extractor was constructed via the legacy
+        // [`LexiconExtractor::new`] path. Comparison is Unicode-
+        // lowercase aware (Phase 1.1 #BUG-0001 closure) so
+        // Cyrillic and Vietnamese stop-words match their
+        // capitalised forms. The capitalised-token entity
+        // heuristic is itself only meaningful for case-bearing
+        // scripts (Latin / Cyrillic / Greek / Armenian / …), but
+        // we run it unconditionally — sentences in CJK / Arabic
+        // / Thai contain no capitalised tokens, so the heuristic
+        // naturally emits no results for those scripts and the
+        // predicate is consulted zero times for those scripts.
+        let dominant_for_stop_words = dominant_language.as_ref();
+        for word in
+            extract_capitalised_words(text, |raw| self.is_stop_word(raw, dominant_for_stop_words))
+        {
             if seen_entities.insert(word.clone()) {
                 out.push(
                     Observation::new_candidate(ObservationType::Entity, word, scope, 0.55)
@@ -2211,6 +2251,157 @@ mod tests {
             obs.iter()
                 .map(|o| (o.observation_type, o.content.clone()))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn capitalised_extractor_skips_non_ascii_stop_words_unicode_lowercase() {
+        // Phase 1.1 #BUG-0001 closure: the pre-Phase-1.1 path
+        // compared capitalised tokens against stop-words via
+        // `str::eq_ignore_ascii_case`, which only folds the
+        // ASCII A–Z / a–z range. Non-ASCII stop-words (Cyrillic
+        // Russian Это / это; Vietnamese with prefixed Đ / đ)
+        // therefore silently passed through as entity
+        // candidates. The fix routes the check through
+        // `LexiconExtractor::is_stop_word`, which lowercases the
+        // candidate with the Unicode-aware `str::to_lowercase`
+        // fold before comparing.
+        //
+        // Russian regression: the Russian lexicon's stop-word
+        // table includes `это` (lower-case). When the candidate
+        // is the capitalised opener `Это`, the predicate must
+        // return true — otherwise `Это` is mis-emitted as an
+        // entity observation.
+        let ru = LanguageTag::new("ru").unwrap();
+        let ext = LexiconExtractor::default();
+        assert!(
+            ext.is_stop_word("Это", Some(&ru)),
+            "Cyrillic capitalised `Это` must match lexicon stop-word `это` under \
+             Unicode lowercase folding (Devin Review #BUG-0001)"
+        );
+        assert!(
+            !ext.is_stop_word("Москва", Some(&ru)),
+            "Real Russian entity `Москва` must not match any stop-word"
+        );
+
+        // Vietnamese regression: `đó` is in the Vietnamese
+        // stop-word table; the capitalised opener `Đó` must
+        // fold to `đó` (Vietnamese-specific `Đ` → `đ` is a
+        // standard Unicode lowercase mapping, not ASCII).
+        let vi = LanguageTag::new("vi").unwrap();
+        assert!(
+            ext.is_stop_word("Đó", Some(&vi)),
+            "Vietnamese capitalised `Đó` must match lexicon stop-word `đó` under \
+             Unicode lowercase folding"
+        );
+        assert!(
+            !ext.is_stop_word("Hà", Some(&vi)),
+            "Real Vietnamese entity fragment `Hà` must not match any stop-word"
+        );
+
+        // English baseline regression: the ASCII case fold must
+        // still work (regression guard against the new predicate
+        // accidentally dropping ASCII coverage).
+        let en = LanguageTag::new("en").unwrap();
+        assert!(
+            ext.is_stop_word("The", Some(&en)),
+            "English capitalised `The` must continue to match stop-word `the`"
+        );
+    }
+
+    #[test]
+    fn capitalised_extractor_drops_cyrillic_function_word_entity_e2e() {
+        // End-to-end version of the BUG-0001 regression:
+        // without the fix, a Russian sentence whose first word
+        // is the demonstrative `Это` produced an `Entity`
+        // observation for `Это` because the ASCII case fold
+        // failed. With the fix it should not.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        let ru = LanguageTag::new("ru").unwrap();
+        let text = "Это просто текст для теста.";
+        let obs = ext.extract_with_dominant_language(text, scope, Some(&ru));
+        let entities = find_obs_by_type(&obs, ObservationType::Entity);
+        assert!(
+            !entities.iter().any(|o| o.content == "Это"),
+            "Russian function word `Это` must not surface as an Entity observation \
+             (Devin Review #BUG-0001); got entities {:?}",
+            entities.iter().map(|o| &o.content).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn looks_like_question_strips_arabic_tashkeel_via_normalize_for_lookup() {
+        // Phase 1.1 #ANALYSIS-0002 closure: the question detector
+        // used to apply its own ad-hoc NFC + lowercase pass that
+        // did NOT strip Arabic tashkeel + tatweel, so an Arabic
+        // interrogative decorated with vowel marks (`كَيْفَ`) did
+        // not match the canonical table entry (`كيف`) under the
+        // FirstToken matcher (the tokeniser splits on the
+        // tashkeel codepoints, which are category Mn). Routing
+        // the question path through `normalize_for_lookup` now
+        // strips the tashkeel before tokenisation, matching how
+        // the decision / task / imperative paths already
+        // worked.
+        let ar = LanguageTag::new("ar").unwrap();
+        // `كَيْفَ` = `كيف` ("how") with three tashkeel marks
+        // (fatha + sukun + fatha). Without tashkeel strip the
+        // FirstToken tokeniser would split this into pieces that
+        // never match the bare `كيف` entry.
+        let with_tashkeel = "كَيْفَ يمكنني المساعدة";
+        let without_tashkeel = "كيف يمكنني المساعدة";
+        assert!(
+            looks_like_question(without_tashkeel, Some('.'), Some(&ar)),
+            "Bare Arabic `كيف` interrogative must classify as a question"
+        );
+        assert!(
+            looks_like_question(with_tashkeel, Some('.'), Some(&ar)),
+            "Tashkeel-decorated Arabic `كَيْفَ` must classify as a question \
+             after normalize_for_lookup strips the tashkeel \
+             (Devin Review #ANALYSIS-0002)"
+        );
+    }
+
+    #[test]
+    fn looks_like_question_recovers_vietnamese_bigram_interrogatives() {
+        // Phase 1.1 #ANALYSIS-0004 closure: Vietnamese now uses
+        // `InterrogativeMatch::FirstBigram` so the high-frequency
+        // bare prepositions / conjunctions `tại` / `khi` / `vì`
+        // recover their interrogative readings via the two-token
+        // collocations `tại sao` / `khi nào` / `vì sao` without
+        // re-introducing the false positives the bare forms
+        // caused. Bare `Khi tôi đến...` must still NOT classify.
+        let vi = LanguageTag::new("vi").unwrap();
+        // Bigram interrogatives — must classify even without a
+        // `?` terminator (otherwise the matcher path is never
+        // exercised, since the terminator short-circuits first).
+        for question in ["tại sao bạn buồn", "khi nào chúng ta đi", "vì sao trời mưa"]
+        {
+            assert!(
+                looks_like_question(question, Some('.'), Some(&vi)),
+                "Vietnamese bigram interrogative {question:?} must classify as a question \
+                 via FirstBigram (Devin Review #ANALYSIS-0004)"
+            );
+        }
+        // Bare forms must still NOT classify (the false-positive
+        // guard that motivated the deferred bigram approach).
+        for declarative in [
+            "khi tôi đến nhà của bạn",
+            "tại Hà Nội mọi thứ rất khác",
+            "vì tôi bận nên không thể đến",
+        ] {
+            assert!(
+                !looks_like_question(declarative, Some('.'), Some(&vi)),
+                "Vietnamese declarative {declarative:?} starting with bare function word must \
+                 NOT classify as a question (regression guard against re-adding bare forms)"
+            );
+        }
+        // Bare unambiguous interrogatives must still classify via
+        // the FirstToken arm of FirstBigram.
+        assert!(
+            looks_like_question("ai là người đó", Some('.'), Some(&vi)),
+            "Vietnamese bare interrogative `ai` must still classify via FirstBigram's \
+             first-token arm"
         );
     }
 }
