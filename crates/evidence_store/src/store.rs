@@ -4512,8 +4512,32 @@ pub(crate) fn dual_fts_search(
     }
 
     // Sort by best (smallest) rank ascending; truncate to limit.
+    //
+    // Deterministic tiebreaker on `EvidenceId` (`Uuid::Ord`) for
+    // rows whose FTS5 ranks compare as equal. Without it, the
+    // upstream `HashMap` iteration order is hash-randomised, so
+    // tied ranks would produce a different `Vec` ordering on every
+    // call — a test-stability hazard for any caller asserting on
+    // result order. Ties are rare in FTS5 rank (BM25 ties require
+    // identical term frequencies on identical-length documents) but
+    // are reproducible enough to flake CI: two rows in the
+    // `evidence_fts_cjk` branch sharing a trigram-windowed body of
+    // the same length is the canonical case. The tiebreaker is
+    // O(1) per comparison and `Uuid::Ord` is byte-lexicographic, so
+    // the resulting order is also stable across process restarts
+    // (UUIDs are persisted, hash seeds are not).
+    //
+    // This is the long-form fix for sweep-4 Devin Review INFO-0004
+    // — pinning the result order so that downstream tests and
+    // any caller that does NOT re-score (e.g. the raw `search_fts`
+    // public surface) sees identical output across runs for the
+    // same input.
     let mut sorted: Vec<(EvidenceId, f64)> = best_rank.into_iter().collect();
-    sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| {
+        a.1.partial_cmp(&b.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
     sorted.truncate(limit);
     Ok(sorted)
 }

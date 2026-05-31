@@ -1031,6 +1031,68 @@ fn fts5_unicode61_query_succeeds_even_when_trigram_branch_rejects_shape() {
 }
 
 #[test]
+fn fts5_dual_search_orders_tied_ranks_deterministically_by_evidence_id() {
+    // Sweep-4 INFO-0004 regression — verifies that `dual_fts_search`
+    // emits a deterministic ordering for rows whose FTS5 rank
+    // compares as equal. Pre-fix the `HashMap`-then-`sort_by(rank)`
+    // pipeline produced run-to-run ordering jitter for ties because
+    // hashmap iteration is randomised. Post-fix the tiebreaker is
+    // `EvidenceId` ascending (Uuid::Ord = byte-lexicographic), which
+    // is stable across process restarts.
+    //
+    // The fixture seeds two rows with identical CJK bodies into the
+    // same scope. Both bodies produce the same set of trigrams, so
+    // the trigram branch ranks them identically, exercising the
+    // tiebreaker path. We then call `search_fts` 16 times and
+    // assert (a) every run returns the same ordering and (b) the
+    // ordering matches `EvidenceId` ascending.
+    //
+    // Identical CJK bodies produce identical trigram windows, so
+    // FTS5 BM25 rank should tie. The body is well above the
+    // 3-codepoint trigram floor so the `evidence_fts_cjk` lane is
+    // exercised.
+    const TIED_BODY: &str = "今日の重要な会議の議事録";
+
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r1 = store
+        .ingest(scope, TIED_BODY.as_bytes(), None, ImportanceClass::Useful)
+        .expect("ingest row 1");
+    let r2 = store
+        .ingest(scope, TIED_BODY.as_bytes(), None, ImportanceClass::Useful)
+        .expect("ingest row 2");
+
+    // Both rows must come back from the trigram lane so we know the
+    // tiebreaker is on the dual_fts_search merge path (not a single
+    // ORDER BY on one statement).
+    let baseline = store.search_fts(scope, "重要な会議", 10).unwrap();
+    assert_eq!(
+        baseline.len(),
+        2,
+        "both tied-body rows must be returned by the CJK lane"
+    );
+
+    // Run the same query 16 times; every result must be identical.
+    let runs: Vec<Vec<_>> = (0..16)
+        .map(|_| store.search_fts(scope, "重要な会議", 10).unwrap())
+        .collect();
+    for (i, run) in runs.iter().enumerate().skip(1) {
+        assert_eq!(
+            run, &runs[0],
+            "run {i} differs from run 0 — tied-rank ordering is non-deterministic"
+        );
+    }
+
+    // The deterministic order is `EvidenceId` ascending.
+    let mut expected_ids = vec![r1.evidence_id, r2.evidence_id];
+    expected_ids.sort();
+    assert_eq!(
+        runs[0], expected_ids,
+        "tied-rank tiebreaker must be EvidenceId ascending (Uuid::Ord)"
+    );
+}
+
+#[test]
 fn fts5_trigram_branch_error_is_silently_swallowed_so_unicode61_results_survive() {
     // Sweep-2 BUG-0001 regression — directly proves the error
     // containment path. We inject a guaranteed trigram failure by
