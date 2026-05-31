@@ -113,9 +113,10 @@ pqcrypto-traits = "0.3"
 # pending the MSRV bump anyway.
 #
 # Bumping rusqlite past `0.36` is gated on a workspace MSRV bump to
-# `≥1.94`, which is itself gated by the Dependabot pin in
-# `.github/workflows/ci.yml::MSRV (1.85.0)`. The matching Dependabot
-# ignore lives in `.github/dependabot.yml`.
+# `≥1.94`, which is itself enforced by the `MSRV (1.85.0)` CI job
+# in `.github/workflows/ci.yml` (which pins the toolchain via
+# `dtolnay/rust-toolchain@1.85.0`). The matching Dependabot ignore
+# lives in `.github/dependabot.yml`.
 rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl", "blob"] }
 
 # Time
@@ -139,8 +140,9 @@ tempfile = "3"
 # `-D warnings`.
 #
 # Bumping to criterion `0.8` is gated on a workspace MSRV bump to
-# `1.86`, which is itself gated by the Dependabot pin in
-# `.github/workflows/ci.yml::MSRV (1.85.0)`.
+# `1.86`, which is itself enforced by the `MSRV (1.85.0)` CI job
+# in `.github/workflows/ci.yml` (which pins the toolchain via
+# `dtolnay/rust-toolchain@1.85.0`).
 criterion = { version = "0.7", features = ["html_reports"] }
 
 # Serialization
