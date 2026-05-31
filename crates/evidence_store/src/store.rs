@@ -4547,13 +4547,32 @@ pub(crate) fn dual_fts_search(
 /// is negative-and-smaller-is-better, so `min` is the correct dedupe
 /// rule when the same `evidence_id` is returned by both the
 /// `unicode61` and `trigram` branches.
+///
+/// Uses [`f64::min`] rather than a raw `<` comparison so the
+/// implementation actually behaves like the doc-comment "MIN(rank)"
+/// contract on the IEEE 754 NaN edge case: `f64::min` returns the
+/// non-NaN argument when exactly one operand is NaN (IEEE 754-2008
+/// `minNum` / libm `fmin` semantics), so a hypothetically corrupted
+/// `NaN` rank from one branch never displaces a real finite rank
+/// from the other. With a raw `<` (`if rank < *existing { … }`) a
+/// `NaN` incoming value left a real existing value alone (correct
+/// by accident), but a `NaN` *existing* value could never be
+/// overwritten by a real incoming value (wrong — the slot would
+/// stick at `NaN` forever and drag the row to the sort comparator's
+/// `Equal` bucket). FTS5's BM25 rank is always a finite negative
+/// `f64` so this codepath is unreachable in production today, but
+/// pinning the merge to `f64::min` removes the trap entirely and
+/// aligns with the defensive `partial_cmp().unwrap_or(Equal)` used
+/// in the sort comparator at `dual_fts_search` (sweep-4 INFO-0004)
+/// — both halves of the merge pipeline now treat NaN identically
+/// instead of skewing in opposite directions.
+///
+/// This is the long-form fix for sweep-5 Devin Review INFO-0002.
 fn merge_min_rank(best_rank: &mut HashMap<EvidenceId, f64>, id: EvidenceId, rank: f64) {
     best_rank
         .entry(id)
         .and_modify(|existing| {
-            if rank < *existing {
-                *existing = rank;
-            }
+            *existing = (*existing).min(rank);
         })
         .or_insert(rank);
 }
@@ -4606,3 +4625,73 @@ const _: () = {
     // crypto crate exposes.
     let _ = [(); MASTER_KEY_LEN - 32];
 };
+
+#[cfg(test)]
+mod merge_min_rank_tests {
+    //! Sweep-5 INFO-0002 regression — pin the IEEE 754 NaN behaviour
+    //! of [`merge_min_rank`]. Production FTS5 BM25 rank is always a
+    //! finite negative `f64`, so this codepath is unreachable today;
+    //! the tests exist to guard against a future contributor "simplifying"
+    //! the `f64::min` call back to a raw `if rank < *existing` (which
+    //! breaks the "MIN(rank)" contract for the `(existing = NaN,
+    //! incoming = finite)` case).
+    use super::{merge_min_rank, EvidenceId};
+    use std::collections::HashMap;
+    use uuid::Uuid;
+    fn id_for(byte: u8) -> EvidenceId {
+        EvidenceId(Uuid::from_bytes([byte; 16]))
+    }
+    #[test]
+    fn min_of_two_finite_ranks_keeps_smallest() {
+        let id = id_for(0xa1);
+        let mut map: HashMap<EvidenceId, f64> = HashMap::new();
+        merge_min_rank(&mut map, id, -3.0);
+        merge_min_rank(&mut map, id, -7.5);
+        merge_min_rank(&mut map, id, -1.0);
+        assert_eq!(map.get(&id), Some(&-7.5));
+    }
+    #[test]
+    fn nan_incoming_never_displaces_finite_existing() {
+        // The pre-fix raw-`<` impl was correct-by-accident in this
+        // direction (`NaN < anything` is false), so we pin it
+        // explicitly so the new `f64::min` impl keeps the same
+        // behaviour after the refactor.
+        let id = id_for(0xa2);
+        let mut map: HashMap<EvidenceId, f64> = HashMap::new();
+        merge_min_rank(&mut map, id, -2.0);
+        merge_min_rank(&mut map, id, f64::NAN);
+        assert_eq!(map.get(&id), Some(&-2.0));
+    }
+    #[test]
+    fn finite_incoming_displaces_nan_existing() {
+        // This is the case the pre-fix raw-`<` impl got wrong:
+        // `anything < NaN` is false, so a NaN-stuck slot could
+        // never recover. `f64::min` returns the non-NaN argument,
+        // so the slot heals on the next finite insert.
+        let id = id_for(0xa3);
+        let mut map: HashMap<EvidenceId, f64> = HashMap::new();
+        merge_min_rank(&mut map, id, f64::NAN);
+        merge_min_rank(&mut map, id, -4.5);
+        assert_eq!(map.get(&id), Some(&-4.5));
+    }
+    #[test]
+    fn nan_only_inserts_leave_nan_in_slot() {
+        // Documented behaviour: with no finite operand ever supplied
+        // the slot stays NaN. This is unreachable in production but
+        // pinning it keeps the contract explicit.
+        let id = id_for(0xa4);
+        let mut map: HashMap<EvidenceId, f64> = HashMap::new();
+        merge_min_rank(&mut map, id, f64::NAN);
+        merge_min_rank(&mut map, id, f64::NAN);
+        assert!(map.get(&id).copied().unwrap().is_nan());
+    }
+    #[test]
+    fn distinct_ids_do_not_interfere() {
+        let mut map: HashMap<EvidenceId, f64> = HashMap::new();
+        merge_min_rank(&mut map, id_for(0xb1), -1.0);
+        merge_min_rank(&mut map, id_for(0xb2), -2.0);
+        merge_min_rank(&mut map, id_for(0xb1), -0.5);
+        assert_eq!(map.get(&id_for(0xb1)), Some(&-1.0));
+        assert_eq!(map.get(&id_for(0xb2)), Some(&-2.0));
+    }
+}
