@@ -29,6 +29,40 @@ updates:
     labels:
       - "dependencies"
       - "rust"
+    # MSRV-gated pins. Each entry below is a dep whose latest
+    # release has bumped its `rust-version` beyond the workspace's
+    # `MSRV (1.85.0)` CI gate at
+    # `.github/workflows/ci.yml::MSRV (1.85.0)`. The version range
+    # at the gate boundary is filtered out here so the review
+    # queue is not littered with PRs that cannot land; once the
+    # workspace MSRV moves forward, the matching block(s) below
+    # should be deleted in the same PR that bumps the gate. Patch
+    # bumps and intermediate minor bumps that stay below the gated
+    # version are still picked up because each block only filters
+    # the gated range.
+    ignore:
+      # rusqlite >=0.37 (via libsqlite3-sys >=0.36) requires Rust
+      # 1.94+ for the stable `cfg_select!` macro. See the comment
+      # block immediately above the `rusqlite = ` line in the
+      # workspace `Cargo.toml` for the full rationale. We still
+      # allow patch bumps within the 0.32.x line and minor bumps
+      # up to (but not including) 0.37 so the substrate-side
+      # rusqlite surface can be migrated incrementally if a future
+      # maint sweep targets an intermediate.
+      - dependency-name: "rusqlite"
+        versions: [">=0.37"]
+      # aws-nitro-enclaves-nsm-api >=0.5 sets rust-version=1.92.
+      # See the comment block immediately above the
+      # `aws-nitro-enclaves-nsm-api = ` line in
+      # `crates/synthesis_engine/Cargo.toml` for the full
+      # rationale.
+      - dependency-name: "aws-nitro-enclaves-nsm-api"
+        versions: [">=0.5"]
+      # criterion >=0.8 requires Rust 1.86. See the comment block
+      # immediately above the `criterion = ` line in the
+      # workspace `Cargo.toml` for the full rationale.
+      - dependency-name: "criterion"
+        versions: [">=0.8"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

@@ -55,9 +55,13 @@ tracing = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"], optional = true }
 # Optional: only linked when the `nitro-tee` feature is enabled.
 # Talks to /dev/nsm to request attestation documents from the AWS
-# Nitro Secure Module. Pinned to the 0.4.x line — the same minor
-# the upstream `aws-nitro-enclaves-cose` crate targets — so future
-# bumps stay coordinated.
+# Nitro Secure Module. Pinned to the 0.4.x line for two coordinated
+# reasons: (1) it tracks the same minor the upstream
+# `aws-nitro-enclaves-cose` crate targets, so future bumps stay
+# coordinated; (2) `0.5.0` raised `rust-version` to `1.92`, well
+# beyond the workspace's `MSRV (1.85.0)` CI gate, so bumping to
+# `0.5+` is gated on a workspace MSRV bump. The matching Dependabot
+# ignore lives in `.github/dependabot.yml`.
 aws-nitro-enclaves-nsm-api = { version = "0.4", optional = true }
 # Optional: only linked when the `nitro-tee` feature is enabled.
 # Used to decode the CBOR-encoded COSE_Sign1 attestation document

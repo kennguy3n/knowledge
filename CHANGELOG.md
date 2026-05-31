@@ -202,6 +202,22 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Changed — Dependencies
 
+- Documented and Dependabot-filtered three MSRV-gated dependency
+  pins so the review queue no longer cycles unmergeable PRs:
+  `rusqlite` (`0.32.x` line; `>=0.37` requires Rust 1.94+ via
+  `libsqlite3-sys 0.36+`'s adoption of the stable `cfg_select!`
+  macro), `aws-nitro-enclaves-nsm-api` (`0.4.x` line; `>=0.5`
+  sets `rust-version = 1.92`), and `criterion` (`0.7.x` line —
+  already pinned but lacked a Dependabot ignore; `>=0.8`
+  requires Rust 1.86). Each pin now has (a) a multi-paragraph
+  explanation in the relevant `Cargo.toml` block citing the
+  upstream MSRV and the workspace `MSRV (1.85.0)` CI gate, and
+  (b) a `versions:` block in `.github/dependabot.yml` that
+  filters out only the gated range so patch / intermediate
+  bumps still surface. The three currently open Dependabot PRs
+  for these deps (`#76` / `#87` / `#88`) are closed with a link
+  to this policy. The ignore blocks will be deleted in the same
+  PR that bumps the workspace MSRV forward.
 - Bumped `axum` from `0.7` to `0.8` (workspace pin). Axum 0.8
   changed the router path-pattern syntax: a leading `:` on a
   segment now panics at registration time
