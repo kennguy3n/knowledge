@@ -70,6 +70,16 @@ pub struct EvidenceRow {
     pub storage_path: StoragePath,
     /// Unix epoch seconds at ingest.
     pub created_at: i64,
+    /// BCP-47 primary language subtag detected on the plaintext
+    /// body at ingest time (schema v13, Phase 1.3). `None` when
+    /// the row was ingested via the legacy
+    /// [`EvidenceStore::ingest`] shim, when the language detector
+    /// declined to classify, or when the row predates schema v13.
+    /// Downstream consumers (multilingual lexicon registry, per-
+    /// locale FTS5 tokenizer) MUST treat `None` as "unknown"
+    /// rather than substitute a default — see
+    /// [`EvidenceStore::ingest_with_language`].
+    pub language_tag: Option<String>,
 }
 
 /// Returned by [`EvidenceStore::ingest`].
@@ -407,6 +417,30 @@ impl EvidenceStore {
         source_ref: Option<&str>,
         importance: ImportanceClass,
     ) -> Result<IngestResult> {
+        self.ingest_with_language(scope_id, body, source_ref, importance, None)
+    }
+
+    /// Same contract as [`Self::ingest`], but additionally stamps
+    /// the row's `language_tag` column (schema v13, Phase 1.3) with
+    /// a BCP-47 primary subtag.
+    ///
+    /// The substrate's ingest path runs
+    /// [`observation_engine::detect_language`] on the plaintext
+    /// body before this call; the detected tag (or `None` when the
+    /// detector declined to classify) flows through here so the
+    /// multilingual lexicon registry and per-locale FTS5 tokenizer
+    /// can pick the right per-locale assets without re-running
+    /// detection on every downstream consumer. Noise-class rows go
+    /// to the ring buffer and therefore do not retain the language
+    /// tag (the ring buffer is plaintext-only, append-and-evict).
+    pub fn ingest_with_language(
+        &mut self,
+        scope_id: ScopeId,
+        body: &[u8],
+        source_ref: Option<&str>,
+        importance: ImportanceClass,
+        language_tag: Option<&str>,
+    ) -> Result<IngestResult> {
         let path = route_storage_with_threshold(
             body.len(),
             importance,
@@ -427,9 +461,11 @@ impl EvidenceStore {
                     content_hash: hash,
                 })
             }
-            StoragePath::Inline => self.ingest_inline(scope_id, body, source_ref, importance, hash),
+            StoragePath::Inline => {
+                self.ingest_inline(scope_id, body, source_ref, importance, hash, language_tag)
+            }
             StoragePath::BodyTable => {
-                self.ingest_body_table(scope_id, body, source_ref, importance, hash)
+                self.ingest_body_table(scope_id, body, source_ref, importance, hash, language_tag)
             }
         }
     }
@@ -441,6 +477,7 @@ impl EvidenceStore {
         source_ref: Option<&str>,
         importance: ImportanceClass,
         hash: ContentHash,
+        language_tag: Option<&str>,
     ) -> Result<IngestResult> {
         let evidence_id = EvidenceId::new_v4();
         let key = self.scope_key(scope_id)?;
@@ -455,8 +492,9 @@ impl EvidenceStore {
         tx.execute(
             "INSERT INTO evidence
              (id, scope_id, content_hash, body, body_ref, nonce,
-              source_ref, acl_pointer, importance, storage_path, created_at)
-             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, NULL, ?7, ?8, ?9)",
+              source_ref, acl_pointer, importance, storage_path,
+              created_at, language_tag)
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, NULL, ?7, ?8, ?9, ?10)",
             params![
                 evidence_id.as_uuid().as_bytes().as_slice(),
                 scope_id.as_uuid().as_bytes().as_slice(),
@@ -467,6 +505,7 @@ impl EvidenceStore {
                 importance.as_tag(),
                 path_tag,
                 now,
+                language_tag,
             ],
         )?;
         Self::index_fts(&tx, evidence_id, scope_id, body)?;
@@ -494,6 +533,7 @@ impl EvidenceStore {
         source_ref: Option<&str>,
         importance: ImportanceClass,
         hash: ContentHash,
+        language_tag: Option<&str>,
     ) -> Result<IngestResult> {
         let evidence_id = EvidenceId::new_v4();
         let scope_key = self.scope_key(scope_id)?;
@@ -643,8 +683,9 @@ impl EvidenceStore {
         tx.execute(
             "INSERT INTO evidence
              (id, scope_id, content_hash, body, body_ref, nonce,
-              source_ref, acl_pointer, importance, storage_path, created_at)
-             VALUES (?1, ?2, ?3, NULL, ?4, NULL, ?5, NULL, ?6, ?7, ?8)",
+              source_ref, acl_pointer, importance, storage_path,
+              created_at, language_tag)
+             VALUES (?1, ?2, ?3, NULL, ?4, NULL, ?5, NULL, ?6, ?7, ?8, ?9)",
             params![
                 evidence_id.as_uuid().as_bytes().as_slice(),
                 scope_id.as_uuid().as_bytes().as_slice(),
@@ -654,6 +695,7 @@ impl EvidenceStore {
                 importance.as_tag(),
                 path_tag,
                 now,
+                language_tag,
             ],
         )?;
         Self::index_fts(&tx, evidence_id, scope_id, body)?;
@@ -950,7 +992,7 @@ impl EvidenceStore {
             .conn
             .query_row(
                 "SELECT scope_id, content_hash, source_ref, acl_pointer, importance,
-                        storage_path, created_at
+                        storage_path, created_at, language_tag
                  FROM evidence WHERE id = ?1",
                 params![evidence_id.as_uuid().as_bytes().as_slice()],
                 |r| {
@@ -962,13 +1004,22 @@ impl EvidenceStore {
                         r.get::<_, i32>(4)?,
                         r.get::<_, i64>(5)?,
                         r.get::<_, i64>(6)?,
+                        r.get::<_, Option<String>>(7)?,
                     ))
                 },
             )
             .optional()?;
 
-        let Some((scope_bytes, hash_bytes, source_ref, acl_pointer, imp_tag, path_tag, created)) =
-            row
+        let Some((
+            scope_bytes,
+            hash_bytes,
+            source_ref,
+            acl_pointer,
+            imp_tag,
+            path_tag,
+            created,
+            language_tag,
+        )) = row
         else {
             return Ok(None);
         };
@@ -1002,6 +1053,7 @@ impl EvidenceStore {
             importance,
             storage_path,
             created_at: created,
+            language_tag,
         }))
     }
 
@@ -3801,10 +3853,51 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // skips the post-bootstrap step because the legacy columns
         // never exist.
         12 => Ok(()),
+        // v13 (Phase 1.3 — multilingual ingestion): add the
+        // optional `language_tag` column to the `evidence` table
+        // so the BCP-47 primary subtag detected on the row's
+        // plaintext body at ingest time can flow through to the
+        // multilingual lexicon registry and per-locale FTS5
+        // tokenizer without re-running detection on the read
+        // side. The column is nullable and has no NOT NULL or
+        // DEFAULT constraint, so the `ALTER TABLE ADD COLUMN`
+        // is non-destructive for existing rows (they retroactively
+        // read as `NULL`) and SQLite executes it without
+        // rewriting the table. A fresh v13 database picks the
+        // column up from `SCHEMA_SQL`'s `CREATE TABLE IF NOT
+        // EXISTS`; only the v12 -> v13 upgrade path needs the
+        // explicit ALTER.
+        13 => migrate_v13_add_evidence_language_tag(conn),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
         )),
     }
+}
+
+/// v12 -> v13 additive migration: add the `language_tag` column to
+/// the `evidence` table.
+///
+/// Idempotent: pre-checks `PRAGMA table_info(evidence)` so a
+/// re-applied migration (e.g. on a fresh v13 database whose schema
+/// already includes the column via `SCHEMA_SQL`) is a no-op rather
+/// than a `duplicate column name` error.
+fn migrate_v13_add_evidence_language_tag(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(evidence)")?;
+    let mut rows = stmt.query([])?;
+    let mut has_column = false;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == "language_tag" {
+            has_column = true;
+            break;
+        }
+    }
+    drop(rows);
+    drop(stmt);
+    if !has_column {
+        conn.execute("ALTER TABLE evidence ADD COLUMN language_tag TEXT", [])?;
+    }
+    Ok(())
 }
 
 /// v2 -> v3 destructive migration for `evidence_embeddings`.

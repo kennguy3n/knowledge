@@ -99,6 +99,24 @@
 ///   simply have no version history rows yet, matching the
 ///   pre-Item-4 contract where every synthesis output overwrote
 ///   the prior one with no recoverable trail.
+/// - v13 (Phase 1.3 — multilingual ingestion): added the optional
+///   `language_tag` column to the `evidence` table. The column
+///   stores the BCP-47 primary subtag detected on the row's
+///   plaintext body by
+///   [`observation_engine::detect_language`] when the row was
+///   ingested via
+///   [`crate::store::EvidenceStore::ingest_with_language`]; rows
+///   ingested through the legacy [`crate::store::EvidenceStore::ingest`]
+///   shim or by pre-v13 builds carry `NULL` and downstream
+///   consumers (multilingual lexicon registry, per-locale FTS5
+///   tokenizer) MUST treat the absence as "unknown" rather than
+///   substitute a default. Purely additive — a v12 -> v13
+///   upgrade just runs `ALTER TABLE evidence ADD COLUMN
+///   language_tag TEXT`; pre-existing rows keep their original
+///   shape and retroactively read as `NULL`. SQLite's
+///   `ALTER TABLE ADD COLUMN` does not run the append-only
+///   triggers (DDL bypasses row triggers), so the addition is
+///   safe against the existing `evidence_no_update` trigger.
 /// - v12 (Phase 10 Item 6 — body-store dedup for approved-document
 ///   payloads): the `approved_document_payloads` table loses its
 ///   inline `nonce` + `payload` columns and becomes metadata-only.
@@ -116,7 +134,7 @@
 ///   `ALTER TABLE ... DROP COLUMN` calls are implemented in
 ///   `migrate_approved_doc_payloads_to_body_store` (a post-bootstrap
 ///   step run from `open` after the scope-DEK cache is hydrated).
-pub const SCHEMA_VERSION: i32 = 12;
+pub const SCHEMA_VERSION: i32 = 13;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -134,7 +152,12 @@ CREATE TABLE IF NOT EXISTS evidence (
     acl_pointer     TEXT,
     importance      INTEGER NOT NULL,
     storage_path    INTEGER NOT NULL,
-    created_at      INTEGER NOT NULL
+    created_at      INTEGER NOT NULL,
+    -- v13: BCP-47 primary language subtag detected on the
+    -- plaintext body by `observation_engine::detect_language`.
+    -- NULL when the detector either declined to classify or was
+    -- bypassed (e.g. pre-v13 ingest paths, embedded binary blobs).
+    language_tag    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_evidence_scope_created

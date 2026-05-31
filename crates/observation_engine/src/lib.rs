@@ -21,6 +21,7 @@ pub mod citation;
 pub mod document;
 pub mod error;
 pub mod extractor;
+pub mod language;
 pub mod pipeline;
 pub mod promotion;
 pub mod types;
@@ -35,6 +36,7 @@ pub use document::{
 };
 pub use error::{ObservationError, Result};
 pub use extractor::{LexiconExtractor, ObservationExtractor};
-pub use pipeline::ObservationPipeline;
+pub use language::{detect_language, LanguageDetection, LanguageTag};
+pub use pipeline::{default_pipeline, ObservationPipeline, PipelineRunOutput};
 pub use promotion::{should_promote, ChannelPromotionPolicy, PromotionReason, PromotionResult};
 pub use types::{Observation, ObservationType};

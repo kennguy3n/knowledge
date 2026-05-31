@@ -315,6 +315,14 @@ where
             if extracted.is_empty() {
                 continue;
             }
+            // Detect language *per chunk* — long documents may
+            // genuinely change language between sections (an
+            // English README that quotes a Japanese release note,
+            // a multilingual policy doc, …) so re-running
+            // detection on each chunk's text gives a tighter
+            // language stamp than a single document-level detect
+            // would.
+            let chunk_language = crate::language::detect_language(&chunk.text).map(|d| d.tag);
             // Carry chunk-level evidence id and citation onto
             // every observation extracted from this chunk.
             let evidence_id = chunk_evidence_ids.get(chunk.metadata.chunk_index).copied();
@@ -324,6 +332,7 @@ where
                         obs.source_evidence_ids.push(eid);
                     }
                 }
+                obs.language_tag.clone_from(&chunk_language);
                 citations.insert(
                     obs.id,
                     ObservationCitation {
