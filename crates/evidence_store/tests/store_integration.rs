@@ -73,6 +73,77 @@ fn ingest_inline_path_for_small_useful_message() {
 }
 
 #[test]
+fn ingest_with_language_tag_round_trips_inline() {
+    // Phase 1.3 / schema v13: the inline-path ingest API stamps the
+    // optional BCP-47 primary subtag onto the row's `language_tag`
+    // column and `EvidenceStore::get` round-trips it back through
+    // `EvidenceRow::language_tag`.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let body = b"Friday is the deadline for the migration.";
+
+    let res = store
+        .ingest_with_language(
+            scope,
+            body,
+            Some("source:msg-jp"),
+            ImportanceClass::Important,
+            Some("ja"),
+        )
+        .unwrap();
+    assert_eq!(res.storage_path, StoragePath::Inline);
+    let row = store.get(res.evidence_id).unwrap().expect("row");
+    assert_eq!(row.language_tag.as_deref(), Some("ja"));
+}
+
+#[test]
+fn ingest_with_language_tag_round_trips_body_table() {
+    // Phase 1.3 / schema v13: the body-table-path ingest API stamps
+    // the BCP-47 subtag onto the row's `language_tag` column, even
+    // when the same body content is dedup-shared across scopes
+    // (the language stamp lives on the per-scope `evidence` row, not
+    // on the deduplicated `body_store` row).
+    let (_dir, mut store) = fresh_store();
+    let scope_a = ScopeId::new_v4();
+    let scope_b = ScopeId::new_v4();
+    let body = vec![b'Z'; DEFAULT_INLINE_THRESHOLD_BYTES + 1];
+
+    let res_a = store
+        .ingest_with_language(scope_a, &body, None, ImportanceClass::Useful, Some("en"))
+        .unwrap();
+    let res_b = store
+        .ingest_with_language(scope_b, &body, None, ImportanceClass::Useful, Some("ja"))
+        .unwrap();
+    assert_eq!(res_a.storage_path, StoragePath::BodyTable);
+    assert_eq!(res_b.storage_path, StoragePath::BodyTable);
+
+    let row_a = store.get(res_a.evidence_id).unwrap().expect("row a");
+    let row_b = store.get(res_b.evidence_id).unwrap().expect("row b");
+    // The two rows share the body_store row but carry independent
+    // language tags on their `evidence` rows.
+    assert_eq!(row_a.content_hash, row_b.content_hash);
+    assert_eq!(row_a.language_tag.as_deref(), Some("en"));
+    assert_eq!(row_b.language_tag.as_deref(), Some("ja"));
+}
+
+#[test]
+fn legacy_ingest_leaves_language_tag_null() {
+    // Backwards-compatibility check: the legacy `ingest` shim does
+    // not require callers to plumb a language tag through. Rows it
+    // produces carry `language_tag = NULL`, which downstream
+    // consumers MUST treat as "unknown".
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let body = b"Friday is the deadline for the migration.";
+
+    let res = store
+        .ingest(scope, body, None, ImportanceClass::Important)
+        .unwrap();
+    let row = store.get(res.evidence_id).unwrap().expect("row");
+    assert_eq!(row.language_tag, None);
+}
+
+#[test]
 fn ingest_body_table_path_for_large_body() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();

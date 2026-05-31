@@ -243,6 +243,95 @@ fn opens_v3_database_and_upgrades_to_current() {
 }
 
 #[test]
+fn opens_v12_database_and_upgrades_to_current_with_language_tag_column() {
+    // v12 -> v13 specifically exercises the
+    // `ALTER TABLE evidence ADD COLUMN language_tag TEXT` step.
+    // `build_legacy_fixture` re-uses the modern `SCHEMA_SQL`, which
+    // already includes `language_tag` in the `CREATE TABLE` body,
+    // so the v13 migration's idempotent skip branch would
+    // short-circuit. To meaningfully exercise the ADD COLUMN arm
+    // we reshape the table back to its pre-v13 layout via the
+    // documented SQLite "12-step ALTER" pattern (rename + recreate
+    // + copy + drop) — `ALTER TABLE ... DROP COLUMN` is rejected
+    // by SQLCipher when the affected table participates in triggers
+    // or covering indexes that the planner cannot prove are
+    // column-independent, so the rename-recreate-copy pattern is
+    // the portable way to get a true pre-v13 shape on disk.
+    let (_dir, path) = build_legacy_fixture(12);
+    {
+        let conn = open_sqlcipher(&path);
+        conn.execute_batch(
+            "BEGIN;\n\
+             DROP TRIGGER IF EXISTS evidence_no_update;\n\
+             DROP TRIGGER IF EXISTS evidence_no_delete;\n\
+             ALTER TABLE evidence RENAME TO evidence_v12_tmp;\n\
+             CREATE TABLE evidence (\n\
+                 id              BLOB    PRIMARY KEY,\n\
+                 scope_id        BLOB    NOT NULL,\n\
+                 content_hash    BLOB    NOT NULL,\n\
+                 body            BLOB,\n\
+                 body_ref        BLOB,\n\
+                 nonce           BLOB,\n\
+                 source_ref      TEXT,\n\
+                 acl_pointer     TEXT,\n\
+                 importance      INTEGER NOT NULL,\n\
+                 storage_path    INTEGER NOT NULL,\n\
+                 created_at      INTEGER NOT NULL\n\
+             );\n\
+             INSERT INTO evidence (id, scope_id, content_hash, body, body_ref,\n\
+                                   nonce, source_ref, acl_pointer, importance,\n\
+                                   storage_path, created_at)\n\
+                 SELECT id, scope_id, content_hash, body, body_ref, nonce,\n\
+                        source_ref, acl_pointer, importance, storage_path,\n\
+                        created_at FROM evidence_v12_tmp;\n\
+             DROP TABLE evidence_v12_tmp;\n\
+             COMMIT;",
+        )
+        .expect("reshape evidence back to v12 layout");
+        // Confirm the column really is gone before re-opening.
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(evidence)")
+            .expect("prepare table_info");
+        let mut rows = stmt.query([]).expect("query table_info");
+        let mut found = false;
+        while let Some(row) = rows.next().expect("next row") {
+            let name: String = row.get(1).expect("col name");
+            if name == "language_tag" {
+                found = true;
+            }
+        }
+        assert!(
+            !found,
+            "test setup must leave the schema without language_tag before reopen"
+        );
+        conn.pragma_update(None, "user_version", 12_i64)
+            .expect("re-stamp user_version=12 after reshape");
+    }
+
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("re-open v12 db (post-reshape) must run v13 migration");
+    assert_post_migration_state(&path, &store);
+
+    // The migration must have re-added the language_tag column.
+    let conn = open_sqlcipher(&path);
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(evidence)")
+        .expect("prepare table_info after upgrade");
+    let mut rows = stmt.query([]).expect("query table_info after upgrade");
+    let mut found = false;
+    while let Some(row) = rows.next().expect("next row") {
+        let name: String = row.get(1).expect("col name");
+        if name == "language_tag" {
+            found = true;
+        }
+    }
+    assert!(
+        found,
+        "v12 -> v13 upgrade must restore the language_tag column"
+    );
+}
+
+#[test]
 fn rejects_database_written_by_a_newer_binary() {
     // The preflight guard at `store.rs:253-260` rejects any
     // `user_version > SCHEMA_VERSION` database so a downgrade

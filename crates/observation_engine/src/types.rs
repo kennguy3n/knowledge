@@ -7,6 +7,8 @@ use uuid::Uuid;
 use evidence_store::{EvidenceId, ScopeId};
 use memory_manager::MemoryState;
 
+use crate::language::LanguageTag;
+
 /// The five observation types that the substrate models.
 ///
 /// Per `docs/DESIGN.md` §3.2: "Normalized facts, claims, entities,
@@ -70,6 +72,16 @@ pub struct Observation {
     /// Memory state at the time of extraction. Always
     /// [`MemoryState::Candidate`] for fresh extractions.
     pub memory_state: MemoryState,
+    /// BCP-47 primary language subtag for the source text the
+    /// observation was extracted from (Phase 1.3). `None` when the
+    /// upstream language detector either declined to classify the
+    /// input or marked the result as unreliable. Downstream
+    /// consumers (multilingual lexicon registry, per-locale FTS5
+    /// tokenizer) MUST treat `None` as "unknown" rather than
+    /// substitute a default — see
+    /// [`crate::language::detect_language`] for the contract.
+    #[serde(default)]
+    pub language_tag: Option<LanguageTag>,
 }
 
 impl Observation {
@@ -89,6 +101,18 @@ impl Observation {
             scope_id,
             created_at: Utc::now(),
             memory_state: MemoryState::Candidate,
+            language_tag: None,
         }
+    }
+
+    /// Builder-style helper: stamp the detected source language
+    /// onto this observation. Called by
+    /// [`crate::pipeline::ObservationPipeline::run`] after
+    /// [`crate::language::detect_language`] runs over the raw
+    /// input text, so every observation produced from a single
+    /// ingestion shares the same language tag.
+    pub fn with_language_tag(mut self, tag: Option<LanguageTag>) -> Self {
+        self.language_tag = tag;
+        self
     }
 }

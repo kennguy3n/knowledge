@@ -87,6 +87,37 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
     assert_eq!(record.body, body);
     assert_eq!(record.source, SourceKind::Slack);
     assert_eq!(record.scope_id, scope);
+    // Phase 1.3 / schema v13: `ingest_message` runs
+    // `observation_engine::detect_language` on the plaintext
+    // body at the production write boundary. The body here
+    // embeds the synthetic FTS5 marker token
+    // `xyzzyintegrationroundtrip` (used so the FTS5
+    // assertion above can prove the row is actually
+    // queryable rather than false-positively matching a
+    // common English phrase). whatlang's trigram model
+    // marks the resulting input as unreliable — there's
+    // enough non-English noise from the synthetic token to
+    // pull the entropy past the reliability threshold —
+    // and `detect_language` therefore returns `None`. That
+    // collapses to a NULL `language_tag` on the row, which
+    // is the documented fail-closed contract ("no
+    // detection" rather than a substituted default).
+    //
+    // The concrete `Some("en")` / `Some("ja")` /
+    // unclassifiable `None` contracts for the new ingest
+    // path are pinned by the dedicated tests below
+    // (`ingest_message_stamps_language_tag_for_japanese_body`,
+    // `ingest_message_leaves_language_tag_null_for_unclassifiable_body`,
+    // `ingest_message_stamps_language_tag_for_plain_english_body`);
+    // this assertion stays purely on the fail-closed shape
+    // to keep the surface-coverage test from baking in a
+    // specific whatlang reliability decision for a
+    // synthetic-token corpus that may drift across crate
+    // versions.
+    assert_eq!(
+        record.language_tag, None,
+        "synthetic-token English body is correctly classified as unreliable; language_tag must stay NULL"
+    );
 
     forget(h, evidence_id.clone()).expect("forget");
 
@@ -99,6 +130,125 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
         Err(FfiError::NotFound { kind, .. }) => assert_eq!(kind, "evidence"),
         other => panic!("expected NotFound after forget, got {other:?}"),
     }
+
+    close_store(h).expect("close_store");
+}
+
+/// Phase 1.3 / schema v13 — `ingest_message` MUST stamp
+/// `Some("en")` onto a reliably-English plaintext body. The
+/// surface-coverage test above uses a synthetic FTS5 marker token
+/// that whatlang refuses to classify; this is the dedicated
+/// "happy path" regression guard for the most common production
+/// case: a natural-language English sentence with no synthetic
+/// tokens. If this assertion ever breaks it almost certainly
+/// means `ingest_message` was accidentally rewired back to the
+/// legacy `EvidenceStore::ingest()` shim that drops the tag.
+#[test]
+fn ingest_message_stamps_language_tag_for_plain_english_body() {
+    let (h, _dir) = fresh_store();
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    // Plain English with no synthetic markers; whatlang's
+    // trigram model classifies this reliably as `Lang::Eng`
+    // which maps to BCP-47 `"en"`.
+    let body =
+        "Please review the quarterly financial report before tomorrow's board meeting.".to_string();
+
+    let evidence_id = ingest_message(
+        h,
+        scope.clone(),
+        body.clone(),
+        SourceKind::Slack,
+        FfiImportanceClass::Important,
+    )
+    .expect("ingest_message");
+
+    let record = get_evidence(h, evidence_id).expect("get_evidence");
+    assert_eq!(record.body, body);
+    assert_eq!(
+        record.language_tag.as_deref(),
+        Some("en"),
+        "ingest_message FFI path must stamp language_tag = Some(\"en\") for plain English plaintext"
+    );
+
+    close_store(h).expect("close_store");
+}
+
+/// Phase 1.3 / schema v13 — the FFI ingest write path MUST stamp
+/// the detected BCP-47 primary subtag onto **non-Latin** scripts
+/// too, not just Latin English. This pins the contract with a
+/// Japanese sentence; whatlang's trigram model classifies it
+/// reliably as `Lang::Jpn` which maps to BCP-47 `"ja"`. A previous
+/// regression had `ingest_message` going through the legacy
+/// `EvidenceStore::ingest()` shim that passed `None`, leaving the
+/// column NULL for every production message — guarding against
+/// re-introduction by exercising the multilingual case explicitly.
+#[test]
+fn ingest_message_stamps_language_tag_for_japanese_body() {
+    let (h, _dir) = fresh_store();
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    // A Japanese sentence long enough to clear whatlang's
+    // reliability heuristic. Mixed hiragana + katakana + kanji
+    // forces the detector onto the Japanese trigram path rather
+    // than collapsing to a generic CJK fallback.
+    let body =
+        "今日は会議の議事録を整理してから、新しいプロジェクトの計画を立てる予定です。".to_string();
+
+    let evidence_id = ingest_message(
+        h,
+        scope.clone(),
+        body.clone(),
+        SourceKind::Slack,
+        FfiImportanceClass::Important,
+    )
+    .expect("ingest_message");
+
+    let record = get_evidence(h, evidence_id).expect("get_evidence");
+    assert_eq!(record.body, body);
+    assert_eq!(
+        record.language_tag.as_deref(),
+        Some("ja"),
+        "ingest_message FFI path must stamp language_tag = Some(\"ja\") for Japanese plaintext"
+    );
+
+    close_store(h).expect("close_store");
+}
+
+/// Phase 1.3 / schema v13 — `detect_language` is fail-closed: when
+/// the input is too short, pure punctuation / pure emoji, or
+/// otherwise unreliable on whatlang's internal heuristic, it
+/// returns `None` and the column stays NULL. This is the correct
+/// "language unknown" outcome — downstream consumers (Phase 1.1
+/// lexicon registry) treat NULL as "fall back to scope-default
+/// locale" rather than guessing. Pinning this avoids a future
+/// "helpful" change that silently substitutes `"en"` as a default
+/// on unclassifiable input, which would derail per-locale
+/// retrieval for non-English tenants.
+#[test]
+fn ingest_message_leaves_language_tag_null_for_unclassifiable_body() {
+    let (h, _dir) = fresh_store();
+
+    let scope = uuid::Uuid::new_v4().to_string();
+    // Pure punctuation + numeric noise; whatlang refuses to
+    // classify and `detect_language` returns `None`.
+    let body = "!!! ... ??? 12345 !!!".to_string();
+
+    let evidence_id = ingest_message(
+        h,
+        scope.clone(),
+        body.clone(),
+        SourceKind::Slack,
+        FfiImportanceClass::Important,
+    )
+    .expect("ingest_message");
+
+    let record = get_evidence(h, evidence_id).expect("get_evidence");
+    assert_eq!(record.body, body);
+    assert_eq!(
+        record.language_tag, None,
+        "ingest_message FFI path must leave language_tag NULL when whatlang refuses to classify"
+    );
 
     close_store(h).expect("close_store");
 }
@@ -495,10 +645,15 @@ fn evidence_round_trip_via_wire_types() {
         body: "a sample evidence body with unicode: 한글 / café".into(),
         source: SourceKind::Slack,
         created_at: 1_700_000_000,
+        // Schema v13 (Phase 1.3): the bridge MUST surface the
+        // detected BCP-47 tag end-to-end so host shells don't
+        // re-run detection on the read side. NULL stays NULL.
+        language_tag: Some("ko".into()),
     };
     let json = serde_json::to_string(&original).expect("EvidenceRecord must serialize");
     let back: EvidenceRecord = serde_json::from_str(&json).expect("EvidenceRecord must round-trip");
     assert_eq!(original, back);
+    assert_eq!(back.language_tag.as_deref(), Some("ko"));
 }
 
 /// `MemoryRecord` is the canonical wire shape every host UI renders

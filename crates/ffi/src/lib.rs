@@ -203,13 +203,32 @@ pub fn ingest_message(
                 });
             }
             rt.ensure_scope_registered(scope)?;
+            // Phase 1.3 — run language detection at the production
+            // write boundary so every persistent row stamps a
+            // BCP-47 primary subtag onto the `language_tag` column
+            // (schema v13). `detect_language` is fail-closed: empty
+            // / pure-punctuation / pure-emoji / unreliable-short
+            // input returns `None` and the column stays NULL,
+            // which is the correct "language unknown" state for
+            // downstream consumers (the Phase 1.1 lexicon registry
+            // reads this column on every retrieval). Detection
+            // runs unconditionally — including on the noise path
+            // that gets routed to the ring buffer by
+            // `ingest_with_language` — because the ~microsecond
+            // trigram analysis is cheaper than threading a
+            // sensitivity-class lookahead through here, and noise
+            // rows do not retain the tag anyway (the ring buffer
+            // is plaintext-only, append-and-evict).
+            let detection = observation_engine::detect_language(&body);
+            let language_tag = detection.as_ref().map(|d| d.tag.as_str());
             let result = rt
                 .store_mut()
-                .ingest(
+                .ingest_with_language(
                     scope,
                     body.as_bytes(),
                     Some(source_kind_tag(&source)),
                     ffi_importance_to_internal(importance),
+                    language_tag,
                 )
                 .map_err(|e| FfiError::Evidence {
                     message: e.to_string(),
@@ -400,6 +419,17 @@ pub fn get_evidence(handle: RuntimeHandle, evidence_id: String) -> FfiResult<Evi
                     .as_deref()
                     .map_or(SourceKind::Other, parse_source_kind),
                 created_at: row.created_at,
+                // Forward the BCP-47 primary subtag the substrate
+                // stamped on the row at ingest (schema v13, Phase
+                // 1.3). NULL stays NULL across the bridge so host
+                // shells can distinguish "no detection" from a
+                // concrete tag like `"en"`. `row` is owned and not
+                // borrowed after this expression, and `source_ref`'s
+                // borrow above has already been consumed by
+                // `map_or`, so a partial move of `row.language_tag`
+                // (rather than a clone of the inner `String`) is
+                // sound and saves the allocation.
+                language_tag: row.language_tag,
             })
         })
     })
