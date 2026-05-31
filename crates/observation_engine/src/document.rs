@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 use crate::error::{ObservationError, Result};
 use crate::extractor::{LexiconExtractor, ObservationExtractor};
+use crate::language::{detect_language, LanguageTag};
 use crate::types::Observation;
 
 /// Stable identifier for a source document (Google Drive id,
@@ -239,6 +240,21 @@ pub struct DocumentExtractionResult {
     pub citations: HashMap<Uuid, ObservationCitation>,
     /// Number of chunks dropped by the importance classifier.
     pub chunks_dropped_low_importance: usize,
+    /// Per-chunk dominant language tag (1:1 with `chunks`, in the
+    /// same order). `None` for a chunk means
+    /// [`crate::language::detect_language`] refused to classify
+    /// the chunk (too short, mixed scripts, etc.) and the
+    /// extractor stamped sentence-level tags only.
+    ///
+    /// Surfaces the chunk-level tag for downstream consumers that
+    /// want a coarse per-chunk language without re-running
+    /// detection — addresses Devin Review finding
+    /// #ANALYSIS-0001b (consistency with
+    /// [`crate::pipeline::ObservationPipeline::run_with_language`])
+    /// and the earlier #ANALYSIS-0002 finding that the doc
+    /// pipeline didn't surface a chunk-level language for chunks
+    /// that produced no observations.
+    pub chunk_languages: Vec<Option<LanguageTag>>,
 }
 
 /// Pipeline that chains chunking → importance tagging →
@@ -305,24 +321,49 @@ where
         let mut observations = Vec::new();
         let mut citations = HashMap::new();
         let mut dropped = 0_usize;
+        // Phase 1.4 (Devin Review #ANALYSIS-0001b): pre-compute the
+        // per-chunk dominant language at the doc-pipeline level so
+        // that (a) we can pass it through
+        // `extract_with_dominant_language` to the extractor
+        // (consistent with how
+        // `ObservationPipeline::run_with_language` threads the
+        // whole-message dominant tag in `pipeline.rs`), and
+        // (b) we can surface it on `DocumentExtractionResult` so
+        // downstream consumers don't need to re-run detection on
+        // chunks that produced no observations. `chunk_languages`
+        // is 1:1 with `chunks` (in order), including entries for
+        // chunks dropped by the importance classifier.
+        let mut chunk_languages: Vec<Option<LanguageTag>> = Vec::with_capacity(chunks.len());
         for chunk in &chunks {
+            let chunk_language = detect_language(&chunk.text).map(|d| d.tag);
+            chunk_languages.push(chunk_language.clone());
+
             let importance = self.classifier.classify(&chunk.text);
             if importance.as_tag() < self.min_importance_tag {
                 dropped += 1;
                 continue;
             }
-            let mut extracted = self.extractor.extract(&chunk.text, scope);
+            let mut extracted = self.extractor.extract_with_dominant_language(
+                &chunk.text,
+                scope,
+                chunk_language.as_ref(),
+            );
             if extracted.is_empty() {
                 continue;
             }
-            // Detect language *per chunk* — long documents may
-            // genuinely change language between sections (an
-            // English README that quotes a Japanese release note,
-            // a multilingual policy doc, …) so re-running
-            // detection on each chunk's text gives a tighter
-            // language stamp than a single document-level detect
-            // would.
-            let chunk_language = crate::language::detect_language(&chunk.text).map(|d| d.tag);
+            // Phase 1.4: the lexicon extractor now stamps
+            // per-sentence language tags inside each chunk (CJK
+            // `。`, Arabic `؟`, Devanagari `।` etc. are recognised
+            // by `split_sentences_with_terminator`, and
+            // `detect_language` runs per sentence with the
+            // chunk-level dominant tag as the fallback). The
+            // resulting observations carry tighter language stamps
+            // than the chunk-level single tag we used in Phase 1.3
+            // — so we *do not* overwrite them here. The previous
+            // `obs.language_tag.clone_from(&chunk_language)` would
+            // have clobbered, for instance, a Japanese sentence's
+            // `ja` tag with the chunk's dominant `en` tag.
+            //
             // Carry chunk-level evidence id and citation onto
             // every observation extracted from this chunk.
             let evidence_id = chunk_evidence_ids.get(chunk.metadata.chunk_index).copied();
@@ -332,7 +373,6 @@ where
                         obs.source_evidence_ids.push(eid);
                     }
                 }
-                obs.language_tag.clone_from(&chunk_language);
                 citations.insert(
                     obs.id,
                     ObservationCitation {
@@ -349,6 +389,7 @@ where
             chunks,
             citations,
             chunks_dropped_low_importance: dropped,
+            chunk_languages,
         })
     }
 }
@@ -520,6 +561,103 @@ mod tests {
         assert_eq!(
             c.overlap_chars,
             SlidingWindowChunker::default().overlap_chars
+        );
+    }
+
+    #[test]
+    fn document_pipeline_preserves_per_sentence_language_tags_in_chunk() {
+        // Phase 1.4 contract: the document pipeline must NOT
+        // overwrite per-sentence language tags with the
+        // chunk-level dominant tag. A document chunk containing
+        // bilingual prose should yield observations with
+        // per-sentence tags.
+        let pipeline = default_document_pipeline().with_min_importance(ImportanceClass::Noise);
+        let scope = ScopeId::new_v4();
+        // Long enough that it stays a single chunk (under the
+        // default 1500-char window), but covers two languages so
+        // per-sentence detection produces distinct tags.
+        let text = "Please review the migration plan and ship the rollout this Friday. \
+                    今日の会議では何時に開始する予定でしょうか、ご確認お願いします。 \
+                    Approved the rollout schedule on Monday for the entire team.";
+        let res = pipeline
+            .process(
+                text,
+                &doc_ref(),
+                DocumentKind::PlainText,
+                scope,
+                &[EvidenceId::new_v4()],
+            )
+            .unwrap();
+        assert!(!res.observations.is_empty(), "expected observations");
+
+        let ja_tag_count = res
+            .observations
+            .iter()
+            .filter(|o| o.language_tag.as_ref().is_some_and(|t| t.primary() == "ja"))
+            .count();
+        let en_tag_count = res
+            .observations
+            .iter()
+            .filter(|o| o.language_tag.as_ref().is_some_and(|t| t.primary() == "en"))
+            .count();
+        assert!(
+            ja_tag_count >= 1,
+            "expected at least one ja-tagged observation from the JA sentence, got tags: {:?}",
+            res.observations
+                .iter()
+                .map(|o| o.language_tag.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            en_tag_count >= 1,
+            "expected at least one en-tagged observation from the EN sentences, got tags: {:?}",
+            res.observations
+                .iter()
+                .map(|o| o.language_tag.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn document_pipeline_surfaces_per_chunk_language() {
+        // Devin Review #ANALYSIS-0001b: the doc pipeline should
+        // surface the chunk-level dominant language on its result
+        // for downstream consumers that want a coarse per-chunk
+        // tag without re-running detection. The vector should be
+        // 1:1 with `chunks` (in chunker-emitted order, *before*
+        // importance filtering).
+        let pipeline = default_document_pipeline().with_min_importance(ImportanceClass::Noise);
+        let scope = ScopeId::new_v4();
+        // A long-enough English passage that whatlang classifies it
+        // reliably as `en`.
+        let text = "Please review the migration plan and ship the rollout this Friday. \
+                    Approved the rollout schedule on Monday for the entire team. \
+                    The deadline for the next sprint has been moved to next Wednesday.";
+        let res = pipeline
+            .process(
+                text,
+                &doc_ref(),
+                DocumentKind::PlainText,
+                scope,
+                &[EvidenceId::new_v4()],
+            )
+            .unwrap();
+        assert_eq!(
+            res.chunk_languages.len(),
+            res.chunks.len(),
+            "chunk_languages must be 1:1 with chunks"
+        );
+        assert!(
+            res.chunk_languages.iter().any(Option::is_some),
+            "expected at least one chunk to detect a dominant language, got {:?}",
+            res.chunk_languages
+        );
+        assert!(
+            res.chunk_languages
+                .iter()
+                .all(|t| t.as_ref().is_none_or(|tag| tag.primary() == "en")),
+            "expected all detected chunk languages to be `en`, got {:?}",
+            res.chunk_languages
         );
     }
 }
