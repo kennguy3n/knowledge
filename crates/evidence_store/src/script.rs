@@ -68,11 +68,25 @@ pub fn contains_cjk_or_thai(text: &str) -> bool {
 ///   classical Chinese corpora
 /// * CJK Unified Ideographs Extension B (`U+20000..=U+2A6DF`) —
 ///   supplementary-plane Han used in scholarly / historical text
-/// * CJK Unified Ideographs Extensions C..H
-///   (`U+2A700..=U+2EBEF` and `U+30000..=U+323AF`) — extremely rare
-///   scholarly characters, kept here so the predicate is forward
-///   defensive against any future content surfaced through OCR or
-///   academic corpora; the cost is one extra range check
+/// * CJK Unified Ideographs Extensions C..F **and I**
+///   (`U+2A700..=U+2EE5F`, contiguous) — Extensions C..F
+///   (`U+2A700..=U+2EBEF`) plus Extension I
+///   (`U+2EBF0..=U+2EE5F`, added in Unicode 15.1, September 2023).
+///   The ranges abut so we encode them as a single `matches!` arm.
+/// * CJK Unified Ideographs Extensions G..H **and J**
+///   (`U+30000..=U+33479`, contiguous) — Extensions G..H
+///   (`U+30000..=U+323AF`) plus Extension J
+///   (`U+323B0..=U+33479`, added in Unicode 16.0, September 2024).
+///   The ranges abut so we encode them as a single `matches!` arm.
+///   All of C..J are extremely rare scholarly characters; we route
+///   them so the predicate is forward defensive against any future
+///   content surfaced through OCR or academic corpora — the cost is
+///   one extra range check per arm. The standing policy is **"every
+///   currently-defined CJK Unified Ideographs Extension is routed"**
+///   so a future contributor extending the predicate for Unicode
+///   17+ Ext K / L / ... just needs to widen the upper bound of
+///   whichever contiguous arm the new block belongs to, rather than
+///   re-litigating the forward-defensive design every time.
 /// * CJK Radicals Supplement (`U+2E80..=U+2EFF`) — Kangxi radical
 ///   components used in dictionaries and IME candidate lists
 /// * CJK Compatibility Ideographs (`U+F900..=U+FAFF`) — duplicates
@@ -121,8 +135,8 @@ pub fn is_cjk_or_thai_codepoint(c: char) -> bool {
         | '\u{4E00}'..='\u{9FFF}'    // CJK Unified Ideographs
         | '\u{F900}'..='\u{FAFF}'    // CJK Compatibility Ideographs
         | '\u{20000}'..='\u{2A6DF}'  // CJK Unified Ideographs Extension B
-        | '\u{2A700}'..='\u{2EBEF}'  // CJK Unified Ideographs Extensions C..F
-        | '\u{30000}'..='\u{323AF}'  // CJK Unified Ideographs Extensions G..H
+        | '\u{2A700}'..='\u{2EE5F}'  // CJK Unified Ideographs Extensions C..F + I
+        | '\u{30000}'..='\u{33479}'  // CJK Unified Ideographs Extensions G..H + J
         | '\u{0E00}'..='\u{0E7F}'    // Thai
     )
 }
@@ -263,24 +277,37 @@ mod tests {
     }
 
     #[test]
-    fn cjk_extensions_c_through_h_route_to_cjk() {
+    fn cjk_extensions_c_through_j_route_to_cjk() {
         // Pick one codepoint from each merged range to confirm the
         // ranges are covered. The exact codepoints are scholarly /
         // historical Han characters that real corpora rarely
         // include, but if they ever do appear, the predicate must
         // route the row correctly rather than silently strand it.
+        //
+        // Sweep-6 INFO-0003: Extension I (U+2EBF0..=U+2EE5F, Unicode
+        // 15.1, Sep 2023) and Extension J (U+323B0..=U+33479,
+        // Unicode 16.0, Sep 2024) are now included to honour the
+        // doc-comment's stated forward-defensive policy of routing
+        // every currently-defined CJK Unified Ideographs Extension.
         assert!(contains_cjk_or_thai("\u{2A700}")); // first of Ext C
         assert!(contains_cjk_or_thai("\u{2B740}")); // first of Ext D
         assert!(contains_cjk_or_thai("\u{2B820}")); // first of Ext E
         assert!(contains_cjk_or_thai("\u{2CEB0}")); // first of Ext F
-        assert!(contains_cjk_or_thai("\u{2EBEF}")); // last of merged C..F range
+        assert!(contains_cjk_or_thai("\u{2EBEF}")); // last of contiguous C..F sub-span
+        assert!(contains_cjk_or_thai("\u{2EBF0}")); // first of Ext I (Unicode 15.1)
+        assert!(contains_cjk_or_thai("\u{2EE5F}")); // last of merged C..F+I range
         assert!(contains_cjk_or_thai("\u{30000}")); // first of Ext G
         assert!(contains_cjk_or_thai("\u{31350}")); // first of Ext H
-        assert!(contains_cjk_or_thai("\u{323AF}")); // last of merged G..H range
-                                                    // Gap between the two merged spans (U+2EBF0..=U+2FFFF +
-                                                    // U+30000-adjacent boundaries) must NOT route on its own.
-        assert!(!contains_cjk_or_thai("\u{2EBF0}"));
+        assert!(contains_cjk_or_thai("\u{323AF}")); // last of contiguous G..H sub-span
+        assert!(contains_cjk_or_thai("\u{323B0}")); // first of Ext J (Unicode 16.0)
+        assert!(contains_cjk_or_thai("\u{33479}")); // last of merged G..H+J range
+        // Just past the merged C..F+I upper bound (U+2EE60..=U+2FFFF
+        // is unallocated / non-CJK) must NOT route on its own.
+        assert!(!contains_cjk_or_thai("\u{2EE60}"));
         assert!(!contains_cjk_or_thai("\u{2FFFF}"));
+        // Just past the merged G..H+J upper bound (U+3347A..=U+3FFFF
+        // is unallocated as of Unicode 16.0) must NOT route either.
+        assert!(!contains_cjk_or_thai("\u{3347A}"));
     }
 
     #[test]
