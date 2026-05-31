@@ -949,3 +949,131 @@ fn fts5_search_dedupes_when_both_tables_match_same_row() {
     );
     assert_eq!(hits[0], r.evidence_id);
 }
+
+#[test]
+fn fts5_unicode61_query_succeeds_even_when_trigram_branch_rejects_shape() {
+    // Sweep-2 BUG-0001 regression. The SQLite trigram tokeniser docs
+    // <https://www.sqlite.org/fts5.html#the_trigram_tokenizer> say
+    // that trigram returns an *error* (not an empty result set)
+    // when given any of:
+    //   * a query term shorter than 3 characters,
+    //   * a `NEAR(…)` expression,
+    //   * a column filter,
+    //   * a prefix-star match shorter than 3 codepoints.
+    //
+    // The dual-table search (`evidence_fts` UNION-style merged with
+    // `evidence_fts_cjk`) splits the query across both branches.
+    // The architectural invariant the post-bug-0001 fix pins is:
+    // **a syntactically valid `unicode61` query never breaks
+    // `search_fts` just because the same query happens to be a
+    // shape that `trigram` rejects per the docs.** The trigram
+    // branch is purely additive recall; any rusqlite error on it
+    // is swallowed and the branch is treated as the empty set.
+    //
+    // We assert this by reaching past `.unwrap()` for every
+    // documented-as-error shape — if the error propagated, every
+    // case would panic. Empirically the bundled SQLite version
+    // happens to be lenient and silently returns empty (or even
+    // contributes hits) for some of these shapes rather than
+    // erroring; the defensive containment still applies and
+    // future-proofs against a bundled-SQLite upgrade that tightens
+    // to the documented behaviour.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "Project 計画書 launch review meeting".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+
+    // Case 1: 2-codepoint Latin term — explicitly below the trigram
+    // floor per the docs. Reach past `.unwrap()`.
+    let _r1 = store.search_fts(scope, "to", 10).unwrap();
+
+    // Case 2: 1-codepoint query — below the floor.
+    let _r2 = store.search_fts(scope, "a", 10).unwrap();
+
+    // Case 3: `NEAR(...)` expression — trigram rejects NEAR per docs.
+    // unicode61 supports it; both `launch` and `review` are in the body.
+    let r3 = store
+        .search_fts(scope, "NEAR(launch review, 5)", 10)
+        .unwrap();
+    assert_eq!(
+        r3.len(),
+        1,
+        "NEAR matches in unicode61 MUST return the row even when trigram rejects NEAR"
+    );
+    assert_eq!(r3[0], r.evidence_id);
+
+    // Case 4: column filter — trigram rejects column filters per docs.
+    let r4 = store.search_fts(scope, "{content} : launch", 10).unwrap();
+    assert_eq!(
+        r4.len(),
+        1,
+        "column-filter matches in unicode61 MUST return the row even when trigram rejects column filters"
+    );
+    assert_eq!(r4[0], r.evidence_id);
+
+    // Case 5: 2-codepoint CJK prefix-star match — below the trigram
+    // prefix-floor per docs. Reach past `.unwrap()`. The hit count
+    // depends on the bundled SQLite's leniency.
+    let _r5 = store.search_fts(scope, "計画*", 10).unwrap();
+
+    // Case 6: well-formed long-prefix query — sanity check that the
+    // refactor still returns hits when both branches accept the
+    // query.
+    let r6 = store.search_fts(scope, "launch*", 10).unwrap();
+    assert_eq!(r6.len(), 1, "long-prefix query still returns hit");
+    assert_eq!(r6[0], r.evidence_id);
+}
+
+#[test]
+fn fts5_trigram_branch_error_is_silently_swallowed_so_unicode61_results_survive() {
+    // Sweep-2 BUG-0001 regression — directly proves the error
+    // containment path. We inject a guaranteed trigram failure by
+    // DROPing the `evidence_fts_cjk` table out from under the
+    // search, then verify the `unicode61` branch's results still
+    // flow through. This exercises the rusqlite error swallow in
+    // `dual_fts_search` independent of whichever bundled SQLite
+    // version's tolerance for short trigram terms.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "Project launch review meeting".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    // Sanity baseline before drop: unicode61 returns the hit.
+    let baseline = store.search_fts(scope, "launch", 10).unwrap();
+    assert_eq!(baseline.len(), 1);
+    assert_eq!(baseline[0], r.evidence_id);
+
+    // Force the trigram branch to fail by dropping the underlying
+    // virtual table. Any subsequent `evidence_fts_cjk MATCH …`
+    // prepare returns `Err(SqliteFailure(...))`.
+    store
+        .raw_conn()
+        .execute("DROP TABLE evidence_fts_cjk", [])
+        .expect("drop evidence_fts_cjk for test");
+
+    // The unicode61 branch is unchanged; the trigram branch errors
+    // on prepare. The defensive `dual_fts_search` swallows the
+    // trigram error and surfaces only the unicode61 hit — the
+    // public `search_fts` API does NOT propagate the trigram
+    // failure.
+    let hits = store
+        .search_fts(scope, "launch", 10)
+        .expect("trigram failure MUST NOT propagate; unicode61 result MUST survive");
+    assert_eq!(
+        hits.len(),
+        1,
+        "trigram-branch failure must be swallowed; unicode61 hit must still surface"
+    );
+    assert_eq!(hits[0], r.evidence_id);
+}

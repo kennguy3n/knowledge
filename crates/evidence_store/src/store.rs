@@ -1,6 +1,7 @@
 //! Top-level [`EvidenceStore`] type — opens the SQLCipher database,
 //! runs the schema, and exposes the append-only ingestion + read API.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -1132,61 +1133,56 @@ impl EvidenceStore {
     /// accept the same FTS5 query *grammar* (the bareword / `"phrase"`
     /// / `term1 OR term2` / `NEAR(…)` / column-filter / prefix-star
     /// syntax described in <https://sqlite.org/fts5.html#full_text_query_syntax>).
-    /// They differ in what terms each tokeniser is able to match:
+    /// They differ in what each tokeniser is able to match, and the
+    /// `trigram` branch rejects some queries that `unicode61` accepts.
+    /// Per the [`trigram` tokeniser documentation][trigram-doc]:
     ///
     /// * `unicode61` (universal table) splits on Unicode whitespace
     ///   and punctuation and is happy with single-codepoint terms.
     ///   A query like `"to OR deadline"` is well-formed and may
     ///   match real rows.
     /// * `trigram` (CJK table) only stores overlapping 3-codepoint
-    ///   windows of `content`, so any **individual** query term that
-    ///   is fewer than 3 codepoints will simply never match a row in
-    ///   that branch — it is silently and validly empty. This is
-    ///   the documented Phase 1.2 floor and is what enables the
-    ///   `天気` (2-codepoint) test case to round-trip as
-    ///   `Ok(vec![])` instead of erroring (a custom FFI bigram
-    ///   tokeniser is the future-phase fix). Compound queries
-    ///   with at least one term ≥ 3 codepoints (e.g.
-    ///   `"to OR 良い天気"`) match in `trigram` on the long term
-    ///   and in `unicode61` on the short term; the UNION then
-    ///   surfaces the row from whichever index found it.
+    ///   windows of `content`. It returns a SQLite error — not an
+    ///   empty result set — when given a query term shorter than 3
+    ///   characters, a `NEAR(…)` expression, a column filter, or a
+    ///   prefix-star (`term*`) match shorter than 3 codepoints.
     ///
-    /// Either branch returning zero rows for queries it cannot serve
-    /// (a < 3-codepoint term against trigram, or a pure-CJK term
-    /// against unicode61 with no Latin context) is the expected
-    /// non-error path, not a tokeniser mismatch.
+    /// To preserve the **architectural invariant that a syntactically
+    /// valid `unicode61` query never breaks the substrate's search
+    /// API** — even when that query happens to be a `trigram`-rejected
+    /// shape — the implementation runs the two branches as two
+    /// independent prepared statements and merges in Rust:
+    ///
+    /// * The `unicode61` branch is the **source of truth for query
+    ///   validity**: any error from `evidence_fts MATCH ?1`
+    ///   propagates to the caller (genuine FTS5 syntax error,
+    ///   schema corruption, etc).
+    /// * The `trigram` branch is **purely additive recall**: any
+    ///   error from `evidence_fts_cjk MATCH ?1` — including the
+    ///   short-term / `NEAR(…)` / column-filter rejections — is
+    ///   silently treated as an empty result set, so the caller
+    ///   sees the `unicode61` results unchanged. A 2-codepoint CJK
+    ///   query like `天気` thus round-trips as `Ok(vec![])` (the
+    ///   documented Phase 1.2 floor; a custom FFI bigram tokeniser
+    ///   is the future-phase recall fix), and a query like
+    ///   `"to OR 良い天気"` still returns the `unicode61` hit on
+    ///   `to` even though `trigram` rejects the 2-char `to` token.
+    ///
+    /// This design also makes the substrate robust to the exact
+    /// bundled SQLite version's lenience — older builds may silently
+    /// return empty for short-term trigram queries while the
+    /// documented contract is to error. Either way, the public
+    /// `search_fts` contract is unchanged.
+    ///
+    /// [trigram-doc]: <https://www.sqlite.org/fts5.html#the_trigram_tokenizer>
     pub fn search_fts(
         &self,
         scope_id: ScopeId,
         query: &str,
         limit: usize,
     ) -> Result<Vec<EvidenceId>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT evidence_id, MIN(rank) AS best_rank FROM (
-                 SELECT evidence_id, rank FROM evidence_fts
-                  WHERE evidence_fts MATCH ?1 AND scope_id = ?2
-                 UNION ALL
-                 SELECT evidence_id, rank FROM evidence_fts_cjk
-                  WHERE evidence_fts_cjk MATCH ?1 AND scope_id = ?2
-             ) merged
-             GROUP BY evidence_id
-             ORDER BY best_rank
-             LIMIT ?3",
-        )?;
-        let rows = stmt.query_map(
-            params![
-                query,
-                scope_id.as_uuid().as_bytes().as_slice(),
-                clamp_limit_to_sqlite(limit),
-            ],
-            |row| row.get::<_, Vec<u8>>(0),
-        )?;
-        let mut out = Vec::new();
-        for row in rows {
-            let bytes = row?;
-            out.push(EvidenceId(slice_to_uuid(&bytes)?));
-        }
-        Ok(out)
+        let merged = dual_fts_search(&self.conn, scope_id, query, limit)?;
+        Ok(merged.into_iter().map(|(id, _rank)| id).collect())
     }
 
     /// Insert a noise-class body into the ring buffer.
@@ -4339,6 +4335,118 @@ fn scope_dek_aad(scope_id: ScopeId) -> Vec<u8> {
 /// represent" means.
 pub(crate) fn clamp_limit_to_sqlite(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
+}
+
+/// Run a dual-table FTS5 search and return `(evidence_id, best_rank)`
+/// pairs sorted by best rank ascending, truncated to `limit`.
+///
+/// See [`EvidenceStore::search_fts`] for the full design rationale.
+/// Briefly:
+///
+/// * `evidence_fts` (unicode61) is the **source of truth for query
+///   validity** — any error from its `MATCH` is propagated. The
+///   per-branch `LIMIT` bounds the row count to `limit`.
+/// * `evidence_fts_cjk` (trigram) is **purely additive recall** —
+///   any error from its `MATCH` (including the documented
+///   short-term / `NEAR(…)` / column-filter / short prefix-star
+///   rejections) is swallowed and the branch is treated as the
+///   empty set, so a syntactically valid `unicode61` query never
+///   breaks `search_fts` just because `trigram` rejects the shape.
+///
+/// The per-branch results are merged in a `HashMap<EvidenceId, f64>`
+/// keeping `MIN(rank)` (FTS5 rank is negative-and-smaller-is-better),
+/// then sorted ascending and truncated to `limit`. The merged set
+/// is bounded by `2 * limit` before truncation, independent of
+/// dataset size.
+///
+/// `pub(crate)` so [`crate::retrieval::HybridRetriever::search_fts`]
+/// can reuse the same merge logic (both call sites need identical
+/// dedupe + error-containment semantics; diverging implementations
+/// would silently drift apart and was one of the failure modes the
+/// sweep-2 Devin Review BUG-0001 finding flagged).
+pub(crate) fn dual_fts_search(
+    conn: &Connection,
+    scope_id: ScopeId,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<(EvidenceId, f64)>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let limit_sql = clamp_limit_to_sqlite(limit);
+    let scope_uuid = scope_id.as_uuid();
+    let scope_bytes = scope_uuid.as_bytes().as_slice();
+
+    let mut best_rank: HashMap<EvidenceId, f64> = HashMap::with_capacity(limit.saturating_mul(2));
+
+    // Branch 1: unicode61 (universal). Errors propagate.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT evidence_id, rank FROM evidence_fts
+             WHERE evidence_fts MATCH ?1 AND scope_id = ?2
+             ORDER BY rank LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![query, scope_bytes, limit_sql], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
+        })?;
+        for row in rows {
+            let (id_bytes, rank) = row?;
+            let id = EvidenceId(slice_to_uuid(&id_bytes)?);
+            merge_min_rank(&mut best_rank, id, rank);
+        }
+    }
+
+    // Branch 2: trigram (additive recall). Errors swallowed.
+    //
+    // The closure captures every rusqlite error path (prepare,
+    // query_map, per-row mapping) so any failure from the trigram
+    // tokeniser — including the documented short-term rejection,
+    // `NEAR(…)`, column filters, and short prefix-star matches —
+    // is observed as `Err(_)` here and treated as an empty
+    // contribution. We only consume the `Ok` arm.
+    let trigram_attempt: rusqlite::Result<Vec<(Vec<u8>, f64)>> = (|| {
+        let mut stmt = conn.prepare(
+            "SELECT evidence_id, rank FROM evidence_fts_cjk
+             WHERE evidence_fts_cjk MATCH ?1 AND scope_id = ?2
+             ORDER BY rank LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![query, scope_bytes, limit_sql], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    })();
+    if let Ok(trigram_rows) = trigram_attempt {
+        for (id_bytes, rank) in trigram_rows {
+            let id = EvidenceId(slice_to_uuid(&id_bytes)?);
+            merge_min_rank(&mut best_rank, id, rank);
+        }
+    }
+
+    // Sort by best (smallest) rank ascending; truncate to limit.
+    let mut sorted: Vec<(EvidenceId, f64)> = best_rank.into_iter().collect();
+    sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.truncate(limit);
+    Ok(sorted)
+}
+
+/// Insert `(id, rank)` into `best_rank`, keeping the **smallest**
+/// (most relevant) of any existing value vs the new one. FTS5 rank
+/// is negative-and-smaller-is-better, so `min` is the correct dedupe
+/// rule when the same `evidence_id` is returned by both the
+/// `unicode61` and `trigram` branches.
+fn merge_min_rank(best_rank: &mut HashMap<EvidenceId, f64>, id: EvidenceId, rank: f64) {
+    best_rank
+        .entry(id)
+        .and_modify(|existing| {
+            if rank < *existing {
+                *existing = rank;
+            }
+        })
+        .or_insert(rank);
 }
 
 /// Convert a `COUNT(*) / SUM(...)` result from SQLite into a Rust
