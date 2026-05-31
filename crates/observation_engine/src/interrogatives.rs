@@ -275,10 +275,30 @@ pub fn interrogatives_for(
         // interrogatives; we use FirstToken which catches the
         // initial case and rely on `?`/`?` terminator for the
         // sentence-final case.
+        //
+        // Deliberately omitted: `khi`, `tại`, `vì`. These are
+        // extremely high-frequency Vietnamese conjunctions /
+        // prepositions whose interrogative readings only manifest
+        // as part of two-word bigrams — `khi nào` ("when?"),
+        // `tại sao` ("why?"), `vì sao` ("why?"). The bare forms
+        // overwhelmingly open declaratives: `Khi tôi đến...`
+        // ("When I arrived..."), `Tại Hà Nội...` ("At Hanoi..."),
+        // `Vì tôi bận...` ("Because I'm busy..."). A FirstToken
+        // match on bare `khi`/`tại`/`vì` would mis-classify a
+        // huge fraction of declaratives as questions — same class
+        // of bug as Spanish/Portuguese `por` (FLAG-0003),
+        // Indonesian/Malay `di`/`yang` (FLAG-0005b), French `que`
+        // / Italian `che` / Portuguese `que` (FLAG-0001c). The
+        // `?` terminator catches the sentence-final cases
+        // (`Khi nào?`, `Tại sao?`, `Vì sao?`), and the bare
+        // interrogatives `ai`/`gì`/`nào`/`đâu`/`sao` are kept to
+        // catch initial-position questions without `?`. Future
+        // work could add two-token bigram matching to recover the
+        // `khi nào`/`tại sao`/`vì sao` recall — deferred to the
+        // Phase 1.1 LexiconRegistry, which has a richer matcher
+        // surface. See Devin Review finding #FLAG-0002d.
         "vi" => Some((
-            &[
-                "ai", "gì", "nào", "đâu", "khi", "bao", "sao", "tại", "vì", "thế",
-            ],
+            &["ai", "gì", "nào", "đâu", "bao", "sao", "thế"],
             InterrogativeMatch::FirstToken,
         )),
 
@@ -436,7 +456,24 @@ pub fn interrogatives_for(
                 "哪个",
                 "哪些",
                 "如何",
-                "几",
+                // Deliberately omitted: bare `几` ("how many / a few").
+                // Substring matching on the single character `几`
+                // would mis-classify common non-interrogative
+                // compounds containing it: `几乎` ("almost"),
+                // `几何` ("geometry"), `几率` ("probability"),
+                // `几个月` ("a few months" — indefinite quantifier,
+                // not interrogative). The interrogative readings of
+                // `几` always occur in tight collocations
+                // (`几点了？`, `几岁？`, `星期几？`), so we surface the
+                // unambiguous canonical forms below instead, plus
+                // retain `多少` ("how many / how much") for general
+                // quantity questions and `吗` as the canonical
+                // yes/no particle. Same class of precision-vs-recall
+                // call as the Romance / Indonesian / Vietnamese
+                // omissions documented above. See Devin Review
+                // finding #FLAG-0001d.
+                "几点", // "what time"
+                "几岁", // "how old"
                 "多少",
                 "吗",
                 "什麼",
@@ -753,5 +790,100 @@ mod tests {
             !es_list.contains(&"que"),
             "spanish list must not contain unaccented 'que' (only 'qué' is interrogative)"
         );
+    }
+
+    #[test]
+    fn chinese_omits_ambiguous_numeral_几() {
+        // Devin Review #FLAG-0001d: bare `几` is an ambiguous
+        // morpheme \u2014 it is genuinely interrogative in
+        // collocations like `几点了？`, `几岁？`, `星期几？`, but it
+        // also appears in extremely common non-interrogative
+        // compounds: `几乎` ("almost"), `几何` ("geometry"), `几率`
+        // ("probability"), `几个月` (indefinite "a few months").
+        // Under Substring matching, a single-character entry
+        // mis-classifies any sentence containing those compounds
+        // as a question. The replacement is to surface the
+        // unambiguous canonical collocations (`几点`, `几岁`) and
+        // rely on `多少` for general quantity questions plus `吗`
+        // for yes/no.
+        let (zh_list, strat) = interrogatives_for("zh").unwrap();
+        assert_eq!(strat, InterrogativeMatch::Substring);
+        assert!(
+            !zh_list.contains(&"几"),
+            "chinese list must not contain bare '几' (substring match would \
+             mis-classify '几乎' / '几何' / '几率' / '几个月' declaratives as questions)"
+        );
+        // The replacements: tight collocations that are
+        // unambiguously interrogative.
+        assert!(
+            zh_list.contains(&"几点"),
+            "chinese list must contain canonical interrogative collocation '几点' (\"what time\")"
+        );
+        assert!(
+            zh_list.contains(&"几岁"),
+            "chinese list must contain canonical interrogative collocation '几岁' (\"how old\")"
+        );
+        // The general quantity fallback `多少` should remain so
+        // `多少钱？` ("how much money?") and similar still classify.
+        assert!(
+            zh_list.contains(&"多少"),
+            "chinese list must still contain general quantity interrogative '多少'"
+        );
+        // The yes/no particle `吗` should remain so any `…吗？`
+        // sentence still classifies.
+        assert!(
+            zh_list.contains(&"吗"),
+            "chinese list must still contain yes/no particle '吗'"
+        );
+        // Sanity-check a sample of other canonical interrogatives
+        // to guard against accidental wholesale list edits.
+        assert!(
+            zh_list.contains(&"什么"),
+            "chinese list must still contain interrogative '什么' (\"what\")"
+        );
+        assert!(
+            zh_list.contains(&"为什么"),
+            "chinese list must still contain interrogative '为什么' (\"why\")"
+        );
+    }
+
+    #[test]
+    fn vietnamese_omits_high_frequency_conjunctions() {
+        // Devin Review #FLAG-0002d: `khi`, `tại`, `vì` are
+        // extremely common Vietnamese conjunctions / prepositions
+        // (\"when [in declarative]\", \"at\", \"because\") whose
+        // interrogative readings only manifest as part of bigrams
+        // (`khi nào`, `tại sao`, `vì sao`). FirstToken matching on
+        // the bare forms mis-classifies a huge fraction of
+        // declaratives as questions \u2014 same class of false-positive
+        // as Spanish/Portuguese `por`, Indonesian/Malay `di`/`yang`,
+        // French `que`, Italian `che`, Portuguese `que`.
+        let (vi_list, strat) = interrogatives_for("vi").unwrap();
+        assert_eq!(strat, InterrogativeMatch::FirstToken);
+        assert!(
+            !vi_list.contains(&"khi"),
+            "vietnamese list must not contain high-frequency conjunction 'khi' (\
+             'Khi tôi đến...' would mis-classify as a question)"
+        );
+        assert!(
+            !vi_list.contains(&"tại"),
+            "vietnamese list must not contain high-frequency preposition 'tại' (\
+             'Tại Hà Nội...' would mis-classify as a question)"
+        );
+        assert!(
+            !vi_list.contains(&"vì"),
+            "vietnamese list must not contain high-frequency conjunction 'vì' (\
+             'Vì tôi bận...' would mis-classify as a question)"
+        );
+        // The bare unambiguous interrogatives should remain so
+        // sentence-initial `Ai là...?` / `Gì xảy ra...?` /
+        // `Nào là...?` / `Đâu là...?` / `Sao thế?` / `Bao nhiêu?`
+        // still classify under FirstToken.
+        for kept in ["ai", "gì", "nào", "đâu", "bao", "sao", "thế"] {
+            assert!(
+                vi_list.contains(&kept),
+                "vietnamese list must still contain bare interrogative {kept:?}"
+            );
+        }
     }
 }

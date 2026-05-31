@@ -824,15 +824,16 @@ impl LexiconExtractor {
         // (mentions / URLs / dates / numerics span the whole input,
         // so the dominant language is the only language that makes
         // semantic sense to stamp on them).
-        // Re-use the caller's pre-computed dominant language when
-        // one was supplied (the pipeline runs detect_language
-        // once to populate row-level metadata and threads that
-        // result through this hint); only fall back to running
-        // detect_language ourselves when no hint was provided
-        // (direct callers of `extract`, tests, etc.).
-        let dominant_language = dominant_language
-            .cloned()
-            .or_else(|| detect_language(text).map(|d| d.tag));
+        //
+        // `dominant_language` is treated as authoritative: callers
+        // are responsible for running [`detect_language`] on the
+        // whole input (or for explicitly supplying `None` when
+        // detection failed) before calling `do_extract`. We do not
+        // re-run detection here — a `None` hint means "detection
+        // already ran and produced no language", not "detection has
+        // not been attempted". This avoids a redundant trigram pass
+        // on every call. See Devin Review finding #ANALYSIS-0001d.
+        let dominant_language = dominant_language.cloned();
 
         // Entity extraction over the entire input.
         for mention in extract_at_mentions(text) {
@@ -958,7 +959,17 @@ impl LexiconExtractor {
 
 impl ObservationExtractor for LexiconExtractor {
     fn extract(&self, text: &str, scope: ScopeId) -> Vec<Observation> {
-        self.do_extract(text, scope, None)
+        // `extract` is the no-hint entry point: callers (typically
+        // tests / direct lexicon-only users) haven't pre-computed
+        // a dominant tag. Run [`detect_language`] **once** here and
+        // pass the result through to `do_extract`, which treats
+        // its hint argument as authoritative and never re-detects.
+        // This consolidates the whole-input detection to a single
+        // call site so future implementors of
+        // [`ObservationExtractor`] don't accidentally duplicate the
+        // pass. See Devin Review finding #ANALYSIS-0001d.
+        let dominant_language = detect_language(text).map(|d| d.tag);
+        self.do_extract(text, scope, dominant_language.as_ref())
     }
 
     fn extract_with_dominant_language(
@@ -967,6 +978,13 @@ impl ObservationExtractor for LexiconExtractor {
         scope: ScopeId,
         dominant_language: Option<&LanguageTag>,
     ) -> Vec<Observation> {
+        // The hint is authoritative: callers that supply
+        // `Some(tag)` get that tag stamped on entity-class
+        // observations, and callers that supply `None` get
+        // `None`-stamped entities (i.e. "language unknown"). We do
+        // not fall back to running [`detect_language`] on `None`
+        // hints — see ANALYSIS-0001d and the comment inside
+        // [`Self::do_extract`].
         self.do_extract(text, scope, dominant_language)
     }
 }
@@ -1538,27 +1556,73 @@ mod tests {
     }
 
     #[test]
-    fn extract_with_no_hint_matches_extract() {
-        // The default `extract_with_dominant_language(..., None)`
-        // path must produce the same observations as the legacy
-        // `extract()` entry point so existing callers see no
-        // behavioural change.
+    fn extract_runs_whole_input_detection_once_at_call_site() {
+        // Devin Review #ANALYSIS-0001d: the legacy `extract()`
+        // entry point is the only caller that has *not* already
+        // run `detect_language` on the whole input, so it is
+        // responsible for the single whole-input detection pass.
+        // Verify the dominant language ends up stamped on
+        // entity-class observations even though the caller never
+        // supplied a hint \u2014 i.e. detection still happens, just
+        // exactly once and at the public-API boundary instead of
+        // inside the private `do_extract` helper.
         let scope = ScopeId::new_v4();
         let ext = LexiconExtractor::default();
-        let text = "Approved the rollout. @alice please draft the agenda by Friday. \
-                    今日は晴れですか。";
-        let a = ext.extract(text, scope);
-        let b = ext.extract_with_dominant_language(text, scope, None);
+        let text = "@sara please draft the rollout schedule by Friday and ship the migration plan.";
+        let obs = ext.extract(text, scope);
+        let mention = obs
+            .iter()
+            .find(|o| o.observation_type == ObservationType::Entity && o.content == "@sara")
+            .expect("@sara mention should be extracted");
+        let en = LanguageTag::new("en").expect("en tag");
         assert_eq!(
-            a.len(),
-            b.len(),
-            "extract and extract_with_dominant_language(None) must return \
-             the same number of observations"
+            mention.language_tag.as_ref(),
+            Some(&en),
+            "extract() must run detect_language once at the public-API boundary \
+             and stamp the detected tag on entity-class observations (got {:?})",
+            mention.language_tag
         );
-        for (lhs, rhs) in a.iter().zip(b.iter()) {
-            assert_eq!(lhs.observation_type, rhs.observation_type);
-            assert_eq!(lhs.content, rhs.content);
-            assert_eq!(lhs.language_tag, rhs.language_tag);
-        }
+    }
+
+    #[test]
+    fn extract_with_dominant_language_treats_none_hint_as_authoritative() {
+        // Devin Review #ANALYSIS-0001d: callers that have already
+        // attempted detection and got `None` (text not classifiable,
+        // not reliable, too short) must be able to communicate that
+        // to the extractor without the extractor redundantly
+        // re-running `detect_language` on the same text. A `None`
+        // hint to `extract_with_dominant_language` is authoritative:
+        // entity-class observations get `language_tag = None`, not
+        // a tag derived from a second detection pass.
+        //
+        // To prove the contract, use an input that *would* detect
+        // to a known tag (so the test is sensitive to a regression
+        // that reintroduces the fallback) and assert the absence
+        // of that tag on the resulting entity-class observations.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+        // English text long enough that `detect_language` is
+        // reliable on it: if the extractor re-ran detection it
+        // would re-derive `en`.
+        let text = "@sara please draft the rollout schedule by Friday and ship the migration plan.";
+        let pre_detect = detect_language(text).map(|d| d.tag);
+        assert!(
+            pre_detect.is_some(),
+            "test premise: detect_language must succeed on this input so the \
+             regression test is sensitive to a future re-introduction of the \
+             fallback detection inside do_extract"
+        );
+
+        let obs = ext.extract_with_dominant_language(text, scope, None);
+        let mention = obs
+            .iter()
+            .find(|o| o.observation_type == ObservationType::Entity && o.content == "@sara")
+            .expect("@sara mention should be extracted");
+        assert!(
+            mention.language_tag.is_none(),
+            "@mention must inherit the authoritative None hint, NOT re-detect \
+             the dominant language inside do_extract (got {:?})",
+            mention.language_tag
+        );
     }
 }
