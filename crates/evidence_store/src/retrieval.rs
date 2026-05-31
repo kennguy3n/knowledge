@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::embeddings::{cosine_similarity, similarity_to_score, EmbeddingModel};
 use crate::error::{EvidenceError, Result};
 use crate::ids::{EvidenceId, ScopeId};
-use crate::store::{clamp_limit_to_sqlite, EvidenceStore};
+use crate::store::{clamp_limit_to_sqlite, dual_fts_search, EvidenceStore};
 
 /// One row in a hybrid retrieval result.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -142,6 +142,50 @@ impl<'a> HybridRetriever<'a> {
     /// relevant); we project it into `0.0 ..= 1.0` via
     /// `1 / (1 + (-rank))` so that the most relevant row scores
     /// closest to `1.0`.
+    ///
+    /// Per Phase 1.2 / schema v14 the search fans out across **both**
+    /// lexical indexes — `evidence_fts` (unicode61) for whitespace-
+    /// segmented scripts and `evidence_fts_cjk` (trigram) for CJK
+    /// Han / Hiragana / Katakana / Thai content — and de-duplicates
+    /// on `evidence_id` taking the best (smallest, i.e. most
+    /// relevant) rank across the two tokenisers. The two ranks are
+    /// each table's own BM25 score and are not strictly comparable
+    /// across tokenisers, but both are negative-and-smaller-is-
+    /// better so `MIN(rank)` is the correct dedupe rule. A row that
+    /// matches both indexes (mixed-script body with a query term
+    /// findable in either tokenisation) appears once with its best
+    /// rank rather than twice with separate scores. The
+    /// `fts_score` field surfaced on
+    /// [`RetrievalResult`] is the unified projected score derived
+    /// from that best rank.
+    ///
+    /// Both branches accept the same FTS5 query *grammar*
+    /// (bareword / `"phrase"` / `term OR term` / `NEAR(…)` /
+    /// column-filter / prefix-star), but the `trigram` tokeniser
+    /// rejects more shapes than `unicode61` does: per the
+    /// [`trigram` tokeniser documentation][trigram-doc] it
+    /// returns a SQLite error — not an empty result — when a
+    /// query term is shorter than 3 characters, when the query
+    /// is a `NEAR(…)` expression, when it uses a column filter,
+    /// or when it asks for a prefix-star match shorter than 3
+    /// codepoints.
+    ///
+    /// To preserve the architectural invariant that a
+    /// syntactically valid `unicode61` query never breaks hybrid
+    /// retrieval, the two branches run as two independent
+    /// prepared statements and are merged in Rust:
+    ///
+    /// * `unicode61` is the source of truth for validity — its
+    ///   errors propagate.
+    /// * `trigram` is additive recall — its errors are silently
+    ///   treated as an empty contribution.
+    ///
+    /// The shared [`crate::store::dual_fts_search`] helper
+    /// implements both halves so this method and
+    /// [`crate::EvidenceStore::search_fts`] cannot drift in their
+    /// dedupe + error-containment semantics.
+    ///
+    /// [trigram-doc]: <https://www.sqlite.org/fts5.html#the_trigram_tokenizer>
     pub fn search_fts(
         &self,
         scope_id: ScopeId,
@@ -151,34 +195,20 @@ impl<'a> HybridRetriever<'a> {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let mut stmt = self.store.raw_conn().prepare(
-            "SELECT evidence_id, rank
-             FROM evidence_fts
-             WHERE evidence_fts MATCH ?1 AND scope_id = ?2
-             ORDER BY rank
-             LIMIT ?3",
-        )?;
-        let rows = stmt.query_map(
-            params![
-                query,
-                scope_id.as_uuid().as_bytes().as_slice(),
-                clamp_limit_to_sqlite(limit),
-            ],
-            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?)),
-        )?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (id_bytes, rank) = row?;
-            let id = EvidenceId(slice_to_uuid(&id_bytes)?);
-            let fts_score = 1.0 / (1.0 + (-rank).max(0.0));
-            out.push(RetrievalResult {
-                evidence_id: id,
-                score: fts_score,
-                fts_score,
-                recency_score: 0.0,
-                vector_score: 0.0,
-            });
-        }
+        let merged = dual_fts_search(self.store.raw_conn(), scope_id, query, limit)?;
+        let out = merged
+            .into_iter()
+            .map(|(id, rank)| {
+                let fts_score = 1.0 / (1.0 + (-rank).max(0.0));
+                RetrievalResult {
+                    evidence_id: id,
+                    score: fts_score,
+                    fts_score,
+                    recency_score: 0.0,
+                    vector_score: 0.0,
+                }
+            })
+            .collect();
         Ok(out)
     }
 

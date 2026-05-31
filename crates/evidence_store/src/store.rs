@@ -1,6 +1,7 @@
 //! Top-level [`EvidenceStore`] type — opens the SQLCipher database,
 //! runs the schema, and exposes the append-only ingestion + read API.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -726,14 +727,37 @@ impl EvidenceStore {
         // Only index UTF-8 content. Binary blobs (files, media) are
         // not indexed at this layer — observation-plane extraction
         // handles those in a future update.
-        if let Ok(text) = std::str::from_utf8(body) {
+        let Ok(text) = std::str::from_utf8(body) else {
+            return Ok(());
+        };
+        let evidence_uuid = evidence_id.as_uuid();
+        let scope_uuid = scope_id.as_uuid();
+        let evidence_id_bytes = evidence_uuid.as_bytes().as_slice();
+        let scope_id_bytes = scope_uuid.as_bytes().as_slice();
+        // Every UTF-8 row goes into `evidence_fts` (unicode61). The
+        // tokeniser segments whitespace-bounded scripts (Latin,
+        // Cyrillic, Greek, Arabic, Hangul, Devanagari) including any
+        // Latin terms embedded inside an otherwise-CJK document, so
+        // this is the universal lexical index.
+        tx.execute(
+            "INSERT INTO evidence_fts (content, evidence_id, scope_id) VALUES (?1, ?2, ?3)",
+            params![text, evidence_id_bytes, scope_id_bytes],
+        )?;
+        // Phase 1.2 / schema v14: rows whose body contains any CJK
+        // Han / Hiragana / Katakana / Thai codepoint *additionally*
+        // go into `evidence_fts_cjk` (trigram). `unicode61` emits
+        // zero tokens for those codepoints, so without this branch
+        // a pure-CJK or pure-Thai document is invisible to lexical
+        // search. The routing decision is body-derived (not
+        // language-tag-derived) so a row with `language_tag = NULL`
+        // or a mis-detected dominant tag still lands in the right
+        // table. See `crate::script::contains_cjk_or_thai` for the
+        // codepoint membership rationale.
+        if crate::script::contains_cjk_or_thai(text) {
             tx.execute(
-                "INSERT INTO evidence_fts (content, evidence_id, scope_id) VALUES (?1, ?2, ?3)",
-                params![
-                    text,
-                    evidence_id.as_uuid().as_bytes().as_slice(),
-                    scope_id.as_uuid().as_bytes().as_slice(),
-                ],
+                "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
+                 VALUES (?1, ?2, ?3)",
+                params![text, evidence_id_bytes, scope_id_bytes],
             )?;
         }
         Ok(())
@@ -1097,32 +1121,68 @@ impl EvidenceStore {
     /// The query is passed straight through to FTS5; callers should
     /// pre-process per FTS5's syntax (e.g. quote phrases). The result
     /// is the matching evidence ids ordered by FTS5 rank.
+    ///
+    /// Per Phase 1.2 / schema v14 the search fans out across **both**
+    /// lexical indexes — `evidence_fts` (unicode61) for whitespace-
+    /// segmented scripts and `evidence_fts_cjk` (trigram) for CJK
+    /// Han / Hiragana / Katakana / Thai content — and de-duplicates
+    /// on `evidence_id`, taking the best (smallest, since FTS5 rank
+    /// is negative-and-smaller-is-better) of the two ranks.
+    ///
+    /// **Query-syntax compatibility, not equivalence.** Both branches
+    /// accept the same FTS5 query *grammar* (the bareword / `"phrase"`
+    /// / `term1 OR term2` / `NEAR(…)` / column-filter / prefix-star
+    /// syntax described in <https://sqlite.org/fts5.html#full_text_query_syntax>).
+    /// They differ in what each tokeniser is able to match, and the
+    /// `trigram` branch rejects some queries that `unicode61` accepts.
+    /// Per the [`trigram` tokeniser documentation][trigram-doc]:
+    ///
+    /// * `unicode61` (universal table) splits on Unicode whitespace
+    ///   and punctuation and is happy with single-codepoint terms.
+    ///   A query like `"to OR deadline"` is well-formed and may
+    ///   match real rows.
+    /// * `trigram` (CJK table) only stores overlapping 3-codepoint
+    ///   windows of `content`. It returns a SQLite error — not an
+    ///   empty result set — when given a query term shorter than 3
+    ///   characters, a `NEAR(…)` expression, a column filter, or a
+    ///   prefix-star (`term*`) match shorter than 3 codepoints.
+    ///
+    /// To preserve the **architectural invariant that a syntactically
+    /// valid `unicode61` query never breaks the substrate's search
+    /// API** — even when that query happens to be a `trigram`-rejected
+    /// shape — the implementation runs the two branches as two
+    /// independent prepared statements and merges in Rust:
+    ///
+    /// * The `unicode61` branch is the **source of truth for query
+    ///   validity**: any error from `evidence_fts MATCH ?1`
+    ///   propagates to the caller (genuine FTS5 syntax error,
+    ///   schema corruption, etc).
+    /// * The `trigram` branch is **purely additive recall**: any
+    ///   error from `evidence_fts_cjk MATCH ?1` — including the
+    ///   short-term / `NEAR(…)` / column-filter rejections — is
+    ///   silently treated as an empty result set, so the caller
+    ///   sees the `unicode61` results unchanged. A 2-codepoint CJK
+    ///   query like `天気` thus round-trips as `Ok(vec![])` (the
+    ///   documented Phase 1.2 floor; a custom FFI bigram tokeniser
+    ///   is the future-phase recall fix), and a query like
+    ///   `"to OR 良い天気"` still returns the `unicode61` hit on
+    ///   `to` even though `trigram` rejects the 2-char `to` token.
+    ///
+    /// This design also makes the substrate robust to the exact
+    /// bundled SQLite version's lenience — older builds may silently
+    /// return empty for short-term trigram queries while the
+    /// documented contract is to error. Either way, the public
+    /// `search_fts` contract is unchanged.
+    ///
+    /// [trigram-doc]: <https://www.sqlite.org/fts5.html#the_trigram_tokenizer>
     pub fn search_fts(
         &self,
         scope_id: ScopeId,
         query: &str,
         limit: usize,
     ) -> Result<Vec<EvidenceId>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT evidence_id FROM evidence_fts
-             WHERE evidence_fts MATCH ?1 AND scope_id = ?2
-             ORDER BY rank
-             LIMIT ?3",
-        )?;
-        let rows = stmt.query_map(
-            params![
-                query,
-                scope_id.as_uuid().as_bytes().as_slice(),
-                clamp_limit_to_sqlite(limit),
-            ],
-            |row| row.get::<_, Vec<u8>>(0),
-        )?;
-        let mut out = Vec::new();
-        for row in rows {
-            let bytes = row?;
-            out.push(EvidenceId(slice_to_uuid(&bytes)?));
-        }
-        Ok(out)
+        let merged = dual_fts_search(&self.conn, scope_id, query, limit)?;
+        Ok(merged.into_iter().map(|(id, _rank)| id).collect())
     }
 
     /// Insert a noise-class body into the ring buffer.
@@ -3077,6 +3137,11 @@ impl EvidenceStore {
     ///   *plaintext* of every body, regardless of the row's AEAD
     ///   key. This is the gap pinned by
     ///   `crates/evidence_store/tests/forgetting_fts.rs`.
+    /// * `evidence_fts_cjk` — the v14 trigram-tokenised companion
+    ///   index for CJK / Thai content. Same property: the shadow
+    ///   tables retain tokenised plaintext for any row whose body
+    ///   contains a CJK Han / Hiragana / Katakana / Thai
+    ///   codepoint, regardless of AEAD key.
     /// * `evidence_embeddings` — cached `f32` vectors derived from
     ///   the plaintext body via an on-device embedding model. They
     ///   are not strictly plaintext but are still
@@ -3085,18 +3150,24 @@ impl EvidenceStore {
     /// This method runs a single transaction:
     ///
     /// 1. Look up every `evidence_id` belonging to `scope_id`.
-    /// 2. `DELETE FROM evidence_fts WHERE evidence_id IN (...)` —
-    ///    FTS5 supports `DELETE` on the virtual table (it does NOT
-    ///    have the append-only trigger that protects `evidence`).
+    /// 2. `DELETE FROM evidence_fts WHERE evidence_id IN (...)`
+    ///    *and* `DELETE FROM evidence_fts_cjk WHERE evidence_id
+    ///    IN (...)` — FTS5 supports `DELETE` on virtual tables
+    ///    (they do NOT have the append-only trigger that protects
+    ///    `evidence`). Both tables are deleted in the same
+    ///    transaction so they can never drift apart.
     /// 3. `DELETE FROM evidence_embeddings WHERE evidence_id IN (...)`.
     /// 4. If — and only if — step 2 actually removed at least one
-    ///    FTS row, issue `INSERT INTO evidence_fts(evidence_fts)
-    ///    VALUES('rebuild')` to truncate the FTS5 shadow tables and
-    ///    re-tokenise from the surviving content rows. Skipping
-    ///    this when zero FTS rows were deleted is what makes the
-    ///    function genuinely idempotent: re-purging an
+    ///    FTS row across either table, issue `INSERT INTO
+    ///    evidence_fts(evidence_fts) VALUES('rebuild')` and
+    ///    `INSERT INTO evidence_fts_cjk(evidence_fts_cjk)
+    ///    VALUES('rebuild')` to truncate the FTS5 shadow tables
+    ///    and re-tokenise from the surviving content rows.
+    ///    Skipping this when zero FTS rows were deleted is what
+    ///    makes the function genuinely idempotent: re-purging an
     ///    already-purged scope on startup costs one `SELECT` plus
-    ///    one zero-row `DELETE`, not a full O(total_fts_rows)
+    ///    one zero-row `DELETE` per table, not a full
+    ///    O(total_fts_rows)
     ///    rebuild.
     ///
     /// The `evidence` rows themselves are intentionally left in
@@ -3188,6 +3259,17 @@ impl EvidenceStore {
         // `IN (?, ?, ...)` clause that exceeds SQLite's parameter
         // cap. `SQLITE_MAX_VARIABLE_NUMBER` is 999 on the default
         // build; we stay well under it.
+        //
+        // Per Phase 1.2 / schema v14, `evidence_fts_cjk` (trigram-
+        // tokenised CJK / Thai index) is purged alongside the
+        // primary `evidence_fts` (unicode61) in the same
+        // transaction so the two indexes can never drift apart
+        // under crash-recovery, and so a forgotten scope leaves
+        // zero plaintext tokens in either FTS shadow table after
+        // the subsequent `REBUILD`. The returned count is the sum
+        // across both tables — if either tokeniser still has rows
+        // for the scope, the caller-side `if rows_deleted > 0`
+        // gate still triggers a rebuild.
         let mut fts_rows_deleted: usize = 0;
         for chunk in evidence_ids.chunks(DELETE_BATCH) {
             let placeholders = (0..chunk.len())
@@ -3195,29 +3277,38 @@ impl EvidenceStore {
                 .collect::<Vec<_>>()
                 .join(", ");
             let fts_sql = format!("DELETE FROM evidence_fts WHERE evidence_id IN ({placeholders})");
+            let fts_cjk_sql =
+                format!("DELETE FROM evidence_fts_cjk WHERE evidence_id IN ({placeholders})");
             let emb_sql =
                 format!("DELETE FROM evidence_embeddings WHERE evidence_id IN ({placeholders})");
             let params: Vec<&dyn rusqlite::ToSql> =
                 chunk.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
             fts_rows_deleted +=
                 tx.execute(&fts_sql, rusqlite::params_from_iter(params.iter().copied()))?;
+            fts_rows_deleted += tx.execute(
+                &fts_cjk_sql,
+                rusqlite::params_from_iter(params.iter().copied()),
+            )?;
             tx.execute(&emb_sql, rusqlite::params_from_iter(params.iter().copied()))?;
         }
         Ok(fts_rows_deleted)
     }
 
-    /// Issue the FTS5 `REBUILD` command on `evidence_fts`,
-    /// truncating the shadow tables (`%_data`, `%_idx`,
-    /// `%_docsize`, …) and re-tokenising from the surviving
-    /// content rows.
+    /// Issue the FTS5 `REBUILD` command on **both** lexical
+    /// indexes — `evidence_fts` (unicode61) and `evidence_fts_cjk`
+    /// (trigram, schema v14) — truncating their shadow tables
+    /// (`%_data`, `%_idx`, `%_docsize`, …) and re-tokenising from
+    /// the surviving content rows.
     ///
     /// `OPTIMIZE` only merges segments and can leave tokenised
     /// plaintext fragments behind in the `%_data` segment B-tree
     /// for rows that were `DELETE`'d in this same transaction.
-    /// `REBUILD` re-tokenises from the FTS table's stored
-    /// `content` column — which now no longer references the
-    /// purged scopes — so no residual plaintext tokens survive on
-    /// disk for the forgotten scopes.
+    /// `REBUILD` re-tokenises from each table's stored `content`
+    /// column — which now no longer references the purged scopes
+    /// — so no residual plaintext tokens survive on disk for the
+    /// forgotten scopes in either tokeniser's shadow store. Both
+    /// rebuilds run inside the caller's transaction so the two
+    /// tables are committed atomically.
     ///
     /// This is the strongest in-engine guarantee SQLite FTS5
     /// exposes; the alternative would be a full `VACUUM` at a
@@ -3225,6 +3316,10 @@ impl EvidenceStore {
     fn rebuild_evidence_fts_in_tx(tx: &rusqlite::Transaction<'_>) -> Result<()> {
         tx.execute(
             "INSERT INTO evidence_fts(evidence_fts) VALUES('rebuild')",
+            [],
+        )?;
+        tx.execute(
+            "INSERT INTO evidence_fts_cjk(evidence_fts_cjk) VALUES('rebuild')",
             [],
         )?;
         Ok(())
@@ -3868,6 +3963,19 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // EXISTS`; only the v12 -> v13 upgrade path needs the
         // explicit ALTER.
         13 => migrate_v13_add_evidence_language_tag(conn),
+        // v14 (Phase 1.2 — CJK-aware FTS5 tokeniser): add the
+        // `evidence_fts_cjk` virtual table and backfill it from the
+        // pre-existing `evidence_fts.content` rows whose plaintext
+        // body contains any CJK Han / Hiragana / Katakana / Thai
+        // codepoint. The `CREATE VIRTUAL TABLE IF NOT EXISTS` lives
+        // in SCHEMA_SQL so a fresh v14 database picks the table up
+        // directly; a v13 -> v14 upgrade hits the same statement
+        // (no-op) and then walks the backfill below.
+        //
+        // Backfill is gated on `evidence_fts_cjk` being empty so
+        // re-running the migration on an already-populated v14
+        // database is a no-op rather than producing duplicate rows.
+        14 => migrate_v14_backfill_evidence_fts_cjk(conn),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
         )),
@@ -3897,6 +4005,148 @@ fn migrate_v13_add_evidence_language_tag(conn: &Connection) -> Result<()> {
     if !has_column {
         conn.execute("ALTER TABLE evidence ADD COLUMN language_tag TEXT", [])?;
     }
+    Ok(())
+}
+
+/// Chunk size for [`migrate_v14_backfill_evidence_fts_cjk`]'s
+/// streaming read of `evidence_fts`. Bounded so peak migration
+/// memory is O(chunk * row_size) regardless of how many evidence
+/// rows the user has accumulated (sweep-2 Devin Review
+/// ANALYSIS-0004).
+const V14_MIGRATION_CHUNK_SIZE: i64 = 1_000;
+
+/// v13 -> v14 additive migration: backfill `evidence_fts_cjk` from
+/// pre-existing `evidence_fts.content` rows whose body contains any
+/// CJK Han / Hiragana / Katakana / Thai codepoint.
+///
+/// The `evidence_fts_cjk` virtual table itself is created by
+/// `SCHEMA_SQL`'s `CREATE VIRTUAL TABLE IF NOT EXISTS` so this
+/// function does not need to issue the DDL — `Self::open` runs
+/// `SCHEMA_SQL` before walking the migration ladder, so by the time
+/// we are called the table exists (possibly empty for a v13 -> v14
+/// upgrade, possibly already populated for a fresh v14 database).
+///
+/// Idempotency: the function first checks whether
+/// `evidence_fts_cjk` already has any rows. If it does we return
+/// without doing any work — the table is either freshly populated
+/// (fresh v14 open) or the migration has already run successfully
+/// against this database (re-applied v13 -> v14 upgrade after a
+/// crash before the `user_version` write hit disk). The check is
+/// O(1) at the SQLite level because FTS5 maintains row-count
+/// metadata in `evidence_fts_cjk_docsize`.
+///
+/// Per-row routing matches the write path
+/// ([`EvidenceStore::index_fts`]): a body is backfilled into
+/// `evidence_fts_cjk` iff `script::contains_cjk_or_thai` returns
+/// true for its plaintext content. The pre-existing
+/// `evidence_fts` rows themselves are untouched.
+///
+/// Crash-safety: the backfill runs inside an explicit
+/// `unchecked_transaction` so partial progress is rolled back on
+/// crash. The `user_version` write that records "migration v14
+/// applied" lives in [`EvidenceStore::open`] *after* the
+/// `apply_migration` loop completes, so a crash mid-backfill leaves
+/// the database at `user_version = 13` and the next open re-walks
+/// this function from scratch over an empty `evidence_fts_cjk`. The
+/// idempotency check ("already have rows in evidence_fts_cjk?") is
+/// what makes a successful re-walk on an already-migrated database
+/// — for example after a crash *between* the backfill commit and
+/// the `user_version` write — a single O(1) `COUNT(*)` rather than
+/// a duplicate-row producer.
+///
+/// We use `unchecked_transaction` because the migration entry
+/// point [`apply_migration`] receives `&Connection` (not `&mut`),
+/// matching the contract of the sibling migrations
+/// ([`migrate_v13_add_evidence_language_tag`],
+/// [`migrate_evidence_embeddings_to_composite_pk`]).
+///
+/// Memory bound: the backfill iterates `evidence_fts` in
+/// rowid-ordered chunks of [`V14_MIGRATION_CHUNK_SIZE`] rows, so
+/// peak memory is O(chunk * row_size) rather than O(total_rows *
+/// row_size). This was the architectural fix for sweep-2 Devin
+/// Review ANALYSIS-0004 — on a large pre-v14 database the
+/// "materialise everything into a single `Vec`" version would
+/// have allocated proportional to the entire body corpus, which
+/// is unbounded on desktop substrates and a real OOM risk during
+/// the one-time migration. The chunked version makes the
+/// migration's worst-case memory footprint independent of the
+/// database size.
+fn migrate_v14_backfill_evidence_fts_cjk(conn: &Connection) -> Result<()> {
+    let existing_cjk_rows: i64 =
+        conn.query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |row| {
+            row.get(0)
+        })?;
+    if existing_cjk_rows > 0 {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+
+    // Stream the backfill in rowid-ordered chunks of
+    // `V14_MIGRATION_CHUNK_SIZE` rows rather than materialising the
+    // whole `evidence_fts` table into a single `Vec`. This bounds
+    // peak migration memory to O(chunk * row_size) regardless of
+    // how many evidence rows the user has accumulated, addressing
+    // sweep-2 Devin Review ANALYSIS-0004 (memory pressure during
+    // one-time v13→v14 migration on large databases).
+    //
+    // We page on the FTS5 virtual table's implicit `rowid` rather
+    // than `evidence_id` so the chunking is independent of how
+    // evidence_id values are distributed (uuid bytes are not
+    // monotonic). The page is fully drained before the next
+    // SELECT is prepared so the read statement is never alive at
+    // the same time as the INSERT statements — rusqlite cannot
+    // safely keep two prepared statements alive on the same
+    // `&Connection` when one is iterating, which is what forced
+    // the original "materialise everything first" pattern.
+    //
+    // Strictly increasing `last_rowid` cursor guarantees we make
+    // forward progress on every iteration even though the
+    // INSERTs into `evidence_fts_cjk` happen on the same
+    // connection; we are ordering on `evidence_fts.rowid`, not
+    // `evidence_fts_cjk.rowid`, so the new inserts cannot
+    // perturb the read cursor.
+    let mut last_rowid: i64 = 0;
+    loop {
+        let chunk: Vec<(i64, String, Vec<u8>, Vec<u8>)> = {
+            let mut stmt = tx.prepare(
+                "SELECT rowid, content, evidence_id, scope_id FROM evidence_fts
+                 WHERE rowid > ?1
+                 ORDER BY rowid
+                 LIMIT ?2",
+            )?;
+            let collected = stmt
+                .query_map(params![last_rowid, V14_MIGRATION_CHUNK_SIZE], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            collected
+        };
+        if chunk.is_empty() {
+            break;
+        }
+        // Update cursor to the largest rowid in this page BEFORE
+        // we drop the chunk via the `for` loop's move semantics.
+        last_rowid = chunk
+            .last()
+            .map(|(rowid, _, _, _)| *rowid)
+            .expect("chunk is non-empty by the early break above");
+        for (_rowid, content, evidence_id, scope_id) in chunk {
+            if !crate::script::contains_cjk_or_thai(&content) {
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
+                 VALUES (?1, ?2, ?3)",
+                params![content, evidence_id, scope_id],
+            )?;
+        }
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -4149,6 +4399,184 @@ pub(crate) fn clamp_limit_to_sqlite(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
 }
 
+/// Run a dual-table FTS5 search and return `(evidence_id, best_rank)`
+/// pairs sorted by best rank ascending, truncated to `limit`.
+///
+/// See [`EvidenceStore::search_fts`] for the full design rationale.
+/// Briefly:
+///
+/// * `evidence_fts` (unicode61) is the **source of truth for query
+///   validity** — any error from its `MATCH` is propagated. The
+///   per-branch `LIMIT` bounds the row count to `limit`.
+/// * `evidence_fts_cjk` (trigram) is **purely additive recall** —
+///   any error from its `MATCH` (including the documented
+///   short-term / `NEAR(…)` / column-filter / short prefix-star
+///   rejections) is swallowed and the branch is treated as the
+///   empty set, so a syntactically valid `unicode61` query never
+///   breaks `search_fts` just because `trigram` rejects the shape.
+///
+/// The per-branch results are merged in a `HashMap<EvidenceId, f64>`
+/// keeping `MIN(rank)` (FTS5 rank is negative-and-smaller-is-better),
+/// then sorted ascending and truncated to `limit`. The merged set
+/// is bounded by `2 * limit` before truncation, independent of
+/// dataset size.
+///
+/// `pub(crate)` so [`crate::retrieval::HybridRetriever::search_fts`]
+/// can reuse the same merge logic (both call sites need identical
+/// dedupe + error-containment semantics; diverging implementations
+/// would silently drift apart and was one of the failure modes the
+/// sweep-2 Devin Review BUG-0001 finding flagged).
+pub(crate) fn dual_fts_search(
+    conn: &Connection,
+    scope_id: ScopeId,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<(EvidenceId, f64)>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let limit_sql = clamp_limit_to_sqlite(limit);
+    let scope_uuid = scope_id.as_uuid();
+    let scope_bytes = scope_uuid.as_bytes().as_slice();
+
+    let mut best_rank: HashMap<EvidenceId, f64> = HashMap::with_capacity(limit.saturating_mul(2));
+
+    // Branch 1: unicode61 (universal). Errors propagate.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT evidence_id, rank FROM evidence_fts
+             WHERE evidence_fts MATCH ?1 AND scope_id = ?2
+             ORDER BY rank LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![query, scope_bytes, limit_sql], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
+        })?;
+        for row in rows {
+            let (id_bytes, rank) = row?;
+            let id = EvidenceId(slice_to_uuid(&id_bytes)?);
+            merge_min_rank(&mut best_rank, id, rank);
+        }
+    }
+
+    // Branch 2: trigram (additive recall). Errors swallowed.
+    //
+    // The closure captures every error path inside the trigram
+    // branch — `prepare`, `query_map`, per-row column mapping,
+    // AND the post-retrieval `slice_to_uuid` UUID parse — so any
+    // failure from the trigram tokeniser OR any malformed
+    // evidence-id payload is observed locally and treated as an
+    // empty contribution. We only consume the `Ok` arm, so the
+    // unicode61 branch remains the sole source of truth for
+    // query validity even if `evidence_fts_cjk` ever returned a
+    // corrupted UUID (e.g. external database tampering). This is
+    // the long-form fix for sweep-3 Devin Review INFO-0001 —
+    // moving the UUID parse inside the swallow-scope means the
+    // doc-comment's "errors swallowed" contract holds without
+    // any post-closure exception.
+    //
+    // The inner closure returns a `Vec<(EvidenceId, f64)>` so the
+    // caller never has to re-parse a `Vec<u8>` — and so the only
+    // post-closure code is the `MIN(rank)` merge, which is
+    // infallible.
+    let trigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
+        let mut stmt = conn.prepare(
+            "SELECT evidence_id, rank FROM evidence_fts_cjk
+             WHERE evidence_fts_cjk MATCH ?1 AND scope_id = ?2
+             ORDER BY rank LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![query, scope_bytes, limit_sql], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id_bytes, rank) = row?;
+            // A malformed UUID in `evidence_fts_cjk` can only come
+            // from external corruption (the write path at
+            // `index_fts` always writes a valid 16-byte
+            // `Uuid::as_bytes`). Skip the offending row rather
+            // than aborting the whole trigram branch so the rest
+            // of the recall lane still merges into the unicode61
+            // result set. This matches the broader contract that
+            // the trigram lane is *purely additive*.
+            match slice_to_uuid(&id_bytes) {
+                Ok(uuid) => out.push((EvidenceId(uuid), rank)),
+                Err(_) => continue,
+            }
+        }
+        Ok(out)
+    })();
+    if let Ok(trigram_rows) = trigram_attempt {
+        for (id, rank) in trigram_rows {
+            merge_min_rank(&mut best_rank, id, rank);
+        }
+    }
+
+    // Sort by best (smallest) rank ascending; truncate to limit.
+    //
+    // Deterministic tiebreaker on `EvidenceId` (`Uuid::Ord`) for
+    // rows whose FTS5 ranks compare as equal. Without it, the
+    // upstream `HashMap` iteration order is hash-randomised, so
+    // tied ranks would produce a different `Vec` ordering on every
+    // call — a test-stability hazard for any caller asserting on
+    // result order. Ties are rare in FTS5 rank (BM25 ties require
+    // identical term frequencies on identical-length documents) but
+    // are reproducible enough to flake CI: two rows in the
+    // `evidence_fts_cjk` branch sharing a trigram-windowed body of
+    // the same length is the canonical case. The tiebreaker is
+    // O(1) per comparison and `Uuid::Ord` is byte-lexicographic, so
+    // the resulting order is also stable across process restarts
+    // (UUIDs are persisted, hash seeds are not).
+    //
+    // This is the long-form fix for sweep-4 Devin Review INFO-0004
+    // — pinning the result order so that downstream tests and
+    // any caller that does NOT re-score (e.g. the raw `search_fts`
+    // public surface) sees identical output across runs for the
+    // same input.
+    let mut sorted: Vec<(EvidenceId, f64)> = best_rank.into_iter().collect();
+    sorted.sort_by(|a, b| {
+        a.1.partial_cmp(&b.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    sorted.truncate(limit);
+    Ok(sorted)
+}
+
+/// Insert `(id, rank)` into `best_rank`, keeping the **smallest**
+/// (most relevant) of any existing value vs the new one. FTS5 rank
+/// is negative-and-smaller-is-better, so `min` is the correct dedupe
+/// rule when the same `evidence_id` is returned by both the
+/// `unicode61` and `trigram` branches.
+///
+/// Uses [`f64::min`] rather than a raw `<` comparison so the
+/// implementation actually behaves like the doc-comment "MIN(rank)"
+/// contract on the IEEE 754 NaN edge case: `f64::min` returns the
+/// non-NaN argument when exactly one operand is NaN (IEEE 754-2008
+/// `minNum` / libm `fmin` semantics), so a hypothetically corrupted
+/// `NaN` rank from one branch never displaces a real finite rank
+/// from the other. With a raw `<` (`if rank < *existing { … }`) a
+/// `NaN` incoming value left a real existing value alone (correct
+/// by accident), but a `NaN` *existing* value could never be
+/// overwritten by a real incoming value (wrong — the slot would
+/// stick at `NaN` forever and drag the row to the sort comparator's
+/// `Equal` bucket). FTS5's BM25 rank is always a finite negative
+/// `f64` so this codepath is unreachable in production today, but
+/// pinning the merge to `f64::min` removes the trap entirely and
+/// aligns with the defensive `partial_cmp().unwrap_or(Equal)` used
+/// in the sort comparator at `dual_fts_search` (sweep-4 INFO-0004)
+/// — both halves of the merge pipeline now treat NaN identically
+/// instead of skewing in opposite directions.
+///
+/// This is the long-form fix for sweep-5 Devin Review INFO-0002.
+fn merge_min_rank(best_rank: &mut HashMap<EvidenceId, f64>, id: EvidenceId, rank: f64) {
+    best_rank
+        .entry(id)
+        .and_modify(|existing| {
+            *existing = (*existing).min(rank);
+        })
+        .or_insert(rank);
+}
+
 /// Convert a `COUNT(*) / SUM(...)` result from SQLite into a Rust
 /// `usize`. Both functions are non-negative by definition; the
 /// `.max(0)` guard handles a negative value defensively in case
@@ -4197,3 +4625,73 @@ const _: () = {
     // crypto crate exposes.
     let _ = [(); MASTER_KEY_LEN - 32];
 };
+
+#[cfg(test)]
+mod merge_min_rank_tests {
+    //! Sweep-5 INFO-0002 regression — pin the IEEE 754 NaN behaviour
+    //! of [`merge_min_rank`]. Production FTS5 BM25 rank is always a
+    //! finite negative `f64`, so this codepath is unreachable today;
+    //! the tests exist to guard against a future contributor "simplifying"
+    //! the `f64::min` call back to a raw `if rank < *existing` (which
+    //! breaks the "MIN(rank)" contract for the `(existing = NaN,
+    //! incoming = finite)` case).
+    use super::{merge_min_rank, EvidenceId};
+    use std::collections::HashMap;
+    use uuid::Uuid;
+    fn id_for(byte: u8) -> EvidenceId {
+        EvidenceId(Uuid::from_bytes([byte; 16]))
+    }
+    #[test]
+    fn min_of_two_finite_ranks_keeps_smallest() {
+        let id = id_for(0xa1);
+        let mut map: HashMap<EvidenceId, f64> = HashMap::new();
+        merge_min_rank(&mut map, id, -3.0);
+        merge_min_rank(&mut map, id, -7.5);
+        merge_min_rank(&mut map, id, -1.0);
+        assert_eq!(map.get(&id), Some(&-7.5));
+    }
+    #[test]
+    fn nan_incoming_never_displaces_finite_existing() {
+        // The pre-fix raw-`<` impl was correct-by-accident in this
+        // direction (`NaN < anything` is false), so we pin it
+        // explicitly so the new `f64::min` impl keeps the same
+        // behaviour after the refactor.
+        let id = id_for(0xa2);
+        let mut map: HashMap<EvidenceId, f64> = HashMap::new();
+        merge_min_rank(&mut map, id, -2.0);
+        merge_min_rank(&mut map, id, f64::NAN);
+        assert_eq!(map.get(&id), Some(&-2.0));
+    }
+    #[test]
+    fn finite_incoming_displaces_nan_existing() {
+        // This is the case the pre-fix raw-`<` impl got wrong:
+        // `anything < NaN` is false, so a NaN-stuck slot could
+        // never recover. `f64::min` returns the non-NaN argument,
+        // so the slot heals on the next finite insert.
+        let id = id_for(0xa3);
+        let mut map: HashMap<EvidenceId, f64> = HashMap::new();
+        merge_min_rank(&mut map, id, f64::NAN);
+        merge_min_rank(&mut map, id, -4.5);
+        assert_eq!(map.get(&id), Some(&-4.5));
+    }
+    #[test]
+    fn nan_only_inserts_leave_nan_in_slot() {
+        // Documented behaviour: with no finite operand ever supplied
+        // the slot stays NaN. This is unreachable in production but
+        // pinning it keeps the contract explicit.
+        let id = id_for(0xa4);
+        let mut map: HashMap<EvidenceId, f64> = HashMap::new();
+        merge_min_rank(&mut map, id, f64::NAN);
+        merge_min_rank(&mut map, id, f64::NAN);
+        assert!(map.get(&id).copied().unwrap().is_nan());
+    }
+    #[test]
+    fn distinct_ids_do_not_interfere() {
+        let mut map: HashMap<EvidenceId, f64> = HashMap::new();
+        merge_min_rank(&mut map, id_for(0xb1), -1.0);
+        merge_min_rank(&mut map, id_for(0xb2), -2.0);
+        merge_min_rank(&mut map, id_for(0xb1), -0.5);
+        assert_eq!(map.get(&id_for(0xb1)), Some(&-1.0));
+        assert_eq!(map.get(&id_for(0xb2)), Some(&-2.0));
+    }
+}

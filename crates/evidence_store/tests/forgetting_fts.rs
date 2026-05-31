@@ -483,3 +483,106 @@ fn purge_fts_for_scopes_batch_matches_per_scope_purge() {
     // database at all.
     store.purge_fts_for_scopes(&[]).expect("empty batch purge");
 }
+
+/// Phase 1.2 / schema v14: the v14 `evidence_fts_cjk` companion
+/// table (trigram-tokenised) is plaintext-derived in the same way
+/// the v0..v13 `evidence_fts` (unicode61) table is, so the
+/// cryptographic-forgetting contract requires both tables to be
+/// purged together. This test pins that contract by ingesting a
+/// pure-CJK body, verifying the CJK trigram index sees it, calling
+/// `purge_fts_for_scope`, and asserting both `evidence_fts` and
+/// `evidence_fts_cjk` are empty for the scope on a fresh re-open.
+#[test]
+fn fts_cjk_companion_table_is_purged_alongside_evidence_fts() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let scope = ScopeId::new_v4();
+
+    // Distinctive ≥3-codepoint CJK substring so the trigram index
+    // can serve the query — pre-purge it must hit, post-purge it
+    // must not.
+    let body = "今日の重要な会議の議事録です";
+    let query = "重要な会議";
+    let evidence_id;
+    {
+        let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+            .expect("open store");
+        let res = store
+            .ingest(
+                scope,
+                body.as_bytes(),
+                Some("source:cjk-forgetting-test"),
+                ImportanceClass::Important,
+            )
+            .expect("ingest");
+        evidence_id = res.evidence_id;
+
+        // Sanity: trigram index sees the query before purge.
+        let hits = store
+            .search_fts(scope, query, 10)
+            .expect("search_fts pre-purge");
+        assert_eq!(
+            hits,
+            vec![evidence_id],
+            "evidence_fts_cjk must surface the CJK substring before purge"
+        );
+
+        // …and a raw probe confirms the row lives in
+        // evidence_fts_cjk specifically, not just evidence_fts.
+        let cjk_rows: i64 = store
+            .raw_conn()
+            .query_row(
+                "SELECT COUNT(*) FROM evidence_fts_cjk WHERE scope_id = ?1",
+                rusqlite::params![scope.as_uuid().as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .expect("count cjk rows pre-purge");
+        assert_eq!(
+            cjk_rows, 1,
+            "ingest of CJK body must populate evidence_fts_cjk"
+        );
+
+        store
+            .purge_fts_for_scope(scope)
+            .expect("purge_fts_for_scope");
+    }
+
+    // Re-open the store and probe both FTS tables directly.
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("re-open store");
+
+    let primary_rows: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_fts WHERE scope_id = ?1",
+            rusqlite::params![scope.as_uuid().as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .expect("count primary fts rows post-purge");
+    assert_eq!(
+        primary_rows, 0,
+        "evidence_fts must contain no rows for the forgotten scope after purge"
+    );
+
+    let cjk_rows: i64 = store
+        .raw_conn()
+        .query_row(
+            "SELECT COUNT(*) FROM evidence_fts_cjk WHERE scope_id = ?1",
+            rusqlite::params![scope.as_uuid().as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .expect("count cjk fts rows post-purge");
+    assert_eq!(
+        cjk_rows, 0,
+        "evidence_fts_cjk must contain no rows for the forgotten scope after purge"
+    );
+
+    // Public API mirrors the raw probe.
+    let hits = store
+        .search_fts(scope, query, 10)
+        .expect("search_fts post-purge");
+    assert!(
+        hits.is_empty(),
+        "search_fts must return no rows for a forgotten scope after purge: {hits:?}"
+    );
+}

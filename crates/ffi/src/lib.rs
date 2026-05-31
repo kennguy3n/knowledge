@@ -2810,6 +2810,192 @@ mod tests {
         teardown(h2);
     }
 
+    /// C10 integration regression: same crash-recovery contract as
+    /// [`open_store_repurges_fts_for_persisted_tombstones`], but
+    /// with a body that contains CJK Han / Hiragana / Katakana
+    /// codepoints so the row is also written to
+    /// `evidence_fts_cjk` (the trigram-tokenised companion
+    /// introduced in Phase 1.2 / schema v14). The Latin-only test
+    /// above cannot exercise this code path because `unicode61`
+    /// produces tokens for Latin but `script::contains_cjk_or_thai`
+    /// returns false, so the row is never inserted into
+    /// `evidence_fts_cjk` and the post-reopen purge of that table
+    /// is a no-op for that fixture.
+    ///
+    /// This test pins the dual-table purge contract end-to-end
+    /// through the FFI: both `evidence_fts` and
+    /// `evidence_fts_cjk` rows must survive the tombstone-only
+    /// pre-reopen state (pre-condition), and both must be empty
+    /// after the next `open_store` runs the re-purge. Closes the
+    /// coverage gap flagged by sweep-3 Devin Review INFO-0002.
+    #[test]
+    fn open_store_repurges_evidence_fts_cjk_for_persisted_tombstones() {
+        // The body intentionally contains a long CJK substring so
+        // it is well above the FTS5 trigram tokeniser's
+        // 3-codepoint floor and reliably matches as a substring
+        // probe against `evidence_fts_cjk`.
+        const CJK_BODY: &str = "今日の重要な会議の議事録";
+        // Latin probe pulled separately because `unicode61` does
+        // not produce tokens for CJK codepoints — querying for
+        // the CJK substring through `evidence_fts` would always
+        // return zero rows regardless of purge state, so we use
+        // it only against `evidence_fts_cjk`.
+        const CJK_PROBE: &str = "重要な会議";
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let key_hex = "a5".repeat(32);
+        let scope_str = uuid::Uuid::new_v4().to_string();
+
+        let h1 =
+            open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open_store");
+
+        let evidence_id = ingest_message(
+            h1,
+            scope_str.clone(),
+            CJK_BODY.into(),
+            SourceKind::Manual,
+            FfiImportanceClass::Important,
+        )
+        .expect("ingest_message");
+        assert!(!evidence_id.is_empty());
+
+        // Sanity: the public query surface routes the CJK probe
+        // through the dual-table union and finds the row.
+        let hits =
+            query(h1, scope_str.clone(), CJK_PROBE.into(), 10).expect("query pre-forget cjk");
+        assert_eq!(
+            hits.len(),
+            1,
+            "FTS5 dual-table union must surface the seeded CJK phrase before forgetting"
+        );
+
+        // Persist the scope tombstone *without* running the FTS
+        // purge, modelling a crash between the tombstone write and
+        // the `purge_fts_for_scope_in_tx` call.
+        runtime::with_runtime(h1, |rt| {
+            let scope = parse_scope_id(&scope_str)?;
+            rt.store_mut()
+                .record_forgotten_scope(scope)
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            Ok(())
+        })
+        .expect("seed cjk tombstone without FTS purge");
+
+        // Pre-condition: BOTH FTS5 shadow tables must still contain
+        // the row for the forgotten scope. This is the crash state
+        // the re-purge has to repair, and the assertion that makes
+        // the rest of the test meaningful (a no-op test that
+        // happens to pass against an empty `evidence_fts_cjk`
+        // would never catch a regression where the cjk-purge is
+        // skipped).
+        runtime::with_runtime(h1, |rt| {
+            let scope = parse_scope_id(&scope_str)?;
+            let scope_bytes = scope.as_uuid().as_bytes().to_vec();
+            // Probe by scope_id alone (no `MATCH`) so the
+            // unicode61-vs-trigram tokeniser asymmetry doesn't
+            // leak into the assertion: `unicode61` would never
+            // match a pure-CJK probe regardless of purge state,
+            // so a MATCH-based count would conflate "row absent"
+            // with "row present but tokeniser produced no tokens
+            // for this query". A scope-only `COUNT(*)` directly
+            // tests row presence in each shadow table.
+            let unicode61_count: i64 = rt
+                .store()
+                .raw_conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM evidence_fts WHERE scope_id = ?1",
+                    rusqlite::params![scope_bytes.as_slice()],
+                    |row| row.get(0),
+                )
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            let trigram_count: i64 = rt
+                .store()
+                .raw_conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM evidence_fts_cjk WHERE scope_id = ?1",
+                    rusqlite::params![scope_bytes.as_slice()],
+                    |row| row.get(0),
+                )
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            assert_eq!(
+                unicode61_count, 1,
+                "pre-condition: evidence_fts must still hold the row for the tombstoned CJK \
+                 scope so the test exercises the re-purge"
+            );
+            assert_eq!(
+                trigram_count, 1,
+                "pre-condition: evidence_fts_cjk must still hold the row for the tombstoned CJK \
+                 scope so the test exercises the dual-table re-purge"
+            );
+            Ok(())
+        })
+        .expect("probe pre-reopen dual-table fts");
+
+        // Restart cycle. The next `open_store` is where the
+        // dual-table re-purge runs.
+        close_store(h1).expect("close_store");
+        let h2 = open_store(path.to_string_lossy().into_owned(), key_hex).expect("re-open_store");
+
+        // BOTH FTS5 shadow tables must be empty for the forgotten
+        // scope after the re-purge. Asserting on the cjk table is
+        // what's new here vs the Latin-only sibling test.
+        runtime::with_runtime(h2, |rt| {
+            let scope = parse_scope_id(&scope_str)?;
+            let scope_bytes = scope.as_uuid().as_bytes().to_vec();
+            let unicode61_count: i64 = rt
+                .store()
+                .raw_conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM evidence_fts WHERE scope_id = ?1",
+                    rusqlite::params![scope_bytes.as_slice()],
+                    |row| row.get(0),
+                )
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            let trigram_count: i64 = rt
+                .store()
+                .raw_conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM evidence_fts_cjk WHERE scope_id = ?1",
+                    rusqlite::params![scope_bytes.as_slice()],
+                    |row| row.get(0),
+                )
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
+            assert_eq!(
+                unicode61_count, 0,
+                "open_store must re-purge evidence_fts rows for every persisted tombstone, \
+                 including CJK-routed rows"
+            );
+            assert_eq!(
+                trigram_count, 0,
+                "open_store must re-purge evidence_fts_cjk rows for every persisted tombstone \
+                 (sweep-3 Devin Review INFO-0002 regression guard)"
+            );
+            Ok(())
+        })
+        .expect("probe post-reopen dual-table fts");
+
+        // Public query surface mirrors the raw dual-table probe.
+        let hits_after =
+            query(h2, scope_str.clone(), CJK_PROBE.into(), 10).expect("query post-reopen cjk");
+        assert!(
+            hits_after.is_empty(),
+            "post-reopen CJK query must return no rows for the previously-tombstoned scope"
+        );
+
+        teardown(h2);
+    }
+
     /// C10 integration test: memory state survives an open/close/open
     /// cycle via the encrypted `memory_objects` table.
     #[test]
