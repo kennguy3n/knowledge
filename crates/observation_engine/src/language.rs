@@ -83,15 +83,23 @@ impl Serialize for LanguageTag {
     /// it for `Arc<T>` when the `rc` feature is enabled, which the
     /// workspace deliberately does not enable (the substrate also
     /// uses `Arc` for in-flight, non-persisted values and we don't
-    /// want every `Arc<T>` to silently become serializable). Hand
-    /// off to `str::serialize` instead so the wire format is bit-
-    /// for-bit identical to what `#[serde(transparent)]` on a
-    /// `String`-backed tuple struct would produce.
+    /// want every `Arc<T>` to silently become serializable).
+    ///
+    /// The implementation calls [`Serializer::serialize_str`]
+    /// directly on the inner [`str`] rather than going through
+    /// `<Arc<str> as Serialize>::serialize` or relying on Rust's
+    /// method-resolution deref-coercion to find
+    /// `<str as Serialize>::serialize`. Calling `serialize_str`
+    /// directly removes any dependence on which crate features are
+    /// enabled in the dependency graph — the wire form is locked
+    /// to the bare JSON string regardless of whether a future
+    /// dependency turns on serde's `rc` feature. See Devin Review
+    /// finding ANALYSIS-0002b.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        self.0.serialize(serializer)
+        serializer.serialize_str(&self.0)
     }
 }
 

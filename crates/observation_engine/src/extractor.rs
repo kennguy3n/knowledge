@@ -759,21 +759,36 @@ fn extract_capitalised_words(text: &str, stop_words: &[String]) -> Vec<String> {
 /// A sentence is considered "shaped" enough to be a Fact
 /// candidate when it has either a whitespace separator (Latin /
 /// Cyrillic / Arabic / Devanagari / etc.) **or** is a run of at
-/// least 4 codepoints in a no-inter-word-whitespace script (CJK
-/// or Thai). Without this fallback, the "contains space" gate
-/// would silently drop every CJK / Thai sentence as
-/// not-fact-shaped, since those scripts run words together with
-/// no separator. Phase 1.4 added the CJK arm; the Thai arm was
-/// added in the Devin Review fixup pass so Thai declaratives
+/// least 4 codepoints in a no-inter-word-whitespace script. The
+/// no-whitespace scripts currently recognised are CJK, Thai,
+/// Lao, Khmer, and Myanmar (Burmese) — the five major living
+/// scripts in whatlang's detected-language set that do not use
+/// inter-word spaces. Without this fallback, the "contains
+/// space" gate would silently drop every sentence in those
+/// scripts as not-fact-shaped, since those scripts run words
+/// together with no separator.
+///
+/// History: Phase 1.4 added the CJK arm; the Thai arm was added
+/// in the first Devin Review fixup pass (so Thai declaratives
 /// like `กรุงเทพมหานครเป็นเมืองหลวงของประเทศไทย` can become Fact
-/// observations.
+/// observations); the Lao / Khmer / Myanmar arms were added in
+/// the sixth Devin Review fixup pass for the same reason
+/// (whatlang already detects `lo`/`km`/`my`, so without this
+/// they were silently failing the fact-shape gate). See Devin
+/// Review finding ANALYSIS-0001b.
 fn is_sentence_shaped_for_fact(sentence: &str) -> bool {
     if sentence.contains(' ') {
         return true;
     }
     let unsegmented_chars = sentence
         .chars()
-        .filter(|c| is_cjk_codepoint(*c) || is_thai_codepoint(*c))
+        .filter(|c| {
+            is_cjk_codepoint(*c)
+                || is_thai_codepoint(*c)
+                || is_lao_codepoint(*c)
+                || is_khmer_codepoint(*c)
+                || is_myanmar_codepoint(*c)
+        })
         .count();
     unsegmented_chars >= 4
 }
@@ -800,6 +815,43 @@ fn is_cjk_codepoint(c: char) -> bool {
 /// codepoint run on the same terms as a CJK run.
 fn is_thai_codepoint(c: char) -> bool {
     matches!(c, '\u{0E00}'..='\u{0E7F}')
+}
+
+/// True for code points in the Lao script block
+/// (`U+0E80..U+0EFF`). Lao is a sister script to Thai (Brahmic
+/// family, descended from the Khom script) and shares the same
+/// no-inter-word-whitespace convention. whatlang 0.18 does not
+/// currently detect Lao (the next-largest open-source detector
+/// `lingua-rs` does — this arm anticipates the LexiconRegistry
+/// landing in Phase 1.1 with richer detection), but the
+/// fact-shape gate runs even when language detection produces
+/// `None`, so this codepoint check ensures a Lao declarative is
+/// still admitted as a Fact candidate on shape alone, with the
+/// `language_tag` stayed at `None` via the fail-closed contract.
+fn is_lao_codepoint(c: char) -> bool {
+    matches!(c, '\u{0E80}'..='\u{0EFF}')
+}
+
+/// True for code points in the Khmer script block
+/// (`U+1780..U+17FF`). Khmer is the script of Cambodian and is
+/// also Brahmic-derived with no inter-word whitespace (though
+/// it does use whitespace between phrases / clauses, so many
+/// Khmer sentences fall through the `sentence.contains(' ')`
+/// fast path; this arm is the safety net for clause-internal
+/// Khmer runs). whatlang detects Khmer as the `khm` enum
+/// variant, mapped to BCP-47 `km`.
+fn is_khmer_codepoint(c: char) -> bool {
+    matches!(c, '\u{1780}'..='\u{17FF}')
+}
+
+/// True for code points in the Myanmar (Burmese) script block
+/// (`U+1000..U+109F`). Myanmar is a Brahmic script used for
+/// Burmese, Shan, and several other languages of Myanmar /
+/// Thailand / Bangladesh / India; like CJK it has no
+/// inter-word whitespace. whatlang detects Burmese as the `mya`
+/// enum variant, mapped to BCP-47 `my`.
+fn is_myanmar_codepoint(c: char) -> bool {
+    matches!(c, '\u{1000}'..='\u{109F}')
 }
 
 impl LexiconExtractor {
@@ -1517,6 +1569,108 @@ mod tests {
             !obs.iter()
                 .any(|o| o.observation_type == ObservationType::Fact),
             "expected no Fact from very short Thai utterance"
+        );
+    }
+
+    #[test]
+    fn is_lao_khmer_myanmar_codepoint_classifies_correctly() {
+        // Devin Review #ANALYSIS-0006 (sweep 6): widen
+        // no-whitespace-script fact-shape coverage from CJK +
+        // Thai to also include the three other major Brahmic-
+        // family scripts present in whatlang's detection set
+        // (Khmer, Myanmar) plus its sibling script Lao
+        // (forward-defensive — whatlang 0.18 does not detect
+        // Lao but its codepoints are still recognised by the
+        // fact-shape gate so a Lao declarative is admitted on
+        // shape alone with `language_tag = None`).
+
+        // Lao: spot-check consonants + vowel + tone mark.
+        assert!(is_lao_codepoint('ກ')); // Lao letter ko
+        assert!(is_lao_codepoint('ນ')); // Lao letter no
+        assert!(is_lao_codepoint('ະ')); // Lao vowel sign nyo
+        assert!(!is_lao_codepoint('ก')); // Thai (handled separately)
+        assert!(!is_lao_codepoint('a')); // ASCII
+
+        // Khmer: spot-check consonants + sign coeng.
+        assert!(is_khmer_codepoint('ក')); // Khmer letter ka
+        assert!(is_khmer_codepoint('ម')); // Khmer letter ma
+        assert!(is_khmer_codepoint('ែ')); // Khmer vowel sign ae
+        assert!(is_khmer_codepoint('្')); // Khmer sign coeng (subscript)
+        assert!(!is_khmer_codepoint('म')); // Devanagari (visually similar)
+        assert!(!is_khmer_codepoint('a')); // ASCII
+
+        // Myanmar: spot-check consonants + medial.
+        assert!(is_myanmar_codepoint('က')); // Myanmar letter ka
+        assert!(is_myanmar_codepoint('မ')); // Myanmar letter ma
+        assert!(is_myanmar_codepoint('န')); // Myanmar letter na
+        assert!(is_myanmar_codepoint('ြ')); // Myanmar consonant sign medial ra
+        assert!(!is_myanmar_codepoint('ก')); // Thai (handled separately)
+        assert!(!is_myanmar_codepoint('a')); // ASCII
+
+        // Cross-bleed: each script's helper must reject the other
+        // two no-whitespace-script ranges to keep the helpers
+        // useful as standalone predicates (callers may want to
+        // distinguish later for per-script tokeniser routing).
+        assert!(!is_lao_codepoint('ក')); // Khmer
+        assert!(!is_lao_codepoint('က')); // Myanmar
+        assert!(!is_khmer_codepoint('ກ')); // Lao
+        assert!(!is_khmer_codepoint('က')); // Myanmar
+        assert!(!is_myanmar_codepoint('ກ')); // Lao
+        assert!(!is_myanmar_codepoint('ក')); // Khmer
+    }
+
+    #[test]
+    fn lao_khmer_myanmar_fact_shaped_without_whitespace() {
+        // Devin Review #ANALYSIS-0006 (sweep 6): a declarative
+        // Khmer / Myanmar sentence (whatlang DOES detect these,
+        // and they are no-inter-word-whitespace scripts so the
+        // `contains(' ')` fast path does not fire) must produce
+        // a Fact candidate via the codepoint-count gate.
+        let scope = ScopeId::new_v4();
+        let ext = LexiconExtractor::default();
+
+        // "Phnom Penh is the capital of Cambodia." — Khmer, no
+        // inter-word spaces, well over 4 Khmer codepoints.
+        let obs_km = ext.extract("ភ្នំពេញគឺជារដ្ឋធានីនៃប្រទេសកម្ពុជា", scope);
+        assert!(
+            obs_km
+                .iter()
+                .any(|o| o.observation_type == ObservationType::Fact),
+            "expected at least one Fact from Khmer declarative; got {:?}",
+            obs_km
+                .iter()
+                .map(|o| o.observation_type)
+                .collect::<Vec<_>>()
+        );
+
+        // "Yangon is the largest city in Myanmar." — Burmese, no
+        // inter-word spaces, well over 4 Myanmar codepoints.
+        let obs_my = ext.extract("ရန်ကုန်သည်မြန်မာနိုင်ငံ၏အကြီးဆုံးမြို့ဖြစ်သည်", scope);
+        assert!(
+            obs_my
+                .iter()
+                .any(|o| o.observation_type == ObservationType::Fact),
+            "expected at least one Fact from Burmese declarative; got {:?}",
+            obs_my
+                .iter()
+                .map(|o| o.observation_type)
+                .collect::<Vec<_>>()
+        );
+
+        // "Vientiane is the capital of Laos." — Lao, no
+        // inter-word spaces. whatlang refuses to classify it but
+        // the codepoint-count gate must still admit it as a
+        // Fact (the row will just carry `language_tag = None`).
+        let obs_lo = ext.extract("ວຽງຈັນເປັນນະຄອນຫຼວງຂອງປະເທດລາວ", scope);
+        assert!(
+            obs_lo
+                .iter()
+                .any(|o| o.observation_type == ObservationType::Fact),
+            "expected at least one Fact from Lao declarative on shape alone; got {:?}",
+            obs_lo
+                .iter()
+                .map(|o| o.observation_type)
+                .collect::<Vec<_>>()
         );
     }
 
