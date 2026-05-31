@@ -910,13 +910,31 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                 for ev in &run_result.events {
                     if let Some(body) = event_to_evidence_body(ev) {
                         let source_tag = connector_source_tag(snapshot.source_kind);
+                        // Phase 1.3 — stamp the BCP-47 primary
+                        // subtag on each ingested connector
+                        // event. Connector events serialise as
+                        // a small JSON shell (`kind` +
+                        // `document_id` + `occurred_at`) today,
+                        // so `detect_language` will typically
+                        // return `None` and the column stays
+                        // NULL — that's the correct "language
+                        // unknown" outcome for the current
+                        // event shape. When provider events
+                        // later carry richer natural-language
+                        // payloads (e.g. Slack message bodies,
+                        // Notion page excerpts), the same
+                        // call site picks up the detected tag
+                        // without further plumbing.
+                        let detection = observation_engine::detect_language(&body);
+                        let language_tag = detection.as_ref().map(|d| d.tag.as_str());
                         let result = rt
                             .store_mut()
-                            .ingest(
+                            .ingest_with_language(
                                 snapshot.scope,
                                 body.as_bytes(),
                                 Some(source_tag),
                                 ImportanceClass::Important,
+                                language_tag,
                             )
                             .map_err(|e| FfiError::Evidence {
                                 message: e.to_string(),

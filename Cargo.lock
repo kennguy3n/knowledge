@@ -1068,6 +1068,7 @@ dependencies = [
  "evidence_store",
  "inference_router",
  "memory_manager",
+ "observation_engine",
  "rand",
  "rusqlite",
  "serde",

@@ -83,6 +83,17 @@ crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }
 inference_router = { path = "../inference_router" }
 memory_manager = { path = "../memory_manager" }
+# Pulled in so the FFI ingest paths (`ingest_message`, connector sync,
+# webhook dispatch) can run `observation_engine::detect_language` on
+# the plaintext body and stamp the schema-v13 `language_tag` column at
+# the actual write boundary. Without this, the column would stay NULL
+# in production no matter how many messages flow through — the
+# detection plumbing on `ObservationPipeline` only fires on the
+# memory-extraction path, not on the substrate's persistent ingest
+# write. Phase 1.1 (multilingual lexicon registry) reads this column
+# on every retrieval to pick a per-locale lexicon, so the column has
+# to be populated at ingest, not after the fact.
+observation_engine = { path = "../observation_engine" }
 synthesis_engine = { path = "../synthesis_engine" }
 synthesis_pipeline = { path = "../synthesis_pipeline" }
 

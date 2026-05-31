@@ -466,12 +466,24 @@ fn dispatch_blocking(
         let mut ingested = 0usize;
         for ev in &events {
             if let Some(body) = event_to_evidence_body(ev) {
+                // Phase 1.3 — stamp the BCP-47 primary subtag on
+                // each webhook-dispatched event. Same fail-closed
+                // contract as the connector sync path: a NULL
+                // outcome means "language unknown" (the body
+                // failed detection or is too short / pure
+                // structural JSON). Detection runs at the
+                // persistent write boundary so the schema-v13
+                // column populates for every production payload,
+                // not just the in-memory observation pipeline.
+                let detection = observation_engine::detect_language(&body);
+                let language_tag = detection.as_ref().map(|d| d.tag.as_str());
                 rt.store_mut()
-                    .ingest(
+                    .ingest_with_language(
                         scope,
                         body.as_bytes(),
                         Some(source_tag),
                         evidence_store::ImportanceClass::Important,
+                        language_tag,
                     )
                     .map_err(|e| FfiError::Evidence {
                         message: e.to_string(),
