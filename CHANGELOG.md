@@ -115,8 +115,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   Enterprise (connector polling) deployment tiers, plus the
   comparison table vs. server-side competitors.
 - `README.md` "Observability — metrics, tracing, health":
-  reorganised the counter catalogue from a prose-flow list (47
-  counters, ~15 silently omitted) into a grouped exhaustive
+  reorganised the counter catalogue from a prose-flow list (49
+  counters, 16 silently omitted) into a grouped exhaustive
   inventory of all 65 counters defined in
   [`crates/ffi/src/metrics.rs`](crates/ffi/src/metrics.rs). The
   10 sub-headings (Runtime lifecycle, Memory, Synthesis, Decay,
