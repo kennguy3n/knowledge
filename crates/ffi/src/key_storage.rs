@@ -157,12 +157,23 @@ pub fn clear_key_storage_resolver(handle: RuntimeHandle) -> FfiResult<()> {
 
 #[cfg(test)]
 mod tests {
-    //! Resolver registration is purely cross-language plumbing —
-    //! the substrate does not call into the resolver from any hot
-    //! path yet (per the module-level docs). The tests exercise
-    //! the registration / unregistration lifecycle through a
-    //! deterministic in-memory backing store and verify the
-    //! metric counters fire as expected.
+    //! These tests cover the **mid-life registration / clearing
+    //! lifecycle** that the [`set_key_storage_resolver`] /
+    //! [`clear_key_storage_resolver`] entry points expose
+    //! independently of the cold-boot resolver-driven open.
+    //!
+    //! The substrate's **active consumption** of the resolver — the
+    //! cold-boot `load_key` call that drives
+    //! [`crate::open_store_with_resolver`] — is covered by the
+    //! resolver-path unit tests in `crate::runtime::tests`
+    //! (`open_store_with_resolver_*`), which exercise the
+    //! end-to-end flow (resolver consulted once, hex parsed,
+    //! SQLCipher opened, resolver attached to the runtime before
+    //! the registry insert). The tests below intentionally exercise
+    //! the trait directly without a live `RuntimeHandle` so the
+    //! registration-side wiring (metric counters, slot replacement,
+    //! cleared-slot idempotency) can be observed without standing
+    //! up a full open.
     use super::*;
     use crate::metrics::snapshot;
 
