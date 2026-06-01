@@ -1089,6 +1089,24 @@ pub struct VectorTelemetry {
     /// `evidence_store::vector_telemetry::record_observed_dimension`.
     #[serde(default)]
     pub model_tag_dimension_violations_total: u64,
+    /// Pre-embedding router (Phase 1.12) admitted the input —
+    /// `model.embed(text)` was invoked.  See upstream
+    /// `evidence_store::embedding_routing::classify_for_embedding`
+    /// for the routing rationale.
+    #[serde(default)]
+    pub pre_embed_admitted_total: u64,
+    /// Pre-embedding router diverted the call site because the
+    /// input was empty after `str::trim`.  Usually signals an
+    /// upstream extraction bug rather than legitimate noise.
+    #[serde(default)]
+    pub pre_embed_skipped_empty_after_trim_total: u64,
+    /// Pre-embedding router diverted the call site because the
+    /// input was non-empty after trim but `whatlang::detect`
+    /// found no trigram-detectable linguistic content (pure
+    /// punctuation / pure emoji / pure digits / pure-symbol
+    /// input all land here).
+    #[serde(default)]
+    pub pre_embed_skipped_no_linguistic_content_total: u64,
 }
 
 /// Unified retrieval-telemetry read surface (Phase 2.0) — the
@@ -1443,6 +1461,10 @@ fn project_vector_telemetry(
         model_load_errors_total: s.model_load_errors_total,
         inference_failures_total: s.inference_failures_total,
         model_tag_dimension_violations_total: s.model_tag_dimension_violations_total,
+        pre_embed_admitted_total: s.pre_embed_admitted_total,
+        pre_embed_skipped_empty_after_trim_total: s.pre_embed_skipped_empty_after_trim_total,
+        pre_embed_skipped_no_linguistic_content_total: s
+            .pre_embed_skipped_no_linguistic_content_total,
     }
 }
 

@@ -1006,6 +1006,7 @@ dependencies = [
  "tokenizers",
  "tracing",
  "uuid",
+ "whatlang",
  "zeroize",
 ]
 

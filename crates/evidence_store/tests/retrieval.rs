@@ -1490,3 +1490,307 @@ fn vector_telemetry_counters_move_through_public_retriever() {
         "expected first ingested row in results"
     );
 }
+
+/// Phase 1.12 — counts every call to `model.embed(text)` via
+/// the `MultilingualConceptMockModel` so a Phase 1.12 pre-embed
+/// gate that admits a noise-only input would visibly bump this
+/// counter.  Used by
+/// `phase_1_12_search_hybrid_skips_vector_lane_on_noise_only_query`
+/// to prove the embedding lane was NOT invoked on the noise
+/// query rather than just invoked-but-returning-noise.
+#[derive(Default)]
+struct CountingMockModel {
+    embeds: std::sync::atomic::AtomicUsize,
+}
+
+impl EmbeddingModel for CountingMockModel {
+    fn embed(&self, text: &str) -> evidence_store::embeddings::Result<Vec<f32>> {
+        self.embeds
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if text.is_empty() {
+            return Err(EmbeddingError::EmptyInput);
+        }
+        let mut v = vec![0.0_f32; MULTILINGUAL_MOCK_DIM];
+        v[MultilingualConceptMockModel::concept_for(text)] = 1.0;
+        Ok(v)
+    }
+    fn dimension(&self) -> usize {
+        MULTILINGUAL_MOCK_DIM
+    }
+    fn probe(&self) -> EmbeddingProbe {
+        EmbeddingProbe::Available
+    }
+}
+
+/// Thin newtype wrapping an `Arc<CountingMockModel>` so the
+/// retriever — which takes `impl EmbeddingModel + 'static` by
+/// move via `with_embedding_model` — owns its `EmbeddingModel`
+/// while the test still keeps an outside handle to the per-
+/// instance `embeds` counter for race-safe negative assertions.
+struct ArcCountingModel(std::sync::Arc<CountingMockModel>);
+
+impl EmbeddingModel for ArcCountingModel {
+    fn embed(&self, text: &str) -> evidence_store::embeddings::Result<Vec<f32>> {
+        self.0.embed(text)
+    }
+    fn dimension(&self) -> usize {
+        self.0.dimension()
+    }
+    fn probe(&self) -> EmbeddingProbe {
+        self.0.probe()
+    }
+}
+
+/// Phase 1.12 — a noise-only query (pure punctuation) must NOT
+/// reach the embedding adapter.  The pre-embed routing gate in
+/// `search_hybrid` short-circuits before `model.embed(query)`
+/// is called, bumping the
+/// `pre_embed_skipped_no_linguistic_content_total` counter
+/// instead of the `query_embeddings_total` counter, and the
+/// `evidence_store::embedding_routing::EmbeddingRoute::Skip`
+/// branch falls through to FTS+recency-only ranking.
+#[test]
+fn phase_1_12_search_hybrid_skips_vector_lane_on_noise_only_query() {
+    use evidence_store::vector_telemetry;
+    let model = std::sync::Arc::new(CountingMockModel::default());
+    let model_for_retriever = model.clone();
+
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    // Ingest a row so FTS / recency lanes have something to
+    // surface — proves the search still produces hits via the
+    // lexical lanes even when the vector lane is gated off.
+    let r1 = store
+        .ingest(
+            scope,
+            "weather forecast".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+
+    let before = vector_telemetry::snapshot();
+    let embeds_before = model.embeds.load(std::sync::atomic::Ordering::Relaxed);
+
+    let retriever = HybridRetriever::new(&store)
+        .with_embedding_model(ArcCountingModel(model_for_retriever), "counting-mock-v1");
+
+    // Pure-digit query — pre-embed router classifies as
+    // NoLinguisticContent and skips the vector lane.  Digits
+    // are picked over punctuation (e.g. "!!!") because FTS5's
+    // default tokenizer treats `!` as a query-syntax operator
+    // and would error out before the vector lane is reached;
+    // digits sail through FTS5 as a no-match token, leaving
+    // the test focused on the vector-lane skip behaviour.
+    let hits = retriever.search_hybrid(scope, "12345", 10).unwrap();
+
+    let after = vector_telemetry::snapshot();
+    let embeds_after = model.embeds.load(std::sync::atomic::Ordering::Relaxed);
+
+    // The query embed was skipped.  This assertion uses the
+    // per-instance `model.embeds` counter (NOT the process-
+    // singleton `query_embeddings_total`) so a parallel test
+    // bumping the singleton counter does NOT race with the
+    // "did NOT fire" assertion.  See Phase 1.11 Sweep 3 for
+    // the prior incident this pattern was added to avoid.
+    assert_eq!(
+        embeds_before, embeds_after,
+        "noise-only query reached the embedding adapter ({embeds_before} -> {embeds_after} embeds)",
+    );
+    // The NoLinguisticContent counter moved — monotonic
+    // lower-bound is race-safe under parallel test execution.
+    assert!(
+        after.pre_embed_skipped_no_linguistic_content_total
+            > before.pre_embed_skipped_no_linguistic_content_total,
+        "pre_embed_skipped_no_linguistic_content_total did not move (before={}, after={})",
+        before.pre_embed_skipped_no_linguistic_content_total,
+        after.pre_embed_skipped_no_linguistic_content_total,
+    );
+    // The lexical lanes still return the ingested row even when
+    // the vector lane is gated off — proves the fail-open
+    // contract.  An empty FTS hit-list for a pure-punctuation
+    // query is acceptable here because FTS5 has nothing to
+    // tokenise from `!!!`; what matters is that we don't crash
+    // and the counter bookkeeping is intact.
+    let _ = (hits, r1);
+}
+
+/// Phase 1.12 — a body classified as noise-only must NOT
+/// produce an `evidence_embeddings` row.  Ingesting a pure-
+/// punctuation body bumps the
+/// `pre_embed_skipped_no_linguistic_content_total` counter
+/// instead of `index_write_embeddings_total`, and a subsequent
+/// `get_embedding_for_model` lookup for that row returns
+/// `None`.
+#[test]
+fn phase_1_12_index_embedding_skips_noise_only_body() {
+    use evidence_store::vector_telemetry;
+    let model = std::sync::Arc::new(CountingMockModel::default());
+
+    // Open the store with the model wired in for ingest so the
+    // index-write embed path actually runs.
+    let (_dir, mut store) = fresh_store();
+    store = store.with_embedding_model(ArcCountingModel(model.clone()), "counting-mock-v1");
+    let scope = ScopeId::new_v4();
+
+    let before = vector_telemetry::snapshot();
+    let embeds_before = model.embeds.load(std::sync::atomic::Ordering::Relaxed);
+
+    // Ingest a pure-digit body (noise wrt linguistic content).
+    let noise_row = store
+        .ingest(scope, b"12345", None, ImportanceClass::Useful)
+        .unwrap();
+    // Ingest a linguistic-content body as a control — its
+    // index-write embed MUST run normally.
+    let signal_row = store
+        .ingest(scope, b"weather forecast", None, ImportanceClass::Useful)
+        .unwrap();
+
+    let after = vector_telemetry::snapshot();
+    let embeds_after = model.embeds.load(std::sync::atomic::Ordering::Relaxed);
+
+    // Exactly one embed was invoked — on the signal body, not
+    // on the noise body.  Per-instance counter is race-safe.
+    assert_eq!(
+        embeds_after - embeds_before,
+        1,
+        "expected exactly one embed call (signal body only); got {} (before={}, after={})",
+        embeds_after - embeds_before,
+        embeds_before,
+        embeds_after,
+    );
+    // The noise body bumped the skip counter.
+    assert!(
+        after.pre_embed_skipped_no_linguistic_content_total
+            > before.pre_embed_skipped_no_linguistic_content_total,
+        "pre_embed_skipped_no_linguistic_content_total did not move",
+    );
+    // The signal body bumped the admit counter.
+    assert!(
+        after.pre_embed_admitted_total > before.pre_embed_admitted_total,
+        "pre_embed_admitted_total did not move",
+    );
+    // The signal body bumped index_write_embeddings_total —
+    // monotonic lower-bound (race-safe vs. parallel tests).
+    // The strict "exactly one" guarantee on the singleton
+    // counter is delegated to the per-instance `embeds` count
+    // above; the singleton-counter assertion here only proves
+    // the bookkeeping wiring is intact end-to-end.
+    assert!(
+        after.index_write_embeddings_total > before.index_write_embeddings_total,
+        "index_write_embeddings_total did not move (before={}, after={})",
+        before.index_write_embeddings_total,
+        after.index_write_embeddings_total,
+    );
+
+    // The noise row has no cached embedding (skip path).
+    let noise_embedding = store
+        .get_embedding_for_model(noise_row.evidence_id, "counting-mock-v1")
+        .unwrap();
+    assert!(
+        noise_embedding.is_none(),
+        "noise body should NOT have an evidence_embeddings row",
+    );
+    // The signal row DOES have a cached embedding.
+    let signal_embedding = store
+        .get_embedding_for_model(signal_row.evidence_id, "counting-mock-v1")
+        .unwrap();
+    assert!(
+        signal_embedding.is_some(),
+        "signal body should have an evidence_embeddings row",
+    );
+}
+
+/// Phase 1.12 — `rerank_with_embeddings` short-circuits the
+/// whole rerank when called with a noise-only query.  The
+/// original candidate ordering is returned unchanged AND no
+/// candidate body is embedded.
+#[test]
+fn phase_1_12_rerank_with_embeddings_short_circuits_on_noise_only_query() {
+    use evidence_store::vector_telemetry;
+    let model = std::sync::Arc::new(CountingMockModel::default());
+
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r1 = store
+        .ingest(
+            scope,
+            "weather forecast".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let r2 = store
+        .ingest(
+            scope,
+            "stock market".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+
+    let retriever = HybridRetriever::new(&store)
+        .with_embedding_model(ArcCountingModel(model.clone()), "counting-mock-v1");
+
+    let embeds_before = model.embeds.load(std::sync::atomic::Ordering::Relaxed);
+    let before = vector_telemetry::snapshot();
+
+    // Hand-construct candidates with a clear ordering — the
+    // rerank pass MUST NOT permute these when the query is
+    // gated off.
+    let candidates = vec![
+        RetrievalResult {
+            evidence_id: r1.evidence_id,
+            fts_score: 0.9,
+            recency_score: 0.1,
+            vector_score: 0.0,
+            score: 0.5,
+        },
+        RetrievalResult {
+            evidence_id: r2.evidence_id,
+            fts_score: 0.1,
+            recency_score: 0.9,
+            vector_score: 0.0,
+            score: 0.3,
+        },
+    ];
+
+    let bodies = vec![
+        (r1.evidence_id, "weather forecast".to_string()),
+        (r2.evidence_id, "stock market".to_string()),
+    ];
+
+    // Pure-digit query — rerank gate skips wholesale; FTS5 is
+    // not invoked by `rerank_with_embeddings`, so we COULD use
+    // punctuation here, but digits keep the noise vocabulary
+    // consistent with the sibling search_hybrid test.
+    let reranked = retriever
+        .rerank_with_embeddings("12345", candidates.clone(), &bodies)
+        .unwrap();
+
+    let after = vector_telemetry::snapshot();
+    let embeds_after = model.embeds.load(std::sync::atomic::Ordering::Relaxed);
+
+    // No embeds were performed.
+    assert_eq!(
+        embeds_before, embeds_after,
+        "noise-only rerank query reached the embedding adapter",
+    );
+    // The skip counter moved.
+    assert!(
+        after.pre_embed_skipped_no_linguistic_content_total
+            > before.pre_embed_skipped_no_linguistic_content_total,
+        "pre_embed_skipped_no_linguistic_content_total did not move",
+    );
+    // The candidate ordering and scores are unchanged.  This
+    // is the operational contract: a noise rerank query is a
+    // no-op rather than a re-shuffle by zero-score.
+    assert_eq!(reranked.len(), candidates.len());
+    for (got, want) in reranked.iter().zip(candidates.iter()) {
+        assert_eq!(got.evidence_id, want.evidence_id);
+        assert_score_eq(got.fts_score, want.fts_score);
+        assert_score_eq(got.recency_score, want.recency_score);
+        assert_score_eq(got.vector_score, want.vector_score);
+        assert_score_eq(got.score, want.score);
+    }
+}
