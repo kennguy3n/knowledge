@@ -86,10 +86,10 @@
 //!
 //! # Telemetry
 //!
-//! Every routing decision bumps exactly one of the four
+//! Every routing decision bumps exactly one of the three
 //! `pre_embed_*_total` counters in [`crate::vector_telemetry`]:
 //! [`crate::vector_telemetry::record_pre_embed_decision`].  The
-//! sum across all four = total call sites that consulted the
+//! sum across all three = total call sites that consulted the
 //! router.  See the wire-flat
 //! [`crate::vector_telemetry::VectorTelemetrySnapshot`] for the
 //! operator-dashboard read shape.
@@ -123,10 +123,12 @@ pub enum EmbeddingRoute {
 
 /// Why [`classify_for_embedding`] returned [`EmbeddingRoute::Skip`].
 ///
-/// The three variants are mutually exclusive per routing call —
+/// The two variants are mutually exclusive per routing call —
 /// every [`EmbeddingRoute::Skip`] decision pins exactly one
-/// reason.  The taxonomy mirrors the three short-circuit gates
-/// in [`classify_for_embedding`] in source order.
+/// reason.  The taxonomy mirrors the two short-circuit gates in
+/// [`classify_for_embedding`] in source order (the third
+/// branch of `classify_for_embedding` is the fall-through to
+/// [`EmbeddingRoute::Embed`], which carries no [`SkipReason`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
     /// Input was empty after `str::trim` — pure whitespace or

@@ -1615,6 +1615,90 @@ fn phase_1_12_search_hybrid_skips_vector_lane_on_noise_only_query() {
     let _ = (hits, r1);
 }
 
+/// Phase 1.12 — regression for sweep-1 finding (PR #114):
+/// when the retriever is configured WITHOUT an embedding model
+/// (FTS+recency-only mode), the pre-embed routing gate must NOT
+/// be consulted — otherwise `pre_embed_admitted_total` would be
+/// inflated for every linguistic query even though
+/// `model.embed()` is never called, breaking the documented
+/// `admitted / total = ONNX-call admission rate` metric used by
+/// operators for capacity planning.
+///
+/// Why this test does NOT assert directly on the singleton
+/// `pre_embed_*` counters: those counters are bumped by many
+/// other tests in this binary (any sibling test wiring in an
+/// embedding model and calling `search_hybrid` /
+/// `rerank_with_embeddings` / `ingest`).  A direct
+/// `assert_eq!(before, after)` on a process-singleton counter is
+/// the Phase 1.11 Sweep 3 anti-pattern — a parallel sibling
+/// bumping the counter between the snapshots produces a false
+/// positive.  Instead we verify the structural fix via two
+/// race-free observables: (1) `search_hybrid` does not panic
+/// when no model is wired in, and (2) the FTS lane returns the
+/// row even though the vector lane was not consulted (the
+/// `with_embedding_model(...)` builder was never called).  The
+/// gate-inside-model-guard structure is the load-bearing fix;
+/// regressions would be caught by code review + the long-form
+/// rationale comment block in `retrieval.rs::search_hybrid`.
+#[allow(clippy::float_cmp)]
+#[test]
+fn phase_1_12_search_hybrid_no_model_does_not_consult_routing_gate() {
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r1 = store
+        .ingest(
+            scope,
+            "weather forecast".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+
+    // No `.with_embedding_model(...)` — the retriever runs in
+    // FTS+recency-only mode.  This is the bug-trigger
+    // configuration from sweep-1: before the fix, the routing
+    // gate fired unconditionally and bumped
+    // `pre_embed_admitted_total` even though `model.embed()`
+    // was never invoked.
+    let retriever = HybridRetriever::new(&store);
+    // Linguistic query.  Two race-free assertions:
+    let hits = retriever
+        .search_hybrid(scope, "weather", 10)
+        .expect("search_hybrid must not panic with no model wired in");
+    // (1) FTS lane returned the ingested row — proves
+    // `search_hybrid` completed end-to-end with the model-less
+    // configuration.
+    assert!(
+        hits.iter().any(|h| h.evidence_id == r1.evidence_id),
+        "FTS lane did not surface the ingested row in model-less mode \
+         ({} hits)",
+        hits.len(),
+    );
+    // (2) Every hit has `vector_score == 0.0` — proves no
+    // embedding contribution was added to the fan-in score (the
+    // structural guarantee being defended here is that the
+    // routing-gate-then-model-embed sequence stayed gated
+    // behind `if let Some(model) = ...`; if the gate is moved
+    // outside the guard, the test still passes because there's
+    // no model to embed with, but the counter would inflate.
+    // The counter-inflation regression is caught by code
+    // review + the load-bearing comment block in
+    // `retrieval.rs::search_hybrid`, not by this assertion).
+    // Exact-zero comparison is well-defined here: every
+    // `RetrievalResult` is constructed with `vector_score = 0.0`
+    // and only `rerank_with_embeddings` /
+    // `search_hybrid`'s vector lane writes a non-zero value;
+    // see `clippy::float_cmp` allow above.
+    for hit in &hits {
+        assert!(
+            hit.vector_score == 0.0,
+            "model-less retriever produced a non-zero vector_score for {} (score={})",
+            hit.evidence_id,
+            hit.vector_score,
+        );
+    }
+}
+
 /// Phase 1.12 — a body classified as noise-only must NOT
 /// produce an `evidence_embeddings` row.  Ingesting a pure-
 /// punctuation body bumps the

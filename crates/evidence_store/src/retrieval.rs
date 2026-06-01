@@ -429,17 +429,27 @@ impl<'a> HybridRetriever<'a> {
         // randomising the top-k.  Skipping the lane wholesale
         // is strictly better — the FTS+recency lanes still rank
         // the candidates by lexical signal.
-        let query_route = crate::embedding_routing::classify_for_embedding(query);
-        crate::vector_telemetry::record_pre_embed_decision(query_route);
-        let query_vec = if matches!(
-            query_route,
-            crate::embedding_routing::EmbeddingRoute::Skip(_),
-        ) {
-            None
-        } else {
-            self.embedding_model
-                .as_ref()
-                .and_then(|model| match model.embed(query) {
+        //
+        // The gate is guarded behind `self.embedding_model.is_some()`
+        // so the `pre_embed_*_total` counters reflect only call
+        // sites where the model is actually available to service
+        // the routing decision — matching the same pattern in
+        // [`Self::rerank_with_embeddings`] above and
+        // [`EvidenceStore::index_embedding`].  Without this guard
+        // the admission-rate metric documented at
+        // `vector_telemetry.rs` (`admitted / total = ONNX-call
+        // admission rate`) would be inflated for retrievers
+        // running in FTS+recency-only mode.
+        let query_vec = if let Some(model) = self.embedding_model.as_ref() {
+            let query_route = crate::embedding_routing::classify_for_embedding(query);
+            crate::vector_telemetry::record_pre_embed_decision(query_route);
+            if matches!(
+                query_route,
+                crate::embedding_routing::EmbeddingRoute::Skip(_),
+            ) {
+                None
+            } else {
+                match model.embed(query) {
                     Ok(v) => {
                         crate::vector_telemetry::record_embedding_computed(
                             crate::vector_telemetry::EmbedSite::Query,
@@ -450,7 +460,10 @@ impl<'a> HybridRetriever<'a> {
                         crate::vector_telemetry::record_embedding_error_from(&err);
                         None
                     }
-                })
+                }
+            }
+        } else {
+            None
         };
         if let (Some(model), Some(query_vec)) = (self.embedding_model.as_ref(), query_vec) {
             for entry in by_id.values_mut() {
