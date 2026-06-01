@@ -191,7 +191,42 @@
 ///   migration's pattern. Forget / purge / rebuild now touch
 ///   all three FTS shadow tables in the same transaction so
 ///   they cannot drift apart under crash recovery.
-pub const SCHEMA_VERSION: i32 = 15;
+/// - v16 (Phase 1.9 — symmetric recall-lane stopword stripping):
+///   the unicode61 baseline lane is left untouched (BM25 idf
+///   already discounts high-frequency particles for whitespace-
+///   tokenised scripts), but the trigram and bigram lanes now
+///   apply [`crate::fts_stopwords::strip_recall_lane_stopwords`]
+///   to BOTH the body at index time AND the query at read time.
+///   Stripping replaces each script-aware stopword (Japanese `の`
+///   / `です`, Chinese `的` / `了`, Thai `และ` / `พรุ่งนี้`,
+///   Tibetan / Khmer / Myanmar / Lao function-word cognates) with
+///   a single ASCII space. The trigram / bigram tokenisers treat
+///   whitespace as a hard separator so the spurious "particle
+///   trigram" / "particle bigram" windows the substrate produced
+///   at v15 (e.g. `今日のオ` matching `今日の鬼` for the unrelated
+///   semantic `今日の鬼ヶ島` story) are eliminated. Symmetric
+///   stripping is required: index-only stripping would mean a
+///   query `今日のオリンピック` (stripped to `今日 オリンピック`)
+///   would no longer match a body containing the original phrase,
+///   because the body's stored trigrams would miss the `日のオ`
+///   bridge window the query no longer generates. Korean Hangul
+///   is **deliberately excluded** from the stripping inventory —
+///   the unicode61 baseline lane already segments Korean cleanly
+///   at the eojeol boundary, and substring-based stripping would
+///   false-positive on common content words like `도시` ("city",
+///   starts with the particle codepoint `도`) and `은행` ("bank",
+///   starts with `은`). The v15 -> v16 migration
+///   ([`crate::store::migrate_v16_strip_recall_lane_stopwords`])
+///   re-tokenises every existing `evidence_fts_cjk` and
+///   `evidence_fts_bigram` row from the source
+///   `evidence_fts.content` column with the strip applied,
+///   chunked on `evidence_fts.rowid` for bounded memory matching
+///   the v14 / v15 migrations' pattern. The migration is
+///   idempotent by reconstruction (re-running it produces the
+///   same shape as a single run), so the crash-after-commit-
+///   before-version-stamp recovery path is safe without any
+///   inner sentinel check.
+pub const SCHEMA_VERSION: i32 = 16;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.

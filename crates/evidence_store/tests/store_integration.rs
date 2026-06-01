@@ -1635,3 +1635,242 @@ fn phase_1_8_lane_weight_precision_hierarchy_holds_at_query_time() {
          trigram={trigram_weighted}, bigram={bigram_weighted}"
     );
 }
+
+// ----------------------------------------------------------------------
+// Phase 1.9 — Symmetric recall-lane stopword stripping (schema v16)
+// ----------------------------------------------------------------------
+//
+// Phase 1.9 strips a small, conservative inventory of per-script
+// function words (Japanese particles, Chinese connectives, Thai
+// prepositions, ...) from BOTH the index-time write path and the
+// query-time read path before the bigram / trigram lanes consume the
+// text. The stripping is symmetric — applied identically on both
+// sides — so a query that includes a stopword still matches a body
+// that contains the same stopword, but neither side's bigram /
+// trigram windows include the function-word noise.
+//
+// These tests pin three contracts:
+//
+//   1. **Recall is preserved for content-word queries.** A body
+//      containing a stopword + content word matches a query of the
+//      same body, even though the stopword is stripped from both
+//      sides before the lane match.
+//   2. **Recall is preserved when the query has a stopword and the
+//      body has a different stopword in the same position.** A
+//      body `日本のオリンピック` ("Japan's Olympics", with genitive
+//      `の`) matches a query `日本オリンピック` (no particle) and
+//      vice versa — both sides reduce to the same stripped form
+//      `日本 オリンピック` after the strip.
+//   3. **Content-bearing terms intentionally omitted from the
+//      inventory (e.g. Thai time deictic `วันนี้`) are NOT stripped
+//      from either side**, so a query `วันนี้` against a body
+//      containing `วันนี้` hits via the bigram / trigram lanes the
+//      same as any other content phrase. This guards against
+//      future contributors expanding the inventory to include
+//      content-bearing items (see `STOPWORDS_TH` doc-comment for
+//      the deliberate-exclusion rationale).
+
+#[test]
+fn fts5_phase_1_9_japanese_stopword_query_matches_indexed_stopword_body() {
+    // Body and query both contain the same genitive particle `の`.
+    // Both sides strip identically, so the bigram-lane windows on
+    // both sides reduce to `日本 オリンピック` and the match must
+    // succeed — verifying the symmetric-strip contract.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "日本のオリンピック".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "日本のオリンピック", 10).unwrap();
+    assert_eq!(hits.len(), 1, "body+query with identical stopword must hit",);
+    assert_eq!(hits[0], r.evidence_id);
+}
+
+#[test]
+fn fts5_phase_1_9_japanese_stopword_in_body_only_still_matches_clean_query() {
+    // Body has the genitive particle `の`; query does not. The
+    // body's stored bigram windows (after stripping) are
+    // `日本 オリンピック` (with a space at the strip site). The
+    // query, also stripped, becomes `日本オリンピック`
+    // (unchanged — no stopwords). The CJK bigram lane filters
+    // ASCII whitespace out before windowing, so the body windows
+    // collapse to the same `日本オリンピック` bigram sequence as
+    // the query — the match must succeed.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "日本のオリンピック".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "日本オリンピック", 10).unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "body with stopword must hit when query omits the same stopword",
+    );
+    assert_eq!(hits[0], r.evidence_id);
+}
+
+#[test]
+fn fts5_phase_1_9_japanese_stopword_in_query_only_still_matches_clean_body() {
+    // The reverse of the previous test. Body has no stopword;
+    // query includes `の`. After symmetric stripping both reduce
+    // to the same lane-tokenisable form.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "日本オリンピック".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "日本のオリンピック", 10).unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "body without stopword must hit when query inserts an adjacent stopword",
+    );
+    assert_eq!(hits[0], r.evidence_id);
+}
+
+#[test]
+fn fts5_phase_1_9_pure_stopword_query_yields_no_hit_against_content_body() {
+    // A query consisting entirely of stopword particles strips to
+    // pure whitespace, which the lane SQL detects and short-
+    // circuits to an empty result for. This is correct: pure
+    // particles are uninformative and should not match any body.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let _r = store
+        .ingest(
+            scope,
+            "日本のオリンピック".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "のはがを", 10).unwrap();
+    assert!(
+        hits.is_empty(),
+        "pure-stopword query must return no hits (lane short-circuit)",
+    );
+}
+
+#[test]
+fn fts5_phase_1_9_chinese_de_particle_symmetric_round_trip() {
+    // Body contains the genitive `的`; query contains the same.
+    // The bigram lane windows after stripping must align.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "日本的天气".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "日本的天气", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0], r.evidence_id);
+
+    // And the asymmetric direction: body with particle, clean
+    // query — must still hit.
+    let hits = store.search_fts(scope, "日本天气", 10).unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "body with `的` must hit clean query after symmetric strip",
+    );
+    assert_eq!(hits[0], r.evidence_id);
+}
+
+#[test]
+fn fts5_phase_1_9_thai_preposition_kong_symmetric_round_trip() {
+    // Body contains the preposition `ของ` ("of"); query contains
+    // the same. Both sides strip identically.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "อากาศของกรุงเทพ".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "อากาศของกรุงเทพ", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0], r.evidence_id);
+
+    // Asymmetric: body with `ของ`, query without — must still
+    // hit after symmetric strip collapses both to the same
+    // residual content.
+    let hits = store.search_fts(scope, "อากาศกรุงเทพ", 10).unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "body with `ของ` must hit clean query after symmetric strip",
+    );
+    assert_eq!(hits[0], r.evidence_id);
+}
+
+#[test]
+fn fts5_phase_1_9_does_not_strip_content_bearing_time_deictic_wannii() {
+    // Pin the deliberate-exclusion contract: `วันนี้` ("today")
+    // is **NOT** in STOPWORDS_TH because it's a content-bearing
+    // temporal expression. A body containing `วันนี้` must hit a
+    // query of the same `วันนี้` — the bigram / trigram lanes
+    // must see the full codepoint sequence on both sides.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(scope, "อากาศวันนี้ดี".as_bytes(), None, ImportanceClass::Useful)
+        .unwrap();
+    let hits = store.search_fts(scope, "วันนี้", 10).unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "content-bearing `วันนี้` must NOT be stripped by Phase 1.9",
+    );
+    assert_eq!(hits[0], r.evidence_id);
+}
+
+#[test]
+fn fts5_phase_1_9_unicode61_lane_unstripped_for_latin_content() {
+    // The Phase 1.9 strip only applies to the trigram and bigram
+    // lanes (`evidence_fts_cjk` and `evidence_fts_bigram`). The
+    // unicode61 source-of-truth lane (`evidence_fts.content`)
+    // never sees the strip, so Latin queries against Latin
+    // bodies must continue to work exactly as in Phase 1.2's
+    // baseline — no spurious "stopwords" are removed from
+    // English-language content.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "the quick brown fox jumps over the lazy dog".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "brown fox", 10).unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "Latin (unicode61) lane must not be touched by Phase 1.9",
+    );
+    assert_eq!(hits[0], r.evidence_id);
+}
