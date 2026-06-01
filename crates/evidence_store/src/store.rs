@@ -5039,9 +5039,9 @@ fn unicode61_lane_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
         format!(
-            "SELECT evidence_id, {bm25} AS rank FROM evidence_fts \
+            "SELECT evidence_id, {bm25} AS weighted_rank FROM evidence_fts \
              WHERE evidence_fts MATCH ?1 AND scope_id = ?2 \
-             ORDER BY rank LIMIT ?3",
+             ORDER BY weighted_rank LIMIT ?3",
             bm25 = bm25_select_fragment("evidence_fts", EVIDENCE_FTS_COLUMN_WEIGHTS),
         )
     })
@@ -5055,9 +5055,9 @@ fn trigram_lane_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
         format!(
-            "SELECT evidence_id, {bm25} AS rank FROM evidence_fts_cjk \
+            "SELECT evidence_id, {bm25} AS weighted_rank FROM evidence_fts_cjk \
              WHERE evidence_fts_cjk MATCH ?1 AND scope_id = ?2 \
-             ORDER BY rank LIMIT ?3",
+             ORDER BY weighted_rank LIMIT ?3",
             bm25 = bm25_select_fragment("evidence_fts_cjk", EVIDENCE_FTS_CJK_COLUMN_WEIGHTS),
         )
     })
@@ -5071,9 +5071,9 @@ fn bigram_lane_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
         format!(
-            "SELECT evidence_id, {bm25} AS rank FROM evidence_fts_bigram \
+            "SELECT evidence_id, {bm25} AS weighted_rank FROM evidence_fts_bigram \
              WHERE evidence_fts_bigram MATCH ?1 AND scope_id = ?2 \
-             ORDER BY rank LIMIT ?3",
+             ORDER BY weighted_rank LIMIT ?3",
             bm25 = bm25_select_fragment("evidence_fts_bigram", EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS),
         )
     })
@@ -5227,6 +5227,30 @@ mod phase_1_8_lane_sql_tests {
             sql.contains("evidence_fts MATCH ?1"),
             "unicode61 lane SQL must MATCH against `evidence_fts` — got: {sql}"
         );
+        // The SELECT alias must NOT collide with FTS5's built-in
+        // `rank` pseudo-column — SQLite resolves `ORDER BY rank`
+        // in favour of the SELECT-list alias today, but the
+        // shadowing is fragile reading and future tuning when
+        // column weights diverge from 1.0 needs the alias to
+        // unambiguously refer to the *weighted* score. Pinning
+        // `weighted_rank` here keeps a future refactor that
+        // silently restores `AS rank` from drifting the contract.
+        assert!(
+            sql.contains("AS weighted_rank"),
+            "unicode61 lane SQL must alias the bm25() expression as \
+             `weighted_rank` (not `rank`, which shadows FTS5's \
+             built-in `rank` pseudo-column) — got: {sql}"
+        );
+        assert!(
+            sql.contains("ORDER BY weighted_rank"),
+            "unicode61 lane SQL must ORDER BY the `weighted_rank` \
+             alias — got: {sql}"
+        );
+        assert!(
+            !sql.contains("AS rank ") && !sql.contains("ORDER BY rank "),
+            "unicode61 lane SQL must not use the shadowing `rank` \
+             alias — got: {sql}"
+        );
     }
 
     #[test]
@@ -5241,6 +5265,11 @@ mod phase_1_8_lane_sql_tests {
             sql.contains("evidence_fts_cjk MATCH ?1"),
             "trigram lane SQL must MATCH against `evidence_fts_cjk` — got: {sql}"
         );
+        assert!(
+            sql.contains("AS weighted_rank") && sql.contains("ORDER BY weighted_rank"),
+            "trigram lane SQL must alias + sort on the `weighted_rank` \
+             alias (not the shadowing `rank` alias) — got: {sql}"
+        );
     }
 
     #[test]
@@ -5254,6 +5283,11 @@ mod phase_1_8_lane_sql_tests {
         assert!(
             sql.contains("evidence_fts_bigram MATCH ?1"),
             "bigram lane SQL must MATCH against `evidence_fts_bigram` — got: {sql}"
+        );
+        assert!(
+            sql.contains("AS weighted_rank") && sql.contains("ORDER BY weighted_rank"),
+            "bigram lane SQL must alias + sort on the `weighted_rank` \
+             alias (not the shadowing `rank` alias) — got: {sql}"
         );
     }
 
