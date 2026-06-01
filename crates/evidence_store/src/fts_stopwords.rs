@@ -388,6 +388,23 @@ pub const ALL_RECALL_LANE_STOPWORDS: &[&str] = &[
 /// fast path; with stopwords the cost grows linearly in match
 /// count, not body size.
 pub fn strip_recall_lane_stopwords(text: &str) -> Cow<'_, str> {
+    let (stripped, _count) = strip_recall_lane_stopwords_counted(text);
+    stripped
+}
+
+/// Strip recall-lane stopwords AND report how many stopword
+/// instances were replaced.  Same semantics as
+/// [`strip_recall_lane_stopwords`] for the returned text — the
+/// only difference is that the second tuple element carries the
+/// strip count so observability call sites can feed it into
+/// [`crate::fts_telemetry::record_stopwords_stripped`] without
+/// re-scanning the input.
+///
+/// Returns `(Cow::Borrowed(text), 0)` on the no-match fast path
+/// and `(Cow::Owned(stripped), n)` when `n >= 1` stopword
+/// instances were stripped.
+#[must_use]
+pub fn strip_recall_lane_stopwords_counted(text: &str) -> (Cow<'_, str>, u64) {
     // Fast path: scan once to detect whether any stopword appears.
     // If none, return `Cow::Borrowed` without allocating. The
     // detection scan is O(n * m) worst-case but short-circuits on
@@ -409,7 +426,7 @@ pub fn strip_recall_lane_stopwords(text: &str) -> Cow<'_, str> {
         probe = &probe[ch_len..];
     }
     if !any_match {
-        return Cow::Borrowed(text);
+        return (Cow::Borrowed(text), 0);
     }
 
     // Allocation path: build the stripped output. We size for the
@@ -418,6 +435,7 @@ pub fn strip_recall_lane_stopwords(text: &str) -> Cow<'_, str> {
     // word dense, particles compose roughly 10-20% of codepoints).
     let mut out = String::with_capacity(text.len());
     let mut remaining = text;
+    let mut strip_count: u64 = 0;
     while !remaining.is_empty() {
         // Dynamic longest-match: enumerate every entry that
         // matches at the current position and pick the longest
@@ -435,6 +453,7 @@ pub fn strip_recall_lane_stopwords(text: &str) -> Cow<'_, str> {
         if let Some(sw) = matched {
             out.push(' ');
             remaining = &remaining[sw.len()..];
+            strip_count += 1;
         } else {
             // No stopword at this position — copy one codepoint
             // and advance.
@@ -446,7 +465,7 @@ pub fn strip_recall_lane_stopwords(text: &str) -> Cow<'_, str> {
             remaining = &remaining[ch.len_utf8()..];
         }
     }
-    Cow::Owned(out)
+    (Cow::Owned(out), strip_count)
 }
 
 #[cfg(test)]

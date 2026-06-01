@@ -1687,7 +1687,7 @@ fn fts5_phase_1_9_japanese_stopword_query_matches_indexed_stopword_body() {
         )
         .unwrap();
     let hits = store.search_fts(scope, "日本のオリンピック", 10).unwrap();
-    assert_eq!(hits.len(), 1, "body+query with identical stopword must hit",);
+    assert_eq!(hits.len(), 1, "body+query with identical stopword must hit");
     assert_eq!(hits[0], r.evidence_id);
 }
 
@@ -1873,4 +1873,150 @@ fn fts5_phase_1_9_unicode61_lane_unstripped_for_latin_content() {
         "Latin (unicode61) lane must not be touched by Phase 1.9",
     );
     assert_eq!(hits[0], r.evidence_id);
+}
+
+/// End-to-end integration test for the Phase 1.10 FTS-telemetry
+/// counters: ingest a CJK body, run a search across all three
+/// recall lanes, and confirm each counter category advances.
+///
+/// This is the cross-cutting "do the counters actually tick
+/// through the public surface?" check — every counter wired in
+/// `crates/evidence_store/src/store.rs` should move when a real
+/// Japanese sentence is ingested + queried.
+///
+/// Counters exercised:
+///   - `index_write_stopwords_stripped_total` (ingest path: の)
+///   - `query_time_stopwords_stripped_total`  (query path: の)
+///   - `unicode61_lane_queries_total`          (always)
+///   - `cjk_trigram_lane_queries_total`        (CJK body present)
+///   - `bigram_lane_queries_total`             (CJK body present)
+///
+/// We use lower-bound (`>`) assertions because other tests in
+/// the same binary touch the same process-singleton counters,
+/// matching the [`crates/ffi/src/metrics.rs`] mirror-parity tests.
+#[test]
+fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
+    use evidence_store::fts_telemetry;
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+
+    // Take a snapshot *before* both ingest and query so we can
+    // independently assert the index-write site advances on
+    // ingest and the query-time site advances on search.
+    let before_ingest = fts_telemetry::snapshot();
+
+    // Japanese body containing two stopwords ("の" particle ×2):
+    // forces the index-time stopword strip path to bump for the
+    // trigram + bigram lanes (the unicode61 lane preserves the
+    // body verbatim).  The body has enough CJK codepoints (>=3)
+    // to route to both trigram and bigram lanes.
+    let body = "今日は会議の議事録の確認を行いました";
+    let res = store
+        .ingest(scope, body.as_bytes(), None, ImportanceClass::Useful)
+        .unwrap();
+
+    let after_ingest = fts_telemetry::snapshot();
+    assert!(
+        after_ingest.index_write_stopwords_stripped_total
+            > before_ingest.index_write_stopwords_stripped_total,
+        "index-write stopword strip counter did not advance on CJK ingest"
+    );
+
+    // Now run a query that itself contains "の" — guarantees
+    // the query-time strip counter advances independently of the
+    // index-time site.
+    let hits = store.search_fts(scope, "議事録の確認", 10).unwrap();
+    assert!(
+        hits.contains(&res.evidence_id),
+        "CJK end-to-end query failed to return the ingested row"
+    );
+
+    let after_query = fts_telemetry::snapshot();
+
+    // Query-time strip site moved.
+    assert!(
+        after_query.query_time_stopwords_stripped_total
+            > after_ingest.query_time_stopwords_stripped_total,
+        "query-time stopword strip counter did not advance on CJK query"
+    );
+
+    // All three lane-query counters moved (unicode61 is always
+    // tried; trigram + bigram are tried because the query
+    // contains adjacent CJK codepoints).
+    assert!(
+        after_query.unicode61_lane_queries_total > after_ingest.unicode61_lane_queries_total,
+        "unicode61 lane query counter did not advance"
+    );
+    assert!(
+        after_query.cjk_trigram_lane_queries_total > after_ingest.cjk_trigram_lane_queries_total,
+        "trigram lane query counter did not advance"
+    );
+    assert!(
+        after_query.bigram_lane_queries_total > after_ingest.bigram_lane_queries_total,
+        "bigram lane query counter did not advance"
+    );
+
+    // The lane row totals should have advanced at least by the
+    // unicode61 lane's hit count (>=1), because the ingested
+    // row matches the query on at least one lane.
+    assert!(
+        after_query.unicode61_lane_rows_total
+            + after_query.cjk_trigram_lane_rows_total
+            + after_query.bigram_lane_rows_total
+            > after_ingest.unicode61_lane_rows_total
+                + after_ingest.cjk_trigram_lane_rows_total
+                + after_ingest.bigram_lane_rows_total,
+        "no recall-lane row counter advanced — the search returned a hit but no lane recorded it"
+    );
+}
+
+/// Skip-counter end-to-end test.  Sister of
+/// `fts_telemetry_counters_advance_for_cjk_query_end_to_end`
+/// that exercises the two *skip* counters.
+///
+/// - `bigram_lane_skips_no_cjk_query_total` advances when the
+///   query has no adjacent CJK codepoint (Latin-only).
+/// - `cjk_trigram_lane_skips_pure_stopword_query_total`
+///   advances when stripping collapses the query to empty
+///   (pure-stopword Japanese input like "の の の").
+#[test]
+fn fts_telemetry_skip_counters_advance_for_structural_skips() {
+    use evidence_store::fts_telemetry;
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+
+    // Seed something searchable so the query path actually runs.
+    let _ = store
+        .ingest(
+            scope,
+            b"Latin body for skip-counter test.",
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+
+    let before = fts_telemetry::snapshot();
+
+    // (1) Latin-only query → bigram lane is structurally
+    // declined (no CJK adjacency) and trigram lane runs without
+    // a pure-stopword collapse.
+    let _ = store.search_fts(scope, "Latin body", 10).unwrap();
+
+    let after_latin = fts_telemetry::snapshot();
+    assert!(
+        after_latin.bigram_lane_skips_no_cjk_query_total
+            > before.bigram_lane_skips_no_cjk_query_total,
+        "bigram no-CJK-query skip counter did not advance on Latin-only query"
+    );
+
+    // (2) Pure-stopword Japanese query → trigram lane collapses
+    // to empty after the query-time strip and short-circuits.
+    let _ = store.search_fts(scope, "の の の", 10).unwrap();
+
+    let after_stop = fts_telemetry::snapshot();
+    assert!(
+        after_stop.cjk_trigram_lane_skips_pure_stopword_query_total
+            > after_latin.cjk_trigram_lane_skips_pure_stopword_query_total,
+        "trigram pure-stopword-query skip counter did not advance on a stripped-to-empty query"
+    );
 }

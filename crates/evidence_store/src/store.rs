@@ -818,7 +818,15 @@ impl EvidenceStore {
             // produce the bridging trigram that the unstripped
             // side still expects). See [`crate::fts_stopwords`]
             // for the symmetric-stripping rationale.
-            let stripped = crate::fts_stopwords::strip_recall_lane_stopwords(text);
+            // Counted variant feeds the Phase 1.10 index-write
+            // stopword strip telemetry — `strip_count` is the
+            // number of stopword instances replaced.
+            let (stripped, strip_count) =
+                crate::fts_stopwords::strip_recall_lane_stopwords_counted(text);
+            crate::fts_telemetry::record_stopwords_stripped(
+                crate::fts_telemetry::StripSite::IndexWrite,
+                strip_count,
+            );
             tx.execute(
                 "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
                  VALUES (?1, ?2, ?3)",
@@ -4688,8 +4696,14 @@ fn migrate_v16_strip_recall_lane_stopwords(conn: &Connection) -> Result<()> {
             // Apply the same stopword strip the write path uses
             // post-Phase-1.9 so the recall-lane indexes here are
             // identical to what a fresh-DB ingest of the same
-            // bodies would produce.
-            let stripped = crate::fts_stopwords::strip_recall_lane_stopwords(&content);
+            // bodies would produce.  Counted variant feeds the
+            // Phase 1.10 v16-migration stopword strip telemetry.
+            let (stripped, strip_count) =
+                crate::fts_stopwords::strip_recall_lane_stopwords_counted(&content);
+            crate::fts_telemetry::record_stopwords_stripped(
+                crate::fts_telemetry::StripSite::V16Migration,
+                strip_count,
+            );
             tx.execute(
                 "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
                  VALUES (?1, ?2, ?3)",
@@ -5042,7 +5056,16 @@ pub(crate) fn merged_fts_search(
     // [`crate::fts_stopwords`] for the symmetric-stripping
     // rationale and [`crate::schema::SCHEMA_VERSION`] v16 for the
     // index-time migration.
-    let stripped_query = crate::fts_stopwords::strip_recall_lane_stopwords(query);
+    // Counted variant feeds the Phase 1.10 query-time stopword
+    // strip telemetry — `strip_count` is the number of stopword
+    // instances replaced.  See [`crate::fts_telemetry`] for the
+    // counter semantics.
+    let (stripped_query, strip_count) =
+        crate::fts_stopwords::strip_recall_lane_stopwords_counted(query);
+    crate::fts_telemetry::record_stopwords_stripped(
+        crate::fts_telemetry::StripSite::QueryTime,
+        strip_count,
+    );
 
     // Capacity bound: 3 branches each contribute at most `limit`
     // unique evidence_ids, so `3 * limit` is the tight upper
@@ -5084,11 +5107,18 @@ pub(crate) fn merged_fts_search(
         let rows = stmt.query_map(params![query, scope_bytes, limit_sql], |row| {
             Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
         })?;
+        let mut row_count: u64 = 0;
         for row in rows {
             let (id_bytes, rank) = row?;
             let id = EvidenceId(slice_to_uuid(&id_bytes)?);
             merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_LANE_WEIGHT);
+            row_count += 1;
         }
+        // Telemetry: record the lane invocation + raw row count
+        // (pre-merge, pre-truncate, pre-rank-comparison).  Counts
+        // the rows the lane *contributed* to the merge, not the
+        // rows that survived the final cross-lane sort+truncate.
+        crate::fts_telemetry::record_lane_query(crate::fts_telemetry::Lane::Unicode61, row_count);
     }
 
     // Branch 2: trigram (additive recall). Errors swallowed.
@@ -5124,6 +5154,11 @@ pub(crate) fn merged_fts_search(
     // exactly the ASCII spaces we inserted at strip sites.
     let trigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
         if stripped_query.as_ref().trim().is_empty() {
+            // Telemetry: pure-stopword query collapsed to empty
+            // after stripping — the trigram lane is declined.
+            crate::fts_telemetry::record_lane_skip(
+                crate::fts_telemetry::SkipReason::CjkTrigramPureStopwordQuery,
+            );
             return Ok(Vec::new());
         }
         // `prepare_cached` — see Branch 1 comment for rationale.
@@ -5167,9 +5202,20 @@ pub(crate) fn merged_fts_search(
         // the cross-lane min-rank comparison. See
         // [`crate::fts_weights`] for the precision-vs-recall
         // rationale.
+        let row_count = u64::try_from(trigram_rows.len()).unwrap_or(u64::MAX);
         for (id, rank) in trigram_rows {
             merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_CJK_LANE_WEIGHT);
         }
+        // Telemetry: record the lane invocation + contributed
+        // row count.  The skip-branch above already bumped the
+        // skips counter for the pure-stopword case, so the lane
+        // queries counter strictly tracks invocations that
+        // reached SQLite.  An `Err` outcome of the swallow-scope
+        // is silently dropped (same architectural rule as the
+        // doc-comment "errors swallowed" contract); the
+        // telemetry counter is bumped only when the lane
+        // contributed rows that the merge actually consumed.
+        crate::fts_telemetry::record_lane_query(crate::fts_telemetry::Lane::CjkTrigram, row_count);
     }
 
     // Branch 3: precomputed-bigram (additive recall). Errors
@@ -5212,6 +5258,13 @@ pub(crate) fn merged_fts_search(
     // produced by the body).
     if let Some(bigram_match) = crate::bigram::compute_cjk_bigram_query(stripped_query.as_ref()) {
         let bigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
+            // Note on telemetry placement: the bigram lane query
+            // counter is bumped post-swallow (after the `Ok` arm
+            // is reached and `bigram_rows` is in scope) — same
+            // architectural choice as the trigram lane above.
+            // The bigram skip counter is bumped in the `else`
+            // arm of the outer `if let` (see below).
+            //
             // `prepare_cached` — see Branch 1 comment for rationale.
             let sql = bigram_lane_sql();
             let mut stmt = conn.prepare_cached(sql)?;
@@ -5234,10 +5287,16 @@ pub(crate) fn merged_fts_search(
             // 1.0) before merging — the bigram lane is the
             // highest-recall and lowest-precision lane so its
             // weighted ranks pay the steepest cross-lane penalty.
+            let row_count = u64::try_from(bigram_rows.len()).unwrap_or(u64::MAX);
             for (id, rank) in bigram_rows {
                 merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_BIGRAM_LANE_WEIGHT);
             }
+            crate::fts_telemetry::record_lane_query(crate::fts_telemetry::Lane::Bigram, row_count);
         }
+    } else {
+        // Telemetry: query had no adjacent-CJK codepoint pair, so
+        // the bigram lane is declined without invoking SQLite.
+        crate::fts_telemetry::record_lane_skip(crate::fts_telemetry::SkipReason::BigramNoCjkQuery);
     }
 
     // Sort by best (smallest) rank ascending; truncate to limit.

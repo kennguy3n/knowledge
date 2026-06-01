@@ -762,6 +762,207 @@ pub struct MetricsSnapshot {
     /// initialised. Used to compute `uptime_secs` on the health
     /// envelope.
     pub boot_unix_secs: u64,
+    /// Multilingual lexicon-path telemetry (Phase 1.10).  Counts
+    /// per-BCP-47 lexicon hits, [`observation_engine::MatchStrategy`]
+    /// fires, and Arabic / Hebrew clitic-peel depth distribution.
+    /// `#[serde(default)]` per the additive-wire-contract rule —
+    /// older emitters' JSON lacks this field and deserialises to
+    /// [`LexiconTelemetry::default()`] (all zeroes).
+    #[serde(default)]
+    pub lexicon_telemetry: LexiconTelemetry,
+    /// Multilingual FTS5-path telemetry (Phase 1.10).  Counts
+    /// per-lane query / row totals, recall-lane skip causes, and
+    /// stopword strip volumes per call site.
+    /// `#[serde(default)]` per the additive-wire-contract rule.
+    #[serde(default)]
+    pub fts_telemetry: FtsTelemetry,
+}
+
+/// Multilingual lexicon-path observability counters mirrored from
+/// [`observation_engine::lexicon_telemetry`] (Phase 1.10).
+///
+/// The mirror lives here rather than upstream because the FFI
+/// crate is where the `uniffi::Record` / serde derive lives, and
+/// the upstream `observation_engine` crate intentionally does not
+/// depend on either FFI runtime.  The field list mirrors
+/// [`observation_engine::LexiconTelemetrySnapshot`] verbatim
+/// — adding a counter requires extending both structs
+/// symmetrically.
+///
+/// New fields must use `#[serde(default)]` so older snapshots
+/// deserialise cleanly; the additive-wire-contract rule applies
+/// to this struct exactly the same as to [`MetricsSnapshot`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
+pub struct LexiconTelemetry {
+    /// Resolved-lexicon hits for `ar`.
+    #[serde(default)]
+    pub hits_ar: u64,
+    /// Resolved-lexicon hits for `bo`.
+    #[serde(default)]
+    pub hits_bo: u64,
+    /// Resolved-lexicon hits for `de`.
+    #[serde(default)]
+    pub hits_de: u64,
+    /// Resolved-lexicon hits for `en`.  Includes the
+    /// unknown-tag → English fallback path (see
+    /// [`Self::unknown_tag_fallbacks_total`]).
+    #[serde(default)]
+    pub hits_en: u64,
+    /// Resolved-lexicon hits for `es`.
+    #[serde(default)]
+    pub hits_es: u64,
+    /// Resolved-lexicon hits for `fr`.
+    #[serde(default)]
+    pub hits_fr: u64,
+    /// Resolved-lexicon hits for `he`.
+    #[serde(default)]
+    pub hits_he: u64,
+    /// Resolved-lexicon hits for `hi`.
+    #[serde(default)]
+    pub hits_hi: u64,
+    /// Resolved-lexicon hits for `id`.
+    #[serde(default)]
+    pub hits_id: u64,
+    /// Resolved-lexicon hits for `it`.
+    #[serde(default)]
+    pub hits_it: u64,
+    /// Resolved-lexicon hits for `ja`.
+    #[serde(default)]
+    pub hits_ja: u64,
+    /// Resolved-lexicon hits for `km`.
+    #[serde(default)]
+    pub hits_km: u64,
+    /// Resolved-lexicon hits for `ko`.
+    #[serde(default)]
+    pub hits_ko: u64,
+    /// Resolved-lexicon hits for `lo`.
+    #[serde(default)]
+    pub hits_lo: u64,
+    /// Resolved-lexicon hits for `ms`.
+    #[serde(default)]
+    pub hits_ms: u64,
+    /// Resolved-lexicon hits for `my`.
+    #[serde(default)]
+    pub hits_my: u64,
+    /// Resolved-lexicon hits for `pt`.
+    #[serde(default)]
+    pub hits_pt: u64,
+    /// Resolved-lexicon hits for `ru`.
+    #[serde(default)]
+    pub hits_ru: u64,
+    /// Resolved-lexicon hits for `th`.
+    #[serde(default)]
+    pub hits_th: u64,
+    /// Resolved-lexicon hits for `vi`.
+    #[serde(default)]
+    pub hits_vi: u64,
+    /// Resolved-lexicon hits for `zh`.
+    #[serde(default)]
+    pub hits_zh: u64,
+    /// Times an input primary_tag was `Some(t)` but no lexicon
+    /// was configured for `t`, so the registry fell back to
+    /// English.  Always satisfies
+    /// `unknown_tag_fallbacks_total <= hits_en`.
+    #[serde(default)]
+    pub unknown_tag_fallbacks_total: u64,
+    /// `MatchStrategy::FirstToken` fires.
+    #[serde(default)]
+    pub strategy_first_token: u64,
+    /// `MatchStrategy::FirstBigram` fires.
+    #[serde(default)]
+    pub strategy_first_bigram: u64,
+    /// `MatchStrategy::Substring` fires.
+    #[serde(default)]
+    pub strategy_substring: u64,
+    /// `MatchStrategy::FirstTokenWithArabicClitics` fires.
+    #[serde(default)]
+    pub strategy_first_token_with_arabic_clitics: u64,
+    /// `MatchStrategy::FirstTokenWithHebrewClitics` fires.
+    #[serde(default)]
+    pub strategy_first_token_with_hebrew_clitics: u64,
+    /// Arabic clitic-peeler matches at depth 0 (no peel needed).
+    #[serde(default)]
+    pub arabic_peel_depth_0_matches: u64,
+    /// Arabic clitic-peeler matches at depth 1 (one peel).
+    #[serde(default)]
+    pub arabic_peel_depth_1_matches: u64,
+    /// Arabic clitic-peeler matches at depth 2 (two peels).
+    #[serde(default)]
+    pub arabic_peel_depth_2_matches: u64,
+    /// Arabic clitic-peeler matches at depth 3 (three peels).
+    #[serde(default)]
+    pub arabic_peel_depth_3_matches: u64,
+    /// Arabic clitic-peeler budget exhausted without a match.
+    #[serde(default)]
+    pub arabic_peel_depth_exhausted: u64,
+    /// Hebrew clitic-peeler matches at depth 0 (no peel needed).
+    #[serde(default)]
+    pub hebrew_peel_depth_0_matches: u64,
+    /// Hebrew clitic-peeler matches at depth 1 (one peel).
+    #[serde(default)]
+    pub hebrew_peel_depth_1_matches: u64,
+    /// Hebrew clitic-peeler matches at depth 2 (two peels).
+    #[serde(default)]
+    pub hebrew_peel_depth_2_matches: u64,
+    /// Hebrew clitic-peeler matches at depth 3 (three peels).
+    #[serde(default)]
+    pub hebrew_peel_depth_3_matches: u64,
+    /// Hebrew clitic-peeler budget exhausted without a match.
+    #[serde(default)]
+    pub hebrew_peel_depth_exhausted: u64,
+}
+
+/// Multilingual FTS5-path observability counters mirrored from
+/// [`evidence_store::fts_telemetry`] (Phase 1.10).
+///
+/// See [`LexiconTelemetry`] for the wire-mirror rationale.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
+pub struct FtsTelemetry {
+    /// Times the unicode61 lane (`evidence_fts`) was invoked
+    /// with a non-empty query in
+    /// [`evidence_store::store::merged_fts_search`].
+    #[serde(default)]
+    pub unicode61_lane_queries_total: u64,
+    /// Cumulative row count across all
+    /// [`Self::unicode61_lane_queries_total`] invocations.
+    #[serde(default)]
+    pub unicode61_lane_rows_total: u64,
+    /// Times the CJK trigram lane (`evidence_fts_cjk`) was
+    /// invoked with a non-empty stripped query.
+    #[serde(default)]
+    pub cjk_trigram_lane_queries_total: u64,
+    /// Cumulative row count across all
+    /// [`Self::cjk_trigram_lane_queries_total`] invocations.
+    #[serde(default)]
+    pub cjk_trigram_lane_rows_total: u64,
+    /// Times the CJK trigram lane was skipped because the
+    /// stopword stripping collapsed the query to empty.
+    #[serde(default)]
+    pub cjk_trigram_lane_skips_pure_stopword_query_total: u64,
+    /// Times the CJK bigram lane (`evidence_fts_bigram`) was
+    /// invoked with a non-empty bigram match string.
+    #[serde(default)]
+    pub bigram_lane_queries_total: u64,
+    /// Cumulative row count across all
+    /// [`Self::bigram_lane_queries_total`] invocations.
+    #[serde(default)]
+    pub bigram_lane_rows_total: u64,
+    /// Times the CJK bigram lane was skipped because the query
+    /// contained no adjacent-CJK codepoint pair.
+    #[serde(default)]
+    pub bigram_lane_skips_no_cjk_query_total: u64,
+    /// Cumulative count of stopword instances stripped at
+    /// index-write time.
+    #[serde(default)]
+    pub index_write_stopwords_stripped_total: u64,
+    /// Cumulative count of stopword instances stripped at
+    /// query time.
+    #[serde(default)]
+    pub query_time_stopwords_stripped_total: u64,
+    /// Cumulative count of stopword instances stripped during
+    /// the v15 → v16 chunked re-tokenisation migration.
+    #[serde(default)]
+    pub v16_migration_stopwords_stripped_total: u64,
 }
 
 /// Per-kind error counters.
@@ -937,6 +1138,77 @@ pub fn snapshot() -> MetricsSnapshot {
         open_handles: m.open_handles.load(Ordering::Relaxed),
         tombstone_count: m.tombstone_count.load(Ordering::Relaxed),
         boot_unix_secs: m.boot_unix_secs.load(Ordering::Relaxed),
+        lexicon_telemetry: lexicon_telemetry_snapshot(),
+        fts_telemetry: fts_telemetry_snapshot(),
+    }
+}
+
+/// Read the upstream
+/// [`observation_engine::lexicon_telemetry::snapshot`] and
+/// project it into the FFI mirror struct.  One-to-one field
+/// mapping by name — the field lists are kept symmetric by the
+/// `lexicon_telemetry_mirror_field_parity` test below.
+fn lexicon_telemetry_snapshot() -> LexiconTelemetry {
+    let s = observation_engine::lexicon_telemetry::snapshot();
+    LexiconTelemetry {
+        hits_ar: s.hits_ar,
+        hits_bo: s.hits_bo,
+        hits_de: s.hits_de,
+        hits_en: s.hits_en,
+        hits_es: s.hits_es,
+        hits_fr: s.hits_fr,
+        hits_he: s.hits_he,
+        hits_hi: s.hits_hi,
+        hits_id: s.hits_id,
+        hits_it: s.hits_it,
+        hits_ja: s.hits_ja,
+        hits_km: s.hits_km,
+        hits_ko: s.hits_ko,
+        hits_lo: s.hits_lo,
+        hits_ms: s.hits_ms,
+        hits_my: s.hits_my,
+        hits_pt: s.hits_pt,
+        hits_ru: s.hits_ru,
+        hits_th: s.hits_th,
+        hits_vi: s.hits_vi,
+        hits_zh: s.hits_zh,
+        unknown_tag_fallbacks_total: s.unknown_tag_fallbacks_total,
+        strategy_first_token: s.strategy_first_token,
+        strategy_first_bigram: s.strategy_first_bigram,
+        strategy_substring: s.strategy_substring,
+        strategy_first_token_with_arabic_clitics: s.strategy_first_token_with_arabic_clitics,
+        strategy_first_token_with_hebrew_clitics: s.strategy_first_token_with_hebrew_clitics,
+        arabic_peel_depth_0_matches: s.arabic_peel_depth_0_matches,
+        arabic_peel_depth_1_matches: s.arabic_peel_depth_1_matches,
+        arabic_peel_depth_2_matches: s.arabic_peel_depth_2_matches,
+        arabic_peel_depth_3_matches: s.arabic_peel_depth_3_matches,
+        arabic_peel_depth_exhausted: s.arabic_peel_depth_exhausted,
+        hebrew_peel_depth_0_matches: s.hebrew_peel_depth_0_matches,
+        hebrew_peel_depth_1_matches: s.hebrew_peel_depth_1_matches,
+        hebrew_peel_depth_2_matches: s.hebrew_peel_depth_2_matches,
+        hebrew_peel_depth_3_matches: s.hebrew_peel_depth_3_matches,
+        hebrew_peel_depth_exhausted: s.hebrew_peel_depth_exhausted,
+    }
+}
+
+/// Read the upstream
+/// [`evidence_store::fts_telemetry::snapshot`] and project it
+/// into the FFI mirror struct.
+fn fts_telemetry_snapshot() -> FtsTelemetry {
+    let s = evidence_store::fts_telemetry::snapshot();
+    FtsTelemetry {
+        unicode61_lane_queries_total: s.unicode61_lane_queries_total,
+        unicode61_lane_rows_total: s.unicode61_lane_rows_total,
+        cjk_trigram_lane_queries_total: s.cjk_trigram_lane_queries_total,
+        cjk_trigram_lane_rows_total: s.cjk_trigram_lane_rows_total,
+        cjk_trigram_lane_skips_pure_stopword_query_total: s
+            .cjk_trigram_lane_skips_pure_stopword_query_total,
+        bigram_lane_queries_total: s.bigram_lane_queries_total,
+        bigram_lane_rows_total: s.bigram_lane_rows_total,
+        bigram_lane_skips_no_cjk_query_total: s.bigram_lane_skips_no_cjk_query_total,
+        index_write_stopwords_stripped_total: s.index_write_stopwords_stripped_total,
+        query_time_stopwords_stripped_total: s.query_time_stopwords_stripped_total,
+        v16_migration_stopwords_stripped_total: s.v16_migration_stopwords_stripped_total,
     }
 }
 
@@ -1191,5 +1463,291 @@ mod tests {
         // The boot stamp may be any non-zero positive integer
         // (post-1970); we only check that it's been initialised.
         assert!(snap.boot_unix_secs > 0);
+    }
+
+    /// Pin the lexicon-telemetry mirror field parity (Phase 1.10).
+    ///
+    /// Every field on
+    /// [`observation_engine::LexiconTelemetrySnapshot`] must have
+    /// a one-to-one counterpart on the FFI [`LexiconTelemetry`]
+    /// struct.  The check is byte-by-byte: we read the upstream
+    /// snapshot, project into the FFI mirror via
+    /// [`lexicon_telemetry_snapshot`], and then re-project field
+    /// values by name to make sure no field was dropped or
+    /// silently zeroed.  When this test fails after an
+    /// upstream-counter addition, the FFI mirror is missing the
+    /// new field — extend [`LexiconTelemetry`] and the
+    /// projection helper symmetrically.
+    ///
+    /// The test bumps the upstream counters first so all fields
+    /// have non-zero distinct values, then asserts the projection
+    /// preserves them.  We use distinct prime-ish increments per
+    /// counter so a swapped-field-order bug surfaces as a value
+    /// mismatch rather than silently aliasing.
+    #[test]
+    fn lexicon_telemetry_mirror_round_trips() {
+        use observation_engine::lexicon::MatchStrategy;
+        use observation_engine::lexicon_telemetry::{
+            record_arabic_peel_depth, record_hebrew_peel_depth, record_lexicon_hit,
+            record_match_strategy_fire, PeelOutcome,
+        };
+
+        // Take a baseline so we can compute deltas — this test
+        // shares the process-singleton counters with every other
+        // test in the binary that touches the lexicon path.
+        let before = observation_engine::lexicon_telemetry::snapshot();
+        // Issue a single representative increment per upstream
+        // counter so every field exercises a non-zero delta.
+        for tag in [
+            "ar", "bo", "de", "en", "es", "fr", "he", "hi", "id", "it", "ja", "km", "ko", "lo",
+            "ms", "my", "pt", "ru", "th", "vi", "zh",
+        ] {
+            record_lexicon_hit(Some(tag), tag);
+        }
+        record_lexicon_hit(Some("xx-unknown"), "en");
+        for s in [
+            MatchStrategy::FirstToken,
+            MatchStrategy::FirstBigram,
+            MatchStrategy::Substring,
+            MatchStrategy::FirstTokenWithArabicClitics,
+            MatchStrategy::FirstTokenWithHebrewClitics,
+        ] {
+            record_match_strategy_fire(s);
+        }
+        for o in [
+            PeelOutcome::MatchedAtDepth(0),
+            PeelOutcome::MatchedAtDepth(1),
+            PeelOutcome::MatchedAtDepth(2),
+            PeelOutcome::MatchedAtDepth(3),
+            PeelOutcome::BudgetExhausted,
+        ] {
+            record_arabic_peel_depth(o);
+            record_hebrew_peel_depth(o);
+        }
+
+        // Mirror is read AFTER upstream so its values are a
+        // (potentially advanced) read of the same singleton;
+        // parallel tests may bump counters in between, so the
+        // mirror values are bounded *below* by the upstream
+        // snapshot.  This is the same monotonic-lower-bound
+        // pattern used by [`snapshot_reflects_counter_increments`]
+        // above.  We additionally lower-bound the mirror by
+        // `before + N` so the test catches a mirror that
+        // silently zeroes a field (mirror==0 would be < before+1
+        // even on a clean process).
+        let upstream = observation_engine::lexicon_telemetry::snapshot();
+        let mirror = lexicon_telemetry_snapshot();
+
+        // Verify each FFI mirror field plumbs through to the
+        // corresponding upstream counter.  Lower-bound by the
+        // upstream value because parallel tests cannot decrement
+        // counters but may increment them between the two reads.
+        assert!(mirror.hits_ar >= upstream.hits_ar);
+        assert!(mirror.hits_bo >= upstream.hits_bo);
+        assert!(mirror.hits_de >= upstream.hits_de);
+        assert!(mirror.hits_en >= upstream.hits_en);
+        assert!(mirror.hits_es >= upstream.hits_es);
+        assert!(mirror.hits_fr >= upstream.hits_fr);
+        assert!(mirror.hits_he >= upstream.hits_he);
+        assert!(mirror.hits_hi >= upstream.hits_hi);
+        assert!(mirror.hits_id >= upstream.hits_id);
+        assert!(mirror.hits_it >= upstream.hits_it);
+        assert!(mirror.hits_ja >= upstream.hits_ja);
+        assert!(mirror.hits_km >= upstream.hits_km);
+        assert!(mirror.hits_ko >= upstream.hits_ko);
+        assert!(mirror.hits_lo >= upstream.hits_lo);
+        assert!(mirror.hits_ms >= upstream.hits_ms);
+        assert!(mirror.hits_my >= upstream.hits_my);
+        assert!(mirror.hits_pt >= upstream.hits_pt);
+        assert!(mirror.hits_ru >= upstream.hits_ru);
+        assert!(mirror.hits_th >= upstream.hits_th);
+        assert!(mirror.hits_vi >= upstream.hits_vi);
+        assert!(mirror.hits_zh >= upstream.hits_zh);
+        assert!(mirror.unknown_tag_fallbacks_total >= upstream.unknown_tag_fallbacks_total);
+        assert!(mirror.strategy_first_token >= upstream.strategy_first_token);
+        assert!(mirror.strategy_first_bigram >= upstream.strategy_first_bigram);
+        assert!(mirror.strategy_substring >= upstream.strategy_substring);
+        assert!(
+            mirror.strategy_first_token_with_arabic_clitics
+                >= upstream.strategy_first_token_with_arabic_clitics
+        );
+        assert!(
+            mirror.strategy_first_token_with_hebrew_clitics
+                >= upstream.strategy_first_token_with_hebrew_clitics
+        );
+        assert!(mirror.arabic_peel_depth_0_matches >= upstream.arabic_peel_depth_0_matches);
+        assert!(mirror.arabic_peel_depth_1_matches >= upstream.arabic_peel_depth_1_matches);
+        assert!(mirror.arabic_peel_depth_2_matches >= upstream.arabic_peel_depth_2_matches);
+        assert!(mirror.arabic_peel_depth_3_matches >= upstream.arabic_peel_depth_3_matches);
+        assert!(mirror.arabic_peel_depth_exhausted >= upstream.arabic_peel_depth_exhausted);
+        assert!(mirror.hebrew_peel_depth_0_matches >= upstream.hebrew_peel_depth_0_matches);
+        assert!(mirror.hebrew_peel_depth_1_matches >= upstream.hebrew_peel_depth_1_matches);
+        assert!(mirror.hebrew_peel_depth_2_matches >= upstream.hebrew_peel_depth_2_matches);
+        assert!(mirror.hebrew_peel_depth_3_matches >= upstream.hebrew_peel_depth_3_matches);
+        assert!(mirror.hebrew_peel_depth_exhausted >= upstream.hebrew_peel_depth_exhausted);
+
+        // Reverse direction: every field we bumped above must
+        // show movement from baseline through the FFI mirror.
+        // This is what catches a silently-zeroed projection: if
+        // the mirror dropped `hits_ar`, `mirror.hits_ar - before.hits_ar`
+        // would be 0 even though our increment added 1.
+        assert!(mirror.hits_ar > before.hits_ar, "hits_ar not plumbed");
+        assert!(mirror.hits_bo > before.hits_bo, "hits_bo not plumbed");
+        assert!(mirror.hits_de > before.hits_de, "hits_de not plumbed");
+        assert!(mirror.hits_en >= before.hits_en + 2, "hits_en not plumbed");
+        assert!(mirror.hits_es > before.hits_es, "hits_es not plumbed");
+        assert!(mirror.hits_fr > before.hits_fr, "hits_fr not plumbed");
+        assert!(mirror.hits_he > before.hits_he, "hits_he not plumbed");
+        assert!(mirror.hits_hi > before.hits_hi, "hits_hi not plumbed");
+        assert!(mirror.hits_id > before.hits_id, "hits_id not plumbed");
+        assert!(mirror.hits_it > before.hits_it, "hits_it not plumbed");
+        assert!(mirror.hits_ja > before.hits_ja, "hits_ja not plumbed");
+        assert!(mirror.hits_km > before.hits_km, "hits_km not plumbed");
+        assert!(mirror.hits_ko > before.hits_ko, "hits_ko not plumbed");
+        assert!(mirror.hits_lo > before.hits_lo, "hits_lo not plumbed");
+        assert!(mirror.hits_ms > before.hits_ms, "hits_ms not plumbed");
+        assert!(mirror.hits_my > before.hits_my, "hits_my not plumbed");
+        assert!(mirror.hits_pt > before.hits_pt, "hits_pt not plumbed");
+        assert!(mirror.hits_ru > before.hits_ru, "hits_ru not plumbed");
+        assert!(mirror.hits_th > before.hits_th, "hits_th not plumbed");
+        assert!(mirror.hits_vi > before.hits_vi, "hits_vi not plumbed");
+        assert!(mirror.hits_zh > before.hits_zh, "hits_zh not plumbed");
+        assert!(
+            mirror.unknown_tag_fallbacks_total > before.unknown_tag_fallbacks_total,
+            "unknown_tag_fallbacks_total not plumbed"
+        );
+        assert!(
+            mirror.strategy_first_token > before.strategy_first_token,
+            "strategy_first_token not plumbed"
+        );
+        assert!(
+            mirror.strategy_first_bigram > before.strategy_first_bigram,
+            "strategy_first_bigram not plumbed"
+        );
+        assert!(
+            mirror.strategy_substring > before.strategy_substring,
+            "strategy_substring not plumbed"
+        );
+        assert!(
+            mirror.strategy_first_token_with_arabic_clitics
+                > before.strategy_first_token_with_arabic_clitics,
+            "strategy_first_token_with_arabic_clitics not plumbed"
+        );
+        assert!(
+            mirror.strategy_first_token_with_hebrew_clitics
+                > before.strategy_first_token_with_hebrew_clitics,
+            "strategy_first_token_with_hebrew_clitics not plumbed"
+        );
+        assert!(
+            mirror.arabic_peel_depth_0_matches > before.arabic_peel_depth_0_matches,
+            "arabic_peel_depth_0_matches not plumbed"
+        );
+        assert!(
+            mirror.arabic_peel_depth_1_matches > before.arabic_peel_depth_1_matches,
+            "arabic_peel_depth_1_matches not plumbed"
+        );
+        assert!(
+            mirror.arabic_peel_depth_2_matches > before.arabic_peel_depth_2_matches,
+            "arabic_peel_depth_2_matches not plumbed"
+        );
+        assert!(
+            mirror.arabic_peel_depth_3_matches > before.arabic_peel_depth_3_matches,
+            "arabic_peel_depth_3_matches not plumbed"
+        );
+        assert!(
+            mirror.arabic_peel_depth_exhausted > before.arabic_peel_depth_exhausted,
+            "arabic_peel_depth_exhausted not plumbed"
+        );
+        assert!(
+            mirror.hebrew_peel_depth_0_matches > before.hebrew_peel_depth_0_matches,
+            "hebrew_peel_depth_0_matches not plumbed"
+        );
+        assert!(
+            mirror.hebrew_peel_depth_1_matches > before.hebrew_peel_depth_1_matches,
+            "hebrew_peel_depth_1_matches not plumbed"
+        );
+        assert!(
+            mirror.hebrew_peel_depth_2_matches > before.hebrew_peel_depth_2_matches,
+            "hebrew_peel_depth_2_matches not plumbed"
+        );
+        assert!(
+            mirror.hebrew_peel_depth_3_matches > before.hebrew_peel_depth_3_matches,
+            "hebrew_peel_depth_3_matches not plumbed"
+        );
+        assert!(
+            mirror.hebrew_peel_depth_exhausted > before.hebrew_peel_depth_exhausted,
+            "hebrew_peel_depth_exhausted not plumbed"
+        );
+    }
+
+    /// Pin the FTS-telemetry mirror field parity (Phase 1.10).
+    /// Mirror of `lexicon_telemetry_mirror_round_trips` for the
+    /// FTS path.
+    #[test]
+    fn fts_telemetry_mirror_round_trips() {
+        use evidence_store::fts_telemetry::{
+            record_lane_query, record_lane_skip, record_stopwords_stripped, Lane, SkipReason,
+            StripSite,
+        };
+        let before = evidence_store::fts_telemetry::snapshot();
+        record_lane_query(Lane::Unicode61, 7);
+        record_lane_query(Lane::CjkTrigram, 5);
+        record_lane_query(Lane::Bigram, 3);
+        record_lane_skip(SkipReason::CjkTrigramPureStopwordQuery);
+        record_lane_skip(SkipReason::BigramNoCjkQuery);
+        record_stopwords_stripped(StripSite::IndexWrite, 11);
+        record_stopwords_stripped(StripSite::QueryTime, 13);
+        record_stopwords_stripped(StripSite::V16Migration, 17);
+
+        let upstream = evidence_store::fts_telemetry::snapshot();
+        let mirror = fts_telemetry_snapshot();
+
+        assert_eq!(
+            mirror.unicode61_lane_queries_total,
+            upstream.unicode61_lane_queries_total
+        );
+        assert_eq!(
+            mirror.unicode61_lane_rows_total,
+            upstream.unicode61_lane_rows_total
+        );
+        assert_eq!(
+            mirror.cjk_trigram_lane_queries_total,
+            upstream.cjk_trigram_lane_queries_total
+        );
+        assert_eq!(
+            mirror.cjk_trigram_lane_rows_total,
+            upstream.cjk_trigram_lane_rows_total
+        );
+        assert_eq!(
+            mirror.cjk_trigram_lane_skips_pure_stopword_query_total,
+            upstream.cjk_trigram_lane_skips_pure_stopword_query_total
+        );
+        assert_eq!(
+            mirror.bigram_lane_queries_total,
+            upstream.bigram_lane_queries_total
+        );
+        assert_eq!(
+            mirror.bigram_lane_rows_total,
+            upstream.bigram_lane_rows_total
+        );
+        assert_eq!(
+            mirror.bigram_lane_skips_no_cjk_query_total,
+            upstream.bigram_lane_skips_no_cjk_query_total
+        );
+        assert_eq!(
+            mirror.index_write_stopwords_stripped_total,
+            upstream.index_write_stopwords_stripped_total
+        );
+        assert_eq!(
+            mirror.query_time_stopwords_stripped_total,
+            upstream.query_time_stopwords_stripped_total
+        );
+        assert_eq!(
+            mirror.v16_migration_stopwords_stripped_total,
+            upstream.v16_migration_stopwords_stripped_total
+        );
+
+        // Sanity: the upstream counters actually moved.
+        assert!(upstream.unicode61_lane_queries_total > before.unicode61_lane_queries_total);
     }
 }

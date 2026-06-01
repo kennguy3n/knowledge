@@ -61,6 +61,7 @@ pub mod classifier;
 pub mod embeddings;
 pub mod error;
 pub mod fts_stopwords;
+pub mod fts_telemetry;
 pub mod fts_weights;
 pub mod ids;
 pub mod importance;
@@ -72,6 +73,7 @@ pub mod store;
 
 pub use crypto::{ContentHash, MasterKey, MASTER_KEY_LEN};
 pub use error::{EvidenceError, Result};
+pub use fts_telemetry::{snapshot as fts_telemetry_snapshot, FtsTelemetrySnapshot};
 pub use ids::{EvidenceId, ScopeId};
 pub use importance::{ImportanceClass, ImportanceClassifier, Lexicon, LexiconClassifier};
 pub use retrieval::{HybridRetriever, HybridWeights, RetrievalResult};
