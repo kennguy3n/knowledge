@@ -499,37 +499,32 @@ impl<'a> HybridRetriever<'a> {
                 );
                 return Ok(Some(stored));
             }
-            // Two distinct failure modes share the same handling — both
-            // demote to "cache miss, let the live-embed path try":
+            // Three distinct cache-lookup dispositions, each demoting
+            // to the live-embed path but routed to a distinct
+            // telemetry counter so operators can distinguish
+            // expected-miss (`MissNoRow`) from rotation-rule
+            // violations (`MissDimension`) and from transient
+            // storage errors (`MissReadError`):
             //
-            // * `Ok(_)`: dimension mismatch (defensive — should not
-            //   happen when `model_tag` matches, since a single tag
-            //   implies a single dimension) or no cached row at all.
-            //
+            // * `Ok(None)`: no cached row for the active
+            //   `(evidence_id, model_tag)`.
+            // * `Ok(Some(_))` past the dimension-match arm above:
+            //   defensive — the cache row's dimension did not match.
+            //   Should be impossible under the `model_tag` rotation
+            //   rule (one tag ⇒ one dim); the counter makes any
+            //   violation operator-visible.
             // * `Err(Schema | Sqlite)`: a corrupted cache row or
             //   transient SQL error must not abort the whole search.
-            //
-            // The arms are intentionally listed separately so each
-            // failure mode is documented; `clippy::match_same_arms`
-            // is silenced because collapsing them would lose that
-            // semantic distinction.
-            #[allow(clippy::match_same_arms)]
             Ok(None) => {
                 crate::vector_telemetry::record_cache_outcome(
                     crate::vector_telemetry::CacheOutcome::MissNoRow,
                 );
             }
-            #[allow(clippy::match_same_arms)]
             Ok(Some(_)) => {
-                // Defensive: the cache row's dimension did not match
-                // the query embedding's. Should be impossible under
-                // the `model_tag` rotation rule (one tag ⇒ one dim);
-                // the counter makes any violation operator-visible.
                 crate::vector_telemetry::record_cache_outcome(
                     crate::vector_telemetry::CacheOutcome::MissDimension,
                 );
             }
-            #[allow(clippy::match_same_arms)]
             Err(EvidenceError::Schema(_) | EvidenceError::Sqlite(_)) => {
                 crate::vector_telemetry::record_cache_outcome(
                     crate::vector_telemetry::CacheOutcome::MissReadError,
