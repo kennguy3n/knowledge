@@ -31,7 +31,7 @@
 
 use crypto::{decrypt_aead, encrypt_aead, AeadKey, AeadNonce, AEAD_KEY_LEN, AEAD_NONCE_LEN};
 use evidence_store::ScopeId;
-use rand::RngCore;
+use rand::Rng;
 use uuid::Uuid;
 
 use synthesis_pipeline::publish::{

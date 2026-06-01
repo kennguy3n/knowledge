@@ -1,6 +1,6 @@
 //! Integration tests for the encrypted publish / consume round-trip.
 
-use rand::RngCore;
+use rand::Rng;
 
 use crypto::{AeadKey, AEAD_KEY_LEN};
 use evidence_store::ScopeId;

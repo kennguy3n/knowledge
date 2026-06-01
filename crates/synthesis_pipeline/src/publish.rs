@@ -15,11 +15,11 @@
 //!   window. The AAD is reconstructed at decrypt time and any
 //!   mismatch surfaces as [`crypto::CryptoError::AeadDecryption`].
 
-// `TryRngCore` is needed alongside `RngCore` because rand 0.9 made
-// `OsRng` fallible-only. See SECURITY.md §"Random number
-// generation" for the rationale behind the workspace-wide
-// `OsRng`-for-everything policy.
-use rand::{RngCore, TryRngCore};
+// `TryRng` is the fallible RNG trait in rand 0.10 (which renamed
+// `TryRngCore` to `TryRng` and `OsRng` to `SysRng`). See SECURITY.md
+// §"Random number generation" for the rationale behind the
+// workspace-wide OS-RNG-for-everything policy.
+use rand::TryRng;
 use serde::{Deserialize, Serialize};
 
 use crypto::{decrypt_aead, encrypt_aead, AeadCiphertext, AeadKey, AeadNonce, AEAD_NONCE_LEN};
@@ -60,7 +60,9 @@ fn aad_for(scope_id: ScopeId, window_id: WindowId, object_id: ObjectId) -> Vec<u
 fn random_nonce() -> AeadNonce {
     let mut nonce = [0u8; AEAD_NONCE_LEN];
     // See SECURITY.md §"Random number generation".
-    rand::rngs::OsRng.unwrap_err().fill_bytes(&mut nonce);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut nonce)
+        .expect("OS RNG failure");
     nonce
 }
 
@@ -109,6 +111,7 @@ mod tests {
     use super::*;
     use crate::object::{SynthesisObject, SynthesisObjectType};
     use crate::window::WindowId;
+    use rand::Rng;
     use uuid::Uuid;
 
     fn fresh_key() -> AeadKey {

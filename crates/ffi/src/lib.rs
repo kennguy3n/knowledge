@@ -157,11 +157,11 @@ use crypto::{
     AEAD_NONCE_LEN,
 };
 use evidence_store::{EvidenceId, ImportanceClass, ScopeId};
-// `TryRngCore` is needed alongside `RngCore` because rand 0.9 made
-// `OsRng` fallible-only. See SECURITY.md §"Random number
-// generation" for the rationale behind the workspace-wide
-// `OsRng`-for-everything policy.
-use rand::{RngCore, TryRngCore};
+// `TryRng` is the fallible RNG trait in rand 0.10 (which renamed
+// `TryRngCore` to `TryRng` and `OsRng` to `SysRng`). See SECURITY.md
+// §"Random number generation" for the rationale behind the
+// workspace-wide OS-RNG-for-everything policy.
+use rand::TryRng;
 
 use runtime::with_runtime;
 
@@ -1603,7 +1603,9 @@ pub fn encrypt(
             // See SECURITY.md §"Random number generation" for why
             // the substrate uses `OsRng` (not `ThreadRng`) for every
             // per-encrypt AEAD nonce, even on the hot FFI path.
-            rand::rngs::OsRng.unwrap_err().fill_bytes(&mut nonce);
+            rand::rngs::SysRng
+                .try_fill_bytes(&mut nonce)
+                .expect("OS RNG failure");
             let aad = scope_aad(scope);
             let ciphertext =
                 encrypt_aead(&key, &nonce, &plaintext, &aad).map_err(|e| FfiError::Crypto {

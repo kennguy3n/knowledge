@@ -74,14 +74,18 @@ zeroize = { version = "1", features = ["derive"] }
 # `rand_core` is intentionally kept at 0.6 because `x25519-dalek 2`'s
 # `X25519Secret::random_from_rng` and `ml-kem 0.2`'s `KemCore::generate`
 # both consume the `rand_core 0.6 CryptoRngCore` trait. Bumping
-# `rand_core` to 0.9 would require also bumping `x25519-dalek` and
-# `ml-kem`, which is out of scope for this PR. `rand 0.9` is happy to
-# coexist with `rand_core 0.6`: the two crates have parallel `RngCore`
+# `rand_core` past 0.6 would require also bumping `x25519-dalek` and
+# `ml-kem`, which is out of scope for this PR. `rand 0.10` is happy
+# to coexist with `rand_core 0.6`: the two crates have parallel RNG
 # trait hierarchies and our code uses them at distinct call sites
-# (PQ-crypto callsites import `rand_core::OsRng` from the 0.6 surface;
-# everything else uses `rand::rng()` / `rand::rngs::OsRng` from 0.9).
+# (PQ-crypto callsites import `rand_core::OsRng` from the 0.6
+# surface; everything else uses `rand::rng()` / `rand::rngs::SysRng`
+# from 0.10). rand 0.10 renamed `OsRng` to `SysRng`, `RngCore` /
+# `TryRngCore` to `Rng` / `TryRng`, and `os_rng` to `sys_rng`; see
+# the per-callsite migration notes in `crates/*/src/persist.rs` and
+# `crates/evidence_store/src/store.rs`.
 rand_core = { version = "0.6", features = ["std"] }
-rand = "0.9"
+rand = "0.10"
 
 # Post-quantum + classical KEM
 x25519-dalek = { version = "2", features = ["static_secrets"] }

@@ -1918,10 +1918,8 @@ impl EvidenceStore {
         // surfaces the breakage rather than silently producing weak
         // keys. Called via UFCS to avoid a mid-function `use` that
         // clippy's `items-after-statements` lint would flag.
-        rand::RngCore::fill_bytes(
-            &mut rand::TryRngCore::unwrap_err(rand::rngs::OsRng),
-            &mut dek,
-        );
+        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut dek)
+            .expect("OS RNG failure");
         self.store_scope_dek(scope_id, &dek)?;
         Ok(dek)
     }
@@ -4862,27 +4860,31 @@ fn migrate_evidence_embeddings_to_composite_pk(conn: &Connection) -> Result<()> 
 }
 
 fn random_nonce() -> AeadNonce {
-    use rand::rngs::OsRng;
-    use rand::{RngCore, TryRngCore};
+    use rand::rngs::SysRng;
+    use rand::TryRng;
     let mut nonce = [0u8; AEAD_NONCE_LEN];
     // See SECURITY.md §"Random number generation" for why the
-    // substrate uses `OsRng` (not `ThreadRng`) for every per-row
+    // substrate uses the OS RNG (not `ThreadRng`) for every per-row
     // AEAD nonce. Panicking on OS RNG failure is intentional — a
     // substrate that cannot draw entropy cannot encrypt safely.
-    OsRng.unwrap_err().fill_bytes(&mut nonce);
+    SysRng
+        .try_fill_bytes(&mut nonce)
+        .expect("OS RNG failure");
     nonce
 }
 
 fn random_cek() -> AeadKey {
-    use rand::rngs::OsRng;
-    // `TryRngCore` is needed because rand 0.9 made `OsRng` fallible.
-    // The `.unwrap_err()` adapter restores the infallible `RngCore`
-    // surface that this CEK generator depends on (panics on OS RNG
-    // failure, which is the correct behavior — a substrate that
-    // cannot draw entropy cannot wrap content safely).
-    use rand::{RngCore, TryRngCore};
+    // rand 0.10 renamed `OsRng` to `SysRng` and the fallible RNG
+    // trait from `TryRngCore` to `TryRng`. Calling `try_fill_bytes`
+    // and `.expect(...)` keeps the previous semantics: panic on OS
+    // RNG failure (a substrate that cannot draw entropy cannot wrap
+    // content safely).
+    use rand::rngs::SysRng;
+    use rand::TryRng;
     let mut key = [0u8; AEAD_KEY_LEN];
-    OsRng.unwrap_err().fill_bytes(&mut key);
+    SysRng
+        .try_fill_bytes(&mut key)
+        .expect("OS RNG failure");
     key
 }
 

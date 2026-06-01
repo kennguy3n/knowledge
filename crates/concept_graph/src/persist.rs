@@ -43,13 +43,12 @@
 
 use std::path::Path;
 
-// `TryRngCore` is needed alongside `RngCore` because rand 0.9 made
-// `OsRng` fallible-only (it now impls `TryRngCore` / `TryCryptoRng`
-// rather than `RngCore` / `CryptoRng`). The `.unwrap_err()` adapter
-// turns `OsRng` back into an infallible `RngCore` (`UnwrapErr<OsRng>`)
-// that panics on OS RNG failure — the correct behavior for the
-// substrate, since we cannot continue safely without entropy.
-use rand::{RngCore, TryRngCore};
+// `TryRng` is the fallible RNG trait in rand 0.10 (which renamed
+// `TryRngCore` to `TryRng` and `OsRng` to `SysRng`). We call
+// `try_fill_bytes(...).expect("OS RNG failure")` so a transient
+// kernel-RNG failure surfaces as a panic — the correct behaviour for
+// the substrate, since we cannot continue safely without entropy.
+use rand::TryRng;
 use rusqlite::{params, Connection};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -720,7 +719,9 @@ fn random_nonce() -> [u8; AEAD_NONCE_LEN] {
     // `RngCore` (infallible) by panicking on OS RNG failure. See the
     // import comment above for why this dance is required under
     // rand 0.9.
-    rand::rngs::OsRng.unwrap_err().fill_bytes(&mut n);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut n)
+        .expect("OS RNG failure");
     n
 }
 
