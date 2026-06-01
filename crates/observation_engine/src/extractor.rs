@@ -19,9 +19,10 @@
 //! ## Phase 1.4 — multilingual sentence + question handling
 //!
 //! [`split_sentences_with_terminator`] recognises CJK
-//! (`。！？`), Arabic (`؟ ۔`), Devanagari (`।`), Armenian (`։`),
-//! Ethiopic (`።`) sentence terminators alongside ASCII
-//! (`. ! ? \n`). [`looks_like_question`] consults the per-language
+//! (`。！？`), Arabic (`؟ ۔`), Devanagari (`। ॥`),
+//! Armenian (`։`), Ethiopic (`።`), Tibetan (`། ༎`),
+//! Khmer (`។`), and Myanmar (`။`) sentence terminators
+//! alongside ASCII (`. ! ? \n`). [`looks_like_question`] consults the per-language
 //! interrogative tables in [`crate::interrogatives`] and falls
 //! back to first-token English matching when the sentence's
 //! detected language is unknown.
@@ -262,8 +263,8 @@ impl LexiconExtractor {
 /// The terminator is `None` for the trailing fragment of
 /// unterminated input. Stored as a `char` (not a `u8`) because
 /// Phase 1.4 supports multi-byte UTF-8 terminators — CJK `。`,
-/// Arabic `؟`, Devanagari `।`, etc. — that don't fit in a single
-/// byte.
+/// Arabic `؟`, Devanagari `।`, Tibetan `།`, Khmer `។`,
+/// Myanmar `။`, etc. — that don't fit in a single byte.
 #[derive(Debug, Clone, Copy)]
 struct SentenceSlice<'a> {
     text: &'a str,
@@ -298,6 +299,33 @@ struct SentenceSlice<'a> {
 ///   used as a sentence terminator and is intentionally absent
 ///   here.
 /// * `።` (U+1362 ETHIOPIC FULL STOP) — Amharic, Tigrinya.
+/// * `།` (U+0F0D TIBETAN MARK SHAD),
+///   `༎` (U+0F0E TIBETAN MARK NYIS SHAD) — Tibetan single
+///   shad ends a clause / sentence; the nyis shad (double
+///   shad) ends a paragraph or verse, structurally parallel to
+///   the Devanagari single / double danda pair above. Phase 1.5
+///   addition.
+/// * `។` (U+17D4 KHMER SIGN KHAN) — Khmer full stop. Phase
+///   1.5 addition. The Khmer bariyoosan `៕` (U+17D5) is a
+///   paragraph-end marker rather than a sentence-end marker
+///   and is intentionally absent here — matching the precedent
+///   of excluding the Armenian combining question mark `՞`.
+/// * `။` (U+104B MYANMAR SIGN SECTION) — Myanmar / Burmese
+///   full stop ("visarga"). Phase 1.5 addition. The Myanmar
+///   little section `၊` (U+104A) is a clause-level marker
+///   (Burmese comma) rather than a sentence-end marker and is
+///   intentionally absent.
+///
+/// Phase 1.5 closure of #BUG_pr-review-job-..._0001:
+/// without the Tibetan / Khmer / Myanmar arms a multi-sentence
+/// body in these scripts (e.g. `statement1။statement2`) was
+/// treated as a single sentence, so (a) the interrogative
+/// classifier applied substring matching to the entire body
+/// rather than per-sentence, and (b) a body with two
+/// declaratives produced one Fact observation instead of two.
+/// These three scripts ship full Phase 1.5 lexicon +
+/// interrogative coverage; their terminators belong in the
+/// splitter alongside them.
 fn is_sentence_terminator(c: char) -> bool {
     matches!(
         c,
@@ -317,6 +345,13 @@ fn is_sentence_terminator(c: char) -> bool {
         | '\u{0589}' // ։
         // Ethiopic
         | '\u{1362}' // ።
+        // Tibetan (Phase 1.5)
+        | '\u{0F0D}' // །  shad (sentence / clause end)
+        | '\u{0F0E}' // ༎  nyis shad (paragraph / verse end)
+        // Khmer (Phase 1.5)
+        | '\u{17D4}' // ។  khan (full stop)
+        // Myanmar (Phase 1.5)
+        | '\u{104B}' // ။  sign section (full stop / visarga)
     )
 }
 
@@ -859,21 +894,34 @@ fn fold_typographic_apostrophes(text: &str) -> Cow<'_, str> {
 /// Cyrillic / Arabic / Devanagari / etc.) **or** is a run of at
 /// least 4 codepoints in a no-inter-word-whitespace script. The
 /// no-whitespace scripts currently recognised are CJK, Thai,
-/// Lao, Khmer, and Myanmar (Burmese) — the five major living
-/// scripts in whatlang's detected-language set that do not use
-/// inter-word spaces. Without this fallback, the "contains
-/// space" gate would silently drop every sentence in those
-/// scripts as not-fact-shaped, since those scripts run words
-/// together with no separator.
+/// Lao, Khmer, Myanmar (Burmese), and Tibetan — the six major
+/// living Asian scripts that do not separate words with
+/// whitespace. Without this fallback, the "contains space" gate
+/// would silently drop every sentence in those scripts as
+/// not-fact-shaped.
+///
+/// The codepoint set is intentionally **decoupled** from
+/// whatlang's detected-language set: whatlang 0.18 ships
+/// classifiers for CJK / Thai / Khmer / Myanmar but NOT for
+/// Lao or Tibetan (`Lang::Bod` is absent). The fact-shape gate
+/// runs even when language detection produces `None`, and
+/// Phase 1.5 ships `lo` and `bo` lexicons reachable via
+/// explicit-tag callers (FFI / connector pipelines that stamp
+/// the language tag directly). The arms exist so a Lao or
+/// Tibetan body is admitted as a Fact candidate on shape alone,
+/// with `language_tag = None` via the fail-closed contract
+/// when whatlang cannot classify it.
 ///
 /// History: Phase 1.4 added the CJK arm; the Thai arm was added
 /// in the first Devin Review fixup pass (so Thai declaratives
 /// like `กรุงเทพมหานครเป็นเมืองหลวงของประเทศไทย` can become Fact
 /// observations); the Lao / Khmer / Myanmar arms were added in
-/// the sixth Devin Review fixup pass for the same reason
-/// (whatlang already detects `lo`/`km`/`my`, so without this
-/// they were silently failing the fact-shape gate). See Devin
-/// Review finding ANALYSIS-0001b.
+/// the sixth Devin Review fixup pass; Phase 1.5 sweep 3 added
+/// the Tibetan arm and extended the Myanmar arm to Extended-A
+/// / -B. Phase 1.5 sweep 4 closed the asymmetry on Khmer
+/// Symbols (U+19E0..=U+19FF) inside `is_khmer_codepoint`. See
+/// Devin Review findings ANALYSIS-0001b and
+/// BUG_pr-review-job-25cf9148_0001.
 fn is_sentence_shaped_for_fact(sentence: &str) -> bool {
     if sentence.contains(' ') {
         return true;
@@ -886,23 +934,77 @@ fn is_sentence_shaped_for_fact(sentence: &str) -> bool {
                 || is_lao_codepoint(*c)
                 || is_khmer_codepoint(*c)
                 || is_myanmar_codepoint(*c)
+                || is_tibetan_codepoint(*c)
         })
         .count();
     unsegmented_chars >= 4
 }
 
-/// True for code points in the CJK script blocks: CJK Unified
-/// Ideographs (`U+4E00..U+9FFF`), Hiragana (`U+3040..U+309F`),
-/// Katakana (`U+30A0..U+30FF`), Hangul Syllables
-/// (`U+AC00..U+D7AF`). Used by the sentence-shape heuristic and
-/// by the per-sentence-language fallback path.
+/// True for code points in the CJK script blocks. Used by the
+/// sentence-shape heuristic and by the per-sentence-language
+/// fallback path.
+///
+/// **Lockstep contract.** This predicate is kept in lockstep
+/// with [`evidence_store::script::is_cjk_or_thai_codepoint`]
+/// (the FTS5 routing predicate) — same defense-in-depth
+/// principle as `is_khmer_codepoint` / `is_myanmar_codepoint` /
+/// `is_tibetan_codepoint` below. Any codepoint that FTS5 routes
+/// to the `evidence_fts_cjk` / `evidence_fts_bigram` lanes must
+/// also be admitted by the fact-shape gate; otherwise a body
+/// composed entirely of (say) CJK Compatibility Ideographs or
+/// Halfwidth Katakana would be indexed-and-searchable but
+/// silently rejected from becoming a Fact observation. Phase
+/// 1.5 sweep 6 extended this predicate to cover the full CJK
+/// block set, closing the same asymmetry that sweeps 3 (Myanmar
+/// Extended-A / -B) and 4 (Khmer Symbols) closed for the
+/// Brahmic scripts.
+///
+/// **Coverage.**
+///
+/// * Hiragana (`U+3040..=U+309F`)
+/// * Katakana (`U+30A0..=U+30FF`)
+/// * Katakana Phonetic Extensions (`U+31F0..=U+31FF`) — small
+///   kana used in Ainu transliteration and Japanese linguistics
+/// * Halfwidth Katakana (`U+FF65..=U+FF9F`) — JIS X 0201-derived
+///   half-width forms commonly emitted by legacy Japanese IMEs,
+///   mobile-carrier SMS / SS7 gateways, and Japanese telephony
+///   systems
+/// * CJK Radicals Supplement (`U+2E80..=U+2EFF`) — Kangxi radical
+///   components used in dictionaries and IME candidate lists
+/// * CJK Unified Ideographs Extension A (`U+3400..=U+4DBF`)
+/// * CJK Unified Ideographs (`U+4E00..=U+9FFF`)
+/// * Hangul Syllables (`U+AC00..=U+D7AF`)
+/// * CJK Compatibility Ideographs (`U+F900..=U+FAFF`) — duplicates
+///   of Han characters preserved for round-trip compatibility
+///   with legacy charsets (`KS X 1001`, `JIS X 0213`, `Big5`)
+/// * CJK Unified Ideographs Extension B (`U+20000..=U+2A6DF`)
+/// * CJK Unified Ideographs Extensions C..F + I
+///   (`U+2A700..=U+2EE5F`, contiguous; Extension I added in
+///   Unicode 15.1)
+/// * CJK Unified Ideographs Extensions G..H + J
+///   (`U+30000..=U+33479`, contiguous; Extension J added in
+///   Unicode 16.0)
+///
+/// The standing policy is the same as the FTS5 routing
+/// predicate: **"every currently-defined CJK Unified Ideographs
+/// Extension is admitted"**. A future contributor extending the
+/// predicate for Unicode 17+ Extension K / L / ... only needs to
+/// widen the upper bound of whichever contiguous arm the new
+/// block belongs to.
 fn is_cjk_codepoint(c: char) -> bool {
     matches!(c,
-        '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
-        | '\u{3040}'..='\u{309F}' // Hiragana
-        | '\u{30A0}'..='\u{30FF}' // Katakana
-        | '\u{AC00}'..='\u{D7AF}' // Hangul Syllables
-        | '\u{3400}'..='\u{4DBF}' // CJK Unified Ideographs Extension A
+        '\u{3040}'..='\u{309F}'      // Hiragana
+        | '\u{30A0}'..='\u{30FF}'    // Katakana
+        | '\u{31F0}'..='\u{31FF}'    // Katakana Phonetic Extensions
+        | '\u{FF65}'..='\u{FF9F}'    // Halfwidth Katakana
+        | '\u{2E80}'..='\u{2EFF}'    // CJK Radicals Supplement
+        | '\u{3400}'..='\u{4DBF}'    // CJK Unified Ideographs Extension A
+        | '\u{4E00}'..='\u{9FFF}'    // CJK Unified Ideographs
+        | '\u{AC00}'..='\u{D7AF}'    // Hangul Syllables
+        | '\u{F900}'..='\u{FAFF}'    // CJK Compatibility Ideographs
+        | '\u{20000}'..='\u{2A6DF}'  // CJK Unified Ideographs Extension B
+        | '\u{2A700}'..='\u{2EE5F}'  // CJK Unified Ideographs Extensions C..F + I
+        | '\u{30000}'..='\u{33479}'  // CJK Unified Ideographs Extensions G..H + J
     )
 }
 
@@ -930,26 +1032,93 @@ fn is_lao_codepoint(c: char) -> bool {
     matches!(c, '\u{0E80}'..='\u{0EFF}')
 }
 
-/// True for code points in the Khmer script block
-/// (`U+1780..U+17FF`). Khmer is the script of Cambodian and is
-/// also Brahmic-derived with no inter-word whitespace (though
-/// it does use whitespace between phrases / clauses, so many
-/// Khmer sentences fall through the `sentence.contains(' ')`
+/// True for code points in either Khmer block:
+///
+/// * Khmer main block (`U+1780..=U+17FF`) — consonants, vowels,
+///   the invisible coeng (`U+17D2`), and the standard prose
+///   inventory.
+/// * Khmer Symbols (`U+19E0..=U+19FF`) — astronomical / lunar
+///   date symbols used in liturgical / horoscopic corpora.
+///
+/// Both blocks are routed to the FTS5 dual / bigram lanes by
+/// [`crate::script::is_cjk_or_thai_codepoint`] (Phase 1.5). This
+/// predicate is kept in lockstep with the FTS5 routing predicate
+/// — same defense-in-depth principle as Myanmar Extended-A / -B
+/// above and Tibetan below: a body composed entirely of symbols
+/// from the supplementary block must be admitted by the
+/// fact-shape gate on the same terms as it is indexed by FTS5.
+/// Without the supplement arm such a body would be indexed-and-
+/// searchable but never become a Fact observation.
+///
+/// Khmer is Brahmic-derived with no inter-word whitespace
+/// (though it does use whitespace between phrases / clauses, so
+/// many Khmer sentences fall through the `sentence.contains(' ')`
 /// fast path; this arm is the safety net for clause-internal
 /// Khmer runs). whatlang detects Khmer as the `khm` enum
 /// variant, mapped to BCP-47 `km`.
 fn is_khmer_codepoint(c: char) -> bool {
-    matches!(c, '\u{1780}'..='\u{17FF}')
+    matches!(c,
+        '\u{1780}'..='\u{17FF}'   // Khmer main
+        | '\u{19E0}'..='\u{19FF}' // Khmer Symbols (astronomical / lunar date)
+    )
 }
 
-/// True for code points in the Myanmar (Burmese) script block
-/// (`U+1000..U+109F`). Myanmar is a Brahmic script used for
-/// Burmese, Shan, and several other languages of Myanmar /
-/// Thailand / Bangladesh / India; like CJK it has no
-/// inter-word whitespace. whatlang detects Burmese as the `mya`
-/// enum variant, mapped to BCP-47 `my`.
+/// True for code points in any of the three Myanmar script
+/// blocks:
+///
+/// * Myanmar main block (`U+1000..=U+109F`) — Burmese plus the
+///   shared consonant inventory.
+/// * Myanmar Extended-A (`U+AA60..=U+AA7F`) — Pao + Pwo Karen
+///   letters extending the main block (Unicode 5.2, 2009).
+/// * Myanmar Extended-B (`U+A9E0..=U+A9FF`) — Shan additions
+///   (Unicode 7.0, 2014).
+///
+/// All three blocks are routed to the FTS5 dual / bigram lanes
+/// by [`crate::script::is_cjk_or_thai_codepoint`] (Phase 1.5).
+/// This predicate is kept in lockstep with the FTS5 routing
+/// predicate so that a body in a Myanmar minority script (e.g.
+/// pure Shan text using Extended-B codepoints) is admitted by
+/// the extractor's fact-shape gate on the same terms as it is
+/// indexed by the FTS5 layer. Without the Extended-A/-B arms
+/// the asymmetry was: such bodies would be indexed-and-
+/// searchable but never become Fact observations.
+///
+/// whatlang detects Burmese as the `mya` enum variant, mapped
+/// to BCP-47 `my`.
 fn is_myanmar_codepoint(c: char) -> bool {
-    matches!(c, '\u{1000}'..='\u{109F}')
+    matches!(c,
+        '\u{1000}'..='\u{109F}'   // Myanmar main
+        | '\u{AA60}'..='\u{AA7F}' // Myanmar Extended-A (Pao + Pwo Karen)
+        | '\u{A9E0}'..='\u{A9FF}' // Myanmar Extended-B (Shan)
+    )
+}
+
+/// True for code points in the Tibetan script block
+/// (`U+0F00..=U+0FFF`). Tibetan is a Brahmic-derived script
+/// that uses the tsheg (`U+0F0B`) as a *syllable* separator,
+/// not a word boundary, so the `sentence.contains(' ')` fast
+/// path in [`is_sentence_shaped_for_fact`] does not fire for
+/// pure-Tibetan bodies and this codepoint gate is what admits
+/// them as Fact candidates.
+///
+/// whatlang 0.18 does NOT ship a Tibetan classifier
+/// ([`Lang::Bod`](https://docs.rs/whatlang/0.18.0/whatlang/enum.Lang.html)
+/// is absent), so the per-sentence detector will normally
+/// leave the `language_tag` as `None` for Tibetan bodies — but
+/// the fact-shape gate runs even when language detection
+/// produces `None`, and Phase 1.5 ships a `bo` lexicon
+/// reachable via explicit-tag callers (FFI / connector
+/// pipelines), so the Tibetan body is fully indexable, fully
+/// FTS-routable, and (with this arm) fully Fact-eligible.
+/// Without this arm the asymmetry was: a Tibetan sentence
+/// without ASCII spaces would route to `evidence_fts_cjk` /
+/// `evidence_fts_bigram` via
+/// [`crate::script::is_cjk_or_thai_codepoint`] but silently
+/// fail the fact-shape gate and never become a Fact
+/// observation. Same defense-in-depth principle as the Lao /
+/// Khmer / Myanmar arms added in earlier sweeps.
+fn is_tibetan_codepoint(c: char) -> bool {
+    matches!(c, '\u{0F00}'..='\u{0FFF}')
 }
 
 impl LexiconExtractor {
@@ -1459,6 +1628,77 @@ mod tests {
     }
 
     #[test]
+    fn split_sentences_recognises_tibetan_shad() {
+        // Phase 1.5 sweep 5: Tibetan ends sentences with shad
+        // (་།, U+0F0D) and paragraphs / verses with nyis shad
+        // (༎, U+0F0E) — structurally parallel to Devanagari
+        // single / double danda above. Without these arms in
+        // `is_sentence_terminator`, a multi-sentence Tibetan
+        // body would be treated as a single sentence and the
+        // interrogative + fact-shape classifiers would only
+        // apply to the whole thing. Statement 1 = "Lhasa is
+        // the capital of Tibet"; statement 2 = "Tibetan is the
+        // language of Tibet".
+        let text = "ལྷ་ས་ནི་བོད་ཀྱི་རྒྱལ་ས་ཡིན།བོད་སྐད་ནི་བོད་ཀྱི་སྐད་ཡིན༎";
+        let slices = split_sentences_with_terminator(text);
+        assert_eq!(slices.len(), 2, "expected 2 sentences: {slices:?}");
+        assert_eq!(slices[0].terminator, Some('\u{0F0D}'));
+        assert_eq!(slices[1].terminator, Some('\u{0F0E}'));
+    }
+
+    #[test]
+    fn split_sentences_recognises_khmer_khan() {
+        // Phase 1.5 sweep 5: Khmer ends sentences with khan
+        // (។, U+17D4). Statement 1 = "Phnom Penh is the
+        // capital of Cambodia"; statement 2 = "Khmer is the
+        // language of Cambodia".
+        let text = "ភ្នំពេញគឺជារដ្ឋធានីនៃប្រទេសកម្ពុជា។ខ្មែរគឺជាភាសានៃប្រទេសកម្ពុជា។";
+        let slices = split_sentences_with_terminator(text);
+        assert_eq!(slices.len(), 2, "expected 2 sentences: {slices:?}");
+        assert_eq!(slices[0].terminator, Some('\u{17D4}'));
+        assert_eq!(slices[1].terminator, Some('\u{17D4}'));
+    }
+
+    #[test]
+    fn split_sentences_recognises_myanmar_visarga() {
+        // Phase 1.5 sweep 5: Myanmar / Burmese ends sentences
+        // with sign section / "visarga" (။, U+104B).
+        // Statement 1 = "Yangon is the largest city of
+        // Myanmar"; statement 2 = "Naypyidaw is the capital
+        // of Myanmar".
+        let text = "ရန်ကုန်သည်မြန်မာနိုင်ငံ၏အကြီးဆုံးမြို့ဖြစ်သည်။နေပြည်တော်သည်မြန်မာနိုင်ငံ၏မြို့တော်ဖြစ်သည်။";
+        let slices = split_sentences_with_terminator(text);
+        assert_eq!(slices.len(), 2, "expected 2 sentences: {slices:?}");
+        assert_eq!(slices[0].terminator, Some('\u{104B}'));
+        assert_eq!(slices[1].terminator, Some('\u{104B}'));
+    }
+
+    #[test]
+    fn split_sentences_phase_1_5_terminators_do_not_swallow_non_terminator_punctuation() {
+        // Defense in depth: codepoints adjacent to or visually
+        // similar to the Phase 1.5 terminators must NOT trigger
+        // a split. Locks the precision contract so a future
+        // sweep doesn't accidentally add the Khmer bariyoosan
+        // (\u{17D5}, paragraph-end), Myanmar little section
+        // (\u{104A}, clause-comma), or Tibetan rin chen
+        // spungs shad (\u{0F11}, ornamental) as sentence
+        // terminators.
+        for non_terminator in [
+            '\u{17D5}', // ៕  Khmer bariyoosan (paragraph end)
+            '\u{104A}', // ၊  Myanmar little section (clause comma)
+            '\u{0F11}', // ༑  Tibetan rin chen spungs shad
+            '\u{0F0C}', // ་ Tibetan delimiter mark tsheg bstar
+        ] {
+            assert!(
+                !is_sentence_terminator(non_terminator),
+                "{:?} (U+{:04X}) must not be a sentence terminator",
+                non_terminator,
+                non_terminator as u32,
+            );
+        }
+    }
+
+    #[test]
     fn split_sentences_mixed_script_message() {
         // The motivating Phase 1.4 example: a bilingual chat
         // message ("Hello. 안녕하세요. Let's ship Friday.") splits
@@ -1794,6 +2034,71 @@ mod tests {
         assert!(!is_cjk_codepoint('م')); // Arabic
         assert!(!is_cjk_codepoint('क')); // Devanagari
         assert!(!is_cjk_codepoint('ก')); // Thai (handled separately)
+
+        // Phase 1.5 sweep 6: extended CJK coverage to mirror the
+        // FTS5 routing predicate `script::is_cjk_or_thai_codepoint`,
+        // closing the same lockstep asymmetry that sweeps 3
+        // (Myanmar Extended-A / -B) and 4 (Khmer Symbols)
+        // closed for the Brahmic scripts. Without these arms,
+        // a body composed entirely of (say) Halfwidth Katakana
+        // or CJK Compatibility Ideographs would be indexed in
+        // the dual FTS5 lanes but silently rejected by the
+        // fact-shape gate.
+
+        // Halfwidth Katakana (legacy Japanese IME / SMS).
+        assert!(is_cjk_codepoint('\u{FF65}')); // first cp
+        assert!(is_cjk_codepoint('\u{FF9F}')); // last cp
+        assert!(is_cjk_codepoint('カ' /* カ */)); // full-width sanity
+
+        // Katakana Phonetic Extensions (Ainu transliteration).
+        assert!(is_cjk_codepoint('\u{31F0}')); // first cp
+        assert!(is_cjk_codepoint('\u{31FF}')); // last cp
+
+        // CJK Radicals Supplement (Kangxi radical components).
+        assert!(is_cjk_codepoint('\u{2E80}')); // first cp
+        assert!(is_cjk_codepoint('\u{2EFF}')); // last cp
+
+        // CJK Compatibility Ideographs (legacy round-trip Han).
+        assert!(is_cjk_codepoint('\u{F900}')); // first cp
+        assert!(is_cjk_codepoint('\u{FAFF}')); // last cp
+
+        // CJK Unified Ideographs Extension B (supplementary-
+        // plane Han, scholarly / historical text).
+        assert!(is_cjk_codepoint('\u{20000}')); // first cp
+        assert!(is_cjk_codepoint('\u{2A6DF}')); // last cp
+
+        // CJK Unified Ideographs Extensions C..F + I
+        // (contiguous range, Ext I added in Unicode 15.1).
+        assert!(is_cjk_codepoint('\u{2A700}')); // first cp (Ext C)
+        assert!(is_cjk_codepoint('\u{2EBEF}')); // last cp of Ext F
+        assert!(is_cjk_codepoint('\u{2EBF0}')); // first cp of Ext I
+        assert!(is_cjk_codepoint('\u{2EE5F}')); // last cp (Ext I)
+
+        // CJK Unified Ideographs Extensions G..H + J
+        // (contiguous range, Ext J added in Unicode 16.0).
+        assert!(is_cjk_codepoint('\u{30000}')); // first cp (Ext G)
+        assert!(is_cjk_codepoint('\u{323AF}')); // last cp of Ext H
+        assert!(is_cjk_codepoint('\u{323B0}')); // first cp of Ext J
+        assert!(is_cjk_codepoint('\u{33479}')); // last cp (Ext J)
+
+        // Boundary checks: codepoints immediately outside each
+        // newly-added block must remain outside the predicate.
+        // Pins the precision contract so a future contributor
+        // doesn't accidentally over-widen the upper bound and
+        // start admitting unrelated scripts as CJK.
+        assert!(!is_cjk_codepoint('\u{FF64}')); // one below Halfwidth Katakana
+        assert!(!is_cjk_codepoint('\u{FFA0}')); // one above Halfwidth Katakana
+        assert!(!is_cjk_codepoint('\u{31EF}')); // one below Phonetic Ext
+        assert!(!is_cjk_codepoint('\u{3200}')); // one above Phonetic Ext
+        assert!(!is_cjk_codepoint('\u{2E7F}')); // one below Radicals Supplement
+        assert!(!is_cjk_codepoint('\u{F8FF}')); // one below Compat Ideographs (PUA)
+        assert!(!is_cjk_codepoint('\u{FB00}')); // one above Compat Ideographs (Latin presentation)
+        assert!(!is_cjk_codepoint('\u{1FFFF}')); // one below Ext B (SMP misc)
+        assert!(!is_cjk_codepoint('\u{2A6E0}')); // one above Ext B (CJK Compat Ideographs Supplement starts at 2F800)
+        assert!(!is_cjk_codepoint('\u{2A6FF}')); // gap between Ext B and Ext C
+        assert!(!is_cjk_codepoint('\u{2EE60}')); // one above Ext I
+        assert!(!is_cjk_codepoint('\u{2FFFF}')); // gap between Ext F-I and Ext G
+        assert!(!is_cjk_codepoint('\u{3347A}')); // one above Ext J
     }
 
     #[test]
@@ -1863,13 +2168,29 @@ mod tests {
         assert!(!is_lao_codepoint('ก')); // Thai (handled separately)
         assert!(!is_lao_codepoint('a')); // ASCII
 
-        // Khmer: spot-check consonants + sign coeng.
+        // Khmer main: spot-check consonants + sign coeng.
         assert!(is_khmer_codepoint('ក')); // Khmer letter ka
         assert!(is_khmer_codepoint('ម')); // Khmer letter ma
         assert!(is_khmer_codepoint('ែ')); // Khmer vowel sign ae
         assert!(is_khmer_codepoint('្')); // Khmer sign coeng (subscript)
         assert!(!is_khmer_codepoint('म')); // Devanagari (visually similar)
         assert!(!is_khmer_codepoint('a')); // ASCII
+
+        // Phase 1.5 sweep 4: Khmer Symbols (astronomical /
+        // lunar date symbols). The FTS5 routing predicate at
+        // `script::is_cjk_or_thai_codepoint` covers the
+        // supplementary block, so the extractor predicate must
+        // too — otherwise a body composed of pure Khmer Symbols
+        // (a calendar or horoscope page) would be indexed in
+        // the dual FTS5 lanes but silently rejected by the
+        // fact-shape gate. Same lockstep principle as Myanmar
+        // Extended-A / -B above.
+        assert!(is_khmer_codepoint('᧠')); // U+19E0 first cp of Khmer Symbols
+        assert!(is_khmer_codepoint('᧿')); // U+19FF last cp of Khmer Symbols
+                                          // Boundary: codepoints just outside the supplement must
+                                          // remain outside the predicate.
+        assert!(!is_khmer_codepoint('᧟')); // U+19DF (one below — New Tai Lue)
+        assert!(!is_khmer_codepoint('ᨀ')); // U+1A00 (one above — Buginese)
 
         // Myanmar: spot-check consonants + medial.
         assert!(is_myanmar_codepoint('က')); // Myanmar letter ka
@@ -1878,6 +2199,23 @@ mod tests {
         assert!(is_myanmar_codepoint('ြ')); // Myanmar consonant sign medial ra
         assert!(!is_myanmar_codepoint('ก')); // Thai (handled separately)
         assert!(!is_myanmar_codepoint('a')); // ASCII
+
+        // Phase 1.5 sweep 3: Myanmar Extended-A (Pao + Pwo
+        // Karen) and Extended-B (Shan). The FTS5 routing
+        // predicate at `script::is_cjk_or_thai_codepoint`
+        // covers both blocks, so the extractor predicate
+        // must too — otherwise a body in a pure-Shan or
+        // pure-Pwo-Karen minority script would be indexed in
+        // the dual FTS5 lanes but silently rejected by the
+        // fact-shape gate.
+        assert!(is_myanmar_codepoint('ꩠ')); // first cp of Myanmar Ext-A
+        assert!(is_myanmar_codepoint('ꩿ')); // last cp of Myanmar Ext-A
+        assert!(is_myanmar_codepoint('ꧠ')); // first cp of Myanmar Ext-B (Shan)
+        assert!(is_myanmar_codepoint('꧿')); // last cp of Myanmar Ext-B (Shan)
+                                            // Boundary: codepoints just outside Ext-A / Ext-B
+                                            // must remain outside the predicate.
+        assert!(!is_myanmar_codepoint('꧟')); // U+A9DF (one below Ext-B)
+        assert!(!is_myanmar_codepoint('ꪀ')); // U+AA80 (one above Ext-A)
 
         // Cross-bleed: each script's helper must reject the other
         // two no-whitespace-script ranges to keep the helpers
@@ -1892,12 +2230,45 @@ mod tests {
     }
 
     #[test]
-    fn lao_khmer_myanmar_fact_shaped_without_whitespace() {
-        // Devin Review #ANALYSIS-0006 (sweep 6): a declarative
-        // Khmer / Myanmar sentence (whatlang DOES detect these,
-        // and they are no-inter-word-whitespace scripts so the
-        // `contains(' ')` fast path does not fire) must produce
-        // a Fact candidate via the codepoint-count gate.
+    fn is_tibetan_codepoint_classifies_correctly() {
+        // Phase 1.5 sweep 3: Tibetan is now in the fact-shape
+        // gate's codepoint set. Spot-check the predicate at
+        // boundaries, against neighbouring scripts in the
+        // gate, and against ASCII.
+        assert!(is_tibetan_codepoint('ༀ')); // first cp of Tibetan block
+        assert!(is_tibetan_codepoint('ཀ')); // Tibetan letter ka
+        assert!(is_tibetan_codepoint('་')); // Tibetan tsheg (syllable separator)
+        assert!(is_tibetan_codepoint('ས')); // Tibetan letter sa
+        assert!(is_tibetan_codepoint('࿿')); // last cp of Tibetan block
+
+        // Boundary: codepoints just outside the block must
+        // remain outside the predicate.
+        assert!(!is_tibetan_codepoint('໿')); // last cp of Lao (one below)
+        assert!(!is_tibetan_codepoint('က')); // first cp of Myanmar (one above)
+
+        // Cross-bleed: Tibetan must reject the other Brahmic /
+        // Indic scripts in the fact-shape gate's set, plus
+        // ASCII.
+        assert!(!is_tibetan_codepoint('ก')); // Thai
+        assert!(!is_tibetan_codepoint('ກ')); // Lao
+        assert!(!is_tibetan_codepoint('ហ')); // Khmer
+        assert!(!is_tibetan_codepoint('က')); // Myanmar
+        assert!(!is_tibetan_codepoint('म')); // Devanagari
+        assert!(!is_tibetan_codepoint('a')); // ASCII
+    }
+
+    #[test]
+    fn lao_khmer_myanmar_tibetan_fact_shaped_without_whitespace() {
+        // Devin Review #ANALYSIS-0006 (sweep 6) + Phase 1.5
+        // sweep 3: a declarative Khmer / Myanmar / Lao /
+        // Tibetan sentence (no-inter-word-whitespace scripts
+        // so the `contains(' ')` fast path does not fire)
+        // must produce a Fact candidate via the codepoint-
+        // count gate. Tibetan was added in Phase 1.5 sweep 3
+        // for parity with the BO_LEXICON shipped in this PR —
+        // explicit-tag callers (FFI / connector pipelines
+        // passing `bo`) MUST be able to round-trip a Tibetan
+        // declarative through the fact extractor.
         let scope = ScopeId::new_v4();
         let ext = LexiconExtractor::default();
 
@@ -1944,13 +2315,41 @@ mod tests {
                 .map(|o| o.observation_type)
                 .collect::<Vec<_>>()
         );
+
+        // "Lhasa is the capital of Tibet." — Tibetan, no
+        // ASCII spaces (tsheg `\u{0F0B}` is a syllable
+        // separator, not a word boundary). whatlang 0.18
+        // does not ship a Tibetan classifier so the row
+        // carries `language_tag = None`, but the codepoint-
+        // count gate MUST still admit it as a Fact — same
+        // defense-in-depth as the Lao arm above. Without the
+        // Tibetan arm added in Phase 1.5 sweep 3 this
+        // assertion fails and no Tibetan declarative ever
+        // becomes a Fact.
+        let obs_bo = ext.extract("ལྷ་ས་ནི་བོད་ཀྱི་རྒྱལ་ས་ཡིན", scope);
+        assert!(
+            obs_bo
+                .iter()
+                .any(|o| o.observation_type == ObservationType::Fact),
+            "expected at least one Fact from Tibetan declarative on shape alone; got {:?}",
+            obs_bo
+                .iter()
+                .map(|o| o.observation_type)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn is_sentence_terminator_covers_phase_1_4_set() {
         // Defensive: pin the exact terminator set so accidental
         // additions/removals fail tests instead of silently
-        // changing behaviour.
+        // changing behaviour. The scope of this test is
+        // intentionally limited to the Phase 1.4 codepoints so
+        // that an accidental REMOVAL of any Phase 1.4 terminator
+        // (regression of the original multilingual terminator
+        // work) fires here with an unambiguous error. Phase 1.5
+        // additions have their own sibling pinning test below
+        // (`is_sentence_terminator_covers_phase_1_5_set`).
         let terminators = [
             '.', '!', '?', '\n', '。', '！', '？', '؟', '۔', '।', '॥', '։', '።',
         ];
@@ -1969,6 +2368,41 @@ mod tests {
                 c as u32
             );
         }
+    }
+
+    #[test]
+    fn is_sentence_terminator_covers_phase_1_5_set() {
+        // Phase 1.5 sweep 6 sibling to the Phase 1.4 pinning
+        // test above. Pins the four Phase 1.5 sentence-final
+        // marks added in sweep 5 so an accidental removal fires
+        // here independently of the Phase 1.4 set.
+        //
+        // The split between this and the Phase 1.4 test is
+        // intentional: each test fails with a phase-specific
+        // error message, so a regression that drops (say) the
+        // Khmer khan can be triaged to the Phase 1.5 commit
+        // line that introduced it without first ruling out a
+        // Phase 1.4 regression.
+        let terminators = [
+            ('\u{0F0D}', "Tibetan shad (sentence / clause end)"),
+            ('\u{0F0E}', "Tibetan nyis shad (paragraph / verse end)"),
+            ('\u{17D4}', "Khmer khan (full stop)"),
+            ('\u{104B}', "Myanmar sign section / visarga (full stop)"),
+        ];
+        for (c, role) in terminators {
+            assert!(
+                is_sentence_terminator(c),
+                "{c:?} (U+{:04X}, {role}) must be a sentence terminator",
+                c as u32
+            );
+        }
+        // Lao is intentionally absent: the Lao script (Unicode
+        // block U+0E80..=U+0EFF) has no dedicated sentence-end
+        // punctuation; modern Lao typography uses ASCII `.`,
+        // `!`, `?` for sentence termination, which are already
+        // in the Phase 1.4 set. The 3-new-terminators-vs-
+        // 4-new-scripts asymmetry is documented by absence
+        // here and at the doc-comment of `is_sentence_terminator`.
     }
 
     #[test]

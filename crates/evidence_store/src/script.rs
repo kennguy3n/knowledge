@@ -1,22 +1,39 @@
 //! Script-detection helpers used by the FTS5 write / read routing
-//! introduced in schema v14 (Phase 1.2 — CJK-aware FTS5 tokeniser).
+//! introduced in schema v14 (Phase 1.2 — CJK-aware FTS5 tokeniser)
+//! and extended in Phase 1.5 to cover the remaining Brahmic-family
+//! scripts that lack inter-word whitespace (Tibetan, Khmer, Myanmar,
+//! Lao).
 //!
 //! SQLite FTS5's `unicode61` tokeniser classifies CJK Han, Hiragana,
-//! Katakana, and Thai codepoints as non-letter *separators*, so a
-//! document composed entirely of those scripts produces zero tokens
-//! and is invisible to lexical search. Phase 1.2 adds a parallel
-//! `evidence_fts_cjk` virtual table tokenised with `trigram`, and
-//! routes each ingest into the CJK table *additionally* iff the body
-//! contains any codepoint from one of the affected scripts.
+//! Katakana, Thai, **Tibetan, Khmer, Myanmar, and Lao** codepoints
+//! as non-letter *separators*, so a document composed entirely of
+//! those scripts produces zero tokens and is invisible to lexical
+//! search. Phase 1.2 added a parallel `evidence_fts_cjk` virtual
+//! table tokenised with `trigram` and an `evidence_fts_bigram`
+//! companion (Phase 1.2.1), and routes each ingest into both lanes
+//! *additionally* iff the body contains any codepoint from one of
+//! the affected scripts.
+//!
+//! The historical names `is_cjk_or_thai_codepoint` and
+//! `contains_cjk_or_thai` are retained for stability — the predicate
+//! itself answers "is this codepoint one of the scripts that the
+//! `unicode61` tokeniser cannot segment and therefore needs the
+//! parallel CJK lane?". Phase 1.5 extends that scope to the four
+//! Indic / Southeast-Asian scripts the substrate's connector
+//! pipelines now surface; the function name is the contract for the
+//! routing site, not a taxonomy claim about the codepoints.
 //!
 //! The routing decision is deliberately based on the **body** rather
 //! than on the row's stored `language_tag` (Phase 1.3): the language
-//! tag can be `NULL` (detection refused) or wrong (mixed-language
+//! tag can be `NULL` (detection refused, e.g. whatlang 0.18 does not
+//! ship classifiers for Tibetan or Lao) or wrong (mixed-language
 //! body whose dominant language is Latin), and in both cases the
 //! tokeniser-blind text is still in the body. A pure-codepoint
 //! membership check is robust to those misses and adds only a single
 //! linear pass over the bytes — much cheaper than re-running language
-//! detection at the storage layer.
+//! detection at the storage layer. This property is what makes
+//! Phase 1.5's Tibetan/Lao coverage work despite the language
+//! detector being unable to tag those scripts.
 //!
 //! Korean (Hangul, `U+AC00..U+D7AF`), Vietnamese (Latin with
 //! diacritics), Hindi (Devanagari, whitespace-separated words) and
@@ -29,7 +46,8 @@
 /// `true` iff `text` contains at least one codepoint that
 /// SQLite FTS5's `unicode61` tokeniser cannot segment into a useful
 /// token, and which is therefore eligible to be additionally
-/// indexed in the `evidence_fts_cjk` (trigram) table.
+/// indexed in the `evidence_fts_cjk` (trigram) + `evidence_fts_bigram`
+/// (precomputed-bigram) lanes.
 ///
 /// Returns `false` for the empty string, for any pure-Latin /
 /// Cyrillic / Greek / Arabic / Devanagari / Hangul body, and for
@@ -99,11 +117,44 @@ pub fn contains_cjk_or_thai(text: &str) -> bool {
 /// * Thai (`U+0E00..=U+0E7F`) — Thai also lacks whitespace word
 ///   boundaries; `unicode61` produces zero tokens for it
 ///
+/// **Indic / Southeast-Asian (Phase 1.5)**
+/// * Lao (`U+0E80..=U+0EFF`) — Lao script lacks inter-word
+///   whitespace and uses combining vowel signs / tone marks that
+///   `unicode61` treats as separators; whole documents reduce to
+///   zero tokens without routing. Lao is contiguous with the Thai
+///   block above, so we encode both as a single arm with Tibetan.
+/// * Tibetan (`U+0F00..=U+0FFF`) — Tibetan script uses the `tsheg`
+///   (`་`, `U+0F0B`) as a syllable separator rather than a word
+///   boundary; `unicode61` classifies the consonants + subscript
+///   stacks + vowels as separators and the whole script becomes
+///   invisible to lexical search. The Tibetan block is contiguous
+///   with Lao above, so the merged arm covers `U+0E00..=U+0FFF`
+///   (Thai + Lao + Tibetan in one range check).
+/// * Khmer (`U+1780..=U+17FF`) — Khmer script lacks inter-word
+///   whitespace and uses sub-/superscript consonants stacked via
+///   the invisible `coeng` (`U+17D2`) virama; `unicode61` reduces
+///   any Khmer body to zero tokens. The Khmer Symbols block
+///   (`U+19E0..=U+19FF` — astronomical / lunar date symbols) is
+///   added on the same forward-defensive policy as the CJK
+///   Extension blocks above: it co-occurs with Khmer text in
+///   liturgical / horoscopic corpora and would otherwise be
+///   silently stranded.
+/// * Myanmar / Burmese (`U+1000..=U+109F`) — Myanmar script uses
+///   subscript consonants and combining vowels and lacks word
+///   boundaries; `unicode61` segments to zero. The Myanmar
+///   Extended-A (`U+AA60..=U+AA7F`, Pao + Pwo Karen) and
+///   Myanmar Extended-B (`U+A9E0..=U+A9FF`, Shan, Aiton, Phake,
+///   Khamti) blocks are added on the same forward-defensive
+///   policy — these minority-language extensions ship inside
+///   real-world Myanmar education / minority-press corpora and
+///   are written in the Myanmar typesetting tradition.
+///
 /// Together these blocks cover the realistic ja / zh / ko-Hanja /
-/// th content the substrate ingests via KChat / Tessera / connector
-/// pipelines, including the awkward edge cases (half-width
-/// katakana, compatibility ideographs) that are easy to miss with
-/// a "BMP-only / no compatibility" check and that Devin Review
+/// th / lo / bo / km / my content the substrate ingests via KChat
+/// / Tessera / connector pipelines, including the awkward edge
+/// cases (half-width katakana, compatibility ideographs, Myanmar
+/// minority-language extensions) that are easy to miss with a
+/// "BMP-only / no compatibility" check and that Devin Review
 /// finding `ANALYSIS_…_0005` explicitly called out.
 ///
 /// Korean Hangul (`U+AC00..=U+D7AF`), Vietnamese (Latin with
@@ -114,14 +165,15 @@ pub fn contains_cjk_or_thai(text: &str) -> bool {
 /// letter category. Adding them to the CJK routing would write
 /// redundant rows into `evidence_fts_cjk` with no recall benefit.
 ///
-/// Other scripts that *also* lack whitespace word boundaries
-/// (Tibetan `U+0F00..=U+0FFF`, Khmer `U+1780..=U+17FF`, Myanmar
-/// `U+1000..=U+109F`, Lao `U+0E80..=U+0EFF`) are intentionally
-/// excluded from Phase 1.2 to keep the predicate's scope tightly
-/// bound to what Phase 1.4's language detector actually produces
-/// (`ja`, `zh`, `th` and the auxiliary CJK languages); a future
-/// phase can extend the predicate alongside lexicon support for
-/// those scripts.
+/// The standing forward-defensive policy is therefore **"every
+/// currently-defined script that `unicode61` cannot segment is
+/// routed; every script that `unicode61` segments correctly
+/// stays out"**. The next contributor adding a new
+/// non-whitespace-segmented script (Tai Tham `U+1A20..=U+1AAF`,
+/// Tai Viet `U+AA80..=U+AADF`, Javanese `U+A980..=U+A9DF`,
+/// Sundanese `U+1B80..=U+1BBF`, …) just adds an arm here
+/// alongside the lexicon update, rather than re-litigating the
+/// routing design.
 #[inline]
 pub fn is_cjk_or_thai_codepoint(c: char) -> bool {
     matches!(
@@ -137,7 +189,12 @@ pub fn is_cjk_or_thai_codepoint(c: char) -> bool {
         | '\u{20000}'..='\u{2A6DF}'  // CJK Unified Ideographs Extension B
         | '\u{2A700}'..='\u{2EE5F}'  // CJK Unified Ideographs Extensions C..F + I
         | '\u{30000}'..='\u{33479}'  // CJK Unified Ideographs Extensions G..H + J
-        | '\u{0E00}'..='\u{0E7F}'    // Thai
+        | '\u{0E00}'..='\u{0FFF}'    // Thai + Lao + Tibetan (contiguous; Phase 1.5)
+        | '\u{1000}'..='\u{109F}'    // Myanmar (Phase 1.5)
+        | '\u{1780}'..='\u{17FF}'    // Khmer (Phase 1.5)
+        | '\u{19E0}'..='\u{19FF}'    // Khmer Symbols (Phase 1.5)
+        | '\u{A9E0}'..='\u{A9FF}'    // Myanmar Extended-B / Shan (Phase 1.5)
+        | '\u{AA60}'..='\u{AA7F}'    // Myanmar Extended-A / Pao + Pwo Karen (Phase 1.5)
     )
 }
 
@@ -333,5 +390,143 @@ mod tests {
         assert!(contains_cjk_or_thai("\u{4E00}"));
         assert!(contains_cjk_or_thai("\u{4DBF}"));
         assert!(!contains_cjk_or_thai("\u{4DC0}"));
+    }
+
+    // --------------------------------------------------------------
+    // Phase 1.5 — Tibetan / Khmer / Myanmar / Lao routing
+    // --------------------------------------------------------------
+
+    #[test]
+    fn tibetan_routes_to_cjk() {
+        // བཀྲ་ཤིས་བདེ་ལེགས — "good fortune" / common greeting.
+        // Tibetan script (U+0F00..=U+0FFF) lacks word boundaries
+        // and uses the tsheg (U+0F0B) as a syllable separator;
+        // unicode61 reduces the body to zero tokens without
+        // routing.
+        assert!(contains_cjk_or_thai("བཀྲ་ཤིས་བདེ་ལེགས"));
+        // Range boundaries.
+        assert!(contains_cjk_or_thai("\u{0F00}"));
+        assert!(contains_cjk_or_thai("\u{0FFF}"));
+        // Just-outside upper bound (U+1000 is Myanmar — also
+        // routed, but via a separate arm).
+        assert!(contains_cjk_or_thai("\u{1000}"));
+    }
+
+    #[test]
+    fn lao_routes_to_cjk() {
+        // ສະບາຍດີ — "hello" in Lao.
+        // Lao script (U+0E80..=U+0EFF) lacks word boundaries and
+        // uses combining vowel signs / tone marks; unicode61
+        // produces zero tokens without routing. Lao is contiguous
+        // with the Thai block, so a single matches arm covers
+        // both.
+        assert!(contains_cjk_or_thai("ສະບາຍດີ"));
+        // Range boundaries.
+        assert!(contains_cjk_or_thai("\u{0E80}"));
+        assert!(contains_cjk_or_thai("\u{0EFF}"));
+    }
+
+    #[test]
+    fn khmer_routes_to_cjk() {
+        // ជំរាបសួរ — "hello" in Khmer.
+        // Khmer script (U+1780..=U+17FF) lacks word boundaries
+        // and uses subscript consonants stacked via the invisible
+        // coeng U+17D2 (virama); unicode61 reduces any Khmer body
+        // to zero tokens.
+        assert!(contains_cjk_or_thai("ជំរាបសួរ"));
+        // Range boundaries.
+        assert!(contains_cjk_or_thai("\u{1780}"));
+        assert!(contains_cjk_or_thai("\u{17FF}"));
+        // Khmer Symbols supplement (astronomical / lunar date
+        // symbols co-occurring with Khmer text in liturgical /
+        // horoscopic corpora).
+        assert!(contains_cjk_or_thai("\u{19E0}"));
+        assert!(contains_cjk_or_thai("\u{19FF}"));
+        // Just-outside boundaries on the Khmer Symbols block.
+        // U+19DF is the last codepoint of New Tai Lue (a script
+        // we deliberately do not route in Phase 1.5).
+        assert!(!contains_cjk_or_thai("\u{19DF}"));
+        // U+1A00 is Buginese — not routed.
+        assert!(!contains_cjk_or_thai("\u{1A00}"));
+    }
+
+    #[test]
+    fn myanmar_routes_to_cjk() {
+        // မင်္ဂလာပါ — "hello" in Burmese.
+        // Myanmar script (U+1000..=U+109F) uses subscript
+        // consonants and combining vowels and lacks word
+        // boundaries; unicode61 produces zero tokens without
+        // routing.
+        assert!(contains_cjk_or_thai("မင်္ဂလာပါ"));
+        // Main block range boundaries.
+        assert!(contains_cjk_or_thai("\u{1000}"));
+        assert!(contains_cjk_or_thai("\u{109F}"));
+        // Myanmar Extended-B (U+A9E0..=U+A9FF) — Shan, Aiton,
+        // Phake, Khamti minority languages.
+        assert!(contains_cjk_or_thai("\u{A9E0}"));
+        assert!(contains_cjk_or_thai("\u{A9FF}"));
+        // Myanmar Extended-A (U+AA60..=U+AA7F) — Pao + Pwo Karen.
+        assert!(contains_cjk_or_thai("\u{AA60}"));
+        assert!(contains_cjk_or_thai("\u{AA7F}"));
+        // Just-outside boundaries.
+        // U+0FFF is Tibetan (routed via the merged Thai+Lao+
+        // Tibetan arm), U+10A0 is Georgian (NOT routed).
+        assert!(contains_cjk_or_thai("\u{0FFF}"));
+        assert!(!contains_cjk_or_thai("\u{10A0}"));
+        // U+A9DF is Javanese (NOT routed) — sits just below
+        // Myanmar Ext-B.
+        assert!(!contains_cjk_or_thai("\u{A9DF}"));
+        // U+AA80 is the start of Tai Viet (NOT routed) — sits
+        // just above Myanmar Ext-A.
+        assert!(!contains_cjk_or_thai("\u{AA80}"));
+    }
+
+    #[test]
+    fn brahmic_scripts_we_deliberately_do_not_route_stay_out() {
+        // Phase 1.5's standing policy says "the next contributor
+        // adding a new non-whitespace-segmented script just adds
+        // an arm here". Pin the current state so a future
+        // contributor who adds e.g. Tai Tham must explicitly
+        // delete this test (not silently widen recall as a
+        // side-effect of an unrelated change).
+        //
+        // Tai Tham (U+1A20..=U+1AAF) — Northern Thai / Lanna,
+        // Khün, Lue. Lacks word boundaries but Phase 1.5 does
+        // not yet ship a lexicon for it, so we keep it out of
+        // the routing predicate to preserve the
+        // routing-aligns-with-lexicon-coverage invariant.
+        assert!(!contains_cjk_or_thai("\u{1A20}"));
+        assert!(!contains_cjk_or_thai("\u{1AAF}"));
+        // Tai Viet (U+AA80..=U+AADF) — same rationale.
+        assert!(!contains_cjk_or_thai("\u{AA80}"));
+        assert!(!contains_cjk_or_thai("\u{AADF}"));
+        // Javanese (U+A980..=U+A9DF) — same rationale.
+        assert!(!contains_cjk_or_thai("\u{A980}"));
+        assert!(!contains_cjk_or_thai("\u{A9DF}"));
+        // Balinese (U+1B00..=U+1B7F), Sundanese (U+1B80..=
+        // U+1BBF) — same rationale.
+        assert!(!contains_cjk_or_thai("\u{1B00}"));
+        assert!(!contains_cjk_or_thai("\u{1B80}"));
+        // Devanagari (U+0900..=U+097F) — whitespace-segmented,
+        // unicode61 handles it correctly. Explicit pin so a
+        // future contributor doesn't accidentally route Hindi.
+        assert!(!contains_cjk_or_thai("\u{0900}"));
+        assert!(!contains_cjk_or_thai("\u{097F}"));
+        // Hangul (U+AC00..=U+D7AF) — whitespace-segmented,
+        // unicode61 handles it correctly.
+        assert!(!contains_cjk_or_thai("\u{AC00}"));
+        assert!(!contains_cjk_or_thai("\u{D7AF}"));
+    }
+
+    #[test]
+    fn mixed_latin_with_one_indic_codepoint_routes_to_cjk() {
+        // Phase 1.5 — same mixed-script behaviour as Phase 1.2's
+        // "Project 計画 review" test: a single codepoint from any
+        // of the four newly-routed scripts is enough to route
+        // the body.
+        assert!(contains_cjk_or_thai("Status: ສະບາຍດີ — all good")); // Lao
+        assert!(contains_cjk_or_thai("Project ជំរាបសួរ ping")); // Khmer
+        assert!(contains_cjk_or_thai("Meeting မင်္ဂလာပါ tomorrow")); // Myanmar
+        assert!(contains_cjk_or_thai("Greeting བཀྲ་ཤིས་ from team")); // Tibetan
     }
 }
