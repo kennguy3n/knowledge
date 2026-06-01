@@ -96,6 +96,18 @@ pub enum InterrogativeMatch {
     /// interrogative hamza is excluded, why `Substring` is
     /// rejected for short Arabic interrogatives).
     FirstTokenWithArabicClitics,
+    /// Phase 1.7 strategy for Hebrew: tries first-token equality,
+    /// then iteratively peels the recognised Hebrew proclitic
+    /// prefixes (`ו` "and", `ש` "that / which", `מ` "from",
+    /// `ל` "to / for", `ב` "in / at / with") and re-checks
+    /// equality after each peel. The definite article `ה` and
+    /// the preposition `כ` are deliberately excluded from the
+    /// peel set; see
+    /// [`crate::lexicon::MatchStrategy::FirstTokenWithHebrewClitics`]
+    /// for the full design notes (peel inventory, why `ה` /
+    /// `כ` are excluded, why `Substring` is rejected for short
+    /// Hebrew interrogatives).
+    FirstTokenWithHebrewClitics,
 }
 
 /// Look up the interrogative-word list for a BCP-47 primary
@@ -443,6 +455,69 @@ pub fn interrogatives_for(
             InterrogativeMatch::FirstTokenWithArabicClitics,
         )),
 
+        // Hebrew — Glinert, Modern Hebrew: An Essential Grammar
+        // (Routledge, 4th ed. 2005), §6.1 ("Question words").
+        //
+        // Hebrew interrogatives are typically sentence-initial
+        // and lowercased (Hebrew has no case distinction). The
+        // canonical set covers `מי` "who", `מה` "what",
+        // `מתי` "when", `איפה` / `היכן` "where", `איך` "how",
+        // `למה` / `מדוע` "why", `איזה` / `איזו` / `אילו`
+        // "which" (masc / fem / pl), `כמה` "how much / many",
+        // and the formal/written yes-no particle `האם`.
+        //
+        // Phase 1.7: Hebrew uses
+        // [`InterrogativeMatch::FirstTokenWithHebrewClitics`]
+        // so the productive clitic-prefixed forms recover their
+        // interrogative reading via iterative prefix peeling:
+        //
+        // * `ומתי` ("and when?") — `ו` + `מתי`.
+        // * `שמה` ("that what?") — `ש` + `מה`.
+        // * `מאיזה` ("from which?") — `מ` + `איזה`.
+        // * `לאיזה` ("to which?") — `ל` + `איזה`.
+        // * `באיזה` ("in which?") — `ב` + `איזה`.
+        //
+        // Pre-Phase-1.7 these all bypassed the interrogative
+        // table (the first alphabetic token was the prefixed
+        // form `ומתי` / `שמה` / … which never appeared in the
+        // table), so Hebrew question detection without an
+        // explicit `?` terminator was limited to the bare
+        // interrogative-initial pattern.
+        //
+        // Deliberately omitted: `כי` (conjunction "because /
+        // that") — high-frequency function word that would
+        // mis-classify declarative subordinate clauses
+        // (`אמרתי כי...` "I said that...", `יודע כי...` "knows
+        // that...") as questions. Same class of omission as
+        // Spanish / Portuguese `por`, French / Italian bare
+        // `que` / `che`, Indonesian / Malay `di` / `yang`.
+        //
+        // Deliberately omitted: bare `ה` (definite article and
+        // also the surface form of the colloquial yes-no
+        // question particle in some registers). Including bare
+        // `ה` would over-classify every NP-initial sentence as
+        // a question. The formal yes-no particle `האם`
+        // (`ה` + `אם`) is kept as the unambiguous, written-
+        // register interrogative form.
+        "he" => Some((
+            &[
+                "מי",   // "who"
+                "מה",   // "what"
+                "מתי",  // "when"
+                "איפה", // "where"
+                "היכן", // "where (formal)"
+                "איך",  // "how"
+                "למה",  // "why"
+                "מדוע", // "why (formal)"
+                "איזה", // "which (masc)"
+                "איזו", // "which (fem)"
+                "אילו", // "which (pl)"
+                "כמה",  // "how much / many"
+                "האם",  // "if / whether" — yes-no particle (formal)
+            ],
+            InterrogativeMatch::FirstTokenWithHebrewClitics,
+        )),
+
         // Hindi — McGregor, Outline of Hindi Grammar §3.5
         // ("Interrogative pronouns"). Devanagari script;
         // Devanagari case-folding is a no-op (no case in
@@ -746,8 +821,8 @@ pub fn matching_strategy_for(primary_tag: &str) -> Option<InterrogativeMatch> {
 /// tables for. Useful for tests + diagnostics that want to assert
 /// coverage.
 pub const SUPPORTED_PRIMARY_TAGS: &[&str] = &[
-    "en", "es", "fr", "de", "pt", "it", "ru", "vi", "id", "ms", "ar", "hi", "ja", "ko", "zh", "th",
-    "bo", "km", "my", "lo",
+    "en", "es", "fr", "de", "pt", "it", "ru", "vi", "id", "ms", "ar", "he", "hi", "ja", "ko", "zh",
+    "th", "bo", "km", "my", "lo",
 ];
 
 #[cfg(test)]
@@ -954,6 +1029,93 @@ mod tests {
     }
 
     #[test]
+    fn first_token_with_hebrew_clitics_languages_are_hebrew_only_for_now() {
+        // Phase 1.7: the Hebrew clitic-aware first-token strategy
+        // was introduced specifically for the Hebrew agglutinative-
+        // prefix morphology (ו / ש / מ / ל / ב clitically attaching
+        // to the next word). It is NOT a generic "FirstToken with
+        // some script-specific prefix peeling" — the peel inventory
+        // is Hebrew-specific (HEBREW_PROCLITIC_PREFIXES), references
+        // Hebrew-only orthography, and would no-op on any non-
+        // Hebrew script.
+        //
+        // Pin exclusivity to Hebrew for the same reason the sibling
+        // `first_token_with_arabic_clitics_languages_are_arabic_only_for_now`
+        // test pins the Arabic variant to Arabic: adding a second
+        // FirstTokenWithHebrewClitics language must be an
+        // intentional decision that updates both the peel inventory
+        // (today's `HEBREW_PROCLITIC_PREFIXES` constant is named
+        // explicitly "HEBREW_*") AND this test in lockstep.
+        //
+        // The most likely incoming candidates (Yiddish `yi`, Ladino
+        // `lad`) share the Hebrew alphabet but have language-
+        // specific spelling conventions:
+        // * Yiddish uses digraph vowels (`ייִ`, `וֹ`, `ױ`, `יִ`) with
+        //   different vowel semantics from Modern Hebrew, and
+        //   different proclitic productivity (`אַז` "that" is a free
+        //   word, not a proclitic; `דער`/`די`/`דאָס` are the definite
+        //   articles, not the proclitic `ה`).
+        // * Ladino retains historical orthographic features
+        //   (rafe-marked letters, different niqqud placement) and
+        //   different proclitic morphology (`la`/`el` analogues
+        //   transliterated from Spanish).
+        //
+        // Silently sharing Modern Hebrew's peel inventory would
+        // introduce false positives on those languages — they each
+        // need their own peel inventory and exclusivity-test
+        // membership.
+        let expected_he_clitic_aware: std::collections::HashSet<&str> =
+            ["he"].into_iter().collect();
+        for tag in SUPPORTED_PRIMARY_TAGS {
+            let strat = matching_strategy_for(tag).unwrap();
+            let is_he_clitic_aware = strat == InterrogativeMatch::FirstTokenWithHebrewClitics;
+            assert_eq!(
+                is_he_clitic_aware,
+                expected_he_clitic_aware.contains(tag),
+                "tag {tag}: hebrew-clitic-aware expected={}, got strategy={:?} \
+                 — FirstTokenWithHebrewClitics must remain Hebrew-only \
+                 (see test comment for rationale)",
+                expected_he_clitic_aware.contains(tag),
+                strat
+            );
+        }
+    }
+
+    #[test]
+    fn hebrew_first_token_with_clitics_strategy() {
+        // Phase 1.7: Hebrew moved from non-existent (no entry) to
+        // `FirstTokenWithHebrewClitics` so the productive proclitic-
+        // prefix forms (`ומתי` = `ו` + `מתי`, `שמה` = `ש` + `מה`,
+        // `מאיזה` = `מ` + `איזה`, …) recover their interrogative
+        // readings via iterative prefix peeling. The bare entries
+        // must include the canonical Hebrew question words.
+        //
+        // The bare definite article `ה` is deliberately omitted
+        // per the inline comment on the `he` arm of
+        // `interrogatives_for` (over-classification risk).
+        let (list, strat) = interrogatives_for("he").expect("hebrew configured");
+        assert!(list.contains(&"מי"));
+        assert!(list.contains(&"מה"));
+        assert!(list.contains(&"מתי"));
+        assert!(list.contains(&"איפה"));
+        assert!(list.contains(&"איך"));
+        assert!(list.contains(&"למה"));
+        assert!(list.contains(&"כמה"));
+        assert!(list.contains(&"האם"));
+        assert!(
+            !list.contains(&"ה"),
+            "Phase 1.7: the bare definite article `ה` must NOT appear in the Hebrew \
+             interrogative table — see the dedicated-omission comment in interrogatives_for"
+        );
+        assert!(
+            !list.contains(&"כי"),
+            "Phase 1.7: the bare conjunction `כי` must NOT appear in the Hebrew interrogative \
+             table — see the dedicated-omission comment in interrogatives_for"
+        );
+        assert_eq!(strat, InterrogativeMatch::FirstTokenWithHebrewClitics);
+    }
+
+    #[test]
     fn no_first_token_entry_contains_tokeniser_boundary_chars() {
         // Devin Review #BUG-0001: an interrogative entry that
         // contains a non-alphabetic character is unreachable
@@ -978,8 +1140,16 @@ mod tests {
             // exempt because their entries either span multiple
             // tokens (`tại sao`) or are intentionally matched as
             // substrings (`何ですか`).
+            //
+            // Phase 1.7 extension: same invariant applies to the
+            // Hebrew clitic-aware strategy by identical reasoning
+            // — the peel strips only alphabetic Hebrew proclitics
+            // (never tokeniser-boundary chars), so any non-
+            // alphabetic char in a Hebrew interrogative entry
+            // would be unreachable.
             if strat != InterrogativeMatch::FirstToken
                 && strat != InterrogativeMatch::FirstTokenWithArabicClitics
+                && strat != InterrogativeMatch::FirstTokenWithHebrewClitics
             {
                 continue;
             }
