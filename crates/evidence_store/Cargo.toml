@@ -70,9 +70,25 @@ whatlang = { workspace = true }
 # rc.12's `vitis` execution provider references a field that does not
 # exist on the bundled `OrtApi` struct, so the build breaks under
 # `cargo build --all-features`.
+#
+# The pin is double-gated against MSRV: `rc.11` and `rc.12` both
+# declare `rust-version = "1.88"` in their published crates.io
+# metadata, which is above the workspace MSRV floor of `1.85`
+# enforced by the `MSRV (1.85.0)` CI job. Even if the upstream
+# `vitis` build break is fixed in a future `rc.13`, bumping past
+# `rc.10` therefore also requires a workspace MSRV bump to `≥1.88`
+# (the same threshold the `napi_addon` crate already requires).
+#
+# Phase 2.4 freshness audit confirmed `rc.10` (MSRV `1.81`) is the
+# latest version that fits the workspace MSRV gate. See
+# `docs/MULTILINGUAL_DEPENDENCY_AUDIT.md` for the per-dep audit log.
 ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["load-dynamic", "ndarray"] }
 # `fancy-regex` is the pure-Rust regex backend; the default `onig`
 # backend pulls in a C library (libonig) that isn't part of CI.
+# Phase 2.4 freshness audit: on `0.23.1`, the latest published
+# version of the `0.23.x` line; upstream declares no MSRV, fits the
+# workspace `1.85` floor cleanly. See
+# `docs/MULTILINGUAL_DEPENDENCY_AUDIT.md`.
 tokenizers = { version = "0.23", optional = true, default-features = false, features = ["fancy-regex"] }
 
 [dev-dependencies]

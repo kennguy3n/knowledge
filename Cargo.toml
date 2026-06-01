@@ -159,13 +159,25 @@ serde_json = "1"
 # in every downstream consumer.
 #
 # Pinned to 0.18 — the current line. Pure Rust, MIT, no I/O, ~2 MB
-# embedded model, compatible with the workspace MSRV (1.85).
+# embedded model, compatible with the workspace MSRV (1.85). Known
+# limitation: 0.18 does not ship classifiers for Tibetan or Lao —
+# the FTS routing predicate in `evidence_store::script` keys on
+# script presence rather than the language tag, which is the right
+# architecture independently and not a workaround we need to lift.
+#
+# Freshness audited in Phase 2.4 against `index.crates.io`; on the
+# latest published version. See `docs/MULTILINGUAL_DEPENDENCY_AUDIT.md`
+# for the per-dep audit log and the future-bump policy.
 whatlang = "0.18"
 
 # Unicode NFC normalization (Phase 1.4) — used by the interrogative
 # first-token extractor to handle NFD-decomposed input (e.g. `qué` as
 # `q u e \u{0301}`) so accented interrogatives match the NFC-composed
 # table entries. Pure Rust, no_std-compatible, MIT.
+#
+# Freshness audited in Phase 2.4 against `index.crates.io`; on the
+# latest published version (`0.1.25`, upstream MSRV `1.36`). See
+# `docs/MULTILINGUAL_DEPENDENCY_AUDIT.md`.
 unicode-normalization = "0.1"
 
 # HTTP client. The blocking client is used by the synchronous
