@@ -682,37 +682,37 @@ mod tests {
 
     /// Pin empty-tag short-circuit: an empty `model_tag` is
     /// treated as the no-model-wired-in sentinel and skipped.
-    /// Uses the equality-based assertion only against THIS
-    /// helper's effect: we capture a snapshot, call the helper
-    /// with empty-tag conflicting dims (which would be a
-    /// violation if not short-circuited), capture again, and
-    /// assert the delta from THIS call site is zero. A parallel
-    /// test bumping the violation counter would also bump the
-    /// `after` value, but the test still fails as expected
-    /// because we are asserting the LOWER bound is zero, i.e.
-    /// that THIS call site never contributes to the counter.
-    /// The assertion shape `<= before` is correct because
-    /// `model_tag_dimension_violations_total` is monotonic
-    /// non-decreasing.
+    ///
+    /// Asserts directly on the `OBSERVED_TAG_DIMS` registry
+    /// rather than on the singleton counter. The counter-based
+    /// shape (`after_violations == before_violations`) would be
+    /// racy under parallel test execution: the sibling
+    /// [`record_observed_dimension_detects_rotation_violation`]
+    /// bumps the same `model_tag_dimension_violations_total`,
+    /// and if it interleaves between this test's two snapshots
+    /// the equality would fail even though the empty-tag short-
+    /// circuit itself never contributed. The registry-state
+    /// shape is race-free: the empty-key insert (or absence
+    /// thereof) is a property of the local call, not a global
+    /// counter that other tests share.
     #[test]
     fn record_observed_dimension_skips_empty_tag() {
-        // Snapshot, do two empty-tag calls, snapshot again, and
-        // assert no NEW violation was contributed by them. Because
-        // the counter is monotonic, the only way `after - before`
-        // can equal zero AND the empty-tag path was buggy is if no
-        // parallel test bumped the counter either — i.e. the
-        // assertion only passes when the empty-tag short-circuit
-        // held. If a parallel test bumps it, the assertion fails
-        // safely (reporting a regression in another test rather
-        // than in this one), which is acceptable for a unit test
-        // that protects a single-line short-circuit invariant.
-        let before = snapshot();
+        // The empty-tag short-circuit's invariant: a call with
+        // `model_tag == ""` must NEVER insert the empty key into
+        // the registry, regardless of `dim`. We assert that
+        // directly under the registry's lock, which is the only
+        // state the empty-tag branch could mutate. Counter state
+        // is shared with sibling tests and not checked here — its
+        // correctness is implied by the registry state (an empty-
+        // key insert would precede any counter bump on
+        // re-observation).
         record_observed_dimension("", 768);
         record_observed_dimension("", 384); // would be a violation if not skipped
-        let after = snapshot();
-        assert_eq!(
-            after.model_tag_dimension_violations_total, before.model_tag_dimension_violations_total,
-            "Empty model_tag must NOT bump the violation counter even with conflicting dims (note: a failure here may indicate either a regression in the empty-tag short-circuit OR a parallel test bumping the same counter — inspect the surrounding test output before assuming this test's call sites caused the bump)"
+        let map = observed_tag_dims().lock().expect("observed_tag_dims lock");
+        assert!(
+            !map.contains_key(""),
+            "Empty model_tag must NOT be inserted into the OBSERVED_TAG_DIMS registry (would have allowed a future re-observation to bump the violation counter); registry currently has {} keys",
+            map.len()
         );
     }
 }
