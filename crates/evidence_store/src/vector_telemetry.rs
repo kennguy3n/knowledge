@@ -442,8 +442,9 @@ pub fn record_observed_dimension(model_tag: &str, dim: usize) {
 ///
 /// `_total` suffix is preserved on every field for the same
 /// Prometheus-convention reason documented on [`Counters`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[allow(clippy::struct_field_names)]
+#[serde(default)]
 pub struct VectorTelemetrySnapshot {
     /// Successful query-side embeds in
     /// [`crate::retrieval::HybridRetriever::search_hybrid`] or

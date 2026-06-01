@@ -25,6 +25,7 @@ pub mod interrogatives;
 pub mod language;
 pub mod lexicon;
 pub mod lexicon_telemetry;
+pub mod persistent_telemetry;
 pub mod pipeline;
 pub mod promotion;
 pub mod retrieval_telemetry;

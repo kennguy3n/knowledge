@@ -333,7 +333,8 @@ pub fn record_hebrew_peel_depth(outcome: PeelOutcome) {
 /// FFI-mirror struct in `crates/ffi/src/metrics.rs` with the
 /// `#[serde(default)]` attribute so older emitters' JSON still
 /// deserializes.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct LexiconTelemetrySnapshot {
     /// Resolved-lexicon hits for `ar`.
     pub hits_ar: u64,

@@ -68,7 +68,8 @@ use crate::lexicon_telemetry::{self, LexiconTelemetrySnapshot};
 /// Each field mirrors the per-lane snapshot type verbatim — extending
 /// any of the three upstream snapshot structs automatically extends
 /// the corresponding sub-snapshot here, no symmetric edit required.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct RetrievalMetricsSnapshot {
     /// FTS5-path telemetry (Phase 1.10) — per-lane query / row totals,
     /// recall-lane structural skips, stopword-strip volumes per call
