@@ -1972,11 +1972,19 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
 
 /// Skip-counter end-to-end test.  Sister of
 /// `fts_telemetry_counters_advance_for_cjk_query_end_to_end`
-/// that exercises the three *skip* counters.
+/// that exercises the four *skip* counters.
 ///
 /// - `bigram_lane_skips_no_cjk_query_total` advances when the
 ///   stripped query is non-empty but has no adjacent CJK
 ///   codepoint (e.g. Latin-only).
+/// - `cjk_trigram_lane_skips_no_cjk_or_thai_query_total`
+///   advances when the stripped query is non-empty but
+///   contains no CJK / Thai codepoint (e.g. Latin-only).
+///   Phase 1.10 sweep 3 (FLAG-0001) added this variant so the
+///   trigram lane's structural skip taxonomy matches the
+///   bigram lane's — before sweep 3, a Latin-only query
+///   bumped `cjk_trigram_lane_queries_total` (with zero rows)
+///   instead of being structurally declined.
 /// - `cjk_trigram_lane_skips_pure_stopword_query_total`
 ///   advances when stripping collapses the query to empty
 ///   (pure-stopword Japanese input like "の の の").
@@ -2006,12 +2014,27 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
 
     let before = fts_telemetry::snapshot();
 
-    // (1) Latin-only query → bigram lane is structurally
-    // declined (no CJK adjacency) and trigram lane runs without
-    // a pure-stopword collapse.
+    // (1) Latin-only query → BOTH recall lanes structurally
+    // decline:
+    //   * trigram lane bumps
+    //     `cjk_trigram_lane_skips_no_cjk_or_thai_query_total`
+    //     (sweep-3 FLAG-0001 fix — before this, the trigram
+    //     lane ran an unproductive FTS5 MATCH against the
+    //     CJK-only `evidence_fts_cjk` table and bumped
+    //     `cjk_trigram_lane_queries_total` instead).
+    //   * bigram lane bumps `bigram_lane_skips_no_cjk_query_total`
+    //     (the existing structural skip — `compute_cjk_bigram_query`
+    //     returns `None` for non-CJK input).
+    // Neither lane should run a SQLite MATCH for this query.
     let _ = store.search_fts(scope, "Latin body", 10).unwrap();
 
     let after_latin = fts_telemetry::snapshot();
+    assert!(
+        after_latin.cjk_trigram_lane_skips_no_cjk_or_thai_query_total
+            > before.cjk_trigram_lane_skips_no_cjk_or_thai_query_total,
+        "trigram no-CJK-or-Thai skip counter did not advance on Latin-only query \
+         — sweep-3 FLAG-0001 regressed (trigram lane invoked SQLite for Latin query)"
+    );
     assert!(
         after_latin.bigram_lane_skips_no_cjk_query_total
             > before.bigram_lane_skips_no_cjk_query_total,
