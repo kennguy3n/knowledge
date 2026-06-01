@@ -234,6 +234,62 @@ pub enum MatchStrategy {
     /// instead via the `؟` terminator short-circuit in
     /// [`crate::extractor::looks_like_question`].
     FirstTokenWithArabicClitics,
+    /// Phase 1.7 strategy for Hebrew, whose morphology
+    /// agglutinates short single-letter proclitics to the front
+    /// of the host word with no orthographic separator — the
+    /// same shape as Arabic's productive proclitic stack but
+    /// with a Hebrew-specific peel inventory (`ו` "and",
+    /// `ש` "that / which", `מ` "from", `ל` "to / for",
+    /// `ב` "in / at / with"). The matcher tries first-token
+    /// exact equality first; if that fails, it iteratively peels
+    /// the recognised Hebrew proclitic prefixes (see
+    /// [`HEBREW_PROCLITIC_PREFIXES`]) and re-checks exact
+    /// equality after each peel. Up to
+    /// [`HEBREW_PROCLITIC_PEEL_BUDGET`] peels are attempted to
+    /// bound worst-case cost on adversarial input; in practice
+    /// 2-3 peels covers the realistic stack (e.g.
+    /// `ושבכיתה` = `ו` + `ש` + `ב` + `כיתה` = "and that in the
+    /// classroom").
+    ///
+    /// **Why a Hebrew-specific peel set rather than reusing
+    /// [`MatchStrategy::FirstTokenWithArabicClitics`]?** The
+    /// Arabic peel inventory references Arabic-only orthography:
+    /// the 2-character definite article `ال` / `أل` does not
+    /// exist in Hebrew (Hebrew's definite article is the single
+    /// letter `ה`), and the Arabic conjunction/connector `ف` is
+    /// not a Hebrew letter. Conversely, the Hebrew relative
+    /// pronoun `ש` and the preposition `מ` are not productive
+    /// Arabic proclitics. Sharing one peel inventory across the
+    /// two languages would cause silent no-ops in the best case
+    /// and over-peeling false positives in the worst case. The
+    /// per-language strategy is the architectural lockstep with
+    /// the per-language peel-inventory constant — see
+    /// `first_token_with_arabic_clitics_languages_are_arabic_only_for_now`
+    /// and the matching
+    /// `first_token_with_hebrew_clitics_languages_are_hebrew_only_for_now`
+    /// exclusivity test.
+    ///
+    /// **Why not peel `ה` (definite article) or `כ` (preposition
+    /// "like / as")?** Both are excluded for precision reasons
+    /// documented in detail on [`HEBREW_PROCLITIC_PREFIXES`].
+    /// Briefly: `ה`-peeling would conflate passive participles
+    /// (`הכתוב` "the written one") with imperatives (`כתוב`
+    /// "write!") on the imperative path, producing a real Task
+    /// false positive on declarative sentences that mention a
+    /// written / sent / scheduled / etc. document. `כ`-peeling
+    /// mirrors the Arabic-side exclusion of `ك` — short
+    /// 1-character prepositions whose recall gain is limited
+    /// while their false-positive blast radius on the verb table
+    /// is real.
+    ///
+    /// **Why not `Substring`?** Hebrew morphology is dense and
+    /// short interrogatives (`מי` "who" — 2 chars, `מה` "what" —
+    /// 2 chars) collide with arbitrary in-word substrings
+    /// (`מי` ⊂ `מים` "water" / `מילה` "word"; `מה` ⊂ `המה`
+    /// "they" / `מהר` "fast"). Bounded prefix peeling gives the
+    /// proclitic recall we need without the per-letter
+    /// false-positive blast radius that `Substring` would carry.
+    FirstTokenWithHebrewClitics,
 }
 
 impl MatchStrategy {
@@ -246,7 +302,11 @@ impl MatchStrategy {
     /// [`InterrogativeMatch::FirstBigram`] (Vietnamese) to
     /// [`MatchStrategy::FirstBigram`] so the Vietnamese
     /// bigram interrogatives (`tại sao`, `khi nào`, `vì sao`)
-    /// reach the matcher.
+    /// reach the matcher. Phase 1.7: now maps
+    /// [`InterrogativeMatch::FirstTokenWithHebrewClitics`]
+    /// (Hebrew) to the matching registry strategy so the
+    /// Hebrew clitic-stacked interrogatives (`ומתי`, `שמה`,
+    /// `מאיזה`) reach the matcher.
     pub fn from_interrogative_match(strategy: InterrogativeMatch) -> Self {
         match strategy {
             InterrogativeMatch::FirstToken => MatchStrategy::FirstToken,
@@ -254,6 +314,9 @@ impl MatchStrategy {
             InterrogativeMatch::Substring => MatchStrategy::Substring,
             InterrogativeMatch::FirstTokenWithArabicClitics => {
                 MatchStrategy::FirstTokenWithArabicClitics
+            }
+            InterrogativeMatch::FirstTokenWithHebrewClitics => {
+                MatchStrategy::FirstTokenWithHebrewClitics
             }
         }
     }
@@ -512,6 +575,55 @@ pub fn is_arabic_combining_or_tatweel(c: char) -> bool {
     )
 }
 
+/// True for Hebrew niqqud (vowel pointing) and cantillation
+/// (te'amim) marks. Counterpart to
+/// [`is_arabic_combining_or_tatweel`].
+///
+/// Ranges from the Unicode 15 Hebrew block:
+///
+/// * `U+0591..=U+05AF` — Hebrew cantillation marks
+///   (`te'amim`, used in liturgical / Biblical text to mark
+///   recitation melody and prosodic structure).
+/// * `U+05B0..=U+05BD` — Hebrew points (`niqqud`: sheva,
+///   hataf-segol, hataf-patah, hataf-qamats, hiriq, tsere,
+///   segol, patah, qamats, holam, holam-haser, qubuts, dagesh,
+///   meteg). Category `Mn`.
+/// * `U+05BF` — Hebrew point rafe. Category `Mn`.
+/// * `U+05C1..=U+05C2` — Hebrew shin / sin dot. Category `Mn`.
+/// * `U+05C4..=U+05C5` — Hebrew mark upper / lower dot.
+///   Category `Mn`.
+/// * `U+05C7` — Hebrew point qamats qatan. Category `Mn`.
+///
+/// These codepoints are stripped during
+/// [`normalize_for_lookup`] when the language tag is `"he"`
+/// (or any other Hebrew-script primary subtag we add later)
+/// so that a niqqud-decorated word like `מָתַי` matches the
+/// canonical table entry `מתי`. Without the strip, the
+/// FirstToken splitter (which treats non-alphabetic
+/// codepoints as token boundaries — `Mn` is not alphabetic
+/// per [`char::is_alphabetic`]) would break the word into
+/// single-letter pieces that never match.
+///
+/// We strip rather than NFKD-decompose for the same reason as
+/// Arabic (see [`is_arabic_combining_or_tatweel`]): NFKD
+/// would also touch unrelated codepoints (e.g. fullwidth
+/// Latin), but strip-by-range is targeted and fully
+/// deterministic. The maqaf (`U+05BE`, Hebrew hyphen — used
+/// to join words orthographically) is **not** stripped:
+/// maqaf is `Po` (punctuation), behaves as a hard tokeniser
+/// boundary by design, and stripping it would conflate
+/// orthographically-distinct phrases.
+pub fn is_hebrew_combining(c: char) -> bool {
+    matches!(c,
+        '\u{0591}'..='\u{05AF}'
+        | '\u{05B0}'..='\u{05BD}'
+        | '\u{05BF}'
+        | '\u{05C1}'..='\u{05C2}'
+        | '\u{05C4}'..='\u{05C5}'
+        | '\u{05C7}'
+    )
+}
+
 /// True for the bidirectional / zero-width formatting
 /// codepoints that should be stripped during normalisation
 /// for **all** languages: zero-width joiner (U+200D),
@@ -581,6 +693,15 @@ pub fn normalize_for_lookup(text: &str, primary_tag: Option<&str>) -> String {
                 .chars()
                 .filter(|c| !is_arabic_combining_or_tatweel(*c))
                 .collect();
+        } else if is_hebrew_script_primary_tag(tag) {
+            // Phase 1.7: strip niqqud + cantillation marks so
+            // that pointed Hebrew text (`מָתַי`) matches the
+            // unpointed canonical table entries (`מתי`). Without
+            // this strip, the FirstToken splitter would break
+            // pointed words into single-letter fragments at every
+            // combining mark, because the marks are category `Mn`
+            // (not alphabetic per `char::is_alphabetic`).
+            buf = buf.chars().filter(|c| !is_hebrew_combining(*c)).collect();
         }
     }
 
@@ -597,6 +718,20 @@ pub fn normalize_for_lookup(text: &str, primary_tag: Option<&str>) -> String {
 /// lexicons for them.
 fn is_arabic_script_primary_tag(primary_tag: &str) -> bool {
     matches!(primary_tag, "ar" | "fa" | "ur" | "ckb" | "ps" | "sd")
+}
+
+/// True for BCP-47 primary subtags whose canonical script is
+/// the Hebrew abjad (and which therefore need niqqud +
+/// cantillation marks stripped during normalisation).
+/// Conservative list — only `he` (Modern Hebrew) ships a
+/// lexicon today. Yiddish (`yi`) and Ladino (`lad`) also use
+/// the Hebrew alphabet but have language-specific spelling
+/// conventions (Yiddish uses `ייִ`/`וֹ` digraphs with different
+/// vowel semantics; Ladino uses different niqqud placement)
+/// and would benefit from their own peel inventories; they're
+/// excluded from this predicate until lexicons land for them.
+fn is_hebrew_script_primary_tag(primary_tag: &str) -> bool {
+    matches!(primary_tag, "he")
 }
 
 // ---------------------------------------------------------------------
@@ -662,6 +797,10 @@ pub fn table_matches(table: &[&str], normalised: &str, strategy: MatchStrategy) 
         MatchStrategy::FirstTokenWithArabicClitics => {
             let first = first_alphabetic_token(normalised);
             first_token_matches_after_arabic_clitic_strip(table, first)
+        }
+        MatchStrategy::FirstTokenWithHebrewClitics => {
+            let first = first_alphabetic_token(normalised);
+            first_token_matches_after_hebrew_clitic_strip(table, first)
         }
     }
 }
@@ -800,8 +939,152 @@ fn peel_one_arabic_proclitic(token: &str) -> Option<&str> {
     None
 }
 
+/// Hebrew proclitic prefixes that the
+/// [`MatchStrategy::FirstTokenWithHebrewClitics`] matcher will
+/// peel from the front of the first alphabetic token.
+///
+/// **Source** for the inventory: Glinert, *Modern Hebrew: An
+/// Essential Grammar* (Routledge, 4th ed. 2005), §3.5
+/// ("Bound prefixes — the 'attaching' particles"). Modern
+/// Hebrew has a small productive inventory of single-letter
+/// proclitics that attach to the next word with no
+/// orthographic separator and which can stack (e.g.
+/// `ושבכיתה` = `ו` "and" + `ש` "that" + `ב` "in" + `כיתה`
+/// "classroom"). The five recognised proclitics below
+/// (`ו` conjunction, `ש` relative pronoun, `מ` preposition
+/// "from", `ל` preposition "to / for", `ב` preposition
+/// "in / at / with") cover every productive proclitic in
+/// modern Hebrew news / docs / formal IM register that the
+/// substrate's lexicons target, *minus* the two surfaces
+/// (`ה`, `כ`) excluded for precision reasons documented below.
+///
+/// Unlike Arabic, **every Hebrew proclitic is exactly one
+/// codepoint** — Hebrew has no 2-character article analogous
+/// to Arabic `ال` / `أل`. The peel loop therefore strips one
+/// codepoint per iteration in the worst case.
+///
+/// Two additional Hebrew proclitics from the linguistic
+/// inventory are **deliberately omitted** from this set, each
+/// for a different reason; the omissions are pinned by tests
+/// so a future contributor can't silently add them back:
+///
+/// * **`ה`** (definite article "the", 1 char) — would conflate
+///   passive participles with imperatives on the imperative
+///   path. Hebrew's masculine-singular imperative for the most
+///   common verbs (`כתוב` "write!", `שלח` "send!", `סקור`
+///   "review!", `פרסם` "publish!", `הצב` "deploy!") is
+///   morphologically a single string, but the same trilateral
+///   root forms a passive participle that takes the article
+///   `ה` in NP context (`הכתוב במסמך` "the (one) written in
+///   the document"). Peeling `ה` from `הכתוב` would surface
+///   the imperative table entry `כתוב` and emit a false Task
+///   observation on a plain declarative noun phrase. The
+///   article also doesn't attach to interrogatives in Hebrew
+///   (interrogatives are NPs themselves, not arguments of an
+///   NP head), so the recall gain on the interrogative path
+///   is zero. Net: real false-positive risk, zero realistic
+///   recall benefit — exclude.
+/// * **`כ`** (preposition "like / as", 1 char) — mirrors the
+///   Arabic-side exclusion of `ك` (see the docstring on
+///   [`ARABIC_PROCLITIC_PREFIXES`]): a 1-character preposition
+///   attached predominantly to nouns, which are matched via
+///   `Substring` on the decision / task classes. Peeling `כ`
+///   from common Hebrew openers (`כתב לי שלום` "he wrote me
+///   hello" — first token `כתב` past-tense of "write") could
+///   surface `תב` (not a word, safe) but also from `כסף`
+///   "money" → `סף`, `כלב` "dog" → `לב`, neither a word in
+///   the table so the peel is also safe in practice — BUT
+///   the recall gain is essentially nil (no productive Hebrew
+///   `כ`-prefixed interrogative; the imperative table is also
+///   not normally prefixed with `כ`). Conservative default:
+///   exclude.
+const HEBREW_PROCLITIC_PREFIXES: &[&str] = &[
+    "ו", // conjunction "and".
+    "ש", // relative pronoun / complementiser "that / which".
+    "מ", // preposition "from".
+    "ל", // preposition "to / for".
+    "ב", // preposition "in / at / with".
+         // NOTE: `ה` (definite article) and `כ` (preposition
+         // "like / as") are deliberately NOT in this list; see
+         // the docstring above for the precision rationale, and
+         // `table_matches_hebrew_clitic_strip_drops_unproductive_h_and_k_prefixes`
+         // for the regression tests that pin the omissions.
+];
+
+/// Worst-case number of proclitic peels the Hebrew clitic-aware
+/// matcher will attempt on a single token before giving up.
+///
+/// Three peels covers the realistic stack-depth in modern
+/// Hebrew — the typical productive stacks are `ש` + `ה` +
+/// nominal (`שהילד` "that the child"), `ו` + `ש` + `ה`
+/// nominal (`ושהילד` "and that the child"), and `ו` + `ש` +
+/// `ב` nominal (`ושבכיתה` "and that in the classroom"). With
+/// `ה` excluded from our peel inventory (see the
+/// [`HEBREW_PROCLITIC_PREFIXES`] docstring) the realistic
+/// stack reduces further to 1-2 peels in nearly every case,
+/// but the budget matches Arabic's [`ARABIC_PROCLITIC_PEEL_BUDGET`]
+/// for symmetry and to leave headroom for any future addition
+/// to the peel set. Pathological tokens like
+/// `וווווו...מתי` exit after 3 peels of `ו` without
+/// exhausting the iterator.
+pub const HEBREW_PROCLITIC_PEEL_BUDGET: usize = 3;
+
+/// Helper for [`MatchStrategy::FirstTokenWithHebrewClitics`].
+///
+/// Returns `true` when `first` exact-matches an entry in `table`
+/// either directly OR after up to
+/// [`HEBREW_PROCLITIC_PEEL_BUDGET`] iterative peels of the
+/// recognised Hebrew proclitic prefixes (see
+/// [`HEBREW_PROCLITIC_PREFIXES`]).
+///
+/// Each iteration tries each prefix in
+/// [`HEBREW_PROCLITIC_PREFIXES`] order and takes the first one
+/// that strips off a non-empty alphabetic residual. A residual
+/// that collapses to empty (e.g. `ו` alone stripped to `""`) is
+/// rejected — there is no host word left to match against the
+/// table.
+fn first_token_matches_after_hebrew_clitic_strip(table: &[&str], first: &str) -> bool {
+    if first.is_empty() {
+        return false;
+    }
+    if table.contains(&first) {
+        return true;
+    }
+    let mut current = first;
+    for _ in 0..HEBREW_PROCLITIC_PEEL_BUDGET {
+        let Some(stripped) = peel_one_hebrew_proclitic(current) else {
+            return false;
+        };
+        if table.contains(&stripped) {
+            return true;
+        }
+        current = stripped;
+    }
+    false
+}
+
+/// Attempt one peel of the recognised Hebrew proclitic prefixes
+/// (see [`HEBREW_PROCLITIC_PREFIXES`]) from the front of `token`.
+///
+/// Returns `Some(residual)` when a prefix was successfully
+/// peeled AND the residual is non-empty (we never propagate an
+/// empty-string "match"). Returns `None` when no recognised
+/// prefix matched OR when the only matching prefix would leave
+/// an empty residual.
+fn peel_one_hebrew_proclitic(token: &str) -> Option<&str> {
+    for prefix in HEBREW_PROCLITIC_PREFIXES {
+        if let Some(rest) = token.strip_prefix(prefix) {
+            if !rest.is_empty() {
+                return Some(rest);
+            }
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------
-// Per-language lexicon definitions (12 BCP-47 primary subtags)
+// Per-language lexicon definitions (13 BCP-47 primary subtags after
+// Phase 1.7 adds `he`; the count tracks BUILTIN_LEXICONS.len()).
 // ---------------------------------------------------------------------
 
 /// English (`en`) — substrate default. Keyword entries
@@ -1358,6 +1641,128 @@ const AR_LEXICON: LanguageLexicon = LanguageLexicon {
     stop_words: &[],
 };
 
+/// Hebrew (`he`).
+///
+/// Modern Hebrew (Israel) — the lexicon target for Phase 1.7.
+/// Hebrew is a right-to-left abjad: consonants are written as
+/// independent letters, vowels are typically omitted in everyday
+/// IM / news / business text (niqqud-less spelling), and short
+/// proclitic particles clitically attach to the next word with
+/// no orthographic separator (`ה` "the", `ו` "and", `ש` "that",
+/// `מ` "from", `ל` "to/for", `ב` "in/at/with", `כ` "like/as").
+///
+/// Sources for the keyword inventory:
+///
+/// * Glinert, *Modern Hebrew: An Essential Grammar* (Routledge,
+///   4th ed. 2005), §11.4 ("Sentence types: declarative,
+///   imperative, interrogative"), §10.2 ("Polite requests and
+///   imperatives — `נא` / `בבקשה` / `אנא`").
+/// * Even-Shoshan, *Ha-Milon He-Hadash* (Kiryat Sefer, 2003) —
+///   canonical entries for decision verbs (`הוחלט`, `החלטה`,
+///   `אושר`, `נחתם`, `נדחה`) and task nouns (`משימה`,
+///   `מטלה`).
+///
+/// **Per-class match-strategy asymmetry** (mirrors AR_LEXICON,
+/// see the dedicated commentary block above `AR_LEXICON`):
+///
+/// * `decision_strategy` / `task_strategy` = `Substring`.
+///   Decision and task keywords are full multi-character
+///   lexical items (≥3 chars on average — `הוחלט`,
+///   `החלטה`, `אושר`, `משימה`, `בבקשה`) that can appear
+///   anywhere in a sentence. Substring catches them wherever
+///   they fall, including inside clitic-prefixed forms
+///   (`וההחלטה` "and the decision" still contains the literal
+///   `החלטה`), without needing a separate peel pass.
+/// * `task_imperative_strategy` = `FirstTokenWithHebrewClitics`.
+///   Hebrew imperatives are positional — they must be the
+///   FIRST alphabetic token in a sentence to be classified as
+///   a directive (otherwise `שלח` inside a longer sentence
+///   might just mean "send" as a past-tense verb form, not as
+///   an imperative directive). The proclitic-aware first-token
+///   strategy is the only place in HE_LEXICON where
+///   positional+prefix-aware matching is needed, because
+///   clitic-stacked imperatives (`ושלח את הדוח` "and send the
+///   report", `ובדוק את הקובץ` "and check the file") must
+///   surface the bare imperative root from the prefixed first
+///   token without false-positively matching the same root
+///   buried in a declarative sentence further downstream.
+///   Substring would over-match (any sentence containing
+///   `שלח` anywhere would emit Task); plain FirstToken would
+///   miss the clitic-prefixed forms.
+/// * Interrogatives use `FirstTokenWithHebrewClitics` for the
+///   same positional reason — Hebrew question words `מי`
+///   ("who", 2 chars) / `מה` ("what", 2 chars) / `מתי`
+///   ("when", 3 chars) are short enough that Substring would
+///   collide with arbitrary in-word fragments (`מי` ⊂ `מים`
+///   "water" / `מילה` "word"; `מה` ⊂ `המה` "they" / `מהר`
+///   "fast"). The interrogative lockstep lives in
+///   `interrogatives_for("he")` (the per-language strategy is
+///   stored on the interrogative table rather than the
+///   language lexicon).
+///
+/// All keyword data is unpointed (no niqqud), because the
+/// [`normalize_for_lookup`] normalisation primitive strips
+/// niqqud + cantillation from input before comparison
+/// (see [`is_hebrew_combining`]), so pointed input like
+/// `מָתַי` matches the unpointed table entry `מתי`.
+const HE_LEXICON: LanguageLexicon = LanguageLexicon {
+    primary_tag: "he",
+    display_name: "Hebrew",
+    decision_keywords: &[
+        "הוחלט",  // "it was decided" (passive past)
+        "החלטה",  // "decision" (noun)
+        "החליטו", // "they decided" (active past 3pl)
+        "אושר",   // "was approved" (passive past)
+        "אישור",  // "approval" (noun)
+        "אישרו",  // "they approved"
+        "נחתם",   // "was signed" (passive past)
+        "נדחה",   // "was rejected" (passive past)
+        "סוכם",   // "was agreed / summarised"
+    ],
+    // Substring: long-form keywords, anywhere in sentence. See
+    // per-class asymmetry block above and the matching block on
+    // `AR_LEXICON`.
+    decision_strategy: MatchStrategy::Substring,
+    task_keywords: &[
+        "משימה", // "task" (noun)
+        "מטלה",  // "assignment / task" (noun, more formal)
+        "בבקשה", // "please" (canonical polite request)
+        "אנא",   // "please" (formal / written request)
+        "מעקב",  // "follow-up" (noun)
+    ],
+    // Substring: long-form keywords, anywhere in sentence. See
+    // per-class asymmetry block above.
+    task_strategy: MatchStrategy::Substring,
+    // Imperatives are unpointed masculine-singular forms (the
+    // canonical Hebrew imperative shape). The matcher strips
+    // niqqud + cantillation from input before comparison, so
+    // pointed input (e.g. `כְּתֹב`) still matches the unpointed
+    // table entry `כתוב`. Verbs cover the same English
+    // imperative semantics shipped by EN_LEXICON for parity:
+    // write / send / schedule / review / publish / fix / deploy /
+    // investigate / prepare / update / merge.
+    task_imperative_verbs: &[
+        "כתוב", // "write"
+        "שלח",  // "send"
+        "קבע",  // "schedule / set"
+        "סקור", // "review"
+        "בדוק", // "check"
+        "פרסם", // "publish"
+        "תקן",  // "fix"
+        "הצב",  // "deploy / set up"
+        "חקור", // "investigate"
+        "הכן",  // "prepare"
+        "עדכן", // "update"
+        "מזג",  // "merge"
+    ],
+    // FirstTokenWithHebrewClitics: positional (must be the
+    // first alphabetic token) + clitic-aware (peels ו/ש/מ/ל/ב
+    // before re-checking equality). See per-class asymmetry
+    // block above and the matching block on AR_LEXICON.
+    task_imperative_strategy: MatchStrategy::FirstTokenWithHebrewClitics,
+    stop_words: &[],
+};
+
 /// Vietnamese (`vi`).
 ///
 /// Vietnamese is space-separated but with a productive set of
@@ -1881,9 +2286,9 @@ const LO_LEXICON: LanguageLexicon = LanguageLexicon {
 /// ([`crate::interrogatives::SUPPORTED_PRIMARY_TAGS`]) holds
 /// for every language listed here.
 pub const BUILTIN_LEXICONS: &[LanguageLexicon] = &[
-    AR_LEXICON, BO_LEXICON, DE_LEXICON, EN_LEXICON, ES_LEXICON, FR_LEXICON, HI_LEXICON, ID_LEXICON,
-    IT_LEXICON, JA_LEXICON, KM_LEXICON, KO_LEXICON, LO_LEXICON, MS_LEXICON, MY_LEXICON, PT_LEXICON,
-    RU_LEXICON, TH_LEXICON, VI_LEXICON, ZH_LEXICON,
+    AR_LEXICON, BO_LEXICON, DE_LEXICON, EN_LEXICON, ES_LEXICON, FR_LEXICON, HE_LEXICON, HI_LEXICON,
+    ID_LEXICON, IT_LEXICON, JA_LEXICON, KM_LEXICON, KO_LEXICON, LO_LEXICON, MS_LEXICON, MY_LEXICON,
+    PT_LEXICON, RU_LEXICON, TH_LEXICON, VI_LEXICON, ZH_LEXICON,
 ];
 
 /// All BCP-47 primary tags shipped in the built-in
@@ -1891,8 +2296,8 @@ pub const BUILTIN_LEXICONS: &[LanguageLexicon] = &[
 /// [`crate::interrogatives::SUPPORTED_PRIMARY_TAGS`] by
 /// design (one is the test invariant for the other).
 pub const SUPPORTED_LEXICON_TAGS: &[&str] = &[
-    "ar", "bo", "de", "en", "es", "fr", "hi", "id", "it", "ja", "km", "ko", "lo", "ms", "my", "pt",
-    "ru", "th", "vi", "zh",
+    "ar", "bo", "de", "en", "es", "fr", "he", "hi", "id", "it", "ja", "km", "ko", "lo", "ms", "my",
+    "pt", "ru", "th", "vi", "zh",
 ];
 
 /// Return a reference to the process-wide built-in
@@ -2481,6 +2886,441 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
+    // Phase 1.7: FirstTokenWithHebrewClitics
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn table_matches_hebrew_clitic_strip_fast_path_bare_first_token() {
+        // Phase 1.7: a bare interrogative-initial Hebrew sentence
+        // (no proclitic prefixes on the first token) must surface
+        // the matching table entry via the fast-path equality
+        // check — no peel is required.
+        let table = &["מי", "מה", "מתי", "איפה", "איך", "למה", "כמה", "האם"];
+        for sentence in [
+            "מי שלח את ההודעה", // "Who sent the message"
+            "מה התוכנית שלך",   // "What is your plan"
+            "מתי הישיבה הבאה",  // "When is the next meeting"
+            "איפה הקובץ",       // "Where is the file"
+            "איך הולך הפרויקט", // "How is the project going"
+            "למה זה לא עובד",   // "Why doesn't this work"
+            "כמה זמן זה ייקח",  // "How much time will this take"
+            "האם זה אפשרי",     // "Is this possible"
+        ] {
+            assert!(
+                table_matches(table, sentence, MatchStrategy::FirstTokenWithHebrewClitics),
+                "bare Hebrew interrogative {sentence:?} must match via the FirstToken \
+                 fast path of FirstTokenWithHebrewClitics"
+            );
+        }
+    }
+
+    #[test]
+    fn table_matches_hebrew_clitic_strip_single_prefix_peel() {
+        // Phase 1.7: single-prefix proclitic-attached interrogatives
+        // (the architecturally meaningful direction — these would
+        // NOT match under the bare FirstToken strategy).
+        let table = &["מי", "מה", "מתי", "איפה", "איך", "למה"];
+        for (sentence, prefix, residual) in [
+            ("ומתי נתחיל את הפגישה", "ו", "מתי"), // "And when do we start the meeting"
+            ("שמה הסיבה", "ש", "מה"),             // "That what's the reason"
+            ("מאיפה הגיע המייל", "מ", "איפה"),    // synthetic — pins the מ-peel even though
+            // colloquial Hebrew tends to use `מהיכן`
+            // for "from where".
+            ("לאיך נגיב לזה", "ל", "איך"), // synthetic — pins the ל-peel.
+            ("בלמה התעכבנו", "ב", "למה"),  // synthetic — pins the ב-peel.
+        ] {
+            let bare = table_matches(table, sentence, MatchStrategy::FirstToken);
+            let clitic = table_matches(table, sentence, MatchStrategy::FirstTokenWithHebrewClitics);
+            assert!(
+                !bare,
+                "FirstToken must NOT match the proclitic-prefixed surface form: \
+                 sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
+                 unexpectedly matched bare FirstToken — this would mean the strict \
+                 superset assertion is vacuous"
+            );
+            assert!(
+                clitic,
+                "FirstTokenWithHebrewClitics MUST match the proclitic-prefixed surface: \
+                 sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
+                 did not match — the strict-superset direction is broken"
+            );
+        }
+    }
+
+    #[test]
+    fn table_matches_hebrew_clitic_strip_stacked_prefixes() {
+        // Phase 1.7: realistic stacked proclitic forms must peel
+        // within the 3-iteration budget. Hebrew commonly stacks
+        // `ו` + `ש` + content (`ושמה` "and that what") and
+        // `ו` + `ב` + content (`ובאיזה` "and in which").
+        let table = &["מה", "איזה", "מתי"];
+        // `ושמה` = `ו` + `ש` + `מה` (2 peels).
+        assert!(
+            table_matches(
+                table,
+                "ושמה היתרון",
+                MatchStrategy::FirstTokenWithHebrewClitics
+            ),
+            "`ושמה` must peel `ו` then `ש` → `מה` within the 3-peel budget"
+        );
+        // `ובאיזה` = `ו` + `ב` + `איזה` (2 peels).
+        assert!(
+            table_matches(
+                table,
+                "ובאיזה אופן",
+                MatchStrategy::FirstTokenWithHebrewClitics
+            ),
+            "`ובאיזה` must peel `ו` then `ב` → `איזה` within the 3-peel budget"
+        );
+        // `ושבמתי` = `ו` + `ש` + `ב` + `מתי` (3 peels — at the
+        // budget limit; synthetic since this stack isn't
+        // idiomatic but pins the budget edge).
+        assert!(
+            table_matches(
+                table,
+                "ושבמתי נחתום",
+                MatchStrategy::FirstTokenWithHebrewClitics
+            ),
+            "`ושבמתי` must peel `ו` then `ש` then `ב` → `מתי` exactly at the 3-peel budget"
+        );
+    }
+
+    #[test]
+    fn table_matches_hebrew_clitic_strip_rejects_unrelated_first_token() {
+        // Phase 1.7 false-positive guard: declarative Hebrew
+        // sentences whose first token is not a recognised
+        // interrogative (even after peeling) must NOT match.
+        let table = &["מי", "מה", "מתי", "איפה"];
+        for sentence in [
+            "הילד הלך לבית הספר",      // "The child went to school" — `ה` not in peel set.
+            "דניאל סיים את הפרויקט",   // proper-name first token.
+            "ספר חדש פורסם",           // "A new book was published" — `ספר` doesn't peel.
+            "תוצאת הפגישה היתה ברורה", // first token `תוצאת` is none of the peels.
+        ] {
+            assert!(
+                !table_matches(table, sentence, MatchStrategy::FirstTokenWithHebrewClitics),
+                "Hebrew declarative {sentence:?} must NOT match the interrogative table \
+                 under FirstTokenWithHebrewClitics (no peel produces an interrogative \
+                 residual)"
+            );
+        }
+    }
+
+    #[test]
+    fn table_matches_hebrew_clitic_strip_rejects_bare_proclitic_token() {
+        // Phase 1.7 edge case: a first token consisting only of a
+        // proclitic prefix (e.g. just `ו` with no host word) must
+        // NOT match — there is no residual to compare against the
+        // table. This guards against accidentally matching the
+        // empty string.
+        let table = &["מי", "מה"];
+        assert!(
+            !table_matches(
+                table,
+                "ו מה התוכנית",
+                MatchStrategy::FirstTokenWithHebrewClitics
+            ),
+            "bare proclitic `ו` (separated from `מה` by whitespace) must not falsely \
+             surface `מה` via the peel — `peel_one_hebrew_proclitic` rejects empty residuals"
+        );
+    }
+
+    #[test]
+    fn table_matches_hebrew_clitic_strip_drops_unproductive_h_and_k_prefixes() {
+        // Phase 1.7 deliberate-omission regression: `ה` (definite
+        // article) and `כ` (preposition "like / as") are NOT in
+        // HEBREW_PROCLITIC_PREFIXES, so they MUST NOT peel.
+        //
+        // The decisive `ה`-test: `הכתוב במסמך` ("the (one) written
+        // in the document") is a noun phrase — a passive
+        // participle with the definite article. If `ה` were in
+        // the peel set, the matcher would surface `כתוב` (Hebrew
+        // imperative "write!") on this declarative sentence,
+        // emitting a false Task observation. Confirm it does NOT.
+        let imperative_table = &["כתוב", "שלח", "סקור"];
+        assert!(
+            !table_matches(
+                imperative_table,
+                "הכתוב במסמך",
+                MatchStrategy::FirstTokenWithHebrewClitics
+            ),
+            "definite-article `ה` MUST NOT peel — `הכתוב במסמך` (passive participle) \
+             must not surface the imperative `כתוב`"
+        );
+        // Similarly, `כ` must not peel — `כתב לי` ("he wrote me")
+        // begins with `כתב` (past-tense verb), not `כ` + a host;
+        // even though no residual is in the imperative table here,
+        // the negative regression pins the omission.
+        assert!(
+            !table_matches(
+                imperative_table,
+                "כתב לי הודעה",
+                MatchStrategy::FirstTokenWithHebrewClitics
+            ),
+            "preposition `כ` MUST NOT peel — `כתב` (past-tense verb) must not surface as an \
+             imperative via a `כ` peel"
+        );
+    }
+
+    #[test]
+    fn peel_one_hebrew_proclitic_longest_first_priority() {
+        // Phase 1.7 ordering invariant: each Hebrew proclitic in
+        // HEBREW_PROCLITIC_PREFIXES is exactly one codepoint, so
+        // there is no "longest-first" ambiguity at the per-prefix
+        // level (unlike Arabic's 2-char `ال` vs 1-char `ا`/`ل`).
+        // The constant's iteration order DOES matter when an
+        // input could match multiple recognised prefixes at the
+        // same position — `ושמה` could in theory peel `ש` first
+        // (yielding `שמה`-then-`מה`, 2 peels) or `ו` first
+        // (yielding the same `מה` in 2 peels). The peel order
+        // (ו, ש, מ, ל, ב) is deterministic; pin the surface
+        // residuals one peel at a time.
+        assert_eq!(peel_one_hebrew_proclitic("ומתי"), Some("מתי"));
+        assert_eq!(peel_one_hebrew_proclitic("שמה"), Some("מה"));
+        assert_eq!(peel_one_hebrew_proclitic("מאיזה"), Some("איזה"));
+        assert_eq!(peel_one_hebrew_proclitic("לאיך"), Some("איך"));
+        assert_eq!(peel_one_hebrew_proclitic("בלמה"), Some("למה"));
+        // Definite article `ה` and preposition `כ` are deliberately
+        // NOT in the peel set — see the docstring on
+        // HEBREW_PROCLITIC_PREFIXES.
+        assert_eq!(peel_one_hebrew_proclitic("הכתוב"), None);
+        assert_eq!(peel_one_hebrew_proclitic("כתב"), None);
+        // No recognised prefix → None.
+        assert_eq!(peel_one_hebrew_proclitic("דניאל"), None);
+        assert_eq!(peel_one_hebrew_proclitic("ספר"), None);
+        // Pure proclitic with empty residual → None.
+        assert_eq!(peel_one_hebrew_proclitic("ו"), None);
+        assert_eq!(peel_one_hebrew_proclitic("ש"), None);
+        assert_eq!(peel_one_hebrew_proclitic("מ"), None);
+    }
+
+    #[test]
+    fn hebrew_clitic_peel_budget_bounds_worst_case_iteration() {
+        // Phase 1.7 budget invariant: the helper must give up
+        // after HEBREW_PROCLITIC_PEEL_BUDGET peels even on a
+        // pathological input that could otherwise loop.
+        let table = &["מתי"];
+        // 10 leading `ו` followed by `מתי`. 10 > 3, so the budget
+        // exits before reaching `מתי`. This guards the structural
+        // bound (an attacker can't force the matcher to iterate
+        // proportional to input length).
+        let mut adversarial = String::new();
+        for _ in 0..10 {
+            adversarial.push('ו');
+        }
+        adversarial.push_str("מתי");
+        assert!(
+            !table_matches(
+                table,
+                adversarial.as_str(),
+                MatchStrategy::FirstTokenWithHebrewClitics
+            ),
+            "pathological 10-`ו` prefix must exit via the peel budget without surfacing `מתי`"
+        );
+        // Sanity: exactly 3 leading `ו` still matches (the budget
+        // is inclusive — 3 peels are attempted).
+        assert!(
+            table_matches(
+                table,
+                "ווומתי נתחיל",
+                MatchStrategy::FirstTokenWithHebrewClitics
+            ),
+            "3-`ו` prefix `ווומתי` must surface `מתי` within the 3-peel budget"
+        );
+    }
+
+    #[test]
+    fn hebrew_clitic_strategy_is_strict_superset_of_first_token() {
+        // Phase 1.7 invariant: the FirstTokenWithHebrewClitics
+        // strategy must be a *strict superset* of FirstToken —
+        // (a) every sentence matching FirstToken matches under
+        // FirstTokenWithHebrewClitics, AND (b) some sentences
+        // match under FirstTokenWithHebrewClitics that do NOT
+        // match under FirstToken (the new strategy genuinely
+        // adds recall).
+        let table = &["מי", "מה", "מתי", "איפה"];
+
+        // Direction (a): bare-first-token cases.
+        for sentence in ["מי שלח את ההודעה", "מתי הישיבה", "איפה הקובץ", "מה התוכנית"]
+        {
+            let bare = table_matches(table, sentence, MatchStrategy::FirstToken);
+            let clitic = table_matches(table, sentence, MatchStrategy::FirstTokenWithHebrewClitics);
+            assert!(
+                bare && clitic,
+                "FirstTokenWithHebrewClitics must preserve all FirstToken matches: \
+                 sentence {sentence:?} matched FirstToken={bare} but \
+                 FirstTokenWithHebrewClitics={clitic} (both must be true)"
+            );
+        }
+
+        // Direction (b): proclitic-prefixed cases.
+        for (sentence, prefix, residual) in [
+            ("ומתי נתחיל", "ו", "מתי"),
+            ("שמה הסיבה", "ש", "מה"),
+            ("מאיפה הגיע", "מ", "איפה"),
+            ("ושמה התוצאה", "וש", "מה"), // 2-stack
+        ] {
+            let bare = table_matches(table, sentence, MatchStrategy::FirstToken);
+            let clitic = table_matches(table, sentence, MatchStrategy::FirstTokenWithHebrewClitics);
+            assert!(
+                !bare,
+                "FirstToken must NOT match the proclitic-prefixed surface form: \
+                 sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
+                 unexpectedly matched bare FirstToken — strict superset assertion would be vacuous"
+            );
+            assert!(
+                clitic,
+                "FirstTokenWithHebrewClitics MUST match the proclitic-prefixed surface: \
+                 sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
+                 did not match — the strict-superset direction is broken"
+            );
+        }
+    }
+
+    #[test]
+    fn hebrew_normalisation_strips_niqqud_and_cantillation() {
+        // Phase 1.7: pointed Hebrew (with niqqud or cantillation
+        // marks) must collapse to the unpointed canonical form
+        // via `normalize_for_lookup`. Without the strip, pointed
+        // input like `מָתַי` would tokenise into single-letter
+        // fragments at every combining mark.
+        let table = &["מתי", "מי", "מה"];
+        let he = Some("he");
+
+        // Niqqud-decorated `מָתַי` (mem + qamats + tav + patah + yod).
+        let pointed_matai = "\u{05DE}\u{05B8}\u{05EA}\u{05B7}\u{05D9}";
+        let normalised = normalize_for_lookup(pointed_matai, he);
+        assert_eq!(
+            normalised, "מתי",
+            "niqqud must be stripped: `מָתַי` ({pointed_matai:?}) → `מתי`, got {normalised:?}"
+        );
+        assert!(
+            table_matches(
+                table,
+                &normalised,
+                MatchStrategy::FirstTokenWithHebrewClitics
+            ),
+            "normalised pointed `מָתַי` must match the unpointed `מתי` table entry"
+        );
+
+        // Cantillation-decorated `מִ֖י` (mem + hiriq + tipeha + yod).
+        // U+0596 = Hebrew accent tipeha (cantillation).
+        let cantillated_mi = "\u{05DE}\u{05B4}\u{0596}\u{05D9}";
+        let normalised = normalize_for_lookup(cantillated_mi, he);
+        assert_eq!(
+            normalised, "מי",
+            "cantillation must be stripped: `מִ֖י` ({cantillated_mi:?}) → `מי`, got {normalised:?}"
+        );
+        assert!(
+            table_matches(
+                table,
+                &normalised,
+                MatchStrategy::FirstTokenWithHebrewClitics
+            ),
+            "normalised cantillated `מִ֖י` must match the unpointed `מי` table entry"
+        );
+
+        // Combined niqqud + cantillation + clitic prefix:
+        // `וּמָתַ֖י` = `ו` + qubuts + `מ` + qamats + `ת` + patah +
+        // tipeha + `י`. After strip + NFC: `ומתי`. Peel `ו` → `מתי`.
+        let pointed_umatai = "\u{05D5}\u{05BB}\u{05DE}\u{05B8}\u{05EA}\u{05B7}\u{0596}\u{05D9}";
+        let normalised = normalize_for_lookup(pointed_umatai, he);
+        assert_eq!(normalised, "ומתי", "got {normalised:?}");
+        assert!(
+            table_matches(
+                table,
+                &normalised,
+                MatchStrategy::FirstTokenWithHebrewClitics
+            ),
+            "pointed-and-prefixed `וּמָתַ֖י` must normalise to `ומתי` and then peel `ו` to surface `מתי`"
+        );
+
+        // Sanity: maqaf (U+05BE Hebrew hyphen, category Po) is
+        // NOT stripped — it remains as a tokeniser boundary.
+        let with_maqaf = "מי\u{05BE}שלח";
+        let normalised = normalize_for_lookup(with_maqaf, he);
+        assert!(
+            normalised.contains('\u{05BE}'),
+            "maqaf U+05BE must NOT be stripped (it's punctuation, not a combining mark); \
+             got normalised={normalised:?}"
+        );
+    }
+
+    #[test]
+    fn hebrew_lexicon_has_expected_class_strategies() {
+        // Phase 1.7: pin the per-class asymmetry for HE_LEXICON.
+        // Decision / Task = Substring; TaskImperative =
+        // FirstTokenWithHebrewClitics. See the per-class
+        // asymmetry block in the HE_LEXICON docstring.
+        let lex = default_registry()
+            .lexicon_for("he")
+            .expect("hebrew configured");
+        let (_decision, decision_strat) = lex.entries(KeywordClass::Decision).unwrap();
+        assert_eq!(
+            decision_strat,
+            MatchStrategy::Substring,
+            "Hebrew decision strategy must be Substring (long-form keywords, anywhere)"
+        );
+        let (_task, task_strat) = lex.entries(KeywordClass::Task).unwrap();
+        assert_eq!(
+            task_strat,
+            MatchStrategy::Substring,
+            "Hebrew task strategy must be Substring"
+        );
+        let (imperatives, imperative_strat) = lex.entries(KeywordClass::TaskImperative).unwrap();
+        assert_eq!(
+            imperative_strat,
+            MatchStrategy::FirstTokenWithHebrewClitics,
+            "Hebrew imperative strategy must be FirstTokenWithHebrewClitics"
+        );
+        // Verify imperatives cover the substrate's standard
+        // imperative semantics.
+        for verb in ["כתוב", "שלח", "סקור", "פרסם", "תקן", "הצב"] {
+            assert!(
+                imperatives.contains(&verb),
+                "Hebrew imperatives must include {verb:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn first_token_with_hebrew_clitics_languages_are_hebrew_only_for_now() {
+        // Phase 1.7: pin exclusivity of MatchStrategy::FirstTokenWithHebrewClitics
+        // to the `he` lexicon. Same architectural rationale as the
+        // Arabic-side sibling test
+        // (`first_token_with_arabic_clitics_languages_are_arabic_only_for_now`):
+        // adding a second language that wants Hebrew-style
+        // proclitic peeling must be an INTENTIONAL decision that
+        // (a) verifies HEBREW_PROCLITIC_PREFIXES is the right peel
+        // inventory for that language, AND (b) updates this test
+        // to reflect the new membership. Yiddish (yi) and Ladino
+        // (lad) use the Hebrew alphabet but have different
+        // proclitic morphology and would need their own peel
+        // inventories — silently sharing Modern Hebrew's would
+        // introduce false positives.
+        let reg = default_registry();
+        let expected_hebrew_clitic_aware: std::collections::HashSet<&str> =
+            ["he"].into_iter().collect();
+        // Apply the same lockstep across both the LexiconRegistry
+        // (task_imperative_strategy field) AND the interrogatives
+        // module (matching_strategy_for) — both must agree.
+        for lex in reg.iter() {
+            let tag = lex.primary_tag;
+            let (_, ti_strat) = lex.entries(KeywordClass::TaskImperative).unwrap();
+            let is_clitic_aware = ti_strat == MatchStrategy::FirstTokenWithHebrewClitics;
+            assert_eq!(
+                is_clitic_aware,
+                expected_hebrew_clitic_aware.contains(tag),
+                "lexicon {tag}: hebrew-clitic-aware expected={}, got task_imperative_strategy={:?} \
+                 — FirstTokenWithHebrewClitics must remain Hebrew-only \
+                 (see test comment for rationale)",
+                expected_hebrew_clitic_aware.contains(tag),
+                ti_strat
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------
     // Registry behaviour
     // -----------------------------------------------------------------
 
@@ -2617,6 +3457,21 @@ mod tests {
                                 !entry.chars().any(char::is_whitespace),
                                 "{}/{strategy_label} entry {entry:?} is \
                                  FirstTokenWithArabicClitics but contains whitespace \
+                                 (no token / peel-residual would ever equal it)",
+                                lex.primary_tag,
+                            );
+                        }
+                        // FirstTokenWithHebrewClitics shares the
+                        // same first-alphabetic-token exact-
+                        // equality semantics as FirstToken and
+                        // FirstTokenWithArabicClitics, plus
+                        // peeled residuals — entries with
+                        // whitespace would never match.
+                        MatchStrategy::FirstTokenWithHebrewClitics => {
+                            assert!(
+                                !entry.chars().any(char::is_whitespace),
+                                "{}/{strategy_label} entry {entry:?} is \
+                                 FirstTokenWithHebrewClitics but contains whitespace \
                                  (no token / peel-residual would ever equal it)",
                                 lex.primary_tag,
                             );
