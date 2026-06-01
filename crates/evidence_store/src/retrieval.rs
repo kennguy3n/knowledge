@@ -272,6 +272,20 @@ impl<'a> HybridRetriever<'a> {
         let Some(model) = self.embedding_model.as_ref() else {
             return Ok(candidates);
         };
+        // Phase 1.12 pre-embedding routing gate.  A noise-only
+        // rerank query (pure punctuation / emoji / digits)
+        // would burn an ONNX call to produce a near-zero vector
+        // that scores every candidate body uniformly — worse
+        // than just returning the FTS+recency candidates
+        // unchanged.  Skip the lane wholesale in that case.
+        let query_route = crate::embedding_routing::classify_for_embedding(query);
+        crate::vector_telemetry::record_pre_embed_decision(query_route);
+        if matches!(
+            query_route,
+            crate::embedding_routing::EmbeddingRoute::Skip(_)
+        ) {
+            return Ok(candidates);
+        }
         let query_vec = match model.embed(query) {
             Ok(v) => {
                 crate::vector_telemetry::record_embedding_computed(
@@ -293,18 +307,38 @@ impl<'a> HybridRetriever<'a> {
         let mut out = Vec::with_capacity(candidates.len());
         for mut hit in candidates {
             let vector_score = match body_lookup.get(&hit.evidence_id) {
-                Some(body) => match model.embed(body) {
-                    Ok(v) => {
-                        crate::vector_telemetry::record_embedding_computed(
-                            crate::vector_telemetry::EmbedSite::LiveBody,
-                        );
-                        similarity_to_score(cosine_similarity(&query_vec, &v))
-                    }
-                    Err(err) => {
-                        crate::vector_telemetry::record_embedding_error_from(&err);
+                Some(body) => {
+                    // Phase 1.12: per-body pre-embed gate.  A
+                    // noise-only body would otherwise have its
+                    // `vector_score` set from a near-zero embed
+                    // that drags the fan-in score toward 0.5
+                    // (the `cos == 0` projection per
+                    // `similarity_to_score`).  Skipping the
+                    // embed and leaving `vector_score = 0.0`
+                    // matches the existing "no body" branch
+                    // below.
+                    let body_route = crate::embedding_routing::classify_for_embedding(body);
+                    crate::vector_telemetry::record_pre_embed_decision(body_route);
+                    if matches!(
+                        body_route,
+                        crate::embedding_routing::EmbeddingRoute::Skip(_),
+                    ) {
                         0.0
+                    } else {
+                        match model.embed(body) {
+                            Ok(v) => {
+                                crate::vector_telemetry::record_embedding_computed(
+                                    crate::vector_telemetry::EmbedSite::LiveBody,
+                                );
+                                similarity_to_score(cosine_similarity(&query_vec, &v))
+                            }
+                            Err(err) => {
+                                crate::vector_telemetry::record_embedding_error_from(&err);
+                                0.0
+                            }
+                        }
                     }
-                },
+                }
                 None => 0.0,
             };
             hit.vector_score = vector_score;
@@ -387,21 +421,50 @@ impl<'a> HybridRetriever<'a> {
         // adapter outage anyway). The success / error counters cover
         // both branches so the operator can see degraded mode in
         // metrics.
-        let query_vec = self
-            .embedding_model
-            .as_ref()
-            .and_then(|model| match model.embed(query) {
-                Ok(v) => {
-                    crate::vector_telemetry::record_embedding_computed(
-                        crate::vector_telemetry::EmbedSite::Query,
-                    );
-                    Some(v)
+        // Phase 1.12 pre-embedding routing gate.  A noise-only
+        // query (pure punctuation / emoji / digits) would have
+        // its near-zero embedding score every candidate body at
+        // roughly the same (low) cosine similarity, dragging
+        // the fan-in score toward `0.5` and effectively
+        // randomising the top-k.  Skipping the lane wholesale
+        // is strictly better — the FTS+recency lanes still rank
+        // the candidates by lexical signal.
+        //
+        // The gate is guarded behind `self.embedding_model.is_some()`
+        // so the `pre_embed_*_total` counters reflect only call
+        // sites where the model is actually available to service
+        // the routing decision — matching the same pattern in
+        // [`Self::rerank_with_embeddings`] above and
+        // [`EvidenceStore::index_embedding`].  Without this guard
+        // the admission-rate metric documented at
+        // `vector_telemetry.rs` (`admitted / total = ONNX-call
+        // admission rate`) would be inflated for retrievers
+        // running in FTS+recency-only mode.
+        let query_vec = if let Some(model) = self.embedding_model.as_ref() {
+            let query_route = crate::embedding_routing::classify_for_embedding(query);
+            crate::vector_telemetry::record_pre_embed_decision(query_route);
+            if matches!(
+                query_route,
+                crate::embedding_routing::EmbeddingRoute::Skip(_),
+            ) {
+                None
+            } else {
+                match model.embed(query) {
+                    Ok(v) => {
+                        crate::vector_telemetry::record_embedding_computed(
+                            crate::vector_telemetry::EmbedSite::Query,
+                        );
+                        Some(v)
+                    }
+                    Err(err) => {
+                        crate::vector_telemetry::record_embedding_error_from(&err);
+                        None
+                    }
                 }
-                Err(err) => {
-                    crate::vector_telemetry::record_embedding_error_from(&err);
-                    None
-                }
-            });
+            }
+        } else {
+            None
+        };
         if let (Some(model), Some(query_vec)) = (self.embedding_model.as_ref(), query_vec) {
             for entry in by_id.values_mut() {
                 let body_vec =
@@ -568,6 +631,20 @@ impl<'a> HybridRetriever<'a> {
                 return Ok(None);
             }
         };
+        // Phase 1.12 pre-embedding routing gate for the
+        // cache-miss fallback.  A body classified as noise-only
+        // would have its `vector_score` set from a near-zero
+        // embed; skipping the embed and returning `None` here
+        // matches the upstream caller's existing "no body"
+        // semantics in `search_hybrid`.
+        let body_route = crate::embedding_routing::classify_for_embedding(&body);
+        crate::vector_telemetry::record_pre_embed_decision(body_route);
+        if matches!(
+            body_route,
+            crate::embedding_routing::EmbeddingRoute::Skip(_),
+        ) {
+            return Ok(None);
+        }
         match model.embed(&body) {
             Ok(v) => {
                 crate::vector_telemetry::record_embedding_computed(

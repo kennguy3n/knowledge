@@ -549,6 +549,15 @@ fn vector_saturating_sub(
         model_tag_dimension_violations_total: latest
             .model_tag_dimension_violations_total
             .saturating_sub(prior.model_tag_dimension_violations_total),
+        pre_embed_admitted_total: latest
+            .pre_embed_admitted_total
+            .saturating_sub(prior.pre_embed_admitted_total),
+        pre_embed_skipped_empty_after_trim_total: latest
+            .pre_embed_skipped_empty_after_trim_total
+            .saturating_sub(prior.pre_embed_skipped_empty_after_trim_total),
+        pre_embed_skipped_no_linguistic_content_total: latest
+            .pre_embed_skipped_no_linguistic_content_total
+            .saturating_sub(prior.pre_embed_skipped_no_linguistic_content_total),
     }
 }
 

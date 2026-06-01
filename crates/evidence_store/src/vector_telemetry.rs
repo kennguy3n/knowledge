@@ -123,6 +123,34 @@
 //!     kernel error, tokenizer issue, dimension mismatch
 //!     between runtime output and `OnnxModelConfig::dimension`).
 //!
+//! * **Pre-embedding routing decisions (Phase 1.12)** — three
+//!   sibling counters covering the disposition of every call to
+//!   [`crate::embedding_routing::classify_for_embedding`] on a
+//!   production code path.  The pre-embed router short-circuits
+//!   ONNX invocations on text with no linguistic content (pure
+//!   punctuation / pure emoji / pure digits / pure whitespace);
+//!   the counters let operators see what fraction of calls the
+//!   router admits vs. diverts to the lexical-only fallback.
+//!
+//!   * [`Counters::pre_embed_admitted_total`] — input had
+//!     trigram-detectable linguistic content; the call site
+//!     proceeded to `model.embed(text)`.
+//!   * [`Counters::pre_embed_skipped_empty_after_trim_total`] —
+//!     input was empty after `str::trim`.  Usually signals an
+//!     upstream extraction bug rather than legitimate noise;
+//!     operators may want to alert on a non-trivial fraction.
+//!   * [`Counters::pre_embed_skipped_no_linguistic_content_total`]
+//!     — input was non-empty after trim but [`whatlang::detect`]
+//!     could not extract any trigram-detectable linguistic
+//!     content.  Pure punctuation / pure emoji / pure digits /
+//!     pure-symbol input all land here.
+//!
+//!   The three are mutually exclusive — every routing call
+//!   bumps exactly one.  Summing the three gives the total
+//!   number of call sites that consulted the router; dividing
+//!   `pre_embed_admitted_total` by that sum is the ONNX-call
+//!   admission rate.
+//!
 //! * **`model_tag` rotation invariant** — single counter
 //!   [`Counters::model_tag_dimension_violations_total`] bumped
 //!   by [`record_observed_dimension`] when the same `model_tag`
@@ -202,6 +230,11 @@ pub(crate) struct Counters {
 
     // ─── model_tag rotation invariant ──────────────────────────
     pub(crate) model_tag_dimension_violations_total: AtomicU64,
+
+    // ─── Pre-embedding routing decisions (Phase 1.12) ──────────
+    pub(crate) pre_embed_admitted_total: AtomicU64,
+    pub(crate) pre_embed_skipped_empty_after_trim_total: AtomicU64,
+    pub(crate) pre_embed_skipped_no_linguistic_content_total: AtomicU64,
 }
 
 static COUNTERS: OnceLock<Counters> = OnceLock::new();
@@ -288,6 +321,35 @@ pub enum CacheOutcome {
     /// demotes this to a miss to preserve the fail-open
     /// contract on the read path.
     MissReadError,
+}
+
+/// Record the disposition of a single call to
+/// [`crate::embedding_routing::classify_for_embedding`].  Bumps
+/// exactly one of the three `pre_embed_*_total` counters in
+/// [`Counters`].
+///
+/// This is the bookkeeping counterpart to the architectural
+/// rule that every production embed call site MUST consult
+/// [`crate::embedding_routing::classify_for_embedding`] *and*
+/// bump the appropriate counter via this helper before either
+/// invoking the model or diverting to the lexical fallback.
+/// Without the counter bump the operator dashboard cannot tell
+/// "the router fired and diverted" from "the call site bypassed
+/// the router entirely".
+#[inline]
+pub fn record_pre_embed_decision(route: crate::embedding_routing::EmbeddingRoute) {
+    use crate::embedding_routing::{EmbeddingRoute, SkipReason};
+    let c = counters();
+    let counter = match route {
+        EmbeddingRoute::Embed => &c.pre_embed_admitted_total,
+        EmbeddingRoute::Skip(SkipReason::EmptyAfterTrim) => {
+            &c.pre_embed_skipped_empty_after_trim_total
+        }
+        EmbeddingRoute::Skip(SkipReason::NoLinguisticContent) => {
+            &c.pre_embed_skipped_no_linguistic_content_total
+        }
+    };
+    counter.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Record the outcome of a single embedding-cache lookup.
@@ -494,6 +556,21 @@ pub struct VectorTelemetrySnapshot {
     /// the same `model_tag` at a different output dimension
     /// than the first observation — a rotation-rule violation.
     pub model_tag_dimension_violations_total: u64,
+    /// Pre-embedding router admitted the input — the call site
+    /// proceeded to invoke `model.embed(text)`.  See
+    /// [`crate::embedding_routing::classify_for_embedding`] for
+    /// the routing rationale.
+    pub pre_embed_admitted_total: u64,
+    /// Pre-embedding router diverted the call site because the
+    /// input was empty after `str::trim`.  Usually an upstream
+    /// extraction bug.
+    pub pre_embed_skipped_empty_after_trim_total: u64,
+    /// Pre-embedding router diverted the call site because the
+    /// input was non-empty after trim but [`whatlang::detect`]
+    /// found no trigram-detectable linguistic content.  Pure
+    /// punctuation / pure emoji / pure digits / pure-symbol
+    /// input all land here.
+    pub pre_embed_skipped_no_linguistic_content_total: u64,
 }
 
 /// Return a wire-flat snapshot of every vector-telemetry
@@ -515,6 +592,13 @@ pub fn snapshot() -> VectorTelemetrySnapshot {
         inference_failures_total: c.inference_failures_total.load(Ordering::Relaxed),
         model_tag_dimension_violations_total: c
             .model_tag_dimension_violations_total
+            .load(Ordering::Relaxed),
+        pre_embed_admitted_total: c.pre_embed_admitted_total.load(Ordering::Relaxed),
+        pre_embed_skipped_empty_after_trim_total: c
+            .pre_embed_skipped_empty_after_trim_total
+            .load(Ordering::Relaxed),
+        pre_embed_skipped_no_linguistic_content_total: c
+            .pre_embed_skipped_no_linguistic_content_total
             .load(Ordering::Relaxed),
     }
 }

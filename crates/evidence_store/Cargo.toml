@@ -54,6 +54,16 @@ tracing = { workspace = true }
 zeroize = { workspace = true }
 rand = { workspace = true }
 rand_core = { workspace = true }
+# Pure-Rust trigram-based language detector used by Phase 1.12's
+# pre-embedding routing hook (`embedding_routing.rs`) to short-
+# circuit ONNX invocations on text with no linguistic content
+# (pure punctuation / emoji / digits / whitespace).  The
+# substrate already pulls `whatlang` in via `observation_engine`
+# for the per-sentence detection used by the classifier; making
+# it a direct dep here lets the embedding lane reuse the same
+# detector primitive without an upstream-direction crate
+# dependency on `observation_engine`.
+whatlang = { workspace = true }
 
 # Optional ONNX Runtime backend (enabled via `onnx-runtime` feature).
 # Pinned to `=2.0.0-rc.10`: rc.9 fails to compile on stable Rust and

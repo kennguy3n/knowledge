@@ -1089,6 +1089,24 @@ pub struct VectorTelemetry {
     /// `evidence_store::vector_telemetry::record_observed_dimension`.
     #[serde(default)]
     pub model_tag_dimension_violations_total: u64,
+    /// Pre-embedding router (Phase 1.12) admitted the input —
+    /// `model.embed(text)` was invoked.  See upstream
+    /// `evidence_store::embedding_routing::classify_for_embedding`
+    /// for the routing rationale.
+    #[serde(default)]
+    pub pre_embed_admitted_total: u64,
+    /// Pre-embedding router diverted the call site because the
+    /// input was empty after `str::trim`.  Usually signals an
+    /// upstream extraction bug rather than legitimate noise.
+    #[serde(default)]
+    pub pre_embed_skipped_empty_after_trim_total: u64,
+    /// Pre-embedding router diverted the call site because the
+    /// input was non-empty after trim but `whatlang::detect`
+    /// found no trigram-detectable linguistic content (pure
+    /// punctuation / pure emoji / pure digits / pure-symbol
+    /// input all land here).
+    #[serde(default)]
+    pub pre_embed_skipped_no_linguistic_content_total: u64,
 }
 
 /// Unified retrieval-telemetry read surface (Phase 2.0) — the
@@ -1443,6 +1461,10 @@ fn project_vector_telemetry(
         model_load_errors_total: s.model_load_errors_total,
         inference_failures_total: s.inference_failures_total,
         model_tag_dimension_violations_total: s.model_tag_dimension_violations_total,
+        pre_embed_admitted_total: s.pre_embed_admitted_total,
+        pre_embed_skipped_empty_after_trim_total: s.pre_embed_skipped_empty_after_trim_total,
+        pre_embed_skipped_no_linguistic_content_total: s
+            .pre_embed_skipped_no_linguistic_content_total,
     }
 }
 
@@ -2110,10 +2132,11 @@ mod tests {
     /// embedding / vector-retrieval path.
     #[test]
     fn vector_telemetry_mirror_round_trips() {
+        use evidence_store::embedding_routing::{EmbeddingRoute, SkipReason};
         use evidence_store::vector_telemetry::{
             record_cache_outcome, record_dedup_copy_hit, record_embedding_computed,
-            record_embedding_error, record_observed_dimension, CacheOutcome, EmbedSite,
-            EmbeddingErrorKind,
+            record_embedding_error, record_observed_dimension, record_pre_embed_decision,
+            CacheOutcome, EmbedSite, EmbeddingErrorKind,
         };
         let before = evidence_store::vector_telemetry::snapshot();
         record_embedding_computed(EmbedSite::Query);
@@ -2127,6 +2150,15 @@ mod tests {
         record_embedding_error(EmbeddingErrorKind::RuntimeUnavailable);
         record_embedding_error(EmbeddingErrorKind::ModelLoad);
         record_embedding_error(EmbeddingErrorKind::InferenceFailure);
+        // Phase 1.12 pre-embedding routing counters — bump one
+        // each so the three new fields participate in the same
+        // monotonic-lower-bound + plumbed-from-baseline parity
+        // discipline as every other vector-telemetry field.
+        // The three variants are mutually exclusive per call so
+        // bumping one of each tests the full taxonomy.
+        record_pre_embed_decision(EmbeddingRoute::Embed);
+        record_pre_embed_decision(EmbeddingRoute::Skip(SkipReason::EmptyAfterTrim));
+        record_pre_embed_decision(EmbeddingRoute::Skip(SkipReason::NoLinguisticContent));
         // Trigger one rotation-rule violation: record a tag at
         // a baseline dim, then re-record it at a different dim.
         // Uses a test-local tag name so parallel tests can't
@@ -2194,6 +2226,20 @@ mod tests {
                 >= upstream.model_tag_dimension_violations_total,
             "model_tag_dimension_violations_total mirror < upstream"
         );
+        assert!(
+            mirror.pre_embed_admitted_total >= upstream.pre_embed_admitted_total,
+            "pre_embed_admitted_total mirror < upstream"
+        );
+        assert!(
+            mirror.pre_embed_skipped_empty_after_trim_total
+                >= upstream.pre_embed_skipped_empty_after_trim_total,
+            "pre_embed_skipped_empty_after_trim_total mirror < upstream"
+        );
+        assert!(
+            mirror.pre_embed_skipped_no_linguistic_content_total
+                >= upstream.pre_embed_skipped_no_linguistic_content_total,
+            "pre_embed_skipped_no_linguistic_content_total mirror < upstream"
+        );
 
         // Reverse direction: every field we bumped above must
         // show movement from baseline through the FFI mirror.
@@ -2249,6 +2295,20 @@ mod tests {
             mirror.model_tag_dimension_violations_total
                 > before.model_tag_dimension_violations_total,
             "model_tag_dimension_violations_total not plumbed"
+        );
+        assert!(
+            mirror.pre_embed_admitted_total > before.pre_embed_admitted_total,
+            "pre_embed_admitted_total not plumbed"
+        );
+        assert!(
+            mirror.pre_embed_skipped_empty_after_trim_total
+                > before.pre_embed_skipped_empty_after_trim_total,
+            "pre_embed_skipped_empty_after_trim_total not plumbed"
+        );
+        assert!(
+            mirror.pre_embed_skipped_no_linguistic_content_total
+                > before.pre_embed_skipped_no_linguistic_content_total,
+            "pre_embed_skipped_no_linguistic_content_total not plumbed"
         );
     }
 

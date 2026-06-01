@@ -906,6 +906,19 @@ impl EvidenceStore {
         if text.is_empty() {
             return;
         }
+        // Phase 1.12 pre-embedding routing gate.  A body
+        // classified as noise-only (pure punctuation / emoji /
+        // digits / whitespace) is still indexed via FTS5 by the
+        // caller — we just skip writing a vector row for it.
+        // The retriever's `candidate_embedding` path on a later
+        // search will short-circuit the same way, so an absent
+        // `evidence_embeddings` row for a noise body is
+        // consistent end-to-end.
+        let route = crate::embedding_routing::classify_for_embedding(text);
+        crate::vector_telemetry::record_pre_embed_decision(route);
+        if matches!(route, crate::embedding_routing::EmbeddingRoute::Skip(_)) {
+            return;
+        }
         // A model failure should not block ingestion — the row is
         // still recoverable via FTS and the retriever's re-embedding
         // fallback. Both the success and the per-variant error are
