@@ -1262,6 +1262,62 @@ const RU_LEXICON: LanguageLexicon = LanguageLexicon {
 /// `ك` was also removed for symmetric precision reasons. See
 /// [`MatchStrategy::FirstTokenWithArabicClitics`] for the full
 /// omission rationale.
+// ---------------------------------------------------------------------
+// Per-class match-strategy asymmetry in AR_LEXICON
+// ---------------------------------------------------------------------
+//
+// The four match-strategy fields below intentionally do NOT use a
+// uniform strategy across classes. The asymmetry is positional, not
+// arbitrary:
+//
+// * `decision_strategy` / `task_strategy` = `Substring`. Decision
+//   and task keywords are full multi-character lexical items (≥3
+//   chars on average — `تقرر` "decided", `موافق` "approved",
+//   `يرجى` "please", `من فضلك` "please / kindly") that can appear
+//   anywhere in a sentence. The Substring strategy catches them
+//   wherever they fall — including inside clitic-prefixed forms —
+//   without needing a separate peel pass. Keywords starting with
+//   what would otherwise be a productive clitic (e.g. `وقع` "signed"
+//   begins with `و` which is also the conjunction proclitic) are
+//   handled correctly by Substring because the matcher looks for
+//   the literal token anywhere in the input — no peel is needed,
+//   no false positive is created. The short-keyword false-positive
+//   risk that motivates `FirstTokenWithArabicClitics` for the
+//   imperative class does not apply here because decision / task
+//   keywords are long enough that substring collisions are rare in
+//   real Arabic text.
+//
+// * `task_imperative_strategy` = `FirstTokenWithArabicClitics`.
+//   Arabic imperatives are positional — they must be the FIRST
+//   alphabetic token in a sentence to be classified as a directive
+//   (otherwise `أرسل` inside a longer sentence might just mean
+//   "send" as a verb in declarative voice, not as a directive).
+//   The proclitic-aware first-token strategy is the only place in
+//   AR_LEXICON where positional+prefix-aware matching is needed,
+//   because clitic-stacked imperatives (`واكتب التقرير` "and write
+//   the report", `فجدول الاجتماع` "then schedule the meeting")
+//   must surface the bare imperative root from the prefixed first
+//   token without false-positively matching the same root buried
+//   in a declarative sentence further downstream. Substring would
+//   over-match (any sentence containing `أرسل` anywhere would emit
+//   Task); plain FirstToken would miss the clitic-prefixed forms.
+//
+// * Interrogatives use `FirstTokenWithArabicClitics` for the same
+//   positional reason — Arabic question words `كيف`/`متى`/`من`/`ما`
+//   are short enough that Substring would collide with arbitrary
+//   in-word fragments (`من` ⊂ `أمن` "safety" / `يمن` "Yemen" /
+//   `زمن` "time"). The interrogative lockstep lives in
+//   `interrogatives_for("ar")` (the per-language strategy is stored
+//   on the interrogative table rather than the language lexicon).
+//
+// This per-class asymmetry IS the architectural design — uniform
+// `Substring` across all classes would break imperatives, uniform
+// `FirstTokenWithArabicClitics` would miss decision/task keywords
+// that don't sit at the first token. Each class gets the strategy
+// that matches its lexical and positional properties. A future
+// contributor who reads this should NOT attempt to harmonise the
+// strategies — see Devin Review #3331684703 (Phase 1.6 sweep 3)
+// and the test `arabic_lexicon_strategy_per_class_is_intentional`.
 const AR_LEXICON: LanguageLexicon = LanguageLexicon {
     primary_tag: "ar",
     display_name: "Arabic",
@@ -1276,8 +1332,13 @@ const AR_LEXICON: LanguageLexicon = LanguageLexicon {
         "وقع",
         "رفض",
     ],
+    // Substring: long-form keywords, anywhere in sentence.
+    // See per-class asymmetry block above.
     decision_strategy: MatchStrategy::Substring,
     task_keywords: &["مهمة", "من فضلك", "يرجى", "متابعة", "إجراء"],
+    // Substring: long-form keywords + bigram phrases
+    // (`من فضلك`), anywhere in sentence. See per-class
+    // asymmetry block above.
     task_strategy: MatchStrategy::Substring,
     // Note: Arabic verbs are unvocalised (no tashkeel) to
     // match the canonical table form. `وزع` ("distribute /
@@ -1289,6 +1350,10 @@ const AR_LEXICON: LanguageLexicon = LanguageLexicon {
     task_imperative_verbs: &[
         "اكتب", "أرسل", "جدول", "راجع", "انشر", "أصلح", "وزع", "تحقق", "حضر", "حدث", "ادمج",
     ],
+    // FirstTokenWithArabicClitics: positional (must be the
+    // first alphabetic token) + clitic-aware (peels و/ف/ب/ل/ال/أل
+    // before re-checking equality). See per-class asymmetry
+    // block above.
     task_imperative_strategy: MatchStrategy::FirstTokenWithArabicClitics,
     stop_words: &[],
 };
@@ -2780,6 +2845,63 @@ mod tests {
                 "Lao lexicon entry {entry:?} contains no Lao codepoint",
             );
         }
+    }
+
+    #[test]
+    fn arabic_lexicon_strategy_per_class_is_intentional() {
+        // Phase 1.6 sweep-3 (Devin Review #3331684703): the
+        // per-class strategy asymmetry in AR_LEXICON is the
+        // architectural design, not an oversight. This test
+        // pins each strategy at runtime so a contributor who
+        // tries to "harmonise" them — e.g. push Substring up to
+        // task_imperative, or push FirstTokenWithArabicClitics
+        // down to decision/task — breaks a test rather than
+        // silently degrading precision or recall.
+        //
+        // See the per-class asymmetry doc block on AR_LEXICON
+        // (lexicon.rs:1265-1320) for the full rationale.
+        let reg = default_registry();
+        let lex = reg.lexicon_for("ar").expect("ar configured");
+
+        // Decision class: Substring (long-form keywords,
+        // anywhere in sentence). FirstTokenWithArabicClitics
+        // would miss decision keywords that don't sit at the
+        // first token (e.g. `هذا تقرر بالأمس` "this was decided
+        // yesterday" puts `تقرر` at token position 2). Substring
+        // is correct.
+        assert_eq!(
+            lex.decision_strategy,
+            MatchStrategy::Substring,
+            "AR_LEXICON.decision_strategy must be Substring — see per-class \
+             asymmetry doc block on AR_LEXICON for rationale (long-form \
+             keywords matched anywhere in sentence)"
+        );
+
+        // Task class: Substring (long-form keywords + bigram
+        // phrases like `من فضلك`). Same rationale as decision.
+        assert_eq!(
+            lex.task_strategy,
+            MatchStrategy::Substring,
+            "AR_LEXICON.task_strategy must be Substring — see per-class \
+             asymmetry doc block on AR_LEXICON for rationale (long-form \
+             keywords + bigram phrases matched anywhere in sentence)"
+        );
+
+        // Imperative class: FirstTokenWithArabicClitics
+        // (positional + clitic-aware). Substring would over-match
+        // (any sentence containing `أرسل` anywhere would falsely
+        // emit Task); plain FirstToken would miss clitic-stacked
+        // imperatives like `واكتب التقرير` "and write the report"
+        // that surface the bare imperative root only after peeling
+        // the conjunction proclitic.
+        assert_eq!(
+            lex.task_imperative_strategy,
+            MatchStrategy::FirstTokenWithArabicClitics,
+            "AR_LEXICON.task_imperative_strategy must be \
+             FirstTokenWithArabicClitics — see per-class asymmetry doc block \
+             on AR_LEXICON for rationale (positional + clitic-aware matching \
+             is what makes Phase 1.6 architecturally correct)"
+        );
     }
 
     #[test]
