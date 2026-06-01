@@ -931,16 +931,35 @@ fn is_lao_codepoint(c: char) -> bool {
     matches!(c, '\u{0E80}'..='\u{0EFF}')
 }
 
-/// True for code points in the Khmer script block
-/// (`U+1780..U+17FF`). Khmer is the script of Cambodian and is
-/// also Brahmic-derived with no inter-word whitespace (though
-/// it does use whitespace between phrases / clauses, so many
-/// Khmer sentences fall through the `sentence.contains(' ')`
+/// True for code points in either Khmer block:
+///
+/// * Khmer main block (`U+1780..=U+17FF`) — consonants, vowels,
+///   the invisible coeng (`U+17D2`), and the standard prose
+///   inventory.
+/// * Khmer Symbols (`U+19E0..=U+19FF`) — astronomical / lunar
+///   date symbols used in liturgical / horoscopic corpora.
+///
+/// Both blocks are routed to the FTS5 dual / bigram lanes by
+/// [`crate::script::is_cjk_or_thai_codepoint`] (Phase 1.5). This
+/// predicate is kept in lockstep with the FTS5 routing predicate
+/// — same defense-in-depth principle as Myanmar Extended-A / -B
+/// above and Tibetan below: a body composed entirely of symbols
+/// from the supplementary block must be admitted by the
+/// fact-shape gate on the same terms as it is indexed by FTS5.
+/// Without the supplement arm such a body would be indexed-and-
+/// searchable but never become a Fact observation.
+///
+/// Khmer is Brahmic-derived with no inter-word whitespace
+/// (though it does use whitespace between phrases / clauses, so
+/// many Khmer sentences fall through the `sentence.contains(' ')`
 /// fast path; this arm is the safety net for clause-internal
 /// Khmer runs). whatlang detects Khmer as the `khm` enum
 /// variant, mapped to BCP-47 `km`.
 fn is_khmer_codepoint(c: char) -> bool {
-    matches!(c, '\u{1780}'..='\u{17FF}')
+    matches!(c,
+        '\u{1780}'..='\u{17FF}'   // Khmer main
+        | '\u{19E0}'..='\u{19FF}' // Khmer Symbols (astronomical / lunar date)
+    )
 }
 
 /// True for code points in any of the three Myanmar script
@@ -1912,13 +1931,29 @@ mod tests {
         assert!(!is_lao_codepoint('ก')); // Thai (handled separately)
         assert!(!is_lao_codepoint('a')); // ASCII
 
-        // Khmer: spot-check consonants + sign coeng.
+        // Khmer main: spot-check consonants + sign coeng.
         assert!(is_khmer_codepoint('ក')); // Khmer letter ka
         assert!(is_khmer_codepoint('ម')); // Khmer letter ma
         assert!(is_khmer_codepoint('ែ')); // Khmer vowel sign ae
         assert!(is_khmer_codepoint('្')); // Khmer sign coeng (subscript)
         assert!(!is_khmer_codepoint('म')); // Devanagari (visually similar)
         assert!(!is_khmer_codepoint('a')); // ASCII
+
+        // Phase 1.5 sweep 4: Khmer Symbols (astronomical /
+        // lunar date symbols). The FTS5 routing predicate at
+        // `script::is_cjk_or_thai_codepoint` covers the
+        // supplementary block, so the extractor predicate must
+        // too — otherwise a body composed of pure Khmer Symbols
+        // (a calendar or horoscope page) would be indexed in
+        // the dual FTS5 lanes but silently rejected by the
+        // fact-shape gate. Same lockstep principle as Myanmar
+        // Extended-A / -B above.
+        assert!(is_khmer_codepoint('᧠')); // U+19E0 first cp of Khmer Symbols
+        assert!(is_khmer_codepoint('᧿')); // U+19FF last cp of Khmer Symbols
+                                          // Boundary: codepoints just outside the supplement must
+                                          // remain outside the predicate.
+        assert!(!is_khmer_codepoint('᧟')); // U+19DF (one below — New Tai Lue)
+        assert!(!is_khmer_codepoint('ᨀ')); // U+1A00 (one above — Buginese)
 
         // Myanmar: spot-check consonants + medial.
         assert!(is_myanmar_codepoint('က')); // Myanmar letter ka
