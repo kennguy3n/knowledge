@@ -89,6 +89,27 @@
 //! the real XLM-R adapter loaded by an operator — the mock just
 //! lets the test run in CI without the model artifact.
 //!
+//! ### Cosine similarity vs `vector_score`
+//!
+//! Note that the retriever does not surface raw cosine similarity;
+//! it projects cosine `[-1.0, 1.0]` into a retrieval-friendly
+//! `[0.0, 1.0]` `vector_score` via
+//! [`evidence_store::embeddings::similarity_to_score`] —
+//! `f64::midpoint(cos, 1.0).clamp(0.0, 1.0)`.  So under the mock:
+//!
+//! * same-concept paraphrases (cos sim = 1.0) → `vector_score = 1.0`
+//! * unrelated concepts (cos sim = 0.0) → `vector_score = 0.5`
+//! * opposite vectors (cos sim = -1.0) → `vector_score = 0.0`
+//!
+//! The benchmark's `recall@12` / `hit-rate@k` assertions are pinned
+//! on the rank order — same-concept docs (score 1.0) > unrelated
+//! docs (score 0.5) — not on the absolute score magnitudes, so the
+//! 0.5 score floor for unrelated concepts is by-design and does not
+//! perturb the recall measurement.  A real model producing, say,
+//! `cos = 0.6` for same-concept pairs would yield `vector_score =
+//! 0.8`, still well above the 0.5 unrelated-concept floor —
+//! ranking-correct, just with a narrower score gap than the mock.
+//!
 //! ## Reading the assertions
 //!
 //! With the mock model:
