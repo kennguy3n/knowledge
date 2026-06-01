@@ -198,12 +198,16 @@
 ///   apply [`crate::fts_stopwords::strip_recall_lane_stopwords`]
 ///   to BOTH the body at index time AND the query at read time.
 ///   Stripping replaces each script-aware stopword (Japanese `の`
-///   / `です`, Chinese `的` / `了`, Thai `และ` / `พรุ่งนี้`,
+///   / `です`, Chinese `的` / `了`, Thai `และ` / `ของ`,
 ///   Tibetan / Khmer / Myanmar / Lao function-word cognates) with
-///   a single ASCII space. The trigram / bigram tokenisers treat
-///   whitespace as a hard separator so the spurious "particle
-///   trigram" / "particle bigram" windows the substrate produced
-///   at v15 (e.g. `今日のオ` matching `今日の鬼` for the unrelated
+///   a single ASCII space. (Thai content-bearing time deictics
+///   `วันนี้` / `พรุ่งนี้` / `เมื่อวาน` and demonstratives
+///   `นี้` / `นั้น` are **deliberately excluded** from the
+///   inventory — see [`crate::fts_stopwords::STOPWORDS_TH`]'s
+///   doc comment for the per-entry rationale.) The trigram /
+///   bigram tokenisers treat whitespace as a hard separator so
+///   the spurious "particle trigram" / "particle bigram" windows
+///   the substrate produced at v15 (e.g. `今日のオ` matching `今日の鬼` for the unrelated
 ///   semantic `今日の鬼ヶ島` story) are eliminated. Symmetric
 ///   stripping is required: index-only stripping would mean a
 ///   query `今日のオリンピック` (stripped to `今日 オリンピック`)
