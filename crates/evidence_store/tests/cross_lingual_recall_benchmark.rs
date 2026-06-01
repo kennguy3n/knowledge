@@ -564,9 +564,19 @@ const PER_QUERY_HIT_RATE_AT_3_FLOOR: f64 = 0.95;
 
 /// The Phase 2.1 cross-lingual recall benchmark.  Walks every
 /// (query_lang × concept) cell of the 120-entry corpus, computes
-/// `recall@{1, 3, 12}` per query, asserts both the per-query and
-/// aggregate-mean floors, and prints the per-language-pair
+/// `hit-rate@{1, 3}` (via [`hit_rate_at_k`]) and `recall@12`
+/// (via [`recall_at_k`]) per query, asserts both the per-query
+/// and aggregate-mean floors, and prints the per-language-pair
 /// breakdown for operator inspection.
+///
+/// The metric split is deliberate: `recall@k` is structurally
+/// capped at `k / |relevant|` for any ranker, so `recall@1` and
+/// `recall@3` would max out at `1/12` and `3/12` respectively on
+/// this corpus — useless as gates.  `hit-rate@k` (any relevant in
+/// top-k) is the gate that catches a top-result regression, and
+/// `recall@12` (k = `|relevant set|`) is the gate that catches a
+/// full-set regression.  See module-level docs for the full
+/// rationale.
 ///
 /// With the [`BenchmarkMockModel`] this test runs in well under one
 /// second on a stock CI machine (12 × 10 = 120 queries × 120-row
