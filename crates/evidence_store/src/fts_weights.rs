@@ -110,7 +110,7 @@ pub const EVIDENCE_FTS_BIGRAM_LANE_WEIGHT: f64 = 0.7;
 /// (`content`). When a future schema bump adds a second indexed
 /// column (e.g. a separate `subject` / `title` column), grow
 /// this vector to `&[w_content, w_title]` — the SQL
-/// fragment builder at [`bm25_select_fragment_for_evidence_fts`]
+/// fragment builder at [`bm25_select_fragment`]
 /// reads its length to generate the matching `bm25(<table>, ...)`
 /// argument list, so a column addition is a one-line change here
 /// plus a `CREATE VIRTUAL TABLE` shape change in
