@@ -1002,3 +1002,197 @@ fn v15_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
          query that the trigram floor blocks) after multi-chunk migration"
     );
 }
+
+// ----------------------------------------------------------------------
+// Phase 1.9 / schema v16 — Symmetric stopword stripping migration
+// ----------------------------------------------------------------------
+//
+// The v16 migration deletes every row from `evidence_fts_cjk` and
+// `evidence_fts_bigram` (the two recall-lane shadow tables) and
+// rewrites them from `evidence_fts.content` with the Phase 1.9
+// stopword strip applied. Re-running the migration twice produces
+// the same final state (idempotency-by-reconstruction).
+
+#[test]
+fn opens_v15_database_and_upgrades_to_current_with_recall_lanes_re_stripped() {
+    // Setup: ingest a CJK row under the modern schema (so
+    // `evidence_fts.content` carries the original plaintext
+    // verbatim), then re-stamp `user_version = 15` to put the
+    // database in a pre-v16 shape on disk. The v16 migration
+    // must re-tokenise the bigram + trigram lanes with the
+    // Phase 1.9 stopword strip applied.
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let scope = ScopeId::new_v4();
+    // Body contains the genitive particle `の` — a Phase 1.9
+    // stopword — so the post-migration bigram content must not
+    // contain `日本` adjacent to `の` (the stopword is replaced
+    // with a single ASCII space and the lane filters whitespace
+    // out before windowing).
+    let cjk_body = "日本のオリンピック";
+
+    {
+        let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+            .expect("open fresh store at SCHEMA_VERSION");
+        store
+            .ingest(
+                scope,
+                cjk_body.as_bytes(),
+                Some("source:cjk-v16-strip"),
+                ImportanceClass::Important,
+            )
+            .expect("ingest cjk row");
+    }
+
+    // Reshape: re-stamp `user_version = 15` AND seed the v15
+    // shape of the recall lanes (unstripped, so we can prove the
+    // v16 migration replaces them). We do this by inserting a
+    // sentinel that contains the `の` codepoint into the bigram
+    // lane — if the v16 migration is broken, the sentinel will
+    // survive into the post-migration state.
+    {
+        let conn = open_sqlcipher(&path);
+        // Overwrite the bigram lane with the pre-v16 (unstripped)
+        // shape: the body's bigrams INCLUDING the `の` particle.
+        // The migration must DELETE this row and rewrite from
+        // `evidence_fts.content` with the strip applied.
+        conn.execute_batch("DELETE FROM evidence_fts_bigram;")
+            .expect("delete pre-v16 bigram seeds");
+        // Re-insert with the pre-Phase-1.9 (unstripped) bigram
+        // form so we can prove the migration overwrites it. The
+        // pre-v16 form contained the `の` particle in the
+        // computed bigrams (e.g. `日本`, `本の`, `のオ`, ...).
+        // We use a sentinel bigram `本の` that would never appear
+        // in the post-v16 stripped form.
+        conn.execute_batch(
+            "INSERT INTO evidence_fts_bigram(content, evidence_id, scope_id) \
+             SELECT '日本 本の のオ オリ リン ンピ ピッ ック', evidence_id, scope_id \
+             FROM evidence_fts;",
+        )
+        .expect("seed pre-v16 unstripped bigram row");
+        conn.pragma_update(None, "user_version", 15_i64)
+            .expect("re-stamp user_version=15 after reshape");
+    }
+
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("re-open v15 db (post-reshape) must run v16 migration");
+
+    assert_eq!(
+        read_user_version(&path),
+        SCHEMA_VERSION,
+        "post-migration user_version must equal SCHEMA_VERSION"
+    );
+
+    // The migration must have rewritten the bigram lane: the
+    // sentinel `本の` must be gone, replaced by the stripped
+    // form (where `の` was replaced with whitespace before
+    // bigram computation).
+    let stored_bigram_content: String = store
+        .raw_conn()
+        .query_row("SELECT content FROM evidence_fts_bigram", [], |row| {
+            row.get(0)
+        })
+        .expect("read evidence_fts_bigram.content after v16 upgrade");
+    assert!(
+        !stored_bigram_content.contains("本の"),
+        "v16 migration must rewrite bigram lane WITHOUT the pre-strip `本の` window \
+         (was: `{stored_bigram_content}`)"
+    );
+    assert!(
+        !stored_bigram_content.contains("のオ"),
+        "v16 migration must rewrite bigram lane WITHOUT the pre-strip `のオ` window \
+         (was: `{stored_bigram_content}`)"
+    );
+    // The post-strip content-side bigrams must still be present
+    // — proving the migration didn't simply purge the row.
+    for expected_bigram in ["オリ", "リン", "ンピ", "ピッ", "ック"] {
+        assert!(
+            stored_bigram_content.contains(expected_bigram),
+            "post-v16 stripped bigram content must contain `{expected_bigram}` \
+             (was: `{stored_bigram_content}`)"
+        );
+    }
+
+    // End-to-end: the symmetric-strip read path must find the
+    // body via the bigram lane on a query that omits the
+    // particle.
+    let hits = store
+        .search_fts(scope, "日本オリンピック", 10)
+        .expect("post-v16 read path must find body via stripped bigram windows");
+    assert_eq!(
+        hits.len(),
+        1,
+        "post-v16 symmetric strip must let particle-free query match particle-containing body",
+    );
+}
+
+#[test]
+fn v16_migration_is_idempotent_on_already_stripped_database() {
+    // The v16 migration deletes-and-rewrites the recall lanes
+    // every time, so re-running it must produce the same final
+    // state. This is the "idempotency-by-reconstruction"
+    // contract: there is no "already populated" guard on the
+    // v16 path — instead, the migration is defined such that
+    // running it twice from any starting shape produces the
+    // same final shape.
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let scope = ScopeId::new_v4();
+    let cjk_body = "日本のオリンピック";
+
+    {
+        let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+            .expect("open fresh store");
+        store
+            .ingest(
+                scope,
+                cjk_body.as_bytes(),
+                Some("source:cjk-v16-idem"),
+                ImportanceClass::Important,
+            )
+            .expect("ingest cjk row");
+        let bigram_before: i64 = store
+            .raw_conn()
+            .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+            .expect("count bigram rows before downgrade");
+        assert_eq!(bigram_before, 1);
+    }
+
+    // Re-stamp user_version=15 to trigger re-running the v16
+    // migration on next open. The post-state must be identical
+    // — exactly one bigram row, exactly the stripped content.
+    stamp_user_version(&path, 15);
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("re-open with user_version=15 must re-run v16 migration");
+
+    let bigram_after: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .expect("count bigram rows after re-migration");
+    assert_eq!(
+        bigram_after, 1,
+        "idempotent v16 re-migration must not duplicate evidence_fts_bigram rows"
+    );
+    let trigram_after: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
+        .expect("count trigram rows after re-migration");
+    assert_eq!(
+        trigram_after, 1,
+        "idempotent v16 re-migration must not duplicate evidence_fts_cjk rows"
+    );
+    assert_eq!(read_user_version(&path), SCHEMA_VERSION);
+
+    // The post-strip bigram content must NOT contain the
+    // pre-strip `本の` window even after re-running.
+    let stored_bigram_content: String = store
+        .raw_conn()
+        .query_row("SELECT content FROM evidence_fts_bigram", [], |row| {
+            row.get(0)
+        })
+        .expect("read evidence_fts_bigram.content after idempotent re-migration");
+    assert!(
+        !stored_bigram_content.contains("本の"),
+        "idempotent v16 re-migration must keep the strip applied (was: `{stored_bigram_content}`)"
+    );
+}

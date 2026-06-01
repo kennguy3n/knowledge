@@ -794,10 +794,35 @@ impl EvidenceStore {
         // table. See `crate::script::contains_cjk_or_thai` for the
         // codepoint membership rationale.
         if crate::script::contains_cjk_or_thai(text) {
+            // Phase 1.9 / schema v16: strip recall-lane stopwords
+            // (Japanese / Chinese / Thai / Tibetan / Khmer /
+            // Myanmar / Lao function words) BEFORE the trigram and
+            // bigram lanes index the body. Stripping replaces each
+            // matched stopword with a single ASCII space; the
+            // trigram and bigram tokenisers treat whitespace as a
+            // hard separator so the spurious "particle window"
+            // pseudo-matches (e.g. body `今日の鬼ヶ島` matching a
+            // query about `今日のオリンピック` on the
+            // cross-particle trigram `日のオ`) are eliminated. The
+            // unicode61 `evidence_fts.content` insert above is
+            // intentionally untouched — the baseline lane is the
+            // universal source of truth for plaintext, and BM25's
+            // idf weighting already discounts high-frequency
+            // particles for whitespace-tokenised scripts. The same
+            // strip is symmetrically applied on the query side by
+            // [`merged_fts_search`], which is what makes the
+            // index- and query-time tokenisations match: stripping
+            // on only one side would silently destroy recall on
+            // any body that contains a stopword between two
+            // content tokens (the stripped side would no longer
+            // produce the bridging trigram that the unstripped
+            // side still expects). See [`crate::fts_stopwords`]
+            // for the symmetric-stripping rationale.
+            let stripped = crate::fts_stopwords::strip_recall_lane_stopwords(text);
             tx.execute(
                 "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
                  VALUES (?1, ?2, ?3)",
-                params![text, evidence_id_bytes, scope_id_bytes],
+                params![stripped.as_ref(), evidence_id_bytes, scope_id_bytes],
             )?;
             // Phase 1.2.1 / schema v15: rows that route to
             // `evidence_fts_cjk` *additionally* go into
@@ -819,7 +844,22 @@ impl EvidenceStore {
             // FTS5 docid and inflate the
             // `evidence_fts_bigram_docsize` shadow without
             // contributing any recall.
-            let bigrams = crate::bigram::compute_cjk_bigrams(text);
+            //
+            // The bigram windowing happens over the SAME stripped
+            // text as the trigram lane above. `compute_cjk_bigrams`
+            // additionally filters to CJK / Thai codepoints, so
+            // the ASCII spaces produced by stripping are dropped
+            // before windowing — which means the bigram lane DOES
+            // bridge across stripped-particle gaps (a body
+            // `日本のオリンピック` after stripping is
+            // `日本 オリンピック` then filtered to
+            // `日本オリンピック`, yielding the bridging bigram
+            // `本オ`). This is symmetric with the query-side
+            // bigram path: `compute_cjk_bigram_query` runs over
+            // the stripped query and applies the same CJK / Thai
+            // filter, so the bridging bigram is requested by the
+            // query whenever it would be produced by the body.
+            let bigrams = crate::bigram::compute_cjk_bigrams(stripped.as_ref());
             if !bigrams.is_empty() {
                 tx.execute(
                     "INSERT INTO evidence_fts_bigram (content, evidence_id, scope_id) \
@@ -4163,6 +4203,22 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // re-running the migration on an already-populated v15
         // database is a no-op rather than producing duplicate rows.
         15 => migrate_v15_backfill_evidence_fts_bigram(conn),
+        // v16 (Phase 1.9 — symmetric recall-lane stopword
+        // stripping): re-tokenise every existing `evidence_fts_cjk`
+        // and `evidence_fts_bigram` row from the source
+        // `evidence_fts.content` column with
+        // [`crate::fts_stopwords::strip_recall_lane_stopwords`]
+        // applied. The migration is destructive on the two recall
+        // lane tables — it deletes every existing row from
+        // `evidence_fts_cjk` and `evidence_fts_bigram` and rewrites
+        // them from `evidence_fts.content` — but the
+        // `evidence_fts` baseline lane itself is **untouched**, so
+        // the universal source of truth for plaintext is preserved
+        // across the migration. See
+        // [`migrate_v16_strip_recall_lane_stopwords`] for the
+        // chunked-streaming + idempotency-by-reconstruction
+        // contract.
+        16 => migrate_v16_strip_recall_lane_stopwords(conn),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
         )),
@@ -4497,6 +4553,169 @@ fn migrate_v15_backfill_evidence_fts_bigram(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Chunk size for [`migrate_v16_strip_recall_lane_stopwords`]'s
+/// streaming read of `evidence_fts`. Matches the v14 / v15
+/// migrations' chunk so the v15→v16 walk has the same memory
+/// profile per row as the earlier chunked rewrites.
+const V16_MIGRATION_CHUNK_SIZE: i64 = 1_000;
+
+/// v15 -> v16 destructive migration on the recall-lane shadow
+/// tables: re-tokenise every existing `evidence_fts_cjk` and
+/// `evidence_fts_bigram` row from the source `evidence_fts.content`
+/// column with [`crate::fts_stopwords::strip_recall_lane_stopwords`]
+/// applied. The `evidence_fts` baseline lane itself is left
+/// untouched — it is the universal source of truth for plaintext
+/// and BM25's idf weighting already discounts high-frequency
+/// particles for whitespace-tokenised scripts.
+///
+/// The recall-lane tables themselves are NOT recreated by this
+/// function — the `CREATE VIRTUAL TABLE IF NOT EXISTS` for both
+/// `evidence_fts_cjk` and `evidence_fts_bigram` lives in
+/// `SCHEMA_SQL`, which runs before the migration ladder. The DDL
+/// shape is identical between v15 and v16; the migration only
+/// rewrites the contents.
+///
+/// Idempotency: this migration is idempotent **by reconstruction**.
+/// Every run begins with `DELETE FROM evidence_fts_cjk` /
+/// `DELETE FROM evidence_fts_bigram` (so any prior state — partial
+/// or complete — is wiped) and ends with a full deterministic
+/// rewrite from `evidence_fts.content`. Running the migration
+/// twice in a row produces the same end state as running it once.
+/// This is the architectural alternative to the v14 / v15
+/// "COUNT(*) > 0 means migration already ran" guard: that guard
+/// works only when the migration is purely additive (the table
+/// starts empty), but here we need to overwrite existing rows so
+/// a COUNT-gate would either skip needed work (if the table is
+/// non-empty pre-migration) or do nothing useful. The reconstruct-
+/// from-source pattern matches what the v14 / v15 contracts
+/// already document as the recovery path under the
+/// "crash-after-commit-before-version-stamp" race: the migration
+/// is safe to re-enter because re-running it converges to the
+/// same fixed point.
+///
+/// Per-row routing matches the write path
+/// ([`EvidenceStore::index_fts`]): a body is rewritten into
+/// `evidence_fts_cjk` iff [`crate::script::contains_cjk_or_thai`]
+/// returns true for the *original* plaintext content (before
+/// stripping — the routing predicate fires on the codepoint
+/// inventory of the body, not on what survives the strip), and
+/// into `evidence_fts_bigram` iff that routing fires AND the
+/// precomputed bigram string of the *stripped* content is
+/// non-empty. The two-stage gate matches the write path exactly
+/// so the migration produces precisely the set of rows the write
+/// path would have written had Phase 1.9 been active from day
+/// one.
+///
+/// Crash-safety: the rewrite runs inside an explicit
+/// `unchecked_transaction` so partial progress is rolled back on
+/// crash. The `user_version` write that records "migration v16
+/// applied" lives in [`EvidenceStore::open`] *after* the
+/// `apply_migration` loop completes, so a crash mid-rewrite
+/// leaves the database at `user_version = 15` and the next open
+/// re-walks this function from scratch — which is safe because
+/// the reconstruction-from-source contract above means a second
+/// walk produces the same result as a first.
+///
+/// We use `unchecked_transaction` because the migration entry
+/// point [`apply_migration`] receives `&Connection` (not `&mut`),
+/// matching the contract of the sibling migrations.
+///
+/// Memory bound: the rewrite iterates `evidence_fts` in
+/// rowid-ordered chunks of [`V16_MIGRATION_CHUNK_SIZE`] rows so
+/// peak memory is O(chunk * row_size) rather than O(total_rows *
+/// row_size). This matches the v14 / v15 migrations' chunked-
+/// streaming shape — the rationale carries over verbatim (on a
+/// large pre-v16 database the materialise-everything version
+/// would have allocated proportional to the entire body corpus).
+fn migrate_v16_strip_recall_lane_stopwords(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+
+    // Wipe every existing row from the two recall-lane shadow
+    // tables. We do NOT touch `evidence_fts` — its rows are the
+    // source of truth that we rebuild from. FTS5 standard
+    // `DELETE FROM <table>` works on regular FTS5 tables (ours
+    // are not contentless) and removes both the docid-keyed
+    // shadow content and the inverted-index entries.
+    tx.execute("DELETE FROM evidence_fts_cjk", [])?;
+    tx.execute("DELETE FROM evidence_fts_bigram", [])?;
+
+    // Stream the rewrite in rowid-ordered chunks for the same
+    // memory-bound reason as the v14 / v15 migrations. Strictly
+    // increasing `last_rowid` cursor guarantees forward progress
+    // because we order on `evidence_fts.rowid` — the INSERTs into
+    // the recall-lane tables happen on the same connection but
+    // cannot perturb the read cursor on the unrelated
+    // `evidence_fts` shadow.
+    let mut last_rowid: i64 = 0;
+    loop {
+        let chunk: Vec<(i64, String, Vec<u8>, Vec<u8>)> = {
+            let mut stmt = tx.prepare(
+                "SELECT rowid, content, evidence_id, scope_id FROM evidence_fts
+                 WHERE rowid > ?1
+                 ORDER BY rowid
+                 LIMIT ?2",
+            )?;
+            let collected = stmt
+                .query_map(params![last_rowid, V16_MIGRATION_CHUNK_SIZE], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            collected
+        };
+        if chunk.is_empty() {
+            break;
+        }
+        last_rowid = chunk
+            .last()
+            .map(|(rowid, _, _, _)| *rowid)
+            .expect("chunk is non-empty by the early break above");
+        for (_rowid, content, evidence_id, scope_id) in chunk {
+            // Routing is decided on the ORIGINAL content — the
+            // codepoint inventory of what the user actually
+            // stored, not what survives the stopword strip. This
+            // matches the write path (`EvidenceStore::index_fts`)
+            // exactly: bodies are routed by `contains_cjk_or_thai`
+            // before stripping, and the strip only affects the
+            // tokeniser input on the route-yes path.
+            if !crate::script::contains_cjk_or_thai(&content) {
+                continue;
+            }
+            // Apply the same stopword strip the write path uses
+            // post-Phase-1.9 so the recall-lane indexes here are
+            // identical to what a fresh-DB ingest of the same
+            // bodies would produce.
+            let stripped = crate::fts_stopwords::strip_recall_lane_stopwords(&content);
+            tx.execute(
+                "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
+                 VALUES (?1, ?2, ?3)",
+                params![stripped.as_ref(), evidence_id, scope_id],
+            )?;
+            // Same two-stage gate as the write path: the bigram
+            // lane only receives rows whose stripped content
+            // produces at least one bigram window. A single CJK
+            // codepoint surrounded by particles strips down to a
+            // bare codepoint with no neighbour to form a bigram
+            // with, and the gate catches that edge case.
+            let bigrams = crate::bigram::compute_cjk_bigrams(stripped.as_ref());
+            if bigrams.is_empty() {
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO evidence_fts_bigram (content, evidence_id, scope_id) \
+                 VALUES (?1, ?2, ?3)",
+                params![bigrams, evidence_id, scope_id],
+            )?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// v2 -> v3 destructive migration for `evidence_embeddings`.
 ///
 /// SQLite cannot change a table's primary key in place — the only
@@ -4808,6 +5027,23 @@ pub(crate) fn merged_fts_search(
     let scope_uuid = scope_id.as_uuid();
     let scope_bytes = scope_uuid.as_bytes().as_slice();
 
+    // Phase 1.9 / schema v16: the trigram and bigram recall lanes
+    // are queried against stopword-stripped indexed content (see
+    // [`EvidenceStore::index_fts`]). The query side must apply the
+    // same strip so that tokenisation is symmetric — without it a
+    // query `今日のオリンピック` would window the bridging
+    // trigram `日のオ` that no longer exists in the stripped body,
+    // killing the recall this lane is responsible for. The
+    // unicode61 baseline branch (Branch 1 below) deliberately does
+    // NOT receive the strip — `evidence_fts.content` stores the
+    // full plaintext and is the universal source of truth for
+    // Latin / Cyrillic / Greek / Arabic / Hebrew / Devanagari /
+    // Hangul terms embedded inside a CJK body. See
+    // [`crate::fts_stopwords`] for the symmetric-stripping
+    // rationale and [`crate::schema::SCHEMA_VERSION`] v16 for the
+    // index-time migration.
+    let stripped_query = crate::fts_stopwords::strip_recall_lane_stopwords(query);
+
     // Capacity bound: 3 branches each contribute at most `limit`
     // unique evidence_ids, so `3 * limit` is the tight upper
     // bound on the pre-truncate set size. `saturating_mul`
@@ -4875,13 +5111,37 @@ pub(crate) fn merged_fts_search(
     // caller never has to re-parse a `Vec<u8>` — and so the only
     // post-closure code is the `MIN(rank)` merge, which is
     // infallible.
+    // Phase 1.9: skip the trigram branch entirely when the
+    // stopword-stripped query collapses to whitespace-only — for
+    // example a query of pure particles like `のはがを` strips to
+    // `    `. Feeding an all-whitespace MATCH operand to FTS5 is
+    // undefined across SQLite versions (3.45 errors with
+    // "fts5: syntax error near \"\"", 3.46+ returns zero rows
+    // silently) and either outcome is pure waste — the trigram
+    // tokeniser would emit zero tokens so no row could possibly
+    // match. The check uses `trim().is_empty()` rather than a
+    // codepoint scan because the strip output's whitespace is
+    // exactly the ASCII spaces we inserted at strip sites.
     let trigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
+        if stripped_query.as_ref().trim().is_empty() {
+            return Ok(Vec::new());
+        }
         // `prepare_cached` — see Branch 1 comment for rationale.
+        //
+        // Phase 1.9: the bound query parameter is
+        // `stripped_query.as_ref()` — NOT the raw `query` — so
+        // the FTS5 trigram MATCH runs against the same
+        // stopword-stripped content the index was written with
+        // (schema v16 contract). Using the raw query here would
+        // silently destroy recall: a `今日のオリンピック` query
+        // would window `日のオ` which the stripped body no
+        // longer contains.
         let sql = trigram_lane_sql();
         let mut stmt = conn.prepare_cached(sql)?;
-        let rows = stmt.query_map(params![query, scope_bytes, limit_sql], |row| {
-            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
-        })?;
+        let rows = stmt.query_map(
+            params![stripped_query.as_ref(), scope_bytes, limit_sql],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?)),
+        )?;
         let mut out = Vec::new();
         for row in rows {
             let (id_bytes, rank) = row?;
@@ -4937,7 +5197,20 @@ pub(crate) fn merged_fts_search(
     // UUID parse inside the swallow scope" pattern from Branch
     // 2 applies here — see the trigram branch comment for the
     // architectural rationale (sweep-3 Devin Review INFO-0001).
-    if let Some(bigram_match) = crate::bigram::compute_cjk_bigram_query(query) {
+    // Phase 1.9: feed `compute_cjk_bigram_query` the stopword-
+    // stripped query (not the raw `query`) so the bigram windows
+    // it generates are computed over the same character set that
+    // the index-time write path windowed for storage. This is the
+    // query half of the symmetric stripping contract — see
+    // [`EvidenceStore::index_fts`] for the storage half. The
+    // `compute_cjk_bigram_query` function additionally filters
+    // each kept character down to the CJK / Thai routing
+    // predicate, so the ASCII spaces produced by stripping are
+    // dropped before windowing (the body went through the same
+    // CJK-only filter via `compute_cjk_bigrams`, so the bridging
+    // bigram is requested by the query whenever it would be
+    // produced by the body).
+    if let Some(bigram_match) = crate::bigram::compute_cjk_bigram_query(stripped_query.as_ref()) {
         let bigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
             // `prepare_cached` — see Branch 1 comment for rationale.
             let sql = bigram_lane_sql();
