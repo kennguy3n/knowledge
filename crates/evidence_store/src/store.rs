@@ -4836,8 +4836,15 @@ pub(crate) fn merged_fts_search(
     // identity today — see [`crate::fts_weights`] for the
     // architectural rationale.
     {
+        // `prepare_cached` reuses the compiled FTS5 statement across
+        // every `merged_fts_search` call on the same connection — the
+        // hot search path no longer re-parses + re-plans the SELECT
+        // on every query. Combined with the `OnceLock`-cached SQL
+        // string from [`unicode61_lane_sql`], the only per-call cost
+        // is the bind / step / fetch loop. (rusqlite's default cache
+        // size is 16; the three lane statements all fit comfortably.)
         let sql = unicode61_lane_sql();
-        let mut stmt = conn.prepare(sql)?;
+        let mut stmt = conn.prepare_cached(sql)?;
         let rows = stmt.query_map(params![query, scope_bytes, limit_sql], |row| {
             Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
         })?;
@@ -4869,8 +4876,9 @@ pub(crate) fn merged_fts_search(
     // post-closure code is the `MIN(rank)` merge, which is
     // infallible.
     let trigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
+        // `prepare_cached` — see Branch 1 comment for rationale.
         let sql = trigram_lane_sql();
-        let mut stmt = conn.prepare(sql)?;
+        let mut stmt = conn.prepare_cached(sql)?;
         let rows = stmt.query_map(params![query, scope_bytes, limit_sql], |row| {
             Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
         })?;
@@ -4931,8 +4939,9 @@ pub(crate) fn merged_fts_search(
     // architectural rationale (sweep-3 Devin Review INFO-0001).
     if let Some(bigram_match) = crate::bigram::compute_cjk_bigram_query(query) {
         let bigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
+            // `prepare_cached` — see Branch 1 comment for rationale.
             let sql = bigram_lane_sql();
-            let mut stmt = conn.prepare(sql)?;
+            let mut stmt = conn.prepare_cached(sql)?;
             let rows = stmt.query_map(params![bigram_match, scope_bytes, limit_sql], |row| {
                 Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
             })?;
@@ -5039,9 +5048,26 @@ fn unicode61_lane_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
         format!(
+            // `ORDER BY rank` (FTS5's built-in pseudo-column),
+            // NOT `ORDER BY weighted_rank` — the former triggers
+            // FTS5's documented incremental-rank optimisation
+            // which retrieves rows in best-to-worst order without
+            // computing bm25() for every matching document, so the
+            // per-query cost stays O(LIMIT) instead of O(matches).
+            // With today's all-1.0 `EVIDENCE_FTS_COLUMN_WEIGHTS`
+            // the built-in `rank` and `bm25(evidence_fts, 1.0)`
+            // compute identical f64 values, so sorting by `rank`
+            // and reading the SELECT-list column `weighted_rank`
+            // are numerically equivalent. When a future schema
+            // tunes column weights off `1.0`, the FTS5 rank
+            // configuration (`INSERT INTO evidence_fts(
+            // evidence_fts, rank) VALUES('rank', 'bm25(w1, w2)')`)
+            // re-configures the built-in `rank` to use the
+            // matching weights and preserves the optimisation —
+            // see `EVIDENCE_FTS_*_COLUMN_WEIGHTS` doc-comments.
             "SELECT evidence_id, {bm25} AS weighted_rank FROM evidence_fts \
              WHERE evidence_fts MATCH ?1 AND scope_id = ?2 \
-             ORDER BY weighted_rank LIMIT ?3",
+             ORDER BY rank LIMIT ?3",
             bm25 = bm25_select_fragment("evidence_fts", EVIDENCE_FTS_COLUMN_WEIGHTS),
         )
     })
@@ -5055,9 +5081,13 @@ fn trigram_lane_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
         format!(
+            // See [`unicode61_lane_sql`] for the rationale on using
+            // `ORDER BY rank` (FTS5 built-in) rather than
+            // `ORDER BY weighted_rank` (the SELECT-list alias) —
+            // it preserves FTS5's incremental-rank optimisation.
             "SELECT evidence_id, {bm25} AS weighted_rank FROM evidence_fts_cjk \
              WHERE evidence_fts_cjk MATCH ?1 AND scope_id = ?2 \
-             ORDER BY weighted_rank LIMIT ?3",
+             ORDER BY rank LIMIT ?3",
             bm25 = bm25_select_fragment("evidence_fts_cjk", EVIDENCE_FTS_CJK_COLUMN_WEIGHTS),
         )
     })
@@ -5071,9 +5101,13 @@ fn bigram_lane_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
         format!(
+            // See [`unicode61_lane_sql`] for the rationale on using
+            // `ORDER BY rank` (FTS5 built-in) rather than
+            // `ORDER BY weighted_rank` (the SELECT-list alias) —
+            // it preserves FTS5's incremental-rank optimisation.
             "SELECT evidence_id, {bm25} AS weighted_rank FROM evidence_fts_bigram \
              WHERE evidence_fts_bigram MATCH ?1 AND scope_id = ?2 \
-             ORDER BY weighted_rank LIMIT ?3",
+             ORDER BY rank LIMIT ?3",
             bm25 = bm25_select_fragment("evidence_fts_bigram", EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS),
         )
     })
@@ -5227,29 +5261,37 @@ mod phase_1_8_lane_sql_tests {
             sql.contains("evidence_fts MATCH ?1"),
             "unicode61 lane SQL must MATCH against `evidence_fts` — got: {sql}"
         );
-        // The SELECT alias must NOT collide with FTS5's built-in
-        // `rank` pseudo-column — SQLite resolves `ORDER BY rank`
-        // in favour of the SELECT-list alias today, but the
-        // shadowing is fragile reading and future tuning when
-        // column weights diverge from 1.0 needs the alias to
-        // unambiguously refer to the *weighted* score. Pinning
-        // `weighted_rank` here keeps a future refactor that
-        // silently restores `AS rank` from drifting the contract.
+        // The SELECT-list alias is `weighted_rank` so a future
+        // multi-column tune (where `bm25(t, w1, w2)` diverges
+        // from FTS5's built-in `rank`) keeps the SELECT column
+        // name unambiguously bound to the weighted score. The
+        // `ORDER BY` clause uses FTS5's built-in `rank` pseudo-
+        // column — NOT the alias — because only `ORDER BY rank`
+        // triggers FTS5's incremental-rank optimisation that
+        // avoids computing bm25() for every matching row. With
+        // today's all-1.0 column weights the two are numerically
+        // identical; when column weights diverge the FTS5 rank
+        // configuration is updated in lockstep to keep the
+        // optimisation valid (see the `EVIDENCE_FTS_*_COLUMN_WEIGHTS`
+        // doc-comments for the forward-compat protocol).
         assert!(
             sql.contains("AS weighted_rank"),
             "unicode61 lane SQL must alias the bm25() expression as \
-             `weighted_rank` (not `rank`, which shadows FTS5's \
-             built-in `rank` pseudo-column) — got: {sql}"
+             `weighted_rank` so the SELECT column name remains \
+             unambiguous when column weights diverge from 1.0 — \
+             got: {sql}"
         );
         assert!(
-            sql.contains("ORDER BY weighted_rank"),
-            "unicode61 lane SQL must ORDER BY the `weighted_rank` \
-             alias — got: {sql}"
+            sql.contains("ORDER BY rank LIMIT"),
+            "unicode61 lane SQL must `ORDER BY rank` (FTS5's \
+             built-in pseudo-column) to keep the incremental-rank \
+             optimisation — got: {sql}"
         );
         assert!(
-            !sql.contains("AS rank ") && !sql.contains("ORDER BY rank "),
-            "unicode61 lane SQL must not use the shadowing `rank` \
-             alias — got: {sql}"
+            !sql.contains("ORDER BY weighted_rank"),
+            "unicode61 lane SQL must not ORDER BY the alias — \
+             that disables FTS5's incremental-rank optimisation — \
+             got: {sql}"
         );
     }
 
@@ -5266,9 +5308,11 @@ mod phase_1_8_lane_sql_tests {
             "trigram lane SQL must MATCH against `evidence_fts_cjk` — got: {sql}"
         );
         assert!(
-            sql.contains("AS weighted_rank") && sql.contains("ORDER BY weighted_rank"),
-            "trigram lane SQL must alias + sort on the `weighted_rank` \
-             alias (not the shadowing `rank` alias) — got: {sql}"
+            sql.contains("AS weighted_rank") && sql.contains("ORDER BY rank LIMIT"),
+            "trigram lane SQL must alias the bm25() column as \
+             `weighted_rank` AND sort on FTS5's built-in `rank` \
+             pseudo-column (preserves the incremental-rank \
+             optimisation) — got: {sql}"
         );
     }
 
@@ -5285,9 +5329,11 @@ mod phase_1_8_lane_sql_tests {
             "bigram lane SQL must MATCH against `evidence_fts_bigram` — got: {sql}"
         );
         assert!(
-            sql.contains("AS weighted_rank") && sql.contains("ORDER BY weighted_rank"),
-            "bigram lane SQL must alias + sort on the `weighted_rank` \
-             alias (not the shadowing `rank` alias) — got: {sql}"
+            sql.contains("AS weighted_rank") && sql.contains("ORDER BY rank LIMIT"),
+            "bigram lane SQL must alias the bm25() column as \
+             `weighted_rank` AND sort on FTS5's built-in `rank` \
+             pseudo-column (preserves the incremental-rank \
+             optimisation) — got: {sql}"
         );
     }
 
