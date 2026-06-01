@@ -16,6 +16,11 @@ use crypto::{
 
 use crate::embeddings::EmbeddingModel;
 use crate::error::{EvidenceError, Result};
+use crate::fts_weights::{
+    bm25_select_fragment, EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS, EVIDENCE_FTS_BIGRAM_LANE_WEIGHT,
+    EVIDENCE_FTS_CJK_COLUMN_WEIGHTS, EVIDENCE_FTS_CJK_LANE_WEIGHT, EVIDENCE_FTS_COLUMN_WEIGHTS,
+    EVIDENCE_FTS_LANE_WEIGHT,
+};
 use crate::ids::{EvidenceId, ScopeId};
 use crate::importance::ImportanceClass;
 use crate::routing::{route_storage_with_threshold, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES};
@@ -1277,6 +1282,39 @@ impl EvidenceStore {
     ) -> Result<Vec<EvidenceId>> {
         let merged = merged_fts_search(&self.conn, scope_id, query, limit)?;
         Ok(merged.into_iter().map(|(id, _rank)| id).collect())
+    }
+
+    /// Test-only variant of [`Self::search_fts`] that exposes the
+    /// post-lane-weighting BM25 rank for every returned row, so
+    /// Phase 1.8 integration tests can pin the cross-lane
+    /// precision-vs-recall hierarchy at the rank-arithmetic level
+    /// (and not just at the recall-preservation level that
+    /// [`Self::search_fts`] would surface).
+    ///
+    /// The ranks are the **post-weight** scores the public
+    /// surface uses internally for cross-lane MIN-merge — so
+    /// e.g. a 2-char CJK query that only hits the bigram lane
+    /// returns the raw BM25 rank multiplied by
+    /// [`crate::fts_weights::EVIDENCE_FTS_BIGRAM_LANE_WEIGHT`].
+    /// This is the integration-test counterpart to the unit-test
+    /// pinning in [`crate::fts_weights::tests`] and the SQL-
+    /// shape pinning in [`phase_1_8_lane_sql_tests`].
+    ///
+    /// Only available with the `test-support` feature (or in unit
+    /// tests of this crate). The public surface remains the
+    /// ID-only [`Self::search_fts`] because cross-lane raw ranks
+    /// are not directly comparable to BM25 numbers a caller might
+    /// produce against the FTS5 tables directly — exposing them
+    /// in the public API would leak the lane-weight constants as
+    /// a stable interface, which they are not.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn search_fts_with_weighted_ranks_for_tests(
+        &self,
+        scope_id: ScopeId,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<(EvidenceId, f64)>> {
+        merged_fts_search(&self.conn, scope_id, query, limit)
     }
 
     /// Insert a noise-class body into the ring buffer.
@@ -4777,19 +4815,36 @@ pub(crate) fn merged_fts_search(
     let mut best_rank: HashMap<EvidenceId, f64> = HashMap::with_capacity(limit.saturating_mul(3));
 
     // Branch 1: unicode61 (universal). Errors propagate.
+    //
+    // The SELECT uses the explicit `bm25(<table>, <col_w>...)`
+    // form built by [`crate::fts_weights::bm25_select_fragment`]
+    // rather than the bare `rank` alias. With the current single-
+    // indexed-column shape the SQL is `bm25(evidence_fts, 1.0)`
+    // which is numerically identical to `rank`, but the explicit
+    // form is the integration point for the future multi-column
+    // case (a separate `subject` / `title` column would extend
+    // [`crate::fts_weights::EVIDENCE_FTS_COLUMN_WEIGHTS`] and
+    // the same call site would render the new argument list).
+    //
+    // The post-fetch `* EVIDENCE_FTS_LANE_WEIGHT` multiply is the
+    // *inter-lane* weight — orthogonal to the column-weight argument
+    // list inside `bm25(...)` because the cross-lane comparison
+    // happens between *different* SQL statements whose raw BM25
+    // ranks are not directly comparable (different lanes
+    // tokenise different prefixes of the body). For the unicode61
+    // baseline the weight is `1.0` so this multiply is the
+    // identity today — see [`crate::fts_weights`] for the
+    // architectural rationale.
     {
-        let mut stmt = conn.prepare(
-            "SELECT evidence_id, rank FROM evidence_fts
-             WHERE evidence_fts MATCH ?1 AND scope_id = ?2
-             ORDER BY rank LIMIT ?3",
-        )?;
+        let sql = unicode61_lane_sql();
+        let mut stmt = conn.prepare(sql)?;
         let rows = stmt.query_map(params![query, scope_bytes, limit_sql], |row| {
             Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
         })?;
         for row in rows {
             let (id_bytes, rank) = row?;
             let id = EvidenceId(slice_to_uuid(&id_bytes)?);
-            merge_min_rank(&mut best_rank, id, rank);
+            merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_LANE_WEIGHT);
         }
     }
 
@@ -4814,11 +4869,8 @@ pub(crate) fn merged_fts_search(
     // post-closure code is the `MIN(rank)` merge, which is
     // infallible.
     let trigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
-        let mut stmt = conn.prepare(
-            "SELECT evidence_id, rank FROM evidence_fts_cjk
-             WHERE evidence_fts_cjk MATCH ?1 AND scope_id = ?2
-             ORDER BY rank LIMIT ?3",
-        )?;
+        let sql = trigram_lane_sql();
+        let mut stmt = conn.prepare(sql)?;
         let rows = stmt.query_map(params![query, scope_bytes, limit_sql], |row| {
             Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
         })?;
@@ -4841,8 +4893,14 @@ pub(crate) fn merged_fts_search(
         Ok(out)
     })();
     if let Ok(trigram_rows) = trigram_attempt {
+        // Phase 1.8: apply the trigram lane's inter-lane weight
+        // (`EVIDENCE_FTS_CJK_LANE_WEIGHT`, < 1.0) before merging
+        // so the trigram lane's precision penalty propagates into
+        // the cross-lane min-rank comparison. See
+        // [`crate::fts_weights`] for the precision-vs-recall
+        // rationale.
         for (id, rank) in trigram_rows {
-            merge_min_rank(&mut best_rank, id, rank);
+            merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_CJK_LANE_WEIGHT);
         }
     }
 
@@ -4873,11 +4931,8 @@ pub(crate) fn merged_fts_search(
     // architectural rationale (sweep-3 Devin Review INFO-0001).
     if let Some(bigram_match) = crate::bigram::compute_cjk_bigram_query(query) {
         let bigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
-            let mut stmt = conn.prepare(
-                "SELECT evidence_id, rank FROM evidence_fts_bigram
-                 WHERE evidence_fts_bigram MATCH ?1 AND scope_id = ?2
-                 ORDER BY rank LIMIT ?3",
-            )?;
+            let sql = bigram_lane_sql();
+            let mut stmt = conn.prepare(sql)?;
             let rows = stmt.query_map(params![bigram_match, scope_bytes, limit_sql], |row| {
                 Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
             })?;
@@ -4892,8 +4947,13 @@ pub(crate) fn merged_fts_search(
             Ok(out)
         })();
         if let Ok(bigram_rows) = bigram_attempt {
+            // Phase 1.8: apply the bigram lane's inter-lane weight
+            // (`EVIDENCE_FTS_BIGRAM_LANE_WEIGHT`, < trigram's <
+            // 1.0) before merging — the bigram lane is the
+            // highest-recall and lowest-precision lane so its
+            // weighted ranks pay the steepest cross-lane penalty.
             for (id, rank) in bigram_rows {
-                merge_min_rank(&mut best_rank, id, rank);
+                merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_BIGRAM_LANE_WEIGHT);
             }
         }
     }
@@ -4962,6 +5022,61 @@ fn merge_min_rank(best_rank: &mut HashMap<EvidenceId, f64>, id: EvidenceId, rank
             *existing = (*existing).min(rank);
         })
         .or_insert(rank);
+}
+
+/// Phase 1.8: cached SQL string for the unicode61 lane's MATCH
+/// query in [`merged_fts_search`]. The `bm25(<table>, w...)`
+/// fragment is built once at first use via
+/// [`crate::fts_weights::bm25_select_fragment`] so a future
+/// column addition becomes an [`crate::fts_weights::EVIDENCE_FTS_COLUMN_WEIGHTS`]
+/// length bump rather than an in-place SQL edit here.
+///
+/// The cache uses [`std::sync::OnceLock`] so the format cost is
+/// paid exactly once per process \u2014 the read-hot path
+/// ([`merged_fts_search`]) then borrows the cached `&'static str`
+/// for every subsequent query.
+fn unicode61_lane_sql() -> &'static str {
+    static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SQL.get_or_init(|| {
+        format!(
+            "SELECT evidence_id, {bm25} AS rank FROM evidence_fts \
+             WHERE evidence_fts MATCH ?1 AND scope_id = ?2 \
+             ORDER BY rank LIMIT ?3",
+            bm25 = bm25_select_fragment("evidence_fts", EVIDENCE_FTS_COLUMN_WEIGHTS),
+        )
+    })
+}
+
+/// Phase 1.8: cached SQL string for the trigram lane's MATCH
+/// query. Same shape as [`unicode61_lane_sql`] but against
+/// `evidence_fts_cjk` and with the trigram-lane column-weight
+/// vector. See [`unicode61_lane_sql`] for the caching rationale.
+fn trigram_lane_sql() -> &'static str {
+    static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SQL.get_or_init(|| {
+        format!(
+            "SELECT evidence_id, {bm25} AS rank FROM evidence_fts_cjk \
+             WHERE evidence_fts_cjk MATCH ?1 AND scope_id = ?2 \
+             ORDER BY rank LIMIT ?3",
+            bm25 = bm25_select_fragment("evidence_fts_cjk", EVIDENCE_FTS_CJK_COLUMN_WEIGHTS),
+        )
+    })
+}
+
+/// Phase 1.8: cached SQL string for the bigram lane's MATCH
+/// query. Same shape as [`unicode61_lane_sql`] but against
+/// `evidence_fts_bigram` and with the bigram-lane column-weight
+/// vector. See [`unicode61_lane_sql`] for the caching rationale.
+fn bigram_lane_sql() -> &'static str {
+    static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SQL.get_or_init(|| {
+        format!(
+            "SELECT evidence_id, {bm25} AS rank FROM evidence_fts_bigram \
+             WHERE evidence_fts_bigram MATCH ?1 AND scope_id = ?2 \
+             ORDER BY rank LIMIT ?3",
+            bm25 = bm25_select_fragment("evidence_fts_bigram", EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS),
+        )
+    })
 }
 
 /// Convert a `COUNT(*) / SUM(...)` result from SQLite into a Rust
@@ -5080,5 +5195,95 @@ mod merge_min_rank_tests {
         merge_min_rank(&mut map, id_for(0xb1), -0.5);
         assert_eq!(map.get(&id_for(0xb1)), Some(&-1.0));
         assert_eq!(map.get(&id_for(0xb2)), Some(&-2.0));
+    }
+}
+
+#[cfg(test)]
+mod phase_1_8_lane_sql_tests {
+    //! Phase 1.8: pin the exact SQL emitted by
+    //! [`super::unicode61_lane_sql`] / [`super::trigram_lane_sql`]
+    //! / [`super::bigram_lane_sql`] so a refactor of either
+    //! [`crate::fts_weights::bm25_select_fragment`] or the SELECT
+    //! template here cannot drift the shape that
+    //! [`super::merged_fts_search`] depends on.
+    //!
+    //! Each test asserts the cached SQL contains both the explicit
+    //! `bm25(<table>, <weights>...)` form (proves the column-
+    //! weight integration point fired) AND the lane-specific
+    //! `MATCH` predicate (proves the SELECT routed to the right
+    //! table).
+
+    use super::{bigram_lane_sql, trigram_lane_sql, unicode61_lane_sql};
+
+    #[test]
+    fn unicode61_lane_sql_contains_explicit_bm25_call_and_match_clause() {
+        let sql = unicode61_lane_sql();
+        assert!(
+            sql.contains("bm25(evidence_fts, 1.0)"),
+            "unicode61 lane SQL must invoke bm25() with explicit \
+             column weights — got: {sql}"
+        );
+        assert!(
+            sql.contains("evidence_fts MATCH ?1"),
+            "unicode61 lane SQL must MATCH against `evidence_fts` — got: {sql}"
+        );
+    }
+
+    #[test]
+    fn trigram_lane_sql_contains_explicit_bm25_call_and_match_clause() {
+        let sql = trigram_lane_sql();
+        assert!(
+            sql.contains("bm25(evidence_fts_cjk, 1.0)"),
+            "trigram lane SQL must invoke bm25() with explicit \
+             column weights — got: {sql}"
+        );
+        assert!(
+            sql.contains("evidence_fts_cjk MATCH ?1"),
+            "trigram lane SQL must MATCH against `evidence_fts_cjk` — got: {sql}"
+        );
+    }
+
+    #[test]
+    fn bigram_lane_sql_contains_explicit_bm25_call_and_match_clause() {
+        let sql = bigram_lane_sql();
+        assert!(
+            sql.contains("bm25(evidence_fts_bigram, 1.0)"),
+            "bigram lane SQL must invoke bm25() with explicit \
+             column weights — got: {sql}"
+        );
+        assert!(
+            sql.contains("evidence_fts_bigram MATCH ?1"),
+            "bigram lane SQL must MATCH against `evidence_fts_bigram` — got: {sql}"
+        );
+    }
+
+    #[test]
+    fn lane_sql_helpers_are_idempotent_across_calls() {
+        // Phase 1.8: the OnceLock caching contract — every call
+        // returns the same `&'static str` pointer (not just an
+        // equal string), so a future contributor cannot
+        // accidentally swap in a `format!()` that pays the
+        // allocation cost on every query.
+        let a = unicode61_lane_sql();
+        let b = unicode61_lane_sql();
+        assert!(
+            std::ptr::eq(a, b),
+            "unicode61_lane_sql() must return the cached pointer \
+             on every call (OnceLock caching invariant)"
+        );
+        let a = trigram_lane_sql();
+        let b = trigram_lane_sql();
+        assert!(
+            std::ptr::eq(a, b),
+            "trigram_lane_sql() must return the cached pointer \
+             on every call (OnceLock caching invariant)"
+        );
+        let a = bigram_lane_sql();
+        let b = bigram_lane_sql();
+        assert!(
+            std::ptr::eq(a, b),
+            "bigram_lane_sql() must return the cached pointer \
+             on every call (OnceLock caching invariant)"
+        );
     }
 }

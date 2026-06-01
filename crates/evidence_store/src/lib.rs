@@ -24,6 +24,7 @@ pub mod bigram;
 pub mod classifier;
 pub mod embeddings;
 pub mod error;
+pub mod fts_weights;
 pub mod ids;
 pub mod importance;
 pub mod retrieval;
