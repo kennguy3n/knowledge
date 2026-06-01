@@ -908,10 +908,25 @@ impl EvidenceStore {
         }
         // A model failure should not block ingestion — the row is
         // still recoverable via FTS and the retriever's re-embedding
-        // fallback.
-        let Ok(vec) = model.embed(text) else {
-            return;
+        // fallback. Both the success and the per-variant error are
+        // counted in `crate::vector_telemetry` so the operator can
+        // see the adapter-health signal alongside the lane invocations.
+        let vec = match model.embed(text) {
+            Ok(v) => {
+                crate::vector_telemetry::record_embedding_computed(
+                    crate::vector_telemetry::EmbedSite::IndexWrite,
+                );
+                v
+            }
+            Err(err) => {
+                crate::vector_telemetry::record_embedding_error_from(&err);
+                return;
+            }
         };
+        // Surface the (model_tag, dimension) observation so a rotation-
+        // rule violation (same tag, different dim) is operator-visible
+        // via `model_tag_dimension_violations_total`. Best-effort.
+        crate::vector_telemetry::record_observed_dimension(model_tag, vec.len());
         let bytes = embedding_to_bytes(&vec);
         // Best-effort write. See the doc-comment above for the
         // rationale — propagating this error would abort the
@@ -989,6 +1004,11 @@ impl EvidenceStore {
 
         if let Some(bytes) = copied {
             // Same content + same model ⇒ identical vector. Reuse.
+            // Bump the dedup-copy counter so the operator can see
+            // how often this short-circuit pays off on real corpora
+            // (the dominant write-path optimisation for high-dedup
+            // workloads like mailing-list threads / replayed payloads).
+            crate::vector_telemetry::record_dedup_copy_hit();
             // Same swallow-and-log discipline as `index_embedding`:
             // the cache row is non-load-bearing data so an INSERT
             // failure must not abort the surrounding transaction,
@@ -3908,8 +3928,14 @@ impl EvidenceStore {
         model: M,
         model_tag: impl Into<String>,
     ) -> Self {
+        let dim = model.dimension();
         self.embedding_model = Some(Box::new(model));
         self.embedding_model_tag = model_tag.into();
+        // Register the wired-in (tag, dimension) pair so a same-tag /
+        // different-dimension rotation violation is flagged in
+        // `model_tag_dimension_violations_total` immediately on wire-
+        // in, rather than only when the cache happens to be consulted.
+        crate::vector_telemetry::record_observed_dimension(&self.embedding_model_tag, dim);
         self
     }
 
@@ -3920,8 +3946,12 @@ impl EvidenceStore {
         model: M,
         model_tag: impl Into<String>,
     ) {
+        let dim = model.dimension();
         self.embedding_model = Some(Box::new(model));
         self.embedding_model_tag = model_tag.into();
+        // Same wire-in observation as `with_embedding_model` — mirror
+        // the rotation-violation flag for `&mut self` callers.
+        crate::vector_telemetry::record_observed_dimension(&self.embedding_model_tag, dim);
     }
 
     /// `true` when an [`EmbeddingModel`] is wired in. Useful for tests

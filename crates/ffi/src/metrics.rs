@@ -776,6 +776,14 @@ pub struct MetricsSnapshot {
     /// `#[serde(default)]` per the additive-wire-contract rule.
     #[serde(default)]
     pub fts_telemetry: FtsTelemetry,
+    /// Multilingual embedding / vector-retrieval telemetry (Phase 1.11).
+    /// Counts live embeddings computed per call site,
+    /// `evidence_embeddings` cache outcomes, dedup-copy hits,
+    /// per-variant adapter errors, and `model_tag` rotation-rule
+    /// violations.  `#[serde(default)]` per the additive-wire-contract
+    /// rule.
+    #[serde(default)]
+    pub vector_telemetry: VectorTelemetry,
 }
 
 /// Multilingual lexicon-path observability counters mirrored from
@@ -1001,6 +1009,76 @@ pub struct FtsTelemetry {
     pub v16_migration_stopwords_stripped_total: u64,
 }
 
+/// Multilingual embedding / vector-retrieval observability counters
+/// mirrored from [`evidence_store::vector_telemetry`] (Phase 1.11).
+///
+/// See [`LexiconTelemetry`] for the wire-mirror rationale; the
+/// `#[serde(default)]` discipline applies symmetrically here so an
+/// older emitter's JSON that lacks any of these fields still
+/// deserialises cleanly.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
+pub struct VectorTelemetry {
+    /// Successful query-side embeds in
+    /// [`evidence_store::retrieval::HybridRetriever::search_hybrid`]
+    /// or
+    /// [`evidence_store::retrieval::HybridRetriever::rerank_with_embeddings`].
+    #[serde(default)]
+    pub query_embeddings_total: u64,
+    /// Successful fresh body embeds in
+    /// [`evidence_store::EvidenceStore::index_embedding`] (the
+    /// path NOT short-circuited by dedup-copy).
+    #[serde(default)]
+    pub index_write_embeddings_total: u64,
+    /// Successful body embeds in
+    /// [`evidence_store::retrieval::HybridRetriever::candidate_embedding`]'s
+    /// cache-miss fallback.
+    #[serde(default)]
+    pub live_body_embeddings_total: u64,
+    /// Embedding-cache lookups that returned a dimension-
+    /// matching row for the active `(evidence_id, model_tag)`.
+    #[serde(default)]
+    pub cache_hits_total: u64,
+    /// Embedding-cache lookups that found no row for the
+    /// active `(evidence_id, model_tag)`.
+    #[serde(default)]
+    pub cache_misses_no_row_total: u64,
+    /// Embedding-cache lookups that returned a row whose
+    /// dimension did NOT match. Defensive — non-zero means the
+    /// `model_tag` rotation rule (one tag ⇒ one dimension) was
+    /// violated somewhere in history.
+    #[serde(default)]
+    pub cache_misses_dimension_total: u64,
+    /// Embedding-cache lookups whose `SELECT` itself errored.
+    /// Demoted to a miss to preserve the fail-open read-path
+    /// contract.
+    #[serde(default)]
+    pub cache_misses_read_error_total: u64,
+    /// Dedup-copy hits in
+    /// [`evidence_store::EvidenceStore::index_embedding_or_copy_dedup`]
+    /// — the dominant write-path optimisation for high-dedup
+    /// workloads.
+    #[serde(default)]
+    pub dedup_copy_hits_total: u64,
+    /// Failed embeds with
+    /// [`evidence_store::embeddings::EmbeddingError::RuntimeUnavailable`].
+    #[serde(default)]
+    pub runtime_unavailable_total: u64,
+    /// Failed embeds with
+    /// [`evidence_store::embeddings::EmbeddingError::ModelLoad`].
+    #[serde(default)]
+    pub model_load_errors_total: u64,
+    /// Failed embeds with
+    /// [`evidence_store::embeddings::EmbeddingError::InferenceFailure`].
+    #[serde(default)]
+    pub inference_failures_total: u64,
+    /// Number of times the same `model_tag` was observed at a
+    /// different output dimension than its first observation — a
+    /// rotation-rule violation. See upstream
+    /// `evidence_store::vector_telemetry::record_observed_dimension`.
+    #[serde(default)]
+    pub model_tag_dimension_violations_total: u64,
+}
+
 /// Per-kind error counters.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct ErrorCounters {
@@ -1176,6 +1254,7 @@ pub fn snapshot() -> MetricsSnapshot {
         boot_unix_secs: m.boot_unix_secs.load(Ordering::Relaxed),
         lexicon_telemetry: lexicon_telemetry_snapshot(),
         fts_telemetry: fts_telemetry_snapshot(),
+        vector_telemetry: vector_telemetry_snapshot(),
     }
 }
 
@@ -1246,6 +1325,29 @@ fn fts_telemetry_snapshot() -> FtsTelemetry {
         index_write_stopwords_stripped_total: s.index_write_stopwords_stripped_total,
         query_time_stopwords_stripped_total: s.query_time_stopwords_stripped_total,
         v16_migration_stopwords_stripped_total: s.v16_migration_stopwords_stripped_total,
+    }
+}
+
+/// Read the upstream
+/// [`evidence_store::vector_telemetry::snapshot`] and project it
+/// into the FFI mirror struct.  One-to-one field mapping by name —
+/// the field lists are kept symmetric by the
+/// `vector_telemetry_mirror_round_trips` test below.
+fn vector_telemetry_snapshot() -> VectorTelemetry {
+    let s = evidence_store::vector_telemetry::snapshot();
+    VectorTelemetry {
+        query_embeddings_total: s.query_embeddings_total,
+        index_write_embeddings_total: s.index_write_embeddings_total,
+        live_body_embeddings_total: s.live_body_embeddings_total,
+        cache_hits_total: s.cache_hits_total,
+        cache_misses_no_row_total: s.cache_misses_no_row_total,
+        cache_misses_dimension_total: s.cache_misses_dimension_total,
+        cache_misses_read_error_total: s.cache_misses_read_error_total,
+        dedup_copy_hits_total: s.dedup_copy_hits_total,
+        runtime_unavailable_total: s.runtime_unavailable_total,
+        model_load_errors_total: s.model_load_errors_total,
+        inference_failures_total: s.inference_failures_total,
+        model_tag_dimension_violations_total: s.model_tag_dimension_violations_total,
     }
 }
 
@@ -1873,6 +1975,153 @@ mod tests {
             mirror.v16_migration_stopwords_stripped_total
                 > before.v16_migration_stopwords_stripped_total,
             "v16_migration_stopwords_stripped_total not plumbed"
+        );
+    }
+
+    /// Pin the vector-telemetry mirror field parity (Phase 1.11).
+    /// Mirror of `fts_telemetry_mirror_round_trips` for the
+    /// embedding / vector-retrieval path.
+    #[test]
+    fn vector_telemetry_mirror_round_trips() {
+        use evidence_store::vector_telemetry::{
+            record_cache_outcome, record_dedup_copy_hit, record_embedding_computed,
+            record_embedding_error, record_observed_dimension, CacheOutcome, EmbedSite,
+            EmbeddingErrorKind,
+        };
+        let before = evidence_store::vector_telemetry::snapshot();
+        record_embedding_computed(EmbedSite::Query);
+        record_embedding_computed(EmbedSite::IndexWrite);
+        record_embedding_computed(EmbedSite::LiveBody);
+        record_cache_outcome(CacheOutcome::Hit);
+        record_cache_outcome(CacheOutcome::MissNoRow);
+        record_cache_outcome(CacheOutcome::MissDimension);
+        record_cache_outcome(CacheOutcome::MissReadError);
+        record_dedup_copy_hit();
+        record_embedding_error(EmbeddingErrorKind::RuntimeUnavailable);
+        record_embedding_error(EmbeddingErrorKind::ModelLoad);
+        record_embedding_error(EmbeddingErrorKind::InferenceFailure);
+        // Trigger one rotation-rule violation: record a tag at
+        // a baseline dim, then re-record it at a different dim.
+        // Uses a test-local tag name so parallel tests can't
+        // interfere with the violation arithmetic.
+        record_observed_dimension("ffi-vec-tel-round-trip-tag", 768);
+        record_observed_dimension("ffi-vec-tel-round-trip-tag", 384);
+
+        // Upstream is read AFTER the bumps but BEFORE the mirror,
+        // so concurrent tests bumping counters in between would
+        // only increase the mirror's value relative to the
+        // upstream snapshot.  Lower-bound the mirror by upstream
+        // (the same monotonic-lower-bound pattern as the FTS
+        // mirror test).
+        let upstream = evidence_store::vector_telemetry::snapshot();
+        let mirror = vector_telemetry_snapshot();
+
+        // Mirror ≥ upstream for every field — catches a
+        // silently-dropped projection.
+        assert!(
+            mirror.query_embeddings_total >= upstream.query_embeddings_total,
+            "query_embeddings_total mirror < upstream"
+        );
+        assert!(
+            mirror.index_write_embeddings_total >= upstream.index_write_embeddings_total,
+            "index_write_embeddings_total mirror < upstream"
+        );
+        assert!(
+            mirror.live_body_embeddings_total >= upstream.live_body_embeddings_total,
+            "live_body_embeddings_total mirror < upstream"
+        );
+        assert!(
+            mirror.cache_hits_total >= upstream.cache_hits_total,
+            "cache_hits_total mirror < upstream"
+        );
+        assert!(
+            mirror.cache_misses_no_row_total >= upstream.cache_misses_no_row_total,
+            "cache_misses_no_row_total mirror < upstream"
+        );
+        assert!(
+            mirror.cache_misses_dimension_total >= upstream.cache_misses_dimension_total,
+            "cache_misses_dimension_total mirror < upstream"
+        );
+        assert!(
+            mirror.cache_misses_read_error_total >= upstream.cache_misses_read_error_total,
+            "cache_misses_read_error_total mirror < upstream"
+        );
+        assert!(
+            mirror.dedup_copy_hits_total >= upstream.dedup_copy_hits_total,
+            "dedup_copy_hits_total mirror < upstream"
+        );
+        assert!(
+            mirror.runtime_unavailable_total >= upstream.runtime_unavailable_total,
+            "runtime_unavailable_total mirror < upstream"
+        );
+        assert!(
+            mirror.model_load_errors_total >= upstream.model_load_errors_total,
+            "model_load_errors_total mirror < upstream"
+        );
+        assert!(
+            mirror.inference_failures_total >= upstream.inference_failures_total,
+            "inference_failures_total mirror < upstream"
+        );
+        assert!(
+            mirror.model_tag_dimension_violations_total
+                >= upstream.model_tag_dimension_violations_total,
+            "model_tag_dimension_violations_total mirror < upstream"
+        );
+
+        // Reverse direction: every field we bumped above must
+        // show movement from baseline through the FFI mirror.
+        // A silently-zeroed projection (e.g. forgetting to add
+        // `query_embeddings_total: s.query_embeddings_total` in
+        // [`vector_telemetry_snapshot`]) would leave the diff
+        // at 0 even though our increment added 1.
+        assert!(
+            mirror.query_embeddings_total > before.query_embeddings_total,
+            "query_embeddings_total not plumbed"
+        );
+        assert!(
+            mirror.index_write_embeddings_total > before.index_write_embeddings_total,
+            "index_write_embeddings_total not plumbed"
+        );
+        assert!(
+            mirror.live_body_embeddings_total > before.live_body_embeddings_total,
+            "live_body_embeddings_total not plumbed"
+        );
+        assert!(
+            mirror.cache_hits_total > before.cache_hits_total,
+            "cache_hits_total not plumbed"
+        );
+        assert!(
+            mirror.cache_misses_no_row_total > before.cache_misses_no_row_total,
+            "cache_misses_no_row_total not plumbed"
+        );
+        assert!(
+            mirror.cache_misses_dimension_total > before.cache_misses_dimension_total,
+            "cache_misses_dimension_total not plumbed"
+        );
+        assert!(
+            mirror.cache_misses_read_error_total > before.cache_misses_read_error_total,
+            "cache_misses_read_error_total not plumbed"
+        );
+        assert!(
+            mirror.dedup_copy_hits_total > before.dedup_copy_hits_total,
+            "dedup_copy_hits_total not plumbed"
+        );
+        assert!(
+            mirror.runtime_unavailable_total > before.runtime_unavailable_total,
+            "runtime_unavailable_total not plumbed"
+        );
+        assert!(
+            mirror.model_load_errors_total > before.model_load_errors_total,
+            "model_load_errors_total not plumbed"
+        );
+        assert!(
+            mirror.inference_failures_total > before.inference_failures_total,
+            "inference_failures_total not plumbed"
+        );
+        assert!(
+            mirror.model_tag_dimension_violations_total
+                > before.model_tag_dimension_violations_total,
+            "model_tag_dimension_violations_total not plumbed"
         );
     }
 }
