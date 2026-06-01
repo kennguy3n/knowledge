@@ -137,8 +137,28 @@ pub const EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS: &[f64] = &[1.0];
 /// identifier (`evidence_fts` / `evidence_fts_cjk` /
 /// `evidence_fts_bigram`) — there is no escaping because the
 /// argument is never derived from user input.
+///
+/// # Panics
+///
+/// Panics if `column_weights` is empty. The empty case would
+/// produce `bm25(<table>)` — valid SQL that silently falls back
+/// to FTS5's default all-1.0 column weights — which bypasses the
+/// explicit-weight contract this function exists to enforce.
+/// Every call site in the crate passes a non-empty
+/// `EVIDENCE_FTS_*_COLUMN_WEIGHTS` slice (length pinned at ≥ 1 by
+/// `column_weights_match_single_column_fts5_shape`); a future
+/// caller that constructs the slice dynamically will fail fast
+/// at the call site rather than emit weight-less SQL that masks
+/// the precision hierarchy.
 pub fn bm25_select_fragment(table: &str, column_weights: &[f64]) -> String {
     use std::fmt::Write;
+    assert!(
+        !column_weights.is_empty(),
+        "bm25_select_fragment requires at least one column weight \
+         — the empty case would produce `bm25({table})` and silently \
+         fall back to FTS5's default all-1.0 weights, bypassing the \
+         explicit-weight contract"
+    );
     let mut s = String::with_capacity(8 + table.len() + column_weights.len() * 5);
     s.push_str("bm25(");
     s.push_str(table);
@@ -291,6 +311,21 @@ mod tests {
             bm25_select_fragment("evidence_fts_bigram", EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS),
             "bm25(evidence_fts_bigram, 1.0)"
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "requires at least one column weight")]
+    fn bm25_select_fragment_panics_on_empty_column_weights() {
+        // Phase 1.8 (sweep 4) defense-in-depth: the empty-slice
+        // case would render to `bm25(evidence_fts)` — valid SQL
+        // that silently falls back to FTS5's default all-1.0
+        // column weights, bypassing the explicit-weight contract
+        // the function exists to enforce. Pin the panic-on-empty
+        // contract here so a future caller that constructs the
+        // slice dynamically fails fast at the call site rather
+        // than emitting weight-less SQL that masks the precision
+        // hierarchy.
+        let _ = bm25_select_fragment("evidence_fts", &[]);
     }
 
     #[test]
