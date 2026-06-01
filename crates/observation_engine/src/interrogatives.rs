@@ -625,11 +625,30 @@ pub fn interrogatives_for(
 
         // Lao — Phase 1.5. Lao script is structurally
         // parallel to Thai: no inter-word whitespace,
-        // interrogatives can appear anywhere. The
-        // sentence-final particle ບໍ is the canonical yes/no
-        // question marker. Sources: Reinhorn, *Dictionnaire
-        // Laotien-Français* (Larousse 2001) entries for
-        // ໃຜ ("who"), ຫຍັງ ("what"), etc.
+        // interrogatives can appear anywhere. Sources:
+        // Reinhorn, *Dictionnaire Laotien-Français*
+        // (Larousse 2001) entries for ໃຜ ("who"),
+        // ຫຍັງ ("what"), etc.
+        //
+        // Deliberately omitted: bare `ບໍ` (the sentence-final
+        // yes/no question particle). Under substring matching
+        // `ບໍ` (U+0E9A U+0ECD) is a strict 2-codepoint prefix
+        // of the Lao negation particle `ບໍ່`
+        // (U+0E9A U+0ECD U+0EC8, "not") and of the extremely
+        // common nouns `ບໍລິສັດ` ("company") and `ບໍລິການ`
+        // ("service") — every Lao negative sentence
+        // (`ບໍ່ມີ`, `ບໍ່ແມ່ນ`, `ບໍ່ໄດ້`, …) and every clause
+        // mentioning a company or a service would
+        // mis-classify as a Question. Same class of
+        // precision-vs-recall trade-off as the Khmer
+        // omission of bare `ទេ` documented above and the
+        // Mandarin omission of bare `几`. The unambiguous
+        // wh-words below cover the canonical interrogative
+        // shapes; the yes/no construction in Lao also
+        // commonly uses the A-not-A form (e.g.
+        // `ມີ...ບໍ່ມີ` "have or not have") which a future
+        // sweep can add as a multi-token rule if a Phase-2
+        // Lao corpus needs it.
         "lo" => Some((
             &[
                 "ໃຜ",     // "who"
@@ -644,7 +663,6 @@ pub fn interrogatives_for(
                 "ໃດ",     // "which"
                 "ອັນໃດ",   // "which one"
                 "ເທົ່າໃດ",  // "how much / how many"
-                "ບໍ",      // canonical yes/no sentence-final particle
             ],
             InterrogativeMatch::Substring,
         )),

@@ -2254,4 +2254,56 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn phase_1_5_lao_negation_and_business_nouns_do_not_match_interrogatives() {
+        // Pin the deliberate omission of bare `ບໍ`
+        // (U+0E9A U+0ECD) from the Lao interrogative
+        // table. `ບໍ` is a strict 2-codepoint prefix of
+        // both:
+        //   * the negation particle `ບໍ່`
+        //     (U+0E9A U+0ECD U+0EC8, "not")
+        //   * the everyday nouns `ບໍລິສັດ` ("company") and
+        //     `ບໍລິການ` ("service")
+        // Under `InterrogativeMatch::Substring` (which the
+        // Lao lexicon uses because Lao script has no
+        // inter-word whitespace), including `ບໍ` in the
+        // interrogative table would mis-classify every
+        // negative Lao sentence and every clause about a
+        // company / service as a Question. This regression
+        // test fires before the production extractor would,
+        // with a precise error message naming the
+        // offending entry.
+        use crate::interrogatives::interrogatives_for;
+        let (interr, _) = interrogatives_for("lo").expect("Lao interrogatives configured");
+
+        // Each sentence is grammatically declarative
+        // (negation or simple subject + verb) and MUST NOT
+        // match any Lao interrogative under substring.
+        let declaratives = [
+            // negation: "I don't have"
+            "ຂ້ອຍບໍ່ມີ",
+            // negation: "It isn't"
+            "ມັນບໍ່ແມ່ນ",
+            // negation: "I can't"
+            "ຂ້ອຍບໍ່ໄດ້",
+            // business noun: "I work at the company"
+            "ຂ້ອຍເຮັດວຽກຢູ່ບໍລິສັດ",
+            // business noun: "The service is good"
+            "ບໍລິການດີ",
+        ];
+
+        for declarative in declaratives {
+            for entry in interr {
+                assert!(
+                    !declarative.contains(entry),
+                    "Lao interrogative entry {entry:?} substring-matches \
+                     a Lao declarative {declarative:?} — this indicates \
+                     the Phase 1.5 deliberate omission of bare `ບໍ` has \
+                     been undone without solving the negation/business-noun \
+                     collision documented in interrogatives.rs.",
+                );
+            }
+        }
+    }
 }
