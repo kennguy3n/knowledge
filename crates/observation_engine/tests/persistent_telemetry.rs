@@ -247,10 +247,19 @@ fn concurrent_reads_during_writes_never_observe_partial_file() {
                         );
                     }
                     Err(PersistError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                        // Brief gap on POSIX between `rename`
-                        // syscalls is acceptable on some
-                        // platforms; tolerate `NotFound` but
-                        // nothing else.
+                        // POSIX `rename(2)` over an existing
+                        // target is atomic — a concurrent read
+                        // on Linux/macOS should always see
+                        // either the prior or the new file and
+                        // never trip this arm.  On Windows
+                        // however, `tempfile::NamedTempFile::
+                        // persist` may have to delete the target
+                        // before renaming on some filesystems,
+                        // which produces a brief `NotFound`
+                        // window.  Tolerate `NotFound` for
+                        // cross-platform robustness; reject
+                        // every other error kind (including
+                        // truncated-JSON `PersistError::Json`).
                     }
                     Err(other) => {
                         return Err(format!("unexpected read error: {other:?}"));
