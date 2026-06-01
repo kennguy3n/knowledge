@@ -2019,4 +2019,20 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
             > after_latin.cjk_trigram_lane_skips_pure_stopword_query_total,
         "trigram pure-stopword-query skip counter did not advance on a stripped-to-empty query"
     );
+    // BUG-0001 regression note (Phase 1.10 sweep 1): with the
+    // structural `if stripped_query.trim().is_empty() { skip }
+    // else { closure; if let Ok { record_lane_query } }` shape
+    // in `merged_fts_search`, a pure-stopword query like the
+    // one above bumps *only* the skip counter — never the
+    // query counter — because the two branches are mutually
+    // exclusive by construction.  We deliberately do NOT pin
+    // this via a runtime assertion on the query counter:
+    // sibling tests in this binary run in parallel and bump
+    // the same process-singleton counter, so any
+    // `assert_eq!(after_stop.query, after_latin.query)` would
+    // race.  The regression-resistance lives in the structural
+    // if/else, not in this test — see the doc comment on the
+    // trigram branch in `crate::store::merged_fts_search` and
+    // the `queries + skips = total_attempts` contract on
+    // `crate::fts_telemetry`.
 }

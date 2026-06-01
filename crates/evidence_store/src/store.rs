@@ -5152,70 +5152,91 @@ pub(crate) fn merged_fts_search(
     // match. The check uses `trim().is_empty()` rather than a
     // codepoint scan because the strip output's whitespace is
     // exactly the ASCII spaces we inserted at strip sites.
-    let trigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
-        if stripped_query.as_ref().trim().is_empty() {
-            // Telemetry: pure-stopword query collapsed to empty
-            // after stripping — the trigram lane is declined.
-            crate::fts_telemetry::record_lane_skip(
-                crate::fts_telemetry::SkipReason::CjkTrigramPureStopwordQuery,
-            );
-            return Ok(Vec::new());
-        }
-        // `prepare_cached` — see Branch 1 comment for rationale.
-        //
-        // Phase 1.9: the bound query parameter is
-        // `stripped_query.as_ref()` — NOT the raw `query` — so
-        // the FTS5 trigram MATCH runs against the same
-        // stopword-stripped content the index was written with
-        // (schema v16 contract). Using the raw query here would
-        // silently destroy recall: a `今日のオリンピック` query
-        // would window `日のオ` which the stripped body no
-        // longer contains.
-        let sql = trigram_lane_sql();
-        let mut stmt = conn.prepare_cached(sql)?;
-        let rows = stmt.query_map(
-            params![stripped_query.as_ref(), scope_bytes, limit_sql],
-            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?)),
-        )?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (id_bytes, rank) = row?;
-            // A malformed UUID in `evidence_fts_cjk` can only come
-            // from external corruption (the write path at
-            // `index_fts` always writes a valid 16-byte
-            // `Uuid::as_bytes`). Skip the offending row rather
-            // than aborting the whole trigram branch so the rest
-            // of the recall lane still merges into the unicode61
-            // result set. This matches the broader contract that
-            // the trigram lane is *purely additive*.
-            match slice_to_uuid(&id_bytes) {
-                Ok(uuid) => out.push((EvidenceId(uuid), rank)),
-                Err(_) => continue,
+    //
+    // Phase 1.10 sweep 1 (BUG-0001 fix): the skip-check is
+    // hoisted OUT of the closure so the skip-counter and
+    // lane-query-counter branches are mutually exclusive by
+    // construction — matches the bigram lane's `if let Some / else`
+    // pattern below. Prior to this restructure the closure
+    // returned `Ok(Vec::new())` on the skip path, which also
+    // matched the `if let Ok(trigram_rows)` arm and bumped
+    // `record_lane_query(CjkTrigram, 0)` for the very query that
+    // had just bumped `record_lane_skip(CjkTrigramPureStopwordQuery)`.
+    // That violated the `queries + skips = total_attempts`
+    // invariant documented on [`crate::fts_telemetry`].  The
+    // current shape makes that invariant a structural property
+    // of the surrounding `if / else`, not a logical one buried
+    // inside the closure.
+    if stripped_query.as_ref().trim().is_empty() {
+        // Telemetry: pure-stopword query collapsed to empty
+        // after stripping — the trigram lane is declined
+        // without invoking SQLite.
+        crate::fts_telemetry::record_lane_skip(
+            crate::fts_telemetry::SkipReason::CjkTrigramPureStopwordQuery,
+        );
+    } else {
+        let trigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
+            // `prepare_cached` — see Branch 1 comment for rationale.
+            //
+            // Phase 1.9: the bound query parameter is
+            // `stripped_query.as_ref()` — NOT the raw `query` — so
+            // the FTS5 trigram MATCH runs against the same
+            // stopword-stripped content the index was written with
+            // (schema v16 contract). Using the raw query here would
+            // silently destroy recall: a `今日のオリンピック` query
+            // would window `日のオ` which the stripped body no
+            // longer contains.
+            let sql = trigram_lane_sql();
+            let mut stmt = conn.prepare_cached(sql)?;
+            let rows = stmt.query_map(
+                params![stripped_query.as_ref(), scope_bytes, limit_sql],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?)),
+            )?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id_bytes, rank) = row?;
+                // A malformed UUID in `evidence_fts_cjk` can only come
+                // from external corruption (the write path at
+                // `index_fts` always writes a valid 16-byte
+                // `Uuid::as_bytes`). Skip the offending row rather
+                // than aborting the whole trigram branch so the rest
+                // of the recall lane still merges into the unicode61
+                // result set. This matches the broader contract that
+                // the trigram lane is *purely additive*.
+                match slice_to_uuid(&id_bytes) {
+                    Ok(uuid) => out.push((EvidenceId(uuid), rank)),
+                    Err(_) => continue,
+                }
             }
+            Ok(out)
+        })();
+        if let Ok(trigram_rows) = trigram_attempt {
+            // Phase 1.8: apply the trigram lane's inter-lane weight
+            // (`EVIDENCE_FTS_CJK_LANE_WEIGHT`, < 1.0) before merging
+            // so the trigram lane's precision penalty propagates into
+            // the cross-lane min-rank comparison. See
+            // [`crate::fts_weights`] for the precision-vs-recall
+            // rationale.
+            let row_count = u64::try_from(trigram_rows.len()).unwrap_or(u64::MAX);
+            for (id, rank) in trigram_rows {
+                merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_CJK_LANE_WEIGHT);
+            }
+            // Telemetry: record the lane invocation + contributed
+            // row count.  The skip branch above is structurally
+            // mutually exclusive with this arm (see the doc
+            // comment on the outer `if / else`), so the
+            // `queries + skips = total_attempts` contract holds
+            // by construction.  An `Err` outcome of the
+            // swallow-scope is silently dropped (same
+            // architectural rule as the doc-comment "errors
+            // swallowed" contract); the telemetry counter is
+            // bumped only when the lane contributed rows that
+            // the merge actually consumed.
+            crate::fts_telemetry::record_lane_query(
+                crate::fts_telemetry::Lane::CjkTrigram,
+                row_count,
+            );
         }
-        Ok(out)
-    })();
-    if let Ok(trigram_rows) = trigram_attempt {
-        // Phase 1.8: apply the trigram lane's inter-lane weight
-        // (`EVIDENCE_FTS_CJK_LANE_WEIGHT`, < 1.0) before merging
-        // so the trigram lane's precision penalty propagates into
-        // the cross-lane min-rank comparison. See
-        // [`crate::fts_weights`] for the precision-vs-recall
-        // rationale.
-        let row_count = u64::try_from(trigram_rows.len()).unwrap_or(u64::MAX);
-        for (id, rank) in trigram_rows {
-            merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_CJK_LANE_WEIGHT);
-        }
-        // Telemetry: record the lane invocation + contributed
-        // row count.  The skip-branch above already bumped the
-        // skips counter for the pure-stopword case, so the lane
-        // queries counter strictly tracks invocations that
-        // reached SQLite.  An `Err` outcome of the swallow-scope
-        // is silently dropped (same architectural rule as the
-        // doc-comment "errors swallowed" contract); the
-        // telemetry counter is bumped only when the lane
-        // contributed rows that the merge actually consumed.
-        crate::fts_telemetry::record_lane_query(crate::fts_telemetry::Lane::CjkTrigram, row_count);
     }
 
     // Branch 3: precomputed-bigram (additive recall). Errors

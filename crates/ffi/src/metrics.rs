@@ -1699,55 +1699,132 @@ mod tests {
         record_stopwords_stripped(StripSite::QueryTime, 13);
         record_stopwords_stripped(StripSite::V16Migration, 17);
 
+        // Mirror is read AFTER upstream so its values are a
+        // (potentially advanced) read of the same singleton;
+        // parallel tests may bump counters in between, so the
+        // mirror values are bounded *below* by the upstream
+        // snapshot.  This is the same monotonic-lower-bound
+        // pattern used by [`snapshot_reflects_counter_increments`]
+        // and by `lexicon_telemetry_mirror_round_trips` above.
+        // Phase 1.10 sweep 1 (INFO-0002 fix): the previous
+        // `assert_eq!(mirror.field, upstream.field)` shape was
+        // accidentally racy — if any parallel test (today only
+        // `store_integration::fts_telemetry_*`, but trivially
+        // any future ffi-binary test that touches FTS) bumped a
+        // counter between the two reads, the assertion would
+        // fail.  Switching to `>=` makes the test correct under
+        // arbitrary concurrent telemetry traffic and matches
+        // the lexicon mirror test pattern verbatim.
         let upstream = evidence_store::fts_telemetry::snapshot();
         let mirror = fts_telemetry_snapshot();
 
-        assert_eq!(
-            mirror.unicode61_lane_queries_total,
-            upstream.unicode61_lane_queries_total
+        // Verify each FFI mirror field plumbs through to the
+        // corresponding upstream counter.  Lower-bound by the
+        // upstream value because parallel tests cannot decrement
+        // counters but may increment them between the two reads.
+        assert!(
+            mirror.unicode61_lane_queries_total >= upstream.unicode61_lane_queries_total,
+            "unicode61_lane_queries_total mirror < upstream"
         );
-        assert_eq!(
-            mirror.unicode61_lane_rows_total,
-            upstream.unicode61_lane_rows_total
+        assert!(
+            mirror.unicode61_lane_rows_total >= upstream.unicode61_lane_rows_total,
+            "unicode61_lane_rows_total mirror < upstream"
         );
-        assert_eq!(
-            mirror.cjk_trigram_lane_queries_total,
-            upstream.cjk_trigram_lane_queries_total
+        assert!(
+            mirror.cjk_trigram_lane_queries_total >= upstream.cjk_trigram_lane_queries_total,
+            "cjk_trigram_lane_queries_total mirror < upstream"
         );
-        assert_eq!(
-            mirror.cjk_trigram_lane_rows_total,
-            upstream.cjk_trigram_lane_rows_total
+        assert!(
+            mirror.cjk_trigram_lane_rows_total >= upstream.cjk_trigram_lane_rows_total,
+            "cjk_trigram_lane_rows_total mirror < upstream"
         );
-        assert_eq!(
-            mirror.cjk_trigram_lane_skips_pure_stopword_query_total,
-            upstream.cjk_trigram_lane_skips_pure_stopword_query_total
+        assert!(
+            mirror.cjk_trigram_lane_skips_pure_stopword_query_total
+                >= upstream.cjk_trigram_lane_skips_pure_stopword_query_total,
+            "cjk_trigram_lane_skips_pure_stopword_query_total mirror < upstream"
         );
-        assert_eq!(
-            mirror.bigram_lane_queries_total,
-            upstream.bigram_lane_queries_total
+        assert!(
+            mirror.bigram_lane_queries_total >= upstream.bigram_lane_queries_total,
+            "bigram_lane_queries_total mirror < upstream"
         );
-        assert_eq!(
-            mirror.bigram_lane_rows_total,
-            upstream.bigram_lane_rows_total
+        assert!(
+            mirror.bigram_lane_rows_total >= upstream.bigram_lane_rows_total,
+            "bigram_lane_rows_total mirror < upstream"
         );
-        assert_eq!(
-            mirror.bigram_lane_skips_no_cjk_query_total,
-            upstream.bigram_lane_skips_no_cjk_query_total
+        assert!(
+            mirror.bigram_lane_skips_no_cjk_query_total
+                >= upstream.bigram_lane_skips_no_cjk_query_total,
+            "bigram_lane_skips_no_cjk_query_total mirror < upstream"
         );
-        assert_eq!(
-            mirror.index_write_stopwords_stripped_total,
-            upstream.index_write_stopwords_stripped_total
+        assert!(
+            mirror.index_write_stopwords_stripped_total
+                >= upstream.index_write_stopwords_stripped_total,
+            "index_write_stopwords_stripped_total mirror < upstream"
         );
-        assert_eq!(
-            mirror.query_time_stopwords_stripped_total,
-            upstream.query_time_stopwords_stripped_total
+        assert!(
+            mirror.query_time_stopwords_stripped_total
+                >= upstream.query_time_stopwords_stripped_total,
+            "query_time_stopwords_stripped_total mirror < upstream"
         );
-        assert_eq!(
-            mirror.v16_migration_stopwords_stripped_total,
-            upstream.v16_migration_stopwords_stripped_total
+        assert!(
+            mirror.v16_migration_stopwords_stripped_total
+                >= upstream.v16_migration_stopwords_stripped_total,
+            "v16_migration_stopwords_stripped_total mirror < upstream"
         );
 
-        // Sanity: the upstream counters actually moved.
-        assert!(upstream.unicode61_lane_queries_total > before.unicode61_lane_queries_total);
+        // Reverse direction: every field we bumped above must
+        // show movement from baseline through the FFI mirror.
+        // This is what catches a silently-zeroed projection: if
+        // the mirror dropped `unicode61_lane_queries_total`,
+        // `mirror.unicode61_lane_queries_total - before.unicode61_lane_queries_total`
+        // would be 0 even though our increment added 1.
+        assert!(
+            mirror.unicode61_lane_queries_total > before.unicode61_lane_queries_total,
+            "unicode61_lane_queries_total not plumbed"
+        );
+        assert!(
+            mirror.unicode61_lane_rows_total > before.unicode61_lane_rows_total,
+            "unicode61_lane_rows_total not plumbed"
+        );
+        assert!(
+            mirror.cjk_trigram_lane_queries_total > before.cjk_trigram_lane_queries_total,
+            "cjk_trigram_lane_queries_total not plumbed"
+        );
+        assert!(
+            mirror.cjk_trigram_lane_rows_total > before.cjk_trigram_lane_rows_total,
+            "cjk_trigram_lane_rows_total not plumbed"
+        );
+        assert!(
+            mirror.cjk_trigram_lane_skips_pure_stopword_query_total
+                > before.cjk_trigram_lane_skips_pure_stopword_query_total,
+            "cjk_trigram_lane_skips_pure_stopword_query_total not plumbed"
+        );
+        assert!(
+            mirror.bigram_lane_queries_total > before.bigram_lane_queries_total,
+            "bigram_lane_queries_total not plumbed"
+        );
+        assert!(
+            mirror.bigram_lane_rows_total > before.bigram_lane_rows_total,
+            "bigram_lane_rows_total not plumbed"
+        );
+        assert!(
+            mirror.bigram_lane_skips_no_cjk_query_total
+                > before.bigram_lane_skips_no_cjk_query_total,
+            "bigram_lane_skips_no_cjk_query_total not plumbed"
+        );
+        assert!(
+            mirror.index_write_stopwords_stripped_total
+                > before.index_write_stopwords_stripped_total,
+            "index_write_stopwords_stripped_total not plumbed"
+        );
+        assert!(
+            mirror.query_time_stopwords_stripped_total > before.query_time_stopwords_stripped_total,
+            "query_time_stopwords_stripped_total not plumbed"
+        );
+        assert!(
+            mirror.v16_migration_stopwords_stripped_total
+                > before.v16_migration_stopwords_stripped_total,
+            "v16_migration_stopwords_stripped_total not plumbed"
+        );
     }
 }
