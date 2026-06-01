@@ -27,6 +27,7 @@ pub mod lexicon;
 pub mod lexicon_telemetry;
 pub mod pipeline;
 pub mod promotion;
+pub mod retrieval_telemetry;
 pub mod types;
 
 pub use citation::{
@@ -52,4 +53,5 @@ pub use lexicon::{
 pub use lexicon_telemetry::{snapshot as lexicon_telemetry_snapshot, LexiconTelemetrySnapshot};
 pub use pipeline::{default_pipeline, ObservationPipeline, PipelineRunOutput};
 pub use promotion::{should_promote, ChannelPromotionPolicy, PromotionReason, PromotionResult};
+pub use retrieval_telemetry::{snapshot as retrieval_metrics_snapshot, RetrievalMetricsSnapshot};
 pub use types::{Observation, ObservationType};

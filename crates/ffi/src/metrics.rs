@@ -784,6 +784,18 @@ pub struct MetricsSnapshot {
     /// rule.
     #[serde(default)]
     pub vector_telemetry: VectorTelemetry,
+    /// Unified retrieval-telemetry view (Phase 2.0) — the three
+    /// per-lane telemetry sub-structs grouped under one namespace
+    /// for dashboard ergonomics.  Always populated identically to
+    /// the flat [`Self::fts_telemetry`] / [`Self::lexicon_telemetry`]
+    /// / [`Self::vector_telemetry`] fields; the
+    /// `metrics_snapshot_retrieval_metrics_matches_flat_fields`
+    /// test below locks the parity.  `#[serde(default)]` per the
+    /// additive-wire-contract rule — older emitters' JSON lacks
+    /// this field and deserialises to
+    /// [`RetrievalMetrics::default()`] (all zeroes).
+    #[serde(default)]
+    pub retrieval_metrics: RetrievalMetrics,
 }
 
 /// Multilingual lexicon-path observability counters mirrored from
@@ -1079,6 +1091,60 @@ pub struct VectorTelemetry {
     pub model_tag_dimension_violations_total: u64,
 }
 
+/// Unified retrieval-telemetry read surface (Phase 2.0) — the
+/// three per-lane telemetry sub-structs grouped under a single
+/// namespace for dashboard ergonomics.
+///
+/// Mirrors the upstream
+/// [`observation_engine::RetrievalMetricsSnapshot`] verbatim:
+/// hosts that want the "all retrieval counters in one place"
+/// view consume [`MetricsSnapshot::retrieval_metrics`]; hosts
+/// that still consume the flat `lexicon_telemetry` /
+/// `fts_telemetry` / `vector_telemetry` fields on
+/// [`MetricsSnapshot`] continue to work unchanged — the two
+/// views are populated from the same three upstream singletons
+/// in [`snapshot`], so they always carry the same values
+/// (subject to the same sub-second cross-lane skew documented
+/// on the upstream module).
+///
+/// The duplication is intentional: removing the flat fields
+/// would be a wire-breaking change, and the grouped view
+/// doesn't *replace* the flat view — it offers a second,
+/// nested read shape that dashboard code can consume by
+/// expanding one field instead of locating three among the
+/// 50+ unrelated host-API call counters on [`MetricsSnapshot`].
+///
+/// Wire-contract invariants pinned by the
+/// `metrics_snapshot_retrieval_metrics_matches_flat_fields`
+/// test below:
+/// * `retrieval_metrics.fts == fts_telemetry`
+/// * `retrieval_metrics.lexicon == lexicon_telemetry`
+/// * `retrieval_metrics.vector == vector_telemetry`
+///
+/// New fields must use `#[serde(default)]` per the additive-
+/// wire-contract rule documented on [`MetricsSnapshot`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
+pub struct RetrievalMetrics {
+    /// FTS5-path telemetry — per-lane query / row totals,
+    /// recall-lane structural skips, stopword-strip volumes
+    /// per call site.  Identical to
+    /// [`MetricsSnapshot::fts_telemetry`].
+    #[serde(default)]
+    pub fts: FtsTelemetry,
+    /// Lexicon-path telemetry — per-BCP-47 lexicon hits, match-
+    /// strategy fires, Arabic / Hebrew clitic-peel depth
+    /// distribution.  Identical to
+    /// [`MetricsSnapshot::lexicon_telemetry`].
+    #[serde(default)]
+    pub lexicon: LexiconTelemetry,
+    /// Vector-path telemetry — embedding-call-site volumes,
+    /// `evidence_embeddings` cache outcomes, adapter error
+    /// variants, `model_tag` rotation-rule violations.  Identical
+    /// to [`MetricsSnapshot::vector_telemetry`].
+    #[serde(default)]
+    pub vector: VectorTelemetry,
+}
+
 /// Per-kind error counters.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct ErrorCounters {
@@ -1142,6 +1208,15 @@ pub fn snapshot() -> MetricsSnapshot {
     // exactly one read — this is documented on the field.
     inc_metrics_snapshot();
     let m = metrics();
+    // Phase 2.0: read the upstream retrieval-telemetry aggregator
+    // ONCE and project into both the flat fields and the new
+    // grouped `retrieval_metrics` view from the same read pass —
+    // see the populate-block comment below for why a single read
+    // is required to preserve the documented parity invariant.
+    let upstream_retrieval = observation_engine::retrieval_telemetry::snapshot();
+    let fts_view = project_fts_telemetry(&upstream_retrieval.fts);
+    let lex_view = project_lexicon_telemetry(&upstream_retrieval.lexicon);
+    let vec_view = project_vector_telemetry(&upstream_retrieval.vector);
     MetricsSnapshot {
         open_store_total: m.open_store_total.load(Ordering::Relaxed),
         open_store_with_resolver_total: m.open_store_with_resolver_total.load(Ordering::Relaxed),
@@ -1252,19 +1327,37 @@ pub fn snapshot() -> MetricsSnapshot {
         open_handles: m.open_handles.load(Ordering::Relaxed),
         tombstone_count: m.tombstone_count.load(Ordering::Relaxed),
         boot_unix_secs: m.boot_unix_secs.load(Ordering::Relaxed),
-        lexicon_telemetry: lexicon_telemetry_snapshot(),
-        fts_telemetry: fts_telemetry_snapshot(),
-        vector_telemetry: vector_telemetry_snapshot(),
+        // Phase 2.0: read the upstream aggregator once and project
+        // into BOTH the flat fields and the grouped `retrieval_metrics`
+        // view from the same read pass.  This guarantees the
+        // `metrics_snapshot_retrieval_metrics_matches_flat_fields`
+        // parity invariant holds even under concurrent telemetry
+        // writes — if we did two separate reads (one for the flat
+        // fields, one for the grouped view), a writer that bumps a
+        // counter between the two reads would leave the two views
+        // disagreeing on the same `MetricsSnapshot` value, which
+        // would break the wire contract documented on
+        // [`MetricsSnapshot::retrieval_metrics`].
+        lexicon_telemetry: lex_view.clone(),
+        fts_telemetry: fts_view.clone(),
+        vector_telemetry: vec_view.clone(),
+        retrieval_metrics: RetrievalMetrics {
+            fts: fts_view,
+            lexicon: lex_view,
+            vector: vec_view,
+        },
     }
 }
 
-/// Read the upstream
-/// [`observation_engine::lexicon_telemetry::snapshot`] and
-/// project it into the FFI mirror struct.  One-to-one field
-/// mapping by name — the field lists are kept symmetric by the
+/// Project an upstream
+/// [`observation_engine::LexiconTelemetrySnapshot`] into the FFI
+/// mirror struct.  Pure (no I/O) — separated from the
+/// singleton-read so [`snapshot`] can read the upstream
+/// aggregator once and project into both the flat fields and the
+/// grouped [`RetrievalMetrics`] view from the same read pass.
+/// The field lists are kept symmetric by the
 /// `lexicon_telemetry_mirror_field_parity` test below.
-fn lexicon_telemetry_snapshot() -> LexiconTelemetry {
-    let s = observation_engine::lexicon_telemetry::snapshot();
+fn project_lexicon_telemetry(s: &observation_engine::LexiconTelemetrySnapshot) -> LexiconTelemetry {
     LexiconTelemetry {
         hits_ar: s.hits_ar,
         hits_bo: s.hits_bo,
@@ -1306,11 +1399,11 @@ fn lexicon_telemetry_snapshot() -> LexiconTelemetry {
     }
 }
 
-/// Read the upstream
-/// [`evidence_store::fts_telemetry::snapshot`] and project it
-/// into the FFI mirror struct.
-fn fts_telemetry_snapshot() -> FtsTelemetry {
-    let s = evidence_store::fts_telemetry::snapshot();
+/// Project an upstream
+/// [`evidence_store::fts_telemetry::FtsTelemetrySnapshot`] into
+/// the FFI mirror struct.  Pure (no I/O) — see
+/// [`project_lexicon_telemetry`] for the rationale.
+fn project_fts_telemetry(s: &evidence_store::fts_telemetry::FtsTelemetrySnapshot) -> FtsTelemetry {
     FtsTelemetry {
         unicode61_lane_queries_total: s.unicode61_lane_queries_total,
         unicode61_lane_rows_total: s.unicode61_lane_rows_total,
@@ -1328,13 +1421,15 @@ fn fts_telemetry_snapshot() -> FtsTelemetry {
     }
 }
 
-/// Read the upstream
-/// [`evidence_store::vector_telemetry::snapshot`] and project it
-/// into the FFI mirror struct.  One-to-one field mapping by name —
-/// the field lists are kept symmetric by the
+/// Project an upstream
+/// [`evidence_store::vector_telemetry::VectorTelemetrySnapshot`]
+/// into the FFI mirror struct.  Pure (no I/O) — see
+/// [`project_lexicon_telemetry`] for the rationale.  The field
+/// lists are kept symmetric by the
 /// `vector_telemetry_mirror_round_trips` test below.
-fn vector_telemetry_snapshot() -> VectorTelemetry {
-    let s = evidence_store::vector_telemetry::snapshot();
+fn project_vector_telemetry(
+    s: &evidence_store::vector_telemetry::VectorTelemetrySnapshot,
+) -> VectorTelemetry {
     VectorTelemetry {
         query_embeddings_total: s.query_embeddings_total,
         index_write_embeddings_total: s.index_write_embeddings_total,
@@ -1349,6 +1444,38 @@ fn vector_telemetry_snapshot() -> VectorTelemetry {
         inference_failures_total: s.inference_failures_total,
         model_tag_dimension_violations_total: s.model_tag_dimension_violations_total,
     }
+}
+
+/// Read the upstream
+/// [`observation_engine::lexicon_telemetry::snapshot`] and
+/// project it into the FFI mirror struct.  Test-only convenience
+/// wrapper — the production [`snapshot`] path now goes through the
+/// upstream aggregator in
+/// [`observation_engine::retrieval_telemetry::snapshot`] and the
+/// pure [`project_lexicon_telemetry`] helper instead, so this
+/// wrapper is gated to `#[cfg(test)]` to keep the lib build free
+/// of dead-code warnings.
+#[cfg(test)]
+fn lexicon_telemetry_snapshot() -> LexiconTelemetry {
+    project_lexicon_telemetry(&observation_engine::lexicon_telemetry::snapshot())
+}
+
+/// Read the upstream
+/// [`evidence_store::fts_telemetry::snapshot`] and project it
+/// into the FFI mirror struct.  See [`lexicon_telemetry_snapshot`]
+/// for the relationship to the new aggregator-based read path.
+#[cfg(test)]
+fn fts_telemetry_snapshot() -> FtsTelemetry {
+    project_fts_telemetry(&evidence_store::fts_telemetry::snapshot())
+}
+
+/// Read the upstream
+/// [`evidence_store::vector_telemetry::snapshot`] and project it
+/// into the FFI mirror struct.  See [`lexicon_telemetry_snapshot`]
+/// for the relationship to the new aggregator-based read path.
+#[cfg(test)]
+fn vector_telemetry_snapshot() -> VectorTelemetry {
+    project_vector_telemetry(&evidence_store::vector_telemetry::snapshot())
 }
 
 /// Wrap one public FFI entry point with the metrics call /
@@ -2122,6 +2249,113 @@ mod tests {
             mirror.model_tag_dimension_violations_total
                 > before.model_tag_dimension_violations_total,
             "model_tag_dimension_violations_total not plumbed"
+        );
+    }
+
+    /// Phase 2.0 parity invariant: the flat
+    /// `fts_telemetry` / `lexicon_telemetry` / `vector_telemetry`
+    /// fields on a single [`MetricsSnapshot`] value MUST equal
+    /// the grouped `retrieval_metrics.fts` /
+    /// `retrieval_metrics.lexicon` / `retrieval_metrics.vector`
+    /// sub-fields of the same snapshot.
+    ///
+    /// This is the wire-contract pinned by the doc on
+    /// [`MetricsSnapshot::retrieval_metrics`]: the two views are
+    /// populated from a single upstream
+    /// [`observation_engine::retrieval_telemetry::snapshot`] read
+    /// pass in [`super::snapshot`], so they cannot drift even
+    /// under heavy concurrent telemetry writes.  Without the
+    /// single-read-pass discipline this would be flaky — see
+    /// the comment in the `snapshot` populate block.
+    #[test]
+    fn metrics_snapshot_retrieval_metrics_matches_flat_fields() {
+        // Drive every retrieval lane briefly before snapshotting,
+        // so any future divergence between the two views surfaces
+        // as a non-zero counter mismatch rather than a trivial
+        // all-zero pass-through.
+        let registry = observation_engine::default_registry();
+        let _ = registry.lexicon_for_or_english(Some("en"));
+        let _ = registry.lexicon_for_or_english(Some("ja"));
+        let _ = registry.lexicon_for_or_english(Some("ar"));
+
+        let snap = super::snapshot();
+
+        // The three flat fields MUST equal the three grouped
+        // sub-fields, byte for byte, on the same snapshot.
+        assert_eq!(
+            snap.fts_telemetry, snap.retrieval_metrics.fts,
+            "flat fts_telemetry must equal retrieval_metrics.fts on the same snapshot"
+        );
+        assert_eq!(
+            snap.lexicon_telemetry, snap.retrieval_metrics.lexicon,
+            "flat lexicon_telemetry must equal retrieval_metrics.lexicon on the same snapshot"
+        );
+        assert_eq!(
+            snap.vector_telemetry, snap.retrieval_metrics.vector,
+            "flat vector_telemetry must equal retrieval_metrics.vector on the same snapshot"
+        );
+    }
+
+    /// Phase 2.0 wire-default contract: a freshly-constructed
+    /// [`RetrievalMetrics`] (via the `Default` derive) is all-zero
+    /// across all three sub-fields, and serialises to a JSON
+    /// object with three sub-objects that themselves serialise to
+    /// all-zero JSON.
+    ///
+    /// Combined with the `#[serde(default)]` attribute on
+    /// [`MetricsSnapshot::retrieval_metrics`], this means an
+    /// older emitter that never knew about `retrieval_metrics`
+    /// will produce JSON that deserialises under a newer reader
+    /// to a `MetricsSnapshot` whose `retrieval_metrics` is the
+    /// all-zero default — preserving the additive-wire-contract
+    /// rule documented on [`MetricsSnapshot`].
+    #[test]
+    fn retrieval_metrics_default_is_all_zero_and_round_trips() {
+        let zero = RetrievalMetrics::default();
+        let json = serde_json::to_string(&zero).expect("RetrievalMetrics serialises");
+        let back: RetrievalMetrics =
+            serde_json::from_str(&json).expect("RetrievalMetrics deserialises");
+        assert_eq!(back, zero);
+
+        // Cross-check: an empty JSON object should deserialise to
+        // the all-zero default via the per-field `#[serde(default)]`
+        // attributes.  This is the wire-contract invariant for
+        // forward compatibility with older snapshot emitters.
+        let from_empty: RetrievalMetrics =
+            serde_json::from_str("{}").expect("empty JSON deserialises to default");
+        assert_eq!(from_empty, zero);
+
+        // The flat MetricsSnapshot JSON must also accept missing
+        // `retrieval_metrics`: an older emitter's JSON that lacks
+        // the field entirely must still deserialise under the new
+        // reader.  We test this by serialising a full snapshot,
+        // surgically removing the `retrieval_metrics` key (simulating
+        // an older emitter that doesn't know about the field), and
+        // confirming the result still deserialises with
+        // `retrieval_metrics == RetrievalMetrics::default()`.
+        let snap = super::snapshot();
+        let mut as_value: serde_json::Value =
+            serde_json::to_value(&snap).expect("MetricsSnapshot serialises to JSON value");
+        let removed = as_value
+            .as_object_mut()
+            .expect("MetricsSnapshot JSON is an object")
+            .remove("retrieval_metrics");
+        assert!(
+            removed.is_some(),
+            "retrieval_metrics key must be present in a fresh MetricsSnapshot's JSON"
+        );
+        let without_retrieval_metrics: MetricsSnapshot = serde_json::from_value(as_value)
+            .expect("MetricsSnapshot JSON without retrieval_metrics deserialises");
+        assert_eq!(
+            without_retrieval_metrics.retrieval_metrics,
+            RetrievalMetrics::default(),
+            "missing retrieval_metrics field must deserialise to all-zero default"
+        );
+        // The other flat fields must be preserved across the round trip.
+        assert_eq!(without_retrieval_metrics.ingest_total, snap.ingest_total);
+        assert_eq!(
+            without_retrieval_metrics.lexicon_telemetry,
+            snap.lexicon_telemetry
         );
     }
 }
