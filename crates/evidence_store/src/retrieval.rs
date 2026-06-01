@@ -294,8 +294,16 @@ impl<'a> HybridRetriever<'a> {
         for mut hit in candidates {
             let vector_score = match body_lookup.get(&hit.evidence_id) {
                 Some(body) => match model.embed(body) {
-                    Ok(v) => similarity_to_score(cosine_similarity(&query_vec, &v)),
-                    Err(_) => 0.0,
+                    Ok(v) => {
+                        crate::vector_telemetry::record_embedding_computed(
+                            crate::vector_telemetry::EmbedSite::LiveBody,
+                        );
+                        similarity_to_score(cosine_similarity(&query_vec, &v))
+                    }
+                    Err(err) => {
+                        crate::vector_telemetry::record_embedding_error_from(&err);
+                        0.0
+                    }
                 },
                 None => 0.0,
             };

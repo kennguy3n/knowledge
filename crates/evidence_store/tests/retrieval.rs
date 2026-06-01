@@ -1358,6 +1358,12 @@ fn vector_telemetry_cross_lingual_recall_via_rerank() {
 
     let retriever = HybridRetriever::new(&store)
         .with_embedding_model(MultilingualConceptMockModel, "ml-mock-v1");
+
+    // Capture the telemetry baseline immediately before the call so the
+    // delta is invariant under any other test bumping the same
+    // process-singleton counters concurrently or sequentially.
+    let before = evidence_store::vector_telemetry::snapshot();
+
     let reranked = retriever
         .rerank_with_embeddings("prévisions météo", candidates, &bodies)
         .expect("rerank ok");
@@ -1375,6 +1381,24 @@ fn vector_telemetry_cross_lingual_recall_via_rerank() {
          weather={weather_score}, cooking={cooking_score}",
         weather_score = weather_hit.vector_score,
         cooking_score = cooking_hit.vector_score,
+    );
+
+    // Regression coverage for the Phase-1.11 sweep-1 Bug fix:
+    // `rerank_with_embeddings` MUST bump `query_embeddings_total` once
+    // for the query embed AND `live_body_embeddings_total` once per
+    // body it embeds.  Before the fix the body-embed call site at
+    // `retrieval.rs:296` was silently uninstrumented; this assertion
+    // would have caught that.  See PR #110 Devin Review sweep 1.
+    let after = evidence_store::vector_telemetry::snapshot();
+    assert_eq!(
+        after.query_embeddings_total - before.query_embeddings_total,
+        1,
+        "rerank_with_embeddings must bump query_embeddings_total exactly once"
+    );
+    assert_eq!(
+        after.live_body_embeddings_total - before.live_body_embeddings_total,
+        bodies.len() as u64,
+        "rerank_with_embeddings must bump live_body_embeddings_total once per body embedded"
     );
 }
 
