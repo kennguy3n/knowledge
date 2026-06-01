@@ -81,7 +81,7 @@ zeroize = { version = "1", features = ["derive"] }
 # (PQ-crypto callsites import `rand_core::OsRng` from the 0.6 surface;
 # everything else uses `rand::rng()` / `rand::rngs::OsRng` from 0.9).
 rand_core = { version = "0.6", features = ["std"] }
-rand = "0.9"
+rand = "0.10"
 
 # Post-quantum + classical KEM
 x25519-dalek = { version = "2", features = ["static_secrets"] }
