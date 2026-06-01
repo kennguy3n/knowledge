@@ -914,6 +914,46 @@ mod tests {
     }
 
     #[test]
+    fn first_token_with_arabic_clitics_languages_are_arabic_only_for_now() {
+        // Phase 1.6 sweep-4 (Devin Review #3331706213): the
+        // proclitic-aware first-token strategy was introduced
+        // specifically for the Arabic agglutinative-prefix
+        // morphology (و / ف / ب / ل / ال / أل clitically attaching
+        // to the next word). It is NOT a generic "FirstToken with
+        // some script-specific prefix peeling" — the peel inventory
+        // is Arabic-specific, references Arabic-only orthography,
+        // and would over-peel or no-op on any non-Arabic script.
+        //
+        // Pin exclusivity to Arabic for the same reason the
+        // sibling `first_bigram_languages_are_vietnamese_only_for_now`
+        // test pins FirstBigram to Vietnamese: adding a second
+        // FirstTokenWithArabicClitics language must be an
+        // intentional decision that updates both the peel inventory
+        // (today's `ARABIC_PROCLITIC_PREFIXES` constant is named
+        // explicitly "ARABIC_*") AND this test in lockstep. The
+        // most likely incoming candidates (Farsi `fa`, Urdu `ur`,
+        // Sorani Kurdish `ckb`, Pashto `ps`, Sindhi `sd`) share
+        // SOME proclitic patterns with Arabic but have script-
+        // specific differences that would require a per-language
+        // peel inventory — silently sharing Arabic's would
+        // introduce false positives on those languages.
+        let expected_clitic_aware: std::collections::HashSet<&str> = ["ar"].into_iter().collect();
+        for tag in SUPPORTED_PRIMARY_TAGS {
+            let strat = matching_strategy_for(tag).unwrap();
+            let is_clitic_aware = strat == InterrogativeMatch::FirstTokenWithArabicClitics;
+            assert_eq!(
+                is_clitic_aware,
+                expected_clitic_aware.contains(tag),
+                "tag {tag}: clitic-aware expected={}, got strategy={:?} \
+                 — FirstTokenWithArabicClitics must remain Arabic-only \
+                 (see test comment for rationale)",
+                expected_clitic_aware.contains(tag),
+                strat
+            );
+        }
+    }
+
+    #[test]
     fn no_first_token_entry_contains_tokeniser_boundary_chars() {
         // Devin Review #BUG-0001: an interrogative entry that
         // contains a non-alphabetic character is unreachable
