@@ -141,8 +141,20 @@ pub enum MatchStrategy {
     FirstBigram,
     /// Any entry in the table that appears as a substring of
     /// the normalised sentence counts as a match. Used for
-    /// no-inter-word-whitespace scripts (CJK, Thai) where
-    /// boundary-based token comparison doesn't apply.
+    /// scripts where boundary-based token comparison doesn't
+    /// apply — either because the script lacks inter-word
+    /// whitespace (CJK Han, Thai, Lao, Khmer, Myanmar,
+    /// Tibetan) or because the script uses non-alphabetic
+    /// combining marks (Devanagari virama `U+094D`,
+    /// Tibetan tsheg `U+0F0B`, Khmer coeng `U+17D2`, Myanmar
+    /// virama/asat `U+1039`/`U+103A`) that `unicode61` treats
+    /// as token boundaries, fragmenting any meaningful
+    /// keyword. Hindi (Phase 1.1 sweep 2) and the four
+    /// Phase 1.5 lexicons (Tibetan / Khmer / Myanmar / Lao)
+    /// all use this strategy. Adding any future script that
+    /// shares either property (e.g. Tai Tham, Javanese,
+    /// Cham) should default to `Substring` unless the script
+    /// is provably whitespace-segmented at the word level.
     Substring,
 }
 
@@ -2202,10 +2214,22 @@ mod tests {
         // collides, this test fires before
         // `lao_khmer_myanmar_fact_shaped_without_whitespace`
         // does, with a much more precise error message.
+        //
+        // Tibetan is included as a defense-in-depth case
+        // even though whatlang 0.18 does not ship a
+        // Lang::Bod classifier — explicit-tag callers via
+        // FFI / connector pipelines that tag bodies as `bo`
+        // would still invoke the Tibetan lexicon, so a
+        // keyword-vs-declarative collision IS reachable in
+        // production via that path. The canonical Tibetan
+        // declarative "ལྷ་ས་ནི་བོད་ཀྱི་རྒྱལ་ས་ཡིན།"
+        // ("Lhasa is the capital of Tibet") is the
+        // structural parallel to the km/my/lo cases.
         use crate::interrogatives::interrogatives_for;
         let reg = default_registry();
 
         let cases = [
+            ("bo", "ལྷ་ས་ནི་བོད་ཀྱི་རྒྱལ་ས་ཡིན"),
             ("km", "ភ្នំពេញគឺជារដ្ឋធានីនៃប្រទេសកម្ពុជា"),
             ("my", "ရန်ကုန်သည်မြန်မာနိုင်ငံ၏အကြီးဆုံးမြို့ဖြစ်သည်"),
             ("lo", "ວຽງຈັນເປັນນະຄອນຫຼວງຂອງປະເທດລາວ"),
