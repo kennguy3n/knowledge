@@ -3170,6 +3170,17 @@ impl EvidenceStore {
     ///   tables retain tokenised plaintext for any row whose body
     ///   contains a CJK Han / Hiragana / Katakana / Thai
     ///   codepoint, regardless of AEAD key.
+    /// * `evidence_fts_bigram` — the v15 precomputed-bigram
+    ///   recall lane (Phase 1.2.1). Same property as the trigram
+    ///   shadow: the table's `content` column retains the
+    ///   whitespace-separated overlapping 2-codepoint windows
+    ///   derived from the plaintext body for any row whose body
+    ///   contains a CJK / Thai codepoint, regardless of AEAD key.
+    ///   Because the windows are themselves a direct transform of
+    ///   the original plaintext (a windowed projection of the
+    ///   CJK / Thai portion onto `chars()[i..i+2]` pairs) they
+    ///   leak the same surface as the trigram shadow and so must
+    ///   be purged in the same transaction.
     /// * `evidence_embeddings` — cached `f32` vectors derived from
     ///   the plaintext body via an on-device embedding model. They
     ///   are not strictly plaintext but are still
@@ -3178,17 +3189,19 @@ impl EvidenceStore {
     /// This method runs a single transaction:
     ///
     /// 1. Look up every `evidence_id` belonging to `scope_id`.
-    /// 2. `DELETE FROM evidence_fts WHERE evidence_id IN (...)`
-    ///    *and* `DELETE FROM evidence_fts_cjk WHERE evidence_id
+    /// 2. `DELETE FROM evidence_fts WHERE evidence_id IN (...)`,
+    ///    `DELETE FROM evidence_fts_cjk WHERE evidence_id IN (...)`,
+    ///    *and* `DELETE FROM evidence_fts_bigram WHERE evidence_id
     ///    IN (...)` — FTS5 supports `DELETE` on virtual tables
     ///    (they do NOT have the append-only trigger that protects
-    ///    `evidence`). Both tables are deleted in the same
-    ///    transaction so they can never drift apart.
+    ///    `evidence`). All three FTS shadow tables are deleted in
+    ///    the same transaction so they can never drift apart.
     /// 3. `DELETE FROM evidence_embeddings WHERE evidence_id IN (...)`.
     /// 4. If — and only if — step 2 actually removed at least one
-    ///    FTS row across either table, issue `INSERT INTO
-    ///    evidence_fts(evidence_fts) VALUES('rebuild')` and
-    ///    `INSERT INTO evidence_fts_cjk(evidence_fts_cjk)
+    ///    FTS row across any of the three tables, issue
+    ///    `INSERT INTO evidence_fts(evidence_fts) VALUES('rebuild')`,
+    ///    `INSERT INTO evidence_fts_cjk(evidence_fts_cjk) VALUES('rebuild')`,
+    ///    *and* `INSERT INTO evidence_fts_bigram(evidence_fts_bigram)
     ///    VALUES('rebuild')` to truncate the FTS5 shadow tables
     ///    and re-tokenise from the surviving content rows.
     ///    Skipping this when zero FTS rows were deleted is what
