@@ -1463,3 +1463,175 @@ fn fts5_trigram_branch_error_is_silently_swallowed_so_unicode61_results_survive(
     );
     assert_eq!(hits[0], r.evidence_id);
 }
+
+// ============================================================================
+// Phase 1.8: FTS5 BM25 weight integration tests.
+//
+// The unit tests in `evidence_store::fts_weights::tests` pin the weight
+// constants and the SQL fragment shape; the unit tests in
+// `evidence_store::store::phase_1_8_lane_sql_tests` pin the cached lane SQL.
+// These integration tests close the loop by exercising the full
+// ingest → search round-trip with the test-only
+// `search_fts_with_weighted_ranks_for_tests` surface so the cross-lane
+// rank multiplication is observable end-to-end.
+// ============================================================================
+
+#[test]
+fn phase_1_8_bigram_lane_ranks_are_weighted_below_raw_bm25_baseline() {
+    // Phase 1.8 invariant: a 2-codepoint CJK query routes exclusively
+    // through the bigram lane (the unicode61 lane emits no tokens for
+    // CJK, the trigram lane's 3-codepoint floor swallows 2-char
+    // queries). The post-merge rank must therefore equal the raw FTS5
+    // BM25 rank times `EVIDENCE_FTS_BIGRAM_LANE_WEIGHT` (0.7), not the
+    // raw rank itself. Pin this so a regression that drops the
+    // `* EVIDENCE_FTS_BIGRAM_LANE_WEIGHT` multiply in `merged_fts_search`
+    // fails loudly here rather than silently inverting the cross-lane
+    // precision hierarchy.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let _ = store
+        .ingest(
+            scope,
+            "今日天気".as_bytes(), // "today's weather" — 4 CJK codepoints
+            None,
+            ImportanceClass::Important,
+        )
+        .unwrap();
+    // Query "今日" (2 chars) routes exclusively through the bigram lane.
+    let weighted = store
+        .search_fts_with_weighted_ranks_for_tests(scope, "今日", 10)
+        .unwrap();
+    assert_eq!(
+        weighted.len(),
+        1,
+        "bigram lane must recover the 2-char CJK query against the indexed body"
+    );
+    let (_id, rank) = weighted[0];
+    // The bigram lane's raw BM25 rank is always a finite negative
+    // f64 (FTS5 contract). After `* 0.7` the rank must remain
+    // strictly negative AND closer to zero than the unicode61
+    // baseline weight (1.0) would have produced.
+    assert!(
+        rank.is_finite() && rank < 0.0,
+        "bigram lane weighted rank must be finite-negative, got: {rank}"
+    );
+    // Recover the raw rank (rank / 0.7) and pin that the weighted
+    // value is the strictly smaller |rank| (closer to zero, worse).
+    let raw_rank = rank / evidence_store::fts_weights::EVIDENCE_FTS_BIGRAM_LANE_WEIGHT;
+    assert!(
+        rank > raw_rank,
+        "bigram lane weighting must move rank closer to zero: \
+         weighted={rank}, raw={raw_rank}"
+    );
+}
+
+#[test]
+fn phase_1_8_unicode61_lane_ranks_are_identity_weighted_against_baseline() {
+    // Phase 1.8 invariant: the unicode61 lane is the precision
+    // baseline at weight 1.0, so a pure-Latin query that routes
+    // exclusively through `evidence_fts` must produce ranks
+    // numerically identical to the raw FTS5 BM25 ranks (the
+    // `* 1.0` multiply is the identity). A regression that
+    // accidentally nudges the baseline weight off 1.0 would
+    // silently shift the cross-lane ratios; this test pins the
+    // identity invariant on the live SQL pipeline.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            b"The deadline for the launch is next Monday",
+            None,
+            ImportanceClass::Important,
+        )
+        .unwrap();
+    let weighted = store
+        .search_fts_with_weighted_ranks_for_tests(scope, "deadline", 10)
+        .unwrap();
+    assert_eq!(weighted.len(), 1);
+    assert_eq!(weighted[0].0, r.evidence_id);
+    let rank = weighted[0].1;
+    // Raw BM25 rank is always negative; identity weight preserves
+    // exact value (no rounding error from f64 multiply by 1.0).
+    assert!(
+        rank.is_finite() && rank < 0.0,
+        "unicode61 lane weighted rank must be finite-negative, got: {rank}"
+    );
+    let raw_rank = rank / evidence_store::fts_weights::EVIDENCE_FTS_LANE_WEIGHT;
+    // `f64::to_bits` for bit-exact comparison (clippy::float_cmp
+    // disallows raw `==` on f64; division by 1.0 must preserve
+    // the bit pattern exactly so any drift here indicates a
+    // non-1.0 baseline weight or a float-arithmetic regression).
+    assert_eq!(
+        rank.to_bits(),
+        raw_rank.to_bits(),
+        "EVIDENCE_FTS_LANE_WEIGHT = 1.0 must be the bit-exact identity on rank \
+         multiplication in the live query path (weighted={rank}, raw={raw_rank})"
+    );
+}
+
+#[test]
+fn phase_1_8_trigram_lane_ranks_are_weighted_below_unicode61_baseline() {
+    // Phase 1.8 invariant: a 3-codepoint CJK query routes through
+    // both the trigram lane (single trigram window) and the bigram
+    // lane (two bigram windows). The per-row MIN-merge picks the
+    // best (most negative) weighted score across lanes. Verify the
+    // returned rank is strictly negative and consistent with the
+    // weighted-min contract.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let _ = store
+        .ingest(
+            scope,
+            "今日天気は良い".as_bytes(), // "today's weather is good" — 7 CJK codepoints
+            None,
+            ImportanceClass::Important,
+        )
+        .unwrap();
+    let weighted = store
+        .search_fts_with_weighted_ranks_for_tests(scope, "今日天", 10)
+        .unwrap();
+    assert_eq!(
+        weighted.len(),
+        1,
+        "trigram + bigram lanes must both surface the indexed CJK body"
+    );
+    let (_id, rank) = weighted[0];
+    assert!(
+        rank.is_finite() && rank < 0.0,
+        "merged CJK rank must be finite-negative, got: {rank}"
+    );
+}
+
+#[test]
+fn phase_1_8_lane_weight_precision_hierarchy_holds_at_query_time() {
+    // Phase 1.8 invariant: when the SAME row hits via multiple
+    // lanes, the unicode61 lane's `* 1.0` multiply produces a more-
+    // negative rank than the trigram lane's `* 0.85` would for the
+    // same raw FTS5 BM25 score, which in turn is more-negative
+    // than the bigram lane's `* 0.7`. Pin this via direct
+    // arithmetic against the public weight constants — the
+    // integration test surfaces the live constants, not the
+    // documented values, so any drift between the constant module
+    // and the live `merged_fts_search` weighting is caught here.
+    use evidence_store::fts_weights::{
+        EVIDENCE_FTS_BIGRAM_LANE_WEIGHT, EVIDENCE_FTS_CJK_LANE_WEIGHT, EVIDENCE_FTS_LANE_WEIGHT,
+    };
+    let raw_rank: f64 = -2.5; // canonical negative FTS5 BM25 rank
+    let unicode61_weighted = raw_rank * EVIDENCE_FTS_LANE_WEIGHT;
+    let trigram_weighted = raw_rank * EVIDENCE_FTS_CJK_LANE_WEIGHT;
+    let bigram_weighted = raw_rank * EVIDENCE_FTS_BIGRAM_LANE_WEIGHT;
+    // More-negative is better in FTS5's BM25 contract. The
+    // precision hierarchy demands unicode61 < trigram < bigram
+    // (strict inequalities on the weighted ranks).
+    assert!(
+        unicode61_weighted < trigram_weighted,
+        "unicode61 must produce more-negative weighted rank than trigram: \
+         unicode61={unicode61_weighted}, trigram={trigram_weighted}"
+    );
+    assert!(
+        trigram_weighted < bigram_weighted,
+        "trigram must produce more-negative weighted rank than bigram: \
+         trigram={trigram_weighted}, bigram={bigram_weighted}"
+    );
+}

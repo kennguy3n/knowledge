@@ -18,16 +18,26 @@ default = []
 onnx-runtime = ["dep:ort", "dep:tokenizers"]
 # Exposes test-only hooks for downstream integration crates (chiefly
 # the `ffi` crate's unit + integration tests) to drive otherwise
-# inaccessible failure paths. Currently surfaces:
+# inaccessible code paths. Each hook is documented in detail in the
+# crate's top-level doc comment (`src/lib.rs` `# Test-only types`
+# section); the summary here is just a catalogue:
+#   * `EvidenceStore::search_fts_with_weighted_ranks_for_tests`
+#     (Phase 1.8) — exposes the cross-lane merged BM25 ranks (after
+#     lane-weight application) so the lane-weight precision
+#     hierarchy can be asserted from outside the crate.
 #   * `EvidenceStore::inject_with_transaction_failure_for_tests` /
 #     `take_injected_with_transaction_failure` — lets tests force
-#     [`EvidenceStore::with_transaction`] to fail on its next call so
+#     `EvidenceStore::with_transaction` to fail on its next call so
 #     callers (e.g. `apply_dispatch_outcome`'s commit path) can be
-#     exercised against a synthetic disk-write failure without a real
-#     SQLCipher I/O error.
+#     exercised against a synthetic disk-write failure without a
+#     real SQLCipher I/O error.
+#   * `EvidenceStore::write_legacy_approved_doc_payload_for_tests`
+#     — surgically reshapes `approved_document_payloads` back to
+#     its pre-v12 (Phase 8 / v10) inline layout so the v12-onwards
+#     re-migration code path has a controllable starting state.
 # Gated `cfg(any(test, feature = "test-support"))` so production
-# builds never compile the hook nor pay the runtime cost of checking
-# the injection slot on every `with_transaction` call.
+# builds never compile the hooks nor pay the runtime cost of
+# checking the injection slot on every `with_transaction` call.
 test-support = []
 
 [dependencies]

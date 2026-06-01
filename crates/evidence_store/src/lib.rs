@@ -16,6 +16,42 @@
 //! * A lexicon-only [`importance::ImportanceClassifier`] fallback used
 //!   when the SLM is not available (low-tier devices, bootstrap,
 //!   degraded-mode operation).
+//!
+//! # Test-only types (`test-support` feature)
+//!
+//! `CONTRIBUTING.md` requires that test-only types be gated behind
+//! `cfg(any(test, feature = "test-support"))` AND documented in the
+//! crate's top-level doc comment. The `test-support` feature is
+//! declared in `Cargo.toml` as a no-op feature flag (no transitive
+//! dependencies); enabling it exposes the following deterministic
+//! hooks for unit tests, integration tests, and the `ffi` crate's
+//! end-to-end tests:
+//!
+//! * `EvidenceStore::search_fts_with_weighted_ranks_for_tests` —
+//!   exposes the cross-lane merged BM25 ranks (after lane-weight
+//!   application) so Phase 1.8 tests can assert the precision
+//!   hierarchy `unicode61 < trigram < bigram` rather than just the
+//!   evidence-id ordering surfaced by the public retrieval path.
+//! * `EvidenceStore::inject_with_transaction_failure_for_tests` —
+//!   forces the next `EvidenceStore::with_transaction` call to fail
+//!   with a synthetic `EvidenceError::Sqlite(SQLITE_FULL)` so
+//!   commit-failure recovery paths (e.g. `apply_dispatch_outcome`,
+//!   `replace_approved_document`) can be exercised without a real
+//!   SQLCipher I/O error. Paired with a private
+//!   `take_injected_with_transaction_failure` consumer so the
+//!   injection fires exactly once.
+//! * `EvidenceStore::write_legacy_approved_doc_payload_for_tests` —
+//!   surgically reshapes `approved_document_payloads` back to its
+//!   pre-v12 (Phase 8 / v10) inline layout and writes a single
+//!   legacy-shape row so the v12-onwards re-migration code path
+//!   has a controllable starting state. The next
+//!   `EvidenceStore::open` silently re-migrates the row.
+//!
+//! The three hooks above are referenced as plain code spans rather
+//! than intra-doc links because their `pub` symbols are themselves
+//! gated behind `cfg(any(test, feature = "test-support"))`, so the
+//! links would be unresolved under default-features `cargo doc`.
+//! This mirrors the `crypto` crate's `Test-only types` precedent.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(missing_docs)]
@@ -24,6 +60,7 @@ pub mod bigram;
 pub mod classifier;
 pub mod embeddings;
 pub mod error;
+pub mod fts_weights;
 pub mod ids;
 pub mod importance;
 pub mod retrieval;
