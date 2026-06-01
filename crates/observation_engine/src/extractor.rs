@@ -405,16 +405,24 @@ fn split_sentences_with_terminator(text: &str) -> Vec<SentenceSlice<'_>> {
 ///    [`crate::interrogatives::interrogatives_for`] on the
 ///    sentence's primary BCP-47 subtag, then matched through the
 ///    unified [`crate::lexicon::table_matches`] entry point.
-///    CJK + Thai + Hindi use
+///    CJK + Thai + Indic-Brahmic (Hindi / Tibetan / Khmer /
+///    Myanmar / Lao) use
 ///    [`crate::lexicon::MatchStrategy::Substring`] (the
-///    interrogative may appear anywhere in the sentence);
+///    interrogative may appear anywhere in the sentence and the
+///    scripts are not whitespace-segmented at word boundaries);
 ///    Vietnamese uses
 ///    [`crate::lexicon::MatchStrategy::FirstBigram`] (Phase 1.1
 ///    #ANALYSIS-0004 closure — `tại sao` / `khi nào` / `vì sao`
 ///    are bigram entries while the bare unambiguous
-///    interrogatives still match via the first-token arm); the
-///    remaining space-separated languages use
-///    [`crate::lexicon::MatchStrategy::FirstToken`].
+///    interrogatives still match via the first-token arm);
+///    Arabic uses
+///    [`crate::lexicon::MatchStrategy::FirstTokenWithArabicClitics`]
+///    (Phase 1.6 — peels productive Arabic proclitic prefixes
+///    `و` / `ف` / `ب` / `ل` and the 2-char definite article
+///    `ال` / `أل` from the first token before re-checking
+///    equality, so `وكيف` / `فمتى` / `بأي` / `لمن` etc. surface
+///    the bare interrogative); the remaining space-separated
+///    languages use [`crate::lexicon::MatchStrategy::FirstToken`].
 /// 3. **Fallback** — when the language tag is `None` or no
 ///    table is configured for the language, fall back to the
 ///    English first-token check so substantive English
@@ -3074,6 +3082,251 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 1.6 — Arabic proclitic-aware classification, end-to-end
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn phase_1_6_arabic_proclitic_prefixed_interrogatives_classify_as_questions() {
+        // Phase 1.6 entry point: the productive Arabic proclitic
+        // prefix forms of canonical interrogatives must classify
+        // as questions through the LexiconExtractor's
+        // `looks_like_question` path, including when the
+        // terminator is ASCII `.` (so the `؟` short-circuit does
+        // not apply and the test exercises the actual lookup).
+        //
+        // Each case is a Modern Standard Arabic sentence drawn
+        // from the productive proclitic stack documented in
+        // Ryding §10.1 ("Proclitics"):
+        //
+        // * `و` ("and") + `كيف` ("how") = `وكيف`
+        // * `ف` ("then") + `متى` ("when") = `فمتى`
+        // * `ب` ("with/by") + `أي` ("which") = `بأي`
+        // * `ل` ("to/for") + `من` ("who") = `لمن`
+        let ar = LanguageTag::new("ar").unwrap();
+        let cases = [
+            ("وكيف يمكنني المساعدة", "و+كيف"),
+            ("فمتى نلتقي", "ف+متى"),
+            ("بأي طريقة نفعل ذلك", "ب+أي"),
+            ("لمن هذا الكتاب", "ل+من"),
+        ];
+        for (sentence, label) in cases {
+            assert!(
+                looks_like_question(sentence, Some('.'), Some(&ar)),
+                "Phase 1.6: proclitic-prefixed Arabic interrogative {label:?} in \
+                 sentence {sentence:?} must classify as a question via the \
+                 FirstTokenWithArabicClitics matcher even with `.` terminator (the \
+                 `؟` short-circuit is bypassed in this test on purpose)"
+            );
+        }
+    }
+
+    #[test]
+    fn phase_1_6_arabic_proclitic_prefixed_imperatives_emit_task_observations() {
+        // Phase 1.6 entry point: the productive Arabic proclitic
+        // prefix forms of canonical imperative verbs must emit
+        // Task observations through the LexiconExtractor when
+        // routed via the FirstTokenWithArabicClitics matcher.
+        // Each sentence chains the imperative behind a proclitic
+        // (`و` / `ف`), which is the realistic multi-clause Arabic
+        // task directive pattern that pre-Phase-1.6 FirstBigram
+        // missed.
+        let extractor = LexiconExtractor::default();
+        let ar = LanguageTag::new("ar").unwrap();
+        let scope = ScopeId::new_v4();
+        let cases = [
+            ("واكتب التقرير غدا", "و+اكتب (write the report tomorrow)"),
+            ("وأرسل البريد الآن", "و+أرسل (send the email now)"),
+            (
+                "فجدول الاجتماع الأسبوع القادم",
+                "ف+جدول (schedule the meeting next week)",
+            ),
+            (
+                "وراجع الخطة قبل الاجتماع",
+                "و+راجع (review the plan before the meeting)",
+            ),
+        ];
+        for (sentence, label) in cases {
+            let obs = extractor.extract_with_dominant_language(sentence, scope, Some(&ar));
+            assert!(
+                obs.iter()
+                    .any(|o| matches!(o.observation_type, ObservationType::Task)),
+                "Phase 1.6: proclitic-prefixed Arabic imperative {label:?} in sentence \
+                 {sentence:?} must produce a Task observation via the \
+                 FirstTokenWithArabicClitics matcher"
+            );
+        }
+    }
+
+    #[test]
+    fn phase_1_6_arabic_declaratives_do_not_falsely_classify_as_questions() {
+        // Phase 1.6 false-positive guard: a declarative whose
+        // first token starts with `أ` (interrogative-hamza
+        // orthography) must NOT classify as a question, because
+        // `أ` is deliberately omitted from the peel set —
+        // peeling would over-classify the large open class of
+        // `أ`-initial nouns / pronouns / proper names.
+        //
+        // Each case is an Arabic declarative with a leading
+        // `أ`-word that pre-Phase-1.6 was correctly NOT detected
+        // (no proclitic stripping happened); Phase 1.6 must
+        // preserve that correctness.
+        let ar = LanguageTag::new("ar").unwrap();
+        let declaratives = [
+            "أنا في المكتب اليوم", // "I am in the office today" — pronoun `أنا`.
+            "أحمد قادم غدا",       // "Ahmad is coming tomorrow" — proper-name `أحمد`.
+            "أمي في المنزل",       // "My mother is at home" — `أمي` (my mother).
+            "أبي يعمل في الشركة",  // "My father works at the company" — `أبي` (my father).
+        ];
+        for sentence in declaratives {
+            assert!(
+                !looks_like_question(sentence, Some('.'), Some(&ar)),
+                "Phase 1.6: Arabic declarative {sentence:?} starting with `أ`-prefixed \
+                 word must NOT classify as a question — `أ` is deliberately omitted \
+                 from the proclitic peel set to avoid over-classifying the open class \
+                 of `أ`-initial nouns/pronouns/proper-names"
+            );
+        }
+    }
+
+    #[test]
+    fn phase_1_6_arabic_definite_article_in_declarative_does_not_emit_task() {
+        // Phase 1.6 false-positive guard for the imperative
+        // path: a noun starting with the definite article `ال`
+        // must NOT trigger a Task observation just because the
+        // peel surfaces a substring that happens to share
+        // letters with an imperative verb.
+        //
+        // Worked example: `الكتاب على المنضدة` ("The book is on
+        // the table") peels `ال` from `الكتاب` to leave
+        // `كتاب`. None of the AR_LEXICON imperative entries are
+        // `كتاب` (they are `اكتب` / `أرسل` / `جدول` / `راجع` /
+        // `انشر` / `أصلح` / `وزع` / `تحقق` / `حضر` / `حدث` /
+        // `ادمج`), so the peel-then-compare path must yield no
+        // Task observation. This pins the precision contract:
+        // peeling produces a residual to test for exact
+        // equality, NOT a substring-match license.
+        let extractor = LexiconExtractor::default();
+        let ar = LanguageTag::new("ar").unwrap();
+        let scope = ScopeId::new_v4();
+        let declaratives = [
+            "الكتاب على المنضدة",
+            "الاجتماع في الساعة الثالثة",
+            "البيت كبير وجميل",
+        ];
+        for sentence in declaratives {
+            let obs = extractor.extract_with_dominant_language(sentence, scope, Some(&ar));
+            assert!(
+                !obs.iter()
+                    .any(|o| matches!(o.observation_type, ObservationType::Task)),
+                "Phase 1.6: Arabic declarative {sentence:?} starting with `ال` must NOT \
+                 emit a Task observation — peeling `ال` produces a noun residual that is \
+                 not in the imperative table, so exact-equality must hold and the false \
+                 positive must not surface"
+            );
+        }
+    }
+
+    #[test]
+    fn phase_1_6_arabic_proclitic_stack_resolves_through_two_peels() {
+        // Phase 1.6: 2-peel realistic stack. `فلكتاب` (`ف` +
+        // `ل` + `كتاب`) appears in formal Arabic prose meaning
+        // "then for-book" / "so as-for-the-book". The Task
+        // path does NOT trigger here (no `كتاب` in the
+        // imperative table), and the Question path does not
+        // trigger either (no `كتاب` in the interrogative
+        // table). What this test pins is the architectural
+        // contract that the peeler can in fact iterate 2 peels
+        // without false-positive bleed into either class — a
+        // sanity check that's tedious but high-signal because
+        // a regression would surface as either a spurious Task
+        // or a spurious Question for a declarative noun phrase.
+        //
+        // The companion `lexicon::tests::table_matches_
+        // arabic_clitic_strip_iterates_stacked_prefixes` test
+        // already pins the positive iteration semantics with
+        // a synthetic table containing `كتاب`; this test pins
+        // the production-table negative semantics.
+        let extractor = LexiconExtractor::default();
+        let ar = LanguageTag::new("ar").unwrap();
+        let scope = ScopeId::new_v4();
+        let sentence = "فلكتاب أهمية كبيرة";
+        let obs = extractor.extract_with_dominant_language(sentence, scope, Some(&ar));
+        assert!(
+            !obs.iter()
+                .any(|o| matches!(o.observation_type, ObservationType::Task)),
+            "Phase 1.6: 2-peel-deep stack `فلكتاب` must not trigger Task on a noun residual"
+        );
+        assert!(
+            !looks_like_question(sentence, Some('.'), Some(&ar)),
+            "Phase 1.6: 2-peel-deep stack `فلكتاب` on a declarative noun phrase must not \
+             trigger Question on a noun residual"
+        );
+    }
+
+    #[test]
+    fn phase_1_6_arabic_clitic_aware_strategy_preserves_tashkeel_path() {
+        // Phase 1.6 cross-feature interaction: the
+        // FirstTokenWithArabicClitics matcher must compose
+        // correctly with the tashkeel-strip normalisation path
+        // (Phase 1.4 #ANALYSIS-0002 / Phase 1.1). A
+        // tashkeel-decorated proclitic-prefixed interrogative
+        // (`وَكَيْفَ` = `و` + tashkeel-decorated `كيف`) must
+        // classify as a question because (a) `normalize_for_lookup`
+        // strips the tashkeel first, leaving `وكيف`, then (b)
+        // the proclitic-aware matcher peels `و` to reveal `كيف`.
+        let ar = LanguageTag::new("ar").unwrap();
+        let with_tashkeel = "وَكَيْفَ يمكنني المساعدة";
+        let without_tashkeel = "وكيف يمكنني المساعدة";
+        assert!(
+            looks_like_question(without_tashkeel, Some('.'), Some(&ar)),
+            "Phase 1.6: bare proclitic-prefixed `وكيف` must classify as a question"
+        );
+        assert!(
+            looks_like_question(with_tashkeel, Some('.'), Some(&ar)),
+            "Phase 1.6: tashkeel-decorated proclitic-prefixed `وَكَيْفَ` must compose \
+             tashkeel-strip + proclitic-peel correctly and classify as a question"
+        );
+    }
+
+    #[test]
+    fn phase_1_6_arabic_first_person_future_does_not_emit_task() {
+        // Phase 1.6 sweep-1 precision guard (Devin Review
+        // #ANALYSIS-0004), end-to-end: 1st-person future-tense
+        // declaratives that share a verb root with an `أ`-initial
+        // imperative must NOT emit a Task observation. The future
+        // marker `س` is deliberately omitted from the proclitic
+        // peel set precisely because peeling `سأرسل` ("I will
+        // send") to surface `أرسل` (which IS in the imperative
+        // table) would produce a phantom Task observation on
+        // every Arabic future-tense statement of intent.
+        //
+        // The companion `lexicon::tests::table_matches_arabic_
+        // clitic_strip_drops_unproductive_k_and_s_prefixes` test
+        // pins this at the matcher boundary; this test pins it
+        // at the end-to-end integration boundary so an accidental
+        // re-addition of `س` to the peel set would surface as a
+        // failing test in BOTH layers.
+        let extractor = LexiconExtractor::default();
+        let ar = LanguageTag::new("ar").unwrap();
+        let scope = ScopeId::new_v4();
+        let declaratives = [
+            "سأرسل البريد غدا",            // "I will send the email tomorrow".
+            "سأكتب التقرير الأسبوع القادم", // "I will write the report next week".
+            "سأصلح الخلل قريبا",           // "I will fix the bug soon".
+        ];
+        for sentence in declaratives {
+            let obs = extractor.extract_with_dominant_language(sentence, scope, Some(&ar));
+            assert!(
+                !obs.iter()
+                    .any(|o| matches!(o.observation_type, ObservationType::Task)),
+                "Phase 1.6 sweep-1 precision: 1st-person future declarative {sentence:?} \
+                 must NOT emit a Task observation — `س` is deliberately omitted from the \
+                 peel set so the future marker cannot conflate with the imperative table"
+            );
         }
     }
 }

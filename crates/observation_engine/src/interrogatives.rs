@@ -55,7 +55,11 @@ pub enum InterrogativeMatch {
     /// exactly equal one of the interrogatives. Used for languages
     /// where the question word is canonically sentence-initial and
     /// word boundaries are clear from whitespace (English, German,
-    /// Romance languages, Arabic, Indonesian).
+    /// Romance languages, Indonesian). Arabic used `FirstToken`
+    /// before Phase 1.6 but now uses
+    /// [`Self::FirstTokenWithArabicClitics`] to recover the
+    /// proclitic prefix forms (`وكيف`, `فمتى`, `بأي`,
+    /// `لمن`) that the bare FirstToken matcher misses.
     FirstToken,
     /// The first alphabetic token OR the space-joined first two
     /// alphabetic tokens (case-folded) must equal an entry.
@@ -77,6 +81,21 @@ pub enum InterrogativeMatch {
     /// and/or because the language permits non-initial interrogative
     /// placement.
     Substring,
+    /// Phase 1.6 strategy for Arabic-script languages whose
+    /// proclitics agglutinate to the host word: tries first-token
+    /// equality, then iteratively peels the recognised Arabic
+    /// proclitic prefixes (`و` "and", `ف` "then", `ب` "with",
+    /// `ل` "to", and the 2-character definite article `ال` /
+    /// `أل` "the") and re-checks equality after each peel. The
+    /// preposition `ك` ("like / as") and the future marker `س`
+    /// ("will") were initially in the peel set but were removed
+    /// in sweep 1 (Devin Review #ANALYSIS-0004) for precision
+    /// reasons. See
+    /// [`crate::lexicon::MatchStrategy::FirstTokenWithArabicClitics`]
+    /// for the full design notes (peel inventory, why `أ`
+    /// interrogative hamza is excluded, why `Substring` is
+    /// rejected for short Arabic interrogatives).
+    FirstTokenWithArabicClitics,
 }
 
 /// Look up the interrogative-word list for a BCP-47 primary
@@ -360,6 +379,53 @@ pub fn interrogatives_for(
         // ("Interrogative particles and pronouns"). Modern
         // Standard Arabic; dialects use additional forms but
         // these cover MSA news / docs / formal IM.
+        //
+        // Phase 1.6: promoted from
+        // [`InterrogativeMatch::FirstToken`] to
+        // [`InterrogativeMatch::FirstTokenWithArabicClitics`] so
+        // the productive Arabic proclitic-prefix forms recover
+        // their interrogative readings:
+        //
+        // * `وكيف يمكنني المساعدة؟` ("and how can I
+        //   help?") — `و` + `كيف`.
+        // * `فمتى سنلتقي؟` ("then when do we meet?")
+        //   — `ف` + `متى`.
+        // * `بأي طريقة نفعل ذلك؟` ("in which way do we
+        //   do that?") — `ب` + `أي`.
+        // * `لمن هذا الكتاب؟` ("to whom is this
+        //   book?") — `ل` + `من`.
+        //
+        // Pre-Phase-1.6 these all bypassed the interrogative
+        // table (the first alphabetic token was the prefixed
+        // form `وكيف` / `فمتى` / … which never appeared in
+        // the table), so question detection relied entirely on
+        // the `؟` terminator short-circuit. With the prefix-
+        // peeling matcher the table is consulted even when the
+        // terminator is missing (e.g. a question rendered with
+        // an ASCII `?` or accidentally terminated with `.`).
+        //
+        // `أ` (interrogative yes/no hamza, single character) is
+        // deliberately **omitted** from the table. It shares
+        // its orthography with the prosthetic / radical hamza on
+        // a large open class of common Arabic nouns and
+        // pronouns (`أنا` "I", `أنت` "you-masc", `أب` "father",
+        // `أم` "mother", `أحمد` proper-name, `أخ` "brother",
+        // …), so including it would over-classify a large
+        // fraction of Arabic declarative sentences as questions.
+        // Yes/no questions with the hamza particle are
+        // recovered instead via the `؟` terminator short-
+        // circuit in [`crate::extractor::looks_like_question`].
+        //
+        // Sweep-1 precision update (Devin Review
+        // #ANALYSIS-0004): the proclitic peel set was
+        // narrowed from 8 to 6 entries; `ك` ("like/as") and
+        // `س` ("will") were excluded after surfacing both
+        // interrogative-path false positives (`كمن` ➜ `من`,
+        // `سما` ➜ `ما`) and a more dangerous imperative-path
+        // false positive (`سأرسل` "I will send" ➜ imperative
+        // `أرسل`). See the docstring on
+        // [`crate::lexicon::MatchStrategy::FirstTokenWithArabicClitics`]
+        // for the full omission rationale on `ك` / `س` / `أ`.
         "ar" => Some((
             &[
                 "من",
@@ -373,9 +439,8 @@ pub fn interrogatives_for(
                 "أية",
                 "كم",
                 "هل",
-                "أ",
             ],
-            InterrogativeMatch::FirstToken,
+            InterrogativeMatch::FirstTokenWithArabicClitics,
         )),
 
         // Hindi — McGregor, Outline of Hindi Grammar §3.5
@@ -725,11 +790,26 @@ mod tests {
     }
 
     #[test]
-    fn arabic_first_token_strategy() {
+    fn arabic_first_token_with_clitics_strategy() {
+        // Phase 1.6: Arabic moved from `FirstToken` to
+        // `FirstTokenWithArabicClitics` so the productive
+        // proclitic-prefix forms (`وكيف` = `و` + `كيف`,
+        // `فمتى` = `ف` + `متى`, etc.) recover their interrogative
+        // readings via iterative prefix peeling. The bare entries
+        // remain unchanged; only the lookup STRATEGY was promoted.
+        // The interrogative-hamza particle `أ` is deliberately
+        // omitted from the table per the inline comment on the
+        // `ar` arm of `interrogatives_for` (over-classification
+        // risk on the open class of `أ`-initial declaratives).
         let (list, strat) = interrogatives_for("ar").expect("arabic configured");
         assert!(list.contains(&"من"));
         assert!(list.contains(&"كيف"));
-        assert_eq!(strat, InterrogativeMatch::FirstToken);
+        assert!(
+            !list.contains(&"أ"),
+            "Phase 1.6: the bare interrogative-hamza `أ` must NOT appear in the Arabic \
+             interrogative table — see the dedicated-omission comment in interrogatives_for"
+        );
+        assert_eq!(strat, InterrogativeMatch::FirstTokenWithArabicClitics);
     }
 
     #[test]
@@ -834,6 +914,46 @@ mod tests {
     }
 
     #[test]
+    fn first_token_with_arabic_clitics_languages_are_arabic_only_for_now() {
+        // Phase 1.6 sweep-4 (Devin Review #3331706213): the
+        // proclitic-aware first-token strategy was introduced
+        // specifically for the Arabic agglutinative-prefix
+        // morphology (و / ف / ب / ل / ال / أل clitically attaching
+        // to the next word). It is NOT a generic "FirstToken with
+        // some script-specific prefix peeling" — the peel inventory
+        // is Arabic-specific, references Arabic-only orthography,
+        // and would over-peel or no-op on any non-Arabic script.
+        //
+        // Pin exclusivity to Arabic for the same reason the
+        // sibling `first_bigram_languages_are_vietnamese_only_for_now`
+        // test pins FirstBigram to Vietnamese: adding a second
+        // FirstTokenWithArabicClitics language must be an
+        // intentional decision that updates both the peel inventory
+        // (today's `ARABIC_PROCLITIC_PREFIXES` constant is named
+        // explicitly "ARABIC_*") AND this test in lockstep. The
+        // most likely incoming candidates (Farsi `fa`, Urdu `ur`,
+        // Sorani Kurdish `ckb`, Pashto `ps`, Sindhi `sd`) share
+        // SOME proclitic patterns with Arabic but have script-
+        // specific differences that would require a per-language
+        // peel inventory — silently sharing Arabic's would
+        // introduce false positives on those languages.
+        let expected_clitic_aware: std::collections::HashSet<&str> = ["ar"].into_iter().collect();
+        for tag in SUPPORTED_PRIMARY_TAGS {
+            let strat = matching_strategy_for(tag).unwrap();
+            let is_clitic_aware = strat == InterrogativeMatch::FirstTokenWithArabicClitics;
+            assert_eq!(
+                is_clitic_aware,
+                expected_clitic_aware.contains(tag),
+                "tag {tag}: clitic-aware expected={}, got strategy={:?} \
+                 — FirstTokenWithArabicClitics must remain Arabic-only \
+                 (see test comment for rationale)",
+                expected_clitic_aware.contains(tag),
+                strat
+            );
+        }
+    }
+
+    #[test]
     fn no_first_token_entry_contains_tokeniser_boundary_chars() {
         // Devin Review #BUG-0001: an interrogative entry that
         // contains a non-alphabetic character is unreachable
@@ -843,7 +963,24 @@ mod tests {
         // language's entries.
         for tag in SUPPORTED_PRIMARY_TAGS {
             let (list, strat) = interrogatives_for(tag).unwrap();
-            if strat != InterrogativeMatch::FirstToken {
+            // Phase 1.6 sweep-1 extension (Devin Review
+            // #3331604782): the invariant applies to every
+            // strategy whose matcher consults the extractor's
+            // alphabetic-only tokeniser — i.e. both bare
+            // FirstToken AND FirstTokenWithArabicClitics, which
+            // begins with a FirstToken-style exact-equality
+            // check and whose peel only strips alphabetic Arabic
+            // proclitics (never tokeniser-boundary chars). Pre-
+            // fix, the new Arabic strategy bypassed this guard
+            // entirely; including it here pins the no-boundary-
+            // char invariant for the Arabic interrogative table
+            // as well. Substring / FirstBigram strategies remain
+            // exempt because their entries either span multiple
+            // tokens (`tại sao`) or are intentionally matched as
+            // substrings (`何ですか`).
+            if strat != InterrogativeMatch::FirstToken
+                && strat != InterrogativeMatch::FirstTokenWithArabicClitics
+            {
                 continue;
             }
             for entry in list {

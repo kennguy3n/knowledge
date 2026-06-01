@@ -128,8 +128,19 @@ pub enum MatchStrategy {
     /// must exactly equal an entry in the table. Suitable for
     /// space-separated languages where the question / decision
     /// / task opener is canonically sentence-initial (English,
-    /// German, Romance languages, Arabic, Vietnamese,
-    /// Indonesian).
+    /// German, Romance languages, Vietnamese, Indonesian). Arabic
+    /// used FirstToken before Phase 1.6 but now uses
+    /// [`MatchStrategy::FirstTokenWithArabicClitics`] so the
+    /// proclitic prefix forms (`وكيف` = `و`+`كيف`,
+    /// `فمتى` = `ف`+`متى`, `بأي` = `ب`+`أي`,
+    /// `لمن` = `ل`+`من`, `واكتب` = `و`+`اكتب`) are recovered.
+    /// `ك` ("like/as") and `س` (future marker) were initially
+    /// in the peel set but Devin Review #ANALYSIS-0004 surfaced
+    /// a false-positive on short interrogatives (`كمن` ➜ `من`,
+    /// `سما` ➜ `ما`) AND a worse false-positive on the imperative
+    /// path (`سأرسل` "I will send" ➜ `أرسل` imperative table
+    /// entry) — both excluded after sweep 1; see the inventory
+    /// comment on [`ARABIC_PROCLITIC_PREFIXES`].
     FirstToken,
     /// Either the first alphabetic token OR the space-joined
     /// first two alphabetic tokens must exactly equal an entry
@@ -156,6 +167,73 @@ pub enum MatchStrategy {
     /// Cham) should default to `Substring` unless the script
     /// is provably whitespace-segmented at the word level.
     Substring,
+    /// Phase 1.6 strategy for Arabic-script languages whose
+    /// morphology agglutinates short proclitic particles to the
+    /// front of the host word with no orthographic separator.
+    /// The matcher tries first-token exact equality first; if
+    /// that fails, it iteratively peels the recognised Arabic
+    /// proclitic prefixes (the 1-character conjunction `و`
+    /// "and", the 1-character connector `ف` "then", the
+    /// 1-character prepositions `ب` "with/by" / `ل` "to/for",
+    /// and the 2-character definite article `ال` / `أل` "the")
+    /// from the front of the token and re-checks exact equality
+    /// after each peel. Up to [`ARABIC_PROCLITIC_PEEL_BUDGET`]
+    /// peels are attempted to bound worst-case cost on
+    /// adversarial input; in practice 2 peels covers the
+    /// realistic stack (e.g. `وللكتاب` = `و` + `ل` + `ل` +
+    /// `كتاب`, which only needs to surface `كتاب` for downstream
+    /// classes — interrogatives almost never stack more than one
+    /// proclitic on top of `ال`).
+    ///
+    /// **Why not peel `ك` "like/as" and `س` "will" (sweep-1
+    /// removal)?** Devin Review #ANALYSIS-0004 noted that both
+    /// could collide with short interrogatives (`كمن` peels `ك`
+    /// to surface `من` "who"; `سما` peels `س` to surface `ما`
+    /// "what"), and an internal audit then surfaced a far more
+    /// dangerous interaction on the imperative path: `س` is the
+    /// 1st-person-future marker, so `سأرسل` ("I will send" —
+    /// 1st-person future verb, NOT an imperative) would peel to
+    /// surface `أرسل` (which IS in the imperative table), giving
+    /// a real false Task observation on plain declarative
+    /// future-tense statements. The same risk exists for
+    /// `سأكتب` ➜ `اكتب`, `سأصلح` ➜ `أصلح`, etc. — every
+    /// `أ`-initial imperative has a 1st-person future counterpart
+    /// that `س` peeling would conflate. Excluding `ك` / `س`
+    /// from the peel set is a strict precision win with zero
+    /// recall loss on the production tables: `ك` attaches
+    /// predominantly to nouns (handled via Substring on
+    /// [`LanguageLexicon::decision_strategy`] /
+    /// [`LanguageLexicon::task_strategy`], which don't need
+    /// prefix peeling), and `س` attaches predominantly to
+    /// verbs but never to imperatives by morphological
+    /// construction.
+    ///
+    /// **Why not `Substring`?** Arabic morphology is dense and
+    /// short interrogatives (`من` "who", `ما` "what",
+    /// `أي` "which") collide with arbitrary in-word substrings
+    /// (`مَن` shares its three letters with `أمن` "safety",
+    /// `يمن` "Yemen", `زمن` "time"; `ما` collides with
+    /// `كما` "as", `لما` "because", `أما` "as for"). Bounded
+    /// prefix peeling gives the proclitic recall we need without
+    /// the per-letter false-positive blast radius that
+    /// `Substring` would carry.
+    ///
+    /// **Why not strip `أ` (interrogative hamza)?** The
+    /// single-character interrogative hamza `أ` shares its
+    /// orthography with the prosthetic / radical hamza on a
+    /// large open class of common Arabic nouns and pronouns
+    /// (`أنا` "I", `أنت` "you-masc", `أب` "father",
+    /// `أم` "mother", `أحمد` proper-name, `أخ` "brother", …)
+    /// so peeling it would cause systematic over-classification
+    /// of declarative sentences as questions. The Arabic
+    /// interrogative table omits `أ` for exactly this reason
+    /// (see the dedicated-omission comment on the Arabic
+    /// interrogative table in
+    /// [`crate::interrogatives::interrogatives_for`]).
+    /// Yes/no questions with the hamza particle are recovered
+    /// instead via the `؟` terminator short-circuit in
+    /// [`crate::extractor::looks_like_question`].
+    FirstTokenWithArabicClitics,
 }
 
 impl MatchStrategy {
@@ -174,6 +252,9 @@ impl MatchStrategy {
             InterrogativeMatch::FirstToken => MatchStrategy::FirstToken,
             InterrogativeMatch::FirstBigram => MatchStrategy::FirstBigram,
             InterrogativeMatch::Substring => MatchStrategy::Substring,
+            InterrogativeMatch::FirstTokenWithArabicClitics => {
+                MatchStrategy::FirstTokenWithArabicClitics
+            }
         }
     }
 }
@@ -578,7 +659,145 @@ pub fn table_matches(table: &[&str], normalised: &str, strategy: MatchStrategy) 
             table.iter().any(|e| *e == bigram)
         }
         MatchStrategy::Substring => table.iter().any(|e| normalised.contains(*e)),
+        MatchStrategy::FirstTokenWithArabicClitics => {
+            let first = first_alphabetic_token(normalised);
+            first_token_matches_after_arabic_clitic_strip(table, first)
+        }
     }
+}
+
+/// Arabic proclitic prefixes that the
+/// [`MatchStrategy::FirstTokenWithArabicClitics`] matcher will
+/// peel from the front of the first alphabetic token. Listed
+/// **longest-first** so the iterative peeler tries the
+/// definite-article forms before the 1-character particles
+/// (peeling `ال` from `الكتاب` produces `كتاب`; peeling the
+/// 1-character `ا` from `الكتاب` would produce the meaningless
+/// `لكتاب` and could mask a genuine match further down).
+///
+/// **Source** for the inventory: Ryding, *A Reference Grammar of
+/// Modern Standard Arabic* (Cambridge, 2005), §10.1
+/// ("Proclitics — short particles that attach to the next word
+/// with no orthographic separator"). The five recognised
+/// proclitics (`ال` / `أل` counted as one definite article with
+/// two spelling variants, plus the four 1-character productive
+/// particles `و` / `ف` / `ب` / `ل`) cover every proclitic in
+/// MSA news / docs / formal IM register that the substrate's
+/// lexicons target, *minus* the two surfaces (`ك`, `س`)
+/// excluded for precision reasons documented on
+/// [`MatchStrategy::FirstTokenWithArabicClitics`] (sweep-1
+/// Devin Review #ANALYSIS-0004).
+///
+/// Three additional Arabic proclitics from the linguistic
+/// inventory are **deliberately omitted** from this set, each
+/// for a different reason; the omissions are pinned by tests
+/// so a future contributor can't silently add them back:
+///
+/// * **`أ`** (interrogative hamza, 1 char) — would over-
+///   classify the open class of `أ`-initial declaratives as
+///   questions (`أنا` "I", `أحمد` proper-name, …). Yes/no
+///   questions with the hamza particle are recovered instead
+///   via the `؟` terminator short-circuit in
+///   [`crate::extractor::looks_like_question`].
+/// * **`ك`** (preposition "like / as", 1 char) — collides with
+///   short interrogatives (`كمن` ➜ `من` "who") and with the
+///   imperative table (`ك`-prefixing never produces a real
+///   imperative form in MSA but the peel could spuriously
+///   surface one). `ك` attaches predominantly to nouns, which
+///   are handled via Substring on
+///   [`LanguageLexicon::decision_strategy`] /
+///   [`LanguageLexicon::task_strategy`] without needing prefix
+///   peeling.
+/// * **`س`** (future marker "will", 1 char) — every `أ`-initial
+///   imperative in the AR table (`أرسل`, `أصلح`, …) has a
+///   1st-person future counterpart (`سأرسل`, `سأصلح`, …)
+///   that `س` peeling would conflate with the imperative. The
+///   future marker also never attaches to interrogatives in
+///   MSA. The trade-off (zero realistic recall loss against
+///   real false-positive risk on declarative future-tense
+///   statements) makes exclusion the conservative default.
+const ARABIC_PROCLITIC_PREFIXES: &[&str] = &[
+    // 2-character definite-article forms (longest first).
+    "ال", // alif-lam — canonical definite article (NFC form).
+    "أل", // hamza-on-alif + lam — common spelling variant.
+    // 1-character productive proclitic particles.
+    "و", // conjunction "and".
+    "ف", // connector "then / so".
+    "ب", // preposition "with / by / in".
+    "ل", // preposition "to / for".
+         // NOTE: `ك` (preposition "like / as") and `س` (future
+         // marker "will") are deliberately NOT in this list; see
+         // the docstring above for the precision rationale, and
+         // `table_matches_arabic_clitic_strip_drops_unproductive_k_and_s_prefixes`
+         // for the regression tests that pin the omissions.
+];
+
+/// Worst-case number of proclitic peels the Arabic clitic-aware
+/// matcher will attempt on a single token before giving up.
+///
+/// Three peels covers the realistic stack-depth in MSA — e.g.
+/// `وللكتاب` is `و` + `ل` + `ل` + `كتاب` (3 peels to surface
+/// the bare noun), and `وبالكتاب` is `و` + `ب` + `ال` +
+/// `كتاب` (3 peels). MSA does not stack more than three
+/// productive proclitics in front of a single host word, so this
+/// bound is generous against realistic corpora while still
+/// putting a hard ceiling on adversarial inputs (a pathological
+/// token like `وووووووووو...كتاب` exits after 3 peels of `و`
+/// without exhausting the iterator).
+pub const ARABIC_PROCLITIC_PEEL_BUDGET: usize = 3;
+
+/// Helper for [`MatchStrategy::FirstTokenWithArabicClitics`].
+///
+/// Returns `true` when `first` exact-matches an entry in `table`
+/// either directly OR after up to
+/// [`ARABIC_PROCLITIC_PEEL_BUDGET`] iterative peels of the
+/// recognised Arabic proclitic prefixes (see
+/// [`ARABIC_PROCLITIC_PREFIXES`]).
+///
+/// The peeler is greedy and longest-first: at each step it
+/// tries each prefix in [`ARABIC_PROCLITIC_PREFIXES`] order and
+/// takes the first one that strips off non-empty alphabetic
+/// residual. A residual that collapses to empty (e.g. `و` alone
+/// stripped to `""`) is rejected — there is no host word left
+/// to match against the table.
+fn first_token_matches_after_arabic_clitic_strip(table: &[&str], first: &str) -> bool {
+    if first.is_empty() {
+        return false;
+    }
+    if table.contains(&first) {
+        return true;
+    }
+    let mut current = first;
+    for _ in 0..ARABIC_PROCLITIC_PEEL_BUDGET {
+        let Some(stripped) = peel_one_arabic_proclitic(current) else {
+            return false;
+        };
+        if table.contains(&stripped) {
+            return true;
+        }
+        current = stripped;
+    }
+    false
+}
+
+/// Attempt one greedy longest-first peel of the recognised
+/// Arabic proclitic prefixes (see [`ARABIC_PROCLITIC_PREFIXES`])
+/// from the front of `token`.
+///
+/// Returns `Some(residual)` when a prefix was successfully
+/// peeled AND the residual is non-empty (we never propagate an
+/// empty-string "match"). Returns `None` when no recognised
+/// prefix matched OR when the only matching prefix would leave
+/// an empty residual.
+fn peel_one_arabic_proclitic(token: &str) -> Option<&str> {
+    for prefix in ARABIC_PROCLITIC_PREFIXES {
+        if let Some(rest) = token.strip_prefix(prefix) {
+            if !rest.is_empty() {
+                return Some(rest);
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------
@@ -1006,6 +1225,99 @@ const RU_LEXICON: LanguageLexicon = LanguageLexicon {
 /// (`قررنا` — "we decided"). Task class includes
 /// `من فضلك` ("please") and `يرجى` ("kindly") which are the
 /// canonical polite-request openers.
+///
+/// **Phase 1.6:** `task_imperative_strategy` promoted from
+/// [`MatchStrategy::FirstBigram`] to
+/// [`MatchStrategy::FirstTokenWithArabicClitics`] so the
+/// productive proclitic-prefix forms of the imperative verbs
+/// recover their Task readings:
+///
+/// * `واكتب التقرير` ("and write the report") — `و` + `اكتب`.
+/// * `وأرسل البريد` ("and send the email") — `و` + `أرسل`.
+/// * `فجدول الاجتماع` ("then schedule the meeting") — `ف` +
+///   `جدول`.
+/// * `وراجع الخطة` ("and review the plan") — `و` + `راجع`.
+///
+/// Pre-Phase-1.6 these all bypassed the imperative table (the
+/// `FirstBigram` matcher compared the bare first-token /
+/// first-bigram against entries verbatim, but `واكتب` is
+/// neither `اكتب` nor `و اكتب`), so multi-clause Arabic task
+/// directives that chained `و`/`ف` between verbs lost recall on
+/// every clause after the first. The `Substring` strategy was
+/// rejected for imperatives because the verb stems are
+/// 3-character roots whose substrings are exceptionally
+/// promiscuous in Arabic morphology (`جدول` "schedule" shares
+/// its three letters with `جداول` "tables" and `الجدول` "the
+/// table"; clitic-aware prefix peeling is precise enough to
+/// recover the prefixed verb form without these false
+/// positives).
+///
+/// **Sweep-1 precision narrowing** (Devin Review
+/// #ANALYSIS-0004): the proclitic peel set was reduced from
+/// 8 to 6 entries after `س` (1st-person future marker) was
+/// shown to falsely surface imperatives on plain declarative
+/// future-tense statements (`سأرسل البريد غدا` "I will send
+/// the email tomorrow" peeled `س` to surface the imperative
+/// table entry `أرسل`, producing a phantom Task observation).
+/// `ك` was also removed for symmetric precision reasons. See
+/// [`MatchStrategy::FirstTokenWithArabicClitics`] for the full
+/// omission rationale.
+// ---------------------------------------------------------------------
+// Per-class match-strategy asymmetry in AR_LEXICON
+// ---------------------------------------------------------------------
+//
+// The four match-strategy fields below intentionally do NOT use a
+// uniform strategy across classes. The asymmetry is positional, not
+// arbitrary:
+//
+// * `decision_strategy` / `task_strategy` = `Substring`. Decision
+//   and task keywords are full multi-character lexical items (≥3
+//   chars on average — `تقرر` "decided", `موافق` "approved",
+//   `يرجى` "please", `من فضلك` "please / kindly") that can appear
+//   anywhere in a sentence. The Substring strategy catches them
+//   wherever they fall — including inside clitic-prefixed forms —
+//   without needing a separate peel pass. Keywords starting with
+//   what would otherwise be a productive clitic (e.g. `وقع` "signed"
+//   begins with `و` which is also the conjunction proclitic) are
+//   handled correctly by Substring because the matcher looks for
+//   the literal token anywhere in the input — no peel is needed,
+//   no false positive is created. The short-keyword false-positive
+//   risk that motivates `FirstTokenWithArabicClitics` for the
+//   imperative class does not apply here because decision / task
+//   keywords are long enough that substring collisions are rare in
+//   real Arabic text.
+//
+// * `task_imperative_strategy` = `FirstTokenWithArabicClitics`.
+//   Arabic imperatives are positional — they must be the FIRST
+//   alphabetic token in a sentence to be classified as a directive
+//   (otherwise `أرسل` inside a longer sentence might just mean
+//   "send" as a verb in declarative voice, not as a directive).
+//   The proclitic-aware first-token strategy is the only place in
+//   AR_LEXICON where positional+prefix-aware matching is needed,
+//   because clitic-stacked imperatives (`واكتب التقرير` "and write
+//   the report", `فجدول الاجتماع` "then schedule the meeting")
+//   must surface the bare imperative root from the prefixed first
+//   token without false-positively matching the same root buried
+//   in a declarative sentence further downstream. Substring would
+//   over-match (any sentence containing `أرسل` anywhere would emit
+//   Task); plain FirstToken would miss the clitic-prefixed forms.
+//
+// * Interrogatives use `FirstTokenWithArabicClitics` for the same
+//   positional reason — Arabic question words `كيف`/`متى`/`من`/`ما`
+//   are short enough that Substring would collide with arbitrary
+//   in-word fragments (`من` ⊂ `أمن` "safety" / `يمن` "Yemen" /
+//   `زمن` "time"). The interrogative lockstep lives in
+//   `interrogatives_for("ar")` (the per-language strategy is stored
+//   on the interrogative table rather than the language lexicon).
+//
+// This per-class asymmetry IS the architectural design — uniform
+// `Substring` across all classes would break imperatives, uniform
+// `FirstTokenWithArabicClitics` would miss decision/task keywords
+// that don't sit at the first token. Each class gets the strategy
+// that matches its lexical and positional properties. A future
+// contributor who reads this should NOT attempt to harmonise the
+// strategies — see Devin Review #3331684703 (Phase 1.6 sweep 3)
+// and the test `arabic_lexicon_strategy_per_class_is_intentional`.
 const AR_LEXICON: LanguageLexicon = LanguageLexicon {
     primary_tag: "ar",
     display_name: "Arabic",
@@ -1020,8 +1332,13 @@ const AR_LEXICON: LanguageLexicon = LanguageLexicon {
         "وقع",
         "رفض",
     ],
+    // Substring: long-form keywords, anywhere in sentence.
+    // See per-class asymmetry block above.
     decision_strategy: MatchStrategy::Substring,
     task_keywords: &["مهمة", "من فضلك", "يرجى", "متابعة", "إجراء"],
+    // Substring: long-form keywords + bigram phrases
+    // (`من فضلك`), anywhere in sentence. See per-class
+    // asymmetry block above.
     task_strategy: MatchStrategy::Substring,
     // Note: Arabic verbs are unvocalised (no tashkeel) to
     // match the canonical table form. `وزع` ("distribute /
@@ -1033,7 +1350,11 @@ const AR_LEXICON: LanguageLexicon = LanguageLexicon {
     task_imperative_verbs: &[
         "اكتب", "أرسل", "جدول", "راجع", "انشر", "أصلح", "وزع", "تحقق", "حضر", "حدث", "ادمج",
     ],
-    task_imperative_strategy: MatchStrategy::FirstBigram,
+    // FirstTokenWithArabicClitics: positional (must be the
+    // first alphabetic token) + clitic-aware (peels و/ف/ب/ل/ال/أل
+    // before re-checking equality). See per-class asymmetry
+    // block above.
+    task_imperative_strategy: MatchStrategy::FirstTokenWithArabicClitics,
     stop_words: &[],
 };
 
@@ -1722,6 +2043,444 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
+    // Phase 1.6 — Arabic proclitic-aware matcher
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn table_matches_arabic_clitic_strip_finds_bare_first_token() {
+        // Phase 1.6: the FirstTokenWithArabicClitics strategy
+        // must remain a strict superset of FirstToken — a bare
+        // unprefixed interrogative still matches via the
+        // exact-equality fast path.
+        let table = &["كيف", "متى", "أين", "لماذا"];
+        for sentence in ["كيف الحال", "متى تأتي", "أين الكتاب", "لماذا تأخرت"]
+        {
+            assert!(
+                table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics),
+                "bare Arabic interrogative in {sentence:?} must match via the \
+                 exact-equality fast path before any peel is attempted"
+            );
+        }
+    }
+
+    #[test]
+    fn table_matches_arabic_clitic_strip_recovers_single_proclitic_prefix() {
+        // Phase 1.6 main payload: each of the 4 single-character
+        // productive proclitic prefixes (`و`, `ف`, `ب`, `ل`)
+        // recovers the bare interrogative under one peel. The
+        // sweep-1 removal of `ك` and `س` is exercised by the
+        // dedicated negative-assertion test
+        // `table_matches_arabic_clitic_strip_drops_unproductive_k_and_s_prefixes`.
+        let table = &["كيف", "متى", "أي", "من", "أين", "ما"];
+        for (sentence, prefix, residual) in [
+            ("وكيف يمكنني المساعدة", "و", "كيف"),
+            ("فمتى نلتقي", "ف", "متى"),
+            ("بأي طريقة نفعل ذلك", "ب", "أي"),
+            ("لمن هذا الكتاب", "ل", "من"),
+        ] {
+            assert!(
+                table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics),
+                "Arabic proclitic-prefixed interrogative in {sentence:?} (prefix {prefix:?}, \
+                 residual {residual:?}) must match via the Phase 1.6 peel"
+            );
+        }
+    }
+
+    #[test]
+    fn table_matches_arabic_clitic_strip_drops_unproductive_k_and_s_prefixes() {
+        // Phase 1.6 sweep-1 precision guard (Devin Review
+        // #ANALYSIS-0004): `ك` and `س` were initially in the
+        // peel set but caused false positives on both the
+        // interrogative path and (more dangerously) the
+        // imperative path. They are now deliberately omitted
+        // from [`ARABIC_PROCLITIC_PREFIXES`]; this test pins
+        // that omission so a future contributor can't silently
+        // re-add them without re-running the false-positive
+        // analysis.
+
+        // Interrogative-path negatives: a leading `ك` or `س`
+        // on a non-interrogative host must NOT surface an
+        // interrogative residual via the peel.
+        let interrogative_table = &["من", "ما", "أين", "كيف"];
+        for sentence in [
+            "كمن تريد أن أكون", // "like who do you want me to be" — `ك` + `من`,
+            // pre-fix peeled to `من` and falsely matched the interrogative table.
+            "سما الذي سيحدث غدا", // "so what will happen tomorrow" —
+                                  // `س` + `ما`; pre-fix peeled to `ما` and falsely matched.
+        ] {
+            assert!(
+                !table_matches(
+                    interrogative_table,
+                    sentence,
+                    MatchStrategy::FirstTokenWithArabicClitics
+                ),
+                "sweep-1 precision guard: {sentence:?} must NOT match the interrogative \
+                 table — the peel set no longer includes `ك` / `س`"
+            );
+        }
+
+        // Imperative-path negative — the architectural reason
+        // for the removal. `سأرسل` is the 1st-person future
+        // ("I will send"), a plain declarative statement; pre-
+        // fix it peeled `س` to surface `أرسل` and falsely
+        // matched the imperative table, producing a phantom
+        // Task observation on every Arabic future-tense
+        // declarative whose verb shared a root with an `أ`-
+        // initial imperative. Same risk on `سأصلح` ➜ `أصلح`.
+        let imperative_table = &["أرسل", "أصلح", "اكتب"];
+        for sentence in [
+            "سأرسل البريد غدا",          // "I will send the email tomorrow".
+            "سأصلح الخلل الأسبوع القادم", // "I will fix the bug next week".
+        ] {
+            assert!(
+                !table_matches(
+                    imperative_table,
+                    sentence,
+                    MatchStrategy::FirstTokenWithArabicClitics
+                ),
+                "sweep-1 precision guard: {sentence:?} (1st-person future, NOT \
+                 imperative) must NOT match the imperative table — the peel set no \
+                 longer includes `س`"
+            );
+        }
+    }
+
+    #[test]
+    fn table_matches_arabic_clitic_strip_recovers_definite_article() {
+        // Phase 1.6: the 2-character definite article `ال` peels
+        // before the 1-character proclitics so a leading `الكتاب`
+        // can surface as `كتاب`. The interrogative table doesn't
+        // contain nouns, but the imperative use case does: the
+        // future-marker compound `سال…` is contrived; the real
+        // win is for verbs preceded by `و` + `ال` is rare. The
+        // representative case here uses the `الكتاب`-style noun
+        // surfacing because that's the cleanest test of the
+        // longest-first peel ordering.
+        let table = &["كتاب", "اجتماع"];
+        assert!(
+            table_matches(
+                table,
+                "الكتاب على المنضدة",
+                MatchStrategy::FirstTokenWithArabicClitics
+            ),
+            "`الكتاب` must peel `ال` → `كتاب` and match the table"
+        );
+        assert!(
+            table_matches(
+                table,
+                "الاجتماع في الساعة الثالثة",
+                MatchStrategy::FirstTokenWithArabicClitics
+            ),
+            "`الاجتماع` must peel `ال` → `اجتماع` and match the table"
+        );
+    }
+
+    #[test]
+    fn table_matches_arabic_clitic_strip_iterates_stacked_prefixes() {
+        // Phase 1.6: real Arabic stacks up to 3 proclitics on
+        // a single host word. The peel budget
+        // (ARABIC_PROCLITIC_PEEL_BUDGET = 3) must accommodate
+        // the realistic stack-depth.
+        let table = &["كتاب"];
+        // `وللكتاب` = `و` + `ل` + `ل` + `كتاب` (3 peels).
+        // `و` and `ل` are both 1-char proclitics, so the peel
+        // iterates 3 times to surface `كتاب`.
+        assert!(
+            table_matches(
+                table,
+                "وللكتاب قيمة",
+                MatchStrategy::FirstTokenWithArabicClitics
+            ),
+            "`وللكتاب` must peel `و` then `ل` then `ل` → `كتاب` within the 3-peel budget"
+        );
+        // `وبالكتاب` = `و` + `ب` + `ال` + `كتاب` (3 peels;
+        // `ال` is the 2-char definite article).
+        assert!(
+            table_matches(
+                table,
+                "وبالكتاب نتعلم",
+                MatchStrategy::FirstTokenWithArabicClitics
+            ),
+            "`وبالكتاب` must peel `و` then `ب` then `ال` → `كتاب` within the 3-peel budget"
+        );
+    }
+
+    #[test]
+    fn table_matches_arabic_clitic_strip_rejects_unrelated_first_token() {
+        // Phase 1.6 false-positive guard: a sentence whose
+        // first token contains zero proclitic prefixes and is
+        // not itself a table entry must NOT match.
+        let table = &["كيف", "متى", "أين", "لماذا"];
+        for sentence in [
+            "أنا في المكتب", // "I am in the office" — `أنا` starts with `أ` (interrog hamza
+            // orthography) but `أ` is deliberately NOT in the peel set.
+            "أحمد قادم غدا", // "Ahmad is coming tomorrow" — proper-name `أحمد`.
+            "محمد ذهب",      // "Muhammad went" — proper-name `محمد`.
+            "هذا كتاب جديد", // "This is a new book" — demonstrative `هذا`.
+        ] {
+            assert!(
+                !table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics),
+                "Arabic declarative {sentence:?} must NOT match the interrogative table \
+                 under the proclitic-peeling strategy (no peel produces an interrogative \
+                 residual)"
+            );
+        }
+    }
+
+    #[test]
+    fn table_matches_arabic_clitic_strip_rejects_bare_proclitic_token() {
+        // Phase 1.6 edge case: a first token consisting only of
+        // a proclitic prefix (e.g. just `و` with no host word)
+        // must NOT match — there is no residual to compare
+        // against the table. This guards against accidentally
+        // matching the empty string against a table containing
+        // the empty string (defence in depth; no table actually
+        // does that today).
+        let table = &["كيف", "متى"];
+        // Pure proclitic-only first token: stripping `و` would
+        // leave "", which the peel helper explicitly rejects.
+        assert!(
+            !table_matches(table, "و كيف", MatchStrategy::FirstTokenWithArabicClitics),
+            "bare proclitic `و` (separated from `كيف` by whitespace) must not falsely \
+             surface `كيف` via the peel — `peel_one_arabic_proclitic` rejects empty residuals"
+        );
+    }
+
+    #[test]
+    fn peel_one_arabic_proclitic_longest_first_priority() {
+        // Phase 1.6 ordering invariant: 2-char `ال` peels before
+        // 1-char `ا`/`ل` so leading `الكتاب` surfaces `كتاب`,
+        // not the meaningless `لكتاب` that a `ا`-first peel
+        // would produce. (`ا` is not in the peel set, so this
+        // is technically belt-and-braces — but the ordering test
+        // pins the priority so a future contributor can't
+        // accidentally re-order the constant.)
+        assert_eq!(peel_one_arabic_proclitic("الكتاب"), Some("كتاب"));
+        assert_eq!(
+            peel_one_arabic_proclitic("أل"), /* def-art only */
+            None
+        );
+        // Definite-article variant `أل` (hamza-on-alif + lam):
+        // peels to non-empty residual.
+        assert_eq!(peel_one_arabic_proclitic("ألكتاب"), Some("كتاب"));
+        // 1-char productive proclitics return the bare residual.
+        assert_eq!(peel_one_arabic_proclitic("وكيف"), Some("كيف"));
+        assert_eq!(peel_one_arabic_proclitic("فمتى"), Some("متى"));
+        assert_eq!(peel_one_arabic_proclitic("بأي"), Some("أي"));
+        assert_eq!(peel_one_arabic_proclitic("لمن"), Some("من"));
+        // Sweep-1 precision guard (Devin Review #ANALYSIS-0004):
+        // `ك` and `س` are NO LONGER in the peel set, so a
+        // leading `ك` / `س` does not peel — the residual `كأين`
+        // / `سيكون` is returned as-None (no other recognised
+        // prefix at position 0 either). See
+        // `table_matches_arabic_clitic_strip_drops_unproductive_k_and_s_prefixes`
+        // for the host-level negative assertions, and the
+        // docstring on `ARABIC_PROCLITIC_PREFIXES` for the
+        // false-positive rationale (`سأرسل` ➜ imperative
+        // `أرسل` was the architectural trigger).
+        assert_eq!(peel_one_arabic_proclitic("كأين"), None);
+        assert_eq!(peel_one_arabic_proclitic("سيكون"), None);
+        // No recognised prefix → None.
+        assert_eq!(peel_one_arabic_proclitic("أحمد"), None);
+        assert_eq!(peel_one_arabic_proclitic("هذا"), None);
+        assert_eq!(peel_one_arabic_proclitic("محمد"), None);
+        // Pure proclitic with empty residual → None.
+        assert_eq!(peel_one_arabic_proclitic("و"), None);
+        assert_eq!(peel_one_arabic_proclitic("ال"), None);
+    }
+
+    #[test]
+    fn arabic_clitic_peel_budget_bounds_worst_case_iteration() {
+        // Phase 1.6 budget invariant: the helper must give up
+        // after ARABIC_PROCLITIC_PEEL_BUDGET peels even on a
+        // pathological input that could otherwise loop. A
+        // string of N `و` characters followed by a non-matching
+        // host produces N peels before exhausting the prefixes
+        // — the budget caps at ARABIC_PROCLITIC_PEEL_BUDGET = 3.
+        let table = &["كيف"];
+        // `وووووووووو…كيف` with 10 leading `و` — 10 > 3, so the
+        // budget exits before reaching `كيف`. This guards the
+        // structural bound (an attacker can't force the matcher
+        // to iterate proportional to input length).
+        let mut adversarial = String::new();
+        for _ in 0..10 {
+            adversarial.push('و');
+        }
+        adversarial.push_str("كيف");
+        assert!(
+            !table_matches(
+                table,
+                adversarial.as_str(),
+                MatchStrategy::FirstTokenWithArabicClitics
+            ),
+            "pathological 10-`و` prefix must exit via the peel budget without surfacing `كيف`"
+        );
+        // Sanity: exactly 3 leading `و` still matches (the
+        // budget is inclusive — 3 peels are attempted).
+        assert!(
+            table_matches(
+                table,
+                "وووكيف يحدث ذلك",
+                MatchStrategy::FirstTokenWithArabicClitics
+            ),
+            "3-`و` prefix `وووكيف` must surface `كيف` within the 3-peel budget"
+        );
+    }
+
+    #[test]
+    fn arabic_clitic_strategy_is_strict_superset_of_first_token() {
+        // Phase 1.6 invariant: the FirstTokenWithArabicClitics
+        // strategy must be a *strict superset* of FirstToken —
+        // i.e. (a) every sentence that matches under FirstToken
+        // must also match under FirstTokenWithArabicClitics
+        // (no recall is removed), AND (b) some sentences match
+        // under FirstTokenWithArabicClitics that do NOT match
+        // under FirstToken (the new strategy genuinely adds
+        // recall, not just preserves it).
+        //
+        // Sweep-2 strengthening (Devin Review #3331659010): the
+        // original implementation only checked direction (a) with
+        // bare-first-token inputs (where both strategies trivially
+        // match), making the assertion `!bare || clitic`
+        // vacuously true if FirstTokenWithArabicClitics had been
+        // broken to silently fall through to a copy of FirstToken.
+        // The current implementation adds direction (b) with
+        // proclitic-prefixed inputs, so a regression that made
+        // the new strategy degrade to bare FirstToken would now
+        // fail the second loop instead of passing the first
+        // loop trivially.
+        let table = &["كيف", "متى", "أين", "ما"];
+
+        // Direction (a): bare-first-token cases — both strategies
+        // must match because the fast-path equality fires before
+        // any peel is attempted.
+        for sentence in ["كيف الحال", "متى الاجتماع", "أين المفتاح", "ما هذا"]
+        {
+            let bare = table_matches(table, sentence, MatchStrategy::FirstToken);
+            let clitic = table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics);
+            assert!(
+                bare && clitic,
+                "FirstTokenWithArabicClitics must preserve all FirstToken matches: \
+                 sentence {sentence:?} matched FirstToken={bare} but \
+                 FirstTokenWithArabicClitics={clitic} (both must be true for the \
+                 bare-first-token fast path)"
+            );
+        }
+
+        // Direction (b): proclitic-prefixed cases — FirstToken
+        // must NOT match (the prefixed surface is not in the
+        // table) while FirstTokenWithArabicClitics MUST match
+        // (the peel surfaces the bare interrogative). This is
+        // the architecturally meaningful direction that pins
+        // the recall gain Phase 1.6 was introduced to deliver.
+        for (sentence, prefix, residual) in [
+            ("وكيف يمكنني المساعدة", "و", "كيف"),
+            ("فمتى نلتقي", "ف", "متى"),
+            ("بأين", "ب", "أين"), // synthetic — pins the prefix peel even though
+            // `بأين` isn't idiomatic Arabic.
+            ("لما هذا", "ل", "ما"),
+        ] {
+            let bare = table_matches(table, sentence, MatchStrategy::FirstToken);
+            let clitic = table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics);
+            assert!(
+                !bare,
+                "FirstToken must NOT match the proclitic-prefixed surface form: \
+                 sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
+                 unexpectedly matched bare FirstToken — this would mean the strict \
+                 superset assertion is vacuous"
+            );
+            assert!(
+                clitic,
+                "FirstTokenWithArabicClitics MUST match the proclitic-prefixed surface: \
+                 sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
+                 did not match — the strict-superset direction is broken"
+            );
+        }
+    }
+
+    #[test]
+    fn arabic_clitic_strip_handles_nfd_hamza_alif_via_dual_prefix_entries() {
+        // Phase 1.6 sweep-2 (Devin Review #3331658913): the
+        // `normalize_for_lookup` pipeline strips Arabic combining
+        // marks (including U+0654 ARABIC HAMZA ABOVE) BEFORE NFC
+        // composition, so an NFD-encoded `أل` (U+0627 ALEF +
+        // U+0654 HAMZA ABOVE + U+0644 LAM) collapses to bare `ال`
+        // (U+0627 + U+0644). An NFC-encoded `أل` (U+0623
+        // HAMZA-ON-ALEF + U+0644) survives the strip because
+        // U+0623 is a precomposed base character. Both forms
+        // must successfully peel the definite article.
+        //
+        // The ARABIC_PROCLITIC_PREFIXES constant correctly
+        // includes BOTH `ال` and `أل` entries, so the peel
+        // succeeds regardless of the input's original NFC/NFD
+        // encoding. This test pins the dual-entry design against
+        // a future contributor who looks at `أل` and `ال` in the
+        // constant and assumes one is redundant (it is NOT —
+        // removing either would silently break recall on one of
+        // the two encodings).
+        // The production call path normalises via
+        // `normalize_for_lookup` BEFORE invoking `table_matches`,
+        // so this test mirrors that contract — anything else
+        // wouldn't exercise the NFD-collapse interaction the
+        // dual-entry design protects against.
+        let table = &["كتاب"];
+        let ar = Some("ar");
+
+        // Case 1: NFC-encoded `أل` (precomposed U+0623 + U+0644).
+        // The hamza-on-alif is a base character (not a combining
+        // mark), so it survives `normalize_for_lookup`'s tashkeel-
+        // strip pass intact; the peel matches via the `أل` entry
+        // in the proclitic prefix list.
+        let nfc_alef_hamza_lam = "\u{0623}\u{0644}\u{0643}\u{062A}\u{0627}\u{0628}"; // أل + كتاب
+        let nfc_normalised = normalize_for_lookup(nfc_alef_hamza_lam, ar);
+        assert!(
+            table_matches(
+                table,
+                &nfc_normalised,
+                MatchStrategy::FirstTokenWithArabicClitics
+            ),
+            "NFC-encoded `أل` (U+0623 + U+0644) must peel via the `أل` proclitic entry \
+             after normalisation; got normalised={nfc_normalised:?}"
+        );
+
+        // Case 2: NFD-encoded `أل` (decomposed U+0627 ALEF +
+        // U+0654 ARABIC HAMZA ABOVE + U+0644 LAM). The combining-
+        // hamza-above is in the U+064B..U+065F tashkeel range, so
+        // `normalize_for_lookup`'s tashkeel-strip pass removes it
+        // BEFORE NFC composition runs, leaving bare `ال`
+        // (U+0627 + U+0644). The peel then matches via the `ال`
+        // entry — NOT via `أل` (which is no longer present after
+        // the strip). Without BOTH entries in the proclitic list,
+        // one of these two NFD/NFC encodings would silently fail.
+        let nfd_alef_hamza_lam = "\u{0627}\u{0654}\u{0644}\u{0643}\u{062A}\u{0627}\u{0628}"; // alef + combining-hamza-above + lam + كتاب
+        let nfd_normalised = normalize_for_lookup(nfd_alef_hamza_lam, ar);
+        assert!(
+            table_matches(
+                table,
+                &nfd_normalised,
+                MatchStrategy::FirstTokenWithArabicClitics
+            ),
+            "NFD-encoded `أل` (U+0627 + U+0654 + U+0644) must peel via the `ال` entry \
+             after tashkeel-strip collapses the combining hamza-above; got \
+             normalised={nfd_normalised:?}"
+        );
+
+        // Case 3: canonical NFC `ال` (bare alef-lam, no hamza) —
+        // sanity check that the `ال` entry handles the most
+        // common Arabic definite article form.
+        let canonical_alef_lam = "\u{0627}\u{0644}\u{0643}\u{062A}\u{0627}\u{0628}"; // ال + كتاب
+        let canonical_normalised = normalize_for_lookup(canonical_alef_lam, ar);
+        assert!(
+            table_matches(
+                table,
+                &canonical_normalised,
+                MatchStrategy::FirstTokenWithArabicClitics
+            ),
+            "Canonical `ال` (U+0627 + U+0644) must peel via the `ال` proclitic entry"
+        );
+    }
+
+    // -----------------------------------------------------------------
     // Registry behaviour
     // -----------------------------------------------------------------
 
@@ -1844,6 +2603,24 @@ mod tests {
                         }
                         // Substring entries are allowed any whitespace.
                         MatchStrategy::Substring => {}
+                        // FirstTokenWithArabicClitics shares the
+                        // exact-equality semantics of FirstToken
+                        // on the first alphabetic token (plus
+                        // peeled residuals), so entries must
+                        // satisfy the same no-whitespace
+                        // invariant as FirstToken — a
+                        // whitespace-bearing entry could never
+                        // equal a single alphabetic token (or a
+                        // proclitic-stripped residual thereof).
+                        MatchStrategy::FirstTokenWithArabicClitics => {
+                            assert!(
+                                !entry.chars().any(char::is_whitespace),
+                                "{}/{strategy_label} entry {entry:?} is \
+                                 FirstTokenWithArabicClitics but contains whitespace \
+                                 (no token / peel-residual would ever equal it)",
+                                lex.primary_tag,
+                            );
+                        }
                     }
                 }
             }
@@ -2068,6 +2845,63 @@ mod tests {
                 "Lao lexicon entry {entry:?} contains no Lao codepoint",
             );
         }
+    }
+
+    #[test]
+    fn arabic_lexicon_strategy_per_class_is_intentional() {
+        // Phase 1.6 sweep-3 (Devin Review #3331684703): the
+        // per-class strategy asymmetry in AR_LEXICON is the
+        // architectural design, not an oversight. This test
+        // pins each strategy at runtime so a contributor who
+        // tries to "harmonise" them — e.g. push Substring up to
+        // task_imperative, or push FirstTokenWithArabicClitics
+        // down to decision/task — breaks a test rather than
+        // silently degrading precision or recall.
+        //
+        // See the per-class asymmetry doc block on AR_LEXICON
+        // (lexicon.rs:1265-1320) for the full rationale.
+        let reg = default_registry();
+        let lex = reg.lexicon_for("ar").expect("ar configured");
+
+        // Decision class: Substring (long-form keywords,
+        // anywhere in sentence). FirstTokenWithArabicClitics
+        // would miss decision keywords that don't sit at the
+        // first token (e.g. `هذا تقرر بالأمس` "this was decided
+        // yesterday" puts `تقرر` at token position 2). Substring
+        // is correct.
+        assert_eq!(
+            lex.decision_strategy,
+            MatchStrategy::Substring,
+            "AR_LEXICON.decision_strategy must be Substring — see per-class \
+             asymmetry doc block on AR_LEXICON for rationale (long-form \
+             keywords matched anywhere in sentence)"
+        );
+
+        // Task class: Substring (long-form keywords + bigram
+        // phrases like `من فضلك`). Same rationale as decision.
+        assert_eq!(
+            lex.task_strategy,
+            MatchStrategy::Substring,
+            "AR_LEXICON.task_strategy must be Substring — see per-class \
+             asymmetry doc block on AR_LEXICON for rationale (long-form \
+             keywords + bigram phrases matched anywhere in sentence)"
+        );
+
+        // Imperative class: FirstTokenWithArabicClitics
+        // (positional + clitic-aware). Substring would over-match
+        // (any sentence containing `أرسل` anywhere would falsely
+        // emit Task); plain FirstToken would miss clitic-stacked
+        // imperatives like `واكتب التقرير` "and write the report"
+        // that surface the bare imperative root only after peeling
+        // the conjunction proclitic.
+        assert_eq!(
+            lex.task_imperative_strategy,
+            MatchStrategy::FirstTokenWithArabicClitics,
+            "AR_LEXICON.task_imperative_strategy must be \
+             FirstTokenWithArabicClitics — see per-class asymmetry doc block \
+             on AR_LEXICON for rationale (positional + clitic-aware matching \
+             is what makes Phase 1.6 architecturally correct)"
+        );
     }
 
     #[test]
