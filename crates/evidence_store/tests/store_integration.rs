@@ -959,6 +959,98 @@ fn fts5_bigram_lane_closes_2char_cjk_recall_floor() {
 }
 
 #[test]
+fn fts5_three_lane_merge_dedupes_mixed_query_across_all_three_tables() {
+    // Sweep-2 finding #7 regression — exercises the
+    // `merged_fts_search` three-lane fan-out across a single
+    // mixed Latin + 2-codepoint CJK query so all three FTS5
+    // shadow tables contribute hits that the merge must
+    // de-duplicate by `evidence_id`.
+    //
+    // The body contains a single matching row whose Latin
+    // substring (`launch`) routes to `evidence_fts` (unicode61),
+    // whose 3+-codepoint CJK substring (`良い天気`) routes to
+    // `evidence_fts_cjk` (trigram), AND whose 2-codepoint CJK
+    // substring (`天気`) routes to `evidence_fts_bigram`
+    // (precomputed bigrams under unicode61). All three branches
+    // therefore return the same row under different ranks; the
+    // `merged_fts_search` `MIN(rank)`-by-evidence-id HashMap
+    // contract must collapse them to a single hit. Pre-Phase-1.2.1
+    // this test was unrepresentable because the bigram lane did
+    // not exist and the 2-codepoint CJK term `天気` round-tripped
+    // as empty.
+    //
+    // The companion `fts5_search_dedupes_when_both_tables_match_same_row`
+    // test exercises only the two-lane (unicode61 + trigram) merge;
+    // this test extends that contract to the third lane.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "Project launch review with 今日は良い天気です note".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+
+    // Sanity: the row landed in all three FTS shadow tables. We
+    // verify this directly via the raw connection so a regression
+    // in the write-path routing predicate surfaces as a clear
+    // assertion failure here, not as a confusing miss in the
+    // merge below.
+    let unicode61_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts", [], |r| r.get(0))
+        .unwrap();
+    let trigram_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
+        .unwrap();
+    let bigram_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(unicode61_rows, 1, "row must land in evidence_fts");
+    assert_eq!(trigram_rows, 1, "row must land in evidence_fts_cjk");
+    assert_eq!(bigram_rows, 1, "row must land in evidence_fts_bigram");
+
+    // A single mixed query that intentionally drives all three
+    // lanes to a hit on the same evidence_id. FTS5 boolean OR
+    // syntax `term1 OR term2 OR term3`:
+    //
+    //  * `launch`     → unicode61 (`evidence_fts`)
+    //  * `良い天気`     → trigram  (`evidence_fts_cjk`)
+    //  * `天気`        → bigram   (`evidence_fts_bigram`)
+    //
+    // The merge contract collapses them to a single hit on the
+    // shared evidence_id. If any lane's prepared statement were
+    // accidentally dropped, the row would still appear (because
+    // the other two lanes also match), so this test is robust to
+    // a single-lane regression — but a wrong-shape merge that
+    // returned duplicates would fail loudly.
+    let hits = store
+        .search_fts(scope, "launch OR 良い天気 OR 天気", 10)
+        .unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "three-lane mixed query must dedupe to a single hit on the shared evidence_id"
+    );
+    assert_eq!(hits[0], r.evidence_id);
+
+    // Each lane in isolation also returns exactly the same row.
+    // This pins the contract that the bigram lane is purely
+    // additive — running the same query without the other two
+    // terms must still hit the same row.
+    let unicode61_only = store.search_fts(scope, "launch", 10).unwrap();
+    assert_eq!(unicode61_only, vec![r.evidence_id]);
+    let trigram_only = store.search_fts(scope, "良い天気", 10).unwrap();
+    assert_eq!(trigram_only, vec![r.evidence_id]);
+    let bigram_only = store.search_fts(scope, "天気", 10).unwrap();
+    assert_eq!(bigram_only, vec![r.evidence_id]);
+}
+
+#[test]
 fn fts5_search_dedupes_when_both_tables_match_same_row() {
     // A mixed-script body where the Latin substring matches
     // unicode61 AND a CJK trigram substring matches trigram is

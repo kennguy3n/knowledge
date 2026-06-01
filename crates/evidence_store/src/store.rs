@@ -718,6 +718,41 @@ impl EvidenceStore {
         })
     }
 
+    /// Write-side dual entry point for all three FTS5 shadow tables
+    /// (`evidence_fts` / `evidence_fts_cjk` / `evidence_fts_bigram`).
+    ///
+    /// **Error-propagation contract** (read this if you're tempted
+    /// to "match the read path" and swallow errors on the CJK lanes):
+    ///
+    /// All three INSERT statements propagate `rusqlite::Error` to
+    /// the caller via `?`. This is **asymmetric** with the read-path
+    /// contract documented on [`Self::search_fts`], which silently
+    /// treats CJK-lane errors as empty results to preserve the
+    /// "unicode61 is the source of truth for query validity"
+    /// invariant. The asymmetry is intentional:
+    ///
+    /// * `index_fts` runs **inside the same SQLCipher transaction**
+    ///   as the `evidence` row INSERT (see [`Self::ingest_message`]
+    ///   / [`Self::ingest_document`]). A swallowed INSERT failure
+    ///   on `evidence_fts_cjk` or `evidence_fts_bigram` would
+    ///   commit the `evidence` row + `evidence_fts` row without
+    ///   the matching CJK / bigram shadow row — a permanent stale
+    ///   state with no REBUILD opportunity (REBUILD re-tokenises
+    ///   the existing `content` column; it cannot synthesise rows
+    ///   that were never inserted). That would silently degrade
+    ///   recall on the affected scope forever with no signal to
+    ///   the caller or operator.
+    /// * `search_fts` runs **outside any transaction** as a
+    ///   read-only query. If the engine is transiently broken
+    ///   (e.g. an old `sqlite_stat1` regression on a specific
+    ///   bundled build), the read path can safely degrade recall
+    ///   for the duration of the broken read and recover on the
+    ///   next call. There is no committed state to corrupt.
+    ///
+    /// Hence: propagate on write, swallow on read. Both paths are
+    /// part of the same architectural invariant — the source of
+    /// truth (`evidence_fts`) is always consistent with the
+    /// additive lanes whenever every write transaction commits.
     fn index_fts(
         tx: &rusqlite::Transaction<'_>,
         evidence_id: EvidenceId,
@@ -1150,51 +1185,82 @@ impl EvidenceStore {
     /// pre-process per FTS5's syntax (e.g. quote phrases). The result
     /// is the matching evidence ids ordered by FTS5 rank.
     ///
-    /// Per Phase 1.2 / schema v14 the search fans out across **both**
-    /// lexical indexes — `evidence_fts` (unicode61) for whitespace-
-    /// segmented scripts and `evidence_fts_cjk` (trigram) for CJK
-    /// Han / Hiragana / Katakana / Thai content — and de-duplicates
-    /// on `evidence_id`, taking the best (smallest, since FTS5 rank
-    /// is negative-and-smaller-is-better) of the two ranks.
+    /// As of schema v15 (Phase 1.2.1) the search fans out across
+    /// **three** lexical indexes and de-duplicates on `evidence_id`,
+    /// taking the best (smallest, since FTS5 rank is negative-and-
+    /// smaller-is-better) of whichever ranks the row appears under:
     ///
-    /// **Query-syntax compatibility, not equivalence.** Both branches
-    /// accept the same FTS5 query *grammar* (the bareword / `"phrase"`
-    /// / `term1 OR term2` / `NEAR(…)` / column-filter / prefix-star
-    /// syntax described in <https://sqlite.org/fts5.html#full_text_query_syntax>).
+    /// * `evidence_fts` (unicode61, schema v1) — universal lane for
+    ///   whitespace / punctuation-segmented scripts.
+    /// * `evidence_fts_cjk` (trigram, schema v14, Phase 1.2) — CJK /
+    ///   Thai substring lane for queries of ≥ 3 codepoints (FTS5's
+    ///   built-in trigram tokeniser cannot serve shorter queries).
+    /// * `evidence_fts_bigram` (precomputed bigrams under
+    ///   `unicode61`, schema v15, Phase 1.2.1) — CJK / Thai recall
+    ///   lane for **2-codepoint** queries like `天気` (Japanese
+    ///   "weather") that the trigram lane cannot serve. Bigrams are
+    ///   computed at write time over the CJK / Thai portion of the
+    ///   body (see [`crate::bigram`]) and stored as whitespace-
+    ///   separated tokens, so the same `unicode61` tokeniser that
+    ///   powers `evidence_fts` matches them word-by-word.
+    ///
+    /// **Query-syntax compatibility, not equivalence.** All three
+    /// branches accept the same FTS5 query *grammar* (the bareword
+    /// / `"phrase"` / `term1 OR term2` / `NEAR(…)` / column-filter /
+    /// prefix-star syntax described in
+    /// <https://sqlite.org/fts5.html#full_text_query_syntax>).
     /// They differ in what each tokeniser is able to match, and the
-    /// `trigram` branch rejects some queries that `unicode61` accepts.
-    /// Per the [`trigram` tokeniser documentation][trigram-doc]:
+    /// `trigram` branch rejects some queries that `unicode61`
+    /// accepts. Per the [`trigram` tokeniser documentation][trigram-doc]:
     ///
-    /// * `unicode61` (universal table) splits on Unicode whitespace
+    /// * `unicode61` (`evidence_fts`) splits on Unicode whitespace
     ///   and punctuation and is happy with single-codepoint terms.
     ///   A query like `"to OR deadline"` is well-formed and may
     ///   match real rows.
-    /// * `trigram` (CJK table) only stores overlapping 3-codepoint
-    ///   windows of `content`. It returns a SQLite error — not an
-    ///   empty result set — when given a query term shorter than 3
-    ///   characters, a `NEAR(…)` expression, a column filter, or a
-    ///   prefix-star (`term*`) match shorter than 3 codepoints.
+    /// * `trigram` (`evidence_fts_cjk`) only stores overlapping
+    ///   3-codepoint windows of `content`. It returns a SQLite
+    ///   error — not an empty result set — when given a query term
+    ///   shorter than 3 characters, a `NEAR(…)` expression, a
+    ///   column filter, or a prefix-star (`term*`) match shorter
+    ///   than 3 codepoints.
+    /// * `unicode61` over precomputed bigrams (`evidence_fts_bigram`)
+    ///   only sees rows whose body contributed bigrams (i.e. bodies
+    ///   that contain at least one CJK / Thai codepoint). Queries
+    ///   below 2 CJK codepoints, or pure-ASCII queries, route to
+    ///   it as empty matches that are folded into the merge.
     ///
     /// To preserve the **architectural invariant that a syntactically
     /// valid `unicode61` query never breaks the substrate's search
-    /// API** — even when that query happens to be a `trigram`-rejected
-    /// shape — the implementation runs the two branches as two
-    /// independent prepared statements and merges in Rust:
+    /// API** — even when that query happens to be a `trigram`-
+    /// rejected shape — the implementation runs each branch as an
+    /// independent prepared statement and merges in Rust:
     ///
-    /// * The `unicode61` branch is the **source of truth for query
-    ///   validity**: any error from `evidence_fts MATCH ?1`
-    ///   propagates to the caller (genuine FTS5 syntax error,
-    ///   schema corruption, etc).
-    /// * The `trigram` branch is **purely additive recall**: any
-    ///   error from `evidence_fts_cjk MATCH ?1` — including the
-    ///   short-term / `NEAR(…)` / column-filter rejections — is
-    ///   silently treated as an empty result set, so the caller
-    ///   sees the `unicode61` results unchanged. A 2-codepoint CJK
-    ///   query like `天気` thus round-trips as `Ok(vec![])` (the
-    ///   documented Phase 1.2 floor; a custom FFI bigram tokeniser
-    ///   is the future-phase recall fix), and a query like
-    ///   `"to OR 良い天気"` still returns the `unicode61` hit on
-    ///   `to` even though `trigram` rejects the 2-char `to` token.
+    /// * The `unicode61` branch (`evidence_fts`) is the **source of
+    ///   truth for query validity**: any error from
+    ///   `evidence_fts MATCH ?1` propagates to the caller (genuine
+    ///   FTS5 syntax error, schema corruption, etc).
+    /// * The `trigram` branch (`evidence_fts_cjk`) is **purely
+    ///   additive recall**: any error from `evidence_fts_cjk
+    ///   MATCH ?1` — including the short-term / `NEAR(…)` /
+    ///   column-filter rejections — is silently treated as an
+    ///   empty result set, so the caller sees the `unicode61`
+    ///   results unchanged.
+    /// * The `unicode61`-over-bigrams branch (`evidence_fts_bigram`)
+    ///   is **purely additive recall** on the same contract as the
+    ///   trigram branch. Queries with fewer than 2 CJK / Thai
+    ///   codepoints round-trip as empty bigram matches, so adding
+    ///   the branch never changes the result set of a pre-Phase-1.2.1
+    ///   pure-Latin query.
+    ///
+    /// Concretely, a 2-codepoint CJK query like `天気` — which the
+    /// v14 trigram lane could not serve — now returns matches via
+    /// the bigram lane (Phase 1.2.1 closes the documented Phase 1.2
+    /// floor). A mixed query like `"to OR 良い天気"` still returns
+    /// the `unicode61` hit on `to` even though the trigram branch
+    /// rejects the 2-char `to` token, AND additionally picks up CJK
+    /// matches via both the trigram lane (3+ codepoint `良い天`,
+    /// `い天気`) and the bigram lane (2-codepoint windows of
+    /// `良い天気`).
     ///
     /// This design also makes the substrate robust to the exact
     /// bundled SQLite version's lenience — older builds may silently
@@ -4262,6 +4328,30 @@ const V15_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 /// disk). The check is O(1) at the SQLite level because FTS5
 /// maintains row-count metadata in
 /// `evidence_fts_bigram_docsize`.
+///
+/// Reachability of partial-population states (sweep-2 inline
+/// 3331173175 contract for future migration authors). The
+/// `COUNT(*) > 0` guard is *deliberately coarse*: it treats
+/// "any rows" as "migration already ran". This is sound for
+/// every reachable code path because every site that deletes
+/// from `evidence_fts_bigram` ([`EvidenceStore::purge_fts_for_scope_in_tx`]
+/// and [`EvidenceStore::rebuild_evidence_fts_in_tx`]) runs
+/// **after** the migration completes — `Self::open` walks
+/// `apply_migration` to `SCHEMA_VERSION` and stamps
+/// `user_version` before returning the store handle, and the
+/// FFI runtime's `purge_fts_for_scopes` replay of persisted
+/// tombstones runs *after* `Self::open` returns. There is no
+/// code path that can produce a partially-populated
+/// `evidence_fts_bigram` table for the migration to walk back
+/// into. If a future migration author adds a site that mutates
+/// `evidence_fts_bigram` between `Self::open`'s schema bootstrap
+/// and the `apply_migration` walk, they MUST tighten this guard
+/// to verify the table contents match the
+/// `evidence_fts`-derived expected set (or run the backfill
+/// inside a single transaction with the new deletion path so
+/// the partial state is never observable). The same invariant
+/// applies symmetrically to the v14 migration's idempotency
+/// guard.
 ///
 /// Per-row routing matches the write path
 /// ([`EvidenceStore::index_fts`]): a body is backfilled into

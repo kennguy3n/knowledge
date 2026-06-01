@@ -789,6 +789,38 @@ fn opens_v14_database_and_upgrades_to_current_with_evidence_fts_bigram_backfille
         "v14 -> v15 backfill must re-insert the CJK row into evidence_fts_bigram"
     );
 
+    // Defensive content-column inspection (closes sweep-2
+    // finding #6: prior assertion only verified row count). The
+    // backfilled `content` column must hold the precomputed-bigram
+    // string emitted by `crate::bigram::compute_cjk_bigrams` over
+    // the original CJK body — not the raw body, and not an empty
+    // string. Pinning a sample of expected bigrams catches a
+    // future regression where the migration accidentally writes
+    // the trigram-shaped string (or the raw body) into the bigram
+    // table while still satisfying the COUNT-based idempotency
+    // guard.
+    let stored_bigram_content: String = store
+        .raw_conn()
+        .query_row("SELECT content FROM evidence_fts_bigram", [], |row| {
+            row.get(0)
+        })
+        .expect("read evidence_fts_bigram.content after upgrade");
+    assert!(
+        !stored_bigram_content.is_empty(),
+        "v14 -> v15 backfill must populate evidence_fts_bigram.content"
+    );
+    assert_ne!(
+        stored_bigram_content, cjk_body,
+        "v14 -> v15 backfill must transform the body into bigram form, not store raw content"
+    );
+    for expected_bigram in ["会議", "議事", "今日", "重要"] {
+        assert!(
+            stored_bigram_content.contains(expected_bigram),
+            "backfilled bigram content must contain '{expected_bigram}' \
+             from `{cjk_body}` (was: `{stored_bigram_content}`)"
+        );
+    }
+
     // End-to-end: the 2-codepoint CJK query that the trigram lane
     // cannot serve (because of the 3-codepoint floor) must now
     // return the back-filled row through the bigram lane. 「会議」
@@ -801,6 +833,34 @@ fn opens_v14_database_and_upgrades_to_current_with_evidence_fts_bigram_backfille
         hits.len(),
         1,
         "v14 -> v15 backfill must make 2-char CJK queries hit via the bigram lane"
+    );
+
+    // Latin row sanity: a body that contains zero CJK / Thai
+    // codepoints must NOT be back-filled into `evidence_fts_bigram`
+    // (the routing predicate gates writes identically on the
+    // migration path and the steady-state ingest path). Cross-
+    // checks the storage-cost invariant so the migration cannot
+    // silently bloat the bigram lane with Latin rows.
+    let total_evidence_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts", [], |r| r.get(0))
+        .expect("count evidence_fts rows after upgrade");
+    assert!(
+        total_evidence_rows >= 2,
+        "expected at least the cjk + latin rows in evidence_fts"
+    );
+    let latin_bytes_len = latin_body.len();
+    assert!(
+        latin_bytes_len > 0,
+        "latin_body fixture must be non-empty to make the next assertion meaningful"
+    );
+    let bigram_count_after: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .expect("recount bigram rows for latin guard");
+    assert_eq!(
+        bigram_count_after, 1,
+        "v14 -> v15 backfill must NOT insert the pure-Latin row into evidence_fts_bigram"
     );
 }
 
