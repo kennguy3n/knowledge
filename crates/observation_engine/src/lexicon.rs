@@ -1299,26 +1299,258 @@ const TH_LEXICON: LanguageLexicon = LanguageLexicon {
     stop_words: &[],
 };
 
+/// Tibetan (`bo`) — Phase 1.5.
+///
+/// Tibetan script (`U+0F00..=U+0FFF`) uses the `tsheg` (`་`,
+/// `U+0F0B`) as a *syllable* separator, not a word boundary,
+/// and stacks consonants via subscript / superscript marks
+/// that fall outside `unicode61`'s letter category. As with
+/// Hindi (Phase 1.1 sweep 2) the strategy for every class is
+/// [`MatchStrategy::Substring`]: token-based matchers would
+/// fragment intra-word stacks (e.g. `བཀའ་ཤོག་` "decree" splits
+/// into pieces around the tsheg + subjoined consonants and
+/// no keyword ever lines up with a token boundary).
+///
+/// Whatlang 0.18 does NOT ship a Tibetan classifier
+/// ([`Lang::Bod`](https://docs.rs/whatlang/0.18.0/whatlang/enum.Lang.html)
+/// is absent), so the language tag will normally be `None`
+/// for Tibetan bodies. The FTS5 routing in Phase 1.2 is
+/// body-based (see [`crate::script::is_cjk_or_thai_codepoint`])
+/// so recall still works, and callers that explicitly know
+/// the language can pass the `"bo"` tag to this registry to
+/// get keyword extraction. The lexicon is intentionally
+/// shipped despite the missing detector so the substrate can
+/// be wired into Tibetan corpora via explicit tagging.
+///
+/// Sources:
+/// * Decision / task vocabulary curated from
+///   monlam.org and Tibetan-English dictionary entries
+///   (Goldstein, *The New Tibetan-English Dictionary of
+///   Modern Tibetan*, UC Press 2001).
+const BO_LEXICON: LanguageLexicon = LanguageLexicon {
+    primary_tag: "bo",
+    display_name: "Tibetan",
+    decision_keywords: &[
+        "ཐག་གཅོད",  // "decide / determine"
+        "གཏན་འཁེལ", // "settle / finalise"
+        "ཆོད",      // "decided" (past)
+        "མོས་མཐུན",  // "agreed / consensus"
+        "ཁས་ལེན",   // "accept"
+        "གནང་བ",   // "approval / sanction" (honorific)
+        "ཕྱིར་འདོར",  // "reject / dismiss"
+        "མིང་རྟགས",  // "signature"
+    ],
+    decision_strategy: MatchStrategy::Substring,
+    task_keywords: &[
+        "ལས་ཀ",    // "work / task"
+        "བྱ་བ",     // "action / activity"
+        "ཐུགས་རྗེ་ཆེ", // "thank you / please (polite opener)"
+        "ཞུ",       // "request" (honorific verb root)
+        "རྗེས་འཇུག",  // "follow-up"
+    ],
+    task_strategy: MatchStrategy::Substring,
+    // Tibetan word boundaries are syllable-level (tsheg
+    // separated), not whitespace-separated, so the
+    // `FirstBigram` token-based matcher cannot fire. We use
+    // `Substring` here for the same reason as Hindi: stacked
+    // consonants and combining vowel signs are non-alphabetic
+    // (Unicode category Mn) and would split intra-syllable
+    // under any alphabetic-token matcher.
+    task_imperative_verbs: &[
+        "འབྲི",   // "write" (imperative)
+        "གཏོང",  // "send"
+        "བཤེར",  // "review / check"
+        "སྤེལ",   // "publish / spread"
+        "གཟིགས", // "examine / inspect" (honorific)
+    ],
+    task_imperative_strategy: MatchStrategy::Substring,
+    stop_words: &[],
+};
+
+/// Khmer (`km`) — Phase 1.5.
+///
+/// Khmer script (`U+1780..=U+17FF`) lacks inter-word
+/// whitespace and stacks subscript consonants via the
+/// invisible `coeng` (`U+17D2`, the Khmer virama).
+/// `unicode61` reduces any Khmer body to zero tokens. As
+/// with Tibetan above the strategy for every class is
+/// [`MatchStrategy::Substring`]: an alphabetic-token matcher
+/// would split `សម្រេច` ("decide", with coeng + subscript
+/// `m`) into pieces and never match the canonical form.
+///
+/// Whatlang 0.18 ships [`Lang::Khm`] so language detection
+/// works for Khmer bodies; this lexicon is reachable both
+/// via auto-detection and via explicit tag.
+///
+/// Sources:
+/// * Decision / task vocabulary curated from
+///   `headwordkhmer.com` and the *Khmer-English Dictionary*
+///   (Headley et al., Dunwoody Press 1997).
+const KM_LEXICON: LanguageLexicon = LanguageLexicon {
+    primary_tag: "km",
+    display_name: "Khmer",
+    decision_keywords: &[
+        "សម្រេច",    // "decide"
+        "ឯកភាព",    // "agreement / consensus"
+        "យល់ព្រម",    // "agree / consent"
+        "អនុម័ត",     // "approve / ratify"
+        "ច្បាស់",     // "definite / settled"
+        "ចុះហត្ថលេខា", // "sign (a document)"
+        "បដិសេធ",    // "reject"
+        "ទទួលយក",    // "accept"
+    ],
+    decision_strategy: MatchStrategy::Substring,
+    task_keywords: &[
+        "កិច្ចការ",  // "task / duty"
+        "ការងារ", // "work / job"
+        "សូម",     // "please" (canonical polite opener)
+        "ស្នើ",     // "request / propose"
+        "តាមដាន", // "follow up / track"
+    ],
+    task_strategy: MatchStrategy::Substring,
+    task_imperative_verbs: &[
+        "សរសេរ",   // "write"
+        "ផ្ញើ",      // "send"
+        "ត្រួតពិនិត្យ", // "review / inspect"
+        "បោះពុម្ព",   // "publish / print"
+        "អនុវត្ត",    // "implement / execute"
+    ],
+    task_imperative_strategy: MatchStrategy::Substring,
+    stop_words: &[],
+};
+
+/// Myanmar / Burmese (`my`) — Phase 1.5.
+///
+/// Myanmar script (`U+1000..=U+109F`) uses combining vowels,
+/// subscript consonants attached via the visible `asat`
+/// (`U+103A`) and `virama` (`U+1039`), and stacked
+/// consonants — none of which fall inside `unicode61`'s
+/// letter category. The script lacks inter-word whitespace.
+/// As with Tibetan and Khmer above the strategy for every
+/// class is [`MatchStrategy::Substring`].
+///
+/// Whatlang 0.18 ships [`Lang::Mya`] (Burmese) so language
+/// detection works for Myanmar bodies. The substrate's
+/// observation engine reaches this lexicon both via
+/// auto-detection and via explicit tag.
+///
+/// Sources:
+/// * Decision / task vocabulary curated from
+///   `myanmar-language.com` and the *Myanmar-English
+///   Dictionary* (Department of the Myanmar Language
+///   Commission, Yangon 1993).
+const MY_LEXICON: LanguageLexicon = LanguageLexicon {
+    primary_tag: "my",
+    display_name: "Burmese",
+    decision_keywords: &[
+        "ဆုံးဖြတ်",     // "decide"
+        "သဘောတူ",     // "agree / consent"
+        "သဘောတူခွင့်ပြု", // "agree and permit / approve"
+        "ခွင့်ပြု",      // "permit / approve"
+        "အတည်ပြု",     // "confirm / ratify"
+        "လက်မှတ်ထိုး",    // "sign (a document)"
+        "ပယ်ချ",      // "reject / dismiss"
+        "လက်ခံ",       // "accept"
+    ],
+    decision_strategy: MatchStrategy::Substring,
+    task_keywords: &[
+        "တာဝန်",     // "duty / task"
+        "လုပ်ငန်း",    // "work / business"
+        "ကျေးဇူးပြု", // "please" (canonical polite opener)
+        "တောင်းဆို",   // "request"
+        "လိုက်လံ",      // "follow up"
+    ],
+    task_strategy: MatchStrategy::Substring,
+    task_imperative_verbs: &[
+        "ရေး",         // "write"
+        "ပို့",           // "send"
+        "စစ်ဆေး",       // "check / review"
+        "ထုတ်ဝေ",        // "publish / release"
+        "အကောင်အထည်ဖော်", // "implement"
+    ],
+    task_imperative_strategy: MatchStrategy::Substring,
+    stop_words: &[],
+};
+
+/// Lao (`lo`) — Phase 1.5.
+///
+/// Lao script (`U+0E80..=U+0EFF`) is structurally parallel to
+/// Thai: it lacks inter-word whitespace, uses combining
+/// vowel signs and tone marks, and `unicode61` reduces any
+/// Lao body to zero tokens. As with Tibetan / Khmer /
+/// Myanmar above the strategy for every class is
+/// [`MatchStrategy::Substring`].
+///
+/// Whatlang 0.18 does NOT ship a Lao classifier
+/// ([`Lang::Lao`](https://docs.rs/whatlang/0.18.0/whatlang/enum.Lang.html)
+/// is absent — the closest detection is Thai, which can
+/// mis-tag Lao bodies). The FTS5 routing in Phase 1.2 is
+/// body-based so recall still works, and callers can pass
+/// `"lo"` explicitly. Same shipping rationale as Tibetan
+/// above.
+///
+/// Sources:
+/// * Decision / task vocabulary curated from
+///   `laodictionary.net` and the *Lao-English Dictionary*
+///   (Reinhorn, Larousse 2001).
+const LO_LEXICON: LanguageLexicon = LanguageLexicon {
+    primary_tag: "lo",
+    display_name: "Lao",
+    decision_keywords: &[
+        "ຕັດສິນໃຈ",   // "decide"
+        "ເຫັນດີ",     // "agree / consent"
+        "ອະນຸມັດ",    // "approve / authorise"
+        "ຍອມຮັບ",    // "accept"
+        "ລົງລາຍເຊັນ", // "sign (a document)"
+        "ປະຕິເສດ",   // "reject"
+    ],
+    decision_strategy: MatchStrategy::Substring,
+    task_keywords: &[
+        "ວຽກ",   // "work / task"
+        "ຫນ້າທີ່",  // "duty / responsibility"
+        "ກະລຸນາ", // "please" (canonical polite opener)
+        "ຮ້ອງຂໍ",  // "request"
+        "ຕິດຕາມ", // "follow up / track"
+    ],
+    task_strategy: MatchStrategy::Substring,
+    task_imperative_verbs: &[
+        "ຂຽນ",   // "write"
+        "ສົ່ງ",    // "send"
+        "ກວດກາ", // "check / review"
+        "ເຜີຍແຜ່", // "publish / disseminate"
+        "ປະຕິບັດ", // "implement / execute"
+    ],
+    task_imperative_strategy: MatchStrategy::Substring,
+    stop_words: &[],
+};
+
 /// All built-in lexicons, in BCP-47-primary-tag order.
 ///
 /// The exact set is the union of:
 ///
 /// * Phase 1.4 [`SUPPORTED_PRIMARY_TAGS`] interrogative
-///   coverage (16 languages: en/es/fr/de/pt/it/ru/vi/id/ms/ar/hi/ja/ko/zh/th).
+///   coverage (originally 16 languages: en/es/fr/de/pt/it/ru/
+///   vi/id/ms/ar/hi/ja/ko/zh/th; extended by Phase 1.5 to
+///   add bo/km/my/lo).
 /// * Phase 1.1 keyword-class coverage requirements: a
 ///   keyword bundle per language for the substrate's
 ///   built-in decision / task / imperative pipelines.
 ///
-/// 16 languages ship in Phase 1.1 — the 12-language target
-/// from the Phase 1.1 outline (en/ja/ko/zh/es/fr/de/pt/ar/vi/th/id)
-/// plus the four Phase 1.4 add-ons (`it`, `ru`, `hi`, `ms`)
-/// that already have interrogative tables, to avoid the
-/// invariant-test failure that would result if the
-/// interrogative table covered a language that the
-/// LexiconRegistry did not.
+/// 20 languages ship as of Phase 1.5 — the 12-language
+/// target from the Phase 1.1 outline
+/// (en/ja/ko/zh/es/fr/de/pt/ar/vi/th/id) plus the four Phase
+/// 1.4 add-ons (`it`, `ru`, `hi`, `ms`) that already have
+/// interrogative tables, plus the four Phase 1.5 add-ons
+/// (`bo`, `km`, `my`, `lo`) that close the
+/// FTS5-tokeniser-blind / no-whitespace-word-boundary script
+/// gap. The interrogative-table-vs-LexiconRegistry coverage
+/// invariant test
+/// ([`crate::interrogatives::SUPPORTED_PRIMARY_TAGS`]) holds
+/// for every language listed here.
 pub const BUILTIN_LEXICONS: &[LanguageLexicon] = &[
-    AR_LEXICON, DE_LEXICON, EN_LEXICON, ES_LEXICON, FR_LEXICON, HI_LEXICON, ID_LEXICON, IT_LEXICON,
-    JA_LEXICON, KO_LEXICON, MS_LEXICON, PT_LEXICON, RU_LEXICON, TH_LEXICON, VI_LEXICON, ZH_LEXICON,
+    AR_LEXICON, BO_LEXICON, DE_LEXICON, EN_LEXICON, ES_LEXICON, FR_LEXICON, HI_LEXICON, ID_LEXICON,
+    IT_LEXICON, JA_LEXICON, KM_LEXICON, KO_LEXICON, LO_LEXICON, MS_LEXICON, MY_LEXICON, PT_LEXICON,
+    RU_LEXICON, TH_LEXICON, VI_LEXICON, ZH_LEXICON,
 ];
 
 /// All BCP-47 primary tags shipped in the built-in
@@ -1326,7 +1558,8 @@ pub const BUILTIN_LEXICONS: &[LanguageLexicon] = &[
 /// [`crate::interrogatives::SUPPORTED_PRIMARY_TAGS`] by
 /// design (one is the test invariant for the other).
 pub const SUPPORTED_LEXICON_TAGS: &[&str] = &[
-    "ar", "de", "en", "es", "fr", "hi", "id", "it", "ja", "ko", "ms", "pt", "ru", "th", "vi", "zh",
+    "ar", "bo", "de", "en", "es", "fr", "hi", "id", "it", "ja", "km", "ko", "lo", "ms", "my", "pt",
+    "ru", "th", "vi", "zh",
 ];
 
 /// Return a reference to the process-wide built-in
@@ -1690,5 +1923,335 @@ mod tests {
             LexiconRegistry::from_static(NO_EN);
         });
         assert!(result.is_err(), "from_static must panic without en");
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 1.5 — Tibetan / Khmer / Myanmar / Lao lexicon tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn phase_1_5_lexicons_all_use_substring_strategy() {
+        // Tibetan / Khmer / Myanmar / Lao all lack inter-word
+        // whitespace and use combining marks (virama, tsheg,
+        // coeng, asat) that fall outside `unicode61`'s letter
+        // category. A FirstToken or FirstBigram matcher would
+        // either fragment intra-word stacks or fail to align
+        // with any whitespace boundary. Substring matching is
+        // the only strategy that fires on these scripts. Pin
+        // this contract so a future contributor doesn't
+        // silently switch a Phase 1.5 lexicon to FirstToken
+        // and produce zero matches.
+        let reg = default_registry();
+        for tag in ["bo", "km", "my", "lo"] {
+            let lex = reg.lexicon_for(tag).expect("Phase 1.5 lexicon configured");
+            assert_eq!(
+                lex.decision_strategy,
+                MatchStrategy::Substring,
+                "{tag} decision_strategy must be Substring (no whitespace word boundaries)",
+            );
+            assert_eq!(
+                lex.task_strategy,
+                MatchStrategy::Substring,
+                "{tag} task_strategy must be Substring (no whitespace word boundaries)",
+            );
+            assert_eq!(
+                lex.task_imperative_strategy,
+                MatchStrategy::Substring,
+                "{tag} task_imperative_strategy must be Substring \
+                 (combining marks split intra-word under any alphabetic-token matcher)",
+            );
+        }
+    }
+
+    #[test]
+    fn tibetan_lexicon_keywords_are_in_tibetan_unicode_range() {
+        // Defensive check: every Tibetan keyword must contain
+        // at least one codepoint from the Tibetan block
+        // (U+0F00..=U+0FFF). Catches accidental cut-and-paste
+        // of non-Tibetan text (e.g. Devanagari that visually
+        // resembles a Tibetan glyph) into the lexicon entries.
+        let reg = default_registry();
+        let lex = reg.lexicon_for("bo").expect("bo configured");
+        let all_entries: Vec<&str> = lex
+            .decision_keywords
+            .iter()
+            .chain(lex.task_keywords.iter())
+            .chain(lex.task_imperative_verbs.iter())
+            .copied()
+            .collect();
+        assert!(!all_entries.is_empty(), "bo lexicon must have entries");
+        for entry in all_entries {
+            assert!(
+                entry
+                    .chars()
+                    .any(|c| ('\u{0F00}'..='\u{0FFF}').contains(&c)),
+                "Tibetan lexicon entry {entry:?} contains no Tibetan codepoint",
+            );
+        }
+    }
+
+    #[test]
+    fn khmer_lexicon_keywords_are_in_khmer_unicode_range() {
+        let reg = default_registry();
+        let lex = reg.lexicon_for("km").expect("km configured");
+        let all_entries: Vec<&str> = lex
+            .decision_keywords
+            .iter()
+            .chain(lex.task_keywords.iter())
+            .chain(lex.task_imperative_verbs.iter())
+            .copied()
+            .collect();
+        assert!(!all_entries.is_empty(), "km lexicon must have entries");
+        for entry in all_entries {
+            assert!(
+                entry
+                    .chars()
+                    .any(|c| ('\u{1780}'..='\u{17FF}').contains(&c)),
+                "Khmer lexicon entry {entry:?} contains no Khmer codepoint",
+            );
+        }
+    }
+
+    #[test]
+    fn myanmar_lexicon_keywords_are_in_myanmar_unicode_range() {
+        let reg = default_registry();
+        let lex = reg.lexicon_for("my").expect("my configured");
+        let all_entries: Vec<&str> = lex
+            .decision_keywords
+            .iter()
+            .chain(lex.task_keywords.iter())
+            .chain(lex.task_imperative_verbs.iter())
+            .copied()
+            .collect();
+        assert!(!all_entries.is_empty(), "my lexicon must have entries");
+        for entry in all_entries {
+            assert!(
+                entry.chars().any(|c| {
+                    ('\u{1000}'..='\u{109F}').contains(&c)        // Myanmar main
+                        || ('\u{AA60}'..='\u{AA7F}').contains(&c) // Myanmar Ext-A
+                        || ('\u{A9E0}'..='\u{A9FF}').contains(&c) // Myanmar Ext-B
+                }),
+                "Myanmar lexicon entry {entry:?} contains no Myanmar codepoint",
+            );
+        }
+    }
+
+    #[test]
+    fn lao_lexicon_keywords_are_in_lao_unicode_range() {
+        let reg = default_registry();
+        let lex = reg.lexicon_for("lo").expect("lo configured");
+        let all_entries: Vec<&str> = lex
+            .decision_keywords
+            .iter()
+            .chain(lex.task_keywords.iter())
+            .chain(lex.task_imperative_verbs.iter())
+            .copied()
+            .collect();
+        assert!(!all_entries.is_empty(), "lo lexicon must have entries");
+        for entry in all_entries {
+            assert!(
+                entry
+                    .chars()
+                    .any(|c| ('\u{0E80}'..='\u{0EFF}').contains(&c)),
+                "Lao lexicon entry {entry:?} contains no Lao codepoint",
+            );
+        }
+    }
+
+    #[test]
+    fn phase_1_5_lexicons_are_distinct_from_each_other() {
+        // The four scripts are visually distinct but tooling
+        // bugs (font-substitution-driven mis-copy, lossy NFC
+        // round-trips, automated translation pipelines) can
+        // produce eerily similar-looking byte sequences. Pin
+        // pairwise distinctness so a regression that
+        // accidentally aliases (e.g.) bo to lo fails the test
+        // rather than silently degrading recall.
+        let reg = default_registry();
+        let tags = ["bo", "km", "my", "lo"];
+        for (i, a_tag) in tags.iter().enumerate() {
+            for b_tag in tags.iter().skip(i + 1) {
+                let a = reg.lexicon_for(a_tag).expect("configured");
+                let b = reg.lexicon_for(b_tag).expect("configured");
+                assert_ne!(
+                    a.decision_keywords, b.decision_keywords,
+                    "{a_tag} and {b_tag} share identical decision_keywords \
+                     — accidental aliasing?",
+                );
+                assert_ne!(
+                    a.task_keywords, b.task_keywords,
+                    "{a_tag} and {b_tag} share identical task_keywords",
+                );
+                assert_ne!(
+                    a.task_imperative_verbs, b.task_imperative_verbs,
+                    "{a_tag} and {b_tag} share identical task_imperative_verbs",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn phase_1_5_decision_keyword_extracted_under_substring_matching() {
+        // End-to-end smoke test: a sentence containing a
+        // Phase 1.5 decision keyword must round-trip through
+        // the `table_matches` Substring path. This is the
+        // path the LexiconExtractor exercises when
+        // classifying CJK / Indic sentences.
+        let reg = default_registry();
+        // Tibetan: "ཐུགས་རྗེ་ཆེ ་ ལས་ཀ་ འདི་ ཐག་གཅོད་ བྱེད་ ཐུབ་ པ ?"
+        // — informal "Can we decide this task, please?" The
+        // decision keyword ཐག་གཅོད must trip the Substring
+        // matcher.
+        let bo_lex = reg.lexicon_for("bo").unwrap();
+        assert!(
+            table_matches(
+                bo_lex.decision_keywords,
+                "ཐུགས་རྗེ་ཆེ་ལས་ཀ་འདི་ཐག་གཅོད་བྱེད་ཐུབ་པ",
+                bo_lex.decision_strategy,
+            ),
+            "Tibetan decision keyword ཐག་གཅོད did not fire under Substring",
+        );
+
+        // Khmer: a sentence containing the decision verb
+        // សម្រេច ("decide").
+        let km_lex = reg.lexicon_for("km").unwrap();
+        assert!(
+            table_matches(
+                km_lex.decision_keywords,
+                "យើងសម្រេចចេញគោលនយោបាយថ្មីហើយ",
+                km_lex.decision_strategy,
+            ),
+            "Khmer decision keyword សម្រេច did not fire under Substring",
+        );
+
+        // Myanmar: a sentence containing ဆုံးဖြတ် ("decide").
+        let my_lex = reg.lexicon_for("my").unwrap();
+        assert!(
+            table_matches(
+                my_lex.decision_keywords,
+                "ကျွန်တော်တို့ဆုံးဖြတ်ပြီးပါပြီ",
+                my_lex.decision_strategy,
+            ),
+            "Myanmar decision keyword ဆုံးဖြတ် did not fire under Substring",
+        );
+
+        // Lao: a sentence containing ຕັດສິນໃຈ ("decide").
+        let lo_lex = reg.lexicon_for("lo").unwrap();
+        assert!(
+            table_matches(
+                lo_lex.decision_keywords,
+                "ພວກເຮົາຕັດສິນໃຈແລ້ວ",
+                lo_lex.decision_strategy,
+            ),
+            "Lao decision keyword ຕັດສິນໃຈ did not fire under Substring",
+        );
+    }
+
+    #[test]
+    fn phase_1_5_task_imperative_extracted_under_substring_matching() {
+        // Cross-script imperative verb test. Every Phase 1.5
+        // lexicon's imperative-verb list is non-empty (unlike
+        // ja/ko/zh/th) because Substring matching DOES fire
+        // on no-whitespace scripts, so dropping the verbs
+        // would lose recall.
+        let reg = default_registry();
+
+        // Tibetan: "འབྲི" ("write")
+        let bo_lex = reg.lexicon_for("bo").unwrap();
+        assert!(table_matches(
+            bo_lex.task_imperative_verbs,
+            "འདི་འབྲི་རོགས་གནང",
+            bo_lex.task_imperative_strategy,
+        ));
+
+        // Khmer: "ផ្ញើ" ("send")
+        let km_lex = reg.lexicon_for("km").unwrap();
+        assert!(table_matches(
+            km_lex.task_imperative_verbs,
+            "សូមផ្ញើឯកសារ",
+            km_lex.task_imperative_strategy,
+        ));
+
+        // Myanmar: "ပို့" ("send")
+        let my_lex = reg.lexicon_for("my").unwrap();
+        assert!(table_matches(
+            my_lex.task_imperative_verbs,
+            "ကျေးဇူးပြုပြီးပို့ပါ",
+            my_lex.task_imperative_strategy,
+        ));
+
+        // Lao: "ສົ່ງ" ("send")
+        let lo_lex = reg.lexicon_for("lo").unwrap();
+        assert!(table_matches(
+            lo_lex.task_imperative_verbs,
+            "ກະລຸນາສົ່ງເອກະສານ",
+            lo_lex.task_imperative_strategy,
+        ));
+    }
+
+    #[test]
+    fn phase_1_5_no_keyword_substring_collides_with_phase_1_5_test_declarative() {
+        // Regression guard: the existing
+        // `lao_khmer_myanmar_fact_shaped_without_whitespace`
+        // test in extractor.rs uses three canonical
+        // declarative sentences to verify Fact-shape
+        // classification. Pin that none of the Phase 1.5
+        // lexicon entries OR interrogative entries
+        // accidentally substring-match those declaratives.
+        // If a future contributor adds a keyword that
+        // collides, this test fires before
+        // `lao_khmer_myanmar_fact_shaped_without_whitespace`
+        // does, with a much more precise error message.
+        use crate::interrogatives::interrogatives_for;
+        let reg = default_registry();
+
+        let cases = [
+            ("km", "ភ្នំពេញគឺជារដ្ឋធានីនៃប្រទេសកម្ពុជា"),
+            ("my", "ရန်ကုန်သည်မြန်မာနိုင်ငံ၏အကြီးဆုံးမြို့ဖြစ်သည်"),
+            ("lo", "ວຽງຈັນເປັນນະຄອນຫຼວງຂອງປະເທດລາວ"),
+        ];
+
+        for (tag, declarative) in cases {
+            // Interrogative table: NO entry should match the
+            // declarative.
+            let (interr, _) = interrogatives_for(tag).expect("configured");
+            for entry in interr {
+                assert!(
+                    !declarative.contains(entry),
+                    "{tag} interrogative entry {entry:?} substring-matches \
+                     a Phase-1.5 declarative test sentence {declarative:?}",
+                );
+            }
+
+            // Decision keywords: NO entry should match.
+            let lex = reg.lexicon_for(tag).expect("configured");
+            for entry in lex.decision_keywords {
+                assert!(
+                    !declarative.contains(entry),
+                    "{tag} decision_keyword {entry:?} substring-matches \
+                     a Phase-1.5 declarative test sentence {declarative:?}",
+                );
+            }
+
+            // Task keywords: NO entry should match.
+            for entry in lex.task_keywords {
+                assert!(
+                    !declarative.contains(entry),
+                    "{tag} task_keyword {entry:?} substring-matches \
+                     a Phase-1.5 declarative test sentence {declarative:?}",
+                );
+            }
+
+            // Task imperative verbs: NO entry should match
+            // (these declaratives are nominal statements, not
+            // imperatives).
+            for entry in lex.task_imperative_verbs {
+                assert!(
+                    !declarative.contains(entry),
+                    "{tag} task_imperative_verb {entry:?} substring-matches \
+                     a Phase-1.5 declarative test sentence {declarative:?}",
+                );
+            }
+        }
     }
 }

@@ -775,6 +775,194 @@ fn fts5_thai_query_returns_hit() {
     assert_eq!(hits[0], r.evidence_id);
 }
 
+// ----------------------------------------------------------------------
+// Phase 1.5 — Tibetan / Khmer / Myanmar / Lao routing integration tests
+// ----------------------------------------------------------------------
+//
+// Phase 1.2 introduced `evidence_fts_cjk` (trigram lane) and Phase 1.2.1
+// added `evidence_fts_bigram` (precomputed bigram lane). Both lanes
+// gate writes on `crate::script::contains_cjk_or_thai`, which Phase 1.5
+// extended to include four additional Brahmic-family scripts that lack
+// inter-word whitespace: Tibetan (`bo`), Khmer (`km`), Myanmar (`my`),
+// Lao (`lo`). The fixtures below pin the read-path recall AND the
+// write-path table membership for each script via the same dual-lane
+// architecture as the Phase 1.2 sites — ensuring no regression silently
+// excludes one of the four scripts from one of the two CJK-routed
+// shadow tables.
+
+#[test]
+fn fts5_tibetan_query_returns_hit_via_trigram_lane() {
+    // བཀྲ་ཤིས་བདེ་ལེགས — common Tibetan greeting, ~7 codepoints,
+    // well above the trigram lane's 3-codepoint floor.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "བཀྲ་ཤིས་བདེ་ལེགས".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    // 3+ codepoint sub-query — trigram lane must hit.
+    let hits = store.search_fts(scope, "བཀྲ་ཤིས", 10).unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "Tibetan body must route to evidence_fts_cjk and be searchable via trigram",
+    );
+    assert_eq!(hits[0], r.evidence_id);
+
+    // Pin the write-path invariant: the body must also land in
+    // `evidence_fts_bigram` (Phase 1.2.1) so a future 2-codepoint
+    // Tibetan query can find it.
+    let bigram_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        bigram_rows, 1,
+        "Tibetan body must also land in evidence_fts_bigram",
+    );
+}
+
+#[test]
+fn fts5_khmer_query_returns_hit_via_trigram_lane() {
+    // ភ្នំពេញ — "Phnom Penh"; 4 base codepoints with subscript
+    // consonants joined by the invisible coeng (U+17D2).
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "ភ្នំពេញគឺជារដ្ឋធានីនៃប្រទេសកម្ពុជា".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "ភ្នំពេញ", 10).unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "Khmer body must route to evidence_fts_cjk and be searchable via trigram",
+    );
+    assert_eq!(hits[0], r.evidence_id);
+
+    let bigram_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        bigram_rows, 1,
+        "Khmer body must also land in evidence_fts_bigram",
+    );
+}
+
+#[test]
+fn fts5_myanmar_query_returns_hit_via_trigram_lane() {
+    // ရန်ကုန် — "Yangon", with combining ngathat (U+103A) and
+    // dependent vowels.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "ရန်ကုန်သည် မြန်မာနိုင်ငံ၏ အကြီးဆုံးမြို့ ဖြစ်သည်".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "ရန်ကုန်", 10).unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "Myanmar body must route to evidence_fts_cjk and be searchable via trigram",
+    );
+    assert_eq!(hits[0], r.evidence_id);
+
+    let bigram_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        bigram_rows, 1,
+        "Myanmar body must also land in evidence_fts_bigram",
+    );
+}
+
+#[test]
+fn fts5_lao_query_returns_hit_via_trigram_lane() {
+    // ວຽງຈັນ — "Vientiane", capital of Laos. Lao script
+    // (U+0E80..=U+0EFF) is contiguous with Thai under the
+    // single Phase 1.5 routing arm `'\u{0E00}'..='\u{0FFF}'`.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let r = store
+        .ingest(
+            scope,
+            "ວຽງຈັນ ເປັນ ນະຄອນຫຼວງ ຂອງ ປະເທດລາວ".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let hits = store.search_fts(scope, "ວຽງຈັນ", 10).unwrap();
+    assert_eq!(
+        hits.len(),
+        1,
+        "Lao body must route to evidence_fts_cjk and be searchable via trigram",
+    );
+    assert_eq!(hits[0], r.evidence_id);
+
+    let bigram_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        bigram_rows, 1,
+        "Lao body must also land in evidence_fts_bigram",
+    );
+}
+
+#[test]
+fn fts5_phase_1_5_pure_devanagari_body_routes_only_to_unicode61() {
+    // Negative-space pin: Devanagari (Hindi, U+0900..=U+097F)
+    // is deliberately NOT in the Phase 1.5 routing predicate
+    // — the unicode61 tokeniser classifies Devanagari letters
+    // as letters and so already segments Hindi correctly,
+    // so adding a redundant trigram row would inflate the CJK
+    // index without recall benefit. The Phase 1.1 Hindi
+    // lexicon uses Substring matching at the observation
+    // engine layer (not the FTS5 layer) to compensate for
+    // virama-induced intra-word splits.
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    let _ = store
+        .ingest(
+            scope,
+            "नई दिल्ली भारत की राजधानी है".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let cjk_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
+        .unwrap();
+    let bigram_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        cjk_rows, 0,
+        "pure-Devanagari body must NOT be written to evidence_fts_cjk \
+         — Devanagari is whitespace-segmented and unicode61 handles it",
+    );
+    assert_eq!(
+        bigram_rows, 0,
+        "pure-Devanagari body must NOT be written to evidence_fts_bigram",
+    );
+}
+
 #[test]
 fn fts5_pre_v14_latin_path_still_works_unchanged() {
     // Regression pin: the unicode61 lexical path that the v0..v13

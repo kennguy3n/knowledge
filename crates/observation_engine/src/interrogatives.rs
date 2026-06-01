@@ -528,6 +528,127 @@ pub fn interrogatives_for(
             InterrogativeMatch::Substring,
         )),
 
+        // Tibetan — Phase 1.5. Tibetan script uses the tsheg
+        // (་, U+0F0B) as a syllable separator rather than a
+        // word boundary; the interrogative root can land
+        // anywhere in the clause. Sources: Goldstein, *The
+        // New Tibetan-English Dictionary of Modern Tibetan*
+        // (UC Press 2001) entries for ག ("which / what"),
+        // སུ ("who"), and the regular interrogative compounds
+        // built on those roots. Substring match because the
+        // tsheg-segmented syllables do not align with
+        // whitespace word boundaries.
+        "bo" => Some((
+            &[
+                "སུ",    // "who"
+                "ག་རེ",  // "what"
+                "ག་གི",  // "which / what (alternative spelling)"
+                "ནམ",   // "when"
+                "ག་དུས", // "when (alternative)"
+                "ག་པར", // "where"
+                "ག་སར", // "where (alternative)"
+                "ག་འདྲ", // "how / what kind"
+                "ག་སྟེ",  // "how"
+                "ཅིའི",   // "why" (literally "of what")
+                "ག་ཚོད", // "how much / how many"
+            ],
+            InterrogativeMatch::Substring,
+        )),
+
+        // Khmer — Phase 1.5. Khmer script has no inter-word
+        // whitespace; interrogatives can land anywhere in the
+        // clause. Sources: Headley et al., *Khmer-English
+        // Dictionary* (Dunwoody Press 1997) entries for
+        // អ្វី ("what"), នរណា ("who"), etc.
+        //
+        // Deliberately omitted: bare `ទេ` (the sentence-final
+        // negation + yes/no question particle). Under
+        // substring matching `ទេ` collides with the very
+        // common noun `ប្រទេស` ("country / nation") — the
+        // first two codepoints of the compound are U+1791 +
+        // U+17C1, identical to the particle — and would
+        // mis-classify any sentence about a country
+        // (`ប្រទេសកម្ពុជា`, `ប្រទេសបារាំង`, …) as a Question.
+        // Same class of precision-vs-recall trade-off as the
+        // Mandarin omission of bare `几` documented above.
+        // The unambiguous wh-compounds below cover the
+        // canonical interrogative shapes; the yes/no
+        // construction in Khmer also commonly uses the
+        // sentence-final `ឬទេ` ("or not?") which we could add
+        // in a future sweep if a Phase-2 Khmer corpus needs
+        // it.
+        "km" => Some((
+            &[
+                "នរណា",   // "who"
+                "អ្នកណា",   // "who" (informal / collective)
+                "អ្វី",      // "what"
+                "ពេលណា",  // "when"
+                "កាលណា",  // "when (alternative)"
+                "ឯណា",    // "where"
+                "កន្លែងណា", // "where (alternative)"
+                "ហេតុអ្វី",   // "why"
+                "យ៉ាងណា",  // "how"
+                "ដូចម្តេច",  // "how (alternative)"
+                "មួយណា",   // "which one"
+                "ប៉ុន្មាន",   // "how much / how many"
+            ],
+            InterrogativeMatch::Substring,
+        )),
+
+        // Myanmar / Burmese — Phase 1.5. Myanmar script has
+        // no inter-word whitespace; interrogatives can land
+        // anywhere in the clause. The sentence-final particle
+        // လား is the canonical yes/no question marker (`-la`
+        // or `-laa`) and is included to catch yes/no
+        // constructions. Sources: Department of the Myanmar
+        // Language Commission, *Myanmar-English Dictionary*
+        // (Yangon 1993) entries for ဘယ် ("what / which")
+        // and the regular compounds built on it.
+        "my" => Some((
+            &[
+                "ဘယ်သူ",    // "who"
+                "ဘာ",     // "what"
+                "ဘယ်အရာ",  // "what (alternative)"
+                "ဘယ်တုန်းက", // "when (past)"
+                "ဘယ်အချိန်", // "when (general)"
+                "ဘယ်နေရာ", // "where"
+                "ဘယ်မှာ",   // "where (alternative)"
+                "ဘာဖြစ်လို့", // "why"
+                "ဘယ်လို",    // "how"
+                "ဘယ်ဟာ",   // "which"
+                "ဘယ်လောက်", // "how much / how many"
+                "လား",    // canonical yes/no sentence-final particle
+                "သလား",   // formal yes/no particle
+            ],
+            InterrogativeMatch::Substring,
+        )),
+
+        // Lao — Phase 1.5. Lao script is structurally
+        // parallel to Thai: no inter-word whitespace,
+        // interrogatives can appear anywhere. The
+        // sentence-final particle ບໍ is the canonical yes/no
+        // question marker. Sources: Reinhorn, *Dictionnaire
+        // Laotien-Français* (Larousse 2001) entries for
+        // ໃຜ ("who"), ຫຍັງ ("what"), etc.
+        "lo" => Some((
+            &[
+                "ໃຜ",     // "who"
+                "ຫຍັງ",    // "what"
+                "ເມື່ອໃດ",  // "when"
+                "ຕອນໃດ",  // "when (alternative)"
+                "ຢູ່ໃສ",    // "where"
+                "ບ່ອນໃດ",  // "where (alternative)"
+                "ເປັນຫຍັງ", // "why"
+                "ແນວໃດ",  // "how"
+                "ຄືແນວໃດ", // "how (alternative)"
+                "ໃດ",     // "which"
+                "ອັນໃດ",   // "which one"
+                "ເທົ່າໃດ",  // "how much / how many"
+                "ບໍ",      // canonical yes/no sentence-final particle
+            ],
+            InterrogativeMatch::Substring,
+        )),
+
         _ => None,
     }
 }
@@ -543,6 +664,7 @@ pub fn matching_strategy_for(primary_tag: &str) -> Option<InterrogativeMatch> {
 /// coverage.
 pub const SUPPORTED_PRIMARY_TAGS: &[&str] = &[
     "en", "es", "fr", "de", "pt", "it", "ru", "vi", "id", "ms", "ar", "hi", "ja", "ko", "zh", "th",
+    "bo", "km", "my", "lo",
 ];
 
 #[cfg(test)]
@@ -634,17 +756,29 @@ mod tests {
     }
 
     #[test]
-    fn substring_languages_are_cjk_thai_or_hindi() {
-        // Defends the design contract: the only languages that
-        // use Substring matching are CJK + Thai (no inter-word
-        // whitespace) and Hindi (Devanagari virama interferes
-        // with the FirstToken tokeniser and Hindi permits
-        // non-initial interrogative placement anyway). Any
-        // future change to this invariant should be intentional
-        // and update both this test and the module-level
-        // docstring.
+    fn substring_languages_are_cjk_thai_or_indic_brahmic() {
+        // Defends the design contract: Substring is used for
+        // every language whose script lacks unambiguous
+        // whitespace-aligned word boundaries OR whose
+        // combining marks (virama, tsheg, coeng, asat)
+        // interfere with the FirstToken tokeniser and which
+        // additionally permits non-initial interrogative
+        // placement. As of Phase 1.5 this is:
+        // - CJK / Thai (no inter-word whitespace at all)
+        // - Hindi (Devanagari virama)
+        // - Tibetan (tsheg syllable-separator, stacked
+        //   consonants)
+        // - Khmer (no whitespace, coeng-stacked consonants)
+        // - Myanmar (no whitespace, asat / virama)
+        // - Lao (no whitespace, combining vowel signs)
+        //
+        // Any future change to this invariant should be
+        // intentional and update both this test and the
+        // module-level docstring.
         let expected_substring: std::collections::HashSet<&str> =
-            ["ja", "ko", "zh", "th", "hi"].into_iter().collect();
+            ["ja", "ko", "zh", "th", "hi", "bo", "km", "my", "lo"]
+                .into_iter()
+                .collect();
         for tag in SUPPORTED_PRIMARY_TAGS {
             let strat = matching_strategy_for(tag).unwrap();
             let is_substring = strat == InterrogativeMatch::Substring;
