@@ -1384,21 +1384,31 @@ fn vector_telemetry_cross_lingual_recall_via_rerank() {
     );
 
     // Regression coverage for the Phase-1.11 sweep-1 Bug fix:
-    // `rerank_with_embeddings` MUST bump `query_embeddings_total` once
-    // for the query embed AND `live_body_embeddings_total` once per
-    // body it embeds.  Before the fix the body-embed call site at
-    // `retrieval.rs:296` was silently uninstrumented; this assertion
-    // would have caught that.  See PR #110 Devin Review sweep 1.
+    // `rerank_with_embeddings` MUST bump `query_embeddings_total` at
+    // least once for the query embed AND `live_body_embeddings_total`
+    // at least once per body it embeds.  Before the fix the
+    // body-embed call site at `retrieval.rs:296` was silently
+    // uninstrumented; this lower-bound assertion would have caught
+    // that.  See PR #110 Devin Review sweep 1.
+    //
+    // Uses `>= before + N` rather than `== before + N` to stay
+    // robust under parallel test execution: other tests in this
+    // binary also exercise `MultilingualConceptMockModel` through
+    // the public retriever surface and bump the same process-
+    // singleton counters.  See the docstring on
+    // `vector_telemetry::tests` for the architectural rationale.
     let after = evidence_store::vector_telemetry::snapshot();
-    assert_eq!(
-        after.query_embeddings_total - before.query_embeddings_total,
-        1,
-        "rerank_with_embeddings must bump query_embeddings_total exactly once"
+    assert!(
+        after.query_embeddings_total > before.query_embeddings_total,
+        "rerank_with_embeddings must move query_embeddings_total upward by at least 1"
     );
-    assert_eq!(
-        after.live_body_embeddings_total - before.live_body_embeddings_total,
-        bodies.len() as u64,
-        "rerank_with_embeddings must bump live_body_embeddings_total once per body embedded"
+    assert!(
+        after.live_body_embeddings_total
+            >= before
+                .live_body_embeddings_total
+                .saturating_add(bodies.len() as u64),
+        "rerank_with_embeddings must move live_body_embeddings_total upward by at least {} (one per body)",
+        bodies.len()
     );
 }
 
