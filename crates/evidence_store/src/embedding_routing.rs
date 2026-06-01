@@ -58,13 +58,24 @@
 //! ## Why not a character-class heuristic
 //!
 //! An obvious alternative is "count `char::is_alphabetic`
-//! characters, route to fallback if zero".  That fails on CJK
-//! and some Indic scripts where the relevant characters are
-//! `is_alphabetic == false` in Unicode's general category
-//! classification but very much linguistic content for XLM-R.
-//! `whatlang::detect` is already calibrated against the same
-//! script families XLM-R was trained on, so it is the
-//! substrate-shaped primitive.
+//! characters, route to fallback if zero".  CJK ideographs are
+//! Unicode general category `Lo` (Letter, other) and Devanagari
+//! / other Indic scripts are also alphabetic — so
+//! `char::is_alphabetic` does return `true` for those scripts.
+//! The heuristic still loses, but for a different reason: it
+//! cannot distinguish "no-script numerics + spaces" from "noise
+//! that XLM-R should handle".  A query like `"100 200 300"` has
+//! zero alphabetic characters and would be routed to fallback
+//! by the heuristic, even though XLM-R produces a meaningful
+//! vector (numerics share an embedding space with their textual
+//! word forms in XLM-R's training corpus).  Conversely, a
+//! query like `"!!!?"` is alphabetic-zero AND noise — the
+//! heuristic would route it correctly but only by accident.
+//! `whatlang::detect` is calibrated against the same script
+//! families XLM-R was trained on and uses trigram-frequency
+//! signal rather than Unicode category, so it produces the
+//! right decision on both inputs.  It is the
+//! substrate-shaped primitive for the embedding-lane gate.
 //!
 //! # Fail-open semantics
 //!
