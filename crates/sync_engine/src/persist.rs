@@ -110,6 +110,15 @@ const SCHEMA_VERSION: i32 = 1;
 /// `Debug` is intentionally redacted — the wrapper holds key
 /// material whose serialised form must never reach a panic message
 /// or a log line.
+///
+/// The AEAD ciphertext column carries the `serde_json` UTF-8
+/// encoding of [`SyncOp<T>`] verbatim — the persistence layer is
+/// byte-clean across every Unicode script (ASCII / CJK / RTL /
+/// Indic / etc.) and does not normalise, fold, or otherwise
+/// inspect the contents of `T`. The "Multilingual contract"
+/// section in the crate-level docs
+/// (`crates/sync_engine/src/lib.rs`) details what this means for
+/// callers that pick text-bearing `T`.
 pub struct PersistentSyncEngine<T = Uuid>
 where
     T: Eq + Hash + Clone,

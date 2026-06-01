@@ -21,6 +21,14 @@ use uuid::Uuid;
 ///
 /// `T` must be hashable and serialisable so the set can be merged
 /// across replicas and persisted in op logs.
+///
+/// Identity is byte-exact (i.e. whatever `Hash` + `Eq` derive on
+/// `T`). When callers pick a text-bearing `T` (`String` /
+/// `Cow<'_, str>` / a struct with a string field), Unicode
+/// normalisation (NFC vs NFD vs NFKC) and the preservation of
+/// bidi-control / zero-width / BOM code points are the caller's
+/// responsibility — see the "Multilingual contract" section in
+/// the crate-level docs (`crates/sync_engine/src/lib.rs`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddWinsSet<T>
 where

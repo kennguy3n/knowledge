@@ -32,6 +32,62 @@
 //!   the op log to a SQLCipher database (per-scope AEAD on the
 //!   payload column, following the `concept_graph` pattern).
 //!
+//! # Multilingual contract (Phase 2.3 audit)
+//!
+//! `SyncEngine<T>` is parameterised over an arbitrary
+//! `T: Eq + Hash + Clone` element type, so the CRDT machinery in
+//! this crate is **byte-exact and culture-neutral by design**:
+//! element identity is whatever `Hash` + `Eq` derive on `T`, and
+//! neither the [`AddWinsSet`], the [`OpLog`], the
+//! [`crate::delta::DeltaEnvelope`] wire format (`serde_json` over
+//! UTF-8 bytes), nor the [`crate::persist::PersistentSyncEngine`]
+//! SQLCipher persistence layer (AEAD-encrypted UTF-8 JSON
+//! payload) ever inspects the contents of `T` beyond its hash
+//! and equality. This is the right architecture for a generic
+//! CRDT — preserving the caller's identity choices verbatim is
+//! what makes add-wins, idempotence, commutativity, and
+//! associativity hold for *any* hashable payload.
+//!
+//! For callers whose `T` is a text-bearing type (`String`,
+//! `Cow<'_, str>`, or a struct that carries a string field
+//! contributing to `Hash` / `Eq`), this contract has three
+//! practical consequences worth flagging:
+//!
+//! 1. **Unicode normalisation is the caller's responsibility.**
+//!    `String` `Hash`/`Eq` compares bytes, not grapheme clusters
+//!    or NFC code-point sequences. Two replicas that disagree on
+//!    normalisation form (one feeding NFC `"café"`, the other
+//!    feeding NFD `"cafe\u{301}"`) will produce two distinct CRDT
+//!    identities for what humans read as the same element,
+//!    silently breaking the add-wins property on cross-replica
+//!    merge. Callers must pick a single normalisation form
+//!    (recommended: NFC, matching evidence_store / observation_engine
+//!    convention) and apply it **before** every mutation.
+//! 2. **Bidi-control marks and invisible code points are
+//!    preserved verbatim.** `U+202E RIGHT-TO-LEFT OVERRIDE`,
+//!    `U+200B ZERO WIDTH SPACE`, `U+FEFF BYTE ORDER MARK`, and
+//!    similar formatting controls participate in identity. This
+//!    is the correct behaviour for a CRDT — stripping them would
+//!    create silent identity collisions — but it means visually
+//!    indistinguishable strings can be distinct elements.
+//! 3. **Compatibility decomposition (NFKC vs NFC) is also a
+//!    caller decision.** Full-width vs half-width CJK forms,
+//!    Roman-numeral compatibility characters (`U+2160 Ⅰ` vs
+//!    ASCII `"I"`), and similar pairs hash to distinct values
+//!    until the caller folds them upstream.
+//!
+//! Wire format and persistence are byte-clean across all
+//! Unicode scripts: `serde_json` and `rusqlite` blob columns
+//! round-trip the exact UTF-8 bytes the caller fed in. The
+//! multilingual contract test suite at
+//! `crates/sync_engine/tests/multilingual_contract.rs` exercises
+//! this end-to-end for ASCII / Japanese / Arabic / Hebrew /
+//! Devanagari payloads through add+merge, delta round-trip,
+//! snapshot/restore, and SQLCipher persist/reload, and pins the
+//! NFC-vs-NFD-are-distinct-identities and
+//! bidi-marks-are-preserved invariants explicitly so a future
+//! "smart" comparison helper cannot silently break the contract.
+//!
 //! Cross-references:
 //!
 //! * `docs/DESIGN.md` §3.2 — CRDT delta protocol

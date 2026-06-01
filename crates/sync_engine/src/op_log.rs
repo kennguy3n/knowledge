@@ -50,6 +50,17 @@ where
 }
 
 /// One entry in the op log.
+///
+/// `T` flows verbatim through the wire format and the persistence
+/// layer: [`crate::delta::DeltaEnvelope`] serialises it via
+/// `serde_json` (UTF-8 byte-clean) and
+/// [`crate::persist::PersistentSyncEngine`] AEAD-seals the
+/// serialised `SyncOp` JSON into a SQLCipher blob column (also
+/// byte-clean). The CRDT itself does not inspect the contents of
+/// `T` beyond `Hash` / `Eq`. When `T` carries text, Unicode
+/// normalisation is a caller responsibility — see the
+/// "Multilingual contract" section in the crate-level docs
+/// (`crates/sync_engine/src/lib.rs`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncOp<T>
 where
