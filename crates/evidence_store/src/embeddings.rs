@@ -20,6 +20,64 @@
 //! HuggingFace `tokenizers` is gated behind the `onnx-runtime` cargo
 //! feature. The default build still only carries the stub / mock
 //! runtimes.
+//!
+//! # Multilingual property
+//!
+//! XLM-R (Cross-lingual Language Model — RoBERTa) was trained
+//! across 100 languages over 2.5 TB of filtered CommonCrawl. The
+//! query and the indexed body do **not** need to share a script,
+//! a writing system, or even a language family for the cosine
+//! similarity between their embeddings to be semantically
+//! meaningful. A query like `"weather forecast"` will produce a
+//! vector whose cosine similarity with the embedding of
+//! `"明日の天気予報"` (Japanese: "tomorrow's weather forecast") is
+//! non-trivial; the same property holds for French ↔ Spanish,
+//! Arabic ↔ English, Thai ↔ Vietnamese, and so on across the
+//! full 100-language inventory.
+//!
+//! This module is the *adapter* layer — it does not enforce the
+//! multilingual property (that is a function of the model
+//! artifact). The architectural invariant we DO enforce is that
+//! the retriever consumes embeddings via the
+//! [`crate::retrieval::HybridRetriever::candidate_embedding`]
+//! path without any script-conditioned routing, so a future
+//! change that accidentally inserts a script-segregation layer
+//! would break the cross-lingual property. The integration test
+//! `vector_telemetry_cross_lingual_recall_via_rerank` in
+//! `crates/evidence_store/tests/store_integration.rs` pins that
+//! invariant by replaying a deterministic multilingual mock that
+//! reproduces XLM-R's cross-script clustering behaviour against
+//! the real retriever surface.
+//!
+//! # `model_tag` rotation discipline
+//!
+//! Every embedding cached in `evidence_embeddings` is stamped
+//! with the `model_tag` of the model that produced it. The
+//! schema invariant is **one tag ⇒ one model ⇒ one output
+//! dimension ⇒ one vector space**. Any change to the model
+//! artifact — even a re-quantisation that preserves the output
+//! dimension — MUST be accompanied by a new `model_tag`. Two
+//! different models that happen to share an output dimension
+//! produce vectors that are NOT in the same space: a cosine
+//! similarity computed between them is meaningless even though
+//! the arithmetic is well-defined.
+//!
+//! The retriever filters cache lookups by `model_tag` so a stale
+//! row produced under an old tag falls through to the live-embed
+//! path rather than being scored as if it had been produced by
+//! the active model (see
+//! [`crate::store::EvidenceStore::get_embedding_for_model`]).
+//! Phase 1.11 added runtime telemetry around this rule:
+//! [`crate::vector_telemetry::record_observed_dimension`] is
+//! called every time an [`EmbeddingModel`] is wired in and every
+//! time `index_embedding` writes a fresh vector. A same-tag /
+//! different-dimension observation bumps
+//! `model_tag_dimension_violations_total` and emits a
+//! `tracing::warn!`, making rotation-rule violations operator-
+//! visible in both metrics and logs. The check is purely
+//! advisory — it never fails the surrounding operation — but it
+//! reliably surfaces the silent-bug shape that "same dimension
+//! does NOT imply compatible vectors".
 
 use std::fmt;
 

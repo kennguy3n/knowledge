@@ -1136,3 +1136,357 @@ where
         .with_embedding_model(model, tag);
     (dir, store)
 }
+
+// ---------------------------------------------------------------------
+// Phase 1.11 — multilingual / cross-lingual embedding-lane invariant.
+// ---------------------------------------------------------------------
+//
+// The production adapter is wired to XLM-R (`models/xlm-r-base.onnx`,
+// 768d), which was trained on 100 languages over 2.5 TB of
+// CommonCrawl.  XLM-R's defining property is that a query and a
+// body do not need to share a script for their embeddings to be
+// semantically clusterable — `"weather forecast"` and `明日の天気予報`
+// land near each other in vector space, while `"weather forecast"`
+// and `株式市場` ("stock market") do not.
+//
+// This module exercises that architectural invariant with a
+// deterministic mock that simulates the same concept-clustering
+// shape (without dragging the real XLM-R ONNX session into the
+// test harness).  The mock maps multilingual paraphrases of the
+// same concept onto the same unit-vector axis, so cosine
+// similarity between paraphrases is 1.0 and similarity between
+// unrelated concepts is 0.0.  Running this against the real
+// `HybridRetriever` pins the invariant that the retriever does
+// NOT script-segregate the embedding lane (a future refactor
+// that accidentally inserted a "skip embed when query script !=
+// body script" branch would fail this test).
+
+/// Number of orthogonal concept axes the mock supports. One per
+/// concept; the last axis is the "unrelated" catch-all so any
+/// off-vocabulary text reliably lands far from every concept.
+const MULTILINGUAL_MOCK_DIM: usize = 8;
+
+/// Deterministic mock that simulates XLM-R's cross-lingual
+/// concept-clustering shape.  Each input text is mapped to one of
+/// a small inventory of concept axes; identical concepts produce
+/// identical unit vectors (cos sim = 1.0), different concepts
+/// produce orthogonal unit vectors (cos sim = 0.0).  The mock is
+/// pure — no randomness, no model artifact — so the test is
+/// reproducible without ORT installed.
+struct MultilingualConceptMockModel;
+
+impl MultilingualConceptMockModel {
+    /// Concept axis for `text`. Multilingual paraphrases of the
+    /// same concept share an axis; the catch-all axis is
+    /// `MULTILINGUAL_MOCK_DIM - 1` so unmatched inputs land far
+    /// from every named concept.
+    fn concept_for(text: &str) -> usize {
+        // The inputs are intentionally drawn from a tiny fixed
+        // inventory.  We avoid a substring match because we want
+        // to assert the architectural invariant — that the
+        // retriever does not segregate by script — without
+        // tangling the test in the mock's matching policy.
+        //
+        // `clippy::match_same_arms` is silenced deliberately: the
+        // whole point of the mock is that cross-script
+        // paraphrases collapse onto the *same* concept axis (so
+        // their bodies are identical by design).  Merging the
+        // arms with `|` would defeat the visual demonstration of
+        // which inputs cluster, which is precisely the property
+        // this test is designed to expose to future readers.
+        #[allow(clippy::match_same_arms)]
+        match text {
+            // Concept 0 — weather (Latin, CJK, French, Spanish).
+            "weather forecast" => 0,
+            "明日の天気予報" => 0,
+            "prévisions météo" => 0,
+            "pronóstico del tiempo" => 0,
+            "天气预报" => 0,
+            // Concept 1 — finance.
+            "stock market" => 1,
+            "株式市場" => 1,
+            // Concept 2 — cooking.
+            "recipe ingredients" => 2,
+            "レシピの材料" => 2,
+            // Off-concept: lands on the catch-all axis.
+            _ => MULTILINGUAL_MOCK_DIM - 1,
+        }
+    }
+}
+
+impl EmbeddingModel for MultilingualConceptMockModel {
+    fn embed(&self, text: &str) -> evidence_store::embeddings::Result<Vec<f32>> {
+        if text.is_empty() {
+            return Err(EmbeddingError::EmptyInput);
+        }
+        let mut v = vec![0.0_f32; MULTILINGUAL_MOCK_DIM];
+        v[Self::concept_for(text)] = 1.0;
+        Ok(v)
+    }
+    fn dimension(&self) -> usize {
+        MULTILINGUAL_MOCK_DIM
+    }
+    fn probe(&self) -> EmbeddingProbe {
+        EmbeddingProbe::Available
+    }
+}
+
+/// Cross-lingual recall via the real [`HybridRetriever::search_hybrid`]
+/// surface.  English query `"weather forecast"`, Japanese body
+/// `明日の天気予報` ("tomorrow's weather forecast"), unrelated
+/// Japanese body `株式市場` ("stock market").  Pins the architectural
+/// invariant that the embedding lane does NOT script-segregate —
+/// the cross-script weather paraphrase MUST score above the
+/// same-script unrelated body on `vector_score`, even though
+/// FTS5 (which DOES tokenise per-script) returns the Japanese
+/// stock-market body as the only lexical hit for the English
+/// "forecast" query (it doesn't match anything in the CJK
+/// body either, so FTS contributes nothing to either row, and
+/// the vector lane is the sole signal).
+#[test]
+fn vector_telemetry_cross_lingual_recall_via_search_hybrid() {
+    let (_dir, mut store) = open_store_with_model(MultilingualConceptMockModel, "ml-mock-v1");
+    let scope = ScopeId::new_v4();
+    // Two bodies in CJK script — one a paraphrase of the English
+    // query, one unrelated.
+    let weather_jp = store
+        .ingest(
+            scope,
+            "明日の天気予報".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let stock_jp = store
+        .ingest(scope, "株式市場".as_bytes(), None, ImportanceClass::Useful)
+        .unwrap();
+
+    // Vector-only weights: zero out FTS and recency so the
+    // vector_score is the sole tiebreaker.  Cosine between two
+    // identical unit vectors is 1.0; cosine between two
+    // orthogonal unit vectors is 0.0.  The retriever carries
+    // its own [`EmbeddingModel`] handle (it does NOT inherit
+    // the one wired into the store at ingest time), so we wire
+    // the same mock in on the retriever for the query-side
+    // path.
+    let retriever = HybridRetriever::new(&store)
+        .with_embedding_model(MultilingualConceptMockModel, "ml-mock-v1")
+        .with_weights(HybridWeights {
+            fts: 0.0,
+            recency: 0.0,
+            vector: 1.0,
+        });
+    let hits = retriever
+        .search_hybrid(scope, "weather forecast", 10)
+        .unwrap();
+
+    let weather_hit = hits
+        .iter()
+        .find(|h| h.evidence_id == weather_jp.evidence_id)
+        .expect("Japanese weather body must appear in cross-lingual results");
+    let stock_hit = hits
+        .iter()
+        .find(|h| h.evidence_id == stock_jp.evidence_id)
+        .expect("Japanese stock body must appear in cross-lingual results");
+
+    // The cross-script paraphrase scores HIGHER than the
+    // unrelated same-script body — XLM-R's signature property
+    // mocked by the concept-axis vectors above.
+    assert!(
+        weather_hit.vector_score > stock_hit.vector_score,
+        "expected cross-lingual paraphrase to outscore unrelated body; \
+         weather={weather_score}, stock={stock_score}",
+        weather_score = weather_hit.vector_score,
+        stock_score = stock_hit.vector_score,
+    );
+    // The weather body is the top result (vector-only weights,
+    // FTS contributes 0.0 here because the English query does
+    // not appear in either CJK body).
+    assert_eq!(
+        hits[0].evidence_id, weather_jp.evidence_id,
+        "expected Japanese weather body to top the cross-lingual ranking, got hits={hits:?}"
+    );
+}
+
+/// Same invariant via [`HybridRetriever::rerank_with_embeddings`]
+/// — the alternative entry point.  French query, Spanish body of
+/// the same concept, English body of a different concept.  Pins
+/// that the rerank path is equally script-agnostic.
+#[test]
+fn vector_telemetry_cross_lingual_recall_via_rerank() {
+    let (_dir, mut store) = open_store_with_model(MultilingualConceptMockModel, "ml-mock-v1");
+    let scope = ScopeId::new_v4();
+    let weather_es = store
+        .ingest(
+            scope,
+            "pronóstico del tiempo".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let cooking_en = store
+        .ingest(
+            scope,
+            "recipe ingredients".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+
+    // Feed both rows in as candidates with a flat 0.0 baseline
+    // so the rerank scores are entirely vector-driven.
+    let candidates = vec![
+        RetrievalResult {
+            evidence_id: weather_es.evidence_id,
+            score: 0.0,
+            fts_score: 0.0,
+            recency_score: 0.0,
+            vector_score: 0.0,
+        },
+        RetrievalResult {
+            evidence_id: cooking_en.evidence_id,
+            score: 0.0,
+            fts_score: 0.0,
+            recency_score: 0.0,
+            vector_score: 0.0,
+        },
+    ];
+    let bodies = vec![
+        (weather_es.evidence_id, "pronóstico del tiempo".to_string()),
+        (cooking_en.evidence_id, "recipe ingredients".to_string()),
+    ];
+
+    let retriever = HybridRetriever::new(&store)
+        .with_embedding_model(MultilingualConceptMockModel, "ml-mock-v1");
+
+    // Capture the telemetry baseline immediately before the call so the
+    // delta is invariant under any other test bumping the same
+    // process-singleton counters concurrently or sequentially.
+    let before = evidence_store::vector_telemetry::snapshot();
+
+    let reranked = retriever
+        .rerank_with_embeddings("prévisions météo", candidates, &bodies)
+        .expect("rerank ok");
+    let weather_hit = reranked
+        .iter()
+        .find(|h| h.evidence_id == weather_es.evidence_id)
+        .expect("Spanish weather body present");
+    let cooking_hit = reranked
+        .iter()
+        .find(|h| h.evidence_id == cooking_en.evidence_id)
+        .expect("English cooking body present");
+    assert!(
+        weather_hit.vector_score > cooking_hit.vector_score,
+        "French query should match Spanish weather paraphrase above English cooking body; \
+         weather={weather_score}, cooking={cooking_score}",
+        weather_score = weather_hit.vector_score,
+        cooking_score = cooking_hit.vector_score,
+    );
+
+    // Regression coverage for the Phase-1.11 sweep-1 Bug fix:
+    // `rerank_with_embeddings` MUST bump `query_embeddings_total` at
+    // least once for the query embed AND `live_body_embeddings_total`
+    // at least once per body it embeds.  Before the fix the
+    // body-embed call site at `retrieval.rs:296` was silently
+    // uninstrumented; this lower-bound assertion would have caught
+    // that.  See PR #110 Devin Review sweep 1.
+    //
+    // Uses `>= before + N` rather than `== before + N` to stay
+    // robust under parallel test execution: other tests in this
+    // binary also exercise `MultilingualConceptMockModel` through
+    // the public retriever surface and bump the same process-
+    // singleton counters.  See the docstring on
+    // `vector_telemetry::tests` for the architectural rationale.
+    let after = evidence_store::vector_telemetry::snapshot();
+    assert!(
+        after.query_embeddings_total > before.query_embeddings_total,
+        "rerank_with_embeddings must move query_embeddings_total upward by at least 1"
+    );
+    assert!(
+        after.live_body_embeddings_total
+            >= before
+                .live_body_embeddings_total
+                .saturating_add(bodies.len() as u64),
+        "rerank_with_embeddings must move live_body_embeddings_total upward by at least {} (one per body)",
+        bodies.len()
+    );
+}
+
+/// Phase 1.11 — verify the vector-telemetry counters move through
+/// the public retriever surface end-to-end.  Bumps `live_body_*`
+/// rather than `cache_hits_*` because the store ingests the bodies
+/// WITHOUT a wired-in model (`fresh_store` returns a model-less
+/// store), so the retriever's `candidate_embedding` path has to
+/// fall through to the live re-embed branch on every row.
+#[test]
+fn vector_telemetry_counters_move_through_public_retriever() {
+    use evidence_store::vector_telemetry;
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+    // Ingest WITHOUT a wired-in model so the cache is empty.
+    // `candidate_embedding` will hit `MissNoRow` for every row
+    // and fall through to live re-embed.
+    let r1 = store
+        .ingest(
+            scope,
+            "weather forecast".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+    let _r2 = store
+        .ingest(
+            scope,
+            "stock market".as_bytes(),
+            None,
+            ImportanceClass::Useful,
+        )
+        .unwrap();
+
+    let before = vector_telemetry::snapshot();
+    let retriever = HybridRetriever::new(&store)
+        .with_embedding_model(MultilingualConceptMockModel, "ml-mock-v1")
+        .with_weights(HybridWeights {
+            fts: 0.0,
+            recency: 0.0,
+            vector: 1.0,
+        });
+    let hits = retriever
+        .search_hybrid(scope, "weather forecast", 10)
+        .unwrap();
+    let after = vector_telemetry::snapshot();
+
+    assert!(!hits.is_empty(), "search_hybrid produced no results");
+
+    // The query was successfully embedded — bumps Query.
+    assert!(
+        after.query_embeddings_total > before.query_embeddings_total,
+        "query_embeddings_total did not move (before={}, after={})",
+        before.query_embeddings_total,
+        after.query_embeddings_total,
+    );
+    // Every candidate fell through to the live-body re-embed —
+    // bumps LiveBody at least once.  The retriever inspects
+    // both rows so the increment is >= 1 (the exact count
+    // depends on internal `candidate_embedding` call patterns
+    // which are private; we only assert movement).
+    assert!(
+        after.live_body_embeddings_total > before.live_body_embeddings_total,
+        "live_body_embeddings_total did not move (before={}, after={})",
+        before.live_body_embeddings_total,
+        after.live_body_embeddings_total,
+    );
+    // Cache was empty (no wired-in model on `ingest`), so the
+    // miss-no-row counter MUST move.
+    assert!(
+        after.cache_misses_no_row_total > before.cache_misses_no_row_total,
+        "cache_misses_no_row_total did not move (before={}, after={})",
+        before.cache_misses_no_row_total,
+        after.cache_misses_no_row_total,
+    );
+    // Sanity: the row IDs returned are the ones we ingested.
+    assert!(
+        hits.iter().any(|h| h.evidence_id == r1.evidence_id),
+        "expected first ingested row in results"
+    );
+}

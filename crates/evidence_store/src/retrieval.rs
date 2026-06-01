@@ -126,8 +126,16 @@ impl<'a> HybridRetriever<'a> {
         model: M,
         model_tag: impl Into<String>,
     ) -> Self {
+        let dim = model.dimension();
         self.embedding_model = Some(Box::new(model));
         self.embedding_model_tag = model_tag.into();
+        // Register the wired-in (tag, dimension) pair so a same-tag /
+        // different-dimension rotation violation is flagged in
+        // `model_tag_dimension_violations_total` the moment the second
+        // retriever instance is constructed, not only when the cache
+        // happens to be consulted. Skipped for the empty-tag sentinel
+        // (see `record_observed_dimension`).
+        crate::vector_telemetry::record_observed_dimension(&self.embedding_model_tag, dim);
         self
     }
 
@@ -264,9 +272,20 @@ impl<'a> HybridRetriever<'a> {
         let Some(model) = self.embedding_model.as_ref() else {
             return Ok(candidates);
         };
-        let query_vec = model
-            .embed(query)
-            .map_err(|e| EvidenceError::Embedding(format!("embedding query failed: {e}")))?;
+        let query_vec = match model.embed(query) {
+            Ok(v) => {
+                crate::vector_telemetry::record_embedding_computed(
+                    crate::vector_telemetry::EmbedSite::Query,
+                );
+                v
+            }
+            Err(err) => {
+                crate::vector_telemetry::record_embedding_error_from(&err);
+                return Err(EvidenceError::Embedding(format!(
+                    "embedding query failed: {err}"
+                )));
+            }
+        };
         let body_lookup: std::collections::HashMap<EvidenceId, &str> = bodies
             .iter()
             .map(|(id, body)| (*id, body.as_str()))
@@ -275,8 +294,16 @@ impl<'a> HybridRetriever<'a> {
         for mut hit in candidates {
             let vector_score = match body_lookup.get(&hit.evidence_id) {
                 Some(body) => match model.embed(body) {
-                    Ok(v) => similarity_to_score(cosine_similarity(&query_vec, &v)),
-                    Err(_) => 0.0,
+                    Ok(v) => {
+                        crate::vector_telemetry::record_embedding_computed(
+                            crate::vector_telemetry::EmbedSite::LiveBody,
+                        );
+                        similarity_to_score(cosine_similarity(&query_vec, &v))
+                    }
+                    Err(err) => {
+                        crate::vector_telemetry::record_embedding_error_from(&err);
+                        0.0
+                    }
                 },
                 None => 0.0,
             };
@@ -352,10 +379,29 @@ impl<'a> HybridRetriever<'a> {
         // per-row failures (missing body, runtime hiccup, dimension
         // mismatch with a stale cached row) just leave that single
         // row at 0.0.
+        // Query-side embed for the semantic-vector lane. We do not
+        // propagate failures here: a query embed error degrades the
+        // single search to lexical-only (vector_score = 0.0) but must
+        // not abort the whole `search_hybrid` call (the lexical hits
+        // are still useful and the caller cannot do anything about an
+        // adapter outage anyway). The success / error counters cover
+        // both branches so the operator can see degraded mode in
+        // metrics.
         let query_vec = self
             .embedding_model
             .as_ref()
-            .and_then(|model| model.embed(query).ok());
+            .and_then(|model| match model.embed(query) {
+                Ok(v) => {
+                    crate::vector_telemetry::record_embedding_computed(
+                        crate::vector_telemetry::EmbedSite::Query,
+                    );
+                    Some(v)
+                }
+                Err(err) => {
+                    crate::vector_telemetry::record_embedding_error_from(&err);
+                    None
+                }
+            });
         if let (Some(model), Some(query_vec)) = (self.embedding_model.as_ref(), query_vec) {
             for entry in by_id.values_mut() {
                 let body_vec =
@@ -447,25 +493,43 @@ impl<'a> HybridRetriever<'a> {
             .store
             .get_embedding_for_model(id, &self.embedding_model_tag)
         {
-            Ok(Some(stored)) if stored.len() == query_dim => return Ok(Some(stored)),
-            // Two distinct failure modes share the same handling — both
-            // demote to "cache miss, let the live-embed path try":
+            Ok(Some(stored)) if stored.len() == query_dim => {
+                crate::vector_telemetry::record_cache_outcome(
+                    crate::vector_telemetry::CacheOutcome::Hit,
+                );
+                return Ok(Some(stored));
+            }
+            // Three distinct cache-lookup dispositions, each demoting
+            // to the live-embed path but routed to a distinct
+            // telemetry counter so operators can distinguish
+            // expected-miss (`MissNoRow`) from rotation-rule
+            // violations (`MissDimension`) and from transient
+            // storage errors (`MissReadError`):
             //
-            // * `Ok(_)`: dimension mismatch (defensive — should not
-            //   happen when `model_tag` matches, since a single tag
-            //   implies a single dimension) or no cached row at all.
-            //
+            // * `Ok(None)`: no cached row for the active
+            //   `(evidence_id, model_tag)`.
+            // * `Ok(Some(_))` past the dimension-match arm above:
+            //   defensive — the cache row's dimension did not match.
+            //   Should be impossible under the `model_tag` rotation
+            //   rule (one tag ⇒ one dim); the counter makes any
+            //   violation operator-visible.
             // * `Err(Schema | Sqlite)`: a corrupted cache row or
             //   transient SQL error must not abort the whole search.
-            //
-            // The arms are intentionally listed separately so each
-            // failure mode is documented; `clippy::match_same_arms`
-            // is silenced because collapsing them would lose that
-            // semantic distinction.
-            #[allow(clippy::match_same_arms)]
-            Ok(_) => {}
-            #[allow(clippy::match_same_arms)]
-            Err(EvidenceError::Schema(_) | EvidenceError::Sqlite(_)) => {}
+            Ok(None) => {
+                crate::vector_telemetry::record_cache_outcome(
+                    crate::vector_telemetry::CacheOutcome::MissNoRow,
+                );
+            }
+            Ok(Some(_)) => {
+                crate::vector_telemetry::record_cache_outcome(
+                    crate::vector_telemetry::CacheOutcome::MissDimension,
+                );
+            }
+            Err(EvidenceError::Schema(_) | EvidenceError::Sqlite(_)) => {
+                crate::vector_telemetry::record_cache_outcome(
+                    crate::vector_telemetry::CacheOutcome::MissReadError,
+                );
+            }
             // `get_embedding_for_model` only constructs `Sqlite` (from
             // the `query_row` call) and `Schema` (from
             // `bytes_to_embedding`). The remaining `EvidenceError`
@@ -504,7 +568,23 @@ impl<'a> HybridRetriever<'a> {
                 return Ok(None);
             }
         };
-        Ok(model.embed(&body).ok())
+        match model.embed(&body) {
+            Ok(v) => {
+                crate::vector_telemetry::record_embedding_computed(
+                    crate::vector_telemetry::EmbedSite::LiveBody,
+                );
+                Ok(Some(v))
+            }
+            Err(err) => {
+                // Cache-miss fallback failed — score the row at 0.0
+                // and continue. The per-variant error counter makes
+                // adapter-health regressions visible even when no
+                // cache row exists yet (e.g. first search after a
+                // model rotation).
+                crate::vector_telemetry::record_embedding_error_from(&err);
+                Ok(None)
+            }
+        }
     }
 
     fn lookup_recency(&self, id: EvidenceId) -> Result<Option<f64>> {

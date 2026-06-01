@@ -70,6 +70,7 @@ pub mod routing;
 pub mod schema;
 pub mod script;
 pub mod store;
+pub mod vector_telemetry;
 
 pub use crypto::{ContentHash, MasterKey, MASTER_KEY_LEN};
 pub use error::{EvidenceError, Result};
@@ -84,3 +85,4 @@ pub use store::{
     ApprovedDocumentPayloadMeta, EvidenceRow, EvidenceStore, EvidenceStoreConfig, IngestResult,
     RingBufferEntry, DEFAULT_RING_BUFFER_MAX_BYTES,
 };
+pub use vector_telemetry::{snapshot as vector_telemetry_snapshot, VectorTelemetrySnapshot};
