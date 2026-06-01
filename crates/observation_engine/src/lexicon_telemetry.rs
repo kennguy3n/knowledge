@@ -26,6 +26,28 @@
 //!   for the English lexicon therefore includes both genuinely
 //!   English bodies AND the fallback cases.
 //!
+//!   **Unit-of-measurement**: each `hits_<tag>` increment counts
+//!   one *resolution call* — i.e. one invocation of
+//!   `lexicon_for_or_english` — NOT one unique sentence or
+//!   document. A single sentence typically triggers several
+//!   resolution calls because the classifier loop in
+//!   [`crate::extractor::LexiconExtractor::sentence_matches_class`]
+//!   re-resolves for each of the up-to-three keyword classes it
+//!   tests (Decision, Task, TaskImperative), and the capitalised-
+//!   word stop-word filter at
+//!   [`crate::lexicon::is_stop_word`] re-resolves once per
+//!   capitalised word it inspects. For a typical 5-capitalised-
+//!   word English sentence with no class match, expect ~8
+//!   `hits_en` increments (3 class checks + 5 stop-word checks).
+//!   Operators inferring "documents classified" from `hits_*`
+//!   should divide by their measured calls-per-document ratio
+//!   rather than reading the counter directly. Phase 1.10
+//!   sweep 2 (ANALYSIS-0003) added this clarification — the
+//!   counter semantics itself are by design (counting calls is
+//!   what makes the ratio `strategy_fires / hits_*` a useful
+//!   "how-often-does-each-resolved-lexicon-actually-classify"
+//!   signal).
+//!
 //! * **`MatchStrategy` fires** — every call to
 //!   [`crate::lexicon::table_matches`] increments exactly one of
 //!   the five [`Counters::strategy_first_token`] /

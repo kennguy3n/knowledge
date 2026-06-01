@@ -1972,13 +1972,22 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
 
 /// Skip-counter end-to-end test.  Sister of
 /// `fts_telemetry_counters_advance_for_cjk_query_end_to_end`
-/// that exercises the two *skip* counters.
+/// that exercises the three *skip* counters.
 ///
 /// - `bigram_lane_skips_no_cjk_query_total` advances when the
-///   query has no adjacent CJK codepoint (Latin-only).
+///   stripped query is non-empty but has no adjacent CJK
+///   codepoint (e.g. Latin-only).
 /// - `cjk_trigram_lane_skips_pure_stopword_query_total`
 ///   advances when stripping collapses the query to empty
 ///   (pure-stopword Japanese input like "の の の").
+/// - `bigram_lane_skips_pure_stopword_query_total` advances on
+///   the same pure-stopword input as the trigram skip above —
+///   Phase 1.10 sweep 2 (ANALYSIS-0004) added this variant so
+///   the bigram lane can distinguish "Latin-only query, lane
+///   correctly declined" from "CJK query annihilated by
+///   stopword stripping".  Before the sweep-2 restructure, the
+///   pure-stopword case incorrectly bumped
+///   `bigram_lane_skips_no_cjk_query_total`.
 #[test]
 fn fts_telemetry_skip_counters_advance_for_structural_skips() {
     use evidence_store::fts_telemetry;
@@ -2010,7 +2019,10 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
     );
 
     // (2) Pure-stopword Japanese query → trigram lane collapses
-    // to empty after the query-time strip and short-circuits.
+    // to empty after the query-time strip and short-circuits,
+    // AND the bigram lane records its sibling pure-stopword
+    // skip (sweep-2 ANALYSIS-0004 fix) instead of routing the
+    // pure-stopword case into the no-CJK counter.
     let _ = store.search_fts(scope, "の の の", 10).unwrap();
 
     let after_stop = fts_telemetry::snapshot();
@@ -2018,6 +2030,12 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
         after_stop.cjk_trigram_lane_skips_pure_stopword_query_total
             > after_latin.cjk_trigram_lane_skips_pure_stopword_query_total,
         "trigram pure-stopword-query skip counter did not advance on a stripped-to-empty query"
+    );
+    assert!(
+        after_stop.bigram_lane_skips_pure_stopword_query_total
+            > after_latin.bigram_lane_skips_pure_stopword_query_total,
+        "bigram pure-stopword-query skip counter did not advance on a stripped-to-empty CJK query \
+         — sweep-2 ANALYSIS-0004 regressed (pure-stopword case routed to BigramNoCjkQuery instead)"
     );
     // BUG-0001 regression note (Phase 1.10 sweep 1): with the
     // structural `if stripped_query.trim().is_empty() { skip }
@@ -2033,6 +2051,15 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
     // race.  The regression-resistance lives in the structural
     // if/else, not in this test — see the doc comment on the
     // trigram branch in `crate::store::merged_fts_search` and
-    // the `queries + skips = total_attempts` contract on
-    // `crate::fts_telemetry`.
+    // the `queries + skips + silently_swallowed_errors =
+    // total_attempts` contract on `crate::fts_telemetry`.
+    //
+    // ANALYSIS-0004 regression note (Phase 1.10 sweep 2): the
+    // bigram lane parallels the same structural shape — the
+    // pure-stopword check runs BEFORE
+    // `compute_cjk_bigram_query` so the no-CJK and
+    // pure-stopword bigram skip counters are mutually
+    // exclusive by construction.  We do not pin
+    // `bigram_lane_skips_no_cjk_query_total` not-advancing on
+    // step (2) for the same parallel-tests race reason.
 }

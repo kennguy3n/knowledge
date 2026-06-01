@@ -792,6 +792,22 @@ pub struct MetricsSnapshot {
 /// New fields must use `#[serde(default)]` so older snapshots
 /// deserialise cleanly; the additive-wire-contract rule applies
 /// to this struct exactly the same as to [`MetricsSnapshot`].
+///
+/// # Counter semantics — read this before consuming `hits_*`
+///
+/// Each `hits_<tag>` field counts *lexicon-resolution calls*
+/// (every invocation of
+/// `LexiconRegistry::lexicon_for_or_english`), NOT unique
+/// sentences or documents.  A typical sentence triggers several
+/// resolution calls — up to three classifier-loop resolutions
+/// plus one per inspected capitalised word for the stop-word
+/// filter — so e.g. a 5-capitalised-word English sentence with
+/// no class match will bump `hits_en` ~8 times.  Operators
+/// inferring "documents classified" from these counters should
+/// divide by their measured calls-per-document ratio rather
+/// than reading the counter directly.  See the upstream
+/// `observation_engine::lexicon_telemetry` module doc for the
+/// full rationale (Phase 1.10 sweep 2 ANALYSIS-0003).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct LexiconTelemetry {
     /// Resolved-lexicon hits for `ar`.
@@ -947,8 +963,22 @@ pub struct FtsTelemetry {
     /// [`Self::bigram_lane_queries_total`] invocations.
     #[serde(default)]
     pub bigram_lane_rows_total: u64,
-    /// Times the CJK bigram lane was skipped because the query
-    /// contained no adjacent-CJK codepoint pair.
+    /// Times the CJK bigram lane was skipped because the
+    /// stopword stripping collapsed the query to empty.
+    /// Mutually exclusive with
+    /// [`Self::bigram_lane_skips_no_cjk_query_total`] — the
+    /// pure-stopword check runs first, so a pure-stopword CJK
+    /// query like `の の の` bumps this counter and NOT the
+    /// no-CJK counter.  See the upstream
+    /// `evidence_store::fts_telemetry::SkipReason` doc for the
+    /// taxonomic rationale (added Phase 1.10 sweep 2).
+    #[serde(default)]
+    pub bigram_lane_skips_pure_stopword_query_total: u64,
+    /// Times the CJK bigram lane was skipped because the
+    /// stripped query was non-empty but contained no adjacent-
+    /// CJK codepoint pair (e.g. a Latin-only query).  Mutually
+    /// exclusive with
+    /// [`Self::bigram_lane_skips_pure_stopword_query_total`].
     #[serde(default)]
     pub bigram_lane_skips_no_cjk_query_total: u64,
     /// Cumulative count of stopword instances stripped at
@@ -1205,6 +1235,7 @@ fn fts_telemetry_snapshot() -> FtsTelemetry {
             .cjk_trigram_lane_skips_pure_stopword_query_total,
         bigram_lane_queries_total: s.bigram_lane_queries_total,
         bigram_lane_rows_total: s.bigram_lane_rows_total,
+        bigram_lane_skips_pure_stopword_query_total: s.bigram_lane_skips_pure_stopword_query_total,
         bigram_lane_skips_no_cjk_query_total: s.bigram_lane_skips_no_cjk_query_total,
         index_write_stopwords_stripped_total: s.index_write_stopwords_stripped_total,
         query_time_stopwords_stripped_total: s.query_time_stopwords_stripped_total,
@@ -1694,6 +1725,7 @@ mod tests {
         record_lane_query(Lane::CjkTrigram, 5);
         record_lane_query(Lane::Bigram, 3);
         record_lane_skip(SkipReason::CjkTrigramPureStopwordQuery);
+        record_lane_skip(SkipReason::BigramPureStopwordQuery);
         record_lane_skip(SkipReason::BigramNoCjkQuery);
         record_stopwords_stripped(StripSite::IndexWrite, 11);
         record_stopwords_stripped(StripSite::QueryTime, 13);
@@ -1752,6 +1784,11 @@ mod tests {
             "bigram_lane_rows_total mirror < upstream"
         );
         assert!(
+            mirror.bigram_lane_skips_pure_stopword_query_total
+                >= upstream.bigram_lane_skips_pure_stopword_query_total,
+            "bigram_lane_skips_pure_stopword_query_total mirror < upstream"
+        );
+        assert!(
             mirror.bigram_lane_skips_no_cjk_query_total
                 >= upstream.bigram_lane_skips_no_cjk_query_total,
             "bigram_lane_skips_no_cjk_query_total mirror < upstream"
@@ -1806,6 +1843,11 @@ mod tests {
         assert!(
             mirror.bigram_lane_rows_total > before.bigram_lane_rows_total,
             "bigram_lane_rows_total not plumbed"
+        );
+        assert!(
+            mirror.bigram_lane_skips_pure_stopword_query_total
+                > before.bigram_lane_skips_pure_stopword_query_total,
+            "bigram_lane_skips_pure_stopword_query_total not plumbed"
         );
         assert!(
             mirror.bigram_lane_skips_no_cjk_query_total

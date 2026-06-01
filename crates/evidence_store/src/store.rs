@@ -5277,14 +5277,41 @@ pub(crate) fn merged_fts_search(
     // CJK-only filter via `compute_cjk_bigrams`, so the bridging
     // bigram is requested by the query whenever it would be
     // produced by the body).
-    if let Some(bigram_match) = crate::bigram::compute_cjk_bigram_query(stripped_query.as_ref()) {
+    //
+    // Phase 1.10 sweep 2 (ANALYSIS-0004 fix): the bigram lane's
+    // skip taxonomy now matches the trigram lane's structural
+    // shape — the pure-stopword check runs BEFORE
+    // `compute_cjk_bigram_query` so a CJK pure-stopword query
+    // like `の の の` records `BigramPureStopwordQuery` (correct
+    // semantic) rather than `BigramNoCjkQuery` (technically
+    // accurate but operationally misleading, since the query
+    // DID start as CJK and only became no-CJK as a side effect
+    // of stripping).  The two bigram skip variants are therefore
+    // mutually exclusive by construction: a pure-stopword query
+    // exits at the first branch; a non-CJK / Latin-only query
+    // proceeds past the empty-check and exits at the second.
+    if stripped_query.as_ref().trim().is_empty() {
+        // Telemetry: pure-stopword CJK query collapsed to empty
+        // after stripping — the bigram lane is declined here
+        // (NOT via `BigramNoCjkQuery`) so operators can tell a
+        // genuinely non-CJK query path from a CJK-input-but-
+        // pure-particles path.  Parallels the trigram-lane
+        // pure-stopword branch above.
+        crate::fts_telemetry::record_lane_skip(
+            crate::fts_telemetry::SkipReason::BigramPureStopwordQuery,
+        );
+    } else if let Some(bigram_match) =
+        crate::bigram::compute_cjk_bigram_query(stripped_query.as_ref())
+    {
         let bigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
             // Note on telemetry placement: the bigram lane query
             // counter is bumped post-swallow (after the `Ok` arm
             // is reached and `bigram_rows` is in scope) — same
             // architectural choice as the trigram lane above.
-            // The bigram skip counter is bumped in the `else`
-            // arm of the outer `if let` (see below).
+            // The bigram skip counters are bumped in the two
+            // sibling `else` arms (pure-stopword above, no-CJK
+            // below) — both mutually exclusive with this arm by
+            // construction.
             //
             // `prepare_cached` — see Branch 1 comment for rationale.
             let sql = bigram_lane_sql();
@@ -5315,8 +5342,17 @@ pub(crate) fn merged_fts_search(
             crate::fts_telemetry::record_lane_query(crate::fts_telemetry::Lane::Bigram, row_count);
         }
     } else {
-        // Telemetry: query had no adjacent-CJK codepoint pair, so
-        // the bigram lane is declined without invoking SQLite.
+        // Telemetry: stripped query was non-empty but had no
+        // adjacent-CJK codepoint pair (e.g. a Latin-only query
+        // or a CJK query with all isolated codepoints separated
+        // by non-CJK characters).  This is the "expected" skip
+        // path for the bigram lane on non-CJK traffic — it is
+        // structurally distinct from `BigramPureStopwordQuery`
+        // because operators inspecting the ratio
+        // `bigram_skips_pure_stopword / bigram_skips_no_cjk`
+        // need to be able to tell "Latin query, lane correctly
+        // declined" from "CJK query annihilated by over-
+        // aggressive stopword inventory".
         crate::fts_telemetry::record_lane_skip(crate::fts_telemetry::SkipReason::BigramNoCjkQuery);
     }
 

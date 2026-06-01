@@ -30,11 +30,39 @@
 //!
 //! * **Recall-lane skips** — when the trigram / bigram lane is
 //!   *not* invoked because the input was structurally
-//!   incompatible (pure-stopword stripped query for trigram,
-//!   no CJK content for bigram), a sibling `<lane>_skips_*_total`
-//!   counter is bumped instead. The skips counters are NOT
-//!   subsumed by the query totals — combining them yields the
-//!   true call rate (`queries + skips = total_attempts`).
+//!   incompatible, a sibling `<lane>_skips_*_total` counter is
+//!   bumped instead.  The trigram lane has one skip taxonomy
+//!   (pure-stopword stripped query); the bigram lane has two
+//!   (pure-stopword stripped query, OR non-empty stripped query
+//!   with no adjacent-CJK codepoint pair).  The bigram skip
+//!   variants are mutually exclusive *by construction*: the
+//!   pure-stopword check runs first, so a pure-stopword CJK
+//!   query like `の の の` bumps `BigramPureStopwordQuery` and
+//!   NOT `BigramNoCjkQuery` (even though both predicates would
+//!   trigger if evaluated independently).
+//!
+//!   The skips counters are NOT subsumed by the query totals —
+//!   combining them yields the true *successful-decision* rate
+//!   per lane:
+//!
+//!   ```text
+//!   queries + skips + silently_swallowed_errors = total_attempts
+//!   ```
+//!
+//!   In practice the error term is ~0 (the recall-lane closures
+//!   only return `Err` on SQLite-side faults like cache
+//!   contention or disk I/O, both of which are rare).  The
+//!   architectural reason errors are not counted is documented
+//!   on the trigram / bigram branches in
+//!   [`crate::store::merged_fts_search`]: a per-row UUID parse
+//!   error is swallowed and `continue`d (so the row is silently
+//!   skipped within an otherwise-successful lane invocation),
+//!   and a top-level `Err` from the closure is silently dropped
+//!   so the lane is *purely additive* (a flaky recall lane must
+//!   never sabotage the unicode61 lane).  Operators reading the
+//!   counter ratios should therefore treat `queries + skips` as
+//!   a lower bound on `total_attempts`, with the gap being
+//!   exactly the swallowed-error count.
 //!
 //! * **Stopword strip totals** — every invocation of
 //!   [`crate::fts_stopwords::strip_recall_lane_stopwords_counted`]
@@ -88,6 +116,7 @@ pub(crate) struct Counters {
 
     // ─── Recall-lane skips ──────────────────────────────────────
     pub(crate) cjk_trigram_lane_skips_pure_stopword_query_total: AtomicU64,
+    pub(crate) bigram_lane_skips_pure_stopword_query_total: AtomicU64,
     pub(crate) bigram_lane_skips_no_cjk_query_total: AtomicU64,
 
     // ─── Stopword strip totals (mutually exclusive sites) ──────
@@ -148,9 +177,24 @@ pub enum SkipReason {
     /// Trigram lane: stopword stripping collapsed the query to
     /// empty (pure-stopword input), so no MATCH was attempted.
     CjkTrigramPureStopwordQuery,
-    /// Bigram lane: the query contained no adjacent-CJK
-    /// codepoint pair, so [`crate::bigram::compute_cjk_bigram_query`]
-    /// returned `None` and no MATCH was attempted.
+    /// Bigram lane: stopword stripping collapsed the query to
+    /// empty (pure-stopword input) — checked *before*
+    /// [`crate::bigram::compute_cjk_bigram_query`] so the
+    /// pure-stopword case never falls through to
+    /// [`Self::BigramNoCjkQuery`].  The two bigram skip variants
+    /// are mutually exclusive by construction in
+    /// [`crate::store::merged_fts_search`] — see the module-level
+    /// doc on this crate for the full ordering rationale.
+    BigramPureStopwordQuery,
+    /// Bigram lane: stripped query was non-empty but contained
+    /// no adjacent-CJK codepoint pair, so
+    /// [`crate::bigram::compute_cjk_bigram_query`] returned
+    /// `None` and no MATCH was attempted.  Distinct from
+    /// [`Self::BigramPureStopwordQuery`] so operators can tell
+    /// a Latin-only / non-CJK query path from a CJK-input-but-
+    /// pure-particles path; the former is expected (the bigram
+    /// lane is CJK-only by design) while the latter signals an
+    /// over-aggressive stopword inventory if it dominates.
     BigramNoCjkQuery,
 }
 
@@ -163,6 +207,7 @@ pub fn record_lane_skip(reason: SkipReason) {
         SkipReason::CjkTrigramPureStopwordQuery => {
             &c.cjk_trigram_lane_skips_pure_stopword_query_total
         }
+        SkipReason::BigramPureStopwordQuery => &c.bigram_lane_skips_pure_stopword_query_total,
         SkipReason::BigramNoCjkQuery => &c.bigram_lane_skips_no_cjk_query_total,
     };
     counter.fetch_add(1, Ordering::Relaxed);
@@ -239,8 +284,18 @@ pub struct FtsTelemetrySnapshot {
     /// [`bigram_lane_queries_total`](Self::bigram_lane_queries_total)
     /// invocations.
     pub bigram_lane_rows_total: u64,
-    /// Times the CJK bigram lane was skipped because the query
-    /// contained no adjacent-CJK codepoint pair.
+    /// Times the CJK bigram lane was skipped because the
+    /// stopword stripping collapsed the query to empty.
+    /// Mutually exclusive with
+    /// [`Self::bigram_lane_skips_no_cjk_query_total`] — the
+    /// pure-stopword check runs first, so a pure-stopword CJK
+    /// query bumps this counter and NOT the no-CJK counter.
+    pub bigram_lane_skips_pure_stopword_query_total: u64,
+    /// Times the CJK bigram lane was skipped because the
+    /// stripped query was non-empty but contained no adjacent-
+    /// CJK codepoint pair (e.g. a Latin-only query).  Mutually
+    /// exclusive with
+    /// [`Self::bigram_lane_skips_pure_stopword_query_total`].
     pub bigram_lane_skips_no_cjk_query_total: u64,
     /// Cumulative count of stopword instances stripped at
     /// index-write time (i.e. when a body is written into the
@@ -273,6 +328,9 @@ pub fn snapshot() -> FtsTelemetrySnapshot {
             .load(Ordering::Relaxed),
         bigram_lane_queries_total: c.bigram_lane_queries_total.load(Ordering::Relaxed),
         bigram_lane_rows_total: c.bigram_lane_rows_total.load(Ordering::Relaxed),
+        bigram_lane_skips_pure_stopword_query_total: c
+            .bigram_lane_skips_pure_stopword_query_total
+            .load(Ordering::Relaxed),
         bigram_lane_skips_no_cjk_query_total: c
             .bigram_lane_skips_no_cjk_query_total
             .load(Ordering::Relaxed),
@@ -353,16 +411,24 @@ mod tests {
         );
     }
 
-    /// Pin skip → counter mapping.
+    /// Pin skip → counter mapping for every variant.  Each
+    /// [`SkipReason`] must map to a distinct counter field;
+    /// regressions here would silently merge unrelated skip
+    /// reasons into the same metric stream.
     #[test]
     fn lane_skips_increment_distinct_counters() {
         let before = snapshot();
         record_lane_skip(SkipReason::CjkTrigramPureStopwordQuery);
+        record_lane_skip(SkipReason::BigramPureStopwordQuery);
         record_lane_skip(SkipReason::BigramNoCjkQuery);
         let after = snapshot();
         assert_eq!(
             after.cjk_trigram_lane_skips_pure_stopword_query_total,
             before.cjk_trigram_lane_skips_pure_stopword_query_total + 1
+        );
+        assert_eq!(
+            after.bigram_lane_skips_pure_stopword_query_total,
+            before.bigram_lane_skips_pure_stopword_query_total + 1
         );
         assert_eq!(
             after.bigram_lane_skips_no_cjk_query_total,
