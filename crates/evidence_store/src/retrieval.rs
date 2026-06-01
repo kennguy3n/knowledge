@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::embeddings::{cosine_similarity, similarity_to_score, EmbeddingModel};
 use crate::error::{EvidenceError, Result};
 use crate::ids::{EvidenceId, ScopeId};
-use crate::store::{clamp_limit_to_sqlite, dual_fts_search, EvidenceStore};
+use crate::store::{clamp_limit_to_sqlite, merged_fts_search, EvidenceStore};
 
 /// One row in a hybrid retrieval result.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -180,7 +180,7 @@ impl<'a> HybridRetriever<'a> {
     /// * `trigram` is additive recall — its errors are silently
     ///   treated as an empty contribution.
     ///
-    /// The shared [`crate::store::dual_fts_search`] helper
+    /// The shared [`crate::store::merged_fts_search`] helper
     /// implements both halves so this method and
     /// [`crate::EvidenceStore::search_fts`] cannot drift in their
     /// dedupe + error-containment semantics.
@@ -195,7 +195,7 @@ impl<'a> HybridRetriever<'a> {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let merged = dual_fts_search(self.store.raw_conn(), scope_id, query, limit)?;
+        let merged = merged_fts_search(self.store.raw_conn(), scope_id, query, limit)?;
         let out = merged
             .into_iter()
             .map(|(id, rank)| {

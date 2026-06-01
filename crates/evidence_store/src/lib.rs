@@ -20,6 +20,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(missing_docs)]
 
+pub mod bigram;
 pub mod classifier;
 pub mod embeddings;
 pub mod error;

@@ -301,6 +301,7 @@ mod tests {
         assert!(contains_cjk_or_thai("\u{323AF}")); // last of contiguous G..H sub-span
         assert!(contains_cjk_or_thai("\u{323B0}")); // first of Ext J (Unicode 16.0)
         assert!(contains_cjk_or_thai("\u{33479}")); // last of merged G..H+J range
+
         // Just past the merged C..F+I upper bound (U+2EE60..=U+2FFFF
         // is unallocated / non-CJK) must NOT route on its own.
         assert!(!contains_cjk_or_thai("\u{2EE60}"));
