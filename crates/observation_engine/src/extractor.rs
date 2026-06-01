@@ -940,18 +940,71 @@ fn is_sentence_shaped_for_fact(sentence: &str) -> bool {
     unsegmented_chars >= 4
 }
 
-/// True for code points in the CJK script blocks: CJK Unified
-/// Ideographs (`U+4E00..U+9FFF`), Hiragana (`U+3040..U+309F`),
-/// Katakana (`U+30A0..U+30FF`), Hangul Syllables
-/// (`U+AC00..U+D7AF`). Used by the sentence-shape heuristic and
-/// by the per-sentence-language fallback path.
+/// True for code points in the CJK script blocks. Used by the
+/// sentence-shape heuristic and by the per-sentence-language
+/// fallback path.
+///
+/// **Lockstep contract.** This predicate is kept in lockstep
+/// with [`evidence_store::script::is_cjk_or_thai_codepoint`]
+/// (the FTS5 routing predicate) — same defense-in-depth
+/// principle as `is_khmer_codepoint` / `is_myanmar_codepoint` /
+/// `is_tibetan_codepoint` below. Any codepoint that FTS5 routes
+/// to the `evidence_fts_cjk` / `evidence_fts_bigram` lanes must
+/// also be admitted by the fact-shape gate; otherwise a body
+/// composed entirely of (say) CJK Compatibility Ideographs or
+/// Halfwidth Katakana would be indexed-and-searchable but
+/// silently rejected from becoming a Fact observation. Phase
+/// 1.5 sweep 6 extended this predicate to cover the full CJK
+/// block set, closing the same asymmetry that sweeps 3 (Myanmar
+/// Extended-A / -B) and 4 (Khmer Symbols) closed for the
+/// Brahmic scripts.
+///
+/// **Coverage.**
+///
+/// * Hiragana (`U+3040..=U+309F`)
+/// * Katakana (`U+30A0..=U+30FF`)
+/// * Katakana Phonetic Extensions (`U+31F0..=U+31FF`) — small
+///   kana used in Ainu transliteration and Japanese linguistics
+/// * Halfwidth Katakana (`U+FF65..=U+FF9F`) — JIS X 0201-derived
+///   half-width forms commonly emitted by legacy Japanese IMEs,
+///   mobile-carrier SMS / SS7 gateways, and Japanese telephony
+///   systems
+/// * CJK Radicals Supplement (`U+2E80..=U+2EFF`) — Kangxi radical
+///   components used in dictionaries and IME candidate lists
+/// * CJK Unified Ideographs Extension A (`U+3400..=U+4DBF`)
+/// * CJK Unified Ideographs (`U+4E00..=U+9FFF`)
+/// * Hangul Syllables (`U+AC00..=U+D7AF`)
+/// * CJK Compatibility Ideographs (`U+F900..=U+FAFF`) — duplicates
+///   of Han characters preserved for round-trip compatibility
+///   with legacy charsets (`KS X 1001`, `JIS X 0213`, `Big5`)
+/// * CJK Unified Ideographs Extension B (`U+20000..=U+2A6DF`)
+/// * CJK Unified Ideographs Extensions C..F + I
+///   (`U+2A700..=U+2EE5F`, contiguous; Extension I added in
+///   Unicode 15.1)
+/// * CJK Unified Ideographs Extensions G..H + J
+///   (`U+30000..=U+33479`, contiguous; Extension J added in
+///   Unicode 16.0)
+///
+/// The standing policy is the same as the FTS5 routing
+/// predicate: **"every currently-defined CJK Unified Ideographs
+/// Extension is admitted"**. A future contributor extending the
+/// predicate for Unicode 17+ Extension K / L / ... only needs to
+/// widen the upper bound of whichever contiguous arm the new
+/// block belongs to.
 fn is_cjk_codepoint(c: char) -> bool {
     matches!(c,
-        '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
-        | '\u{3040}'..='\u{309F}' // Hiragana
-        | '\u{30A0}'..='\u{30FF}' // Katakana
-        | '\u{AC00}'..='\u{D7AF}' // Hangul Syllables
-        | '\u{3400}'..='\u{4DBF}' // CJK Unified Ideographs Extension A
+        '\u{3040}'..='\u{309F}'      // Hiragana
+        | '\u{30A0}'..='\u{30FF}'    // Katakana
+        | '\u{31F0}'..='\u{31FF}'    // Katakana Phonetic Extensions
+        | '\u{FF65}'..='\u{FF9F}'    // Halfwidth Katakana
+        | '\u{2E80}'..='\u{2EFF}'    // CJK Radicals Supplement
+        | '\u{3400}'..='\u{4DBF}'    // CJK Unified Ideographs Extension A
+        | '\u{4E00}'..='\u{9FFF}'    // CJK Unified Ideographs
+        | '\u{AC00}'..='\u{D7AF}'    // Hangul Syllables
+        | '\u{F900}'..='\u{FAFF}'    // CJK Compatibility Ideographs
+        | '\u{20000}'..='\u{2A6DF}'  // CJK Unified Ideographs Extension B
+        | '\u{2A700}'..='\u{2EE5F}'  // CJK Unified Ideographs Extensions C..F + I
+        | '\u{30000}'..='\u{33479}'  // CJK Unified Ideographs Extensions G..H + J
     )
 }
 
@@ -1981,6 +2034,71 @@ mod tests {
         assert!(!is_cjk_codepoint('م')); // Arabic
         assert!(!is_cjk_codepoint('क')); // Devanagari
         assert!(!is_cjk_codepoint('ก')); // Thai (handled separately)
+
+        // Phase 1.5 sweep 6: extended CJK coverage to mirror the
+        // FTS5 routing predicate `script::is_cjk_or_thai_codepoint`,
+        // closing the same lockstep asymmetry that sweeps 3
+        // (Myanmar Extended-A / -B) and 4 (Khmer Symbols)
+        // closed for the Brahmic scripts. Without these arms,
+        // a body composed entirely of (say) Halfwidth Katakana
+        // or CJK Compatibility Ideographs would be indexed in
+        // the dual FTS5 lanes but silently rejected by the
+        // fact-shape gate.
+
+        // Halfwidth Katakana (legacy Japanese IME / SMS).
+        assert!(is_cjk_codepoint('\u{FF65}')); // first cp
+        assert!(is_cjk_codepoint('\u{FF9F}')); // last cp
+        assert!(is_cjk_codepoint('カ' /* カ */)); // full-width sanity
+
+        // Katakana Phonetic Extensions (Ainu transliteration).
+        assert!(is_cjk_codepoint('\u{31F0}')); // first cp
+        assert!(is_cjk_codepoint('\u{31FF}')); // last cp
+
+        // CJK Radicals Supplement (Kangxi radical components).
+        assert!(is_cjk_codepoint('\u{2E80}')); // first cp
+        assert!(is_cjk_codepoint('\u{2EFF}')); // last cp
+
+        // CJK Compatibility Ideographs (legacy round-trip Han).
+        assert!(is_cjk_codepoint('\u{F900}')); // first cp
+        assert!(is_cjk_codepoint('\u{FAFF}')); // last cp
+
+        // CJK Unified Ideographs Extension B (supplementary-
+        // plane Han, scholarly / historical text).
+        assert!(is_cjk_codepoint('\u{20000}')); // first cp
+        assert!(is_cjk_codepoint('\u{2A6DF}')); // last cp
+
+        // CJK Unified Ideographs Extensions C..F + I
+        // (contiguous range, Ext I added in Unicode 15.1).
+        assert!(is_cjk_codepoint('\u{2A700}')); // first cp (Ext C)
+        assert!(is_cjk_codepoint('\u{2EBEF}')); // last cp of Ext F
+        assert!(is_cjk_codepoint('\u{2EBF0}')); // first cp of Ext I
+        assert!(is_cjk_codepoint('\u{2EE5F}')); // last cp (Ext I)
+
+        // CJK Unified Ideographs Extensions G..H + J
+        // (contiguous range, Ext J added in Unicode 16.0).
+        assert!(is_cjk_codepoint('\u{30000}')); // first cp (Ext G)
+        assert!(is_cjk_codepoint('\u{323AF}')); // last cp of Ext H
+        assert!(is_cjk_codepoint('\u{323B0}')); // first cp of Ext J
+        assert!(is_cjk_codepoint('\u{33479}')); // last cp (Ext J)
+
+        // Boundary checks: codepoints immediately outside each
+        // newly-added block must remain outside the predicate.
+        // Pins the precision contract so a future contributor
+        // doesn't accidentally over-widen the upper bound and
+        // start admitting unrelated scripts as CJK.
+        assert!(!is_cjk_codepoint('\u{FF64}')); // one below Halfwidth Katakana
+        assert!(!is_cjk_codepoint('\u{FFA0}')); // one above Halfwidth Katakana
+        assert!(!is_cjk_codepoint('\u{31EF}')); // one below Phonetic Ext
+        assert!(!is_cjk_codepoint('\u{3200}')); // one above Phonetic Ext
+        assert!(!is_cjk_codepoint('\u{2E7F}')); // one below Radicals Supplement
+        assert!(!is_cjk_codepoint('\u{F8FF}')); // one below Compat Ideographs (PUA)
+        assert!(!is_cjk_codepoint('\u{FB00}')); // one above Compat Ideographs (Latin presentation)
+        assert!(!is_cjk_codepoint('\u{1FFFF}')); // one below Ext B (SMP misc)
+        assert!(!is_cjk_codepoint('\u{2A6E0}')); // one above Ext B (CJK Compat Ideographs Supplement starts at 2F800)
+        assert!(!is_cjk_codepoint('\u{2A6FF}')); // gap between Ext B and Ext C
+        assert!(!is_cjk_codepoint('\u{2EE60}')); // one above Ext I
+        assert!(!is_cjk_codepoint('\u{2FFFF}')); // gap between Ext F-I and Ext G
+        assert!(!is_cjk_codepoint('\u{3347A}')); // one above Ext J
     }
 
     #[test]
@@ -2225,7 +2343,13 @@ mod tests {
     fn is_sentence_terminator_covers_phase_1_4_set() {
         // Defensive: pin the exact terminator set so accidental
         // additions/removals fail tests instead of silently
-        // changing behaviour.
+        // changing behaviour. The scope of this test is
+        // intentionally limited to the Phase 1.4 codepoints so
+        // that an accidental REMOVAL of any Phase 1.4 terminator
+        // (regression of the original multilingual terminator
+        // work) fires here with an unambiguous error. Phase 1.5
+        // additions have their own sibling pinning test below
+        // (`is_sentence_terminator_covers_phase_1_5_set`).
         let terminators = [
             '.', '!', '?', '\n', '。', '！', '？', '؟', '۔', '।', '॥', '։', '።',
         ];
@@ -2244,6 +2368,41 @@ mod tests {
                 c as u32
             );
         }
+    }
+
+    #[test]
+    fn is_sentence_terminator_covers_phase_1_5_set() {
+        // Phase 1.5 sweep 6 sibling to the Phase 1.4 pinning
+        // test above. Pins the four Phase 1.5 sentence-final
+        // marks added in sweep 5 so an accidental removal fires
+        // here independently of the Phase 1.4 set.
+        //
+        // The split between this and the Phase 1.4 test is
+        // intentional: each test fails with a phase-specific
+        // error message, so a regression that drops (say) the
+        // Khmer khan can be triaged to the Phase 1.5 commit
+        // line that introduced it without first ruling out a
+        // Phase 1.4 regression.
+        let terminators = [
+            ('\u{0F0D}', "Tibetan shad (sentence / clause end)"),
+            ('\u{0F0E}', "Tibetan nyis shad (paragraph / verse end)"),
+            ('\u{17D4}', "Khmer khan (full stop)"),
+            ('\u{104B}', "Myanmar sign section / visarga (full stop)"),
+        ];
+        for (c, role) in terminators {
+            assert!(
+                is_sentence_terminator(c),
+                "{c:?} (U+{:04X}, {role}) must be a sentence terminator",
+                c as u32
+            );
+        }
+        // Lao is intentionally absent: the Lao script (Unicode
+        // block U+0E80..=U+0EFF) has no dedicated sentence-end
+        // punctuation; modern Lao typography uses ASCII `.`,
+        // `!`, `?` for sentence termination, which are already
+        // in the Phase 1.4 set. The 3-new-terminators-vs-
+        // 4-new-scripts asymmetry is documented by absence
+        // here and at the doc-comment of `is_sentence_terminator`.
     }
 
     #[test]
