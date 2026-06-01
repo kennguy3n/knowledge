@@ -19,9 +19,10 @@
 //! ## Phase 1.4 — multilingual sentence + question handling
 //!
 //! [`split_sentences_with_terminator`] recognises CJK
-//! (`。！？`), Arabic (`؟ ۔`), Devanagari (`।`), Armenian (`։`),
-//! Ethiopic (`።`) sentence terminators alongside ASCII
-//! (`. ! ? \n`). [`looks_like_question`] consults the per-language
+//! (`。！？`), Arabic (`؟ ۔`), Devanagari (`। ॥`),
+//! Armenian (`։`), Ethiopic (`።`), Tibetan (`། ༎`),
+//! Khmer (`។`), and Myanmar (`။`) sentence terminators
+//! alongside ASCII (`. ! ? \n`). [`looks_like_question`] consults the per-language
 //! interrogative tables in [`crate::interrogatives`] and falls
 //! back to first-token English matching when the sentence's
 //! detected language is unknown.
@@ -262,8 +263,8 @@ impl LexiconExtractor {
 /// The terminator is `None` for the trailing fragment of
 /// unterminated input. Stored as a `char` (not a `u8`) because
 /// Phase 1.4 supports multi-byte UTF-8 terminators — CJK `。`,
-/// Arabic `؟`, Devanagari `।`, etc. — that don't fit in a single
-/// byte.
+/// Arabic `؟`, Devanagari `।`, Tibetan `།`, Khmer `។`,
+/// Myanmar `။`, etc. — that don't fit in a single byte.
 #[derive(Debug, Clone, Copy)]
 struct SentenceSlice<'a> {
     text: &'a str,
@@ -298,6 +299,33 @@ struct SentenceSlice<'a> {
 ///   used as a sentence terminator and is intentionally absent
 ///   here.
 /// * `።` (U+1362 ETHIOPIC FULL STOP) — Amharic, Tigrinya.
+/// * `།` (U+0F0D TIBETAN MARK SHAD),
+///   `༎` (U+0F0E TIBETAN MARK NYIS SHAD) — Tibetan single
+///   shad ends a clause / sentence; the nyis shad (double
+///   shad) ends a paragraph or verse, structurally parallel to
+///   the Devanagari single / double danda pair above. Phase 1.5
+///   addition.
+/// * `។` (U+17D4 KHMER SIGN KHAN) — Khmer full stop. Phase
+///   1.5 addition. The Khmer bariyoosan `៕` (U+17D5) is a
+///   paragraph-end marker rather than a sentence-end marker
+///   and is intentionally absent here — matching the precedent
+///   of excluding the Armenian combining question mark `՞`.
+/// * `။` (U+104B MYANMAR SIGN SECTION) — Myanmar / Burmese
+///   full stop ("visarga"). Phase 1.5 addition. The Myanmar
+///   little section `၊` (U+104A) is a clause-level marker
+///   (Burmese comma) rather than a sentence-end marker and is
+///   intentionally absent.
+///
+/// Phase 1.5 closure of #BUG_pr-review-job-..._0001:
+/// without the Tibetan / Khmer / Myanmar arms a multi-sentence
+/// body in these scripts (e.g. `statement1။statement2`) was
+/// treated as a single sentence, so (a) the interrogative
+/// classifier applied substring matching to the entire body
+/// rather than per-sentence, and (b) a body with two
+/// declaratives produced one Fact observation instead of two.
+/// These three scripts ship full Phase 1.5 lexicon +
+/// interrogative coverage; their terminators belong in the
+/// splitter alongside them.
 fn is_sentence_terminator(c: char) -> bool {
     matches!(
         c,
@@ -317,6 +345,13 @@ fn is_sentence_terminator(c: char) -> bool {
         | '\u{0589}' // ։
         // Ethiopic
         | '\u{1362}' // ።
+        // Tibetan (Phase 1.5)
+        | '\u{0F0D}' // །  shad (sentence / clause end)
+        | '\u{0F0E}' // ༎  nyis shad (paragraph / verse end)
+        // Khmer (Phase 1.5)
+        | '\u{17D4}' // ។  khan (full stop)
+        // Myanmar (Phase 1.5)
+        | '\u{104B}' // ။  sign section (full stop / visarga)
     )
 }
 
@@ -859,21 +894,34 @@ fn fold_typographic_apostrophes(text: &str) -> Cow<'_, str> {
 /// Cyrillic / Arabic / Devanagari / etc.) **or** is a run of at
 /// least 4 codepoints in a no-inter-word-whitespace script. The
 /// no-whitespace scripts currently recognised are CJK, Thai,
-/// Lao, Khmer, and Myanmar (Burmese) — the five major living
-/// scripts in whatlang's detected-language set that do not use
-/// inter-word spaces. Without this fallback, the "contains
-/// space" gate would silently drop every sentence in those
-/// scripts as not-fact-shaped, since those scripts run words
-/// together with no separator.
+/// Lao, Khmer, Myanmar (Burmese), and Tibetan — the six major
+/// living Asian scripts that do not separate words with
+/// whitespace. Without this fallback, the "contains space" gate
+/// would silently drop every sentence in those scripts as
+/// not-fact-shaped.
+///
+/// The codepoint set is intentionally **decoupled** from
+/// whatlang's detected-language set: whatlang 0.18 ships
+/// classifiers for CJK / Thai / Khmer / Myanmar but NOT for
+/// Lao or Tibetan (`Lang::Bod` is absent). The fact-shape gate
+/// runs even when language detection produces `None`, and
+/// Phase 1.5 ships `lo` and `bo` lexicons reachable via
+/// explicit-tag callers (FFI / connector pipelines that stamp
+/// the language tag directly). The arms exist so a Lao or
+/// Tibetan body is admitted as a Fact candidate on shape alone,
+/// with `language_tag = None` via the fail-closed contract
+/// when whatlang cannot classify it.
 ///
 /// History: Phase 1.4 added the CJK arm; the Thai arm was added
 /// in the first Devin Review fixup pass (so Thai declaratives
 /// like `กรุงเทพมหานครเป็นเมืองหลวงของประเทศไทย` can become Fact
 /// observations); the Lao / Khmer / Myanmar arms were added in
-/// the sixth Devin Review fixup pass for the same reason
-/// (whatlang already detects `lo`/`km`/`my`, so without this
-/// they were silently failing the fact-shape gate). See Devin
-/// Review finding ANALYSIS-0001b.
+/// the sixth Devin Review fixup pass; Phase 1.5 sweep 3 added
+/// the Tibetan arm and extended the Myanmar arm to Extended-A
+/// / -B. Phase 1.5 sweep 4 closed the asymmetry on Khmer
+/// Symbols (U+19E0..=U+19FF) inside `is_khmer_codepoint`. See
+/// Devin Review findings ANALYSIS-0001b and
+/// BUG_pr-review-job-25cf9148_0001.
 fn is_sentence_shaped_for_fact(sentence: &str) -> bool {
     if sentence.contains(' ') {
         return true;
@@ -1524,6 +1572,77 @@ mod tests {
         assert_eq!(slices.len(), 2);
         assert_eq!(slices[0].terminator, Some('።'));
         assert_eq!(slices[1].terminator, Some('።'));
+    }
+
+    #[test]
+    fn split_sentences_recognises_tibetan_shad() {
+        // Phase 1.5 sweep 5: Tibetan ends sentences with shad
+        // (་།, U+0F0D) and paragraphs / verses with nyis shad
+        // (༎, U+0F0E) — structurally parallel to Devanagari
+        // single / double danda above. Without these arms in
+        // `is_sentence_terminator`, a multi-sentence Tibetan
+        // body would be treated as a single sentence and the
+        // interrogative + fact-shape classifiers would only
+        // apply to the whole thing. Statement 1 = "Lhasa is
+        // the capital of Tibet"; statement 2 = "Tibetan is the
+        // language of Tibet".
+        let text = "ལྷ་ས་ནི་བོད་ཀྱི་རྒྱལ་ས་ཡིན།བོད་སྐད་ནི་བོད་ཀྱི་སྐད་ཡིན༎";
+        let slices = split_sentences_with_terminator(text);
+        assert_eq!(slices.len(), 2, "expected 2 sentences: {slices:?}");
+        assert_eq!(slices[0].terminator, Some('\u{0F0D}'));
+        assert_eq!(slices[1].terminator, Some('\u{0F0E}'));
+    }
+
+    #[test]
+    fn split_sentences_recognises_khmer_khan() {
+        // Phase 1.5 sweep 5: Khmer ends sentences with khan
+        // (។, U+17D4). Statement 1 = "Phnom Penh is the
+        // capital of Cambodia"; statement 2 = "Khmer is the
+        // language of Cambodia".
+        let text = "ភ្នំពេញគឺជារដ្ឋធានីនៃប្រទេសកម្ពុជា។ខ្មែរគឺជាភាសានៃប្រទេសកម្ពុជា។";
+        let slices = split_sentences_with_terminator(text);
+        assert_eq!(slices.len(), 2, "expected 2 sentences: {slices:?}");
+        assert_eq!(slices[0].terminator, Some('\u{17D4}'));
+        assert_eq!(slices[1].terminator, Some('\u{17D4}'));
+    }
+
+    #[test]
+    fn split_sentences_recognises_myanmar_visarga() {
+        // Phase 1.5 sweep 5: Myanmar / Burmese ends sentences
+        // with sign section / "visarga" (။, U+104B).
+        // Statement 1 = "Yangon is the largest city of
+        // Myanmar"; statement 2 = "Naypyidaw is the capital
+        // of Myanmar".
+        let text = "ရန်ကုန်သည်မြန်မာနိုင်ငံ၏အကြီးဆုံးမြို့ဖြစ်သည်။နေပြည်တော်သည်မြန်မာနိုင်ငံ၏မြို့တော်ဖြစ်သည်။";
+        let slices = split_sentences_with_terminator(text);
+        assert_eq!(slices.len(), 2, "expected 2 sentences: {slices:?}");
+        assert_eq!(slices[0].terminator, Some('\u{104B}'));
+        assert_eq!(slices[1].terminator, Some('\u{104B}'));
+    }
+
+    #[test]
+    fn split_sentences_phase_1_5_terminators_do_not_swallow_non_terminator_punctuation() {
+        // Defense in depth: codepoints adjacent to or visually
+        // similar to the Phase 1.5 terminators must NOT trigger
+        // a split. Locks the precision contract so a future
+        // sweep doesn't accidentally add the Khmer bariyoosan
+        // (\u{17D5}, paragraph-end), Myanmar little section
+        // (\u{104A}, clause-comma), or Tibetan rin chen
+        // spungs shad (\u{0F11}, ornamental) as sentence
+        // terminators.
+        for non_terminator in [
+            '\u{17D5}', // ៕  Khmer bariyoosan (paragraph end)
+            '\u{104A}', // ၊  Myanmar little section (clause comma)
+            '\u{0F11}', // ༑  Tibetan rin chen spungs shad
+            '\u{0F0C}', // ་ Tibetan delimiter mark tsheg bstar
+        ] {
+            assert!(
+                !is_sentence_terminator(non_terminator),
+                "{:?} (U+{:04X}) must not be a sentence terminator",
+                non_terminator,
+                non_terminator as u32,
+            );
+        }
     }
 
     #[test]
