@@ -288,8 +288,9 @@ pub fn record_stopwords_stripped(site: StripSite, count: u64) {
 ///
 /// `_total` suffix is preserved on every field for the same
 /// Prometheus-convention reason documented on [`Counters`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[allow(clippy::struct_field_names)]
+#[serde(default)]
 pub struct FtsTelemetrySnapshot {
     /// Times the unicode61 lane (`evidence_fts`) was invoked
     /// with a non-empty query in
