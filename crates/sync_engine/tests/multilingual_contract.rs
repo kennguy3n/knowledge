@@ -229,11 +229,16 @@ fn sqlcipher_persist_reload_preserves_multilingual_bytes() {
 }
 
 #[test]
-fn two_replica_merge_with_multilingual_payloads_is_associative() {
-    // Replica A authors three payloads; replica B authors three
+fn two_replica_merge_with_multilingual_payloads_is_commutative() {
+    // Replica A authors two payloads; replica B authors three
     // different payloads (different scripts). Both merge each
     // other's log via merge_logs / merge() and must converge on
-    // the same set of six elements, byte-for-byte identical.
+    // the same set of five elements, byte-for-byte identical.
+    // This is the multilingual-payload analogue of the
+    // `merge_is_commutative` unit test in
+    // `crates/sync_engine/src/crdt.rs`, with the same
+    // direction-of-merge invariant (A ∪ B == B ∪ A) — naming
+    // matches the crdt.rs convention.
     let payloads = multilingual_payloads();
     let (a_payloads, b_payloads) = payloads.split_at(2);
 
