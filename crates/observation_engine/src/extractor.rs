@@ -886,6 +886,7 @@ fn is_sentence_shaped_for_fact(sentence: &str) -> bool {
                 || is_lao_codepoint(*c)
                 || is_khmer_codepoint(*c)
                 || is_myanmar_codepoint(*c)
+                || is_tibetan_codepoint(*c)
         })
         .count();
     unsegmented_chars >= 4
@@ -942,14 +943,62 @@ fn is_khmer_codepoint(c: char) -> bool {
     matches!(c, '\u{1780}'..='\u{17FF}')
 }
 
-/// True for code points in the Myanmar (Burmese) script block
-/// (`U+1000..U+109F`). Myanmar is a Brahmic script used for
-/// Burmese, Shan, and several other languages of Myanmar /
-/// Thailand / Bangladesh / India; like CJK it has no
-/// inter-word whitespace. whatlang detects Burmese as the `mya`
-/// enum variant, mapped to BCP-47 `my`.
+/// True for code points in any of the three Myanmar script
+/// blocks:
+///
+/// * Myanmar main block (`U+1000..=U+109F`) — Burmese plus the
+///   shared consonant inventory.
+/// * Myanmar Extended-A (`U+AA60..=U+AA7F`) — Pao + Pwo Karen
+///   letters extending the main block (Unicode 5.2, 2009).
+/// * Myanmar Extended-B (`U+A9E0..=U+A9FF`) — Shan additions
+///   (Unicode 7.0, 2014).
+///
+/// All three blocks are routed to the FTS5 dual / bigram lanes
+/// by [`crate::script::is_cjk_or_thai_codepoint`] (Phase 1.5).
+/// This predicate is kept in lockstep with the FTS5 routing
+/// predicate so that a body in a Myanmar minority script (e.g.
+/// pure Shan text using Extended-B codepoints) is admitted by
+/// the extractor's fact-shape gate on the same terms as it is
+/// indexed by the FTS5 layer. Without the Extended-A/-B arms
+/// the asymmetry was: such bodies would be indexed-and-
+/// searchable but never become Fact observations.
+///
+/// whatlang detects Burmese as the `mya` enum variant, mapped
+/// to BCP-47 `my`.
 fn is_myanmar_codepoint(c: char) -> bool {
-    matches!(c, '\u{1000}'..='\u{109F}')
+    matches!(c,
+        '\u{1000}'..='\u{109F}'   // Myanmar main
+        | '\u{AA60}'..='\u{AA7F}' // Myanmar Extended-A (Pao + Pwo Karen)
+        | '\u{A9E0}'..='\u{A9FF}' // Myanmar Extended-B (Shan)
+    )
+}
+
+/// True for code points in the Tibetan script block
+/// (`U+0F00..=U+0FFF`). Tibetan is a Brahmic-derived script
+/// that uses the tsheg (`U+0F0B`) as a *syllable* separator,
+/// not a word boundary, so the `sentence.contains(' ')` fast
+/// path in [`is_sentence_shaped_for_fact`] does not fire for
+/// pure-Tibetan bodies and this codepoint gate is what admits
+/// them as Fact candidates.
+///
+/// whatlang 0.18 does NOT ship a Tibetan classifier
+/// ([`Lang::Bod`](https://docs.rs/whatlang/0.18.0/whatlang/enum.Lang.html)
+/// is absent), so the per-sentence detector will normally
+/// leave the `language_tag` as `None` for Tibetan bodies — but
+/// the fact-shape gate runs even when language detection
+/// produces `None`, and Phase 1.5 ships a `bo` lexicon
+/// reachable via explicit-tag callers (FFI / connector
+/// pipelines), so the Tibetan body is fully indexable, fully
+/// FTS-routable, and (with this arm) fully Fact-eligible.
+/// Without this arm the asymmetry was: a Tibetan sentence
+/// without ASCII spaces would route to `evidence_fts_cjk` /
+/// `evidence_fts_bigram` via
+/// [`crate::script::is_cjk_or_thai_codepoint`] but silently
+/// fail the fact-shape gate and never become a Fact
+/// observation. Same defense-in-depth principle as the Lao /
+/// Khmer / Myanmar arms added in earlier sweeps.
+fn is_tibetan_codepoint(c: char) -> bool {
+    matches!(c, '\u{0F00}'..='\u{0FFF}')
 }
 
 impl LexiconExtractor {
@@ -1879,6 +1928,23 @@ mod tests {
         assert!(!is_myanmar_codepoint('ก')); // Thai (handled separately)
         assert!(!is_myanmar_codepoint('a')); // ASCII
 
+        // Phase 1.5 sweep 3: Myanmar Extended-A (Pao + Pwo
+        // Karen) and Extended-B (Shan). The FTS5 routing
+        // predicate at `script::is_cjk_or_thai_codepoint`
+        // covers both blocks, so the extractor predicate
+        // must too — otherwise a body in a pure-Shan or
+        // pure-Pwo-Karen minority script would be indexed in
+        // the dual FTS5 lanes but silently rejected by the
+        // fact-shape gate.
+        assert!(is_myanmar_codepoint('ꩠ')); // first cp of Myanmar Ext-A
+        assert!(is_myanmar_codepoint('ꩿ')); // last cp of Myanmar Ext-A
+        assert!(is_myanmar_codepoint('ꧠ')); // first cp of Myanmar Ext-B (Shan)
+        assert!(is_myanmar_codepoint('꧿')); // last cp of Myanmar Ext-B (Shan)
+                                            // Boundary: codepoints just outside Ext-A / Ext-B
+                                            // must remain outside the predicate.
+        assert!(!is_myanmar_codepoint('꧟')); // U+A9DF (one below Ext-B)
+        assert!(!is_myanmar_codepoint('ꪀ')); // U+AA80 (one above Ext-A)
+
         // Cross-bleed: each script's helper must reject the other
         // two no-whitespace-script ranges to keep the helpers
         // useful as standalone predicates (callers may want to
@@ -1892,12 +1958,45 @@ mod tests {
     }
 
     #[test]
-    fn lao_khmer_myanmar_fact_shaped_without_whitespace() {
-        // Devin Review #ANALYSIS-0006 (sweep 6): a declarative
-        // Khmer / Myanmar sentence (whatlang DOES detect these,
-        // and they are no-inter-word-whitespace scripts so the
-        // `contains(' ')` fast path does not fire) must produce
-        // a Fact candidate via the codepoint-count gate.
+    fn is_tibetan_codepoint_classifies_correctly() {
+        // Phase 1.5 sweep 3: Tibetan is now in the fact-shape
+        // gate's codepoint set. Spot-check the predicate at
+        // boundaries, against neighbouring scripts in the
+        // gate, and against ASCII.
+        assert!(is_tibetan_codepoint('ༀ')); // first cp of Tibetan block
+        assert!(is_tibetan_codepoint('ཀ')); // Tibetan letter ka
+        assert!(is_tibetan_codepoint('་')); // Tibetan tsheg (syllable separator)
+        assert!(is_tibetan_codepoint('ས')); // Tibetan letter sa
+        assert!(is_tibetan_codepoint('࿿')); // last cp of Tibetan block
+
+        // Boundary: codepoints just outside the block must
+        // remain outside the predicate.
+        assert!(!is_tibetan_codepoint('໿')); // last cp of Lao (one below)
+        assert!(!is_tibetan_codepoint('က')); // first cp of Myanmar (one above)
+
+        // Cross-bleed: Tibetan must reject the other Brahmic /
+        // Indic scripts in the fact-shape gate's set, plus
+        // ASCII.
+        assert!(!is_tibetan_codepoint('ก')); // Thai
+        assert!(!is_tibetan_codepoint('ກ')); // Lao
+        assert!(!is_tibetan_codepoint('ហ')); // Khmer
+        assert!(!is_tibetan_codepoint('က')); // Myanmar
+        assert!(!is_tibetan_codepoint('म')); // Devanagari
+        assert!(!is_tibetan_codepoint('a')); // ASCII
+    }
+
+    #[test]
+    fn lao_khmer_myanmar_tibetan_fact_shaped_without_whitespace() {
+        // Devin Review #ANALYSIS-0006 (sweep 6) + Phase 1.5
+        // sweep 3: a declarative Khmer / Myanmar / Lao /
+        // Tibetan sentence (no-inter-word-whitespace scripts
+        // so the `contains(' ')` fast path does not fire)
+        // must produce a Fact candidate via the codepoint-
+        // count gate. Tibetan was added in Phase 1.5 sweep 3
+        // for parity with the BO_LEXICON shipped in this PR —
+        // explicit-tag callers (FFI / connector pipelines
+        // passing `bo`) MUST be able to round-trip a Tibetan
+        // declarative through the fact extractor.
         let scope = ScopeId::new_v4();
         let ext = LexiconExtractor::default();
 
@@ -1940,6 +2039,28 @@ mod tests {
                 .any(|o| o.observation_type == ObservationType::Fact),
             "expected at least one Fact from Lao declarative on shape alone; got {:?}",
             obs_lo
+                .iter()
+                .map(|o| o.observation_type)
+                .collect::<Vec<_>>()
+        );
+
+        // "Lhasa is the capital of Tibet." — Tibetan, no
+        // ASCII spaces (tsheg `\u{0F0B}` is a syllable
+        // separator, not a word boundary). whatlang 0.18
+        // does not ship a Tibetan classifier so the row
+        // carries `language_tag = None`, but the codepoint-
+        // count gate MUST still admit it as a Fact — same
+        // defense-in-depth as the Lao arm above. Without the
+        // Tibetan arm added in Phase 1.5 sweep 3 this
+        // assertion fails and no Tibetan declarative ever
+        // becomes a Fact.
+        let obs_bo = ext.extract("ལྷ་ས་ནི་བོད་ཀྱི་རྒྱལ་ས་ཡིན", scope);
+        assert!(
+            obs_bo
+                .iter()
+                .any(|o| o.observation_type == ObservationType::Fact),
+            "expected at least one Fact from Tibetan declarative on shape alone; got {:?}",
+            obs_bo
                 .iter()
                 .map(|o| o.observation_type)
                 .collect::<Vec<_>>()
