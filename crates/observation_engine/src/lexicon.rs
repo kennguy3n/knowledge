@@ -2264,24 +2264,155 @@ mod tests {
 
     #[test]
     fn arabic_clitic_strategy_is_strict_superset_of_first_token() {
-        // Phase 1.6 invariant: anything that matches under
-        // FirstToken must also match under
-        // FirstTokenWithArabicClitics (the new strategy adds
-        // recall, never removes it). The reverse direction is
-        // the Phase 1.6 point — many strings match the new
-        // strategy that did not match FirstToken.
+        // Phase 1.6 invariant: the FirstTokenWithArabicClitics
+        // strategy must be a *strict superset* of FirstToken —
+        // i.e. (a) every sentence that matches under FirstToken
+        // must also match under FirstTokenWithArabicClitics
+        // (no recall is removed), AND (b) some sentences match
+        // under FirstTokenWithArabicClitics that do NOT match
+        // under FirstToken (the new strategy genuinely adds
+        // recall, not just preserves it).
+        //
+        // Sweep-2 strengthening (Devin Review #3331659010): the
+        // original implementation only checked direction (a) with
+        // bare-first-token inputs (where both strategies trivially
+        // match), making the assertion `!bare || clitic`
+        // vacuously true if FirstTokenWithArabicClitics had been
+        // broken to silently fall through to a copy of FirstToken.
+        // The current implementation adds direction (b) with
+        // proclitic-prefixed inputs, so a regression that made
+        // the new strategy degrade to bare FirstToken would now
+        // fail the second loop instead of passing the first
+        // loop trivially.
         let table = &["كيف", "متى", "أين", "ما"];
+
+        // Direction (a): bare-first-token cases — both strategies
+        // must match because the fast-path equality fires before
+        // any peel is attempted.
         for sentence in ["كيف الحال", "متى الاجتماع", "أين المفتاح", "ما هذا"]
         {
             let bare = table_matches(table, sentence, MatchStrategy::FirstToken);
             let clitic = table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics);
             assert!(
-                !bare || clitic,
-                "FirstTokenWithArabicClitics must be a superset of FirstToken: \
+                bare && clitic,
+                "FirstTokenWithArabicClitics must preserve all FirstToken matches: \
                  sentence {sentence:?} matched FirstToken={bare} but \
-                 FirstTokenWithArabicClitics={clitic}"
+                 FirstTokenWithArabicClitics={clitic} (both must be true for the \
+                 bare-first-token fast path)"
             );
         }
+
+        // Direction (b): proclitic-prefixed cases — FirstToken
+        // must NOT match (the prefixed surface is not in the
+        // table) while FirstTokenWithArabicClitics MUST match
+        // (the peel surfaces the bare interrogative). This is
+        // the architecturally meaningful direction that pins
+        // the recall gain Phase 1.6 was introduced to deliver.
+        for (sentence, prefix, residual) in [
+            ("وكيف يمكنني المساعدة", "و", "كيف"),
+            ("فمتى نلتقي", "ف", "متى"),
+            ("بأين", "ب", "أين"), // synthetic — pins the prefix peel even though
+            // `بأين` isn't idiomatic Arabic.
+            ("لما هذا", "ل", "ما"),
+        ] {
+            let bare = table_matches(table, sentence, MatchStrategy::FirstToken);
+            let clitic = table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics);
+            assert!(
+                !bare,
+                "FirstToken must NOT match the proclitic-prefixed surface form: \
+                 sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
+                 unexpectedly matched bare FirstToken — this would mean the strict \
+                 superset assertion is vacuous"
+            );
+            assert!(
+                clitic,
+                "FirstTokenWithArabicClitics MUST match the proclitic-prefixed surface: \
+                 sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
+                 did not match — the strict-superset direction is broken"
+            );
+        }
+    }
+
+    #[test]
+    fn arabic_clitic_strip_handles_nfd_hamza_alif_via_dual_prefix_entries() {
+        // Phase 1.6 sweep-2 (Devin Review #3331658913): the
+        // `normalize_for_lookup` pipeline strips Arabic combining
+        // marks (including U+0654 ARABIC HAMZA ABOVE) BEFORE NFC
+        // composition, so an NFD-encoded `أل` (U+0627 ALEF +
+        // U+0654 HAMZA ABOVE + U+0644 LAM) collapses to bare `ال`
+        // (U+0627 + U+0644). An NFC-encoded `أل` (U+0623
+        // HAMZA-ON-ALEF + U+0644) survives the strip because
+        // U+0623 is a precomposed base character. Both forms
+        // must successfully peel the definite article.
+        //
+        // The ARABIC_PROCLITIC_PREFIXES constant correctly
+        // includes BOTH `ال` and `أل` entries, so the peel
+        // succeeds regardless of the input's original NFC/NFD
+        // encoding. This test pins the dual-entry design against
+        // a future contributor who looks at `أل` and `ال` in the
+        // constant and assumes one is redundant (it is NOT —
+        // removing either would silently break recall on one of
+        // the two encodings).
+        // The production call path normalises via
+        // `normalize_for_lookup` BEFORE invoking `table_matches`,
+        // so this test mirrors that contract — anything else
+        // wouldn't exercise the NFD-collapse interaction the
+        // dual-entry design protects against.
+        let table = &["كتاب"];
+        let ar = Some("ar");
+
+        // Case 1: NFC-encoded `أل` (precomposed U+0623 + U+0644).
+        // The hamza-on-alif is a base character (not a combining
+        // mark), so it survives `normalize_for_lookup`'s tashkeel-
+        // strip pass intact; the peel matches via the `أل` entry
+        // in the proclitic prefix list.
+        let nfc_alef_hamza_lam = "\u{0623}\u{0644}\u{0643}\u{062A}\u{0627}\u{0628}"; // أل + كتاب
+        let nfc_normalised = normalize_for_lookup(nfc_alef_hamza_lam, ar);
+        assert!(
+            table_matches(
+                table,
+                &nfc_normalised,
+                MatchStrategy::FirstTokenWithArabicClitics
+            ),
+            "NFC-encoded `أل` (U+0623 + U+0644) must peel via the `أل` proclitic entry \
+             after normalisation; got normalised={nfc_normalised:?}"
+        );
+
+        // Case 2: NFD-encoded `أل` (decomposed U+0627 ALEF +
+        // U+0654 ARABIC HAMZA ABOVE + U+0644 LAM). The combining-
+        // hamza-above is in the U+064B..U+065F tashkeel range, so
+        // `normalize_for_lookup`'s tashkeel-strip pass removes it
+        // BEFORE NFC composition runs, leaving bare `ال`
+        // (U+0627 + U+0644). The peel then matches via the `ال`
+        // entry — NOT via `أل` (which is no longer present after
+        // the strip). Without BOTH entries in the proclitic list,
+        // one of these two NFD/NFC encodings would silently fail.
+        let nfd_alef_hamza_lam = "\u{0627}\u{0654}\u{0644}\u{0643}\u{062A}\u{0627}\u{0628}"; // alef + combining-hamza-above + lam + كتاب
+        let nfd_normalised = normalize_for_lookup(nfd_alef_hamza_lam, ar);
+        assert!(
+            table_matches(
+                table,
+                &nfd_normalised,
+                MatchStrategy::FirstTokenWithArabicClitics
+            ),
+            "NFD-encoded `أل` (U+0627 + U+0654 + U+0644) must peel via the `ال` entry \
+             after tashkeel-strip collapses the combining hamza-above; got \
+             normalised={nfd_normalised:?}"
+        );
+
+        // Case 3: canonical NFC `ال` (bare alef-lam, no hamza) —
+        // sanity check that the `ال` entry handles the most
+        // common Arabic definite article form.
+        let canonical_alef_lam = "\u{0627}\u{0644}\u{0643}\u{062A}\u{0627}\u{0628}"; // ال + كتاب
+        let canonical_normalised = normalize_for_lookup(canonical_alef_lam, ar);
+        assert!(
+            table_matches(
+                table,
+                &canonical_normalised,
+                MatchStrategy::FirstTokenWithArabicClitics
+            ),
+            "Canonical `ال` (U+0627 + U+0644) must peel via the `ال` proclitic entry"
+        );
     }
 
     // -----------------------------------------------------------------

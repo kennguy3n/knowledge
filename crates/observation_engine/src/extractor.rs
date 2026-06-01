@@ -405,16 +405,24 @@ fn split_sentences_with_terminator(text: &str) -> Vec<SentenceSlice<'_>> {
 ///    [`crate::interrogatives::interrogatives_for`] on the
 ///    sentence's primary BCP-47 subtag, then matched through the
 ///    unified [`crate::lexicon::table_matches`] entry point.
-///    CJK + Thai + Hindi use
+///    CJK + Thai + Indic-Brahmic (Hindi / Tibetan / Khmer /
+///    Myanmar / Lao) use
 ///    [`crate::lexicon::MatchStrategy::Substring`] (the
-///    interrogative may appear anywhere in the sentence);
+///    interrogative may appear anywhere in the sentence and the
+///    scripts are not whitespace-segmented at word boundaries);
 ///    Vietnamese uses
 ///    [`crate::lexicon::MatchStrategy::FirstBigram`] (Phase 1.1
 ///    #ANALYSIS-0004 closure — `tại sao` / `khi nào` / `vì sao`
 ///    are bigram entries while the bare unambiguous
-///    interrogatives still match via the first-token arm); the
-///    remaining space-separated languages use
-///    [`crate::lexicon::MatchStrategy::FirstToken`].
+///    interrogatives still match via the first-token arm);
+///    Arabic uses
+///    [`crate::lexicon::MatchStrategy::FirstTokenWithArabicClitics`]
+///    (Phase 1.6 — peels productive Arabic proclitic prefixes
+///    `و` / `ف` / `ب` / `ل` and the 2-char definite article
+///    `ال` / `أل` from the first token before re-checking
+///    equality, so `وكيف` / `فمتى` / `بأي` / `لمن` etc. surface
+///    the bare interrogative); the remaining space-separated
+///    languages use [`crate::lexicon::MatchStrategy::FirstToken`].
 /// 3. **Fallback** — when the language tag is `None` or no
 ///    table is configured for the language, fall back to the
 ///    English first-token check so substantive English
