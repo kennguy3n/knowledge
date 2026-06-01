@@ -5168,52 +5168,29 @@ pub(crate) fn merged_fts_search(
     // of the surrounding `if / else`, not a logical one buried
     // inside the closure.
     //
-    // Phase 1.10 sweep 3 (FLAG-0001 fix): the trigram lane now
-    // ALSO short-circuits when the stripped query is non-empty
-    // but contains no CJK / Thai codepoint — the
-    // `evidence_fts_cjk` table is populated only with bodies for
-    // which [`crate::script::contains_cjk_or_thai`] is true (see
-    // `EvidenceStore::index_fts`), so a Latin-only query like
-    // `"brown fox"` can never match.  Prior to this restructure
-    // such a query ran the FTS5 MATCH against the CJK-only
-    // table, returned zero rows, and bumped
-    // `record_lane_query(CjkTrigram, 0)` — diluting the
-    // per-lane precision signal
-    // (`cjk_trigram_lane_rows_total / cjk_trigram_lane_queries_total`)
-    // with structurally-incompatible attempts on every
-    // Latin-dominant workload, AND paying an unnecessary
-    // SQLite roundtrip per Latin query.  The new structural
-    // skip mirrors the bigram lane's `if let Some / else`
-    // pattern below: trigram and bigram lanes now have
-    // parallel skip taxonomies (pure-stopword vs no-CJK).
-    // The three branches are mutually exclusive by
-    // construction: pure-stopword exits at the first arm,
-    // no-CJK-or-Thai exits at the second, and the third arm
-    // is the only path that invokes SQLite.
+    // NOTE on Latin-only queries: the trigram lane intentionally
+    // does NOT structurally skip Latin-only queries even though
+    // the `evidence_fts_cjk` table is only populated for bodies
+    // whose [`crate::script::contains_cjk_or_thai`] is true. The
+    // FTS5 `trigram` tokeniser windows ALL 3-codepoint sequences
+    // in the body — including any Latin substrings embedded in a
+    // CJK body (e.g. `日本のiPhone発表` produces trigrams `iPh`,
+    // `Pho`, `hon`, `one`).  A Latin-only query like `iPhone`
+    // therefore CAN match Latin substrings stored in the CJK-only
+    // table, contributing additional weighted rank for the merge.
+    // Operators reading `cjk_trigram_lane_rows_total /
+    // cjk_trigram_lane_queries_total` will observe lower precision
+    // on Latin-dominant workloads — that signal is intentional and
+    // not a bug.  See sweep-3 (commit `4aaccba`) which tried to
+    // structurally skip Latin queries here and was reverted in
+    // sweep 4 once the trigram tokeniser's cross-script behaviour
+    // was correctly identified.
     if stripped_query.as_ref().trim().is_empty() {
         // Telemetry: pure-stopword query collapsed to empty
         // after stripping — the trigram lane is declined
         // without invoking SQLite.
         crate::fts_telemetry::record_lane_skip(
             crate::fts_telemetry::SkipReason::CjkTrigramPureStopwordQuery,
-        );
-    } else if !crate::script::contains_cjk_or_thai(stripped_query.as_ref()) {
-        // Telemetry: stripped query was non-empty but had no
-        // CJK / Thai codepoint (e.g. Latin-only).  The
-        // `evidence_fts_cjk` table cannot contain a matching
-        // row for such a query — its write path at
-        // `EvidenceStore::index_fts` gates on the same
-        // `contains_cjk_or_thai` predicate — so we skip the
-        // FTS5 MATCH entirely.  This is the trigram-lane
-        // mirror of the bigram-lane `BigramNoCjkQuery` skip:
-        // operators reading
-        // `cjk_trigram_lane_skips_no_cjk_or_thai_query_total /
-        // bigram_lane_skips_no_cjk_query_total` can compare
-        // the structural-decline rate on both recall lanes
-        // (they should track each other modulo the bigram
-        // lane's stricter "adjacent CJK" requirement).
-        crate::fts_telemetry::record_lane_skip(
-            crate::fts_telemetry::SkipReason::CjkTrigramNoCjkOrThaiQuery,
         );
     } else {
         let trigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {

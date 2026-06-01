@@ -1972,19 +1972,11 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
 
 /// Skip-counter end-to-end test.  Sister of
 /// `fts_telemetry_counters_advance_for_cjk_query_end_to_end`
-/// that exercises the four *skip* counters.
+/// that exercises the three *skip* counters.
 ///
 /// - `bigram_lane_skips_no_cjk_query_total` advances when the
 ///   stripped query is non-empty but has no adjacent CJK
 ///   codepoint (e.g. Latin-only).
-/// - `cjk_trigram_lane_skips_no_cjk_or_thai_query_total`
-///   advances when the stripped query is non-empty but
-///   contains no CJK / Thai codepoint (e.g. Latin-only).
-///   Phase 1.10 sweep 3 (FLAG-0001) added this variant so the
-///   trigram lane's structural skip taxonomy matches the
-///   bigram lane's — before sweep 3, a Latin-only query
-///   bumped `cjk_trigram_lane_queries_total` (with zero rows)
-///   instead of being structurally declined.
 /// - `cjk_trigram_lane_skips_pure_stopword_query_total`
 ///   advances when stripping collapses the query to empty
 ///   (pure-stopword Japanese input like "の の の").
@@ -1996,6 +1988,18 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
 ///   stopword stripping".  Before the sweep-2 restructure, the
 ///   pure-stopword case incorrectly bumped
 ///   `bigram_lane_skips_no_cjk_query_total`.
+///
+/// Note: a Latin-only query does NOT structurally skip the
+/// trigram lane — the FTS5 `trigram` tokeniser windows Latin
+/// substrings embedded in CJK bodies, so Latin queries can
+/// legitimately match.  On Latin-only seed data the trigram
+/// lane simply runs a MATCH that returns zero rows (bumping
+/// `cjk_trigram_lane_queries_total`, not a skip counter).
+/// Phase 1.10 sweep 3 (commit `4aaccba`) tried to skip Latin
+/// queries on the trigram lane and was reverted in sweep 4 —
+/// see the doc comment on `crate::fts_telemetry` and the
+/// trigram branch in `crate::store::merged_fts_search` for the
+/// cross-script rationale.
 #[test]
 fn fts_telemetry_skip_counters_advance_for_structural_skips() {
     use evidence_store::fts_telemetry;
@@ -2014,27 +2018,20 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
 
     let before = fts_telemetry::snapshot();
 
-    // (1) Latin-only query → BOTH recall lanes structurally
-    // decline:
-    //   * trigram lane bumps
-    //     `cjk_trigram_lane_skips_no_cjk_or_thai_query_total`
-    //     (sweep-3 FLAG-0001 fix — before this, the trigram
-    //     lane ran an unproductive FTS5 MATCH against the
-    //     CJK-only `evidence_fts_cjk` table and bumped
-    //     `cjk_trigram_lane_queries_total` instead).
-    //   * bigram lane bumps `bigram_lane_skips_no_cjk_query_total`
-    //     (the existing structural skip — `compute_cjk_bigram_query`
-    //     returns `None` for non-CJK input).
-    // Neither lane should run a SQLite MATCH for this query.
+    // (1) Latin-only query → bigram lane structurally declines
+    // (`compute_cjk_bigram_query` returns `None` because no
+    // adjacent CJK codepoint pair exists in the query).  The
+    // trigram lane does NOT structurally decline a Latin-only
+    // query — it runs a MATCH against `evidence_fts_cjk` which
+    // returns zero rows on this Latin-only seed (the body
+    // wasn't routed into the CJK-only table to begin with) and
+    // bumps `cjk_trigram_lane_queries_total`.  This shape was
+    // the pre-sweep-3 behaviour; sweep 4 reverted the sweep-3
+    // structural skip after the trigram tokeniser's cross-
+    // script behaviour was correctly identified.
     let _ = store.search_fts(scope, "Latin body", 10).unwrap();
 
     let after_latin = fts_telemetry::snapshot();
-    assert!(
-        after_latin.cjk_trigram_lane_skips_no_cjk_or_thai_query_total
-            > before.cjk_trigram_lane_skips_no_cjk_or_thai_query_total,
-        "trigram no-CJK-or-Thai skip counter did not advance on Latin-only query \
-         — sweep-3 FLAG-0001 regressed (trigram lane invoked SQLite for Latin query)"
-    );
     assert!(
         after_latin.bigram_lane_skips_no_cjk_query_total
             > before.bigram_lane_skips_no_cjk_query_total,
@@ -2085,4 +2082,88 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
     // exclusive by construction.  We do not pin
     // `bigram_lane_skips_no_cjk_query_total` not-advancing on
     // step (2) for the same parallel-tests race reason.
+}
+
+/// Architectural-reality regression test for the trigram
+/// tokeniser's cross-script behaviour.  Pins the fact that a
+/// Latin-only query MUST be able to match a CJK body containing
+/// an embedded Latin substring via the `evidence_fts_cjk`
+/// (trigram) lane — because the FTS5 `trigram` tokeniser windows
+/// ALL overlapping 3-codepoint sequences in the indexed body,
+/// not just CJK ones.
+///
+/// Background: Phase 1.10 sweep 3 (commit `4aaccba`) added a
+/// structural skip on the trigram lane for Latin-only queries
+/// under the false premise that `evidence_fts_cjk` "cannot
+/// contain a matching row" for such queries.  Sweep 4 reverted
+/// that change after Devin Review correctly identified that the
+/// trigram tokeniser DOES index Latin substrings inside CJK
+/// bodies, so the structural skip was a recall risk dressed as a
+/// perf optimisation.  This test locks the correct behaviour
+/// in place — a future re-optimisation attempt that re-adds the
+/// Latin-only skip will fail here loudly.
+///
+/// Mechanism: ingest `日本のiPhone発表` (mixed Japanese + Latin)
+/// and query for `iPhone` (Latin only).  The CJK body routes
+/// into `evidence_fts_cjk` (because `contains_cjk_or_thai` is
+/// true on the body), and the FTS5 trigram tokeniser stores the
+/// Latin trigrams `iPh`, `Pho`, `hon`, `one`.  The Latin query
+/// tokenises to the same trigrams and matches.
+///
+/// Unicode61 lane note: the unicode61 lane also matches this
+/// query (Latin tokens are preserved verbatim in `evidence_fts`),
+/// so end-to-end recall is independently guaranteed via that
+/// lane.  This test asserts the trigram lane *also* matches,
+/// which is what the sweep-3 commit silently broke.
+#[test]
+fn fts_telemetry_trigram_lane_matches_latin_in_cjk_body() {
+    use evidence_store::fts_telemetry;
+    let (_dir, mut store) = fresh_store();
+    let scope = ScopeId::new_v4();
+
+    // Mixed-script body: Japanese particles + Latin product
+    // name.  Routes into `evidence_fts_cjk` because the body
+    // contains CJK codepoints, and the trigram tokeniser indexes
+    // the embedded Latin substring `iPhone` as overlapping
+    // 3-codepoint windows alongside the CJK trigrams.
+    let body = "日本のiPhone発表";
+    let res = store
+        .ingest(scope, body.as_bytes(), None, ImportanceClass::Useful)
+        .unwrap();
+
+    let before = fts_telemetry::snapshot();
+
+    // Latin-only query.  Must match the body — both the
+    // unicode61 lane (Latin tokens preserved) and the trigram
+    // lane (Latin trigrams windowed inside the CJK body) will
+    // contribute.
+    let hits = store.search_fts(scope, "iPhone", 10).unwrap();
+    assert!(
+        hits.contains(&res.evidence_id),
+        "Latin-only query failed to match a CJK body containing the Latin substring \
+         — the trigram lane MUST window Latin trigrams inside CJK bodies \
+         (see fts_telemetry module doc and the sweep-4 revert of commit 4aaccba)"
+    );
+
+    let after = fts_telemetry::snapshot();
+
+    // The trigram lane MUST be invoked (no structural skip on
+    // Latin queries) — this is the key sweep-4 regression
+    // guard.  If a future commit re-adds the Latin-only
+    // structural skip, the trigram query counter will not
+    // advance and this assertion fails.
+    assert!(
+        after.cjk_trigram_lane_queries_total > before.cjk_trigram_lane_queries_total,
+        "trigram lane query counter did not advance on Latin-only query against CJK body \
+         — sweep-3 FLAG-0001 must remain reverted (the trigram lane is NOT structurally \
+         declined for Latin queries; see fts_telemetry module doc for the cross-script \
+         tokeniser rationale)"
+    );
+
+    // And the unicode61 lane MUST also be invoked — it's the
+    // primary high-precision lane for Latin queries.
+    assert!(
+        after.unicode61_lane_queries_total > before.unicode61_lane_queries_total,
+        "unicode61 lane query counter did not advance"
+    );
 }

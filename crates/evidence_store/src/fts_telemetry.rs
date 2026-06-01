@@ -15,22 +15,24 @@
 //!
 //! * **Lane invocation totals** — every entry into
 //!   [`crate::store::merged_fts_search`]'s unicode61 / trigram /
-//!   bigram branch bumps `<lane>_lane_queries_total`. Phase 1.10
-//!   sweep 3 (FLAG-0001 fix) made the trigram and bigram lanes
-//!   architecturally symmetric on the skip side: the trigram
-//!   branch only counts as "invoked" when the stripped query
-//!   contained at least one CJK or Thai codepoint — Latin-only
-//!   queries are structurally declined via
-//!   [`SkipReason::CjkTrigramNoCjkOrThaiQuery`] rather than
-//!   running a no-match FTS5 MATCH that can never return rows.
-//!   The bigram branch counts as "invoked" only after
+//!   bigram branch bumps `<lane>_lane_queries_total`. The
+//!   unicode61 branch counts every non-empty query. The trigram
+//!   branch counts as "invoked" when the stripped query is
+//!   non-empty — note this includes Latin-only queries, because
+//!   the FTS5 `trigram` tokeniser indexes ALL 3-codepoint
+//!   windows in the body (including Latin substrings embedded
+//!   in CJK bodies), so a Latin-only query CAN match Latin
+//!   substrings inside `evidence_fts_cjk` rows. The bigram
+//!   branch counts as "invoked" only after
 //!   [`crate::bigram::compute_cjk_bigram_query`] returned a
 //!   non-empty bigram match string (i.e. the query had at least
-//!   two adjacent CJK codepoints to bigram-window).  Operators
+//!   two adjacent CJK codepoints to bigram-window). Operators
 //!   computing a per-lane hit rate (`<lane>_lane_rows_total /
-//!   <lane>_lane_queries_total`) now get a precision signal
-//!   that isn't diluted by structurally-incompatible queries on
-//!   either recall lane.
+//!   <lane>_lane_queries_total`) will see lower precision on
+//!   the trigram lane for Latin-dominant workloads — that
+//!   signal is intentional and operators can detect such
+//!   workloads by comparing trigram precision against unicode61
+//!   precision over the same period.
 //!
 //! * **Lane row totals** — cumulative row count across all
 //!   invocations of each lane (`<lane>_lane_rows_total`). Useful
@@ -40,27 +42,30 @@
 //! * **Recall-lane skips** — when the trigram / bigram lane is
 //!   *not* invoked because the input was structurally
 //!   incompatible, a sibling `<lane>_skips_*_total` counter is
-//!   bumped instead.  After Phase 1.10 sweep 3 (FLAG-0001) the
-//!   two recall lanes have parallel skip taxonomies, each
-//!   partitioned into TWO mutually-exclusive variants:
+//!   bumped instead. The two recall lanes have DIFFERENT skip
+//!   taxonomies because their tokenisers behave differently on
+//!   Latin substrings:
 //!
-//!   * **trigram lane**:
+//!   * **trigram lane**: SINGLE skip variant
 //!     [`SkipReason::CjkTrigramPureStopwordQuery`] (stripped
-//!     query empty) vs
-//!     [`SkipReason::CjkTrigramNoCjkOrThaiQuery`] (stripped
-//!     query non-empty but contains no CJK / Thai codepoint —
-//!     e.g. a Latin-only query that can never match the
-//!     CJK-only `evidence_fts_cjk` table).
-//!   * **bigram lane**:
+//!     query empty). Latin-only queries are NOT structurally
+//!     skipped because the FTS5 `trigram` tokeniser windows
+//!     Latin substrings embedded in CJK bodies.
+//!   * **bigram lane**: TWO skip variants —
 //!     [`SkipReason::BigramPureStopwordQuery`] (stripped query
 //!     empty) vs [`SkipReason::BigramNoCjkQuery`] (stripped
 //!     query non-empty but contains no adjacent-CJK codepoint
-//!     pair).
+//!     pair). Latin-only queries DO structurally skip here
+//!     because [`crate::bigram::compute_cjk_bigram_query`] only
+//!     generates bigrams of ADJACENT CJK codepoints — Latin
+//!     substrings are not bigram-tokenised, so a Latin-only
+//!     query produces no bigram match string and the lane is
+//!     correctly declined.
 //!
-//!   Within each lane the two variants are mutually exclusive
-//!   *by construction*: the pure-stopword check runs first, so
-//!   a pure-stopword CJK query like `の の の` bumps
-//!   `*PureStopwordQuery` and NOT the no-CJK variant (even
+//!   Within the bigram lane the two variants are mutually
+//!   exclusive *by construction*: the pure-stopword check runs
+//!   first, so a pure-stopword CJK query like `の の の` bumps
+//!   `BigramPureStopwordQuery` and NOT the no-CJK variant (even
 //!   though both predicates would trigger if evaluated
 //!   independently).
 //!
@@ -139,7 +144,6 @@ pub(crate) struct Counters {
 
     // ─── Recall-lane skips ──────────────────────────────────────
     pub(crate) cjk_trigram_lane_skips_pure_stopword_query_total: AtomicU64,
-    pub(crate) cjk_trigram_lane_skips_no_cjk_or_thai_query_total: AtomicU64,
     pub(crate) bigram_lane_skips_pure_stopword_query_total: AtomicU64,
     pub(crate) bigram_lane_skips_no_cjk_query_total: AtomicU64,
 
@@ -200,26 +204,12 @@ pub fn record_lane_query(lane: Lane, rows: u64) {
 pub enum SkipReason {
     /// Trigram lane: stopword stripping collapsed the query to
     /// empty (pure-stopword input), so no MATCH was attempted.
-    /// Checked *before* [`Self::CjkTrigramNoCjkOrThaiQuery`] —
-    /// the two trigram skip variants are mutually exclusive by
-    /// construction in [`crate::store::merged_fts_search`].
+    /// This is the SINGLE structural-skip variant for the
+    /// trigram lane — Latin-only queries are NOT skipped here
+    /// because the FTS5 `trigram` tokeniser windows Latin
+    /// substrings embedded in CJK bodies (see the module-level
+    /// doc for the cross-script behaviour rationale).
     CjkTrigramPureStopwordQuery,
-    /// Trigram lane: stripped query was non-empty but contained
-    /// no CJK / Thai codepoint, so the trigram table
-    /// (`evidence_fts_cjk`, populated only with bodies for which
-    /// [`crate::script::contains_cjk_or_thai`] is true) cannot
-    /// possibly produce a match.  Phase 1.10 sweep 3 (FLAG-0001
-    /// fix) added this variant so the trigram lane structurally
-    /// declines Latin-only queries the same way the bigram lane
-    /// does via [`Self::BigramNoCjkQuery`] — eliminating a no-
-    /// match FTS5 MATCH roundtrip on every Latin-dominant query
-    /// and giving operators a clean precision signal
-    /// (`cjk_trigram_lane_rows_total / cjk_trigram_lane_queries_total`)
-    /// that isn't diluted by structurally-incompatible queries.
-    /// Distinct from [`Self::CjkTrigramPureStopwordQuery`] so a
-    /// Latin-only query is observably different from a CJK
-    /// query annihilated by stopword stripping.
-    CjkTrigramNoCjkOrThaiQuery,
     /// Bigram lane: stopword stripping collapsed the query to
     /// empty (pure-stopword input) — checked *before*
     /// [`crate::bigram::compute_cjk_bigram_query`] so the
@@ -249,9 +239,6 @@ pub fn record_lane_skip(reason: SkipReason) {
     let counter = match reason {
         SkipReason::CjkTrigramPureStopwordQuery => {
             &c.cjk_trigram_lane_skips_pure_stopword_query_total
-        }
-        SkipReason::CjkTrigramNoCjkOrThaiQuery => {
-            &c.cjk_trigram_lane_skips_no_cjk_or_thai_query_total
         }
         SkipReason::BigramPureStopwordQuery => &c.bigram_lane_skips_pure_stopword_query_total,
         SkipReason::BigramNoCjkQuery => &c.bigram_lane_skips_no_cjk_query_total,
@@ -322,20 +309,11 @@ pub struct FtsTelemetrySnapshot {
     pub cjk_trigram_lane_rows_total: u64,
     /// Times the CJK trigram lane was skipped because the
     /// stopword stripping collapsed the query to empty.
-    /// Mutually exclusive with
-    /// [`Self::cjk_trigram_lane_skips_no_cjk_or_thai_query_total`]
-    /// — the pure-stopword check runs first, so a pure-stopword
-    /// CJK query bumps this counter and NOT the no-CJK-or-Thai
-    /// counter.
+    /// This is the SINGLE structural-skip variant for the
+    /// trigram lane (see the module-level doc on this crate for
+    /// why Latin-only queries are NOT structurally skipped on
+    /// the trigram lane).
     pub cjk_trigram_lane_skips_pure_stopword_query_total: u64,
-    /// Times the CJK trigram lane was skipped because the
-    /// stripped query was non-empty but contained no CJK / Thai
-    /// codepoint (e.g. a Latin-only query).  Mutually exclusive
-    /// with [`Self::cjk_trigram_lane_skips_pure_stopword_query_total`].
-    /// Phase 1.10 sweep 3 (FLAG-0001 fix) — see the
-    /// [`SkipReason::CjkTrigramNoCjkOrThaiQuery`] doc for the
-    /// architectural-symmetry rationale.
-    pub cjk_trigram_lane_skips_no_cjk_or_thai_query_total: u64,
     /// Times the CJK bigram lane (`evidence_fts_bigram`) was
     /// invoked with a non-empty bigram match string.
     pub bigram_lane_queries_total: u64,
@@ -384,9 +362,6 @@ pub fn snapshot() -> FtsTelemetrySnapshot {
         cjk_trigram_lane_rows_total: c.cjk_trigram_lane_rows_total.load(Ordering::Relaxed),
         cjk_trigram_lane_skips_pure_stopword_query_total: c
             .cjk_trigram_lane_skips_pure_stopword_query_total
-            .load(Ordering::Relaxed),
-        cjk_trigram_lane_skips_no_cjk_or_thai_query_total: c
-            .cjk_trigram_lane_skips_no_cjk_or_thai_query_total
             .load(Ordering::Relaxed),
         bigram_lane_queries_total: c.bigram_lane_queries_total.load(Ordering::Relaxed),
         bigram_lane_rows_total: c.bigram_lane_rows_total.load(Ordering::Relaxed),
@@ -481,7 +456,6 @@ mod tests {
     fn lane_skips_increment_distinct_counters() {
         let before = snapshot();
         record_lane_skip(SkipReason::CjkTrigramPureStopwordQuery);
-        record_lane_skip(SkipReason::CjkTrigramNoCjkOrThaiQuery);
         record_lane_skip(SkipReason::BigramPureStopwordQuery);
         record_lane_skip(SkipReason::BigramNoCjkQuery);
         let after = snapshot();
@@ -490,51 +464,12 @@ mod tests {
             before.cjk_trigram_lane_skips_pure_stopword_query_total + 1
         );
         assert_eq!(
-            after.cjk_trigram_lane_skips_no_cjk_or_thai_query_total,
-            before.cjk_trigram_lane_skips_no_cjk_or_thai_query_total + 1
-        );
-        assert_eq!(
             after.bigram_lane_skips_pure_stopword_query_total,
             before.bigram_lane_skips_pure_stopword_query_total + 1
         );
         assert_eq!(
             after.bigram_lane_skips_no_cjk_query_total,
             before.bigram_lane_skips_no_cjk_query_total + 1
-        );
-    }
-
-    /// Pin the trigram-lane skip taxonomy exclusivity at the
-    /// counter layer: bumping the two variants independently
-    /// must NOT cross-contaminate counters.  Mirror of the
-    /// existing `bigram_skip_variants_exclusive` shape so
-    /// regressions in either lane surface symmetrically.
-    #[test]
-    fn trigram_skip_variants_exclusive() {
-        let before = snapshot();
-        record_lane_skip(SkipReason::CjkTrigramPureStopwordQuery);
-        let after_pure = snapshot();
-        assert_eq!(
-            after_pure.cjk_trigram_lane_skips_pure_stopword_query_total,
-            before.cjk_trigram_lane_skips_pure_stopword_query_total + 1,
-            "pure-stopword variant did not bump pure-stopword counter"
-        );
-        assert_eq!(
-            after_pure.cjk_trigram_lane_skips_no_cjk_or_thai_query_total,
-            before.cjk_trigram_lane_skips_no_cjk_or_thai_query_total,
-            "pure-stopword variant MUST NOT bump no-CJK-or-Thai counter"
-        );
-
-        record_lane_skip(SkipReason::CjkTrigramNoCjkOrThaiQuery);
-        let after_nocjk = snapshot();
-        assert_eq!(
-            after_nocjk.cjk_trigram_lane_skips_no_cjk_or_thai_query_total,
-            after_pure.cjk_trigram_lane_skips_no_cjk_or_thai_query_total + 1,
-            "no-CJK-or-Thai variant did not bump no-CJK-or-Thai counter"
-        );
-        assert_eq!(
-            after_nocjk.cjk_trigram_lane_skips_pure_stopword_query_total,
-            after_pure.cjk_trigram_lane_skips_pure_stopword_query_total,
-            "no-CJK-or-Thai variant MUST NOT bump pure-stopword counter"
         );
     }
 

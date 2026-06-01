@@ -952,26 +952,15 @@ pub struct FtsTelemetry {
     #[serde(default)]
     pub cjk_trigram_lane_rows_total: u64,
     /// Times the CJK trigram lane was skipped because the
-    /// stopword stripping collapsed the query to empty.
-    /// Mutually exclusive with
-    /// [`Self::cjk_trigram_lane_skips_no_cjk_or_thai_query_total`]
-    /// — the pure-stopword check runs first, so a pure-stopword
-    /// CJK query bumps this counter and NOT the no-CJK-or-Thai
-    /// counter.
+    /// stopword stripping collapsed the query to empty. This is
+    /// the SINGLE structural-skip variant for the trigram lane
+    /// — Latin-only queries are NOT skipped because the FTS5
+    /// `trigram` tokeniser windows Latin substrings embedded in
+    /// CJK bodies (see upstream
+    /// `evidence_store::fts_telemetry` module doc for the
+    /// cross-script rationale).
     #[serde(default)]
     pub cjk_trigram_lane_skips_pure_stopword_query_total: u64,
-    /// Times the CJK trigram lane was skipped because the
-    /// stripped query was non-empty but contained no CJK / Thai
-    /// codepoint (e.g. a Latin-only query that could never
-    /// match the CJK-only `evidence_fts_cjk` table).  Mutually
-    /// exclusive with
-    /// [`Self::cjk_trigram_lane_skips_pure_stopword_query_total`].
-    /// Phase 1.10 sweep 3 (FLAG-0001 fix) added this counter so
-    /// the trigram lane's skip taxonomy is architecturally
-    /// symmetric with the bigram lane (which already had
-    /// [`Self::bigram_lane_skips_no_cjk_query_total`]).
-    #[serde(default)]
-    pub cjk_trigram_lane_skips_no_cjk_or_thai_query_total: u64,
     /// Times the CJK bigram lane (`evidence_fts_bigram`) was
     /// invoked with a non-empty bigram match string.
     #[serde(default)]
@@ -1250,8 +1239,6 @@ fn fts_telemetry_snapshot() -> FtsTelemetry {
         cjk_trigram_lane_rows_total: s.cjk_trigram_lane_rows_total,
         cjk_trigram_lane_skips_pure_stopword_query_total: s
             .cjk_trigram_lane_skips_pure_stopword_query_total,
-        cjk_trigram_lane_skips_no_cjk_or_thai_query_total: s
-            .cjk_trigram_lane_skips_no_cjk_or_thai_query_total,
         bigram_lane_queries_total: s.bigram_lane_queries_total,
         bigram_lane_rows_total: s.bigram_lane_rows_total,
         bigram_lane_skips_pure_stopword_query_total: s.bigram_lane_skips_pure_stopword_query_total,
@@ -1744,7 +1731,6 @@ mod tests {
         record_lane_query(Lane::CjkTrigram, 5);
         record_lane_query(Lane::Bigram, 3);
         record_lane_skip(SkipReason::CjkTrigramPureStopwordQuery);
-        record_lane_skip(SkipReason::CjkTrigramNoCjkOrThaiQuery);
         record_lane_skip(SkipReason::BigramPureStopwordQuery);
         record_lane_skip(SkipReason::BigramNoCjkQuery);
         record_stopwords_stripped(StripSite::IndexWrite, 11);
@@ -1794,11 +1780,6 @@ mod tests {
             mirror.cjk_trigram_lane_skips_pure_stopword_query_total
                 >= upstream.cjk_trigram_lane_skips_pure_stopword_query_total,
             "cjk_trigram_lane_skips_pure_stopword_query_total mirror < upstream"
-        );
-        assert!(
-            mirror.cjk_trigram_lane_skips_no_cjk_or_thai_query_total
-                >= upstream.cjk_trigram_lane_skips_no_cjk_or_thai_query_total,
-            "cjk_trigram_lane_skips_no_cjk_or_thai_query_total mirror < upstream"
         );
         assert!(
             mirror.bigram_lane_queries_total >= upstream.bigram_lane_queries_total,
@@ -1860,11 +1841,6 @@ mod tests {
             mirror.cjk_trigram_lane_skips_pure_stopword_query_total
                 > before.cjk_trigram_lane_skips_pure_stopword_query_total,
             "cjk_trigram_lane_skips_pure_stopword_query_total not plumbed"
-        );
-        assert!(
-            mirror.cjk_trigram_lane_skips_no_cjk_or_thai_query_total
-                > before.cjk_trigram_lane_skips_no_cjk_or_thai_query_total,
-            "cjk_trigram_lane_skips_no_cjk_or_thai_query_total not plumbed"
         );
         assert!(
             mirror.bigram_lane_queries_total > before.bigram_lane_queries_total,
