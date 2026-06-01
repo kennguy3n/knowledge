@@ -85,8 +85,12 @@ pub enum InterrogativeMatch {
     /// proclitics agglutinate to the host word: tries first-token
     /// equality, then iteratively peels the recognised Arabic
     /// proclitic prefixes (`و` "and", `ف` "then", `ب` "with",
-    /// `ل` "to", `ك` "as", `س` "will", `ال` / `أل` "the")
-    /// and re-checks equality after each peel. See
+    /// `ل` "to", and the 2-character definite article `ال` /
+    /// `أل` "the") and re-checks equality after each peel. The
+    /// preposition `ك` ("like / as") and the future marker `س`
+    /// ("will") were initially in the peel set but were removed
+    /// in sweep 1 (Devin Review #ANALYSIS-0004) for precision
+    /// reasons. See
     /// [`crate::lexicon::MatchStrategy::FirstTokenWithArabicClitics`]
     /// for the full design notes (peel inventory, why `أ`
     /// interrogative hamza is excluded, why `Substring` is
@@ -411,9 +415,17 @@ pub fn interrogatives_for(
         // Yes/no questions with the hamza particle are
         // recovered instead via the `؟` terminator short-
         // circuit in [`crate::extractor::looks_like_question`].
-        // See the docstring on
+        //
+        // Sweep-1 precision update (Devin Review
+        // #ANALYSIS-0004): the proclitic peel set was
+        // narrowed from 8 to 6 entries; `ك` ("like/as") and
+        // `س` ("will") were excluded after surfacing both
+        // interrogative-path false positives (`كمن` ➜ `من`,
+        // `سما` ➜ `ما`) and a more dangerous imperative-path
+        // false positive (`سأرسل` "I will send" ➜ imperative
+        // `أرسل`). See the docstring on
         // [`crate::lexicon::MatchStrategy::FirstTokenWithArabicClitics`]
-        // for the full omission rationale.
+        // for the full omission rationale on `ك` / `س` / `أ`.
         "ar" => Some((
             &[
                 "من",
@@ -911,7 +923,24 @@ mod tests {
         // language's entries.
         for tag in SUPPORTED_PRIMARY_TAGS {
             let (list, strat) = interrogatives_for(tag).unwrap();
-            if strat != InterrogativeMatch::FirstToken {
+            // Phase 1.6 sweep-1 extension (Devin Review
+            // #3331604782): the invariant applies to every
+            // strategy whose matcher consults the extractor's
+            // alphabetic-only tokeniser — i.e. both bare
+            // FirstToken AND FirstTokenWithArabicClitics, which
+            // begins with a FirstToken-style exact-equality
+            // check and whose peel only strips alphabetic Arabic
+            // proclitics (never tokeniser-boundary chars). Pre-
+            // fix, the new Arabic strategy bypassed this guard
+            // entirely; including it here pins the no-boundary-
+            // char invariant for the Arabic interrogative table
+            // as well. Substring / FirstBigram strategies remain
+            // exempt because their entries either span multiple
+            // tokens (`tại sao`) or are intentionally matched as
+            // substrings (`何ですか`).
+            if strat != InterrogativeMatch::FirstToken
+                && strat != InterrogativeMatch::FirstTokenWithArabicClitics
+            {
                 continue;
             }
             for entry in list {

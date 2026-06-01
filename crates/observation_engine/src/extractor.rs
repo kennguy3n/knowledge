@@ -3283,4 +3283,42 @@ mod tests {
              tashkeel-strip + proclitic-peel correctly and classify as a question"
         );
     }
+
+    #[test]
+    fn phase_1_6_arabic_first_person_future_does_not_emit_task() {
+        // Phase 1.6 sweep-1 precision guard (Devin Review
+        // #ANALYSIS-0004), end-to-end: 1st-person future-tense
+        // declaratives that share a verb root with an `أ`-initial
+        // imperative must NOT emit a Task observation. The future
+        // marker `س` is deliberately omitted from the proclitic
+        // peel set precisely because peeling `سأرسل` ("I will
+        // send") to surface `أرسل` (which IS in the imperative
+        // table) would produce a phantom Task observation on
+        // every Arabic future-tense statement of intent.
+        //
+        // The companion `lexicon::tests::table_matches_arabic_
+        // clitic_strip_drops_unproductive_k_and_s_prefixes` test
+        // pins this at the matcher boundary; this test pins it
+        // at the end-to-end integration boundary so an accidental
+        // re-addition of `س` to the peel set would surface as a
+        // failing test in BOTH layers.
+        let extractor = LexiconExtractor::default();
+        let ar = LanguageTag::new("ar").unwrap();
+        let scope = ScopeId::new_v4();
+        let declaratives = [
+            "سأرسل البريد غدا",            // "I will send the email tomorrow".
+            "سأكتب التقرير الأسبوع القادم", // "I will write the report next week".
+            "سأصلح الخلل قريبا",           // "I will fix the bug soon".
+        ];
+        for sentence in declaratives {
+            let obs = extractor.extract_with_dominant_language(sentence, scope, Some(&ar));
+            assert!(
+                !obs.iter()
+                    .any(|o| matches!(o.observation_type, ObservationType::Task)),
+                "Phase 1.6 sweep-1 precision: 1st-person future declarative {sentence:?} \
+                 must NOT emit a Task observation — `س` is deliberately omitted from the \
+                 peel set so the future marker cannot conflate with the imperative table"
+            );
+        }
+    }
 }

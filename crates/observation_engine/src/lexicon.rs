@@ -134,6 +134,13 @@ pub enum MatchStrategy {
     /// proclitic prefix forms (`وكيف` = `و`+`كيف`,
     /// `فمتى` = `ف`+`متى`, `بأي` = `ب`+`أي`,
     /// `لمن` = `ل`+`من`, `واكتب` = `و`+`اكتب`) are recovered.
+    /// `ك` ("like/as") and `س` (future marker) were initially
+    /// in the peel set but Devin Review #ANALYSIS-0004 surfaced
+    /// a false-positive on short interrogatives (`كمن` ➜ `من`,
+    /// `سما` ➜ `ما`) AND a worse false-positive on the imperative
+    /// path (`سأرسل` "I will send" ➜ `أرسل` imperative table
+    /// entry) — both excluded after sweep 1; see the inventory
+    /// comment on [`ARABIC_PROCLITIC_PREFIXES`].
     FirstToken,
     /// Either the first alphabetic token OR the space-joined
     /// first two alphabetic tokens must exactly equal an entry
@@ -167,17 +174,39 @@ pub enum MatchStrategy {
     /// that fails, it iteratively peels the recognised Arabic
     /// proclitic prefixes (the 1-character conjunction `و`
     /// "and", the 1-character connector `ف` "then", the
-    /// 1-character prepositions `ب` "with/by" / `ل` "to/for" /
-    /// `ك` "like/as", the 1-character future marker `س`
-    /// "will", and the 2-character definite article `ال` /
-    /// `أل` "the") from the front of the token and re-checks
-    /// exact equality after each peel. Up to
-    /// [`ARABIC_PROCLITIC_PEEL_BUDGET`] peels are attempted to
-    /// bound worst-case cost on adversarial input; in practice
-    /// 2 peels covers the realistic stack (e.g. `وللكتاب` =
-    /// `و` + `ل` + `ل` + `كتاب`, which only needs to surface
-    /// `كتاب` for downstream classes — interrogatives almost
-    /// never stack more than one proclitic on top of `ال`).
+    /// 1-character prepositions `ب` "with/by" / `ل` "to/for",
+    /// and the 2-character definite article `ال` / `أل` "the")
+    /// from the front of the token and re-checks exact equality
+    /// after each peel. Up to [`ARABIC_PROCLITIC_PEEL_BUDGET`]
+    /// peels are attempted to bound worst-case cost on
+    /// adversarial input; in practice 2 peels covers the
+    /// realistic stack (e.g. `وللكتاب` = `و` + `ل` + `ل` +
+    /// `كتاب`, which only needs to surface `كتاب` for downstream
+    /// classes — interrogatives almost never stack more than one
+    /// proclitic on top of `ال`).
+    ///
+    /// **Why not peel `ك` "like/as" and `س` "will" (sweep-1
+    /// removal)?** Devin Review #ANALYSIS-0004 noted that both
+    /// could collide with short interrogatives (`كمن` peels `ك`
+    /// to surface `من` "who"; `سما` peels `س` to surface `ما`
+    /// "what"), and an internal audit then surfaced a far more
+    /// dangerous interaction on the imperative path: `س` is the
+    /// 1st-person-future marker, so `سأرسل` ("I will send" —
+    /// 1st-person future verb, NOT an imperative) would peel to
+    /// surface `أرسل` (which IS in the imperative table), giving
+    /// a real false Task observation on plain declarative
+    /// future-tense statements. The same risk exists for
+    /// `سأكتب` ➜ `اكتب`, `سأصلح` ➜ `أصلح`, etc. — every
+    /// `أ`-initial imperative has a 1st-person future counterpart
+    /// that `س` peeling would conflate. Excluding `ك` / `س`
+    /// from the peel set is a strict precision win with zero
+    /// recall loss on the production tables: `ك` attaches
+    /// predominantly to nouns (handled via Substring on
+    /// [`LanguageLexicon::decision_strategy`] /
+    /// [`LanguageLexicon::task_strategy`], which don't need
+    /// prefix peeling), and `س` attaches predominantly to
+    /// verbs but never to imperatives by morphological
+    /// construction.
     ///
     /// **Why not `Substring`?** Arabic morphology is dense and
     /// short interrogatives (`من` "who", `ما` "what",
@@ -649,26 +678,58 @@ pub fn table_matches(table: &[&str], normalised: &str, strategy: MatchStrategy) 
 /// **Source** for the inventory: Ryding, *A Reference Grammar of
 /// Modern Standard Arabic* (Cambridge, 2005), §10.1
 /// ("Proclitics — short particles that attach to the next word
-/// with no orthographic separator"). The seven entries cover
-/// every productive proclitic in MSA news / docs / formal IM
-/// register, which is what the substrate's lexicons target.
+/// with no orthographic separator"). The five recognised
+/// proclitics (`ال` / `أل` counted as one definite article with
+/// two spelling variants, plus the four 1-character productive
+/// particles `و` / `ف` / `ب` / `ل`) cover every proclitic in
+/// MSA news / docs / formal IM register that the substrate's
+/// lexicons target, *minus* the two surfaces (`ك`, `س`)
+/// excluded for precision reasons documented on
+/// [`MatchStrategy::FirstTokenWithArabicClitics`] (sweep-1
+/// Devin Review #ANALYSIS-0004).
 ///
-/// The interrogative hamza `أ` is **deliberately omitted** from
-/// this peel set; see the docstring on
-/// [`MatchStrategy::FirstTokenWithArabicClitics`] for the
-/// rationale (open class of `أ`-initial declaratives would over-
-/// classify as questions).
+/// Three additional Arabic proclitics from the linguistic
+/// inventory are **deliberately omitted** from this set, each
+/// for a different reason; the omissions are pinned by tests
+/// so a future contributor can't silently add them back:
+///
+/// * **`أ`** (interrogative hamza, 1 char) — would over-
+///   classify the open class of `أ`-initial declaratives as
+///   questions (`أنا` "I", `أحمد` proper-name, …). Yes/no
+///   questions with the hamza particle are recovered instead
+///   via the `؟` terminator short-circuit in
+///   [`crate::extractor::looks_like_question`].
+/// * **`ك`** (preposition "like / as", 1 char) — collides with
+///   short interrogatives (`كمن` ➜ `من` "who") and with the
+///   imperative table (`ك`-prefixing never produces a real
+///   imperative form in MSA but the peel could spuriously
+///   surface one). `ك` attaches predominantly to nouns, which
+///   are handled via Substring on
+///   [`LanguageLexicon::decision_strategy`] /
+///   [`LanguageLexicon::task_strategy`] without needing prefix
+///   peeling.
+/// * **`س`** (future marker "will", 1 char) — every `أ`-initial
+///   imperative in the AR table (`أرسل`, `أصلح`, …) has a
+///   1st-person future counterpart (`سأرسل`, `سأصلح`, …)
+///   that `س` peeling would conflate with the imperative. The
+///   future marker also never attaches to interrogatives in
+///   MSA. The trade-off (zero realistic recall loss against
+///   real false-positive risk on declarative future-tense
+///   statements) makes exclusion the conservative default.
 const ARABIC_PROCLITIC_PREFIXES: &[&str] = &[
     // 2-character definite-article forms (longest first).
     "ال", // alif-lam — canonical definite article (NFC form).
     "أل", // hamza-on-alif + lam — common spelling variant.
-    // 1-character proclitic particles.
+    // 1-character productive proclitic particles.
     "و", // conjunction "and".
     "ف", // connector "then / so".
     "ب", // preposition "with / by / in".
     "ل", // preposition "to / for".
-    "ك", // preposition "like / as".
-    "س", // future marker "will".
+         // NOTE: `ك` (preposition "like / as") and `س` (future
+         // marker "will") are deliberately NOT in this list; see
+         // the docstring above for the precision rationale, and
+         // `table_matches_arabic_clitic_strip_drops_unproductive_k_and_s_prefixes`
+         // for the regression tests that pin the omissions.
 ];
 
 /// Worst-case number of proclitic peels the Arabic clitic-aware
@@ -1190,6 +1251,17 @@ const RU_LEXICON: LanguageLexicon = LanguageLexicon {
 /// table"; clitic-aware prefix peeling is precise enough to
 /// recover the prefixed verb form without these false
 /// positives).
+///
+/// **Sweep-1 precision narrowing** (Devin Review
+/// #ANALYSIS-0004): the proclitic peel set was reduced from
+/// 8 to 6 entries after `س` (1st-person future marker) was
+/// shown to falsely surface imperatives on plain declarative
+/// future-tense statements (`سأرسل البريد غدا` "I will send
+/// the email tomorrow" peeled `س` to surface the imperative
+/// table entry `أرسل`, producing a phantom Task observation).
+/// `ك` was also removed for symmetric precision reasons. See
+/// [`MatchStrategy::FirstTokenWithArabicClitics`] for the full
+/// omission rationale.
 const AR_LEXICON: LanguageLexicon = LanguageLexicon {
     primary_tag: "ar",
     display_name: "Arabic",
@@ -1928,22 +2000,82 @@ mod tests {
 
     #[test]
     fn table_matches_arabic_clitic_strip_recovers_single_proclitic_prefix() {
-        // Phase 1.6 main payload: each of the 6 single-character
-        // Arabic proclitic prefixes recovers the bare interrogative
-        // under one peel.
+        // Phase 1.6 main payload: each of the 4 single-character
+        // productive proclitic prefixes (`و`, `ف`, `ب`, `ل`)
+        // recovers the bare interrogative under one peel. The
+        // sweep-1 removal of `ك` and `س` is exercised by the
+        // dedicated negative-assertion test
+        // `table_matches_arabic_clitic_strip_drops_unproductive_k_and_s_prefixes`.
         let table = &["كيف", "متى", "أي", "من", "أين", "ما"];
         for (sentence, prefix, residual) in [
             ("وكيف يمكنني المساعدة", "و", "كيف"),
             ("فمتى نلتقي", "ف", "متى"),
             ("بأي طريقة نفعل ذلك", "ب", "أي"),
             ("لمن هذا الكتاب", "ل", "من"),
-            ("كأين كنت قد قلت", "ك", "أين"),
-            ("سما الذي سيحدث غدا", "س", "ما"),
         ] {
             assert!(
                 table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics),
                 "Arabic proclitic-prefixed interrogative in {sentence:?} (prefix {prefix:?}, \
                  residual {residual:?}) must match via the Phase 1.6 peel"
+            );
+        }
+    }
+
+    #[test]
+    fn table_matches_arabic_clitic_strip_drops_unproductive_k_and_s_prefixes() {
+        // Phase 1.6 sweep-1 precision guard (Devin Review
+        // #ANALYSIS-0004): `ك` and `س` were initially in the
+        // peel set but caused false positives on both the
+        // interrogative path and (more dangerously) the
+        // imperative path. They are now deliberately omitted
+        // from [`ARABIC_PROCLITIC_PREFIXES`]; this test pins
+        // that omission so a future contributor can't silently
+        // re-add them without re-running the false-positive
+        // analysis.
+
+        // Interrogative-path negatives: a leading `ك` or `س`
+        // on a non-interrogative host must NOT surface an
+        // interrogative residual via the peel.
+        let interrogative_table = &["من", "ما", "أين", "كيف"];
+        for sentence in [
+            "كمن تريد أن أكون", // "like who do you want me to be" — `ك` + `من`,
+            // pre-fix peeled to `من` and falsely matched the interrogative table.
+            "سما الذي سيحدث غدا", // "so what will happen tomorrow" —
+                                  // `س` + `ما`; pre-fix peeled to `ما` and falsely matched.
+        ] {
+            assert!(
+                !table_matches(
+                    interrogative_table,
+                    sentence,
+                    MatchStrategy::FirstTokenWithArabicClitics
+                ),
+                "sweep-1 precision guard: {sentence:?} must NOT match the interrogative \
+                 table — the peel set no longer includes `ك` / `س`"
+            );
+        }
+
+        // Imperative-path negative — the architectural reason
+        // for the removal. `سأرسل` is the 1st-person future
+        // ("I will send"), a plain declarative statement; pre-
+        // fix it peeled `س` to surface `أرسل` and falsely
+        // matched the imperative table, producing a phantom
+        // Task observation on every Arabic future-tense
+        // declarative whose verb shared a root with an `أ`-
+        // initial imperative. Same risk on `سأصلح` ➜ `أصلح`.
+        let imperative_table = &["أرسل", "أصلح", "اكتب"];
+        for sentence in [
+            "سأرسل البريد غدا",          // "I will send the email tomorrow".
+            "سأصلح الخلل الأسبوع القادم", // "I will fix the bug next week".
+        ] {
+            assert!(
+                !table_matches(
+                    imperative_table,
+                    sentence,
+                    MatchStrategy::FirstTokenWithArabicClitics
+                ),
+                "sweep-1 precision guard: {sentence:?} (1st-person future, NOT \
+                 imperative) must NOT match the imperative table — the peel set no \
+                 longer includes `س`"
             );
         }
     }
@@ -2066,13 +2198,23 @@ mod tests {
         // Definite-article variant `أل` (hamza-on-alif + lam):
         // peels to non-empty residual.
         assert_eq!(peel_one_arabic_proclitic("ألكتاب"), Some("كتاب"));
-        // 1-char proclitics return the bare residual.
+        // 1-char productive proclitics return the bare residual.
         assert_eq!(peel_one_arabic_proclitic("وكيف"), Some("كيف"));
         assert_eq!(peel_one_arabic_proclitic("فمتى"), Some("متى"));
         assert_eq!(peel_one_arabic_proclitic("بأي"), Some("أي"));
         assert_eq!(peel_one_arabic_proclitic("لمن"), Some("من"));
-        assert_eq!(peel_one_arabic_proclitic("كأين"), Some("أين"));
-        assert_eq!(peel_one_arabic_proclitic("سيكون"), Some("يكون"));
+        // Sweep-1 precision guard (Devin Review #ANALYSIS-0004):
+        // `ك` and `س` are NO LONGER in the peel set, so a
+        // leading `ك` / `س` does not peel — the residual `كأين`
+        // / `سيكون` is returned as-None (no other recognised
+        // prefix at position 0 either). See
+        // `table_matches_arabic_clitic_strip_drops_unproductive_k_and_s_prefixes`
+        // for the host-level negative assertions, and the
+        // docstring on `ARABIC_PROCLITIC_PREFIXES` for the
+        // false-positive rationale (`سأرسل` ➜ imperative
+        // `أرسل` was the architectural trigger).
+        assert_eq!(peel_one_arabic_proclitic("كأين"), None);
+        assert_eq!(peel_one_arabic_proclitic("سيكون"), None);
         // No recognised prefix → None.
         assert_eq!(peel_one_arabic_proclitic("أحمد"), None);
         assert_eq!(peel_one_arabic_proclitic("هذا"), None);
