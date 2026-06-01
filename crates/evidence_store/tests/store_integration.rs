@@ -44,7 +44,16 @@ fn schema_creates_required_tables() {
     let fts_cjk: i64 = conn
         .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
         .unwrap();
-    assert_eq!((evidence, body_store, ring, fts, fts_cjk), (0, 0, 0, 0, 0));
+    // Phase 1.2.1 / schema v15: precomputed-bigram FTS5 table for
+    // 2-codepoint CJK / Thai recall. Bootstrapped alongside
+    // `evidence_fts` and `evidence_fts_cjk` by `SCHEMA_SQL`.
+    let fts_bigram: i64 = conn
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        (evidence, body_store, ring, fts, fts_cjk, fts_bigram),
+        (0, 0, 0, 0, 0, 0)
+    );
 }
 
 #[test]
@@ -853,6 +862,16 @@ fn fts5_cjk_routing_is_body_derived_not_language_tag_derived() {
         .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
         .unwrap();
     assert_eq!(cjk_rows, 1);
+    // Phase 1.2.1 / schema v15: the same body also lands in
+    // evidence_fts_bigram so 2-codepoint CJK queries hit it.
+    let bigram_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        bigram_rows, 1,
+        "CJK body must land in evidence_fts_bigram alongside evidence_fts_cjk"
+    );
 }
 
 #[test]
@@ -879,18 +898,41 @@ fn fts5_pure_latin_does_not_consume_cjk_table_storage() {
         cjk_rows, 0,
         "pure-Latin body must not be written to evidence_fts_cjk"
     );
+    // Phase 1.2.1 / schema v15: pure-Latin bodies likewise stay
+    // out of `evidence_fts_bigram` — the bigram lane is gated on
+    // `crate::script::contains_cjk_or_thai` identically to the
+    // trigram lane, so this assertion pins the storage-cost
+    // invariant for the new shadow.
+    let bigram_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        bigram_rows, 0,
+        "pure-Latin body must not be written to evidence_fts_bigram"
+    );
 }
 
 #[test]
-fn fts5_trigram_2char_cjk_query_is_documented_floor() {
-    // SQLite's built-in `trigram` tokeniser has a hard 3-codepoint
-    // minimum for both indexed substrings and queries. A 2-char
-    // CJK query like `天気` returns ∅ even when the substring is
-    // present in the body. This is the known limitation flagged
-    // in the schema v14 doc-comment; a future phase can register
-    // a custom Rust-side bigram tokeniser via the `fts5_api` FFI
-    // to close the gap. This test pins the current floor so any
-    // future bigram-tokeniser work has a regression signal.
+fn fts5_bigram_lane_closes_2char_cjk_recall_floor() {
+    // Phase 1.2.1 (schema v15) regression — pins the bigram-lane
+    // gap-closure for 2-codepoint CJK queries.
+    //
+    // Background: SQLite's built-in `trigram` tokeniser has a
+    // hard 3-codepoint minimum for both indexed substrings and
+    // queries, so a 2-char CJK query like `天気` returns ∅
+    // through the `evidence_fts_cjk` (trigram) lane even when
+    // the substring is present in the body. Phase 1.2.1 added
+    // a third FTS5 table (`evidence_fts_bigram`) that stores
+    // whitespace-separated overlapping 2-codepoint windows under
+    // the same `unicode61` tokeniser as `evidence_fts`. The read
+    // path runs an independent prepared statement against the
+    // bigram table and merges results into the existing
+    // `MIN(rank)` HashMap so the lane is purely additive recall.
+    //
+    // This test pins (a) the 2-char CJK query NOW returns a hit
+    // because the bigram lane catches it, and (b) the 3-char
+    // CJK query still works through whichever lane fires first.
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let _ = store
@@ -904,12 +946,14 @@ fn fts5_trigram_2char_cjk_query_is_documented_floor() {
     let hits = store.search_fts(scope, "天気", 10).unwrap();
     assert_eq!(
         hits.len(),
-        0,
-        "2-char CJK query is below the trigram floor — \
-         change this assertion only when a bigram-tokeniser \
-         lands"
+        1,
+        "2-char CJK query MUST hit via the bigram lane now that \
+         Phase 1.2.1's `evidence_fts_bigram` table exists — the \
+         trigram lane still misses these as documented but the \
+         bigram lane closes the gap"
     );
-    // …and the same query 1 char longer crosses the floor:
+    // …and the same query 1 char longer still works (this lane
+    // crosses the trigram floor so we exercise both branches):
     let hits = store.search_fts(scope, "良い天気", 10).unwrap();
     assert_eq!(hits.len(), 1);
 }
@@ -961,7 +1005,7 @@ fn fts5_unicode61_query_succeeds_even_when_trigram_branch_rejects_shape() {
     //   * a column filter,
     //   * a prefix-star match shorter than 3 codepoints.
     //
-    // The dual-table search (`evidence_fts` UNION-style merged with
+    // The fanned-out search (`evidence_fts` merged with
     // `evidence_fts_cjk`) splits the query across both branches.
     // The architectural invariant the post-bug-0001 fix pins is:
     // **a syntactically valid `unicode61` query never breaks
@@ -1032,7 +1076,7 @@ fn fts5_unicode61_query_succeeds_even_when_trigram_branch_rejects_shape() {
 
 #[test]
 fn fts5_dual_search_orders_tied_ranks_deterministically_by_evidence_id() {
-    // Sweep-4 INFO-0004 regression — verifies that `dual_fts_search`
+    // Sweep-4 INFO-0004 regression — verifies that `merged_fts_search`
     // emits a deterministic ordering for rows whose FTS5 rank
     // compares as equal. Pre-fix the `HashMap`-then-`sort_by(rank)`
     // pipeline produced run-to-run ordering jitter for ties because
@@ -1063,7 +1107,7 @@ fn fts5_dual_search_orders_tied_ranks_deterministically_by_evidence_id() {
         .expect("ingest row 2");
 
     // Both rows must come back from the trigram lane so we know the
-    // tiebreaker is on the dual_fts_search merge path (not a single
+    // tiebreaker is on the merged_fts_search merge path (not a single
     // ORDER BY on one statement).
     let baseline = store.search_fts(scope, "重要な会議", 10).unwrap();
     assert_eq!(
@@ -1099,7 +1143,7 @@ fn fts5_trigram_branch_error_is_silently_swallowed_so_unicode61_results_survive(
     // DROPing the `evidence_fts_cjk` table out from under the
     // search, then verify the `unicode61` branch's results still
     // flow through. This exercises the rusqlite error swallow in
-    // `dual_fts_search` independent of whichever bundled SQLite
+    // `merged_fts_search` independent of whichever bundled SQLite
     // version's tolerance for short trigram terms.
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
@@ -1125,7 +1169,7 @@ fn fts5_trigram_branch_error_is_silently_swallowed_so_unicode61_results_survive(
         .expect("drop evidence_fts_cjk for test");
 
     // The unicode61 branch is unchanged; the trigram branch errors
-    // on prepare. The defensive `dual_fts_search` swallows the
+    // on prepare. The defensive `merged_fts_search` swallows the
     // trigram error and surfaces only the unicode61 hit — the
     // public `search_fts` API does NOT propagate the trigram
     // failure.

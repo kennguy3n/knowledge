@@ -759,6 +759,34 @@ impl EvidenceStore {
                  VALUES (?1, ?2, ?3)",
                 params![text, evidence_id_bytes, scope_id_bytes],
             )?;
+            // Phase 1.2.1 / schema v15: rows that route to
+            // `evidence_fts_cjk` *additionally* go into
+            // `evidence_fts_bigram`, which stores the
+            // whitespace-separated overlapping 2-codepoint
+            // windows of the CJK / Thai portion of the body
+            // under the same `unicode61` tokeniser as
+            // `evidence_fts`. The bigram lane is the recall
+            // floor that the v14 trigram lane cannot serve —
+            // queries with only 2 CJK codepoints (`天気`,
+            // `良い`) MATCH here even though they hit the
+            // FTS5 trigram 3-codepoint minimum on
+            // `evidence_fts_cjk`. We skip the INSERT entirely
+            // when the precomputed bigram string is empty
+            // (which can only happen if the body has a single
+            // CJK / Thai codepoint and no others — extremely
+            // rare but possible on a fragmentary OCR ingest);
+            // an empty `content` row would still consume an
+            // FTS5 docid and inflate the
+            // `evidence_fts_bigram_docsize` shadow without
+            // contributing any recall.
+            let bigrams = crate::bigram::compute_cjk_bigrams(text);
+            if !bigrams.is_empty() {
+                tx.execute(
+                    "INSERT INTO evidence_fts_bigram (content, evidence_id, scope_id) \
+                     VALUES (?1, ?2, ?3)",
+                    params![bigrams, evidence_id_bytes, scope_id_bytes],
+                )?;
+            }
         }
         Ok(())
     }
@@ -1181,7 +1209,7 @@ impl EvidenceStore {
         query: &str,
         limit: usize,
     ) -> Result<Vec<EvidenceId>> {
-        let merged = dual_fts_search(&self.conn, scope_id, query, limit)?;
+        let merged = merged_fts_search(&self.conn, scope_id, query, limit)?;
         Ok(merged.into_iter().map(|(id, _rank)| id).collect())
     }
 
@@ -3266,10 +3294,18 @@ impl EvidenceStore {
         // transaction so the two indexes can never drift apart
         // under crash-recovery, and so a forgotten scope leaves
         // zero plaintext tokens in either FTS shadow table after
-        // the subsequent `REBUILD`. The returned count is the sum
-        // across both tables — if either tokeniser still has rows
-        // for the scope, the caller-side `if rows_deleted > 0`
-        // gate still triggers a rebuild.
+        // the subsequent `REBUILD`. Phase 1.2.1 / schema v15
+        // extends the same invariant to `evidence_fts_bigram`
+        // (precomputed-bigram recall lane) — the three FTS
+        // shadow tables are purged together inside the same
+        // transaction so a partial purge can never leave bigram
+        // tokens behind that the unicode61 / trigram purge
+        // cleared. The returned count is the sum across all
+        // three tables — if any tokeniser still has rows for the
+        // scope, the caller-side `if rows_deleted > 0` gate
+        // still triggers a rebuild that fans out across the
+        // three indexes via
+        // [`Self::rebuild_evidence_fts_in_tx`].
         let mut fts_rows_deleted: usize = 0;
         for chunk in evidence_ids.chunks(DELETE_BATCH) {
             let placeholders = (0..chunk.len())
@@ -3279,6 +3315,8 @@ impl EvidenceStore {
             let fts_sql = format!("DELETE FROM evidence_fts WHERE evidence_id IN ({placeholders})");
             let fts_cjk_sql =
                 format!("DELETE FROM evidence_fts_cjk WHERE evidence_id IN ({placeholders})");
+            let fts_bigram_sql =
+                format!("DELETE FROM evidence_fts_bigram WHERE evidence_id IN ({placeholders})");
             let emb_sql =
                 format!("DELETE FROM evidence_embeddings WHERE evidence_id IN ({placeholders})");
             let params: Vec<&dyn rusqlite::ToSql> =
@@ -3289,16 +3327,21 @@ impl EvidenceStore {
                 &fts_cjk_sql,
                 rusqlite::params_from_iter(params.iter().copied()),
             )?;
+            fts_rows_deleted += tx.execute(
+                &fts_bigram_sql,
+                rusqlite::params_from_iter(params.iter().copied()),
+            )?;
             tx.execute(&emb_sql, rusqlite::params_from_iter(params.iter().copied()))?;
         }
         Ok(fts_rows_deleted)
     }
 
-    /// Issue the FTS5 `REBUILD` command on **both** lexical
-    /// indexes — `evidence_fts` (unicode61) and `evidence_fts_cjk`
-    /// (trigram, schema v14) — truncating their shadow tables
-    /// (`%_data`, `%_idx`, `%_docsize`, …) and re-tokenising from
-    /// the surviving content rows.
+    /// Issue the FTS5 `REBUILD` command on **all three** lexical
+    /// indexes — `evidence_fts` (unicode61), `evidence_fts_cjk`
+    /// (trigram, schema v14), and `evidence_fts_bigram`
+    /// (precomputed-bigram, schema v15) — truncating their
+    /// shadow tables (`%_data`, `%_idx`, `%_docsize`, …) and
+    /// re-tokenising from the surviving content rows.
     ///
     /// `OPTIMIZE` only merges segments and can leave tokenised
     /// plaintext fragments behind in the `%_data` segment B-tree
@@ -3306,9 +3349,19 @@ impl EvidenceStore {
     /// `REBUILD` re-tokenises from each table's stored `content`
     /// column — which now no longer references the purged scopes
     /// — so no residual plaintext tokens survive on disk for the
-    /// forgotten scopes in either tokeniser's shadow store. Both
-    /// rebuilds run inside the caller's transaction so the two
-    /// tables are committed atomically.
+    /// forgotten scopes in any of the three tokenisers' shadow
+    /// stores. All three rebuilds run inside the caller's
+    /// transaction so the tables are committed atomically.
+    ///
+    /// For `evidence_fts_bigram` the stored `content` column
+    /// already holds the precomputed bigram string (see
+    /// [`crate::bigram::compute_cjk_bigrams`]), so the
+    /// `unicode61` REBUILD re-derives the same bigram tokens
+    /// without re-running the codepoint-filter pass — the only
+    /// requirement is that any bigram strings for purged scopes
+    /// have already been DELETEd by
+    /// [`Self::purge_fts_for_scope_in_tx`] before this REBUILD
+    /// fires, which the surrounding transaction enforces.
     ///
     /// This is the strongest in-engine guarantee SQLite FTS5
     /// exposes; the alternative would be a full `VACUUM` at a
@@ -3320,6 +3373,10 @@ impl EvidenceStore {
         )?;
         tx.execute(
             "INSERT INTO evidence_fts_cjk(evidence_fts_cjk) VALUES('rebuild')",
+            [],
+        )?;
+        tx.execute(
+            "INSERT INTO evidence_fts_bigram(evidence_fts_bigram) VALUES('rebuild')",
             [],
         )?;
         Ok(())
@@ -3976,6 +4033,19 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // re-running the migration on an already-populated v14
         // database is a no-op rather than producing duplicate rows.
         14 => migrate_v14_backfill_evidence_fts_cjk(conn),
+        // v15 (Phase 1.2.1 — CJK / Thai bigram recall lane): add the
+        // `evidence_fts_bigram` virtual table and backfill it from
+        // the pre-existing `evidence_fts.content` rows whose
+        // plaintext body routes CJK / Thai. The
+        // `CREATE VIRTUAL TABLE IF NOT EXISTS` lives in SCHEMA_SQL
+        // so a fresh v15 database picks the table up directly; a
+        // v14 -> v15 upgrade hits the same statement (no-op) and
+        // then walks the backfill below.
+        //
+        // Backfill is gated on `evidence_fts_bigram` being empty so
+        // re-running the migration on an already-populated v15
+        // database is a no-op rather than producing duplicate rows.
+        15 => migrate_v15_backfill_evidence_fts_bigram(conn),
         _ => Err(EvidenceError::Schema(
             "no migration registered for the requested schema version",
         )),
@@ -4143,6 +4213,142 @@ fn migrate_v14_backfill_evidence_fts_cjk(conn: &Connection) -> Result<()> {
                 "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
                  VALUES (?1, ?2, ?3)",
                 params![content, evidence_id, scope_id],
+            )?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Chunk size for [`migrate_v15_backfill_evidence_fts_bigram`]'s
+/// streaming read of `evidence_fts`. Bounded so peak migration
+/// memory is O(chunk * row_size) regardless of how many evidence
+/// rows the user has accumulated. Mirrors
+/// [`V14_MIGRATION_CHUNK_SIZE`] so both migrations have the same
+/// memory profile on a multi-version walk.
+const V15_MIGRATION_CHUNK_SIZE: i64 = 1_000;
+
+/// v14 -> v15 additive migration: backfill `evidence_fts_bigram`
+/// from pre-existing `evidence_fts.content` rows whose body
+/// contains any CJK / Thai codepoint.
+///
+/// The `evidence_fts_bigram` virtual table itself is created by
+/// `SCHEMA_SQL`'s `CREATE VIRTUAL TABLE IF NOT EXISTS` so this
+/// function does not need to issue the DDL — `Self::open` runs
+/// `SCHEMA_SQL` before walking the migration ladder, so by the
+/// time we are called the table exists (possibly empty for a
+/// v14 -> v15 upgrade, possibly already populated for a fresh
+/// v15 database).
+///
+/// Idempotency: the function first checks whether
+/// `evidence_fts_bigram` already has any rows. If it does we
+/// return without doing any work — the table is either freshly
+/// populated (fresh v15 open) or the migration has already run
+/// successfully against this database (re-applied v14 -> v15
+/// upgrade after a crash before the `user_version` write hit
+/// disk). The check is O(1) at the SQLite level because FTS5
+/// maintains row-count metadata in
+/// `evidence_fts_bigram_docsize`.
+///
+/// Per-row routing matches the write path
+/// ([`EvidenceStore::index_fts`]): a body is backfilled into
+/// `evidence_fts_bigram` iff
+/// [`crate::script::contains_cjk_or_thai`] returns true for its
+/// plaintext content AND the precomputed bigram string
+/// ([`crate::bigram::compute_cjk_bigrams`]) is non-empty. The
+/// secondary non-empty gate matches the write path's gate so
+/// the migration produces exactly the same set of rows the
+/// write path would have written had Phase 1.2.1 been active
+/// from day one. The pre-existing `evidence_fts` /
+/// `evidence_fts_cjk` rows themselves are untouched.
+///
+/// Crash-safety: the backfill runs inside an explicit
+/// `unchecked_transaction` so partial progress is rolled back
+/// on crash. The `user_version` write that records "migration
+/// v15 applied" lives in [`EvidenceStore::open`] *after* the
+/// `apply_migration` loop completes, so a crash mid-backfill
+/// leaves the database at `user_version = 14` and the next
+/// open re-walks this function from scratch over an empty
+/// `evidence_fts_bigram`. The idempotency check ("already have
+/// rows in evidence_fts_bigram?") is what makes a successful
+/// re-walk on an already-migrated database a single O(1)
+/// `COUNT(*)` rather than a duplicate-row producer.
+///
+/// We use `unchecked_transaction` because the migration entry
+/// point [`apply_migration`] receives `&Connection` (not
+/// `&mut`), matching the contract of the sibling migrations.
+///
+/// Memory bound: the backfill iterates `evidence_fts` in
+/// rowid-ordered chunks of [`V15_MIGRATION_CHUNK_SIZE`] rows
+/// so peak memory is O(chunk * row_size) rather than
+/// O(total_rows * row_size). This matches the v14 migration's
+/// chunked-streaming shape — the rationale carries over verbatim
+/// (on a large pre-v15 database the materialise-everything
+/// version would have allocated proportional to the entire body
+/// corpus).
+fn migrate_v15_backfill_evidence_fts_bigram(conn: &Connection) -> Result<()> {
+    let existing_bigram_rows: i64 =
+        conn.query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |row| {
+            row.get(0)
+        })?;
+    if existing_bigram_rows > 0 {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+
+    // Stream the backfill in rowid-ordered chunks for the same
+    // memory-bound reason as the v14 migration. Strictly
+    // increasing `last_rowid` cursor guarantees forward progress
+    // because we order on `evidence_fts.rowid` — the
+    // INSERTs into `evidence_fts_bigram` happen on the same
+    // connection but cannot perturb the read cursor on the
+    // unrelated FTS shadow table.
+    let mut last_rowid: i64 = 0;
+    loop {
+        let chunk: Vec<(i64, String, Vec<u8>, Vec<u8>)> = {
+            let mut stmt = tx.prepare(
+                "SELECT rowid, content, evidence_id, scope_id FROM evidence_fts
+                 WHERE rowid > ?1
+                 ORDER BY rowid
+                 LIMIT ?2",
+            )?;
+            let collected = stmt
+                .query_map(params![last_rowid, V15_MIGRATION_CHUNK_SIZE], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            collected
+        };
+        if chunk.is_empty() {
+            break;
+        }
+        last_rowid = chunk
+            .last()
+            .map(|(rowid, _, _, _)| *rowid)
+            .expect("chunk is non-empty by the early break above");
+        for (_rowid, content, evidence_id, scope_id) in chunk {
+            if !crate::script::contains_cjk_or_thai(&content) {
+                continue;
+            }
+            // Match the write path's two-stage gate exactly:
+            // first the codepoint-membership routing predicate,
+            // then the precomputed-bigram non-empty check. The
+            // second gate catches the single-CJK-codepoint edge
+            // case where routing says "yes" but bigram windowing
+            // produces no overlapping pairs.
+            let bigrams = crate::bigram::compute_cjk_bigrams(&content);
+            if bigrams.is_empty() {
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO evidence_fts_bigram (content, evidence_id, scope_id) \
+                 VALUES (?1, ?2, ?3)",
+                params![bigrams, evidence_id, scope_id],
             )?;
         }
     }
@@ -4399,26 +4605,43 @@ pub(crate) fn clamp_limit_to_sqlite(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
 }
 
-/// Run a dual-table FTS5 search and return `(evidence_id, best_rank)`
-/// pairs sorted by best rank ascending, truncated to `limit`.
+/// Run a fanned-out multi-table FTS5 search across every lexical
+/// index the schema exposes today (`evidence_fts` unicode61,
+/// `evidence_fts_cjk` trigram, `evidence_fts_bigram`
+/// precomputed-bigram) and return `(evidence_id, best_rank)` pairs
+/// sorted by best rank ascending, truncated to `limit`.
 ///
 /// See [`EvidenceStore::search_fts`] for the full design rationale.
 /// Briefly:
 ///
-/// * `evidence_fts` (unicode61) is the **source of truth for query
-///   validity** — any error from its `MATCH` is propagated. The
-///   per-branch `LIMIT` bounds the row count to `limit`.
-/// * `evidence_fts_cjk` (trigram) is **purely additive recall** —
-///   any error from its `MATCH` (including the documented
-///   short-term / `NEAR(…)` / column-filter / short prefix-star
-///   rejections) is swallowed and the branch is treated as the
-///   empty set, so a syntactically valid `unicode61` query never
-///   breaks `search_fts` just because `trigram` rejects the shape.
+/// * `evidence_fts` (unicode61, schema v1+) is the **source of
+///   truth for query validity** — any error from its `MATCH` is
+///   propagated. The per-branch `LIMIT` bounds the row count to
+///   `limit`.
+/// * `evidence_fts_cjk` (trigram, schema v14) is **purely
+///   additive recall** for 3+ codepoint CJK / Thai substring
+///   queries — any error from its `MATCH` (including the
+///   documented short-term / `NEAR(…)` / column-filter / short
+///   prefix-star rejections) is swallowed and the branch is
+///   treated as the empty set, so a syntactically valid
+///   `unicode61` query never breaks `search_fts` just because
+///   `trigram` rejects the shape.
+/// * `evidence_fts_bigram` (precomputed-bigram, schema v15) is
+///   **purely additive recall** for 2+ codepoint CJK / Thai
+///   substring queries — closes the FTS5 trigram tokeniser's
+///   hard 3-codepoint minimum so queries like `天気` (Japanese
+///   "weather", 2 codepoints) match real rows instead of
+///   returning an empty result set. Like the trigram lane, any
+///   error from this branch's `MATCH` is swallowed; additionally
+///   the lane is skipped entirely when the query has fewer than
+///   two CJK / Thai codepoints (because the bigram tokeniser
+///   cannot produce any tokens for it — see
+///   [`crate::bigram::compute_cjk_bigram_query`]).
 ///
 /// The per-branch results are merged in a `HashMap<EvidenceId, f64>`
 /// keeping `MIN(rank)` (FTS5 rank is negative-and-smaller-is-better),
 /// then sorted ascending and truncated to `limit`. The merged set
-/// is bounded by `2 * limit` before truncation, independent of
+/// is bounded by `3 * limit` before truncation, independent of
 /// dataset size.
 ///
 /// `pub(crate)` so [`crate::retrieval::HybridRetriever::search_fts`]
@@ -4426,7 +4649,12 @@ pub(crate) fn clamp_limit_to_sqlite(n: usize) -> i64 {
 /// dedupe + error-containment semantics; diverging implementations
 /// would silently drift apart and was one of the failure modes the
 /// sweep-2 Devin Review BUG-0001 finding flagged).
-pub(crate) fn dual_fts_search(
+///
+/// The function is named `merged_fts_search` rather than
+/// `dual_/triple_fts_search` so the public-crate-internal name
+/// stays stable as the schema grows additional tokeniser branches
+/// over future phases.
+pub(crate) fn merged_fts_search(
     conn: &Connection,
     scope_id: ScopeId,
     query: &str,
@@ -4439,7 +4667,11 @@ pub(crate) fn dual_fts_search(
     let scope_uuid = scope_id.as_uuid();
     let scope_bytes = scope_uuid.as_bytes().as_slice();
 
-    let mut best_rank: HashMap<EvidenceId, f64> = HashMap::with_capacity(limit.saturating_mul(2));
+    // Capacity bound: 3 branches each contribute at most `limit`
+    // unique evidence_ids, so `3 * limit` is the tight upper
+    // bound on the pre-truncate set size. `saturating_mul`
+    // handles the `usize::MAX / 3` overflow edge defensively.
+    let mut best_rank: HashMap<EvidenceId, f64> = HashMap::with_capacity(limit.saturating_mul(3));
 
     // Branch 1: unicode61 (universal). Errors propagate.
     {
@@ -4511,6 +4743,58 @@ pub(crate) fn dual_fts_search(
         }
     }
 
+    // Branch 3: precomputed-bigram (additive recall). Errors
+    // swallowed, same shape as the trigram lane.
+    //
+    // We only prepare the statement if the query bigram-
+    // tokenisation produces at least one term — for a query
+    // with fewer than two CJK / Thai codepoints the bigram lane
+    // cannot contribute, and running a no-op MATCH would still
+    // pay the prepare + statement cache cost. The branch-skip
+    // gate is what makes Latin-only queries free of bigram
+    // overhead.
+    //
+    // For queries that DO produce bigram terms we run a
+    // synthesised MATCH clause (`"AB" AND "BC" AND "CD"`) against
+    // `evidence_fts_bigram`. The `unicode61` tokeniser on that
+    // table splits the precomputed bigram string on whitespace
+    // into the individual bigram tokens, so the MATCH semantics
+    // are "row's bigram string contains every requested bigram"
+    // — the exact recall lane the v14 trigram tokeniser cannot
+    // serve for 2-codepoint CJK queries because its built-in
+    // tokeniser produces no trigrams for them.
+    //
+    // The same "every error path in the closure, post-retrieval
+    // UUID parse inside the swallow scope" pattern from Branch
+    // 2 applies here — see the trigram branch comment for the
+    // architectural rationale (sweep-3 Devin Review INFO-0001).
+    if let Some(bigram_match) = crate::bigram::compute_cjk_bigram_query(query) {
+        let bigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
+            let mut stmt = conn.prepare(
+                "SELECT evidence_id, rank FROM evidence_fts_bigram
+                 WHERE evidence_fts_bigram MATCH ?1 AND scope_id = ?2
+                 ORDER BY rank LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(params![bigram_match, scope_bytes, limit_sql], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id_bytes, rank) = row?;
+                match slice_to_uuid(&id_bytes) {
+                    Ok(uuid) => out.push((EvidenceId(uuid), rank)),
+                    Err(_) => continue,
+                }
+            }
+            Ok(out)
+        })();
+        if let Ok(bigram_rows) = bigram_attempt {
+            for (id, rank) in bigram_rows {
+                merge_min_rank(&mut best_rank, id, rank);
+            }
+        }
+    }
+
     // Sort by best (smallest) rank ascending; truncate to limit.
     //
     // Deterministic tiebreaker on `EvidenceId` (`Uuid::Ord`) for
@@ -4563,7 +4847,7 @@ pub(crate) fn dual_fts_search(
 /// `f64` so this codepath is unreachable in production today, but
 /// pinning the merge to `f64::min` removes the trap entirely and
 /// aligns with the defensive `partial_cmp().unwrap_or(Equal)` used
-/// in the sort comparator at `dual_fts_search` (sweep-4 INFO-0004)
+/// in the sort comparator at `merged_fts_search` (sweep-4 INFO-0004)
 /// — both halves of the merge pipeline now treat NaN identically
 /// instead of skewing in opposite directions.
 ///

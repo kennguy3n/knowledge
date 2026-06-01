@@ -703,3 +703,242 @@ fn v14_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
         "public search_fts must surface every back-filled CJK row after multi-chunk migration"
     );
 }
+
+#[test]
+fn opens_v14_database_and_upgrades_to_current_with_evidence_fts_bigram_backfilled() {
+    // v14 -> v15 specifically exercises the `evidence_fts_bigram`
+    // virtual table + the `migrate_v15_backfill_evidence_fts_bigram`
+    // backfill that walks every row of `evidence_fts.content` and
+    // re-inserts any row whose plaintext contains a CJK Han /
+    // Hiragana / Katakana / Thai codepoint, transforming the body
+    // into its precomputed-bigram form on the way in.
+    //
+    // Same setup shape as the v13 -> v14 test: ingest under the
+    // modern schema, then DROP the v15 companion table and
+    // re-stamp `user_version = 14` to put the database in a true
+    // pre-v15 shape on disk before re-opening.
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let scope = ScopeId::new_v4();
+    let cjk_body = "今日の重要な会議の議事録です";
+    let latin_body = b"shipment ETA monday morning sharp";
+
+    {
+        let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+            .expect("open fresh store at SCHEMA_VERSION");
+        store
+            .ingest(
+                scope,
+                cjk_body.as_bytes(),
+                Some("source:cjk"),
+                ImportanceClass::Important,
+            )
+            .expect("ingest cjk row");
+        store
+            .ingest(
+                scope,
+                latin_body,
+                Some("source:latin"),
+                ImportanceClass::Important,
+            )
+            .expect("ingest latin row");
+    }
+
+    // Drop the v15 companion table so the database is back to a
+    // true pre-v15 shape on disk. The v14 store wouldn't have had
+    // this table at all, so the backfill arm of
+    // `migrate_v15_backfill_evidence_fts_bigram` must re-discover
+    // every CJK row from `evidence_fts.content`.
+    {
+        let conn = open_sqlcipher(&path);
+        conn.execute_batch("DROP TABLE evidence_fts_bigram;")
+            .expect("drop evidence_fts_bigram to reach v14 shape");
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type = 'table' AND name = 'evidence_fts_bigram'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query sqlite_master for evidence_fts_bigram");
+        assert_eq!(
+            exists, 0,
+            "test setup must leave the schema without evidence_fts_bigram before reopen"
+        );
+        conn.pragma_update(None, "user_version", 14_i64)
+            .expect("re-stamp user_version=14 after reshape");
+    }
+
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("re-open v14 db (post-reshape) must run v15 migration");
+
+    assert_eq!(
+        read_user_version(&path),
+        SCHEMA_VERSION,
+        "post-migration user_version must equal SCHEMA_VERSION"
+    );
+
+    // The migration must have created `evidence_fts_bigram` and
+    // back-filled it with the CJK row from `evidence_fts.content`.
+    let bigram_rows: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .expect("count bigram rows after upgrade");
+    assert_eq!(
+        bigram_rows, 1,
+        "v14 -> v15 backfill must re-insert the CJK row into evidence_fts_bigram"
+    );
+
+    // End-to-end: the 2-codepoint CJK query that the trigram lane
+    // cannot serve (because of the 3-codepoint floor) must now
+    // return the back-filled row through the bigram lane. 「会議」
+    // is exactly 2 codepoints and appears verbatim in the seeded
+    // body, so this is the canonical 2-char CJK gap-closure probe.
+    let hits = store
+        .search_fts(scope, "会議", 10)
+        .expect("search_fts post-upgrade for 2-char query");
+    assert_eq!(
+        hits.len(),
+        1,
+        "v14 -> v15 backfill must make 2-char CJK queries hit via the bigram lane"
+    );
+}
+
+#[test]
+fn v15_migration_is_idempotent_on_already_populated_database() {
+    // Idempotency guard for the v15 migration mirrors the v14
+    // contract: re-stamping `user_version = 14` on a v15-shaped
+    // database with rows in `evidence_fts_bigram` re-runs the
+    // migration on next open *without* producing duplicate rows.
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let scope = ScopeId::new_v4();
+    let cjk_body = "今日の重要な会議の議事録です";
+
+    {
+        let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+            .expect("open fresh store");
+        store
+            .ingest(
+                scope,
+                cjk_body.as_bytes(),
+                Some("source:cjk-idem-bigram"),
+                ImportanceClass::Important,
+            )
+            .expect("ingest cjk row");
+        let bigram_before: i64 = store
+            .raw_conn()
+            .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+            .expect("count bigram rows before downgrade");
+        assert_eq!(bigram_before, 1);
+    }
+
+    stamp_user_version(&path, 14);
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("re-open with user_version=14 must re-run v15 migration");
+
+    let bigram_after: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .expect("count bigram rows after re-migration");
+    assert_eq!(
+        bigram_after, 1,
+        "idempotent v15 re-migration must not duplicate evidence_fts_bigram rows"
+    );
+    assert_eq!(read_user_version(&path), SCHEMA_VERSION);
+}
+
+#[test]
+fn v15_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
+    // Same chunked-streaming regression as the v14 sibling test,
+    // pinning the v15 backfill's per-chunk forward-progress and
+    // no-duplicate-emit invariants.
+    use uuid::Uuid;
+
+    // The v15 backfill streams in chunks of 1_000 rows; 1_500
+    // rows guarantees the loop straddles at least one chunk
+    // boundary.
+    const SEEDED_ROWS: i64 = 1_500;
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let scope = ScopeId::new_v4();
+    let scope_bytes = scope.as_uuid().as_bytes().to_vec();
+
+    {
+        let _store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+            .expect("open fresh store at SCHEMA_VERSION");
+    }
+    {
+        let conn = open_sqlcipher(&path);
+        conn.execute_batch("DROP TABLE evidence_fts_bigram;")
+            .expect("drop evidence_fts_bigram to reach v14 shape");
+        let tx = conn
+            .unchecked_transaction()
+            .expect("begin tx for bulk seed");
+        {
+            let mut insert = tx
+                .prepare(
+                    "INSERT INTO evidence_fts (content, evidence_id, scope_id) \
+                     VALUES (?1, ?2, ?3)",
+                )
+                .expect("prepare bulk-seed insert");
+            for n in 0..SEEDED_ROWS {
+                let eid = Uuid::new_v4().as_bytes().to_vec();
+                let body = format!("重要な会議の議事録 #{n}");
+                insert
+                    .execute(rusqlite::params![body, eid, scope_bytes])
+                    .expect("seed evidence_fts row");
+            }
+        }
+        tx.commit().expect("commit bulk seed");
+
+        conn.pragma_update(None, "user_version", 14_i64)
+            .expect("re-stamp user_version=14 after bulk seed");
+
+        let fts_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM evidence_fts", [], |r| r.get(0))
+            .expect("count evidence_fts after seed");
+        assert_eq!(
+            fts_count, SEEDED_ROWS,
+            "bulk seed must populate evidence_fts with SEEDED_ROWS rows"
+        );
+        let companion_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type = 'table' AND name = 'evidence_fts_bigram'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("inspect sqlite_master for evidence_fts_bigram");
+        assert_eq!(
+            companion_exists, 0,
+            "evidence_fts_bigram must be absent before re-open so the migration backfill arm runs"
+        );
+    }
+
+    let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
+        .expect("re-open v14-shaped db with SEEDED_ROWS rows must run v15 migration");
+
+    let bigram_total: i64 = store
+        .raw_conn()
+        .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
+        .expect("count evidence_fts_bigram after multi-chunk backfill");
+    assert_eq!(
+        bigram_total, SEEDED_ROWS,
+        "multi-chunk v15 backfill must produce exactly one evidence_fts_bigram row per seeded \
+         evidence_fts row (rowid cursor advanced past a chunk boundary, no rows dropped, no rows \
+         duplicated)"
+    );
+
+    let seeded_rows_usize = usize::try_from(SEEDED_ROWS).expect("SEEDED_ROWS fits in usize");
+    let hits = store
+        .search_fts(scope, "会議", seeded_rows_usize)
+        .expect("search_fts post-multi-chunk migration for 2-char query");
+    assert_eq!(
+        hits.len(),
+        seeded_rows_usize,
+        "public search_fts must surface every back-filled CJK row via the bigram lane (2-char \
+         query that the trigram floor blocks) after multi-chunk migration"
+    );
+}

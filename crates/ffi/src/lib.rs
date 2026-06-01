@@ -2924,6 +2924,22 @@ mod tests {
                 .map_err(|e| FfiError::Evidence {
                     message: e.to_string(),
                 })?;
+            // Phase 1.2.1 / schema v15: the bigram shadow also
+            // holds a row for CJK bodies (precomputed-bigram
+            // recall lane for 2-codepoint queries). Pre-condition
+            // sanity-checks that the re-purge has a non-empty
+            // bigram shadow to actually clean up.
+            let bigram_count: i64 = rt
+                .store()
+                .raw_conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM evidence_fts_bigram WHERE scope_id = ?1",
+                    rusqlite::params![scope_bytes.as_slice()],
+                    |row| row.get(0),
+                )
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
             assert_eq!(
                 unicode61_count, 1,
                 "pre-condition: evidence_fts must still hold the row for the tombstoned CJK \
@@ -2934,18 +2950,27 @@ mod tests {
                 "pre-condition: evidence_fts_cjk must still hold the row for the tombstoned CJK \
                  scope so the test exercises the dual-table re-purge"
             );
+            assert_eq!(
+                bigram_count, 1,
+                "pre-condition: evidence_fts_bigram must still hold the row for the tombstoned \
+                 CJK scope so the test exercises the three-table re-purge introduced in \
+                 Phase 1.2.1 / schema v15"
+            );
             Ok(())
         })
-        .expect("probe pre-reopen dual-table fts");
+        .expect("probe pre-reopen three-table fts");
 
         // Restart cycle. The next `open_store` is where the
         // dual-table re-purge runs.
         close_store(h1).expect("close_store");
         let h2 = open_store(path.to_string_lossy().into_owned(), key_hex).expect("re-open_store");
 
-        // BOTH FTS5 shadow tables must be empty for the forgotten
-        // scope after the re-purge. Asserting on the cjk table is
-        // what's new here vs the Latin-only sibling test.
+        // All THREE FTS5 shadow tables must be empty for the
+        // forgotten scope after the re-purge. Asserting on the
+        // bigram table is what's new here vs the dual-table
+        // sweep-3 sibling test — the three-table atomic transaction
+        // invariant introduced in Phase 1.2.1 / schema v15 is what
+        // this regression guards.
         runtime::with_runtime(h2, |rt| {
             let scope = parse_scope_id(&scope_str)?;
             let scope_bytes = scope.as_uuid().as_bytes().to_vec();
@@ -2971,6 +2996,17 @@ mod tests {
                 .map_err(|e| FfiError::Evidence {
                     message: e.to_string(),
                 })?;
+            let bigram_count: i64 = rt
+                .store()
+                .raw_conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM evidence_fts_bigram WHERE scope_id = ?1",
+                    rusqlite::params![scope_bytes.as_slice()],
+                    |row| row.get(0),
+                )
+                .map_err(|e| FfiError::Evidence {
+                    message: e.to_string(),
+                })?;
             assert_eq!(
                 unicode61_count, 0,
                 "open_store must re-purge evidence_fts rows for every persisted tombstone, \
@@ -2981,9 +3017,14 @@ mod tests {
                 "open_store must re-purge evidence_fts_cjk rows for every persisted tombstone \
                  (sweep-3 Devin Review INFO-0002 regression guard)"
             );
+            assert_eq!(
+                bigram_count, 0,
+                "open_store must re-purge evidence_fts_bigram rows for every persisted \
+                 tombstone (Phase 1.2.1 / schema v15 three-table atomicity invariant)"
+            );
             Ok(())
         })
-        .expect("probe post-reopen dual-table fts");
+        .expect("probe post-reopen three-table fts");
 
         // Public query surface mirrors the raw dual-table probe.
         let hits_after =

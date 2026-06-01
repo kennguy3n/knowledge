@@ -160,12 +160,38 @@
 ///   Known limitation: SQLite's built-in `trigram` tokeniser has
 ///   a hard 3-codepoint minimum for both indexed substrings and
 ///   query strings — 2-character CJK queries like `天気` return ∅
-///   even when the substring is present in the indexed text. A
-///   future phase can register a Rust-side custom FTS5 bigram
-///   tokeniser via the `fts5_api` FFI to close that gap; doing so
-///   does not require another schema bump because a tokeniser
-///   swap is an FTS5 table option, not a column.
-pub const SCHEMA_VERSION: i32 = 14;
+///   even when the substring is present in the indexed text.
+///   Schema v15 (Phase 1.2.1) closes that gap via a precomputed-
+///   bigram lane in a parallel `evidence_fts_bigram` table; see
+///   the v15 history entry below.
+/// - v15 (Phase 1.2.1 — CJK / Thai bigram recall lane): added
+///   the `evidence_fts_bigram` virtual table that stores
+///   whitespace-separated overlapping 2-codepoint windows of the
+///   CJK / Thai portion of each body under the same
+///   `unicode61 remove_diacritics 2` tokeniser as `evidence_fts`.
+///   The write path computes the bigram string via
+///   [`crate::bigram::compute_cjk_bigrams`] and INSERTs it
+///   alongside the v14 trigram INSERT iff
+///   [`crate::script::contains_cjk_or_thai`] is true for the
+///   body; the read path runs a third independent prepared
+///   statement against `evidence_fts_bigram` with the query
+///   bigram-tokenised via [`crate::bigram::compute_cjk_bigram_query`]
+///   and merges its results into the existing
+///   `MIN(rank)`-by-`evidence_id` HashMap. The bigram lane is
+///   the gap-closer for 2-codepoint CJK queries like `天気`
+///   that the v14 trigram lane cannot serve because of FTS5's
+///   3-codepoint trigram minimum. Like the trigram lane it is
+///   purely additive recall: errors are swallowed and the
+///   unicode61 branch remains the source of truth for query
+///   validity. The v14 -> v15 migration
+///   ([`crate::store::migrate_v15_backfill_evidence_fts_bigram`])
+///   replays `evidence_fts.content` row-by-row through the same
+///   bigram pre-tokeniser the write path uses, chunked on
+///   `evidence_fts.rowid` for bounded memory matching the v14
+///   migration's pattern. Forget / purge / rebuild now touch
+///   all three FTS shadow tables in the same transaction so
+///   they cannot drift apart under crash recovery.
+pub const SCHEMA_VERSION: i32 = 15;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -260,6 +286,33 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_cjk USING fts5(
     evidence_id UNINDEXED,
     scope_id    UNINDEXED,
     tokenize    = 'trigram'
+);
+
+-- v15 (Phase 1.2.1): CJK / Thai bigram recall lane. The `content`
+-- column stores a whitespace-separated string of overlapping
+-- 2-codepoint windows over the CJK / Thai portion of the body
+-- (computed by `crate::bigram::compute_cjk_bigrams`); the
+-- `unicode61 remove_diacritics 2` tokeniser then splits that
+-- string into the individual bigram tokens. The write path
+-- INSERTs here in addition to `evidence_fts` (always) and
+-- `evidence_fts_cjk` (when the body routes CJK / Thai) iff the
+-- precomputed bigram string is non-empty. The read path runs
+-- a third independent prepared statement against this table
+-- with the query bigram-tokenised by
+-- `crate::bigram::compute_cjk_bigram_query`, merging into the
+-- same `MIN(rank)`-by-`evidence_id` HashMap as the other two
+-- branches. This closes the v14 trigram lane's
+-- "≥ 3 codepoint query" floor so 2-codepoint CJK queries like
+-- `天気` (Japanese "weather") return real recall instead of an
+-- empty result set. Forget / purge / rebuild paths touch this
+-- table alongside `evidence_fts` and `evidence_fts_cjk` in the
+-- same transaction so the three indexes can never drift apart
+-- under crash recovery.
+CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_bigram USING fts5(
+    content,
+    evidence_id UNINDEXED,
+    scope_id    UNINDEXED,
+    tokenize    = 'unicode61 remove_diacritics 2'
 );
 
 -- Embedding cache used by the hybrid retriever's semantic-vector
