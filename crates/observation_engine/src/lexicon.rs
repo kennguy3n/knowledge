@@ -492,11 +492,22 @@ impl LexiconRegistry {
     /// back to the English lexicon when the tag is unconfigured
     /// or `None`. The English fallback is guaranteed to exist
     /// by [`Self::from_static`].
+    ///
+    /// Side effect (Phase 1.10): bumps the
+    /// [`crate::lexicon_telemetry`] `hits_<tag>` counter for the
+    /// resolved lexicon's `primary_tag`, and additionally bumps
+    /// [`crate::lexicon_telemetry::LexiconTelemetrySnapshot::
+    /// unknown_tag_fallbacks_total`] when an input
+    /// `primary_tag = Some(t)` failed the lookup and fell back
+    /// to English.  See [`crate::lexicon_telemetry::
+    /// record_lexicon_hit`] for the counter semantics.
     pub fn lexicon_for_or_english(&self, primary_tag: Option<&str>) -> &'static LanguageLexicon {
-        primary_tag
+        let resolved = primary_tag
             .and_then(|t| self.lexicon_for(t))
             .or_else(|| self.lexicon_for("en"))
-            .expect("English fallback lexicon must exist in registry")
+            .expect("English fallback lexicon must exist in registry");
+        crate::lexicon_telemetry::record_lexicon_hit(primary_tag, resolved.primary_tag);
+        resolved
     }
 
     /// Look up the interrogative table + matching strategy for
@@ -777,6 +788,15 @@ pub fn first_alphabetic_bigram(normalised: &str) -> Option<String> {
 /// and checked against the space-joined first two alphabetic
 /// tokens (see [`first_alphabetic_bigram`]).
 pub fn table_matches(table: &[&str], normalised: &str, strategy: MatchStrategy) -> bool {
+    // Telemetry: every invocation bumps the per-strategy counter
+    // (regardless of whether the call ultimately returns `true`
+    // or `false`).  The counter measures *strategy fires* — how
+    // often each variant is consulted on the hot path — which is
+    // the right signal for tuning lexicon / extractor logic.  If
+    // future need ever arises to separate "fired AND matched"
+    // from "fired AND missed", a sibling pair of counters can be
+    // added without touching this site.
+    crate::lexicon_telemetry::record_match_strategy_fire(strategy);
     match strategy {
         MatchStrategy::FirstToken => {
             let first = first_alphabetic_token(normalised);
@@ -900,23 +920,60 @@ pub const ARABIC_PROCLITIC_PEEL_BUDGET: usize = 3;
 /// stripped to `""`) is rejected — there is no host word left
 /// to match against the table.
 fn first_token_matches_after_arabic_clitic_strip(table: &[&str], first: &str) -> bool {
+    // Empty input is a guard against a routing bug — bail
+    // without any telemetry side effect (an empty first token
+    // is NOT a real "peel attempt").
     if first.is_empty() {
         return false;
     }
+    let outcome = arabic_clitic_peel_outcome(table, first);
+    crate::lexicon_telemetry::record_arabic_peel_depth(outcome);
+    matches!(
+        outcome,
+        crate::lexicon_telemetry::PeelOutcome::MatchedAtDepth(_)
+    )
+}
+
+/// Compute the peel-depth outcome for an Arabic clitic-aware
+/// table check.  Separated from
+/// [`first_token_matches_after_arabic_clitic_strip`] so that the
+/// telemetry counter increment lives at exactly one site, and
+/// the depth value is unambiguous (depth 0 = matched without
+/// peeling, depth 1..=`ARABIC_PROCLITIC_PEEL_BUDGET` = matched
+/// after that many peels, `BudgetExhausted` = budget consumed
+/// without a match OR no more stripable proclitics left).
+///
+/// The "no more stripable proclitics" sub-case (peel_one returns
+/// `None` mid-loop) is folded into `BudgetExhausted` rather than
+/// given its own bucket — both share the semantic "matcher gave
+/// up without finding a table entry", and the count of such
+/// cases combined with the `MatchedAtDepth(N)` distribution is
+/// already enough to diagnose routing problems (high exhausted
+/// rate => non-Arabic tokens reaching the matcher).
+fn arabic_clitic_peel_outcome(
+    table: &[&str],
+    first: &str,
+) -> crate::lexicon_telemetry::PeelOutcome {
+    use crate::lexicon_telemetry::PeelOutcome;
+    debug_assert!(!first.is_empty(), "caller must filter empty `first`");
     if table.contains(&first) {
-        return true;
+        return PeelOutcome::MatchedAtDepth(0);
     }
     let mut current = first;
-    for _ in 0..ARABIC_PROCLITIC_PEEL_BUDGET {
+    for depth in 1..=ARABIC_PROCLITIC_PEEL_BUDGET {
         let Some(stripped) = peel_one_arabic_proclitic(current) else {
-            return false;
+            return PeelOutcome::BudgetExhausted;
         };
         if table.contains(&stripped) {
-            return true;
+            // depth is in 1..=ARABIC_PROCLITIC_PEEL_BUDGET (== 3
+            // today), which fits in u8 trivially.
+            return PeelOutcome::MatchedAtDepth(
+                u8::try_from(depth).expect("peel budget fits in u8"),
+            );
         }
         current = stripped;
     }
-    false
+    PeelOutcome::BudgetExhausted
 }
 
 /// Attempt one greedy longest-first peel of the recognised
@@ -1044,23 +1101,44 @@ pub const HEBREW_PROCLITIC_PEEL_BUDGET: usize = 3;
 /// rejected — there is no host word left to match against the
 /// table.
 fn first_token_matches_after_hebrew_clitic_strip(table: &[&str], first: &str) -> bool {
+    // Empty input is a routing-bug guard — bail without any
+    // telemetry side effect.
     if first.is_empty() {
         return false;
     }
+    let outcome = hebrew_clitic_peel_outcome(table, first);
+    crate::lexicon_telemetry::record_hebrew_peel_depth(outcome);
+    matches!(
+        outcome,
+        crate::lexicon_telemetry::PeelOutcome::MatchedAtDepth(_)
+    )
+}
+
+/// Compute the peel-depth outcome for a Hebrew clitic-aware
+/// table check.  See [`arabic_clitic_peel_outcome`] for the
+/// bucketing semantics — this is the Hebrew mirror.
+fn hebrew_clitic_peel_outcome(
+    table: &[&str],
+    first: &str,
+) -> crate::lexicon_telemetry::PeelOutcome {
+    use crate::lexicon_telemetry::PeelOutcome;
+    debug_assert!(!first.is_empty(), "caller must filter empty `first`");
     if table.contains(&first) {
-        return true;
+        return PeelOutcome::MatchedAtDepth(0);
     }
     let mut current = first;
-    for _ in 0..HEBREW_PROCLITIC_PEEL_BUDGET {
+    for depth in 1..=HEBREW_PROCLITIC_PEEL_BUDGET {
         let Some(stripped) = peel_one_hebrew_proclitic(current) else {
-            return false;
+            return PeelOutcome::BudgetExhausted;
         };
         if table.contains(&stripped) {
-            return true;
+            return PeelOutcome::MatchedAtDepth(
+                u8::try_from(depth).expect("peel budget fits in u8"),
+            );
         }
         current = stripped;
     }
-    false
+    PeelOutcome::BudgetExhausted
 }
 
 /// Attempt one peel of the recognised Hebrew proclitic prefixes

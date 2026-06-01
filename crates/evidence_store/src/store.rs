@@ -818,7 +818,15 @@ impl EvidenceStore {
             // produce the bridging trigram that the unstripped
             // side still expects). See [`crate::fts_stopwords`]
             // for the symmetric-stripping rationale.
-            let stripped = crate::fts_stopwords::strip_recall_lane_stopwords(text);
+            // Counted variant feeds the Phase 1.10 index-write
+            // stopword strip telemetry — `strip_count` is the
+            // number of stopword instances replaced.
+            let (stripped, strip_count) =
+                crate::fts_stopwords::strip_recall_lane_stopwords_counted(text);
+            crate::fts_telemetry::record_stopwords_stripped(
+                crate::fts_telemetry::StripSite::IndexWrite,
+                strip_count,
+            );
             tx.execute(
                 "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
                  VALUES (?1, ?2, ?3)",
@@ -4688,8 +4696,14 @@ fn migrate_v16_strip_recall_lane_stopwords(conn: &Connection) -> Result<()> {
             // Apply the same stopword strip the write path uses
             // post-Phase-1.9 so the recall-lane indexes here are
             // identical to what a fresh-DB ingest of the same
-            // bodies would produce.
-            let stripped = crate::fts_stopwords::strip_recall_lane_stopwords(&content);
+            // bodies would produce.  Counted variant feeds the
+            // Phase 1.10 v16-migration stopword strip telemetry.
+            let (stripped, strip_count) =
+                crate::fts_stopwords::strip_recall_lane_stopwords_counted(&content);
+            crate::fts_telemetry::record_stopwords_stripped(
+                crate::fts_telemetry::StripSite::V16Migration,
+                strip_count,
+            );
             tx.execute(
                 "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
                  VALUES (?1, ?2, ?3)",
@@ -5042,7 +5056,16 @@ pub(crate) fn merged_fts_search(
     // [`crate::fts_stopwords`] for the symmetric-stripping
     // rationale and [`crate::schema::SCHEMA_VERSION`] v16 for the
     // index-time migration.
-    let stripped_query = crate::fts_stopwords::strip_recall_lane_stopwords(query);
+    // Counted variant feeds the Phase 1.10 query-time stopword
+    // strip telemetry — `strip_count` is the number of stopword
+    // instances replaced.  See [`crate::fts_telemetry`] for the
+    // counter semantics.
+    let (stripped_query, strip_count) =
+        crate::fts_stopwords::strip_recall_lane_stopwords_counted(query);
+    crate::fts_telemetry::record_stopwords_stripped(
+        crate::fts_telemetry::StripSite::QueryTime,
+        strip_count,
+    );
 
     // Capacity bound: 3 branches each contribute at most `limit`
     // unique evidence_ids, so `3 * limit` is the tight upper
@@ -5084,11 +5107,18 @@ pub(crate) fn merged_fts_search(
         let rows = stmt.query_map(params![query, scope_bytes, limit_sql], |row| {
             Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?))
         })?;
+        let mut row_count: u64 = 0;
         for row in rows {
             let (id_bytes, rank) = row?;
             let id = EvidenceId(slice_to_uuid(&id_bytes)?);
             merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_LANE_WEIGHT);
+            row_count += 1;
         }
+        // Telemetry: record the lane invocation + raw row count
+        // (pre-merge, pre-truncate, pre-rank-comparison).  Counts
+        // the rows the lane *contributed* to the merge, not the
+        // rows that survived the final cross-lane sort+truncate.
+        crate::fts_telemetry::record_lane_query(crate::fts_telemetry::Lane::Unicode61, row_count);
     }
 
     // Branch 2: trigram (additive recall). Errors swallowed.
@@ -5122,53 +5152,108 @@ pub(crate) fn merged_fts_search(
     // match. The check uses `trim().is_empty()` rather than a
     // codepoint scan because the strip output's whitespace is
     // exactly the ASCII spaces we inserted at strip sites.
-    let trigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
-        if stripped_query.as_ref().trim().is_empty() {
-            return Ok(Vec::new());
-        }
-        // `prepare_cached` — see Branch 1 comment for rationale.
-        //
-        // Phase 1.9: the bound query parameter is
-        // `stripped_query.as_ref()` — NOT the raw `query` — so
-        // the FTS5 trigram MATCH runs against the same
-        // stopword-stripped content the index was written with
-        // (schema v16 contract). Using the raw query here would
-        // silently destroy recall: a `今日のオリンピック` query
-        // would window `日のオ` which the stripped body no
-        // longer contains.
-        let sql = trigram_lane_sql();
-        let mut stmt = conn.prepare_cached(sql)?;
-        let rows = stmt.query_map(
-            params![stripped_query.as_ref(), scope_bytes, limit_sql],
-            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?)),
-        )?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (id_bytes, rank) = row?;
-            // A malformed UUID in `evidence_fts_cjk` can only come
-            // from external corruption (the write path at
-            // `index_fts` always writes a valid 16-byte
-            // `Uuid::as_bytes`). Skip the offending row rather
-            // than aborting the whole trigram branch so the rest
-            // of the recall lane still merges into the unicode61
-            // result set. This matches the broader contract that
-            // the trigram lane is *purely additive*.
-            match slice_to_uuid(&id_bytes) {
-                Ok(uuid) => out.push((EvidenceId(uuid), rank)),
-                Err(_) => continue,
+    //
+    // Phase 1.10 sweep 1 (BUG-0001 fix): the skip-check is
+    // hoisted OUT of the closure so the skip-counter and
+    // lane-query-counter branches are mutually exclusive by
+    // construction — matches the bigram lane's `if let Some / else`
+    // pattern below. Prior to this restructure the closure
+    // returned `Ok(Vec::new())` on the skip path, which also
+    // matched the `if let Ok(trigram_rows)` arm and bumped
+    // `record_lane_query(CjkTrigram, 0)` for the very query that
+    // had just bumped `record_lane_skip(CjkTrigramPureStopwordQuery)`.
+    // That violated the `queries + skips = total_attempts`
+    // invariant documented on [`crate::fts_telemetry`].  The
+    // current shape makes that invariant a structural property
+    // of the surrounding `if / else`, not a logical one buried
+    // inside the closure.
+    //
+    // NOTE on Latin-only queries: the trigram lane intentionally
+    // does NOT structurally skip Latin-only queries even though
+    // the `evidence_fts_cjk` table is only populated for bodies
+    // whose [`crate::script::contains_cjk_or_thai`] is true. The
+    // FTS5 `trigram` tokeniser windows ALL 3-codepoint sequences
+    // in the body — including any Latin substrings embedded in a
+    // CJK body (e.g. `日本のiPhone発表` produces trigrams `iPh`,
+    // `Pho`, `hon`, `one`).  A Latin-only query like `iPhone`
+    // therefore CAN match Latin substrings stored in the CJK-only
+    // table, contributing additional weighted rank for the merge.
+    // Operators reading `cjk_trigram_lane_rows_total /
+    // cjk_trigram_lane_queries_total` will observe lower precision
+    // on Latin-dominant workloads — that signal is intentional and
+    // not a bug.  See sweep-3 (commit `4aaccba`) which tried to
+    // structurally skip Latin queries here and was reverted in
+    // sweep 4 once the trigram tokeniser's cross-script behaviour
+    // was correctly identified.
+    if stripped_query.as_ref().trim().is_empty() {
+        // Telemetry: pure-stopword query collapsed to empty
+        // after stripping — the trigram lane is declined
+        // without invoking SQLite.
+        crate::fts_telemetry::record_lane_skip(
+            crate::fts_telemetry::SkipReason::CjkTrigramPureStopwordQuery,
+        );
+    } else {
+        let trigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
+            // `prepare_cached` — see Branch 1 comment for rationale.
+            //
+            // Phase 1.9: the bound query parameter is
+            // `stripped_query.as_ref()` — NOT the raw `query` — so
+            // the FTS5 trigram MATCH runs against the same
+            // stopword-stripped content the index was written with
+            // (schema v16 contract). Using the raw query here would
+            // silently destroy recall: a `今日のオリンピック` query
+            // would window `日のオ` which the stripped body no
+            // longer contains.
+            let sql = trigram_lane_sql();
+            let mut stmt = conn.prepare_cached(sql)?;
+            let rows = stmt.query_map(
+                params![stripped_query.as_ref(), scope_bytes, limit_sql],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?)),
+            )?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id_bytes, rank) = row?;
+                // A malformed UUID in `evidence_fts_cjk` can only come
+                // from external corruption (the write path at
+                // `index_fts` always writes a valid 16-byte
+                // `Uuid::as_bytes`). Skip the offending row rather
+                // than aborting the whole trigram branch so the rest
+                // of the recall lane still merges into the unicode61
+                // result set. This matches the broader contract that
+                // the trigram lane is *purely additive*.
+                match slice_to_uuid(&id_bytes) {
+                    Ok(uuid) => out.push((EvidenceId(uuid), rank)),
+                    Err(_) => continue,
+                }
             }
-        }
-        Ok(out)
-    })();
-    if let Ok(trigram_rows) = trigram_attempt {
-        // Phase 1.8: apply the trigram lane's inter-lane weight
-        // (`EVIDENCE_FTS_CJK_LANE_WEIGHT`, < 1.0) before merging
-        // so the trigram lane's precision penalty propagates into
-        // the cross-lane min-rank comparison. See
-        // [`crate::fts_weights`] for the precision-vs-recall
-        // rationale.
-        for (id, rank) in trigram_rows {
-            merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_CJK_LANE_WEIGHT);
+            Ok(out)
+        })();
+        if let Ok(trigram_rows) = trigram_attempt {
+            // Phase 1.8: apply the trigram lane's inter-lane weight
+            // (`EVIDENCE_FTS_CJK_LANE_WEIGHT`, < 1.0) before merging
+            // so the trigram lane's precision penalty propagates into
+            // the cross-lane min-rank comparison. See
+            // [`crate::fts_weights`] for the precision-vs-recall
+            // rationale.
+            let row_count = u64::try_from(trigram_rows.len()).unwrap_or(u64::MAX);
+            for (id, rank) in trigram_rows {
+                merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_CJK_LANE_WEIGHT);
+            }
+            // Telemetry: record the lane invocation + contributed
+            // row count.  The skip branch above is structurally
+            // mutually exclusive with this arm (see the doc
+            // comment on the outer `if / else`), so the
+            // `queries + skips = total_attempts` contract holds
+            // by construction.  An `Err` outcome of the
+            // swallow-scope is silently dropped (same
+            // architectural rule as the doc-comment "errors
+            // swallowed" contract); the telemetry counter is
+            // bumped only when the lane contributed rows that
+            // the merge actually consumed.
+            crate::fts_telemetry::record_lane_query(
+                crate::fts_telemetry::Lane::CjkTrigram,
+                row_count,
+            );
         }
     }
 
@@ -5210,8 +5295,42 @@ pub(crate) fn merged_fts_search(
     // CJK-only filter via `compute_cjk_bigrams`, so the bridging
     // bigram is requested by the query whenever it would be
     // produced by the body).
-    if let Some(bigram_match) = crate::bigram::compute_cjk_bigram_query(stripped_query.as_ref()) {
+    //
+    // Phase 1.10 sweep 2 (ANALYSIS-0004 fix): the bigram lane's
+    // skip taxonomy now matches the trigram lane's structural
+    // shape — the pure-stopword check runs BEFORE
+    // `compute_cjk_bigram_query` so a CJK pure-stopword query
+    // like `の の の` records `BigramPureStopwordQuery` (correct
+    // semantic) rather than `BigramNoCjkQuery` (technically
+    // accurate but operationally misleading, since the query
+    // DID start as CJK and only became no-CJK as a side effect
+    // of stripping).  The two bigram skip variants are therefore
+    // mutually exclusive by construction: a pure-stopword query
+    // exits at the first branch; a non-CJK / Latin-only query
+    // proceeds past the empty-check and exits at the second.
+    if stripped_query.as_ref().trim().is_empty() {
+        // Telemetry: pure-stopword CJK query collapsed to empty
+        // after stripping — the bigram lane is declined here
+        // (NOT via `BigramNoCjkQuery`) so operators can tell a
+        // genuinely non-CJK query path from a CJK-input-but-
+        // pure-particles path.  Parallels the trigram-lane
+        // pure-stopword branch above.
+        crate::fts_telemetry::record_lane_skip(
+            crate::fts_telemetry::SkipReason::BigramPureStopwordQuery,
+        );
+    } else if let Some(bigram_match) =
+        crate::bigram::compute_cjk_bigram_query(stripped_query.as_ref())
+    {
         let bigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
+            // Note on telemetry placement: the bigram lane query
+            // counter is bumped post-swallow (after the `Ok` arm
+            // is reached and `bigram_rows` is in scope) — same
+            // architectural choice as the trigram lane above.
+            // The bigram skip counters are bumped in the two
+            // sibling `else` arms (pure-stopword above, no-CJK
+            // below) — both mutually exclusive with this arm by
+            // construction.
+            //
             // `prepare_cached` — see Branch 1 comment for rationale.
             let sql = bigram_lane_sql();
             let mut stmt = conn.prepare_cached(sql)?;
@@ -5234,10 +5353,25 @@ pub(crate) fn merged_fts_search(
             // 1.0) before merging — the bigram lane is the
             // highest-recall and lowest-precision lane so its
             // weighted ranks pay the steepest cross-lane penalty.
+            let row_count = u64::try_from(bigram_rows.len()).unwrap_or(u64::MAX);
             for (id, rank) in bigram_rows {
                 merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_BIGRAM_LANE_WEIGHT);
             }
+            crate::fts_telemetry::record_lane_query(crate::fts_telemetry::Lane::Bigram, row_count);
         }
+    } else {
+        // Telemetry: stripped query was non-empty but had no
+        // adjacent-CJK codepoint pair (e.g. a Latin-only query
+        // or a CJK query with all isolated codepoints separated
+        // by non-CJK characters).  This is the "expected" skip
+        // path for the bigram lane on non-CJK traffic — it is
+        // structurally distinct from `BigramPureStopwordQuery`
+        // because operators inspecting the ratio
+        // `bigram_skips_pure_stopword / bigram_skips_no_cjk`
+        // need to be able to tell "Latin query, lane correctly
+        // declined" from "CJK query annihilated by over-
+        // aggressive stopword inventory".
+        crate::fts_telemetry::record_lane_skip(crate::fts_telemetry::SkipReason::BigramNoCjkQuery);
     }
 
     // Sort by best (smallest) rank ascending; truncate to limit.

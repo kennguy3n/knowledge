@@ -24,6 +24,7 @@ pub mod extractor;
 pub mod interrogatives;
 pub mod language;
 pub mod lexicon;
+pub mod lexicon_telemetry;
 pub mod pipeline;
 pub mod promotion;
 pub mod types;
@@ -48,6 +49,7 @@ pub use lexicon::{
     KeywordClass, LanguageLexicon, LexiconRegistry, MatchStrategy, BUILTIN_LEXICONS,
     SUPPORTED_LEXICON_TAGS,
 };
+pub use lexicon_telemetry::{snapshot as lexicon_telemetry_snapshot, LexiconTelemetrySnapshot};
 pub use pipeline::{default_pipeline, ObservationPipeline, PipelineRunOutput};
 pub use promotion::{should_promote, ChannelPromotionPolicy, PromotionReason, PromotionResult};
 pub use types::{Observation, ObservationType};

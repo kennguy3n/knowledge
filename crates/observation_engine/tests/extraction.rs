@@ -333,3 +333,105 @@ fn fresh_observations_are_candidate_state() {
         .iter()
         .all(|o| o.memory_state == memory_manager::MemoryState::Candidate));
 }
+
+/// Phase 1.10 end-to-end test: confirm the lexicon-telemetry
+/// counters tick through the public extraction surface.
+///
+/// This is the cross-cutting "do the counters actually tick
+/// through the public API?" check — calling
+/// [`LexiconExtractor::extract`] on a non-trivial English body
+/// must drive *some* lexicon-hit counter and *some* match-
+/// strategy-fire counter (the exact tags / strategies depend on
+/// which whatlang-detected sentence routes through which
+/// keyword class — that's pinned by the unit tests in
+/// `crates/observation_engine/src/lexicon_telemetry.rs`).  This
+/// test pins the structural property: the public extractor IS
+/// wired to the telemetry registry.
+///
+/// We use lower-bound (`>`) assertions because other tests in
+/// the same binary touch the same process-singleton counters.
+#[test]
+fn lexicon_telemetry_counters_advance_through_public_extractor() {
+    use observation_engine::lexicon_telemetry;
+    let scope = ScopeId::new_v4();
+    let before = lexicon_telemetry::snapshot();
+
+    // Multi-sentence English body — guarantees the per-sentence
+    // language detector resolves at least one sentence to a
+    // lexicon (the `en` fallback at minimum) and exercises the
+    // FirstToken strategy on the question class via "?".
+    let _ = ext().extract(
+        "Please review the deck before Friday. Can you sign off by EOD?",
+        scope,
+    );
+
+    let after = lexicon_telemetry::snapshot();
+
+    // *Some* lexicon hit must have been recorded.  We don't pin
+    // a specific tag because that depends on whatlang's
+    // per-sentence guess; the structural property is "the
+    // public extractor is wired to record_lexicon_hit at least
+    // once per non-empty extract() call".
+    let total_lexicon_hits_before = before.hits_ar
+        + before.hits_bo
+        + before.hits_de
+        + before.hits_en
+        + before.hits_es
+        + before.hits_fr
+        + before.hits_he
+        + before.hits_hi
+        + before.hits_id
+        + before.hits_it
+        + before.hits_ja
+        + before.hits_km
+        + before.hits_ko
+        + before.hits_lo
+        + before.hits_ms
+        + before.hits_my
+        + before.hits_pt
+        + before.hits_ru
+        + before.hits_th
+        + before.hits_vi
+        + before.hits_zh;
+    let total_lexicon_hits_after = after.hits_ar
+        + after.hits_bo
+        + after.hits_de
+        + after.hits_en
+        + after.hits_es
+        + after.hits_fr
+        + after.hits_he
+        + after.hits_hi
+        + after.hits_id
+        + after.hits_it
+        + after.hits_ja
+        + after.hits_km
+        + after.hits_ko
+        + after.hits_lo
+        + after.hits_ms
+        + after.hits_my
+        + after.hits_pt
+        + after.hits_ru
+        + after.hits_th
+        + after.hits_vi
+        + after.hits_zh;
+    assert!(
+        total_lexicon_hits_after > total_lexicon_hits_before,
+        "no lexicon-hit counter advanced through the public extractor — the wire is broken"
+    );
+
+    // *Some* strategy fire must have been recorded too.
+    let total_strategy_fires_before = before.strategy_first_token
+        + before.strategy_first_bigram
+        + before.strategy_substring
+        + before.strategy_first_token_with_arabic_clitics
+        + before.strategy_first_token_with_hebrew_clitics;
+    let total_strategy_fires_after = after.strategy_first_token
+        + after.strategy_first_bigram
+        + after.strategy_substring
+        + after.strategy_first_token_with_arabic_clitics
+        + after.strategy_first_token_with_hebrew_clitics;
+    assert!(
+        total_strategy_fires_after > total_strategy_fires_before,
+        "no match-strategy-fire counter advanced through the public extractor — the wire is broken"
+    );
+}
