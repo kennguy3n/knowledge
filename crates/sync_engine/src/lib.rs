@@ -274,25 +274,25 @@ where
     /// the trichotomy through `serde_json`:
     ///
     /// * Outer `None` — the field was absent on the wire
-    ///   (pre-versioning snapshot). [`SyncEngine::restore_snapshot`]
-    ///   falls back to [`DEFAULT_COMPACT_THRESHOLD`], preserving
-    ///   the original behaviour for old on-disk snapshots.
-    /// * Outer `Some(Enabled(n))` — the authoring engine had an
-    ///   explicit threshold of `n`; the restorer re-applies it
-    ///   via [`SyncEngine::with_compact_threshold(Some(n))`].
+    ///   (pre-versioning snapshot **or** default Adaptive policy).
+    ///   [`SyncEngine::restore_snapshot`] leaves the engine at its
+    ///   default compaction policy (`CompactionPolicy::default()`).
+    /// * Outer `Some(Enabled { value: n })` — the authoring engine
+    ///   had `Fixed(n)` policy; the restorer re-applies it via
+    ///   [`SyncEngine::with_compaction_policy`].
     /// * Outer `Some(Disabled)` — the authoring engine had
-    ///   auto-compaction explicitly disabled
-    ///   (`with_compact_threshold(None)`); the restorer re-applies
-    ///   the disabled state via
-    ///   [`SyncEngine::with_compact_threshold(None)`].
+    ///   auto-compaction explicitly disabled; the restorer
+    ///   re-applies `CompactionPolicy::Disabled`.
+    /// * Outer `Some(Adaptive { .. })` — the authoring engine had
+    ///   a **custom** (non-default) Adaptive policy; the restorer
+    ///   re-applies those parameters.
     ///
     /// `#[serde(default)]` populates the outer `None` cleanly on
     /// deserialise of pre-versioning payloads;
     /// `skip_serializing_if = "Option::is_none"` keeps the field
-    /// out of newly-written snapshots only if it was deliberately
-    /// omitted (which [`SyncEngine::snapshot`] never does — it
-    /// always populates the field from the engine's configured
-    /// value, so snapshot/restore round-trips are lossless).
+    /// out of newly-written snapshots when the policy is the
+    /// default Adaptive (for forward-compatibility with older
+    /// engines that lack the `Adaptive` variant).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_threshold: Option<CompactThresholdSetting>,
 }
@@ -935,15 +935,14 @@ where
     /// for that case.
     ///
     /// **Note on `compact_threshold`**: a snapshot carries the
-    /// authoring engine's configured threshold in its
+    /// authoring engine's configured compaction policy in its
     /// [`EngineSnapshot::compact_threshold`] field, so a
     /// same-version snapshot/restore round-trip preserves the
-    /// threshold losslessly (a custom value re-applies; an
-    /// explicit `None` re-applies as disabled). Snapshots
-    /// produced by an older engine that did not carry the field
-    /// fall back to [`DEFAULT_COMPACT_THRESHOLD`] — this is the
-    /// previous behaviour and so is fully back-compatible with
-    /// on-disk snapshots written before the field was added.
+    /// policy losslessly. Snapshots produced by an older engine
+    /// that did not carry the field (or by an engine using the
+    /// default Adaptive policy, which omits the field for
+    /// forward-compatibility) fall back to the engine's default
+    /// compaction policy (`CompactionPolicy::default()`).
     pub fn restore_snapshot(bytes: &[u8]) -> Result<Self>
     where
         T: for<'de> Deserialize<'de> + Serialize,
