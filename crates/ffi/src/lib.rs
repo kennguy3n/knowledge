@@ -100,35 +100,56 @@
 // for the upstream design note).
 uniffi::setup_scaffolding!();
 
+// STABLE
 pub mod connector;
+// STABLE
 pub mod error;
+// STABLE
 pub mod health;
+// STABLE
 pub mod key_storage;
+// UNSTABLE — internal metrics; signatures may change.
+#[doc(hidden)]
 pub mod metrics;
+// STABLE
 pub mod runtime;
+// STABLE
 pub mod sync_scheduler;
+// STABLE
 pub mod synthesis;
 pub(crate) mod synthesis_rate;
+// STABLE
 #[cfg(feature = "tracing-subscriber")]
 pub mod tracing_init;
+// STABLE
 pub mod types;
+// STABLE
 pub mod webhook;
 
+// STABLE
 pub use connector::{
     authenticate_connector, clear_oauth_client_secret_resolver, connector_status, create_connector,
     list_connectors, refresh_connector_token, remove_connector, set_oauth_client_secret_resolver,
     sync_connector, OAuthClientSecretResolver,
 };
+// STABLE
 pub use error::{FfiError, FfiResult};
+// STABLE
 pub use health::{health_check, AdapterReport, HealthStatus, SubsystemHealth, SubsystemStatus};
+// STABLE
 pub use key_storage::{clear_key_storage_resolver, set_key_storage_resolver, KeyStorageResolver};
+// UNSTABLE — internal metrics; signatures may change.
+#[doc(hidden)]
 pub use metrics::{snapshot as metrics_snapshot, ErrorCounters, MetricsSnapshot};
+// STABLE
 pub use runtime::{close_store, open_store, open_store_with_resolver, RuntimeHandle};
+// STABLE
 pub use sync_scheduler::{
     clear_sync_schedule, configure_sync_auto_synthesize, configure_sync_schedule,
     start_sync_scheduler, stop_sync_scheduler, sync_scheduler_status, DEFAULT_SYNC_INTERVAL_SECS,
     DEFAULT_SYNC_MAX_BACKOFF_SECS, DEFAULT_SYNC_TICK_SECS,
 };
+// STABLE
 pub use synthesis::{
     admit_approved_document, configure_synthesis_engine, list_approved_documents,
     list_recent_syntheses, list_synthesis_versions, replace_approved_document, replay_synthesis,
@@ -137,8 +158,10 @@ pub use synthesis::{
     MAX_APPROVED_DOCUMENT_METADATA_BYTES, MAX_SYNTHESIS_OUTPUT_BYTES,
     MAX_SYNTHESIS_VERSIONS_PER_WINDOW, PER_SCOPE_COOLDOWN_SECS, WINDOW_RETENTION_CAP_PER_SCOPE,
 };
+// STABLE
 #[cfg(feature = "tracing-subscriber")]
 pub use tracing_init::try_init_tracing;
+// STABLE
 pub use types::{
     ApprovedDocumentSummary, ConnectorHealthRecord, ConnectorKindTag, ConnectorStatus,
     EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, MemoryFilter, MemoryRecord,
@@ -147,6 +170,7 @@ pub use types::{
     SynthesisTierKind, SynthesisTrigger, SynthesisVersionSummary, WebhookServerHandle,
     WebhookServerSummary,
 };
+// STABLE
 pub use webhook::{
     list_webhook_servers, register_webhook_dispatch, start_webhook_server, stop_webhook_server,
     unregister_webhook_dispatch,

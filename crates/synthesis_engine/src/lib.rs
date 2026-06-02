@@ -66,30 +66,46 @@
 #[cfg(all(feature = "test-support", not(debug_assertions)))]
 compile_error!("test-support must not be enabled in release builds");
 
+// UNSTABLE — internal batcher; API may change.
+#[doc(hidden)]
 pub mod batcher;
+// STABLE
 #[cfg(feature = "http-client")]
 pub mod blocking_client;
+// STABLE
 pub mod engine;
+// STABLE
 pub mod error;
+// STABLE
 pub mod managed_endpoint;
+// UNSTABLE — internal rate limiter; API may change.
+#[doc(hidden)]
 pub mod rate_limiter;
+// STABLE
 pub mod stub;
+// STABLE
 pub mod tee_worker;
 
 // Production `TeeRuntime` for AWS Nitro Enclaves. Only compiled
 // when the `nitro-tee` feature is on — `mod` declaration sits
 // behind the cfg so default builds neither try to link the nsm-
 // api kernel-driver shim nor pull in the CBOR codec.
+// STABLE
 #[cfg(feature = "nitro-tee")]
 pub mod tee_runtime_nitro;
 
+// STABLE
 #[cfg(feature = "http-client")]
 pub use blocking_client::BlockingHttpClientAdapter;
+// STABLE
 pub use engine::{DomainSynthesisResult, SynthesisEngine, TenantSynthesisResult};
+// STABLE
 pub use error::{EngineError, Result};
+// STABLE
 pub use managed_endpoint::{
     EndpointConfig, EndpointError, HttpClient, HttpManagedEndpointSynthesizer, InputObjectRef,
     MockHttpClient, SynthesisRequest, SynthesisResponse, DEFAULT_DOMAIN_PROMPT, DEFAULT_MAX_TOKENS,
     DEFAULT_TENANT_PROMPT, DEFAULT_TIMEOUT,
 };
+// STABLE
 pub use stub::ManagedEndpointSynthesizer;

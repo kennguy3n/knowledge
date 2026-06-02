@@ -23,39 +23,68 @@
 
 #![deny(missing_docs)]
 
+// STABLE
 pub mod channel_memory;
+// STABLE
 pub mod decay;
+// STABLE
 pub mod domain_memory;
+// UNSTABLE — episodic memory; API still evolving.
 pub mod episodic;
+// STABLE
 pub mod error;
+// UNSTABLE — internal metrics; signatures may change.
+#[doc(hidden)]
 pub mod metrics;
+// STABLE
 pub mod object;
+// STABLE
 pub mod privacy_strip;
+// STABLE
 pub mod retention;
+// STABLE
 pub mod state;
+// STABLE
 pub mod tenant_memory;
+// UNSTABLE — internal state-machine transitions; not part of consumer API.
+#[doc(hidden)]
 pub mod transitions;
+// STABLE
 pub mod user_memory;
+// STABLE
 pub mod working_memory;
 
+// STABLE
 pub use channel_memory::{
     ActiveTask, ChannelDecayReport, ChannelMemoryObject, Decision, OpenQuestion,
     DEFAULT_COMPLETED_TASK_TTL_DAYS, DEFAULT_RESOLVED_QUESTION_TTL_DAYS,
 };
+// STABLE
 pub use decay::{decay_sweep, DecaySweepReport};
+// STABLE
 pub use domain_memory::{
     Dependency, DomainDecayReport, DomainMemoryObject, Procedure, Risk, Workstream,
     DEFAULT_COMPLETED_WORKSTREAM_TTL_DAYS, DEFAULT_RESOLVED_RISK_TTL_DAYS,
 };
+// STABLE
 pub use error::{MemoryError, Result};
+// STABLE
 pub use object::{MemoryObject, SensitivityClass};
+// STABLE
 pub use privacy_strip::{ComputeLocation, PrivacyStrip, PrivacyStripBuilder, SynthesisOutput};
+// STABLE
 pub use retention::{compute_retention_score, RetentionScore, RetentionWeights};
+// STABLE
 pub use state::MemoryState;
+// STABLE
 pub use tenant_memory::{
     ApprovedDocumentRef, CanonicalPolicy, ProductTaxonomyEntry, StableOrgKnowledge,
     TenantMemoryError, TenantMemoryObject,
 };
+// UNSTABLE — internal state-machine transitions; not part of consumer API.
+#[doc(hidden)]
 pub use transitions::MemoryStateMachine;
+// STABLE
 pub use user_memory::{MemoryFilter, UserMemoryObject};
+// STABLE
 pub use working_memory::{WorkingMemory, WorkingMemoryEntry};

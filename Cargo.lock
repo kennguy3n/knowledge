@@ -1726,6 +1726,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "concept_graph",
+ "connector_framework",
  "criterion",
  "crypto",
  "evidence_store",

@@ -39,6 +39,7 @@ permission_service = { path = "../permission_service" }
 sync_engine = { path = "../sync_engine" }
 synthesis_pipeline = { path = "../synthesis_pipeline", features = ["test-support"] }
 chrono = { workspace = true }
+connector_framework = { path = "../connector_framework" }
 # Criterion drives the multi-scope load bench under `benches/`. The
 # workspace dependency carries the shared `html_reports` feature so
 # the bench's `target/criterion/report/index.html` artefact is

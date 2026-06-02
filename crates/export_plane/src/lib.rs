@@ -24,23 +24,33 @@
 
 #![deny(missing_docs)]
 
+// STABLE
 pub mod approval;
+// STABLE
 pub mod controls;
+// STABLE
 pub mod policy;
+// STABLE
 pub mod profile;
+// STABLE
 pub mod simulator;
 
+// STABLE
 pub use approval::{ApprovalError, ConceptApprovalWorkflow};
+// STABLE
 pub use controls::{
     ConceptExportControl, ExportControlError, ExportControlRegistry, RedactionLevel,
     SummaryExportControl, WorkflowExportControl,
 };
+// STABLE
 pub use policy::{
     ExportDecision, ExportPolicy, ExportRejection, ExportRejectionReason, ExportViewError,
     ExportViewRequest, PolicyEngine,
 };
+// STABLE
 pub use profile::{
     ApprovedConcept, ApprovedSummary, EvidencePack, ExportConstraint, ExportView,
     ExportViewContent, PortableConceptProfile, ReasoningRef,
 };
+// STABLE
 pub use simulator::{PolicySimulator, SimulationResult};

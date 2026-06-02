@@ -43,22 +43,40 @@
 
 #![deny(missing_docs)]
 
+// STABLE
 pub mod confluence;
+// STABLE
 pub mod email;
+// STABLE
 pub mod figma;
+// STABLE
 pub mod google_drive;
+// STABLE
 pub mod hubspot;
+// STABLE
 pub mod jira;
+// STABLE
 pub mod notion;
+// STABLE
 pub mod onedrive;
+// STABLE
 pub mod slack;
 
+// STABLE
 pub use confluence::ConfluenceConnector;
+// STABLE
 pub use email::EmailConnector;
+// STABLE
 pub use figma::FigmaConnector;
+// STABLE
 pub use google_drive::GoogleDriveConnector;
+// STABLE
 pub use hubspot::HubSpotConnector;
+// STABLE
 pub use jira::JiraConnector;
+// STABLE
 pub use notion::NotionConnector;
+// STABLE
 pub use onedrive::OneDriveConnector;
+// STABLE
 pub use slack::SlackConnector;

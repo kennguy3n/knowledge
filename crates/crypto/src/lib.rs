@@ -77,43 +77,66 @@
 #[cfg(all(feature = "test-support", not(debug_assertions)))]
 compile_error!("test-support must not be enabled in release builds");
 
+// STABLE
 pub mod aead;
+// UNSTABLE — TEE attestation surface; API may change.
 pub mod attestation;
+// STABLE
 pub mod errors;
+// STABLE
 pub mod forgetting;
+// STABLE
 pub mod hash;
+// UNSTABLE — internal enforcement helper; not part of consumer API.
+#[doc(hidden)]
 pub mod hybrid_enforcement;
+// STABLE
 pub mod hybrid_kem;
+// STABLE
 pub mod kdf;
+// STABLE
 pub mod kem;
+// STABLE
 pub mod key_storage;
+// UNSTABLE — MLS keying; API may change.
 pub mod mls;
+// STABLE
 pub mod provenance;
+// STABLE
 pub mod signer_backend;
+// STABLE
 pub mod sphincs;
 
+// STABLE
 pub use aead::{
     decrypt_aead, encrypt_aead, AeadCiphertext, AeadKey, AeadNonce, AEAD_KEY_LEN, AEAD_NONCE_LEN,
 };
+// STABLE
 pub use errors::CryptoError;
 #[cfg(any(test, feature = "test-support"))]
 pub use forgetting::DeterministicEpochKeySource;
+// STABLE
 pub use hash::{content_hash, ContentHash, CONTENT_HASH_LEN};
+// STABLE
 pub use hybrid_kem::{
     hybrid_kem_decap, hybrid_kem_decap_with_backend, hybrid_kem_encap,
     hybrid_kem_encap_with_backend, hybrid_keypair, hybrid_keypair_with_backend, HybridCiphertext,
     HybridPublicKey, HybridSecretKey, HybridSharedSecret,
 };
+// STABLE
 pub use kdf::{derive_key, DerivedKey, MasterKey, MASTER_KEY_LEN};
 #[cfg(any(test, feature = "test-support"))]
 pub use kem::StubKemBackend;
+// STABLE
 pub use kem::{
     KemBackend, KemCiphertext, KemPublicKey, KemSecretKey, KemSharedSecret, MlKem768Backend,
     KEM_CIPHERTEXT_LEN, KEM_PUBLIC_KEY_LEN, KEM_SECRET_KEY_LEN, KEM_SHARED_SECRET_LEN,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use key_storage::InMemoryKeyStorage;
+// STABLE
 pub use key_storage::KeyStorage;
+// STABLE
 pub use provenance::{
     AgentKind, EvidenceRef, ProvenanceAgent, ProvenanceBundle, ProvenanceSignature,
     ProvenanceSigner, SignedBundle, SynthesisActivity,

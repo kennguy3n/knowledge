@@ -56,34 +56,70 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(missing_docs)]
 
+// UNSTABLE — internal bigram tokeniser; not part of consumer API.
+#[doc(hidden)]
 pub mod bigram;
+// UNSTABLE — internal classifier plumbing; not part of consumer API.
+#[doc(hidden)]
 pub mod classifier;
+// UNSTABLE — internal embedding routing; not part of consumer API.
+#[doc(hidden)]
 pub mod embedding_routing;
+// STABLE
 pub mod embeddings;
+// STABLE
 pub mod error;
+// UNSTABLE — internal FTS stopword lists.
+#[doc(hidden)]
 pub mod fts_stopwords;
+// UNSTABLE — internal FTS telemetry.
+#[doc(hidden)]
 pub mod fts_telemetry;
+// UNSTABLE — internal FTS weight tuning.
+#[doc(hidden)]
 pub mod fts_weights;
+// STABLE
 pub mod ids;
+// STABLE
 pub mod importance;
+// STABLE
 pub mod retrieval;
+// STABLE
 pub mod routing;
+// UNSTABLE — internal schema migrations; not part of consumer API.
+#[doc(hidden)]
 pub mod schema;
+// UNSTABLE — internal Unicode script detection.
+#[doc(hidden)]
 pub mod script;
+// STABLE
 pub mod store;
+// UNSTABLE — internal vector telemetry.
+#[doc(hidden)]
 pub mod vector_telemetry;
 
+// STABLE
 pub use crypto::{ContentHash, MasterKey, MASTER_KEY_LEN};
+// STABLE
 pub use error::{EvidenceError, Result};
+// UNSTABLE — internal telemetry; signatures may change.
+#[doc(hidden)]
 pub use fts_telemetry::{snapshot as fts_telemetry_snapshot, FtsTelemetrySnapshot};
+// STABLE
 pub use ids::{EvidenceId, ScopeId};
+// STABLE
 pub use importance::{ImportanceClass, ImportanceClassifier, Lexicon, LexiconClassifier};
+// STABLE
 pub use retrieval::{HybridRetriever, HybridWeights, RetrievalResult};
+// STABLE
 pub use routing::{
     route_storage, route_storage_with_threshold, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES,
 };
+// STABLE
 pub use store::{
     ApprovedDocumentPayloadMeta, EvidenceRow, EvidenceStore, EvidenceStoreConfig, IngestResult,
     RingBufferEntry, DEFAULT_RING_BUFFER_MAX_BYTES,
 };
+// UNSTABLE — internal telemetry; signatures may change.
+#[doc(hidden)]
 pub use vector_telemetry::{snapshot as vector_telemetry_snapshot, VectorTelemetrySnapshot};
