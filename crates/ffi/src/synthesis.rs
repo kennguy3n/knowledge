@@ -433,8 +433,7 @@ pub fn list_recent_syntheses(
     })
 }
 
-/// Re-run server-side synthesis on an existing `Complete` window
-/// .
+/// Re-run server-side synthesis on an existing `Complete` window.
 ///
 /// The same hierarchy gather, engine dispatch, and crash-safe
 /// apply pipeline that powers
@@ -3383,8 +3382,8 @@ mod tests {
         teardown(handle);
     }
 
-    /// Regression test for earlier review findings (an earlier review on
-    /// commit 6456b6f): the `SynthesisWindowManager` is persisted
+    /// Regression test for an earlier review finding on
+    /// commit 6456b6f: the `SynthesisWindowManager` is persisted
     /// under a single sentinel scope, so its on-disk blob contains
     /// windows for every scope mixed together. When
     /// `forget_scope_state`'s post-prune `flush_synthesis_windows`

@@ -448,8 +448,8 @@ pub fn js_list_recent_syntheses(handle: BigInt, scope_id: String) -> Result<serd
     })
 }
 
-/// Re-run synthesis on an existing `Complete` window (
-///). The window transitions back through `Complete →
+/// Re-run synthesis on an existing `Complete` window. The
+/// window transitions back through `Complete →
 /// Pending → InProgress → Complete` (or `→ Failed` on engine
 /// error) on the same `(scope, window_id)` pair; the previous
 /// synthesis object is archived to the history table at its

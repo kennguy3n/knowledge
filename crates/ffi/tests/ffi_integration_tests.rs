@@ -971,7 +971,7 @@ fn forget_by_evidence_id_also_purges_connectors_bound_to_the_resolved_scope() {
 /// `ConnectorError::Auth("…auth_config_json.authorization_code is
 /// required")` if the key is missing.
 ///
-/// This pins the round-4 an earlier review bug on PR #54: the FFI
+/// This pins an earlier review bug on PR #54: the FFI
 /// previously spliced the code under `"auth_code"`, which would
 /// cause every host `authenticate_connector` call to surface
 /// `auth_config_json.authorization_code is required` even when the

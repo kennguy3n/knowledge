@@ -132,7 +132,7 @@ pub enum MatchStrategy {
     /// `فمتى` = `ف`+`متى`, `بأي` = `ب`+`أي`,
     /// `لمن` = `ل`+`من`, `واكتب` = `و`+`اكتب`) are recovered.
     /// `ك` ("like/as") and `س` (future marker) were initially
-    /// in the peel set but  surfaced
+    /// in the peel set but later removed after they surfaced
     /// a false-positive on short interrogatives (`كمن` ➜ `من`,
     /// `سما` ➜ `ما`) AND a worse false-positive on the imperative
     /// path (`سأرسل` "I will send" ➜ `أرسل` imperative table
@@ -182,8 +182,8 @@ pub enum MatchStrategy {
     /// classes — interrogatives almost never stack more than one
     /// proclitic on top of `ال`).
     ///
-    /// **Why not peel `ك` "like/as" and `س` "will" (a follow-up
-    /// removal)?**  noted that both
+    /// **Why not peel `ك` "like/as" and `س` "will" (later removed
+    /// from the peel set)?** A follow-up precision audit noted that both
     /// could collide with short interrogatives (`كمن` peels `ك`
     /// to surface `من` "who"; `سما` peels `س` to surface `ما`
     /// "what"), and an internal audit then surfaced a far more
@@ -295,11 +295,12 @@ impl MatchStrategy {
     /// [`LexiconRegistry::interrogatives_for`] to expose the
     /// per-language interrogative matcher through the unified
     /// [`table_matches`] entry point.
-    /// an earlier review: now maps
+    ///
+    /// The mapping also routes
     /// [`InterrogativeMatch::FirstBigram`] (Vietnamese) to
     /// [`MatchStrategy::FirstBigram`] so the Vietnamese
     /// bigram interrogatives (`tại sao`, `khi nào`, `vì sao`)
-    /// reach the matcher. : now maps
+    /// reach the matcher, and routes
     /// [`InterrogativeMatch::FirstTokenWithHebrewClitics`]
     /// (Hebrew) to the matching registry strategy so the
     /// Hebrew clitic-stacked interrogatives (`ומתי`, `שמה`,
@@ -352,8 +353,6 @@ pub struct LanguageLexicon {
     /// arm) must be written with a single ASCII space
     /// separating the two alphabetic tokens; see
     /// [`first_alphabetic_bigram`](crate::lexicon::first_alphabetic_bigram).
-    /// See earlier review — the
-    /// strategy is now documented to match the code.
     pub task_imperative_verbs: &'static [&'static str],
     /// Strategy for matching [`Self::task_imperative_verbs`].
     ///
@@ -426,8 +425,8 @@ impl LanguageLexicon {
             //   Returning `None` here makes that contract
             //   explicit at the type level so a future caller
             //   can't accidentally route stop-words through
-            //   the wrong matcher. See an earlier review
-            //   earlier review.
+            //   the wrong matcher (per an earlier review's
+            //   guidance).
             // * `Interrogative`: served by
             //   [`LexiconRegistry::interrogatives_for`] —
             //   the interrogative tables live in
@@ -569,8 +568,7 @@ impl LexiconRegistry {
 /// We strip rather than NFKD-decompose because NFKD would also
 /// touch unrelated codepoints (e.g. fullwidth Latin, CJK
 /// compatibility ideographs) — strip-by-range is targeted and
-/// fully deterministic. See an earlier review
-/// (a follow-up deferred to ).
+/// fully deterministic.
 pub fn is_arabic_combining_or_tatweel(c: char) -> bool {
     matches!(c,
         '\u{0610}'..='\u{061A}'
@@ -839,8 +837,7 @@ pub fn table_matches(table: &[&str], normalised: &str, strategy: MatchStrategy) 
 /// MSA news / docs / formal IM register that the substrate's
 /// lexicons target, *minus* the two surfaces (`ك`, `س`)
 /// excluded for precision reasons documented on
-/// [`MatchStrategy::FirstTokenWithArabicClitics`] (a follow-up
-/// ).
+/// [`MatchStrategy::FirstTokenWithArabicClitics`].
 ///
 /// Three additional Arabic proclitics from the linguistic
 /// inventory are **deliberately omitted** from this set, each
@@ -1608,8 +1605,7 @@ const RU_LEXICON: LanguageLexicon = LanguageLexicon {
 /// recover the prefixed verb form without these false
 /// positives).
 ///
-/// **A later review** (an earlier review
-/// Earlier review: the proclitic peel set was reduced from
+/// An earlier review reduced the proclitic peel set from
 /// 8 to 6 entries after `س` (1st-person future marker) was
 /// shown to falsely surface imperatives on plain declarative
 /// future-tense statements (`سأرسل البريد غدا` "I will send
@@ -1672,8 +1668,9 @@ const RU_LEXICON: LanguageLexicon = LanguageLexicon {
 // that don't sit at the first token. Each class gets the strategy
 // that matches its lexical and positional properties. A future
 // contributor who reads this should NOT attempt to harmonise the
-// strategies — see an earlier review #3331684703
-// and the test `arabic_lexicon_strategy_per_class_is_intentional`.
+// strategies — see the test
+// `arabic_lexicon_strategy_per_class_is_intentional` for the
+// invariant this design pins down.
 const AR_LEXICON: LanguageLexicon = LanguageLexicon {
     primary_tag: "ar",
     display_name: "Arabic",
@@ -1716,7 +1713,8 @@ const AR_LEXICON: LanguageLexicon = LanguageLexicon {
 
 /// Hebrew (`he`).
 ///
-/// Modern Hebrew (Israel) — the lexicon target for .
+/// Modern Hebrew (Israel) — the lexicon target for the
+/// Hebrew language.
 /// Hebrew is a right-to-left abjad: consonants are written as
 /// independent letters, vowels are typically omitted in everyday
 /// IM / news / business text (niqqud-less spelling), and short
@@ -1904,11 +1902,11 @@ const VI_LEXICON: LanguageLexicon = LanguageLexicon {
 /// Indonesian (`id`).
 ///
 /// Indonesian and Malay share most vocabulary; the `id` and
-/// `ms` lexicons are identical at this stage of
-/// because the decision / task lexicons we ship don't yet
-/// differentiate the few register-specific entries between
-/// the two ( SLM-assisted extraction will handle the
-/// register difference). Task class includes `mohon` /
+/// `ms` lexicons are identical at this stage because the
+/// decision / task lexicons we ship don't yet differentiate
+/// the few register-specific entries between the two (later
+/// SLM-assisted extraction will handle the register
+/// difference). Task class includes `mohon` /
 /// `tolong` ("please") and `silakan` (formal "please go
 /// ahead"). Decision verbs are mostly past-participle prefix
 /// `di-` forms (`diputuskan`, `disetujui`, `disahkan`).
@@ -2347,11 +2345,10 @@ const LO_LEXICON: LanguageLexicon = LanguageLexicon {
 ///   keyword bundle per language for the substrate's
 ///   built-in decision / task / imperative pipelines.
 ///
-/// 20 languages ship as of — the 12-language
-/// target from the outline
-/// (en/ja/ko/zh/es/fr/de/pt/ar/vi/th/id) plus the four ///
-/// 1.4 add-ons (`it`, `ru`, `hi`, `ms`) that already have
-/// interrogative tables, plus the four add-ons
+/// 20 languages ship today — the 12-language
+/// base target (en/ja/ko/zh/es/fr/de/pt/ar/vi/th/id) plus four
+/// add-ons (`it`, `ru`, `hi`, `ms`) that already have
+/// interrogative tables, plus four script-coverage add-ons
 /// (`bo`, `km`, `my`, `lo`) that close the
 /// FTS5-tokeniser-blind / no-whitespace-word-boundary script
 /// gap. The interrogative-table-vs-LexiconRegistry coverage
@@ -2546,7 +2543,7 @@ mod tests {
         // main payload: each of the 4 single-character
         // productive proclitic prefixes (`و`, `ف`, `ب`, `ل`)
         // recovers the bare interrogative under one peel. The
-        // a follow-up removal of `ك` and `س` is exercised by the
+        // later removal of `ك` and `س` is exercised by the
         // dedicated negative-assertion test
         // `table_matches_arabic_clitic_strip_drops_unproductive_k_and_s_prefixes`.
         let table = &["كيف", "متى", "أي", "من", "أين", "ما"];
@@ -2559,16 +2556,16 @@ mod tests {
             assert!(
                 table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics),
                 "Arabic proclitic-prefixed interrogative in {sentence:?} (prefix {prefix:?}, \
-                 residual {residual:?}) must match via the  peel"
+                 residual {residual:?}) must match via the proclitic peel"
             );
         }
     }
 
     #[test]
     fn table_matches_arabic_clitic_strip_drops_unproductive_k_and_s_prefixes() {
-        // a follow-up precision guard (an earlier review
-        // Earlier review: `ك` and `س` were initially in the
-        // peel set but caused false positives on both the
+        // Precision guard from an earlier review: `ك` and `س`
+        // were initially in the peel set but caused false
+        // positives on both the
         // interrogative path and (more dangerously) the
         // imperative path. They are now deliberately omitted
         // from [`ARABIC_PROCLITIC_PREFIXES`]; this test pins
@@ -2592,7 +2589,7 @@ mod tests {
                     sentence,
                     MatchStrategy::FirstTokenWithArabicClitics
                 ),
-                "a follow-up precision guard: {sentence:?} must NOT match the interrogative \
+                "precision guard: {sentence:?} must NOT match the interrogative \
                  table — the peel set no longer includes `ك` / `س`"
             );
         }
@@ -2616,7 +2613,7 @@ mod tests {
                     sentence,
                     MatchStrategy::FirstTokenWithArabicClitics
                 ),
-                "a follow-up precision guard: {sentence:?} (1st-person future, NOT \
+                "precision guard: {sentence:?} (1st-person future, NOT \
                  imperative) must NOT match the imperative table — the peel set no \
                  longer includes `س`"
             );
@@ -2878,8 +2875,8 @@ mod tests {
 
     #[test]
     fn arabic_clitic_strip_handles_nfd_hamza_alif_via_dual_prefix_entries() {
-        // a follow-up (an earlier review #3331658913): the
-        // `normalize_for_lookup` pipeline strips Arabic combining
+        // Regression guard from an earlier review:
+        // `normalize_for_lookup` strips Arabic combining
         // marks (including U+0654 ARABIC HAMZA ABOVE) BEFORE NFC
         // composition, so an NFD-encoded `أل` (U+0627 ALEF +
         // U+0654 HAMZA ABOVE + U+0644 LAM) collapses to bare `ال`
@@ -3445,19 +3442,20 @@ mod tests {
 
     #[test]
     fn registry_covers_every_interrogative_language() {
-        // Every language in 's interrogative table
+        // Every language in the interrogative table
         // must ALSO appear in the registry, so the
         // per-sentence keyword matcher never finds itself
         // looking up decision/task keywords for a language it
         // can detect interrogatives for. This is the structural
-        // invariant of .
+        // invariant the registry contract relies on.
         use crate::interrogatives::SUPPORTED_PRIMARY_TAGS;
         let reg = default_registry();
         for tag in SUPPORTED_PRIMARY_TAGS {
             assert!(
                 reg.lexicon_for(tag).is_some(),
-                "supports interrogatives for {tag} but \
-                  has no lexicon — add one to BUILTIN_LEXICONS"
+                "interrogative table supports {tag} but the lexicon \
+                 registry has no entry for it — add one to \
+                 BUILTIN_LEXICONS"
             );
         }
     }
@@ -3774,8 +3772,8 @@ mod tests {
 
     #[test]
     fn arabic_lexicon_strategy_per_class_is_intentional() {
-        // a follow-up (an earlier review #3331684703): the
-        // per-class strategy asymmetry in AR_LEXICON is the
+        // Regression guard from an earlier review:
+        // the per-class strategy asymmetry in AR_LEXICON is the
         // architectural design, not an oversight. This test
         // pins each strategy at runtime so a contributor who
         // tries to "harmonise" them — e.g. push Substring up to
@@ -4082,7 +4080,7 @@ mod tests {
                     !declarative.contains(entry),
                     "Lao interrogative entry {entry:?} substring-matches \
                      a Lao declarative {declarative:?} — this indicates \
-                     the  deliberate omission of bare `ບໍ` has \
+                     the deliberate omission of bare `ບໍ` has \
                      been undone without solving the negation/business-noun \
                      collision documented in interrogatives.rs.",
                 );

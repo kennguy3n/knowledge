@@ -137,7 +137,7 @@ pub enum FfiError {
     },
 
     /// A rate-shaping limiter at the FFI boundary rejected the
-    /// call . Hosts SHOULD wait `retry_after_ms`
+    /// call. Hosts SHOULD wait `retry_after_ms`
     /// and retry the same call — the rejection is purely
     /// rate-driven, the request itself is valid.
     ///

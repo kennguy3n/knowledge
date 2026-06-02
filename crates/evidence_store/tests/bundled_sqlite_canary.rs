@@ -72,7 +72,7 @@ fn bundled_sqlite_version_matches_pin() {
          changed which SQLite the substrate ships with. Before updating the \
          literal in `bundled_sqlite_canary.rs`, follow the steps in the \
          module-level docs of this file: re-run all `fts5_*` tests, re-run \
-         the  cross-lingual recall benchmark, and audit the \
+         the cross-lingual recall benchmark, and audit the \
          upstream SQLite release notes for unicode61 / trigram tokeniser \
          changes between {EXPECTED_SQLITE_VERSION} and {actual}."
     );

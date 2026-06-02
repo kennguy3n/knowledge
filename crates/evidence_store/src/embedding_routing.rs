@@ -275,10 +275,10 @@ mod tests {
 
     #[test]
     fn multilingual_text_routes_to_embed() {
-        // Cross-script sanity — every script family
-        // / 1.6 / 1.7 added a lexicon for should admit to the
-        // embedding lane. This pins the "XLM-R is multilingual"
-        // contract from the router's side.
+        // Cross-script sanity — every script family the lexicon
+        // registry covers should admit to the embedding lane.
+        // This pins the "XLM-R is multilingual" contract from
+        // the router's side.
         for input in [
             "The quick brown fox jumps over the lazy dog",
             "L'eau de la mer est salée",

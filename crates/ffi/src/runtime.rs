@@ -509,9 +509,8 @@ pub struct FfiRuntime {
     pub(crate) synthesis_single_tenant: bool,
 
     /// Global token-bucket rate limiter gating
-    /// [`crate::synthesis::trigger_server_synthesis`]
-    /// . Created at `open_store` with the
-    /// defaults from
+    /// [`crate::synthesis::trigger_server_synthesis`].
+    /// Created at `open_store` with the defaults from
     /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY`] and
     /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC`];
     /// reconfigured by

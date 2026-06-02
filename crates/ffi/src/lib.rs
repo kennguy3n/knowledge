@@ -2824,7 +2824,7 @@ mod tests {
     /// `evidence_fts_cjk` rows must survive the tombstone-only
     /// pre-reopen state (pre-condition), and both must be empty
     /// after the next `open_store` runs the re-purge. Closes the
-    /// coverage gap flagged by a follow-up .
+    /// coverage gap flagged by an earlier review.
     #[test]
     fn open_store_repurges_evidence_fts_cjk_for_persisted_tombstones() {
         // The body intentionally contains a long CJK substring so
@@ -2965,7 +2965,7 @@ mod tests {
         // All THREE FTS5 shadow tables must be empty for the
         // forgotten scope after the re-purge. Asserting on the
         // bigram table is what's new here vs the dual-table
-        // a follow-up sibling test — the three-table atomic transaction
+        // sibling test — the three-table atomic transaction
         // invariant / schema v15 is what
         // this regression guards.
         runtime::with_runtime(h2, |rt| {
@@ -3012,7 +3012,7 @@ mod tests {
             assert_eq!(
                 trigram_count, 0,
                 "open_store must re-purge evidence_fts_cjk rows for every persisted tombstone \
-                 (a follow-up  regression guard)"
+                 (regression guard from an earlier review)"
             );
             assert_eq!(
                 bigram_count, 0,

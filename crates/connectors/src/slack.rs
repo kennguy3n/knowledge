@@ -1636,7 +1636,7 @@ mod tests {
         assert_eq!(dt.timestamp_subsec_micros(), 123);
     }
 
-    // ---- channel-list cache (an earlier review) ----
+    // ---- channel-list cache ----
     //
     // Slack's API has no "channels with activity since X" filter, so
     // every `incremental_sync` would otherwise re-walk

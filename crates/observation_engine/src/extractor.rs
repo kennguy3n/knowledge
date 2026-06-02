@@ -923,9 +923,9 @@ fn fold_typographic_apostrophes(text: &str) -> Cow<'_, str> {
 /// like `กรุงเทพมหานครเป็นเมืองหลวงของประเทศไทย`), then Lao /
 /// Khmer / Myanmar, then Tibetan and Myanmar Extended-A / -B.
 /// A later revision closed the asymmetry on Khmer Symbols
-/// (U+19E0..=U+19FF) inside `is_khmer_codepoint`. See Devin
-/// Review findings an earlier review finding and
-/// earlier review.
+/// (U+19E0..=U+19FF) inside `is_khmer_codepoint`. See the
+/// matching earlier-review findings for the script-coverage
+/// extension history.
 fn is_sentence_shaped_for_fact(sentence: &str) -> bool {
     if sentence.contains(' ') {
         return true;
@@ -1241,8 +1241,7 @@ impl LexiconExtractor {
     /// Routing both trait methods through this private helper
     /// instead of having one trait method call the other avoids
     /// the mutual-delegation infinite-recursion trap documented on
-    /// the [`ObservationExtractor`] trait. See an earlier review
-    /// finding earlier review.
+    /// the [`ObservationExtractor`] trait.
     fn do_extract(
         &self,
         text: &str,
@@ -1264,7 +1263,7 @@ impl LexiconExtractor {
         // re-run detection here — a `None` hint means "detection
         // already ran and produced no language", not "detection has
         // not been attempted". This avoids a redundant trigram pass
-        // on every call. See earlier review.
+        // on every call.
         let dominant_language = dominant_language.cloned();
 
         // Entity extraction over the entire input.
@@ -1283,7 +1282,7 @@ impl LexiconExtractor {
         // unconfigured languages, and falls back to the inline
         // list when the extractor was constructed via the legacy
         // [`LexiconExtractor::new`] path. Comparison is Unicode-
-        // lowercase aware ( collocation closure) so
+        // lowercase aware (closing the collocation gap) so
         // Cyrillic and Vietnamese stop-words match their
         // capitalised forms. The capitalised-token entity
         // heuristic is itself only meaningful for case-bearing
@@ -1337,7 +1336,7 @@ impl LexiconExtractor {
         }
 
         // Sentence-level extraction for tasks / decisions / questions
-        // / facts. : each sentence is independently
+        // / facts: each sentence is independently
         // language-detected so a bilingual chat message
         // (`"Hello. 안녕하세요. Let's ship Friday."`) gets per-sentence
         // tags. When whatlang refuses to classify a short sentence,
@@ -1486,7 +1485,7 @@ impl ObservationExtractor for LexiconExtractor {
         // This consolidates the whole-input detection to a single
         // call site so future implementors of
         // [`ObservationExtractor`] don't accidentally duplicate the
-        // pass. See earlier review.
+        // pass.
         let dominant_language = detect_language(text).map(|d| d.tag);
         self.do_extract(text, scope, dominant_language.as_ref())
     }
@@ -1822,7 +1821,7 @@ mod tests {
 
     #[test]
     fn looks_like_question_handles_nfd_decomposed_input() {
-        // : NFD-decomposed input (e.g.
+        // Regression coverage: NFD-decomposed input (e.g.
         // accented Spanish text coming from a macOS file system or
         // some IME pipelines) decomposes `é` into `e + U+0301`
         // (COMBINING ACUTE ACCENT). The FirstToken tokeniser
@@ -2155,7 +2154,7 @@ mod tests {
 
     #[test]
     fn is_lao_khmer_myanmar_codepoint_classifies_correctly() {
-        // : widen
+        // Regression coverage: widen
         // no-whitespace-script fact-shape coverage from CJK +
         // Thai to also include the three other major Brahmic-
         // family scripts present in whatlang's detection set
@@ -2411,7 +2410,7 @@ mod tests {
 
     #[test]
     fn extract_with_dominant_language_hint_is_honoured_for_entity_class() {
-        // : pipeline + extractor used
+        // Regression coverage: the pipeline + extractor used
         // to detect the dominant language twice on the same
         // text. The new `extract_with_dominant_language` hint
         // skips the extractor's whole-input detect_language when
@@ -2443,7 +2442,7 @@ mod tests {
 
     #[test]
     fn extract_runs_whole_input_detection_once_at_call_site() {
-        // : the legacy `extract()`
+        // Regression coverage: the legacy `extract()`
         // entry point is the only caller that has *not* already
         // run `detect_language` on the whole input, so it is
         // responsible for the single whole-input detection pass.
@@ -2472,7 +2471,7 @@ mod tests {
 
     #[test]
     fn extract_with_dominant_language_treats_none_hint_as_authoritative() {
-        // : callers that have already
+        // Regression coverage: callers that have already
         // attempted detection and got `None` (text not classifiable,
         // not reliable, too short) must be able to communicate that
         // to the extractor without the extractor redundantly
@@ -2594,9 +2593,8 @@ mod tests {
 
     #[test]
     fn vietnamese_task_imperative_matches_through_first_bigram() {
-        // closes deferred an earlier review finding /
-        // an earlier review finding: multi-word collocations need
-        // FirstBigram-strategy matching. Vietnamese
+        // Earlier reviews flagged that multi-word collocations
+        // need FirstBigram-strategy matching. Vietnamese
         // `triển khai` ("deploy", "roll out") is a single
         // semantic verb spelt as two tokens — FirstToken would
         // miss it. FirstBigram tries first-token first
@@ -2626,8 +2624,8 @@ mod tests {
 
     #[test]
     fn arabic_decision_keyword_matches_after_tashkeel_strip() {
-        // closes deferred an earlier review finding:
-        // Arabic combining marks (tashkeel) like fatha / kasra
+        // Closes an earlier-review finding: Arabic combining
+        // marks (tashkeel) like fatha / kasra
         // would otherwise split the FirstToken matcher's view
         // of the word boundary because the marks are category
         // Mn (non-alphabetic). The
@@ -2950,8 +2948,8 @@ mod tests {
 
     #[test]
     fn hindi_devanagari_virama_imperatives_match_via_substring() {
-        // an earlier review finding + collocation closure.
-        // Hindi `task_imperative_verbs` containing the Devanagari
+        // Earlier review: Hindi `task_imperative_verbs`
+        // containing the Devanagari
         // virama `U+094D` (Category Mn) — `मर्ज` (merge),
         // `समीक्षा` (review), `प्रकाशित` (publish), `अद्यतन`
         // (update) — are unreachable under the FirstBigram
@@ -2989,8 +2987,8 @@ mod tests {
                 obs.iter()
                     .any(|o| matches!(o.observation_type, ObservationType::Task)),
                 "Hindi imperative containing virama {label:?} must produce a Task \
-                 observation under MatchStrategy::Substring ( + \
-                 an earlier review finding)"
+                 observation under MatchStrategy::Substring \
+                 (per an earlier-review finding)"
             );
         }
     }
@@ -3036,7 +3034,7 @@ mod tests {
             "French Aujourd\u{2019}hui (typographic U+2019) must produce the same \
              entity set as Aujourd'hui (ASCII U+0027) after typographic-apostrophe \
              folding in extract_capitalised_words \
-             ( a follow-up)"
+             (per a follow-up review)"
         );
         assert!(
             entities_typographic.iter().any(|e| e == "Paris"),
@@ -3061,8 +3059,8 @@ mod tests {
         // apostrophes in the INPUT to ASCII before lookup; the
         // lookup table itself must mirror that canonical form
         // or the fold-then-compare path would silently miss.
-        // See `extract_capitalised_words` doc + an earlier review
-        // a follow-up review.
+        // See `extract_capitalised_words` doc and the matching
+        // earlier-review threads for the case-folding contract.
         for lexicon in default_registry().iter() {
             for entry in lexicon.stop_words {
                 for c in entry.chars() {
@@ -3268,7 +3266,7 @@ mod tests {
         // cross-feature interaction: the
         // FirstTokenWithArabicClitics matcher must compose
         // correctly with the tashkeel-strip normalisation path
-        // ( an earlier review finding / ). A
+        // (per an earlier-review finding). A
         // tashkeel-decorated proclitic-prefixed interrogative
         // (`وَكَيْفَ` = `و` + tashkeel-decorated `كيف`) must
         // classify as a question because (a) `normalize_for_lookup`
@@ -3290,9 +3288,9 @@ mod tests {
 
     #[test]
     fn arabic_first_person_future_does_not_emit_task() {
-        // a follow-up precision guard (an earlier review
-        // an earlier review finding), end-to-end: 1st-person future-tense
-        // declaratives that share a verb root with an `أ`-initial
+        // Precision guard from earlier reviews, end-to-end:
+        // 1st-person future-tense declaratives that share a
+        // verb root with an `أ`-initial
         // imperative must NOT emit a Task observation. The future
         // marker `س` is deliberately omitted from the proclitic
         // peel set precisely because peeling `سأرسل` ("I will

@@ -1,7 +1,8 @@
 //! Background sync scheduler FFI surface.
 //!
-//! Per `ARCHITECTURE.md` §4.4 and the open backlog from , the
-//! substrate ships its own in-process scheduler so connectors poll
+//! Per `ARCHITECTURE.md` §4.4 and the open backlog from the
+//! initial connector-framework rollout, the substrate ships its
+//! own in-process scheduler so connectors poll
 //! their upstream providers on a configurable cadence without
 //! requiring the host to drive every [`crate::sync_connector`] call
 //! itself. The scheduler walks the per-runtime

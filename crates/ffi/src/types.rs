@@ -80,7 +80,7 @@ pub struct EvidenceRecord {
     /// Unix epoch (seconds) when the row was ingested.
     pub created_at: i64,
     /// BCP-47 primary language subtag detected on the plaintext
-    /// body at ingest time (schema v13, ). `None` when
+    /// body at ingest time (schema v13). `None` when
     /// the row was ingested via the legacy
     /// `EvidenceStore::ingest()` shim, when the language detector
     /// declined to classify (empty / pure-punctuation / pure-emoji
@@ -207,7 +207,7 @@ pub struct FfiKeypair {
 /// only emits Swift / Kotlin types reachable from `#[uniffi::export]`
 /// functions; deriving `Record` on a type that no exported function
 /// consumes registers metadata that the bindgen quietly drops, which
-/// is the kind of dead contract Devin Review flagged on PR #52
+/// is the kind of dead contract an earlier review flagged on PR #52
 /// (`crates/ffi/src/types.rs:186`). The derive is intentionally
 /// deferred until a `sign(handle, data) -> FfiResult<FfiSignature>` /
 /// `verify(handle, sig, data) -> FfiResult<bool>` FFI pair lands;
@@ -1230,7 +1230,7 @@ mod tests {
     /// Pin the JSON wire format `crates/napi/src/bindings.rs::
     /// js_sync_scheduler_status` documents — every key MUST be the
     /// camelCase form documented in the rustdoc (`isRunning`,
-    /// `startedAtUnix`, …). The bug surfaced by Devin Review round 3
+    /// `startedAtUnix`, …). The bug surfaced by an earlier review
     /// was that the doc promised camelCase but the type derived
     /// `Serialize` without `rename_all`, producing snake_case keys
     /// that would surface as `undefined` when destructured by a JS
@@ -1315,7 +1315,7 @@ mod tests {
         assert_eq!(back, status);
     }
 
-    /// 's `WebhookServerSummary` had the same latent wire
+    /// `WebhookServerSummary` had the same latent wire
     /// format mismatch (doc at `crates/napi/src/bindings.rs::
     /// js_list_webhook_servers` documents camelCase but the type
     /// originally derived `Serialize` without `rename_all`). Pin the
@@ -1369,7 +1369,7 @@ mod tests {
     /// `RefreshReport` is the response envelope for
     /// `crates/napi/src/bindings.rs::js_refresh_connector_token`,
     /// whose rustdoc documents `{ instanceId, refreshed, expiresAt,
-    /// refreshedAt }` (camelCase). Devin Review round 4 flagged the
+    /// refreshedAt }` (camelCase). A later review flagged the
     /// type as still serializing snake_case keys despite the doc
     /// claim; the rename now aligns the wire format with the doc.
     /// Pin the camelCase invariant so future drift between doc and

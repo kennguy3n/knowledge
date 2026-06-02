@@ -177,8 +177,8 @@ pub(crate) struct Metrics {
     /// (diagnostic snapshot read).
     pub(crate) sync_scheduler_status_total: AtomicU64,
     /// Total ticks the scheduler worker thread has completed
-    /// across every scheduler instance the process has ever run
-    ///. Process-singleton sum because per-runtime
+    /// across every scheduler instance the process has ever run.
+    /// Process-singleton sum because per-runtime
     /// counters live inside the per-runtime
     /// [`crate::sync_scheduler::RunningSyncScheduler`] and would
     /// be invisible to a host that polls only `metrics_snapshot`.
@@ -200,7 +200,7 @@ pub(crate) struct Metrics {
     /// tick fired (a host-driven sync was running concurrently).
     /// Distinct from `*_dispatches_failed_total` because the
     /// scheduler never invoked `sync_connector` for these
-    ///.
+    /// instances.
     pub(crate) sync_scheduler_dispatches_skipped_in_progress_total: AtomicU64,
     /// Total webhook dispatches that completed with `200 OK`
     /// across every running server in this process. Tracked as a
@@ -586,16 +586,15 @@ pub struct MetricsSnapshot {
     /// (it is part of the `sync_connector_total` accounting).
     #[serde(default)]
     pub refresh_connector_token_total: u64,
-    /// Total `set_oauth_client_secret_resolver` calls initiated
-    ///. Increments every time a host (re-)registers a
+    /// Total `set_oauth_client_secret_resolver` calls initiated.
+    /// Increments every time a host (re-)registers a
     /// resolver; high frequency indicates the host is treating the
     /// resolver registration as a per-request operation rather
     /// than a once-per-`open_store` lifecycle event — worth
     /// investigating.
     #[serde(default)]
     pub set_oauth_client_secret_resolver_total: u64,
-    /// Total `clear_oauth_client_secret_resolver` calls initiated
-    ///.
+    /// Total `clear_oauth_client_secret_resolver` calls initiated.
     #[serde(default)]
     pub clear_oauth_client_secret_resolver_total: u64,
     /// Total `set_key_storage_resolver` calls initiated. Mirrors
@@ -705,8 +704,7 @@ pub struct MetricsSnapshot {
     /// Total `list_recent_syntheses` calls initiated.
     #[serde(default)]
     pub list_recent_syntheses_total: u64,
-    /// Total `configure_sync_auto_synthesize` calls initiated
-    ///.
+    /// Total `configure_sync_auto_synthesize` calls initiated.
     #[serde(default)]
     pub configure_sync_auto_synthesize_total: u64,
     /// Total `admit_approved_document` calls initiated.
@@ -825,9 +823,9 @@ pub struct MetricsSnapshot {
 /// no class match will bump `hits_en` ~8 times.  Operators
 /// inferring "documents classified" from these counters should
 /// divide by their measured calls-per-document ratio rather
-/// than reading the counter directly.  See the upstream
+/// than reading the counter directly. See the upstream
 /// `observation_engine::lexicon_telemetry` module doc for the
-/// full rationale (a follow-up ANALYSIS-0003).
+/// full rationale (calls-vs-documents distinction).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct LexiconTelemetry {
     /// Resolved-lexicon hits for `ar`.
@@ -997,7 +995,7 @@ pub struct FtsTelemetry {
     /// query like `の の の` bumps this counter and NOT the
     /// no-CJK counter.  See the upstream
     /// `evidence_store::fts_telemetry::SkipReason` doc for the
-    /// taxonomic rationale (added a follow-up).
+    /// taxonomic rationale (added in a follow-up).
     #[serde(default)]
     pub bigram_lane_skips_pure_stopword_query_total: u64,
     /// Times the CJK bigram lane was skipped because the
@@ -1995,7 +1993,7 @@ mod tests {
         // snapshot.  This is the same monotonic-lower-bound
         // pattern used by [`snapshot_reflects_counter_increments`]
         // and by `lexicon_telemetry_mirror_round_trips` above.
-        // a follow-up (INFO-0002 fix): the previous
+        // Earlier review fix: the previous
         // `assert_eq!(mirror.field, upstream.field)` shape was
         // accidentally racy — if any parallel test (today only
         // `store_integration::fts_telemetry_*`, but trivially

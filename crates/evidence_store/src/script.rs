@@ -1,6 +1,6 @@
 //! Script-detection helpers used by the FTS5 write / read routing
 //! introduced in schema v14 (CJK-aware FTS5 tokeniser)
-//! and extended in to cover the remaining Brahmic-family
+//! and later extended to cover the remaining Brahmic-family
 //! scripts that lack inter-word whitespace (Tibetan, Khmer, Myanmar,
 //! Lao).
 //!
@@ -8,8 +8,9 @@
 //! Katakana, Thai, **Tibetan, Khmer, Myanmar, and Lao** codepoints
 //! as non-letter *separators*, so a document composed entirely of
 //! those scripts produces zero tokens and is invisible to lexical
-//! search. added a parallel `evidence_fts_cjk` virtual
-//! table tokenised with `trigram` and an `evidence_fts_bigram`
+//! search. The CJK-aware schema (v14) added a parallel
+//! `evidence_fts_cjk` virtual table tokenised with `trigram` and
+//! an `evidence_fts_bigram`
 //! companion, and routes each ingest into both lanes
 //! *additionally* iff the body contains any codepoint from one of
 //! the affected scripts.
@@ -18,8 +19,8 @@
 //! `contains_cjk_or_thai` are retained for stability — the predicate
 //! itself answers "is this codepoint one of the scripts that the
 //! `unicode61` tokeniser cannot segment and therefore needs the
-//! parallel CJK lane?". extends that scope to the four
-//! Indic / Southeast-Asian scripts the substrate's connector
+//! parallel CJK lane?". The expanded routing predicate covers
+//! the four Indic / Southeast-Asian scripts the substrate's connector
 //! pipelines now surface; the function name is the contract for the
 //! routing site, not a taxonomy claim about the codepoints.
 //!
@@ -32,7 +33,7 @@
 //! membership check is robust to those misses and adds only a single
 //! linear pass over the bytes — much cheaper than re-running language
 //! detection at the storage layer. This property is what makes
-//! 's Tibetan/Lao coverage work despite the language
+//! Tibetan/Lao coverage work despite the language
 //! detector being unable to tag those scripts.
 //!
 //! Korean (Hangul, `U+AC00..U+D7AF`), Vietnamese (Latin with
@@ -443,7 +444,7 @@ mod tests {
         assert!(contains_cjk_or_thai("\u{19FF}"));
         // Just-outside boundaries on the Khmer Symbols block.
         // U+19DF is the last codepoint of New Tai Lue (a script
-        // we deliberately do not route in ).
+        // we deliberately do not route).
         assert!(!contains_cjk_or_thai("\u{19DF}"));
         // U+1A00 is Buginese — not routed.
         assert!(!contains_cjk_or_thai("\u{1A00}"));
@@ -482,7 +483,7 @@ mod tests {
 
     #[test]
     fn brahmic_scripts_we_deliberately_do_not_route_stay_out() {
-        // 's standing policy says "the next contributor
+        // The standing policy says "the next contributor
         // adding a new non-whitespace-segmented script just adds
         // an arm here". Pin the current state so a future
         // contributor who adds e.g. Tai Tham must explicitly
@@ -519,7 +520,7 @@ mod tests {
 
     #[test]
     fn mixed_latin_with_one_indic_codepoint_routes_to_cjk() {
-        //  — same mixed-script behaviour as 's
+        // Same mixed-script behaviour as the
         // "Project 計画 review" test: a single codepoint from any
         // of the four newly-routed scripts is enough to route
         // the body.

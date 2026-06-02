@@ -1372,13 +1372,13 @@ fn vector_telemetry_cross_lingual_recall_via_rerank() {
         cooking_score = cooking_hit.vector_score,
     );
 
-    // Regression coverage for the earlier a follow-up Bug fix:
+    // Regression coverage for an earlier Bug fix:
     // `rerank_with_embeddings` MUST bump `query_embeddings_total` at
     // least once for the query embed AND `live_body_embeddings_total`
     // at least once per body it embeds. Before the fix the
     // body-embed call site at `retrieval.rs:296` was silently
     // uninstrumented; this lower-bound assertion would have caught
-    // that. See PR #110 an earlier review.
+    // that.
     //
     // Uses `>= before + N` rather than `== before + N` to stay
     // robust under parallel test execution: other tests in this
@@ -1579,8 +1579,7 @@ fn search_hybrid_skips_vector_lane_on_noise_only_query() {
     // per-instance `model.embeds` counter (NOT the process-
     // singleton `query_embeddings_total`) so a parallel test
     // bumping the singleton counter does NOT race with the
-    // "did NOT fire" assertion. See a follow-up for
-    // the prior incident this pattern was added to avoid.
+    // "did NOT fire" assertion.
     assert_eq!(
         embeds_before, embeds_after,
         "noise-only query reached the embedding adapter ({embeds_before} -> {embeds_after} embeds)",
@@ -1603,7 +1602,7 @@ fn search_hybrid_skips_vector_lane_on_noise_only_query() {
     let _ = (hits, r1);
 }
 
-///  — regression for a follow-up finding (PR #114):
+/// Regression for an earlier review finding (PR #114):
 /// when the retriever is configured WITHOUT an embedding model
 /// (FTS+recency-only mode), the pre-embed routing gate must NOT
 /// be consulted — otherwise `pre_embed_admitted_total` would be
@@ -1618,7 +1617,7 @@ fn search_hybrid_skips_vector_lane_on_noise_only_query() {
 /// embedding model and calling `search_hybrid` /
 /// `rerank_with_embeddings` / `ingest`). A direct
 /// `assert_eq!(before, after)` on a process-singleton counter is
-/// the a follow-up anti-pattern — a parallel sibling
+/// a known anti-pattern — a parallel sibling
 /// bumping the counter between the snapshots produces a false
 /// positive. Instead we verify the structural fix via two
 /// race-free observables: (1) `search_hybrid` does not panic
@@ -1644,7 +1643,7 @@ fn search_hybrid_no_model_does_not_consult_routing_gate() {
 
     // No `.with_embedding_model(...)` — the retriever runs in
     // FTS+recency-only mode. This is the bug-trigger
-    // configuration from a follow-up: before the fix, the routing
+    // configuration that motivated the fix: previously, the routing
     // gate fired unconditionally and bumped
     // `pre_embed_admitted_total` even though `model.embed()`
     // was never invoked.

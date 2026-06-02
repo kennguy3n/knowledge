@@ -565,9 +565,9 @@ fn v14_migration_is_idempotent_on_already_populated_database() {
 
 #[test]
 fn v14_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
-    // Regression test for a follow-up
-    // (`migrate_v14_backfill_evidence_fts_cjk` previously loaded
-    // the entire `evidence_fts` table into a single `Vec`). The
+    // Regression test for an earlier memory-pressure fix:
+    // `migrate_v14_backfill_evidence_fts_cjk` previously loaded
+    // the entire `evidence_fts` table into a single `Vec`. The
     // fix paginates the read in chunks of `MIGRATION_CHUNK_SIZE`
     // (1_000 rows). This test seeds `MIGRATION_CHUNK_SIZE + 500`
     // (1_500) distinct CJK rows directly into `evidence_fts` to
@@ -789,8 +789,8 @@ fn opens_v14_database_and_upgrades_to_current_with_evidence_fts_bigram_backfille
         "v14 -> v15 backfill must re-insert the CJK row into evidence_fts_bigram"
     );
 
-    // Defensive content-column inspection (closes a follow-up
-    // finding #6: prior assertion only verified row count). The
+    // Defensive content-column inspection (closes an earlier
+    // review finding: prior assertion only verified row count). The
     // backfilled `content` column must hold the precomputed-bigram
     // string emitted by `crate::bigram::compute_cjk_bigrams` over
     // the original CJK body — not the raw body, and not an empty

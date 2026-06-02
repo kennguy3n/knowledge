@@ -77,7 +77,7 @@ pub struct EvidenceRow {
     /// Unix epoch seconds at ingest.
     pub created_at: i64,
     /// BCP-47 primary language subtag detected on the plaintext
-    /// body at ingest time (schema v13, ). `None` when
+    /// body at ingest time (schema v13). `None` when
     /// the row was ingested via the legacy
     /// [`EvidenceStore::ingest`] shim, when the language detector
     /// declined to classify, or when the row predates schema v13.
@@ -427,7 +427,7 @@ impl EvidenceStore {
     }
 
     /// Same contract as [`Self::ingest`], but additionally stamps
-    /// the row's `language_tag` column (schema v13, ) with
+    /// the row's `language_tag` column (schema v13) with
     /// a BCP-47 primary subtag.
     ///
     /// The substrate's ingest path runs
@@ -1276,11 +1276,11 @@ impl EvidenceStore {
     ///
     /// * `evidence_fts` (unicode61, schema v1) — universal lane for
     ///   whitespace / punctuation-segmented scripts.
-    /// * `evidence_fts_cjk` (trigram, schema v14, ) — CJK /
+    /// * `evidence_fts_cjk` (trigram, schema v14) — CJK /
     ///   Thai substring lane for queries of ≥ 3 codepoints (FTS5's
     ///   built-in trigram tokeniser cannot serve shorter queries).
     /// * `evidence_fts_bigram` (precomputed bigrams under
-    ///   `unicode61`, schema v15, ) — CJK / Thai recall
+    ///   `unicode61`, schema v15) — CJK / Thai recall
     ///   lane for **2-codepoint** queries like `天気` (Japanese
     ///   "weather") that the trigram lane cannot serve. Bigrams are
     ///   computed at write time over the CJK / Thai portion of the
@@ -4281,8 +4281,7 @@ fn migrate_v13_add_evidence_language_tag(conn: &Connection) -> Result<()> {
 /// Chunk size for [`migrate_v14_backfill_evidence_fts_cjk`]'s
 /// streaming read of `evidence_fts`. Bounded so peak migration
 /// memory is O(chunk * row_size) regardless of how many evidence
-/// rows the user has accumulated (a follow-up an earlier review
-/// earlier review.
+/// rows the user has accumulated.
 const V14_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 
 /// v13 -> v14 additive migration: backfill `evidence_fts_cjk` from
@@ -4333,8 +4332,7 @@ const V14_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 /// Memory bound: the backfill iterates `evidence_fts` in
 /// rowid-ordered chunks of [`V14_MIGRATION_CHUNK_SIZE`] rows, so
 /// peak memory is O(chunk * row_size) rather than O(total_rows *
-/// row_size). This was the architectural fix for a follow-up Devin
-/// An earlier review — on a large pre-v14 database the
+/// row_size). On a large pre-v14 database the original
 /// "materialise everything into a single `Vec`" version would
 /// have allocated proportional to the entire body corpus, which
 /// is unbounded on desktop substrates and a real OOM risk during
@@ -4356,8 +4354,8 @@ fn migrate_v14_backfill_evidence_fts_cjk(conn: &Connection) -> Result<()> {
     // whole `evidence_fts` table into a single `Vec`. This bounds
     // peak migration memory to O(chunk * row_size) regardless of
     // how many evidence rows the user has accumulated, addressing
-    // a follow-up  (memory pressure during
-    // one-time v13→v14 migration on large databases).
+    // a memory-pressure concern raised during the one-time
+    // v13→v14 migration on large databases.
     //
     // We page on the FTS5 virtual table's implicit `rowid` rather
     // than `evidence_id` so the chunking is independent of how
@@ -4450,8 +4448,8 @@ const V15_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 /// maintains row-count metadata in
 /// `evidence_fts_bigram_docsize`.
 ///
-/// Reachability of partial-population states (a follow-up inline
-/// 3331173175 contract for future migration authors). The
+/// Reachability of partial-population states is the contract
+/// future migration authors must preserve. The
 /// `COUNT(*) > 0` guard is *deliberately coarse*: it treats
 /// "any rows" as "migration already ran". This is sound for
 /// every reachable code path because every site that deletes
@@ -5042,8 +5040,8 @@ pub(crate) fn clamp_limit_to_sqlite(n: usize) -> i64 {
 /// `pub(crate)` so [`crate::retrieval::HybridRetriever::search_fts`]
 /// can reuse the same merge logic (both call sites need identical
 /// dedupe + error-containment semantics; diverging implementations
-/// would silently drift apart and was one of the failure modes the
-/// a follow-up  finding flagged).
+/// would silently drift apart, which an earlier review flagged as
+/// a latent failure mode).
 ///
 /// The function is named `merged_fts_search` rather than
 /// `dual_/triple_fts_search` so the public-crate-internal name
@@ -5152,9 +5150,9 @@ pub(crate) fn merged_fts_search(
     // empty contribution. We only consume the `Ok` arm, so the
     // unicode61 branch remains the sole source of truth for
     // query validity even if `evidence_fts_cjk` ever returned a
-    // corrupted UUID (e.g. external database tampering). This is
-    // the long-form fix for a follow-up  —
-    // moving the UUID parse inside the swallow-scope means the
+    // corrupted UUID (e.g. external database tampering). The
+    // architectural fix from an earlier review was to move the
+    // UUID parse inside the swallow-scope; that means the
     // doc-comment's "errors swallowed" contract holds without
     // any post-closure exception.
     //
@@ -5174,7 +5172,7 @@ pub(crate) fn merged_fts_search(
     // codepoint scan because the strip output's whitespace is
     // exactly the ASCII spaces we inserted at strip sites.
     //
-    // a follow-up review fix: the skip-check is
+    // Skip-check architectural fix: the skip-check is
     // hoisted OUT of the closure so the skip-counter and
     // lane-query-counter branches are mutually exclusive by
     // construction — matches the bigram lane's `if let Some / else`
@@ -5202,9 +5200,9 @@ pub(crate) fn merged_fts_search(
     // Operators reading `cjk_trigram_lane_rows_total /
     // cjk_trigram_lane_queries_total` will observe lower precision
     // on Latin-dominant workloads — that signal is intentional and
-    // not a bug. See a follow-up (commit `4aaccba`) which tried to
-    // structurally skip Latin queries here and was reverted in
-    // a follow-up once the trigram tokeniser's cross-script behaviour
+    // not a bug. An earlier commit (`4aaccba`) tried to
+    // structurally skip Latin queries here and was reverted
+    // once the trigram tokeniser's cross-script behaviour
     // was correctly identified.
     if stripped_query.as_ref().trim().is_empty() {
         // Telemetry: pure-stopword query collapsed to empty
@@ -5302,7 +5300,7 @@ pub(crate) fn merged_fts_search(
     // The same "every error path in the closure, post-retrieval
     // UUID parse inside the swallow scope" pattern from Branch
     // 2 applies here — see the trigram branch comment for the
-    // architectural rationale (a follow-up ).
+    // architectural rationale.
     // feed `compute_cjk_bigram_query` the stopword-
     // stripped query (not the raw `query`) so the bigram windows
     // it generates are computed over the same character set that
@@ -5317,7 +5315,7 @@ pub(crate) fn merged_fts_search(
     // bigram is requested by the query whenever it would be
     // produced by the body).
     //
-    // a follow-up review fix: the bigram lane's
+    // Skip-taxonomy architectural fix: the bigram lane's
     // skip taxonomy now matches the trigram lane's structural
     // shape — the pure-stopword check runs BEFORE
     // `compute_cjk_bigram_query` so a CJK pure-stopword query
@@ -5411,8 +5409,8 @@ pub(crate) fn merged_fts_search(
     // the resulting order is also stable across process restarts
     // (UUIDs are persisted, hash seeds are not).
     //
-    // This is the long-form fix for a follow-up
-    // — pinning the result order so that downstream tests and
+    // The pinned result order is the long-form fix from an
+    // earlier review — ensuring downstream tests and
     // any caller that does NOT re-score (e.g. the raw `search_fts`
     // public surface) sees identical output across runs for the
     // same input.
@@ -5447,11 +5445,11 @@ pub(crate) fn merged_fts_search(
 /// `f64` so this codepath is unreachable in production today, but
 /// pinning the merge to `f64::min` removes the trap entirely and
 /// aligns with the defensive `partial_cmp().unwrap_or(Equal)` used
-/// in the sort comparator at `merged_fts_search` (a follow-up review)
+/// in the sort comparator at `merged_fts_search`
 /// — both halves of the merge pipeline now treat NaN identically
 /// instead of skewing in opposite directions.
 ///
-/// This is the long-form fix for a follow-up .
+/// This is the long-form fix from an earlier review.
 fn merge_min_rank(best_rank: &mut HashMap<EvidenceId, f64>, id: EvidenceId, rank: f64) {
     best_rank
         .entry(id)

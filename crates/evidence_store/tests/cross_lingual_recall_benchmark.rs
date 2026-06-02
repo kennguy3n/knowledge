@@ -53,12 +53,12 @@
 //!   top but misses the rest would score perfect `hit-rate@1`
 //!   and terrible `recall@12`).
 //!
-//! ## What this benchmark catches that the  spot-checks miss
+//! ## What this benchmark catches that ad-hoc spot-checks miss
 //!
 //! 1. **Per-language-pair regressions** — a future change that
 //!    breaks cross-lingual clustering for one specific direction
 //!    (e.g. `ar → he` after a tokeniser tweak) would still pass
-//!    the three  spot-checks but would drop the
+//!    the three ad-hoc spot-checks but would drop the
 //!    `recall@k` for that one row of the matrix below the pinned
 //!    floor.
 //! 2. **Asymmetric recall** — XLM-R has known asymmetries
@@ -622,7 +622,7 @@ fn cross_lingual_recall_benchmark() {
     // same axis as the ingest-side embeddings.  Vector-only
     // weights so the recall measurement is on the embedding
     // pipeline (FTS5 doesn't share script with most queries, so
-    // it would contribute mostly noise; the  FTS5
+    // it would contribute mostly noise; the FTS5
     // lane weights are exercised by their own tests).
     let retriever = HybridRetriever::new(&store)
         .with_embedding_model(BenchmarkMockModel, "benchmark-mock-v1")

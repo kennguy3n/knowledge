@@ -320,7 +320,7 @@ where
         let mut observations = Vec::new();
         let mut citations = HashMap::new();
         let mut dropped = 0_usize;
-        //  : pre-compute the
+        // Pre-compute the
         // per-chunk dominant language at the doc-pipeline level so
         // that (a) we can pass it through
         // `extract_with_dominant_language` to the extractor
@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn document_pipeline_surfaces_per_chunk_language() {
-        // : the doc pipeline should
+        // Regression coverage: the doc pipeline should
         // surface the chunk-level dominant language on its result
         // for downstream consumers that want a coarse per-chunk
         // tag without re-running detection. The vector should be

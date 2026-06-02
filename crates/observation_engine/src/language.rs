@@ -59,8 +59,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// on the strong-count. The public surface — `as_str`, `primary`,
 /// `Display`, `PartialEq`, `Eq`, `Hash`, `Serialize`,
 /// `Deserialize` — is unaffected because [`Arc<str>`] derefs to
-/// [`str`] and inherits its equality / hashing semantics. See
-/// earlier review.
+/// [`str`] and inherits its equality / hashing semantics.
 ///
 /// `Deserialize` is implemented by hand (rather than derived as
 /// `#[serde(transparent)]`) so that round-tripping a tag through
@@ -93,8 +92,7 @@ impl Serialize for LanguageTag {
     /// directly removes any dependence on which crate features are
     /// enabled in the dependency graph — the wire form is locked
     /// to the bare JSON string regardless of whether a future
-    /// dependency turns on serde's `rc` feature. See an earlier review
-    /// finding earlier review.
+    /// dependency turns on serde's `rc` feature.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,

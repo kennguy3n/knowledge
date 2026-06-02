@@ -149,8 +149,8 @@ pub fn interrogatives_for(
         // question. The `¿` opener and `?` terminator are strong
         // enough signals for `¿por qué?` on their own — the
         // sentence-shape gate elsewhere in the extractor already
-        // surfaces these via the `?` terminator. See an earlier review
-        // finding earlier review.
+        // surfaces these via the `?` terminator. See the
+        // matching earlier-review finding for the analysis trail.
         "es" => Some((
             &[
                 "qué", "quién", "quiénes", "cuándo", "dónde", "adónde", "cómo", "cuál", "cuáles",
@@ -172,7 +172,7 @@ pub fn interrogatives_for(
         // always end with `?` and the `?` terminator alone is
         // sufficient signal; the alternative (a hyphen-tolerant
         // tokeniser) would degrade the strategy for every other
-        // language. See earlier review.
+        // language.
         //
         // Deliberately omitted: `que`. Unlike Spanish (which has
         // the accented interrogative `qué` vs. the unaccented
@@ -188,8 +188,9 @@ pub fn interrogatives_for(
         // interrogative-only and stays in the list; combined with
         // the `?` terminator on `que ...?` openers, recall stays
         // adequate. Same class of bug as Spanish / Portuguese
-        // `por` an earlier review, Indonesian / Malay `di` / `yang`
-        // an earlier review. See earlier review.
+        // `por` (flagged by an earlier review) and
+        // Indonesian / Malay `di` / `yang` (flagged by an earlier
+        // review).
         "fr" => Some((
             &[
                 "qui",
@@ -237,7 +238,7 @@ pub fn interrogatives_for(
         // for `por que ...?` (and the bare `porque` /
         // accented-`porquê` interrogative variants below cover
         // the cases where the preposition fuses into a single
-        // word). See earlier review.
+        // word).
         //
         // Deliberately omitted: bare `que`. Portuguese has the
         // accented `quê` (kept) as the canonical sentence-final
@@ -248,10 +249,10 @@ pub fn interrogatives_for(
         // `Que ele venha amanhã` — "(I hope) he comes tomorrow",
         // `O livro que li`, ...). The FirstToken false-positive
         // surface is the same as French `que` and Italian `che`
-        // an earlier review. The accented `quê` and the bare `o que`
-        // (which tokenises to `o`, missed regardless) combined
-        // with the `?` terminator on `que ...?` openers give
-        // adequate recall. See earlier review.
+        // (per an earlier review). The accented `quê` and the
+        // bare `o que` (which tokenises to `o`, missed regardless)
+        // combined with the `?` terminator on `que ...?` openers
+        // give adequate recall.
         "pt" => Some((
             &[
                 "quem", "quê", "qual", "quais", "quando", "onde", "aonde", "como", "porquê",
@@ -278,7 +279,6 @@ pub fn interrogatives_for(
         // the common interrogative form; combined with the `?`
         // terminator on `che ...?` openers, recall stays adequate.
         // Same class of bug as French `que` and Portuguese `que`.
-        // See earlier review.
         "it" => Some((
             &[
                 "chi", "cosa", "quando", "dove", "come", "perché", "quale", "quali", "quanto",
@@ -372,7 +372,6 @@ pub fn interrogatives_for(
         // in the list, which catches the canonical
         // `Mana yang lebih baik?` form; the `?` terminator handles
         // the sentence-final cases (`Bagus, di mana?`) on its own.
-        // See earlier review.
         "id" | "ms" => Some((
             &[
                 "siapa",
@@ -429,9 +428,8 @@ pub fn interrogatives_for(
         // recovered instead via the `؟` terminator short-
         // circuit in [`crate::extractor::looks_like_question`].
         //
-        // A later review (an earlier review
-        // Earlier review: the proclitic peel set was
-        // narrowed from 8 to 6 entries; `ك` ("like/as") and
+        // An earlier review narrowed the proclitic peel set
+        // from 8 to 6 entries: `ك` ("like/as") and
         // `س` ("will") were excluded after surfacing both
         // interrogative-path false positives (`كمن` ➜ `من`,
         // `سما` ➜ `ما`) and a more dangerous imperative-path
@@ -631,8 +629,8 @@ pub fn interrogatives_for(
                 // quantity questions and `吗` as the canonical
                 // yes/no particle. Same class of precision-vs-recall
                 // call as the Romance / Indonesian / Vietnamese
-                // omissions documented above. See an earlier review
-                // finding earlier review.
+                // omissions documented above. See the matching
+                // earlier-review finding for the analysis trail.
                 "几点", // "what time"
                 "几岁", // "how old"
                 "多少",
@@ -991,7 +989,7 @@ mod tests {
 
     #[test]
     fn first_token_with_arabic_clitics_languages_are_arabic_only_for_now() {
-        // a follow-up (an earlier review #3331706213): the
+        // Pinned by an earlier review: the
         // proclitic-aware first-token strategy was introduced
         // specifically for the Arabic agglutinative-prefix
         // morphology (و / ف / ب / ل / ال / أل clitically attaching
@@ -1118,7 +1116,7 @@ mod tests {
 
     #[test]
     fn no_first_token_entry_contains_tokeniser_boundary_chars() {
-        // : an interrogative entry that
+        // Regression coverage: an interrogative entry that
         // contains a non-alphabetic character is unreachable
         // under the FirstToken strategy, because the extractor's
         // tokeniser splits on every non-alphabetic char. Guard
@@ -1126,8 +1124,8 @@ mod tests {
         // language's entries.
         for tag in SUPPORTED_PRIMARY_TAGS {
             let (list, strat) = interrogatives_for(tag).unwrap();
-            // a follow-up extension (an earlier review
-            // #3331604782): the invariant applies to every
+            // Extended by an earlier review: the invariant
+            // applies to every
             // strategy whose matcher consults the extractor's
             // alphabetic-only tokeniser — i.e. both bare
             // FirstToken AND FirstTokenWithArabicClitics, which
@@ -1197,7 +1195,7 @@ mod tests {
 
     #[test]
     fn no_entry_is_duplicated_within_a_language() {
-        // : Vietnamese previously listed
+        // Regression coverage: Vietnamese previously listed
         // `bao` twice. Guard against future cut-and-paste
         // duplications across every language.
         for tag in SUPPORTED_PRIMARY_TAGS {
@@ -1214,7 +1212,7 @@ mod tests {
 
     #[test]
     fn spanish_and_portuguese_omit_preposition_por() {
-        // : `por` is too common a
+        // Regression coverage: `por` is too common a
         // preposition in both languages to use as a FirstToken
         // question trigger. Guard against accidental re-addition.
         let (es_list, _) = interrogatives_for("es").unwrap();
@@ -1231,7 +1229,7 @@ mod tests {
 
     #[test]
     fn french_omits_unreachable_est_ce_entry() {
-        // : the FirstToken tokeniser would
+        // Regression coverage: the FirstToken tokeniser would
         // split `est-ce` on the hyphen, so the entry was dead
         // code. Verify it stays removed.
         let (fr_list, _) = interrogatives_for("fr").unwrap();
@@ -1243,7 +1241,7 @@ mod tests {
 
     #[test]
     fn indonesian_malay_omits_high_frequency_prepositions() {
-        // : `di` ("in / at") and `yang`
+        // Regression coverage: `di` ("in / at") and `yang`
         // ("that / which") are extremely common Indonesian / Malay
         // function words. FirstToken matching on either would
         // mis-classify every declarative starting with the
@@ -1270,7 +1268,7 @@ mod tests {
 
     #[test]
     fn romance_languages_omit_bare_que_che_function_words() {
-        // : bare `que` (French, Portuguese)
+        // Regression coverage: bare `que` (French, Portuguese)
         // and `che` (Italian) are far more common as relative
         // pronouns / conjunctions / exclamation openers than as
         // interrogatives, and the FirstToken strategy can't
@@ -1328,7 +1326,7 @@ mod tests {
 
     #[test]
     fn chinese_omits_ambiguous_numeral_几() {
-        // : bare `几` is an ambiguous
+        // Regression coverage: bare `几` is an ambiguous
         // morpheme \u2014 it is genuinely interrogative in
         // collocations like `几点了？`, `几岁？`, `星期几？`, but it
         // also appears in extremely common non-interrogative
@@ -1383,7 +1381,7 @@ mod tests {
 
     #[test]
     fn vietnamese_omits_high_frequency_bare_conjunctions_but_keeps_bigrams() {
-        //  / an earlier review finding:
+        // Per an earlier-review finding:
         // `khi`, `tại`, `vì` are extremely common Vietnamese
         // conjunctions / prepositions whose interrogative
         // readings only manifest as part of bigrams (`khi nào`,
