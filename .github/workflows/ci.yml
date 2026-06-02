@@ -870,3 +870,16 @@ jobs:
           path: crates/napi/knowledge.*.node
           if-no-files-found: error
           retention-days: 14
+
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-cyclonedx --locked || true
+      - run: cargo cyclonedx --all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: "**/*.cdx.json"

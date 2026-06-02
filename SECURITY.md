@@ -54,9 +54,11 @@ co-signing.
 The following are honest gaps; the project is pre-1.0 and they
 are tracked openly:
 
-1. **No live connector traffic.** The connector implementations
-   are fixture parsers — OAuth2 transport, webhook subscription,
-   and incremental delta sync are contract-only at this stage.
+1. **Connector live-traffic support is in progress.** A parallel
+   PR is adding real content fetching (OAuth2 transport, webhook
+   subscription, incremental delta sync) to the connector
+   implementations. Until that work lands, connectors behave as
+   fixture parsers.
 2. **Host shells are out of scope.** Mobile and desktop UI
    shells live in sibling repositories and are not audited by
    this policy. However, explicit host-shell key handling
@@ -67,6 +69,9 @@ are tracked openly:
 ## Third-party audit
 
 The project has not yet undergone an independent security audit.
+An engagement with one of the candidate firms listed below is
+targeted for Q3 2026.
+
 The planned audit scope covers:
 
 - `crates/crypto/` — hybrid KEM combiner (X25519 + ML-KEM-768),
@@ -271,6 +276,18 @@ consumer that hardware-backed hosts hit on every cold boot, and
 the `open_store_with_resolver_total` metric counter exposes how
 many cold boots went through the resolver-driven path vs the
 direct-hex path.
+
+## Compliance
+
+The substrate's technical controls are mapped to GDPR, SOC 2, and
+HIPAA requirements in [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md).
+
+## Software Bill of Materials (SBOM)
+
+CycloneDX JSON SBOMs are generated on every CI run by the `sbom` job
+in `.github/workflows/ci.yml` and uploaded as build artefacts. The
+dependency policy, license allow-list, and CI audit gates are
+documented in [`docs/SUPPLY_CHAIN.md`](docs/SUPPLY_CHAIN.md).
 
 ## Supported versions
 
