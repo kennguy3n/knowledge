@@ -59,7 +59,7 @@ pub fn run(
         .details(json!({
             "event": "demo_run_completed",
             "demo_run_id": demo_run_id,
-            "phase_count": 12,
+            "stage_count": 12,
             "dataset_messages": dataset.messages.len(),
         }))
         .build()

@@ -38,13 +38,13 @@ fn schema_creates_required_tables() {
     let fts: i64 = conn
         .query_row("SELECT COUNT(*) FROM evidence_fts", [], |r| r.get(0))
         .unwrap();
-    //  / schema v14: trigram-tokenised companion FTS5
+    // schema v14: trigram-tokenised companion FTS5
     // table for CJK / Thai content. Bootstrapped alongside
     // `evidence_fts` by `SCHEMA_SQL`.
     let fts_cjk: i64 = conn
         .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
         .unwrap();
-    //  / schema v15: precomputed-bigram FTS5 table for
+    // schema v15: precomputed-bigram FTS5 table for
     // 2-codepoint CJK / Thai recall. Bootstrapped alongside
     // `evidence_fts` and `evidence_fts_cjk` by `SCHEMA_SQL`.
     let fts_bigram: i64 = conn
@@ -89,7 +89,7 @@ fn ingest_inline_path_for_small_useful_message() {
 
 #[test]
 fn ingest_with_language_tag_round_trips_inline() {
-    //  / schema v13: the inline-path ingest API stamps the
+    // schema v13: the inline-path ingest API stamps the
     // optional BCP-47 primary subtag onto the row's `language_tag`
     // column and `EvidenceStore::get` round-trips it back through
     // `EvidenceRow::language_tag`.
@@ -113,7 +113,7 @@ fn ingest_with_language_tag_round_trips_inline() {
 
 #[test]
 fn ingest_with_language_tag_round_trips_body_table() {
-    //  / schema v13: the body-table-path ingest API stamps
+    // schema v13: the body-table-path ingest API stamps
     // the BCP-47 subtag onto the row's `language_tag` column, even
     // when the same body content is dedup-shared across scopes
     // (the language stamp lives on the per-scope `evidence` row, not
@@ -712,7 +712,7 @@ fn with_transaction_rolls_back_on_err() {
 }
 
 // ============================================================
-//  / schema v14 — CJK-aware FTS5 tokeniser tests.
+// schema v14 — CJK-aware FTS5 tokeniser tests.
 //
 // Pre-v14 the substrate's only lexical index used the FTS5
 // `unicode61 remove_diacritics 2` tokeniser, which classifies CJK
@@ -1050,7 +1050,7 @@ fn fts5_cjk_routing_is_body_derived_not_language_tag_derived() {
         .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
         .unwrap();
     assert_eq!(cjk_rows, 1);
-    //  / schema v15: the same body also lands in
+    // schema v15: the same body also lands in
     // evidence_fts_bigram so 2-codepoint CJK queries hit it.
     let bigram_rows: i64 = store
         .raw_conn()
@@ -1086,7 +1086,7 @@ fn fts5_pure_latin_does_not_consume_cjk_table_storage() {
         cjk_rows, 0,
         "pure-Latin body must not be written to evidence_fts_cjk"
     );
-    //  / schema v15: pure-Latin bodies likewise stay
+    // schema v15: pure-Latin bodies likewise stay
     // out of `evidence_fts_bigram` — the bigram lane is gated on
     // `crate::script::contains_cjk_or_thai` identically to the
     // trigram lane, so this assertion pins the storage-cost
@@ -1103,7 +1103,7 @@ fn fts5_pure_latin_does_not_consume_cjk_table_storage() {
 
 #[test]
 fn fts5_bigram_lane_closes_2char_cjk_recall_floor() {
-    //  (schema v15) regression — pins the bigram-lane
+    // Bigram lane (schema v15) regression — pins the bigram-lane
     // gap-closure for 2-codepoint CJK queries.
     //
     // Background: SQLite's built-in `trigram` tokeniser has a

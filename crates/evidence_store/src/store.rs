@@ -783,7 +783,7 @@ impl EvidenceStore {
             "INSERT INTO evidence_fts (content, evidence_id, scope_id) VALUES (?1, ?2, ?3)",
             params![text, evidence_id_bytes, scope_id_bytes],
         )?;
-        //  / schema v14: rows whose body contains any CJK
+        // schema v14: rows whose body contains any CJK
         // Han / Hiragana / Katakana / Thai codepoint *additionally*
         // go into `evidence_fts_cjk` (trigram). `unicode61` emits
         // zero tokens for those codepoints, so without this branch
@@ -794,7 +794,7 @@ impl EvidenceStore {
         // table. See `crate::script::contains_cjk_or_thai` for the
         // codepoint membership rationale.
         if crate::script::contains_cjk_or_thai(text) {
-            //  / schema v16: strip recall-lane stopwords
+            // schema v16: strip recall-lane stopwords
             // (Japanese / Chinese / Thai / Tibetan / Khmer /
             // Myanmar / Lao function words) BEFORE the trigram and
             // bigram lanes index the body. Stripping replaces each
@@ -832,7 +832,7 @@ impl EvidenceStore {
                  VALUES (?1, ?2, ?3)",
                 params![stripped.as_ref(), evidence_id_bytes, scope_id_bytes],
             )?;
-            //  / schema v15: rows that route to
+            // schema v15: rows that route to
             // `evidence_fts_cjk` *additionally* go into
             // `evidence_fts_bigram`, which stores the
             // whitespace-separated overlapping 2-codepoint
@@ -5062,7 +5062,7 @@ pub(crate) fn merged_fts_search(
     let scope_uuid = scope_id.as_uuid();
     let scope_bytes = scope_uuid.as_bytes().as_slice();
 
-    //  / schema v16: the trigram and bigram recall lanes
+    // schema v16: the trigram and bigram recall lanes
     // are queried against stopword-stripped indexed content (see
     // [`EvidenceStore::index_fts`]). The query side must apply the
     // same strip so that tokenisation is symmetric — without it a

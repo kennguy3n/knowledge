@@ -474,8 +474,8 @@ fn looks_like_question(
 /// caller in [`LexiconExtractor::do_extract`] computes both
 /// values once per sentence (for decision / task matching) and
 /// reuses them here. The pre-normalised signature exists
-/// specifically to close an earlier review finding
-///: the per-sentence question path was
+/// specifically to close an earlier review finding: the
+/// per-sentence question path was
 /// re-running the NFC + lowercase + tashkeel/bidi-strip pass
 /// over the same sentence that decision/task matching had
 /// already normalised.
@@ -492,8 +492,8 @@ fn looks_like_question_normalised(
     }
     // Look up per-language interrogatives; fall back to English
     // when the tag is unknown or unconfigured. Promote the
-    //  InterrogativeMatch into the unified
-    //  MatchStrategy so the shared table_matches entry
+    // per-language InterrogativeMatch into the unified
+    // MatchStrategy so the shared table_matches entry
     // point handles the FirstToken / FirstBigram / Substring
     // semantics in one place.
     let (table, strategy) = primary_tag

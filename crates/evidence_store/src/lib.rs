@@ -42,7 +42,7 @@
 //!   injection fires exactly once.
 //! * `EvidenceStore::write_legacy_approved_doc_payload_for_tests` —
 //!   surgically reshapes `approved_document_payloads` back to its
-//!   pre-v12 ( / v10) inline layout and writes a single
+//!   pre-v12 (v10) inline layout and writes a single
 //!   legacy-shape row so the v12-onwards re-migration code path
 //!   has a controllable starting state. The next
 //!   `EvidenceStore::open` silently re-migrates the row.

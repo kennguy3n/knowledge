@@ -151,7 +151,7 @@ impl<'a> HybridRetriever<'a> {
     /// `1 / (1 + (-rank))` so that the most relevant row scores
     /// closest to `1.0`.
     ///
-    /// Per  / schema v14 the search fans out across **both**
+    /// Per schema v14 the search fans out across **both**
     /// lexical indexes — `evidence_fts` (unicode61) for whitespace-
     /// segmented scripts and `evidence_fts_cjk` (trigram) for CJK
     /// Han / Hiragana / Katakana / Thai content — and de-duplicates

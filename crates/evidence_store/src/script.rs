@@ -188,7 +188,7 @@ pub fn is_cjk_or_thai_codepoint(c: char) -> bool {
         | '\u{20000}'..='\u{2A6DF}'  // CJK Unified Ideographs Extension B
         | '\u{2A700}'..='\u{2EE5F}'  // CJK Unified Ideographs Extensions C..F + I
         | '\u{30000}'..='\u{33479}'  // CJK Unified Ideographs Extensions G..H + J
-        | '\u{0E00}'..='\u{0FFF}'    // Thai + Lao + Tibetan (contiguous; )
+        | '\u{0E00}'..='\u{0FFF}'    // Thai + Lao + Tibetan (contiguous)
         | '\u{1000}'..='\u{109F}'    // Myanmar
         | '\u{1780}'..='\u{17FF}'    // Khmer
         | '\u{19E0}'..='\u{19FF}'    // Khmer Symbols

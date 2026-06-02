@@ -4,7 +4,7 @@
 //! classifies each synthetic message with the
 //! [`evidence_store::classifier::CompositeClassifier`] (lexicon-only
 //! configuration — no SLM available in the demo run), runs the
-//!  [`observation_engine::detect_language`] trigram detector
+//! [`observation_engine::detect_language`] trigram detector
 //! against the plaintext body, and ingests every message via the
 //! public [`EvidenceStore::ingest_with_language`] API so the
 //! schema-v13 `language_tag` column is populated end-to-end on the

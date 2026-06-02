@@ -89,7 +89,7 @@ pub fn run(
     report: &mut DemoReport,
     log: &mut AssertionLog,
 ) {
-    let phase_started = Instant::now();
+    let started = Instant::now();
     let mut stage = StageReport::new("Stage 11: Connector Framework");
 
     let drive = exercise_google_drive(dataset, log, report);
@@ -171,7 +171,7 @@ pub fn run(
     // stage stats above without polluting the audit trail's semantic
     // contract.
 
-    stage.timing = phase_started.elapsed();
+    stage.timing = started.elapsed();
     report.add_stage(stage);
 }
 

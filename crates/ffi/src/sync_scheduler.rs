@@ -541,7 +541,7 @@ pub fn start_sync_scheduler(
 #[uniffi::export]
 pub fn stop_sync_scheduler(handle: RuntimeHandle) -> FfiResult<()> {
     metrics::instrument(metrics::inc_stop_sync_scheduler, || {
-        //  (locked): take the scheduler out of the runtime
+        // Step 1 (locked): take the scheduler out of the runtime
         // slot. Releases the runtime mutex before the join so any
         // in-flight tick — which is itself blocked on the runtime
         // mutex inside `with_runtime` — can complete and drop the
@@ -549,7 +549,7 @@ pub fn stop_sync_scheduler(handle: RuntimeHandle) -> FfiResult<()> {
         let scheduler = with_runtime(handle, |rt| -> FfiResult<Option<RunningSyncScheduler>> {
             Ok(rt.sync_scheduler.take())
         })?;
-        //  (unlocked): synchronously join the worker. May
+        // Step 2 (unlocked): synchronously join the worker. May
         // take up to `tick_interval` (the worker's recv_timeout)
         // to surface the shutdown signal.
         if let Some(s) = scheduler {

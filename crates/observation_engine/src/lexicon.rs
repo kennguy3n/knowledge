@@ -372,8 +372,7 @@ pub struct LanguageLexicon {
     /// every non-alphabetic char and would never produce the
     /// virama-spanning token. Per-language override structurally
     /// prevents the unreachable-entry class of bug for future
-    /// languages — see earlier review findings
-    /// earlier review.
+    /// languages — see an earlier review for context.
     pub task_imperative_strategy: MatchStrategy,
     /// Stop-words for the capitalised-token entity extractor.
     /// Only relevant for languages with case distinction —
@@ -405,8 +404,7 @@ impl LanguageLexicon {
             // because the virama `U+094D` is non-alphabetic and
             // splits intra-word imperatives like `मर्ज` /
             // `समीक्षा` that no first-token / first-bigram check
-            // could ever reassemble. See earlier review findings
-            // earlier review.
+            // could ever reassemble. See an earlier review for context.
             KeywordClass::TaskImperative => {
                 Some((self.task_imperative_verbs, self.task_imperative_strategy))
             }

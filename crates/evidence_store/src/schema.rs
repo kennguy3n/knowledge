@@ -467,7 +467,7 @@ CREATE TABLE IF NOT EXISTS epoch_tombstones (
 -- Each row stores one connector's `(ConnectorConfig, SyncState)`
 -- pair as a single AEAD-encrypted JSON blob under the per-scope DEK.
 -- The blob is upserted on `create_connector` (initial state) and on
--- every `sync_connector`  (advancing the `SyncState` cursor /
+-- every `sync_connector` call (advancing the `SyncState` cursor /
 -- status). The `kind` column is denormalised out of the encrypted
 -- payload so the unique index below can pin the single-instance-per-
 -- `(scope_id, kind)` contract at the DB layer without first having
@@ -493,7 +493,7 @@ CREATE TABLE IF NOT EXISTS connector_instances (
 CREATE INDEX IF NOT EXISTS idx_connector_instances_scope
     ON connector_instances (scope_id);
 
--- Defense-in-depth: the  runtime check in `create_connector`
+-- Defense-in-depth: the runtime check in `create_connector`
 -- rejects duplicates with `ConnectorError::DuplicateConnector` under
 -- the per-handle mutex (see `crates/ffi/src/connector.rs`). This
 -- unique index pins the same contract at the database layer so a
@@ -580,7 +580,7 @@ CREATE TABLE IF NOT EXISTS approved_document_payloads (
     PRIMARY KEY (scope_id, document_id)
 );
 
--- Per-window synthesis-object version history .
+-- Per-window synthesis-object version history.
 --
 -- The live `synthesis_objects` blob (keyed by `memory_objects.kind
 -- = 'synthesis_object'`, one row per scope) carries only the

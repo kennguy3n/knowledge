@@ -2812,7 +2812,7 @@ mod tests {
     /// with a body that contains CJK Han / Hiragana / Katakana
     /// codepoints so the row is also written to
     /// `evidence_fts_cjk` (the trigram-tokenised companion
-    /// / schema v14). The Latin-only test
+    /// schema v14). The Latin-only test
     /// above cannot exercise this code path because `unicode61`
     /// produces tokens for Latin but `script::contains_cjk_or_thai`
     /// returns false, so the row is never inserted into
@@ -2921,7 +2921,7 @@ mod tests {
                 .map_err(|e| FfiError::Evidence {
                     message: e.to_string(),
                 })?;
-            //  / schema v15: the bigram shadow also
+            // schema v15: the bigram shadow also
             // holds a row for CJK bodies (precomputed-bigram
             // recall lane for 2-codepoint queries). Pre-condition
             // sanity-checks that the re-purge has a non-empty

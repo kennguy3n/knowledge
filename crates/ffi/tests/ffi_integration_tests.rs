@@ -87,7 +87,7 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
     assert_eq!(record.body, body);
     assert_eq!(record.source, SourceKind::Slack);
     assert_eq!(record.scope_id, scope);
-    //  / schema v13: `ingest_message` runs
+    // schema v13: `ingest_message` runs
     // `observation_engine::detect_language` on the plaintext
     // body at the production write boundary. The body here
     // embeds the synthetic FTS5 marker token
@@ -133,7 +133,7 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
     close_store(h).expect("close_store");
 }
 
-///  / schema v13 — `ingest_message` MUST stamp
+/// schema v13 — `ingest_message` MUST stamp
 /// `Some("en")` onto a reliably-English plaintext body. The
 /// surface-coverage test above uses a synthetic FTS5 marker token
 /// that whatlang refuses to classify; this is the dedicated
@@ -172,7 +172,7 @@ fn ingest_message_stamps_language_tag_for_plain_english_body() {
     close_store(h).expect("close_store");
 }
 
-///  / schema v13 — the FFI ingest write path MUST stamp
+/// schema v13 — the FFI ingest write path MUST stamp
 /// the detected BCP-47 primary subtag onto **non-Latin** scripts
 /// too, not just Latin English. This pins the contract with a
 /// Japanese sentence; whatlang's trigram model classifies it
@@ -213,7 +213,7 @@ fn ingest_message_stamps_language_tag_for_japanese_body() {
     close_store(h).expect("close_store");
 }
 
-///  / schema v13 — `detect_language` is fail-closed: when
+/// schema v13 — `detect_language` is fail-closed: when
 /// the input is too short, pure punctuation / pure emoji, or
 /// otherwise unreliable on whatlang's internal heuristic, it
 /// returns `None` and the column stays NULL. This is the correct

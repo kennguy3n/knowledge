@@ -484,7 +484,7 @@ fn purge_fts_for_scopes_batch_matches_per_scope_purge() {
     store.purge_fts_for_scopes(&[]).expect("empty batch purge");
 }
 
-///  / schema v14: the v14 `evidence_fts_cjk` companion
+/// schema v14: the v14 `evidence_fts_cjk` companion
 /// table (trigram-tokenised) is plaintext-derived in the same way
 /// the v0..v13 `evidence_fts` (unicode61) table is, so the
 /// cryptographic-forgetting contract requires both tables to be

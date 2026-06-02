@@ -1004,7 +1004,7 @@ fn v15_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
 }
 
 // ----------------------------------------------------------------------
-//  / schema v16 — Symmetric stopword stripping migration
+// schema v16 — Symmetric stopword stripping migration
 // ----------------------------------------------------------------------
 //
 // The v16 migration deletes every row from `evidence_fts_cjk` and

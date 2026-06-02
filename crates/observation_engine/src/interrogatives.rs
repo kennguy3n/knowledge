@@ -70,8 +70,8 @@ pub enum InterrogativeMatch {
     /// short two-token collocations whose bare leading token is
     /// too high-frequency to use on its own (Vietnamese, where
     /// `tại` / `khi` / `vì` are common prepositions /
-    /// conjunctions in declaratives — see an earlier review finding
-    /// an earlier review finding / earlier review.
+    /// conjunctions in declaratives — see an earlier review for
+    /// context).
     FirstBigram,
     /// Any interrogative appearing as a substring of the
     /// case-folded sentence counts as a match. Used for languages
@@ -319,9 +319,9 @@ pub fn interrogatives_for(
         // initial case and rely on `?`/`?` terminator for the
         // sentence-final case.
         //
-        //  (,
-        // closing the deferred an earlier review finding): Vietnamese now uses
-        // FirstBigram so the high-frequency leading prepositions
+        // Updated (closing the deferred earlier-review finding):
+        // Vietnamese now uses FirstBigram so the high-frequency
+        // leading prepositions
         // / conjunctions `tại` / `khi` / `vì` recover their
         // interrogative readings via the two-token collocations
         // (`tại sao` "why?", `khi nào` "when?", `vì sao` "why?")
