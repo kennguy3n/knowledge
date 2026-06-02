@@ -192,7 +192,7 @@ impl KemBackend for StubKemBackend {
         recipient_pk: &KemPublicKey,
     ) -> Result<(KemSharedSecret, KemCiphertext), CryptoError> {
         // See keypair() above for why this import targets `rand_core`
-        // 0.6 rather than `rand` 0.9.
+        // 0.6 rather than `rand` 0.10.
         use rand_core::RngCore;
         let mut rng = OsRng;
         let mut ct = [0u8; KEM_CIPHERTEXT_LEN];
