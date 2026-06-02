@@ -60,7 +60,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// `Display`, `PartialEq`, `Eq`, `Hash`, `Serialize`,
 /// `Deserialize` — is unaffected because [`Arc<str>`] derefs to
 /// [`str`] and inherits its equality / hashing semantics. See
-/// Devin Review finding #ANALYSIS-0002.
+/// earlier review.
 ///
 /// `Deserialize` is implemented by hand (rather than derived as
 /// `#[serde(transparent)]`) so that round-tripping a tag through
@@ -69,7 +69,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// records — enforces the exact same `trim` + lower-case + empty
 /// check that [`LanguageTag::new`] applies. Without this an
 /// adversarial or malformed payload (`"language_tag": ""`,
-/// `"language_tag": "   "`, `"language_tag": "EN-US"`) would
+/// `"language_tag": " "`, `"language_tag": "EN-US"`) would
 /// otherwise materialise as an un-normalised tag and silently
 /// derail the per-locale lexicon / FTS5 tokenizer selection.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -93,8 +93,8 @@ impl Serialize for LanguageTag {
     /// directly removes any dependence on which crate features are
     /// enabled in the dependency graph — the wire form is locked
     /// to the bare JSON string regardless of whether a future
-    /// dependency turns on serde's `rc` feature. See Devin Review
-    /// finding ANALYSIS-0002b.
+    /// dependency turns on serde's `rc` feature. See an earlier review
+    /// finding earlier review.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -110,7 +110,8 @@ impl<'de> Deserialize<'de> for LanguageTag {
     {
         let raw = String::deserialize(deserializer)?;
         LanguageTag::new(&raw).ok_or_else(|| {
-            serde::de::Error::custom("language_tag must be a non-empty BCP-47 primary subtag after trim",
+            serde::de::Error::custom(
+                "language_tag must be a non-empty BCP-47 primary subtag after trim",
             )
         })
     }
@@ -344,7 +345,8 @@ mod tests {
 
     #[test]
     fn detects_korean() {
-        let det = detect_language("다음 주 금요일에 새로운 마이그레이션을 배포할 예정이니 회의에서 검토 부탁드립니다.",
+        let det = detect_language(
+            "다음 주 금요일에 새로운 마이그레이션을 배포할 예정이니 회의에서 검토 부탁드립니다.",
         )
         .expect("korean should be reliably detected");
         assert_eq!(det.tag.as_str(), "ko");
@@ -384,7 +386,8 @@ mod tests {
 
     #[test]
     fn detects_arabic() {
-        let det = detect_language("قررنا إطلاق عملية الترحيل الجديدة يوم الجمعة المقبل وعرض النتائج على الفريق بأكمله.",
+        let det = detect_language(
+            "قررنا إطلاق عملية الترحيل الجديدة يوم الجمعة المقبل وعرض النتائج على الفريق بأكمله.",
         )
         .expect("arabic should be reliably detected");
         assert_eq!(det.tag.as_str(), "ar");
@@ -431,10 +434,12 @@ mod tests {
         // for whatever subset the detector chose to classify.
         for input in ["ok", "hi", "no", "yes", "the cat"] {
             if let Some(det) = detect_language(input) {
-                assert!(det.is_reliable,
+                assert!(
+                    det.is_reliable,
                     "detect_language must only surface reliable results: {det:?}"
                 );
-                assert!((0.0..=1.0).contains(&det.confidence),
+                assert!(
+                    (0.0..=1.0).contains(&det.confidence),
                     "confidence must be in [0, 1]: {det:?}"
                 );
             }
@@ -443,7 +448,7 @@ mod tests {
 
     #[test]
     fn clone_shares_allocation_via_arc() {
-        // Devin Review #ANALYSIS-0002: `LanguageTag` clones happen
+        // : `LanguageTag` clones happen
         // in the extractor entity-class loops (~6+ per call) and in
         // the doc pipeline's per-chunk threading. The internal
         // representation was switched from `String` to `Arc<str>`
@@ -455,11 +460,12 @@ mod tests {
         // location (the single Arc'd buffer).
         let a = LanguageTag::new("ja").unwrap();
         let b = a.clone();
-        assert_eq!(a.as_str().as_ptr(),
+        assert_eq!(
+            a.as_str().as_ptr(),
             b.as_str().as_ptr(),
             "LanguageTag::clone must share the underlying Arc<str> allocation \
              (got distinct data pointers — Clone is allocating again, which \
-             defeats the Arc<str> refactor for ANALYSIS-0002)"
+             defeats the Arc<str> refactor for an earlier review finding)"
         );
         // Equality + hashing still behave as `str`-based comparison
         // (a fresh-construction "ja" allocates a separate buffer
@@ -470,7 +476,8 @@ mod tests {
         let mut hasher_c = std::collections::hash_map::DefaultHasher::new();
         std::hash::Hash::hash(&a, &mut hasher_a);
         std::hash::Hash::hash(&c, &mut hasher_c);
-        assert_eq!(std::hash::Hasher::finish(&hasher_a),
+        assert_eq!(
+            std::hash::Hasher::finish(&hasher_a),
             std::hash::Hasher::finish(&hasher_c),
             "tags with identical content must hash equal regardless of Arc identity"
         );
@@ -512,7 +519,8 @@ mod tests {
         // represent as `Option<LanguageTag>::None`).
         for empty in ["\"\"", "\"   \""] {
             let res: Result<LanguageTag, _> = serde_json::from_str(empty);
-            assert!(res.is_err(),
+            assert!(
+                res.is_err(),
                 "deserialising empty / whitespace-only input must fail: {empty}"
             );
         }

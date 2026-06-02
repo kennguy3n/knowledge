@@ -25,9 +25,9 @@
 //!     nonce BLOB NOT NULL,
 //!     payload BLOB NOT NULL
 //! );
-//! CREATE INDEX audit_log_action_idx   ON audit_log(action_type);
-//! CREATE INDEX audit_log_actor_idx    ON audit_log(actor_id);
-//! CREATE INDEX audit_log_scope_idx    ON audit_log(scope_id);
+//! CREATE INDEX audit_log_action_idx ON audit_log(action_type);
+//! CREATE INDEX audit_log_actor_idx ON audit_log(actor_id);
+//! CREATE INDEX audit_log_scope_idx ON audit_log(scope_id);
 //! ```
 //!
 //! `payload` is the AEAD ciphertext of the JSON-encoded
@@ -158,7 +158,8 @@ impl PersistentAuditLog {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap_or(0);
         if existing_version != 0 && existing_version != SCHEMA_VERSION {
-            return Err(AuditError::Persistence("schema version mismatch — refusing to open",
+            return Err(AuditError::Persistence(
+                "schema version mismatch — refusing to open",
             ));
         }
 
@@ -236,7 +237,8 @@ impl PersistentAuditLog {
                 let sequence: i64 = row.get(1).map_err(AuditError::Sqlite)?;
                 let nonce_bytes: Vec<u8> = row.get(2).map_err(AuditError::Sqlite)?;
                 let ct: Vec<u8> = row.get(3).map_err(AuditError::Sqlite)?;
-                rows.push((slice_to_uuid(&id_bytes)?,
+                rows.push((
+                    slice_to_uuid(&id_bytes)?,
                     sequence,
                     slice_to_nonce(&nonce_bytes)?,
                     ct,
@@ -259,7 +261,8 @@ impl PersistentAuditLog {
             // entry being replayed under an id that doesn't
             // match its payload.
             if entry.id != AuditEntryId(id) || i64_to_seq(sequence)? != entry.sequence {
-                return Err(AuditError::Persistence("audit entry id/sequence does not match its row",
+                return Err(AuditError::Persistence(
+                    "audit entry id/sequence does not match its row",
                 ));
             }
             self.log.replay_persisted(entry)?;
@@ -282,7 +285,8 @@ impl PersistentAuditLog {
         let target_id_str = Some(entry.target.target_id.to_string());
         let scope_bytes = entry.scope_id.map(|s| s.as_uuid().as_bytes().to_vec());
         self.conn
-            .execute("INSERT INTO audit_log
+            .execute(
+                "INSERT INTO audit_log
                     (id, sequence, action_type, actor_type, actor_id,
                      target_type, target_id, scope_id, created_at, nonce, payload)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -502,7 +506,8 @@ mod tests {
         }
 
         let err = PersistentAuditLog::open(tmp.path(), &key_b).unwrap_err();
-        assert!(matches!(err, AuditError::Persistence(_) | AuditError::Sqlite(_)),
+        assert!(
+            matches!(err, AuditError::Persistence(_) | AuditError::Sqlite(_)),
             "expected an open failure for the wrong key, got {err:?}",
         );
     }
@@ -547,7 +552,8 @@ mod tests {
         let nonce = random_nonce();
         let aad = entry_aad(entry2.id.0, 0); // sequence 0 already taken
         let ct = encrypt_aead(&log.payload_key, &nonce, &payload, &aad).unwrap();
-        let res = log.conn.execute("INSERT INTO audit_log
+        let res = log.conn.execute(
+            "INSERT INTO audit_log
                 (id, sequence, action_type, actor_type, actor_id,
                  target_type, target_id, scope_id, created_at, nonce, payload)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -589,14 +595,16 @@ mod tests {
         let squatter_payload = serde_json::to_vec(&squatter).unwrap();
         let squatter_nonce = random_nonce();
         let squatter_aad = entry_aad(squatter.id.0, 1);
-        let squatter_ct = encrypt_aead(&log.payload_key,
+        let squatter_ct = encrypt_aead(
+            &log.payload_key,
             &squatter_nonce,
             &squatter_payload,
             &squatter_aad,
         )
         .unwrap();
         log.conn
-            .execute("INSERT INTO audit_log
+            .execute(
+                "INSERT INTO audit_log
                     (id, sequence, action_type, actor_type, actor_id,
                      target_type, target_id, scope_id, created_at, nonce, payload)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -619,14 +627,17 @@ mod tests {
         let before_len = log.log().len();
         let before_next = log.log().peek_next_sequence();
         let result = log.append(fresh_entry());
-        assert!(matches!(result, Err(AuditError::Sqlite(_))),
+        assert!(
+            matches!(result, Err(AuditError::Sqlite(_))),
             "expected the duplicate-sequence INSERT to fail, got {result:?}",
         );
-        assert_eq!(log.log().len(),
+        assert_eq!(
+            log.log().len(),
             before_len,
             "failed persist must not grow the in-memory log",
         );
-        assert_eq!(log.log().peek_next_sequence(),
+        assert_eq!(
+            log.log().peek_next_sequence(),
             before_next,
             "failed persist must not consume a sequence number",
         );

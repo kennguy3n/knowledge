@@ -8,10 +8,10 @@ use crate::error::{Result, TenantError};
 ///
 /// ```text
 /// [*] -> Active
-/// Active    -> Suspended  (admin / billing freeze)
-/// Suspended -> Active     (admin / billing unfreeze)
-/// Active    -> Deleted    (explicit deletion + key destruction)
-/// Suspended -> Deleted    (explicit deletion + key destruction)
+/// Active -> Suspended (admin / billing freeze)
+/// Suspended -> Active (admin / billing unfreeze)
+/// Active -> Deleted (explicit deletion + key destruction)
+/// Suspended -> Deleted (explicit deletion + key destruction)
 /// ```
 ///
 /// `Deleted` is terminal — the tenant root key has been destroyed and
@@ -48,10 +48,13 @@ impl TenantStatus {
     /// [`TenantError::InvalidLifecycleTransition`] if the transition
     /// is not allowed.
     pub fn validate_transition(self, to: TenantStatus) -> Result<()> {
-        let allowed = matches!((self, to),
-            (TenantStatus::Active,
+        let allowed = matches!(
+            (self, to),
+            (
+                TenantStatus::Active,
                 TenantStatus::Suspended | TenantStatus::Deleted
-            ) | (TenantStatus::Suspended,
+            ) | (
+                TenantStatus::Suspended,
                 TenantStatus::Active | TenantStatus::Deleted
             )
         );

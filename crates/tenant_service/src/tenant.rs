@@ -171,7 +171,8 @@ impl TenantRegistry {
     /// employees who leave and return.) A user whose membership row
     /// is currently `Active` is rejected with
     /// [`TenantError::MemberAlreadyProvisioned`].
-    pub fn add_member(&mut self,
+    pub fn add_member(
+        &mut self,
         tenant_id: TenantId,
         user_id: Uuid,
         role: Relation,
@@ -216,7 +217,8 @@ impl TenantRegistry {
     /// `Removed` are kept as audit artefacts only and cannot be
     /// re-roled; calling [`TenantRegistry::update_role`] on them
     /// returns [`TenantError::MemberAlreadyRemoved`].
-    pub fn update_role(&mut self,
+    pub fn update_role(
+        &mut self,
         tenant_id: TenantId,
         user_id: Uuid,
         role: Relation,

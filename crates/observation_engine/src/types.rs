@@ -86,7 +86,8 @@ pub struct Observation {
 
 impl Observation {
     /// Construct a fresh candidate observation.
-    pub fn new_candidate(observation_type: ObservationType,
+    pub fn new_candidate(
+        observation_type: ObservationType,
         content: impl Into<String>,
         scope_id: ScopeId,
         confidence: f64,

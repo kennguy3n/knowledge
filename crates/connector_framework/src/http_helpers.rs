@@ -69,7 +69,8 @@ pub fn classify_failure(provider: &str, endpoint: &str, resp: &HttpResponse) -> 
     } else {
         trimmed.to_string()
     };
-    let msg = format!("{provider} {endpoint} returned status {}: {detail}",
+    let msg = format!(
+        "{provider} {endpoint} returned status {}: {detail}",
         resp.status
     );
     match resp.status {
@@ -92,7 +93,8 @@ pub fn classify_failure(provider: &str, endpoint: &str, resp: &HttpResponse) -> 
 /// failures, [`ConnectorError::Auth`] for 401/403, and
 /// [`ConnectorError::Sync`] for any other non-2xx status or a JSON
 /// parse failure.
-pub fn bearer_get_json<R: DeserializeOwned>(transport: &Arc<dyn HttpTransport>,
+pub fn bearer_get_json<R: DeserializeOwned>(
+    transport: &Arc<dyn HttpTransport>,
     provider: &str,
     endpoint: &str,
     url: &str,
@@ -110,7 +112,8 @@ pub fn bearer_get_json<R: DeserializeOwned>(transport: &Arc<dyn HttpTransport>,
         return Err(classify_failure(provider, endpoint, &resp));
     }
     serde_json::from_slice::<R>(&resp.body).map_err(|e| {
-        ConnectorError::Sync(format!("{provider} {endpoint} JSON parse failed: {e} \
+        ConnectorError::Sync(format!(
+            "{provider} {endpoint} JSON parse failed: {e} \
              (body prefix: {})",
             String::from_utf8_lossy(&resp.body[..resp.body.len().min(256)])
         ))
@@ -131,7 +134,8 @@ pub fn bearer_get_json<R: DeserializeOwned>(transport: &Arc<dyn HttpTransport>,
 /// failures, [`ConnectorError::Auth`] for 401/403, and
 /// [`ConnectorError::Sync`] for non-2xx, JSON serialise, or JSON
 /// parse failures.
-pub fn bearer_post_json<B: serde::Serialize, R: DeserializeOwned>(transport: &Arc<dyn HttpTransport>,
+pub fn bearer_post_json<B: serde::Serialize, R: DeserializeOwned>(
+    transport: &Arc<dyn HttpTransport>,
     provider: &str,
     endpoint: &str,
     url: &str,
@@ -140,7 +144,8 @@ pub fn bearer_post_json<B: serde::Serialize, R: DeserializeOwned>(transport: &Ar
     body: &B,
 ) -> Result<R> {
     let body_bytes = serde_json::to_vec(body).map_err(|e| {
-        ConnectorError::Sync(format!("{provider} {endpoint} serialise request body failed: {e}"
+        ConnectorError::Sync(format!(
+            "{provider} {endpoint} serialise request body failed: {e}"
         ))
     })?;
     let mut req = HttpRequest::post(url, body_bytes)
@@ -155,7 +160,8 @@ pub fn bearer_post_json<B: serde::Serialize, R: DeserializeOwned>(transport: &Ar
         return Err(classify_failure(provider, endpoint, &resp));
     }
     serde_json::from_slice::<R>(&resp.body).map_err(|e| {
-        ConnectorError::Sync(format!("{provider} {endpoint} JSON parse failed: {e} \
+        ConnectorError::Sync(format!(
+            "{provider} {endpoint} JSON parse failed: {e} \
              (body prefix: {})",
             String::from_utf8_lossy(&resp.body[..resp.body.len().min(256)])
         ))
@@ -172,7 +178,8 @@ pub fn bearer_post_json<B: serde::Serialize, R: DeserializeOwned>(transport: &Ar
 /// # Errors
 ///
 /// Same as [`bearer_post_json`].
-pub fn bearer_post_form<R: DeserializeOwned>(transport: &Arc<dyn HttpTransport>,
+pub fn bearer_post_form<R: DeserializeOwned>(
+    transport: &Arc<dyn HttpTransport>,
     provider: &str,
     endpoint: &str,
     url: &str,
@@ -193,7 +200,8 @@ pub fn bearer_post_form<R: DeserializeOwned>(transport: &Arc<dyn HttpTransport>,
         return Err(classify_failure(provider, endpoint, &resp));
     }
     serde_json::from_slice::<R>(&resp.body).map_err(|e| {
-        ConnectorError::Sync(format!("{provider} {endpoint} JSON parse failed: {e} \
+        ConnectorError::Sync(format!(
+            "{provider} {endpoint} JSON parse failed: {e} \
              (body prefix: {})",
             String::from_utf8_lossy(&resp.body[..resp.body.len().min(256)])
         ))
@@ -343,7 +351,8 @@ mod tests {
         assert!(msg.contains('…'), "expected ellipsis: {msg}");
         // Truncated body cap is 512 + ellipsis; full 2000 bytes
         // must not appear verbatim.
-        assert!(!msg.contains(&"a".repeat(1_000)),
+        assert!(
+            !msg.contains(&"a".repeat(1_000)),
             "long body must be truncated"
         );
     }
@@ -370,7 +379,8 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains('…'), "expected truncation ellipsis: {msg}");
         // The 510 ASCII bytes must be preserved verbatim.
-        assert!(msg.contains(&"a".repeat(510)),
+        assert!(
+            msg.contains(&"a".repeat(510)),
             "expected the 510-byte ASCII prefix in the error message"
         );
     }
@@ -390,7 +400,8 @@ mod tests {
     #[test]
     fn percent_encode_preserves_unreserved() {
         // RFC 3986 §2.3 unreserved set: a-z A-Z 0-9 -._~
-        assert_eq!(percent_encode_form_component("Az0-_.~"),
+        assert_eq!(
+            percent_encode_form_component("Az0-_.~"),
             "Az0-_.~",
             "unreserved characters must pass through unchanged"
         );
@@ -401,7 +412,8 @@ mod tests {
         // A strict RFC 3986 §3.4 proxy / gateway may reject `+` in a
         // query string; the URL encoder must emit `%20` so the
         // substrate's traffic is never rejected mid-path.
-        assert_eq!(percent_encode_path_component("hello world"),
+        assert_eq!(
+            percent_encode_path_component("hello world"),
             "hello%20world"
         );
     }
@@ -413,10 +425,12 @@ mod tests {
         // Asserting `%20` here pins the encoder choice in the URL
         // path against accidental migration back to `+`.
         let encoded = percent_encode_path_component("updated > '2024-01-01' ORDER BY updated ASC");
-        assert!(encoded.contains("%20"),
+        assert!(
+            encoded.contains("%20"),
             "expected spaces as %20, got: {encoded}"
         );
-        assert!(!encoded.contains('+'),
+        assert!(
+            !encoded.contains('+'),
             "URL encoder must not emit `+` for spaces; got: {encoded}"
         );
     }

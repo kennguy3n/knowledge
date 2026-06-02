@@ -202,7 +202,8 @@ impl ContradictionPair {
 }
 
 /// Compute the contradiction-detection rate.
-pub fn compute_contradiction_rate(detected: &[ContradictionPair],
+pub fn compute_contradiction_rate(
+    detected: &[ContradictionPair],
     ground_truth: &[ContradictionPair],
 ) -> ContradictionDetectionRate {
     if ground_truth.is_empty() {
@@ -217,7 +218,8 @@ pub fn compute_contradiction_rate(detected: &[ContradictionPair],
 /// Build a [`DecayTuningMetrics`] from a sweep report and out-of-band
 /// promotion / deletion counts. Convenience wrapper around
 /// [`DecayTuningMetrics::from_sweep`].
-pub fn decay_sweep_report(report: DecaySweepReport,
+pub fn decay_sweep_report(
+    report: DecaySweepReport,
     promoted: u64,
     deleted: u64,
 ) -> DecayTuningMetrics {
@@ -308,7 +310,8 @@ impl MetricsCollector {
     /// and reset the in-window counters. The contradiction-rate
     /// component is computed against `ground_truth`, the
     /// retention-precision component against `objects`.
-    pub fn generate_report(&mut self,
+    pub fn generate_report(
+        &mut self,
         now: DateTime<Utc>,
         objects: &[MemoryObject],
         ground_truth: &[ContradictionPair],
@@ -354,12 +357,14 @@ mod tests {
     /// assertion loudly.
     #[track_caller]
     fn assert_float_eq(actual: f64, expected: f64) {
-        assert!(actual.total_cmp(&expected).is_eq(),
+        assert!(
+            actual.total_cmp(&expected).is_eq(),
             "float mismatch: actual={actual}, expected={expected}"
         );
     }
 
-    fn obj(state: MemoryState,
+    fn obj(
+        state: MemoryState,
         retrieval_count: u32,
         sensitivity: SensitivityClass,
     ) -> MemoryObject {
@@ -543,7 +548,8 @@ mod tests {
             generated_at: Utc::now(),
             retention_precision: RetentionPrecision::from_counts(2, 3),
             contradiction_rate: ContradictionDetectionRate::from_counts(1, 2),
-            decay_tuning: DecayTuningMetrics::from_sweep(DecaySweepReport {
+            decay_tuning: DecayTuningMetrics::from_sweep(
+                DecaySweepReport {
                     scored: 1,
                     candidates_archived: 1,
                     superseded_archived: 0,

@@ -39,12 +39,13 @@ use uuid::Uuid;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::stages::runtime::RuntimeState;
 use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::RuntimeState;
 
 const STAGE: &str = "crypto";
 
-pub fn run(dataset: &Dataset,
+pub fn run(
+    dataset: &Dataset,
     state: &mut RuntimeState,
     report: &mut DemoReport,
     log: &mut AssertionLog,
@@ -91,7 +92,8 @@ pub fn run(dataset: &Dataset,
     };
 
     for (i, entity_id) in entity_ids.iter().take(8).enumerate() {
-        let activity = SynthesisActivity::new("synth-pipeline:elected:demo-device",
+        let activity = SynthesisActivity::new(
+            "synth-pipeline:elected:demo-device",
             "bonsai-1.7b@q1_0_g128-2026-04-01",
             format!("synth.summary.v{}", i + 1),
             Uuid::from_u128(0x7777_0000_0000_0000_0000_0000_0000_0000 + i as u128),
@@ -163,7 +165,8 @@ pub fn run(dataset: &Dataset,
         }
         n
     };
-    let aead_aad = format!("scope:{};epoch:0;table:evidence_body",
+    let aead_aad = format!(
+        "scope:{};epoch:0;table:evidence_body",
         dataset.tenant_scope.id.0
     );
     let aead_payload = b"This is an evidence body that exercises the AEAD API end-to-end.".to_vec();
@@ -183,7 +186,8 @@ pub fn run(dataset: &Dataset,
     let aead_wrong_key_rejected = wrong_key_decrypt.is_err();
 
     // Wrong AAD.
-    let wrong_aad_decrypt = decrypt_aead(&aead_key,
+    let wrong_aad_decrypt = decrypt_aead(
+        &aead_key,
         &aead_nonce,
         &aead_ct,
         format!("scope:{};epoch:0;table:wrong", dataset.tenant_scope.id.0).as_bytes(),
@@ -220,7 +224,8 @@ pub fn run(dataset: &Dataset,
         .and_then(|d| d.key())
         .copied()
         .expect("live DEK borrowable before destroy");
-    let forget_ct = encrypt_aead(&live_key,
+    let forget_ct = encrypt_aead(
+        &live_key,
         &forget_nonce,
         forget_payload,
         forget_aad.as_bytes(),
@@ -245,7 +250,8 @@ pub fn run(dataset: &Dataset,
     // ciphertext (since the original key is gone forever, this is
     // the cryptographic guarantee).
     let mut zeroed_key: AeadKey = [0u8; AEAD_KEY_LEN];
-    let new_key_attempt = decrypt_aead(&zeroed_key,
+    let new_key_attempt = decrypt_aead(
+        &zeroed_key,
         &forget_nonce,
         &forget_ct,
         forget_aad.as_bytes(),
@@ -314,7 +320,8 @@ pub fn run(dataset: &Dataset,
 
     // Drive a size-based rotation by recording bytes.
     let _ = manager
-        .record_bytes(rotation_scope,
+        .record_bytes(
+            rotation_scope,
             16 * 1024 * 1024 * 1024 + 1,
             &mut rotation_registry,
         )
@@ -330,10 +337,12 @@ pub fn run(dataset: &Dataset,
     let listed_at_least_three = total_epochs_listed >= 3;
 
     // -------- Audit trail ------------------------------------------
-    state.audit_log.append(audit_service::AuditEntryBuilder::new()
+    state.audit_log.append(
+        audit_service::AuditEntryBuilder::new()
             .actor(audit_service::Actor::System)
             .action(audit_service::AuditActionType::KeyDestruction)
-            .target(audit_service::TargetRef::new(audit_service::TargetType::Key,
+            .target(audit_service::TargetRef::new(
+                audit_service::TargetType::Key,
                 scope_id.0,
             ))
             .scope(dataset.channel_scope.id)
@@ -344,10 +353,12 @@ pub fn run(dataset: &Dataset,
             .build()
             .expect("key destruction audit"),
     );
-    state.audit_log.append(audit_service::AuditEntryBuilder::new()
+    state.audit_log.append(
+        audit_service::AuditEntryBuilder::new()
             .actor(audit_service::Actor::System)
             .action(audit_service::AuditActionType::KeyDestruction)
-            .target(audit_service::TargetRef::new(audit_service::TargetType::Key,
+            .target(audit_service::TargetRef::new(
+                audit_service::TargetType::Key,
                 alt_scope.0,
             ))
             .scope(dataset.channel_alt_scope.id)
@@ -367,88 +378,108 @@ pub fn run(dataset: &Dataset,
     state.epoch_rotations += 2; // force + size
 
     // -------- Assertions ------------------------------------------
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "every signed bundle verifies under its own key",
         verify_total > 0 && verify_total == verify_pass,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "wrong-key verification fails for every signed bundle",
         wrong_key_failures == verify_total && verify_total > 0,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "tampered-entity-id bundles fail verification",
         tampered_failures == verify_total && verify_total > 0,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "hybrid KEM encap/decap produces matching shared secrets",
         kem_match,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "hybrid KEM shared secret length is 32 bytes (AEAD_KEY_LEN)",
         kem_secret_len == AEAD_KEY_LEN,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "wrong recipient secret cannot recover the hybrid shared secret",
         kem_isolation,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "AEAD encrypt/decrypt round-trips cleanly with bound AAD",
         aead_round_trip_ok,
     );
     log.check(STAGE, "AEAD wrong key is rejected", aead_wrong_key_rejected);
     log.check(STAGE, "AEAD wrong AAD is rejected", aead_wrong_aad_rejected);
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "AEAD tampered ciphertext is rejected",
         aead_tampered_rejected,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "scope DEK decrypts payload before destroy",
         pre_destroy_decrypt,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "scope DEK is dropped from the registry after destroy",
         !live_after_destroy,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "scope is forgotten after destroy_scope_dek",
         scope_forgotten,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "destroy_scope_dek emitted at least one KeyDestructionEvent",
         destroyed_count >= 1,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "decrypt with a zeroed key is rejected (forgetting holds)",
         zeroed_key_rejected,
     );
     log.check(STAGE, "destroy_scope_dek is idempotent", destroy_idempotent);
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "alternate scope started with two epoch DEKs",
         epoch_count_before == 2,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "destroy_epoch_dek emits at least one event",
         destroyed_epoch_zero_recorded,
     );
     log.check(STAGE, "destroyed epoch's DEK is gone", !live_epoch_zero);
     log.check(STAGE, "live epoch's DEK still resolves", live_epoch_one);
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "tombstone is set for the destroyed epoch",
         epoch_zero_forgotten,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "single-epoch destroy does NOT mark the whole scope forgotten",
         !scope_forgotten_via_single_epoch,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "epoch manager force_rotate advances the current epoch",
         force_progressed,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "epoch manager size trigger advances the current epoch",
         size_progressed,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "epoch manager lists every historical epoch",
         listed_at_least_three,
     );
@@ -462,11 +493,13 @@ pub fn run(dataset: &Dataset,
     stage.stat("scope_deks_destroyed", destroyed_count.to_string());
     stage.stat("scopes_forgotten", state.scopes_forgotten.to_string());
     stage.stat("epoch_dek_tombstones", "1".to_string());
-    stage.stat("current_epoch_after_rotations",
+    stage.stat(
+        "current_epoch_after_rotations",
         after_size_rotate.0.to_string(),
     );
     stage.stat("epochs_listed_for_scope", total_epochs_listed.to_string());
-    stage.note("Exercises TestSigner provenance round-trips (positive + \
+    stage.note(
+        "Exercises TestSigner provenance round-trips (positive + \
          wrong-key + tampered), hybrid X25519+ML-KEM-768 encap/decap \
          (positive + wrong-recipient), XChaCha20-Poly1305 AEAD \
          (positive + wrong-key + wrong-AAD + tampered), scope DEK \

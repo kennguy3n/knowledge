@@ -63,7 +63,8 @@ fn evidence_promotion_and_supersession_round_trip() {
         for variant in ["initial", "follow-up"] {
             let body = evidence_text(label, &format!("{def} ({variant})"));
             let res = store
-                .ingest(scope,
+                .ingest(
+                    scope,
                     &body,
                     Some("integration:promotion"),
                     ImportanceClass::Important,
@@ -88,14 +89,16 @@ fn evidence_promotion_and_supersession_round_trip() {
     // Channel Recap is a PartOf Project Atlas; Migration Plan IsA
     // Project Atlas. Two edges total.
     let edge_partof = graph
-        .add_edge(ConceptEdge::new(concept_ids[2],
+        .add_edge(ConceptEdge::new(
+            concept_ids[2],
             concept_ids[0],
             RelationType::PartOf,
             scope,
         ))
         .expect("add PartOf edge");
     let edge_isa = graph
-        .add_edge(ConceptEdge::new(concept_ids[1],
+        .add_edge(ConceptEdge::new(
+            concept_ids[1],
             concept_ids[0],
             RelationType::IsA,
             scope,
@@ -122,13 +125,15 @@ fn evidence_promotion_and_supersession_round_trip() {
             assert_eq!(n.state, NodeState::Canonical);
         }
         let partof_edges = view.get_edges(concept_ids[2]);
-        assert!(partof_edges.iter().any(|e| e.id == edge_partof
+        assert!(
+            partof_edges.iter().any(|e| e.id == edge_partof
                 && e.relation == RelationType::PartOf
                 && e.to == concept_ids[0]),
             "PartOf edge wired ChannelRecap → Atlas"
         );
         let isa_edges = view.get_edges(concept_ids[1]);
-        assert!(isa_edges.iter().any(|e| e.id == edge_isa
+        assert!(
+            isa_edges.iter().any(|e| e.id == edge_isa
                 && e.relation == RelationType::IsA
                 && e.to == concept_ids[0]),
             "IsA edge wired Migration → Atlas"
@@ -166,7 +171,8 @@ fn evidence_promotion_and_supersession_round_trip() {
         assert_eq!(pred.state, NodeState::Superseded);
         assert_eq!(pred.superseded_by, Some(new_id));
         let edges = view.get_edges(concept_ids[1]);
-        assert!(edges.iter().any(|e| e.id == supersedes_edge_id
+        assert!(
+            edges.iter().any(|e| e.id == supersedes_edge_id
                 && e.relation == RelationType::Supersedes
                 && e.to == new_id),
             "supersession edge wired predecessor → successor"

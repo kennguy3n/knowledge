@@ -116,7 +116,8 @@ impl Default for AutoPromotionPolicy {
 
 impl AutoPromotionPolicy {
     /// Construct a policy with the given thresholds.
-    pub fn new(min_confidence: f64,
+    pub fn new(
+        min_confidence: f64,
         min_corroboration: u32,
         max_sensitivity: SensitivityClass,
         require_human_for_critical: bool,
@@ -141,7 +142,8 @@ impl AutoPromotionPolicy {
 
     /// True iff a proposal in `(confidence, corroboration_count,
     /// sensitivity)` matches this policy's criteria.
-    pub fn matches(&self,
+    pub fn matches(
+        &self,
         confidence: f64,
         corroboration_count: u32,
         sensitivity: SensitivityClass,
@@ -436,7 +438,8 @@ impl ProposalStore {
     ///
     /// Refuses to overwrite an existing proposal with the same id —
     /// see [`LifecycleError::DuplicateProposal`].
-    pub fn submit_observation(&mut self,
+    pub fn submit_observation(
+        &mut self,
         proposal: AgentProposal<ObservationProposal>,
     ) -> Result<Uuid, LifecycleError> {
         validate_proposal(&proposal)?;
@@ -453,7 +456,8 @@ impl ProposalStore {
     ///
     /// Refuses to overwrite an existing proposal with the same id —
     /// see [`LifecycleError::DuplicateProposal`].
-    pub fn submit_concept(&mut self,
+    pub fn submit_concept(
+        &mut self,
         proposal: AgentProposal<ConceptProposal>,
     ) -> Result<Uuid, LifecycleError> {
         validate_proposal(&proposal)?;
@@ -470,7 +474,8 @@ impl ProposalStore {
     ///
     /// Refuses to overwrite an existing proposal with the same id —
     /// see [`LifecycleError::DuplicateProposal`].
-    pub fn submit_relation(&mut self,
+    pub fn submit_relation(
+        &mut self,
         proposal: AgentProposal<RelationProposal>,
     ) -> Result<Uuid, LifecycleError> {
         validate_proposal(&proposal)?;
@@ -487,7 +492,8 @@ impl ProposalStore {
     ///
     /// Refuses to overwrite an existing proposal with the same id —
     /// see [`LifecycleError::DuplicateProposal`].
-    pub fn submit_summary(&mut self,
+    pub fn submit_summary(
+        &mut self,
         proposal: AgentProposal<SummaryProposal>,
     ) -> Result<Uuid, LifecycleError> {
         validate_proposal(&proposal)?;
@@ -553,7 +559,8 @@ impl ProposalStore {
     /// guard, an expired-TTL check before the state check could
     /// silently flip an already-`Promoted` proposal to `Rejected`
     /// and lose canonical data.
-    pub fn review(&mut self,
+    pub fn review(
+        &mut self,
         id: Uuid,
         policy: &AutoPromotionPolicy,
     ) -> Result<ProposalDecision, LifecycleError> {
@@ -764,7 +771,8 @@ pub(crate) fn derive_canonical_id(kind: ProposalKind, proposal_id: Uuid) -> Uuid
     Uuid::new_v5(&canonical_namespace(kind), proposal_id.as_bytes())
 }
 
-fn stored_from_envelope<T, F: FnOnce(T) -> AnyPayload>(proposal: AgentProposal<T>,
+fn stored_from_envelope<T, F: FnOnce(T) -> AnyPayload>(
+    proposal: AgentProposal<T>,
     wrap: F,
 ) -> StoredProposal {
     StoredProposal {
@@ -804,10 +812,12 @@ mod tests {
         AgentIdentity::new(Uuid::new_v4(), "agent", "bonsai", "v1")
     }
 
-    fn fixture_observation(confidence: f64,
+    fn fixture_observation(
+        confidence: f64,
         sensitivity: SensitivityClass,
     ) -> AgentProposal<ObservationProposal> {
-        AgentProposal::new(ProposalKind::Observation,
+        AgentProposal::new(
+            ProposalKind::Observation,
             ScopeId::new_v4(),
             ObservationProposal::new("claim", "fact"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -872,7 +882,8 @@ mod tests {
             .submit_observation(fixture_observation(0.9, SensitivityClass::Useful))
             .expect("submit");
         // promote directly from Proposed should fail
-        assert!(matches!(store.promote(id),
+        assert!(matches!(
+            store.promote(id),
             Err(LifecycleError::InvalidTransition { .. })
         ));
     }
@@ -913,7 +924,8 @@ mod tests {
             .expect("submit");
         store.review(id, &permissive_policy()).expect("review");
         // Now Promoted — reject must fail
-        assert!(matches!(store.reject(id, "test"),
+        assert!(matches!(
+            store.reject(id, "test"),
             Err(LifecycleError::InvalidTransition { .. })
         ));
     }
@@ -938,7 +950,8 @@ mod tests {
     #[test]
     fn promote_to_canonical_concept() {
         let mut store = ProposalStore::new();
-        let p = AgentProposal::new(ProposalKind::Concept,
+        let p = AgentProposal::new(
+            ProposalKind::Concept,
             ScopeId::new_v4(),
             ConceptProposal::new("Atlas", "Q3 launch"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -962,7 +975,8 @@ mod tests {
         let mut store = ProposalStore::new();
         let src = Uuid::new_v4();
         let dst = Uuid::new_v4();
-        let p = AgentProposal::new(ProposalKind::Relation,
+        let p = AgentProposal::new(
+            ProposalKind::Relation,
             ScopeId::new_v4(),
             RelationProposal::new(src, dst, RelationType::new("part_of")),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -986,7 +1000,8 @@ mod tests {
     #[test]
     fn promote_to_canonical_summary() {
         let mut store = ProposalStore::new();
-        let p = AgentProposal::new(ProposalKind::Summary,
+        let p = AgentProposal::new(
+            ProposalKind::Summary,
             ScopeId::new_v4(),
             SummaryProposal::new("recap text", "channel"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -1021,7 +1036,8 @@ mod tests {
         // canonical objects from one promoted proposal even if the
         // caller invokes `promote_to_canonical` more than once.
         assert_eq!(first.id(), second.id());
-        assert_eq!(first.id(),
+        assert_eq!(
+            first.id(),
             derive_canonical_id(ProposalKind::Observation, id)
         );
     }
@@ -1051,7 +1067,8 @@ mod tests {
             .submit_observation(fixture_observation(0.5, SensitivityClass::Useful))
             .expect("submit");
         // Still Proposed → must fail
-        assert!(matches!(store.promote_to_canonical(id),
+        assert!(matches!(
+            store.promote_to_canonical(id),
             Err(LifecycleError::InvalidTransition { .. })
         ));
     }
@@ -1107,7 +1124,8 @@ mod tests {
             .expect("submit");
         store.review(id, &permissive_policy()).expect("review");
         // Second review must fail (not in Proposed state)
-        assert!(matches!(store.review(id, &permissive_policy()),
+        assert!(matches!(
+            store.review(id, &permissive_policy()),
             Err(LifecycleError::InvalidTransition { .. })
         ));
     }
@@ -1227,7 +1245,8 @@ mod tests {
     #[test]
     fn submit_concept_refuses_duplicate_id() {
         let mut store = ProposalStore::new();
-        let p = AgentProposal::new(ProposalKind::Concept,
+        let p = AgentProposal::new(
+            ProposalKind::Concept,
             ScopeId::new_v4(),
             ConceptProposal::new("Atlas", "Q3 launch"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -1246,7 +1265,8 @@ mod tests {
         let mut store = ProposalStore::new();
         let src = Uuid::new_v4();
         let dst = Uuid::new_v4();
-        let p = AgentProposal::new(ProposalKind::Relation,
+        let p = AgentProposal::new(
+            ProposalKind::Relation,
             ScopeId::new_v4(),
             RelationProposal::new(src, dst, RelationType::new("part_of")),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -1263,7 +1283,8 @@ mod tests {
     #[test]
     fn submit_summary_refuses_duplicate_id() {
         let mut store = ProposalStore::new();
-        let p = AgentProposal::new(ProposalKind::Summary,
+        let p = AgentProposal::new(
+            ProposalKind::Summary,
             ScopeId::new_v4(),
             SummaryProposal::new("recap text", "channel"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],

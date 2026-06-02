@@ -142,7 +142,8 @@ impl TokenBucket {
             // We saturate via `as u64` rather than `try_into` so
             // a debug-build panic on negative inputs cannot
             // escape the cooldown gate.
-            #[allow(clippy::cast_possible_truncation,
+            #[allow(
+                clippy::cast_possible_truncation,
                 clippy::cast_sign_loss,
                 clippy::cast_precision_loss
             )]
@@ -221,7 +222,8 @@ mod tests {
                 .try_acquire(now)
                 .unwrap_or_else(|_| panic!("burst call {i} after long idle must succeed"));
         }
-        assert!(bucket.try_acquire(now).is_err(),
+        assert!(
+            bucket.try_acquire(now).is_err(),
             "6th call after long idle must throttle (cap held at capacity=5)",
         );
     }
@@ -251,7 +253,8 @@ mod tests {
                 .try_acquire(t(0))
                 .unwrap_or_else(|_| panic!("call {i} must succeed under new cap"));
         }
-        assert!(bucket.try_acquire(t(0)).is_err(),
+        assert!(
+            bucket.try_acquire(t(0)).is_err(),
             "4th call must throttle (capacity clamped from 10 to 3)",
         );
     }

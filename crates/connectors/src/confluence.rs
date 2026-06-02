@@ -226,7 +226,8 @@ impl ConfluenceConnector {
     /// `https://auth.atlassian.com/oauth/token`. The production
     /// substrate wires these to `BlockingHttpTransport` +
     /// `OAuth2Client`; tests use `MockHttpTransport`.
-    pub fn new(instance: ConnectorInstanceId,
+    pub fn new(
+        instance: ConnectorInstanceId,
         transport: Arc<dyn HttpTransport>,
         oauth: Arc<dyn OAuth2CodeExchange>,
     ) -> Self {
@@ -259,7 +260,8 @@ impl ConfluenceConnector {
             .auth_config_json
             .get("api_base_url")
             .and_then(serde_json::Value::as_str)
-            .map_or_else(|| self.api_base_url.clone(),
+            .map_or_else(
+                || self.api_base_url.clone(),
                 std::string::ToString::to_string,
             )
     }
@@ -289,7 +291,8 @@ impl ConfluenceConnector {
     /// walks the rest of the page — the per-row `t <= prev`
     /// defence-in-depth filter in [`Self::incremental_sync`] still
     /// drops stale rows correctly.
-    fn paginate_pages(&self,
+    fn paginate_pages(
+        &self,
         base_url: &str,
         token: &OAuth2Token,
         cutoff: Option<DateTime<Utc>>,
@@ -298,7 +301,8 @@ impl ConfluenceConnector {
         // First page — explicit query string. Subsequent pages
         // follow `_links.next` verbatim (it already carries the
         // cursor).
-        let mut next_path = Some(format!("/wiki/api/v2/pages?limit={}&sort=-modified-date",
+        let mut next_path = Some(format!(
+            "/wiki/api/v2/pages?limit={}&sort=-modified-date",
             self.page_size
         ));
         let mut prev_path: Option<String> = None;
@@ -314,7 +318,8 @@ impl ConfluenceConnector {
             }
             prev_path = Some(path.clone());
             let url = format!("{base_url}{path}");
-            let resp: ConfluenceContentList = bearer_get_json(&self.transport,
+            let resp: ConfluenceContentList = bearer_get_json(
+                &self.transport,
                 "confluence",
                 "/wiki/api/v2/pages",
                 &url,
@@ -401,7 +406,8 @@ impl Connector for ConfluenceConnector {
             .get("authorization_code")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Auth("confluence authenticate: auth_config_json.authorization_code is required"
+                ConnectorError::Auth(
+                    "confluence authenticate: auth_config_json.authorization_code is required"
                         .into(),
                 )
             })?;
@@ -425,7 +431,8 @@ impl Connector for ConfluenceConnector {
         })
     }
 
-    fn incremental_sync(&self,
+    fn incremental_sync(
+        &self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         state: &SyncState,
@@ -469,7 +476,8 @@ impl Connector for ConfluenceConnector {
         })
     }
 
-    fn subscribe_webhook(&self,
+    fn subscribe_webhook(
+        &self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         callback_url: &str,
@@ -490,7 +498,8 @@ impl Connector for ConfluenceConnector {
             ],
             "excludeBody": false,
         });
-        let resp: ConfluenceWebhookCreateResponse = bearer_post_json(&self.transport,
+        let resp: ConfluenceWebhookCreateResponse = bearer_post_json(
+            &self.transport,
             "confluence",
             "/wiki/rest/webhooks/1.0/webhook",
             &url,
@@ -499,16 +508,19 @@ impl Connector for ConfluenceConnector {
             &body,
         )?;
         let webhook_id = resp.id.ok_or_else(|| {
-            ConnectorError::Webhook("confluence /wiki/rest/webhooks/1.0/webhook returned no id".into(),
+            ConnectorError::Webhook(
+                "confluence /wiki/rest/webhooks/1.0/webhook returned no id".into(),
             )
         })?;
-        let mut subscription = WebhookSubscription::new(self.instance,
+        let mut subscription = WebhookSubscription::new(
+            self.instance,
             callback_url,
             // Atlassian generates the webhook signing secret
             // out-of-band; surface the configured secret if present,
             // else record a placeholder so the substrate can sign
             // incoming requests once the operator fills it in.
-            WebhookSecret::new(config
+            WebhookSecret::new(
+                config
                     .auth_config_json
                     .get("webhook_secret")
                     .and_then(serde_json::Value::as_str)
@@ -563,7 +575,8 @@ impl Connector for ConfluenceConnector {
                     .content_id
                     .or_else(|| p.page.as_ref().map(|c| c.id.clone()))
                     .ok_or_else(|| {
-                        ConnectorError::Webhook("permission event missing contentId / page.id".into(),
+                        ConnectorError::Webhook(
+                            "permission event missing contentId / page.id".into(),
                         )
                     })?;
                 ConnectorEvent::PermissionChanged {
@@ -574,7 +587,8 @@ impl Connector for ConfluenceConnector {
                 }
             }
             other => {
-                return Err(ConnectorError::Webhook(format!("unknown Confluence webhookEvent: {other}"
+                return Err(ConnectorError::Webhook(format!(
+                    "unknown Confluence webhookEvent: {other}"
                 )))
             }
         };
@@ -594,7 +608,8 @@ mod tests {
     struct FixedOAuth;
     impl OAuth2CodeExchange for FixedOAuth {
         fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
-            Ok(OAuth2Token::new("confluence-access",
+            Ok(OAuth2Token::new(
+                "confluence-access",
                 "confluence-refresh",
                 Utc::now() + Duration::hours(1),
                 "read:confluence-content.all read:confluence-space.summary \
@@ -608,7 +623,8 @@ mod tests {
     }
 
     fn cfg() -> ConnectorConfig {
-        ConnectorConfig::new(ConnectorKind::Confluence,
+        ConnectorConfig::new(
+            ConnectorKind::Confluence,
             AuthKind::OAuth2,
             ScopeId::new_v4(),
         )
@@ -650,7 +666,8 @@ mod tests {
     fn authenticate_requires_authorization_code() {
         let transport = Arc::new(MockHttpTransport::new());
         let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
-        let cfg_no_code = ConnectorConfig::new(ConnectorKind::Confluence,
+        let cfg_no_code = ConnectorConfig::new(
+            ConnectorKind::Confluence,
             AuthKind::OAuth2,
             ScopeId::new_v4(),
         );
@@ -662,7 +679,8 @@ mod tests {
     fn initial_sync_emits_created_for_v1_and_advances_watermark() {
         let now = Utc::now();
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
             ok_json(&serde_json::json!({
                 "results": [page("c1", 1, now)],
@@ -673,7 +691,8 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert!(matches!(res.events[0],
+        assert!(matches!(
+            res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
         assert!(res.next_cursor.is_some());
@@ -683,7 +702,8 @@ mod tests {
     fn initial_sync_follows_links_next_cursor() {
         let now = Utc::now();
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
             ok_json(&serde_json::json!({
                 "results": [page("c1", 1, now)],
@@ -692,7 +712,8 @@ mod tests {
                 }
             })),
         );
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             "https://api.test/confluence/wiki/api/v2/pages?cursor=abc&limit=50&sort=-modified-date",
             ok_json(&serde_json::json!({
                 "results": [page("c2", 2, now - Duration::minutes(5))],
@@ -703,10 +724,12 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 2);
-        assert!(matches!(res.events[0],
+        assert!(matches!(
+            res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
-        assert!(matches!(res.events[1],
+        assert!(matches!(
+            res.events[1],
             ConnectorEvent::DocumentUpdated { .. }
         ));
     }
@@ -718,7 +741,8 @@ mod tests {
         // newer row (now) to be emitted.
         let watermark = (now - Duration::minutes(1)).to_rfc3339();
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
             ok_json(&serde_json::json!({
                 "results": [
@@ -790,13 +814,15 @@ mod tests {
         // Explicit positive assertion: exactly ONE GET landed on
         // the transport — page 2 was never fetched.
         let requests = recorder.recorded();
-        assert_eq!(requests.len(),
+        assert_eq!(
+            requests.len(),
             1,
             "expected short-circuit to issue only one GET, got {}: {:?}",
             requests.len(),
             requests.iter().map(|r| &r.url).collect::<Vec<_>>()
         );
-        assert!(!requests[0].url.contains("should-not-fetch"),
+        assert!(
+            !requests[0].url.contains("should-not-fetch"),
             "first request should be the initial page, not the next-cursor URL"
         );
     }
@@ -811,7 +837,8 @@ mod tests {
         // catch the duplicate. The guard short-circuits on the
         // second observation of the same cursor.
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
             ok_json(&serde_json::json!({
                 "results": [page("c1", 1, now)],
@@ -829,7 +856,8 @@ mod tests {
     #[test]
     fn list_500_propagates_as_sync_error() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
             MockResponse::status(500, b"upstream boom".to_vec()),
         );
@@ -842,7 +870,8 @@ mod tests {
     #[test]
     fn list_401_propagates_as_auth_error() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
             MockResponse::status(401, b"unauthorized".to_vec()),
         );
@@ -855,7 +884,8 @@ mod tests {
     #[test]
     fn subscribe_webhook_posts_and_captures_id() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/confluence/wiki/rest/webhooks/1.0/webhook",
             ok_json(&serde_json::json!({
                 "id": 4242,
@@ -889,7 +919,8 @@ mod tests {
             "page_trashed",
             "space_permissions_updated",
         ] {
-            assert!(events.contains(&needed),
+            assert!(
+                events.contains(&needed),
                 "missing {needed} from webhook subscription body"
             );
         }
@@ -898,7 +929,8 @@ mod tests {
     #[test]
     fn subscribe_webhook_errors_when_id_missing() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/confluence/wiki/rest/webhooks/1.0/webhook",
             ok_json(&serde_json::json!({})),
         );

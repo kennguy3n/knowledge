@@ -148,7 +148,7 @@ so the main process can deny / log / rate-limit as needed.
 When a new N-API export lands in `crates/napi/src/bindings.rs`,
 the corresponding `knowledge:*` channel name must be added to the
 preload allowlist **and** to the main-process `ipcMain.handle`
-registration in the same commit. The Devin Review configuration
+registration in the same commit. The an earlier review configuration
 in this repo flags drifts between the addon exports and the
 preload bundle.
 

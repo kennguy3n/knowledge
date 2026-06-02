@@ -77,7 +77,8 @@ pub fn set_mlx_generate_fn(f: MlxGenerateFn) {
         // double-registration shows up in the substrate's audit
         // log instead of silently swapping the in-flight callback
         // out from under live dispatchers.
-        tracing::warn!("MLX generate callback re-registered \u{2014} discarding previous registration. \
+        tracing::warn!(
+            "MLX generate callback re-registered \u{2014} discarding previous registration. \
              Expected usage is a single registration at app launch; double registration \
              may indicate a misconfigured platform shell.",
         );
@@ -162,7 +163,8 @@ impl InferenceAdapter for MlxAdapter {
 
     fn probe(&self) -> ProbeResult {
         let is_apple = self.on_apple_silicon();
-        let tier_ok = matches!(self.config.device_tier,
+        let tier_ok = matches!(
+            self.config.device_tier,
             DeviceTier::Medium | DeviceTier::High
         );
         let runtime_linked = mlx_runtime_linked();
@@ -342,7 +344,8 @@ mod tests {
         // Force re-probe so is_available correctly reflects the state
         adapter.probe();
         let err = adapter.generate("synth_summary", "", "").unwrap_err();
-        assert!(err.is_fallback(),
+        assert!(
+            err.is_fallback(),
             "MLX generate() must return a fallback error"
         );
     }
@@ -357,7 +360,8 @@ mod tests {
         // Encode the inputs in the output so the assertion below can
         // verify they round-tripped verbatim. Real Swift shells emit
         // grammar-constrained JSON; the test substitute just echoes.
-        Ok(format!("{{\"task\":\"{task_tag}\",\"prompt_len\":{p},\"grammar_len\":{g}}}",
+        Ok(format!(
+            "{{\"task\":\"{task_tag}\",\"prompt_len\":{p},\"grammar_len\":{g}}}",
             p = prompt.len(),
             g = grammar.len(),
         ))
@@ -407,10 +411,12 @@ mod tests {
         let adapter = MlxAdapter::with_platform_override(cfg, true);
         adapter.probe();
         let err = adapter.generate("synth_summary", "hi", "").unwrap_err();
-        assert!(matches!(err, RouterError::InferenceFailure(_)),
+        assert!(
+            matches!(err, RouterError::InferenceFailure(_)),
             "expected InferenceFailure, got {err:?}"
         );
-        assert!(!err.is_fallback(),
+        assert!(
+            !err.is_fallback(),
             "InferenceFailure must not be a fallback error"
         );
         // Restore the test_callback so neighbouring tests that
@@ -428,7 +434,8 @@ mod tests {
         let adapter = MlxAdapter::with_platform_override(cfg, true);
         adapter.probe();
         let err = adapter.generate("synth_summary", "", "").unwrap_err();
-        assert!(err.is_fallback(),
+        assert!(
+            err.is_fallback(),
             "missing callback must surface as a fallback error",
         );
         set_mlx_runtime_linked(false);

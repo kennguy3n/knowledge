@@ -1,15 +1,15 @@
-//!  — Cross-lingual recall benchmark suite.
+//! Cross-lingual recall benchmark suite.
 //!
-//! The multilingual stack (Phases 1.1, 1.3–1.11) wired XLM-R into
-//! the vector lane and validated cross-lingual semantic clustering
-//! with three integration tests (English ↔ Japanese weather, French
-//! ↔ Spanish weather, English ↔ Spanish via rerank).  Those tests
-//! pin the *minimal* invariant — that the embedding lane is not
+//! The multilingual stack wires XLM-R into the vector lane and
+//! validates cross-lingual semantic clustering with three
+//! integration tests (English ↔ Japanese weather, French ↔ Spanish
+//! weather, English ↔ Spanish via rerank). Those tests pin the
+//! *minimal* invariant — that the embedding lane is not
 //! script-segregated — but they don't measure the *quality* of the
 //! cross-lingual clustering at any meaningful scale.
 //!
-//!  lifts those three spot-checks into a fixture-driven
-//! benchmark suite:
+//! This benchmark suite lifts those three spot-checks into a
+//! fixture-driven measurement:
 //!
 //! * **Concept inventory** — 10 named knowledge concepts (weather,
 //!   finance, cooking, sports, technology, travel, music, health,
@@ -443,9 +443,11 @@ fn open_benchmark_store() -> (tempfile::TempDir, EvidenceStore) {
 /// Ingest every [`CORPUS`] entry into `store` under `scope`, return
 /// the (text → evidence_id, evidence_id → concept) maps for use
 /// when scoring recall.
-fn ingest_corpus(store: &mut EvidenceStore,
+fn ingest_corpus(
+    store: &mut EvidenceStore,
     scope: ScopeId,
-) -> (BTreeMap<&'static str, EvidenceId>,
+) -> (
+    BTreeMap<&'static str, EvidenceId>,
     BTreeMap<EvidenceId, Concept>,
 ) {
     let mut by_text = BTreeMap::new();
@@ -472,7 +474,8 @@ fn ingest_corpus(store: &mut EvidenceStore,
 /// top-k slot), so the assertions below pin `recall@12` for the
 /// strict floor and use `hit_rate_at_k` for the top-result quality
 /// invariant.
-fn recall_at_k(top_k: &[EvidenceId],
+fn recall_at_k(
+    top_k: &[EvidenceId],
     expected_concept: Concept,
     concept_by_id: &BTreeMap<EvidenceId, Concept>,
 ) -> f64 {
@@ -480,7 +483,8 @@ fn recall_at_k(top_k: &[EvidenceId],
         .values()
         .filter(|c| **c == expected_concept)
         .count();
-    assert_eq!(relevant_total, NUM_LANGUAGES,
+    assert_eq!(
+        relevant_total, NUM_LANGUAGES,
         "corpus must be dense at NUM_LANGUAGES paraphrases per concept"
     );
 
@@ -502,7 +506,8 @@ fn recall_at_k(top_k: &[EvidenceId],
 /// which makes `recall@1` a useless gate — hit-rate@1 is the
 /// gate that actually catches a regression ("top-1 is NOT a
 /// same-concept doc anymore").
-fn hit_rate_at_k(top_k: &[EvidenceId],
+fn hit_rate_at_k(
+    top_k: &[EvidenceId],
     expected_concept: Concept,
     concept_by_id: &BTreeMap<EvidenceId, Concept>,
 ) -> f64 {
@@ -652,15 +657,18 @@ fn cross_lingual_recall_benchmark() {
         // regressions; recall@3 catches near-top regressions;
         // recall@12 (k = |relevant set| = NUM_LANGUAGES) catches
         // full-set regressions.
-        let hit_at_1 = hit_rate_at_k(&top_ids[..1.min(top_ids.len())],
+        let hit_at_1 = hit_rate_at_k(
+            &top_ids[..1.min(top_ids.len())],
             query.concept,
             &concept_by_id,
         );
-        let hit_at_3 = hit_rate_at_k(&top_ids[..3.min(top_ids.len())],
+        let hit_at_3 = hit_rate_at_k(
+            &top_ids[..3.min(top_ids.len())],
             query.concept,
             &concept_by_id,
         );
-        let r_at_12 = recall_at_k(&top_ids[..NUM_LANGUAGES.min(top_ids.len())],
+        let r_at_12 = recall_at_k(
+            &top_ids[..NUM_LANGUAGES.min(top_ids.len())],
             query.concept,
             &concept_by_id,
         );
@@ -681,7 +689,8 @@ fn cross_lingual_recall_benchmark() {
     let mean_hit_3: f64 = measurements.iter().map(|m| m.hit_rate_at_3).sum::<f64>() / n;
     let mean_r_at_12: f64 = measurements.iter().map(|m| m.recall_at_12).sum::<f64>() / n;
 
-    eprintln!(" cross-lingual recall benchmark (n={n} queries across {c} concepts × {l} languages):",
+    eprintln!(
+        " cross-lingual recall benchmark (n={n} queries across {c} concepts × {l} languages):",
         c = NUM_CONCEPTS,
         l = NUM_LANGUAGES,
     );
@@ -689,7 +698,8 @@ fn cross_lingual_recall_benchmark() {
     eprintln!("  mean hit-rate@3  = {mean_hit_3:.4}");
     eprintln!("  mean recall@12   = {mean_r_at_12:.4}");
 
-    assert!(mean_r_at_12 >= MEAN_RECALL_AT_12_FLOOR,
+    assert!(
+        mean_r_at_12 >= MEAN_RECALL_AT_12_FLOOR,
         "mean recall@12 = {mean_r_at_12:.4} fell below floor {MEAN_RECALL_AT_12_FLOOR:.4}"
     );
 
@@ -703,7 +713,8 @@ fn cross_lingual_recall_benchmark() {
             per_query_failures.push(m);
         }
     }
-    assert!(per_query_failures.is_empty(),
+    assert!(
+        per_query_failures.is_empty(),
         "per-query recall floors tripped on {} of {} queries; failures:\n{:#?}",
         per_query_failures.len(),
         measurements.len(),
@@ -736,7 +747,8 @@ fn cross_lingual_recall_benchmark() {
 /// own failure rather than as a confusing recall-floor breach.
 #[test]
 fn corpus_shape_invariants() {
-    assert_eq!(CORPUS.len(),
+    assert_eq!(
+        CORPUS.len(),
         NUM_CONCEPTS * NUM_LANGUAGES,
         "CORPUS must be a dense NUM_CONCEPTS × NUM_LANGUAGES matrix"
     );
@@ -744,18 +756,21 @@ fn corpus_shape_invariants() {
     let mut by_concept: BTreeMap<Concept, BTreeSet<&'static str>> = BTreeMap::new();
     for entry in CORPUS {
         let langs = by_concept.entry(entry.concept).or_default();
-        assert!(langs.insert(entry.lang),
+        assert!(
+            langs.insert(entry.lang),
             "duplicate (concept={:?}, lang={}) in CORPUS",
             entry.concept,
             entry.lang
         );
     }
-    assert_eq!(by_concept.len(),
+    assert_eq!(
+        by_concept.len(),
         NUM_CONCEPTS,
         "every concept must appear at least once"
     );
     for (concept, langs) in &by_concept {
-        assert_eq!(langs.len(),
+        assert_eq!(
+            langs.len(),
             NUM_LANGUAGES,
             "concept {concept:?} has {} languages, expected {NUM_LANGUAGES}",
             langs.len()
@@ -767,7 +782,8 @@ fn corpus_shape_invariants() {
     // to the same text and confuse the recall@k counting.
     let mut all_texts: BTreeSet<&'static str> = BTreeSet::new();
     for entry in CORPUS {
-        assert!(all_texts.insert(entry.text),
+        assert!(
+            all_texts.insert(entry.text),
             "duplicate corpus text {:?} (concept={:?}, lang={})",
             entry.text,
             entry.concept,
@@ -790,12 +806,14 @@ fn mock_model_concept_axis_invariants() {
     for entry in CORPUS {
         let v = model.embed(entry.text).expect("embed corpus text");
         let axis = entry.concept as usize;
-        assert_eq!(v.len(),
+        assert_eq!(
+            v.len(),
             MOCK_EMBEDDING_DIM,
             "embed dimension mismatch for {:?}",
             entry.text
         );
-        assert!((v[axis] - 1.0).abs() < f32::EPSILON,
+        assert!(
+            (v[axis] - 1.0).abs() < f32::EPSILON,
             "embedding for {:?} did not land on axis {} (concept {:?})",
             entry.text,
             axis,
@@ -807,7 +825,8 @@ fn mock_model_concept_axis_invariants() {
             if i == axis {
                 continue;
             }
-            assert!(component.abs() < f32::EPSILON,
+            assert!(
+                component.abs() < f32::EPSILON,
                 "embedding for {:?} bled non-zero onto axis {} (expected only axis {})",
                 entry.text,
                 i,
@@ -824,14 +843,16 @@ fn mock_model_concept_axis_invariants() {
     let off_vocab = model
         .embed("totally unrelated control-group document body")
         .expect("embed off-vocab");
-    assert!((off_vocab[CATCH_ALL_AXIS] - 1.0).abs() < f32::EPSILON,
+    assert!(
+        (off_vocab[CATCH_ALL_AXIS] - 1.0).abs() < f32::EPSILON,
         "off-vocab text did not land on catch-all axis"
     );
     for (i, &component) in off_vocab.iter().enumerate() {
         if i == CATCH_ALL_AXIS {
             continue;
         }
-        assert!(component.abs() < f32::EPSILON,
+        assert!(
+            component.abs() < f32::EPSILON,
             "off-vocab embedding bled onto axis {i}"
         );
     }
@@ -841,7 +862,8 @@ fn mock_model_concept_axis_invariants() {
     // mock so a future change to the trait's error policy
     // surfaces here.
     let empty_result = model.embed("");
-    assert!(matches!(empty_result, Err(EmbeddingError::EmptyInput)),
+    assert!(
+        matches!(empty_result, Err(EmbeddingError::EmptyInput)),
         "empty string must produce EmbeddingError::EmptyInput, got {empty_result:?}"
     );
 }

@@ -179,7 +179,8 @@ mod tests {
         assert_eq!(limiter.current_window_count(), 3);
 
         let rejected = limiter.check().expect_err("4th call must be rejected");
-        assert!(rejected > Duration::ZERO,
+        assert!(
+            rejected > Duration::ZERO,
             "rejected calls must surface a non-zero wait so callers can sleep"
         );
         assert!(rejected <= WINDOW, "wait must never exceed one full window");

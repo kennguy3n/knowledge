@@ -73,7 +73,8 @@ impl EvidenceSnapshot {
     /// `still_valid` / `superseded` / `removed` given the
     /// surviving set and the superseded set. Anything in
     /// `baseline` not in either bucket is treated as removed.
-    pub fn partition(baseline: Vec<EvidenceId>,
+    pub fn partition(
+        baseline: Vec<EvidenceId>,
         still_valid: Vec<EvidenceId>,
         superseded: Vec<EvidenceId>,
     ) -> Self {
@@ -123,7 +124,8 @@ impl DriftDetector {
     /// Walk every canonical node in `graph` and return a
     /// [`DriftMarker`] for each whose snapshot in `snapshots`
     /// indicates drift. Nodes without a snapshot are skipped.
-    pub fn scan(&self,
+    pub fn scan(
+        &self,
         graph: &ConceptGraph,
         snapshots: &HashMap<NodeId, EvidenceSnapshot>,
     ) -> Vec<DriftMarker> {
@@ -186,7 +188,8 @@ mod tests {
         let e1 = EvidenceId::new_v4();
         let e2 = EvidenceId::new_v4();
         let mut snaps = HashMap::new();
-        snaps.insert(id,
+        snaps.insert(
+            id,
             EvidenceSnapshot::partition(vec![e1, e2], vec![e2], vec![e1]),
         );
         let markers = DriftDetector::new().scan(&g, &snaps);
@@ -206,7 +209,8 @@ mod tests {
         let e1 = EvidenceId::new_v4();
         let e2 = EvidenceId::new_v4();
         let mut snaps = HashMap::new();
-        snaps.insert(id,
+        snaps.insert(
+            id,
             EvidenceSnapshot::partition(vec![e1, e2], vec![e2], vec![]),
         );
         let markers = DriftDetector::new().scan(&g, &snaps);
@@ -260,7 +264,8 @@ mod tests {
         let e1 = EvidenceId::new_v4();
         let e2 = EvidenceId::new_v4();
         let mut snaps = HashMap::new();
-        snaps.insert(id,
+        snaps.insert(
+            id,
             EvidenceSnapshot::partition(vec![e1, e2], vec![e1, e2], vec![]),
         );
         let markers = DriftDetector::new().scan(&g, &snaps);
@@ -275,8 +280,10 @@ mod tests {
         let id = cand.id;
         g.add_node(cand).unwrap();
         let mut snaps = HashMap::new();
-        snaps.insert(id,
-            EvidenceSnapshot::partition(vec![EvidenceId::new_v4()],
+        snaps.insert(
+            id,
+            EvidenceSnapshot::partition(
+                vec![EvidenceId::new_v4()],
                 vec![],
                 vec![EvidenceId::new_v4()],
             ),

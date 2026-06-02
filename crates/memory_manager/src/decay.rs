@@ -51,7 +51,8 @@ pub struct DecaySweepReport {
 /// state are left untouched (the rest of the state machine is
 /// driven by explicit user / pipeline action).
 pub fn decay_sweep(objects: &mut [MemoryObject], now: DateTime<Utc>) -> DecaySweepReport {
-    decay_sweep_with(objects,
+    decay_sweep_with(
+        objects,
         now,
         DEFAULT_CANDIDATE_ARCHIVE_THRESHOLD,
         Duration::days(DEFAULT_SUPERSEDED_TTL_DAYS),
@@ -60,7 +61,8 @@ pub fn decay_sweep(objects: &mut [MemoryObject], now: DateTime<Utc>) -> DecaySwe
 
 /// Lower-level variant of [`decay_sweep`] exposing the archive
 /// threshold and the supersession TTL.
-pub fn decay_sweep_with(objects: &mut [MemoryObject],
+pub fn decay_sweep_with(
+    objects: &mut [MemoryObject],
     now: DateTime<Utc>,
     candidate_archive_threshold: f64,
     superseded_ttl: Duration,
@@ -79,10 +81,12 @@ pub fn decay_sweep_with(objects: &mut [MemoryObject],
         // active set via explicit deprecation / supersession.
         let is_critical = obj.sensitivity_class == SensitivityClass::Critical;
         let (try_archive_candidate, try_archive_superseded) = match obj.state {
-            MemoryState::Candidate => (!is_critical && score.total < candidate_archive_threshold,
+            MemoryState::Candidate => (
+                !is_critical && score.total < candidate_archive_threshold,
                 false,
             ),
-            MemoryState::Superseded => (false,
+            MemoryState::Superseded => (
+                false,
                 !is_critical && (now - obj.last_accessed_at) >= superseded_ttl,
             ),
             _ => (false, false),
@@ -177,7 +181,8 @@ mod tests {
 
         let mut objs = vec![obj];
         let report = decay_sweep(&mut objs, Utc::now());
-        assert_eq!(report.superseded_archived, 0,
+        assert_eq!(
+            report.superseded_archived, 0,
             "supersede() must stamp last_accessed_at so the Superseded TTL counts \
              from the supersession instant, not from the row's last read"
         );

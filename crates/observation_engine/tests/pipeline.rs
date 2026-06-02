@@ -24,7 +24,8 @@ fn substantive_text_yields_typed_candidate_observations() {
     let pipeline = default_pipeline();
     let scope = ScopeId::new_v4();
     let obs = pipeline
-        .run("We decided to ship the launch on Friday. \
+        .run(
+            "We decided to ship the launch on Friday. \
              TODO: draft the RFC for @Sara. \
              The Migration deadline is next Friday.",
             scope,

@@ -64,7 +64,8 @@ const SHARED_KEYWORD: &str = "loadbench-keyword";
 fn body_for(scope_idx: usize, evidence_idx: usize) -> Vec<u8> {
     // Each row has a unique token (for selectivity) and the shared
     // keyword (so the FTS bench has guaranteed hits per scope).
-    let prefix = format!("{SHARED_KEYWORD} scope-{scope_idx} evidence-{evidence_idx} \
+    let prefix = format!(
+        "{SHARED_KEYWORD} scope-{scope_idx} evidence-{evidence_idx} \
          channel-recap commitment migration deadline owner "
     );
     let mut body = prefix.into_bytes();
@@ -88,7 +89,8 @@ fn build_loaded_store() -> (TempDir, EvidenceStore, Vec<ScopeId>) {
         let scope = ScopeId::new_v4();
         for e in 0..EVIDENCE_PER_SCOPE {
             store
-                .ingest(scope,
+                .ingest(
+                    scope,
                     &body_for(s, e),
                     Some("bench:load_bench"),
                     ImportanceClass::Useful,
@@ -109,7 +111,8 @@ fn bench_ingest_throughput(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(20));
     group.bench_function("multi_scope_5000_rows", |b| {
-        b.iter_with_setup(|| {
+        b.iter_with_setup(
+            || {
                 let dir = TempDir::new().expect("tempdir");
                 let path = dir.path().join("evidence.db");
                 let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
@@ -121,7 +124,8 @@ fn bench_ingest_throughput(c: &mut Criterion) {
                 for (s, scope) in scopes.iter().enumerate() {
                     for e in 0..EVIDENCE_PER_SCOPE {
                         store
-                            .ingest(*scope,
+                            .ingest(
+                                *scope,
                                 &body_for(s, e),
                                 Some("bench:load_bench"),
                                 ImportanceClass::Useful,
@@ -161,7 +165,8 @@ fn bench_fts_query_latency(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(load_benches,
+criterion_group!(
+    load_benches,
     bench_ingest_throughput,
     bench_fts_query_latency
 );

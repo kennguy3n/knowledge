@@ -5,9 +5,9 @@
 //! FTS5 virtual tables — `evidence_fts` (unicode61, whitespace-
 //! segmented Latin / Cyrillic / Greek / Arabic / Hebrew /
 //! Devanagari / Hangul; +), `evidence_fts_cjk` (trigram,
-//! CJK / Thai recall lane;  / v14), and
+//! CJK / Thai recall lane; / v14), and
 //! `evidence_fts_bigram` (precomputed overlapping 2-codepoint
-//! windows for ≤ 2-codepoint CJK / Thai queries;  /
+//! windows for ≤ 2-codepoint CJK / Thai queries; /
 //! v15). Each lane returns its own BM25 `rank` and the three are
 //! merged into one `(evidence_id → best_rank)` map by
 //! [`crate::store::merged_fts_search`] before sorting + truncating
@@ -152,7 +152,8 @@ pub const EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS: &[f64] = &[1.0];
 /// the precision hierarchy.
 pub fn bm25_select_fragment(table: &str, column_weights: &[f64]) -> String {
     use std::fmt::Write;
-    assert!(!column_weights.is_empty(),
+    assert!(
+        !column_weights.is_empty(),
         "bm25_select_fragment requires at least one column weight \
          — the empty case would produce `bm25({table})` and silently \
          fall back to FTS5's default all-1.0 weights, bypassing the \
@@ -211,7 +212,8 @@ mod tests {
             ("evidence_fts_cjk", EVIDENCE_FTS_CJK_LANE_WEIGHT),
             ("evidence_fts_bigram", EVIDENCE_FTS_BIGRAM_LANE_WEIGHT),
         ] {
-            assert!(w > 0.0 && w <= 1.0,
+            assert!(
+                w > 0.0 && w <= 1.0,
                 "{name} lane weight {w} must be in (0, 1] — see module docstring"
             );
         }
@@ -230,19 +232,22 @@ mod tests {
         // returns a runtime error. Pin the count here so the
         // schema authors of any future v16+ migration have an
         // obvious test-failure breadcrumb pointing at this file.
-        assert_eq!(EVIDENCE_FTS_COLUMN_WEIGHTS.len(),
+        assert_eq!(
+            EVIDENCE_FTS_COLUMN_WEIGHTS.len(),
             1,
             "evidence_fts has 1 indexed column today (content); \
              schema bump that adds a column must also extend \
              EVIDENCE_FTS_COLUMN_WEIGHTS"
         );
-        assert_eq!(EVIDENCE_FTS_CJK_COLUMN_WEIGHTS.len(),
+        assert_eq!(
+            EVIDENCE_FTS_CJK_COLUMN_WEIGHTS.len(),
             1,
             "evidence_fts_cjk has 1 indexed column today (content); \
              schema bump that adds a column must also extend \
              EVIDENCE_FTS_CJK_COLUMN_WEIGHTS"
         );
-        assert_eq!(EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS.len(),
+        assert_eq!(
+            EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS.len(),
             1,
             "evidence_fts_bigram has 1 indexed column today (content); \
              schema bump that adds a column must also extend \
@@ -260,15 +265,18 @@ mod tests {
         // only mechanism for downweighting.
         for (name, ws) in [
             ("EVIDENCE_FTS_COLUMN_WEIGHTS", EVIDENCE_FTS_COLUMN_WEIGHTS),
-            ("EVIDENCE_FTS_CJK_COLUMN_WEIGHTS",
+            (
+                "EVIDENCE_FTS_CJK_COLUMN_WEIGHTS",
                 EVIDENCE_FTS_CJK_COLUMN_WEIGHTS,
             ),
-            ("EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS",
+            (
+                "EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS",
                 EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS,
             ),
         ] {
             for (i, w) in ws.iter().enumerate() {
-                assert!(w.is_finite() && *w > 0.0,
+                assert!(
+                    w.is_finite() && *w > 0.0,
                     "{name}[{i}] = {w} must be finite and strictly positive"
                 );
             }
@@ -283,21 +291,24 @@ mod tests {
         // is `bm25(<table>, w...)` with `{:?}` formatting on
         // each weight so the SQL parser sees a REAL literal
         // (e.g. `1.0`) rather than an INTEGER literal (`1`).
-        assert_eq!(bm25_select_fragment("evidence_fts", EVIDENCE_FTS_COLUMN_WEIGHTS),
+        assert_eq!(
+            bm25_select_fragment("evidence_fts", EVIDENCE_FTS_COLUMN_WEIGHTS),
             "bm25(evidence_fts, 1.0)"
         );
     }
 
     #[test]
     fn bm25_select_fragment_cjk_lane() {
-        assert_eq!(bm25_select_fragment("evidence_fts_cjk", EVIDENCE_FTS_CJK_COLUMN_WEIGHTS),
+        assert_eq!(
+            bm25_select_fragment("evidence_fts_cjk", EVIDENCE_FTS_CJK_COLUMN_WEIGHTS),
             "bm25(evidence_fts_cjk, 1.0)"
         );
     }
 
     #[test]
     fn bm25_select_fragment_bigram_lane() {
-        assert_eq!(bm25_select_fragment("evidence_fts_bigram", EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS),
+        assert_eq!(
+            bm25_select_fragment("evidence_fts_bigram", EVIDENCE_FTS_BIGRAM_COLUMN_WEIGHTS),
             "bm25(evidence_fts_bigram, 1.0)"
         );
     }
@@ -325,10 +336,12 @@ mod tests {
         // Pin the multi-weight call shape now so the integration
         // point is exercised before the schema actually adds the
         // column.
-        assert_eq!(bm25_select_fragment("evidence_fts", &[1.0, 2.0]),
+        assert_eq!(
+            bm25_select_fragment("evidence_fts", &[1.0, 2.0]),
             "bm25(evidence_fts, 1.0, 2.0)"
         );
-        assert_eq!(bm25_select_fragment("evidence_fts_cjk", &[1.5, 0.5, 0.25]),
+        assert_eq!(
+            bm25_select_fragment("evidence_fts_cjk", &[1.5, 0.5, 0.25]),
             "bm25(evidence_fts_cjk, 1.5, 0.5, 0.25)"
         );
     }
@@ -348,10 +361,12 @@ mod tests {
         // negative-finite sign matters for the invariant.
         let raw_rank: f64 = -2.5;
         let weighted = raw_rank * EVIDENCE_FTS_CJK_LANE_WEIGHT;
-        assert!(weighted < 0.0,
+        assert!(
+            weighted < 0.0,
             "weighted rank {weighted} must stay negative"
         );
-        assert!(weighted > raw_rank,
+        assert!(
+            weighted > raw_rank,
             "weighted rank {weighted} must be closer to zero than raw rank {raw_rank} \
              (precision penalty: smaller |rank| means worse cross-lane comparison)"
         );
@@ -372,7 +387,8 @@ mod tests {
         // float-arithmetic regression.
         let raw_rank: f64 = -2.5;
         let weighted = raw_rank * EVIDENCE_FTS_LANE_WEIGHT;
-        assert_eq!(weighted.to_bits(),
+        assert_eq!(
+            weighted.to_bits(),
             raw_rank.to_bits(),
             "EVIDENCE_FTS_LANE_WEIGHT = 1.0 must be the bit-exact identity on rank \
              multiplication (weighted={weighted}, raw={raw_rank})"

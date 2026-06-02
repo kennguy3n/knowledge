@@ -17,7 +17,7 @@
 //!
 //! ```bash
 //! cargo bench -p crypto
-//! cargo bench -p crypto -- aead          # filter by name
+//! cargo bench -p crypto -- aead # filter by name
 //! ```
 //!
 //! HTML reports land in `target/criterion/`.
@@ -238,7 +238,8 @@ fn bench_sphincs(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(crypto_benches,
+criterion_group!(
+    crypto_benches,
     bench_encrypt_aead,
     bench_decrypt_aead,
     bench_hybrid_kem_encap,

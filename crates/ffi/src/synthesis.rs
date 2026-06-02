@@ -223,7 +223,8 @@ pub const MAX_SYNTHESIS_VERSIONS_PER_WINDOW: usize = 8;
 ///   `config.scope_bindings` is malformed.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
 #[uniffi::export]
-pub fn configure_synthesis_engine(handle: RuntimeHandle,
+pub fn configure_synthesis_engine(
+    handle: RuntimeHandle,
     config: SynthesisEngineConfig,
 ) -> FfiResult<()> {
     metrics::instrument(metrics::inc_configure_synthesis_engine, || {
@@ -232,7 +233,8 @@ pub fn configure_synthesis_engine(handle: RuntimeHandle,
         let single_tenant = config.single_tenant;
         let (rate_capacity, rate_refill_per_sec) =
             resolve_rate_limiter_config(config.rate_capacity, config.rate_refill_per_sec)?;
-        configure_engine_impl(handle,
+        configure_engine_impl(
+            handle,
             endpoint_config,
             scope_bindings,
             single_tenant,
@@ -246,7 +248,8 @@ pub fn configure_synthesis_engine(handle: RuntimeHandle,
 /// knobs on [`SynthesisEngineConfig`]. Splits the parse from the
 /// runtime mutation so the validation surface is unit-testable
 /// without spinning up an `FfiRuntime`.
-fn resolve_rate_limiter_config(rate_capacity: u32,
+fn resolve_rate_limiter_config(
+    rate_capacity: u32,
     rate_refill_per_sec: f64,
 ) -> FfiResult<(u32, f64)> {
     // Sentinel-zero fallback matches the established pattern used
@@ -265,7 +268,8 @@ fn resolve_rate_limiter_config(rate_capacity: u32,
     };
     if !refill.is_finite() || refill <= 0.0 {
         return Err(FfiError::Unavailable {
-            subsystem: format!("synthesis_engine (rate_refill_per_sec must be finite and positive, got {refill})",
+            subsystem: format!(
+                "synthesis_engine (rate_refill_per_sec must be finite and positive, got {refill})",
             ),
         });
     }
@@ -273,7 +277,8 @@ fn resolve_rate_limiter_config(rate_capacity: u32,
 }
 
 #[cfg(feature = "http-client")]
-fn configure_engine_impl(handle: RuntimeHandle,
+fn configure_engine_impl(
+    handle: RuntimeHandle,
     endpoint_config: EndpointConfig,
     scope_bindings: Option<Vec<Uuid>>,
     single_tenant: bool,
@@ -292,7 +297,8 @@ fn configure_engine_impl(handle: RuntimeHandle,
         rt.synthesis_single_tenant = single_tenant;
         rt.synthesis_rate_limiter
             .reconfigure(rate_capacity, rate_refill_per_sec);
-        tracing::info!(handle = handle.0,
+        tracing::info!(
+            handle = handle.0,
             scope_bindings_configured = rt.synthesis_scope_bindings.is_some(),
             single_tenant,
             rate_capacity,
@@ -304,7 +310,8 @@ fn configure_engine_impl(handle: RuntimeHandle,
 }
 
 #[cfg(not(feature = "http-client"))]
-fn configure_engine_impl(_handle: RuntimeHandle,
+fn configure_engine_impl(
+    _handle: RuntimeHandle,
     _endpoint_config: EndpointConfig,
     _scope_bindings: Option<Vec<Uuid>>,
     _single_tenant: bool,
@@ -338,7 +345,8 @@ fn configure_engine_impl(_handle: RuntimeHandle,
 ///   object fails.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
 #[uniffi::export]
-pub fn trigger_server_synthesis(handle: RuntimeHandle,
+pub fn trigger_server_synthesis(
+    handle: RuntimeHandle,
     scope_id: String,
     tier: SynthesisTierKind,
 ) -> FfiResult<String> {
@@ -369,7 +377,8 @@ pub fn trigger_server_synthesis(handle: RuntimeHandle,
 ///   window with that id.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
 #[uniffi::export]
-pub fn synthesis_status(handle: RuntimeHandle,
+pub fn synthesis_status(
+    handle: RuntimeHandle,
     synthesis_id: String,
 ) -> FfiResult<SynthesisStatusRecord> {
     metrics::instrument(metrics::inc_synthesis_status, || {
@@ -400,7 +409,8 @@ pub fn synthesis_status(handle: RuntimeHandle,
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
 #[uniffi::export]
-pub fn list_recent_syntheses(handle: RuntimeHandle,
+pub fn list_recent_syntheses(
+    handle: RuntimeHandle,
     scope_id: String,
 ) -> FfiResult<Vec<SynthesisStatusRecord>> {
     metrics::instrument(metrics::inc_list_recent_syntheses, || {
@@ -485,7 +495,8 @@ pub fn list_recent_syntheses(handle: RuntimeHandle,
 ///   memory blob fails.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
 #[uniffi::export]
-pub fn replay_synthesis(handle: RuntimeHandle,
+pub fn replay_synthesis(
+    handle: RuntimeHandle,
     scope_id: ScopeIdString,
     synthesis_id: String,
 ) -> FfiResult<SynthesisStatusRecord> {
@@ -529,7 +540,8 @@ pub fn replay_synthesis(handle: RuntimeHandle,
 ///   read fails.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
 #[uniffi::export]
-pub fn list_synthesis_versions(handle: RuntimeHandle,
+pub fn list_synthesis_versions(
+    handle: RuntimeHandle,
     synthesis_id: String,
 ) -> FfiResult<Vec<crate::types::SynthesisVersionSummary>> {
     metrics::instrument(metrics::inc_list_synthesis_versions, || {
@@ -646,7 +658,8 @@ pub fn list_synthesis_versions(handle: RuntimeHandle,
 ///   to persist the payload row or the tenant memory blob.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
 #[uniffi::export]
-pub fn admit_approved_document(handle: RuntimeHandle,
+pub fn admit_approved_document(
+    handle: RuntimeHandle,
     scope_id: ScopeIdString,
     label: String,
     approver: String,
@@ -663,7 +676,8 @@ pub fn admit_approved_document(handle: RuntimeHandle,
         }
         if payload.len() > MAX_APPROVED_DOCUMENT_BYTES {
             return Err(FfiError::Memory {
-                message: format!("admit_approved_document: payload size {} bytes exceeds the {} byte cap \
+                message: format!(
+                    "admit_approved_document: payload size {} bytes exceeds the {} byte cap \
                      ({MAX_APPROVED_DOCUMENT_BYTES_MIB} MiB); compress or split client-side \
                      before admission",
                     payload.len(),
@@ -777,7 +791,8 @@ pub fn admit_approved_document(handle: RuntimeHandle,
 ///   memory.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
 #[uniffi::export]
-pub fn revoke_approved_document(handle: RuntimeHandle,
+pub fn revoke_approved_document(
+    handle: RuntimeHandle,
     scope_id: ScopeIdString,
     document_id: String,
 ) -> FfiResult<()> {
@@ -873,7 +888,8 @@ pub fn revoke_approved_document(handle: RuntimeHandle,
 ///   (the transaction rolls back on any inner error).
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
 #[uniffi::export]
-pub fn replace_approved_document(handle: RuntimeHandle,
+pub fn replace_approved_document(
+    handle: RuntimeHandle,
     scope_id: ScopeIdString,
     document_id: String,
     label: String,
@@ -896,7 +912,8 @@ pub fn replace_approved_document(handle: RuntimeHandle,
         }
         if payload.len() > MAX_APPROVED_DOCUMENT_BYTES {
             return Err(FfiError::Memory {
-                message: format!("replace_approved_document: payload size {} bytes exceeds the {} byte cap \
+                message: format!(
+                    "replace_approved_document: payload size {} bytes exceeds the {} byte cap \
                      ({MAX_APPROVED_DOCUMENT_BYTES_MIB} MiB); compress or split client-side \
                      before admission",
                     payload.len(),
@@ -966,13 +983,15 @@ pub fn replace_approved_document(handle: RuntimeHandle,
             // pre-replace shape and the host can retry.
             rt.store()
                 .with_transaction(|tx| {
-                    rt.store().save_approved_document_payload_in_tx(tx,
+                    rt.store().save_approved_document_payload_in_tx(
+                        tx,
                         scope,
                         doc_uuid,
                         &payload,
                         &content_hash,
                     )?;
-                    rt.store().save_memory_blob_in_tx(tx,
+                    rt.store().save_memory_blob_in_tx(
+                        tx,
                         scope,
                         crate::runtime::TENANT_MEMORY_KIND,
                         &tmo_json,
@@ -1007,7 +1026,7 @@ pub fn replace_approved_document(handle: RuntimeHandle,
 /// treat both cases the same as "nothing admitted".
 ///
 /// Refs without a persisted payload row (e.g. legacy refs created
-/// before the  admission path, or a payload row that was
+/// before the admission path, or a payload row that was
 /// purged out-of-band) are still surfaced with
 /// `payload_bytes = 0` and `content_hash_hex = ""` so the host can
 /// detect and act on the gap rather than silently dropping the
@@ -1022,7 +1041,8 @@ pub fn replace_approved_document(handle: RuntimeHandle,
 ///   fails (does NOT decrypt any ciphertext).
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned values across the language boundary on every call.
 #[uniffi::export]
-pub fn list_approved_documents(handle: RuntimeHandle,
+pub fn list_approved_documents(
+    handle: RuntimeHandle,
     scope_id: ScopeIdString,
 ) -> FfiResult<Vec<ApprovedDocumentSummary>> {
     metrics::instrument(metrics::inc_list_approved_documents, || {
@@ -1076,7 +1096,7 @@ pub fn list_approved_documents(handle: RuntimeHandle,
 ///
 /// `windows_clone` is a deep copy of the live
 /// [`SynthesisWindowManager`] taken under the mutex; the engine
-/// validates `handle.window_id` against it during  (unlocked).
+/// validates `handle.window_id` against it during (unlocked).
 ///  replays the Pending → InProgress → Complete transitions on
 /// the live manager so the substrate's persisted state ends up
 /// identical to what the engine observed.
@@ -1102,7 +1122,8 @@ enum DispatchPlan {
     Cooldown(WindowId),
 }
 
-fn dispatch_server_synthesis(handle: RuntimeHandle,
+fn dispatch_server_synthesis(
+    handle: RuntimeHandle,
     scope: ScopeId,
     tier: SynthesisTierKind,
 ) -> FfiResult<String> {
@@ -1113,7 +1134,7 @@ fn dispatch_server_synthesis(handle: RuntimeHandle,
     // for tenant), open a `Pending` window, clone the engine `Arc`
     // out of the mutex, and return the resulting plan. The
     // synthesis window stays in `Pending` after Step 1; Step 2
-    // (unlocked) issues the HTTP call;  (locked) marks the
+    // (unlocked) issues the HTTP call; (locked) marks the
     // window `Complete` / `Failed` based on the dispatch outcome.
     let plan = with_runtime(handle, |rt| build_dispatch_plan(rt, scope, tier))?;
 
@@ -1166,7 +1187,8 @@ fn dispatch_server_synthesis(handle: RuntimeHandle,
 }
 
 ///  body. Holds the runtime mutex.
-fn build_dispatch_plan(rt: &mut FfiRuntime,
+fn build_dispatch_plan(
+    rt: &mut FfiRuntime,
     scope: ScopeId,
     tier: SynthesisTierKind,
 ) -> FfiResult<DispatchPlan> {
@@ -1261,11 +1283,11 @@ fn build_dispatch_plan(rt: &mut FfiRuntime,
                     message: format!("open_tiered_window failed: {e}"),
                 })?;
             // Persist the freshly opened window so its `Pending`
-            // status survives a crash between  and Step 3.
+            // status survives a crash between and Step 3.
             rt.flush_synthesis_windows()?;
             // Take a snapshot of the live manager AFTER the open so
             // the cloned manager sees the new window in `Pending`.
-            // The unlocked  mutates this clone
+            // The unlocked mutates this clone
             // replays the transitions on the live manager.
             let windows_clone = rt.synthesis_windows.clone();
             Ok(DispatchPlan::Domain(DomainDispatchPlan {
@@ -1355,7 +1377,8 @@ enum MemoryAfter {
 }
 
 ///  body. Holds the runtime mutex.
-fn apply_dispatch_outcome(handle: RuntimeHandle,
+fn apply_dispatch_outcome(
+    handle: RuntimeHandle,
     scope: ScopeId,
     tier: SynthesisTierKind,
     window_handle: TieredWindowHandle,
@@ -1410,7 +1433,8 @@ fn apply_dispatch_outcome(handle: RuntimeHandle,
                     fail_window_on_live_manager(rt, window_handle.window_id, "oversize_output");
                     let _ = rt.flush_synthesis_windows();
                     return Err(FfiError::Synthesis {
-                        message: format!("synthesis output exceeded {} bytes (got {})",
+                        message: format!(
+                            "synthesis output exceeded {} bytes (got {})",
                             MAX_SYNTHESIS_OUTPUT_BYTES,
                             object.payload.len(),
                         ),
@@ -1420,13 +1444,15 @@ fn apply_dispatch_outcome(handle: RuntimeHandle,
                 // for the same window/scope we authorised. Defence
                 // in depth against a malicious / buggy engine.
                 if object.scope_id != scope || object.window_id != window_handle.window_id {
-                    fail_window_on_live_manager(rt,
+                    fail_window_on_live_manager(
+                        rt,
                         window_handle.window_id,
                         "scope_window_mismatch",
                     );
                     let _ = rt.flush_synthesis_windows();
                     return Err(FfiError::Synthesis {
-                        message: format!("engine returned object for scope/window ({} / {}) but dispatch \
+                        message: format!(
+                            "engine returned object for scope/window ({} / {}) but dispatch \
                              was for ({} / {})",
                             object.scope_id.as_uuid(),
                             object.window_id.as_uuid(),
@@ -1442,13 +1468,15 @@ fn apply_dispatch_outcome(handle: RuntimeHandle,
                     SynthesisTierKind::Tenant => SynthesisObjectType::TenantSummary,
                 };
                 if object.object_type != expected {
-                    fail_window_on_live_manager(rt,
+                    fail_window_on_live_manager(
+                        rt,
                         window_handle.window_id,
                         "object_type_mismatch",
                     );
                     let _ = rt.flush_synthesis_windows();
                     return Err(FfiError::Synthesis {
-                        message: format!("engine returned {} object but {} synthesis was requested",
+                        message: format!(
+                            "engine returned {} object but {} synthesis was requested",
                             object.object_type.as_str(),
                             tier.as_str(),
                         ),
@@ -1503,7 +1531,8 @@ fn apply_dispatch_outcome(handle: RuntimeHandle,
                             let prior_version = prior.version;
                             let prior_json =
                                 serde_json::to_vec(prior).map_err(|e| FfiError::Memory {
-                                    message: format!("failed to serialize prior synthesis object for archive: {e}"
+                                    message: format!(
+                                    "failed to serialize prior synthesis object for archive: {e}"
                                 ),
                                 })?;
                             // u32 is bounded — overflow at 2^32 replays
@@ -1576,7 +1605,8 @@ fn apply_dispatch_outcome(handle: RuntimeHandle,
                 // MAX_SYNTHESIS_OUTPUT_BYTES) would be wasted.
                 let object_window_id = object.window_id;
                 scope_objects_after.insert(object_window_id, object);
-                let pruned_ids = prune_completed_windows_on(&mut windows_after,
+                let pruned_ids = prune_completed_windows_on(
+                    &mut windows_after,
                     &mut scope_objects_after,
                     scope,
                     WINDOW_RETENTION_CAP_PER_SCOPE,
@@ -1656,14 +1686,16 @@ fn apply_dispatch_outcome(handle: RuntimeHandle,
                     })?;
 
                 if let Err(tx_err) = rt.store().with_transaction(|tx| {
-                    rt.store().save_memory_blob_in_tx(tx,
+                    rt.store().save_memory_blob_in_tx(
+                        tx,
                         scope,
                         crate::runtime::SYNTHESIS_OBJECT_KIND,
                         &synthesis_obj_json,
                     )?;
                     rt.store()
                         .save_memory_blob_in_tx(tx, scope, memory_kind, &memory_blob_json)?;
-                    rt.store().save_memory_blob_in_tx(tx,
+                    rt.store().save_memory_blob_in_tx(
+                        tx,
                         crate::runtime::synthesis_windows_scope(),
                         crate::runtime::SYNTHESIS_WINDOWS_KIND,
                         &windows_json,
@@ -1683,12 +1715,14 @@ fn apply_dispatch_outcome(handle: RuntimeHandle,
                         prior_archive
                     {
                         if should_evict_oldest {
-                            let _ = rt.store().delete_oldest_synthesis_object_version_in_tx(tx,
+                            let _ = rt.store().delete_oldest_synthesis_object_version_in_tx(
+                                tx,
                                 scope,
                                 object_window_id.as_uuid(),
                             )?;
                         }
-                        rt.store().save_synthesis_object_version_in_tx(tx,
+                        rt.store().save_synthesis_object_version_in_tx(
+                            tx,
                             scope,
                             object_window_id.as_uuid(),
                             prior_version,
@@ -1807,14 +1841,14 @@ enum ReplayPlan {
 /// [`dispatch_server_synthesis`]'s three-phase
 /// gather/dispatch/apply structure but with two key differences:
 ///
-/// 1.  reads the existing window instead of opening a new
+/// 1. reads the existing window instead of opening a new
 ///    one. The window must be in `Complete` state — Pending,
 ///    InProgress, and Failed all surface `Conflict`. The
 ///    `Complete → Pending` transition is persisted before the
-///    unlocked  dispatch so a crash mid-replay rehydrates
+///    unlocked dispatch so a crash mid-replay rehydrates
 ///    as Pending (the host can either trigger fresh synthesis or
 ///    rely on the stuck-Pending sweep to mark it Failed).
-/// 2.  archives the prior synthesis object inside the
+/// 2. archives the prior synthesis object inside the
 ///    same SQLCipher tx that lands the new one. The bump from
 ///    `prior.version` to `prior.version + 1` is computed under
 ///    the runtime mutex; the eviction-of-oldest decision is
@@ -1824,7 +1858,8 @@ enum ReplayPlan {
 /// host's already-recorded window id remains the canonical
 /// reference for `synthesis_status` and `list_synthesis_versions`
 /// queries.
-fn replay_synthesis_inner(handle: RuntimeHandle,
+fn replay_synthesis_inner(
+    handle: RuntimeHandle,
     scope: ScopeId,
     window_id: WindowId,
 ) -> FfiResult<SynthesisStatusRecord> {
@@ -1840,7 +1875,8 @@ fn replay_synthesis_inner(handle: RuntimeHandle,
             } = p;
             // ─────────── Step 2: dispatch (UNLOCKED) ───────────
             let outcome = engine.synthesize_domain(&mut windows_clone, window_handle, input);
-            (engine,
+            (
+                engine,
                 window_handle,
                 SynthesisTierKind::Domain,
                 outcome.map(|r| r.object),
@@ -1854,7 +1890,8 @@ fn replay_synthesis_inner(handle: RuntimeHandle,
                 mut windows_clone,
             } = p;
             let outcome = engine.synthesize_tenant(&mut windows_clone, window_handle, input);
-            (engine,
+            (
+                engine,
                 window_handle,
                 SynthesisTierKind::Tenant,
                 outcome.map(|r| r.object),
@@ -1894,7 +1931,8 @@ fn replay_synthesis_inner(handle: RuntimeHandle,
 /// `TieredWindowHandle`, gathers the appropriate hierarchy
 /// input, flips the window to `Pending` (persisted), and clones
 /// the engine `Arc` and window manager for the unlocked Step 2.
-fn build_replay_plan(rt: &mut FfiRuntime,
+fn build_replay_plan(
+    rt: &mut FfiRuntime,
     scope: ScopeId,
     window_id: WindowId,
 ) -> FfiResult<ReplayPlan> {
@@ -1926,7 +1964,8 @@ fn build_replay_plan(rt: &mut FfiRuntime,
         })?;
     if window.status != WindowStatus::Complete {
         return Err(FfiError::Synthesis {
-            message: format!("replay_synthesis: window {} is in {:?} state; only Complete \
+            message: format!(
+                "replay_synthesis: window {} is in {:?} state; only Complete \
                  windows can be replayed",
                 window_id.as_uuid(),
                 window.status,
@@ -1934,7 +1973,8 @@ fn build_replay_plan(rt: &mut FfiRuntime,
         });
     }
     let window_tier = window.tier.ok_or_else(|| FfiError::Synthesis {
-        message: format!("replay_synthesis: window {} has no persisted tier (legacy \
+        message: format!(
+            "replay_synthesis: window {} has no persisted tier (legacy \
              pre-tiered-open window); cannot replay safely",
             window_id.as_uuid(),
         ),
@@ -2064,7 +2104,8 @@ fn enforce_scope_binding(rt: &FfiRuntime, scope: ScopeId) -> FfiResult<()> {
                 Ok(())
             } else {
                 Err(FfiError::Unavailable {
-                    subsystem: format!("synthesis_engine: scope {} not in configured scope_bindings",
+                    subsystem: format!(
+                        "synthesis_engine: scope {} not in configured scope_bindings",
                         scope.as_uuid()
                     ),
                 })
@@ -2079,7 +2120,8 @@ fn enforce_scope_binding(rt: &FfiRuntime, scope: ScopeId) -> FfiResult<()> {
 /// resulting list. Channels with no recorded recap object are
 /// skipped silently — domain synthesis is best-effort across the
 /// registered set.
-fn gather_channel_outputs(rt: &FfiRuntime,
+fn gather_channel_outputs(
+    rt: &FfiRuntime,
     domain: &memory_manager::DomainMemoryObject,
 ) -> Vec<ChannelOutput> {
     let mut outputs = Vec::with_capacity(domain.channel_scopes.len());
@@ -2104,7 +2146,8 @@ fn gather_channel_outputs(rt: &FfiRuntime,
             if cmo.recap.is_empty() {
                 continue;
             }
-            let synthesised = SynthesisObject::new(*channel_scope,
+            let synthesised = SynthesisObject::new(
+                *channel_scope,
                 WindowId::new_v4(),
                 SynthesisObjectType::ChannelRecap,
                 cmo.recap.as_bytes().to_vec(),
@@ -2140,7 +2183,8 @@ fn gather_channel_outputs(rt: &FfiRuntime,
 /// identical materialisation semantics; mutating one (e.g.
 /// tightening the missing-payload policy) automatically updates
 /// the other.
-fn materialise_approved_documents(rt: &FfiRuntime,
+fn materialise_approved_documents(
+    rt: &FfiRuntime,
     scope: ScopeId,
     refs_sorted: &[ApprovedDocumentRef],
 ) -> FfiResult<Vec<ApprovedDocument>> {
@@ -2164,7 +2208,8 @@ fn materialise_approved_documents(rt: &FfiRuntime,
             }
             Err(e) => {
                 return Err(FfiError::Evidence {
-                    message: format!("load_approved_document_payload failed for document {}: {e}",
+                    message: format!(
+                        "load_approved_document_payload failed for document {}: {e}",
                         r.id
                     ),
                 });
@@ -2185,7 +2230,8 @@ fn materialise_approved_documents(rt: &FfiRuntime,
 /// Collect [`DomainOutput`]s for every domain scope registered
 /// on `tenant`. Each domain's most recent `DomainSummary`
 /// synthesis object is folded in.
-fn gather_domain_outputs(rt: &FfiRuntime,
+fn gather_domain_outputs(
+    rt: &FfiRuntime,
     tenant: &memory_manager::TenantMemoryObject,
 ) -> Vec<DomainOutput> {
     let mut outputs = Vec::with_capacity(tenant.domain_scopes.len());
@@ -2209,7 +2255,8 @@ fn gather_domain_outputs(rt: &FfiRuntime,
             // Synthesize a DomainSummary on the fly mirroring the channel
             // fallback in `gather_channel_outputs` so tenant-tier dispatch
             // is not blocked by a missing on-disk SynthesisObject row.
-            let object = SynthesisObject::new(*domain_scope,
+            let object = SynthesisObject::new(
+                *domain_scope,
                 WindowId::new_v4(),
                 SynthesisObjectType::DomainSummary,
                 dmo.recap.as_bytes().to_vec(),
@@ -2241,7 +2288,8 @@ fn gather_domain_outputs(rt: &FfiRuntime,
 /// the remainder from both the window manager and the objects map.
 /// Returns the ids of every window that was pruned (empty when no
 /// pruning was required).
-pub(crate) fn prune_completed_windows_on(windows: &mut SynthesisWindowManager,
+pub(crate) fn prune_completed_windows_on(
+    windows: &mut SynthesisWindowManager,
     objects: &mut std::collections::HashMap<WindowId, SynthesisObject>,
     scope: ScopeId,
     max_per_scope: usize,
@@ -2272,7 +2320,8 @@ fn newest_channel_recap_for_scope(rt: &FfiRuntime, scope: ScopeId) -> Option<Syn
     newest_object_for_scope_of_type(rt, scope, SynthesisObjectType::ChannelRecap)
 }
 
-fn newest_object_for_scope_of_type(rt: &FfiRuntime,
+fn newest_object_for_scope_of_type(
+    rt: &FfiRuntime,
     scope: ScopeId,
     kind: SynthesisObjectType,
 ) -> Option<SynthesisObject> {
@@ -2330,7 +2379,8 @@ fn fail_window_on_live_manager(rt: &mut FfiRuntime, window_id: WindowId, reason:
 /// windows are skipped because they have no associated object yet
 /// — and the cooldown contract only short-circuits when a
 /// matching-tier *Complete* window is available.
-fn newest_complete_window(rt: &FfiRuntime,
+fn newest_complete_window(
+    rt: &FfiRuntime,
     scope: ScopeId,
     tier: SynthesisTierKind,
 ) -> Option<WindowId> {
@@ -2373,7 +2423,7 @@ fn encode_content_hash_hex(hash: &crypto::ContentHash) -> String {
     out
 }
 
-/// Validate a earlier approved-document metadata field
+/// Validate an earlier approved-document metadata field
 /// (`label` or `approver`). Shared by `admit_approved_document`
 /// and `replace_approved_document` so the error messages MUST NOT
 /// hardcode an entry-point name; the field name plus the observed
@@ -2389,7 +2439,8 @@ fn validate_approved_document_metadata(field: &'static str, value: &str) -> FfiR
     }
     if value.len() > MAX_APPROVED_DOCUMENT_METADATA_BYTES {
         return Err(FfiError::Memory {
-            message: format!("approved-document {field} length {} bytes exceeds the {} byte cap",
+            message: format!(
+                "approved-document {field} length {} bytes exceeds the {} byte cap",
                 value.len(),
                 MAX_APPROVED_DOCUMENT_METADATA_BYTES,
             ),
@@ -2433,12 +2484,14 @@ fn endpoint_config_from_ffi(cfg: &SynthesisEngineConfig) -> FfiResult<EndpointCo
     // misconfiguration loud instead of papering over it.
     if cfg.timeout_ms > MAX_TIMEOUT_MS {
         return Err(FfiError::Unavailable {
-            subsystem: format!("synthesis_engine (timeout_ms={} exceeds MAX_TIMEOUT_MS={})",
+            subsystem: format!(
+                "synthesis_engine (timeout_ms={} exceeds MAX_TIMEOUT_MS={})",
                 cfg.timeout_ms, MAX_TIMEOUT_MS,
             ),
         });
     }
-    let mut endpoint = EndpointConfig::new(cfg.url.clone(),
+    let mut endpoint = EndpointConfig::new(
+        cfg.url.clone(),
         cfg.api_key_ref.clone(),
         cfg.model_id.clone(),
     );
@@ -2454,7 +2507,8 @@ fn endpoint_config_from_ffi(cfg: &SynthesisEngineConfig) -> FfiResult<EndpointCo
     Ok(endpoint)
 }
 
-fn window_to_record(window: &synthesis_pipeline::SynthesisWindow,
+fn window_to_record(
+    window: &synthesis_pipeline::SynthesisWindow,
     rt: &FfiRuntime,
 ) -> SynthesisStatusRecord {
     // Look up the synthesis object for this window so callers can
@@ -2520,7 +2574,7 @@ fn window_to_record(window: &synthesis_pipeline::SynthesisWindow,
 
 #[cfg(test)]
 mod tests {
-    //! FFI-level tests for the  server-side synthesis surface.
+    //! FFI-level tests for the server-side synthesis surface.
     //!
     //! These tests open a real temp-dir-backed evidence store, install
     //! a deterministic [`ManagedEndpointSynthesizer`] (from the
@@ -2659,12 +2713,14 @@ mod tests {
     fn trigger_server_synthesis_without_engine_returns_unavailable() {
         let (handle, _dir) = fresh_store();
         let scope = seed_domain_with_two_channels(handle);
-        let err = trigger_server_synthesis(handle,
+        let err = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
         .unwrap_err();
-        assert!(matches!(err, FfiError::Unavailable { ref subsystem } if subsystem.contains("synthesis_engine")),
+        assert!(
+            matches!(err, FfiError::Unavailable { ref subsystem } if subsystem.contains("synthesis_engine")),
             "expected Unavailable(synthesis_engine), got {err:?}",
         );
         teardown(handle);
@@ -2679,12 +2735,14 @@ mod tests {
         // before reaching the engine.
         crate::forget_scope(handle, scope.as_uuid().to_string()).expect("forget_scope");
 
-        let err = trigger_server_synthesis(handle,
+        let err = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
         .unwrap_err();
-        assert!(matches!(err, FfiError::NotFound { .. }),
+        assert!(
+            matches!(err, FfiError::NotFound { .. }),
             "expected NotFound, got {err:?}",
         );
         teardown(handle);
@@ -2696,7 +2754,8 @@ mod tests {
         install_test_engine(handle);
         let scope = seed_domain_with_two_channels(handle);
 
-        let window_id_str = trigger_server_synthesis(handle,
+        let window_id_str = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -2711,13 +2770,15 @@ mod tests {
         assert_eq!(rec.scope_id, scope.as_uuid().to_string());
         assert_eq!(rec.tier, "domain");
         assert_eq!(rec.status, "complete");
-        assert!(rec.object_id.is_some(),
+        assert!(
+            rec.object_id.is_some(),
             "complete window must carry object_id"
         );
 
         // list_recent_syntheses surfaces the same row.
         let list = list_recent_syntheses(handle, scope.as_uuid().to_string()).expect("list");
-        assert!(list.iter().any(|r| r.synthesis_id == window_id_str),
+        assert!(
+            list.iter().any(|r| r.synthesis_id == window_id_str),
             "list must include the newly-completed window",
         );
         teardown(handle);
@@ -2729,7 +2790,8 @@ mod tests {
         install_test_engine(handle);
         let scope = seed_tenant_with_domain(handle);
 
-        let window_id_str = trigger_server_synthesis(handle,
+        let window_id_str = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Tenant,
         )
@@ -2786,12 +2848,14 @@ mod tests {
         let scope_a = seed_domain_with_two_channels(handle);
         let scope_b = seed_domain_with_two_channels(handle);
 
-        let win_a = trigger_server_synthesis(handle,
+        let win_a = trigger_server_synthesis(
+            handle,
             scope_a.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
         .expect("synthesise A");
-        let win_b = trigger_server_synthesis(handle,
+        let win_b = trigger_server_synthesis(
+            handle,
             scope_b.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -2815,14 +2879,16 @@ mod tests {
         install_test_engine(handle);
         let scope = seed_domain_with_two_channels(handle);
 
-        let win1 = trigger_server_synthesis(handle,
+        let win1 = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
         .expect("first synthesis");
         // Second dispatch within the per-scope cooldown returns the
         // SAME window id (no new run was dispatched).
-        let win2 = trigger_server_synthesis(handle,
+        let win2 = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -2837,7 +2903,8 @@ mod tests {
             Ok(())
         })
         .expect("with_runtime");
-        let win3 = trigger_server_synthesis(handle,
+        let win3 = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -2897,7 +2964,8 @@ mod tests {
         })
         .expect("seed cross-tier scope");
 
-        let domain_win = trigger_server_synthesis(handle,
+        let domain_win = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -2907,12 +2975,14 @@ mod tests {
         // same scope must NOT be short-circuited by the Domain
         // stamp. The returned window id must be a fresh Tenant
         // window, not the recycled Domain window.
-        let tenant_win = trigger_server_synthesis(handle,
+        let tenant_win = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Tenant,
         )
         .expect("tenant dispatch");
-        assert_ne!(domain_win, tenant_win,
+        assert_ne!(
+            domain_win, tenant_win,
             "Tenant request must NOT recycle the Domain window via cross-tier cooldown",
         );
 
@@ -2949,12 +3019,14 @@ mod tests {
         // A *second* Domain request on the same scope DOES hit the
         // Domain cooldown (recycles the original Domain window),
         // proving the cooldown still works within a single tier.
-        let domain_win_again = trigger_server_synthesis(handle,
+        let domain_win_again = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
         .expect("second domain dispatch");
-        assert_eq!(domain_win, domain_win_again,
+        assert_eq!(
+            domain_win, domain_win_again,
             "Domain cooldown must still recycle within the same tier",
         );
 
@@ -3011,19 +3083,22 @@ mod tests {
         let metrics_before = crate::metrics::snapshot();
 
         // First two dispatches consume the entire burst.
-        let _win_a = trigger_server_synthesis(handle,
+        let _win_a = trigger_server_synthesis(
+            handle,
             scope_a.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
         .expect("first dispatch must succeed (burst slot 1/2)");
-        let _win_b = trigger_server_synthesis(handle,
+        let _win_b = trigger_server_synthesis(
+            handle,
             scope_b.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
         .expect("second dispatch must succeed (burst slot 2/2)");
 
         // Third dispatch must Throttle.
-        let err = trigger_server_synthesis(handle,
+        let err = trigger_server_synthesis(
+            handle,
             scope_c.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -3047,11 +3122,13 @@ mod tests {
         }
 
         let metrics_after = crate::metrics::snapshot();
-        assert!(metrics_after.trigger_server_synthesis_throttled_total
+        assert!(
+            metrics_after.trigger_server_synthesis_throttled_total
                 > metrics_before.trigger_server_synthesis_throttled_total,
             "trigger_server_synthesis_throttled_total must tick on Throttled return",
         );
-        assert!(metrics_after.errors_by_kind.throttled > metrics_before.errors_by_kind.throttled,
+        assert!(
+            metrics_after.errors_by_kind.throttled > metrics_before.errors_by_kind.throttled,
             "errors_by_kind.throttled must tick on Throttled return",
         );
 
@@ -3085,7 +3162,8 @@ mod tests {
 
         let metrics_before = crate::metrics::snapshot();
 
-        let win1 = trigger_server_synthesis(handle,
+        let win1 = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -3095,18 +3173,21 @@ mod tests {
         // scope + tier). Each must return Ok(same window id),
         // NOT Throttled.
         for i in 0..5 {
-            let win = trigger_server_synthesis(handle,
+            let win = trigger_server_synthesis(
+                handle,
                 scope.as_uuid().to_string(),
                 SynthesisTierKind::Domain,
             )
             .unwrap_or_else(|e| panic!("cooldown short-circuit #{i} must not Throttle: {e:?}"));
-            assert_eq!(win, win1,
+            assert_eq!(
+                win, win1,
                 "cooldown short-circuit must reuse window id, not Throttle",
             );
         }
 
         let metrics_after = crate::metrics::snapshot();
-        assert_eq!(metrics_after.trigger_server_synthesis_throttled_total,
+        assert_eq!(
+            metrics_after.trigger_server_synthesis_throttled_total,
             metrics_before.trigger_server_synthesis_throttled_total,
             "cooldown short-circuit must NOT consume a rate-limit token",
         );
@@ -3154,7 +3235,8 @@ mod tests {
                     .expect("open window");
                 rt.synthesis_windows.mark_in_progress(h.window_id).unwrap();
                 rt.synthesis_windows.mark_complete(h.window_id).unwrap();
-                let obj = SynthesisObject::new(scope,
+                let obj = SynthesisObject::new(
+                    scope,
                     h.window_id,
                     SynthesisObjectType::DomainSummary,
                     format!("preexisting recap #{i}").into_bytes(),
@@ -3170,7 +3252,8 @@ mod tests {
 
         // Trigger one fresh synthesis. The post-apply prune fires
         // and must also rewrite the on-disk synthesis-object blob.
-        let fresh = trigger_server_synthesis(handle,
+        let fresh = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -3196,10 +3279,12 @@ mod tests {
             Ok((remaining, oldest))
         })
         .expect("with_runtime");
-        assert!(!remaining_in_memory.contains(&oldest_pre_existing),
+        assert!(
+            !remaining_in_memory.contains(&oldest_pre_existing),
             "prune must drop the oldest pre-existing object from memory",
         );
-        assert!(remaining_in_memory.contains(&fresh_id),
+        assert!(
+            remaining_in_memory.contains(&fresh_id),
             "fresh window must be present after prune",
         );
 
@@ -3221,9 +3306,10 @@ mod tests {
                 .collect())
         })
         .expect("inspect rehydrated map");
-        assert!(!resurrected.contains(&oldest_pre_existing),
+        assert!(
+            !resurrected.contains(&oldest_pre_existing),
             "pruned object must NOT resurrect from disk on open_store \
-             (BUG_0002 regression)",
+             (earlier regression)",
         );
         // Belt and braces: no rehydrated object should have a
         // window_id that is unknown to the rehydrated window
@@ -3234,7 +3320,8 @@ mod tests {
             // post-prune-flush.
             for inner in rt.synthesis_objects.values() {
                 for id in inner.keys() {
-                    assert!(rt.synthesis_windows.get(*id).is_some(),
+                    assert!(
+                        rt.synthesis_windows.get(*id).is_some(),
                         "rehydrated synthesis object {id:?} has no matching window \
                          — disk blob is out of sync with the window manager",
                     );
@@ -3252,7 +3339,8 @@ mod tests {
         install_test_engine(handle);
         let scope = seed_domain_with_two_channels(handle);
 
-        let win = trigger_server_synthesis(handle,
+        let win = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -3295,7 +3383,7 @@ mod tests {
         teardown(handle);
     }
 
-    /// Regression test for BUG_0001 + ANALYSIS_0004 (Devin Review on
+    /// Regression test for earlier review findings (an earlier review on
     /// commit 6456b6f): the `SynthesisWindowManager` is persisted
     /// under a single sentinel scope, so its on-disk blob contains
     /// windows for every scope mixed together. When
@@ -3320,7 +3408,8 @@ mod tests {
 
         // trigger a synthesis so a window lands on disk
         // under the sentinel-scope blob.
-        let win = trigger_server_synthesis(handle,
+        let win = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -3352,12 +3441,14 @@ mod tests {
             .expect("reopen");
 
         with_runtime(handle2, |rt| {
-            assert!(rt.synthesis_windows.get(win_id).is_none(),
-                "BUG_0001 regression: window for tombstoned scope must NOT resurrect on \
+            assert!(
+                rt.synthesis_windows.get(win_id).is_none(),
+                "earlier regression: window for tombstoned scope must NOT resurrect on \
                  open_store via the rehydrated SynthesisWindowManager",
             );
-            assert!(rt.synthesis_windows.windows_for(scope).is_empty(),
-                "ANALYSIS_0004 regression: no orphan windows for the tombstoned scope may \
+            assert!(
+                rt.synthesis_windows.windows_for(scope).is_empty(),
+                "earlier regression: no orphan windows for the tombstoned scope may \
                  survive the open_store rehydration cleanup",
             );
             // Belt-and-braces: the synthesis_objects map must
@@ -3372,7 +3463,8 @@ mod tests {
             // the cross-scope lookup that walks every bucket, so
             // it's the right tool for asserting "no inner map
             // contains this window".
-            assert!(rt.synthesis_object_by_window(win_id).is_none(),
+            assert!(
+                rt.synthesis_object_by_window(win_id).is_none(),
                 "synthesis_objects must not retain orphan entry for window of tombstoned scope",
             );
             Ok(())
@@ -3388,7 +3480,8 @@ mod tests {
         let handle3 = crate::runtime::open_store(path.to_string_lossy().into_owned(), key_hex2)
             .expect("second reopen");
         with_runtime(handle3, |rt| {
-            assert!(rt.synthesis_windows.windows_for(scope).is_empty(),
+            assert!(
+                rt.synthesis_windows.windows_for(scope).is_empty(),
                 "second open_store must observe the persisted cleanup; the sentinel blob \
                  should have been rewritten on the first reopen",
             );
@@ -3398,7 +3491,7 @@ mod tests {
         teardown(handle3);
     }
 
-    /// ANALYSIS_0006 regression: orphan synthesis objects (whose
+    /// earlier regression: orphan synthesis objects (whose
     /// `window_id` no longer corresponds to any tracked window) must
     /// be purged at `open_store` time AND the divergent on-disk blob
     /// must be rewritten so subsequent opens don't pay the cleanup
@@ -3420,7 +3513,8 @@ mod tests {
         // real synthesis dispatch — windows + objects
         // both land on disk under the per-scope synthesis-object
         // row.
-        let win = trigger_server_synthesis(handle,
+        let win = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -3449,11 +3543,13 @@ mod tests {
             .expect("reopen");
 
         with_runtime(handle2, |rt| {
-            assert!(rt.synthesis_object_by_window(win_id).is_none(),
-                "ANALYSIS_0006 regression: orphan synthesis_object whose window_id is not in \
+            assert!(
+                rt.synthesis_object_by_window(win_id).is_none(),
+                "earlier regression: orphan synthesis_object whose window_id is not in \
                  the rehydrated SynthesisWindowManager must be purged at open_store time",
             );
-            assert!(rt.synthesis_windows.get(win_id).is_none(),
+            assert!(
+                rt.synthesis_windows.get(win_id).is_none(),
                 "windows manager state must remain consistent across the orphan cleanup",
             );
             Ok(())
@@ -3471,7 +3567,8 @@ mod tests {
             crate::runtime::open_store(path.to_string_lossy().into_owned(), "a5".repeat(32))
                 .expect("second reopen");
         with_runtime(handle3, |rt| {
-            assert!(rt.synthesis_object_by_window(win_id).is_none(),
+            assert!(
+                rt.synthesis_object_by_window(win_id).is_none(),
                 "second open_store must observe the persisted orphan-cleanup; the per-scope \
                  synthesis_object blob should have been rewritten on the first reopen",
             );
@@ -3497,12 +3594,14 @@ mod tests {
         let scope_a = seed_domain_with_two_channels(handle);
         let scope_b = seed_domain_with_two_channels(handle);
 
-        let win_a_str = trigger_server_synthesis(handle,
+        let win_a_str = trigger_server_synthesis(
+            handle,
             scope_a.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
         .expect("domain dispatch on scope A");
-        let win_b_str = trigger_server_synthesis(handle,
+        let win_b_str = trigger_server_synthesis(
+            handle,
             scope_b.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -3572,7 +3671,7 @@ mod tests {
         teardown(handle2);
     }
 
-    /// ANALYSIS_0007 regression: synthesis status records for
+    /// earlier regression: synthesis status records for
     /// windows that have NOT reached `Complete` status must still
     /// report the correct tier, derived from the persisted
     /// `SynthesisWindow::tier` field. Before the fix, only
@@ -3591,7 +3690,8 @@ mod tests {
         let window_id = with_runtime(handle, |rt| {
             let h = rt
                 .synthesis_windows
-                .open_tiered_window(scope,
+                .open_tiered_window(
+                    scope,
                     synthesis_pipeline::WindowScopeTier::Domain,
                     now - chrono::Duration::hours(1),
                     now,
@@ -3605,8 +3705,9 @@ mod tests {
         let record =
             synthesis_status(handle, window_id.as_uuid().to_string()).expect("synthesis_status");
         assert_eq!(record.status, "pending");
-        assert_eq!(record.tier, "domain",
-            "ANALYSIS_0007 regression: Pending windows must surface the persisted tier",
+        assert_eq!(
+            record.tier, "domain",
+            "earlier regression: Pending windows must surface the persisted tier",
         );
         assert!(record.object_id.is_none());
 
@@ -3616,7 +3717,8 @@ mod tests {
             rt.tenant_memory_mut(tenant_scope);
             let h = rt
                 .synthesis_windows
-                .open_tiered_window(tenant_scope,
+                .open_tiered_window(
+                    tenant_scope,
                     synthesis_pipeline::WindowScopeTier::Tenant,
                     now - chrono::Duration::hours(1),
                     now,
@@ -3633,8 +3735,9 @@ mod tests {
         let tenant_record = synthesis_status(handle, tenant_window_id.as_uuid().to_string())
             .expect("tenant synthesis_status");
         assert_eq!(tenant_record.status, "in_progress");
-        assert_eq!(tenant_record.tier, "tenant",
-            "ANALYSIS_0007 regression: InProgress windows must surface the persisted tier",
+        assert_eq!(
+            tenant_record.tier, "tenant",
+            "earlier regression: InProgress windows must surface the persisted tier",
         );
         teardown(handle);
     }
@@ -3663,7 +3766,8 @@ mod tests {
 
             let pruned = rt.prune_completed_windows(scope, WINDOW_RETENTION_CAP_PER_SCOPE);
             assert_eq!(pruned.len(), total - WINDOW_RETENTION_CAP_PER_SCOPE);
-            assert_eq!(rt.synthesis_windows.windows_for(scope).len(),
+            assert_eq!(
+                rt.synthesis_windows.windows_for(scope).len(),
                 WINDOW_RETENTION_CAP_PER_SCOPE,
                 "retention cap enforced",
             );
@@ -3674,19 +3778,21 @@ mod tests {
     }
 
     /// Always-failing test engine that returns `EngineError::Engine`
-    /// from both tier dispatchers. Used to drive the  failure
+    /// from both tier dispatchers. Used to drive the failure
     /// path so we can verify the live `SynthesisWindowManager` ends
     /// up in `Failed` (not stuck in `Pending`).
     struct FailingTestEngine;
     impl SynthesisEngine for FailingTestEngine {
-        fn synthesize_domain(&self,
+        fn synthesize_domain(
+            &self,
             _windows: &mut SynthesisWindowManager,
             _handle: TieredWindowHandle,
             _input: synthesis_pipeline::DomainSynthesisInput,
         ) -> synthesis_engine::Result<synthesis_engine::DomainSynthesisResult> {
             Err(synthesis_engine::EngineError::engine("test injection"))
         }
-        fn synthesize_tenant(&self,
+        fn synthesize_tenant(
+            &self,
             _windows: &mut SynthesisWindowManager,
             _handle: TieredWindowHandle,
             _input: synthesis_pipeline::TenantSynthesisInput,
@@ -3699,7 +3805,7 @@ mod tests {
     fn failing_engine_transitions_window_to_failed_not_pending() {
         // Regression test for the `mark_failed`-on-`Pending` bug.
         //  mutates a cloned manager, so on the live manager
-        // the window is still `Pending` when  runs. The fix
+        // the window is still `Pending` when runs. The fix
         // replays `Pending → InProgress → Failed` so the live window
         // ends up `Failed`, surfacing the failure to operators and
         // letting future retention sweeps reason about the window.
@@ -3713,7 +3819,8 @@ mod tests {
         .unwrap();
         let scope = seed_domain_with_two_channels(handle);
 
-        let err = trigger_server_synthesis(handle,
+        let err = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -3725,7 +3832,8 @@ mod tests {
         // scope, so `list_recent_syntheses` returns exactly one row.
         let rows = list_recent_syntheses(handle, scope.as_uuid().to_string()).expect("list");
         assert_eq!(rows.len(), 1, "exactly one window opened for this scope");
-        assert_eq!(rows[0].status, "failed",
+        assert_eq!(
+            rows[0].status, "failed",
             "live window must end Failed after dispatch error, not stuck Pending",
         );
         teardown(handle);
@@ -3754,7 +3862,8 @@ mod tests {
                 // Attach a synthesis object so the tier reports
                 // correctly (otherwise list_recent_syntheses reports
                 // "unknown").
-                let obj = SynthesisObject::new(scope,
+                let obj = SynthesisObject::new(
+                    scope,
                     h.window_id,
                     SynthesisObjectType::DomainSummary,
                     b"recap".to_vec(),
@@ -3804,10 +3913,12 @@ mod tests {
         let err = endpoint_config_from_ffi(&cfg).expect_err("oversize timeout must reject");
         match err {
             FfiError::Unavailable { subsystem } => {
-                assert!(subsystem.contains("timeout_ms="),
+                assert!(
+                    subsystem.contains("timeout_ms="),
                     "error message must surface the offending value, got: {subsystem}",
                 );
-                assert!(subsystem.contains(&MAX_TIMEOUT_MS.to_string()),
+                assert!(
+                    subsystem.contains(&MAX_TIMEOUT_MS.to_string()),
                     "error message must surface the cap, got: {subsystem}",
                 );
             }
@@ -3832,7 +3943,8 @@ mod tests {
             rate_refill_per_sec: 0.0,
         };
         let endpoint = endpoint_config_from_ffi(&cfg).expect("at-cap timeout must accept");
-        assert_eq!(endpoint.timeout,
+        assert_eq!(
+            endpoint.timeout,
             Some(Duration::from_millis(MAX_TIMEOUT_MS))
         );
     }
@@ -3899,7 +4011,8 @@ mod tests {
     #[test]
     fn resolve_rate_limiter_config_rejects_negative_refill() {
         let err = resolve_rate_limiter_config(16, -1.0).expect_err("negative refill must reject");
-        assert!(matches!(&err, FfiError::Unavailable { subsystem } if subsystem.contains("rate_refill_per_sec")),
+        assert!(
+            matches!(&err, FfiError::Unavailable { subsystem } if subsystem.contains("rate_refill_per_sec")),
             "unexpected error variant: {err:?}",
         );
     }
@@ -3911,7 +4024,8 @@ mod tests {
     fn resolve_rate_limiter_config_rejects_non_finite_refill() {
         for refill in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let outcome = resolve_rate_limiter_config(16, refill);
-            assert!(matches!(&outcome, Err(FfiError::Unavailable { .. })),
+            assert!(
+                matches!(&outcome, Err(FfiError::Unavailable { .. })),
                 "refill={refill} must reject with Unavailable, got {outcome:?}",
             );
         }
@@ -3931,7 +4045,8 @@ mod tests {
         let scope_str = scope.as_uuid().to_string();
 
         let payload = b"OFFICIAL POLICY v3.2 - confidential".to_vec();
-        let summary = admit_approved_document(handle,
+        let summary = admit_approved_document(
+            handle,
             scope_str.clone(),
             "Tenant Policy v3.2".into(),
             "compliance-officer".into(),
@@ -3991,7 +4106,8 @@ mod tests {
         let scope_str = scope.as_uuid().to_string();
 
         let oversize = vec![0u8; MAX_APPROVED_DOCUMENT_BYTES + 1];
-        let err = admit_approved_document(handle,
+        let err = admit_approved_document(
+            handle,
             scope_str.clone(),
             "label".into(),
             "approver".into(),
@@ -4000,10 +4116,12 @@ mod tests {
         .expect_err("oversize must reject");
         match err {
             FfiError::Memory { message } => {
-                assert!(message.contains(&(MAX_APPROVED_DOCUMENT_BYTES + 1).to_string()),
+                assert!(
+                    message.contains(&(MAX_APPROVED_DOCUMENT_BYTES + 1).to_string()),
                     "error message must surface the offending size, got: {message}",
                 );
-                assert!(message.contains(&MAX_APPROVED_DOCUMENT_BYTES.to_string()),
+                assert!(
+                    message.contains(&MAX_APPROVED_DOCUMENT_BYTES.to_string()),
                     "error message must surface the cap, got: {message}",
                 );
             }
@@ -4026,17 +4144,20 @@ mod tests {
         let scope_str = scope.as_uuid().to_string();
 
         for (label, approver, payload, expect_field) in [
-            (String::new(),
+            (
+                String::new(),
                 "approver".to_string(),
                 b"x".to_vec(),
                 "label",
             ),
-            ("label".to_string(),
+            (
+                "label".to_string(),
                 String::new(),
                 b"x".to_vec(),
                 "approver",
             ),
-            ("label".to_string(),
+            (
+                "label".to_string(),
                 "approver".to_string(),
                 vec![],
                 "payload",
@@ -4045,7 +4166,8 @@ mod tests {
             let err = admit_approved_document(handle, scope_str.clone(), label, approver, payload)
                 .expect_err("empty input must reject");
             match err {
-                FfiError::Memory { message } => assert!(message.contains(expect_field),
+                FfiError::Memory { message } => assert!(
+                    message.contains(expect_field),
                     "expected field `{expect_field}` in error, got: {message}",
                 ),
                 other => panic!("expected FfiError::Memory, got {other:?}"),
@@ -4063,7 +4185,8 @@ mod tests {
         let scope = seed_tenant_with_domain(handle);
         let scope_str = scope.as_uuid().to_string();
 
-        let summary = admit_approved_document(handle,
+        let summary = admit_approved_document(
+            handle,
             scope_str.clone(),
             "Tenant Policy".into(),
             "approver".into(),
@@ -4116,7 +4239,8 @@ mod tests {
         let scope_str = scope.as_uuid().to_string();
 
         let payload_bytes = b"OFFICIAL CHARTER payload bytes".to_vec();
-        admit_approved_document(handle,
+        admit_approved_document(
+            handle,
             scope_str.clone(),
             "Charter".into(),
             "approver".into(),
@@ -4181,7 +4305,8 @@ mod tests {
         .expect("with_runtime");
 
         // Dispatch must succeed.
-        let window_id_str = trigger_server_synthesis(handle,
+        let window_id_str = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Tenant,
         )
@@ -4203,14 +4328,16 @@ mod tests {
         let scope = seed_tenant_with_domain(handle);
         let scope_str = scope.as_uuid().to_string();
 
-        let summary_a = admit_approved_document(handle,
+        let summary_a = admit_approved_document(
+            handle,
             scope_str.clone(),
             "A".into(),
             "ap".into(),
             b"a".to_vec(),
         )
         .expect("admit A");
-        let summary_b = admit_approved_document(handle,
+        let summary_b = admit_approved_document(
+            handle,
             scope_str.clone(),
             "B".into(),
             "ap".into(),
@@ -4237,7 +4364,8 @@ mod tests {
                 .unwrap())
         })
         .expect("with_runtime");
-        assert!(metas_after.is_empty(),
+        assert!(
+            metas_after.is_empty(),
             "all approved-document payload rows must be purged by forget_scope; \
              survivors: {metas_after:?} (admitted summaries: {summary_a:?}, {summary_b:?})",
         );
@@ -4256,7 +4384,8 @@ mod tests {
         let scope_str = scope.as_uuid().to_string();
         crate::forget_scope(handle, scope_str.clone()).expect("forget_scope");
 
-        let admit_err = admit_approved_document(handle,
+        let admit_err = admit_approved_document(
+            handle,
             scope_str.clone(),
             "label".into(),
             "approver".into(),
@@ -4267,7 +4396,8 @@ mod tests {
 
         let listed =
             list_approved_documents(handle, scope_str.clone()).expect("list on forgotten scope");
-        assert!(listed.is_empty(),
+        assert!(
+            listed.is_empty(),
             "list on a forgotten scope must be soft-empty",
         );
 
@@ -4293,7 +4423,8 @@ mod tests {
         let scope = crate::parse_scope_id(&scope_str).expect("scope");
 
         // 1. Admit a document (creates both ref + payload row).
-        let summary = admit_approved_document(handle,
+        let summary = admit_approved_document(
+            handle,
             scope_str.clone(),
             "test-doc".into(),
             "tester".into(),
@@ -4320,7 +4451,8 @@ mod tests {
                 .store()
                 .list_all_approved_document_payload_keys()
                 .expect("list keys");
-            assert!(keys.iter()
+            assert!(
+                keys.iter()
                     .any(|(s, d)| *s == scope && d.to_string() == summary.id),
                 "payload row must still exist before reopen",
             );
@@ -4340,7 +4472,8 @@ mod tests {
                 .store()
                 .list_all_approved_document_payload_keys()
                 .expect("list keys");
-            assert!(!keys
+            assert!(
+                !keys
                     .iter()
                     .any(|(s, d)| *s == scope && d.to_string() == summary.id),
                 "orphan approved-document payload row must be purged at open_store time",
@@ -4368,7 +4501,8 @@ mod tests {
             .iter()
             .find(|s| s.name == "synthesis_engine")
             .expect("synthesis_engine subsystem must be present");
-        assert_eq!(synth.status,
+        assert_eq!(
+            synth.status,
             crate::SubsystemStatus::Degraded,
             "engine configured w/o scope_bindings must be Degraded by default",
         );
@@ -4399,7 +4533,8 @@ mod tests {
             .iter()
             .find(|s| s.name == "synthesis_engine")
             .expect("synthesis_engine subsystem must be present");
-        assert_eq!(synth.status,
+        assert_eq!(
+            synth.status,
             crate::SubsystemStatus::Ok,
             "engine configured w/o scope_bindings must be Ok when single_tenant=true",
         );
@@ -4418,7 +4553,8 @@ mod tests {
         let scope_str = "00000000-0000-0000-0000-000000009e01".to_string();
         let scope = crate::parse_scope_id(&scope_str).expect("scope");
 
-        let original = admit_approved_document(handle,
+        let original = admit_approved_document(
+            handle,
             scope_str.clone(),
             "v1-label".into(),
             "v1-approver".into(),
@@ -4428,7 +4564,8 @@ mod tests {
 
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        let replaced = replace_approved_document(handle,
+        let replaced = replace_approved_document(
+            handle,
             scope_str.clone(),
             original.id.clone(),
             "v2-label".into(),
@@ -4443,11 +4580,13 @@ mod tests {
         assert_eq!(replaced.label, "v2-label");
         assert_eq!(replaced.approver, "v2-approver");
         // approved_at must be refreshed.
-        assert!(replaced.approved_at_ms >= original.approved_at_ms,
+        assert!(
+            replaced.approved_at_ms >= original.approved_at_ms,
             "approved_at must be refreshed on replace",
         );
         // Content hash must change.
-        assert_ne!(replaced.content_hash_hex, original.content_hash_hex,
+        assert_ne!(
+            replaced.content_hash_hex, original.content_hash_hex,
             "content hash must reflect the new payload",
         );
         assert_eq!(replaced.payload_bytes, 18); // "v2-payload-updated"
@@ -4482,7 +4621,8 @@ mod tests {
         let scope_str = "00000000-0000-0000-0000-000000009e02".to_string();
         let _scope = crate::parse_scope_id(&scope_str).expect("scope");
 
-        let err = replace_approved_document(handle,
+        let err = replace_approved_document(
+            handle,
             scope_str,
             Uuid::new_v4().to_string(),
             "label".into(),
@@ -4490,7 +4630,8 @@ mod tests {
             b"payload".to_vec(),
         )
         .unwrap_err();
-        assert!(matches!(err, FfiError::NotFound { ref kind, .. } if kind == "tenant_memory"),
+        assert!(
+            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "tenant_memory"),
             "expected NotFound for tenant_memory, got {err:?}",
         );
 
@@ -4507,7 +4648,8 @@ mod tests {
         let scope_str = "00000000-0000-0000-0000-000000009e04".to_string();
         // Admit one document so the tenant memory exists, then try
         // to replace a *different* document id.
-        admit_approved_document(handle,
+        admit_approved_document(
+            handle,
             scope_str.clone(),
             "label".into(),
             "approver".into(),
@@ -4515,7 +4657,8 @@ mod tests {
         )
         .expect("admit");
 
-        let err = replace_approved_document(handle,
+        let err = replace_approved_document(
+            handle,
             scope_str,
             Uuid::new_v4().to_string(),
             "label".into(),
@@ -4523,7 +4666,8 @@ mod tests {
             b"payload".to_vec(),
         )
         .unwrap_err();
-        assert!(matches!(err, FfiError::NotFound { ref kind, .. } if kind == "approved_document"),
+        assert!(
+            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "approved_document"),
             "expected NotFound for approved_document, got {err:?}",
         );
 
@@ -4536,7 +4680,8 @@ mod tests {
         let (handle, _dir) = fresh_store();
         let scope_str = "00000000-0000-0000-0000-000000009e03".to_string();
 
-        let original = admit_approved_document(handle,
+        let original = admit_approved_document(
+            handle,
             scope_str.clone(),
             "label".into(),
             "approver".into(),
@@ -4546,7 +4691,8 @@ mod tests {
 
         crate::forget_scope(handle, scope_str.clone()).expect("forget");
 
-        let err = replace_approved_document(handle,
+        let err = replace_approved_document(
+            handle,
             scope_str,
             original.id,
             "label".into(),
@@ -4565,7 +4711,8 @@ mod tests {
         let (handle, _dir) = fresh_store();
         let scope_str = "00000000-0000-0000-0000-000000009e04".to_string();
 
-        let original = admit_approved_document(handle,
+        let original = admit_approved_document(
+            handle,
             scope_str.clone(),
             "label".into(),
             "approver".into(),
@@ -4574,7 +4721,8 @@ mod tests {
         .expect("admit");
 
         let big = vec![0u8; MAX_APPROVED_DOCUMENT_BYTES + 1];
-        let err = replace_approved_document(handle,
+        let err = replace_approved_document(
+            handle,
             scope_str,
             original.id,
             "label".into(),
@@ -4593,7 +4741,8 @@ mod tests {
         let (handle, _dir) = fresh_store();
         let scope_str = "00000000-0000-0000-0000-000000009e05".to_string();
 
-        let original = admit_approved_document(handle,
+        let original = admit_approved_document(
+            handle,
             scope_str.clone(),
             "label".into(),
             "approver".into(),
@@ -4601,7 +4750,8 @@ mod tests {
         )
         .expect("admit");
 
-        let err = replace_approved_document(handle,
+        let err = replace_approved_document(
+            handle,
             scope_str,
             original.id,
             "label".into(),
@@ -4614,7 +4764,7 @@ mod tests {
         teardown(handle);
     }
 
-    // ─────────── apply_dispatch_outcome tx-failure recovery  ─────────
+    // ─────────── apply_dispatch_outcome tx-failure recovery ─────────
 
     /// When the earlier `with_transaction` commit fails, the
     /// per-window recovery path inside `apply_dispatch_outcome` must
@@ -4632,7 +4782,7 @@ mod tests {
 
         // Arm the one-shot failure on the next `with_transaction`
         // call — that will be earlier's apply commit ( flush
-        // uses `save_memory_blob` autocommit;  dispatch does
+        // uses `save_memory_blob` autocommit; dispatch does
         // not touch the store).
         with_runtime(handle, |rt| {
             rt.store()
@@ -4645,7 +4795,8 @@ mod tests {
             .expect_err("dispatch must surface the tx-commit failure");
         match &err {
             FfiError::Evidence { message } => {
-                assert!(message.contains("synthetic tx commit failure"),
+                assert!(
+                    message.contains("synthetic tx commit failure"),
                     "expected the injected failure reason to propagate; got {message:?}",
                 );
             }
@@ -4663,7 +4814,8 @@ mod tests {
             // On disk: re-load the windows blob and check the same.
             let blob = rt
                 .store()
-                .load_memory_blob(crate::runtime::synthesis_windows_scope(),
+                .load_memory_blob(
+                    crate::runtime::synthesis_windows_scope(),
                     crate::runtime::SYNTHESIS_WINDOWS_KIND,
                 )
                 .expect("synthesis_windows blob")
@@ -4677,10 +4829,12 @@ mod tests {
             Ok((in_memory_failed, on_disk_failed))
         })
         .expect("with_runtime");
-        assert!(in_memory_failed,
+        assert!(
+            in_memory_failed,
             "live manager must transition window to Failed on tx commit failure",
         );
-        assert!(on_disk_failed,
+        assert!(
+            on_disk_failed,
             "on-disk window blob must also reflect Failed (recovery flush landed)",
         );
 
@@ -4690,7 +4844,8 @@ mod tests {
         // transaction commits, so a rolled-back tx must leave them
         // in their pre-dispatch shape.
         with_runtime(handle, |rt| {
-            assert!(rt.synthesis_object_count() == 0,
+            assert!(
+                rt.synthesis_object_count() == 0,
                 "synthesis_objects must remain empty on tx commit failure (across every \
                  per-scope sub-map)",
             );
@@ -4699,7 +4854,8 @@ mod tests {
             // be `None` (set by `update_summary` only on a
             // successful dispatch).
             let tmo = rt.tenant_memory(scope).expect("tenant memory");
-            assert!(tmo.last_synthesis_window.is_none(),
+            assert!(
+                tmo.last_synthesis_window.is_none(),
                 "tenant memory last_synthesis_window must not advance on tx commit failure",
             );
             Ok(())
@@ -4751,7 +4907,8 @@ mod tests {
         let before_metric = crate::metrics::snapshot().stuck_pending_window_recovered_total;
         let handle = open_store(path.to_string_lossy().into_owned(), key_hex).expect("re-open");
         let after_metric = crate::metrics::snapshot().stuck_pending_window_recovered_total;
-        assert!(after_metric > before_metric,
+        assert!(
+            after_metric > before_metric,
             "stuck_pending_window_recovered_total counter must advance (before={before_metric}, \
              after={after_metric})",
         );
@@ -4760,7 +4917,8 @@ mod tests {
             Ok(rt.synthesis_windows.get(window_id).map(|w| w.status))
         })
         .expect("with_runtime");
-        assert_eq!(status,
+        assert_eq!(
+            status,
             Some(synthesis_pipeline::WindowStatus::Failed),
             "stuck Pending window must rehydrate as Failed after open_store sweep",
         );
@@ -4797,7 +4955,8 @@ mod tests {
         let before_metric = crate::metrics::snapshot().stuck_pending_window_recovered_total;
         let handle = open_store(path.to_string_lossy().into_owned(), key_hex).expect("re-open");
         let after_metric = crate::metrics::snapshot().stuck_pending_window_recovered_total;
-        assert_eq!(after_metric, before_metric,
+        assert_eq!(
+            after_metric, before_metric,
             "fresh-Pending window must NOT be swept (counter must not advance)",
         );
 
@@ -4805,7 +4964,8 @@ mod tests {
             Ok(rt.synthesis_windows.get(window_id).map(|w| w.status))
         })
         .expect("with_runtime");
-        assert_eq!(status,
+        assert_eq!(
+            status,
             Some(synthesis_pipeline::WindowStatus::Pending),
             "fresh-Pending window must remain Pending after open_store",
         );
@@ -4825,14 +4985,16 @@ mod tests {
         install_test_engine(handle);
         let scope = seed_domain_with_two_channels(handle);
 
-        let window_id_str = trigger_server_synthesis(handle,
+        let window_id_str = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
         .expect("fresh dispatch");
         let rec = synthesis_status(handle, window_id_str.clone()).expect("status");
         assert_eq!(rec.status, "complete");
-        assert_eq!(rec.object_version,
+        assert_eq!(
+            rec.object_version,
             Some(1),
             "fresh dispatch must stamp version = 1"
         );
@@ -4857,7 +5019,8 @@ mod tests {
         install_test_engine(handle);
         let scope = seed_domain_with_two_channels(handle);
 
-        let window_id_str = trigger_server_synthesis(handle,
+        let window_id_str = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -4895,7 +5058,8 @@ mod tests {
         install_test_engine(handle);
         let scope = seed_domain_with_two_channels(handle);
 
-        let window_id_str = trigger_server_synthesis(handle,
+        let window_id_str = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -4916,7 +5080,8 @@ mod tests {
         .expect("force-fail");
 
         let err = replay_synthesis(handle, scope.as_uuid().to_string(), window_id_str).unwrap_err();
-        assert!(matches!(err, FfiError::Synthesis { .. }),
+        assert!(
+            matches!(err, FfiError::Synthesis { .. }),
             "replay on non-Complete must surface Synthesis error, got {err:?}",
         );
 
@@ -4933,7 +5098,8 @@ mod tests {
 
         let unknown = Uuid::new_v4().to_string();
         let err = replay_synthesis(handle, scope.as_uuid().to_string(), unknown).unwrap_err();
-        assert!(matches!(err, FfiError::NotFound { .. }),
+        assert!(
+            matches!(err, FfiError::NotFound { .. }),
             "unknown window must surface NotFound, got {err:?}",
         );
         teardown(handle);
@@ -4948,7 +5114,8 @@ mod tests {
         install_test_engine(handle);
         let scope = seed_domain_with_two_channels(handle);
 
-        let window_id_str = trigger_server_synthesis(handle,
+        let window_id_str = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -4958,7 +5125,8 @@ mod tests {
         crate::forget_scope(handle, scope.as_uuid().to_string()).expect("forget");
 
         let err = replay_synthesis(handle, scope.as_uuid().to_string(), window_id_str).unwrap_err();
-        assert!(matches!(err, FfiError::NotFound { .. }),
+        assert!(
+            matches!(err, FfiError::NotFound { .. }),
             "forgotten scope must surface NotFound, got {err:?}",
         );
 
@@ -4989,7 +5157,8 @@ mod tests {
         let scope = seed_domain_with_two_channels(handle);
 
         // Fresh dispatch at version 1.
-        let window_id_str = trigger_server_synthesis(handle,
+        let window_id_str = trigger_server_synthesis(
+            handle,
             scope.as_uuid().to_string(),
             SynthesisTierKind::Domain,
         )
@@ -4999,7 +5168,8 @@ mod tests {
         // does not surface `Throttled` mid-test (the limiter is
         // global and lives across test cases).
         with_runtime(handle, |rt| {
-            rt.synthesis_rate_limiter.reconfigure(u32::try_from(MAX_SYNTHESIS_VERSIONS_PER_WINDOW * 4).expect("cap fits in u32"),
+            rt.synthesis_rate_limiter.reconfigure(
+                u32::try_from(MAX_SYNTHESIS_VERSIONS_PER_WINDOW * 4).expect("cap fits in u32"),
                 1_000.0,
             );
             Ok(())
@@ -5016,7 +5186,8 @@ mod tests {
 
         let versions =
             list_synthesis_versions(handle, window_id_str.clone()).expect("list versions");
-        assert_eq!(versions.len(),
+        assert_eq!(
+            versions.len(),
             MAX_SYNTHESIS_VERSIONS_PER_WINDOW + 1,
             "current + cap archived = {} entries; got {versions:#?}",
             MAX_SYNTHESIS_VERSIONS_PER_WINDOW + 1,
@@ -5030,7 +5201,8 @@ mod tests {
         // evicted by the in-tx delete-oldest step).
         let latest_version = versions[0].version;
         let oldest_archive_version = versions.last().expect("at least one entry").version;
-        assert_eq!(oldest_archive_version,
+        assert_eq!(
+            oldest_archive_version,
             latest_version
                 - u32::try_from(MAX_SYNTHESIS_VERSIONS_PER_WINDOW).expect("cap fits in u32"),
             "evicting from the head must keep exactly cap archived rows",

@@ -278,7 +278,8 @@ impl WebhookDispatcher for FfiWebhookRouter {
                 self.dispatch_bad_request_total
                     .fetch_add(1, Ordering::Relaxed);
                 metrics::inc_webhook_dispatch_bad_request();
-                return Err(ConnectorError::Webhook(format!("no instance registered for provider_id={provider_id}; \
+                return Err(ConnectorError::Webhook(format!(
+                    "no instance registered for provider_id={provider_id}; \
                      call register_webhook_dispatch first",
                 )));
             };
@@ -315,7 +316,8 @@ impl WebhookDispatcher for FfiWebhookRouter {
                 self.dispatch_bad_gateway_total
                     .fetch_add(1, Ordering::Relaxed);
                 metrics::inc_webhook_dispatch_bad_gateway();
-                return Err(ConnectorError::Transport(format!("webhook dispatch worker join failed: {join_err}",
+                return Err(ConnectorError::Transport(format!(
+                    "webhook dispatch worker join failed: {join_err}",
                 )));
             }
         };
@@ -353,7 +355,8 @@ type DispatchOutcome = Result<usize, ConnectorError>;
 /// Run the synchronous three-phase dispatch on a [`spawn_blocking`]
 /// worker. Split out as a free function so unit tests can exercise
 /// the phase ordering without standing up a real axum server.
-fn dispatch_blocking(handle: RuntimeHandle,
+fn dispatch_blocking(
+    handle: RuntimeHandle,
     instance_id: ConnectorInstanceId,
     provider_id: &str,
     body: &[u8],
@@ -398,7 +401,8 @@ fn dispatch_blocking(handle: RuntimeHandle,
                 "webhook dispatch found connector_instance without matching connector Arc"
             );
             return Err(FfiError::Connector {
-                message: format!("internal: connector instance {instance_id} \
+                message: format!(
+                    "internal: connector instance {instance_id} \
                      missing from connectors map"
                 ),
             });
@@ -410,7 +414,8 @@ fn dispatch_blocking(handle: RuntimeHandle,
     let (connector, scope, kind) = match snapshot {
         Ok(triple) => triple,
         Err(FfiError::NotFound { kind: nf_kind, id }) => {
-            return Err(ConnectorError::Webhook(format!("no live binding for provider_id={provider_id}: {nf_kind}={id} not found"
+            return Err(ConnectorError::Webhook(format!(
+                "no live binding for provider_id={provider_id}: {nf_kind}={id} not found"
             )));
         }
         Err(other) => {
@@ -418,7 +423,8 @@ fn dispatch_blocking(handle: RuntimeHandle,
             // → 502 Bad Gateway. The framework wraps the
             // `ConnectorError` discriminant; we use `Transport`
             // because the "substrate-side fault" semantics match.
-            return Err(ConnectorError::Transport(format!("webhook dispatch phase-1 snapshot failed: {other}"
+            return Err(ConnectorError::Transport(format!(
+                "webhook dispatch phase-1 snapshot failed: {other}"
             )));
         }
     };
@@ -470,7 +476,8 @@ fn dispatch_blocking(handle: RuntimeHandle,
                 let detection = observation_engine::detect_language(&body);
                 let language_tag = detection.as_ref().map(|d| d.tag.as_str());
                 rt.store_mut()
-                    .ingest_with_language(scope,
+                    .ingest_with_language(
+                        scope,
                         body.as_bytes(),
                         Some(source_tag),
                         evidence_store::ImportanceClass::Important,
@@ -487,9 +494,11 @@ fn dispatch_blocking(handle: RuntimeHandle,
 
     match persisted {
         Ok(n) => Ok(n),
-        Err(FfiError::Unavailable { subsystem }) => Err(ConnectorError::Transport(format!("webhook dispatch persist phase failed: subsystem={subsystem} unavailable"
+        Err(FfiError::Unavailable { subsystem }) => Err(ConnectorError::Transport(format!(
+            "webhook dispatch persist phase failed: subsystem={subsystem} unavailable"
         ))),
-        Err(e) => Err(ConnectorError::Transport(format!("webhook dispatch persist phase failed: {e}"
+        Err(e) => Err(ConnectorError::Transport(format!(
+            "webhook dispatch persist phase failed: {e}"
         ))),
     }
 }
@@ -591,7 +600,8 @@ pub(crate) fn drain_all_servers(servers: HashMap<WebhookServerHandle, RunningWeb
     // idiom for "consume and drop"; it avoids the otherwise-needed
     // `mut servers` binding that `servers.drain()` requires.
     for (sh, mut server) in servers {
-        tracing::debug!(server_handle = sh.0,
+        tracing::debug!(
+            server_handle = sh.0,
             "draining webhook server on close_store",
         );
         server.shutdown_and_join();
@@ -648,7 +658,8 @@ impl Drop for RunningWebhookServer {
 /// handle mutex; on different handles they run fully in parallel.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
-pub fn start_webhook_server(handle: RuntimeHandle,
+pub fn start_webhook_server(
+    handle: RuntimeHandle,
     bind_addr: String,
 ) -> FfiResult<WebhookServerHandle> {
     metrics::instrument(metrics::inc_start_webhook_server, || {
@@ -741,7 +752,8 @@ pub fn start_webhook_server(handle: RuntimeHandle,
                     Ok(server_handle)
                 }
                 Entry::Occupied(_) => Err(FfiError::Connector {
-                    message: format!("webhook server handle {} collided during allocation",
+                    message: format!(
+                        "webhook server handle {} collided during allocation",
                         server_handle.0,
                     ),
                 }),
@@ -768,7 +780,8 @@ pub fn start_webhook_server(handle: RuntimeHandle,
 /// guarantee ensures every in-flight dispatch completes before the
 /// join returns.
 #[uniffi::export]
-pub fn stop_webhook_server(handle: RuntimeHandle,
+pub fn stop_webhook_server(
+    handle: RuntimeHandle,
     server_handle: WebhookServerHandle,
 ) -> FfiResult<()> {
     metrics::instrument(metrics::inc_stop_webhook_server, || {
@@ -817,7 +830,8 @@ pub fn stop_webhook_server(handle: RuntimeHandle,
 ///   `genericwebhook`).
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
-pub fn register_webhook_dispatch(handle: RuntimeHandle,
+pub fn register_webhook_dispatch(
+    handle: RuntimeHandle,
     server_handle: WebhookServerHandle,
     provider_id: String,
     instance_id: String,
@@ -830,7 +844,8 @@ pub fn register_webhook_dispatch(handle: RuntimeHandle,
         // pure-Rust lookup — no allocation, no system calls.
         if !is_known_provider_id(&provider_id) {
             return Err(FfiError::Connector {
-                message: format!("unknown provider_id `{provider_id}`: must be one of \
+                message: format!(
+                    "unknown provider_id `{provider_id}`: must be one of \
                      slack, notion, jira, confluence, googledrive, onedrive, \
                      hubspot, figma, email, github, genericwebhook",
                 ),
@@ -876,7 +891,8 @@ pub fn register_webhook_dispatch(handle: RuntimeHandle,
 ///   running server on this runtime.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
-pub fn unregister_webhook_dispatch(handle: RuntimeHandle,
+pub fn unregister_webhook_dispatch(
+    handle: RuntimeHandle,
     server_handle: WebhookServerHandle,
     provider_id: String,
 ) -> FfiResult<()> {
@@ -957,7 +973,8 @@ pub fn list_webhook_servers(handle: RuntimeHandle) -> FfiResult<Vec<WebhookServe
 /// Entry point of the per-server OS thread. Builds a `current_thread`
 /// tokio runtime, binds the listener, and drives the axum server
 /// until the shutdown oneshot fires.
-fn run_server_thread(config: WebhookServerConfig,
+fn run_server_thread(
+    config: WebhookServerConfig,
     dispatches: Vec<WebhookDispatch>,
     shutdown_rx: oneshot::Receiver<()>,
     listener_tx: std::sync::mpsc::SyncSender<Result<SocketAddr, String>>,
@@ -988,7 +1005,8 @@ fn run_server_thread(config: WebhookServerConfig,
         let listener = match tokio::net::TcpListener::bind(config.bind_addr).await {
             Ok(l) => l,
             Err(e) => {
-                let _ = listener_tx.send(Err(format!("bind to {addr} failed: {e}",
+                let _ = listener_tx.send(Err(format!(
+                    "bind to {addr} failed: {e}",
                     addr = config.bind_addr,
                 )));
                 return;
@@ -1114,7 +1132,8 @@ mod tests {
         ];
         for k in all_kinds {
             let slug = provider_id_for_kind(k);
-            assert!(is_known_provider_id(slug),
+            assert!(
+                is_known_provider_id(slug),
                 "provider_id_for_kind({k:?}) = {slug:?} not in KNOWN_PROVIDER_IDS",
             );
         }

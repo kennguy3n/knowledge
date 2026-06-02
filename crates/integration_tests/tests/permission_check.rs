@@ -50,7 +50,8 @@ fn full_inheritance_and_userset_rewrites_resolve() {
     // Synthesizer ambient role on the channel — orthogonal to the
     // membership chain.
     store
-        .insert(RelationTuple::new(channel,
+        .insert(RelationTuple::new(
+            channel,
             Relation::Synthesizer,
             synthesizer,
         ))
@@ -59,7 +60,8 @@ fn full_inheritance_and_userset_rewrites_resolve() {
     // Userset rewrite: `domain # editor @ tenant # admin` — any
     // tenant-admin gets editor on the domain.
     store
-        .insert(RelationTuple::new(domain,
+        .insert(RelationTuple::new(
+            domain,
             Relation::Editor,
             SubjectRef::via(SubjectType::Tenant, tenant.object_id, Relation::Admin),
         ))
@@ -73,79 +75,94 @@ fn full_inheritance_and_userset_rewrites_resolve() {
         Relation::Member,
         Relation::Viewer,
     ] {
-        assert!(check_permission(&store, &ns, tenant, wanted, owner),
+        assert!(
+            check_permission(&store, &ns, tenant, wanted, owner),
             "owner must satisfy tenant#{wanted:?}"
         );
     }
 
     // Owner ambient roles (Synthesizer / Proposer) are NOT implied
     // by the membership chain.
-    assert!(!check_permission(&store, &ns, tenant, Relation::Synthesizer, owner),
+    assert!(
+        !check_permission(&store, &ns, tenant, Relation::Synthesizer, owner),
         "Synthesizer must not be implied by the inheritance chain"
     );
-    assert!(!check_permission(&store, &ns, tenant, Relation::Proposer, owner),
+    assert!(
+        !check_permission(&store, &ns, tenant, Relation::Proposer, owner),
         "Proposer must not be implied by the inheritance chain"
     );
 
     // 2. Admin gets editor / member / viewer on tenant, but NOT
     // owner.
-    assert!(check_permission(&store,
+    assert!(check_permission(
+        &store,
         &ns,
         tenant,
         Relation::Admin,
         admin
     ));
-    assert!(check_permission(&store,
+    assert!(check_permission(
+        &store,
         &ns,
         tenant,
         Relation::Editor,
         admin
     ));
-    assert!(check_permission(&store,
+    assert!(check_permission(
+        &store,
         &ns,
         tenant,
         Relation::Viewer,
         admin
     ));
-    assert!(!check_permission(&store, &ns, tenant, Relation::Owner, admin),
+    assert!(
+        !check_permission(&store, &ns, tenant, Relation::Owner, admin),
         "admin must NOT satisfy tenant#owner"
     );
 
     // 3. Userset rewrite resolves: admin on the tenant gets editor
     //    on the domain, but the channel-only viewer does not.
-    assert!(check_permission(&store, &ns, domain, Relation::Editor, admin),
+    assert!(
+        check_permission(&store, &ns, domain, Relation::Editor, admin),
         "admin satisfies domain#editor via tenant#admin rewrite"
     );
-    assert!(check_permission(&store, &ns, domain, Relation::Viewer, admin),
+    assert!(
+        check_permission(&store, &ns, domain, Relation::Viewer, admin),
         "admin satisfies domain#viewer (Editor ⇒ Member ⇒ Viewer)"
     );
-    assert!(!check_permission(&store, &ns, domain, Relation::Owner, admin),
+    assert!(
+        !check_permission(&store, &ns, domain, Relation::Owner, admin),
         "userset rewrite must not lift admin to domain#owner"
     );
-    assert!(!check_permission(&store, &ns, domain, Relation::Editor, viewer),
+    assert!(
+        !check_permission(&store, &ns, domain, Relation::Editor, viewer),
         "channel viewer must NOT satisfy domain#editor"
     );
 
     // 4. Channel viewer holds only viewer.
-    assert!(check_permission(&store,
+    assert!(check_permission(
+        &store,
         &ns,
         channel,
         Relation::Viewer,
         viewer
     ));
-    assert!(!check_permission(&store, &ns, channel, Relation::Editor, viewer),
+    assert!(
+        !check_permission(&store, &ns, channel, Relation::Editor, viewer),
         "viewer must NOT satisfy channel#editor"
     );
 
     // 5. Synthesizer ambient role is directly grantable but is NOT
     //    implied by membership.
-    assert!(check_permission(&store,
+    assert!(check_permission(
+        &store,
         &ns,
         channel,
         Relation::Synthesizer,
         synthesizer
     ));
-    assert!(!check_permission(&store, &ns, channel, Relation::Viewer, synthesizer),
+    assert!(
+        !check_permission(&store, &ns, channel, Relation::Viewer, synthesizer),
         "ambient Synthesizer must NOT imply Viewer"
     );
 
@@ -160,7 +177,8 @@ fn full_inheritance_and_userset_rewrites_resolve() {
             Relation::Synthesizer,
             Relation::Proposer,
         ] {
-            assert!(!check_permission(&store, &ns, object, wanted, stranger),
+            assert!(
+                !check_permission(&store, &ns, object, wanted, stranger),
                 "stranger must hold nothing on {object:?} # {wanted:?}"
             );
         }
@@ -180,13 +198,15 @@ fn empty_namespace_registry_falls_back_to_self_relation_only() {
         .insert(RelationTuple::new(tenant, Relation::Owner, owner))
         .expect("insert owner");
 
-    assert!(check_permission(&store,
+    assert!(check_permission(
+        &store,
         &ns,
         tenant,
         Relation::Owner,
         owner
     ));
-    assert!(!check_permission(&store, &ns, tenant, Relation::Viewer, owner),
+    assert!(
+        !check_permission(&store, &ns, tenant, Relation::Viewer, owner),
         "without an inheritance config, Owner must not imply Viewer"
     );
 }

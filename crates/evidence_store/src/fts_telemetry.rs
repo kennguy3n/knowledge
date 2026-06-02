@@ -1,11 +1,11 @@
 //! Process-singleton observability counters for the multilingual
 //! FTS5 path.
 //!
-//! Phases 1.2 – 1.9 split the lexical retrieval pipeline into
-//! three FTS5 lanes (`evidence_fts` unicode61, `evidence_fts_cjk`
-//! trigram, `evidence_fts_bigram` bigram) with 
+//! The multilingual rollout split the lexical retrieval pipeline
+//! into three FTS5 lanes (`evidence_fts` unicode61,
+//! `evidence_fts_cjk` trigram, `evidence_fts_bigram` bigram) with
 //! per-script stopword stripping wrapped around the two recall
-//! lanes — but no metrics were ever exposed for which lane
+//! lanes — but originally no metrics were exposed for which lane
 //! produced rows, how often the trigram / bigram lane short-
 //! circuited on a pure-stopword query, or how many stopword
 //! codepoints actually got stripped at index time vs. query
@@ -79,7 +79,7 @@
 //!
 //!   In practice the error term is ~0 (the recall-lane closures
 //!   only return `Err` on SQLite-side faults like cache
-//!   contention or disk I/O, both of which are rare).  The
+//!   contention or disk I/O, both of which are rare). The
 //!   architectural reason errors are not counted is documented
 //!   on the trigram / bigram branches in
 //!   [`crate::store::merged_fts_search`]: a per-row UUID parse
@@ -87,7 +87,7 @@
 //!   skipped within an otherwise-successful lane invocation),
 //!   and a top-level `Err` from the closure is silently dropped
 //!   so the lane is *purely additive* (a flaky recall lane must
-//!   never sabotage the unicode61 lane).  Operators reading the
+//!   never sabotage the unicode61 lane). Operators reading the
 //!   counter ratios should therefore treat `queries + skips` as
 //!   a lower bound on `total_attempts`, with the gap being
 //!   exactly the swallowed-error count.
@@ -118,14 +118,14 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-/// Process-singleton bag of atomic counters.  Internal — callers
+/// Process-singleton bag of atomic counters. Internal — callers
 /// touch via [`record_lane_query`] / [`record_lane_skip`] /
 /// [`record_stopwords_stripped`] and read via [`snapshot`].
 ///
 /// The `_total` field suffix is the Prometheus-canonical naming
 /// convention for monotonic counter metrics — preserved through
 /// the FFI [`crate::ffi::metrics::FtsTelemetry`] mirror and into
-/// any downstream metric exporter.  The clippy
+/// any downstream metric exporter. The clippy
 /// `struct_field_names` lint flags the shared postfix, but
 /// dropping `_total` would diverge from the convention and
 /// confuse exporters expecting `<metric>_total` for counters.
@@ -155,7 +155,7 @@ pub(crate) struct Counters {
 
 static COUNTERS: OnceLock<Counters> = OnceLock::new();
 
-/// Borrow the process-singleton counter block.  Internal.
+/// Borrow the process-singleton counter block. Internal.
 #[inline]
 fn counters() -> &'static Counters {
     COUNTERS.get_or_init(Counters::default)
@@ -173,19 +173,21 @@ pub enum Lane {
 }
 
 /// Record a lane query invocation that produced (or attempted
-/// to produce) rows.  `rows` is the number of rows returned —
+/// to produce) rows. `rows` is the number of rows returned —
 /// pass `0` when the query was syntactically valid but returned
-/// nothing.  The matching `<lane>_lane_queries_total` AND
+/// nothing. The matching `<lane>_lane_queries_total` AND
 /// `<lane>_lane_rows_total` counters are both bumped (the latter
 /// by `rows`).
 #[inline]
 pub fn record_lane_query(lane: Lane, rows: u64) {
     let c = counters();
     let (q, r) = match lane {
-        Lane::Unicode61 => (&c.unicode61_lane_queries_total,
+        Lane::Unicode61 => (
+            &c.unicode61_lane_queries_total,
             &c.unicode61_lane_rows_total,
         ),
-        Lane::CjkTrigram => (&c.cjk_trigram_lane_queries_total,
+        Lane::CjkTrigram => (
+            &c.cjk_trigram_lane_queries_total,
             &c.cjk_trigram_lane_rows_total,
         ),
         Lane::Bigram => (&c.bigram_lane_queries_total, &c.bigram_lane_rows_total),
@@ -196,7 +198,7 @@ pub fn record_lane_query(lane: Lane, rows: u64) {
     }
 }
 
-/// Reason a recall lane was skipped (not invoked).  Each variant
+/// Reason a recall lane was skipped (not invoked). Each variant
 /// maps to a distinct counter in [`Counters`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
@@ -212,7 +214,7 @@ pub enum SkipReason {
     /// empty (pure-stopword input) — checked *before*
     /// [`crate::bigram::compute_cjk_bigram_query`] so the
     /// pure-stopword case never falls through to
-    /// [`Self::BigramNoCjkQuery`].  The two bigram skip variants
+    /// [`Self::BigramNoCjkQuery`]. The two bigram skip variants
     /// are mutually exclusive by construction in
     /// [`crate::store::merged_fts_search`] — see the module-level
     /// doc on this crate for the full ordering rationale.
@@ -220,7 +222,7 @@ pub enum SkipReason {
     /// Bigram lane: stripped query was non-empty but contained
     /// no adjacent-CJK codepoint pair, so
     /// [`crate::bigram::compute_cjk_bigram_query`] returned
-    /// `None` and no MATCH was attempted.  Distinct from
+    /// `None` and no MATCH was attempted. Distinct from
     /// [`Self::BigramPureStopwordQuery`] so operators can tell
     /// a Latin-only / non-CJK query path from a CJK-input-but-
     /// pure-particles path; the former is expected (the bigram
@@ -244,7 +246,7 @@ pub fn record_lane_skip(reason: SkipReason) {
     counter.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Which call site reported the stopword strip.  Each variant
+/// Which call site reported the stopword strip. Each variant
 /// maps to a distinct counter (and the three are mutually
 /// exclusive — a single body / query never appears in more
 /// than one site's count).
@@ -264,7 +266,7 @@ pub enum StripSite {
     V16Migration,
 }
 
-/// Record `count` stopword instances stripped at `site`.  No-op
+/// Record `count` stopword instances stripped at `site`. No-op
 /// when `count == 0` (call-site convenience — caller can pass
 /// the raw strip count without branching).
 #[inline]
@@ -292,7 +294,7 @@ pub fn record_stopwords_stripped(site: StripSite, count: u64) {
 pub struct FtsTelemetrySnapshot {
     /// Times the unicode61 lane (`evidence_fts`) was invoked
     /// with a non-empty query in
-    /// [`crate::store::merged_fts_search`].  Every call counts
+    /// [`crate::store::merged_fts_search`]. Every call counts
     /// even when zero rows were returned.
     pub unicode61_lane_queries_total: u64,
     /// Cumulative row count across all
@@ -329,7 +331,7 @@ pub struct FtsTelemetrySnapshot {
     pub bigram_lane_skips_pure_stopword_query_total: u64,
     /// Times the CJK bigram lane was skipped because the
     /// stripped query was non-empty but contained no adjacent-
-    /// CJK codepoint pair (e.g. a Latin-only query).  Mutually
+    /// CJK codepoint pair (e.g. a Latin-only query). Mutually
     /// exclusive with
     /// [`Self::bigram_lane_skips_pure_stopword_query_total`].
     pub bigram_lane_skips_no_cjk_query_total: u64,
@@ -394,10 +396,12 @@ mod tests {
         let before = snapshot();
         record_lane_query(Lane::Unicode61, 5);
         let after = snapshot();
-        assert_eq!(after.unicode61_lane_queries_total,
+        assert_eq!(
+            after.unicode61_lane_queries_total,
             before.unicode61_lane_queries_total + 1
         );
-        assert_eq!(after.unicode61_lane_rows_total,
+        assert_eq!(
+            after.unicode61_lane_rows_total,
             before.unicode61_lane_rows_total + 5
         );
     }
@@ -410,10 +414,12 @@ mod tests {
         let before = snapshot();
         record_lane_query(Lane::CjkTrigram, 0);
         let after = snapshot();
-        assert_eq!(after.cjk_trigram_lane_queries_total,
+        assert_eq!(
+            after.cjk_trigram_lane_queries_total,
             before.cjk_trigram_lane_queries_total + 1
         );
-        assert_eq!(after.cjk_trigram_lane_rows_total, before.cjk_trigram_lane_rows_total,
+        assert_eq!(
+            after.cjk_trigram_lane_rows_total, before.cjk_trigram_lane_rows_total,
             "zero-rows query must NOT bump _rows_total"
         );
     }
@@ -425,21 +431,25 @@ mod tests {
         let before = snapshot();
         record_lane_query(Lane::Bigram, 3);
         let after = snapshot();
-        assert_eq!(after.bigram_lane_queries_total,
+        assert_eq!(
+            after.bigram_lane_queries_total,
             before.bigram_lane_queries_total + 1
         );
-        assert_eq!(after.bigram_lane_rows_total,
+        assert_eq!(
+            after.bigram_lane_rows_total,
             before.bigram_lane_rows_total + 3
         );
-        assert_eq!(after.unicode61_lane_queries_total, before.unicode61_lane_queries_total,
+        assert_eq!(
+            after.unicode61_lane_queries_total, before.unicode61_lane_queries_total,
             "Bigram query must NOT bump Unicode61 counters"
         );
-        assert_eq!(after.cjk_trigram_lane_queries_total, before.cjk_trigram_lane_queries_total,
+        assert_eq!(
+            after.cjk_trigram_lane_queries_total, before.cjk_trigram_lane_queries_total,
             "Bigram query must NOT bump CjkTrigram counters"
         );
     }
 
-    /// Pin skip → counter mapping for every variant.  Each
+    /// Pin skip → counter mapping for every variant. Each
     /// [`SkipReason`] must map to a distinct counter field;
     /// regressions here would silently merge unrelated skip
     /// reasons into the same metric stream.
@@ -450,13 +460,16 @@ mod tests {
         record_lane_skip(SkipReason::BigramPureStopwordQuery);
         record_lane_skip(SkipReason::BigramNoCjkQuery);
         let after = snapshot();
-        assert_eq!(after.cjk_trigram_lane_skips_pure_stopword_query_total,
+        assert_eq!(
+            after.cjk_trigram_lane_skips_pure_stopword_query_total,
             before.cjk_trigram_lane_skips_pure_stopword_query_total + 1
         );
-        assert_eq!(after.bigram_lane_skips_pure_stopword_query_total,
+        assert_eq!(
+            after.bigram_lane_skips_pure_stopword_query_total,
             before.bigram_lane_skips_pure_stopword_query_total + 1
         );
-        assert_eq!(after.bigram_lane_skips_no_cjk_query_total,
+        assert_eq!(
+            after.bigram_lane_skips_no_cjk_query_total,
             before.bigram_lane_skips_no_cjk_query_total + 1
         );
     }
@@ -470,13 +483,16 @@ mod tests {
         record_stopwords_stripped(StripSite::QueryTime, 2);
         record_stopwords_stripped(StripSite::V16Migration, 100);
         let after = snapshot();
-        assert_eq!(after.index_write_stopwords_stripped_total,
+        assert_eq!(
+            after.index_write_stopwords_stripped_total,
             before.index_write_stopwords_stripped_total + 7
         );
-        assert_eq!(after.query_time_stopwords_stripped_total,
+        assert_eq!(
+            after.query_time_stopwords_stripped_total,
             before.query_time_stopwords_stripped_total + 2
         );
-        assert_eq!(after.v16_migration_stopwords_stripped_total,
+        assert_eq!(
+            after.v16_migration_stopwords_stripped_total,
             before.v16_migration_stopwords_stripped_total + 100
         );
     }

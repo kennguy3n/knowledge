@@ -62,7 +62,8 @@ fn inheritance_chain_owner_to_viewer() {
         Relation::Member,
         Relation::Viewer,
     ] {
-        assert!(check_permission(&store, &ns, tenant, wanted, alice),
+        assert!(
+            check_permission(&store, &ns, tenant, wanted, alice),
             "owner should imply {}",
             wanted.as_str()
         );
@@ -80,7 +81,8 @@ fn inheritance_chain_owner_to_viewer() {
         Relation::Editor,
         Relation::Member,
     ] {
-        assert!(!check_permission(&store, &ns, tenant, higher, bob),
+        assert!(
+            !check_permission(&store, &ns, tenant, higher, bob),
             "viewer should not imply {}",
             higher.as_str()
         );
@@ -105,19 +107,22 @@ fn userset_rewrite_via_subject_relation() {
         .insert(RelationTuple::new(tenant, Relation::Admin, alice))
         .unwrap();
     store
-        .insert(RelationTuple::new(domain,
+        .insert(RelationTuple::new(
+            domain,
             Relation::Editor,
             SubjectRef::via(SubjectType::Tenant, tenant.object_id, Relation::Admin),
         ))
         .unwrap();
 
-    assert!(check_permission(&store,
+    assert!(check_permission(
+        &store,
         &ns,
         domain,
         Relation::Editor,
         alice
     ));
-    assert!(check_permission(&store,
+    assert!(check_permission(
+        &store,
         &ns,
         domain,
         Relation::Member,
@@ -125,7 +130,8 @@ fn userset_rewrite_via_subject_relation() {
     ));
     // Alice is an admin on the tenant, not the domain, so she should
     // NOT inherit `Owner` on the domain.
-    assert!(!check_permission(&store,
+    assert!(!check_permission(
+        &store,
         &ns,
         domain,
         Relation::Owner,
@@ -143,13 +149,15 @@ fn negative_case_unrelated_subject() {
     store
         .insert(RelationTuple::new(tenant, Relation::Owner, alice))
         .unwrap();
-    assert!(!check_permission(&store,
+    assert!(!check_permission(
+        &store,
         &ns,
         tenant,
         Relation::Viewer,
         mallory
     ));
-    assert!(!check_permission(&store,
+    assert!(!check_permission(
+        &store,
         &ns,
         tenant,
         Relation::Owner,
@@ -169,7 +177,8 @@ fn synthesizer_relation_is_orthogonal() {
     store
         .insert(RelationTuple::new(channel, Relation::Owner, alice))
         .unwrap();
-    assert!(!check_permission(&store,
+    assert!(!check_permission(
+        &store,
         &ns,
         channel,
         Relation::Synthesizer,
@@ -178,7 +187,8 @@ fn synthesizer_relation_is_orthogonal() {
     store
         .insert(RelationTuple::new(channel, Relation::Synthesizer, alice))
         .unwrap();
-    assert!(check_permission(&store,
+    assert!(check_permission(
+        &store,
         &ns,
         channel,
         Relation::Synthesizer,
@@ -197,13 +207,15 @@ fn empty_namespace_falls_back_to_direct() {
     store
         .insert(RelationTuple::new(tenant, Relation::Owner, alice))
         .unwrap();
-    assert!(check_permission(&store,
+    assert!(check_permission(
+        &store,
         &ns,
         tenant,
         Relation::Owner,
         alice
     ));
-    assert!(!check_permission(&store,
+    assert!(!check_permission(
+        &store,
         &ns,
         tenant,
         Relation::Member,
@@ -215,7 +227,8 @@ fn empty_namespace_falls_back_to_direct() {
 fn closure_in_custom_namespace() {
     // A custom namespace where Editor implies Viewer only.
     let mut ns = NamespaceRegistry::new();
-    ns.register(NamespaceConfig::new(ObjectType::Channel).imply(Relation::Editor, &[Relation::Viewer]),
+    ns.register(
+        NamespaceConfig::new(ObjectType::Channel).imply(Relation::Editor, &[Relation::Viewer]),
     )
     .unwrap();
 

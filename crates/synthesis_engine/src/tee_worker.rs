@@ -60,7 +60,7 @@ use crate::managed_endpoint::{
 /// Unattested ──attest()──▶ Attesting ──quote ok──▶ Attested
 ///                                  │
 ///                                  └──quote fail──▶ Unattested
-/// Attested  ──synthesize()──▶ Synthesizing ──ok──▶ Idle ──┐
+/// Attested ──synthesize()──▶ Synthesizing ──ok──▶ Idle ──┐
 ///                                                         ▼
 ///                                                       Attested
 /// Idle / Attested ──ttl expiry──▶ Unattested ──attest()──▶ ...
@@ -120,7 +120,8 @@ pub struct TeeWorkerConfig {
 
 impl TeeWorkerConfig {
     /// Construct a config with the default 1-hour attestation TTL.
-    pub fn new(platform: TeePlatform,
+    pub fn new(
+        platform: TeePlatform,
         expected_measurement: ContentHash,
         synthesizer_pub_key: Vec<u8>,
         scope_bindings: Vec<Uuid>,
@@ -267,7 +268,8 @@ impl<R: TeeRuntime> TeeWorker<R, MockHttpClient> {
     /// `cfg(test)` paths in the rest of the crate can keep using the
     /// two-argument constructor.
     pub fn new(runtime: R, config: TeeWorkerConfig) -> Self {
-        let endpoint = EndpointConfig::new("https://synthesis.tee.invalid/v1/synthesize",
+        let endpoint = EndpointConfig::new(
+            "https://synthesis.tee.invalid/v1/synthesize",
             "TEE_DEFAULT_KEY_REF",
             "slm-recap-v1",
         );
@@ -286,7 +288,8 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
     /// [`HttpManagedEndpointSynthesizer`] delegate. Production
     /// callers wire a real HTTPS client into the synthesizer before
     /// passing it in; tests can reuse [`MockHttpClient`].
-    pub fn with_synthesizer(runtime: R,
+    pub fn with_synthesizer(
+        runtime: R,
         config: TeeWorkerConfig,
         synth: HttpManagedEndpointSynthesizer<C>,
     ) -> Self {
@@ -335,7 +338,8 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
         let report = self.runtime.quote(&self.config.enclave_image, &nonce);
 
         if report.platform != self.config.platform {
-            let entry = AttestationAuditEntry::failure(report.report_id,
+            let entry = AttestationAuditEntry::failure(
+                report.report_id,
                 scope_id,
                 report.platform,
                 "tee platform mismatch",
@@ -349,7 +353,8 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
         let verified = verify_attestation(&report, &self.config.expected_measurement)
             .map_err(|e| EngineError::engine(format!("tee: verify_attestation: {e}")))?;
         if !verified {
-            let entry = AttestationAuditEntry::failure(report.report_id,
+            let entry = AttestationAuditEntry::failure(
+                report.report_id,
                 scope_id,
                 report.platform,
                 "measurement mismatch",
@@ -361,7 +366,8 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
         }
 
         let binding = bind_synthesizer_key(&report, &self.config.synthesizer_pub_key);
-        let entry = AttestationAuditEntry::success(report.report_id,
+        let entry = AttestationAuditEntry::success(
+            report.report_id,
             binding.binding_id,
             scope_id,
             report.platform,
@@ -390,11 +396,13 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
 
     fn assert_scope_allowed(&self, scope_id: Uuid) -> Result<()> {
         if self.config.scope_bindings.is_empty() {
-            return Err(EngineError::engine("tee: no scope bindings configured; refusing to synthesise",
+            return Err(EngineError::engine(
+                "tee: no scope bindings configured; refusing to synthesise",
             ));
         }
         if !self.config.scope_bindings.contains(&scope_id) {
-            return Err(EngineError::engine(format!("tee: scope {scope_id} not bound to this worker",
+            return Err(EngineError::engine(format!(
+                "tee: scope {scope_id} not bound to this worker",
             )));
         }
         Ok(())
@@ -437,7 +445,8 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
                     return Err(EngineError::engine("tee: attestation expired"));
                 }
                 if *active {
-                    return Err(EngineError::engine("tee: worker is already inside a synthesis call",
+                    return Err(EngineError::engine(
+                        "tee: worker is already inside a synthesis call",
                     ));
                 }
                 *active = true;
@@ -497,7 +506,8 @@ impl<R: TeeRuntime, C: HttpClient> TeeWorker<R, C> {
 }
 
 impl<R: TeeRuntime, C: HttpClient> SynthesisEngine for TeeWorker<R, C> {
-    fn synthesize_domain(&self,
+    fn synthesize_domain(
+        &self,
         windows: &mut SynthesisWindowManager,
         handle: TieredWindowHandle,
         input: DomainSynthesisInput,
@@ -518,7 +528,8 @@ impl<R: TeeRuntime, C: HttpClient> SynthesisEngine for TeeWorker<R, C> {
         result
     }
 
-    fn synthesize_tenant(&self,
+    fn synthesize_tenant(
+        &self,
         windows: &mut SynthesisWindowManager,
         handle: TieredWindowHandle,
         input: TenantSynthesisInput,
@@ -538,7 +549,8 @@ mod tests {
     fn fixture_config() -> TeeWorkerConfig {
         let enclave_image = b"tee-worker-enclave-v1.0".to_vec();
         let measurement = content_hash(&enclave_image);
-        TeeWorkerConfig::new(TeePlatform::Mock,
+        TeeWorkerConfig::new(
+            TeePlatform::Mock,
             measurement,
             b"synth-pub-key".to_vec(),
             vec![Uuid::new_v4(), Uuid::new_v4()],
@@ -578,7 +590,8 @@ mod tests {
         let audit = worker.audit_trail();
         assert_eq!(audit.len(), 1);
         assert!(!audit[0].verified);
-        assert_eq!(audit[0].failure_reason.as_deref(),
+        assert_eq!(
+            audit[0].failure_reason.as_deref(),
             Some("measurement mismatch")
         );
     }
@@ -722,7 +735,8 @@ mod tests {
         assert_eq!(worker.lifecycle(), TeeWorkerLifecycle::Synthesizing);
 
         worker.exit_synthesizing();
-        assert_eq!(worker.lifecycle(),
+        assert_eq!(
+            worker.lifecycle(),
             TeeWorkerLifecycle::Idle,
             "after exit_synthesizing the worker must be Idle (not Attested)"
         );

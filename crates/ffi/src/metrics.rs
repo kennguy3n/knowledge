@@ -1445,7 +1445,8 @@ fn project_fts_telemetry(s: &evidence_store::fts_telemetry::FtsTelemetrySnapshot
 /// [`project_lexicon_telemetry`] for the rationale.  The field
 /// lists are kept symmetric by the
 /// `vector_telemetry_mirror_round_trips` test below.
-fn project_vector_telemetry(s: &evidence_store::vector_telemetry::VectorTelemetrySnapshot,
+fn project_vector_telemetry(
+    s: &evidence_store::vector_telemetry::VectorTelemetrySnapshot,
 ) -> VectorTelemetry {
     VectorTelemetry {
         query_embeddings_total: s.query_embeddings_total,
@@ -1629,13 +1630,16 @@ mod tests {
         assert!(after.synthesis_status_total > before.synthesis_status_total);
         assert!(after.connector_status_total > before.connector_status_total);
         assert!(after.list_recent_syntheses_total > before.list_recent_syntheses_total);
-        assert!(after.configure_sync_auto_synthesize_total
+        assert!(
+            after.configure_sync_auto_synthesize_total
                 > before.configure_sync_auto_synthesize_total
         );
-        assert!(after.stuck_pending_window_recovered_total
+        assert!(
+            after.stuck_pending_window_recovered_total
                 > before.stuck_pending_window_recovered_total
         );
-        assert!(after.trigger_server_synthesis_throttled_total
+        assert!(
+            after.trigger_server_synthesis_throttled_total
                 > before.trigger_server_synthesis_throttled_total
         );
         assert!(after.replay_synthesis_total > before.replay_synthesis_total);
@@ -1710,10 +1714,12 @@ mod tests {
         // moment. (Either we still see our unique value, or someone
         // else overwrote it after — which itself proves the field is
         // writable.)
-        assert!(pre_open == handles_uniq || post_open != pre_open,
+        assert!(
+            pre_open == handles_uniq || post_open != pre_open,
             "open_handles atomic store was not observable"
         );
-        assert!(pre_tomb == tombs_uniq || post_tomb != pre_tomb,
+        assert!(
+            pre_tomb == tombs_uniq || post_tomb != pre_tomb,
             "tombstone_count atomic store was not observable"
         );
 
@@ -1722,13 +1728,15 @@ mod tests {
         // them under sequential consistency).
         let (open_lo, open_hi) = (pre_open.min(post_open), pre_open.max(post_open));
         let (tomb_lo, tomb_hi) = (pre_tomb.min(post_tomb), pre_tomb.max(post_tomb));
-        assert!((open_lo..=open_hi).contains(&a.open_handles),
+        assert!(
+            (open_lo..=open_hi).contains(&a.open_handles),
             "snapshot.open_handles={} not in [{}, {}]",
             a.open_handles,
             open_lo,
             open_hi
         );
-        assert!((tomb_lo..=tomb_hi).contains(&a.tombstone_count),
+        assert!(
+            (tomb_lo..=tomb_hi).contains(&a.tombstone_count),
             "snapshot.tombstone_count={} not in [{}, {}]",
             a.tombstone_count,
             tomb_lo,
@@ -1847,10 +1855,12 @@ mod tests {
         assert!(mirror.strategy_first_token >= upstream.strategy_first_token);
         assert!(mirror.strategy_first_bigram >= upstream.strategy_first_bigram);
         assert!(mirror.strategy_substring >= upstream.strategy_substring);
-        assert!(mirror.strategy_first_token_with_arabic_clitics
+        assert!(
+            mirror.strategy_first_token_with_arabic_clitics
                 >= upstream.strategy_first_token_with_arabic_clitics
         );
-        assert!(mirror.strategy_first_token_with_hebrew_clitics
+        assert!(
+            mirror.strategy_first_token_with_hebrew_clitics
                 >= upstream.strategy_first_token_with_hebrew_clitics
         );
         assert!(mirror.arabic_peel_depth_0_matches >= upstream.arabic_peel_depth_0_matches);
@@ -1890,54 +1900,70 @@ mod tests {
         assert!(mirror.hits_th > before.hits_th, "hits_th not plumbed");
         assert!(mirror.hits_vi > before.hits_vi, "hits_vi not plumbed");
         assert!(mirror.hits_zh > before.hits_zh, "hits_zh not plumbed");
-        assert!(mirror.unknown_tag_fallbacks_total > before.unknown_tag_fallbacks_total,
+        assert!(
+            mirror.unknown_tag_fallbacks_total > before.unknown_tag_fallbacks_total,
             "unknown_tag_fallbacks_total not plumbed"
         );
-        assert!(mirror.strategy_first_token > before.strategy_first_token,
+        assert!(
+            mirror.strategy_first_token > before.strategy_first_token,
             "strategy_first_token not plumbed"
         );
-        assert!(mirror.strategy_first_bigram > before.strategy_first_bigram,
+        assert!(
+            mirror.strategy_first_bigram > before.strategy_first_bigram,
             "strategy_first_bigram not plumbed"
         );
-        assert!(mirror.strategy_substring > before.strategy_substring,
+        assert!(
+            mirror.strategy_substring > before.strategy_substring,
             "strategy_substring not plumbed"
         );
-        assert!(mirror.strategy_first_token_with_arabic_clitics
+        assert!(
+            mirror.strategy_first_token_with_arabic_clitics
                 > before.strategy_first_token_with_arabic_clitics,
             "strategy_first_token_with_arabic_clitics not plumbed"
         );
-        assert!(mirror.strategy_first_token_with_hebrew_clitics
+        assert!(
+            mirror.strategy_first_token_with_hebrew_clitics
                 > before.strategy_first_token_with_hebrew_clitics,
             "strategy_first_token_with_hebrew_clitics not plumbed"
         );
-        assert!(mirror.arabic_peel_depth_0_matches > before.arabic_peel_depth_0_matches,
+        assert!(
+            mirror.arabic_peel_depth_0_matches > before.arabic_peel_depth_0_matches,
             "arabic_peel_depth_0_matches not plumbed"
         );
-        assert!(mirror.arabic_peel_depth_1_matches > before.arabic_peel_depth_1_matches,
+        assert!(
+            mirror.arabic_peel_depth_1_matches > before.arabic_peel_depth_1_matches,
             "arabic_peel_depth_1_matches not plumbed"
         );
-        assert!(mirror.arabic_peel_depth_2_matches > before.arabic_peel_depth_2_matches,
+        assert!(
+            mirror.arabic_peel_depth_2_matches > before.arabic_peel_depth_2_matches,
             "arabic_peel_depth_2_matches not plumbed"
         );
-        assert!(mirror.arabic_peel_depth_3_matches > before.arabic_peel_depth_3_matches,
+        assert!(
+            mirror.arabic_peel_depth_3_matches > before.arabic_peel_depth_3_matches,
             "arabic_peel_depth_3_matches not plumbed"
         );
-        assert!(mirror.arabic_peel_depth_exhausted > before.arabic_peel_depth_exhausted,
+        assert!(
+            mirror.arabic_peel_depth_exhausted > before.arabic_peel_depth_exhausted,
             "arabic_peel_depth_exhausted not plumbed"
         );
-        assert!(mirror.hebrew_peel_depth_0_matches > before.hebrew_peel_depth_0_matches,
+        assert!(
+            mirror.hebrew_peel_depth_0_matches > before.hebrew_peel_depth_0_matches,
             "hebrew_peel_depth_0_matches not plumbed"
         );
-        assert!(mirror.hebrew_peel_depth_1_matches > before.hebrew_peel_depth_1_matches,
+        assert!(
+            mirror.hebrew_peel_depth_1_matches > before.hebrew_peel_depth_1_matches,
             "hebrew_peel_depth_1_matches not plumbed"
         );
-        assert!(mirror.hebrew_peel_depth_2_matches > before.hebrew_peel_depth_2_matches,
+        assert!(
+            mirror.hebrew_peel_depth_2_matches > before.hebrew_peel_depth_2_matches,
             "hebrew_peel_depth_2_matches not plumbed"
         );
-        assert!(mirror.hebrew_peel_depth_3_matches > before.hebrew_peel_depth_3_matches,
+        assert!(
+            mirror.hebrew_peel_depth_3_matches > before.hebrew_peel_depth_3_matches,
             "hebrew_peel_depth_3_matches not plumbed"
         );
-        assert!(mirror.hebrew_peel_depth_exhausted > before.hebrew_peel_depth_exhausted,
+        assert!(
+            mirror.hebrew_peel_depth_exhausted > before.hebrew_peel_depth_exhausted,
             "hebrew_peel_depth_exhausted not plumbed"
         );
     }
@@ -1985,45 +2011,57 @@ mod tests {
         // corresponding upstream counter.  Lower-bound by the
         // upstream value because parallel tests cannot decrement
         // counters but may increment them between the two reads.
-        assert!(mirror.unicode61_lane_queries_total >= upstream.unicode61_lane_queries_total,
+        assert!(
+            mirror.unicode61_lane_queries_total >= upstream.unicode61_lane_queries_total,
             "unicode61_lane_queries_total mirror < upstream"
         );
-        assert!(mirror.unicode61_lane_rows_total >= upstream.unicode61_lane_rows_total,
+        assert!(
+            mirror.unicode61_lane_rows_total >= upstream.unicode61_lane_rows_total,
             "unicode61_lane_rows_total mirror < upstream"
         );
-        assert!(mirror.cjk_trigram_lane_queries_total >= upstream.cjk_trigram_lane_queries_total,
+        assert!(
+            mirror.cjk_trigram_lane_queries_total >= upstream.cjk_trigram_lane_queries_total,
             "cjk_trigram_lane_queries_total mirror < upstream"
         );
-        assert!(mirror.cjk_trigram_lane_rows_total >= upstream.cjk_trigram_lane_rows_total,
+        assert!(
+            mirror.cjk_trigram_lane_rows_total >= upstream.cjk_trigram_lane_rows_total,
             "cjk_trigram_lane_rows_total mirror < upstream"
         );
-        assert!(mirror.cjk_trigram_lane_skips_pure_stopword_query_total
+        assert!(
+            mirror.cjk_trigram_lane_skips_pure_stopword_query_total
                 >= upstream.cjk_trigram_lane_skips_pure_stopword_query_total,
             "cjk_trigram_lane_skips_pure_stopword_query_total mirror < upstream"
         );
-        assert!(mirror.bigram_lane_queries_total >= upstream.bigram_lane_queries_total,
+        assert!(
+            mirror.bigram_lane_queries_total >= upstream.bigram_lane_queries_total,
             "bigram_lane_queries_total mirror < upstream"
         );
-        assert!(mirror.bigram_lane_rows_total >= upstream.bigram_lane_rows_total,
+        assert!(
+            mirror.bigram_lane_rows_total >= upstream.bigram_lane_rows_total,
             "bigram_lane_rows_total mirror < upstream"
         );
-        assert!(mirror.bigram_lane_skips_pure_stopword_query_total
+        assert!(
+            mirror.bigram_lane_skips_pure_stopword_query_total
                 >= upstream.bigram_lane_skips_pure_stopword_query_total,
             "bigram_lane_skips_pure_stopword_query_total mirror < upstream"
         );
-        assert!(mirror.bigram_lane_skips_no_cjk_query_total
+        assert!(
+            mirror.bigram_lane_skips_no_cjk_query_total
                 >= upstream.bigram_lane_skips_no_cjk_query_total,
             "bigram_lane_skips_no_cjk_query_total mirror < upstream"
         );
-        assert!(mirror.index_write_stopwords_stripped_total
+        assert!(
+            mirror.index_write_stopwords_stripped_total
                 >= upstream.index_write_stopwords_stripped_total,
             "index_write_stopwords_stripped_total mirror < upstream"
         );
-        assert!(mirror.query_time_stopwords_stripped_total
+        assert!(
+            mirror.query_time_stopwords_stripped_total
                 >= upstream.query_time_stopwords_stripped_total,
             "query_time_stopwords_stripped_total mirror < upstream"
         );
-        assert!(mirror.v16_migration_stopwords_stripped_total
+        assert!(
+            mirror.v16_migration_stopwords_stripped_total
                 >= upstream.v16_migration_stopwords_stripped_total,
             "v16_migration_stopwords_stripped_total mirror < upstream"
         );
@@ -2034,44 +2072,56 @@ mod tests {
         // the mirror dropped `unicode61_lane_queries_total`,
         // `mirror.unicode61_lane_queries_total - before.unicode61_lane_queries_total`
         // would be 0 even though our increment added 1.
-        assert!(mirror.unicode61_lane_queries_total > before.unicode61_lane_queries_total,
+        assert!(
+            mirror.unicode61_lane_queries_total > before.unicode61_lane_queries_total,
             "unicode61_lane_queries_total not plumbed"
         );
-        assert!(mirror.unicode61_lane_rows_total > before.unicode61_lane_rows_total,
+        assert!(
+            mirror.unicode61_lane_rows_total > before.unicode61_lane_rows_total,
             "unicode61_lane_rows_total not plumbed"
         );
-        assert!(mirror.cjk_trigram_lane_queries_total > before.cjk_trigram_lane_queries_total,
+        assert!(
+            mirror.cjk_trigram_lane_queries_total > before.cjk_trigram_lane_queries_total,
             "cjk_trigram_lane_queries_total not plumbed"
         );
-        assert!(mirror.cjk_trigram_lane_rows_total > before.cjk_trigram_lane_rows_total,
+        assert!(
+            mirror.cjk_trigram_lane_rows_total > before.cjk_trigram_lane_rows_total,
             "cjk_trigram_lane_rows_total not plumbed"
         );
-        assert!(mirror.cjk_trigram_lane_skips_pure_stopword_query_total
+        assert!(
+            mirror.cjk_trigram_lane_skips_pure_stopword_query_total
                 > before.cjk_trigram_lane_skips_pure_stopword_query_total,
             "cjk_trigram_lane_skips_pure_stopword_query_total not plumbed"
         );
-        assert!(mirror.bigram_lane_queries_total > before.bigram_lane_queries_total,
+        assert!(
+            mirror.bigram_lane_queries_total > before.bigram_lane_queries_total,
             "bigram_lane_queries_total not plumbed"
         );
-        assert!(mirror.bigram_lane_rows_total > before.bigram_lane_rows_total,
+        assert!(
+            mirror.bigram_lane_rows_total > before.bigram_lane_rows_total,
             "bigram_lane_rows_total not plumbed"
         );
-        assert!(mirror.bigram_lane_skips_pure_stopword_query_total
+        assert!(
+            mirror.bigram_lane_skips_pure_stopword_query_total
                 > before.bigram_lane_skips_pure_stopword_query_total,
             "bigram_lane_skips_pure_stopword_query_total not plumbed"
         );
-        assert!(mirror.bigram_lane_skips_no_cjk_query_total
+        assert!(
+            mirror.bigram_lane_skips_no_cjk_query_total
                 > before.bigram_lane_skips_no_cjk_query_total,
             "bigram_lane_skips_no_cjk_query_total not plumbed"
         );
-        assert!(mirror.index_write_stopwords_stripped_total
+        assert!(
+            mirror.index_write_stopwords_stripped_total
                 > before.index_write_stopwords_stripped_total,
             "index_write_stopwords_stripped_total not plumbed"
         );
-        assert!(mirror.query_time_stopwords_stripped_total > before.query_time_stopwords_stripped_total,
+        assert!(
+            mirror.query_time_stopwords_stripped_total > before.query_time_stopwords_stripped_total,
             "query_time_stopwords_stripped_total not plumbed"
         );
-        assert!(mirror.v16_migration_stopwords_stripped_total
+        assert!(
+            mirror.v16_migration_stopwords_stripped_total
                 > before.v16_migration_stopwords_stripped_total,
             "v16_migration_stopwords_stripped_total not plumbed"
         );
@@ -2127,51 +2177,66 @@ mod tests {
 
         // Mirror ≥ upstream for every field — catches a
         // silently-dropped projection.
-        assert!(mirror.query_embeddings_total >= upstream.query_embeddings_total,
+        assert!(
+            mirror.query_embeddings_total >= upstream.query_embeddings_total,
             "query_embeddings_total mirror < upstream"
         );
-        assert!(mirror.index_write_embeddings_total >= upstream.index_write_embeddings_total,
+        assert!(
+            mirror.index_write_embeddings_total >= upstream.index_write_embeddings_total,
             "index_write_embeddings_total mirror < upstream"
         );
-        assert!(mirror.live_body_embeddings_total >= upstream.live_body_embeddings_total,
+        assert!(
+            mirror.live_body_embeddings_total >= upstream.live_body_embeddings_total,
             "live_body_embeddings_total mirror < upstream"
         );
-        assert!(mirror.cache_hits_total >= upstream.cache_hits_total,
+        assert!(
+            mirror.cache_hits_total >= upstream.cache_hits_total,
             "cache_hits_total mirror < upstream"
         );
-        assert!(mirror.cache_misses_no_row_total >= upstream.cache_misses_no_row_total,
+        assert!(
+            mirror.cache_misses_no_row_total >= upstream.cache_misses_no_row_total,
             "cache_misses_no_row_total mirror < upstream"
         );
-        assert!(mirror.cache_misses_dimension_total >= upstream.cache_misses_dimension_total,
+        assert!(
+            mirror.cache_misses_dimension_total >= upstream.cache_misses_dimension_total,
             "cache_misses_dimension_total mirror < upstream"
         );
-        assert!(mirror.cache_misses_read_error_total >= upstream.cache_misses_read_error_total,
+        assert!(
+            mirror.cache_misses_read_error_total >= upstream.cache_misses_read_error_total,
             "cache_misses_read_error_total mirror < upstream"
         );
-        assert!(mirror.dedup_copy_hits_total >= upstream.dedup_copy_hits_total,
+        assert!(
+            mirror.dedup_copy_hits_total >= upstream.dedup_copy_hits_total,
             "dedup_copy_hits_total mirror < upstream"
         );
-        assert!(mirror.runtime_unavailable_total >= upstream.runtime_unavailable_total,
+        assert!(
+            mirror.runtime_unavailable_total >= upstream.runtime_unavailable_total,
             "runtime_unavailable_total mirror < upstream"
         );
-        assert!(mirror.model_load_errors_total >= upstream.model_load_errors_total,
+        assert!(
+            mirror.model_load_errors_total >= upstream.model_load_errors_total,
             "model_load_errors_total mirror < upstream"
         );
-        assert!(mirror.inference_failures_total >= upstream.inference_failures_total,
+        assert!(
+            mirror.inference_failures_total >= upstream.inference_failures_total,
             "inference_failures_total mirror < upstream"
         );
-        assert!(mirror.model_tag_dimension_violations_total
+        assert!(
+            mirror.model_tag_dimension_violations_total
                 >= upstream.model_tag_dimension_violations_total,
             "model_tag_dimension_violations_total mirror < upstream"
         );
-        assert!(mirror.pre_embed_admitted_total >= upstream.pre_embed_admitted_total,
+        assert!(
+            mirror.pre_embed_admitted_total >= upstream.pre_embed_admitted_total,
             "pre_embed_admitted_total mirror < upstream"
         );
-        assert!(mirror.pre_embed_skipped_empty_after_trim_total
+        assert!(
+            mirror.pre_embed_skipped_empty_after_trim_total
                 >= upstream.pre_embed_skipped_empty_after_trim_total,
             "pre_embed_skipped_empty_after_trim_total mirror < upstream"
         );
-        assert!(mirror.pre_embed_skipped_no_linguistic_content_total
+        assert!(
+            mirror.pre_embed_skipped_no_linguistic_content_total
                 >= upstream.pre_embed_skipped_no_linguistic_content_total,
             "pre_embed_skipped_no_linguistic_content_total mirror < upstream"
         );
@@ -2182,51 +2247,66 @@ mod tests {
         // `query_embeddings_total: s.query_embeddings_total` in
         // [`vector_telemetry_snapshot`]) would leave the diff
         // at 0 even though our increment added 1.
-        assert!(mirror.query_embeddings_total > before.query_embeddings_total,
+        assert!(
+            mirror.query_embeddings_total > before.query_embeddings_total,
             "query_embeddings_total not plumbed"
         );
-        assert!(mirror.index_write_embeddings_total > before.index_write_embeddings_total,
+        assert!(
+            mirror.index_write_embeddings_total > before.index_write_embeddings_total,
             "index_write_embeddings_total not plumbed"
         );
-        assert!(mirror.live_body_embeddings_total > before.live_body_embeddings_total,
+        assert!(
+            mirror.live_body_embeddings_total > before.live_body_embeddings_total,
             "live_body_embeddings_total not plumbed"
         );
-        assert!(mirror.cache_hits_total > before.cache_hits_total,
+        assert!(
+            mirror.cache_hits_total > before.cache_hits_total,
             "cache_hits_total not plumbed"
         );
-        assert!(mirror.cache_misses_no_row_total > before.cache_misses_no_row_total,
+        assert!(
+            mirror.cache_misses_no_row_total > before.cache_misses_no_row_total,
             "cache_misses_no_row_total not plumbed"
         );
-        assert!(mirror.cache_misses_dimension_total > before.cache_misses_dimension_total,
+        assert!(
+            mirror.cache_misses_dimension_total > before.cache_misses_dimension_total,
             "cache_misses_dimension_total not plumbed"
         );
-        assert!(mirror.cache_misses_read_error_total > before.cache_misses_read_error_total,
+        assert!(
+            mirror.cache_misses_read_error_total > before.cache_misses_read_error_total,
             "cache_misses_read_error_total not plumbed"
         );
-        assert!(mirror.dedup_copy_hits_total > before.dedup_copy_hits_total,
+        assert!(
+            mirror.dedup_copy_hits_total > before.dedup_copy_hits_total,
             "dedup_copy_hits_total not plumbed"
         );
-        assert!(mirror.runtime_unavailable_total > before.runtime_unavailable_total,
+        assert!(
+            mirror.runtime_unavailable_total > before.runtime_unavailable_total,
             "runtime_unavailable_total not plumbed"
         );
-        assert!(mirror.model_load_errors_total > before.model_load_errors_total,
+        assert!(
+            mirror.model_load_errors_total > before.model_load_errors_total,
             "model_load_errors_total not plumbed"
         );
-        assert!(mirror.inference_failures_total > before.inference_failures_total,
+        assert!(
+            mirror.inference_failures_total > before.inference_failures_total,
             "inference_failures_total not plumbed"
         );
-        assert!(mirror.model_tag_dimension_violations_total
+        assert!(
+            mirror.model_tag_dimension_violations_total
                 > before.model_tag_dimension_violations_total,
             "model_tag_dimension_violations_total not plumbed"
         );
-        assert!(mirror.pre_embed_admitted_total > before.pre_embed_admitted_total,
+        assert!(
+            mirror.pre_embed_admitted_total > before.pre_embed_admitted_total,
             "pre_embed_admitted_total not plumbed"
         );
-        assert!(mirror.pre_embed_skipped_empty_after_trim_total
+        assert!(
+            mirror.pre_embed_skipped_empty_after_trim_total
                 > before.pre_embed_skipped_empty_after_trim_total,
             "pre_embed_skipped_empty_after_trim_total not plumbed"
         );
-        assert!(mirror.pre_embed_skipped_no_linguistic_content_total
+        assert!(
+            mirror.pre_embed_skipped_no_linguistic_content_total
                 > before.pre_embed_skipped_no_linguistic_content_total,
             "pre_embed_skipped_no_linguistic_content_total not plumbed"
         );
@@ -2262,13 +2342,16 @@ mod tests {
 
         // The three flat fields MUST equal the three grouped
         // sub-fields, byte for byte, on the same snapshot.
-        assert_eq!(snap.fts_telemetry, snap.retrieval_metrics.fts,
+        assert_eq!(
+            snap.fts_telemetry, snap.retrieval_metrics.fts,
             "flat fts_telemetry must equal retrieval_metrics.fts on the same snapshot"
         );
-        assert_eq!(snap.lexicon_telemetry, snap.retrieval_metrics.lexicon,
+        assert_eq!(
+            snap.lexicon_telemetry, snap.retrieval_metrics.lexicon,
             "flat lexicon_telemetry must equal retrieval_metrics.lexicon on the same snapshot"
         );
-        assert_eq!(snap.vector_telemetry, snap.retrieval_metrics.vector,
+        assert_eq!(
+            snap.vector_telemetry, snap.retrieval_metrics.vector,
             "flat vector_telemetry must equal retrieval_metrics.vector on the same snapshot"
         );
     }
@@ -2317,18 +2400,21 @@ mod tests {
             .as_object_mut()
             .expect("MetricsSnapshot JSON is an object")
             .remove("retrieval_metrics");
-        assert!(removed.is_some(),
+        assert!(
+            removed.is_some(),
             "retrieval_metrics key must be present in a fresh MetricsSnapshot's JSON"
         );
         let without_retrieval_metrics: MetricsSnapshot = serde_json::from_value(as_value)
             .expect("MetricsSnapshot JSON without retrieval_metrics deserialises");
-        assert_eq!(without_retrieval_metrics.retrieval_metrics,
+        assert_eq!(
+            without_retrieval_metrics.retrieval_metrics,
             RetrievalMetrics::default(),
             "missing retrieval_metrics field must deserialise to all-zero default"
         );
         // The other flat fields must be preserved across the round trip.
         assert_eq!(without_retrieval_metrics.ingest_total, snap.ingest_total);
-        assert_eq!(without_retrieval_metrics.lexicon_telemetry,
+        assert_eq!(
+            without_retrieval_metrics.lexicon_telemetry,
             snap.lexicon_telemetry
         );
     }

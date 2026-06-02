@@ -102,7 +102,8 @@ where
         // `detect_language(text)` on the whole input — the
         // per-sentence detection inside the extractor remains
         // independent of this hint.
-        let observations: Vec<Observation> = self.extractor.extract_with_dominant_language(text,
+        let observations: Vec<Observation> = self.extractor.extract_with_dominant_language(
+            text,
             scope,
             language.as_ref().map(|d| &d.tag),
         );
@@ -135,7 +136,8 @@ pub struct PipelineRunOutput {
 /// extractor + lexicon-only importance classifier).
 pub fn default_pipeline() -> ObservationPipeline<LexiconExtractor, evidence_store::LexiconClassifier>
 {
-    ObservationPipeline::new(LexiconExtractor::default(),
+    ObservationPipeline::new(
+        LexiconExtractor::default(),
         evidence_store::LexiconClassifier::english_default(),
     )
 }
@@ -179,7 +181,8 @@ mod tests {
         let pipeline = default_pipeline();
         let scope = ScopeId::new_v4();
         let out = pipeline
-            .run_with_language("Friday is the deadline for the migration and the team approved the rollout plan.",
+            .run_with_language(
+                "Friday is the deadline for the migration and the team approved the rollout plan.",
                 scope,
             )
             .unwrap();
@@ -253,7 +256,8 @@ mod tests {
             .iter()
             .find(|o| o.observation_type == ObservationType::Question)
             .expect("japanese question must be detected through pipeline");
-        assert_eq!(question
+        assert_eq!(
+            question
                 .language_tag
                 .as_ref()
                 .map(|t| t.primary().to_string()),
@@ -271,7 +275,8 @@ mod tests {
             .filter(|o| o.observation_type == ObservationType::Task)
             .filter(|o| o.language_tag.as_ref().is_some_and(|t| t.primary() == "en"))
             .count();
-        assert!(en_task_count >= 1,
+        assert!(
+            en_task_count >= 1,
             "expected at least one english-tagged task observation through the pipeline; \
              got tags: {:?}",
             out.observations

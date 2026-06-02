@@ -23,7 +23,8 @@ fn test_master_key() -> crypto::MasterKey {
     for (i, slot) in k.iter_mut().enumerate() {
         // `i` is bounded by `MASTER_KEY_LEN` (32) so masking to a
         // byte never truncates the meaningful bits.
-        #[allow(clippy::cast_possible_truncation,
+        #[allow(
+            clippy::cast_possible_truncation,
             reason = "deterministic test key seed; i < MASTER_KEY_LEN < 256"
         )]
         let byte = (i & 0xFF) as u8;
@@ -66,7 +67,8 @@ fn cached_state_is_orders_of_magnitude_faster_than_replay() {
     }
     let replay_avg = start.elapsed() / iters;
 
-    println!("cached_avg={:?}  replay_avg={:?}  ratio={:.2}x",
+    println!(
+        "cached_avg={:?}  replay_avg={:?}  ratio={:.2}x",
         cached_avg,
         replay_avg,
         replay_avg.as_secs_f64() / cached_avg.as_secs_f64().max(1e-9),
@@ -101,7 +103,8 @@ fn compaction_preserves_state_and_shortens_log() {
     assert!(removed > 0, "compaction removed {removed} ops");
 
     let post_log_len = engine.op_log().ops.len();
-    assert!(post_log_len < pre_log_len,
+    assert!(
+        post_log_len < pre_log_len,
         "log should shrink: pre={pre_log_len}, post={post_log_len}"
     );
 
@@ -140,7 +143,8 @@ fn delta_round_trip_full_history() {
 
     let (sender_state, sender_supers) = sender.state().unwrap();
     let (receiver_state, receiver_supers) = receiver.state().unwrap();
-    assert_eq!(sender_state.elements_count(),
+    assert_eq!(
+        sender_state.elements_count(),
         receiver_state.elements_count()
     );
     for v in sender_state.elements() {
@@ -195,7 +199,8 @@ fn delta_rejected_when_sender_is_post_compaction_and_receiver_is_not() {
     let delta = encode_delta_since(sender.op_log(), 0).unwrap();
     let mut receiver: SyncEngine<String> = SyncEngine::new();
     let err = apply_delta(&mut receiver, &delta).unwrap_err();
-    assert!(matches!(err, SyncError::CompactionEpochBehind { local: 0, delta: 1 }),
+    assert!(
+        matches!(err, SyncError::CompactionEpochBehind { local: 0, delta: 1 }),
         "expected CompactionEpochBehind, got {err:?}"
     );
 
@@ -229,7 +234,8 @@ fn bootstrap_from_snapshot_keeps_receiver_replica_id_independent() {
 
     let mut receiver = SyncEngine::<String>::bootstrap_from_snapshot(&snap).unwrap();
     let receiver_id = receiver.replica_id();
-    assert_ne!(receiver_id, author_id,
+    assert_ne!(
+        receiver_id, author_id,
         "bootstrap_from_snapshot must NOT inherit the author's replica_id"
     );
 
@@ -421,13 +427,15 @@ fn remove_on_unknown_value_is_a_full_no_op_including_persistence() {
     }
 
     // Log length must be exactly what it was after the single add.
-    assert_eq!(p.engine().op_log().ops.len(),
+    assert_eq!(
+        p.engine().op_log().ops.len(),
         len_after_add,
         "no-op remove must not append to the in-memory op log",
     );
     // On-disk row count must be exactly what it was after the
     // single add.
-    assert_eq!(p.persisted_len().unwrap(),
+    assert_eq!(
+        p.persisted_len().unwrap(),
         persisted_after_add,
         "no-op remove must not write any rows to sync_ops",
     );
@@ -466,7 +474,8 @@ fn op_log_serialised_form_does_not_carry_seen_index() {
     }
     let snapshot_bytes = engine.snapshot().unwrap();
     let text = std::str::from_utf8(&snapshot_bytes).unwrap();
-    assert!(!text.contains("\"seen\""),
+    assert!(
+        !text.contains("\"seen\""),
         "OpLog serialised snapshot form must not include the redundant `seen` dedup index",
     );
 
@@ -478,7 +487,8 @@ fn op_log_serialised_form_does_not_carry_seen_index() {
     let mut receiver: SyncEngine<u64> =
         SyncEngine::bootstrap_from_snapshot(&snapshot_bytes).unwrap();
     let before = receiver.op_log().ops.len();
-    assert_eq!(before, 50,
+    assert_eq!(
+        before, 50,
         "receiver must observe every op the snapshot carried"
     );
 
@@ -488,7 +498,8 @@ fn op_log_serialised_form_does_not_carry_seen_index() {
     // provides.
     apply_delta(&mut receiver, &delta_bytes).unwrap();
     apply_delta(&mut receiver, &delta_bytes).unwrap();
-    assert_eq!(receiver.op_log().ops.len(),
+    assert_eq!(
+        receiver.op_log().ops.len(),
         before,
         "rehydrated `seen` index must dedupe re-applied delta ops",
     );

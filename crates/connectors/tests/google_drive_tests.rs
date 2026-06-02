@@ -49,7 +49,8 @@ const CHANGE_LIST_FIELDS_MASK: &str = "nextPageToken,newStartPageToken,\
 struct FixedOAuth;
 impl OAuth2CodeExchange for FixedOAuth {
     fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
-        Ok(OAuth2Token::new("drive-access",
+        Ok(OAuth2Token::new(
+            "drive-access",
             "drive-refresh",
             Utc::now() + Duration::hours(1),
             "https://www.googleapis.com/auth/drive.readonly",
@@ -62,7 +63,8 @@ fn oauth() -> Arc<dyn OAuth2CodeExchange> {
 }
 
 fn cfg() -> ConnectorConfig {
-    ConnectorConfig::new(ConnectorKind::GoogleDrive,
+    ConnectorConfig::new(
+        ConnectorKind::GoogleDrive,
         AuthKind::OAuth2,
         ScopeId::new_v4(),
     )
@@ -75,7 +77,8 @@ fn cfg() -> ConnectorConfig {
 }
 
 fn files_list_url(page_token: Option<&str>) -> String {
-    let mut url = format!("{BASE_URL}/drive/v3/files?pageSize={}&q={}&fields={}",
+    let mut url = format!(
+        "{BASE_URL}/drive/v3/files?pageSize={}&q={}&fields={}",
         DEFAULT_PAGE_SIZE,
         percent_encode_path_component("trashed = false"),
         percent_encode_path_component(FILE_LIST_FIELDS_MASK),
@@ -88,7 +91,8 @@ fn files_list_url(page_token: Option<&str>) -> String {
 }
 
 fn changes_list_url(page_token: &str) -> String {
-    format!("{BASE_URL}/drive/v3/changes?pageToken={}&pageSize={}&includeRemoved=true&fields={}",
+    format!(
+        "{BASE_URL}/drive/v3/changes?pageToken={}&pageSize={}&includeRemoved=true&fields={}",
         percent_encode_path_component(page_token),
         DEFAULT_PAGE_SIZE,
         percent_encode_path_component(CHANGE_LIST_FIELDS_MASK),
@@ -100,14 +104,17 @@ fn install_fixture_responses(transport: &MockHttpTransport) {
     // so the test exercises real cursor pagination via the mock.
     let files: GoogleDriveFileList =
         serde_json::from_str(FILES_LIST_FIXTURE).expect("parse files.list fixture");
-    transport.expect(HttpMethod::Get,
+    transport.expect(
+        HttpMethod::Get,
         files_list_url(None),
         MockResponse::ok_json(serde_json::to_vec(&files).unwrap()),
     );
     // Anchor the changes feed.
-    transport.expect(HttpMethod::Get,
+    transport.expect(
+        HttpMethod::Get,
         format!("{BASE_URL}/drive/v3/changes/startPageToken"),
-        MockResponse::ok_json(serde_json::to_vec(&GoogleDriveStartPageToken {
+        MockResponse::ok_json(
+            serde_json::to_vec(&GoogleDriveStartPageToken {
                 start_page_token: Some("drive:start:42".into()),
             })
             .unwrap(),
@@ -115,16 +122,20 @@ fn install_fixture_responses(transport: &MockHttpTransport) {
     );
     let changes: GoogleDriveChangeList =
         serde_json::from_str(CHANGES_FIXTURE).expect("parse changes fixture");
-    transport.expect(HttpMethod::Get,
+    transport.expect(
+        HttpMethod::Get,
         changes_list_url("drive:start:42"),
         MockResponse::ok_json(serde_json::to_vec(&changes).unwrap()),
     );
     // Drive's watch endpoint.
-    transport.expect(HttpMethod::Post,
-        format!("{BASE_URL}/drive/v3/changes/watch?pageToken={}",
+    transport.expect(
+        HttpMethod::Post,
+        format!(
+            "{BASE_URL}/drive/v3/changes/watch?pageToken={}",
             percent_encode_path_component("watch-start-1"),
         ),
-        MockResponse::ok_json(serde_json::to_vec(&GoogleDriveWatchResponse {
+        MockResponse::ok_json(
+            serde_json::to_vec(&GoogleDriveWatchResponse {
                 id: Some("chan-77".into()),
                 resource_id: Some("res-1".into()),
                 expiration: Some((Utc::now() + Duration::days(7)).timestamp_millis()),
@@ -144,16 +155,19 @@ fn full_lifecycle_against_fixture_data() {
 
     // 1. Authenticate.
     let token = connector.authenticate(&config).expect("authenticate");
-    assert!(!token.access_token.expose().is_empty(),
+    assert!(
+        !token.access_token.expose().is_empty(),
         "access_token populated",
     );
-    assert!(token
+    assert!(
+        token
             .refresh_token
             .as_ref()
             .is_some_and(|rt| !rt.expose().is_empty()),
         "refresh_token populated",
     );
-    assert!(token.scope.contains("drive"),
+    assert!(
+        token.scope.contains("drive"),
         "scope should mention drive: {}",
         token.scope
     );
@@ -167,7 +181,8 @@ fn full_lifecycle_against_fixture_data() {
     for ev in &initial.events {
         assert!(matches!(ev, ConnectorEvent::DocumentCreated { .. }));
     }
-    assert_eq!(initial.next_cursor.as_deref(),
+    assert_eq!(
+        initial.next_cursor.as_deref(),
         Some("drive:start:42"),
         "next_cursor should be the startPageToken anchor",
     );
@@ -191,7 +206,8 @@ fn full_lifecycle_against_fixture_data() {
         .count();
     assert_eq!(updated, 1, "one updated document");
     assert_eq!(deleted, 1, "one deleted document");
-    assert_eq!(incremental.next_cursor.as_deref(),
+    assert_eq!(
+        incremental.next_cursor.as_deref(),
         Some("drive:start:99"),
         "newStartPageToken advances",
     );
@@ -204,7 +220,8 @@ fn full_lifecycle_against_fixture_data() {
     assert_eq!(sub.callback_url, "https://substrate.example/hooks/drive");
     assert!(!sub.secret.expose().is_empty());
     assert!(sub.expires_at.is_some(), "Drive channels carry a TTL");
-    assert_eq!(sub.provider_subscription_id.as_deref(),
+    assert_eq!(
+        sub.provider_subscription_id.as_deref(),
         Some("chan-77:res-1"),
         "channel id + resource id captured for revocation",
     );

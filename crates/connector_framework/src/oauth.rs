@@ -251,7 +251,8 @@ impl<T: HttpTransport> std::fmt::Debug for OAuth2Client<T> {
         };
         f.debug_struct("OAuth2Client")
             .field("transport", &"<HttpTransport>")
-            .field("client_secret",
+            .field(
+                "client_secret",
                 &self.client_secret.as_ref().map(|_| "[redacted]"),
             )
             .field("resolver", &resolver_state)
@@ -373,8 +374,8 @@ impl<T: HttpTransport> OAuth2Client<T> {
     /// secret (the framework then omits the `client_secret` form
     /// field).
     ///
-    /// **Locking discipline** (load-bearing — see  review
-    /// finding `BUG_pr-review-job-b54a009cf6d048638e738fc73e9e55c6_0001`):
+    /// **Locking discipline** (load-bearing — see review
+    /// finding):
     /// the read lock on `self.resolver` is held only long enough to
     /// `Arc::clone` the resolver handle out of the slot, then
     /// dropped BEFORE invoking `resolver.resolve(...)`. The N-API
@@ -431,7 +432,7 @@ impl<T: HttpTransport> OAuth2Client<T> {
         // resolver is not registered AND the fallback layer
         // succeeds should not pay for the allocation. `OnceCell`
         // gives us compute-on-first-use with at-most-one allocation
-        // across the whole grant — see Devin Review ANALYSIS_0001
+        // across the whole grant — see
         // on PR #60 for the rationale.
         let scope_id_cell: std::cell::OnceCell<String> = std::cell::OnceCell::new();
         let scope_id = || -> &str {
@@ -535,7 +536,8 @@ impl<T: HttpTransport> OAuth2Client<T> {
     /// one HashSet `insert`, so the mutex never crosses an I/O
     /// boundary.
     fn warn_once_missing_client_secret(&self, kind: &str, scope_id: &str, client_id: &str) {
-        let key = (kind.to_string(),
+        let key = (
+            kind.to_string(),
             scope_id.to_string(),
             client_id.to_string(),
         );
@@ -545,7 +547,8 @@ impl<T: HttpTransport> OAuth2Client<T> {
             Err(_) => true,
         };
         if should_warn {
-            tracing::warn!(kind = kind,
+            tracing::warn!(
+                kind = kind,
                 scope_id = scope_id,
                 client_id = client_id,
                 "OAuth2 client_secret unavailable: resolver returned None and no \
@@ -590,7 +593,8 @@ impl<T: HttpTransport> OAuth2Client<T> {
             .get("token_url")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Auth("auth_config_json.token_url is required for OAuth2 grants".into(),
+                ConnectorError::Auth(
+                    "auth_config_json.token_url is required for OAuth2 grants".into(),
                 )
             })
     }
@@ -611,7 +615,8 @@ impl<T: HttpTransport> OAuth2Client<T> {
             .get("redirect_uri")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Auth("auth_config_json.redirect_uri is required for authorization_code".into(),
+                ConnectorError::Auth(
+                    "auth_config_json.redirect_uri is required for authorization_code".into(),
                 )
             })
     }
@@ -638,7 +643,8 @@ impl<T: HttpTransport> OAuth2Client<T> {
     /// surface as [`ConnectorError::Transport`] via the `?` on
     /// `self.transport.execute(req)` — they are never reclassified
     /// as `Auth` / `TokenRefresh`.
-    fn execute_token_grant(&self,
+    fn execute_token_grant(
+        &self,
         token_url: &str,
         form: &[(&str, &str)],
         error_kind: fn(String) -> ConnectorError,
@@ -705,7 +711,8 @@ impl<T: HttpTransport + 'static> OAuth2Client<T> {
     /// Returns [`ConnectorError::Auth`] if the config is missing
     /// fields, [`ConnectorError::Transport`] on network failure,
     /// [`ConnectorError::TokenRefresh`] on provider rejection.
-    pub fn refresh_with_config(&self,
+    pub fn refresh_with_config(
+        &self,
         config: &ConnectorConfig,
         refresh_token: &str,
     ) -> Result<RefreshedToken> {
@@ -741,7 +748,8 @@ impl<T: HttpTransport + 'static> OAuth2Client<T> {
 /// ([`OAuth2Token`], [`OAuth2CodeExchange`], …). External callers
 /// can keep using `ReqwestOAuth2Client` for one minor cycle to
 /// soften the migration; new code should prefer [`OAuth2Client`].
-#[deprecated(since = "0.2.0",
+#[deprecated(
+    since = "0.2.0",
     note = "renamed to `OAuth2Client` — the type is transport-agnostic and works with any \
             `HttpTransport`, not just the reqwest-backed default"
 )]
@@ -838,7 +846,8 @@ struct TokenResponse {
 /// responses and invalid-JSON bodies map to — see
 /// [`OAuth2Client::execute_token_grant`] for the rationale on
 /// why the two grants pick different variants.
-fn parse_token_response(resp: &HttpResponse,
+fn parse_token_response(
+    resp: &HttpResponse,
     error_kind: fn(String) -> ConnectorError,
 ) -> Result<TokenResponse> {
     if !resp.is_success() {
@@ -856,7 +865,8 @@ fn parse_token_response(resp: &HttpResponse,
                 Some(format!("{err}: {desc}"))
             })
             .unwrap_or_else(|| String::from_utf8_lossy(&resp.body).to_string());
-        return Err(error_kind(format!("OAuth2 token endpoint returned status {} — {}",
+        return Err(error_kind(format!(
+            "OAuth2 token endpoint returned status {} — {}",
             resp.status, detail
         )));
     }
@@ -962,7 +972,8 @@ pub const DEFAULT_OAUTH_TIMEOUT_SECS: u64 = 30;
 /// client builder rejects the timeout configuration.
 #[cfg(feature = "http-client")]
 pub fn default_oauth_client() -> Result<OAuth2Client<crate::http::BlockingHttpTransport>> {
-    let transport = std::sync::Arc::new(crate::http::BlockingHttpTransport::with_timeout(std::time::Duration::from_secs(DEFAULT_OAUTH_TIMEOUT_SECS),
+    let transport = std::sync::Arc::new(crate::http::BlockingHttpTransport::with_timeout(
+        std::time::Duration::from_secs(DEFAULT_OAUTH_TIMEOUT_SECS),
     )?);
     Ok(OAuth2Client::new(transport))
 }
@@ -995,7 +1006,8 @@ mod tests {
         let client = OAuth2Client::new(transport.clone()).with_client_secret("s3cret");
         let token = client.exchange_code(&cfg(), "code-xyz").expect("exchange");
         assert_eq!(token.access_token.expose(), "AT");
-        assert_eq!(token.refresh_token.as_ref().map(SecretToken::expose),
+        assert_eq!(
+            token.refresh_token.as_ref().map(SecretToken::expose),
             Some("RT")
         );
         assert_eq!(token.scope, "read_content");
@@ -1021,9 +1033,11 @@ mod tests {
     #[test]
     fn refresh_with_config_round_trip() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"NEW","expires_in":7200,"scope":"read_content"}"#.to_vec(),
+            MockResponse::ok_json(
+                br#"{"access_token":"NEW","expires_in":7200,"scope":"read_content"}"#.to_vec(),
             ),
         );
         let client = OAuth2Client::new(transport.clone()).with_client_secret("s3cret");
@@ -1044,7 +1058,8 @@ mod tests {
     #[test]
     fn token_endpoint_error_surfaces_oauth_error() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
             MockResponse {
                 status: 400,
@@ -1073,7 +1088,8 @@ mod tests {
         // helper is parametrised by an `error_kind` ctor specifically to
         // keep this invariant explicit.
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
             MockResponse {
                 status: 400,
@@ -1104,7 +1120,8 @@ mod tests {
         // is the polymorphic call site whose callers most need the
         // variant discrimination.
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
             MockResponse {
                 status: 401,
@@ -1133,14 +1150,17 @@ mod tests {
     #[test]
     fn exchange_code_without_refresh_token_stores_none() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"AT","expires_in":3600,"scope":"read_content"}"#.to_vec(),
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","expires_in":3600,"scope":"read_content"}"#.to_vec(),
             ),
         );
         let client = OAuth2Client::new(transport).with_client_secret("s3cret");
         let token = client.exchange_code(&cfg(), "code-xyz").expect("exchange");
-        assert!(token.refresh_token.is_none(),
+        assert!(
+            token.refresh_token.is_none(),
             "provider omitted refresh_token; OAuth2Token must store None, not Some(empty)"
         );
     }
@@ -1153,9 +1173,11 @@ mod tests {
     #[test]
     fn negative_expires_in_clamps_to_zero() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"AT","refresh_token":"RT","expires_in":-3600,"scope":"x"}"#
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":-3600,"scope":"x"}"#
                     .to_vec(),
             ),
         );
@@ -1165,7 +1187,8 @@ mod tests {
         let after = Utc::now();
         // `expires_at` lands inside the [before, after] window — i.e.
         // ~now, not in the past by an hour.
-        assert!(token.expires_at >= before && token.expires_at <= after,
+        assert!(
+            token.expires_at >= before && token.expires_at <= after,
             "negative expires_in not clamped: expires_at {:?} outside [{:?}, {:?}]",
             token.expires_at,
             before,
@@ -1197,9 +1220,11 @@ mod tests {
         // wiring after we removed the broken blanket
         // `TokenRefresher for OAuth2Client` impl.
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"FRESH","expires_in":3600,"scope":"read_content"}"#.to_vec(),
+            MockResponse::ok_json(
+                br#"{"access_token":"FRESH","expires_in":3600,"scope":"read_content"}"#.to_vec(),
             ),
         );
         let client = OAuth2Client::new(transport.clone()).with_client_secret("s3cret");
@@ -1238,10 +1263,12 @@ mod tests {
 
         // Debug must NOT contain the raw secret.
         let dbg = format!("{client:?}");
-        assert!(!dbg.contains("super-secret-value"),
+        assert!(
+            !dbg.contains("super-secret-value"),
             "Debug leaked client_secret: {dbg}"
         );
-        assert!(dbg.contains("[redacted]"),
+        assert!(
+            dbg.contains("[redacted]"),
             "Debug must show '[redacted]' instead of the secret: {dbg}"
         );
 
@@ -1260,7 +1287,8 @@ mod tests {
             .expect("clone retains secret");
         let recorded = transport.recorded();
         let body = String::from_utf8(recorded[0].body.clone()).expect("utf8");
-        assert!(body.contains("client_secret=super-secret-value"),
+        assert!(
+            body.contains("client_secret=super-secret-value"),
             "Clone must still POST the secret"
         );
     }
@@ -1287,7 +1315,8 @@ mod tests {
 
         let recorded = transport.recorded();
         let body = String::from_utf8(recorded[0].body.clone()).expect("utf8");
-        assert!(!body.contains("client_secret"),
+        assert!(
+            !body.contains("client_secret"),
             "form body must omit `client_secret` entirely when none configured, got {body}"
         );
         // The other required fields still ride the form.
@@ -1296,9 +1325,11 @@ mod tests {
         assert!(body.contains("client_id=client-abc"));
 
         // Same invariant for the refresh-token grant.
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"NEW","expires_in":7200,"scope":"s"}"#.to_vec(),
+            MockResponse::ok_json(
+                br#"{"access_token":"NEW","expires_in":7200,"scope":"s"}"#.to_vec(),
             ),
         );
         let _ = client
@@ -1355,7 +1386,8 @@ mod tests {
 
     impl ClientSecretResolver for RecordingResolver {
         fn resolve(&self, kind: &str, scope_id: &str, client_id: &str) -> Option<String> {
-            self.calls.lock().expect("calls poisoned").push((kind.to_string(),
+            self.calls.lock().expect("calls poisoned").push((
+                kind.to_string(),
                 scope_id.to_string(),
                 client_id.to_string(),
             ));
@@ -1370,9 +1402,11 @@ mod tests {
     #[test]
     fn resolver_secret_overrides_auth_config_json_and_static_layers() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
                     .to_vec(),
             ),
         );
@@ -1392,13 +1426,16 @@ mod tests {
             .expect("exchange succeeds");
 
         let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
-        assert!(body.contains("client_secret=resolver-secret"),
+        assert!(
+            body.contains("client_secret=resolver-secret"),
             "resolver must override both auth_config_json and static layers; got {body}"
         );
-        assert!(!body.contains("static-secret"),
+        assert!(
+            !body.contains("static-secret"),
             "static client_secret must be shadowed by resolver"
         );
-        assert!(!body.contains("auth-config-secret"),
+        assert!(
+            !body.contains("auth-config-secret"),
             "auth_config_json client_secret must be shadowed by resolver"
         );
 
@@ -1417,9 +1454,11 @@ mod tests {
     #[test]
     fn auth_config_json_client_secret_used_when_resolver_returns_none() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"AT","expires_in":3600,"scope":"s"}"#.to_vec(),
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","expires_in":3600,"scope":"s"}"#.to_vec(),
             ),
         );
         let client = OAuth2Client::new(transport.clone());
@@ -1434,7 +1473,8 @@ mod tests {
             .expect("refresh succeeds");
 
         let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
-        assert!(body.contains("client_secret=from-auth-config"),
+        assert!(
+            body.contains("client_secret=from-auth-config"),
             "expected layer-2 fallback to populate client_secret; got {body}"
         );
         // Resolver was consulted (we don't skip it).
@@ -1447,9 +1487,11 @@ mod tests {
     #[test]
     fn auth_config_json_client_secret_used_when_no_resolver_registered() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
                     .to_vec(),
             ),
         );
@@ -1463,7 +1505,8 @@ mod tests {
             .expect("exchange succeeds");
 
         let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
-        assert!(body.contains("client_secret=ac-only"),
+        assert!(
+            body.contains("client_secret=ac-only"),
             "auth_config_json fallback must fire when no resolver registered; got {body}"
         );
     }
@@ -1475,9 +1518,11 @@ mod tests {
     #[test]
     fn static_client_secret_used_when_resolver_and_auth_config_both_empty() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
                     .to_vec(),
             ),
         );
@@ -1491,7 +1536,8 @@ mod tests {
             .expect("exchange succeeds");
 
         let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
-        assert!(body.contains("client_secret=static-only"),
+        assert!(
+            body.contains("client_secret=static-only"),
             "static layer must catch when both higher layers come up empty; got {body}"
         );
     }
@@ -1508,9 +1554,11 @@ mod tests {
     #[test]
     fn empty_static_client_secret_is_treated_as_no_secret() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
                     .to_vec(),
             ),
         );
@@ -1523,7 +1571,8 @@ mod tests {
             .expect("exchange succeeds");
 
         let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
-        assert!(!body.contains("client_secret="),
+        assert!(
+            !body.contains("client_secret="),
             "empty static client_secret must not appear in form body; got {body}"
         );
     }
@@ -1535,9 +1584,11 @@ mod tests {
     #[test]
     fn resolver_returning_empty_string_short_circuits_fallback() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"AT","expires_in":3600,"scope":"s"}"#.to_vec(),
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","expires_in":3600,"scope":"s"}"#.to_vec(),
             ),
         );
         let client = OAuth2Client::new(transport.clone()).with_client_secret("static-fallback");
@@ -1562,9 +1613,11 @@ mod tests {
     #[test]
     fn clear_resolver_falls_back_to_auth_config_json() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
                     .to_vec(),
             ),
         );
@@ -1580,7 +1633,8 @@ mod tests {
             .expect("exchange succeeds");
 
         let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
-        assert!(body.contains("client_secret=from-auth-config"),
+        assert!(
+            body.contains("client_secret=from-auth-config"),
             "after clear_resolver(), auth_config_json must take over; got {body}"
         );
     }
@@ -1595,9 +1649,11 @@ mod tests {
     #[test]
     fn resolver_is_shared_across_clones() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
+            MockResponse::ok_json(
+                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s"}"#
                     .to_vec(),
             ),
         );
@@ -1612,7 +1668,8 @@ mod tests {
             .expect("clone-driven grant succeeds");
 
         let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
-        assert!(body.contains("client_secret=shared-secret"),
+        assert!(
+            body.contains("client_secret=shared-secret"),
             "Clone of OAuth2Client must share the resolver slot; got {body}"
         );
     }
@@ -1636,20 +1693,22 @@ mod tests {
 
         // Unset state.
         let dbg_unset = format!("{client:?}");
-        assert!(dbg_unset.contains("<unset>"),
+        assert!(
+            dbg_unset.contains("<unset>"),
             "Debug must indicate unset resolver; got {dbg_unset}"
         );
 
         // After registering a resolver that would panic if called.
         client.set_resolver(Arc::new(PanickingResolver));
         let dbg_set = format!("{client:?}");
-        assert!(dbg_set.contains("<registered>"),
+        assert!(
+            dbg_set.contains("<registered>"),
             "Debug must indicate registered resolver; got {dbg_set}"
         );
     }
 
-    /// Regression test for  review finding
-    /// `BUG_pr-review-job-b54a009cf6d048638e738fc73e9e55c6_0001`:
+    /// Regression test for review finding
+    ///
     /// `client_secret_for` must NOT hold the resolver's read lock
     /// across the `resolve(...)` call, or a concurrent
     /// `set_resolver` from another thread (e.g. the JS event loop
@@ -1691,9 +1750,11 @@ mod tests {
         }
 
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://provider.invalid/oauth/token",
-            MockResponse::ok_json(br#"{"access_token":"a","refresh_token":"r","expires_in":3600,"scope":"read"}"#
+            MockResponse::ok_json(
+                br#"{"access_token":"a","refresh_token":"r","expires_in":3600,"scope":"read"}"#
                     .to_vec(),
             ),
         );
@@ -1711,7 +1772,9 @@ mod tests {
         let client_for_worker = client.clone();
         let worker = thread::spawn(move || {
             client_for_worker
-                .exchange_code(&ConnectorConfig::new(ConnectorKind::Notion,
+                .exchange_code(
+                    &ConnectorConfig::new(
+                        ConnectorKind::Notion,
                         AuthKind::OAuth2,
                         ScopeId::new_v4(),
                     )
@@ -1761,12 +1824,13 @@ mod tests {
         assert_eq!(token.access_token.expose(), "a");
 
         let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
-        assert!(body.contains("client_secret=resolved-after-unblock"),
+        assert!(
+            body.contains("client_secret=resolved-after-unblock"),
             "grant should use the resolver that was active when the call started; got {body}",
         );
     }
 
-    // ─────  — WARN-once-per-instance dedup tests ─────
+    // ───── — WARN-once-per-instance dedup tests ─────
 
     /// Resolver that always returns `None`. Used to drive
     /// `client_secret_for` through the layer-2 / layer-3 fallback
@@ -1803,7 +1867,8 @@ mod tests {
     fn warn_dedup_is_empty_until_first_missing_secret_grant() {
         let transport = Arc::new(MockHttpTransport::new());
         let client = OAuth2Client::new(transport);
-        assert_eq!(client.warned_missing_secret_count(),
+        assert_eq!(
+            client.warned_missing_secret_count(),
             0,
             "fresh OAuth2Client should not have any WARN-suppressed tuples"
         );
@@ -1812,7 +1877,8 @@ mod tests {
         // `None` AND the dedup set picks up the (kind, scope, client_id) tuple.
         let result = client.client_secret_for(&cfg());
         assert!(result.is_none(), "no layer set → None");
-        assert_eq!(client.warned_missing_secret_count(),
+        assert_eq!(
+            client.warned_missing_secret_count(),
             1,
             "first miss should populate the dedup set"
         );
@@ -1828,7 +1894,8 @@ mod tests {
             let r = client.client_secret_for(&config);
             assert!(r.is_none());
         }
-        assert_eq!(client.warned_missing_secret_count(),
+        assert_eq!(
+            client.warned_missing_secret_count(),
             1,
             "repeat grants for the same (kind, scope_id, client_id) should not grow the set",
         );
@@ -1849,7 +1916,8 @@ mod tests {
         client.client_secret_for(&cfg_a);
         client.client_secret_for(&cfg_b);
         client.client_secret_for(&cfg_c);
-        assert_eq!(client.warned_missing_secret_count(),
+        assert_eq!(
+            client.warned_missing_secret_count(),
             3,
             "three distinct (kind, scope_id, client_id) tuples should each WARN once",
         );
@@ -1860,7 +1928,8 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         let client = OAuth2Client::new(transport).with_client_secret("legit-secret");
         client.client_secret_for(&cfg());
-        assert_eq!(client.warned_missing_secret_count(),
+        assert_eq!(
+            client.warned_missing_secret_count(),
             0,
             "when layer 3 produces a secret, the WARN should not fire",
         );
@@ -1890,7 +1959,8 @@ mod tests {
         // set_resolver should clear the suppression so a host
         // fixing its wiring sees a fresh WARN if it still fails.
         client.set_resolver(Arc::new(AlwaysReturnsResolver("now-have-a-secret")));
-        assert_eq!(client.warned_missing_secret_count(),
+        assert_eq!(
+            client.warned_missing_secret_count(),
             0,
             "set_resolver should drain the WARN-once dedup set",
         );
@@ -1904,7 +1974,8 @@ mod tests {
         client.client_secret_for(&cfg());
         assert_eq!(client.warned_missing_secret_count(), 1);
         client.clear_resolver();
-        assert_eq!(client.warned_missing_secret_count(),
+        assert_eq!(
+            client.warned_missing_secret_count(),
             0,
             "clear_resolver should also drain the WARN-once dedup set",
         );
@@ -1920,7 +1991,8 @@ mod tests {
         // so its accessor also reports 1. Without the shared Arc,
         // every clone would re-emit the WARN once on its own
         // first grant, breaking the once-per-instance contract.
-        assert_eq!(clone.warned_missing_secret_count(),
+        assert_eq!(
+            clone.warned_missing_secret_count(),
             1,
             "cloned client should observe the original's WARN suppression",
         );

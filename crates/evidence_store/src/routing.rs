@@ -39,7 +39,8 @@ pub fn route_storage(body_len: usize, importance: ImportanceClass) -> StoragePat
 }
 
 /// Lower-level routing function exposing the inline threshold.
-pub fn route_storage_with_threshold(body_len: usize,
+pub fn route_storage_with_threshold(
+    body_len: usize,
     importance: ImportanceClass,
     inline_threshold: usize,
 ) -> StoragePath {
@@ -59,13 +60,16 @@ mod tests {
 
     #[test]
     fn noise_always_routes_to_ring_buffer() {
-        assert_eq!(route_storage(0, ImportanceClass::Noise),
+        assert_eq!(
+            route_storage(0, ImportanceClass::Noise),
             StoragePath::RingBuffer
         );
-        assert_eq!(route_storage(100, ImportanceClass::Noise),
+        assert_eq!(
+            route_storage(100, ImportanceClass::Noise),
             StoragePath::RingBuffer
         );
-        assert_eq!(route_storage(10_000, ImportanceClass::Noise),
+        assert_eq!(
+            route_storage(10_000, ImportanceClass::Noise),
             StoragePath::RingBuffer
         );
     }
@@ -96,10 +100,12 @@ mod tests {
 
     #[test]
     fn threshold_can_be_overridden() {
-        assert_eq!(route_storage_with_threshold(64, ImportanceClass::Useful, 32),
+        assert_eq!(
+            route_storage_with_threshold(64, ImportanceClass::Useful, 32),
             StoragePath::BodyTable
         );
-        assert_eq!(route_storage_with_threshold(32, ImportanceClass::Useful, 32),
+        assert_eq!(
+            route_storage_with_threshold(32, ImportanceClass::Useful, 32),
             StoragePath::Inline
         );
     }

@@ -12,7 +12,7 @@
 //! counter values **across** process boundaries — both for "the
 //! deployment restarted at 14:32, what were the last counter values
 //! before the restart" and for the lower-resolution "what's the
-//! 5-minute moving average of vector errors" question.  This module
+//! 5-minute moving average of vector errors" question. This module
 //! closes that gap by adding a file-backed persistence layer:
 //!
 //! * [`capture`] reads the current
@@ -40,7 +40,7 @@
 //!
 //! Scheduling the periodic write belongs to the platform host
 //! (iOS / Android / desktop) which already owns the long-lived
-//! async runtime.  Spawning a `tokio::task` here would couple
+//! async runtime. Spawning a `tokio::task` here would couple
 //! `observation_engine` to a specific runtime flavour and force
 //! every consumer (including the FFI smoke tests) to provide one.
 //! The platform-side scheduling is a 5-line `tokio::time::interval`
@@ -50,21 +50,21 @@
 //! ## Why no counter restoration on read
 //!
 //! [`read_snapshot`] returns the envelope verbatim — it does NOT
-//! re-seed the process-singleton counters.  Restoring counters
+//! re-seed the process-singleton counters. Restoring counters
 //! across processes would conflate two distinct process lifetimes
 //! into one number, which would break the "monotonically increasing
 //! since process start" invariant every Prometheus-shape counter
-//! relies on.  Operators reasoning about "all-time totals across
+//! relies on. Operators reasoning about "all-time totals across
 //! restarts" do that arithmetic in the dashboard layer (sum the
 //! per-process deltas), not inside the substrate.
 //!
 //! ## Schema versioning
 //!
 //! [`PersistentRetrievalSnapshot::SCHEMA_VERSION`] is a hard-coded
-//! constant.  Any *incompatible* change to the envelope shape (e.g.
+//! constant. Any *incompatible* change to the envelope shape (e.g.
 //! splitting a field, changing a type, renaming the outer key) bumps
 //! this constant and adds an explicit migration branch in
-//! [`read_snapshot`].  **Additive** changes — new optional fields,
+//! [`read_snapshot`]. **Additive** changes — new optional fields,
 //! new counters in the upstream sub-snapshots — do NOT require a
 //! version bump because [`crate::retrieval_telemetry::
 //! RetrievalMetricsSnapshot`] is derived with `#[serde(default)]`
@@ -75,11 +75,11 @@
 //! ## Atomic write discipline
 //!
 //! [`write_snapshot`] writes to a sibling tempfile in the *same
-//! directory* as `path` and `rename`s on success.  Same-directory
+//! directory* as `path` and `rename`s on success. Same-directory
 //! placement is required because POSIX `rename(2)` is only
 //! guaranteed atomic on the same filesystem — a `/tmp`-staged
 //! tempfile would silently fall back to copy-and-delete and lose
-//! atomicity if `/tmp` is a separate mount.  On error, the tempfile
+//! atomicity if `/tmp` is a separate mount. On error, the tempfile
 //! is cleaned up by [`tempfile::NamedTempFile`]'s `Drop` impl, so
 //! a write failure leaves no orphaned `.tmp` files behind.
 
@@ -92,7 +92,7 @@ use serde::{Deserialize, Serialize};
 use crate::retrieval_telemetry::{self, RetrievalMetricsSnapshot};
 
 /// Versioned wrapper around [`RetrievalMetricsSnapshot`] for on-disk
-/// persistence.  The envelope tags every persisted snapshot with a
+/// persistence. The envelope tags every persisted snapshot with a
 /// schema version and the Unix-millisecond capture timestamp so the
 /// reader can (a) refuse to deserialise an incompatible schema
 /// without silently dropping fields and (b) compute time-windowed
@@ -109,7 +109,7 @@ use crate::retrieval_telemetry::{self, RetrievalMetricsSnapshot};
 /// bump — see the module doc for the discipline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistentRetrievalSnapshot {
-    /// On-disk schema version for the envelope itself.  Bumped
+    /// On-disk schema version for the envelope itself. Bumped
     /// only when the envelope shape changes in an incompatible
     /// way (e.g. splitting a field, renaming the outer key);
     /// additive field additions to
@@ -119,7 +119,7 @@ pub struct PersistentRetrievalSnapshot {
     /// forward-compat rule.
     pub schema_version: u32,
     /// Unix-millisecond timestamp of when this envelope was
-    /// captured.  Set from [`SystemTime::now`] in [`capture`];
+    /// captured. Set from [`SystemTime::now`] in [`capture`];
     /// callers reading prior envelopes for delta-rate
     /// computation should use the *delta* between two
     /// `captured_at_unix_ms` values as the denominator (rather
@@ -127,7 +127,7 @@ pub struct PersistentRetrievalSnapshot {
     /// latency).
     pub captured_at_unix_ms: u64,
     /// The wire-flat read-out of every retrieval-telemetry
-    /// counter at capture time.  See
+    /// counter at capture time. See
     /// [`crate::retrieval_telemetry::snapshot`] for the per-lane
     /// rationale.
     pub retrieval_metrics: RetrievalMetricsSnapshot,
@@ -140,7 +140,7 @@ impl PersistentRetrievalSnapshot {
     /// counters to any of the three upstream sub-snapshots does
     /// NOT require a bump (the `#[serde(default)]` derive on
     /// [`RetrievalMetricsSnapshot`] handles forward compat
-    /// additively).  Bumping examples that DO require a
+    /// additively). Bumping examples that DO require a
     /// migration branch: splitting `retrieval_metrics` into
     /// per-lane top-level keys, changing `captured_at_unix_ms`
     /// to a string, dropping a field that older readers
@@ -177,7 +177,7 @@ pub enum PersistError {
 /// current Unix-millisecond timestamp.
 ///
 /// Does NOT write to disk — use [`write_snapshot`] for the
-/// disk-backed persistence path.  This split lets in-memory
+/// disk-backed persistence path. This split lets in-memory
 /// consumers (e.g. an FFI getter that returns the latest snapshot
 /// without touching disk) reuse the envelope construction without
 /// paying the file-IO cost.
@@ -186,7 +186,7 @@ pub fn capture() -> PersistentRetrievalSnapshot {
     let captured_at_unix_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         // Clock skew can in principle make `now < UNIX_EPOCH`
-        // (e.g. on first-boot devices before NTP sync).  Saturate
+        // (e.g. on first-boot devices before NTP sync). Saturate
         // to zero rather than panic so the envelope is always
         // well-formed; an obvious `0` timestamp is easier for
         // operators to spot than a panic in the snapshot loop.
@@ -222,7 +222,7 @@ pub fn capture() -> PersistentRetrievalSnapshot {
 /// # Errors
 ///
 /// * [`PersistError::Io`] — failed to create the tempfile, write
-///   bytes, persist (rename), or sync the directory.  Returned
+///   bytes, persist (rename), or sync the directory. Returned
 ///   verbatim from the underlying `std::io` operation so callers
 ///   can match on `ErrorKind`.
 /// * [`PersistError::Json`] — failed to serialise the envelope
@@ -235,24 +235,25 @@ pub fn write_snapshot(path: &Path) -> Result<PersistentRetrievalSnapshot, Persis
 }
 
 /// Variant of [`write_snapshot`] that writes a *pre-captured*
-/// envelope rather than capturing fresh.  Useful for tests that
+/// envelope rather than capturing fresh. Useful for tests that
 /// want to pin a deterministic envelope on disk, and for callers
 /// that want to capture once and write to multiple paths.
 ///
 /// # Errors
 ///
 /// Same as [`write_snapshot`].
-pub fn write_envelope(path: &Path,
+pub fn write_envelope(
+    path: &Path,
     envelope: &PersistentRetrievalSnapshot,
 ) -> Result<(), PersistError> {
     // Serialise first so a JSON failure doesn't leave behind a
-    // partially-written file.  Pretty-printed for human
+    // partially-written file. Pretty-printed for human
     // cat-ability — the disk-cost delta over compact JSON is a
     // few KB per snapshot, well worth the operator ergonomics.
     let bytes = serde_json::to_vec_pretty(envelope)?;
 
     // Tempfile in the same directory as `path` so `persist`
-    // (rename) is atomic on the same filesystem.  If `path` has
+    // (rename) is atomic on the same filesystem. If `path` has
     // no parent (e.g. a bare filename in the cwd), default to
     // the current directory.
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
@@ -268,7 +269,7 @@ pub fn write_envelope(path: &Path,
     // handle; on `Err(PersistError)` (file-already-exists on
     // Windows etc.) we destructure the error and return its inner
     // `io::Error`, which is what the caller actually needs to
-    // see.  On success the tempfile's `Drop` is short-circuited
+    // see. On success the tempfile's `Drop` is short-circuited
     // and the target file is the persisted one.
     staging
         .persist(path)
@@ -307,7 +308,7 @@ pub fn read_snapshot(path: &Path) -> Result<PersistentRetrievalSnapshot, Persist
 /// envelopes, with saturating subtraction.
 ///
 /// Same shape as [`RetrievalMetricsSnapshot`] but represents the
-/// *change* in each counter between `prior` and `latest`.  Useful
+/// *change* in each counter between `prior` and `latest`. Useful
 /// for computing rate-of-change ("how many vector errors per
 /// second over the last 5 minutes") in the dashboard layer.
 ///
@@ -317,7 +318,7 @@ pub fn read_snapshot(path: &Path) -> Result<PersistentRetrievalSnapshot, Persist
 /// `latest < prior` (counters lower in the newer snapshot than
 /// the older one — happens on a process restart, since the
 /// process-singleton atomics reset to zero) produces a delta of
-/// `0` rather than a `u64` wrap-around.  This is the only safe
+/// `0` rather than a `u64` wrap-around. This is the only safe
 /// shape for cross-process delta computation: a wrap-around would
 /// surface a `~u64::MAX` spike on the rate dashboard at every
 /// restart, which is exactly the false alert we're trying to
@@ -333,11 +334,11 @@ pub struct RetrievalSnapshotDelta {
     /// Unix-millisecond duration between
     /// `prior.captured_at_unix_ms` and `latest.captured_at_unix_ms`
     /// (saturating-sub, so equal or out-of-order timestamps
-    /// produce `0`).  Useful as the denominator for rate
+    /// produce `0`). Useful as the denominator for rate
     /// calculations done in the dashboard layer.
     pub elapsed_ms: u64,
     /// Per-counter saturating delta of the retrieval metrics
-    /// across the two envelopes.  Same wire-flat shape as
+    /// across the two envelopes. Same wire-flat shape as
     /// [`RetrievalMetricsSnapshot`] so dashboards reading deltas
     /// can use the same field-access path as ones reading
     /// absolute snapshots.
@@ -347,11 +348,12 @@ pub struct RetrievalSnapshotDelta {
 /// Compute the [`RetrievalSnapshotDelta`] between two envelopes.
 ///
 /// See [`RetrievalSnapshotDelta`] for the saturation discipline
-/// and the cross-process restart semantics.  This function is
+/// and the cross-process restart semantics. This function is
 /// pure and never panics — every arithmetic step uses saturating
 /// variants — so it is safe to call from any context.
 #[must_use]
-pub fn delta(prior: &PersistentRetrievalSnapshot,
+pub fn delta(
+    prior: &PersistentRetrievalSnapshot,
     latest: &PersistentRetrievalSnapshot,
 ) -> RetrievalSnapshotDelta {
     let elapsed_ms = latest
@@ -366,12 +368,13 @@ pub fn delta(prior: &PersistentRetrievalSnapshot,
 }
 
 /// Per-counter saturating subtraction across the unified
-/// [`RetrievalMetricsSnapshot`] shape.  Pulled into a helper so
+/// [`RetrievalMetricsSnapshot`] shape. Pulled into a helper so
 /// the per-lane sub-functions stay in one place — adding a new
 /// counter to any of the three upstream snapshots requires
 /// extending the corresponding sub-function below, no need to
 /// touch [`delta`] directly.
-fn retrieval_metrics_saturating_sub(latest: &RetrievalMetricsSnapshot,
+fn retrieval_metrics_saturating_sub(
+    latest: &RetrievalMetricsSnapshot,
     prior: &RetrievalMetricsSnapshot,
 ) -> RetrievalMetricsSnapshot {
     RetrievalMetricsSnapshot {
@@ -381,7 +384,8 @@ fn retrieval_metrics_saturating_sub(latest: &RetrievalMetricsSnapshot,
     }
 }
 
-fn fts_saturating_sub(latest: &evidence_store::fts_telemetry::FtsTelemetrySnapshot,
+fn fts_saturating_sub(
+    latest: &evidence_store::fts_telemetry::FtsTelemetrySnapshot,
     prior: &evidence_store::fts_telemetry::FtsTelemetrySnapshot,
 ) -> evidence_store::fts_telemetry::FtsTelemetrySnapshot {
     use evidence_store::fts_telemetry::FtsTelemetrySnapshot;
@@ -425,7 +429,8 @@ fn fts_saturating_sub(latest: &evidence_store::fts_telemetry::FtsTelemetrySnapsh
     }
 }
 
-fn lexicon_saturating_sub(latest: &crate::lexicon_telemetry::LexiconTelemetrySnapshot,
+fn lexicon_saturating_sub(
+    latest: &crate::lexicon_telemetry::LexiconTelemetrySnapshot,
     prior: &crate::lexicon_telemetry::LexiconTelemetrySnapshot,
 ) -> crate::lexicon_telemetry::LexiconTelemetrySnapshot {
     use crate::lexicon_telemetry::LexiconTelemetrySnapshot;
@@ -502,7 +507,8 @@ fn lexicon_saturating_sub(latest: &crate::lexicon_telemetry::LexiconTelemetrySna
     }
 }
 
-fn vector_saturating_sub(latest: &evidence_store::vector_telemetry::VectorTelemetrySnapshot,
+fn vector_saturating_sub(
+    latest: &evidence_store::vector_telemetry::VectorTelemetrySnapshot,
     prior: &evidence_store::vector_telemetry::VectorTelemetrySnapshot,
 ) -> evidence_store::vector_telemetry::VectorTelemetrySnapshot {
     use evidence_store::vector_telemetry::VectorTelemetrySnapshot;
@@ -564,13 +570,14 @@ mod tests {
     #[test]
     fn capture_uses_current_schema_version() {
         let envelope = capture();
-        assert_eq!(envelope.schema_version,
+        assert_eq!(
+            envelope.schema_version,
             PersistentRetrievalSnapshot::SCHEMA_VERSION
         );
     }
 
     /// `delta` saturates to zero when `latest < prior` (cross-
-    /// process restart shape).  Without saturation a `u64`
+    /// process restart shape). Without saturation a `u64`
     /// wrap-around would surface a `~u64::MAX` spike on every
     /// restart, which is exactly the false alert we're trying to
     /// avoid.

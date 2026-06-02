@@ -129,13 +129,15 @@ pub const fn default_synthesis_object_version() -> u32 {
 impl SynthesisObject {
     /// Construct a fresh synthesis object with the initial version
     /// stamp (`version = 1`).
-    pub fn new(scope_id: ScopeId,
+    pub fn new(
+        scope_id: ScopeId,
         window_id: WindowId,
         object_type: SynthesisObjectType,
         payload: Vec<u8>,
         provenance_ref: Uuid,
     ) -> Self {
-        Self::with_version(scope_id,
+        Self::with_version(
+            scope_id,
             window_id,
             object_type,
             payload,
@@ -149,7 +151,8 @@ impl SynthesisObject {
     /// `ObjectId` while carrying a non-default version. New objects
     /// outside the replay path should call [`Self::new`] instead so
     /// the version-stamp invariant stays implicit in the type.
-    pub fn with_version(scope_id: ScopeId,
+    pub fn with_version(
+        scope_id: ScopeId,
         window_id: WindowId,
         object_type: SynthesisObjectType,
         payload: Vec<u8>,
@@ -184,13 +187,15 @@ mod tests {
     fn supersession_pointer_is_recorded() {
         let scope = ScopeId::new_v4();
         let window = WindowId::new_v4();
-        let prev = SynthesisObject::new(scope,
+        let prev = SynthesisObject::new(
+            scope,
             window,
             SynthesisObjectType::ChannelRecap,
             b"old".to_vec(),
             Uuid::nil(),
         );
-        let next = SynthesisObject::new(scope,
+        let next = SynthesisObject::new(
+            scope,
             window,
             SynthesisObjectType::ChannelRecap,
             b"new".to_vec(),

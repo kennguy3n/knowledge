@@ -14,9 +14,9 @@
 //! `ARCHITECTURE.md` §3.3:
 //!
 //! * [`ImportanceTag`] — `tag.importance`
-//! * [`EntityList`]    — `extract.entities`
+//! * [`EntityList`] — `extract.entities`
 //! * [`ObservationRow`] — `promote.observation`
-//! * [`SummaryBundle`]  — `synth.summary`
+//! * [`SummaryBundle`] — `synth.summary`
 
 use serde::{Deserialize, Serialize};
 

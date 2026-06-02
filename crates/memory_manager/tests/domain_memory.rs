@@ -78,7 +78,8 @@ fn procedure_crud_round_trip() {
 
     let id = dom.add_procedure(Procedure::new(scope, "deploy on green CI"));
     assert_eq!(dom.list_active_procedures().len(), 1);
-    assert_eq!(dom.procedures[0].memory.sensitivity_class,
+    assert_eq!(
+        dom.procedures[0].memory.sensitivity_class,
         SensitivityClass::Critical
     );
 
@@ -92,16 +93,20 @@ fn unknown_ids_yield_not_found() {
     let scope = ScopeId::new_v4();
     let mut dom = DomainMemoryObject::new(scope);
     let bogus = uuid::Uuid::new_v4();
-    assert!(matches!(dom.complete_workstream(bogus).unwrap_err(),
+    assert!(matches!(
+        dom.complete_workstream(bogus).unwrap_err(),
         MemoryError::NotFound(_)
     ));
-    assert!(matches!(dom.resolve_dependency(bogus).unwrap_err(),
+    assert!(matches!(
+        dom.resolve_dependency(bogus).unwrap_err(),
         MemoryError::NotFound(_)
     ));
-    assert!(matches!(dom.resolve_risk(bogus).unwrap_err(),
+    assert!(matches!(
+        dom.resolve_risk(bogus).unwrap_err(),
         MemoryError::NotFound(_)
     ));
-    assert!(matches!(dom.deprecate_procedure(bogus).unwrap_err(),
+    assert!(matches!(
+        dom.deprecate_procedure(bogus).unwrap_err(),
         MemoryError::NotFound(_)
     ));
 }
@@ -117,7 +122,8 @@ fn decay_sweep_archives_old_completed_workstreams() {
         Some(Utc::now() - Duration::days(DEFAULT_COMPLETED_WORKSTREAM_TTL_DAYS + 1));
 
     let report = dom.decay_sweep(Utc::now());
-    assert_eq!(report,
+    assert_eq!(
+        report,
         DomainDecayReport {
             workstreams_archived: 1,
             risks_archived: 0,

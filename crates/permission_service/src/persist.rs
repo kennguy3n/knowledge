@@ -162,7 +162,8 @@ impl PersistentTupleStore {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap_or(0);
         if existing_version != 0 && existing_version != SCHEMA_VERSION {
-            return Err(PermissionError::Persistence("schema version mismatch — refusing to open",
+            return Err(PermissionError::Persistence(
+                "schema version mismatch — refusing to open",
             ));
         }
 
@@ -309,7 +310,8 @@ impl PersistentTupleStore {
             .subject_relation
             .map(|r| r.as_str().to_owned());
         self.conn
-            .execute("INSERT INTO relation_tuples
+            .execute(
+                "INSERT INTO relation_tuples
                     (id, object_type, object_id, relation, subject_type, subject_id,
                      subject_relation, created_at, nonce, payload)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
@@ -344,7 +346,8 @@ impl PersistentTupleStore {
         let id = tuple_row_id(tuple);
         let n = self
             .conn
-            .execute("DELETE FROM relation_tuples WHERE id = ?1",
+            .execute(
+                "DELETE FROM relation_tuples WHERE id = ?1",
                 params![id.as_bytes().to_vec()],
             )
             .map_err(PermissionError::Sqlite)?;
@@ -353,7 +356,8 @@ impl PersistentTupleStore {
             // affected — the two views are out of sync. Surface
             // this so the caller can decide how to recover (most
             // likely by aborting and re-hydrating from disk).
-            return Err(PermissionError::Persistence("in-memory tuple had no matching on-disk row",
+            return Err(PermissionError::Persistence(
+                "in-memory tuple had no matching on-disk row",
             ));
         }
         Ok(())
@@ -534,7 +538,8 @@ mod tests {
         // reproducible. The bytes are not sensitive.
         let mut k: MasterKey = [0u8; MASTER_KEY_LEN];
         for (i, b) in k.iter_mut().enumerate() {
-            #[allow(clippy::cast_possible_truncation,
+            #[allow(
+                clippy::cast_possible_truncation,
                 reason = "deterministic test key seed; i < MASTER_KEY_LEN < 256"
             )]
             let byte = (i & 0xFF) as u8;
@@ -544,7 +549,8 @@ mod tests {
     }
 
     fn fresh_tuple() -> RelationTuple {
-        RelationTuple::new(ObjectRef::new(ObjectType::Tenant, Uuid::new_v4()),
+        RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, Uuid::new_v4()),
             Relation::Owner,
             SubjectRef::direct(SubjectType::User, Uuid::new_v4()),
         )
@@ -557,7 +563,8 @@ mod tests {
 
         let t1 = fresh_tuple();
         let t2 = fresh_tuple();
-        let t3 = RelationTuple::new(ObjectRef::new(ObjectType::Domain, Uuid::new_v4()),
+        let t3 = RelationTuple::new(
+            ObjectRef::new(ObjectType::Domain, Uuid::new_v4()),
             Relation::Editor,
             SubjectRef::via(SubjectType::Tenant, Uuid::new_v4(), Relation::Admin),
         );
@@ -630,7 +637,8 @@ mod tests {
         let key_a = fixture_key();
         let mut key_b: MasterKey = [0u8; MASTER_KEY_LEN];
         for (i, b) in key_b.iter_mut().enumerate() {
-            #[allow(clippy::cast_possible_truncation,
+            #[allow(
+                clippy::cast_possible_truncation,
                 reason = "deterministic test key seed; i < MASTER_KEY_LEN < 256"
             )]
             let byte = (i & 0xFF) as u8;
@@ -648,7 +656,9 @@ mod tests {
         // a raw `Sqlite` error from one of the pragma calls that
         // tried to query the still-locked database. Both are
         // acceptable; what matters is that the open fails.
-        assert!(matches!(err,
+        assert!(
+            matches!(
+                err,
                 PermissionError::Persistence(_) | PermissionError::Sqlite(_)
             ),
             "expected an open failure for the wrong key, got {err:?}",
@@ -689,27 +699,33 @@ mod tests {
         // same `name` slice and therefore the same UUIDv5 output).
         let obj_id = Uuid::new_v4();
         let subj_id = Uuid::new_v4();
-        let base = RelationTuple::new(ObjectRef::new(ObjectType::Tenant, obj_id),
+        let base = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
             Relation::Owner,
             SubjectRef::direct(SubjectType::User, subj_id),
         );
-        let other_obj_type = RelationTuple::new(ObjectRef::new(ObjectType::Domain, obj_id),
+        let other_obj_type = RelationTuple::new(
+            ObjectRef::new(ObjectType::Domain, obj_id),
             Relation::Owner,
             SubjectRef::direct(SubjectType::User, subj_id),
         );
-        let other_relation = RelationTuple::new(ObjectRef::new(ObjectType::Tenant, obj_id),
+        let other_relation = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
             Relation::Editor,
             SubjectRef::direct(SubjectType::User, subj_id),
         );
-        let other_subj_type = RelationTuple::new(ObjectRef::new(ObjectType::Tenant, obj_id),
+        let other_subj_type = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
             Relation::Owner,
             SubjectRef::direct(SubjectType::Tenant, subj_id),
         );
-        let other_subj_id = RelationTuple::new(ObjectRef::new(ObjectType::Tenant, obj_id),
+        let other_subj_id = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
             Relation::Owner,
             SubjectRef::direct(SubjectType::User, Uuid::new_v4()),
         );
-        let with_relation = RelationTuple::new(ObjectRef::new(ObjectType::Tenant, obj_id),
+        let with_relation = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
             Relation::Owner,
             SubjectRef::via(SubjectType::User, subj_id, Relation::Admin),
         );
@@ -723,7 +739,8 @@ mod tests {
             tuple_row_id(&with_relation),
         ];
         let unique: std::collections::BTreeSet<Uuid> = ids.iter().copied().collect();
-        assert_eq!(unique.len(),
+        assert_eq!(
+            unique.len(),
             ids.len(),
             "every distinct tuple must hash to a distinct row id",
         );
@@ -736,11 +753,13 @@ mod tests {
         // `INSERT OR IGNORE` collapse re-inserts.
         let obj_id = Uuid::new_v4();
         let subj_id = Uuid::new_v4();
-        let a = RelationTuple::new(ObjectRef::new(ObjectType::Tenant, obj_id),
+        let a = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
             Relation::Member,
             SubjectRef::direct(SubjectType::User, subj_id),
         );
-        let b = RelationTuple::new(ObjectRef::new(ObjectType::Tenant, obj_id),
+        let b = RelationTuple::new(
+            ObjectRef::new(ObjectType::Tenant, obj_id),
             Relation::Member,
             SubjectRef::direct(SubjectType::User, subj_id),
         );

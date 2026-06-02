@@ -168,7 +168,8 @@ mod tests {
 
         let mut receiver = SyncEngine::<String>::new();
         let err = apply_delta(&mut receiver, &delta).unwrap_err();
-        assert!(matches!(err, SyncError::CompactionEpochBehind { local: 0, delta: 1 }),
+        assert!(
+            matches!(err, SyncError::CompactionEpochBehind { local: 0, delta: 1 }),
             "expected CompactionEpochBehind {{ local: 0, delta: 1 }}, got {err:?}",
         );
     }

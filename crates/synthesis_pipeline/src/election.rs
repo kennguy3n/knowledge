@@ -262,7 +262,8 @@ impl SynthesizerElection {
 mod tests {
     use super::*;
 
-    fn fresh(election: &mut SynthesizerElection,
+    fn fresh(
+        election: &mut SynthesizerElection,
         tier: DeviceTier,
         online: bool,
         battery: u8,

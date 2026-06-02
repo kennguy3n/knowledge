@@ -37,7 +37,8 @@ pub struct WorkingMemoryEntry {
 
 impl WorkingMemoryEntry {
     /// Construct a fresh entry.
-    pub fn new(scope_id: ScopeId,
+    pub fn new(
+        scope_id: ScopeId,
         content: impl Into<String>,
         ttl: Duration,
         relevance_score: f64,
@@ -106,7 +107,8 @@ impl WorkingMemory {
 
     /// Convenience: build a [`WorkingMemoryEntry`] with the default
     /// TTL and the supplied relevance score, then push it.
-    pub fn push_with_default_ttl(&mut self,
+    pub fn push_with_default_ttl(
+        &mut self,
         scope_id: ScopeId,
         content: impl Into<String>,
         relevance_score: f64,

@@ -1186,7 +1186,8 @@ mod tests {
         let err = serde_json::from_str::<MemoryFilter>(payload)
             .expect_err("MemoryFilter must reject unknown camelCase keys like `pinnedOnly`");
         let msg = err.to_string();
-        assert!(msg.contains("unknown field") && msg.contains("pinnedOnly"),
+        assert!(
+            msg.contains("unknown field") && msg.contains("pinnedOnly"),
             "expected `unknown field `pinnedOnly``, got {msg}"
         );
     }
@@ -1197,7 +1198,8 @@ mod tests {
         let payload = r#"{"state":null,"pinned_only":false,"junk":42}"#;
         let err = serde_json::from_str::<MemoryFilter>(payload)
             .expect_err("MemoryFilter must reject stray unknown keys");
-        assert!(err.to_string().contains("unknown field"),
+        assert!(
+            err.to_string().contains("unknown field"),
             "expected `unknown field` error, got {err}"
         );
     }
@@ -1269,7 +1271,8 @@ mod tests {
             "dispatchesFailed",
             "dispatchesSkippedInProgress",
         ] {
-            assert!(obj.contains_key(camel),
+            assert!(
+                obj.contains_key(camel),
                 "SyncSchedulerStatus JSON must contain camelCase key `{camel}`; got {v}"
             );
         }
@@ -1288,7 +1291,8 @@ mod tests {
             "dispatches_failed",
             "dispatches_skipped_in_progress",
         ] {
-            assert!(!obj.contains_key(snake),
+            assert!(
+                !obj.contains_key(snake),
                 "SyncSchedulerStatus JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
@@ -1339,7 +1343,8 @@ mod tests {
             "dispatchBadRequestTotal",
             "dispatchBadGatewayTotal",
         ] {
-            assert!(obj.contains_key(camel),
+            assert!(
+                obj.contains_key(camel),
                 "WebhookServerSummary JSON must contain camelCase key `{camel}`; got {v}"
             );
         }
@@ -1352,7 +1357,8 @@ mod tests {
             "dispatch_bad_request_total",
             "dispatch_bad_gateway_total",
         ] {
-            assert!(!obj.contains_key(snake),
+            assert!(
+                !obj.contains_key(snake),
                 "WebhookServerSummary JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
@@ -1379,12 +1385,14 @@ mod tests {
         let v = serde_json::to_value(&r).expect("serialize");
         let obj = v.as_object().expect("object");
         for camel in ["instanceId", "refreshed", "expiresAt", "refreshedAt"] {
-            assert!(obj.contains_key(camel),
+            assert!(
+                obj.contains_key(camel),
                 "RefreshReport JSON must contain camelCase key `{camel}`; got {v}"
             );
         }
         for snake in ["instance_id", "expires_at", "refreshed_at"] {
-            assert!(!obj.contains_key(snake),
+            assert!(
+                !obj.contains_key(snake),
                 "RefreshReport JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
@@ -1423,7 +1431,8 @@ mod tests {
             "startedAt",
             "completedAt",
         ] {
-            assert!(obj.contains_key(camel),
+            assert!(
+                obj.contains_key(camel),
                 "SyncReport JSON must contain camelCase key `{camel}`; got {v}"
             );
         }
@@ -1436,7 +1445,8 @@ mod tests {
             "started_at",
             "completed_at",
         ] {
-            assert!(!obj.contains_key(snake),
+            assert!(
+                !obj.contains_key(snake),
                 "SyncReport JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
@@ -1446,7 +1456,8 @@ mod tests {
         // NOT the camelCase `"Incremental"` the struct-level rename
         // would suggest. The struct-level `rename_all` only
         // governs field names, not nested enum variants.
-        assert_eq!(obj.get("mode").and_then(|m| m.as_str()),
+        assert_eq!(
+            obj.get("mode").and_then(|m| m.as_str()),
             Some("incremental"),
             "SyncModeKind variant tag must remain snake_case"
         );
@@ -1486,7 +1497,8 @@ mod tests {
             "lastSyncedAt",
             "lastError",
         ] {
-            assert!(obj.contains_key(camel),
+            assert!(
+                obj.contains_key(camel),
                 "ConnectorStatus JSON must contain camelCase key `{camel}`; got {v}"
             );
         }
@@ -1498,7 +1510,8 @@ mod tests {
             "last_synced_at",
             "last_error",
         ] {
-            assert!(!obj.contains_key(snake),
+            assert!(
+                !obj.contains_key(snake),
                 "ConnectorStatus JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
@@ -1510,15 +1523,18 @@ mod tests {
         // `camelCase` (which would silently break every JS
         // consumer matching `"google_drive"`, `"incremental"`,
         // `"succeeded"`) gets caught here.
-        assert_eq!(obj.get("kind").and_then(|m| m.as_str()),
+        assert_eq!(
+            obj.get("kind").and_then(|m| m.as_str()),
             Some("google_drive"),
             "ConnectorKindTag variant tag must remain snake_case"
         );
-        assert_eq!(obj.get("syncMode").and_then(|m| m.as_str()),
+        assert_eq!(
+            obj.get("syncMode").and_then(|m| m.as_str()),
             Some("incremental"),
             "SyncModeKind variant tag must remain snake_case"
         );
-        assert_eq!(obj.get("syncStatus").and_then(|m| m.as_str()),
+        assert_eq!(
+            obj.get("syncStatus").and_then(|m| m.as_str()),
             Some("succeeded"),
             "SyncStatusKind variant tag must remain snake_case"
         );
@@ -1577,7 +1593,8 @@ mod tests {
             "nextAttemptUnix",
             "inCooldown",
         ] {
-            assert!(obj.contains_key(camel),
+            assert!(
+                obj.contains_key(camel),
                 "ConnectorHealthRecord JSON must contain camelCase key `{camel}`; got {v}"
             );
         }
@@ -1596,7 +1613,8 @@ mod tests {
             "next_attempt_unix",
             "in_cooldown",
         ] {
-            assert!(!obj.contains_key(snake),
+            assert!(
+                !obj.contains_key(snake),
                 "ConnectorHealthRecord JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
@@ -1607,15 +1625,18 @@ mod tests {
         // `camelCase` would silently break every JS consumer
         // matching on `"google_drive"` / `"incremental"` /
         // `"failed"`.
-        assert_eq!(obj.get("kind").and_then(|m| m.as_str()),
+        assert_eq!(
+            obj.get("kind").and_then(|m| m.as_str()),
             Some("google_drive"),
             "ConnectorKindTag variant tag must remain snake_case"
         );
-        assert_eq!(obj.get("syncMode").and_then(|m| m.as_str()),
+        assert_eq!(
+            obj.get("syncMode").and_then(|m| m.as_str()),
             Some("incremental"),
             "SyncModeKind variant tag must remain snake_case"
         );
-        assert_eq!(obj.get("syncStatus").and_then(|m| m.as_str()),
+        assert_eq!(
+            obj.get("syncStatus").and_then(|m| m.as_str()),
             Some("failed"),
             "SyncStatusKind variant tag must remain snake_case"
         );
@@ -1628,7 +1649,8 @@ mod tests {
         for kind in [SynthesisTierKind::Domain, SynthesisTierKind::Tenant] {
             let serialized = serde_json::to_string(&kind).expect("serialize");
             // snake_case discipline keeps platform JSON decoders happy.
-            assert!(serialized == "\"domain\"" || serialized == "\"tenant\"",
+            assert!(
+                serialized == "\"domain\"" || serialized == "\"tenant\"",
                 "SynthesisTierKind must serialize as snake_case: {serialized}"
             );
             let back: SynthesisTierKind = serde_json::from_str(&serialized).expect("deserialize");
@@ -1666,7 +1688,8 @@ mod tests {
             "objectId",
             "objectVersion",
         ] {
-            assert!(obj.contains_key(camel),
+            assert!(
+                obj.contains_key(camel),
                 "SynthesisStatusRecord JSON must contain camelCase key `{camel}`: {v}"
             );
         }
@@ -1678,7 +1701,8 @@ mod tests {
             "object_id",
             "object_version",
         ] {
-            assert!(!obj.contains_key(snake),
+            assert!(
+                !obj.contains_key(snake),
                 "SynthesisStatusRecord JSON must NOT contain snake_case key `{snake}`: {v}"
             );
         }
@@ -1697,12 +1721,14 @@ mod tests {
         let v = serde_json::to_value(&summary).expect("serialize");
         let obj = v.as_object().expect("object");
         for camel in ["version", "createdAtUnix", "objectType", "isLatest"] {
-            assert!(obj.contains_key(camel),
+            assert!(
+                obj.contains_key(camel),
                 "SynthesisVersionSummary JSON must contain camelCase key `{camel}`: {v}"
             );
         }
         for snake in ["created_at_unix", "object_type", "is_latest"] {
-            assert!(!obj.contains_key(snake),
+            assert!(
+                !obj.contains_key(snake),
                 "SynthesisVersionSummary JSON must NOT contain snake_case key `{snake}`: {v}"
             );
         }
@@ -1741,7 +1767,8 @@ mod tests {
             "rateCapacity",
             "rateRefillPerSec",
         ] {
-            assert!(obj.contains_key(camel),
+            assert!(
+                obj.contains_key(camel),
                 "SynthesisEngineConfig JSON must contain camelCase key `{camel}`: {v}"
             );
         }
@@ -1755,7 +1782,8 @@ mod tests {
             "rate_capacity",
             "rate_refill_per_sec",
         ] {
-            assert!(!obj.contains_key(snake),
+            assert!(
+                !obj.contains_key(snake),
                 "SynthesisEngineConfig JSON must NOT contain snake_case key `{snake}`: {v}"
             );
         }

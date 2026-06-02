@@ -83,7 +83,8 @@ pub struct AttestationReport {
 
 impl AttestationReport {
     /// Construct a new attestation report.
-    pub fn new(platform: TeePlatform,
+    pub fn new(
+        platform: TeePlatform,
         measurement: ContentHash,
         report_data: Vec<u8>,
         signature: Vec<u8>,
@@ -149,7 +150,8 @@ pub struct AttestationAuditEntry {
 
 impl AttestationAuditEntry {
     /// Construct a successful attestation audit entry.
-    pub fn success(report_id: Uuid,
+    pub fn success(
+        report_id: Uuid,
         binding_id: Uuid,
         scope_id: Uuid,
         platform: TeePlatform,
@@ -167,7 +169,8 @@ impl AttestationAuditEntry {
     }
 
     /// Construct a failed attestation audit entry.
-    pub fn failure(report_id: Uuid,
+    pub fn failure(
+        report_id: Uuid,
         scope_id: Uuid,
         platform: TeePlatform,
         reason: impl Into<String>,
@@ -192,7 +195,8 @@ impl AttestationAuditEntry {
 /// `report.measurement == expected_measurement`. Real platform
 /// implementations will additionally verify the platform signature
 /// against the vendor's root of trust.
-pub fn verify_attestation(report: &AttestationReport,
+pub fn verify_attestation(
+    report: &AttestationReport,
     expected_measurement: &ContentHash,
 ) -> Result<bool, CryptoError> {
     match report.platform {
@@ -213,7 +217,8 @@ pub fn verify_attestation(report: &AttestationReport,
 /// BLAKE3 and stores the hash alongside the report reference so that
 /// downstream consumers can cheaply verify that a given synthesis
 /// output came from the attested enclave.
-pub fn bind_synthesizer_key(report: &AttestationReport,
+pub fn bind_synthesizer_key(
+    report: &AttestationReport,
     synthesizer_pub_key: &[u8],
 ) -> AttestationBinding {
     let key_hash = content_hash(synthesizer_pub_key);
@@ -303,7 +308,8 @@ mod tests {
         let report = mock_attestation_report(ENCLAVE_IMAGE, NONCE);
         let binding = bind_synthesizer_key(&report, PUB_KEY);
         let scope_id = Uuid::new_v4();
-        let entry = AttestationAuditEntry::success(report.report_id,
+        let entry = AttestationAuditEntry::success(
+            report.report_id,
             binding.binding_id,
             scope_id,
             report.platform,
@@ -320,13 +326,15 @@ mod tests {
     fn audit_entry_failure_records_reason() {
         let report = mock_attestation_report(ENCLAVE_IMAGE, NONCE);
         let scope_id = Uuid::new_v4();
-        let entry = AttestationAuditEntry::failure(report.report_id,
+        let entry = AttestationAuditEntry::failure(
+            report.report_id,
             scope_id,
             report.platform,
             "measurement mismatch",
         );
         assert!(!entry.verified);
-        assert_eq!(entry.failure_reason.as_deref(),
+        assert_eq!(
+            entry.failure_reason.as_deref(),
             Some("measurement mismatch")
         );
         assert!(entry.binding_id.is_none());
@@ -344,7 +352,8 @@ mod tests {
         assert_eq!(binding.report_id, report.report_id);
         // 4. Emit an audit entry.
         let scope_id = Uuid::new_v4();
-        let entry = AttestationAuditEntry::success(report.report_id,
+        let entry = AttestationAuditEntry::success(
+            report.report_id,
             binding.binding_id,
             scope_id,
             report.platform,

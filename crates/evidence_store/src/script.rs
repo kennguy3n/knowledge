@@ -1,6 +1,6 @@
 //! Script-detection helpers used by the FTS5 write / read routing
 //! introduced in schema v14 (CJK-aware FTS5 tokeniser)
-//! and extended in  to cover the remaining Brahmic-family
+//! and extended in to cover the remaining Brahmic-family
 //! scripts that lack inter-word whitespace (Tibetan, Khmer, Myanmar,
 //! Lao).
 //!
@@ -18,7 +18,7 @@
 //! `contains_cjk_or_thai` are retained for stability — the predicate
 //! itself answers "is this codepoint one of the scripts that the
 //! `unicode61` tokeniser cannot segment and therefore needs the
-//! parallel CJK lane?".  extends that scope to the four
+//! parallel CJK lane?". extends that scope to the four
 //! Indic / Southeast-Asian scripts the substrate's connector
 //! pipelines now surface; the function name is the contract for the
 //! routing site, not a taxonomy claim about the codepoints.
@@ -154,8 +154,8 @@ pub fn contains_cjk_or_thai(text: &str) -> bool {
 /// / Tessera / connector pipelines, including the awkward edge
 /// cases (half-width katakana, compatibility ideographs, Myanmar
 /// minority-language extensions) that are easy to miss with a
-/// "BMP-only / no compatibility" check and that Devin Review
-/// finding `ANALYSIS_…_0005` explicitly called out.
+/// "BMP-only / no compatibility" check and that an earlier review
+/// finding explicitly called out.
 ///
 /// Korean Hangul (`U+AC00..=U+D7AF`), Vietnamese (Latin with
 /// diacritics), Hindi (Devanagari, whitespace-separated words) and
@@ -220,7 +220,8 @@ mod tests {
             "안녕하세요",       // Korean Hangul — uses whitespace word boundaries
             "Triển khai dự án", // Vietnamese Latin
         ] {
-            assert!(!contains_cjk_or_thai(s),
+            assert!(
+                !contains_cjk_or_thai(s),
                 "{s:?} unexpectedly classified as CJK/Thai"
             );
         }
@@ -339,7 +340,7 @@ mod tests {
         // include, but if they ever do appear, the predicate must
         // route the row correctly rather than silently strand it.
         //
-        // Sweep-6 INFO-0003: Extension I (U+2EBF0..=U+2EE5F, Unicode
+        // Earlier review: Extension I (U+2EBF0..=U+2EE5F, Unicode
         // 15.1, Sep 2023) and Extension J (U+323B0..=U+33479,
         // Unicode 16.0, Sep 2024) are now included to honour the
         // doc-comment's stated forward-defensive policy of routing
@@ -489,7 +490,7 @@ mod tests {
         // side-effect of an unrelated change).
         //
         // Tai Tham (U+1A20..=U+1AAF) — Northern Thai / Lanna,
-        // Khün, Lue. Lacks word boundaries but  does
+        // Khün, Lue. Lacks word boundaries but does
         // not yet ship a lexicon for it, so we keep it out of
         // the routing predicate to preserve the
         // routing-aligns-with-lexicon-coverage invariant.

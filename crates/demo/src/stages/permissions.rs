@@ -41,12 +41,13 @@ use uuid::Uuid;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::stages::runtime::RuntimeState;
 use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::RuntimeState;
 
 const STAGE: &str = "permissions";
 
-pub fn run(dataset: &Dataset,
+pub fn run(
+    dataset: &Dataset,
     state: &mut RuntimeState,
     report: &mut DemoReport,
     log: &mut AssertionLog,
@@ -97,7 +98,8 @@ pub fn run(dataset: &Dataset,
 
     // Direct tenant bindings.
     store
-        .insert(RelationTuple::new(tenant_obj,
+        .insert(RelationTuple::new(
+            tenant_obj,
             Relation::Owner,
             alice_subject,
         ))
@@ -106,13 +108,15 @@ pub fn run(dataset: &Dataset,
         .insert(RelationTuple::new(tenant_obj, Relation::Admin, bob_subject))
         .expect("admin tuple inserted cleanly");
     store
-        .insert(RelationTuple::new(tenant_obj,
+        .insert(RelationTuple::new(
+            tenant_obj,
             Relation::Member,
             carol_subject,
         ))
         .expect("member tuple inserted cleanly");
     store
-        .insert(RelationTuple::new(agent_obj,
+        .insert(RelationTuple::new(
+            agent_obj,
             Relation::Owner,
             agent_subject,
         ))
@@ -123,32 +127,38 @@ pub fn run(dataset: &Dataset,
     // that is `Domain#member`. With the default inheritance chain
     // this means a tenant Owner ⇒ Admin and therefore Domain Editor
     // ⇒ Member ⇒ Viewer, all the way down to channel viewer.
-    let domain_editor_via_tenant_admin = SubjectRef::via(SubjectType::Tenant,
+    let domain_editor_via_tenant_admin = SubjectRef::via(
+        SubjectType::Tenant,
         dataset.tenant_scope.id.0,
         Relation::Admin,
     );
     store
-        .insert(RelationTuple::new(domain_obj,
+        .insert(RelationTuple::new(
+            domain_obj,
             Relation::Editor,
             domain_editor_via_tenant_admin,
         ))
         .expect("domain editor->tenant admin tuple inserted");
-    let domain_member_via_tenant_member = SubjectRef::via(SubjectType::Tenant,
+    let domain_member_via_tenant_member = SubjectRef::via(
+        SubjectType::Tenant,
         dataset.tenant_scope.id.0,
         Relation::Member,
     );
     store
-        .insert(RelationTuple::new(domain_obj,
+        .insert(RelationTuple::new(
+            domain_obj,
             Relation::Member,
             domain_member_via_tenant_member,
         ))
         .expect("domain member->tenant member tuple inserted");
-    let channel_viewer_via_domain_member = SubjectRef::via(SubjectType::Domain,
+    let channel_viewer_via_domain_member = SubjectRef::via(
+        SubjectType::Domain,
         dataset.domain_scope.id.0,
         Relation::Member,
     );
     store
-        .insert(RelationTuple::new(channel_obj,
+        .insert(RelationTuple::new(
+            channel_obj,
             Relation::Viewer,
             channel_viewer_via_domain_member,
         ))
@@ -158,7 +168,8 @@ pub fn run(dataset: &Dataset,
     // namespace inheritance Editor ⇒ Member ⇒ Viewer can be tested
     // on a real subject without any rewrites.
     store
-        .insert(RelationTuple::new(channel_alt_obj,
+        .insert(RelationTuple::new(
+            channel_alt_obj,
             Relation::Editor,
             dave_subject,
         ))
@@ -172,12 +183,14 @@ pub fn run(dataset: &Dataset,
     // (alice is tenant Owner ⇒ tenant Member by namespace inheritance,
     // therefore domain Member by rewrite, therefore channel-alt Member
     // by this rewrite).
-    let channel_alt_member_via_domain_member = SubjectRef::via(SubjectType::Domain,
+    let channel_alt_member_via_domain_member = SubjectRef::via(
+        SubjectType::Domain,
         dataset.domain_scope.id.0,
         Relation::Member,
     );
     store
-        .insert(RelationTuple::new(channel_alt_obj,
+        .insert(RelationTuple::new(
+            channel_alt_obj,
             Relation::Member,
             channel_alt_member_via_domain_member,
         ))
@@ -186,7 +199,8 @@ pub fn run(dataset: &Dataset,
     // -------- Negative API tests ------------------------------------
     // 1. Duplicate insert must error.
     let duplicate_err = store
-        .insert(RelationTuple::new(tenant_obj,
+        .insert(RelationTuple::new(
+            tenant_obj,
             Relation::Owner,
             alice_subject,
         ))
@@ -201,11 +215,13 @@ pub fn run(dataset: &Dataset,
     let phantom_rejected = matches!(phantom_remove_err, PermissionError::NotFound);
 
     // 3. `upsert` is idempotent — a second call returns `false`.
-    let upsert_inserted = store.upsert(RelationTuple::new(tenant_obj,
+    let upsert_inserted = store.upsert(RelationTuple::new(
+        tenant_obj,
         Relation::Synthesizer,
         agent_subject,
     ));
-    let upsert_idempotent = !store.upsert(RelationTuple::new(tenant_obj,
+    let upsert_idempotent = !store.upsert(RelationTuple::new(
+        tenant_obj,
         Relation::Synthesizer,
         agent_subject,
     ));
@@ -227,35 +243,41 @@ pub fn run(dataset: &Dataset,
 
     // Alice (owner) reaches every relation on every tier (and the
     // agent because she owns it via Owner->Admin->Editor).
-    let alice_tenant_owner = check_permission(&store,
+    let alice_tenant_owner = check_permission(
+        &store,
         &namespaces,
         tenant_obj,
         Relation::Owner,
         alice_subject,
     );
-    record(alice_tenant_owner,
+    record(
+        alice_tenant_owner,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
-    let alice_channel_viewer = check_permission(&store,
+    let alice_channel_viewer = check_permission(
+        &store,
         &namespaces,
         channel_obj,
         Relation::Viewer,
         alice_subject,
     );
-    record(alice_channel_viewer,
+    record(
+        alice_channel_viewer,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
-    let alice_channel_alt_member = check_permission(&store,
+    let alice_channel_alt_member = check_permission(
+        &store,
         &namespaces,
         channel_alt_obj,
         Relation::Member,
         alice_subject,
     );
-    record(alice_channel_alt_member,
+    record(
+        alice_channel_alt_member,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
@@ -263,36 +285,42 @@ pub fn run(dataset: &Dataset,
 
     // Bob (admin) reaches Editor on the domain via the userset
     // rewrite, then Member / Viewer on the channel via the chain.
-    let bob_domain_editor = check_permission(&store,
+    let bob_domain_editor = check_permission(
+        &store,
         &namespaces,
         domain_obj,
         Relation::Editor,
         bob_subject,
     );
-    record(bob_domain_editor,
+    record(
+        bob_domain_editor,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
-    let bob_channel_viewer = check_permission(&store,
+    let bob_channel_viewer = check_permission(
+        &store,
         &namespaces,
         channel_obj,
         Relation::Viewer,
         bob_subject,
     );
-    record(bob_channel_viewer,
+    record(
+        bob_channel_viewer,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
-    let bob_tenant_owner = check_permission(&store,
+    let bob_tenant_owner = check_permission(
+        &store,
         &namespaces,
         tenant_obj,
         Relation::Owner,
         bob_subject,
     );
     // Bob is admin not owner -> denied.
-    record(bob_tenant_owner,
+    record(
+        bob_tenant_owner,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
@@ -300,18 +328,21 @@ pub fn run(dataset: &Dataset,
 
     // Carol (member) reaches Viewer / Member on the channel via the
     // double rewrite, but NOT Editor / Admin / Owner anywhere.
-    let carol_channel_viewer = check_permission(&store,
+    let carol_channel_viewer = check_permission(
+        &store,
         &namespaces,
         channel_obj,
         Relation::Viewer,
         carol_subject,
     );
-    record(carol_channel_viewer,
+    record(
+        carol_channel_viewer,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
-    let carol_channel_member = check_permission(&store,
+    let carol_channel_member = check_permission(
+        &store,
         &namespaces,
         channel_obj,
         Relation::Member,
@@ -320,29 +351,34 @@ pub fn run(dataset: &Dataset,
     // Carol -> tenant#member -> domain#member rewrite. The channel
     // tuple is for Viewer though — Member is *not* implied from
     // Viewer, so this should be denied.
-    record(carol_channel_member,
+    record(
+        carol_channel_member,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
-    let carol_channel_editor = check_permission(&store,
+    let carol_channel_editor = check_permission(
+        &store,
         &namespaces,
         channel_obj,
         Relation::Editor,
         carol_subject,
     );
-    record(carol_channel_editor,
+    record(
+        carol_channel_editor,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
-    let carol_tenant_admin = check_permission(&store,
+    let carol_tenant_admin = check_permission(
+        &store,
         &namespaces,
         tenant_obj,
         Relation::Admin,
         carol_subject,
     );
-    record(carol_tenant_admin,
+    record(
+        carol_tenant_admin,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
@@ -350,109 +386,127 @@ pub fn run(dataset: &Dataset,
 
     // Dave (channel-alt editor) inherits Member / Viewer through the
     // namespace chain.
-    let dave_channel_alt_member = check_permission(&store,
+    let dave_channel_alt_member = check_permission(
+        &store,
         &namespaces,
         channel_alt_obj,
         Relation::Member,
         dave_subject,
     );
-    record(dave_channel_alt_member,
+    record(
+        dave_channel_alt_member,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
-    let dave_channel_alt_viewer = check_permission(&store,
+    let dave_channel_alt_viewer = check_permission(
+        &store,
         &namespaces,
         channel_alt_obj,
         Relation::Viewer,
         dave_subject,
     );
-    record(dave_channel_alt_viewer,
+    record(
+        dave_channel_alt_viewer,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
-    let dave_channel_alt_admin = check_permission(&store,
+    let dave_channel_alt_admin = check_permission(
+        &store,
         &namespaces,
         channel_alt_obj,
         Relation::Admin,
         dave_subject,
     );
-    record(dave_channel_alt_admin,
+    record(
+        dave_channel_alt_admin,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
     // dave was given editor on alt channel only — main channel must
     // deny him.
-    let dave_channel_main_viewer = check_permission(&store,
+    let dave_channel_main_viewer = check_permission(
+        &store,
         &namespaces,
         channel_obj,
         Relation::Viewer,
         dave_subject,
     );
-    record(dave_channel_main_viewer,
+    record(
+        dave_channel_main_viewer,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
 
     // Eve (outsider) is denied everywhere.
-    let eve_tenant_viewer = check_permission(&store,
+    let eve_tenant_viewer = check_permission(
+        &store,
         &namespaces,
         tenant_obj,
         Relation::Viewer,
         eve_subject,
     );
-    record(eve_tenant_viewer,
+    record(
+        eve_tenant_viewer,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
-    let eve_domain_viewer = check_permission(&store,
+    let eve_domain_viewer = check_permission(
+        &store,
         &namespaces,
         domain_obj,
         Relation::Viewer,
         eve_subject,
     );
-    record(eve_domain_viewer,
+    record(
+        eve_domain_viewer,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
-    let eve_channel_viewer = check_permission(&store,
+    let eve_channel_viewer = check_permission(
+        &store,
         &namespaces,
         channel_obj,
         Relation::Viewer,
         eve_subject,
     );
-    record(eve_channel_viewer,
+    record(
+        eve_channel_viewer,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
 
     // Synthesizer agent has Synthesizer on tenant via upsert.
-    let agent_tenant_synth = check_permission(&store,
+    let agent_tenant_synth = check_permission(
+        &store,
         &namespaces,
         tenant_obj,
         Relation::Synthesizer,
         agent_subject,
     );
-    record(agent_tenant_synth,
+    record(
+        agent_tenant_synth,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
     );
     // Agent has Owner -> Editor on the agent object via the namespace
     // we registered.
-    let agent_self_editor = check_permission(&store,
+    let agent_self_editor = check_permission(
+        &store,
         &namespaces,
         agent_obj,
         Relation::Editor,
         agent_subject,
     );
-    record(agent_self_editor,
+    record(
+        agent_self_editor,
         &mut total_checks,
         &mut allowed_checks,
         &mut denied_checks,
@@ -467,7 +521,8 @@ pub fn run(dataset: &Dataset,
     store
         .insert(scratch)
         .expect("scratch tuple inserted cleanly");
-    let eve_alt_viewer_before_remove = check_permission(&store,
+    let eve_alt_viewer_before_remove = check_permission(
+        &store,
         &namespaces,
         channel_alt_obj,
         Relation::Viewer,
@@ -476,7 +531,8 @@ pub fn run(dataset: &Dataset,
     store
         .remove(&scratch)
         .expect("scratch tuple removed cleanly");
-    let eve_alt_viewer_after_remove = check_permission(&store,
+    let eve_alt_viewer_after_remove = check_permission(
+        &store,
         &namespaces,
         channel_alt_obj,
         Relation::Viewer,
@@ -484,10 +540,12 @@ pub fn run(dataset: &Dataset,
     );
 
     // -------- Audit trail -------------------------------------------
-    state.audit_log.append(audit_service::AuditEntryBuilder::new()
+    state.audit_log.append(
+        audit_service::AuditEntryBuilder::new()
             .actor(audit_service::Actor::User(alice))
             .action(audit_service::AuditActionType::MemberProvisioned)
-            .target(audit_service::TargetRef::new(audit_service::TargetType::Tenant,
+            .target(audit_service::TargetRef::new(
+                audit_service::TargetType::Tenant,
                 tenant_obj.object_id,
             ))
             .scope(dataset.tenant_scope.id)
@@ -498,10 +556,12 @@ pub fn run(dataset: &Dataset,
             .build()
             .expect("permission audit entry"),
     );
-    state.audit_log.append(audit_service::AuditEntryBuilder::new()
+    state.audit_log.append(
+        audit_service::AuditEntryBuilder::new()
             .actor(audit_service::Actor::System)
             .action(audit_service::AuditActionType::PolicyChange)
-            .target(audit_service::TargetRef::new(audit_service::TargetType::Domain,
+            .target(audit_service::TargetRef::new(
+                audit_service::TargetType::Domain,
                 domain_obj.object_id,
             ))
             .scope(dataset.domain_scope.id)
@@ -513,117 +573,144 @@ pub fn run(dataset: &Dataset,
     );
 
     // -------- Assertions --------------------------------------------
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "alice (owner) reaches Owner on the tenant",
         alice_tenant_owner,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "alice reaches Viewer on the channel via the chain",
         alice_channel_viewer,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "alice reaches Member on the alternate channel via Owner->...->Member",
         alice_channel_alt_member,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "bob (admin) reaches Editor on the domain via tenant#admin rewrite",
         bob_domain_editor,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "bob reaches Viewer on the channel via two-hop rewrite + chain",
         bob_channel_viewer,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "bob (admin not owner) is denied Owner on the tenant",
         !bob_tenant_owner,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "carol (member) reaches Viewer on the channel via two-hop rewrite",
         carol_channel_viewer,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "carol does NOT reach Member on the channel (Viewer doesn't imply Member)",
         !carol_channel_member,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "carol does NOT reach Editor on the channel",
         !carol_channel_editor,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "carol does NOT reach Admin on the tenant",
         !carol_tenant_admin,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "dave (channel editor) reaches Member via Editor->Member",
         dave_channel_alt_member,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "dave reaches Viewer via Editor->...->Viewer",
         dave_channel_alt_viewer,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "dave does NOT reach Admin (Editor doesn't imply Admin)",
         !dave_channel_alt_admin,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "dave's editor binding is scope-local (no leak to main channel)",
         !dave_channel_main_viewer,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "outsider eve is denied Viewer on tenant",
         !eve_tenant_viewer,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "outsider eve is denied Viewer on domain",
         !eve_domain_viewer,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "outsider eve is denied Viewer on channel",
         !eve_channel_viewer,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "synthesis agent reaches Synthesizer on tenant via upsert",
         agent_tenant_synth,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "synthesis agent reaches Editor on its agent object via custom namespace",
         agent_self_editor,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "duplicate tuple insert returns DuplicateTuple",
         duplicate_rejected,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "removing a phantom tuple returns NotFound",
         phantom_rejected,
     );
     log.check(STAGE, "first upsert inserts the tuple", upsert_inserted);
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "second upsert is idempotent (returns false)",
         upsert_idempotent,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "scratch tuple grants viewer to eve before removal",
         eve_alt_viewer_before_remove,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "removing the scratch tuple revokes eve's access",
         !eve_alt_viewer_after_remove,
     );
 
     // -------- Reporting --------------------------------------------
     stage.timing = started.elapsed();
-    stage.stat("namespaces_registered",
+    stage.stat(
+        "namespaces_registered",
         "tenant, domain, channel, agent".to_string(),
     );
     stage.stat("relation_tuples", store.len().to_string());
     stage.stat("reachability_checks_total", total_checks.to_string());
     stage.stat("reachability_checks_allowed", allowed_checks.to_string());
     stage.stat("reachability_checks_denied", denied_checks.to_string());
-    stage.stat("subjects",
+    stage.stat(
+        "subjects",
         "alice, bob, carol, dave, eve, synthesis_agent".to_string(),
     );
-    stage.note("Tenant→Domain→Channel hierarchy with two userset rewrites \
+    stage.note(
+        "Tenant→Domain→Channel hierarchy with two userset rewrites \
          (domain#editor⇐tenant#admin, channel#viewer⇐domain#member) and \
          the default Owner⇒Admin⇒Editor⇒Member⇒Viewer namespace chain. \
          Verified positive paths, negative paths, outsider rejection, \
@@ -636,7 +723,8 @@ pub fn run(dataset: &Dataset,
     report.count("permission_checks_allowed", allowed_checks);
     report.count("permission_checks_denied", denied_checks);
     report.add_stage(stage);
-    report.add_benchmark("permission_reachability_checks",
+    report.add_benchmark(
+        "permission_reachability_checks",
         total_checks,
         benchmark_elapsed,
     );

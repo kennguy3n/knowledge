@@ -56,7 +56,8 @@ fn fresh_nonce() -> AeadNonce {
 }
 
 fn fresh_object(scope_id: ScopeId, window_id: WindowId, payload: Vec<u8>) -> SynthesisObject {
-    SynthesisObject::new(scope_id,
+    SynthesisObject::new(
+        scope_id,
         window_id,
         SynthesisObjectType::ChannelRecap,
         payload,
@@ -88,7 +89,8 @@ fn cross_scope_envelope_rebinding_is_rejected() {
         ..encrypted
     };
     let res = consume_synthesis_object(&attacker_envelope, &key);
-    assert!(res.is_err(),
+    assert!(
+        res.is_err(),
         "attacker rebound an envelope to a different scope and decrypted it"
     );
 }
@@ -111,7 +113,8 @@ fn cross_window_envelope_rebinding_is_rejected() {
         ..encrypted
     };
     let res = consume_synthesis_object(&attacker_envelope, &key);
-    assert!(res.is_err(),
+    assert!(
+        res.is_err(),
         "attacker replayed an envelope under a different window id"
     );
 }
@@ -134,7 +137,8 @@ fn object_id_rebinding_is_rejected() {
         ..encrypted
     };
     let res = consume_synthesis_object(&attacker_envelope, &key);
-    assert!(res.is_err(),
+    assert!(
+        res.is_err(),
         "attacker rebound an envelope to a different object id"
     );
 }
@@ -156,7 +160,8 @@ fn wrong_scope_key_cannot_decrypt() {
     let key_b = fresh_key();
     let encrypted = publish_synthesis_object(&object, &key_a).expect("publish");
     let res = consume_synthesis_object(&encrypted, &key_b);
-    assert!(res.is_err(),
+    assert!(
+        res.is_err(),
         "wrong scope key successfully decrypted an envelope"
     );
 }
@@ -175,7 +180,8 @@ fn flipped_ciphertext_byte_is_detected() {
 
     encrypted.ciphertext[0] ^= 0x01;
     let res = consume_synthesis_object(&encrypted, &key);
-    assert!(res.is_err(),
+    assert!(
+        res.is_err(),
         "Poly1305 failed to detect a single-byte ciphertext flip"
     );
 }
@@ -193,7 +199,8 @@ fn flipped_nonce_byte_is_detected() {
 
     encrypted.nonce[0] ^= 0x01;
     let res = consume_synthesis_object(&encrypted, &key);
-    assert!(res.is_err(),
+    assert!(
+        res.is_err(),
         "Poly1305 failed to detect a single-byte nonce flip"
     );
 }
@@ -270,7 +277,8 @@ fn aad_smuggling_attempt_is_rejected() {
         ciphertext: bad_ct,
     };
     let res = consume_synthesis_object(&bad_envelope, &key);
-    assert!(res.is_err(),
+    assert!(
+        res.is_err(),
         "AAD smuggling went undetected — decrypt must reject when AAD differs"
     );
 }
@@ -291,13 +299,15 @@ fn distinct_keys_with_same_nonce_produce_independent_ciphertexts() {
 
     let ct_a = encrypt_aead(&key_a, &nonce, plain, aad).expect("encrypt a");
     let ct_b = encrypt_aead(&key_b, &nonce, plain, aad).expect("encrypt b");
-    assert_ne!(ct_a, ct_b,
+    assert_ne!(
+        ct_a, ct_b,
         "two distinct keys produced identical ciphertexts with the same nonce"
     );
 
     // Confirm cross-decrypt fails: ct_a must not decrypt under key_b.
     let res = decrypt_aead(&key_b, &nonce, &ct_a, aad);
-    assert!(res.is_err(),
+    assert!(
+        res.is_err(),
         "ciphertext encrypted under key A decrypted under key B"
     );
 }
@@ -356,7 +366,8 @@ fn inner_routing_mismatch_with_matched_aead_is_rejected() {
         ciphertext: ct,
     };
     let res = consume_synthesis_object(&bad, &key);
-    assert!(res.is_err(),
+    assert!(
+        res.is_err(),
         "inner routing mismatch slipped past the defence-in-depth consume guard"
     );
 }

@@ -160,7 +160,8 @@ fn unix_to_dt(unix: i64) -> DateTime<Utc> {
 }
 
 impl TombstoneStore for EvidenceStoreTombstoneStore<'_> {
-    fn persist_tombstone(&mut self,
+    fn persist_tombstone(
+        &mut self,
         scope: forgetting::ScopeId,
         epoch: forgetting::EpochId,
         destroyed_at: DateTime<Utc>,
@@ -171,7 +172,8 @@ impl TombstoneStore for EvidenceStoreTombstoneStore<'_> {
             .map_err(|e| CryptoError::TombstonePersistence(e.to_string()))
     }
 
-    fn persist_forgotten_scope(&mut self,
+    fn persist_forgotten_scope(
+        &mut self,
         scope: forgetting::ScopeId,
         destroyed_at: DateTime<Utc>,
     ) -> Result<(), CryptoError> {
@@ -181,7 +183,8 @@ impl TombstoneStore for EvidenceStoreTombstoneStore<'_> {
             .map_err(|e| CryptoError::TombstonePersistence(e.to_string()))
     }
 
-    fn load_tombstones(&self,
+    fn load_tombstones(
+        &self,
     ) -> Result<Vec<(forgetting::ScopeId, forgetting::EpochId, DateTime<Utc>)>, CryptoError> {
         let rows = self
             .store
@@ -190,7 +193,8 @@ impl TombstoneStore for EvidenceStoreTombstoneStore<'_> {
         Ok(rows
             .into_iter()
             .map(|(scope_id, epoch_id, ts)| {
-                (forgetting::ScopeId(scope_id.as_uuid()),
+                (
+                    forgetting::ScopeId(scope_id.as_uuid()),
                     forgetting::EpochId(epoch_id),
                     unix_to_dt(ts),
                 )
@@ -198,7 +202,8 @@ impl TombstoneStore for EvidenceStoreTombstoneStore<'_> {
             .collect())
     }
 
-    fn load_forgotten_scopes(&self,
+    fn load_forgotten_scopes(
+        &self,
     ) -> Result<Vec<(forgetting::ScopeId, DateTime<Utc>)>, CryptoError> {
         let rows = self
             .store
@@ -465,7 +470,7 @@ pub struct FfiRuntime {
     /// object. The on-disk shape under the
     /// [`SYNTHESIS_OBJECT_KIND`] tag has always been per-scope
     /// (one row per scope, payload = JSON-serialised
-    /// `Vec<SynthesisObject>`);  brought the
+    /// `Vec<SynthesisObject>`); brought the
     /// in-memory shape into alignment so the per-dispatch clone
     /// in [`crate::synthesis::apply_dispatch_outcome`] only
     /// touches the scope being updated. Before the refactor,
@@ -663,7 +668,7 @@ impl FfiRuntime {
     }
 
     /// Borrow the per-user master key. Kept `pub(crate)` so callers
-    /// cannot leak it across the FFI boundary. Read by the 
+    /// cannot leak it across the FFI boundary. Read by the
     /// health probe to verify the master key is non-zero (an
     /// all-zero key signals an uninitialised runtime).
     pub(crate) fn master_key(&self) -> &MasterKey {
@@ -701,13 +706,13 @@ impl FfiRuntime {
     }
 
     /// Number of distinct scopes with a rehydrated
-    /// [`UserMemoryObject`]. Used by the  health probe.
+    /// [`UserMemoryObject`]. Used by the health probe.
     pub(crate) fn user_memory_count(&self) -> usize {
         self.user_memories.len()
     }
 
     /// Number of distinct scopes with a rehydrated
-    /// [`ChannelMemoryObject`]. Used by the  health probe.
+    /// [`ChannelMemoryObject`]. Used by the health probe.
     pub(crate) fn channel_memory_count(&self) -> usize {
         self.channel_memories.len()
     }
@@ -724,7 +729,8 @@ impl FfiRuntime {
     /// `trigger_synthesis_failure_does_not_allocate_channel_memory`
     /// invariant: no `channel_memories` map entry is created until
     /// `save_memory_blob` returns `Ok`.
-    pub(crate) fn save_channel_memory(&mut self,
+    pub(crate) fn save_channel_memory(
+        &mut self,
         scope: ScopeId,
         cmo: ChannelMemoryObject,
     ) -> crate::error::FfiResult<()> {
@@ -795,7 +801,7 @@ impl FfiRuntime {
 
     /// Borrow (or allocate) the per-scope tenant memory.
     ///
-    /// Test-only fixture helper.  transactional
+    /// Test-only fixture helper. transactional
     /// `apply_dispatch_outcome` builds post-synthesis state on
     /// owned clones rather than mutating the live map in-place;
     /// production callers go through [`Self::tenant_memory`] +
@@ -834,7 +840,8 @@ impl FfiRuntime {
     /// tests seed memory fixtures directly without going through
     /// the dispatch pipeline.
     #[cfg(test)]
-    pub(crate) fn save_domain_memory(&mut self,
+    pub(crate) fn save_domain_memory(
+        &mut self,
         scope: ScopeId,
         dmo: DomainMemoryObject,
     ) -> crate::error::FfiResult<()> {
@@ -853,7 +860,8 @@ impl FfiRuntime {
     /// Persist a fully-built [`TenantMemoryObject`] to disk and,
     /// only on disk-save success, install it into the per-scope
     /// in-memory map.
-    pub(crate) fn save_tenant_memory(&mut self,
+    pub(crate) fn save_tenant_memory(
+        &mut self,
         scope: ScopeId,
         tmo: TenantMemoryObject,
     ) -> crate::error::FfiResult<()> {
@@ -899,7 +907,8 @@ impl FfiRuntime {
     /// Test-only fixture helper earlier (see
     /// [`Self::save_domain_memory`] for the rationale).
     #[cfg(test)]
-    pub(crate) fn save_synthesis_object(&mut self,
+    pub(crate) fn save_synthesis_object(
+        &mut self,
         scope: ScopeId,
         object: synthesis_pipeline::SynthesisObject,
     ) -> crate::error::FfiResult<()> {
@@ -994,7 +1003,8 @@ impl FfiRuntime {
     /// transactional `apply_dispatch_outcome` so the prune
     /// commits atomically with the synthesis-object install.
     #[cfg(test)]
-    pub(crate) fn prune_completed_windows(&mut self,
+    pub(crate) fn prune_completed_windows(
+        &mut self,
         scope: ScopeId,
         max_per_scope: usize,
     ) -> Vec<synthesis_pipeline::WindowId> {
@@ -1008,7 +1018,8 @@ impl FfiRuntime {
         let mut empty: HashMap<synthesis_pipeline::WindowId, synthesis_pipeline::SynthesisObject> =
             HashMap::new();
         let objects = self.synthesis_objects.get_mut(&scope).unwrap_or(&mut empty);
-        crate::synthesis::prune_completed_windows_on(&mut self.synthesis_windows,
+        crate::synthesis::prune_completed_windows_on(
+            &mut self.synthesis_windows,
             objects,
             scope,
             max_per_scope,
@@ -1020,7 +1031,8 @@ impl FfiRuntime {
     /// Look up a synthesis object by `(scope, window_id)`. O(1)
     /// against the nested map shape; this is the preferred entry
     /// point for any caller that already knows the owning scope.
-    pub(crate) fn synthesis_object_in(&self,
+    pub(crate) fn synthesis_object_in(
+        &self,
         scope: ScopeId,
         window_id: synthesis_pipeline::WindowId,
     ) -> Option<&synthesis_pipeline::SynthesisObject> {
@@ -1040,7 +1052,8 @@ impl FfiRuntime {
     /// map holds `window_id`" across every scope without
     /// hard-coding which scope owned the now-orphaned window.
     #[cfg(test)]
-    pub(crate) fn synthesis_object_by_window(&self,
+    pub(crate) fn synthesis_object_by_window(
+        &self,
         window_id: synthesis_pipeline::WindowId,
     ) -> Option<&synthesis_pipeline::SynthesisObject> {
         self.synthesis_objects
@@ -1052,7 +1065,8 @@ impl FfiRuntime {
     /// objects). Returned by reference so cold-path readers
     /// (health-probe object count, `newest_*` filters) can iterate
     /// without cloning.
-    pub(crate) fn synthesis_objects_for_scope(&self,
+    pub(crate) fn synthesis_objects_for_scope(
+        &self,
         scope: ScopeId,
     ) -> Option<&HashMap<synthesis_pipeline::WindowId, synthesis_pipeline::SynthesisObject>> {
         self.synthesis_objects.get(&scope)
@@ -1149,7 +1163,8 @@ impl Drop for WithRuntimeGuard {
             // `debug_assert_eq!` flags any imbalance (e.g. a future
             // refactor that lets a guard outlive its frame).
             let popped = stack.pop();
-            debug_assert_eq!(popped,
+            debug_assert_eq!(
+                popped,
                 Some(self.handle),
                 "WithRuntimeGuard pop/push imbalance"
             );
@@ -1308,7 +1323,8 @@ pub fn open_store(path: String, master_key_hex: String) -> FfiResult<RuntimeHand
 /// function, releasing the host's reference count.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI hands owned strings + Arc<dyn> across the language boundary on every call.
 #[uniffi::export]
-pub fn open_store_with_resolver(path: String,
+pub fn open_store_with_resolver(
+    path: String,
     key_id: String,
     resolver: Arc<dyn crate::key_storage::KeyStorageResolver>,
 ) -> FfiResult<RuntimeHandle> {
@@ -1382,7 +1398,8 @@ pub fn open_store_with_resolver(path: String,
 }
 
 #[allow(clippy::needless_pass_by_value)] // Mirror of [`open_store`]: forwards the owned strings the FFI boundary handed to the outer wrapper. `Zeroizing<String>` zeroizes the hex on drop.
-fn open_store_inner(path: String,
+fn open_store_inner(
+    path: String,
     master_key_hex: Zeroizing<String>,
     // `Some(resolver)` for the `open_store_with_resolver` cold-boot
     // path; `None` for the direct-hex `open_store` path. Attached
@@ -1789,13 +1806,15 @@ fn open_store_inner(path: String,
         for scope in &tombstoned_scopes {
             synthesis_windows.remove_windows_for_scope(*scope);
         }
-        tracing::info!(scopes = tombstoned_scopes.len(),
+        tracing::info!(
+            scopes = tombstoned_scopes.len(),
             windows = pruned_window_ids.len(),
             "open_store: purged tombstoned-scope windows from rehydrated SynthesisWindowManager",
         );
         match serde_json::to_vec(&synthesis_windows) {
             Ok(bytes) => {
-                if let Err(e) = store.save_memory_blob(synthesis_windows_scope(),
+                if let Err(e) = store.save_memory_blob(
+                    synthesis_windows_scope(),
                     SYNTHESIS_WINDOWS_KIND,
                     &bytes,
                 ) {
@@ -1864,21 +1883,24 @@ fn open_store_inner(path: String,
     // already swept, every counter has been incremented, and the
     // next `open_store` retry will idempotently re-sweep + retry
     // the flush (recovered windows stay `Failed` once flushed).
-    let swept_window_ids = synthesis_windows.sweep_stuck_pending(chrono::Utc::now(),
+    let swept_window_ids = synthesis_windows.sweep_stuck_pending(
+        chrono::Utc::now(),
         chrono::Duration::seconds(STUCK_PENDING_THRESHOLD_SECS),
     );
     if !swept_window_ids.is_empty() {
         for _ in &swept_window_ids {
             crate::metrics::inc_stuck_pending_window_recovered();
         }
-        tracing::warn!(recovered = swept_window_ids.len(),
+        tracing::warn!(
+            recovered = swept_window_ids.len(),
             threshold_secs = STUCK_PENDING_THRESHOLD_SECS,
             "open_store: stuck-Pending recovery sweep transitioned windows to Failed (prior run \
              likely crashed mid-dispatch or commit-failure recovery did not land)",
         );
         match serde_json::to_vec(&synthesis_windows) {
             Ok(bytes) => {
-                if let Err(e) = store.save_memory_blob(synthesis_windows_scope(),
+                if let Err(e) = store.save_memory_blob(
+                    synthesis_windows_scope(),
                     SYNTHESIS_WINDOWS_KIND,
                     &bytes,
                 ) {
@@ -2013,7 +2035,8 @@ fn open_store_inner(path: String,
         affected_scopes.insert(*scope);
     }
     if orphan_count > 0 {
-        tracing::info!(objects = orphan_count,
+        tracing::info!(
+            objects = orphan_count,
             scopes = affected_scopes.len(),
             "open_store: purged orphan synthesis objects whose window_id is not in the \
              rehydrated SynthesisWindowManager",
@@ -2113,7 +2136,8 @@ fn open_store_inner(path: String,
                             }
                         }
                     }
-                    tracing::info!(orphans = count,
+                    tracing::info!(
+                        orphans = count,
                         deleted,
                         "open_store: purged orphan approved-document payload rows whose \
                          (scope_id, document_id) is not in any rehydrated TenantMemoryObject",
@@ -2196,7 +2220,8 @@ fn open_store_inner(path: String,
                             }
                         }
                     }
-                    tracing::info!(orphans = count,
+                    tracing::info!(
+                        orphans = count,
                         deleted,
                         "open_store: purged orphan synthesis-object version rows whose \
                          (scope_id, window_id) is not in any rehydrated synthesis_objects \
@@ -2315,7 +2340,8 @@ fn open_store_inner(path: String,
         synthesis_objects,
         synthesis_scope_bindings: None,
         synthesis_single_tenant: false,
-        synthesis_rate_limiter: crate::synthesis_rate::TokenBucket::new(crate::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY,
+        synthesis_rate_limiter: crate::synthesis_rate::TokenBucket::new(
+            crate::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY,
             crate::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC,
             chrono::Utc::now(),
         ),
@@ -2543,7 +2569,8 @@ pub fn close_store(handle: RuntimeHandle) -> FfiResult<()> {
 fn parse_master_key_hex(hex: &str) -> FfiResult<MasterKey> {
     if hex.len() != crypto::MASTER_KEY_LEN * 2 {
         return Err(FfiError::InvalidId {
-            message: format!("master_key_hex must be {} hex chars, got {}",
+            message: format!(
+                "master_key_hex must be {} hex chars, got {}",
                 crypto::MASTER_KEY_LEN * 2,
                 hex.len()
             ),
@@ -2641,7 +2668,8 @@ pub(crate) fn build_inference_router(config: RouterConfig) -> InferenceRouter {
     {
         match inference_router::HttpLlamaServerClient::new(config.server_url.clone()) {
             Ok(client) => {
-                adapters.push(Box::new(LlamaCppAdapter::new(config.clone(),
+                adapters.push(Box::new(LlamaCppAdapter::new(
+                    config.clone(),
                     Box::new(client),
                 )));
             }
@@ -2705,7 +2733,8 @@ mod tests {
     #[test]
     fn with_runtime_returns_unavailable_for_unknown_handle() {
         let err = with_runtime(RuntimeHandle(u64::MAX), |_| Ok(())).unwrap_err();
-        assert!(matches!(err, FfiError::Unavailable { ref subsystem } if subsystem == "evidence_store")
+        assert!(
+            matches!(err, FfiError::Unavailable { ref subsystem } if subsystem == "evidence_store")
         );
     }
 
@@ -2734,10 +2763,12 @@ mod tests {
         let err = close_store(h).unwrap_err();
         match err {
             FfiError::Evidence { ref message } => {
-                assert!(message.contains("close_store called from within a with_runtime frame"),
+                assert!(
+                    message.contains("close_store called from within a with_runtime frame"),
                     "expected reentrance error, got: {message}"
                 );
-                assert!(message.contains("same handle"),
+                assert!(
+                    message.contains("same handle"),
                     "expected same-handle qualifier in error message, got: {message}"
                 );
             }
@@ -2790,7 +2821,8 @@ mod tests {
         });
         let other_len = join.join().expect("thread join");
         assert_eq!(other_len, 1, "other thread observed depth 1 inside guard");
-        assert!(stack_empty(),
+        assert!(
+            stack_empty(),
             "this thread's stack still empty after the other thread"
         );
     }
@@ -2909,7 +2941,8 @@ mod tests {
         let resolver = Arc::new(TestKeyStore::seeded("primary", &key_hex));
         let load_calls_before = resolver.load_call_count();
 
-        let handle = open_store_with_resolver(path.to_string_lossy().into_owned(),
+        let handle = open_store_with_resolver(
+            path.to_string_lossy().into_owned(),
             "primary".into(),
             resolver.clone(),
         )
@@ -2931,7 +2964,8 @@ mod tests {
                 .key_storage_resolver
                 .as_ref()
                 .expect("resolver stashed on runtime");
-            assert!(Arc::ptr_eq(&(stashed.clone() as Arc<dyn crate::key_storage::KeyStorageResolver>),
+            assert!(Arc::ptr_eq(
+                &(stashed.clone() as Arc<dyn crate::key_storage::KeyStorageResolver>),
                 &(resolver.clone() as Arc<dyn crate::key_storage::KeyStorageResolver>),
             ));
             Ok(())
@@ -2954,7 +2988,8 @@ mod tests {
         // Resolver knows nothing — every load is a miss.
         let resolver = Arc::new(TestKeyStore::new());
 
-        let err = open_store_with_resolver(path.to_string_lossy().into_owned(),
+        let err = open_store_with_resolver(
+            path.to_string_lossy().into_owned(),
             "missing".into(),
             resolver,
         )
@@ -2980,13 +3015,15 @@ mod tests {
         // (64 chars) but contains non-hex bytes.
         let resolver = Arc::new(TestKeyStore::seeded("primary", &"zz".repeat(32)));
 
-        let err = open_store_with_resolver(path.to_string_lossy().into_owned(),
+        let err = open_store_with_resolver(
+            path.to_string_lossy().into_owned(),
             "primary".into(),
             resolver,
         )
         .expect_err("invalid hex must error");
 
-        assert!(matches!(err, FfiError::InvalidId { .. }),
+        assert!(
+            matches!(err, FfiError::InvalidId { .. }),
             "expected InvalidId, got {err:?}"
         );
     }
@@ -3027,7 +3064,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("evidence.db");
 
-        let err = open_store_with_resolver(path.to_string_lossy().into_owned(),
+        let err = open_store_with_resolver(
+            path.to_string_lossy().into_owned(),
             "primary".into(),
             Arc::new(UnavailableResolver),
         )
@@ -3059,7 +3097,8 @@ mod tests {
                 .expect("open_store_with_resolver");
         let after = snapshot().open_store_with_resolver_total;
 
-        assert!(after > before,
+        assert!(
+            after > before,
             "expected open_store_with_resolver_total to advance, before={before} after={after}",
         );
 

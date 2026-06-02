@@ -1,8 +1,8 @@
 //! Process-singleton observability counters for the multilingual
 //! embedding / vector-retrieval path.
 //!
-//! Phases 1.3 – 1.10 closed the multilingual gaps on the lexical
-//! ([`crate::fts_telemetry`]) and classifier
+//! The multilingual rollout closed the multilingual gaps on the
+//! lexical ([`crate::fts_telemetry`]) and classifier
 //! ([`observation_engine::lexicon_telemetry`]) lanes — but the
 //! third leg of [`crate::retrieval::HybridRetriever`]'s fan-in,
 //! the semantic-vector lane, was running blind: zero metrics on
@@ -126,7 +126,7 @@
 //! * **Pre-embedding routing decisions** — three
 //!   sibling counters covering the disposition of every call to
 //!   [`crate::embedding_routing::classify_for_embedding`] on a
-//!   production code path.  The pre-embed router short-circuits
+//!   production code path. The pre-embed router short-circuits
 //!   ONNX invocations on text with no linguistic content (pure
 //!   punctuation / pure emoji / pure digits / pure whitespace);
 //!   the counters let operators see what fraction of calls the
@@ -136,17 +136,17 @@
 //!     trigram-detectable linguistic content; the call site
 //!     proceeded to `model.embed(text)`.
 //!   * [`Counters::pre_embed_skipped_empty_after_trim_total`] —
-//!     input was empty after `str::trim`.  Usually signals an
+//!     input was empty after `str::trim`. Usually signals an
 //!     upstream extraction bug rather than legitimate noise;
 //!     operators may want to alert on a non-trivial fraction.
 //!   * [`Counters::pre_embed_skipped_no_linguistic_content_total`]
 //!     — input was non-empty after trim but [`whatlang::detect`]
 //!     could not extract any trigram-detectable linguistic
-//!     content.  Pure punctuation / pure emoji / pure digits /
+//!     content. Pure punctuation / pure emoji / pure digits /
 //!     pure-symbol input all land here.
 //!
 //!   The three are mutually exclusive — every routing call
-//!   bumps exactly one.  Summing the three gives the total
+//!   bumps exactly one. Summing the three gives the total
 //!   number of call sites that consulted the router; dividing
 //!   `pre_embed_admitted_total` by that sum is the ONNX-call
 //!   admission rate.
@@ -324,7 +324,7 @@ pub enum CacheOutcome {
 }
 
 /// Record the disposition of a single call to
-/// [`crate::embedding_routing::classify_for_embedding`].  Bumps
+/// [`crate::embedding_routing::classify_for_embedding`]. Bumps
 /// exactly one of the three `pre_embed_*_total` counters in
 /// [`Counters`].
 ///
@@ -556,17 +556,17 @@ pub struct VectorTelemetrySnapshot {
     /// than the first observation — a rotation-rule violation.
     pub model_tag_dimension_violations_total: u64,
     /// Pre-embedding router admitted the input — the call site
-    /// proceeded to invoke `model.embed(text)`.  See
+    /// proceeded to invoke `model.embed(text)`. See
     /// [`crate::embedding_routing::classify_for_embedding`] for
     /// the routing rationale.
     pub pre_embed_admitted_total: u64,
     /// Pre-embedding router diverted the call site because the
-    /// input was empty after `str::trim`.  Usually an upstream
+    /// input was empty after `str::trim`. Usually an upstream
     /// extraction bug.
     pub pre_embed_skipped_empty_after_trim_total: u64,
     /// Pre-embedding router diverted the call site because the
     /// input was non-empty after trim but [`whatlang::detect`]
-    /// found no trigram-detectable linguistic content.  Pure
+    /// found no trigram-detectable linguistic content. Pure
     /// punctuation / pure emoji / pure digits / pure-symbol
     /// input all land here.
     pub pre_embed_skipped_no_linguistic_content_total: u64,
@@ -642,13 +642,16 @@ mod tests {
         record_embedding_computed(EmbedSite::IndexWrite);
         record_embedding_computed(EmbedSite::LiveBody);
         let after = snapshot();
-        assert!(after.query_embeddings_total > before.query_embeddings_total,
+        assert!(
+            after.query_embeddings_total > before.query_embeddings_total,
             "Query bump must move query_embeddings_total upward by at least 1"
         );
-        assert!(after.index_write_embeddings_total > before.index_write_embeddings_total,
+        assert!(
+            after.index_write_embeddings_total > before.index_write_embeddings_total,
             "IndexWrite bump must move index_write_embeddings_total upward by at least 1"
         );
-        assert!(after.live_body_embeddings_total > before.live_body_embeddings_total,
+        assert!(
+            after.live_body_embeddings_total > before.live_body_embeddings_total,
             "LiveBody bump must move live_body_embeddings_total upward by at least 1"
         );
     }
@@ -663,16 +666,20 @@ mod tests {
         record_cache_outcome(CacheOutcome::MissDimension);
         record_cache_outcome(CacheOutcome::MissReadError);
         let after = snapshot();
-        assert!(after.cache_hits_total > before.cache_hits_total,
+        assert!(
+            after.cache_hits_total > before.cache_hits_total,
             "Hit bump must move cache_hits_total upward by at least 1"
         );
-        assert!(after.cache_misses_no_row_total > before.cache_misses_no_row_total,
+        assert!(
+            after.cache_misses_no_row_total > before.cache_misses_no_row_total,
             "MissNoRow bump must move cache_misses_no_row_total upward by at least 1"
         );
-        assert!(after.cache_misses_dimension_total > before.cache_misses_dimension_total,
+        assert!(
+            after.cache_misses_dimension_total > before.cache_misses_dimension_total,
             "MissDimension bump must move cache_misses_dimension_total upward by at least 1"
         );
-        assert!(after.cache_misses_read_error_total > before.cache_misses_read_error_total,
+        assert!(
+            after.cache_misses_read_error_total > before.cache_misses_read_error_total,
             "MissReadError bump must move cache_misses_read_error_total upward by at least 1"
         );
     }
@@ -686,13 +693,16 @@ mod tests {
         record_embedding_error(EmbeddingErrorKind::ModelLoad);
         record_embedding_error(EmbeddingErrorKind::InferenceFailure);
         let after = snapshot();
-        assert!(after.runtime_unavailable_total > before.runtime_unavailable_total,
+        assert!(
+            after.runtime_unavailable_total > before.runtime_unavailable_total,
             "RuntimeUnavailable bump must move runtime_unavailable_total upward by at least 1"
         );
-        assert!(after.model_load_errors_total > before.model_load_errors_total,
+        assert!(
+            after.model_load_errors_total > before.model_load_errors_total,
             "ModelLoad bump must move model_load_errors_total upward by at least 1"
         );
-        assert!(after.inference_failures_total > before.inference_failures_total,
+        assert!(
+            after.inference_failures_total > before.inference_failures_total,
             "InferenceFailure bump must move inference_failures_total upward by at least 1"
         );
     }
@@ -704,7 +714,8 @@ mod tests {
         let before = snapshot();
         record_dedup_copy_hit();
         let after = snapshot();
-        assert!(after.dedup_copy_hits_total > before.dedup_copy_hits_total,
+        assert!(
+            after.dedup_copy_hits_total > before.dedup_copy_hits_total,
             "record_dedup_copy_hit must move dedup_copy_hits_total upward by at least 1"
         );
     }
@@ -731,7 +742,8 @@ mod tests {
         // binary, so we add a per-call discriminator to
         // distinguish call sites within the same process.
         static TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
-        let tag = format!("rotation-test-pid{}-n{}",
+        let tag = format!(
+            "rotation-test-pid{}-n{}",
             std::process::id(),
             TAG_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
@@ -745,7 +757,8 @@ mod tests {
         record_observed_dimension(&tag, 384);
         let after_violation = snapshot();
 
-        assert!(after_violation.model_tag_dimension_violations_total
+        assert!(
+            after_violation.model_tag_dimension_violations_total
                 > before_violation.model_tag_dimension_violations_total,
             "Dimension change for same tag MUST move violation counter upward by at least 1"
         );

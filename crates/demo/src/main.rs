@@ -15,12 +15,12 @@ use std::time::Instant;
 
 mod assertions;
 mod dataset;
-mod stages;
 mod report;
+mod stages;
 
 use crate::assertions::AssertionLog;
-use crate::stages::runtime::RuntimeState;
 use crate::report::DemoReport;
+use crate::stages::runtime::RuntimeState;
 
 fn main() -> std::io::Result<()> {
     let started = Instant::now();
@@ -59,7 +59,8 @@ fn main() -> std::io::Result<()> {
 
     println!("demo complete in {:?}", report.total_wall_clock);
     println!("results written to {out_path}");
-    println!("{} of {} assertions passed",
+    println!(
+        "{} of {} assertions passed",
         log.passed_count(),
         log.total_count()
     );

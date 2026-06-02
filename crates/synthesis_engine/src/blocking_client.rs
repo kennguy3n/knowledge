@@ -110,14 +110,17 @@ impl BlockingHttpClientAdapter {
     /// hitting the remote endpoint at all.
     fn resolve_api_key(api_key_ref: &str) -> Result<String, EndpointError> {
         if api_key_ref.is_empty() {
-            return Err(EndpointError::InvalidRequest("EndpointConfig.api_key_ref is empty".into(),
+            return Err(EndpointError::InvalidRequest(
+                "EndpointConfig.api_key_ref is empty".into(),
             ));
         }
         match std::env::var(api_key_ref) {
             Ok(v) if !v.is_empty() => Ok(v),
-            Ok(_) => Err(EndpointError::InvalidRequest(format!("env var `{api_key_ref}` referenced by EndpointConfig.api_key_ref is set but empty"
+            Ok(_) => Err(EndpointError::InvalidRequest(format!(
+                "env var `{api_key_ref}` referenced by EndpointConfig.api_key_ref is set but empty"
             ))),
-            Err(_) => Err(EndpointError::InvalidRequest(format!("env var `{api_key_ref}` referenced by EndpointConfig.api_key_ref is not set"
+            Err(_) => Err(EndpointError::InvalidRequest(format!(
+                "env var `{api_key_ref}` referenced by EndpointConfig.api_key_ref is not set"
             ))),
         }
     }
@@ -134,14 +137,16 @@ impl BlockingHttpClientAdapter {
 }
 
 impl HttpClient for BlockingHttpClientAdapter {
-    fn send(&self,
+    fn send(
+        &self,
         cfg: &EndpointConfig,
         req: &SynthesisRequest,
     ) -> Result<SynthesisResponse, EndpointError> {
         let api_key = Self::resolve_api_key(&cfg.api_key_ref)?;
         let bearer = format!("Bearer {api_key}");
         let auth_header = HeaderValue::from_str(&bearer).map_err(|e| {
-            EndpointError::InvalidRequest(format!("resolved API key is not a valid HTTP header value: {e}"
+            EndpointError::InvalidRequest(format!(
+                "resolved API key is not a valid HTTP header value: {e}"
             ))
         })?;
 
@@ -160,18 +165,21 @@ impl HttpClient for BlockingHttpClientAdapter {
 
         let status = response.status();
 
-        if matches!(status,
+        if matches!(
+            status,
             StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
         ) {
             let retry_after = response
                 .headers()
                 .get(RETRY_AFTER)
                 .and_then(|h| h.to_str().ok())
-                .map_or_else(|| "unspecified".to_string(),
+                .map_or_else(
+                    || "unspecified".to_string(),
                     std::string::ToString::to_string,
                 );
             let body_excerpt = response.text().unwrap_or_default();
-            return Err(EndpointError::RateLimited(format!("endpoint reported {} (retry-after: {retry_after}): {}",
+            return Err(EndpointError::RateLimited(format!(
+                "endpoint reported {} (retry-after: {retry_after}): {}",
                 status,
                 truncate_body(&body_excerpt, 256),
             )));
@@ -179,7 +187,8 @@ impl HttpClient for BlockingHttpClientAdapter {
 
         if !status.is_success() {
             let body_excerpt = response.text().unwrap_or_default();
-            return Err(EndpointError::Endpoint(format!("endpoint reported status {}: {}",
+            return Err(EndpointError::Endpoint(format!(
+                "endpoint reported status {}: {}",
                 status,
                 truncate_body(&body_excerpt, 512),
             )));

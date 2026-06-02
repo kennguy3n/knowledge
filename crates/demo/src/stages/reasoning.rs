@@ -50,12 +50,13 @@ use reasoning_engine::{
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::stages::runtime::RuntimeState;
 use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::RuntimeState;
 
 const STAGE: &str = "reasoning";
 
-pub fn run(dataset: &Dataset,
+pub fn run(
+    dataset: &Dataset,
     state: &mut RuntimeState,
     report: &mut DemoReport,
     log: &mut AssertionLog,
@@ -120,7 +121,8 @@ pub fn run(dataset: &Dataset,
     // ContradictionDetector + adjudication workflow have a real hit.
     // ---------------------------------------------------------------
     let tenant_scope = dataset.tenant_scope.id;
-    let mut left = ConceptNode::new_candidate("contradiction-claim",
+    let mut left = ConceptNode::new_candidate(
+        "contradiction-claim",
         "Reasoning stage left side of opposing pair.",
         tenant_scope,
     );
@@ -128,7 +130,8 @@ pub fn run(dataset: &Dataset,
     let left_id = pgraph
         .add_node(left)
         .expect("seed left contradiction concept");
-    let mut right = ConceptNode::new_candidate("not contradiction-claim",
+    let mut right = ConceptNode::new_candidate(
+        "not contradiction-claim",
         "Reasoning stage right side of opposing pair (negation prefix).",
         tenant_scope,
     );
@@ -147,7 +150,8 @@ pub fn run(dataset: &Dataset,
         .map(|n| n.id);
     if let Some(anchor) = traversal_anchor {
         pgraph
-            .add_edge(ConceptEdge::new(left_id,
+            .add_edge(ConceptEdge::new(
+                left_id,
                 anchor,
                 RelationType::IsA,
                 tenant_scope,
@@ -164,7 +168,8 @@ pub fn run(dataset: &Dataset,
     let edges = detector.scan(pgraph.graph());
     let bench_contradiction_scan = bench_started.elapsed();
 
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "ContradictionDetector flagged the seeded opposing pair",
         edges.iter().any(|e| {
             (e.left == left_id && e.right == right_id) || (e.left == right_id && e.right == left_id)
@@ -200,11 +205,13 @@ pub fn run(dataset: &Dataset,
         let record = workflow
             .get(edge.id)
             .expect("adjudication record present after resolve");
-        log.check(STAGE,
+        log.check(
+            STAGE,
             "adjudication state advanced to Resolved",
             matches!(record.state, AdjudicationState::Resolved),
         );
-        log.check(STAGE,
+        log.check(
+            STAGE,
             "adjudication outcome marked the left side as winner",
             matches!(record.outcome, Some(AdjudicationOutcome::Winner { .. })),
         );
@@ -234,18 +241,21 @@ pub fn run(dataset: &Dataset,
     let mut targeted_hits: u64 = 0;
     let bench_started = Instant::now();
     if let Some(anchor) = traversal_anchor {
-        let explore = traversal.run(&TraversalQuery::explore(anchor)
+        let explore = traversal.run(
+            &TraversalQuery::explore(anchor)
                 .with_direction(TraversalDirection::Both)
                 .with_scopes(vec![tenant_scope]),
         );
         explore_paths = explore.paths.len() as u64;
         explore_visited = explore.visited.len() as u64;
-        log.check(STAGE,
+        log.check(
+            STAGE,
             "exploratory traversal stayed within max_hops budget",
             explore.trace.hops_taken <= budget.max_hops,
         );
 
-        let targeted = traversal.run(&TraversalQuery::between(anchor, left_id)
+        let targeted = traversal.run(
+            &TraversalQuery::between(anchor, left_id)
                 .with_direction(TraversalDirection::Both)
                 .with_edge_types(vec![
                     RelationType::IsA,
@@ -254,7 +264,8 @@ pub fn run(dataset: &Dataset,
                 ]),
         );
         targeted_hits = targeted.paths.len() as u64;
-        log.check(STAGE,
+        log.check(
+            STAGE,
             "targeted traversal reached the seeded contradiction concept",
             !targeted.paths.is_empty(),
         );
@@ -266,7 +277,8 @@ pub fn run(dataset: &Dataset,
     // ---------------------------------------------------------------
     let bench_started = Instant::now();
     let mut got_graph = ThoughtGraph::new();
-    let got_query = GoTQuery::new("Should the Atlas migration proceed under the EU residency policy?",
+    let got_query = GoTQuery::new(
+        "Should the Atlas migration proceed under the EU residency policy?",
         tenant_scope,
     )
     .with_strategy(GoTStrategy::BestFirst)
@@ -276,7 +288,8 @@ pub fn run(dataset: &Dataset,
     let hyp_supports_id = ThoughtId::new_v4();
     let hyp_supports = ThoughtNode {
         id: hyp_supports_id,
-        ..ThoughtNode::new("Hypothesis: residency-compliant migration is feasible.",
+        ..ThoughtNode::new(
+            "Hypothesis: residency-compliant migration is feasible.",
             ThoughtType::Hypothesis,
             0.85,
             tenant_scope,
@@ -287,7 +300,8 @@ pub fn run(dataset: &Dataset,
     let hyp_against_id = ThoughtId::new_v4();
     let hyp_against = ThoughtNode {
         id: hyp_against_id,
-        ..ThoughtNode::new("Hypothesis: cross-region replication violates residency policy.",
+        ..ThoughtNode::new(
+            "Hypothesis: cross-region replication violates residency policy.",
             ThoughtType::Hypothesis,
             0.65,
             tenant_scope,
@@ -298,7 +312,8 @@ pub fn run(dataset: &Dataset,
     let evidence_for_id = ThoughtId::new_v4();
     let evidence_for = ThoughtNode {
         id: evidence_for_id,
-        ..ThoughtNode::new("Evidence: pgcat shards remain inside the EU region.",
+        ..ThoughtNode::new(
+            "Evidence: pgcat shards remain inside the EU region.",
             ThoughtType::Evidence,
             0.9,
             tenant_scope,
@@ -309,7 +324,8 @@ pub fn run(dataset: &Dataset,
     let conclusion_id = ThoughtId::new_v4();
     let conclusion = ThoughtNode {
         id: conclusion_id,
-        ..ThoughtNode::new("Conclusion: proceed with EU-only Atlas rollout.",
+        ..ThoughtNode::new(
+            "Conclusion: proceed with EU-only Atlas rollout.",
             ThoughtType::Conclusion,
             0.92,
             tenant_scope,
@@ -318,7 +334,8 @@ pub fn run(dataset: &Dataset,
     };
 
     let mut expander = StaticExpander::new();
-    expander.register(plan.root,
+    expander.register(
+        plan.root,
         vec![
             (hyp_supports, ThoughtEdge::Supports),
             (hyp_against, ThoughtEdge::Contradicts),
@@ -333,14 +350,16 @@ pub fn run(dataset: &Dataset,
         .expect("graph-of-thought execution");
     let bench_got = bench_started.elapsed();
 
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "GoT executor produced a Conclusion-ending best path",
         got_result
             .best_path
             .last()
             .is_some_and(|t| matches!(t.thought_type, ThoughtType::Conclusion)),
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "GoT executor stayed within budget (no exhaustion)",
         !got_result.budget_exhausted,
     );
@@ -348,7 +367,8 @@ pub fn run(dataset: &Dataset,
     // Persist the trace into WorkflowMemory.
     let mut memory = WorkflowMemory::new();
     let trace_id = executor.record_trace(&mut memory, &got_query, &got_result);
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "GoT trace persisted into WorkflowMemory",
         memory.get_trace(trace_id).is_ok(),
     );
@@ -364,15 +384,18 @@ pub fn run(dataset: &Dataset,
     let summaries: Vec<CommunitySummary> = summarizer.summarise_all(pgraph.graph(), &hierarchy);
     let bench_communities = bench_started.elapsed();
 
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "CommunityDetector returned at least one canonical cluster",
         !leaves.is_empty(),
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "CommunityHierarchy levels start with the leaves at level 0",
         hierarchy.level_count() >= 1,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "CommunitySummaryGenerator produced summaries for every community",
         summaries.len() == hierarchy.communities.len() && !summaries.is_empty(),
     );
@@ -394,7 +417,8 @@ pub fn run(dataset: &Dataset,
 
     let router = CommunityQueryRouter::new();
     let bench_started = Instant::now();
-    let routed = router.route("atlas migration platform tenant",
+    let routed = router.route(
+        "atlas migration platform tenant",
         &summaries,
         demo_subject,
         &store,
@@ -402,7 +426,8 @@ pub fn run(dataset: &Dataset,
         4,
     );
     let bench_route = bench_started.elapsed();
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "CommunityQueryRouter returned at least one visible summary",
         !routed.is_empty(),
     );
@@ -410,14 +435,16 @@ pub fn run(dataset: &Dataset,
     // The router must *exclude* communities for a user with no
     // grants. This proves the permission filter is wired up.
     let stranger = SubjectRef::direct(SubjectType::User, uuid::Uuid::new_v4());
-    let stranger_routed = router.route("atlas migration platform tenant",
+    let stranger_routed = router.route(
+        "atlas migration platform tenant",
         &summaries,
         stranger,
         &store,
         &registry,
         4,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "CommunityQueryRouter excludes communities for a user with no grants",
         stranger_routed.is_empty(),
     );
@@ -462,11 +489,13 @@ pub fn run(dataset: &Dataset,
     }
     let bench_execute = bench_started.elapsed();
 
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "QueryPlanner produced a non-empty fallback chain for every query",
         plans.iter().all(|p| !p.steps.is_empty()),
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "QueryPlanner.execute stopped at the first Success in every chain",
         executions.iter().all(|e| {
             e.succeeded() && e.attempts.last().map(|(_, o)| *o) == Some(StepOutcome::Success)
@@ -480,7 +509,8 @@ pub fn run(dataset: &Dataset,
     let entry = audit_service::AuditEntryBuilder::new()
         .actor(actor)
         .action(audit_service::AuditActionType::PolicyChange)
-        .target(audit_service::TargetRef::new(audit_service::TargetType::Tenant,
+        .target(audit_service::TargetRef::new(
+            audit_service::TargetType::Tenant,
             tenant_scope.0,
         ))
         .scope(tenant_scope)
@@ -511,7 +541,8 @@ pub fn run(dataset: &Dataset,
     stage.stat("community_summaries", summaries.len().to_string());
     stage.stat("routed_summaries", routed.len().to_string());
     stage.stat("plans_generated", plans.len().to_string());
-    stage.stat("plan_execute_succeeded",
+    stage.stat(
+        "plan_execute_succeeded",
         executions
             .iter()
             .filter(|e| e.succeeded())
@@ -521,26 +552,31 @@ pub fn run(dataset: &Dataset,
 
     // Benchmarks.
     let n_edges = edges.len() as u64;
-    report.add_benchmark("reasoning.contradiction.scan",
+    report.add_benchmark(
+        "reasoning.contradiction.scan",
         n_edges.max(1),
         bench_contradiction_scan,
     );
-    report.add_benchmark("reasoning.contradiction.adjudicate",
+    report.add_benchmark(
+        "reasoning.contradiction.adjudicate",
         detected.max(1) as u64,
         bench_adjudication,
     );
     report.add_benchmark("reasoning.traversal", 2, bench_traversal);
-    report.add_benchmark("reasoning.got.execute",
+    report.add_benchmark(
+        "reasoning.got.execute",
         got_result.reasoning_trace.len().max(1) as u64,
         bench_got,
     );
-    report.add_benchmark("reasoning.community.detect_summarise",
+    report.add_benchmark(
+        "reasoning.community.detect_summarise",
         hierarchy.communities.len().max(1) as u64,
         bench_communities,
     );
     report.add_benchmark("reasoning.community.route", 1, bench_route);
     report.add_benchmark("reasoning.planner.plan", plans.len() as u64, bench_plan);
-    report.add_benchmark("reasoning.planner.execute",
+    report.add_benchmark(
+        "reasoning.planner.execute",
         executions.len() as u64,
         bench_execute,
     );

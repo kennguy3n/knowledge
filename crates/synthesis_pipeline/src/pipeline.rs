@@ -56,7 +56,8 @@ pub trait SynthesisPipeline {
     /// Synthesise an object for `window` from `inputs`. Returns the
     /// freshly-built [`SynthesisObject`] — the caller is responsible
     /// for publishing it via [`crate::publish::publish_synthesis_object`].
-    fn synthesize(&self,
+    fn synthesize(
+        &self,
         window: &SynthesisWindow,
         inputs: &SynthesisInputs,
     ) -> Result<SynthesisObject>;
@@ -92,7 +93,8 @@ impl NoOpSynthesizer {
 
 #[cfg(any(test, feature = "test-support"))]
 impl SynthesisPipeline for NoOpSynthesizer {
-    fn synthesize(&self,
+    fn synthesize(
+        &self,
         window: &SynthesisWindow,
         inputs: &SynthesisInputs,
     ) -> Result<SynthesisObject> {
@@ -102,7 +104,8 @@ impl SynthesisPipeline for NoOpSynthesizer {
         };
         let payload = serde_json::to_vec(&bundle)
             .map_err(|_| crate::error::PipelineError::Serialisation("SummaryBundle::to_vec"))?;
-        Ok(SynthesisObject::new(window.scope_id,
+        Ok(SynthesisObject::new(
+            window.scope_id,
             window.id,
             self.object_type,
             payload,
@@ -199,7 +202,8 @@ impl LlamaCppSynthesizer {
 }
 
 impl SynthesisPipeline for LlamaCppSynthesizer {
-    fn synthesize(&self,
+    fn synthesize(
+        &self,
         window: &SynthesisWindow,
         inputs: &SynthesisInputs,
     ) -> Result<SynthesisObject> {
@@ -214,14 +218,16 @@ impl SynthesisPipeline for LlamaCppSynthesizer {
         // grammar) broke its contract, so we surface it as a
         // synthesis failure rather than masking it.
         let bundle: SummaryBundle = serde_json::from_str(raw.trim()).map_err(|e| {
-            PipelineError::SynthesisFailed(format!("SLM output did not parse as SummaryBundle: {e}; raw=`{raw}`"
+            PipelineError::SynthesisFailed(format!(
+                "SLM output did not parse as SummaryBundle: {e}; raw=`{raw}`"
             ))
         })?;
 
         let payload = serde_json::to_vec(&bundle)
             .map_err(|_| PipelineError::Serialisation("SummaryBundle::to_vec"))?;
 
-        Ok(SynthesisObject::new(window.scope_id,
+        Ok(SynthesisObject::new(
+            window.scope_id,
             window.id,
             self.object_type,
             payload,
@@ -240,7 +246,8 @@ fn render_inputs(window: &SynthesisWindow, inputs: &SynthesisInputs) -> String {
     use std::fmt::Write as _;
 
     let mut out = String::new();
-    let _ = writeln!(&mut out,
+    let _ = writeln!(
+        &mut out,
         "Window: {} \u{2192} {}",
         window.window_start.to_rfc3339(),
         window.window_end.to_rfc3339()
@@ -262,7 +269,8 @@ fn render_inputs(window: &SynthesisWindow, inputs: &SynthesisInputs) -> String {
     } else {
         let _ = writeln!(&mut out, "Observations:");
         for row in rows {
-            let _ = writeln!(&mut out,
+            let _ = writeln!(
+                &mut out,
                 "- [{}] ({}) {}",
                 observation_kind_tag(row.kind),
                 importance_class_tag(row.importance),
@@ -385,7 +393,8 @@ mod tests {
         let err = synth
             .synthesize(&fresh_window(), &SynthesisInputs::default())
             .unwrap_err();
-        assert!(matches!(err, PipelineError::SynthesisFailed(_)),
+        assert!(
+            matches!(err, PipelineError::SynthesisFailed(_)),
             "expected SynthesisFailed, got {err:?}"
         );
     }
@@ -401,7 +410,8 @@ mod tests {
             .synthesize(&fresh_window(), &SynthesisInputs::default())
             .unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("did not parse as SummaryBundle"),
+        assert!(
+            msg.contains("did not parse as SummaryBundle"),
             "expected parse failure, got: {msg}"
         );
     }
@@ -438,7 +448,8 @@ mod tests {
             recap_seed: "vendor selection".into(),
         };
         let window = fresh_window();
-        assert_eq!(LlamaCppSynthesizer::build_prompt(&window, &a),
+        assert_eq!(
+            LlamaCppSynthesizer::build_prompt(&window, &a),
             LlamaCppSynthesizer::build_prompt(&window, &b)
         );
     }
@@ -458,7 +469,8 @@ mod tests {
     #[test]
     fn bootstrap_required_before_dispatch_surfaces_as_synthesis_failed() {
         let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
-        let llama = Box::new(LlamaCppAdapter::new(cfg.clone(),
+        let llama = Box::new(LlamaCppAdapter::new(
+            cfg.clone(),
             Box::new(MockLlamaServerClient::ok("x")),
         ));
         let adapters: Vec<Box<dyn InferenceAdapter>> = vec![llama];

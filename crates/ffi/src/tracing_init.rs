@@ -41,9 +41,9 @@
 //! The most useful directives in practice:
 //!
 //! ```text
-//! info                                          # global default
-//! ffi=debug,evidence_store=debug                # FFI boundary + storage
-//! inference_router=debug,connector_framework=info  # SLM + connectors
+//! info # global default
+//! ffi=debug,evidence_store=debug # FFI boundary + storage
+//! inference_router=debug,connector_framework=info # SLM + connectors
 //! ```
 //!
 //! # Feature gating

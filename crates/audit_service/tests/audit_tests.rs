@@ -233,7 +233,8 @@ fn deserialize_round_trip_rebuilds_all_indexes() {
     // `index_entry_into`.
     let id_a = log.append(entry(AuditActionType::CanonicalPromotion, scope_a, alice));
     let _id_b = log.append(entry(AuditActionType::Export, scope_a, bob));
-    let id_c = log.append(AuditEntryBuilder::new()
+    let id_c = log.append(
+        AuditEntryBuilder::new()
             .actor(Actor::Agent(agent))
             .action(AuditActionType::AgentProposalPromoted)
             .target(TargetRef::new(TargetType::Tenant, Uuid::new_v4()))
@@ -284,7 +285,8 @@ fn deserialize_round_trip_rebuilds_all_indexes() {
     assert_eq!(by_actor_agent.len(), 1);
 
     // sequence numbers and other entry-level fields survive too.
-    assert_eq!(restored
+    assert_eq!(
+        restored
             .entries()
             .iter()
             .map(|e| e.sequence)

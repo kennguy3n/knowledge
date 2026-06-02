@@ -105,7 +105,8 @@ impl DemoReport {
         if let Some(started) = self.started_at {
             let _ = writeln!(out, "- Run started: {}", started.to_rfc3339());
         }
-        let _ = writeln!(out,
+        let _ = writeln!(
+            out,
             "- Total wall-clock: {}",
             format_duration(self.total_wall_clock)
         );
@@ -115,7 +116,8 @@ impl DemoReport {
         } else {
             100.0 * self.passed as f64 / (self.passed + self.failed) as f64
         };
-        let _ = writeln!(out,
+        let _ = writeln!(
+            out,
             "- Assertions: {} passed / {} failed (pass rate {:.1}%)\n",
             self.passed, self.failed, pass_rate,
         );
@@ -129,7 +131,8 @@ impl DemoReport {
 
         out.push_str("## Stages\n\n");
         for stage in &self.stages {
-            let _ = writeln!(out,
+            let _ = writeln!(
+                out,
                 "### {} ({})\n",
                 stage.name,
                 format_duration(stage.timing)
@@ -150,7 +153,8 @@ impl DemoReport {
         out.push_str("## Benchmarks (per-operation timings)\n\n");
         out.push_str("| Operation | N | Total | Per-op |\n|---|---|---|---|\n");
         for row in &self.benchmarks {
-            let _ = writeln!(out,
+            let _ = writeln!(
+                out,
                 "| {} | {} | {} | {} |",
                 row.label,
                 row.n,
@@ -165,7 +169,8 @@ impl DemoReport {
         for r in &self.assertion_records {
             let status = if r.passed { "PASS" } else { "FAIL" };
             let detail = r.detail.clone().unwrap_or_default();
-            let _ = writeln!(out,
+            let _ = writeln!(
+                out,
                 "| {} | {} | {} | {} |",
                 r.stage,
                 escape_md_pipe(&r.label),

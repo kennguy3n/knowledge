@@ -27,7 +27,8 @@ const DELTA_URL: &str = "https://api.test/graph/v1.0/me/drive/root/delta";
 struct FixedOAuth;
 impl OAuth2CodeExchange for FixedOAuth {
     fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
-        Ok(OAuth2Token::new("graph-access",
+        Ok(OAuth2Token::new(
+            "graph-access",
             "graph-refresh",
             Utc::now() + Duration::hours(1),
             "Files.Read.All Sites.Read.All",
@@ -54,18 +55,22 @@ fn install_fixture_responses(transport: &MockHttpTransport) {
         .delta_link
         .clone()
         .expect("initial fixture deltaLink");
-    transport.expect(HttpMethod::Get,
+    transport.expect(
+        HttpMethod::Get,
         DELTA_URL,
         MockResponse::ok_json(serde_json::to_vec(&initial).unwrap()),
     );
     let delta: DeltaResponse = serde_json::from_str(DELTA_FIXTURE).expect("parse delta fixture");
-    transport.expect(HttpMethod::Get,
+    transport.expect(
+        HttpMethod::Get,
         &incremental_url,
         MockResponse::ok_json(serde_json::to_vec(&delta).unwrap()),
     );
-    transport.expect(HttpMethod::Post,
+    transport.expect(
+        HttpMethod::Post,
         "https://api.test/graph/v1.0/subscriptions",
-        MockResponse::ok_json(serde_json::to_vec(&GraphSubscriptionResponse {
+        MockResponse::ok_json(
+            serde_json::to_vec(&GraphSubscriptionResponse {
                 id: Some("sub-1".into()),
                 expiration_date_time: Some(Utc::now() + Duration::days(2)),
             })
@@ -139,7 +144,7 @@ fn full_lifecycle_against_fixture_data() {
 
 #[test]
 fn batched_webhook_emits_every_notification() {
-    // Regression test for the Devin Review finding that
+    // Regression test for an earlier review finding that
     // `OneDriveConnector::handle_webhook_event` used to drop every
     // entry past index 0 of the Graph `changeNotification` batch. A
     // single Graph subscription POST routinely carries multiple
@@ -225,7 +230,8 @@ fn unknown_change_type_is_skipped_not_errored() {
     let events = connector
         .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
         .expect("handle_webhook_event");
-    assert_eq!(events.len(),
+    assert_eq!(
+        events.len(),
         2,
         "valid notifications on either side of an unknown changeType must still surface",
     );

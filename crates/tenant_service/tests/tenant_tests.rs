@@ -35,7 +35,8 @@ fn suspend_activate_delete_lifecycle() {
 
     // Cannot transition out of Deleted.
     let err = reg.activate(id).unwrap_err();
-    assert!(matches!(err,
+    assert!(matches!(
+        err,
         TenantError::InvalidLifecycleTransition { .. }
     ));
 }
@@ -47,7 +48,8 @@ fn invalid_lifecycle_transitions_are_rejected() {
 
     // Active -> Active is a no-op transition; rejected.
     let err = reg.activate(id).unwrap_err();
-    assert!(matches!(err,
+    assert!(matches!(
+        err,
         TenantError::InvalidLifecycleTransition { .. }
     ));
 }
@@ -101,7 +103,8 @@ fn member_provisioning_round_trip() {
     assert_eq!(reg.get_member(id, user).unwrap().role, Relation::Member);
 
     reg.remove_member(id, user).unwrap();
-    assert_eq!(reg.get_member(id, user).unwrap().status,
+    assert_eq!(
+        reg.get_member(id, user).unwrap().status,
         TenantMemberStatus::Removed
     );
 }
@@ -113,7 +116,8 @@ fn add_member_to_deleted_tenant_is_rejected() {
     reg.delete(id).unwrap();
     let user = Uuid::new_v4();
     let err = reg.add_member(id, user, Relation::Admin).unwrap_err();
-    assert!(matches!(err,
+    assert!(matches!(
+        err,
         TenantError::InvalidLifecycleTransition { .. }
     ));
 }
@@ -132,17 +136,20 @@ fn member_mutations_rejected_on_suspended_tenant() {
     let err = reg
         .add_member(id, Uuid::new_v4(), Relation::Member)
         .unwrap_err();
-    assert!(matches!(err,
+    assert!(matches!(
+        err,
         TenantError::InvalidLifecycleTransition { .. }
     ));
 
     let err = reg.update_role(id, user, Relation::Member).unwrap_err();
-    assert!(matches!(err,
+    assert!(matches!(
+        err,
         TenantError::InvalidLifecycleTransition { .. }
     ));
 
     let err = reg.remove_member(id, user).unwrap_err();
-    assert!(matches!(err,
+    assert!(matches!(
+        err,
         TenantError::InvalidLifecycleTransition { .. }
     ));
 
@@ -164,7 +171,8 @@ fn removed_members_are_immutable_audit_artefacts() {
     let user = Uuid::new_v4();
     reg.add_member(id, user, Relation::Admin).unwrap();
     reg.remove_member(id, user).unwrap();
-    assert_eq!(reg.get_member(id, user).unwrap().status,
+    assert_eq!(
+        reg.get_member(id, user).unwrap().status,
         TenantMemberStatus::Removed
     );
 
@@ -191,7 +199,8 @@ fn removed_member_can_be_reprovisioned() {
 
     let first = reg.add_member(id, user, Relation::Admin).unwrap();
     reg.remove_member(id, user).unwrap();
-    assert_eq!(reg.get_member(id, user).unwrap().status,
+    assert_eq!(
+        reg.get_member(id, user).unwrap().status,
         TenantMemberStatus::Removed
     );
 

@@ -6,7 +6,8 @@ use observation_engine::{
 };
 
 fn obs() -> Observation {
-    Observation::new_candidate(ObservationType::Decision,
+    Observation::new_candidate(
+        ObservationType::Decision,
         "approved policy v3",
         ScopeId::new_v4(),
         0.9,

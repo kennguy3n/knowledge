@@ -260,7 +260,8 @@ pub fn js_forget_scope(handle: BigInt, scope_id: String) -> Result<()> {
 /// JS-side mistakes at the FFI boundary instead of letting them
 /// surface as missing memory rows later in the pipeline.
 #[napi(js_name = "listMemories")]
-pub fn js_list_memories(handle: BigInt,
+pub fn js_list_memories(
+    handle: BigInt,
     scope_id: String,
     filter: serde_json::Value,
 ) -> Result<serde_json::Value> {
@@ -338,12 +339,12 @@ pub fn js_trigger_synthesis(handle: BigInt, scope_id: String, trigger: String) -
 ///   deployments where there is no cross-scope allow-list to
 ///   enforce. Multi-tenant production deployments should leave
 ///   this `false` (the default) and provide `scopeBindings`.
-/// * `rateCapacity`  is the burst capacity of
+/// * `rateCapacity` is the burst capacity of
 ///   the global token-bucket rate limiter on
 ///   `triggerServerSynthesis`. `0` (the default if the key is
 ///   omitted) falls back to
 ///   [`ffi::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY`] (`8`).
-/// * `rateRefillPerSec`  is the token refill
+/// * `rateRefillPerSec` is the token refill
 ///   rate in tokens/second. `0.0` falls back to
 ///   [`ffi::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC`]
 ///   (`1.0`). Fractional values are supported; non-finite or
@@ -382,14 +383,15 @@ pub fn js_configure_synthesis_engine(handle: BigInt, config: serde_json::Value) 
 ///   failures.
 /// * `InvalidArgument` if `scopeId` is not a UUID or `tier` is
 ///   not one of the documented values.
-/// * `Throttled`  if the global token-bucket
+/// * `Throttled` if the global token-bucket
 ///   rate limiter rejects the call. The error carries a
 ///   `retryAfterMs` field — the host SHOULD wait that long and
 ///   retry the same call rather than treating this as a
 ///   permanent failure. Tune the limiter via `configureSynthesisEngine`'s
 ///   `rateCapacity` / `rateRefillPerSec` keys.
 #[napi(js_name = "triggerServerSynthesis")]
-pub fn js_trigger_server_synthesis(handle: BigInt,
+pub fn js_trigger_server_synthesis(
+    handle: BigInt,
     scope_id: String,
     tier: String,
 ) -> Result<String> {
@@ -483,7 +485,8 @@ pub fn js_list_recent_syntheses(handle: BigInt, scope_id: String) -> Result<serd
 ///   archiving the prior version / updating the memory blob
 ///   fails.
 #[napi(js_name = "replaySynthesis")]
-pub fn js_replay_synthesis(handle: BigInt,
+pub fn js_replay_synthesis(
+    handle: BigInt,
     scope_id: String,
     synthesis_id: String,
 ) -> Result<serde_json::Value> {
@@ -512,7 +515,8 @@ pub fn js_replay_synthesis(handle: BigInt,
 ///
 /// * `InvalidArgument` if `synthesisId` is not a UUID.
 #[napi(js_name = "listSynthesisVersions")]
-pub fn js_list_synthesis_versions(handle: BigInt,
+pub fn js_list_synthesis_versions(
+    handle: BigInt,
     synthesis_id: String,
 ) -> Result<serde_json::Value> {
     let h = handle_from_bigint(&handle)?;
@@ -551,7 +555,8 @@ pub fn js_list_synthesis_versions(handle: BigInt,
 ///   exceed their documented size caps.
 /// * `InvalidArgument` if `scopeId` is not a UUID.
 #[napi(js_name = "admitApprovedDocument")]
-pub fn js_admit_approved_document(handle: BigInt,
+pub fn js_admit_approved_document(
+    handle: BigInt,
     scope_id: String,
     label: String,
     approver: String,
@@ -604,7 +609,8 @@ pub fn js_admit_approved_document(handle: BigInt,
 /// so JS/TS hosts can pattern-match on `err.kind` uniformly across
 /// both functions.
 #[napi(js_name = "replaceApprovedDocument")]
-pub fn js_replace_approved_document(handle: BigInt,
+pub fn js_replace_approved_document(
+    handle: BigInt,
     scope_id: String,
     document_id: String,
     label: String,
@@ -634,7 +640,8 @@ pub fn js_replace_approved_document(handle: BigInt,
 ///   matches `documentId`.
 /// * `InvalidArgument` if `scopeId` or `documentId` is not a UUID.
 #[napi(js_name = "revokeApprovedDocument")]
-pub fn js_revoke_approved_document(handle: BigInt,
+pub fn js_revoke_approved_document(
+    handle: BigInt,
     scope_id: String,
     document_id: String,
 ) -> Result<()> {
@@ -678,7 +685,8 @@ pub fn js_list_approved_documents(handle: BigInt, scope_id: String) -> Result<se
 /// * `Connector` if no scheduler is running on this handle.
 /// * `InvalidArgument` if `instanceId` is not a UUID.
 #[napi(js_name = "configureSyncAutoSynthesize")]
-pub fn js_configure_sync_auto_synthesize(handle: BigInt,
+pub fn js_configure_sync_auto_synthesize(
+    handle: BigInt,
     instance_id: String,
     enabled: bool,
 ) -> Result<()> {
@@ -792,7 +800,8 @@ pub fn js_health_check(handle: Option<BigInt>) -> Result<serde_json::Value> {
 
 /// Instantiate a connector. Mirrors [`crate::create_connector`].
 #[napi(js_name = "createConnector")]
-pub fn js_create_connector(handle: BigInt,
+pub fn js_create_connector(
+    handle: BigInt,
     kind: serde_json::Value,
     scope_id: String,
     config_json: String,
@@ -805,7 +814,8 @@ pub fn js_create_connector(handle: BigInt,
 /// Run the OAuth2 `authorization_code` exchange for an existing
 /// connector instance. Mirrors [`crate::authenticate_connector`].
 #[napi(js_name = "authenticateConnector")]
-pub fn js_authenticate_connector(handle: BigInt,
+pub fn js_authenticate_connector(
+    handle: BigInt,
     instance_id: String,
     auth_code: String,
 ) -> Result<()> {
@@ -841,7 +851,7 @@ pub fn js_list_connectors(handle: BigInt) -> Result<serde_json::Value> {
     })
 }
 
-/// Single-instance connector health probe  —
+/// Single-instance connector health probe —
 /// symmetric with [`js_synthesis_status`]. Mirrors
 /// [`crate::connector_status`] and returns a JSON object with the
 /// shape:
@@ -921,7 +931,8 @@ pub fn js_remove_connector(handle: BigInt, instance_id: String) -> Result<()> {
 /// * `Unavailable` (`subsystem: "connector-http-client"`) when no
 ///   real HTTP transport is linked into the build.
 #[napi(js_name = "refreshConnectorToken")]
-pub fn js_refresh_connector_token(handle: BigInt,
+pub fn js_refresh_connector_token(
+    handle: BigInt,
     instance_id: String,
 ) -> Result<serde_json::Value> {
     let h = handle_from_bigint(&handle)?;
@@ -1013,7 +1024,8 @@ impl JsClientSecretResolver {
 /// Extracted into a `pub(crate)` helper so the validation logic is
 /// unit-testable without standing up a live N-API environment to
 /// construct a `Function` argument.
-pub(crate) fn resolve_recv_timeout(timeout_ms: Option<u32>,
+pub(crate) fn resolve_recv_timeout(
+    timeout_ms: Option<u32>,
 ) -> std::result::Result<std::time::Duration, NapiError> {
     match timeout_ms {
         None => Ok(JsClientSecretResolver::DEFAULT_RECV_TIMEOUT),
@@ -1037,7 +1049,8 @@ impl ffi::OAuthClientSecretResolver for JsClientSecretResolver {
         let kind_for_warn = kind.clone();
         let scope_id_for_warn = scope_id.clone();
         let client_id_for_warn = client_id.clone();
-        let status = self.tsfn.call_with_return_value((kind, scope_id, client_id),
+        let status = self.tsfn.call_with_return_value(
+            (kind, scope_id, client_id),
             ThreadsafeFunctionCallMode::Blocking,
             move |result: Result<Option<String>>, _env| {
                 // A JS exception during the resolver call surfaces
@@ -1149,7 +1162,8 @@ impl ffi::OAuthClientSecretResolver for JsClientSecretResolver {
 /// resolver. Hosts typically call this exactly once per
 /// `open_store` lifecycle.
 #[napi(js_name = "setOauthClientSecretResolver")]
-pub fn js_set_oauth_client_secret_resolver(handle: BigInt,
+pub fn js_set_oauth_client_secret_resolver(
+    handle: BigInt,
     resolver: Function<(String, String, String), Option<String>>,
     timeout_ms: Option<u32>,
 ) -> Result<()> {
@@ -1337,7 +1351,8 @@ impl JsKeyStorageResolver {
 ///
 /// Extracted into a `pub(crate)` helper so the validation logic
 /// is unit-testable without standing up a live N-API environment.
-pub(crate) fn resolve_key_storage_recv_timeout(timeout_ms: Option<u32>,
+pub(crate) fn resolve_key_storage_recv_timeout(
+    timeout_ms: Option<u32>,
 ) -> std::result::Result<std::time::Duration, NapiError> {
     match timeout_ms {
         None => Ok(JsKeyStorageResolver::DEFAULT_RECV_TIMEOUT),
@@ -1363,7 +1378,8 @@ pub(crate) fn resolve_key_storage_recv_timeout(timeout_ms: Option<u32>,
 /// `entry_point` is the calling JS function name (e.g.
 /// `"setKeyStorageResolver"`) and is embedded into the error
 /// message so the host knows which call site rejected.
-fn extract_resolver_method<'env, Args, Return>(obj: &Object<'env>,
+fn extract_resolver_method<'env, Args, Return>(
+    obj: &Object<'env>,
     method_name: &str,
     entry_point: &str,
 ) -> std::result::Result<Function<'env, Args, Return>, NapiError>
@@ -1375,12 +1391,14 @@ where
     match obj.get::<Function<'env, Args, Return>>(method_name) {
         Ok(Some(f)) => Ok(f),
         Ok(None) => Err(NapiError::InvalidArgument {
-            message: format!("{entry_point}: resolver object is missing required \
+            message: format!(
+                "{entry_point}: resolver object is missing required \
                  `{method_name}` method (expected a function, found nothing)"
             ),
         }),
         Err(e) => Err(NapiError::InvalidArgument {
-            message: format!("{entry_point}: resolver object's `{method_name}` property \
+            message: format!(
+                "{entry_point}: resolver object's `{method_name}` property \
                  is not a function: {e}"
             ),
         }),
@@ -1392,7 +1410,8 @@ where
 /// Shared by `setKeyStorageResolver` and `openStoreWithResolver`
 /// so the JS shape is consistent across both entry points and the
 /// extraction errors look identical.
-fn build_js_key_storage_resolver(resolver: &Object<'_>,
+fn build_js_key_storage_resolver(
+    resolver: &Object<'_>,
     timeout_ms: Option<u32>,
     entry_point: &str,
 ) -> Result<JsKeyStorageResolver> {
@@ -1401,7 +1420,8 @@ fn build_js_key_storage_resolver(resolver: &Object<'_>,
     let load_key_fn =
         extract_resolver_method::<(String,), Option<String>>(resolver, "loadKey", entry_point)
             .map_err(to_js_error)?;
-    let store_key_fn = extract_resolver_method::<(String, String), Option<String>>(resolver,
+    let store_key_fn = extract_resolver_method::<(String, String), Option<String>>(
+        resolver,
         "storeKey",
         entry_point,
     )
@@ -1453,7 +1473,8 @@ impl ffi::KeyStorageResolver for JsKeyStorageResolver {
         // NotFound, or the napi error for a JS exception.
         let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Option<String>>>(1);
         let key_id_for_call = key_id.clone();
-        let status = self.load_key_tsfn.call_with_return_value((key_id_for_call,),
+        let status = self.load_key_tsfn.call_with_return_value(
+            (key_id_for_call,),
             ThreadsafeFunctionCallMode::Blocking,
             move |result: Result<Option<String>>, _env| {
                 let _ = tx.send(result);
@@ -1462,7 +1483,8 @@ impl ffi::KeyStorageResolver for JsKeyStorageResolver {
         );
         if status != napi::Status::Ok {
             return Err(FfiError::Unavailable {
-                subsystem: format!("host-key-store: loadKey dispatch failed with napi status {status:?}"
+                subsystem: format!(
+                    "host-key-store: loadKey dispatch failed with napi status {status:?}"
                 ),
             });
         }
@@ -1519,7 +1541,8 @@ impl ffi::KeyStorageResolver for JsKeyStorageResolver {
     fn store_key(&self, key_id: String, key_hex: String) -> ffi::FfiResult<()> {
         let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Option<String>>>(1);
         let key_id_for_warn = key_id.clone();
-        let status = self.store_key_tsfn.call_with_return_value((key_id, key_hex),
+        let status = self.store_key_tsfn.call_with_return_value(
+            (key_id, key_hex),
             ThreadsafeFunctionCallMode::Blocking,
             move |result: Result<Option<String>>, _env| {
                 let _ = tx.send(result);
@@ -1528,7 +1551,8 @@ impl ffi::KeyStorageResolver for JsKeyStorageResolver {
         );
         if status != napi::Status::Ok {
             return Err(FfiError::Unavailable {
-                subsystem: format!("host-key-store: storeKey dispatch failed with napi status {status:?}"
+                subsystem: format!(
+                    "host-key-store: storeKey dispatch failed with napi status {status:?}"
                 ),
             });
         }
@@ -1567,7 +1591,8 @@ impl ffi::KeyStorageResolver for JsKeyStorageResolver {
         let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Option<String>>>(1);
         let key_id_for_call = key_id.clone();
         let key_id_for_warn = key_id;
-        let status = self.delete_key_tsfn.call_with_return_value((key_id_for_call,),
+        let status = self.delete_key_tsfn.call_with_return_value(
+            (key_id_for_call,),
             ThreadsafeFunctionCallMode::Blocking,
             move |result: Result<Option<String>>, _env| {
                 let _ = tx.send(result);
@@ -1576,7 +1601,8 @@ impl ffi::KeyStorageResolver for JsKeyStorageResolver {
         );
         if status != napi::Status::Ok {
             return Err(FfiError::Unavailable {
-                subsystem: format!("host-key-store: deleteKey dispatch failed with napi status {status:?}"
+                subsystem: format!(
+                    "host-key-store: deleteKey dispatch failed with napi status {status:?}"
                 ),
             });
         }
@@ -1655,7 +1681,8 @@ impl ffi::KeyStorageResolver for JsKeyStorageResolver {
 /// integration point that consumes `loadKey` to derive the master
 /// key during `open_store`, see [`js_open_store_with_resolver`].
 #[napi(js_name = "setKeyStorageResolver")]
-pub fn js_set_key_storage_resolver(handle: BigInt,
+pub fn js_set_key_storage_resolver(
+    handle: BigInt,
     resolver: Object<'_>,
     timeout_ms: Option<u32>,
 ) -> Result<()> {
@@ -1716,7 +1743,8 @@ pub fn js_clear_key_storage_resolver(handle: BigInt) -> Result<()> {
 /// Returns the same opaque `BigInt` handle shape as
 /// [`js_open_store`].
 #[napi(js_name = "openStoreWithResolver")]
-pub fn js_open_store_with_resolver(path: String,
+pub fn js_open_store_with_resolver(
+    path: String,
     key_id: String,
     resolver: Object<'_>,
     timeout_ms: Option<u32>,
@@ -1787,7 +1815,8 @@ pub fn js_stop_webhook_server(handle: BigInt, server_handle: BigInt) -> Result<(
 /// * `Connector` if `providerId` is not one of the framework's
 ///   recognised connector slugs.
 #[napi(js_name = "registerWebhookDispatch")]
-pub fn js_register_webhook_dispatch(handle: BigInt,
+pub fn js_register_webhook_dispatch(
+    handle: BigInt,
     server_handle: BigInt,
     provider_id: String,
     instance_id: String,
@@ -1805,7 +1834,8 @@ pub fn js_register_webhook_dispatch(handle: BigInt,
 /// * `Unavailable` if `open_store(handle)` has not yet been called.
 /// * `NotFound` if `serverHandle` does not name a running server.
 #[napi(js_name = "unregisterWebhookDispatch")]
-pub fn js_unregister_webhook_dispatch(handle: BigInt,
+pub fn js_unregister_webhook_dispatch(
+    handle: BigInt,
     server_handle: BigInt,
     provider_id: String,
 ) -> Result<()> {
@@ -1886,13 +1916,15 @@ pub fn js_list_webhook_servers(handle: BigInt) -> Result<serde_json::Value> {
 /// * `Connector` if a scheduler is already running on this handle
 ///   (call [`js_stop_sync_scheduler`] first).
 #[napi(js_name = "startSyncScheduler")]
-pub fn js_start_sync_scheduler(handle: BigInt,
+pub fn js_start_sync_scheduler(
+    handle: BigInt,
     default_interval_secs: u32,
     default_max_backoff_secs: u32,
     tick_interval_secs: u32,
 ) -> Result<()> {
     let h = handle_from_bigint(&handle)?;
-    crate::start_sync_scheduler(h,
+    crate::start_sync_scheduler(
+        h,
         u64::from(default_interval_secs),
         u64::from(default_max_backoff_secs),
         u64::from(tick_interval_secs),
@@ -1933,13 +1965,15 @@ pub fn js_stop_sync_scheduler(handle: BigInt) -> Result<()> {
 ///   `syncIntervalSecs` is `0`, or
 ///   `maxBackoffSecs < syncIntervalSecs`.
 #[napi(js_name = "configureSyncSchedule")]
-pub fn js_configure_sync_schedule(handle: BigInt,
+pub fn js_configure_sync_schedule(
+    handle: BigInt,
     instance_id: String,
     sync_interval_secs: u32,
     max_backoff_secs: u32,
 ) -> Result<()> {
     let h = handle_from_bigint(&handle)?;
-    crate::configure_sync_schedule(h,
+    crate::configure_sync_schedule(
+        h,
         instance_id,
         u64::from(sync_interval_secs),
         u64::from(max_backoff_secs),
@@ -2086,7 +2120,7 @@ mod tests {
         js_init(cfg.into()).expect("valid config should accept");
     }
 
-    // ─────  — N-API resolver recv-timeout validation ─────
+    // ───── — N-API resolver recv-timeout validation ─────
     //
     // The full `JsClientSecretResolver::resolve` path requires a
     // live napi env to construct a `ThreadsafeFunction`, which is
@@ -2132,16 +2166,19 @@ mod tests {
         // pollute the host's caller-error vs. substrate-bug
         // telemetry split. The message must still guide the host
         // to the correct fix (positive value or omit the argument).
-        assert_eq!(err.kind(),
+        assert_eq!(
+            err.kind(),
             "InvalidArgument",
             "kind() tag must match the variant; got {err:?}",
         );
         match err {
             NapiError::InvalidArgument { message } => {
-                assert!(message.contains("timeoutMs"),
+                assert!(
+                    message.contains("timeoutMs"),
                     "rejection message should mention the JS argument name; got {message}",
                 );
-                assert!(message.contains("> 0"),
+                assert!(
+                    message.contains("> 0"),
                     "rejection message should explain the constraint; got {message}",
                 );
             }
@@ -2155,7 +2192,8 @@ mod tests {
         // across refactors. If we ever change the default, this
         // forces an update to the rustdoc on
         // `js_set_oauth_client_secret_resolver` too.
-        assert_eq!(JsClientSecretResolver::DEFAULT_RECV_TIMEOUT,
+        assert_eq!(
+            JsClientSecretResolver::DEFAULT_RECV_TIMEOUT,
             std::time::Duration::from_secs(5),
         );
     }
@@ -2208,19 +2246,23 @@ mod tests {
     fn resolve_key_storage_recv_timeout_rejects_zero_as_silent_footgun() {
         let err = resolve_key_storage_recv_timeout(Some(0))
             .expect_err("Some(0) must be rejected — same rationale as the OAuth resolver");
-        assert_eq!(err.kind(),
+        assert_eq!(
+            err.kind(),
             "InvalidArgument",
             "kind() tag must match the variant; got {err:?}",
         );
         match err {
             NapiError::InvalidArgument { message } => {
-                assert!(message.contains("timeoutMs"),
+                assert!(
+                    message.contains("timeoutMs"),
                     "rejection message should mention the JS argument name; got {message}",
                 );
-                assert!(message.contains("> 0"),
+                assert!(
+                    message.contains("> 0"),
                     "rejection message should explain the constraint; got {message}",
                 );
-                assert!(message.contains("30000"),
+                assert!(
+                    message.contains("30000"),
                     "rejection message should mention the documented default ms; got {message}",
                 );
             }
@@ -2235,7 +2277,8 @@ mod tests {
         // OAuth resolver's 5 s because master-key lookups can prompt
         // the OS for biometric/password input — see the rustdoc on
         // `js_set_key_storage_resolver` for the rationale.
-        assert_eq!(JsKeyStorageResolver::DEFAULT_RECV_TIMEOUT,
+        assert_eq!(
+            JsKeyStorageResolver::DEFAULT_RECV_TIMEOUT,
             std::time::Duration::from_secs(30),
         );
     }
@@ -2293,7 +2336,8 @@ mod tests {
         let env = parse_envelope(&err);
         assert_eq!(env["kind"], "InvalidArgument");
         let msg = env["message"].as_str().expect("message is a string");
-        assert!(msg.contains("pinnedOnly"),
+        assert!(
+            msg.contains("pinnedOnly"),
             "expected the JS-facing error to name the offending key `pinnedOnly`, got {msg}"
         );
     }
@@ -2347,10 +2391,12 @@ mod tests {
             .and_then(|v| v.as_array())
             .expect("subsystems is an array");
         assert_eq!(subsystems.len(), 1);
-        assert_eq!(subsystems[0].get("name").and_then(|v| v.as_str()),
+        assert_eq!(
+            subsystems[0].get("name").and_then(|v| v.as_str()),
             Some("bridge")
         );
-        assert_eq!(subsystems[0].get("status").and_then(|v| v.as_str()),
+        assert_eq!(
+            subsystems[0].get("status").and_then(|v| v.as_str()),
             Some("ok")
         );
         // tracing_initialized starts false in a fresh process; the
@@ -2387,7 +2433,8 @@ mod tests {
             .and_then(|v| v.as_array())
             .expect("subsystems is an array");
         assert_eq!(subsystems.len(), 1);
-        assert_eq!(subsystems[0].get("name").and_then(|v| v.as_str()),
+        assert_eq!(
+            subsystems[0].get("name").and_then(|v| v.as_str()),
             Some("bridge")
         );
     }
@@ -2400,7 +2447,8 @@ mod tests {
         };
         let err = js_health_check(Some(bogus)).expect_err("unknown handle");
         let env = parse_envelope(&err);
-        assert_eq!(env.get("kind").and_then(|v| v.as_str()),
+        assert_eq!(
+            env.get("kind").and_then(|v| v.as_str()),
             Some("Unavailable")
         );
     }
@@ -2417,13 +2465,15 @@ mod tests {
     fn js_open_store_rejects_malformed_master_key() {
         // 64-char string but contains non-hex characters → InvalidArgument
         // forwarded from the FFI surface.
-        let err = js_open_store("/tmp/should-not-be-touched".into(),
+        let err = js_open_store(
+            "/tmp/should-not-be-touched".into(),
             "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ".into(),
         )
         .unwrap_err();
         let env = parse_envelope(&err);
         // FFI surface flags this as InvalidArgument (hex decode failure).
-        assert!(env["kind"] == "InvalidArgument" || env["kind"] == "InvalidId",
+        assert!(
+            env["kind"] == "InvalidArgument" || env["kind"] == "InvalidId",
             "got kind = {}",
             env["kind"]
         );

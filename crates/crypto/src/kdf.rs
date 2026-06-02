@@ -43,7 +43,8 @@ pub fn derive_key(master_key: &MasterKey, context: &[u8]) -> Result<DerivedKey, 
 /// Production callers should use [`derive_key`] with the substrate's
 /// canonical salt; this variant exists so that integration tests and
 /// future epoch-rotation logic can rotate the salt explicitly.
-pub fn derive_key_with_salt(master_key: &MasterKey,
+pub fn derive_key_with_salt(
+    master_key: &MasterKey,
     salt: &[u8],
     context: &[u8],
 ) -> Result<DerivedKey, CryptoError> {
@@ -59,7 +60,8 @@ pub fn derive_key_with_salt(master_key: &MasterKey,
 ///
 /// Useful at boot when a master key is reconstructed via hybrid-KEM
 /// unwrap and should not linger on the stack.
-pub fn derive_key_and_zeroize(master_key: &mut MasterKey,
+pub fn derive_key_and_zeroize(
+    master_key: &mut MasterKey,
     context: &[u8],
 ) -> Result<DerivedKey, CryptoError> {
     let result = derive_key(master_key, context);

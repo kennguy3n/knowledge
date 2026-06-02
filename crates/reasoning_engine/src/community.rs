@@ -221,7 +221,8 @@ impl CommunityDetector {
                 .iter()
                 .next()
                 .map(concept_graph::NodeId::as_uuid)
-                .cmp(&b.member_node_ids
+                .cmp(
+                    &b.member_node_ids
                         .iter()
                         .next()
                         .map(concept_graph::NodeId::as_uuid),
@@ -438,7 +439,8 @@ impl CommunitySummaryGenerator {
         }
 
         let mut summary_text = String::new();
-        let _ = writeln!(summary_text,
+        let _ = writeln!(
+            summary_text,
             "Community {} (level {})",
             community.label, community.level
         );
@@ -463,7 +465,8 @@ impl CommunitySummaryGenerator {
     }
 
     /// Generate summaries for every community in `hierarchy`.
-    pub fn summarise_all(&self,
+    pub fn summarise_all(
+        &self,
         graph: &ConceptGraph,
         hierarchy: &CommunityHierarchy,
     ) -> Vec<CommunitySummary> {
@@ -496,7 +499,8 @@ impl CommunityQueryRouter {
     /// visible to `subject`. Visibility is checked via
     /// [`check_permission`]: every scope the community spans must
     /// be viewable by the subject.
-    pub fn route<'a>(&self,
+    pub fn route<'a>(
+        &self,
         query: &str,
         summaries: &'a [CommunitySummary],
         subject: SubjectRef,
@@ -569,7 +573,8 @@ fn relevance_score(terms: &[String], summary: &CommunitySummary) -> usize {
     score
 }
 
-fn is_visible(scopes: &BTreeSet<ScopeId>,
+fn is_visible(
+    scopes: &BTreeSet<ScopeId>,
     subject: SubjectRef,
     store: &TupleStore,
     registry: &NamespaceRegistry,

@@ -245,7 +245,8 @@ impl<'a> PolicySimulator<'a> {
             }
         }
         if capped > 0 {
-            warnings.push(format!("policy max_summaries cap reached: {capped} summary/-ies dropped from preview"
+            warnings.push(format!(
+                "policy max_summaries cap reached: {capped} summary/-ies dropped from preview"
             ));
         }
 
@@ -303,7 +304,8 @@ mod tests {
     use std::time::Duration;
 
     fn provenance() -> ProvenanceBundle {
-        ProvenanceBundle::new(Uuid::new_v4(),
+        ProvenanceBundle::new(
+            Uuid::new_v4(),
             SynthesisActivity::new("agent", "model", "prompt", Uuid::new_v4()),
             ProvenanceAgent::software("test"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -315,7 +317,8 @@ mod tests {
         let mut profile =
             PortableConceptProfile::new("demo", "demo profile", "downstream-tool", scope);
         for _ in 0..concept_count {
-            profile.push_concept(ApprovedConcept::new(Uuid::new_v4(),
+            profile.push_concept(ApprovedConcept::new(
+                Uuid::new_v4(),
                 "label",
                 "definition",
                 scope,
@@ -451,7 +454,8 @@ mod tests {
         let mut registry = ExportControlRegistry::new();
         for _ in 0..5 {
             registry
-                .insert_summary(SummaryExportControl::new(Uuid::new_v4(),
+                .insert_summary(SummaryExportControl::new(
+                    Uuid::new_v4(),
                     scope,
                     RedactionLevel::None,
                 ))
@@ -476,7 +480,8 @@ mod tests {
         let policy = ExportPolicy::default();
         let mut registry = ExportControlRegistry::new();
         registry
-            .insert_summary(SummaryExportControl::new(Uuid::new_v4(),
+            .insert_summary(SummaryExportControl::new(
+                Uuid::new_v4(),
                 scope,
                 RedactionLevel::None,
             ))
@@ -503,13 +508,15 @@ mod tests {
         let out_of_scope = Uuid::new_v4();
         let mut registry = ExportControlRegistry::new();
         registry
-            .insert_summary(SummaryExportControl::new(in_scope,
+            .insert_summary(SummaryExportControl::new(
+                in_scope,
                 scope_a,
                 RedactionLevel::None,
             ))
             .expect("insert in-scope");
         registry
-            .insert_summary(SummaryExportControl::new(out_of_scope,
+            .insert_summary(SummaryExportControl::new(
+                out_of_scope,
                 scope_b,
                 RedactionLevel::None,
             ))
@@ -548,7 +555,8 @@ mod tests {
         let mut registry = ExportControlRegistry::new();
         for _ in 0..2 {
             registry
-                .insert_summary(SummaryExportControl::new(Uuid::new_v4(),
+                .insert_summary(SummaryExportControl::new(
+                    Uuid::new_v4(),
                     scope_a,
                     RedactionLevel::None,
                 ))
@@ -556,7 +564,8 @@ mod tests {
         }
         let leaked = Uuid::new_v4();
         registry
-            .insert_summary(SummaryExportControl::new(leaked,
+            .insert_summary(SummaryExportControl::new(
+                leaked,
                 scope_b,
                 RedactionLevel::None,
             ))
@@ -657,7 +666,8 @@ mod tests {
         let scope = ScopeId::new_v4();
         let mut profile =
             PortableConceptProfile::new("demo", "demo profile", "downstream-tool", scope);
-        let mut old = ApprovedConcept::new(Uuid::new_v4(),
+        let mut old = ApprovedConcept::new(
+            Uuid::new_v4(),
             "label",
             "definition",
             scope,
@@ -668,7 +678,8 @@ mod tests {
         profile.push_concept(old);
         profile
             .constraints
-            .push(crate::profile::ExportConstraint::MaxAge(Duration::from_secs(60),
+            .push(crate::profile::ExportConstraint::MaxAge(
+                Duration::from_secs(60),
             ));
         let policy = ExportPolicy::default();
         let mut registry = ExportControlRegistry::new();
@@ -694,7 +705,8 @@ mod tests {
         let scope = ScopeId::new_v4();
         let mut profile =
             PortableConceptProfile::new("demo", "demo profile", "downstream-tool", scope);
-        profile.push_concept(ApprovedConcept::new(Uuid::new_v4(),
+        profile.push_concept(ApprovedConcept::new(
+            Uuid::new_v4(),
             "label",
             "definition",
             scope,
@@ -703,7 +715,8 @@ mod tests {
         ));
         profile
             .constraints
-            .push(crate::profile::ExportConstraint::SensitivityCeiling(SensitivityClass::Useful,
+            .push(crate::profile::ExportConstraint::SensitivityCeiling(
+                SensitivityClass::Useful,
             ));
         let policy = ExportPolicy::permissive(SensitivityClass::Critical);
         let mut registry = ExportControlRegistry::new();
@@ -730,7 +743,8 @@ mod tests {
         let other_scope = ScopeId::new_v4();
         let mut profile =
             PortableConceptProfile::new("demo", "demo profile", "downstream-tool", scope);
-        profile.push_concept(ApprovedConcept::new(Uuid::new_v4(),
+        profile.push_concept(ApprovedConcept::new(
+            Uuid::new_v4(),
             "label",
             "definition",
             scope,
@@ -770,13 +784,15 @@ mod tests {
         // (it always passes the concept's own scope).
         let scope_a = ScopeId::new_v4();
         let scope_b = ScopeId::new_v4();
-        let mut profile = PortableConceptProfile::new("multi-scope",
+        let mut profile = PortableConceptProfile::new(
+            "multi-scope",
             "profile rooted at scope_b holding a concept from scope_a",
             "downstream-tool",
             scope_b,
         );
         let concept_id = Uuid::new_v4();
-        profile.push_concept(ApprovedConcept::new(concept_id,
+        profile.push_concept(ApprovedConcept::new(
+            concept_id,
             "label",
             "definition",
             scope_a,
@@ -800,7 +816,8 @@ mod tests {
             vec![concept_id],
             "concept registered with scope_bound=[scope_a] must be admitted when held by a profile rooted at scope_b — simulator must use the concept's own scope (matching ConceptApprovalWorkflow::approve_for_export)"
         );
-        assert!(result.excluded_concepts.is_empty(),
+        assert!(
+            result.excluded_concepts.is_empty(),
             "no concept should be excluded; got {:?}",
             result.excluded_concepts
         );

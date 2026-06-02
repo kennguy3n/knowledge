@@ -113,7 +113,8 @@ impl NotionConnector {
     /// `https://api.notion.com/v1/oauth/token`. The production
     /// substrate wires these to `BlockingHttpTransport` +
     /// `OAuth2Client`; tests use `MockHttpTransport`.
-    pub fn new(instance: ConnectorInstanceId,
+    pub fn new(
+        instance: ConnectorInstanceId,
         transport: Arc<dyn HttpTransport>,
         oauth: Arc<dyn OAuth2CodeExchange>,
     ) -> Self {
@@ -149,7 +150,8 @@ impl NotionConnector {
             .auth_config_json
             .get("api_base_url")
             .and_then(serde_json::Value::as_str)
-            .map_or_else(|| self.api_base_url.clone(),
+            .map_or_else(
+                || self.api_base_url.clone(),
                 std::string::ToString::to_string,
             )
     }
@@ -178,7 +180,8 @@ impl NotionConnector {
     /// — every subsequent object is guaranteed older under the
     /// descending sort, so fetching further pages would be wasted
     /// I/O.
-    fn paginate_search(&self,
+    fn paginate_search(
+        &self,
         base_url: &str,
         token: &OAuth2Token,
         filter_payload: &serde_json::Value,
@@ -191,16 +194,19 @@ impl NotionConnector {
             let body_map = body.as_object_mut().ok_or_else(|| {
                 ConnectorError::Sync("notion /v1/search body must be a JSON object".into())
             })?;
-            body_map.insert("page_size".to_string(),
+            body_map.insert(
+                "page_size".to_string(),
                 serde_json::Value::from(self.page_size),
             );
             if let Some(c) = cursor.as_ref() {
-                body_map.insert("start_cursor".to_string(),
+                body_map.insert(
+                    "start_cursor".to_string(),
                     serde_json::Value::String(c.clone()),
                 );
             }
             let url = format!("{base_url}/search");
-            let resp: NotionSearchResponse = bearer_post_json(&self.transport,
+            let resp: NotionSearchResponse = bearer_post_json(
+                &self.transport,
                 "notion",
                 "/v1/search",
                 &url,
@@ -237,7 +243,8 @@ impl NotionConnector {
             }
             cursor = next;
         }
-        Err(ConnectorError::Sync(format!("notion /v1/search exceeded {MAX_SEARCH_PAGES} pages without a terminating cursor"
+        Err(ConnectorError::Sync(format!(
+            "notion /v1/search exceeded {MAX_SEARCH_PAGES} pages without a terminating cursor"
         )))
     }
 }
@@ -284,7 +291,8 @@ impl Connector for NotionConnector {
             .get("authorization_code")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Auth("notion authenticate: auth_config_json.authorization_code is required".into(),
+                ConnectorError::Auth(
+                    "notion authenticate: auth_config_json.authorization_code is required".into(),
                 )
             })?;
         self.oauth.exchange_code(config, auth_code)
@@ -309,7 +317,8 @@ impl Connector for NotionConnector {
         })
     }
 
-    fn incremental_sync(&self,
+    fn incremental_sync(
+        &self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         state: &SyncState,
@@ -350,17 +359,20 @@ impl Connector for NotionConnector {
         })
     }
 
-    fn subscribe_webhook(&self,
+    fn subscribe_webhook(
+        &self,
         _config: &ConnectorConfig,
         _token: &OAuth2Token,
         _callback_url: &str,
     ) -> Result<WebhookSubscription> {
-        Err(ConnectorError::Webhook("polling-only mode: Notion has no native webhook surface".to_string(),
+        Err(ConnectorError::Webhook(
+            "polling-only mode: Notion has no native webhook surface".to_string(),
         ))
     }
 
     fn handle_webhook_event(&self, _body: &[u8]) -> Result<Vec<ConnectorEvent>> {
-        Err(ConnectorError::Webhook("polling-only mode: Notion does not deliver webhooks; use incremental_sync".to_string(),
+        Err(ConnectorError::Webhook(
+            "polling-only mode: Notion does not deliver webhooks; use incremental_sync".to_string(),
         ))
     }
 }
@@ -379,7 +391,8 @@ mod tests {
     struct FixedOAuth;
     impl OAuth2CodeExchange for FixedOAuth {
         fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
-            Ok(OAuth2Token::new("notion-access",
+            Ok(OAuth2Token::new(
+                "notion-access",
                 "notion-refresh",
                 Utc::now() + Duration::days(180),
                 "read_content read_user_with_email",
@@ -426,7 +439,8 @@ mod tests {
     fn initial_sync_emits_created_events_for_each_object() {
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/notion/v1/search",
             ok_json(&serde_json::json!({
                 "results": [
@@ -453,7 +467,8 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 2);
-        assert!(matches!(res.events[0],
+        assert!(matches!(
+            res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
         assert!(res.next_cursor.is_some());
@@ -468,7 +483,8 @@ mod tests {
     fn initial_sync_paginates_via_next_cursor() {
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/notion/v1/search",
             ok_json(&serde_json::json!({
                 "results": [{
@@ -479,7 +495,8 @@ mod tests {
                 "has_more": true,
             })),
         );
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/notion/v1/search",
             ok_json(&serde_json::json!({
                 "results": [{
@@ -510,7 +527,8 @@ mod tests {
         // milliseconds apart even on first creation.
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/notion/v1/search",
             ok_json(&serde_json::json!({
                 "results": [{
@@ -527,7 +545,8 @@ mod tests {
         let c = NotionConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
-        assert!(matches!(res.events[0],
+        assert!(matches!(
+            res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
     }
@@ -538,7 +557,8 @@ mod tests {
         let now = Utc::now();
         // Cursor = now - 1 hour; only the page edited at `now`
         // should slip through. The older page must be filtered.
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/notion/v1/search",
             ok_json(&serde_json::json!({
                 "results": [
@@ -567,7 +587,8 @@ mod tests {
         state.cursor = Some((now - Duration::hours(1)).to_rfc3339());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert!(matches!(res.events[0],
+        assert!(matches!(
+            res.events[0],
             ConnectorEvent::DocumentUpdated { .. }
         ));
     }
@@ -580,7 +601,8 @@ mod tests {
         // page 2 even though the response says `has_more=true`.
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/notion/v1/search",
             ok_json(&serde_json::json!({
                 "results": [
@@ -612,7 +634,8 @@ mod tests {
         state.cursor = Some((now - Duration::hours(1)).to_rfc3339());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert_eq!(transport
+        assert_eq!(
+            transport
                 .recorded()
                 .iter()
                 .filter(|r| r.method == HttpMethod::Post)
@@ -626,7 +649,8 @@ mod tests {
     fn incremental_sync_emits_archived_as_deleted() {
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/notion/v1/search",
             ok_json(&serde_json::json!({
                 "results": [{
@@ -644,7 +668,8 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let state = SyncState::new(c.instance);
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert!(matches!(res.events[0],
+        assert!(matches!(
+            res.events[0],
             ConnectorEvent::DocumentDeleted { .. }
         ));
     }
@@ -652,7 +677,8 @@ mod tests {
     #[test]
     fn initial_sync_maps_401_to_auth_error() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/notion/v1/search",
             MockResponse::status(401, b"{\"error\":\"unauthorized\"}".to_vec()),
         );
@@ -665,7 +691,8 @@ mod tests {
     #[test]
     fn initial_sync_maps_500_to_sync_error() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/notion/v1/search",
             MockResponse::status(500, b"{\"error\":\"server\"}".to_vec()),
         );
@@ -708,11 +735,13 @@ mod tests {
         });
         // Register the same response twice — connector receives the
         // same cursor on both pages and must error out.
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/notion/v1/search",
             ok_json(&page),
         );
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/notion/v1/search",
             ok_json(&page),
         );

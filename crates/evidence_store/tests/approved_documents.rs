@@ -1,5 +1,5 @@
 //! Integration tests for the `approved_document_payloads` table
-//! ( / schema v10; reshaped in  / schema v12
+//! ( / schema v10; reshaped in / schema v12
 //! to back the payload bytes with the deduplicated `body_store`
 //! table + per-scope CEK wraps in `body_store_key_wraps`).
 //!
@@ -98,7 +98,8 @@ fn approved_doc_payload_upsert_overwrites_previous_row() {
         .load_approved_document_payload(scope, doc)
         .expect("load")
         .expect("row exists");
-    assert_eq!(loaded, second,
+    assert_eq!(
+        loaded, second,
         "re-admission must overwrite the prior payload"
     );
 
@@ -131,13 +132,15 @@ fn approved_doc_payload_delete_single_purges_row_but_not_siblings() {
         .expect("delete a");
     assert_eq!(removed, 1, "delete must report exactly one row removed");
 
-    assert!(store
+    assert!(
+        store
             .load_approved_document_payload(scope, doc_a)
             .expect("load a")
             .is_none(),
         "doc_a row must be gone",
     );
-    assert!(store
+    assert!(
+        store
             .load_approved_document_payload(scope, doc_b)
             .expect("load b")
             .is_some(),
@@ -177,13 +180,15 @@ fn delete_approved_document_payloads_for_scope_purges_all_rows_for_that_scope() 
         .expect("delete scope_a");
     assert_eq!(removed, 3, "all 3 scope_a rows must be removed");
 
-    assert!(store
+    assert!(
+        store
             .list_approved_document_payload_meta_for_scope(scope_a)
             .expect("list a")
             .is_empty(),
         "scope_a must have no rows left",
     );
-    assert_eq!(store
+    assert_eq!(
+        store
             .list_approved_document_payload_meta_for_scope(scope_b)
             .expect("list b")
             .len(),
@@ -224,7 +229,8 @@ fn list_approved_document_payload_meta_returns_size_and_hash_without_decrypting(
     assert_eq!(got.len(), expected.len(), "row count must match");
     for (g, e) in got.iter().zip(expected.iter()) {
         assert_eq!(g.document_id, e.document_id, "document_id");
-        assert_eq!(g.content_hash, e.content_hash,
+        assert_eq!(
+            g.content_hash, e.content_hash,
             "content_hash (no decrypt needed)"
         );
         assert_eq!(g.size_bytes, e.size_bytes, "size_bytes (no decrypt needed)");
@@ -260,7 +266,8 @@ fn approved_doc_payload_body_cipher_tampering_fails_aead() {
     // AAD, so the tag check must reject the modified row.
     store
         .raw_conn()
-        .execute("UPDATE body_store \
+        .execute(
+            "UPDATE body_store \
              SET body = substr(body, 1, length(body) - 1) || x'00' \
              WHERE content_hash = ?1",
             params![hash.as_slice()],
@@ -271,7 +278,8 @@ fn approved_doc_payload_body_cipher_tampering_fails_aead() {
         .load_approved_document_payload(scope, doc)
         .expect_err("tampered body ciphertext must fail AEAD");
     let msg = err.to_string();
-    assert!(!msg.is_empty(),
+    assert!(
+        !msg.is_empty(),
         "body-cipher tamper must surface a descriptive error, got empty: {msg}",
     );
 }
@@ -312,7 +320,8 @@ fn approved_doc_payload_wrap_cipher_tampering_fails_aead() {
     // tamper.
     let (wrapped_a, nonce_a): (Vec<u8>, Vec<u8>) = store
         .raw_conn()
-        .query_row("SELECT wrapped_cek, nonce FROM body_store_key_wraps \
+        .query_row(
+            "SELECT wrapped_cek, nonce FROM body_store_key_wraps \
              WHERE content_hash = ?1 AND scope_id = ?2",
             params![hash.as_slice(), scope_a.as_uuid().as_bytes().as_slice(),],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -320,7 +329,8 @@ fn approved_doc_payload_wrap_cipher_tampering_fails_aead() {
         .expect("read scope_a wrap");
     store
         .raw_conn()
-        .execute("UPDATE body_store_key_wraps \
+        .execute(
+            "UPDATE body_store_key_wraps \
              SET wrapped_cek = ?1, nonce = ?2 \
              WHERE content_hash = ?3 AND scope_id = ?4",
             params![
@@ -336,7 +346,8 @@ fn approved_doc_payload_wrap_cipher_tampering_fails_aead() {
         .load_approved_document_payload(scope_b, doc)
         .expect_err("cross-scope wrap relocation must fail AEAD");
     let msg = err.to_string();
-    assert!(!msg.is_empty(),
+    assert!(
+        !msg.is_empty(),
         "wrap-cipher tamper must surface a descriptive error, got empty: {msg}",
     );
 }
@@ -364,7 +375,8 @@ fn approved_doc_payload_survives_store_close_and_reopen() {
         .load_approved_document_payload(scope, doc)
         .expect("load after reopen")
         .expect("row exists after reopen");
-    assert_eq!(loaded, payload,
+    assert_eq!(
+        loaded, payload,
         "payload must roundtrip through SQLCipher restart"
     );
 
@@ -401,7 +413,8 @@ fn approved_doc_payload_dedups_identical_content_across_scopes() {
             .load_approved_document_payload(scope, doc)
             .unwrap_or_else(|e| panic!("load for {}: {e}", scope.as_uuid()))
             .expect("row exists");
-        assert_eq!(loaded,
+        assert_eq!(
+            loaded,
             payload,
             "payload must roundtrip via dedup for {}",
             scope.as_uuid(),
@@ -410,7 +423,8 @@ fn approved_doc_payload_dedups_identical_content_across_scopes() {
 
     let body_rows: i64 = store
         .raw_conn()
-        .query_row("SELECT COUNT(*) FROM body_store WHERE content_hash = ?1",
+        .query_row(
+            "SELECT COUNT(*) FROM body_store WHERE content_hash = ?1",
             params![hash.as_slice()],
             |row| row.get(0),
         )
@@ -419,23 +433,27 @@ fn approved_doc_payload_dedups_identical_content_across_scopes() {
 
     let wrap_rows: i64 = store
         .raw_conn()
-        .query_row("SELECT COUNT(*) FROM body_store_key_wraps WHERE content_hash = ?1",
+        .query_row(
+            "SELECT COUNT(*) FROM body_store_key_wraps WHERE content_hash = ?1",
             params![hash.as_slice()],
             |row| row.get(0),
         )
         .expect("count wraps");
-    assert_eq!(wrap_rows, 3,
+    assert_eq!(
+        wrap_rows, 3,
         "each scope must own its own wrap, three scopes admitted",
     );
 
     let ref_count: i64 = store
         .raw_conn()
-        .query_row("SELECT ref_count FROM body_store WHERE content_hash = ?1",
+        .query_row(
+            "SELECT ref_count FROM body_store WHERE content_hash = ?1",
             params![hash.as_slice()],
             |row| row.get(0),
         )
         .expect("read ref_count");
-    assert_eq!(ref_count, 3,
+    assert_eq!(
+        ref_count, 3,
         "ref_count tracks total per-scope wrap admissions",
     );
 }
@@ -470,56 +488,65 @@ fn approved_doc_payload_migration_v11_to_v12_round_trips_legacy_payloads() {
         .load_approved_document_payload(scope, doc)
         .expect("load after migration")
         .expect("row exists after migration");
-    assert_eq!(loaded, plaintext,
+    assert_eq!(
+        loaded, plaintext,
         "v11 -> v12 migration must roundtrip plaintext",
     );
 
     // The legacy columns must be gone after the migration ran.
     let has_payload_column: bool = store
         .raw_conn()
-        .query_row("SELECT EXISTS(SELECT 1 \
+        .query_row(
+            "SELECT EXISTS(SELECT 1 \
              FROM pragma_table_info('approved_document_payloads') \
              WHERE name = 'payload')",
             [],
             |row| row.get(0),
         )
         .expect("check column");
-    assert!(!has_payload_column,
+    assert!(
+        !has_payload_column,
         "legacy `payload` column must be dropped after v12 migration",
     );
     let has_nonce_column: bool = store
         .raw_conn()
-        .query_row("SELECT EXISTS(SELECT 1 \
+        .query_row(
+            "SELECT EXISTS(SELECT 1 \
              FROM pragma_table_info('approved_document_payloads') \
              WHERE name = 'nonce')",
             [],
             |row| row.get(0),
         )
         .expect("check column");
-    assert!(!has_nonce_column,
+    assert!(
+        !has_nonce_column,
         "legacy `nonce` column must be dropped after v12 migration",
     );
 
     // body_store + wrap must exist for the migrated row.
     let body_count: i64 = store
         .raw_conn()
-        .query_row("SELECT COUNT(*) FROM body_store WHERE content_hash = ?1",
+        .query_row(
+            "SELECT COUNT(*) FROM body_store WHERE content_hash = ?1",
             params![hash.as_slice()],
             |row| row.get(0),
         )
         .expect("count body rows");
-    assert_eq!(body_count, 1,
+    assert_eq!(
+        body_count, 1,
         "migration must admit one body_store row for the migrated content",
     );
     let wrap_count: i64 = store
         .raw_conn()
-        .query_row("SELECT COUNT(*) FROM body_store_key_wraps \
+        .query_row(
+            "SELECT COUNT(*) FROM body_store_key_wraps \
              WHERE content_hash = ?1 AND scope_id = ?2",
             params![hash.as_slice(), scope.as_uuid().as_bytes().as_slice()],
             |row| row.get(0),
         )
         .expect("count wraps");
-    assert_eq!(wrap_count, 1,
+    assert_eq!(
+        wrap_count, 1,
         "migration must admit a per-scope wrap for the migrated content",
     );
 }
@@ -559,7 +586,8 @@ fn approved_doc_payload_replace_admits_new_body_and_leaves_old_wrap_for_forget()
     for (hash, label) in [(h1, "c1"), (h2, "c2")] {
         let body_count: i64 = store
             .raw_conn()
-            .query_row("SELECT COUNT(*) FROM body_store WHERE content_hash = ?1",
+            .query_row(
+                "SELECT COUNT(*) FROM body_store WHERE content_hash = ?1",
                 params![hash.as_slice()],
                 |row| row.get(0),
             )
@@ -567,13 +595,15 @@ fn approved_doc_payload_replace_admits_new_body_and_leaves_old_wrap_for_forget()
         assert_eq!(body_count, 1, "{label} body row must remain after replace");
         let wrap_count: i64 = store
             .raw_conn()
-            .query_row("SELECT COUNT(*) FROM body_store_key_wraps \
+            .query_row(
+                "SELECT COUNT(*) FROM body_store_key_wraps \
                  WHERE content_hash = ?1 AND scope_id = ?2",
                 params![hash.as_slice(), scope.as_uuid().as_bytes().as_slice()],
                 |row| row.get(0),
             )
             .unwrap_or_else(|e| panic!("count {label} wrap: {e}"));
-        assert_eq!(wrap_count, 1,
+        assert_eq!(
+            wrap_count, 1,
             "{label} per-scope wrap must remain after replace",
         );
     }

@@ -41,7 +41,8 @@ struct ScriptedAdapter {
 }
 
 impl ScriptedAdapter {
-    fn new(kind: AdapterKind,
+    fn new(
+        kind: AdapterKind,
         available: bool,
         supported: Vec<InferenceTask>,
         response: Result<String, RouterError>,
@@ -72,7 +73,8 @@ impl InferenceAdapter for ScriptedAdapter {
     fn supports(&self, task: InferenceTask) -> bool {
         self.supported.contains(&task)
     }
-    fn generate(&self,
+    fn generate(
+        &self,
         _task_tag: &str,
         _prompt: &str,
         _grammar: &str,
@@ -91,22 +93,26 @@ fn high_tier_config() -> RouterConfig {
 fn mlx_outranks_llama_cpp_outranks_fallback() {
     // All three adapters available and supporting TagImportance —
     // verify the router uses the first one in priority order.
-    let mlx = ScriptedAdapter::new(AdapterKind::Mlx,
+    let mlx = ScriptedAdapter::new(
+        AdapterKind::Mlx,
         true,
         vec![InferenceTask::TagImportance],
         Ok("mlx-served".into()),
     );
-    let llama = ScriptedAdapter::new(AdapterKind::LlamaCpp,
+    let llama = ScriptedAdapter::new(
+        AdapterKind::LlamaCpp,
         true,
         vec![InferenceTask::TagImportance],
         Ok("llama-served".into()),
     );
-    let fallback = ScriptedAdapter::new(AdapterKind::Fallback,
+    let fallback = ScriptedAdapter::new(
+        AdapterKind::Fallback,
         true,
         vec![InferenceTask::TagImportance],
         Ok("fallback-served".into()),
     );
-    let router = InferenceRouter::new(high_tier_config(),
+    let router = InferenceRouter::new(
+        high_tier_config(),
         vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
     );
     router.bootstrap();
@@ -118,22 +124,26 @@ fn mlx_outranks_llama_cpp_outranks_fallback() {
 
 #[test]
 fn router_uses_llama_cpp_when_mlx_unavailable() {
-    let mlx = ScriptedAdapter::new(AdapterKind::Mlx,
+    let mlx = ScriptedAdapter::new(
+        AdapterKind::Mlx,
         false,
         vec![InferenceTask::TagImportance],
         Ok("never".into()),
     );
-    let llama = ScriptedAdapter::new(AdapterKind::LlamaCpp,
+    let llama = ScriptedAdapter::new(
+        AdapterKind::LlamaCpp,
         true,
         vec![InferenceTask::TagImportance],
         Ok("llama-served".into()),
     );
-    let fallback = ScriptedAdapter::new(AdapterKind::Fallback,
+    let fallback = ScriptedAdapter::new(
+        AdapterKind::Fallback,
         true,
         vec![InferenceTask::TagImportance],
         Ok("fallback-served".into()),
     );
-    let router = InferenceRouter::new(high_tier_config(),
+    let router = InferenceRouter::new(
+        high_tier_config(),
         vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
     );
     router.bootstrap();
@@ -145,22 +155,26 @@ fn router_uses_llama_cpp_when_mlx_unavailable() {
 
 #[test]
 fn router_uses_fallback_when_mlx_and_llama_unavailable() {
-    let mlx = ScriptedAdapter::new(AdapterKind::Mlx,
+    let mlx = ScriptedAdapter::new(
+        AdapterKind::Mlx,
         false,
         vec![InferenceTask::TagImportance],
         Ok("never".into()),
     );
-    let llama = ScriptedAdapter::new(AdapterKind::LlamaCpp,
+    let llama = ScriptedAdapter::new(
+        AdapterKind::LlamaCpp,
         false,
         vec![InferenceTask::TagImportance],
         Ok("never".into()),
     );
-    let fallback = ScriptedAdapter::new(AdapterKind::Fallback,
+    let fallback = ScriptedAdapter::new(
+        AdapterKind::Fallback,
         true,
         vec![InferenceTask::TagImportance],
         Ok("fallback-served".into()),
     );
-    let router = InferenceRouter::new(high_tier_config(),
+    let router = InferenceRouter::new(
+        high_tier_config(),
         vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
     );
     router.bootstrap();
@@ -187,7 +201,8 @@ fn low_tier_blocks_slm_adapters() {
     assert_eq!(fallback.probe(), ProbeResult::Available);
 
     // The whole router resolves classification through the fallback.
-    let router = InferenceRouter::new(cfg,
+    let router = InferenceRouter::new(
+        cfg,
         vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
     );
     router.bootstrap();
@@ -224,12 +239,15 @@ fn medium_tier_runs_classification_but_not_synthesis_on_slm_adapters() {
 fn high_tier_runs_full_synthesis_through_llama() {
     let cfg = high_tier_config();
     let mlx = MlxAdapter::with_platform_override(cfg.clone(), false);
-    let llama = LlamaCppAdapter::new(cfg.clone(),
-        Box::new(MockLlamaServerClient::ok("Session summary: deadline reminder",
+    let llama = LlamaCppAdapter::new(
+        cfg.clone(),
+        Box::new(MockLlamaServerClient::ok(
+            "Session summary: deadline reminder",
         )),
     );
     let fallback = FallbackAdapter::new();
-    let router = InferenceRouter::new(cfg,
+    let router = InferenceRouter::new(
+        cfg,
         vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
     );
     router.bootstrap();
@@ -243,22 +261,26 @@ fn high_tier_runs_full_synthesis_through_llama() {
 
 #[test]
 fn warm_up_uses_priority_order_and_marks_router_warmed() {
-    let mlx = ScriptedAdapter::new(AdapterKind::Mlx,
+    let mlx = ScriptedAdapter::new(
+        AdapterKind::Mlx,
         false,
         vec![InferenceTask::TagImportance],
         Ok("never".into()),
     );
-    let llama = ScriptedAdapter::new(AdapterKind::LlamaCpp,
+    let llama = ScriptedAdapter::new(
+        AdapterKind::LlamaCpp,
         true,
         vec![InferenceTask::TagImportance],
         Ok("llama-warmup".into()),
     );
-    let fallback = ScriptedAdapter::new(AdapterKind::Fallback,
+    let fallback = ScriptedAdapter::new(
+        AdapterKind::Fallback,
         true,
         vec![InferenceTask::TagImportance],
         Ok("fallback-warmup".into()),
     );
-    let router = InferenceRouter::new(high_tier_config(),
+    let router = InferenceRouter::new(
+        high_tier_config(),
         vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
     );
     router.bootstrap();
@@ -280,7 +302,8 @@ fn idle_sweep_unloads_adapter_and_can_be_rewarmed() {
     let cfg = RouterConfig::default()
         .with_device_tier(DeviceTier::High)
         .with_idle_timeout(60);
-    let llama = ScriptedAdapter::new(AdapterKind::LlamaCpp,
+    let llama = ScriptedAdapter::new(
+        AdapterKind::LlamaCpp,
         true,
         vec![InferenceTask::TagImportance],
         Ok("served".into()),
@@ -307,12 +330,14 @@ fn idle_sweep_unloads_adapter_and_can_be_rewarmed() {
 
 #[test]
 fn warm_up_returns_none_when_no_adapter_is_available() {
-    let mlx = ScriptedAdapter::new(AdapterKind::Mlx,
+    let mlx = ScriptedAdapter::new(
+        AdapterKind::Mlx,
         false,
         vec![InferenceTask::TagImportance],
         Ok("never".into()),
     );
-    let llama = ScriptedAdapter::new(AdapterKind::LlamaCpp,
+    let llama = ScriptedAdapter::new(
+        AdapterKind::LlamaCpp,
         false,
         vec![InferenceTask::TagImportance],
         Ok("never".into()),
@@ -329,7 +354,8 @@ fn warm_up_uses_configured_warm_up_prompt() {
     assert_eq!(high_tier_config().warm_up_prompt, WARM_UP_PROMPT);
     // Default idle timeout should match the public constant so
     // operators tuning one value see the other.
-    assert_eq!(high_tier_config().idle_timeout_secs,
+    assert_eq!(
+        high_tier_config().idle_timeout_secs,
         IDLE_UNLOAD_TIMEOUT_SECS
     );
 }
@@ -347,11 +373,13 @@ fn every_task_variant_routes_through_high_tier_ladder() {
         r#"{"class":"useful","confidence":0.5,"name":"x","summary":"y","facets":{}}"#;
     let make_router = || {
         let mlx = MlxAdapter::with_platform_override(cfg.clone(), false);
-        let llama = LlamaCppAdapter::new(cfg.clone(),
+        let llama = LlamaCppAdapter::new(
+            cfg.clone(),
             Box::new(MockLlamaServerClient::ok(llama_response)),
         );
         let fallback = FallbackAdapter::new();
-        let r = InferenceRouter::new(cfg.clone(),
+        let r = InferenceRouter::new(
+            cfg.clone(),
             vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
         );
         r.bootstrap();
@@ -388,19 +416,22 @@ fn router_falls_through_on_fallback_signal_errors() {
     // If the primary errors with a fallback-class error
     // (Unavailable / TierTooLow), the router proceeds to the next
     // adapter — but a hard `InferenceFailure` halts dispatch.
-    let primary = ScriptedAdapter::new(AdapterKind::Mlx,
+    let primary = ScriptedAdapter::new(
+        AdapterKind::Mlx,
         true,
         vec![InferenceTask::TagImportance],
         Err(RouterError::Unavailable {
             task: "tag_importance",
         }),
     );
-    let secondary = ScriptedAdapter::new(AdapterKind::LlamaCpp,
+    let secondary = ScriptedAdapter::new(
+        AdapterKind::LlamaCpp,
         true,
         vec![InferenceTask::TagImportance],
         Ok("secondary".into()),
     );
-    let router = InferenceRouter::new(high_tier_config(),
+    let router = InferenceRouter::new(
+        high_tier_config(),
         vec![Box::new(primary), Box::new(secondary)],
     );
     router.bootstrap();
@@ -412,17 +443,20 @@ fn router_falls_through_on_fallback_signal_errors() {
 
 #[test]
 fn router_does_not_fall_through_on_inference_failure() {
-    let primary = ScriptedAdapter::new(AdapterKind::Mlx,
+    let primary = ScriptedAdapter::new(
+        AdapterKind::Mlx,
         true,
         vec![InferenceTask::TagImportance],
         Err(RouterError::InferenceFailure("boom".into())),
     );
-    let secondary = ScriptedAdapter::new(AdapterKind::LlamaCpp,
+    let secondary = ScriptedAdapter::new(
+        AdapterKind::LlamaCpp,
         true,
         vec![InferenceTask::TagImportance],
         Ok("secondary".into()),
     );
-    let router = InferenceRouter::new(high_tier_config(),
+    let router = InferenceRouter::new(
+        high_tier_config(),
         vec![Box::new(primary), Box::new(secondary)],
     );
     router.bootstrap();
@@ -442,15 +476,18 @@ fn fallback_adapter_succeeds_on_classification_tasks() {
     // Each (tag, prompt, marker) tuple uses a body designed to drive
     // the lexicon-based fallback to the expected class.
     let class_tasks: &[(&str, &str, &str)] = &[
-        ("tag_importance",
+        (
+            "tag_importance",
             "x\n\nMessage:\nplease investigate the question",
             "\"class\":\"useful\"",
         ),
-        ("extract_entities",
+        (
+            "extract_entities",
             "x\n\nMessage:\n@alice please review https://example.com",
             "\"entities\":",
         ),
-        ("promote_observation",
+        (
+            "promote_observation",
             "x\n\nObservation:\nWe decided to approve",
             "\"promote\":true",
         ),
@@ -459,7 +496,8 @@ fn fallback_adapter_succeeds_on_classification_tasks() {
         let out = adapter
             .generate(tag, prompt, "")
             .unwrap_or_else(|e| panic!("classification {tag} should succeed but errored: {e}"));
-        assert!(out.contains(marker),
+        assert!(
+            out.contains(marker),
             "classification {tag}: expected {marker:?} in {out:?}"
         );
     }
@@ -547,7 +585,8 @@ fn router_unavailable_error_carries_task_tag() {
     let mlx = MlxAdapter::with_platform_override(cfg.clone(), false);
     let llama = LlamaCppAdapter::new(cfg.clone(), Box::new(MockLlamaServerClient::unreachable()));
     let fallback = FallbackAdapter::new();
-    let router = InferenceRouter::new(cfg,
+    let router = InferenceRouter::new(
+        cfg,
         vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
     );
     router.bootstrap();

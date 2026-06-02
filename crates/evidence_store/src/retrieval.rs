@@ -121,7 +121,8 @@ impl<'a> HybridRetriever<'a> {
     /// so a stale row produced by a previous model (even one with the
     /// same output dimension) falls through to the live-embed path
     /// rather than producing a semantically meaningless cosine score.
-    pub fn with_embedding_model<M: EmbeddingModel + 'static>(mut self,
+    pub fn with_embedding_model<M: EmbeddingModel + 'static>(
+        mut self,
         model: M,
         model_tag: impl Into<String>,
     ) -> Self {
@@ -193,7 +194,8 @@ impl<'a> HybridRetriever<'a> {
     /// dedupe + error-containment semantics.
     ///
     /// [trigram-doc]: <https://www.sqlite.org/fts5.html#the_trigram_tokenizer>
-    pub fn search_fts(&self,
+    pub fn search_fts(
+        &self,
         scope_id: ScopeId,
         query: &str,
         limit: usize,
@@ -223,12 +225,14 @@ impl<'a> HybridRetriever<'a> {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let mut stmt = self.store.raw_conn().prepare("SELECT id, created_at FROM evidence
+        let mut stmt = self.store.raw_conn().prepare(
+            "SELECT id, created_at FROM evidence
              WHERE scope_id = ?1
              ORDER BY created_at DESC
              LIMIT ?2",
         )?;
-        let rows = stmt.query_map(params![
+        let rows = stmt.query_map(
+            params![
                 scope_id.as_uuid().as_bytes().as_slice(),
                 clamp_limit_to_sqlite(limit),
             ],
@@ -259,7 +263,8 @@ impl<'a> HybridRetriever<'a> {
     ///
     /// Returns the candidates with `vector_score` populated and the
     /// final `score` re-computed from the configured weights.
-    pub fn rerank_with_embeddings(&self,
+    pub fn rerank_with_embeddings(
+        &self,
         query: &str,
         candidates: Vec<RetrievalResult>,
         bodies: &[(EvidenceId, String)],
@@ -275,20 +280,23 @@ impl<'a> HybridRetriever<'a> {
         // unchanged.  Skip the lane wholesale in that case.
         let query_route = crate::embedding_routing::classify_for_embedding(query);
         crate::vector_telemetry::record_pre_embed_decision(query_route);
-        if matches!(query_route,
+        if matches!(
+            query_route,
             crate::embedding_routing::EmbeddingRoute::Skip(_)
         ) {
             return Ok(candidates);
         }
         let query_vec = match model.embed(query) {
             Ok(v) => {
-                crate::vector_telemetry::record_embedding_computed(crate::vector_telemetry::EmbedSite::Query,
+                crate::vector_telemetry::record_embedding_computed(
+                    crate::vector_telemetry::EmbedSite::Query,
                 );
                 v
             }
             Err(err) => {
                 crate::vector_telemetry::record_embedding_error_from(&err);
-                return Err(EvidenceError::Embedding(format!("embedding query failed: {err}"
+                return Err(EvidenceError::Embedding(format!(
+                    "embedding query failed: {err}"
                 )));
             }
         };
@@ -311,14 +319,16 @@ impl<'a> HybridRetriever<'a> {
                     // below.
                     let body_route = crate::embedding_routing::classify_for_embedding(body);
                     crate::vector_telemetry::record_pre_embed_decision(body_route);
-                    if matches!(body_route,
+                    if matches!(
+                        body_route,
                         crate::embedding_routing::EmbeddingRoute::Skip(_),
                     ) {
                         0.0
                     } else {
                         match model.embed(body) {
                             Ok(v) => {
-                                crate::vector_telemetry::record_embedding_computed(crate::vector_telemetry::EmbedSite::LiveBody,
+                                crate::vector_telemetry::record_embedding_computed(
+                                    crate::vector_telemetry::EmbedSite::LiveBody,
                                 );
                                 similarity_to_score(cosine_similarity(&query_vec, &v))
                             }
@@ -355,7 +365,8 @@ impl<'a> HybridRetriever<'a> {
     /// `[0.0, 1.0]` via [`crate::embeddings::similarity_to_score`].
     /// When no model is plumbed in (or the query embed itself fails)
     /// the vector component falls through to `0.0`.
-    pub fn search_hybrid(&self,
+    pub fn search_hybrid(
+        &self,
         scope_id: ScopeId,
         query: &str,
         limit: usize,
@@ -432,14 +443,16 @@ impl<'a> HybridRetriever<'a> {
         let query_vec = if let Some(model) = self.embedding_model.as_ref() {
             let query_route = crate::embedding_routing::classify_for_embedding(query);
             crate::vector_telemetry::record_pre_embed_decision(query_route);
-            if matches!(query_route,
+            if matches!(
+                query_route,
                 crate::embedding_routing::EmbeddingRoute::Skip(_),
             ) {
                 None
             } else {
                 match model.embed(query) {
                     Ok(v) => {
-                        crate::vector_telemetry::record_embedding_computed(crate::vector_telemetry::EmbedSite::Query,
+                        crate::vector_telemetry::record_embedding_computed(
+                            crate::vector_telemetry::EmbedSite::Query,
                         );
                         Some(v)
                     }
@@ -533,7 +546,8 @@ impl<'a> HybridRetriever<'a> {
     /// the entire `search_hybrid` call. This mirrors the
     /// localised-failure contract documented in
     /// [`Self::search_hybrid`].
-    fn candidate_embedding(&self,
+    fn candidate_embedding(
+        &self,
         id: EvidenceId,
         query_dim: usize,
         model: &dyn EmbeddingModel,
@@ -543,7 +557,8 @@ impl<'a> HybridRetriever<'a> {
             .get_embedding_for_model(id, &self.embedding_model_tag)
         {
             Ok(Some(stored)) if stored.len() == query_dim => {
-                crate::vector_telemetry::record_cache_outcome(crate::vector_telemetry::CacheOutcome::Hit,
+                crate::vector_telemetry::record_cache_outcome(
+                    crate::vector_telemetry::CacheOutcome::Hit,
                 );
                 return Ok(Some(stored));
             }
@@ -564,15 +579,18 @@ impl<'a> HybridRetriever<'a> {
             // * `Err(Schema | Sqlite)`: a corrupted cache row or
             //   transient SQL error must not abort the whole search.
             Ok(None) => {
-                crate::vector_telemetry::record_cache_outcome(crate::vector_telemetry::CacheOutcome::MissNoRow,
+                crate::vector_telemetry::record_cache_outcome(
+                    crate::vector_telemetry::CacheOutcome::MissNoRow,
                 );
             }
             Ok(Some(_)) => {
-                crate::vector_telemetry::record_cache_outcome(crate::vector_telemetry::CacheOutcome::MissDimension,
+                crate::vector_telemetry::record_cache_outcome(
+                    crate::vector_telemetry::CacheOutcome::MissDimension,
                 );
             }
             Err(EvidenceError::Schema(_) | EvidenceError::Sqlite(_)) => {
-                crate::vector_telemetry::record_cache_outcome(crate::vector_telemetry::CacheOutcome::MissReadError,
+                crate::vector_telemetry::record_cache_outcome(
+                    crate::vector_telemetry::CacheOutcome::MissReadError,
                 );
             }
             // `get_embedding_for_model` only constructs `Sqlite` (from
@@ -583,7 +601,8 @@ impl<'a> HybridRetriever<'a> {
             // contract above is deliberately narrow, and any new
             // error path needs a conscious decision about whether to
             // demote or propagate.
-            Err(err @ (EvidenceError::Crypto(_)
+            Err(
+                err @ (EvidenceError::Crypto(_)
                 | EvidenceError::Io(_)
                 | EvidenceError::AppendOnlyViolation(_)
                 | EvidenceError::NotFound(_)
@@ -619,14 +638,16 @@ impl<'a> HybridRetriever<'a> {
         // semantics in `search_hybrid`.
         let body_route = crate::embedding_routing::classify_for_embedding(&body);
         crate::vector_telemetry::record_pre_embed_decision(body_route);
-        if matches!(body_route,
+        if matches!(
+            body_route,
             crate::embedding_routing::EmbeddingRoute::Skip(_),
         ) {
             return Ok(None);
         }
         match model.embed(&body) {
             Ok(v) => {
-                crate::vector_telemetry::record_embedding_computed(crate::vector_telemetry::EmbedSite::LiveBody,
+                crate::vector_telemetry::record_embedding_computed(
+                    crate::vector_telemetry::EmbedSite::LiveBody,
                 );
                 Ok(Some(v))
             }
@@ -646,7 +667,8 @@ impl<'a> HybridRetriever<'a> {
         let created_at: Option<i64> = self
             .store
             .raw_conn()
-            .query_row("SELECT created_at FROM evidence WHERE id = ?1",
+            .query_row(
+                "SELECT created_at FROM evidence WHERE id = ?1",
                 params![id.as_uuid().as_bytes().as_slice()],
                 |row| row.get::<_, i64>(0),
             )

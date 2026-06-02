@@ -8,7 +8,7 @@
 //! 2-codepoint CJK query like `天気` (Japanese "weather") returns
 //! `Ok(vec![])` because the tokeniser produces no trigrams for the
 //! query side and rejects the MATCH with an empty result set (or
-//! a swallowed error on some SQLite builds).  documented
+//! a swallowed error on some SQLite builds). documented
 //! this as a known limitation and noted "a future phase can
 //! register a Rust-side custom FTS5 bigram tokeniser via the
 //! `fts5_api` FFI to close that gap".
@@ -24,7 +24,7 @@
 //! `"天気 気予 予報"` tokenises as the three independent tokens
 //! `天気`, `気予`, `予報`. A 2-codepoint query `天気` then matches
 //! every row whose bigram-precomputed body contains the token
-//! `天気` — exactly the recall lane  deferred.
+//! `天気` — exactly the recall lane deferred.
 //!
 //! Why precomputed bigrams instead of a custom FTS5 tokeniser:
 //!
@@ -38,7 +38,7 @@
 //!   for the cryptographic-forgetting guarantee (REBUILD must
 //!   wipe residual plaintext tokens from a purged scope).
 //! * Tokeniser swaps are FTS5 table options, not column changes,
-//!   so the bigram lane is additive in the same shape 
+//!   so the bigram lane is additive in the same shape
 //!   used for the trigram lane — purge / rebuild / search all
 //!   fan out across the new table without any restructure of
 //!   the existing two.
@@ -229,7 +229,8 @@ mod tests {
             "안녕하세요",       // Korean Hangul — whitespace-segmented
             "Triển khai dự án", // Vietnamese Latin
         ] {
-            assert_eq!(compute_cjk_bigrams(s),
+            assert_eq!(
+                compute_cjk_bigrams(s),
                 "",
                 "{s:?} unexpectedly produced bigrams"
             );
@@ -288,24 +289,28 @@ mod tests {
 
     #[test]
     fn compute_cjk_bigram_query_single_term_for_two_codepoints() {
-        assert_eq!(compute_cjk_bigram_query("天気"),
+        assert_eq!(
+            compute_cjk_bigram_query("天気"),
             Some("\"天気\"".to_string())
         );
     }
 
     #[test]
     fn compute_cjk_bigram_query_and_chain_for_longer_queries() {
-        assert_eq!(compute_cjk_bigram_query("天気予報"),
+        assert_eq!(
+            compute_cjk_bigram_query("天気予報"),
             Some("\"天気\" AND \"気予\" AND \"予報\"".to_string())
         );
     }
 
     #[test]
     fn compute_cjk_bigram_query_ignores_latin_chars_in_mixed_query() {
-        assert_eq!(compute_cjk_bigram_query("Apple 天気"),
+        assert_eq!(
+            compute_cjk_bigram_query("Apple 天気"),
             Some("\"天気\"".to_string())
         );
-        assert_eq!(compute_cjk_bigram_query("Project 計画書 review"),
+        assert_eq!(
+            compute_cjk_bigram_query("Project 計画書 review"),
             Some("\"計画\" AND \"画書\"".to_string())
         );
     }
@@ -329,12 +334,14 @@ mod tests {
             let written = compute_cjk_bigrams(s);
             match compute_cjk_bigram_query(s) {
                 None => {
-                    assert!(written.is_empty(),
+                    assert!(
+                        written.is_empty(),
                         "writer produced {written:?} but reader would skip for {s:?}"
                     );
                 }
                 Some(_) => {
-                    assert!(!written.is_empty(),
+                    assert!(
+                        !written.is_empty(),
                         "writer produced empty content but reader would query for {s:?}"
                     );
                 }

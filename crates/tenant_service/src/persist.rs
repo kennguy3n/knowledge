@@ -172,7 +172,8 @@ impl PersistentTenantRegistry {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap_or(0);
         if existing_version != 0 && existing_version != SCHEMA_VERSION {
-            return Err(TenantError::Persistence("schema version mismatch — refusing to open",
+            return Err(TenantError::Persistence(
+                "schema version mismatch — refusing to open",
             ));
         }
 
@@ -243,7 +244,8 @@ impl PersistentTenantRegistry {
         let tx = self.conn.transaction().map_err(TenantError::Sqlite)?;
         Self::persist_tenant_in(&tx, &self.payload_key, &tenant)?;
         Self::persist_config_in(&tx, id, &tenant.config)?;
-        tx.execute("UPDATE tenants SET deleted_at = ?1 WHERE id = ?2",
+        tx.execute(
+            "UPDATE tenants SET deleted_at = ?1 WHERE id = ?2",
             params![now, id.as_uuid().as_bytes().to_vec()],
         )
         .map_err(TenantError::Sqlite)?;
@@ -253,7 +255,8 @@ impl PersistentTenantRegistry {
 
     /// Provision a member for `tenant_id`. Mirrors the membership
     /// row to disk.
-    pub fn add_member(&mut self,
+    pub fn add_member(
+        &mut self,
         tenant_id: TenantId,
         user_id: Uuid,
         role: Relation,
@@ -273,7 +276,8 @@ impl PersistentTenantRegistry {
     }
 
     /// Update a member's role. Mirrors the change to disk.
-    pub fn update_role(&mut self,
+    pub fn update_role(
+        &mut self,
         tenant_id: TenantId,
         user_id: Uuid,
         role: Relation,
@@ -352,7 +356,8 @@ impl PersistentTenantRegistry {
         let mut out = Vec::new();
         let mut stmt = self
             .conn
-            .prepare("SELECT tenant_id, user_id, role, status, created_at, updated_at
+            .prepare(
+                "SELECT tenant_id, user_id, role, status, created_at, updated_at
                  FROM tenant_members ORDER BY tenant_id ASC, created_at ASC",
             )
             .map_err(TenantError::Sqlite)?;
@@ -394,7 +399,8 @@ impl PersistentTenantRegistry {
         let aad = tenant_aad(id);
         let ct = encrypt_aead(payload_key, &nonce, &payload, &aad)?;
         let root_key_bytes = tenant.config.root_key.handle.as_bytes().to_vec();
-        conn.execute("INSERT INTO tenants
+        conn.execute(
+            "INSERT INTO tenants
                 (id, name, status, created_at, updated_at, deleted_at,
                  root_key_ref, nonce, payload)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
@@ -434,7 +440,8 @@ impl PersistentTenantRegistry {
         let synthesis_json = serde_json::to_string(&config.synthesis)
             .map_err(|_| TenantError::Persistence("synthesis config could not be serialised"))?;
         let key_ref_bytes = config.root_key.handle.as_bytes().to_vec();
-        conn.execute("INSERT INTO tenant_configs
+        conn.execute(
+            "INSERT INTO tenant_configs
                 (tenant_id, encryption_key_ref, storage_config, synthesis_config)
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(tenant_id) DO UPDATE SET
@@ -454,7 +461,8 @@ impl PersistentTenantRegistry {
 
     fn persist_member(&mut self, member: &TenantMember) -> Result<()> {
         self.conn
-            .execute("INSERT INTO tenant_members
+            .execute(
+                "INSERT INTO tenant_members
                     (tenant_id, user_id, role, status, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(tenant_id, user_id) DO UPDATE SET
@@ -519,7 +527,8 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn ms_to_dt(ms: i64) -> Result<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms).ok_or(TenantError::Persistence("timestamp column out of range for DateTime<Utc>",
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms).ok_or(TenantError::Persistence(
+        "timestamp column out of range for DateTime<Utc>",
     ))
 }
 
@@ -541,7 +550,8 @@ fn parse_member_status(tag: &str) -> Result<TenantMemberStatus> {
         "active" => Ok(TenantMemberStatus::Active),
         "suspended" => Ok(TenantMemberStatus::Suspended),
         "removed" => Ok(TenantMemberStatus::Removed),
-        _ => Err(TenantError::Persistence("unknown member-status tag on disk",
+        _ => Err(TenantError::Persistence(
+            "unknown member-status tag on disk",
         )),
     }
 }
@@ -561,7 +571,8 @@ mod tests {
     fn fixture_key() -> MasterKey {
         let mut k: MasterKey = [0u8; MASTER_KEY_LEN];
         for (i, b) in k.iter_mut().enumerate() {
-            #[allow(clippy::cast_possible_truncation,
+            #[allow(
+                clippy::cast_possible_truncation,
                 reason = "deterministic test key seed; i < MASTER_KEY_LEN < 256"
             )]
             let byte = (i & 0xFF) as u8;
@@ -617,7 +628,8 @@ mod tests {
 
         {
             let reg = PersistentTenantRegistry::open(tmp.path(), &key).unwrap();
-            assert_eq!(reg.registry().get(id).unwrap().status,
+            assert_eq!(
+                reg.registry().get(id).unwrap().status,
                 TenantStatus::Suspended
             );
         }
@@ -641,7 +653,8 @@ mod tests {
         // makes sure none of them was silently dropped).
         let deleted_at: Option<i64> = reg
             .conn
-            .query_row("SELECT deleted_at FROM tenants WHERE id = ?1",
+            .query_row(
+                "SELECT deleted_at FROM tenants WHERE id = ?1",
                 params![id.as_uuid().as_bytes().to_vec()],
                 |row| row.get(0),
             )
@@ -649,7 +662,8 @@ mod tests {
         assert!(deleted_at.is_some(), "delete must stamp deleted_at");
         let status_on_disk: String = reg
             .conn
-            .query_row("SELECT status FROM tenants WHERE id = ?1",
+            .query_row(
+                "SELECT status FROM tenants WHERE id = ?1",
                 params![id.as_uuid().as_bytes().to_vec()],
                 |row| row.get(0),
             )
@@ -657,7 +671,8 @@ mod tests {
         assert_eq!(status_on_disk, TenantStatus::Deleted.as_str());
         let config_rows: i64 = reg
             .conn
-            .query_row("SELECT COUNT(*) FROM tenant_configs WHERE tenant_id = ?1",
+            .query_row(
+                "SELECT COUNT(*) FROM tenant_configs WHERE tenant_id = ?1",
                 params![id.as_uuid().as_bytes().to_vec()],
                 |row| row.get(0),
             )
@@ -709,7 +724,8 @@ mod tests {
         let key_a = fixture_key();
         let mut key_b: MasterKey = [0u8; MASTER_KEY_LEN];
         for (i, b) in key_b.iter_mut().enumerate() {
-            #[allow(clippy::cast_possible_truncation,
+            #[allow(
+                clippy::cast_possible_truncation,
                 reason = "deterministic test key seed; i < MASTER_KEY_LEN < 256"
             )]
             let byte = (i & 0xFF) as u8;
@@ -722,7 +738,8 @@ mod tests {
         }
 
         let err = PersistentTenantRegistry::open(tmp.path(), &key_b).unwrap_err();
-        assert!(matches!(err, TenantError::Persistence(_) | TenantError::Sqlite(_)),
+        assert!(
+            matches!(err, TenantError::Persistence(_) | TenantError::Sqlite(_)),
             "expected an open failure for the wrong key, got {err:?}",
         );
     }

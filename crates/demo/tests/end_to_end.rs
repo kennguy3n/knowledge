@@ -30,13 +30,15 @@ fn run_demo() -> (String, String) {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    assert!(output.status.success(),
+    assert!(
+        output.status.success(),
         "demo exited with non-zero status: {:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
         output.status
     );
 
     let results_path = workdir.path().join("results").join("demo_results.md");
-    assert!(results_path.is_file(),
+    assert!(
+        results_path.is_file(),
         "demo did not produce results/demo_results.md (looked at {})",
         results_path.display()
     );
@@ -47,10 +49,12 @@ fn run_demo() -> (String, String) {
 #[test]
 fn demo_runs_to_completion_without_panics() {
     let (stdout, _contents) = run_demo();
-    assert!(stdout.contains("knowledge demo: starting full-pipeline drive"),
+    assert!(
+        stdout.contains("knowledge demo: starting full-pipeline drive"),
         "demo did not print start banner; stdout was:\n{stdout}"
     );
-    assert!(stdout.contains("results written to results/demo_results.md"),
+    assert!(
+        stdout.contains("results written to results/demo_results.md"),
         "demo did not print results banner; stdout was:\n{stdout}"
     );
 }
@@ -67,7 +71,8 @@ fn demo_results_file_is_written_and_well_formed() {
         "## Assertions",
     ];
     for section in required_sections {
-        assert!(contents.contains(section),
+        assert!(
+            contents.contains(section),
             "results file missing required section `{section}`"
         );
     }
@@ -79,7 +84,8 @@ fn demo_results_file_is_written_and_well_formed() {
         "- Synthetic messages:",
         "- Assertions:",
     ] {
-        assert!(contents.contains(prefix),
+        assert!(
+            contents.contains(prefix),
             "results file missing metadata line `{prefix}`"
         );
     }
@@ -101,7 +107,8 @@ fn demo_results_file_is_written_and_well_formed() {
         "### Stage 12: Audit Service",
     ];
     for stage in stage_headings {
-        assert!(contents.contains(stage),
+        assert!(
+            contents.contains(stage),
             "results file missing per-stage heading for `{stage}`"
         );
     }
@@ -115,7 +122,8 @@ fn demo_records_no_assertion_failures() {
         .lines()
         .filter(|line| line.contains("| FAIL |"))
         .collect();
-    assert!(fail_lines.is_empty(),
+    assert!(
+        fail_lines.is_empty(),
         "demo recorded {} failing assertion(s):\n{}",
         fail_lines.len(),
         fail_lines.join("\n")
@@ -123,7 +131,8 @@ fn demo_records_no_assertion_failures() {
 
     // Sanity: the assertion table is actually populated.
     let pass_count = contents.matches("| PASS |").count();
-    assert!(pass_count > 100,
+    assert!(
+        pass_count > 100,
         "expected > 100 PASS rows in assertion table, found {pass_count}"
     );
 }
@@ -144,10 +153,12 @@ fn demo_assertion_counts_match_stdout_and_file() {
     let stdout_passed: usize = passed_str.parse().expect("passed count must be integer");
     let stdout_total: usize = total_str.parse().expect("total count must be integer");
 
-    assert!(stdout_total > 100,
+    assert!(
+        stdout_total > 100,
         "expected at least 100 demo assertions, got {stdout_total}"
     );
-    assert_eq!(stdout_passed, stdout_total,
+    assert_eq!(
+        stdout_passed, stdout_total,
         "demo reported {stdout_passed} of {stdout_total} assertions passed; expected all to pass"
     );
 
@@ -167,13 +178,16 @@ fn demo_assertion_counts_match_stdout_and_file() {
         .and_then(|t| t.parse().ok())
         .unwrap_or_else(|| panic!("malformed assertions line: `{assertions_line}`"));
 
-    assert_eq!(file_passed, stdout_passed,
+    assert_eq!(
+        file_passed, stdout_passed,
         "results file passed ({file_passed}) != stdout passed ({stdout_passed})"
     );
-    assert_eq!(file_failed, 0,
+    assert_eq!(
+        file_failed, 0,
         "results file reported {file_failed} failures (line: `{assertions_line}`)"
     );
-    assert_eq!(file_passed + file_failed,
+    assert_eq!(
+        file_passed + file_failed,
         stdout_total,
         "results file passed+failed ({}) != stdout total ({stdout_total})",
         file_passed + file_failed
@@ -207,7 +221,8 @@ fn demo_records_timing_data_for_every_phase() {
             .find(|line| line.starts_with(prefix))
             .unwrap_or_else(|| panic!("stage heading line for `{prefix}` not found"));
         let has_timing = line.contains("\u{00b5}s") || line.contains("ms") || line.ends_with("s)");
-        assert!(has_timing,
+        assert!(
+            has_timing,
             "stage heading `{line}` did not include a parseable timing"
         );
     }
@@ -217,7 +232,8 @@ fn demo_records_timing_data_for_every_phase() {
         .lines()
         .find(|line| line.starts_with("- Total wall-clock:"))
         .expect("wall-clock line missing");
-    assert!(!wall_line.contains("0.000ms") && !wall_line.contains("0.0\u{00b5}s"),
+    assert!(
+        !wall_line.contains("0.000ms") && !wall_line.contains("0.0\u{00b5}s"),
         "wall-clock should be > 0, got `{wall_line}`"
     );
 
@@ -231,14 +247,16 @@ fn demo_records_timing_data_for_every_phase() {
         .lines()
         .filter(|line| line.starts_with("| ") && !line.contains("---"))
         .collect();
-    assert!(table_rows.len() > 1,
+    assert!(
+        table_rows.len() > 1,
         "benchmarks table missing data rows; section was:\n{bench_section}"
     );
     let data_rows = &table_rows[1..];
     let some_with_timing = data_rows
         .iter()
         .any(|line| line.contains("ms") || line.contains("\u{00b5}s") || line.contains("s |"));
-    assert!(some_with_timing,
+    assert!(
+        some_with_timing,
         "benchmark data rows missing timings: {data_rows:?}"
     );
 }

@@ -50,7 +50,8 @@ fn schema_creates_required_tables() {
     let fts_bigram: i64 = conn
         .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
         .unwrap();
-    assert_eq!((evidence, body_store, ring, fts, fts_cjk, fts_bigram),
+    assert_eq!(
+        (evidence, body_store, ring, fts, fts_cjk, fts_bigram),
         (0, 0, 0, 0, 0, 0)
     );
 }
@@ -63,7 +64,8 @@ fn ingest_inline_path_for_small_useful_message() {
     assert!(body.len() <= DEFAULT_INLINE_THRESHOLD_BYTES);
 
     let res = store
-        .ingest(scope,
+        .ingest(
+            scope,
             body,
             Some("source:msg-1"),
             ImportanceClass::Important,
@@ -96,7 +98,8 @@ fn ingest_with_language_tag_round_trips_inline() {
     let body = b"Friday is the deadline for the migration.";
 
     let res = store
-        .ingest_with_language(scope,
+        .ingest_with_language(
+            scope,
             body,
             Some("source:msg-jp"),
             ImportanceClass::Important,
@@ -208,7 +211,8 @@ fn content_hash_dedup_shares_one_body_row() {
     // Verify per-scope CEK wraps exist (two scopes ⇒ two wraps).
     let wrap_count: i64 = store
         .raw_conn()
-        .query_row("SELECT COUNT(*) FROM body_store_key_wraps WHERE content_hash = ?1",
+        .query_row(
+            "SELECT COUNT(*) FROM body_store_key_wraps WHERE content_hash = ?1",
             rusqlite::params![res1.content_hash.as_slice()],
             |r| r.get(0),
         )
@@ -261,7 +265,8 @@ fn ring_buffer_created_at_is_unix_epoch_seconds() {
     // microsecond timestamp from the same wall-clock instant would be
     // ~1e15, well outside this band, so this assertion catches the
     // unit mismatch.
-    assert!((1_700_000_000..=2_000_000_000).contains(&ts),
+    assert!(
+        (1_700_000_000..=2_000_000_000).contains(&ts),
         "ring buffer created_at {ts} is not a Unix epoch second"
     );
 }
@@ -328,14 +333,16 @@ fn fts5_search_finds_ingested_text() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r1 = store
-        .ingest(scope,
+        .ingest(
+            scope,
             b"The launch deadline for the export pipeline is May",
             None,
             ImportanceClass::Important,
         )
         .unwrap();
     let _ = store
-        .ingest(scope,
+        .ingest(
+            scope,
             b"This is unrelated content about lunch and ducks",
             None,
             ImportanceClass::Useful,
@@ -361,12 +368,14 @@ fn append_only_constraint_rejects_update_and_delete() {
         .unwrap();
     let id_bytes = res.evidence_id.as_uuid().as_bytes().to_vec();
 
-    let update_err = store.raw_conn().execute("UPDATE evidence SET source_ref = 'tampered' WHERE id = ?1",
+    let update_err = store.raw_conn().execute(
+        "UPDATE evidence SET source_ref = 'tampered' WHERE id = ?1",
         rusqlite::params![id_bytes.as_slice()],
     );
     assert!(update_err.is_err(), "UPDATE on evidence must be rejected");
 
-    let delete_err = store.raw_conn().execute("DELETE FROM evidence WHERE id = ?1",
+    let delete_err = store.raw_conn().execute(
+        "DELETE FROM evidence WHERE id = ?1",
         rusqlite::params![id_bytes.as_slice()],
     );
     assert!(delete_err.is_err(), "DELETE on evidence must be rejected");
@@ -385,10 +394,12 @@ fn classifier_drives_routing_end_to_end() {
 
     let cases = [
         ("hi", StoragePath::RingBuffer),
-        ("Friday is the deadline for the migration.",
+        (
+            "Friday is the deadline for the migration.",
             StoragePath::Inline,
         ),
-        (// Long non-noise body.
+        (
+            // Long non-noise body.
             std::str::from_utf8(&[b'X'; 1024]).unwrap(),
             StoragePath::BodyTable,
         ),
@@ -396,7 +407,8 @@ fn classifier_drives_routing_end_to_end() {
     for (text, expected_path) in cases {
         let class = classifier.classify(text);
         let res = store.ingest(scope, text.as_bytes(), None, class).unwrap();
-        assert_eq!(res.storage_path, expected_path,
+        assert_eq!(
+            res.storage_path, expected_path,
             "text {text:?} routed unexpectedly: {:?}",
             res.storage_path
         );
@@ -463,7 +475,8 @@ fn forgotten_scopes_persist_across_reopen() {
         let mut store =
             EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
         // No tombstones on a fresh DB.
-        assert!(store.load_forgotten_scopes().unwrap().is_empty(),
+        assert!(
+            store.load_forgotten_scopes().unwrap().is_empty(),
             "fresh store must have no forgotten scopes"
         );
 
@@ -484,7 +497,8 @@ fn forgotten_scopes_persist_across_reopen() {
     loaded.sort_by_key(|s| *s.as_uuid().as_bytes());
     let mut expected = vec![scope_a, scope_b];
     expected.sort_by_key(|s| *s.as_uuid().as_bytes());
-    assert_eq!(loaded, expected,
+    assert_eq!(
+        loaded, expected,
         "forgotten scopes must survive a process restart"
     );
 }
@@ -555,7 +569,8 @@ fn cek_wrap_forget_scope_a_leaves_scope_b_readable() {
     // attempting to read the body must fail because its CEK wrap is
     // gone.
     let err = store.read_body(res_a.evidence_id);
-    assert!(err.is_err(),
+    assert!(
+        err.is_err(),
         "scope A's body must be unrecoverable after forget"
     );
 }
@@ -586,7 +601,8 @@ fn cek_wrap_forget_both_scopes_makes_body_unrecoverable() {
         store.purge_body_key_wraps_for_scope(scope_b).unwrap();
 
         // The body_store row should have been garbage-collected.
-        assert_eq!(store.body_store_count().unwrap(),
+        assert_eq!(
+            store.body_store_count().unwrap(),
             0,
             "orphaned body_store row must be garbage-collected"
         );
@@ -598,7 +614,8 @@ fn cek_wrap_forget_both_scopes_makes_body_unrecoverable() {
     // No CEK wraps remain.
     let wrap_count: i64 = store
         .raw_conn()
-        .query_row("SELECT COUNT(*) FROM body_store_key_wraps WHERE content_hash = ?1",
+        .query_row(
+            "SELECT COUNT(*) FROM body_store_key_wraps WHERE content_hash = ?1",
             rusqlite::params![content_hash.as_slice()],
             |r| r.get(0),
         )
@@ -606,7 +623,8 @@ fn cek_wrap_forget_both_scopes_makes_body_unrecoverable() {
     assert_eq!(wrap_count, 0, "all CEK wraps must be purged");
 
     // Body store row must be gone too.
-    assert_eq!(store.body_store_count().unwrap(),
+    assert_eq!(
+        store.body_store_count().unwrap(),
         0,
         "body_store must be empty after both scopes forgot"
     );
@@ -629,12 +647,14 @@ fn cek_wrap_same_scope_reingest_is_idempotent() {
     // Only one CEK wrap for the single scope.
     let wrap_count: i64 = store
         .raw_conn()
-        .query_row("SELECT COUNT(*) FROM body_store_key_wraps WHERE content_hash = ?1",
+        .query_row(
+            "SELECT COUNT(*) FROM body_store_key_wraps WHERE content_hash = ?1",
             rusqlite::params![r1.content_hash.as_slice()],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(wrap_count, 1,
+    assert_eq!(
+        wrap_count, 1,
         "same-scope re-ingest must not duplicate wraps"
     );
 
@@ -676,7 +696,8 @@ fn with_transaction_rolls_back_on_err() {
         store.save_memory_blob_in_tx(tx, scope, "kind_ok", b"{\"ok\":true}")?;
         // Simulate a mid-sequence failure — the specific error
         // variant is irrelevant; only the rollback semantics matter.
-        Err(evidence_store::EvidenceError::Schema("injected failure for rollback test",
+        Err(evidence_store::EvidenceError::Schema(
+            "injected failure for rollback test",
         ))
     });
     assert!(result.is_err(), "tx must propagate the injected error");
@@ -684,7 +705,8 @@ fn with_transaction_rolls_back_on_err() {
     // Neither the successful first write NOR the failed second write
     // may be readable — the entire transaction rolled back.
     let blob = store.load_memory_blob(scope, "kind_ok").unwrap();
-    assert!(blob.is_none(),
+    assert!(
+        blob.is_none(),
         "rolled-back write must not be visible after tx abort"
     );
 }
@@ -708,14 +730,16 @@ fn fts5_cjk_japanese_query_returns_hit() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "今日は良い天気です".as_bytes(),
             None,
             ImportanceClass::Useful,
         )
         .unwrap();
     let hits = store.search_fts(scope, "良い天気", 10).unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "trigram index must find 4-char CJK substring"
     );
@@ -727,7 +751,8 @@ fn fts5_cjk_chinese_query_returns_hit() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "今天天气很好".as_bytes(),
             None,
             ImportanceClass::Useful,
@@ -754,14 +779,14 @@ fn fts5_thai_query_returns_hit() {
 //  — Tibetan / Khmer / Myanmar / Lao routing integration tests
 // ----------------------------------------------------------------------
 //
-// introduced `evidence_fts_cjk` (trigram lane) and 
+// introduced `evidence_fts_cjk` (trigram lane) and
 // added `evidence_fts_bigram` (precomputed bigram lane). Both lanes
-// gate writes on `crate::script::contains_cjk_or_thai`, which 
+// gate writes on `crate::script::contains_cjk_or_thai`, which
 // extended to include four additional Brahmic-family scripts that lack
 // inter-word whitespace: Tibetan (`bo`), Khmer (`km`), Myanmar (`my`),
 // Lao (`lo`). The fixtures below pin the read-path recall AND the
 // write-path table membership for each script via the same dual-lane
-// architecture as the  sites — ensuring no regression silently
+// architecture as the sites — ensuring no regression silently
 // excludes one of the four scripts from one of the two CJK-routed
 // shadow tables.
 
@@ -772,7 +797,8 @@ fn fts5_tibetan_query_returns_hit_via_trigram_lane() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "བཀྲ་ཤིས་བདེ་ལེགས".as_bytes(),
             None,
             ImportanceClass::Useful,
@@ -780,7 +806,8 @@ fn fts5_tibetan_query_returns_hit_via_trigram_lane() {
         .unwrap();
     // 3+ codepoint sub-query — trigram lane must hit.
     let hits = store.search_fts(scope, "བཀྲ་ཤིས", 10).unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "Tibetan body must route to evidence_fts_cjk and be searchable via trigram",
     );
@@ -793,7 +820,8 @@ fn fts5_tibetan_query_returns_hit_via_trigram_lane() {
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(bigram_rows, 1,
+    assert_eq!(
+        bigram_rows, 1,
         "Tibetan body must also land in evidence_fts_bigram",
     );
 }
@@ -805,14 +833,16 @@ fn fts5_khmer_query_returns_hit_via_trigram_lane() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "ភ្នំពេញគឺជារដ្ឋធានីនៃប្រទេសកម្ពុជា".as_bytes(),
             None,
             ImportanceClass::Useful,
         )
         .unwrap();
     let hits = store.search_fts(scope, "ភ្នំពេញ", 10).unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "Khmer body must route to evidence_fts_cjk and be searchable via trigram",
     );
@@ -822,7 +852,8 @@ fn fts5_khmer_query_returns_hit_via_trigram_lane() {
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(bigram_rows, 1,
+    assert_eq!(
+        bigram_rows, 1,
         "Khmer body must also land in evidence_fts_bigram",
     );
 }
@@ -834,14 +865,16 @@ fn fts5_myanmar_query_returns_hit_via_trigram_lane() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "ရန်ကုန်သည် မြန်မာနိုင်ငံ၏ အကြီးဆုံးမြို့ ဖြစ်သည်".as_bytes(),
             None,
             ImportanceClass::Useful,
         )
         .unwrap();
     let hits = store.search_fts(scope, "ရန်ကုန်", 10).unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "Myanmar body must route to evidence_fts_cjk and be searchable via trigram",
     );
@@ -851,7 +884,8 @@ fn fts5_myanmar_query_returns_hit_via_trigram_lane() {
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(bigram_rows, 1,
+    assert_eq!(
+        bigram_rows, 1,
         "Myanmar body must also land in evidence_fts_bigram",
     );
 }
@@ -860,18 +894,20 @@ fn fts5_myanmar_query_returns_hit_via_trigram_lane() {
 fn fts5_lao_query_returns_hit_via_trigram_lane() {
     // ວຽງຈັນ — "Vientiane", capital of Laos. Lao script
     // (U+0E80..=U+0EFF) is contiguous with Thai under the
-    // single  routing arm `'\u{0E00}'..='\u{0FFF}'`.
+    // single routing arm `'\u{0E00}'..='\u{0FFF}'`.
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "ວຽງຈັນ ເປັນ ນະຄອນຫຼວງ ຂອງ ປະເທດລາວ".as_bytes(),
             None,
             ImportanceClass::Useful,
         )
         .unwrap();
     let hits = store.search_fts(scope, "ວຽງຈັນ", 10).unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "Lao body must route to evidence_fts_cjk and be searchable via trigram",
     );
@@ -881,7 +917,8 @@ fn fts5_lao_query_returns_hit_via_trigram_lane() {
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(bigram_rows, 1,
+    assert_eq!(
+        bigram_rows, 1,
         "Lao body must also land in evidence_fts_bigram",
     );
 }
@@ -889,18 +926,19 @@ fn fts5_lao_query_returns_hit_via_trigram_lane() {
 #[test]
 fn fts5_pure_devanagari_body_routes_only_to_unicode61() {
     // Negative-space pin: Devanagari (Hindi, U+0900..=U+097F)
-    // is deliberately NOT in the  routing predicate
+    // is deliberately NOT in the routing predicate
     // — the unicode61 tokeniser classifies Devanagari letters
     // as letters and so already segments Hindi correctly,
     // so adding a redundant trigram row would inflate the CJK
-    // index without recall benefit. The  Hindi
+    // index without recall benefit. The Hindi
     // lexicon uses Substring matching at the observation
     // engine layer (not the FTS5 layer) to compensate for
     // virama-induced intra-word splits.
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let _ = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "नई दिल्ली भारत की राजधानी है".as_bytes(),
             None,
             ImportanceClass::Useful,
@@ -914,11 +952,13 @@ fn fts5_pure_devanagari_body_routes_only_to_unicode61() {
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(cjk_rows, 0,
+    assert_eq!(
+        cjk_rows, 0,
         "pure-Devanagari body must NOT be written to evidence_fts_cjk \
          — Devanagari is whitespace-segmented and unicode61 handles it",
     );
-    assert_eq!(bigram_rows, 0,
+    assert_eq!(
+        bigram_rows, 0,
         "pure-Devanagari body must NOT be written to evidence_fts_bigram",
     );
 }
@@ -931,7 +971,8 @@ fn fts5_pre_v14_latin_path_still_works_unchanged() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             b"The launch deadline for the export pipeline is May",
             None,
             ImportanceClass::Useful,
@@ -954,7 +995,8 @@ fn fts5_mixed_script_doc_searchable_by_both_scripts() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "Project 計画書 review on Friday".as_bytes(),
             None,
             ImportanceClass::Useful,
@@ -980,7 +1022,8 @@ fn fts5_cjk_routing_is_body_derived_not_language_tag_derived() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "今天天气很好".as_bytes(),
             None,
             ImportanceClass::Useful,
@@ -990,12 +1033,14 @@ fn fts5_cjk_routing_is_body_derived_not_language_tag_derived() {
     // Sanity: the row was inserted without a language tag.
     let language_tag: Option<String> = store
         .raw_conn()
-        .query_row("SELECT language_tag FROM evidence WHERE id = ?1",
+        .query_row(
+            "SELECT language_tag FROM evidence WHERE id = ?1",
             rusqlite::params![r.evidence_id.as_uuid().as_bytes().as_slice()],
             |row| row.get(0),
         )
         .unwrap();
-    assert!(language_tag.is_none(),
+    assert!(
+        language_tag.is_none(),
         "ingest() must not stamp a language tag"
     );
 
@@ -1011,7 +1056,8 @@ fn fts5_cjk_routing_is_body_derived_not_language_tag_derived() {
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(bigram_rows, 1,
+    assert_eq!(
+        bigram_rows, 1,
         "CJK body must land in evidence_fts_bigram alongside evidence_fts_cjk"
     );
 }
@@ -1025,7 +1071,8 @@ fn fts5_pure_latin_does_not_consume_cjk_table_storage() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let _ = store
-        .ingest(scope,
+        .ingest(
+            scope,
             b"The launch deadline for the export pipeline is May",
             None,
             ImportanceClass::Useful,
@@ -1035,7 +1082,8 @@ fn fts5_pure_latin_does_not_consume_cjk_table_storage() {
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(cjk_rows, 0,
+    assert_eq!(
+        cjk_rows, 0,
         "pure-Latin body must not be written to evidence_fts_cjk"
     );
     //  / schema v15: pure-Latin bodies likewise stay
@@ -1047,7 +1095,8 @@ fn fts5_pure_latin_does_not_consume_cjk_table_storage() {
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(bigram_rows, 0,
+    assert_eq!(
+        bigram_rows, 0,
         "pure-Latin body must not be written to evidence_fts_bigram"
     );
 }
@@ -1075,14 +1124,16 @@ fn fts5_bigram_lane_closes_2char_cjk_recall_floor() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let _ = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "今日は良い天気です".as_bytes(),
             None,
             ImportanceClass::Useful,
         )
         .unwrap();
     let hits = store.search_fts(scope, "天気", 10).unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "2-char CJK query MUST hit via the bigram lane now that \
          's `evidence_fts_bigram` table exists — the \
@@ -1097,7 +1148,7 @@ fn fts5_bigram_lane_closes_2char_cjk_recall_floor() {
 
 #[test]
 fn fts5_three_lane_merge_dedupes_mixed_query_across_all_three_tables() {
-    // Sweep-2 finding #7 regression — exercises the
+    // earlier regression — exercises the
     // `merged_fts_search` three-lane fan-out across a single
     // mixed Latin + 2-codepoint CJK query so all three FTS5
     // shadow tables contribute hits that the merge must
@@ -1122,7 +1173,8 @@ fn fts5_three_lane_merge_dedupes_mixed_query_across_all_three_tables() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "Project launch review with 今日は良い天気です note".as_bytes(),
             None,
             ImportanceClass::Useful,
@@ -1154,9 +1206,9 @@ fn fts5_three_lane_merge_dedupes_mixed_query_across_all_three_tables() {
     // lanes to a hit on the same evidence_id. FTS5 boolean OR
     // syntax `term1 OR term2 OR term3`:
     //
-    //  * `launch`     → unicode61 (`evidence_fts`)
-    //  * `良い天気`     → trigram  (`evidence_fts_cjk`)
-    //  * `天気`        → bigram   (`evidence_fts_bigram`)
+    //  * `launch` → unicode61 (`evidence_fts`)
+    //  * `良い天気` → trigram (`evidence_fts_cjk`)
+    //  * `天気` → bigram (`evidence_fts_bigram`)
     //
     // The merge contract collapses them to a single hit on the
     // shared evidence_id. If any lane's prepared statement were
@@ -1167,7 +1219,8 @@ fn fts5_three_lane_merge_dedupes_mixed_query_across_all_three_tables() {
     let hits = store
         .search_fts(scope, "launch OR 良い天気 OR 天気", 10)
         .unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "three-lane mixed query must dedupe to a single hit on the shared evidence_id"
     );
@@ -1195,7 +1248,8 @@ fn fts5_search_dedupes_when_both_tables_match_same_row() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "Project 計画書 launch review meeting".as_bytes(),
             None,
             ImportanceClass::Useful,
@@ -1212,7 +1266,8 @@ fn fts5_search_dedupes_when_both_tables_match_same_row() {
     //
     // FTS5 boolean OR syntax: `term1 OR term2`.
     let hits = store.search_fts(scope, "launch OR 計画書", 10).unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "row matched by both branches must dedupe to single hit"
     );
@@ -1221,7 +1276,7 @@ fn fts5_search_dedupes_when_both_tables_match_same_row() {
 
 #[test]
 fn fts5_unicode61_query_succeeds_even_when_trigram_branch_rejects_shape() {
-    // Sweep-2 BUG-0001 regression. The SQLite trigram tokeniser docs
+    // earlier regression. The SQLite trigram tokeniser docs
     // <https://www.sqlite.org/fts5.html#the_trigram_tokenizer> say
     // that trigram returns an *error* (not an empty result set)
     // when given any of:
@@ -1250,7 +1305,8 @@ fn fts5_unicode61_query_succeeds_even_when_trigram_branch_rejects_shape() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "Project 計画書 launch review meeting".as_bytes(),
             None,
             ImportanceClass::Useful,
@@ -1269,7 +1325,8 @@ fn fts5_unicode61_query_succeeds_even_when_trigram_branch_rejects_shape() {
     let r3 = store
         .search_fts(scope, "NEAR(launch review, 5)", 10)
         .unwrap();
-    assert_eq!(r3.len(),
+    assert_eq!(
+        r3.len(),
         1,
         "NEAR matches in unicode61 MUST return the row even when trigram rejects NEAR"
     );
@@ -1298,7 +1355,7 @@ fn fts5_unicode61_query_succeeds_even_when_trigram_branch_rejects_shape() {
 
 #[test]
 fn fts5_dual_search_orders_tied_ranks_deterministically_by_evidence_id() {
-    // Sweep-4 INFO-0004 regression — verifies that `merged_fts_search`
+    // earlier regression — verifies that `merged_fts_search`
     // emits a deterministic ordering for rows whose FTS5 rank
     // compares as equal. Pre-fix the `HashMap`-then-`sort_by(rank)`
     // pipeline produced run-to-run ordering jitter for ties because
@@ -1332,7 +1389,8 @@ fn fts5_dual_search_orders_tied_ranks_deterministically_by_evidence_id() {
     // tiebreaker is on the merged_fts_search merge path (not a single
     // ORDER BY on one statement).
     let baseline = store.search_fts(scope, "重要な会議", 10).unwrap();
-    assert_eq!(baseline.len(),
+    assert_eq!(
+        baseline.len(),
         2,
         "both tied-body rows must be returned by the CJK lane"
     );
@@ -1342,7 +1400,8 @@ fn fts5_dual_search_orders_tied_ranks_deterministically_by_evidence_id() {
         .map(|_| store.search_fts(scope, "重要な会議", 10).unwrap())
         .collect();
     for (i, run) in runs.iter().enumerate().skip(1) {
-        assert_eq!(run, &runs[0],
+        assert_eq!(
+            run, &runs[0],
             "run {i} differs from run 0 — tied-rank ordering is non-deterministic"
         );
     }
@@ -1350,14 +1409,15 @@ fn fts5_dual_search_orders_tied_ranks_deterministically_by_evidence_id() {
     // The deterministic order is `EvidenceId` ascending.
     let mut expected_ids = vec![r1.evidence_id, r2.evidence_id];
     expected_ids.sort();
-    assert_eq!(runs[0], expected_ids,
+    assert_eq!(
+        runs[0], expected_ids,
         "tied-rank tiebreaker must be EvidenceId ascending (Uuid::Ord)"
     );
 }
 
 #[test]
 fn fts5_trigram_branch_error_is_silently_swallowed_so_unicode61_results_survive() {
-    // Sweep-2 BUG-0001 regression — directly proves the error
+    // earlier regression — directly proves the error
     // containment path. We inject a guaranteed trigram failure by
     // DROPing the `evidence_fts_cjk` table out from under the
     // search, then verify the `unicode61` branch's results still
@@ -1367,7 +1427,8 @@ fn fts5_trigram_branch_error_is_silently_swallowed_so_unicode61_results_survive(
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "Project launch review meeting".as_bytes(),
             None,
             ImportanceClass::Useful,
@@ -1394,7 +1455,8 @@ fn fts5_trigram_branch_error_is_silently_swallowed_so_unicode61_results_survive(
     let hits = store
         .search_fts(scope, "launch", 10)
         .expect("trigram failure MUST NOT propagate; unicode61 result MUST survive");
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "trigram-branch failure must be swallowed; unicode61 hit must still surface"
     );
@@ -1427,7 +1489,8 @@ fn bigram_lane_ranks_are_weighted_below_raw_bm25_baseline() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let _ = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "今日天気".as_bytes(), // "today's weather" — 4 CJK codepoints
             None,
             ImportanceClass::Important,
@@ -1437,7 +1500,8 @@ fn bigram_lane_ranks_are_weighted_below_raw_bm25_baseline() {
     let weighted = store
         .search_fts_with_weighted_ranks_for_tests(scope, "今日", 10)
         .unwrap();
-    assert_eq!(weighted.len(),
+    assert_eq!(
+        weighted.len(),
         1,
         "bigram lane must recover the 2-char CJK query against the indexed body"
     );
@@ -1446,13 +1510,15 @@ fn bigram_lane_ranks_are_weighted_below_raw_bm25_baseline() {
     // f64 (FTS5 contract). After `* 0.7` the rank must remain
     // strictly negative AND closer to zero than the unicode61
     // baseline weight (1.0) would have produced.
-    assert!(rank.is_finite() && rank < 0.0,
+    assert!(
+        rank.is_finite() && rank < 0.0,
         "bigram lane weighted rank must be finite-negative, got: {rank}"
     );
     // Recover the raw rank (rank / 0.7) and pin that the weighted
     // value is the strictly smaller |rank| (closer to zero, worse).
     let raw_rank = rank / evidence_store::fts_weights::EVIDENCE_FTS_BIGRAM_LANE_WEIGHT;
-    assert!(rank > raw_rank,
+    assert!(
+        rank > raw_rank,
         "bigram lane weighting must move rank closer to zero: \
          weighted={rank}, raw={raw_rank}"
     );
@@ -1471,7 +1537,8 @@ fn unicode61_lane_ranks_are_identity_weighted_against_baseline() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             b"The deadline for the launch is next Monday",
             None,
             ImportanceClass::Important,
@@ -1485,7 +1552,8 @@ fn unicode61_lane_ranks_are_identity_weighted_against_baseline() {
     let rank = weighted[0].1;
     // Raw BM25 rank is always negative; identity weight preserves
     // exact value (no rounding error from f64 multiply by 1.0).
-    assert!(rank.is_finite() && rank < 0.0,
+    assert!(
+        rank.is_finite() && rank < 0.0,
         "unicode61 lane weighted rank must be finite-negative, got: {rank}"
     );
     let raw_rank = rank / evidence_store::fts_weights::EVIDENCE_FTS_LANE_WEIGHT;
@@ -1493,7 +1561,8 @@ fn unicode61_lane_ranks_are_identity_weighted_against_baseline() {
     // disallows raw `==` on f64; division by 1.0 must preserve
     // the bit pattern exactly so any drift here indicates a
     // non-1.0 baseline weight or a float-arithmetic regression).
-    assert_eq!(rank.to_bits(),
+    assert_eq!(
+        rank.to_bits(),
         raw_rank.to_bits(),
         "EVIDENCE_FTS_LANE_WEIGHT = 1.0 must be the bit-exact identity on rank \
          multiplication in the live query path (weighted={rank}, raw={raw_rank})"
@@ -1511,7 +1580,8 @@ fn trigram_lane_ranks_are_weighted_below_unicode61_baseline() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let _ = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "今日天気は良い".as_bytes(), // "today's weather is good" — 7 CJK codepoints
             None,
             ImportanceClass::Important,
@@ -1520,12 +1590,14 @@ fn trigram_lane_ranks_are_weighted_below_unicode61_baseline() {
     let weighted = store
         .search_fts_with_weighted_ranks_for_tests(scope, "今日天", 10)
         .unwrap();
-    assert_eq!(weighted.len(),
+    assert_eq!(
+        weighted.len(),
         1,
         "trigram + bigram lanes must both surface the indexed CJK body"
     );
     let (_id, rank) = weighted[0];
-    assert!(rank.is_finite() && rank < 0.0,
+    assert!(
+        rank.is_finite() && rank < 0.0,
         "merged CJK rank must be finite-negative, got: {rank}"
     );
 }
@@ -1551,11 +1623,13 @@ fn lane_weight_precision_hierarchy_holds_at_query_time() {
     // More-negative is better in FTS5's BM25 contract. The
     // precision hierarchy demands unicode61 < trigram < bigram
     // (strict inequalities on the weighted ranks).
-    assert!(unicode61_weighted < trigram_weighted,
+    assert!(
+        unicode61_weighted < trigram_weighted,
         "unicode61 must produce more-negative weighted rank than trigram: \
          unicode61={unicode61_weighted}, trigram={trigram_weighted}"
     );
-    assert!(trigram_weighted < bigram_weighted,
+    assert!(
+        trigram_weighted < bigram_weighted,
         "trigram must produce more-negative weighted rank than bigram: \
          trigram={trigram_weighted}, bigram={bigram_weighted}"
     );
@@ -1604,7 +1678,8 @@ fn fts5_japanese_stopword_query_matches_indexed_stopword_body() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "日本のオリンピック".as_bytes(),
             None,
             ImportanceClass::Useful,
@@ -1628,14 +1703,16 @@ fn fts5_japanese_stopword_in_body_only_still_matches_clean_query() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "日本のオリンピック".as_bytes(),
             None,
             ImportanceClass::Useful,
         )
         .unwrap();
     let hits = store.search_fts(scope, "日本オリンピック", 10).unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "body with stopword must hit when query omits the same stopword",
     );
@@ -1650,14 +1727,16 @@ fn fts5_japanese_stopword_in_query_only_still_matches_clean_body() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "日本オリンピック".as_bytes(),
             None,
             ImportanceClass::Useful,
         )
         .unwrap();
     let hits = store.search_fts(scope, "日本のオリンピック", 10).unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "body without stopword must hit when query inserts an adjacent stopword",
     );
@@ -1673,14 +1752,16 @@ fn fts5_pure_stopword_query_yields_no_hit_against_content_body() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let _r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "日本のオリンピック".as_bytes(),
             None,
             ImportanceClass::Useful,
         )
         .unwrap();
     let hits = store.search_fts(scope, "のはがを", 10).unwrap();
-    assert!(hits.is_empty(),
+    assert!(
+        hits.is_empty(),
         "pure-stopword query must return no hits (lane short-circuit)",
     );
 }
@@ -1692,7 +1773,8 @@ fn fts5_chinese_de_particle_symmetric_round_trip() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "日本的天气".as_bytes(),
             None,
             ImportanceClass::Useful,
@@ -1705,7 +1787,8 @@ fn fts5_chinese_de_particle_symmetric_round_trip() {
     // And the asymmetric direction: body with particle, clean
     // query — must still hit.
     let hits = store.search_fts(scope, "日本天气", 10).unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "body with `的` must hit clean query after symmetric strip",
     );
@@ -1719,7 +1802,8 @@ fn fts5_thai_preposition_kong_symmetric_round_trip() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "อากาศของกรุงเทพ".as_bytes(),
             None,
             ImportanceClass::Useful,
@@ -1733,7 +1817,8 @@ fn fts5_thai_preposition_kong_symmetric_round_trip() {
     // hit after symmetric strip collapses both to the same
     // residual content.
     let hits = store.search_fts(scope, "อากาศกรุงเทพ", 10).unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "body with `ของ` must hit clean query after symmetric strip",
     );
@@ -1753,7 +1838,8 @@ fn fts5_does_not_strip_content_bearing_time_deictic_wannii() {
         .ingest(scope, "อากาศวันนี้ดี".as_bytes(), None, ImportanceClass::Useful)
         .unwrap();
     let hits = store.search_fts(scope, "วันนี้", 10).unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "content-bearing `วันนี้` must NOT be stripped by ",
     );
@@ -1762,7 +1848,7 @@ fn fts5_does_not_strip_content_bearing_time_deictic_wannii() {
 
 #[test]
 fn fts5_unicode61_lane_unstripped_for_latin_content() {
-    // The  strip only applies to the trigram and bigram
+    // The strip only applies to the trigram and bigram
     // lanes (`evidence_fts_cjk` and `evidence_fts_bigram`). The
     // unicode61 source-of-truth lane (`evidence_fts.content`)
     // never sees the strip, so Latin queries against Latin
@@ -1772,21 +1858,23 @@ fn fts5_unicode61_lane_unstripped_for_latin_content() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
-        .ingest(scope,
+        .ingest(
+            scope,
             "the quick brown fox jumps over the lazy dog".as_bytes(),
             None,
             ImportanceClass::Useful,
         )
         .unwrap();
     let hits = store.search_fts(scope, "brown fox", 10).unwrap();
-    assert_eq!(hits.len(),
+    assert_eq!(
+        hits.len(),
         1,
         "Latin (unicode61) lane must not be touched by ",
     );
     assert_eq!(hits[0], r.evidence_id);
 }
 
-/// End-to-end integration test for the  FTS-telemetry
+/// End-to-end integration test for the FTS-telemetry
 /// counters: ingest a CJK body, run a search across all three
 /// recall lanes, and confirm each counter category advances.
 ///
@@ -1797,10 +1885,10 @@ fn fts5_unicode61_lane_unstripped_for_latin_content() {
 ///
 /// Counters exercised:
 ///   - `index_write_stopwords_stripped_total` (ingest path: の)
-///   - `query_time_stopwords_stripped_total`  (query path: の)
-///   - `unicode61_lane_queries_total`          (always)
-///   - `cjk_trigram_lane_queries_total`        (CJK body present)
-///   - `bigram_lane_queries_total`             (CJK body present)
+///   - `query_time_stopwords_stripped_total` (query path: の)
+///   - `unicode61_lane_queries_total` (always)
+///   - `cjk_trigram_lane_queries_total` (CJK body present)
+///   - `bigram_lane_queries_total` (CJK body present)
 ///
 /// We use lower-bound (`>`) assertions because other tests in
 /// the same binary touch the same process-singleton counters,
@@ -1819,7 +1907,7 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
     // Japanese body containing two stopwords ("の" particle ×2):
     // forces the index-time stopword strip path to bump for the
     // trigram + bigram lanes (the unicode61 lane preserves the
-    // body verbatim).  The body has enough CJK codepoints (>=3)
+    // body verbatim). The body has enough CJK codepoints (>=3)
     // to route to both trigram and bigram lanes.
     let body = "今日は会議の議事録の確認を行いました";
     let res = store
@@ -1827,7 +1915,8 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
         .unwrap();
 
     let after_ingest = fts_telemetry::snapshot();
-    assert!(after_ingest.index_write_stopwords_stripped_total
+    assert!(
+        after_ingest.index_write_stopwords_stripped_total
             > before_ingest.index_write_stopwords_stripped_total,
         "index-write stopword strip counter did not advance on CJK ingest"
     );
@@ -1836,14 +1925,16 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
     // the query-time strip counter advances independently of the
     // index-time site.
     let hits = store.search_fts(scope, "議事録の確認", 10).unwrap();
-    assert!(hits.contains(&res.evidence_id),
+    assert!(
+        hits.contains(&res.evidence_id),
         "CJK end-to-end query failed to return the ingested row"
     );
 
     let after_query = fts_telemetry::snapshot();
 
     // Query-time strip site moved.
-    assert!(after_query.query_time_stopwords_stripped_total
+    assert!(
+        after_query.query_time_stopwords_stripped_total
             > after_ingest.query_time_stopwords_stripped_total,
         "query-time stopword strip counter did not advance on CJK query"
     );
@@ -1851,20 +1942,24 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
     // All three lane-query counters moved (unicode61 is always
     // tried; trigram + bigram are tried because the query
     // contains adjacent CJK codepoints).
-    assert!(after_query.unicode61_lane_queries_total > after_ingest.unicode61_lane_queries_total,
+    assert!(
+        after_query.unicode61_lane_queries_total > after_ingest.unicode61_lane_queries_total,
         "unicode61 lane query counter did not advance"
     );
-    assert!(after_query.cjk_trigram_lane_queries_total > after_ingest.cjk_trigram_lane_queries_total,
+    assert!(
+        after_query.cjk_trigram_lane_queries_total > after_ingest.cjk_trigram_lane_queries_total,
         "trigram lane query counter did not advance"
     );
-    assert!(after_query.bigram_lane_queries_total > after_ingest.bigram_lane_queries_total,
+    assert!(
+        after_query.bigram_lane_queries_total > after_ingest.bigram_lane_queries_total,
         "bigram lane query counter did not advance"
     );
 
     // The lane row totals should have advanced at least by the
     // unicode61 lane's hit count (>=1), because the ingested
     // row matches the query on at least one lane.
-    assert!(after_query.unicode61_lane_rows_total
+    assert!(
+        after_query.unicode61_lane_rows_total
             + after_query.cjk_trigram_lane_rows_total
             + after_query.bigram_lane_rows_total
             > after_ingest.unicode61_lane_rows_total
@@ -1874,7 +1969,7 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
     );
 }
 
-/// Skip-counter end-to-end test.  Sister of
+/// Skip-counter end-to-end test. Sister of
 /// `fts_telemetry_counters_advance_for_cjk_query_end_to_end`
 /// that exercises the three *skip* counters.
 ///
@@ -1886,17 +1981,17 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
 ///   (pure-stopword Japanese input like "の の の").
 /// - `bigram_lane_skips_pure_stopword_query_total` advances on
 ///   the same pure-stopword input as the trigram skip above —
-///   (ANALYSIS-0004) added this variant so
+///   an earlier review added this variant so
 ///   the bigram lane can distinguish "Latin-only query, lane
 ///   correctly declined" from "CJK query annihilated by
-///   stopword stripping".  Before the a follow-up restructure, the
+///   stopword stripping". Before the a follow-up restructure, the
 ///   pure-stopword case incorrectly bumped
 ///   `bigram_lane_skips_no_cjk_query_total`.
 ///
 /// Note: a Latin-only query does NOT structurally skip the
 /// trigram lane — the FTS5 `trigram` tokeniser windows Latin
 /// substrings embedded in CJK bodies, so Latin queries can
-/// legitimately match.  On Latin-only seed data the trigram
+/// legitimately match. On Latin-only seed data the trigram
 /// lane simply runs a MATCH that returns zero rows (bumping
 /// `cjk_trigram_lane_queries_total`, not a skip counter).
 /// a follow-up (commit `4aaccba`) tried to skip Latin
@@ -1912,7 +2007,8 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
 
     // Seed something searchable so the query path actually runs.
     let _ = store
-        .ingest(scope,
+        .ingest(
+            scope,
             b"Latin body for skip-counter test.",
             None,
             ImportanceClass::Useful,
@@ -1923,19 +2019,20 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
 
     // (1) Latin-only query → bigram lane structurally declines
     // (`compute_cjk_bigram_query` returns `None` because no
-    // adjacent CJK codepoint pair exists in the query).  The
+    // adjacent CJK codepoint pair exists in the query). The
     // trigram lane does NOT structurally decline a Latin-only
     // query — it runs a MATCH against `evidence_fts_cjk` which
     // returns zero rows on this Latin-only seed (the body
     // wasn't routed into the CJK-only table to begin with) and
-    // bumps `cjk_trigram_lane_queries_total`.  This shape was
+    // bumps `cjk_trigram_lane_queries_total`. This shape was
     // the a follow-up behaviour; a follow-up reverted the a follow-up
     // structural skip after the trigram tokeniser's cross-
     // script behaviour was correctly identified.
     let _ = store.search_fts(scope, "Latin body", 10).unwrap();
 
     let after_latin = fts_telemetry::snapshot();
-    assert!(after_latin.bigram_lane_skips_no_cjk_query_total
+    assert!(
+        after_latin.bigram_lane_skips_no_cjk_query_total
             > before.bigram_lane_skips_no_cjk_query_total,
         "bigram no-CJK-query skip counter did not advance on Latin-only query"
     );
@@ -1943,49 +2040,51 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
     // (2) Pure-stopword Japanese query → trigram lane collapses
     // to empty after the query-time strip and short-circuits,
     // AND the bigram lane records its sibling pure-stopword
-    // skip (a follow-up ANALYSIS-0004 fix) instead of routing the
+    // skip (a follow-up review fix) instead of routing the
     // pure-stopword case into the no-CJK counter.
     let _ = store.search_fts(scope, "の の の", 10).unwrap();
 
     let after_stop = fts_telemetry::snapshot();
-    assert!(after_stop.cjk_trigram_lane_skips_pure_stopword_query_total
+    assert!(
+        after_stop.cjk_trigram_lane_skips_pure_stopword_query_total
             > after_latin.cjk_trigram_lane_skips_pure_stopword_query_total,
         "trigram pure-stopword-query skip counter did not advance on a stripped-to-empty query"
     );
-    assert!(after_stop.bigram_lane_skips_pure_stopword_query_total
+    assert!(
+        after_stop.bigram_lane_skips_pure_stopword_query_total
             > after_latin.bigram_lane_skips_pure_stopword_query_total,
         "bigram pure-stopword-query skip counter did not advance on a stripped-to-empty CJK query \
-         — a follow-up ANALYSIS-0004 regressed (pure-stopword case routed to BigramNoCjkQuery instead)"
+         — a follow-up review regressed (pure-stopword case routed to BigramNoCjkQuery instead)"
     );
-    // BUG-0001 regression note: with the
+    // earlier regression note: with the
     // structural `if stripped_query.trim().is_empty() { skip }
     // else { closure; if let Ok { record_lane_query } }` shape
     // in `merged_fts_search`, a pure-stopword query like the
     // one above bumps *only* the skip counter — never the
     // query counter — because the two branches are mutually
-    // exclusive by construction.  We deliberately do NOT pin
+    // exclusive by construction. We deliberately do NOT pin
     // this via a runtime assertion on the query counter:
     // sibling tests in this binary run in parallel and bump
     // the same process-singleton counter, so any
     // `assert_eq!(after_stop.query, after_latin.query)` would
-    // race.  The regression-resistance lives in the structural
+    // race. The regression-resistance lives in the structural
     // if/else, not in this test — see the doc comment on the
     // trigram branch in `crate::store::merged_fts_search` and
     // the `queries + skips + silently_swallowed_errors =
     // total_attempts` contract on `crate::fts_telemetry`.
     //
-    // ANALYSIS-0004 regression note: the
+    // earlier regression note: the
     // bigram lane parallels the same structural shape — the
     // pure-stopword check runs BEFORE
     // `compute_cjk_bigram_query` so the no-CJK and
     // pure-stopword bigram skip counters are mutually
-    // exclusive by construction.  We do not pin
+    // exclusive by construction. We do not pin
     // `bigram_lane_skips_no_cjk_query_total` not-advancing on
     // step (2) for the same parallel-tests race reason.
 }
 
 /// Architectural-reality regression test for the trigram
-/// tokeniser's cross-script behaviour.  Pins the fact that a
+/// tokeniser's cross-script behaviour. Pins the fact that a
 /// Latin-only query MUST be able to match a CJK body containing
 /// an embedded Latin substring via the `evidence_fts_cjk`
 /// (trigram) lane — because the FTS5 `trigram` tokeniser windows
@@ -1995,25 +2094,25 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
 /// Background: a follow-up (commit `4aaccba`) added a
 /// structural skip on the trigram lane for Latin-only queries
 /// under the false premise that `evidence_fts_cjk` "cannot
-/// contain a matching row" for such queries.  a follow-up reverted
-/// that change after Devin Review correctly identified that the
+/// contain a matching row" for such queries. a follow-up reverted
+/// that change after an earlier review correctly identified that the
 /// trigram tokeniser DOES index Latin substrings inside CJK
 /// bodies, so the structural skip was a recall risk dressed as a
-/// perf optimisation.  This test locks the correct behaviour
+/// perf optimisation. This test locks the correct behaviour
 /// in place — a future re-optimisation attempt that re-adds the
 /// Latin-only skip will fail here loudly.
 ///
 /// Mechanism: ingest `日本のiPhone発表` (mixed Japanese + Latin)
-/// and query for `iPhone` (Latin only).  The CJK body routes
+/// and query for `iPhone` (Latin only). The CJK body routes
 /// into `evidence_fts_cjk` (because `contains_cjk_or_thai` is
 /// true on the body), and the FTS5 trigram tokeniser stores the
-/// Latin trigrams `iPh`, `Pho`, `hon`, `one`.  The Latin query
+/// Latin trigrams `iPh`, `Pho`, `hon`, `one`. The Latin query
 /// tokenises to the same trigrams and matches.
 ///
 /// Unicode61 lane note: the unicode61 lane also matches this
 /// query (Latin tokens are preserved verbatim in `evidence_fts`),
 /// so end-to-end recall is independently guaranteed via that
-/// lane.  This test asserts the trigram lane *also* matches,
+/// lane. This test asserts the trigram lane *also* matches,
 /// which is what the a follow-up commit silently broke.
 #[test]
 fn fts_telemetry_trigram_lane_matches_latin_in_cjk_body() {
@@ -2022,7 +2121,7 @@ fn fts_telemetry_trigram_lane_matches_latin_in_cjk_body() {
     let scope = ScopeId::new_v4();
 
     // Mixed-script body: Japanese particles + Latin product
-    // name.  Routes into `evidence_fts_cjk` because the body
+    // name. Routes into `evidence_fts_cjk` because the body
     // contains CJK codepoints, and the trigram tokeniser indexes
     // the embedded Latin substring `iPhone` as overlapping
     // 3-codepoint windows alongside the CJK trigrams.
@@ -2033,12 +2132,13 @@ fn fts_telemetry_trigram_lane_matches_latin_in_cjk_body() {
 
     let before = fts_telemetry::snapshot();
 
-    // Latin-only query.  Must match the body — both the
+    // Latin-only query. Must match the body — both the
     // unicode61 lane (Latin tokens preserved) and the trigram
     // lane (Latin trigrams windowed inside the CJK body) will
     // contribute.
     let hits = store.search_fts(scope, "iPhone", 10).unwrap();
-    assert!(hits.contains(&res.evidence_id),
+    assert!(
+        hits.contains(&res.evidence_id),
         "Latin-only query failed to match a CJK body containing the Latin substring \
          — the trigram lane MUST window Latin trigrams inside CJK bodies \
          (see fts_telemetry module doc and the a follow-up revert of commit 4aaccba)"
@@ -2048,19 +2148,21 @@ fn fts_telemetry_trigram_lane_matches_latin_in_cjk_body() {
 
     // The trigram lane MUST be invoked (no structural skip on
     // Latin queries) — this is the key a follow-up regression
-    // guard.  If a future commit re-adds the Latin-only
+    // guard. If a future commit re-adds the Latin-only
     // structural skip, the trigram query counter will not
     // advance and this assertion fails.
-    assert!(after.cjk_trigram_lane_queries_total > before.cjk_trigram_lane_queries_total,
+    assert!(
+        after.cjk_trigram_lane_queries_total > before.cjk_trigram_lane_queries_total,
         "trigram lane query counter did not advance on Latin-only query against CJK body \
-         — a follow-up FLAG-0001 must remain reverted (the trigram lane is NOT structurally \
+         — a follow-up review must remain reverted (the trigram lane is NOT structurally \
          declined for Latin queries; see fts_telemetry module doc for the cross-script \
          tokeniser rationale)"
     );
 
     // And the unicode61 lane MUST also be invoked — it's the
     // primary high-precision lane for Latin queries.
-    assert!(after.unicode61_lane_queries_total > before.unicode61_lane_queries_total,
+    assert!(
+        after.unicode61_lane_queries_total > before.unicode61_lane_queries_total,
         "unicode61 lane query counter did not advance"
     );
 }

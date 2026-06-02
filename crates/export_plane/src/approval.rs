@@ -73,7 +73,8 @@ impl ConceptApprovalWorkflow {
     ///   `Useful` would silently lift `Important` and `Critical`
     ///   concepts past any policy ceiling stricter than `Useful`,
     ///   which is exactly the leak the ceiling exists to prevent.
-    pub fn approve_for_export(&mut self,
+    pub fn approve_for_export(
+        &mut self,
         concept_id: Uuid,
         scope: ScopeId,
         profile_id: Uuid,
@@ -98,8 +99,10 @@ impl ConceptApprovalWorkflow {
         // Build a provenance bundle attesting to the approval. The
         // approval workflow itself is a synthesis activity (it
         // *produces* the approved-concept entity).
-        let provenance = ProvenanceBundle::new(concept_id,
-            SynthesisActivity::new("export_plane:approval_workflow",
+        let provenance = ProvenanceBundle::new(
+            concept_id,
+            SynthesisActivity::new(
+                "export_plane:approval_workflow",
                 "export_plane@v1",
                 "concept.approve.v1",
                 Uuid::new_v4(),
@@ -108,7 +111,8 @@ impl ConceptApprovalWorkflow {
             Vec::new(),
         );
 
-        let approved = ApprovedConcept::new(concept_id,
+        let approved = ApprovedConcept::new(
+            concept_id,
             node.label.clone(),
             node.definition.clone(),
             scope,
@@ -176,7 +180,8 @@ mod tests {
         let registry = registry_with(id);
         let mut wf = ConceptApprovalWorkflow::new();
         let approved = wf
-            .approve_for_export(id,
+            .approve_for_export(
+                id,
                 ScopeId::new_v4(),
                 Uuid::new_v4(),
                 SensitivityClass::Useful,
@@ -206,7 +211,8 @@ mod tests {
             let registry = registry_with(id);
             let mut wf = ConceptApprovalWorkflow::new();
             let approved = wf
-                .approve_for_export(id,
+                .approve_for_export(
+                    id,
                     ScopeId::new_v4(),
                     Uuid::new_v4(),
                     class,
@@ -214,7 +220,8 @@ mod tests {
                     &registry,
                 )
                 .expect("approve");
-            assert_eq!(approved.sensitivity_class, class,
+            assert_eq!(
+                approved.sensitivity_class, class,
                 "sensitivity {class:?} must round-trip through approve_for_export"
             );
         }
@@ -227,7 +234,8 @@ mod tests {
         let mut wf = ConceptApprovalWorkflow::new();
         let id = Uuid::new_v4();
         let err = wf
-            .approve_for_export(id,
+            .approve_for_export(
+                id,
                 ScopeId::new_v4(),
                 Uuid::new_v4(),
                 SensitivityClass::Useful,
@@ -244,7 +252,8 @@ mod tests {
         let registry = registry_with(id);
         let mut wf = ConceptApprovalWorkflow::new();
         let err = wf
-            .approve_for_export(id,
+            .approve_for_export(
+                id,
                 ScopeId::new_v4(),
                 Uuid::new_v4(),
                 SensitivityClass::Useful,
@@ -261,7 +270,8 @@ mod tests {
         let registry = ExportControlRegistry::new();
         let mut wf = ConceptApprovalWorkflow::new();
         let err = wf
-            .approve_for_export(id,
+            .approve_for_export(
+                id,
                 ScopeId::new_v4(),
                 Uuid::new_v4(),
                 SensitivityClass::Useful,
@@ -281,7 +291,8 @@ mod tests {
         registry.insert_concept(control).expect("insert");
         let mut wf = ConceptApprovalWorkflow::new();
         let err = wf
-            .approve_for_export(id,
+            .approve_for_export(
+                id,
                 ScopeId::new_v4(),
                 Uuid::new_v4(),
                 SensitivityClass::Useful,
@@ -299,7 +310,8 @@ mod tests {
         let mut wf = ConceptApprovalWorkflow::new();
         let scope = ScopeId::new_v4();
         let profile = Uuid::new_v4();
-        wf.approve_for_export(id,
+        wf.approve_for_export(
+            id,
             scope,
             profile,
             SensitivityClass::Useful,
@@ -308,7 +320,8 @@ mod tests {
         )
         .expect("first");
         let err = wf
-            .approve_for_export(id,
+            .approve_for_export(
+                id,
                 scope,
                 profile,
                 SensitivityClass::Useful,
@@ -324,7 +337,8 @@ mod tests {
         let (graph, id) = graph_with_concept(NodeState::Canonical);
         let registry = registry_with(id);
         let mut wf = ConceptApprovalWorkflow::new();
-        wf.approve_for_export(id,
+        wf.approve_for_export(
+            id,
             ScopeId::new_v4(),
             Uuid::new_v4(),
             SensitivityClass::Useful,
@@ -360,7 +374,8 @@ mod tests {
             .expect("b");
 
         let mut wf = ConceptApprovalWorkflow::new();
-        wf.approve_for_export(id_a,
+        wf.approve_for_export(
+            id_a,
             scope_a,
             Uuid::new_v4(),
             SensitivityClass::Useful,
@@ -368,7 +383,8 @@ mod tests {
             &registry,
         )
         .expect("a");
-        wf.approve_for_export(id_b,
+        wf.approve_for_export(
+            id_b,
             scope_b,
             Uuid::new_v4(),
             SensitivityClass::Useful,

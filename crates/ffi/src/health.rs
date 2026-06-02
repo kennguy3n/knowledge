@@ -1,4 +1,4 @@
-//! Substrate liveness probe — the  `health_check` surface.
+//! Substrate liveness probe — the `health_check` surface.
 //!
 //! Replaces the original `"ok"` string stub on the napi side. Returns
 //! a typed [`HealthStatus`] envelope that platform hosts (Electron
@@ -290,7 +290,8 @@ fn crypto_subsystem(rt: &crate::runtime::FfiRuntime, tombstones: u64) -> Subsyst
         SubsystemHealth {
             name: "crypto".into(),
             status: SubsystemStatus::Ok,
-            detail: Some(format!("master_key=present, tombstones={tombstones}, cached_deks={cached_deks}"
+            detail: Some(format!(
+                "master_key=present, tombstones={tombstones}, cached_deks={cached_deks}"
             )),
             adapters: None,
         }
@@ -306,7 +307,8 @@ fn memory_manager_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth 
     SubsystemHealth {
         name: "memory_manager".into(),
         status: SubsystemStatus::Ok,
-        detail: Some(format!("user_memories={users}, channel_memories={channels}"
+        detail: Some(format!(
+            "user_memories={users}, channel_memories={channels}"
         )),
         adapters: None,
     }
@@ -341,11 +343,13 @@ fn inference_router_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealt
         .any(|s| s.supports.iter().copied().any(InferenceTask::is_synthesis));
 
     let (status, detail) = if !any_available {
-        (SubsystemStatus::Unavailable,
+        (
+            SubsystemStatus::Unavailable,
             "no adapter is available; inference will return Unavailable".to_string(),
         )
     } else if !any_synthesis_capable {
-        (SubsystemStatus::Degraded,
+        (
+            SubsystemStatus::Degraded,
             "no available adapter supports synthesis; trigger_synthesis will return Unavailable"
                 .to_string(),
         )
@@ -355,7 +359,8 @@ fn inference_router_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealt
             .filter(|s| s.available)
             .map(|s| s.kind.as_str())
             .collect();
-        (SubsystemStatus::Ok,
+        (
+            SubsystemStatus::Ok,
             format!("available adapters: {}", names.join(", ")),
         )
     };
@@ -442,7 +447,7 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     // (Slack PKCE-only, Notion test mode) work fine without one;
     // the host might also be relying on the
     // `auth_config_json["client_secret"]` fallback layer (//
-// 4.1 layer 2). Only the `failed > 0 || !http_transport`
+    // 4.1 layer 2). Only the `failed > 0 || !http_transport`
     // conditions remain load-bearing for the subsystem status.
     //
     // Under `not(http-client)` the resolver slot is
@@ -456,7 +461,8 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     } else {
         SubsystemStatus::Ok
     };
-    let mut detail = format!("total={total}, authenticated={authenticated}, \
+    let mut detail = format!(
+        "total={total}, authenticated={authenticated}, \
          never_run={never_run}, in_progress={in_progress}, \
          succeeded={succeeded}, failed={failed}"
     );
@@ -481,7 +487,7 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
             ", oauth_resolver=unset"
         });
     }
-    // Surface the  webhook receiver state: how many servers
+    // Surface the webhook receiver state: how many servers
     // are currently bound + how many `(provider_id, instance_id)`
     // dispatch rows are registered across them. Tells the operator
     // at a glance whether the substrate is configured to receive
@@ -499,7 +505,8 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
         .values()
         .map(super::webhook::RunningWebhookServer::router_registration_count)
         .sum();
-    let _ = write!(&mut detail,
+    let _ = write!(
+        &mut detail,
         ", webhook_servers={webhook_server_count}, \
          webhook_registrations={webhook_registration_count}"
     );
@@ -574,7 +581,8 @@ fn synthesis_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     SubsystemHealth {
         name: "synthesis_engine".into(),
         status,
-        detail: Some(format!("engine={}, windows={total_windows}, objects={synthesis_objects}, \
+        detail: Some(format!(
+            "engine={}, windows={total_windows}, objects={synthesis_objects}, \
              domain_memories={domain_count}, tenant_memories={tenant_count}, \
              scope_bindings={}, single_tenant={}, cooldowns={cooldown_count}, \
              rate_capacity={rate_capacity}, rate_refill_per_sec={rate_refill_per_sec}",

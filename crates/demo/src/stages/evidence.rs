@@ -31,12 +31,13 @@ use tempfile::TempDir;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::{Dataset, ScopeTier, SyntheticMessage};
-use crate::stages::runtime::{IngestedRow, RuntimeState};
 use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::{IngestedRow, RuntimeState};
 
 const STAGE: &str = "evidence";
 
-pub fn run(dataset: &Dataset,
+pub fn run(
+    dataset: &Dataset,
     state: &mut RuntimeState,
     report: &mut DemoReport,
     log: &mut AssertionLog,
@@ -67,7 +68,7 @@ pub fn run(dataset: &Dataset,
     // the multilingual ingest pipeline is visibly exercised end-to-
     // end rather than silently leaving the column NULL (which is
     // what the earlier legacy `ingest()` shim would have done
-    // — and what Devin Review correctly flagged as a usability gap).
+    // — and what an earlier review correctly flagged as a usability gap).
     let mut by_language: std::collections::BTreeMap<String, u64> =
         std::collections::BTreeMap::new();
     let mut ingested: Vec<IngestedRow> = Vec::new();
@@ -97,7 +98,8 @@ pub fn run(dataset: &Dataset,
         let language_tag = detection.as_ref().map(|d| d.tag.as_str());
 
         let result = store
-            .ingest_with_language(scope,
+            .ingest_with_language(
+                scope,
                 msg.body.as_bytes(),
                 Some(&msg.source_ref),
                 class,
@@ -115,7 +117,8 @@ pub fn run(dataset: &Dataset,
         // bypass the `language_tag` column entirely, so attributing
         // their detection outcome to the breakdown would overstate
         // what the schema-v13 column actually carries.
-        if matches!(result.storage_path,
+        if matches!(
+            result.storage_path,
             StoragePath::Inline | StoragePath::BodyTable
         ) {
             let lang_key = language_tag.map_or_else(|| "<none>".to_string(), str::to_string);
@@ -123,7 +126,8 @@ pub fn run(dataset: &Dataset,
         }
         ingest_count += 1;
 
-        if matches!(result.storage_path,
+        if matches!(
+            result.storage_path,
             StoragePath::Inline | StoragePath::BodyTable
         ) {
             ingested.push(IngestedRow {
@@ -145,26 +149,31 @@ pub fn run(dataset: &Dataset,
     let ring_size = store.ring_buffer_current_size().expect("ring buffer size") as u64;
     let ring_len = store.ring_buffer_len().expect("ring buffer len") as u64;
 
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "evidence rows match inline+body_table ingest count",
         evidence_rows as u64 == inline + body_table,
     );
     log.check(STAGE, "at least one inline row was created", inline > 0);
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "at least one body-table row was created",
         body_table > 0,
     );
     log.check(STAGE, "at least one ring-buffer row was created", ring > 0);
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "ring buffer length matches noise count",
         ring_len == ring,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "body_store dedup compresses duplicate long bodies",
         body_rows as u64 <= body_table,
     );
     log.check(STAGE, "ring buffer holds bytes", ring_size > 0);
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "all four scope tiers contributed evidence",
         scope_tier_coverage(&ingested) == 4,
     );
@@ -176,13 +185,14 @@ pub fn run(dataset: &Dataset,
     // `"en"`) on the inline / body-table path. A failure here would
     // mean the demo silently regressed back to the legacy `ingest()`
     // shim that leaves the column NULL — which is exactly the
-    // showcase-gap Devin Review flagged on the previous commit.
+    // showcase-gap an earlier review flagged on the previous commit.
     let language_tagged_rows: u64 = by_language
         .iter()
         .filter(|(k, _)| k.as_str() != "<none>")
         .map(|(_, v)| *v)
         .sum();
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "at least one persisted row carries a detected language_tag",
         language_tagged_rows > 0,
     );
@@ -200,14 +210,15 @@ pub fn run(dataset: &Dataset,
     //  breakdown: how many persisted rows carry each BCP-47
     // primary subtag the substrate detected at ingest. `<none>`
     // collects the fail-closed outcomes (detector declined to
-    // classify). The  multilingual lexicon registry reads
+    // classify). The multilingual lexicon registry reads
     // these tags on every retrieval to pick a per-locale lexicon, so
     // surfacing the breakdown here makes the multilingual ingest
     // pipeline visibly exercised end-to-end on every demo run.
     for (k, v) in &by_language {
         stage.stat(format!("language_{k}"), v.to_string());
     }
-    stage.note(format!("Stored evidence at {} (encrypted SQLCipher, master key derived in-process)",
+    stage.note(format!(
+        "Stored evidence at {} (encrypted SQLCipher, master key derived in-process)",
         db_path.display()
     ));
 

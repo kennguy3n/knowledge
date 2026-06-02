@@ -54,12 +54,13 @@ use uuid::Uuid;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::stages::runtime::RuntimeState;
 use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::RuntimeState;
 
 const STAGE: &str = "agent";
 
-pub fn run(dataset: &Dataset,
+pub fn run(
+    dataset: &Dataset,
     state: &mut RuntimeState,
     report: &mut DemoReport,
     log: &mut AssertionLog,
@@ -69,7 +70,8 @@ pub fn run(dataset: &Dataset,
 
     // -------- Agent identity + scopes ----------------------------
     let agent_uuid = Uuid::new_v4();
-    let agent = AgentIdentity::new(agent_uuid,
+    let agent = AgentIdentity::new(
+        agent_uuid,
         "synth-agent",
         "bonsai-1.7b",
         "q1_0_g128-2026-04-01",
@@ -87,7 +89,8 @@ pub fn run(dataset: &Dataset,
         .take(3)
         .map(|row| EvidenceRef::from_uuid(row.evidence_id.0))
         .collect();
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "evidence stage surfaced enough evidence rows to back agent proposals",
         evidence_refs.len() >= 2,
     );
@@ -97,9 +100,11 @@ pub fn run(dataset: &Dataset,
 
     // -------- Submit observation ---------------------------------
     let submit_started = Instant::now();
-    let observation_envelope = AgentProposal::new(ProposalKind::Observation,
+    let observation_envelope = AgentProposal::new(
+        ProposalKind::Observation,
         channel_scope,
-        ObservationProposal::new("Demo observation: substrate ingest pipeline is end-to-end testable",
+        ObservationProposal::new(
+            "Demo observation: substrate ingest pipeline is end-to-end testable",
             "fact",
         ),
         evidence_refs.clone(),
@@ -113,9 +118,11 @@ pub fn run(dataset: &Dataset,
     submitted_ids.push(observation_id);
 
     // -------- Submit concept -------------------------------------
-    let concept_envelope = AgentProposal::new(ProposalKind::Concept,
+    let concept_envelope = AgentProposal::new(
+        ProposalKind::Concept,
         channel_scope,
-        ConceptProposal::new("Knowledge Substrate Demo",
+        ConceptProposal::new(
+            "Knowledge Substrate Demo",
             "End-to-end demo run exercising every Knowledge substrate stage",
         ),
         evidence_refs.clone(),
@@ -130,13 +137,15 @@ pub fn run(dataset: &Dataset,
 
     // -------- Submit relation ------------------------------------
     let (rel_src, rel_dst) = if state.canonical_concept_ids.len() >= 2 {
-        (state.canonical_concept_ids[0],
+        (
+            state.canonical_concept_ids[0],
             state.canonical_concept_ids[1],
         )
     } else {
         (Uuid::new_v4(), Uuid::new_v4())
     };
-    let relation_envelope = AgentProposal::new(ProposalKind::Relation,
+    let relation_envelope = AgentProposal::new(
+        ProposalKind::Relation,
         domain_scope,
         RelationProposal::new(rel_src, rel_dst, RelationType::new("derived_from")),
         evidence_refs.clone(),
@@ -150,9 +159,11 @@ pub fn run(dataset: &Dataset,
     submitted_ids.push(relation_id);
 
     // -------- Submit summary -------------------------------------
-    let summary_envelope = AgentProposal::new(ProposalKind::Summary,
+    let summary_envelope = AgentProposal::new(
+        ProposalKind::Summary,
         channel_scope,
-        SummaryProposal::new("Demo channel summary: weekly digest of substrate operations",
+        SummaryProposal::new(
+            "Demo channel summary: weekly digest of substrate operations",
             "channel",
         ),
         evidence_refs.clone(),
@@ -166,7 +177,8 @@ pub fn run(dataset: &Dataset,
     submitted_ids.push(summary_id);
     let submit_elapsed = submit_started.elapsed();
 
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "store accepted all four typed proposals",
         store.len() == 4,
     );
@@ -177,7 +189,8 @@ pub fn run(dataset: &Dataset,
     }
 
     // -------- Duplicate id is refused ----------------------------
-    let duplicate_envelope = AgentProposal::new(ProposalKind::Observation,
+    let duplicate_envelope = AgentProposal::new(
+        ProposalKind::Observation,
         channel_scope,
         ObservationProposal::new("Duplicate id should be refused", "fact"),
         evidence_refs.clone(),
@@ -190,7 +203,8 @@ pub fn run(dataset: &Dataset,
     let dup_blocked = matches!(store.submit_observation(clash),
         Err(LifecycleError::DuplicateProposal(id)) if id == observation_id,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "store refuses to overwrite an existing proposal id",
         dup_blocked,
     );
@@ -206,7 +220,8 @@ pub fn run(dataset: &Dataset,
         .get(concept_id)
         .map(|p| p.corroboration_count)
         .unwrap_or_default();
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "corroboration count is bumped on each call",
         concept_corroboration == 2,
     );
@@ -217,11 +232,13 @@ pub fn run(dataset: &Dataset,
     let observation_decision = store
         .review(observation_id, &auto_policy)
         .expect("review observation");
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "high-confidence observation auto-promotes under permissive policy",
         matches!(observation_decision, ProposalDecision::AutoPromoted),
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "auto-promoted observation is in Promoted state",
         store.get(observation_id).map(|p| p.state) == Some(ProposalState::Promoted),
     );
@@ -231,14 +248,16 @@ pub fn run(dataset: &Dataset,
     let concept_decision = store
         .review(concept_id, &auto_policy)
         .expect("review concept");
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "below-threshold concept needs human review",
         matches!(concept_decision, ProposalDecision::NeedsHumanReview),
     );
 
     // -------- Manual promote of concept --------------------------
     store.promote(concept_id).expect("promote concept");
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "concept reaches Promoted via manual promote()",
         store.get(concept_id).map(|p| p.state) == Some(ProposalState::Promoted),
     );
@@ -247,14 +266,16 @@ pub fn run(dataset: &Dataset,
     let relation_decision = store
         .review(relation_id, &auto_policy)
         .expect("review relation");
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "below-threshold relation needs human review",
         matches!(relation_decision, ProposalDecision::NeedsHumanReview),
     );
     store
         .reject(relation_id, "demo: relation declined for review")
         .expect("reject relation");
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "rejected relation lands in Rejected with explicit reason",
         store.get(relation_id).is_some_and(|p| {
             p.state == ProposalState::Rejected
@@ -267,7 +288,8 @@ pub fn run(dataset: &Dataset,
     let summary_decision = store
         .review(summary_id, &default_policy)
         .expect("review summary");
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "default policy admits to review without auto-promoting",
         matches!(summary_decision, ProposalDecision::NeedsHumanReview),
     );
@@ -275,10 +297,12 @@ pub fn run(dataset: &Dataset,
     let review_elapsed = review_started.elapsed();
 
     // -------- Cannot reject promoted ------------------------------
-    let cannot_reject_promoted = matches!(store.reject(observation_id, "should be rejected"),
+    let cannot_reject_promoted = matches!(
+        store.reject(observation_id, "should be rejected"),
         Err(LifecycleError::InvalidTransition { .. })
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "rejected once-promoted proposal is refused by the state machine",
         cannot_reject_promoted,
     );
@@ -296,15 +320,18 @@ pub fn run(dataset: &Dataset,
         .expect("promote summary to canonical");
     let canonical_elapsed = canonical_started.elapsed();
 
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "canonical observation derives from observation proposal",
         matches!(canonical_observation, CanonicalArtifact::Observation(_)),
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "canonical concept derives from concept proposal",
         matches!(canonical_concept, CanonicalArtifact::Concept(_)),
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "canonical summary derives from summary proposal",
         matches!(canonical_summary, CanonicalArtifact::Summary(_)),
     );
@@ -315,22 +342,26 @@ pub fn run(dataset: &Dataset,
         .promote_to_canonical(observation_id)
         .expect("re-promote observation")
         .id();
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "promote_to_canonical is deterministic across calls",
         observation_id_again == canonical_observation.id(),
     );
 
     // Cannot derive canonical artifact for a rejected proposal.
-    let canonical_rejected_blocked = matches!(store.promote_to_canonical(relation_id),
+    let canonical_rejected_blocked = matches!(
+        store.promote_to_canonical(relation_id),
         Err(LifecycleError::InvalidTransition { .. })
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "canonical artifact is refused for rejected proposal",
         canonical_rejected_blocked,
     );
 
     // -------- TTL expiry path -------------------------------------
-    let ttl_envelope = AgentProposal::new(ProposalKind::Observation,
+    let ttl_envelope = AgentProposal::new(
+        ProposalKind::Observation,
         channel_scope,
         ObservationProposal::new("TTL-bound demo proposal", "fact"),
         evidence_refs.clone(),
@@ -347,11 +378,13 @@ pub fn run(dataset: &Dataset,
     let ttl_outcome = store.review(ttl_id, &auto_policy);
     let ttl_expired_handled =
         matches!(ttl_outcome, Err(LifecycleError::Expired(id)) if id == ttl_id);
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "TTL-elapsed proposal is rejected with LifecycleError::Expired",
         ttl_expired_handled,
     );
-    log.check(STAGE,
+    log.check(
+        STAGE,
         "TTL-elapsed proposal lands in Rejected with reason `ttl_expired`",
         store.get(ttl_id).is_some_and(|p| {
             p.state == ProposalState::Rejected
@@ -361,32 +394,37 @@ pub fn run(dataset: &Dataset,
 
     // -------- Audit lifecycle entries -----------------------------
     let audit_started = Instant::now();
-    log_proposal_promoted(&mut state.audit_log,
+    log_proposal_promoted(
+        &mut state.audit_log,
         observation_id,
         Actor::System,
         channel_scope,
     )
     .expect("log_proposal_promoted observation");
-    log_proposal_promoted(&mut state.audit_log,
+    log_proposal_promoted(
+        &mut state.audit_log,
         concept_id,
         Actor::User(Uuid::new_v4()),
         channel_scope,
     )
     .expect("log_proposal_promoted concept");
-    log_proposal_promoted(&mut state.audit_log,
+    log_proposal_promoted(
+        &mut state.audit_log,
         summary_id,
         Actor::User(Uuid::new_v4()),
         channel_scope,
     )
     .expect("log_proposal_promoted summary");
-    log_proposal_rejected(&mut state.audit_log,
+    log_proposal_rejected(
+        &mut state.audit_log,
         relation_id,
         Actor::User(Uuid::new_v4()),
         domain_scope,
         "demo: relation declined for review",
     )
     .expect("log_proposal_rejected relation");
-    log_proposal_rejected(&mut state.audit_log,
+    log_proposal_rejected(
+        &mut state.audit_log,
         ttl_id,
         Actor::System,
         channel_scope,
@@ -409,13 +447,16 @@ pub fn run(dataset: &Dataset,
     stage.stat("proposals_auto_promoted", "1");
     stage.stat("proposals_manually_promoted", "2");
     stage.stat("proposals_rejected", total_rejected.to_string());
-    stage.stat("canonical_artifacts_derived",
+    stage.stat(
+        "canonical_artifacts_derived",
         "3 (observation, concept, summary)",
     );
-    stage.stat("concept_corroboration_count",
+    stage.stat(
+        "concept_corroboration_count",
         concept_corroboration.to_string(),
     );
-    stage.note("AgentProposal lifecycle exercised end-to-end: submission, \
+    stage.note(
+        "AgentProposal lifecycle exercised end-to-end: submission, \
          duplicate-id refusal, corroboration bump, AutoPromotionPolicy \
          match + miss, manual promote/reject, deterministic canonical \
          artifact derivation, and TTL-expiry rejection.",
@@ -423,7 +464,8 @@ pub fn run(dataset: &Dataset,
 
     report.count("proposals_submitted", state.proposals_submitted);
     report.count("proposals_auto_promoted", state.proposals_auto_promoted);
-    report.count("proposals_manually_promoted",
+    report.count(
+        "proposals_manually_promoted",
         state.proposals_manually_promoted,
     );
     report.count("proposals_rejected", state.proposals_rejected);

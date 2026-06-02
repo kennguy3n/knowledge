@@ -162,7 +162,8 @@ mod tests {
         let cfg = NamespaceConfig::new(ObjectType::Tenant);
         reg.register(cfg.clone()).unwrap();
         let err = reg.register(cfg).unwrap_err();
-        assert_eq!(err,
+        assert_eq!(
+            err,
             PermissionError::NamespaceAlreadyRegistered(ObjectType::Tenant)
         );
     }

@@ -213,8 +213,10 @@ mod tests {
     use uuid::Uuid;
 
     fn fixture_bundle() -> ProvenanceBundle {
-        ProvenanceBundle::new(Uuid::nil(),
-            SynthesisActivity::new("synth-pipeline:elected:device-7",
+        ProvenanceBundle::new(
+            Uuid::nil(),
+            SynthesisActivity::new(
+                "synth-pipeline:elected:device-7",
                 "bonsai-1.7b@q1_0_g128",
                 "synth.summary.v1",
                 Uuid::nil(),

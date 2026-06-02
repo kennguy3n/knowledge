@@ -68,7 +68,8 @@ fn random_nonce() -> AeadNonce {
 
 /// Encrypt `object` under `scope_key`, binding the routing fields
 /// into the AAD.
-pub fn publish_synthesis_object(object: &SynthesisObject,
+pub fn publish_synthesis_object(
+    object: &SynthesisObject,
     scope_key: &AeadKey,
 ) -> Result<EncryptedSynthesisObject> {
     let nonce = random_nonce();
@@ -86,7 +87,8 @@ pub fn publish_synthesis_object(object: &SynthesisObject,
 }
 
 /// Decrypt and deserialise the inverse of [`publish_synthesis_object`].
-pub fn consume_synthesis_object(encrypted: &EncryptedSynthesisObject,
+pub fn consume_synthesis_object(
+    encrypted: &EncryptedSynthesisObject,
     scope_key: &AeadKey,
 ) -> Result<SynthesisObject> {
     let aad = aad_for(encrypted.scope_id, encrypted.window_id, encrypted.object_id);
@@ -119,7 +121,8 @@ mod tests {
     }
 
     fn fresh_object() -> SynthesisObject {
-        SynthesisObject::new(ScopeId::new_v4(),
+        SynthesisObject::new(
+            ScopeId::new_v4(),
             WindowId::new_v4(),
             SynthesisObjectType::ChannelRecap,
             b"hello".to_vec(),
@@ -143,7 +146,8 @@ mod tests {
         let object = fresh_object();
         let encrypted = publish_synthesis_object(&object, &key).unwrap();
         let err = consume_synthesis_object(&encrypted, &other).unwrap_err();
-        assert!(matches!(err,
+        assert!(matches!(
+            err,
             PipelineError::Crypto(crypto::CryptoError::AeadDecryption)
         ));
     }

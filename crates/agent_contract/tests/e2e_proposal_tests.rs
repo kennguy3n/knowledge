@@ -30,7 +30,8 @@ use evidence_store::ScopeId;
 use memory_manager::SensitivityClass;
 
 fn fixture_identity() -> AgentIdentity {
-    AgentIdentity::new(Uuid::new_v4(),
+    AgentIdentity::new(
+        Uuid::new_v4(),
         "nina-pm",
         "bonsai-1.7b",
         "q1_0_g128-2026-04-01",
@@ -47,7 +48,8 @@ fn observation_proposal_full_lifecycle_with_audit() {
     // 1. Build agent identity + observation proposal.
     let identity = fixture_identity();
     let scope = ScopeId::new_v4();
-    let proposal = AgentProposal::new(ProposalKind::Observation,
+    let proposal = AgentProposal::new(
+        ProposalKind::Observation,
         scope,
         ObservationProposal::new("Atlas launches Q3 2026", "fact"),
         vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -91,10 +93,12 @@ fn observation_proposal_full_lifecycle_with_audit() {
     // 6. Audit trail has one submission + one promotion entry.
     let entries: Vec<_> = audit.entries().to_vec();
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].action_type,
+    assert_eq!(
+        entries[0].action_type,
         AuditActionType::AgentProposalSubmitted
     );
-    assert_eq!(entries[1].action_type,
+    assert_eq!(
+        entries[1].action_type,
         AuditActionType::AgentProposalPromoted
     );
 }
@@ -103,7 +107,8 @@ fn observation_proposal_full_lifecycle_with_audit() {
 fn concept_proposal_promoted_manually_after_human_review() {
     let identity = fixture_identity();
     let scope = ScopeId::new_v4();
-    let proposal = AgentProposal::new(ProposalKind::Concept,
+    let proposal = AgentProposal::new(
+        ProposalKind::Concept,
         scope,
         ConceptProposal::new("Atlas", "Project codename for Q3 launch"),
         vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -138,7 +143,8 @@ fn relation_proposal_canonicalises() {
     let scope = ScopeId::new_v4();
     let src = Uuid::new_v4();
     let dst = Uuid::new_v4();
-    let proposal = AgentProposal::new(ProposalKind::Relation,
+    let proposal = AgentProposal::new(
+        ProposalKind::Relation,
         scope,
         RelationProposal::new(src, dst, RelationType::new("derived_from")),
         vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -165,7 +171,8 @@ fn relation_proposal_canonicalises() {
 fn summary_proposal_canonicalises() {
     let identity = fixture_identity();
     let scope = ScopeId::new_v4();
-    let proposal = AgentProposal::new(ProposalKind::Summary,
+    let proposal = AgentProposal::new(
+        ProposalKind::Summary,
         scope,
         SummaryProposal::new("Weekly digest …", "channel"),
         vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -196,7 +203,8 @@ fn agent_cannot_write_canonical_directly() {
     // not been promoted first.
     let identity = fixture_identity();
     let scope = ScopeId::new_v4();
-    let proposal = AgentProposal::new(ProposalKind::Observation,
+    let proposal = AgentProposal::new(
+        ProposalKind::Observation,
         scope,
         ObservationProposal::new("a", "fact"),
         vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -217,7 +225,8 @@ fn agent_cannot_write_canonical_directly() {
 fn invalid_schema_blocks_submission() {
     let identity = fixture_identity();
     let scope = ScopeId::new_v4();
-    let mut proposal = AgentProposal::new(ProposalKind::Observation,
+    let mut proposal = AgentProposal::new(
+        ProposalKind::Observation,
         scope,
         ObservationProposal::new("a", "fact"),
         vec![],
@@ -242,7 +251,8 @@ fn invalid_schema_blocks_submission() {
 fn expired_ttl_proposal_auto_rejected_with_audit() {
     let identity = fixture_identity();
     let scope = ScopeId::new_v4();
-    let proposal = AgentProposal::new(ProposalKind::Observation,
+    let proposal = AgentProposal::new(
+        ProposalKind::Observation,
         scope,
         ObservationProposal::new("a", "fact"),
         vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -261,7 +271,8 @@ fn expired_ttl_proposal_auto_rejected_with_audit() {
     // one we exercise the expiry path on — we drive that path with a
     // separate, near-zero TTL proposal below so the test does not
     // depend on real-time waits longer than a few milliseconds.
-    let zero = AgentProposal::new(ProposalKind::Observation,
+    let zero = AgentProposal::new(
+        ProposalKind::Observation,
         scope,
         ObservationProposal::new("b", "fact"),
         vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -295,7 +306,8 @@ fn expired_ttl_proposal_auto_rejected_with_audit() {
 fn rejection_records_reason_and_audit_entry() {
     let identity = fixture_identity();
     let scope = ScopeId::new_v4();
-    let proposal = AgentProposal::new(ProposalKind::Observation,
+    let proposal = AgentProposal::new(
+        ProposalKind::Observation,
         scope,
         ObservationProposal::new("a", "fact"),
         vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -311,7 +323,8 @@ fn rejection_records_reason_and_audit_entry() {
 
     let rejector = Uuid::new_v4();
     store.reject(id, "duplicate of canonical").expect("reject");
-    log_proposal_rejected(&mut audit,
+    log_proposal_rejected(
+        &mut audit,
         id,
         Actor::User(rejector),
         scope,
@@ -321,14 +334,16 @@ fn rejection_records_reason_and_audit_entry() {
 
     let stored = store.get(id).unwrap();
     assert_eq!(stored.state, ProposalState::Rejected);
-    assert_eq!(stored.rejection_reason.as_deref(),
+    assert_eq!(
+        stored.rejection_reason.as_deref(),
         Some("duplicate of canonical")
     );
 
     // 2 audit entries: submitted + rejected.
     let entries: Vec<_> = audit.entries().to_vec();
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[1].action_type,
+    assert_eq!(
+        entries[1].action_type,
         AuditActionType::AgentProposalRejected
     );
 }
@@ -337,7 +352,8 @@ fn rejection_records_reason_and_audit_entry() {
 fn critical_sensitivity_requires_human_under_default_policy() {
     let identity = fixture_identity();
     let scope = ScopeId::new_v4();
-    let proposal = AgentProposal::new(ProposalKind::Observation,
+    let proposal = AgentProposal::new(
+        ProposalKind::Observation,
         scope,
         ObservationProposal::new("highly sensitive", "fact"),
         vec![EvidenceRef::from_uuid(Uuid::new_v4())],

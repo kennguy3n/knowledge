@@ -48,7 +48,8 @@ pub struct AgentIdentity {
 
 impl AgentIdentity {
     /// Construct a fresh agent identity.
-    pub fn new(agent_id: Uuid,
+    pub fn new(
+        agent_id: Uuid,
         name: impl Into<String>,
         model_name: impl Into<String>,
         model_version: impl Into<String>,
@@ -148,7 +149,8 @@ pub struct AgentProposal<T> {
 impl<T> AgentProposal<T> {
     /// Construct a fresh proposal with a generated id and `created_at`
     /// stamped to now.
-    pub fn new(kind: ProposalKind,
+    pub fn new(
+        kind: ProposalKind,
         scope_id: ScopeId,
         payload: T,
         evidence_refs: Vec<EvidenceRef>,
@@ -317,7 +319,8 @@ mod tests {
     use super::*;
 
     fn fixture_identity() -> AgentIdentity {
-        AgentIdentity::new(Uuid::new_v4(),
+        AgentIdentity::new(
+            Uuid::new_v4(),
             "nina-pm",
             "bonsai-1.7b",
             "q1_0_g128-2026-04-01",
@@ -329,7 +332,8 @@ mod tests {
     #[test]
     fn observation_proposal_round_trip() {
         let scope = ScopeId::new_v4();
-        let p = AgentProposal::new(ProposalKind::Observation,
+        let p = AgentProposal::new(
+            ProposalKind::Observation,
             scope,
             ObservationProposal::new("Atlas launches Q3 2026", "fact"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -362,7 +366,8 @@ mod tests {
     fn ttl_supersedes_contradicts_builders() {
         let scope = ScopeId::new_v4();
         let target = Uuid::new_v4();
-        let p = AgentProposal::new(ProposalKind::Concept,
+        let p = AgentProposal::new(
+            ProposalKind::Concept,
             scope,
             ConceptProposal::new("Atlas", "Project codename for Q3"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -381,7 +386,8 @@ mod tests {
     #[test]
     fn map_payload_preserves_envelope() {
         let scope = ScopeId::new_v4();
-        let p = AgentProposal::new(ProposalKind::Summary,
+        let p = AgentProposal::new(
+            ProposalKind::Summary,
             scope,
             SummaryProposal::new("hello world", "episodic"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],

@@ -42,17 +42,17 @@
 //!
 //! ## Provider env var matrix
 //!
-//! | Connector     | Token env var               | Optional config env var(s)              |
+//! | Connector | Token env var | Optional config env var(s) |
 //! | ------------- | --------------------------- | --------------------------------------- |
-//! | Notion        | `NOTION_TEST_TOKEN`         | —                                       |
-//! | Google Drive  | `GOOGLE_DRIVE_TEST_TOKEN`   | —                                       |
-//! | Slack         | `SLACK_TEST_TOKEN`          | —                                       |
-//! | Jira          | `JIRA_TEST_TOKEN`           | `JIRA_TEST_BASE_URL`                    |
-//! | Confluence    | `CONFLUENCE_TEST_TOKEN`     | `CONFLUENCE_TEST_BASE_URL`              |
-//! | OneDrive      | `ONEDRIVE_TEST_TOKEN`       | —                                       |
-//! | HubSpot       | `HUBSPOT_TEST_TOKEN`        | —                                       |
-//! | Figma         | `FIGMA_TEST_TOKEN`          | —                                       |
-//! | Email (Gmail) | `EMAIL_TEST_TOKEN`          | `EMAIL_TEST_PROVIDER` (gmail \| graph)  |
+//! | Notion | `NOTION_TEST_TOKEN` | — |
+//! | Google Drive | `GOOGLE_DRIVE_TEST_TOKEN` | — |
+//! | Slack | `SLACK_TEST_TOKEN` | — |
+//! | Jira | `JIRA_TEST_TOKEN` | `JIRA_TEST_BASE_URL` |
+//! | Confluence | `CONFLUENCE_TEST_TOKEN` | `CONFLUENCE_TEST_BASE_URL` |
+//! | OneDrive | `ONEDRIVE_TEST_TOKEN` | — |
+//! | HubSpot | `HUBSPOT_TEST_TOKEN` | — |
+//! | Figma | `FIGMA_TEST_TOKEN` | — |
+//! | Email (Gmail) | `EMAIL_TEST_TOKEN` | `EMAIL_TEST_PROVIDER` (gmail \| graph) |
 //!
 //! Tests assert `initial_sync` returns at least one
 //! [`ConnectorEvent`] — a connected sandbox account is expected
@@ -99,16 +99,19 @@ fn env_or_skip(var: &str, label: &str) -> Option<String> {
 /// Wire a reqwest-backed [`BlockingHttpTransport`] +
 /// `OAuth2Client` pair against the framework's default OAuth
 /// client builder.
-fn live_clients() -> (Arc<BlockingHttpTransport>,
+fn live_clients() -> (
+    Arc<BlockingHttpTransport>,
     Arc<connector_framework::oauth::OAuth2Client<BlockingHttpTransport>>,
 ) {
     // Both fail-paths here mean the test environment itself is
     // broken (no reqwest TLS, etc.) — propagate as a panic so the
     // developer running the harness sees the real error rather
     // than a silent skip.
-    let transport = Arc::new(BlockingHttpTransport::new().expect("BlockingHttpTransport must initialise for live tests"),
+    let transport = Arc::new(
+        BlockingHttpTransport::new().expect("BlockingHttpTransport must initialise for live tests"),
     );
-    let oauth = Arc::new(default_oauth_client().expect("default_oauth_client must initialise for live tests"),
+    let oauth = Arc::new(
+        default_oauth_client().expect("default_oauth_client must initialise for live tests"),
     );
     (transport, oauth)
 }
@@ -140,7 +143,8 @@ fn notion_initial_sync_returns_at_least_one_event() {
     let result = connector
         .initial_sync(&cfg, &bearer)
         .expect("notion initial_sync against the sandbox account must succeed");
-    assert!(!result.events.is_empty(),
+    assert!(
+        !result.events.is_empty(),
         "notion sandbox account must surface at least one page/database"
     );
 }
@@ -154,14 +158,16 @@ fn google_drive_initial_sync_returns_at_least_one_event() {
     let connector =
         GoogleDriveConnector::new(ConnectorInstanceId(Uuid::new_v4()), transport, oauth);
     let cfg = config_for(ConnectorKind::GoogleDrive, AuthKind::OAuth2);
-    let bearer = bearer_token(&token,
+    let bearer = bearer_token(
+        &token,
         "https://www.googleapis.com/auth/drive.metadata.readonly",
     );
 
     let result = connector
         .initial_sync(&cfg, &bearer)
         .expect("google drive initial_sync against the sandbox account must succeed");
-    assert!(!result.events.is_empty(),
+    assert!(
+        !result.events.is_empty(),
         "google drive sandbox account must surface at least one file"
     );
 }
@@ -179,7 +185,8 @@ fn slack_initial_sync_returns_at_least_one_event() {
     let result = connector
         .initial_sync(&cfg, &bearer)
         .expect("slack initial_sync against the sandbox workspace must succeed");
-    assert!(!result.events.is_empty(),
+    assert!(
+        !result.events.is_empty(),
         "slack sandbox workspace must surface at least one channel"
     );
 }
@@ -201,7 +208,8 @@ fn jira_initial_sync_returns_at_least_one_event() {
     let result = connector
         .initial_sync(&cfg, &bearer)
         .expect("jira initial_sync against the sandbox project must succeed");
-    assert!(!result.events.is_empty(),
+    assert!(
+        !result.events.is_empty(),
         "jira sandbox project must surface at least one issue"
     );
 }
@@ -223,7 +231,8 @@ fn confluence_initial_sync_returns_at_least_one_event() {
     let result = connector
         .initial_sync(&cfg, &bearer)
         .expect("confluence initial_sync against the sandbox space must succeed");
-    assert!(!result.events.is_empty(),
+    assert!(
+        !result.events.is_empty(),
         "confluence sandbox space must surface at least one page"
     );
 }
@@ -241,7 +250,8 @@ fn onedrive_initial_sync_returns_at_least_one_event() {
     let result = connector
         .initial_sync(&cfg, &bearer)
         .expect("onedrive initial_sync against the sandbox account must succeed");
-    assert!(!result.events.is_empty(),
+    assert!(
+        !result.events.is_empty(),
         "onedrive sandbox account must surface at least one file"
     );
 }
@@ -259,7 +269,8 @@ fn hubspot_initial_sync_returns_at_least_one_event() {
     let result = connector
         .initial_sync(&cfg, &bearer)
         .expect("hubspot initial_sync against the sandbox portal must succeed");
-    assert!(!result.events.is_empty(),
+    assert!(
+        !result.events.is_empty(),
         "hubspot sandbox portal must surface at least one contact/company/deal"
     );
 }
@@ -277,7 +288,8 @@ fn figma_initial_sync_returns_at_least_one_event() {
     let result = connector
         .initial_sync(&cfg, &bearer)
         .expect("figma initial_sync against the sandbox team must succeed");
-    assert!(!result.events.is_empty(),
+    assert!(
+        !result.events.is_empty(),
         "figma sandbox team must surface at least one file"
     );
 }
@@ -302,7 +314,8 @@ fn email_initial_sync_returns_at_least_one_event() {
     let result = connector
         .initial_sync(&cfg, &bearer)
         .expect("email initial_sync against the sandbox inbox must succeed");
-    assert!(!result.events.is_empty(),
+    assert!(
+        !result.events.is_empty(),
         "email sandbox inbox must surface at least one message"
     );
 }

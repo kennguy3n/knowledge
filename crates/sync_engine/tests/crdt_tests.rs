@@ -67,7 +67,8 @@ fn op_log_replay_recovers_set() {
     let mut log = OpLog::<String>::new(Uuid::new_v4());
     log.record_add("alpha".into());
     log.record_add("beta".into());
-    log.record_remove("alpha".into(),
+    log.record_remove(
+        "alpha".into(),
         log.replay().unwrap().0.tags_for(&"alpha".to_string()),
     );
     let (set, supers) = log.replay().unwrap();
@@ -146,10 +147,12 @@ fn sync_engine_merge_yields_consistent_state() {
     b.merge(&a);
     let (state_a, _) = a.state().unwrap();
     let (state_b, _) = b.state().unwrap();
-    assert_eq!(state_a.contains(&"alpha".to_string()),
+    assert_eq!(
+        state_a.contains(&"alpha".to_string()),
         state_b.contains(&"alpha".to_string())
     );
-    assert_eq!(state_a.contains(&"beta".to_string()),
+    assert_eq!(
+        state_a.contains(&"beta".to_string()),
         state_b.contains(&"beta".to_string())
     );
 }
@@ -195,10 +198,12 @@ fn cross_replica_add_wins_after_merge_replay() {
     //    because T2 is not in any `observed_tags` snapshot.
     let (state_a, _) = a.state().unwrap();
     let (state_b, _) = b.state().unwrap();
-    assert!(state_a.contains(&"x".to_string()),
+    assert!(
+        state_a.contains(&"x".to_string()),
         "add wins on A: T2 must not have been tombstoned"
     );
-    assert!(state_b.contains(&"x".to_string()),
+    assert!(
+        state_b.contains(&"x".to_string()),
         "add wins on B: T2 must not have been tombstoned"
     );
 }

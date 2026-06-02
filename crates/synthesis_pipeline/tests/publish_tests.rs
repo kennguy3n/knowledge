@@ -20,12 +20,14 @@ fn fresh_key() -> AeadKey {
 }
 
 fn fresh_object(scope: ScopeId) -> synthesis_pipeline::SynthesisObject {
-    let window = SynthesisWindow::new(scope,
+    let window = SynthesisWindow::new(
+        scope,
         chrono::Utc::now() - chrono::Duration::hours(1),
         chrono::Utc::now(),
     )
     .unwrap();
-    synthesis_pipeline::SynthesisObject::new(scope,
+    synthesis_pipeline::SynthesisObject::new(
+        scope,
         window.id,
         SynthesisObjectType::ChannelRecap,
         b"sensitive synthesis payload".to_vec(),
@@ -49,7 +51,8 @@ fn wrong_key_is_rejected() {
     let object = fresh_object(scope);
     let encrypted = publish_synthesis_object(&object, &fresh_key()).unwrap();
     let err = consume_synthesis_object(&encrypted, &fresh_key()).unwrap_err();
-    assert!(matches!(err,
+    assert!(matches!(
+        err,
         PipelineError::Crypto(crypto::CryptoError::AeadDecryption)
     ));
 }
@@ -64,7 +67,8 @@ fn aad_binds_scope_id() {
     let mut encrypted = publish_synthesis_object(&object, &key).unwrap();
     encrypted.scope_id = ScopeId::new_v4();
     let err = consume_synthesis_object(&encrypted, &key).unwrap_err();
-    assert!(matches!(err,
+    assert!(matches!(
+        err,
         PipelineError::Crypto(crypto::CryptoError::AeadDecryption)
     ));
 }
@@ -77,7 +81,8 @@ fn aad_binds_window_id() {
     let mut encrypted = publish_synthesis_object(&object, &key).unwrap();
     encrypted.window_id = synthesis_pipeline::WindowId::new_v4();
     let err = consume_synthesis_object(&encrypted, &key).unwrap_err();
-    assert!(matches!(err,
+    assert!(matches!(
+        err,
         PipelineError::Crypto(crypto::CryptoError::AeadDecryption)
     ));
 }
@@ -90,7 +95,8 @@ fn aad_binds_object_id() {
     let mut encrypted = publish_synthesis_object(&object, &key).unwrap();
     encrypted.object_id = synthesis_pipeline::ObjectId::new_v4();
     let err = consume_synthesis_object(&encrypted, &key).unwrap_err();
-    assert!(matches!(err,
+    assert!(matches!(
+        err,
         PipelineError::Crypto(crypto::CryptoError::AeadDecryption)
     ));
 }
@@ -118,7 +124,8 @@ fn tampered_ciphertext_is_rejected() {
     let mut encrypted = publish_synthesis_object(&object, &key).unwrap();
     encrypted.ciphertext[0] ^= 0x01;
     let err = consume_synthesis_object(&encrypted, &key).unwrap_err();
-    assert!(matches!(err,
+    assert!(matches!(
+        err,
         PipelineError::Crypto(crypto::CryptoError::AeadDecryption)
     ));
 }

@@ -57,13 +57,15 @@ impl<'a> PermissionCheck<'a> {
     }
 
     /// Evaluate the permission decision.
-    pub fn evaluate(&self,
+    pub fn evaluate(
+        &self,
         object: ObjectRef,
         relation: Relation,
         subject: SubjectRef,
     ) -> PermissionDecision {
         let mut visited = HashSet::new();
-        let allowed = walk(self.store,
+        let allowed = walk(
+            self.store,
             self.namespaces,
             object,
             relation,
@@ -76,7 +78,8 @@ impl<'a> PermissionCheck<'a> {
 
 /// Top-level convenience — equivalent to
 /// `PermissionCheck::new(store, namespaces).evaluate(...).allowed`.
-pub fn check_permission(store: &TupleStore,
+pub fn check_permission(
+    store: &TupleStore,
     namespaces: &NamespaceRegistry,
     object: ObjectRef,
     relation: Relation,
@@ -87,7 +90,8 @@ pub fn check_permission(store: &TupleStore,
         .allowed
 }
 
-fn walk(store: &TupleStore,
+fn walk(
+    store: &TupleStore,
     namespaces: &NamespaceRegistry,
     object: ObjectRef,
     wanted: Relation,
@@ -135,7 +139,8 @@ fn walk(store: &TupleStore,
 /// `wanted` under `object_type`'s namespace. With the default
 /// inheritance chain `Owner ⇒ Admin ⇒ Editor ⇒ Member ⇒ Viewer`,
 /// `covering_relations(_, _, Viewer)` returns all five relations.
-fn covering_relations(namespaces: &NamespaceRegistry,
+fn covering_relations(
+    namespaces: &NamespaceRegistry,
     object_type: crate::tuple::ObjectType,
     wanted: Relation,
 ) -> Vec<Relation> {
@@ -173,7 +178,8 @@ mod tests {
         store
             .insert(RelationTuple::new(tenant, Relation::Member, user))
             .unwrap();
-        assert!(check_permission(&store,
+        assert!(check_permission(
+            &store,
             &ns,
             tenant,
             Relation::Member,
@@ -186,7 +192,8 @@ mod tests {
         let (store, ns) = fresh();
         let tenant = ObjectRef::new(ObjectType::Tenant, Uuid::new_v4());
         let user = SubjectRef::direct(SubjectType::User, Uuid::new_v4());
-        assert!(!check_permission(&store,
+        assert!(!check_permission(
+            &store,
             &ns,
             tenant,
             Relation::Viewer,

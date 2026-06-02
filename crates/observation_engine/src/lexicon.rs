@@ -1,71 +1,68 @@
-//!  — multilingual `LexiconRegistry`.
+//! Multilingual `LexiconRegistry`.
 //!
-//! Phases 1.3 and 1.4 of the multilingual roadmap landed
-//! per-message + per-sentence language detection and language-aware
-//! question detection (via [`crate::interrogatives`]).  is
-//! the structural follow-on: a single typed registry that owns the
+//! Earlier in the multilingual work the substrate gained
+//! per-message + per-sentence language detection and
+//! language-aware question detection (via
+//! [`crate::interrogatives`]). This module is the structural
+//! follow-on: a single typed registry that owns the
 //! per-BCP-47-primary-subtag keyword tables for **all** lexicon
 //! classes — decisions, tasks, task-imperative verbs, stop-words,
-//! and (by delegation) interrogatives — and the shared
+//! and (by delegation) interrogatives — together with the shared
 //! normalisation primitive that callers use to compare keyword
 //! tables against running text in a script-aware way.
 //!
 //! ## Why a registry, and what it replaces
 //!
-//! earlier [`crate::extractor::LexiconExtractor`] carried a
-//! single set of English decision / task / imperative / stop-word
-//! lists on its struct (the only built-in `english_default` set).
-//! Per-sentence language detection was wired in , but the
-//! sentence-level matcher still consulted the same English
-//! keyword lists no matter what language the sentence was
-//! detected as. That worked for the per-sentence
-//! [`crate::interrogatives`] lookup (which IS per-language) but
-//! left every non-English decision / task sentence silently
-//! falling through.
+//! Before this registry, [`crate::extractor::LexiconExtractor`]
+//! carried a single set of English decision / task / imperative
+//! / stop-word lists on its struct (the only built-in
+//! `english_default` set). Per-sentence language detection was
+//! already wired in, but the sentence-level matcher still
+//! consulted the same English keyword lists no matter what
+//! language the sentence was detected as. That worked for the
+//! per-sentence [`crate::interrogatives`] lookup (which IS
+//! per-language) but left every non-English decision / task
+//! sentence silently falling through.
 //!
-//!  fixes that by introducing [`LexiconRegistry`] —
-//! a lookup-by-BCP-47-primary-subtag map of
-//! [`LanguageLexicon`]s, each of which bundles the keyword
-//! tables for every observation class. The extractor
-//! resolves the right lexicon per sentence (using the sentence's
-//! detected language, falling back to English when detection
-//! produced `None` or the language has no configured lexicon).
+//! [`LexiconRegistry`] fixes that: it is a lookup-by-BCP-47-
+//! primary-subtag map of [`LanguageLexicon`]s, each of which
+//! bundles the keyword tables for every observation class. The
+//! extractor resolves the right lexicon per sentence (using the
+//! sentence's detected language, falling back to English when
+//! detection produced `None` or the language has no configured
+//! lexicon).
 //!
-//! ## Deferred items from  sweeps that this module closes
+//! ## Cross-cutting primitives this module closes
 //!
-//! * **NFC + locale-lowercase primitive** (Devin Review
-//!   #ANALYSIS-0005, a follow-up). The  question
+//! * **NFC + locale-lowercase primitive.** An earlier question
 //!   matcher applied NFC + lowercase ad-hoc inside
-//!   [`crate::extractor::looks_like_question`] but the decision /
-//!   task paths still used plain `to_lowercase`. That was safe
-//!   only as long as those tables stayed ASCII. ships
-//!   [`normalize_for_lookup`] as the single normalisation
+//!   [`crate::extractor::looks_like_question`] but the decision
+//!   / task paths still used plain `to_lowercase`. That was safe
+//!   only as long as those tables stayed ASCII. This module
+//!   ships [`normalize_for_lookup`] as the single normalisation
 //!   primitive every classifier path now uses, so Romance /
 //!   Cyrillic / Arabic decision and task keywords match
 //!   independently of the input's Unicode normalisation form.
-//! * **Tashkeel-tolerant Arabic tokeniser** (Devin Review
-//!   #ANALYSIS-0001, a follow-up). Arabic running text
+//! * **Tashkeel-tolerant Arabic tokeniser.** Arabic running text
 //!   often carries non-spacing combining marks (fatha, kasra,
-//!   damma, sukun, shadda, …) and the elongation glyph
-//!   *tatweel* (U+0640). The  FirstToken splitter
-//!   broke on tashkeel because tashkeel codepoints are category
-//!   `Mn` (non-alphabetic), which split tokens internally. The
+//!   damma, sukun, shadda, …) and the elongation glyph *tatweel*
+//!   (U+0640). The earlier FirstToken splitter broke on tashkeel
+//!   because tashkeel codepoints are category `Mn`
+//!   (non-alphabetic), which split tokens internally. The
 //!   normalisation primitive in this module **strips** the
 //!   Arabic combining marks and tatweel **before** lowercasing
-//!   so that a tashkeel-decorated `كَيْفَ` matches the
-//!   table entry `كيف`.
-//! * **Bigram-prefix matching** (Devin Review #BUG-0001 /
-//!   #FLAG-0002d,  sweeps 1+4). Several languages
-//!   form question / decision / task openers from multi-word
-//!   collocations: Vietnamese `tại sao` ("why"),
-//!   `khi nào` ("when"), `làm sao` ("how"); French
-//!   `est-ce que`; Arabic `هل ال…` (yes/no opener that
-//!   binds to the following definite article); Portuguese
-//!   `por que`. The FirstToken strategy can't see these
-//!   collocations and the Substring strategy is too loose for
-//!   space-separated scripts. adds
-//!   [`MatchStrategy::FirstBigram`] which compares the
-//!   space-joined first two alphabetic tokens against the
+//!   so that a tashkeel-decorated `كَيْفَ` matches the table
+//!   entry `كيف`.
+//! * **Bigram-prefix matching.** Several languages form question
+//!   / decision / task openers from multi-word collocations:
+//!   Vietnamese `tại sao` ("why"), `khi nào` ("when"),
+//!   `làm sao` ("how"); French `est-ce que`; Arabic
+//!   `هل ال…` (yes/no opener that binds to the following
+//!   definite article); Portuguese `por que`. The FirstToken
+//!   strategy can't see these collocations and the Substring
+//!   strategy is too loose for space-separated scripts. This
+//!   module adds [`MatchStrategy::FirstBigram`], which compares
+//!   the space-joined first two alphabetic tokens against the
 //!   keyword table.
 //!
 //! ## Module-level invariants enforced by tests
@@ -118,7 +115,7 @@ pub enum KeywordClass {
 /// normalised sentence.
 ///
 /// This unifies the [`crate::interrogatives::InterrogativeMatch`]
-/// strategy (used by  question detection) with the new
+/// strategy (used by question detection) with the new
 /// [`MatchStrategy::FirstBigram`] strategy to
 /// cover multi-word collocations that the FirstToken /
 /// Substring strategies can't express cleanly.
@@ -129,13 +126,13 @@ pub enum MatchStrategy {
     /// space-separated languages where the question / decision
     /// / task opener is canonically sentence-initial (English,
     /// German, Romance languages, Vietnamese, Indonesian). Arabic
-    /// used FirstToken before  but now uses
+    /// used FirstToken before but now uses
     /// [`MatchStrategy::FirstTokenWithArabicClitics`] so the
     /// proclitic prefix forms (`وكيف` = `و`+`كيف`,
     /// `فمتى` = `ف`+`متى`, `بأي` = `ب`+`أي`,
     /// `لمن` = `ل`+`من`, `واكتب` = `و`+`اكتب`) are recovered.
     /// `ك` ("like/as") and `س` (future marker) were initially
-    /// in the peel set but Devin Review #ANALYSIS-0004 surfaced
+    /// in the peel set but  surfaced
     /// a false-positive on short interrogatives (`كمن` ➜ `من`,
     /// `سما` ➜ `ما`) AND a worse false-positive on the imperative
     /// path (`سأرسل` "I will send" ➜ `أرسل` imperative table
@@ -186,7 +183,7 @@ pub enum MatchStrategy {
     /// proclitic on top of `ال`).
     ///
     /// **Why not peel `ك` "like/as" and `س` "will" (a follow-up
-    /// removal)?** Devin Review #ANALYSIS-0004 noted that both
+    /// removal)?**  noted that both
     /// could collide with short interrogatives (`كمن` peels `ك`
     /// to surface `من` "who"; `سما` peels `س` to surface `ما`
     /// "what"), and an internal audit then surfaced a far more
@@ -293,12 +290,12 @@ pub enum MatchStrategy {
 }
 
 impl MatchStrategy {
-    /// Bridge from the  interrogative-strategy enum to
-    /// the  registry strategy enum. Used by
+    /// Bridge from the interrogative-strategy enum to
+    /// the registry strategy enum. Used by
     /// [`LexiconRegistry::interrogatives_for`] to expose the
     /// per-language interrogative matcher through the unified
-    /// [`table_matches`] entry point. 
-    /// (#ANALYSIS-0004): now maps
+    /// [`table_matches`] entry point.
+    /// an earlier review: now maps
     /// [`InterrogativeMatch::FirstBigram`] (Vietnamese) to
     /// [`MatchStrategy::FirstBigram`] so the Vietnamese
     /// bigram interrogatives (`tại sao`, `khi nào`, `vì sao`)
@@ -355,7 +352,7 @@ pub struct LanguageLexicon {
     /// arm) must be written with a single ASCII space
     /// separating the two alphabetic tokens; see
     /// [`first_alphabetic_bigram`](crate::lexicon::first_alphabetic_bigram).
-    /// See Devin Review finding #BUG-0002 — the
+    /// See earlier review — the
     /// strategy is now documented to match the code.
     pub task_imperative_verbs: &'static [&'static str],
     /// Strategy for matching [`Self::task_imperative_verbs`].
@@ -375,8 +372,8 @@ pub struct LanguageLexicon {
     /// every non-alphabetic char and would never produce the
     /// virama-spanning token. Per-language override structurally
     /// prevents the unreachable-entry class of bug for future
-    /// languages — see Devin Review findings #BUG-0001 +
-    /// #ANALYSIS-0003.
+    /// languages — see earlier review findings
+    /// earlier review.
     pub task_imperative_strategy: MatchStrategy,
     /// Stop-words for the capitalised-token entity extractor.
     /// Only relevant for languages with case distinction —
@@ -390,7 +387,7 @@ impl LanguageLexicon {
     /// served by [`LexiconRegistry::interrogatives_for`] —
     /// the interrogative tables live in
     /// [`crate::interrogatives`] for historical reasons and to
-    /// avoid duplicating the  data).
+    /// avoid duplicating the data).
     pub fn entries(&self, class: KeywordClass) -> Option<(&'static [&'static str], MatchStrategy)> {
         match class {
             KeywordClass::Decision => Some((self.decision_keywords, self.decision_strategy)),
@@ -408,8 +405,8 @@ impl LanguageLexicon {
             // because the virama `U+094D` is non-alphabetic and
             // splits intra-word imperatives like `मर्ज` /
             // `समीक्षा` that no first-token / first-bigram check
-            // could ever reassemble. See Devin Review findings
-            // #BUG-0001 + #ANALYSIS-0003.
+            // could ever reassemble. See earlier review findings
+            // earlier review.
             KeywordClass::TaskImperative => {
                 Some((self.task_imperative_verbs, self.task_imperative_strategy))
             }
@@ -431,14 +428,14 @@ impl LanguageLexicon {
             //   Returning `None` here makes that contract
             //   explicit at the type level so a future caller
             //   can't accidentally route stop-words through
-            //   the wrong matcher. See Devin Review finding
-            //   #ANALYSIS-0004.
+            //   the wrong matcher. See an earlier review
+            //   earlier review.
             // * `Interrogative`: served by
             //   [`LexiconRegistry::interrogatives_for`] —
             //   the interrogative tables live in
             //   [`crate::interrogatives`] for historical
             //   reasons and to avoid duplicating the //
-// 1.4 data on the [`LanguageLexicon`] struct.
+            // 1.4 data on the [`LanguageLexicon`] struct.
             KeywordClass::Stopword | KeywordClass::Interrogative => None,
         }
     }
@@ -464,16 +461,19 @@ impl LexiconRegistry {
     pub fn from_static(lexicons: &'static [LanguageLexicon]) -> Self {
         let mut by_tag = BTreeMap::new();
         for lex in lexicons {
-            assert!(!lex.primary_tag.is_empty(),
+            assert!(
+                !lex.primary_tag.is_empty(),
                 "LanguageLexicon primary_tag must not be empty"
             );
             let prev = by_tag.insert(lex.primary_tag, lex);
-            assert!(prev.is_none(),
+            assert!(
+                prev.is_none(),
                 "duplicate LanguageLexicon primary_tag {:?}",
                 lex.primary_tag
             );
         }
-        assert!(by_tag.contains_key("en"),
+        assert!(
+            by_tag.contains_key("en"),
             "LexiconRegistry::from_static requires an English ('en') lexicon as the fallback"
         );
         Self { by_tag }
@@ -496,7 +496,7 @@ impl LexiconRegistry {
     /// [`crate::lexicon_telemetry::LexiconTelemetrySnapshot::
     /// unknown_tag_fallbacks_total`] when an input
     /// `primary_tag = Some(t)` failed the lookup and fell back
-    /// to English.  See [`crate::lexicon_telemetry::
+    /// to English. See [`crate::lexicon_telemetry::
     /// record_lexicon_hit`] for the counter semantics.
     pub fn lexicon_for_or_english(&self, primary_tag: Option<&str>) -> &'static LanguageLexicon {
         let resolved = primary_tag
@@ -508,11 +508,12 @@ impl LexiconRegistry {
     }
 
     /// Look up the interrogative table + matching strategy for
-    /// a BCP-47 primary subtag. Delegates to the 
+    /// a BCP-47 primary subtag. Delegates to the
     /// [`crate::interrogatives::interrogatives_for`] so the
     /// registry and the question-detection path share a single
     /// source of truth for interrogative entries.
-    pub fn interrogatives_for(&self,
+    pub fn interrogatives_for(
+        &self,
         primary_tag: &str,
     ) -> Option<(&'static [&'static str], MatchStrategy)> {
         interrogatives_for(primary_tag)
@@ -570,8 +571,8 @@ impl LexiconRegistry {
 /// We strip rather than NFKD-decompose because NFKD would also
 /// touch unrelated codepoints (e.g. fullwidth Latin, CJK
 /// compatibility ideographs) — strip-by-range is targeted and
-/// fully deterministic. See Devin Review finding
-/// #ANALYSIS-0001 (a follow-up deferred to ).
+/// fully deterministic. See an earlier review
+/// (a follow-up deferred to ).
 pub fn is_arabic_combining_or_tatweel(c: char) -> bool {
     matches!(c,
         '\u{0610}'..='\u{061A}'
@@ -777,18 +778,18 @@ pub fn first_alphabetic_bigram(normalised: &str) -> Option<String> {
 /// True when **any** entry in the table matches the normalised
 /// sentence under the requested strategy.
 ///
-/// This is the unified matcher used by both the 
+/// This is the unified matcher used by both the
 /// question detection path (via the registry's interrogative
-/// lookup) and the new  decision / task / imperative
+/// lookup) and the new decision / task / imperative
 /// paths. Bigram entries are written with a single ASCII space
 /// and checked against the space-joined first two alphabetic
 /// tokens (see [`first_alphabetic_bigram`]).
 pub fn table_matches(table: &[&str], normalised: &str, strategy: MatchStrategy) -> bool {
     // Telemetry: every invocation bumps the per-strategy counter
     // (regardless of whether the call ultimately returns `true`
-    // or `false`).  The counter measures *strategy fires* — how
+    // or `false`). The counter measures *strategy fires* — how
     // often each variant is consulted on the hot path — which is
-    // the right signal for tuning lexicon / extractor logic.  If
+    // the right signal for tuning lexicon / extractor logic. If
     // future need ever arises to separate "fired AND matched"
     // from "fired AND missed", a sibling pair of counters can be
     // added without touching this site.
@@ -841,7 +842,7 @@ pub fn table_matches(table: &[&str], normalised: &str, strategy: MatchStrategy) 
 /// lexicons target, *minus* the two surfaces (`ك`, `س`)
 /// excluded for precision reasons documented on
 /// [`MatchStrategy::FirstTokenWithArabicClitics`] (a follow-up
-/// Devin Review #ANALYSIS-0004).
+/// ).
 ///
 /// Three additional Arabic proclitics from the linguistic
 /// inventory are **deliberately omitted** from this set, each
@@ -924,13 +925,14 @@ fn first_token_matches_after_arabic_clitic_strip(table: &[&str], first: &str) ->
     }
     let outcome = arabic_clitic_peel_outcome(table, first);
     crate::lexicon_telemetry::record_arabic_peel_depth(outcome);
-    matches!(outcome,
+    matches!(
+        outcome,
         crate::lexicon_telemetry::PeelOutcome::MatchedAtDepth(_)
     )
 }
 
 /// Compute the peel-depth outcome for an Arabic clitic-aware
-/// table check.  Separated from
+/// table check. Separated from
 /// [`first_token_matches_after_arabic_clitic_strip`] so that the
 /// telemetry counter increment lives at exactly one site, and
 /// the depth value is unambiguous (depth 0 = matched without
@@ -945,7 +947,8 @@ fn first_token_matches_after_arabic_clitic_strip(table: &[&str], first: &str) ->
 /// cases combined with the `MatchedAtDepth(N)` distribution is
 /// already enough to diagnose routing problems (high exhausted
 /// rate => non-Arabic tokens reaching the matcher).
-fn arabic_clitic_peel_outcome(table: &[&str],
+fn arabic_clitic_peel_outcome(
+    table: &[&str],
     first: &str,
 ) -> crate::lexicon_telemetry::PeelOutcome {
     use crate::lexicon_telemetry::PeelOutcome;
@@ -961,7 +964,8 @@ fn arabic_clitic_peel_outcome(table: &[&str],
         if table.contains(&stripped) {
             // depth is in 1..=ARABIC_PROCLITIC_PEEL_BUDGET (== 3
             // today), which fits in u8 trivially.
-            return PeelOutcome::MatchedAtDepth(u8::try_from(depth).expect("peel budget fits in u8"),
+            return PeelOutcome::MatchedAtDepth(
+                u8::try_from(depth).expect("peel budget fits in u8"),
             );
         }
         current = stripped;
@@ -1101,15 +1105,17 @@ fn first_token_matches_after_hebrew_clitic_strip(table: &[&str], first: &str) ->
     }
     let outcome = hebrew_clitic_peel_outcome(table, first);
     crate::lexicon_telemetry::record_hebrew_peel_depth(outcome);
-    matches!(outcome,
+    matches!(
+        outcome,
         crate::lexicon_telemetry::PeelOutcome::MatchedAtDepth(_)
     )
 }
 
 /// Compute the peel-depth outcome for a Hebrew clitic-aware
-/// table check.  See [`arabic_clitic_peel_outcome`] for the
+/// table check. See [`arabic_clitic_peel_outcome`] for the
 /// bucketing semantics — this is the Hebrew mirror.
-fn hebrew_clitic_peel_outcome(table: &[&str],
+fn hebrew_clitic_peel_outcome(
+    table: &[&str],
     first: &str,
 ) -> crate::lexicon_telemetry::PeelOutcome {
     use crate::lexicon_telemetry::PeelOutcome;
@@ -1123,7 +1129,8 @@ fn hebrew_clitic_peel_outcome(table: &[&str],
             return PeelOutcome::BudgetExhausted;
         };
         if table.contains(&stripped) {
-            return PeelOutcome::MatchedAtDepth(u8::try_from(depth).expect("peel budget fits in u8"),
+            return PeelOutcome::MatchedAtDepth(
+                u8::try_from(depth).expect("peel budget fits in u8"),
             );
         }
         current = stripped;
@@ -1603,8 +1610,8 @@ const RU_LEXICON: LanguageLexicon = LanguageLexicon {
 /// recover the prefixed verb form without these false
 /// positives).
 ///
-/// **Sweep-1 precision narrowing** (Devin Review
-/// #ANALYSIS-0004): the proclitic peel set was reduced from
+/// **A later review** (an earlier review
+/// Earlier review: the proclitic peel set was reduced from
 /// 8 to 6 entries after `س` (1st-person future marker) was
 /// shown to falsely surface imperatives on plain declarative
 /// future-tense statements (`سأرسل البريد غدا` "I will send
@@ -1667,7 +1674,7 @@ const RU_LEXICON: LanguageLexicon = LanguageLexicon {
 // that don't sit at the first token. Each class gets the strategy
 // that matches its lexical and positional properties. A future
 // contributor who reads this should NOT attempt to harmonise the
-// strategies — see Devin Review #3331684703
+// strategies — see an earlier review #3331684703
 // and the test `arabic_lexicon_strategy_per_class_is_intentional`.
 const AR_LEXICON: LanguageLexicon = LanguageLexicon {
     primary_tag: "ar",
@@ -1843,7 +1850,7 @@ const HE_LEXICON: LanguageLexicon = LanguageLexicon {
 /// older polite particle, also used in `xin hãy` constructions).
 ///
 /// Interrogatives like `tại sao` / `khi nào` are handled by
-/// the  `interrogatives` table — which is now driven
+/// the `interrogatives` table — which is now driven
 /// by [`MatchStrategy::FirstBigram`] via the registry — so
 /// they are not duplicated here.
 const VI_LEXICON: LanguageLexicon = LanguageLexicon {
@@ -1899,7 +1906,7 @@ const VI_LEXICON: LanguageLexicon = LanguageLexicon {
 /// Indonesian (`id`).
 ///
 /// Indonesian and Malay share most vocabulary; the `id` and
-/// `ms` lexicons are identical at this stage of 
+/// `ms` lexicons are identical at this stage of
 /// because the decision / task lexicons we ship don't yet
 /// differentiate the few register-specific entries between
 /// the two ( SLM-assisted extraction will handle the
@@ -2120,7 +2127,7 @@ const TH_LEXICON: LanguageLexicon = LanguageLexicon {
 /// Whatlang 0.18 does NOT ship a Tibetan classifier
 /// ([`Lang::Bod`](https://docs.rs/whatlang/0.18.0/whatlang/enum.Lang.html)
 /// is absent), so the language tag will normally be `None`
-/// for Tibetan bodies. The FTS5 routing in  is
+/// for Tibetan bodies. The FTS5 routing in is
 /// body-based (see [`crate::script::is_cjk_or_thai_codepoint`])
 /// so recall still works, and callers that explicitly know
 /// the language can pass the `"bo"` tag to this registry to
@@ -2290,7 +2297,7 @@ const MY_LEXICON: LanguageLexicon = LanguageLexicon {
 /// Whatlang 0.18 does NOT ship a Lao classifier
 /// ([`Lang::Lao`](https://docs.rs/whatlang/0.18.0/whatlang/enum.Lang.html)
 /// is absent — the closest detection is Thai, which can
-/// mis-tag Lao bodies). The FTS5 routing in  is
+/// mis-tag Lao bodies). The FTS5 routing in is
 /// body-based so recall still works, and callers can pass
 /// `"lo"` explicitly. Same shipping rationale as Tibetan
 /// above.
@@ -2334,19 +2341,19 @@ const LO_LEXICON: LanguageLexicon = LanguageLexicon {
 ///
 /// The exact set is the union of:
 ///
-/// *  [`SUPPORTED_PRIMARY_TAGS`] interrogative
+/// * [`SUPPORTED_PRIMARY_TAGS`] interrogative
 ///   coverage (originally 16 languages: en/es/fr/de/pt/it/ru/
-///   vi/id/ms/ar/hi/ja/ko/zh/th; extended by  to
+///   vi/id/ms/ar/hi/ja/ko/zh/th; extended by to
 ///   add bo/km/my/lo).
-/// *  keyword-class coverage requirements: a
+/// * keyword-class coverage requirements: a
 ///   keyword bundle per language for the substrate's
 ///   built-in decision / task / imperative pipelines.
 ///
-/// 20 languages ship as of  — the 12-language
-/// target from the  outline
+/// 20 languages ship as of — the 12-language
+/// target from the outline
 /// (en/ja/ko/zh/es/fr/de/pt/ar/vi/th/id) plus the four ///
 /// 1.4 add-ons (`it`, `ru`, `hi`, `ms`) that already have
-/// interrogative tables, plus the four  add-ons
+/// interrogative tables, plus the four add-ons
 /// (`bo`, `km`, `my`, `lo`) that close the
 /// FTS5-tokeniser-blind / no-whitespace-word-boundary script
 /// gap. The interrogative-table-vs-LexiconRegistry coverage
@@ -2424,7 +2431,8 @@ mod tests {
         // qué as NFD: q + u + e + U+0301
         let nfd = "qu\u{0065}\u{0301}";
         let nfc = "qué";
-        assert_eq!(normalize_for_lookup(nfd, Some("es")),
+        assert_eq!(
+            normalize_for_lookup(nfd, Some("es")),
             normalize_for_lookup(nfc, Some("es"))
         );
     }
@@ -2434,7 +2442,8 @@ mod tests {
         assert_eq!(normalize_for_lookup("HELLO", Some("en")), "hello");
         assert_eq!(normalize_for_lookup("WAS", Some("de")), "was");
         // Cyrillic: capital Es Е → small es е.
-        assert_eq!(normalize_for_lookup("РЕШЕНО", Some("ru")),
+        assert_eq!(
+            normalize_for_lookup("РЕШЕНО", Some("ru")),
             normalize_for_lookup("решено", Some("ru"))
         );
     }
@@ -2449,10 +2458,12 @@ mod tests {
 
     #[test]
     fn first_alphabetic_bigram_returns_first_two_tokens() {
-        assert_eq!(first_alphabetic_bigram("tại sao bạn"),
+        assert_eq!(
+            first_alphabetic_bigram("tại sao bạn"),
             Some("tại sao".to_string())
         );
-        assert_eq!(first_alphabetic_bigram("por que sí"),
+        assert_eq!(
+            first_alphabetic_bigram("por que sí"),
             Some("por que".to_string())
         );
         assert_eq!(first_alphabetic_bigram("hello"), None);
@@ -2480,11 +2491,13 @@ mod tests {
         // First-token `por` is not in the table, but the
         // space-joined first-bigram `por qué` is, so FirstBigram
         // matches whereas FirstToken would not.
-        assert!(!table_matches(table,
+        assert!(!table_matches(
+            table,
             "por qué pasa",
             MatchStrategy::FirstToken
         ));
-        assert!(table_matches(table,
+        assert!(table_matches(
+            table,
             "por qué pasa",
             MatchStrategy::FirstBigram
         ));
@@ -2497,11 +2510,13 @@ mod tests {
     #[test]
     fn table_matches_substring_for_cjk() {
         let table = &["決定", "承認"];
-        assert!(table_matches(table,
+        assert!(table_matches(
+            table,
             "本日この件について決定しました",
             MatchStrategy::Substring,
         ));
-        assert!(!table_matches(table,
+        assert!(!table_matches(
+            table,
             "本日この件について検討します",
             MatchStrategy::Substring,
         ));
@@ -2520,7 +2535,8 @@ mod tests {
         let table = &["كيف", "متى", "أين", "لماذا"];
         for sentence in ["كيف الحال", "متى تأتي", "أين الكتاب", "لماذا تأخرت"]
         {
-            assert!(table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics),
+            assert!(
+                table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics),
                 "bare Arabic interrogative in {sentence:?} must match via the \
                  exact-equality fast path before any peel is attempted"
             );
@@ -2542,7 +2558,8 @@ mod tests {
             ("بأي طريقة نفعل ذلك", "ب", "أي"),
             ("لمن هذا الكتاب", "ل", "من"),
         ] {
-            assert!(table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics),
+            assert!(
+                table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics),
                 "Arabic proclitic-prefixed interrogative in {sentence:?} (prefix {prefix:?}, \
                  residual {residual:?}) must match via the  peel"
             );
@@ -2551,8 +2568,8 @@ mod tests {
 
     #[test]
     fn table_matches_arabic_clitic_strip_drops_unproductive_k_and_s_prefixes() {
-        //  a follow-up precision guard (Devin Review
-        // #ANALYSIS-0004): `ك` and `س` were initially in the
+        //  a follow-up precision guard (an earlier review
+        // Earlier review: `ك` and `س` were initially in the
         // peel set but caused false positives on both the
         // interrogative path and (more dangerously) the
         // imperative path. They are now deliberately omitted
@@ -2571,7 +2588,9 @@ mod tests {
             "سما الذي سيحدث غدا", // "so what will happen tomorrow" —
                                   // `س` + `ما`; pre-fix peeled to `ما` and falsely matched.
         ] {
-            assert!(!table_matches(interrogative_table,
+            assert!(
+                !table_matches(
+                    interrogative_table,
                     sentence,
                     MatchStrategy::FirstTokenWithArabicClitics
                 ),
@@ -2593,7 +2612,9 @@ mod tests {
             "سأرسل البريد غدا",          // "I will send the email tomorrow".
             "سأصلح الخلل الأسبوع القادم", // "I will fix the bug next week".
         ] {
-            assert!(!table_matches(imperative_table,
+            assert!(
+                !table_matches(
+                    imperative_table,
                     sentence,
                     MatchStrategy::FirstTokenWithArabicClitics
                 ),
@@ -2616,13 +2637,17 @@ mod tests {
         // surfacing because that's the cleanest test of the
         // longest-first peel ordering.
         let table = &["كتاب", "اجتماع"];
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 "الكتاب على المنضدة",
                 MatchStrategy::FirstTokenWithArabicClitics
             ),
             "`الكتاب` must peel `ال` → `كتاب` and match the table"
         );
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 "الاجتماع في الساعة الثالثة",
                 MatchStrategy::FirstTokenWithArabicClitics
             ),
@@ -2640,7 +2665,9 @@ mod tests {
         // `وللكتاب` = `و` + `ل` + `ل` + `كتاب` (3 peels).
         // `و` and `ل` are both 1-char proclitics, so the peel
         // iterates 3 times to surface `كتاب`.
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 "وللكتاب قيمة",
                 MatchStrategy::FirstTokenWithArabicClitics
             ),
@@ -2648,7 +2675,9 @@ mod tests {
         );
         // `وبالكتاب` = `و` + `ب` + `ال` + `كتاب` (3 peels;
         // `ال` is the 2-char definite article).
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 "وبالكتاب نتعلم",
                 MatchStrategy::FirstTokenWithArabicClitics
             ),
@@ -2669,7 +2698,8 @@ mod tests {
             "محمد ذهب",      // "Muhammad went" — proper-name `محمد`.
             "هذا كتاب جديد", // "This is a new book" — demonstrative `هذا`.
         ] {
-            assert!(!table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics),
+            assert!(
+                !table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics),
                 "Arabic declarative {sentence:?} must NOT match the interrogative table \
                  under the proclitic-peeling strategy (no peel produces an interrogative \
                  residual)"
@@ -2689,7 +2719,8 @@ mod tests {
         let table = &["كيف", "متى"];
         // Pure proclitic-only first token: stripping `و` would
         // leave "", which the peel helper explicitly rejects.
-        assert!(!table_matches(table, "و كيف", MatchStrategy::FirstTokenWithArabicClitics),
+        assert!(
+            !table_matches(table, "و كيف", MatchStrategy::FirstTokenWithArabicClitics),
             "bare proclitic `و` (separated from `كيف` by whitespace) must not falsely \
              surface `كيف` via the peel — `peel_one_arabic_proclitic` rejects empty residuals"
         );
@@ -2705,7 +2736,8 @@ mod tests {
         // pins the priority so a future contributor can't
         // accidentally re-order the constant.)
         assert_eq!(peel_one_arabic_proclitic("الكتاب"), Some("كتاب"));
-        assert_eq!(peel_one_arabic_proclitic("أل"), /* def-art only */
+        assert_eq!(
+            peel_one_arabic_proclitic("أل"), /* def-art only */
             None
         );
         // Definite-article variant `أل` (hamza-on-alif + lam):
@@ -2716,7 +2748,7 @@ mod tests {
         assert_eq!(peel_one_arabic_proclitic("فمتى"), Some("متى"));
         assert_eq!(peel_one_arabic_proclitic("بأي"), Some("أي"));
         assert_eq!(peel_one_arabic_proclitic("لمن"), Some("من"));
-        // Sweep-1 precision guard (Devin Review #ANALYSIS-0004):
+        // A later review :
         // `ك` and `س` are NO LONGER in the peel set, so a
         // leading `ك` / `س` does not peel — the residual `كأين`
         // / `سيكون` is returned as-None (no other recognised
@@ -2755,7 +2787,9 @@ mod tests {
             adversarial.push('و');
         }
         adversarial.push_str("كيف");
-        assert!(!table_matches(table,
+        assert!(
+            !table_matches(
+                table,
                 adversarial.as_str(),
                 MatchStrategy::FirstTokenWithArabicClitics
             ),
@@ -2763,7 +2797,9 @@ mod tests {
         );
         // Sanity: exactly 3 leading `و` still matches (the
         // budget is inclusive — 3 peels are attempted).
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 "وووكيف يحدث ذلك",
                 MatchStrategy::FirstTokenWithArabicClitics
             ),
@@ -2782,7 +2818,7 @@ mod tests {
         // under FirstToken (the new strategy genuinely adds
         // recall, not just preserves it).
         //
-        // Sweep-2 strengthening (Devin Review #3331659010): the
+        // A later review: the
         // original implementation only checked direction (a) with
         // bare-first-token inputs (where both strategies trivially
         // match), making the assertion `!bare || clitic`
@@ -2802,7 +2838,8 @@ mod tests {
         {
             let bare = table_matches(table, sentence, MatchStrategy::FirstToken);
             let clitic = table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics);
-            assert!(bare && clitic,
+            assert!(
+                bare && clitic,
                 "FirstTokenWithArabicClitics must preserve all FirstToken matches: \
                  sentence {sentence:?} matched FirstToken={bare} but \
                  FirstTokenWithArabicClitics={clitic} (both must be true for the \
@@ -2815,7 +2852,7 @@ mod tests {
         // table) while FirstTokenWithArabicClitics MUST match
         // (the peel surfaces the bare interrogative). This is
         // the architecturally meaningful direction that pins
-        // the recall gain  was introduced to deliver.
+        // the recall gain was introduced to deliver.
         for (sentence, prefix, residual) in [
             ("وكيف يمكنني المساعدة", "و", "كيف"),
             ("فمتى نلتقي", "ف", "متى"),
@@ -2825,13 +2862,15 @@ mod tests {
         ] {
             let bare = table_matches(table, sentence, MatchStrategy::FirstToken);
             let clitic = table_matches(table, sentence, MatchStrategy::FirstTokenWithArabicClitics);
-            assert!(!bare,
+            assert!(
+                !bare,
                 "FirstToken must NOT match the proclitic-prefixed surface form: \
                  sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
                  unexpectedly matched bare FirstToken — this would mean the strict \
                  superset assertion is vacuous"
             );
-            assert!(clitic,
+            assert!(
+                clitic,
                 "FirstTokenWithArabicClitics MUST match the proclitic-prefixed surface: \
                  sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
                  did not match — the strict-superset direction is broken"
@@ -2841,7 +2880,7 @@ mod tests {
 
     #[test]
     fn arabic_clitic_strip_handles_nfd_hamza_alif_via_dual_prefix_entries() {
-        //  a follow-up (Devin Review #3331658913): the
+        //  a follow-up (an earlier review #3331658913): the
         // `normalize_for_lookup` pipeline strips Arabic combining
         // marks (including U+0654 ARABIC HAMZA ABOVE) BEFORE NFC
         // composition, so an NFD-encoded `أل` (U+0627 ALEF +
@@ -2874,7 +2913,9 @@ mod tests {
         // in the proclitic prefix list.
         let nfc_alef_hamza_lam = "\u{0623}\u{0644}\u{0643}\u{062A}\u{0627}\u{0628}"; // أل + كتاب
         let nfc_normalised = normalize_for_lookup(nfc_alef_hamza_lam, ar);
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 &nfc_normalised,
                 MatchStrategy::FirstTokenWithArabicClitics
             ),
@@ -2893,7 +2934,9 @@ mod tests {
         // one of these two NFD/NFC encodings would silently fail.
         let nfd_alef_hamza_lam = "\u{0627}\u{0654}\u{0644}\u{0643}\u{062A}\u{0627}\u{0628}"; // alef + combining-hamza-above + lam + كتاب
         let nfd_normalised = normalize_for_lookup(nfd_alef_hamza_lam, ar);
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 &nfd_normalised,
                 MatchStrategy::FirstTokenWithArabicClitics
             ),
@@ -2907,7 +2950,9 @@ mod tests {
         // common Arabic definite article form.
         let canonical_alef_lam = "\u{0627}\u{0644}\u{0643}\u{062A}\u{0627}\u{0628}"; // ال + كتاب
         let canonical_normalised = normalize_for_lookup(canonical_alef_lam, ar);
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 &canonical_normalised,
                 MatchStrategy::FirstTokenWithArabicClitics
             ),
@@ -2936,7 +2981,8 @@ mod tests {
             "כמה זמן זה ייקח",  // "How much time will this take"
             "האם זה אפשרי",     // "Is this possible"
         ] {
-            assert!(table_matches(table, sentence, MatchStrategy::FirstTokenWithHebrewClitics),
+            assert!(
+                table_matches(table, sentence, MatchStrategy::FirstTokenWithHebrewClitics),
                 "bare Hebrew interrogative {sentence:?} must match via the FirstToken \
                  fast path of FirstTokenWithHebrewClitics"
             );
@@ -2960,13 +3006,15 @@ mod tests {
         ] {
             let bare = table_matches(table, sentence, MatchStrategy::FirstToken);
             let clitic = table_matches(table, sentence, MatchStrategy::FirstTokenWithHebrewClitics);
-            assert!(!bare,
+            assert!(
+                !bare,
                 "FirstToken must NOT match the proclitic-prefixed surface form: \
                  sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
                  unexpectedly matched bare FirstToken — this would mean the strict \
                  superset assertion is vacuous"
             );
-            assert!(clitic,
+            assert!(
+                clitic,
                 "FirstTokenWithHebrewClitics MUST match the proclitic-prefixed surface: \
                  sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
                  did not match — the strict-superset direction is broken"
@@ -2982,14 +3030,18 @@ mod tests {
         // `ו` + `ב` + content (`ובאיזה` "and in which").
         let table = &["מה", "איזה", "מתי"];
         // `ושמה` = `ו` + `ש` + `מה` (2 peels).
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 "ושמה היתרון",
                 MatchStrategy::FirstTokenWithHebrewClitics
             ),
             "`ושמה` must peel `ו` then `ש` → `מה` within the 3-peel budget"
         );
         // `ובאיזה` = `ו` + `ב` + `איזה` (2 peels).
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 "ובאיזה אופן",
                 MatchStrategy::FirstTokenWithHebrewClitics
             ),
@@ -2998,7 +3050,9 @@ mod tests {
         // `ושבמתי` = `ו` + `ש` + `ב` + `מתי` (3 peels — at the
         // budget limit; synthetic since this stack isn't
         // idiomatic but pins the budget edge).
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 "ושבמתי נחתום",
                 MatchStrategy::FirstTokenWithHebrewClitics
             ),
@@ -3018,7 +3072,8 @@ mod tests {
             "ספר חדש פורסם",           // "A new book was published" — `ספר` doesn't peel.
             "תוצאת הפגישה היתה ברורה", // first token `תוצאת` is none of the peels.
         ] {
-            assert!(!table_matches(table, sentence, MatchStrategy::FirstTokenWithHebrewClitics),
+            assert!(
+                !table_matches(table, sentence, MatchStrategy::FirstTokenWithHebrewClitics),
                 "Hebrew declarative {sentence:?} must NOT match the interrogative table \
                  under FirstTokenWithHebrewClitics (no peel produces an interrogative \
                  residual)"
@@ -3034,7 +3089,9 @@ mod tests {
         // table. This guards against accidentally matching the
         // empty string.
         let table = &["מי", "מה"];
-        assert!(!table_matches(table,
+        assert!(
+            !table_matches(
+                table,
                 "ו מה התוכנית",
                 MatchStrategy::FirstTokenWithHebrewClitics
             ),
@@ -3056,7 +3113,9 @@ mod tests {
         // imperative "write!") on this declarative sentence,
         // emitting a false Task observation. Confirm it does NOT.
         let imperative_table = &["כתוב", "שלח", "סקור"];
-        assert!(!table_matches(imperative_table,
+        assert!(
+            !table_matches(
+                imperative_table,
                 "הכתוב במסמך",
                 MatchStrategy::FirstTokenWithHebrewClitics
             ),
@@ -3067,7 +3126,9 @@ mod tests {
         // begins with `כתב` (past-tense verb), not `כ` + a host;
         // even though no residual is in the imperative table here,
         // the negative regression pins the omission.
-        assert!(!table_matches(imperative_table,
+        assert!(
+            !table_matches(
+                imperative_table,
                 "כתב לי הודעה",
                 MatchStrategy::FirstTokenWithHebrewClitics
             ),
@@ -3123,7 +3184,9 @@ mod tests {
             adversarial.push('ו');
         }
         adversarial.push_str("מתי");
-        assert!(!table_matches(table,
+        assert!(
+            !table_matches(
+                table,
                 adversarial.as_str(),
                 MatchStrategy::FirstTokenWithHebrewClitics
             ),
@@ -3131,7 +3194,9 @@ mod tests {
         );
         // Sanity: exactly 3 leading `ו` still matches (the budget
         // is inclusive — 3 peels are attempted).
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 "ווומתי נתחיל",
                 MatchStrategy::FirstTokenWithHebrewClitics
             ),
@@ -3155,7 +3220,8 @@ mod tests {
         {
             let bare = table_matches(table, sentence, MatchStrategy::FirstToken);
             let clitic = table_matches(table, sentence, MatchStrategy::FirstTokenWithHebrewClitics);
-            assert!(bare && clitic,
+            assert!(
+                bare && clitic,
                 "FirstTokenWithHebrewClitics must preserve all FirstToken matches: \
                  sentence {sentence:?} matched FirstToken={bare} but \
                  FirstTokenWithHebrewClitics={clitic} (both must be true)"
@@ -3171,12 +3237,14 @@ mod tests {
         ] {
             let bare = table_matches(table, sentence, MatchStrategy::FirstToken);
             let clitic = table_matches(table, sentence, MatchStrategy::FirstTokenWithHebrewClitics);
-            assert!(!bare,
+            assert!(
+                !bare,
                 "FirstToken must NOT match the proclitic-prefixed surface form: \
                  sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
                  unexpectedly matched bare FirstToken — strict superset assertion would be vacuous"
             );
-            assert!(clitic,
+            assert!(
+                clitic,
                 "FirstTokenWithHebrewClitics MUST match the proclitic-prefixed surface: \
                  sentence {sentence:?} (prefix {prefix:?}, residual {residual:?}) \
                  did not match — the strict-superset direction is broken"
@@ -3197,10 +3265,13 @@ mod tests {
         // Niqqud-decorated `מָתַי` (mem + qamats + tav + patah + yod).
         let pointed_matai = "\u{05DE}\u{05B8}\u{05EA}\u{05B7}\u{05D9}";
         let normalised = normalize_for_lookup(pointed_matai, he);
-        assert_eq!(normalised, "מתי",
+        assert_eq!(
+            normalised, "מתי",
             "niqqud must be stripped: `מָתַי` ({pointed_matai:?}) → `מתי`, got {normalised:?}"
         );
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 &normalised,
                 MatchStrategy::FirstTokenWithHebrewClitics
             ),
@@ -3211,10 +3282,13 @@ mod tests {
         // U+0596 = Hebrew accent tipeha (cantillation).
         let cantillated_mi = "\u{05DE}\u{05B4}\u{0596}\u{05D9}";
         let normalised = normalize_for_lookup(cantillated_mi, he);
-        assert_eq!(normalised, "מי",
+        assert_eq!(
+            normalised, "מי",
             "cantillation must be stripped: `מִ֖י` ({cantillated_mi:?}) → `מי`, got {normalised:?}"
         );
-        assert!(table_matches(table,
+        assert!(
+            table_matches(
+                table,
                 &normalised,
                 MatchStrategy::FirstTokenWithHebrewClitics
             ),
@@ -3238,7 +3312,8 @@ mod tests {
         // NOT stripped — it remains as a tokeniser boundary.
         let with_maqaf = "מי\u{05BE}שלח";
         let normalised = normalize_for_lookup(with_maqaf, he);
-        assert!(normalised.contains('\u{05BE}'),
+        assert!(
+            normalised.contains('\u{05BE}'),
             "maqaf U+05BE must NOT be stripped (it's punctuation, not a combining mark); \
              got normalised={normalised:?}"
         );
@@ -3254,24 +3329,28 @@ mod tests {
             .lexicon_for("he")
             .expect("hebrew configured");
         let (_decision, decision_strat) = lex.entries(KeywordClass::Decision).unwrap();
-        assert_eq!(decision_strat,
+        assert_eq!(
+            decision_strat,
             MatchStrategy::Substring,
             "Hebrew decision strategy must be Substring (long-form keywords, anywhere)"
         );
         let (_task, task_strat) = lex.entries(KeywordClass::Task).unwrap();
-        assert_eq!(task_strat,
+        assert_eq!(
+            task_strat,
             MatchStrategy::Substring,
             "Hebrew task strategy must be Substring"
         );
         let (imperatives, imperative_strat) = lex.entries(KeywordClass::TaskImperative).unwrap();
-        assert_eq!(imperative_strat,
+        assert_eq!(
+            imperative_strat,
             MatchStrategy::FirstTokenWithHebrewClitics,
             "Hebrew imperative strategy must be FirstTokenWithHebrewClitics"
         );
         // Verify imperatives cover the substrate's standard
         // imperative semantics.
         for verb in ["כתוב", "שלח", "סקור", "פרסם", "תקן", "הצב"] {
-            assert!(imperatives.contains(&verb),
+            assert!(
+                imperatives.contains(&verb),
                 "Hebrew imperatives must include {verb:?}"
             );
         }
@@ -3323,7 +3402,8 @@ mod tests {
         for tag in [
             "en", "ja", "ko", "zh", "es", "fr", "de", "pt", "ar", "vi", "th", "id",
         ] {
-            assert!(reg.lexicon_for(tag).is_some(),
+            assert!(
+                reg.lexicon_for(tag).is_some(),
                 "default registry must contain lexicon for {tag}"
             );
         }
@@ -3368,7 +3448,7 @@ mod tests {
     #[test]
     fn registry_covers_every_interrogative_language() {
         // Every language in 's interrogative table
-        // must ALSO appear in the  registry, so the
+        // must ALSO appear in the registry, so the
         // per-sentence keyword matcher never finds itself
         // looking up decision/task keywords for a language it
         // can detect interrogatives for. This is the structural
@@ -3376,7 +3456,8 @@ mod tests {
         use crate::interrogatives::SUPPORTED_PRIMARY_TAGS;
         let reg = default_registry();
         for tag in SUPPORTED_PRIMARY_TAGS {
-            assert!(reg.lexicon_for(tag).is_some(),
+            assert!(
+                reg.lexicon_for(tag).is_some(),
                 "supports interrogatives for {tag} but \
                   has no lexicon — add one to BUILTIN_LEXICONS"
             );
@@ -3406,7 +3487,8 @@ mod tests {
                 for entry in table {
                     match strategy {
                         MatchStrategy::FirstToken => {
-                            assert!(!entry.chars().any(char::is_whitespace),
+                            assert!(
+                                !entry.chars().any(char::is_whitespace),
                                 "{}/{strategy_label} entry {entry:?} is FirstToken but \
                                  contains whitespace (no token would ever equal it)",
                                 lex.primary_tag,
@@ -3424,7 +3506,8 @@ mod tests {
                             // joins with a single ASCII space).
                             let spaces: Vec<char> =
                                 entry.chars().filter(|c| c.is_whitespace()).collect();
-                            assert!(spaces.is_empty() || spaces == [' '],
+                            assert!(
+                                spaces.is_empty() || spaces == [' '],
                                 "{}/{strategy_label} FirstBigram entry {entry:?} must contain \
                                  zero or one ASCII space (and no other whitespace)",
                                 lex.primary_tag,
@@ -3442,7 +3525,8 @@ mod tests {
                         // equal a single alphabetic token (or a
                         // proclitic-stripped residual thereof).
                         MatchStrategy::FirstTokenWithArabicClitics => {
-                            assert!(!entry.chars().any(char::is_whitespace),
+                            assert!(
+                                !entry.chars().any(char::is_whitespace),
                                 "{}/{strategy_label} entry {entry:?} is \
                                  FirstTokenWithArabicClitics but contains whitespace \
                                  (no token / peel-residual would ever equal it)",
@@ -3456,7 +3540,8 @@ mod tests {
                         // peeled residuals — entries with
                         // whitespace would never match.
                         MatchStrategy::FirstTokenWithHebrewClitics => {
-                            assert!(!entry.chars().any(char::is_whitespace),
+                            assert!(
+                                !entry.chars().any(char::is_whitespace),
                                 "{}/{strategy_label} entry {entry:?} is \
                                  FirstTokenWithHebrewClitics but contains whitespace \
                                  (no token / peel-residual would ever equal it)",
@@ -3485,7 +3570,8 @@ mod tests {
                 let mut seen: std::collections::HashSet<&&str> =
                     std::collections::HashSet::with_capacity(table.len());
                 for entry in table {
-                    assert!(seen.insert(entry),
+                    assert!(
+                        seen.insert(entry),
                         "{}/{strategy_label} table has duplicate entry {entry:?}",
                         lex.primary_tag,
                     );
@@ -3502,7 +3588,8 @@ mod tests {
         // by `interrogatives.rs` directly). Force coverage.
         let reg = default_registry();
         for lex in reg.iter() {
-            assert!(!lex.decision_keywords.is_empty() || !lex.task_keywords.is_empty(),
+            assert!(
+                !lex.decision_keywords.is_empty() || !lex.task_keywords.is_empty(),
                 "{} lexicon has neither decision nor task keywords",
                 lex.primary_tag,
             );
@@ -3518,7 +3605,8 @@ mod tests {
         let reg = default_registry();
         for tag in ["ja", "ko", "zh", "th"] {
             let lex = reg.lexicon_for(tag).expect("configured");
-            assert!(lex.task_imperative_verbs.is_empty(),
+            assert!(
+                lex.task_imperative_verbs.is_empty(),
                 "{tag} lexicon has imperative verbs but the matcher cannot fire on this script",
             );
         }
@@ -3567,20 +3655,23 @@ mod tests {
         // with any whitespace boundary. Substring matching is
         // the only strategy that fires on these scripts. Pin
         // this contract so a future contributor doesn't
-        // silently switch a  lexicon to FirstToken
+        // silently switch a lexicon to FirstToken
         // and produce zero matches.
         let reg = default_registry();
         for tag in ["bo", "km", "my", "lo"] {
             let lex = reg.lexicon_for(tag).expect(" lexicon configured");
-            assert_eq!(lex.decision_strategy,
+            assert_eq!(
+                lex.decision_strategy,
                 MatchStrategy::Substring,
                 "{tag} decision_strategy must be Substring (no whitespace word boundaries)",
             );
-            assert_eq!(lex.task_strategy,
+            assert_eq!(
+                lex.task_strategy,
                 MatchStrategy::Substring,
                 "{tag} task_strategy must be Substring (no whitespace word boundaries)",
             );
-            assert_eq!(lex.task_imperative_strategy,
+            assert_eq!(
+                lex.task_imperative_strategy,
                 MatchStrategy::Substring,
                 "{tag} task_imperative_strategy must be Substring \
                  (combining marks split intra-word under any alphabetic-token matcher)",
@@ -3606,7 +3697,8 @@ mod tests {
             .collect();
         assert!(!all_entries.is_empty(), "bo lexicon must have entries");
         for entry in all_entries {
-            assert!(entry
+            assert!(
+                entry
                     .chars()
                     .any(|c| ('\u{0F00}'..='\u{0FFF}').contains(&c)),
                 "Tibetan lexicon entry {entry:?} contains no Tibetan codepoint",
@@ -3627,7 +3719,8 @@ mod tests {
             .collect();
         assert!(!all_entries.is_empty(), "km lexicon must have entries");
         for entry in all_entries {
-            assert!(entry
+            assert!(
+                entry
                     .chars()
                     .any(|c| ('\u{1780}'..='\u{17FF}').contains(&c)),
                 "Khmer lexicon entry {entry:?} contains no Khmer codepoint",
@@ -3648,7 +3741,8 @@ mod tests {
             .collect();
         assert!(!all_entries.is_empty(), "my lexicon must have entries");
         for entry in all_entries {
-            assert!(entry.chars().any(|c| {
+            assert!(
+                entry.chars().any(|c| {
                     ('\u{1000}'..='\u{109F}').contains(&c)        // Myanmar main
                         || ('\u{AA60}'..='\u{AA7F}').contains(&c) // Myanmar Ext-A
                         || ('\u{A9E0}'..='\u{A9FF}').contains(&c) // Myanmar Ext-B
@@ -3671,7 +3765,8 @@ mod tests {
             .collect();
         assert!(!all_entries.is_empty(), "lo lexicon must have entries");
         for entry in all_entries {
-            assert!(entry
+            assert!(
+                entry
                     .chars()
                     .any(|c| ('\u{0E80}'..='\u{0EFF}').contains(&c)),
                 "Lao lexicon entry {entry:?} contains no Lao codepoint",
@@ -3681,7 +3776,7 @@ mod tests {
 
     #[test]
     fn arabic_lexicon_strategy_per_class_is_intentional() {
-        //  a follow-up (Devin Review #3331684703): the
+        //  a follow-up (an earlier review #3331684703): the
         // per-class strategy asymmetry in AR_LEXICON is the
         // architectural design, not an oversight. This test
         // pins each strategy at runtime so a contributor who
@@ -3701,7 +3796,8 @@ mod tests {
         // first token (e.g. `هذا تقرر بالأمس` "this was decided
         // yesterday" puts `تقرر` at token position 2). Substring
         // is correct.
-        assert_eq!(lex.decision_strategy,
+        assert_eq!(
+            lex.decision_strategy,
             MatchStrategy::Substring,
             "AR_LEXICON.decision_strategy must be Substring — see per-class \
              asymmetry doc block on AR_LEXICON for rationale (long-form \
@@ -3710,7 +3806,8 @@ mod tests {
 
         // Task class: Substring (long-form keywords + bigram
         // phrases like `من فضلك`). Same rationale as decision.
-        assert_eq!(lex.task_strategy,
+        assert_eq!(
+            lex.task_strategy,
             MatchStrategy::Substring,
             "AR_LEXICON.task_strategy must be Substring — see per-class \
              asymmetry doc block on AR_LEXICON for rationale (long-form \
@@ -3724,7 +3821,8 @@ mod tests {
         // imperatives like `واكتب التقرير` "and write the report"
         // that surface the bare imperative root only after peeling
         // the conjunction proclitic.
-        assert_eq!(lex.task_imperative_strategy,
+        assert_eq!(
+            lex.task_imperative_strategy,
             MatchStrategy::FirstTokenWithArabicClitics,
             "AR_LEXICON.task_imperative_strategy must be \
              FirstTokenWithArabicClitics — see per-class asymmetry doc block \
@@ -3748,14 +3846,17 @@ mod tests {
             for b_tag in tags.iter().skip(i + 1) {
                 let a = reg.lexicon_for(a_tag).expect("configured");
                 let b = reg.lexicon_for(b_tag).expect("configured");
-                assert_ne!(a.decision_keywords, b.decision_keywords,
+                assert_ne!(
+                    a.decision_keywords, b.decision_keywords,
                     "{a_tag} and {b_tag} share identical decision_keywords \
                      — accidental aliasing?",
                 );
-                assert_ne!(a.task_keywords, b.task_keywords,
+                assert_ne!(
+                    a.task_keywords, b.task_keywords,
                     "{a_tag} and {b_tag} share identical task_keywords",
                 );
-                assert_ne!(a.task_imperative_verbs, b.task_imperative_verbs,
+                assert_ne!(
+                    a.task_imperative_verbs, b.task_imperative_verbs,
                     "{a_tag} and {b_tag} share identical task_imperative_verbs",
                 );
             }
@@ -3775,7 +3876,9 @@ mod tests {
         // decision keyword ཐག་གཅོད must trip the Substring
         // matcher.
         let bo_lex = reg.lexicon_for("bo").unwrap();
-        assert!(table_matches(bo_lex.decision_keywords,
+        assert!(
+            table_matches(
+                bo_lex.decision_keywords,
                 "ཐུགས་རྗེ་ཆེ་ལས་ཀ་འདི་ཐག་གཅོད་བྱེད་ཐུབ་པ",
                 bo_lex.decision_strategy,
             ),
@@ -3785,7 +3888,9 @@ mod tests {
         // Khmer: a sentence containing the decision verb
         // សម្រេច ("decide").
         let km_lex = reg.lexicon_for("km").unwrap();
-        assert!(table_matches(km_lex.decision_keywords,
+        assert!(
+            table_matches(
+                km_lex.decision_keywords,
                 "យើងសម្រេចចេញគោលនយោបាយថ្មីហើយ",
                 km_lex.decision_strategy,
             ),
@@ -3794,7 +3899,9 @@ mod tests {
 
         // Myanmar: a sentence containing ဆုံးဖြတ် ("decide").
         let my_lex = reg.lexicon_for("my").unwrap();
-        assert!(table_matches(my_lex.decision_keywords,
+        assert!(
+            table_matches(
+                my_lex.decision_keywords,
                 "ကျွန်တော်တို့ဆုံးဖြတ်ပြီးပါပြီ",
                 my_lex.decision_strategy,
             ),
@@ -3803,7 +3910,9 @@ mod tests {
 
         // Lao: a sentence containing ຕັດສິນໃຈ ("decide").
         let lo_lex = reg.lexicon_for("lo").unwrap();
-        assert!(table_matches(lo_lex.decision_keywords,
+        assert!(
+            table_matches(
+                lo_lex.decision_keywords,
                 "ພວກເຮົາຕັດສິນໃຈແລ້ວ",
                 lo_lex.decision_strategy,
             ),
@@ -3813,7 +3922,7 @@ mod tests {
 
     #[test]
     fn task_imperative_extracted_under_substring_matching() {
-        // Cross-script imperative verb test. Every 
+        // Cross-script imperative verb test. Every
         // lexicon's imperative-verb list is non-empty (unlike
         // ja/ko/zh/th) because Substring matching DOES fire
         // on no-whitespace scripts, so dropping the verbs
@@ -3822,28 +3931,32 @@ mod tests {
 
         // Tibetan: "འབྲི" ("write")
         let bo_lex = reg.lexicon_for("bo").unwrap();
-        assert!(table_matches(bo_lex.task_imperative_verbs,
+        assert!(table_matches(
+            bo_lex.task_imperative_verbs,
             "འདི་འབྲི་རོགས་གནང",
             bo_lex.task_imperative_strategy,
         ));
 
         // Khmer: "ផ្ញើ" ("send")
         let km_lex = reg.lexicon_for("km").unwrap();
-        assert!(table_matches(km_lex.task_imperative_verbs,
+        assert!(table_matches(
+            km_lex.task_imperative_verbs,
             "សូមផ្ញើឯកសារ",
             km_lex.task_imperative_strategy,
         ));
 
         // Myanmar: "ပို့" ("send")
         let my_lex = reg.lexicon_for("my").unwrap();
-        assert!(table_matches(my_lex.task_imperative_verbs,
+        assert!(table_matches(
+            my_lex.task_imperative_verbs,
             "ကျေးဇူးပြုပြီးပို့ပါ",
             my_lex.task_imperative_strategy,
         ));
 
         // Lao: "ສົ່ງ" ("send")
         let lo_lex = reg.lexicon_for("lo").unwrap();
-        assert!(table_matches(lo_lex.task_imperative_verbs,
+        assert!(table_matches(
+            lo_lex.task_imperative_verbs,
             "ກະລຸນາສົ່ງເອກະສານ",
             lo_lex.task_imperative_strategy,
         ));
@@ -3855,7 +3968,7 @@ mod tests {
         // `lao_khmer_myanmar_fact_shaped_without_whitespace`
         // test in extractor.rs uses three canonical
         // declarative sentences to verify Fact-shape
-        // classification. Pin that none of the 
+        // classification. Pin that none of the
         // lexicon entries OR interrogative entries
         // accidentally substring-match those declaratives.
         // If a future contributor adds a keyword that
@@ -3888,26 +4001,29 @@ mod tests {
             // declarative.
             let (interr, _) = interrogatives_for(tag).expect("configured");
             for entry in interr {
-                assert!(!declarative.contains(entry),
+                assert!(
+                    !declarative.contains(entry),
                     "{tag} interrogative entry {entry:?} substring-matches \
-                     a earlier declarative test sentence {declarative:?}",
+                     a multilingual declarative test sentence {declarative:?}",
                 );
             }
 
             // Decision keywords: NO entry should match.
             let lex = reg.lexicon_for(tag).expect("configured");
             for entry in lex.decision_keywords {
-                assert!(!declarative.contains(entry),
+                assert!(
+                    !declarative.contains(entry),
                     "{tag} decision_keyword {entry:?} substring-matches \
-                     a earlier declarative test sentence {declarative:?}",
+                     a multilingual declarative test sentence {declarative:?}",
                 );
             }
 
             // Task keywords: NO entry should match.
             for entry in lex.task_keywords {
-                assert!(!declarative.contains(entry),
+                assert!(
+                    !declarative.contains(entry),
                     "{tag} task_keyword {entry:?} substring-matches \
-                     a earlier declarative test sentence {declarative:?}",
+                     a multilingual declarative test sentence {declarative:?}",
                 );
             }
 
@@ -3915,9 +4031,10 @@ mod tests {
             // (these declaratives are nominal statements, not
             // imperatives).
             for entry in lex.task_imperative_verbs {
-                assert!(!declarative.contains(entry),
+                assert!(
+                    !declarative.contains(entry),
                     "{tag} task_imperative_verb {entry:?} substring-matches \
-                     a earlier declarative test sentence {declarative:?}",
+                     a multilingual declarative test sentence {declarative:?}",
                 );
             }
         }
@@ -3963,7 +4080,8 @@ mod tests {
 
         for declarative in declaratives {
             for entry in interr {
-                assert!(!declarative.contains(entry),
+                assert!(
+                    !declarative.contains(entry),
                     "Lao interrogative entry {entry:?} substring-matches \
                      a Lao declarative {declarative:?} — this indicates \
                      the  deliberate omission of bare `ບໍ` has \

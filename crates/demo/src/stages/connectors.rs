@@ -47,7 +47,8 @@ struct DemoOAuth {
 
 impl OAuth2CodeExchange for DemoOAuth {
     fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
-        Ok(OAuth2Token::new("demo-access-token",
+        Ok(OAuth2Token::new(
+            "demo-access-token",
             "demo-refresh-token",
             Utc::now() + Duration::hours(12),
             self.scope,
@@ -68,8 +69,8 @@ fn ok_json(value: &serde_json::Value) -> MockResponse {
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::stages::runtime::RuntimeState;
 use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::RuntimeState;
 
 const STAGE: &str = "connectors";
 
@@ -82,7 +83,8 @@ struct ConnectorMetrics {
     subscriptions: u64,
 }
 
-pub fn run(dataset: &Dataset,
+pub fn run(
+    dataset: &Dataset,
     state: &mut RuntimeState,
     report: &mut DemoReport,
     log: &mut AssertionLog,
@@ -107,16 +109,20 @@ pub fn run(dataset: &Dataset,
         total_webhook += c.webhook_events;
         total_subscriptions += c.subscriptions;
 
-        stage.stat(format!("{}.initial_events", c.name),
+        stage.stat(
+            format!("{}.initial_events", c.name),
             c.initial_events.to_string(),
         );
-        stage.stat(format!("{}.incremental_events", c.name),
+        stage.stat(
+            format!("{}.incremental_events", c.name),
             c.incremental_events.to_string(),
         );
-        stage.stat(format!("{}.webhook_events", c.name),
+        stage.stat(
+            format!("{}.webhook_events", c.name),
             c.webhook_events.to_string(),
         );
-        stage.stat(format!("{}.subscriptions", c.name),
+        stage.stat(
+            format!("{}.subscriptions", c.name),
             c.subscriptions.to_string(),
         );
     }
@@ -125,7 +131,8 @@ pub fn run(dataset: &Dataset,
 
     stage.stat("connectors.exercised", connectors.len().to_string());
     stage.stat("connectors.initial_events", total_initial.to_string());
-    stage.stat("connectors.incremental_events",
+    stage.stat(
+        "connectors.incremental_events",
         total_incremental.to_string(),
     );
     stage.stat("connectors.webhook_events", total_webhook.to_string());
@@ -137,13 +144,15 @@ pub fn run(dataset: &Dataset,
     report.count("connectors.subscriptions", total_subscriptions);
     report.count("connectors.webhook_events", total_webhook);
 
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "all four connectors emit at least one event",
         connectors
             .iter()
             .all(|c| c.initial_events + c.incremental_events + c.webhook_events > 0),
     );
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "every connector registered at least one webhook subscription",
         connectors.iter().all(|c| c.subscriptions >= 1),
     );
@@ -166,7 +175,8 @@ pub fn run(dataset: &Dataset,
     report.add_stage(stage);
 }
 
-fn exercise_google_drive(_dataset: &Dataset,
+fn exercise_google_drive(
+    _dataset: &Dataset,
     log: &mut AssertionLog,
     report: &mut DemoReport,
 ) -> ConnectorMetrics {
@@ -189,8 +199,10 @@ fn exercise_google_drive(_dataset: &Dataset,
          changes(fileId,kind,removed,time,file(id,name,mimeType,trashed,modifiedTime,createdTime))";
 
     // Initial sync — two pages of files.list.
-    transport.expect(HttpMethod::Get,
-        format!("{base_url}/drive/v3/files?pageSize={DRIVE_PAGE_SIZE}&q={}&fields={}",
+    transport.expect(
+        HttpMethod::Get,
+        format!(
+            "{base_url}/drive/v3/files?pageSize={DRIVE_PAGE_SIZE}&q={}&fields={}",
             percent_encode_path_component(q),
             percent_encode_path_component(file_list_fields),
         ),
@@ -217,8 +229,10 @@ fn exercise_google_drive(_dataset: &Dataset,
             new_start_page_token: None,
         })),
     );
-    transport.expect(HttpMethod::Get,
-        format!("{base_url}/drive/v3/files?pageSize={DRIVE_PAGE_SIZE}&q={}&fields={}&pageToken={}",
+    transport.expect(
+        HttpMethod::Get,
+        format!(
+            "{base_url}/drive/v3/files?pageSize={DRIVE_PAGE_SIZE}&q={}&fields={}&pageToken={}",
             percent_encode_path_component(q),
             percent_encode_path_component(file_list_fields),
             percent_encode_path_component("drive-page-2"),
@@ -237,7 +251,8 @@ fn exercise_google_drive(_dataset: &Dataset,
         })),
     );
     // changes.getStartPageToken — anchors the substrate watermark.
-    transport.expect(HttpMethod::Get,
+    transport.expect(
+        HttpMethod::Get,
         format!("{base_url}/drive/v3/changes/startPageToken"),
         ok_json(&json!(GoogleDriveStartPageToken {
             start_page_token: Some("changes-token-1".into()),
@@ -278,8 +293,10 @@ fn exercise_google_drive(_dataset: &Dataset,
         })),
     );
     // changes.watch — webhook subscribe.
-    transport.expect(HttpMethod::Post,
-        format!("{base_url}/drive/v3/changes/watch?pageToken={}",
+    transport.expect(
+        HttpMethod::Post,
+        format!(
+            "{base_url}/drive/v3/changes/watch?pageToken={}",
             percent_encode_path_component("watch-start-1"),
         ),
         ok_json(&json!(GoogleDriveWatchResponse {
@@ -289,13 +306,15 @@ fn exercise_google_drive(_dataset: &Dataset,
         })),
     );
 
-    let connector = GoogleDriveConnector::new(instance,
+    let connector = GoogleDriveConnector::new(
+        instance,
         transport,
         DemoOAuth::arc("https://www.googleapis.com/auth/drive.readonly"),
     );
 
     let token = connector.authenticate(&cfg).expect("drive auth");
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "google_drive.authenticate returns drive scope",
         token.scope.contains("drive"),
     );
@@ -304,15 +323,18 @@ fn exercise_google_drive(_dataset: &Dataset,
     let initial = connector
         .initial_sync(&cfg, &token)
         .expect("drive initial_sync");
-    report.add_benchmark("connectors.google_drive.initial_sync",
+    report.add_benchmark(
+        "connectors.google_drive.initial_sync",
         initial.events.len() as u64,
         initial_started.elapsed(),
     );
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "google_drive.initial_sync emits one event per file",
         initial.events.len() == 3,
     );
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "google_drive.initial_sync seeds new_start_page_token",
         initial.next_cursor.as_deref() == Some("changes-token-1"),
     );
@@ -326,7 +348,8 @@ fn exercise_google_drive(_dataset: &Dataset,
     let incremental = connector
         .incremental_sync(&cfg, &token, &sync_state)
         .expect("drive incremental_sync");
-    report.add_benchmark("connectors.google_drive.incremental_sync",
+    report.add_benchmark(
+        "connectors.google_drive.incremental_sync",
         incremental.events.len() as u64,
         inc_started.elapsed(),
     );
@@ -334,7 +357,8 @@ fn exercise_google_drive(_dataset: &Dataset,
         .events
         .iter()
         .any(|e| matches!(e, ConnectorEvent::DocumentDeleted { .. }));
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "google_drive.incremental_sync surfaces removed change as DocumentDeleted",
         inc_has_delete,
     );
@@ -342,7 +366,8 @@ fn exercise_google_drive(_dataset: &Dataset,
     let subscription = connector
         .subscribe_webhook(&cfg, &token, "https://demo.example/webhooks/drive")
         .expect("drive webhook subscribe");
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "google_drive.subscribe_webhook bound to instance",
         subscription.connector == instance,
     );
@@ -358,14 +383,16 @@ fn exercise_google_drive(_dataset: &Dataset,
     let webhook_events = connector
         .handle_webhook_event(&serde_json::to_vec(&push_payload).unwrap())
         .expect("drive webhook decode");
-    report.add_benchmark("connectors.google_drive.webhook",
+    report.add_benchmark(
+        "connectors.google_drive.webhook",
         webhook_events.len() as u64,
         webhook_started.elapsed(),
     );
     let webhook_is_perm = webhook_events
         .iter()
         .any(|e| matches!(e, ConnectorEvent::PermissionChanged { .. }));
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "google_drive.handle_webhook_event surfaces permission change",
         webhook_is_perm,
     );
@@ -392,12 +419,14 @@ fn issue(key: &str, summary: &str, created: chrono::DateTime<Utc>) -> JiraIssue 
     }
 }
 
-fn exercise_jira(_dataset: &Dataset,
+fn exercise_jira(
+    _dataset: &Dataset,
     log: &mut AssertionLog,
     report: &mut DemoReport,
 ) -> ConnectorMetrics {
     let scope = ScopeId::new_v4();
-    let cfg = ConnectorConfig::new(ConnectorKind::Jira, AuthKind::OAuth2, scope).with_auth_config(json!({
+    let cfg = ConnectorConfig::new(ConnectorKind::Jira, AuthKind::OAuth2, scope).with_auth_config(
+        json!({
             "authorization_code": "demo-code",
             "api_base_url": "https://api.test/jira",
             "webhook_secret": "demo-jira-secret",
@@ -450,7 +479,8 @@ fn exercise_jira(_dataset: &Dataset,
 
     // Webhook subscription — Jira returns the assigned numeric id
     // which the substrate persists into `provider_subscription_id`.
-    transport.expect(HttpMethod::Post,
+    transport.expect(
+        HttpMethod::Post,
         "https://api.test/jira/rest/api/3/webhook",
         ok_json(&json!({
             "webhookRegistrationResult": [
@@ -459,13 +489,15 @@ fn exercise_jira(_dataset: &Dataset,
         })),
     );
 
-    let connector = JiraConnector::new(instance,
+    let connector = JiraConnector::new(
+        instance,
         transport.clone(),
         DemoOAuth::arc("read:jira-work read:jira-user manage:jira-webhook"),
     );
 
     let token = connector.authenticate(&cfg).expect("jira auth");
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "jira.authenticate returns jira-work scope",
         token.scope.contains("jira-work"),
     );
@@ -474,11 +506,13 @@ fn exercise_jira(_dataset: &Dataset,
     let initial = connector
         .initial_sync(&cfg, &token)
         .expect("jira initial_sync");
-    report.add_benchmark("connectors.jira.initial_sync",
+    report.add_benchmark(
+        "connectors.jira.initial_sync",
         initial.events.len() as u64,
         initial_started.elapsed(),
     );
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "jira.initial_sync emits one DocumentCreated per issue",
         initial.events.len() == 3
             && initial
@@ -496,11 +530,13 @@ fn exercise_jira(_dataset: &Dataset,
     let incremental = connector
         .incremental_sync(&cfg, &token, &sync_state)
         .expect("jira incremental_sync");
-    report.add_benchmark("connectors.jira.incremental_sync",
+    report.add_benchmark(
+        "connectors.jira.incremental_sync",
         incremental.events.len() as u64,
         inc_started.elapsed(),
     );
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "jira.incremental_sync emits at least one DocumentUpdated",
         incremental
             .events
@@ -511,7 +547,8 @@ fn exercise_jira(_dataset: &Dataset,
     let subscription = connector
         .subscribe_webhook(&cfg, &token, "https://demo.example/webhooks/jira")
         .expect("jira webhook subscribe");
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "jira.subscribe_webhook returns subscription bound to instance",
         subscription.connector == instance,
     );
@@ -535,7 +572,8 @@ fn exercise_jira(_dataset: &Dataset,
         .handle_webhook_event(&serde_json::to_vec(&created_payload).unwrap())
         .expect("jira created webhook");
     webhook_total += evs.len() as u64;
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "jira.handle_webhook_event(jira:issue_created) yields DocumentCreated",
         evs.iter()
             .any(|e| matches!(e, ConnectorEvent::DocumentCreated { .. })),
@@ -551,13 +589,15 @@ fn exercise_jira(_dataset: &Dataset,
         .handle_webhook_event(&serde_json::to_vec(&perm_payload).unwrap())
         .expect("jira permission webhook");
     webhook_total += perm_evs.len() as u64;
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "jira.handle_webhook_event(permissionscheme_updated) yields PermissionChanged",
         perm_evs
             .iter()
             .any(|e| matches!(e, ConnectorEvent::PermissionChanged { .. })),
     );
-    report.add_benchmark("connectors.jira.webhook",
+    report.add_benchmark(
+        "connectors.jira.webhook",
         webhook_total,
         webhook_started.elapsed(),
     );
@@ -586,12 +626,14 @@ fn message(channel: &str, ts_str: &str, text: &str) -> connectors::slack::SlackM
     }
 }
 
-fn exercise_slack(_dataset: &Dataset,
+fn exercise_slack(
+    _dataset: &Dataset,
     log: &mut AssertionLog,
     report: &mut DemoReport,
 ) -> ConnectorMetrics {
     let scope = ScopeId::new_v4();
-    let cfg = ConnectorConfig::new(ConnectorKind::Slack, AuthKind::OAuth2, scope).with_auth_config(json!({
+    let cfg = ConnectorConfig::new(ConnectorKind::Slack, AuthKind::OAuth2, scope).with_auth_config(
+        json!({
             "authorization_code": "demo-code",
             "signing_secret": "demo-signing-secret",
             "api_base_url": "https://api.test/slack",
@@ -603,7 +645,8 @@ fn exercise_slack(_dataset: &Dataset,
     let transport = Arc::new(MockHttpTransport::new());
 
     // Initial sync — one channel, three messages.
-    transport.expect(HttpMethod::Get,
+    transport.expect(
+        HttpMethod::Get,
         "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
         ok_json(&json!({
             "ok": true,
@@ -617,18 +660,21 @@ fn exercise_slack(_dataset: &Dataset,
             "response_metadata": SlackResponseMetadata::default(),
         })),
     );
-    transport.expect(HttpMethod::Get,
+    transport.expect(
+        HttpMethod::Get,
         "https://api.test/slack/conversations.history?channel=C-PRODUCT&limit=200",
         ok_json(&json!(SlackHistoryResponse {
             ok: true,
             channel: "C-PRODUCT".into(),
             messages: vec![
                 // Slack returns history newest-first.
-                message("C-PRODUCT",
+                message(
+                    "C-PRODUCT",
                     &ts(now_secs - 3600),
                     "Action item: prepare migration guide"
                 ),
-                message("C-PRODUCT",
+                message(
+                    "C-PRODUCT",
                     &ts(now_secs - 5400),
                     "Decision: ship v2 next quarter"
                 ),
@@ -653,7 +699,8 @@ fn exercise_slack(_dataset: &Dataset,
     // recent watermark from the initial-sync messages.
     let initial_watermark_dt =
         chrono::DateTime::<Utc>::from_timestamp(now_secs - 3600, 0).expect("watermark");
-    let oldest = format!("{}.{:06}",
+    let oldest = format!(
+        "{}.{:06}",
         initial_watermark_dt.timestamp(),
         initial_watermark_dt.timestamp_subsec_micros()
     );
@@ -688,13 +735,15 @@ fn exercise_slack(_dataset: &Dataset,
         })),
     );
 
-    let connector = SlackConnector::new(instance,
+    let connector = SlackConnector::new(
+        instance,
         transport,
         DemoOAuth::arc("channels:history channels:read files:read"),
     );
 
     let token = connector.authenticate(&cfg).expect("slack auth");
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "slack.authenticate returns channels:history scope",
         token.scope.contains("channels:history"),
     );
@@ -703,11 +752,13 @@ fn exercise_slack(_dataset: &Dataset,
     let initial = connector
         .initial_sync(&cfg, &token)
         .expect("slack initial_sync");
-    report.add_benchmark("connectors.slack.initial_sync",
+    report.add_benchmark(
+        "connectors.slack.initial_sync",
         initial.events.len() as u64,
         initial_started.elapsed(),
     );
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "slack.initial_sync emits one DocumentCreated per message",
         initial.events.len() == 3
             && initial
@@ -725,7 +776,8 @@ fn exercise_slack(_dataset: &Dataset,
     let incremental = connector
         .incremental_sync(&cfg, &token, &sync_state)
         .expect("slack incremental_sync");
-    report.add_benchmark("connectors.slack.incremental_sync",
+    report.add_benchmark(
+        "connectors.slack.incremental_sync",
         incremental.events.len() as u64,
         inc_started.elapsed(),
     );
@@ -737,7 +789,8 @@ fn exercise_slack(_dataset: &Dataset,
         .events
         .iter()
         .any(|e| matches!(e, ConnectorEvent::DocumentDeleted { .. }));
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "slack.incremental_sync surfaces both update and delete",
         inc_has_update && inc_has_delete,
     );
@@ -745,7 +798,8 @@ fn exercise_slack(_dataset: &Dataset,
     let subscription = connector
         .subscribe_webhook(&cfg, &token, "https://demo.example/webhooks/slack")
         .expect("slack webhook subscribe");
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "slack.subscribe_webhook returns subscription bound to instance",
         subscription.connector == instance,
     );
@@ -765,11 +819,13 @@ fn exercise_slack(_dataset: &Dataset,
     let webhook_events = connector
         .handle_webhook_event(&serde_json::to_vec(&event_payload).unwrap())
         .expect("slack webhook decode");
-    report.add_benchmark("connectors.slack.webhook",
+    report.add_benchmark(
+        "connectors.slack.webhook",
         webhook_events.len() as u64,
         webhook_started.elapsed(),
     );
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "slack.handle_webhook_event(message) yields DocumentCreated",
         webhook_events
             .iter()
@@ -785,14 +841,16 @@ fn exercise_slack(_dataset: &Dataset,
     }
 }
 
-fn exercise_email(_dataset: &Dataset,
+fn exercise_email(
+    _dataset: &Dataset,
     log: &mut AssertionLog,
     report: &mut DemoReport,
 ) -> ConnectorMetrics {
     let scope = ScopeId::new_v4();
     let gmail_base = "https://api.test/gmail";
     let graph_base = "https://api.test/graph";
-    let cfg = ConnectorConfig::new(ConnectorKind::Email, AuthKind::OAuth2, scope).with_auth_config(json!({
+    let cfg = ConnectorConfig::new(ConnectorKind::Email, AuthKind::OAuth2, scope).with_auth_config(
+        json!({
             "provider": "gmail",
             "authorization_code": "demo-code",
             "gmail_api_base_url": gmail_base,
@@ -808,8 +866,10 @@ fn exercise_email(_dataset: &Dataset,
 
     // Initial sync: page 1 (with nextPageToken) → page 2 (terminal) →
     // getProfile to anchor the historyId watermark.
-    transport.expect(HttpMethod::Get,
-        format!("{gmail_base}/gmail/v1/users/me/messages?maxResults={}",
+    transport.expect(
+        HttpMethod::Get,
+        format!(
+            "{gmail_base}/gmail/v1/users/me/messages?maxResults={}",
             percent_encode_path_component(&page_size)
         ),
         ok_json(&json!(GmailMessagesListPage {
@@ -831,8 +891,10 @@ fn exercise_email(_dataset: &Dataset,
             result_size_estimate: Some(3),
         })),
     );
-    transport.expect(HttpMethod::Get,
-        format!("{gmail_base}/gmail/v1/users/me/messages?maxResults={}&pageToken={}",
+    transport.expect(
+        HttpMethod::Get,
+        format!(
+            "{gmail_base}/gmail/v1/users/me/messages?maxResults={}&pageToken={}",
             percent_encode_path_component(&page_size),
             percent_encode_path_component("gmail-page-2"),
         ),
@@ -847,7 +909,8 @@ fn exercise_email(_dataset: &Dataset,
             result_size_estimate: Some(3),
         })),
     );
-    transport.expect(HttpMethod::Get,
+    transport.expect(
+        HttpMethod::Get,
         format!("{gmail_base}/gmail/v1/users/me/profile"),
         ok_json(&json!(GmailProfile {
             email_address: "ops@demo.example".into(),
@@ -871,7 +934,8 @@ fn exercise_email(_dataset: &Dataset,
         })),
     );
     // Webhook subscribe via users.watch.
-    transport.expect(HttpMethod::Post,
+    transport.expect(
+        HttpMethod::Post,
         format!("{gmail_base}/gmail/v1/users/me/watch"),
         ok_json(&json!(GmailWatchResponse {
             history_id: Some("1200".into()),
@@ -879,13 +943,15 @@ fn exercise_email(_dataset: &Dataset,
         })),
     );
 
-    let gmail = EmailConnector::new(instance,
+    let gmail = EmailConnector::new(
+        instance,
         transport,
         DemoOAuth::arc("https://www.googleapis.com/auth/gmail.readonly"),
     );
 
     let token = gmail.authenticate(&cfg).expect("gmail auth");
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "email[gmail].authenticate returns gmail.readonly scope",
         token.scope.contains("gmail.readonly"),
     );
@@ -896,11 +962,13 @@ fn exercise_email(_dataset: &Dataset,
     let gmail_initial = gmail
         .initial_sync(&cfg_gmail, &token)
         .expect("gmail initial_sync");
-    report.add_benchmark("connectors.email.gmail.initial_sync",
+    report.add_benchmark(
+        "connectors.email.gmail.initial_sync",
         gmail_initial.events.len() as u64,
         gmail_initial_started.elapsed(),
     );
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "email[gmail].initial_sync emits one DocumentCreated per message",
         gmail_initial.events.len() == 3
             && gmail_initial
@@ -917,11 +985,13 @@ fn exercise_email(_dataset: &Dataset,
     let gmail_incremental = gmail
         .incremental_sync(&cfg_gmail, &token, &gmail_state)
         .expect("gmail incremental_sync");
-    report.add_benchmark("connectors.email.gmail.incremental_sync",
+    report.add_benchmark(
+        "connectors.email.gmail.incremental_sync",
         gmail_incremental.events.len() as u64,
         gmail_inc_started.elapsed(),
     );
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "email[gmail].incremental_sync emits at least one event",
         !gmail_incremental.events.is_empty(),
     );
@@ -929,7 +999,8 @@ fn exercise_email(_dataset: &Dataset,
     let gmail_subscription = gmail
         .subscribe_webhook(&cfg_gmail, &token, "https://demo.example/webhooks/gmail")
         .expect("gmail webhook subscribe");
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "email[gmail].subscribe_webhook bound to instance",
         gmail_subscription.connector == instance,
     );
@@ -943,11 +1014,13 @@ fn exercise_email(_dataset: &Dataset,
     let gmail_webhook_events = gmail
         .handle_webhook_event(&serde_json::to_vec(&gmail_webhook_payload).unwrap())
         .expect("gmail webhook decode");
-    report.add_benchmark("connectors.email.gmail.webhook",
+    report.add_benchmark(
+        "connectors.email.gmail.webhook",
         gmail_webhook_events.len() as u64,
         gmail_webhook_started.elapsed(),
     );
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "email[gmail].handle_webhook_event emits one event per messageId",
         gmail_webhook_events.len() == 2,
     );
@@ -965,7 +1038,8 @@ fn exercise_email(_dataset: &Dataset,
 
     let graph_transport = Arc::new(MockHttpTransport::new());
     // Initial: one delta page with deltaLink seeding the watermark.
-    graph_transport.expect(HttpMethod::Get,
+    graph_transport.expect(
+        HttpMethod::Get,
         graph_delta_url.clone(),
         ok_json(&json!(GraphMessagesPage {
             value: vec![
@@ -989,7 +1063,8 @@ fn exercise_email(_dataset: &Dataset,
         })),
     );
     // Incremental: walk the prior @odata.deltaLink verbatim.
-    graph_transport.expect(HttpMethod::Get,
+    graph_transport.expect(
+        HttpMethod::Get,
         graph_delta_token_1.clone(),
         ok_json(&json!(GraphMessagesPage {
             value: vec![GraphMessage {
@@ -1004,7 +1079,8 @@ fn exercise_email(_dataset: &Dataset,
         })),
     );
     // Webhook subscribe: POST /subscriptions.
-    graph_transport.expect(HttpMethod::Post,
+    graph_transport.expect(
+        HttpMethod::Post,
         format!("{graph_base}/v1.0/subscriptions"),
         ok_json(&json!(GraphSubscriptionResponse {
             id: Some("sub-graph-demo".into()),
@@ -1012,13 +1088,15 @@ fn exercise_email(_dataset: &Dataset,
         })),
     );
 
-    let graph = EmailConnector::new(graph_instance,
+    let graph = EmailConnector::new(
+        graph_instance,
         graph_transport,
         DemoOAuth::arc("Mail.Read offline_access"),
     );
 
     let graph_token = graph.authenticate(&graph_cfg).expect("graph auth");
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "email[graph].authenticate returns Mail.Read scope",
         graph_token.scope.contains("Mail.Read"),
     );
@@ -1027,11 +1105,13 @@ fn exercise_email(_dataset: &Dataset,
     let graph_initial = graph
         .initial_sync(&graph_cfg, &graph_token)
         .expect("graph initial_sync");
-    report.add_benchmark("connectors.email.graph.initial_sync",
+    report.add_benchmark(
+        "connectors.email.graph.initial_sync",
         graph_initial.events.len() as u64,
         graph_initial_started.elapsed(),
     );
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "email[graph].initial_sync seeds delta-link cursor",
         graph_initial.next_cursor.as_deref() == Some(graph_delta_token_1.as_str()),
     );
@@ -1044,22 +1124,26 @@ fn exercise_email(_dataset: &Dataset,
     let graph_incremental = graph
         .incremental_sync(&graph_cfg, &graph_token, &graph_state)
         .expect("graph incremental_sync");
-    report.add_benchmark("connectors.email.graph.incremental_sync",
+    report.add_benchmark(
+        "connectors.email.graph.incremental_sync",
         graph_incremental.events.len() as u64,
         graph_inc_started.elapsed(),
     );
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "email[graph].incremental_sync emits at least one event",
         !graph_incremental.events.is_empty(),
     );
 
     let graph_subscription = graph
-        .subscribe_webhook(&graph_cfg,
+        .subscribe_webhook(
+            &graph_cfg,
             &graph_token,
             "https://demo.example/webhooks/graph",
         )
         .expect("graph webhook subscribe");
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "email[graph].subscribe_webhook bound to instance",
         graph_subscription.connector == graph_instance,
     );
@@ -1077,11 +1161,13 @@ fn exercise_email(_dataset: &Dataset,
     let graph_webhook_events = graph
         .handle_webhook_event(&serde_json::to_vec(&graph_webhook_payload).unwrap())
         .expect("graph webhook decode");
-    report.add_benchmark("connectors.email.graph.webhook",
+    report.add_benchmark(
+        "connectors.email.graph.webhook",
         graph_webhook_events.len() as u64,
         graph_webhook_started.elapsed(),
     );
-    log.record(STAGE,
+    log.record(
+        STAGE,
         "email[graph].handle_webhook_event emits DocumentCreated for created notifications",
         graph_webhook_events
             .iter()

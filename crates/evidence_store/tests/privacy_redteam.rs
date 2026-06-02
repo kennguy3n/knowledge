@@ -49,7 +49,8 @@ fn scope_isolation_wrong_master_key_refuses_to_unlock() {
         let mut store =
             EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
         store
-            .ingest(ScopeId::new_v4(),
+            .ingest(
+                ScopeId::new_v4(),
                 b"victim payload",
                 None,
                 ImportanceClass::Useful,
@@ -58,7 +59,8 @@ fn scope_isolation_wrong_master_key_refuses_to_unlock() {
     }
     let evil_key = [0xEEu8; 32];
     let result = EvidenceStore::open(&path, &evil_key, EvidenceStoreConfig::default());
-    assert!(result.is_err(),
+    assert!(
+        result.is_err(),
         "store opened with the wrong master key — confidentiality broken"
     );
 }
@@ -93,18 +95,21 @@ fn scope_isolation_inline_rows_use_distinct_aead_aads() {
         .unwrap();
     let conn = store.raw_conn();
     let ct_a: Vec<u8> = conn
-        .query_row("SELECT body FROM evidence WHERE id = ?1",
+        .query_row(
+            "SELECT body FROM evidence WHERE id = ?1",
             rusqlite::params![res_a.evidence_id.as_uuid().as_bytes().as_slice()],
             |r| r.get(0),
         )
         .unwrap();
     let ct_b: Vec<u8> = conn
-        .query_row("SELECT body FROM evidence WHERE id = ?1",
+        .query_row(
+            "SELECT body FROM evidence WHERE id = ?1",
             rusqlite::params![res_b.evidence_id.as_uuid().as_bytes().as_slice()],
             |r| r.get(0),
         )
         .unwrap();
-    assert_ne!(ct_a, ct_b,
+    assert_ne!(
+        ct_a, ct_b,
         "inline ciphertexts collapsed across scopes — keys/AAD broken"
     );
 }
@@ -134,16 +139,19 @@ fn forgotten_scope_yields_no_dek() {
     let events = destroy_scope_dek(&mut registry, scope_id, None)
         .expect("destroy_scope_dek must succeed with no tombstone store");
     assert!(!events.is_empty(), "scope DEK destroy must emit an event");
-    assert!(registry.is_scope_forgotten(scope_id),
+    assert!(
+        registry.is_scope_forgotten(scope_id),
         "registry must report forgotten scope as forgotten"
     );
-    assert!(registry.get_scope_dek(scope_id).is_none(),
+    assert!(
+        registry.get_scope_dek(scope_id).is_none(),
         "registry must not return DEK material for a forgotten scope"
     );
     // Idempotent destroy.
     let again = destroy_scope_dek(&mut registry, scope_id, None)
         .expect("destroy_scope_dek must succeed with no tombstone store");
-    assert!(again.is_empty(),
+    assert!(
+        again.is_empty(),
         "double-destroy must be idempotent (no new events)"
     );
 }
@@ -221,10 +229,12 @@ fn ring_buffer_overflow_does_not_spill_into_evidence_table() {
         store.ring_buffer_insert(scope, &body).unwrap();
     }
     let total = store.ring_buffer_current_size().unwrap();
-    assert!(total <= 256,
+    assert!(
+        total <= 256,
         "ring buffer ignored its byte cap (total={total})"
     );
-    assert_eq!(store.evidence_count().unwrap(),
+    assert_eq!(
+        store.evidence_count().unwrap(),
         0,
         "noise spilled into evidence table"
     );
@@ -249,13 +259,15 @@ fn append_only_evidence_table_rejects_update_and_delete() {
     let id_bytes = res.evidence_id.as_uuid().as_bytes().to_vec();
     assert!(store
         .raw_conn()
-        .execute("UPDATE evidence SET source_ref = 'tampered' WHERE id = ?1",
+        .execute(
+            "UPDATE evidence SET source_ref = 'tampered' WHERE id = ?1",
             rusqlite::params![id_bytes.as_slice()],
         )
         .is_err());
     assert!(store
         .raw_conn()
-        .execute("DELETE FROM evidence WHERE id = ?1",
+        .execute(
+            "DELETE FROM evidence WHERE id = ?1",
             rusqlite::params![id_bytes.as_slice()],
         )
         .is_err());
@@ -284,13 +296,15 @@ fn permission_viewer_cannot_promote_to_editor() {
     store
         .insert(RelationTuple::new(channel, Relation::Viewer, user))
         .unwrap();
-    assert!(check_permission(&store,
+    assert!(check_permission(
+        &store,
         &ns,
         channel,
         Relation::Viewer,
         user
     ));
-    assert!(!check_permission(&store, &ns, channel, Relation::Editor, user),
+    assert!(
+        !check_permission(&store, &ns, channel, Relation::Editor, user),
         "viewer was wrongly promoted to editor"
     );
 }
@@ -317,12 +331,14 @@ fn agent_boundary_canonical_promotion_requires_review() {
     use uuid::Uuid;
 
     let mut store = ProposalStore::new();
-    let identity = AgentIdentity::new(Uuid::new_v4(),
+    let identity = AgentIdentity::new(
+        Uuid::new_v4(),
         "test-agent",
         "bonsai-1.7b",
         "q1_0_g128-2026-04-01",
     );
-    let proposal = AgentProposal::new(ProposalKind::Observation,
+    let proposal = AgentProposal::new(
+        ProposalKind::Observation,
         ScopeId::new_v4(),
         ObservationProposal::new("Friday is the deadline", "fact"),
         vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -333,7 +349,8 @@ fn agent_boundary_canonical_promotion_requires_review() {
     let proposal_id = store.submit_observation(proposal).unwrap();
     // No review yet → must NOT be in canonical state.
     let result = store.promote_to_canonical(proposal_id);
-    assert!(result.is_err(),
+    assert!(
+        result.is_err(),
         "agent slipped a canonical write past the review gate"
     );
     // Even an explicit `review` against the deny-by-default policy
@@ -341,7 +358,8 @@ fn agent_boundary_canonical_promotion_requires_review() {
     let policy = AutoPromotionPolicy::default();
     let _ = store.review(proposal_id, &policy);
     // Still not canonical-promotable until manual `promote`.
-    assert!(store.promote_to_canonical(proposal_id).is_err(),
+    assert!(
+        store.promote_to_canonical(proposal_id).is_err(),
         "default policy auto-promoted a proposal that should require review"
     );
 }
@@ -364,7 +382,8 @@ fn provenance_signature_rejects_tampered_payload() {
     let signer = TestSigner::new([0x42u8; crypto::TEST_SIGNER_KEY_LEN]);
     let agent = ProvenanceAgent::software("synthesizer:test");
     let evidence = vec![EvidenceRef::from_uuid(Uuid::new_v4())];
-    let activity = SynthesisActivity::new("synth-pipeline:elected:device-42",
+    let activity = SynthesisActivity::new(
+        "synth-pipeline:elected:device-42",
         "bonsai-1.7b@q1_0_g128",
         "synth.summary.v1",
         Uuid::new_v4(),
@@ -376,7 +395,8 @@ fn provenance_signature_rejects_tampered_payload() {
     // verifier rejects it without producing a serialisation error.
     let mut tampered = signed.clone();
     tampered.bundle.entity_id = Uuid::from_u128(tampered.bundle.entity_id.as_u128() ^ 0x1);
-    assert!(!signer
+    assert!(
+        !signer
             .verify(&tampered)
             .expect("verifier returns Ok(false)"),
         "tampered provenance bundle slipped past the verifier"
@@ -384,7 +404,8 @@ fn provenance_signature_rejects_tampered_payload() {
     // Tamper: flip a byte of the detached signature itself.
     let mut tampered_sig = signed.clone();
     tampered_sig.signature.0[0] ^= 0x01;
-    assert!(!signer
+    assert!(
+        !signer
             .verify(&tampered_sig)
             .expect("verifier returns Ok(false)"),
         "tampered provenance signature slipped past the verifier"
@@ -410,11 +431,13 @@ fn forgetting_zeroizes_and_isolates_dek_registry_entries() {
     let mut registry = DekRegistry::new();
     let scope_a = CryptoScopeId::new_v4();
     let scope_b = CryptoScopeId::new_v4();
-    registry.insert_scope_dek(ScopeDek::new(scope_a,
+    registry.insert_scope_dek(ScopeDek::new(
+        scope_a,
         EpochId::zero(),
         [0x11u8; crypto::AEAD_KEY_LEN],
     ));
-    registry.insert_scope_dek(ScopeDek::new(scope_b,
+    registry.insert_scope_dek(ScopeDek::new(
+        scope_b,
         EpochId::zero(),
         [0x22u8; crypto::AEAD_KEY_LEN],
     ));

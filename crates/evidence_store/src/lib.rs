@@ -29,7 +29,7 @@
 //!
 //! * `EvidenceStore::search_fts_with_weighted_ranks_for_tests` —
 //!   exposes the cross-lane merged BM25 ranks (after lane-weight
-//!   application) so  tests can assert the precision
+//!   application) so tests can assert the precision
 //!   hierarchy `unicode61 < trigram < bigram` rather than just the
 //!   evidence-id ordering surfaced by the public retrieval path.
 //! * `EvidenceStore::inject_with_transaction_failure_for_tests` —

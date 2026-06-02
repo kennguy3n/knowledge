@@ -59,7 +59,8 @@ pub struct ApprovedConcept {
 
 impl ApprovedConcept {
     /// Construct a fresh [`ApprovedConcept`] with `approved_at = now`.
-    pub fn new(concept_id: Uuid,
+    pub fn new(
+        concept_id: Uuid,
         label: impl Into<String>,
         definition: impl Into<String>,
         scope_id: ScopeId,
@@ -172,7 +173,8 @@ pub struct PortableConceptProfile {
 
 impl PortableConceptProfile {
     /// Construct a fresh empty profile.
-    pub fn new(name: impl Into<String>,
+    pub fn new(
+        name: impl Into<String>,
         description: impl Into<String>,
         target_tool: impl Into<String>,
         scope_id: ScopeId,
@@ -357,7 +359,8 @@ mod tests {
     use crypto::{EvidenceRef, ProvenanceAgent, SynthesisActivity};
 
     fn fixture_provenance() -> ProvenanceBundle {
-        ProvenanceBundle::new(Uuid::new_v4(),
+        ProvenanceBundle::new(
+            Uuid::new_v4(),
             SynthesisActivity::new("test-agent", "bonsai-1.7b@v1", "synth.test", Uuid::new_v4()),
             ProvenanceAgent::software("test"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -367,7 +370,8 @@ mod tests {
     #[test]
     fn approved_concept_constructs_with_now() {
         let scope = ScopeId::new_v4();
-        let concept = ApprovedConcept::new(Uuid::new_v4(),
+        let concept = ApprovedConcept::new(
+            Uuid::new_v4(),
             "Atlas",
             "Q3 launch",
             scope,
@@ -381,7 +385,8 @@ mod tests {
     #[test]
     fn approved_concept_expiry_check() {
         let scope = ScopeId::new_v4();
-        let concept = ApprovedConcept::new(Uuid::new_v4(),
+        let concept = ApprovedConcept::new(
+            Uuid::new_v4(),
             "Atlas",
             "Q3 launch",
             scope,
@@ -396,7 +401,8 @@ mod tests {
     fn portable_profile_builders() {
         let scope = ScopeId::new_v4();
         let mut p = PortableConceptProfile::new("name", "desc", "tool", scope);
-        let concept = ApprovedConcept::new(Uuid::new_v4(),
+        let concept = ApprovedConcept::new(
+            Uuid::new_v4(),
             "Atlas",
             "Q3",
             scope,
@@ -414,7 +420,8 @@ mod tests {
     #[test]
     fn export_view_helpers() {
         let scope = ScopeId::new_v4();
-        let concept = ApprovedConcept::new(Uuid::new_v4(),
+        let concept = ApprovedConcept::new(
+            Uuid::new_v4(),
             "Atlas",
             "Q3",
             scope,
@@ -430,7 +437,8 @@ mod tests {
             evidence_refs: vec![EvidenceRef::from_uuid(Uuid::new_v4())],
             concept_ids: vec![concept.concept_id],
         };
-        let v = ExportView::new(Uuid::new_v4(),
+        let v = ExportView::new(
+            Uuid::new_v4(),
             scope,
             ExportViewContent::WithEvidencePack {
                 concepts: vec![concept.clone()],
@@ -446,7 +454,8 @@ mod tests {
     #[test]
     fn export_view_concepts_only_has_no_summaries_or_pack() {
         let scope = ScopeId::new_v4();
-        let v = ExportView::new(Uuid::new_v4(),
+        let v = ExportView::new(
+            Uuid::new_v4(),
             scope,
             ExportViewContent::ConceptsOnly { concepts: vec![] },
         );

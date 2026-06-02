@@ -108,7 +108,8 @@ impl EmailProvider {
             .get("provider")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Auth("email: auth_config_json.provider is required \
+                ConnectorError::Auth(
+                    "email: auth_config_json.provider is required \
                      (\"gmail\" or \"msgraph\")"
                         .into(),
                 )
@@ -116,7 +117,8 @@ impl EmailProvider {
         match raw {
             "gmail" | "google" => Ok(Self::Gmail),
             "msgraph" | "microsoft_graph" | "ms_graph" | "outlook" => Ok(Self::MicrosoftGraph),
-            other => Err(ConnectorError::Auth(format!("email: unknown provider {other:?} (expected \"gmail\" or \"msgraph\")"
+            other => Err(ConnectorError::Auth(format!(
+                "email: unknown provider {other:?} (expected \"gmail\" or \"msgraph\")"
             ))),
         }
     }
@@ -386,7 +388,8 @@ impl EmailConnector {
     /// `transport` carries every REST call; `oauth` drives the
     /// `authorization_code` exchange against the provider's token
     /// endpoint (Google / Microsoft).
-    pub fn new(instance: ConnectorInstanceId,
+    pub fn new(
+        instance: ConnectorInstanceId,
         transport: Arc<dyn HttpTransport>,
         oauth: Arc<dyn OAuth2CodeExchange>,
     ) -> Self {
@@ -426,7 +429,8 @@ impl EmailConnector {
             .auth_config_json
             .get("gmail_api_base_url")
             .and_then(serde_json::Value::as_str)
-            .map_or_else(|| self.gmail_api_base_url.clone(),
+            .map_or_else(
+                || self.gmail_api_base_url.clone(),
                 std::string::ToString::to_string,
             )
     }
@@ -436,7 +440,8 @@ impl EmailConnector {
             .auth_config_json
             .get("graph_api_base_url")
             .and_then(serde_json::Value::as_str)
-            .map_or_else(|| self.graph_api_base_url.clone(),
+            .map_or_else(
+                || self.graph_api_base_url.clone(),
                 std::string::ToString::to_string,
             )
     }
@@ -446,7 +451,8 @@ impl EmailConnector {
             .auth_config_json
             .get("graph_api_version")
             .and_then(serde_json::Value::as_str)
-            .map_or_else(|| self.graph_api_version.clone(),
+            .map_or_else(
+                || self.graph_api_version.clone(),
                 std::string::ToString::to_string,
             )
     }
@@ -496,7 +502,8 @@ impl EmailConnector {
             .get("gmail_topic_name")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Webhook("gmail subscribe: auth_config_json.gmail_topic_name is required \
+                ConnectorError::Webhook(
+                    "gmail subscribe: auth_config_json.gmail_topic_name is required \
                      (Cloud Pub/Sub topic name, e.g. \"projects/my-proj/topics/gmail\")"
                         .into(),
                 )
@@ -545,7 +552,8 @@ impl EmailConnector {
     /// `nextPageToken` is absent, an empty page lands mid-stream
     /// (defence against mis-shaped servers), or [`MAX_LIST_PAGES`]
     /// is hit. Returns the merged message refs.
-    fn paginate_gmail_messages(&self,
+    fn paginate_gmail_messages(
+        &self,
         base: &str,
         user_path: &str,
         token: &OAuth2Token,
@@ -562,7 +570,8 @@ impl EmailConnector {
             // strict gateway sitting between the substrate and
             // Gmail can never reject the request on a `+` in the
             // query.
-            let mut url = format!("{base}/gmail/v1/{user_path}/messages?maxResults={}",
+            let mut url = format!(
+                "{base}/gmail/v1/{user_path}/messages?maxResults={}",
                 percent_encode_path_component(&page_size)
             );
             if let Some(t) = &next {
@@ -588,14 +597,16 @@ impl EmailConnector {
             prev_token = Some(next_token.clone());
             next = Some(next_token);
         }
-        Err(ConnectorError::Sync(format!("gmail users.messages.list exceeded {MAX_LIST_PAGES} pages \
+        Err(ConnectorError::Sync(format!(
+            "gmail users.messages.list exceeded {MAX_LIST_PAGES} pages \
              without exhausting cursor"
         )))
     }
 
     /// Fetch the mailbox profile so the substrate can seed
     /// `historyId` as the incremental watermark.
-    fn fetch_gmail_profile(&self,
+    fn fetch_gmail_profile(
+        &self,
         base: &str,
         user_path: &str,
         token: &OAuth2Token,
@@ -608,7 +619,8 @@ impl EmailConnector {
     /// `nextPageToken` is absent, an empty page lands mid-stream,
     /// or [`MAX_LIST_PAGES`] is hit. Returns the merged history
     /// entries + the final `historyId` watermark.
-    fn paginate_gmail_history(&self,
+    fn paginate_gmail_history(
+        &self,
         base: &str,
         user_path: &str,
         token: &OAuth2Token,
@@ -622,7 +634,8 @@ impl EmailConnector {
         for _ in 0..MAX_LIST_PAGES {
             // RFC 3986 §3.4 query encoding (`%20` for spaces) — see
             // `paginate_gmail_messages` for the rationale.
-            let mut url = format!("{base}/gmail/v1/{user_path}/history?startHistoryId={}&maxResults={}",
+            let mut url = format!(
+                "{base}/gmail/v1/{user_path}/history?startHistoryId={}&maxResults={}",
                 percent_encode_path_component(start_history_id),
                 percent_encode_path_component(&page_size)
             );
@@ -649,7 +662,8 @@ impl EmailConnector {
             prev_token = Some(next_token.clone());
             next = Some(next_token);
         }
-        Err(ConnectorError::Sync(format!("gmail users.history.list exceeded {MAX_LIST_PAGES} pages \
+        Err(ConnectorError::Sync(format!(
+            "gmail users.history.list exceeded {MAX_LIST_PAGES} pages \
              without exhausting cursor"
         )))
     }
@@ -662,7 +676,8 @@ impl EmailConnector {
     /// absent, the server returns an empty page with no link, or
     /// [`MAX_LIST_PAGES`] is hit. Returns the merged messages +
     /// the final `@odata.deltaLink`.
-    fn paginate_graph_delta(&self,
+    fn paginate_graph_delta(
+        &self,
         first_url: &str,
         token: &OAuth2Token,
     ) -> Result<(Vec<GraphMessage>, Option<String>)> {
@@ -671,7 +686,8 @@ impl EmailConnector {
         let mut prev_url: Option<String> = None;
         let mut delta_link: Option<String> = None;
         for _ in 0..MAX_LIST_PAGES {
-            let resp: GraphMessagesPage = bearer_get_json(&self.transport,
+            let resp: GraphMessagesPage = bearer_get_json(
+                &self.transport,
                 "msgraph",
                 "/messages/delta",
                 &url,
@@ -695,7 +711,8 @@ impl EmailConnector {
             prev_url = Some(next.clone());
             url = next;
         }
-        Err(ConnectorError::Sync(format!("msgraph /me/messages/delta exceeded {MAX_LIST_PAGES} pages \
+        Err(ConnectorError::Sync(format!(
+            "msgraph /me/messages/delta exceeded {MAX_LIST_PAGES} pages \
              without exhausting cursor"
         )))
     }
@@ -746,7 +763,8 @@ impl Connector for EmailConnector {
             .get("authorization_code")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Auth("email authenticate: auth_config_json.authorization_code is required".into(),
+                ConnectorError::Auth(
+                    "email authenticate: auth_config_json.authorization_code is required".into(),
                 )
             })?;
         self.oauth.exchange_code(config, auth_code)
@@ -795,13 +813,15 @@ impl Connector for EmailConnector {
         }
     }
 
-    fn incremental_sync(&self,
+    fn incremental_sync(
+        &self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         state: &SyncState,
     ) -> Result<SyncRunResult> {
         let cursor = state.cursor.as_deref().ok_or_else(|| {
-            ConnectorError::Sync("email incremental_sync: missing cursor; \
+            ConnectorError::Sync(
+                "email incremental_sync: missing cursor; \
                  initial_sync must populate the watermark first"
                     .into(),
             )
@@ -829,7 +849,8 @@ impl Connector for EmailConnector {
                             continue;
                         }
                         events.push(ConnectorEvent::DocumentDeleted {
-                            document_id: Self::document_id(EmailProvider::Gmail,
+                            document_id: Self::document_id(
+                                EmailProvider::Gmail,
                                 &deleted.message.id,
                             ),
                             occurred_at,
@@ -864,7 +885,8 @@ impl Connector for EmailConnector {
         }
     }
 
-    fn subscribe_webhook(&self,
+    fn subscribe_webhook(
+        &self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         callback_url: &str,
@@ -904,7 +926,8 @@ impl Connector for EmailConnector {
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("gmail-pubsub-secret")
                     .to_string();
-                let mut subscription = WebhookSubscription::new(self.instance,
+                let mut subscription = WebhookSubscription::new(
+                    self.instance,
                     callback_url,
                     WebhookSecret::new(secret),
                     WebhookEventTypes {
@@ -956,7 +979,8 @@ impl Connector for EmailConnector {
                     "expirationDateTime": expires_at.to_rfc3339(),
                     "clientState": client_state,
                 });
-                let resp: GraphSubscriptionResponse = bearer_post_json(&self.transport,
+                let resp: GraphSubscriptionResponse = bearer_post_json(
+                    &self.transport,
                     "msgraph",
                     "/subscriptions",
                     &url,
@@ -964,7 +988,8 @@ impl Connector for EmailConnector {
                     &[],
                     &body,
                 )?;
-                let mut subscription = WebhookSubscription::new(self.instance,
+                let mut subscription = WebhookSubscription::new(
+                    self.instance,
                     callback_url,
                     WebhookSecret::new(client_state),
                     WebhookEventTypes {
@@ -1016,7 +1041,8 @@ impl Connector for EmailConnector {
         }
         let push: GmailPushNotification = serde_json::from_slice(body)?;
         if push.email_address.is_empty() && push.history_id == 0 {
-            return Err(ConnectorError::Webhook("email webhook: payload matched neither Graph \
+            return Err(ConnectorError::Webhook(
+                "email webhook: payload matched neither Graph \
                  changeNotificationCollection nor Gmail Pub/Sub envelope"
                     .into(),
             ));
@@ -1043,14 +1069,16 @@ impl Connector for EmailConnector {
 impl EmailConnector {
     fn decode_graph_batch(batch: GraphChangeNotificationBatch) -> Result<Vec<ConnectorEvent>> {
         if batch.value.is_empty() {
-            return Err(ConnectorError::Webhook("msgraph: empty change notification batch".into(),
+            return Err(ConnectorError::Webhook(
+                "msgraph: empty change notification batch".into(),
             ));
         }
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(batch.value.len());
         for note in batch.value {
             let id = Self::graph_message_id_from_resource(&note.resource, &note.resource_data.id);
             if id.is_empty() {
-                return Err(ConnectorError::Webhook("msgraph: change notification missing resource id".into(),
+                return Err(ConnectorError::Webhook(
+                    "msgraph: change notification missing resource id".into(),
                 ));
             }
             let occurred_at = Utc::now();
@@ -1092,7 +1120,8 @@ mod tests {
     struct GmailOAuth;
     impl OAuth2CodeExchange for GmailOAuth {
         fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
-            Ok(OAuth2Token::new("gmail-access",
+            Ok(OAuth2Token::new(
+                "gmail-access",
                 "gmail-refresh",
                 Utc::now() + Duration::hours(1),
                 "https://www.googleapis.com/auth/gmail.readonly",
@@ -1103,7 +1132,8 @@ mod tests {
     struct GraphOAuth;
     impl OAuth2CodeExchange for GraphOAuth {
         fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
-            Ok(OAuth2Token::new("graph-access",
+            Ok(OAuth2Token::new(
+                "graph-access",
                 "graph-refresh",
                 Utc::now() + Duration::hours(1),
                 "Mail.Read offline_access",
@@ -1146,7 +1176,8 @@ mod tests {
 
     fn gmail_list_url(page_token: Option<&str>) -> String {
         let page_size = DEFAULT_PAGE_SIZE.to_string();
-        let mut url = format!("{GMAIL_BASE}/gmail/v1/users/me/messages?maxResults={}",
+        let mut url = format!(
+            "{GMAIL_BASE}/gmail/v1/users/me/messages?maxResults={}",
             percent_encode_path_component(&page_size)
         );
         if let Some(t) = page_token {
@@ -1162,7 +1193,8 @@ mod tests {
 
     fn gmail_history_url(start_history_id: &str, page_token: Option<&str>) -> String {
         let page_size = DEFAULT_PAGE_SIZE.to_string();
-        let mut url = format!("{GMAIL_BASE}/gmail/v1/users/me/history?startHistoryId={}&maxResults={}",
+        let mut url = format!(
+            "{GMAIL_BASE}/gmail/v1/users/me/history?startHistoryId={}&maxResults={}",
             percent_encode_path_component(start_history_id),
             percent_encode_path_component(&page_size)
         );
@@ -1180,7 +1212,8 @@ mod tests {
     #[test]
     fn authenticate_requires_provider() {
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1193,7 +1226,8 @@ mod tests {
     #[test]
     fn authenticate_rejects_unknown_provider() {
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1206,7 +1240,8 @@ mod tests {
     #[test]
     fn gmail_authenticate_dispatches_to_oauth_exchange() {
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1218,7 +1253,8 @@ mod tests {
     #[test]
     fn graph_authenticate_dispatches_to_oauth_exchange() {
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             graph_oauth(),
         );
@@ -1231,7 +1267,8 @@ mod tests {
     fn gmail_initial_sync_walks_pages_and_anchors_history_id() {
         let transport = MockHttpTransport::new();
         // Page 1 → page 2.
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             gmail_list_url(None),
             ok_json(&serde_json::json!({
                 "messages": [
@@ -1241,14 +1278,16 @@ mod tests {
                 "nextPageToken": "tok-2"
             })),
         );
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             gmail_list_url(Some("tok-2")),
             ok_json(&serde_json::json!({
                 "messages": [{"id": "g3", "threadId": "t2", "internalDate": "1700001000000"}],
             })),
         );
         // getProfile to anchor watermark.
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             gmail_profile_url(),
             ok_json(&serde_json::json!({
                 "emailAddress": "user@example.com",
@@ -1256,7 +1295,8 @@ mod tests {
                 "messagesTotal": 3
             })),
         );
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1280,7 +1320,8 @@ mod tests {
             "messages": [{"id": "g-loop", "threadId": "t"}],
             "nextPageToken": "same-token"
         })));
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1298,7 +1339,8 @@ mod tests {
     #[test]
     fn gmail_incremental_sync_walks_history_and_emits_added_and_deleted() {
         let transport = MockHttpTransport::new();
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             gmail_history_url("5005", None),
             ok_json(&serde_json::json!({
                 "history": [
@@ -1316,7 +1358,8 @@ mod tests {
                 "historyId": "6042"
             })),
         );
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1344,7 +1387,8 @@ mod tests {
     #[test]
     fn gmail_incremental_sync_requires_cursor() {
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1358,14 +1402,16 @@ mod tests {
     #[test]
     fn gmail_subscribe_webhook_posts_watch_and_stamps_user_path() {
         let transport = MockHttpTransport::new();
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             format!("{GMAIL_BASE}/gmail/v1/users/me/watch"),
             ok_json(&serde_json::json!({
                 "historyId": "7777",
                 "expiration": "1900000000000"
             })),
         );
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1380,7 +1426,8 @@ mod tests {
         // so we stamp a `gmail-watch:` marker carrying the user
         // path. The historyId itself belongs in sync state (set by
         // `initial_sync` via `users.getProfile`).
-        assert_eq!(sub.provider_subscription_id.as_deref(),
+        assert_eq!(
+            sub.provider_subscription_id.as_deref(),
             Some("gmail-watch:users/me")
         );
         assert!(sub.event_types.document_created);
@@ -1400,14 +1447,16 @@ mod tests {
         // the new path so revocation lines up with the actual
         // watched mailbox.
         let transport = MockHttpTransport::new();
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             format!("{GMAIL_BASE}/gmail/v1/users/team@example.com/watch"),
             ok_json(&serde_json::json!({
                 "historyId": "8888",
                 "expiration": "1900000000000"
             })),
         );
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1416,14 +1465,16 @@ mod tests {
             .auth_config_json
             .as_object_mut()
             .expect("auth_config_json object");
-        auth.insert("gmail_user_id".to_string(),
+        auth.insert(
+            "gmail_user_id".to_string(),
             serde_json::Value::String("team@example.com".to_string()),
         );
         let tok = c.authenticate(&cfg).unwrap();
         let sub = c
             .subscribe_webhook(&cfg, &tok, "https://substrate.example/email/gmail")
             .unwrap();
-        assert_eq!(sub.provider_subscription_id.as_deref(),
+        assert_eq!(
+            sub.provider_subscription_id.as_deref(),
             Some("gmail-watch:users/team@example.com")
         );
     }
@@ -1431,11 +1482,13 @@ mod tests {
     #[test]
     fn gmail_subscribe_webhook_falls_back_to_local_ttl_when_server_omits_expiration() {
         let transport = MockHttpTransport::new();
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             format!("{GMAIL_BASE}/gmail/v1/users/me/watch"),
             ok_json(&serde_json::json!({"historyId": "9000"})),
         );
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1453,7 +1506,8 @@ mod tests {
     #[test]
     fn gmail_subscribe_webhook_requires_topic() {
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1483,7 +1537,8 @@ mod tests {
                 "@odata.nextLink": "https://api.test/graph/v1.0/me/messages/delta?$skiptoken=NEXT"
             })),
         );
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             "https://api.test/graph/v1.0/me/messages/delta?$skiptoken=NEXT",
             ok_json(&serde_json::json!({
                 "value": [
@@ -1492,7 +1547,8 @@ mod tests {
                 "@odata.deltaLink": "https://api.test/graph/v1.0/me/messages/delta?$deltatoken=42"
             })),
         );
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             graph_oauth(),
         );
@@ -1504,7 +1560,8 @@ mod tests {
             .events
             .iter()
             .all(|e| matches!(e, ConnectorEvent::DocumentCreated { .. })));
-        assert_eq!(res.next_cursor.as_deref(),
+        assert_eq!(
+            res.next_cursor.as_deref(),
             Some("https://api.test/graph/v1.0/me/messages/delta?$deltatoken=42")
         );
     }
@@ -1512,7 +1569,8 @@ mod tests {
     #[test]
     fn graph_initial_sync_emits_deleted_for_removed_envelope() {
         let transport = MockHttpTransport::new();
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             graph_delta_url(),
             ok_json(&serde_json::json!({
                 "value": [
@@ -1522,7 +1580,8 @@ mod tests {
                 "@odata.deltaLink": "https://api.test/graph/v1.0/me/messages/delta?$deltatoken=99"
             })),
         );
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             graph_oauth(),
         );
@@ -1542,14 +1601,16 @@ mod tests {
     fn graph_incremental_sync_walks_delta_link_verbatim() {
         let cursor = "https://api.test/graph/v1.0/me/messages/delta?$deltatoken=42";
         let transport = MockHttpTransport::new();
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             cursor,
             ok_json(&serde_json::json!({
                 "value": [{"id": "m9", "lastModifiedDateTime": "2024-02-01T00:00:00Z"}],
                 "@odata.deltaLink": "https://api.test/graph/v1.0/me/messages/delta?$deltatoken=99"
             })),
         );
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             graph_oauth(),
         );
@@ -1559,10 +1620,12 @@ mod tests {
         state.cursor = Some(cursor.to_string());
         let res = c.incremental_sync(&cfg, &tok, &state).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert!(matches!(res.events[0],
+        assert!(matches!(
+            res.events[0],
             ConnectorEvent::DocumentUpdated { .. }
         ));
-        assert_eq!(res.next_cursor.as_deref(),
+        assert_eq!(
+            res.next_cursor.as_deref(),
             Some("https://api.test/graph/v1.0/me/messages/delta?$deltatoken=99")
         );
     }
@@ -1571,13 +1634,15 @@ mod tests {
     fn graph_incremental_sync_falls_back_to_existing_cursor_when_no_new_delta_link() {
         let cursor = "https://api.test/graph/v1.0/me/messages/delta?$deltatoken=42";
         let transport = MockHttpTransport::new();
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             cursor,
             ok_json(&serde_json::json!({
                 "value": []
             })),
         );
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             graph_oauth(),
         );
@@ -1593,14 +1658,16 @@ mod tests {
     #[test]
     fn graph_subscribe_webhook_posts_subscription_and_captures_id() {
         let transport = MockHttpTransport::new();
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             format!("{GRAPH_BASE}/v1.0/subscriptions"),
             ok_json(&serde_json::json!({
                 "id": "sub-graph-1",
                 "expirationDateTime": "2030-01-01T00:00:00Z"
             })),
         );
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             graph_oauth(),
         );
@@ -1618,10 +1685,12 @@ mod tests {
     #[test]
     fn unauthorized_status_maps_to_auth_error() {
         let transport = MockHttpTransport::new();
-        transport.with_default_response(MockResponse::status(401,
+        transport.with_default_response(MockResponse::status(
+            401,
             b"{\"error\":\"invalid_grant\"}".to_vec(),
         ));
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             graph_oauth(),
         );
@@ -1634,7 +1703,8 @@ mod tests {
     #[test]
     fn gmail_webhook_with_message_ids_emits_per_message_events() {
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1653,7 +1723,8 @@ mod tests {
     #[test]
     fn gmail_webhook_without_message_ids_returns_empty_event_list() {
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1670,7 +1741,8 @@ mod tests {
     #[test]
     fn webhook_unrecognised_payload_errors() {
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             gmail_oauth(),
         );
@@ -1689,7 +1761,8 @@ mod tests {
         // parse must NOT short-circuit. The handler must fall
         // through and surface Gmail events.
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             // Construct as Graph on purpose — the *connector* doesn't
             // know which provider sent the webhook; the shape does.
@@ -1710,7 +1783,8 @@ mod tests {
     #[test]
     fn graph_validation_token_short_circuits_to_empty_event_list() {
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             graph_oauth(),
         );
@@ -1727,7 +1801,8 @@ mod tests {
         // surface. A single batch routinely carries multiple
         // notifications and the handler must not stop at index 0.
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             graph_oauth(),
         );
@@ -1752,7 +1827,8 @@ mod tests {
         // A single unknown changeType cannot drop the rest of a
         // valid batch — mirror of the OneDrive policy.
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             graph_oauth(),
         );
@@ -1774,7 +1850,8 @@ mod tests {
     #[test]
     fn graph_change_notification_falls_back_to_resource_path_when_data_missing() {
         let transport = MockHttpTransport::new();
-        let c = EmailConnector::new(ConnectorInstanceId::new_v4(),
+        let c = EmailConnector::new(
+            ConnectorInstanceId::new_v4(),
             Arc::new(transport),
             graph_oauth(),
         );
@@ -1796,10 +1873,12 @@ mod tests {
     fn provider_string_tags_and_document_id_format_are_pinned() {
         assert_eq!(EmailProvider::Gmail.as_str(), "gmail");
         assert_eq!(EmailProvider::MicrosoftGraph.as_str(), "msgraph");
-        assert_eq!(EmailConnector::document_id(EmailProvider::Gmail, "g1").as_str(),
+        assert_eq!(
+            EmailConnector::document_id(EmailProvider::Gmail, "g1").as_str(),
             "gmail:msg:g1"
         );
-        assert_eq!(EmailConnector::document_id(EmailProvider::MicrosoftGraph, "m1").as_str(),
+        assert_eq!(
+            EmailConnector::document_id(EmailProvider::MicrosoftGraph, "m1").as_str(),
             "msgraph:msg:m1"
         );
     }

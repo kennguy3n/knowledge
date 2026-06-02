@@ -188,7 +188,8 @@ impl ExportControlRegistry {
     // ----- concepts -----
 
     /// Insert a new concept control. Errors on duplicate id.
-    pub fn insert_concept(&mut self,
+    pub fn insert_concept(
+        &mut self,
         control: ConceptExportControl,
     ) -> Result<(), ExportControlError> {
         if self.concepts.contains_key(&control.concept_id) {
@@ -224,7 +225,8 @@ impl ExportControlRegistry {
     /// **Deny-by-default** check: returns `true` iff there is an
     /// active concept control for `concept_id` whose `profile_id` /
     /// `scope_id` filters allow it.
-    pub fn allows_concept(&self,
+    pub fn allows_concept(
+        &self,
         concept_id: Uuid,
         profile_id: Uuid,
         scope_id: Uuid,
@@ -248,7 +250,8 @@ impl ExportControlRegistry {
     // ----- summaries -----
 
     /// Insert a summary control. Errors on duplicate.
-    pub fn insert_summary(&mut self,
+    pub fn insert_summary(
+        &mut self,
         control: SummaryExportControl,
     ) -> Result<(), ExportControlError> {
         if self.summaries.contains_key(&control.summary_id) {
@@ -291,7 +294,8 @@ impl ExportControlRegistry {
     // ----- workflows -----
 
     /// Insert a workflow control. Errors on duplicate.
-    pub fn insert_workflow(&mut self,
+    pub fn insert_workflow(
+        &mut self,
         control: WorkflowExportControl,
     ) -> Result<(), ExportControlError> {
         if self.workflows.contains_key(&control.workflow_id) {
@@ -366,7 +370,8 @@ mod tests {
         let mut r = ExportControlRegistry::new();
         let id = Uuid::new_v4();
         r.insert_concept(ConceptExportControl::new(id)).expect("ok");
-        assert_eq!(r.insert_concept(ConceptExportControl::new(id)),
+        assert_eq!(
+            r.insert_concept(ConceptExportControl::new(id)),
             Err(ExportControlError::Duplicate(id))
         );
     }
@@ -427,7 +432,8 @@ mod tests {
     fn summary_registered_allowed() {
         let mut r = ExportControlRegistry::new();
         let id = Uuid::new_v4();
-        r.insert_summary(SummaryExportControl::new(id,
+        r.insert_summary(SummaryExportControl::new(
+            id,
             ScopeId::new_v4(),
             RedactionLevel::None,
         ))
@@ -439,12 +445,14 @@ mod tests {
     fn summary_redaction_level_round_trip() {
         let mut r = ExportControlRegistry::new();
         let id = Uuid::new_v4();
-        r.insert_summary(SummaryExportControl::new(id,
+        r.insert_summary(SummaryExportControl::new(
+            id,
             ScopeId::new_v4(),
             RedactionLevel::Partial,
         ))
         .expect("ok");
-        assert_eq!(r.get_summary(id).unwrap().redaction_level,
+        assert_eq!(
+            r.get_summary(id).unwrap().redaction_level,
             RedactionLevel::Partial
         );
     }
@@ -470,7 +478,8 @@ mod tests {
     #[test]
     fn remove_returns_not_found_for_missing() {
         let mut r = ExportControlRegistry::new();
-        assert!(matches!(r.remove_concept(Uuid::new_v4()),
+        assert!(matches!(
+            r.remove_concept(Uuid::new_v4()),
             Err(ExportControlError::NotFound(_))
         ));
     }

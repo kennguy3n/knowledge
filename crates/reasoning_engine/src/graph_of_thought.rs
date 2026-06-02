@@ -111,7 +111,8 @@ pub struct ThoughtNode {
 
 impl ThoughtNode {
     /// Construct a fresh thought.
-    pub fn new(content: impl Into<String>,
+    pub fn new(
+        content: impl Into<String>,
         thought_type: ThoughtType,
         confidence: f64,
         scope_id: ScopeId,
@@ -217,7 +218,8 @@ impl ThoughtGraph {
     ///
     /// Returns `Err` if `child.parent_ids` is empty or any
     /// parent id is missing.
-    pub fn connect_child(&mut self,
+    pub fn connect_child(
+        &mut self,
         child: ThoughtNode,
         edge: ThoughtEdge,
     ) -> Result<ThoughtId, GoTError> {
@@ -364,7 +366,8 @@ pub trait Expander {
     /// Generate up to `limit` child thoughts for `parent`. The
     /// returned thoughts must already have `parent.id` in their
     /// `parent_ids` (the executor will not patch this).
-    fn expand(&self,
+    fn expand(
+        &self,
         parent: &ThoughtNode,
         depth: usize,
         limit: usize,
@@ -385,7 +388,8 @@ impl StaticExpander {
     }
 
     /// Register children for `parent`.
-    pub fn register(&mut self,
+    pub fn register(
+        &mut self,
         parent: ThoughtId,
         children: Vec<(ThoughtNode, ThoughtEdge)>,
     ) -> &mut Self {
@@ -395,7 +399,8 @@ impl StaticExpander {
 }
 
 impl Expander for StaticExpander {
-    fn expand(&self,
+    fn expand(
+        &self,
         parent: &ThoughtNode,
         _depth: usize,
         limit: usize,
@@ -461,7 +466,8 @@ impl<'a> GraphExpander<'a> {
 }
 
 impl Expander for GraphExpander<'_> {
-    fn expand(&self,
+    fn expand(
+        &self,
         parent: &ThoughtNode,
         _depth: usize,
         limit: usize,
@@ -478,7 +484,8 @@ impl Expander for GraphExpander<'_> {
                     .get_node(*node_id)
                     .map_or_else(|| node_id.to_string(), |n| n.label.clone());
                 let confidence = (parent.confidence * 0.9).clamp(0.0, 1.0);
-                let evidence = ThoughtNode::new(format!("Concept-graph evidence: {label}"),
+                let evidence = ThoughtNode::new(
+                    format!("Concept-graph evidence: {label}"),
                     ThoughtType::Evidence,
                     confidence,
                     self.scope,
@@ -511,7 +518,8 @@ fn default_score(path: &[ThoughtNode]) -> f64 {
     let depth_exp = i32::try_from(path.len().saturating_sub(1)).unwrap_or(i32::MAX);
     let depth_penalty = 0.95_f64.powi(depth_exp);
     score *= depth_penalty;
-    if matches!(path.last().map(|t| t.thought_type),
+    if matches!(
+        path.last().map(|t| t.thought_type),
         Some(ThoughtType::Conclusion)
     ) {
         score = (score + 0.1).min(1.0);
@@ -534,7 +542,8 @@ impl GoTExecutor {
     /// implementation creates the root only — production callers
     /// can pre-seed sub-questions via `plan_with_subquestions`.
     pub fn plan(&self, graph: &mut ThoughtGraph, query: &GoTQuery) -> GoTPlan {
-        let root = ThoughtNode::new(query.question.clone(),
+        let root = ThoughtNode::new(
+            query.question.clone(),
             ThoughtType::Question,
             1.0,
             query.scope,
@@ -550,7 +559,8 @@ impl GoTExecutor {
     /// Same as [`Self::plan`] but seed `sub_questions` as
     /// `Question` children connected to the root via
     /// [`ThoughtEdge::Refines`].
-    pub fn plan_with_subquestions(&self,
+    pub fn plan_with_subquestions(
+        &self,
         graph: &mut ThoughtGraph,
         query: &GoTQuery,
         sub_questions: &[String],
@@ -570,7 +580,8 @@ impl GoTExecutor {
     }
 
     /// Generate child thoughts for `parent` using `expander`.
-    pub fn expand<E: Expander>(&self,
+    pub fn expand<E: Expander>(
+        &self,
         parent: &ThoughtNode,
         depth: usize,
         limit: usize,
@@ -590,7 +601,8 @@ impl GoTExecutor {
     /// ids in advance. For that workflow build the graph and the
     /// [`GoTPlan`] yourself, register expansions against the now
     /// known root id, then call [`Self::execute_from_plan`].
-    pub fn execute<E: Expander>(&self,
+    pub fn execute<E: Expander>(
+        &self,
         query: &GoTQuery,
         expander: &E,
     ) -> Result<(ThoughtGraph, GoTResult), GoTError> {
@@ -610,7 +622,8 @@ impl GoTExecutor {
     /// returned by [`Self::plan`] / [`Self::plan_with_subquestions`]
     /// before calling here, which is impossible if `execute`
     /// constructs the graph internally.
-    pub fn execute_from_plan<E: Expander>(&self,
+    pub fn execute_from_plan<E: Expander>(
+        &self,
         graph: &mut ThoughtGraph,
         plan: &GoTPlan,
         query: &GoTQuery,
@@ -627,7 +640,8 @@ impl GoTExecutor {
     /// budget tripped (i.e. `max_nodes` was exceeded). Public so
     /// tests and callers can pre-seed the graph and plan before
     /// invoking expansion.
-    pub fn expand_all<E: Expander>(&self,
+    pub fn expand_all<E: Expander>(
+        &self,
         graph: &mut ThoughtGraph,
         plan: &GoTPlan,
         query: &GoTQuery,
@@ -678,7 +692,8 @@ impl GoTExecutor {
 
     /// Record the reasoning trace into [`WorkflowMemory`] as a
     /// [`WorkflowTrace`]. Returns the new trace id.
-    pub fn record_trace(&self,
+    pub fn record_trace(
+        &self,
         memory: &mut WorkflowMemory,
         query: &GoTQuery,
         result: &GoTResult,
@@ -689,10 +704,12 @@ impl GoTExecutor {
             .best_path
             .last()
             .is_some_and(|t| matches!(t.thought_type, ThoughtType::Conclusion));
-        recorder.record_step(RetrievalMode::GraphTraversal,
+        recorder.record_step(
+            RetrievalMode::GraphTraversal,
             succeeded,
             0,
-            Some(format!("GoT: {} thoughts, {} paths",
+            Some(format!(
+                "GoT: {} thoughts, {} paths",
                 result.reasoning_trace.len(),
                 result.all_paths.len()
             )),
@@ -701,7 +718,8 @@ impl GoTExecutor {
         memory.record(trace)
     }
 
-    fn run_expansion<E: Expander>(graph: &mut ThoughtGraph,
+    fn run_expansion<E: Expander>(
+        graph: &mut ThoughtGraph,
         plan: &GoTPlan,
         query: &GoTQuery,
         expander: &E,
@@ -746,7 +764,8 @@ impl GoTExecutor {
         false
     }
 
-    fn pop_next(strategy: GoTStrategy,
+    fn pop_next(
+        strategy: GoTStrategy,
         frontier: &mut VecDeque<(ThoughtId, usize)>,
         graph: &ThoughtGraph,
     ) -> Option<(ThoughtId, usize)> {
@@ -804,7 +823,8 @@ impl GoTExecutor {
         }
     }
 
-    fn collect_paths(graph: &ThoughtGraph,
+    fn collect_paths(
+        graph: &ThoughtGraph,
         node_id: ThoughtId,
         current: &mut Vec<ThoughtNode>,
         out: &mut Vec<ScoredPath>,
@@ -847,7 +867,8 @@ mod tests {
         ThoughtNode::new(content, ThoughtType::Conclusion, conf, s).with_parents(vec![parent])
     }
 
-    fn run(exec: &GoTExecutor,
+    fn run(
+        exec: &GoTExecutor,
         graph: &mut ThoughtGraph,
         plan: &GoTPlan,
         query: &GoTQuery,
@@ -867,8 +888,11 @@ mod tests {
         let exec = GoTExecutor::new();
         let plan = exec.plan(&mut graph, &q);
         let mut expander = StaticExpander::new();
-        expander.register(plan.root,
-            vec![(conclusion("Spec slipped because of dependency on KMS",
+        expander.register(
+            plan.root,
+            vec![(
+                conclusion(
+                    "Spec slipped because of dependency on KMS",
                     0.9,
                     plan.root,
                     s,
@@ -879,7 +903,8 @@ mod tests {
         let result = run(&exec, &mut graph, &plan, &q, &expander);
         assert!(!result.best_path.is_empty());
         assert!(result.confidence > 0.0);
-        assert!(matches!(result.best_path.last().unwrap().thought_type,
+        assert!(matches!(
+            result.best_path.last().unwrap().thought_type,
             ThoughtType::Conclusion
         ));
     }
@@ -900,16 +925,21 @@ mod tests {
             .with_parents(vec![plan.root]);
         let h1_id = h1.id;
         let h2_id = h2.id;
-        expander.register(plan.root,
+        expander.register(
+            plan.root,
             vec![(h1, ThoughtEdge::Supports), (h2, ThoughtEdge::Supports)],
         );
-        expander.register(h1_id,
-            vec![(evidence("iostat shows idle", 0.3, h1_id, s),
+        expander.register(
+            h1_id,
+            vec![(
+                evidence("iostat shows idle", 0.3, h1_id, s),
                 ThoughtEdge::Contradicts,
             )],
         );
-        expander.register(h2_id,
-            vec![(conclusion("Pin to fewer cores", 0.95, h2_id, s),
+        expander.register(
+            h2_id,
+            vec![(
+                conclusion("Pin to fewer cores", 0.95, h2_id, s),
                 ThoughtEdge::Derives,
             )],
         );
@@ -961,7 +991,8 @@ mod tests {
         let mut expander = StaticExpander::new();
         let kids: Vec<_> = (0..10)
             .map(|i| {
-                (ThoughtNode::new(format!("kid-{i}"), ThoughtType::Hypothesis, 0.5, s)
+                (
+                    ThoughtNode::new(format!("kid-{i}"), ThoughtType::Hypothesis, 0.5, s)
                         .with_parents(vec![plan.root]),
                     ThoughtEdge::Supports,
                 )
@@ -1015,7 +1046,8 @@ mod tests {
         graph.add(parent);
         let exp = GraphExpander::new(&cg, a, s);
         let kids = exp.expand(graph.get(parent_id).unwrap(), 0, 4);
-        assert!(!kids.is_empty(),
+        assert!(
+            !kids.is_empty(),
             "graph expander returns at least one evidence node",
         );
         for (child, edge) in &kids {
@@ -1032,8 +1064,10 @@ mod tests {
         let mut expander = StaticExpander::new();
         let mut graph = ThoughtGraph::new();
         let plan = exec.plan(&mut graph, &q);
-        expander.register(plan.root,
-            vec![(conclusion("answer", 0.95, plan.root, s),
+        expander.register(
+            plan.root,
+            vec![(
+                conclusion("answer", 0.95, plan.root, s),
                 ThoughtEdge::Derives,
             )],
         );
@@ -1045,7 +1079,8 @@ mod tests {
         let result = exec
             .execute_from_plan(&mut graph, &plan, &q, &expander)
             .unwrap();
-        assert!(result
+        assert!(
+            result
                 .best_path
                 .last()
                 .is_some_and(|t| matches!(t.thought_type, ThoughtType::Conclusion)),

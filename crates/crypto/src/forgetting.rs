@@ -313,7 +313,8 @@ pub trait TombstoneStore {
     /// MUST be idempotent — re-recording an existing tombstone is a
     /// no-op rather than an error, so callers can replay safely
     /// after a partial-failure rerun.
-    fn persist_tombstone(&mut self,
+    fn persist_tombstone(
+        &mut self,
         scope: ScopeId,
         epoch: EpochId,
         destroyed_at: DateTime<Utc>,
@@ -322,7 +323,8 @@ pub trait TombstoneStore {
     /// Persist a scope-wide forgetting tombstone: every DEK for
     /// `scope` has been destroyed at `destroyed_at`. Implementations
     /// MUST be idempotent.
-    fn persist_forgotten_scope(&mut self,
+    fn persist_forgotten_scope(
+        &mut self,
         scope: ScopeId,
         destroyed_at: DateTime<Utc>,
     ) -> Result<(), CryptoError>;
@@ -422,7 +424,8 @@ impl DekRegistry {
 /// remain in the in-memory [`DekRegistry`] only and are lost on
 /// restart) and is appropriate for tests and demos that do not need
 /// durability.
-pub fn destroy_scope_dek(registry: &mut DekRegistry,
+pub fn destroy_scope_dek(
+    registry: &mut DekRegistry,
     scope: ScopeId,
     tombstone_store: Option<&mut dyn TombstoneStore>,
 ) -> Result<Vec<KeyDestructionEvent>, CryptoError> {
@@ -502,7 +505,8 @@ pub fn destroy_scope_dek(registry: &mut DekRegistry,
 /// [`destroy_scope_dek`]: when `Some(_)`, the new tombstone is
 /// persisted via the supplied store after the in-memory DEK has
 /// been zeroized. `None` keeps the legacy ephemeral-only behaviour.
-pub fn destroy_epoch_dek(registry: &mut DekRegistry,
+pub fn destroy_epoch_dek(
+    registry: &mut DekRegistry,
     scope: ScopeId,
     epoch: EpochId,
     tombstone_store: Option<&mut dyn TombstoneStore>,
@@ -691,7 +695,8 @@ impl<S: EpochKeySource> EpochManager<S> {
     ///
     /// Fails with [`CryptoError::EpochOverflow`] if the scope has
     /// already reached the terminal epoch (`EpochId(u64::MAX)`).
-    pub fn force_rotate(&mut self,
+    pub fn force_rotate(
+        &mut self,
         scope: ScopeId,
         registry: &mut DekRegistry,
     ) -> Result<(EpochId, EpochRotationTrigger), CryptoError> {
@@ -723,7 +728,8 @@ impl<S: EpochKeySource> EpochManager<S> {
     /// and switch to a fresh scope rather than retrying; repeated
     /// calls will continue to fail with the same error while the
     /// counter ticks past the budget.
-    pub fn record_bytes(&mut self,
+    pub fn record_bytes(
+        &mut self,
         scope: ScopeId,
         bytes: u64,
         registry: &mut DekRegistry,
@@ -755,7 +761,8 @@ impl<S: EpochKeySource> EpochManager<S> {
     /// Fails with [`CryptoError::EpochOverflow`] if a time-based
     /// rotation would be needed but the scope has already reached
     /// the terminal epoch.
-    pub fn tick(&mut self,
+    pub fn tick(
+        &mut self,
         scope: ScopeId,
         now: DateTime<Utc>,
         registry: &mut DekRegistry,
@@ -775,7 +782,8 @@ impl<S: EpochKeySource> EpochManager<S> {
         }
     }
 
-    fn rotate(&mut self,
+    fn rotate(
+        &mut self,
         scope: ScopeId,
         registry: &mut DekRegistry,
     ) -> Result<EpochId, CryptoError> {
@@ -860,7 +868,8 @@ impl EpochKeySource for DeterministicEpochKeySource {
 /// Fan a sequence of [`KeyDestructionEvent`]s into the supplied
 /// [`KeyDestructionAuditor`]. Provided as a free function so callers
 /// don't have to scatter the pattern across the workspace.
-pub fn record_key_destructions(auditor: &mut dyn KeyDestructionAuditor,
+pub fn record_key_destructions(
+    auditor: &mut dyn KeyDestructionAuditor,
     events: &[KeyDestructionEvent],
 ) {
     for event in events {
@@ -1004,7 +1013,8 @@ mod tests {
     #[test]
     fn epoch_manager_starts_at_epoch_zero() {
         let mut registry = DekRegistry::new();
-        let mut mgr = EpochManager::new(EpochRotationPolicy::new(Duration::seconds(1), 1024),
+        let mut mgr = EpochManager::new(
+            EpochRotationPolicy::new(Duration::seconds(1), 1024),
             DeterministicEpochKeySource,
         );
         let scope = ScopeId::new_v4();
@@ -1017,7 +1027,8 @@ mod tests {
     #[test]
     fn epoch_manager_force_rotates_to_new_epoch() {
         let mut registry = DekRegistry::new();
-        let mut mgr = EpochManager::new(EpochRotationPolicy::default_policy(),
+        let mut mgr = EpochManager::new(
+            EpochRotationPolicy::default_policy(),
             DeterministicEpochKeySource,
         );
         let scope = ScopeId::new_v4();
@@ -1036,7 +1047,8 @@ mod tests {
     #[test]
     fn epoch_manager_rotates_on_size_trigger() {
         let mut registry = DekRegistry::new();
-        let mut mgr = EpochManager::new(EpochRotationPolicy::new(Duration::days(365), 1024),
+        let mut mgr = EpochManager::new(
+            EpochRotationPolicy::new(Duration::days(365), 1024),
             DeterministicEpochKeySource,
         );
         let scope = ScopeId::new_v4();
@@ -1051,7 +1063,8 @@ mod tests {
     #[test]
     fn epoch_manager_rotates_on_time_trigger_via_tick() {
         let mut registry = DekRegistry::new();
-        let mut mgr = EpochManager::new(EpochRotationPolicy::new(Duration::seconds(1), 1024 * 1024 * 1024),
+        let mut mgr = EpochManager::new(
+            EpochRotationPolicy::new(Duration::seconds(1), 1024 * 1024 * 1024),
             DeterministicEpochKeySource,
         );
         let scope = ScopeId::new_v4();
@@ -1067,7 +1080,8 @@ mod tests {
     #[test]
     fn epoch_manager_lists_every_epoch() {
         let mut registry = DekRegistry::new();
-        let mut mgr = EpochManager::new(EpochRotationPolicy::default_policy(),
+        let mut mgr = EpochManager::new(
+            EpochRotationPolicy::default_policy(),
             DeterministicEpochKeySource,
         );
         let scope = ScopeId::new_v4();
@@ -1089,7 +1103,8 @@ mod tests {
     #[test]
     fn epoch_id_zero_and_next_round_trip() {
         assert_eq!(EpochId::zero().0, 0);
-        assert_eq!(EpochId::zero().next().expect("0.next() never overflows").0,
+        assert_eq!(
+            EpochId::zero().next().expect("0.next() never overflows").0,
             1
         );
         // Overflow at the terminal epoch is reported as a hard
@@ -1106,7 +1121,8 @@ mod tests {
     #[test]
     fn epoch_manager_refuses_to_rotate_at_terminal_epoch() {
         let mut registry = DekRegistry::new();
-        let mut mgr = EpochManager::new(EpochRotationPolicy::new(Duration::seconds(1), 1),
+        let mut mgr = EpochManager::new(
+            EpochRotationPolicy::new(Duration::seconds(1), 1),
             DeterministicEpochKeySource,
         );
         let scope = ScopeId::new_v4();
@@ -1122,7 +1138,8 @@ mod tests {
         // Overwrite the manager's current/epochs view of `scope` so
         // that `current_epoch(scope)` returns the terminal epoch.
         mgr.current.insert(scope, terminal);
-        mgr.epochs.insert(scope,
+        mgr.epochs.insert(
+            scope,
             vec![EpochInfo {
                 epoch_id: terminal,
                 started_at: Utc::now() - Duration::days(365),
@@ -1133,18 +1150,21 @@ mod tests {
         registry.insert_epoch_dek(EpochDek::new(scope, terminal, fixture_key(7)));
 
         // force_rotate refuses.
-        assert!(matches!(mgr.force_rotate(scope, &mut registry),
+        assert!(matches!(
+            mgr.force_rotate(scope, &mut registry),
             Err(CryptoError::EpochOverflow)
         ));
 
         // record_bytes that *would* trigger a size rotation refuses.
-        assert!(matches!(mgr.record_bytes(scope, u64::MAX, &mut registry),
+        assert!(matches!(
+            mgr.record_bytes(scope, u64::MAX, &mut registry),
             Err(CryptoError::EpochOverflow)
         ));
 
         // tick that *would* trigger a time rotation refuses.
         let later = Utc::now() + Duration::days(366);
-        assert!(matches!(mgr.tick(scope, later, &mut registry),
+        assert!(matches!(
+            mgr.tick(scope, later, &mut registry),
             Err(CryptoError::EpochOverflow)
         ));
 
@@ -1197,7 +1217,8 @@ mod tests {
     }
 
     impl TombstoneStore for CapturingTombstoneStore {
-        fn persist_tombstone(&mut self,
+        fn persist_tombstone(
+            &mut self,
             scope: ScopeId,
             epoch: EpochId,
             destroyed_at: DateTime<Utc>,
@@ -1212,7 +1233,8 @@ mod tests {
             Ok(())
         }
 
-        fn persist_forgotten_scope(&mut self,
+        fn persist_forgotten_scope(
+            &mut self,
             scope: ScopeId,
             destroyed_at: DateTime<Utc>,
         ) -> Result<(), CryptoError> {
@@ -1241,7 +1263,8 @@ mod tests {
         registry.insert_epoch_dek(EpochDek::new(scope, EpochId::zero(), fixture_key(2)));
         registry.insert_epoch_dek(EpochDek::new(scope, EpochId(1), fixture_key(3)));
 
-        let events = destroy_scope_dek(&mut registry,
+        let events = destroy_scope_dek(
+            &mut registry,
             scope,
             Some(&mut store as &mut dyn TombstoneStore),
         )
@@ -1272,7 +1295,8 @@ mod tests {
         registry.insert_epoch_dek(EpochDek::new(scope, EpochId::zero(), fixture_key(1)));
         registry.insert_epoch_dek(EpochDek::new(scope, EpochId(1), fixture_key(2)));
 
-        let _ = destroy_epoch_dek(&mut registry,
+        let _ = destroy_epoch_dek(
+            &mut registry,
             scope,
             EpochId::zero(),
             Some(&mut store as &mut dyn TombstoneStore),
@@ -1313,7 +1337,8 @@ mod tests {
         // must see tombstones for *both* epoch 0 (pre-existing) and
         // epoch 1 (newly destroyed).
         let mut store = CapturingTombstoneStore::default();
-        let _ = destroy_scope_dek(&mut registry,
+        let _ = destroy_scope_dek(
+            &mut registry,
             scope,
             Some(&mut store as &mut dyn TombstoneStore),
         )
@@ -1321,10 +1346,12 @@ mod tests {
 
         let persisted_epochs: std::collections::BTreeSet<EpochId> =
             store.tombstones.iter().map(|(_, e, _)| *e).collect();
-        assert!(persisted_epochs.contains(&EpochId::zero()),
+        assert!(
+            persisted_epochs.contains(&EpochId::zero()),
             "pre-existing tombstone must be persisted on the scope destroy",
         );
-        assert!(persisted_epochs.contains(&EpochId(1)),
+        assert!(
+            persisted_epochs.contains(&EpochId(1)),
             "newly destroyed tombstone must be persisted",
         );
         assert_eq!(store.forgotten_scopes.len(), 1);
@@ -1337,7 +1364,8 @@ mod tests {
         let scope = ScopeId::new_v4();
 
         registry.insert_scope_dek(ScopeDek::new(scope, EpochId::zero(), fixture_key(1)));
-        let _ = destroy_scope_dek(&mut registry,
+        let _ = destroy_scope_dek(
+            &mut registry,
             scope,
             Some(&mut store as &mut dyn TombstoneStore),
         )
@@ -1347,7 +1375,8 @@ mod tests {
         let snapshot_scopes = store.forgotten_scopes.clone();
 
         // Re-running the destroy must not append duplicate rows.
-        let second = destroy_scope_dek(&mut registry,
+        let second = destroy_scope_dek(
+            &mut registry,
             scope,
             Some(&mut store as &mut dyn TombstoneStore),
         )
@@ -1365,20 +1394,24 @@ mod tests {
     struct FailingTombstoneStore;
 
     impl TombstoneStore for FailingTombstoneStore {
-        fn persist_tombstone(&mut self,
+        fn persist_tombstone(
+            &mut self,
             _scope: ScopeId,
             _epoch: EpochId,
             _destroyed_at: DateTime<Utc>,
         ) -> Result<(), CryptoError> {
-            Err(CryptoError::TombstonePersistence("simulated I/O failure (persist_tombstone)".to_string(),
+            Err(CryptoError::TombstonePersistence(
+                "simulated I/O failure (persist_tombstone)".to_string(),
             ))
         }
 
-        fn persist_forgotten_scope(&mut self,
+        fn persist_forgotten_scope(
+            &mut self,
             _scope: ScopeId,
             _destroyed_at: DateTime<Utc>,
         ) -> Result<(), CryptoError> {
-            Err(CryptoError::TombstonePersistence("simulated I/O failure (persist_forgotten_scope)".to_string(),
+            Err(CryptoError::TombstonePersistence(
+                "simulated I/O failure (persist_forgotten_scope)".to_string(),
             ))
         }
 
@@ -1397,7 +1430,8 @@ mod tests {
         let scope = ScopeId::new_v4();
         registry.insert_epoch_dek(EpochDek::new(scope, EpochId::zero(), fixture_key(1)));
 
-        let err = destroy_epoch_dek(&mut registry,
+        let err = destroy_epoch_dek(
+            &mut registry,
             scope,
             EpochId::zero(),
             Some(&mut FailingTombstoneStore as &mut dyn TombstoneStore),

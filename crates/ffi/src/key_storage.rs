@@ -123,7 +123,8 @@ pub trait KeyStorageResolver: Send + Sync {
 /// * Propagates [`with_runtime`]'s errors if the handle has been
 ///   closed or reaped.
 #[uniffi::export]
-pub fn set_key_storage_resolver(handle: RuntimeHandle,
+pub fn set_key_storage_resolver(
+    handle: RuntimeHandle,
     resolver: Arc<dyn KeyStorageResolver>,
 ) -> FfiResult<()> {
     metrics::instrument(metrics::inc_set_key_storage_resolver, || {
@@ -247,11 +248,13 @@ mod tests {
         metrics::inc_clear_key_storage_resolver();
         let after = snapshot();
 
-        assert_eq!(after.set_key_storage_resolver_total - before.set_key_storage_resolver_total,
+        assert_eq!(
+            after.set_key_storage_resolver_total - before.set_key_storage_resolver_total,
             2,
             "set counter must increment per call"
         );
-        assert_eq!(after.clear_key_storage_resolver_total - before.clear_key_storage_resolver_total,
+        assert_eq!(
+            after.clear_key_storage_resolver_total - before.clear_key_storage_resolver_total,
             1,
             "clear counter must increment per call"
         );

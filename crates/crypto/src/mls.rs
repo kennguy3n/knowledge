@@ -191,7 +191,8 @@ impl MlsCommit {
             }
         }
         out.extend_from_slice(self.committed_by.0.as_bytes());
-        out.extend_from_slice(&self
+        out.extend_from_slice(
+            &self
                 .committed_at
                 .timestamp_nanos_opt()
                 .unwrap_or(0)
@@ -307,7 +308,8 @@ impl Drop for MlsGroup {
 /// their own [`Zeroizing`] binding by move get end-to-end
 /// defence-in-depth: their stack frame is wiped on scope exit and
 /// this function's frame is wiped on return.
-fn derive_schedule(group_id: MlsGroupId,
+fn derive_schedule(
+    group_id: MlsGroupId,
     epoch: MlsEpoch,
     epoch_secret: Zeroizing<[u8; AEAD_KEY_LEN]>,
 ) -> Result<GroupKeySchedule, CryptoError> {
@@ -408,7 +410,8 @@ impl MlsGroup {
     /// wiped on return. Callers that need defence-in-depth at their
     /// own frame should also store the seed in a [`Zeroizing`] binding
     /// from the start, which is naturally enforced by this signature.
-    pub fn create<S: SignerBackend>(signer: &S,
+    pub fn create<S: SignerBackend>(
+        signer: &S,
         creator: MlsMemberId,
         creator_leaf: LeafKeyPackage,
         initial_ratchet: Zeroizing<[u8; AEAD_KEY_LEN]>,
@@ -451,7 +454,8 @@ impl MlsGroup {
         let ratchet: [u8; AEAD_KEY_LEN] = *next_ratchet;
         drop(next_ratchet);
 
-        Ok((Self {
+        Ok((
+            Self {
                 group_id,
                 epoch,
                 members,
@@ -466,13 +470,15 @@ impl MlsGroup {
     /// not applied to local state until [`MlsGroup::process_commit`]
     /// runs against it — this matches RFC 9420's split between
     /// "build a commit" and "process it".
-    pub fn add_member<S: SignerBackend>(&self,
+    pub fn add_member<S: SignerBackend>(
+        &self,
         signer: &S,
         committed_by: MlsMemberId,
         leaf: LeafKeyPackage,
     ) -> Result<MlsCommit, CryptoError> {
         if self.members.contains_key(&leaf.member_id) {
-            return Err(CryptoError::ProvenanceSerialisation("member already in group",
+            return Err(CryptoError::ProvenanceSerialisation(
+                "member already in group",
             ));
         }
         let mut commit = MlsCommit {
@@ -490,7 +496,8 @@ impl MlsGroup {
     }
 
     /// Build (sign) an [`MlsCommit::Remove`].
-    pub fn remove_member<S: SignerBackend>(&self,
+    pub fn remove_member<S: SignerBackend>(
+        &self,
         signer: &S,
         committed_by: MlsMemberId,
         removed: MlsMemberId,
@@ -532,13 +539,15 @@ impl MlsGroup {
     /// `next_ratchet`. After a successful `process_commit`, the only
     /// way to recompute the new epoch secret is to know the previous
     /// ratchet value, which has been wiped.
-    pub fn process_commit<V: SignerBackend>(&mut self,
+    pub fn process_commit<V: SignerBackend>(
+        &mut self,
         commit: &MlsCommit,
         verifier: &V,
     ) -> Result<(), CryptoError> {
         // ---- : validate (read-only against `self`) ----
         if commit.group_id != self.group_id {
-            return Err(CryptoError::ProvenanceSerialisation("commit group_id mismatch",
+            return Err(CryptoError::ProvenanceSerialisation(
+                "commit group_id mismatch",
             ));
         }
         let payload = commit.signing_payload();
@@ -551,7 +560,8 @@ impl MlsGroup {
         // (signed) commit claimed, desynchronising the key schedule
         // from every other member.
         if matches!(commit.operation, CommitOperation::Create { .. }) {
-            return Err(CryptoError::ProvenanceSerialisation("Create commits cannot be processed on an existing group",
+            return Err(CryptoError::ProvenanceSerialisation(
+                "Create commits cannot be processed on an existing group",
             ));
         }
         // Roster-based authorisation: a valid signature alone is not
@@ -561,7 +571,8 @@ impl MlsGroup {
         // could forge state transitions on a group they no longer
         // belong to.
         if !self.members.contains_key(&commit.committed_by) {
-            return Err(CryptoError::ProvenanceSerialisation("committer is not a group member",
+            return Err(CryptoError::ProvenanceSerialisation(
+                "committer is not a group member",
             ));
         }
         // `self.epoch.next()` is fallible at `u64::MAX`. Surfacing
@@ -570,7 +581,8 @@ impl MlsGroup {
         // the addressable epoch space is rejected explicitly.
         let expected_epoch = self.epoch.next()?;
         if commit.epoch != expected_epoch {
-            return Err(CryptoError::ProvenanceSerialisation("commit epoch out of order",
+            return Err(CryptoError::ProvenanceSerialisation(
+                "commit epoch out of order",
             ));
         }
         // Validate the operation against the current roster. Both
@@ -584,13 +596,15 @@ impl MlsGroup {
             CommitOperation::Create { .. } => unreachable!("Create rejected above"),
             CommitOperation::Add { added } => {
                 if self.members.contains_key(added) {
-                    return Err(CryptoError::ProvenanceSerialisation("member already present",
+                    return Err(CryptoError::ProvenanceSerialisation(
+                        "member already present",
                     ));
                 }
             }
             CommitOperation::Remove { removed } => {
                 if !self.members.contains_key(removed) {
-                    return Err(CryptoError::ProvenanceSerialisation("removed member is not in the roster",
+                    return Err(CryptoError::ProvenanceSerialisation(
+                        "removed member is not in the roster",
                     ));
                 }
             }
@@ -619,7 +633,8 @@ impl MlsGroup {
                 // placeholder leaf so the roster is consistent and
                 // the caller can patch in the real one when they
                 // apply the welcome.
-                self.members.insert(*added,
+                self.members.insert(
+                    *added,
                     LeafKeyPackage {
                         member_id: *added,
                         init_key: placeholder_hybrid_pk(),
@@ -658,7 +673,8 @@ impl MlsGroup {
         let leaf = self
             .members
             .get(&added)
-            .ok_or(CryptoError::ProvenanceSerialisation("added member is not in the current roster",
+            .ok_or(CryptoError::ProvenanceSerialisation(
+                "added member is not in the current roster",
             ))?;
         if is_placeholder_hybrid_pk(&leaf.init_key) {
             return Err(CryptoError::ProvenanceSerialisation("added member's init_key is a placeholder; install_leaf with the real key package first",
@@ -729,7 +745,8 @@ impl MlsGroup {
     /// leaves — the caller is expected to install real
     /// [`LeafKeyPackage`]s via [`install_leaf`] as it learns them,
     /// matching the existing `process_commit` Add behaviour.
-    pub fn process_welcome(welcome: &MlsWelcome,
+    pub fn process_welcome(
+        welcome: &MlsWelcome,
         init_sk: &HybridSecretKey,
     ) -> Result<Self, CryptoError> {
         // Every sensitive local in this function is either an array
@@ -750,7 +767,8 @@ impl MlsGroup {
             };
         let aad = welcome_aad(welcome.group_id, welcome.epoch, &welcome.roster);
 
-        let plaintext_result = decrypt_aead(&aead_key,
+        let plaintext_result = decrypt_aead(
+            &aead_key,
             &aead_nonce,
             &welcome.encrypted_epoch_secret,
             &aad,
@@ -764,7 +782,8 @@ impl MlsGroup {
         if plaintext.len() != AEAD_KEY_LEN * 2 {
             // Wipe before erroring so we never leak partial state.
             plaintext.zeroize();
-            return Err(CryptoError::ProvenanceSerialisation("welcome plaintext has unexpected length",
+            return Err(CryptoError::ProvenanceSerialisation(
+                "welcome plaintext has unexpected length",
             ));
         }
         // Split the decrypted plaintext into the two secret halves.
@@ -787,7 +806,8 @@ impl MlsGroup {
         // [`LeafKeyPackage`]s are installed via [`install_leaf`].
         let mut members = BTreeMap::new();
         for id in &welcome.roster {
-            members.insert(*id,
+            members.insert(
+                *id,
                 LeafKeyPackage {
                     member_id: *id,
                     init_key: placeholder_hybrid_pk(),
@@ -838,7 +858,8 @@ impl MlsGroup {
 /// material is keyed to a specific group and epoch — no two epochs
 /// (within the same or across groups) can ever produce the same
 /// outputs even if they accidentally shared a ratchet value.
-fn ratchet_epoch(ratchet: &[u8; AEAD_KEY_LEN],
+fn ratchet_epoch(
+    ratchet: &[u8; AEAD_KEY_LEN],
     group_id: MlsGroupId,
     epoch: MlsEpoch,
 ) -> Result<(Zeroizing<[u8; AEAD_KEY_LEN]>, Zeroizing<[u8; AEAD_KEY_LEN]>), CryptoError> {
@@ -872,7 +893,8 @@ fn ratchet_epoch(ratchet: &[u8; AEAD_KEY_LEN],
 /// Derive the welcome AEAD key and nonce from the hybrid KEM shared
 /// secret, binding `(group_id, epoch)` into the derivation so that a
 /// captured welcome cannot be replayed against a different epoch.
-fn derive_welcome_aead_material(shared: &HybridSharedSecret,
+fn derive_welcome_aead_material(
+    shared: &HybridSharedSecret,
     group_id: MlsGroupId,
     epoch: MlsEpoch,
 ) -> Result<(AeadKey, AeadNonce), CryptoError> {
@@ -1081,7 +1103,8 @@ mod tests {
         let mut commit = group.add_member(&s, creator, leaf).unwrap();
         commit.group_id = MlsGroupId::new_v4();
         let err = group.process_commit(&commit, &s).unwrap_err();
-        assert!(matches!(err,
+        assert!(matches!(
+            err,
             CryptoError::ProvenanceSerialisation("commit group_id mismatch")
         ));
     }
@@ -1169,8 +1192,10 @@ mod tests {
             MlsGroup::create(&s, creator, fresh_leaf(creator), fixed_initial_ratchet()).unwrap();
         // Re-process the genesis Create commit on the live group.
         let err = group.process_commit(&genesis, &s).unwrap_err();
-        assert!(matches!(err,
-            CryptoError::ProvenanceSerialisation("Create commits cannot be processed on an existing group"
+        assert!(matches!(
+            err,
+            CryptoError::ProvenanceSerialisation(
+                "Create commits cannot be processed on an existing group"
             )
         ));
         // State is unchanged.
@@ -1250,16 +1275,20 @@ mod tests {
             // `candidate` is `Zeroizing<[u8; 32]>`; deref to compare
             // against the bare arrays captured above.
             let candidate: [u8; AEAD_KEY_LEN] = *candidate;
-            assert_ne!(candidate, secret_epoch_0,
+            assert_ne!(
+                candidate, secret_epoch_0,
                 "epoch 0 secret recovered from post-epoch-3 ratchet at epoch {epoch}",
             );
-            assert_ne!(candidate, secret_epoch_1,
+            assert_ne!(
+                candidate, secret_epoch_1,
                 "epoch 1 secret recovered from post-epoch-3 ratchet at epoch {epoch}",
             );
-            assert_ne!(candidate, secret_epoch_2,
+            assert_ne!(
+                candidate, secret_epoch_2,
                 "epoch 2 secret recovered from post-epoch-3 ratchet at epoch {epoch}",
             );
-            assert_ne!(candidate, secret_epoch_3,
+            assert_ne!(
+                candidate, secret_epoch_3,
                 "epoch 3 secret recovered from post-epoch-3 ratchet at epoch {epoch}",
             );
         }
@@ -1289,12 +1318,14 @@ mod tests {
         let bootstrapped = MlsGroup::process_welcome(&welcome, &new_sk).expect("process_welcome");
         assert_eq!(bootstrapped.group_id, group.group_id);
         assert_eq!(bootstrapped.epoch, group.epoch);
-        assert_eq!(bootstrapped.schedule.epoch_secret(),
+        assert_eq!(
+            bootstrapped.schedule.epoch_secret(),
             group.schedule.epoch_secret(),
         );
         // The bootstrapped derived keys match too, because they are
         // a deterministic HKDF of the epoch secret.
-        assert_eq!(bootstrapped.schedule.shared_memory_key,
+        assert_eq!(
+            bootstrapped.schedule.shared_memory_key,
             group.schedule.shared_memory_key,
         );
         assert_eq!(bootstrapped.ratchet, group.ratchet);
@@ -1306,7 +1337,8 @@ mod tests {
         // shared secret is recovered.
         let (_pk_other, sk_other) = crate::hybrid_kem::hybrid_keypair().expect("keypair");
         let err = MlsGroup::process_welcome(&welcome, &sk_other).expect_err("foreign sk must fail");
-        assert!(matches!(err, CryptoError::AeadDecryption),
+        assert!(
+            matches!(err, CryptoError::AeadDecryption),
             "unexpected error variant: {err:?}",
         );
     }
@@ -1344,7 +1376,8 @@ mod tests {
         tampered.roster.insert(0, phantom);
         let err = MlsGroup::process_welcome(&tampered, &new_sk)
             .expect_err("tampered roster must be rejected");
-        assert!(matches!(err, CryptoError::AeadDecryption),
+        assert!(
+            matches!(err, CryptoError::AeadDecryption),
             "unexpected error variant: {err:?}",
         );
 
@@ -1353,7 +1386,8 @@ mod tests {
         tampered.roster.pop();
         let err = MlsGroup::process_welcome(&tampered, &new_sk)
             .expect_err("roster-shortened welcome must be rejected");
-        assert!(matches!(err, CryptoError::AeadDecryption),
+        assert!(
+            matches!(err, CryptoError::AeadDecryption),
             "unexpected error variant: {err:?}",
         );
 
@@ -1364,7 +1398,8 @@ mod tests {
             tampered.roster.swap(0, 1);
             let err = MlsGroup::process_welcome(&tampered, &new_sk)
                 .expect_err("reordered roster must be rejected");
-            assert!(matches!(err, CryptoError::AeadDecryption),
+            assert!(
+                matches!(err, CryptoError::AeadDecryption),
                 "unexpected error variant: {err:?}",
             );
         }
@@ -1413,7 +1448,8 @@ mod tests {
         // But `process_commit` rejects because `outsider` is not in
         // the current roster.
         let err = group.process_commit(&commit, &s).unwrap_err();
-        assert!(matches!(err,
+        assert!(matches!(
+            err,
             CryptoError::ProvenanceSerialisation("committer is not a group member")
         ));
 
@@ -1457,7 +1493,8 @@ mod tests {
         commit.signature = s.sign_bytes(&commit.signing_payload()).unwrap();
 
         let err = group.process_commit(&commit, &s).unwrap_err();
-        assert!(matches!(err,
+        assert!(matches!(
+            err,
             CryptoError::ProvenanceSerialisation("removed member is not in the roster")
         ));
 
@@ -1500,7 +1537,8 @@ mod tests {
         commit.signature = s.sign_bytes(&commit.signing_payload()).unwrap();
 
         let err = group.process_commit(&commit, &s).unwrap_err();
-        assert!(matches!(err,
+        assert!(matches!(
+            err,
             CryptoError::ProvenanceSerialisation("commit epoch out of order")
         ));
 

@@ -133,7 +133,8 @@ pub struct WebhookSubscription {
 
 impl WebhookSubscription {
     /// Construct a new subscription in [`WebhookStatus::Pending`].
-    pub fn new(connector: ConnectorInstanceId,
+    pub fn new(
+        connector: ConnectorInstanceId,
         callback_url: impl Into<String>,
         secret: WebhookSecret,
         event_types: WebhookEventTypes,
@@ -181,7 +182,8 @@ mod tests {
 
     #[test]
     fn subscription_starts_pending_then_activates() {
-        let mut s = WebhookSubscription::new(ConnectorInstanceId::new_v4(),
+        let mut s = WebhookSubscription::new(
+            ConnectorInstanceId::new_v4(),
             "https://substrate.example/webhooks/abc",
             WebhookSecret::new("shared-secret"),
             WebhookEventTypes::all(),

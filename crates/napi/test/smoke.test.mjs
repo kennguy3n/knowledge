@@ -454,7 +454,7 @@ test('listMemories() rejects camelCase `pinnedOnly` typo with a named InvalidArg
   // InvalidId surfaced from a silently-defaulted `pinned_only:
   // false` filter that hit the scope-id parser. This test is the
   // last line of defence: it would have caught the doc-comment
-  // typo at `bindings.rs:239` that Devin Review (BUG_0001) flagged.
+  // typo at `bindings.rs:239` that an earlier review flagged.
   assert.throws(
     () => core.listMemories(0n, 'not-a-uuid', { state: null, pinnedOnly: false }),
     (err) => {

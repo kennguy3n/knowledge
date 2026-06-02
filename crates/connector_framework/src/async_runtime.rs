@@ -137,13 +137,15 @@ pub trait AsyncConnector: Send + Sync {
     async fn authenticate(&self, config: &ConnectorConfig) -> Result<OAuth2Token>;
 
     /// First-time pull — walk the entire source surface.
-    async fn initial_sync(&self,
+    async fn initial_sync(
+        &self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
     ) -> Result<SyncRunResult>;
 
     /// Steady-state pull — read the cursor from `state`.
-    async fn incremental_sync(&self,
+    async fn incremental_sync(
+        &self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         state: &SyncState,
@@ -151,7 +153,8 @@ pub trait AsyncConnector: Send + Sync {
 
     /// Install a push subscription with the provider. The returned
     /// [`WebhookSubscription`] should be persisted by the runtime.
-    async fn subscribe_webhook(&self,
+    async fn subscribe_webhook(
+        &self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         callback_url: &str,
@@ -193,7 +196,7 @@ impl<C: Connector + Send + Sync + 'static> BlockingConnectorAdapter<C> {
 
     /// Wrap a sync connector that's already inside an `Arc`. Useful
     /// when the substrate shares the same connector instance across
-    /// both the sync and async paths during the  migration.
+    /// both the sync and async paths during the migration.
     #[must_use]
     pub fn from_arc(connector: Arc<C>) -> Self {
         Self { inner: connector }
@@ -218,7 +221,8 @@ impl<C: Connector + Send + Sync + 'static> AsyncConnector for BlockingConnectorA
             .map_err(|e| join_err_to_connector_err(&e))?
     }
 
-    async fn initial_sync(&self,
+    async fn initial_sync(
+        &self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
     ) -> Result<SyncRunResult> {
@@ -230,7 +234,8 @@ impl<C: Connector + Send + Sync + 'static> AsyncConnector for BlockingConnectorA
             .map_err(|e| join_err_to_connector_err(&e))?
     }
 
-    async fn incremental_sync(&self,
+    async fn incremental_sync(
+        &self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         state: &SyncState,
@@ -244,7 +249,8 @@ impl<C: Connector + Send + Sync + 'static> AsyncConnector for BlockingConnectorA
             .map_err(|e| join_err_to_connector_err(&e))?
     }
 
-    async fn subscribe_webhook(&self,
+    async fn subscribe_webhook(
+        &self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         callback_url: &str,
@@ -313,14 +319,16 @@ mod tests {
     impl Connector for CountingConnector {
         fn authenticate(&self, _config: &ConnectorConfig) -> Result<OAuth2Token> {
             self.authenticate_hits.fetch_add(1, Ordering::SeqCst);
-            Ok(OAuth2Token::new("test-access",
+            Ok(OAuth2Token::new(
+                "test-access",
                 "test-refresh",
                 Utc::now() + chrono::Duration::hours(1),
                 "read",
             ))
         }
 
-        fn initial_sync(&self,
+        fn initial_sync(
+            &self,
             _config: &ConnectorConfig,
             _token: &OAuth2Token,
         ) -> Result<SyncRunResult> {
@@ -334,7 +342,8 @@ mod tests {
             })
         }
 
-        fn incremental_sync(&self,
+        fn incremental_sync(
+            &self,
             _config: &ConnectorConfig,
             _token: &OAuth2Token,
             _state: &SyncState,
@@ -346,14 +355,16 @@ mod tests {
             })
         }
 
-        fn subscribe_webhook(&self,
+        fn subscribe_webhook(
+            &self,
             config: &ConnectorConfig,
             _token: &OAuth2Token,
             callback_url: &str,
         ) -> Result<WebhookSubscription> {
             self.subscribe_hits.fetch_add(1, Ordering::SeqCst);
             let _ = config;
-            Ok(WebhookSubscription::new(crate::token_vault::ConnectorInstanceId::new_v4(),
+            Ok(WebhookSubscription::new(
+                crate::token_vault::ConnectorInstanceId::new_v4(),
                 callback_url.to_string(),
                 WebhookSecret::new("secret"),
                 WebhookEventTypes::all(),
@@ -371,7 +382,8 @@ mod tests {
     }
 
     fn make_config() -> ConnectorConfig {
-        ConnectorConfig::new(ConnectorKind::Slack,
+        ConnectorConfig::new(
+            ConnectorKind::Slack,
             AuthKind::OAuth2,
             ScopeId(Uuid::new_v4()),
         )
@@ -477,14 +489,16 @@ mod tests {
             fn initial_sync(&self, _: &ConnectorConfig, _: &OAuth2Token) -> Result<SyncRunResult> {
                 Err(ConnectorError::Sync("api down".into()))
             }
-            fn incremental_sync(&self,
+            fn incremental_sync(
+                &self,
                 _: &ConnectorConfig,
                 _: &OAuth2Token,
                 _: &SyncState,
             ) -> Result<SyncRunResult> {
                 Err(ConnectorError::Sync("api down".into()))
             }
-            fn subscribe_webhook(&self,
+            fn subscribe_webhook(
+                &self,
                 _: &ConnectorConfig,
                 _: &OAuth2Token,
                 _: &str,
@@ -516,14 +530,16 @@ mod tests {
             fn initial_sync(&self, _: &ConnectorConfig, _: &OAuth2Token) -> Result<SyncRunResult> {
                 unreachable!()
             }
-            fn incremental_sync(&self,
+            fn incremental_sync(
+                &self,
                 _: &ConnectorConfig,
                 _: &OAuth2Token,
                 _: &SyncState,
             ) -> Result<SyncRunResult> {
                 unreachable!()
             }
-            fn subscribe_webhook(&self,
+            fn subscribe_webhook(
+                &self,
                 _: &ConnectorConfig,
                 _: &OAuth2Token,
                 _: &str,

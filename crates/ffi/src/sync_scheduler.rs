@@ -43,7 +43,7 @@
 //! (update consecutive_failures + next_attempt_at) phases. The
 //! actual `sync_connector` call runs UNLOCKED — the entry point
 //! itself walks the substrate's own three-phase discipline (Step 1
-//! snapshot,  HTTP,  result) so any deadlock here
+//! snapshot, HTTP, result) so any deadlock here
 //! would also have caused one for host-driven syncs.
 //!
 //! **4. `close_store` pre-drain.** `close_store` consumes the
@@ -362,7 +362,8 @@ impl RunningSyncScheduler {
                 // panicking join propagation would re-panic the
                 // caller (often itself inside an FFI call where
                 // a panic unwinds across the C ABI boundary).
-                warn!("sync scheduler worker thread panicked; join result: {:?}",
+                warn!(
+                    "sync scheduler worker thread panicked; join result: {:?}",
                     panic
                 );
             }
@@ -444,7 +445,8 @@ pub(crate) fn drain_scheduler(scheduler: Option<RunningSyncScheduler>) {
 /// * [`FfiError::Unavailable`] if the OS rejects the
 ///   [`std::thread::Builder::spawn`] (resource exhaustion).
 #[uniffi::export]
-pub fn start_sync_scheduler(handle: RuntimeHandle,
+pub fn start_sync_scheduler(
+    handle: RuntimeHandle,
     default_interval_secs: u64,
     default_max_backoff_secs: u64,
     tick_interval_secs: u64,
@@ -454,7 +456,8 @@ pub fn start_sync_scheduler(handle: RuntimeHandle,
         validate_tick("tick_interval_secs", tick_interval_secs)?;
         if default_max_backoff_secs < default_interval_secs {
             return Err(FfiError::InvalidId {
-                message: format!("start_sync_scheduler: default_max_backoff_secs ({default_max_backoff_secs}) \
+                message: format!(
+                    "start_sync_scheduler: default_max_backoff_secs ({default_max_backoff_secs}) \
                      must be >= default_interval_secs ({default_interval_secs}) so the \
                      backoff cap actually engages above the base interval"
                 ),
@@ -490,7 +493,8 @@ pub fn start_sync_scheduler(handle: RuntimeHandle,
                     // into the loop by reference so clippy's
                     // `needless_pass_by_value` lint stays clean
                     // (the worker function does not consume them).
-                    run_scheduler_loop(handle,
+                    run_scheduler_loop(
+                        handle,
                         &worker_config,
                         &worker_state,
                         &worker_counters,
@@ -508,7 +512,8 @@ pub fn start_sync_scheduler(handle: RuntimeHandle,
                 shutdown_tx: Some(shutdown_tx),
                 worker_thread: Some(worker_thread),
             });
-            info!(handle = handle.0,
+            info!(
+                handle = handle.0,
                 default_interval_secs,
                 default_max_backoff_secs,
                 tick_interval_secs,
@@ -584,7 +589,8 @@ pub fn stop_sync_scheduler(handle: RuntimeHandle) -> FfiResult<()> {
 ///   does not parse as a UUID.
 #[uniffi::export]
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
-pub fn configure_sync_schedule(handle: RuntimeHandle,
+pub fn configure_sync_schedule(
+    handle: RuntimeHandle,
     instance_id: String,
     sync_interval_secs: u64,
     max_backoff_secs: u64,
@@ -594,7 +600,8 @@ pub fn configure_sync_schedule(handle: RuntimeHandle,
         validate_interval("sync_interval_secs", sync_interval_secs)?;
         if max_backoff_secs < sync_interval_secs {
             return Err(FfiError::InvalidId {
-                message: format!("configure_sync_schedule: max_backoff_secs ({max_backoff_secs}) \
+                message: format!(
+                    "configure_sync_schedule: max_backoff_secs ({max_backoff_secs}) \
                      must be >= sync_interval_secs ({sync_interval_secs})"
                 ),
             });
@@ -702,7 +709,8 @@ pub fn configure_sync_schedule(handle: RuntimeHandle,
 ///   UUID.
 #[uniffi::export]
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
-pub fn configure_sync_auto_synthesize(handle: RuntimeHandle,
+pub fn configure_sync_auto_synthesize(
+    handle: RuntimeHandle,
     instance_id: String,
     enabled: bool,
 ) -> FfiResult<()> {
@@ -787,7 +795,7 @@ pub fn clear_sync_schedule(handle: RuntimeHandle, instance_id: String) -> FfiRes
             state.accounting.remove(&instance);
             // Preserve the `auto_synthesize` flag so a clear /
             // re-cadence cycle does not silently disable
-            // post-sync synthesis.  If the flag was false (or
+            // post-sync synthesis. If the flag was false (or
             // never set), the remove above already restored
             // pure-defaults semantics.
             if prior_auto_synth {
@@ -898,7 +906,7 @@ pub(crate) fn scheduler_health_detail(rt: &crate::runtime::FfiRuntime) -> &'stat
 // ──────────── Per-instance scheduler-state probe ───────────────
 
 /// Snapshot of one connector instance's scheduler-side state for
-/// the  [`crate::connector::connector_status`]
+/// the [`crate::connector::connector_status`]
 /// surface. Bundled into a single record so the caller can build
 /// the wire-flat `ConnectorHealthRecord` without holding the
 /// scheduler-state mutex across the rest of the assembly logic.
@@ -959,7 +967,8 @@ pub(crate) struct InstanceSchedulerSnapshot {
 /// when the scheduler is stopped — `connector_status` is meant
 /// to remain useful even on hosts that never call
 /// [`start_sync_scheduler`].
-pub(crate) fn instance_scheduler_snapshot(rt: &crate::runtime::FfiRuntime,
+pub(crate) fn instance_scheduler_snapshot(
+    rt: &crate::runtime::FfiRuntime,
     instance: ConnectorInstanceId,
 ) -> InstanceSchedulerSnapshot {
     let Some(scheduler) = rt.sync_scheduler.as_ref() else {
@@ -1040,7 +1049,8 @@ pub(crate) fn prune_instance(rt: &crate::runtime::FfiRuntime, instance: Connecto
 ///   `Disconnected` — the [`RunningSyncScheduler`] was dropped
 ///   without an explicit stop, e.g. a runtime teardown crashed
 ///   mid-way through).
-fn run_scheduler_loop(handle: RuntimeHandle,
+fn run_scheduler_loop(
+    handle: RuntimeHandle,
     config: &SchedulerConfig,
     state: &Arc<Mutex<SchedulerState>>,
     counters: &Arc<SchedulerCounters>,
@@ -1060,7 +1070,8 @@ fn run_scheduler_loop(handle: RuntimeHandle,
                 metrics::inc_sync_scheduler_tick();
             }
             Err(RecvTimeoutError::Disconnected) => {
-                debug!(handle = handle.0,
+                debug!(
+                    handle = handle.0,
                     "sync scheduler sender disconnected (likely runtime drop)"
                 );
                 break;
@@ -1081,11 +1092,11 @@ fn run_scheduler_loop(handle: RuntimeHandle,
 /// # Timestamp discipline (load-bearing — read before refactoring)
 ///
 /// `now = Utc::now()` is captured ONCE at tick start and used
-/// only for the  due-instance check.  captures a
+/// only for the due-instance check. captures a
 /// FRESH `dispatch_completed_at = Utc::now()` after each
 /// `sync_connector` call returns and uses that for the
 /// `next_attempt_at` arithmetic. Reusing the tick-start `now`
-/// for  would (a) schedule retries in the past whenever
+/// for would (a) schedule retries in the past whenever
 /// the backoff delay is shorter than the cumulative dispatch
 /// time of preceding instances in the same tick — defeating
 /// exponential backoff entirely — and (b) synchronise every
@@ -1103,10 +1114,10 @@ fn run_scheduler_loop(handle: RuntimeHandle,
 ///    snapshot). Drop it on closure return.
 /// 2. Acquire scheduler state mutex (read policies + accounting).
 ///    Drop it before Step 2.
-/// 3.  dispatch: NO locks held — `sync_connector`
+/// 3. dispatch: NO locks held — `sync_connector`
 ///    re-acquires the runtime mutex on its own, observing the
 ///    substrate's published three-phase discipline.
-/// 4.  result-record: re-acquire the scheduler state
+/// 4. result-record: re-acquire the scheduler state
 ///    mutex briefly to update accounting. Drop it before exit.
 ///
 /// The FFI surface (`configure_sync_schedule`, `clear_sync_schedule`,
@@ -1124,7 +1135,8 @@ fn run_scheduler_loop(handle: RuntimeHandle,
 /// ordering), but a refactor that pulled a `with_runtime` call
 /// INSIDE a `state.lock()` guard WOULD deadlock against the FFI
 /// path. Maintain this invariant when modifying the function.
-fn run_one_tick(handle: RuntimeHandle,
+fn run_one_tick(
+    handle: RuntimeHandle,
     config: &SchedulerConfig,
     state: &Arc<Mutex<SchedulerState>>,
     counters: &Arc<SchedulerCounters>,
@@ -1139,13 +1151,15 @@ fn run_one_tick(handle: RuntimeHandle,
         // (handle no longer in the registry), this returns
         // `NotFound` and we silently stop dispatching — the
         // close_store pre-drain will join us shortly.
-        let snapshot_result = with_runtime(handle,
+        let snapshot_result = with_runtime(
+            handle,
             |rt| -> FfiResult<Vec<(ConnectorInstanceId, SyncStatus, Option<DateTime<Utc>>)>> {
                 Ok(rt
                     .connector_instances
                     .values()
                     .map(|inst| {
-                        (inst.id,
+                        (
+                            inst.id,
                             inst.sync_state.status,
                             inst.sync_state.last_synced_at,
                         )
@@ -1260,7 +1274,8 @@ fn run_one_tick(handle: RuntimeHandle,
                 metrics::inc_sync_scheduler_dispatch_succeeded();
                 entry.consecutive_failures = 0;
                 let delay = policy.next_attempt_delay(0);
-                entry.next_attempt_at = Some(dispatch_completed_at
+                entry.next_attempt_at = Some(
+                    dispatch_completed_at
                         + chrono::Duration::from_std(delay)
                             .unwrap_or_else(|_| chrono::Duration::seconds(0)),
                 );
@@ -1280,7 +1295,8 @@ fn run_one_tick(handle: RuntimeHandle,
                 metrics::inc_sync_scheduler_dispatch_failed();
                 entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
                 let delay = policy.next_attempt_delay(entry.consecutive_failures);
-                entry.next_attempt_at = Some(dispatch_completed_at
+                entry.next_attempt_at = Some(
+                    dispatch_completed_at
                         + chrono::Duration::from_std(delay)
                             .unwrap_or_else(|_| chrono::Duration::seconds(0)),
                 );
@@ -1337,7 +1353,8 @@ fn maybe_dispatch_auto_synthesis(handle: RuntimeHandle, instance_id: ConnectorIn
     // The actual dispatch runs with the runtime mutex released —
     // `trigger_server_synthesis` re-acquires it inside its own
     // three-phase locking discipline.
-    match crate::synthesis::trigger_server_synthesis(handle,
+    match crate::synthesis::trigger_server_synthesis(
+        handle,
         scope.as_uuid().to_string(),
         crate::types::SynthesisTierKind::Domain,
     ) {
@@ -1369,7 +1386,8 @@ fn parse_instance_id(s: &str) -> FfiResult<ConnectorInstanceId> {
 fn validate_interval(name: &str, v: u64) -> FfiResult<()> {
     if v < MIN_INTERVAL_SECS {
         Err(FfiError::InvalidId {
-            message: format!("{name} must be >= {MIN_INTERVAL_SECS} (a zero interval would dispatch every \
+            message: format!(
+                "{name} must be >= {MIN_INTERVAL_SECS} (a zero interval would dispatch every \
                  tick regardless of upstream pressure)"
             ),
         })
@@ -1381,7 +1399,8 @@ fn validate_interval(name: &str, v: u64) -> FfiResult<()> {
 fn validate_tick(name: &str, v: u64) -> FfiResult<()> {
     if v < MIN_TICK_SECS {
         Err(FfiError::InvalidId {
-            message: format!("{name} must be >= {MIN_TICK_SECS} (a faster tick burns CPU without useful \
+            message: format!(
+                "{name} must be >= {MIN_TICK_SECS} (a faster tick burns CPU without useful \
                  resolution improvement)"
             ),
         })

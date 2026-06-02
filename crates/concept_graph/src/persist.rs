@@ -156,7 +156,8 @@ impl PersistentConceptGraph {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap_or(0);
         if existing_version != 0 && existing_version != SCHEMA_VERSION {
-            return Err(GraphError::Persistence("schema version mismatch — refusing to open",
+            return Err(GraphError::Persistence(
+                "schema version mismatch — refusing to open",
             ));
         }
 
@@ -355,7 +356,8 @@ impl PersistentConceptGraph {
 
         let mut node_rows: Vec<(NodeId, [u8; AEAD_NONCE_LEN], Vec<u8>)> = Vec::new();
         {
-            let mut stmt = self.conn.prepare("SELECT id, nonce, payload FROM concept_nodes WHERE scope_id = ?1
+            let mut stmt = self.conn.prepare(
+                "SELECT id, nonce, payload FROM concept_nodes WHERE scope_id = ?1
                  ORDER BY created_at ASC",
             )?;
             let mut rows = stmt.query(params![scope_bytes])?;
@@ -380,7 +382,8 @@ impl PersistentConceptGraph {
 
         let mut edge_rows: Vec<(EdgeId, [u8; AEAD_NONCE_LEN], Vec<u8>)> = Vec::new();
         {
-            let mut stmt = self.conn.prepare("SELECT id, nonce, payload FROM concept_edges WHERE scope_id = ?1
+            let mut stmt = self.conn.prepare(
+                "SELECT id, nonce, payload FROM concept_edges WHERE scope_id = ?1
                  ORDER BY created_at ASC",
             )?;
             let mut rows = stmt.query(params![scope_bytes])?;
@@ -411,7 +414,8 @@ impl PersistentConceptGraph {
         let scope_bytes = scope.as_uuid().as_bytes().to_vec();
         let n: i64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM concept_nodes WHERE scope_id = ?1",
+            .query_row(
+                "SELECT COUNT(*) FROM concept_nodes WHERE scope_id = ?1",
                 params![scope_bytes],
                 |row| row.get(0),
             )
@@ -438,7 +442,8 @@ impl PersistentConceptGraph {
     /// fail. Callers that need a topologically consistent slice
     /// should follow up with [`Self::query_neighbors_from_disk`] for
     /// out-of-window neighbours.
-    pub fn load_scope_paginated(&mut self,
+    pub fn load_scope_paginated(
+        &mut self,
         scope: ScopeId,
         limit: usize,
         offset: usize,
@@ -451,7 +456,8 @@ impl PersistentConceptGraph {
 
         let mut node_rows: Vec<(NodeId, [u8; AEAD_NONCE_LEN], Vec<u8>)> = Vec::new();
         {
-            let mut stmt = self.conn.prepare("SELECT id, nonce, payload FROM concept_nodes WHERE scope_id = ?1
+            let mut stmt = self.conn.prepare(
+                "SELECT id, nonce, payload FROM concept_nodes WHERE scope_id = ?1
                  ORDER BY created_at ASC, id ASC LIMIT ?2 OFFSET ?3",
             )?;
             let mut rows = stmt.query(params![scope_bytes, limit_i, offset_i])?;
@@ -476,7 +482,8 @@ impl PersistentConceptGraph {
 
         let mut edge_rows: Vec<(EdgeId, [u8; AEAD_NONCE_LEN], Vec<u8>)> = Vec::new();
         {
-            let mut stmt = self.conn.prepare("SELECT id, nonce, payload FROM concept_edges WHERE scope_id = ?1
+            let mut stmt = self.conn.prepare(
+                "SELECT id, nonce, payload FROM concept_edges WHERE scope_id = ?1
                  ORDER BY created_at ASC, id ASC LIMIT ?2 OFFSET ?3",
             )?;
             let mut rows = stmt.query(params![scope_bytes, limit_i, offset_i])?;
@@ -535,7 +542,8 @@ impl PersistentConceptGraph {
     /// distinct ids. The cost is one `HashSet::insert` per row in
     /// a function that already does a prepare + per-row AEAD
     /// decrypt, so the relative overhead is well under a percent.
-    pub fn query_neighbors_from_disk(&mut self,
+    pub fn query_neighbors_from_disk(
+        &mut self,
         scope: ScopeId,
         node: NodeId,
     ) -> Result<Vec<ConceptEdge>> {
@@ -545,7 +553,8 @@ impl PersistentConceptGraph {
 
         let mut rows_buf: Vec<(EdgeId, [u8; AEAD_NONCE_LEN], Vec<u8>)> = Vec::new();
         {
-            let mut stmt = self.conn.prepare("SELECT id, nonce, payload FROM concept_edges
+            let mut stmt = self.conn.prepare(
+                "SELECT id, nonce, payload FROM concept_edges
                  WHERE scope_id = ?1 AND (from_node = ?2 OR to_node = ?2)
                  ORDER BY created_at ASC, id ASC",
             )?;
@@ -580,7 +589,8 @@ impl PersistentConceptGraph {
         let scope_bytes = scope.as_uuid().as_bytes().to_vec();
         let n: i64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM concept_edges WHERE scope_id = ?1",
+            .query_row(
+                "SELECT COUNT(*) FROM concept_edges WHERE scope_id = ?1",
                 params![scope_bytes],
                 |row| row.get(0),
             )
@@ -615,7 +625,8 @@ impl PersistentConceptGraph {
         // new scope, otherwise scope-filtered queries find the row
         // under the old scope and fail to decrypt it.
         self.conn
-            .execute("INSERT INTO concept_nodes
+            .execute(
+                "INSERT INTO concept_nodes
                   (id, scope_id, state, superseded_by, created_at, updated_at, nonce, payload)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(id) DO UPDATE SET
@@ -655,7 +666,8 @@ impl PersistentConceptGraph {
         // `graph_mut()` and re-saves, the indexes have to track the
         // new endpoints or `get_edges` returns stale rows.
         self.conn
-            .execute("INSERT INTO concept_edges
+            .execute(
+                "INSERT INTO concept_edges
                   (id, scope_id, from_node, to_node, relation, created_at, nonce, payload)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(id) DO UPDATE SET

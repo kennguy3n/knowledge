@@ -178,7 +178,8 @@ impl OneDriveConnector {
     /// `transport` carries every REST call; `oauth` drives the
     /// `authorization_code` exchange against
     /// `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token`.
-    pub fn new(instance: ConnectorInstanceId,
+    pub fn new(
+        instance: ConnectorInstanceId,
         transport: Arc<dyn HttpTransport>,
         oauth: Arc<dyn OAuth2CodeExchange>,
     ) -> Self {
@@ -210,7 +211,8 @@ impl OneDriveConnector {
             .auth_config_json
             .get("api_base_url")
             .and_then(serde_json::Value::as_str)
-            .map_or_else(|| self.api_base_url.clone(),
+            .map_or_else(
+                || self.api_base_url.clone(),
                 std::string::ToString::to_string,
             )
     }
@@ -220,7 +222,8 @@ impl OneDriveConnector {
             .auth_config_json
             .get("api_version")
             .and_then(serde_json::Value::as_str)
-            .map_or_else(|| self.api_version.clone(),
+            .map_or_else(
+                || self.api_version.clone(),
                 std::string::ToString::to_string,
             )
     }
@@ -241,7 +244,8 @@ impl OneDriveConnector {
     /// absent, the server returns an empty page with no link, or
     /// [`MAX_DELTA_PAGES`] is hit. Returns the merged page list +
     /// the final `@odata.deltaLink`.
-    fn paginate_delta(&self,
+    fn paginate_delta(
+        &self,
         first_url: &str,
         token: &OAuth2Token,
     ) -> Result<(Vec<DriveItem>, Option<String>)> {
@@ -250,7 +254,8 @@ impl OneDriveConnector {
         let mut prev_url: Option<String> = None;
         let mut delta_link: Option<String> = None;
         for _ in 0..MAX_DELTA_PAGES {
-            let resp: DeltaResponse = bearer_get_json(&self.transport,
+            let resp: DeltaResponse = bearer_get_json(
+                &self.transport,
                 "onedrive",
                 "/drive/root/delta",
                 &url,
@@ -280,7 +285,8 @@ impl OneDriveConnector {
             prev_url = Some(next.clone());
             url = next;
         }
-        Err(ConnectorError::Sync(format!("onedrive /drive/root/delta exceeded {MAX_DELTA_PAGES} pages without exhausting cursor"
+        Err(ConnectorError::Sync(format!(
+            "onedrive /drive/root/delta exceeded {MAX_DELTA_PAGES} pages without exhausting cursor"
         )))
     }
 }
@@ -338,7 +344,8 @@ impl Connector for OneDriveConnector {
             .get("authorization_code")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Auth("onedrive authenticate: auth_config_json.authorization_code is required".into(),
+                ConnectorError::Auth(
+                    "onedrive authenticate: auth_config_json.authorization_code is required".into(),
                 )
             })?;
         self.oauth.exchange_code(config, auth_code)
@@ -360,7 +367,8 @@ impl Connector for OneDriveConnector {
         })
     }
 
-    fn incremental_sync(&self,
+    fn incremental_sync(
+        &self,
         _config: &ConnectorConfig,
         token: &OAuth2Token,
         state: &SyncState,
@@ -371,7 +379,8 @@ impl Connector for OneDriveConnector {
         // incrementally fetch; surface the gap so the substrate
         // reschedules with the seed populated.
         let delta_url = state.cursor.as_deref().ok_or_else(|| {
-            ConnectorError::Sync("onedrive incremental_sync: missing cursor; \
+            ConnectorError::Sync(
+                "onedrive incremental_sync: missing cursor; \
                  initial_sync must populate @odata.deltaLink first"
                     .into(),
             )
@@ -391,7 +400,8 @@ impl Connector for OneDriveConnector {
         })
     }
 
-    fn subscribe_webhook(&self,
+    fn subscribe_webhook(
+        &self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         callback_url: &str,
@@ -414,7 +424,8 @@ impl Connector for OneDriveConnector {
             "expirationDateTime": expires_at.to_rfc3339(),
             "clientState": client_state,
         });
-        let resp: GraphSubscriptionResponse = bearer_post_json(&self.transport,
+        let resp: GraphSubscriptionResponse = bearer_post_json(
+            &self.transport,
             "onedrive",
             "/subscriptions",
             &url,
@@ -422,7 +433,8 @@ impl Connector for OneDriveConnector {
             &[],
             &body,
         )?;
-        let mut subscription = WebhookSubscription::new(self.instance,
+        let mut subscription = WebhookSubscription::new(
+            self.instance,
             callback_url,
             WebhookSecret::new(client_state),
             WebhookEventTypes::all(),
@@ -445,13 +457,15 @@ impl Connector for OneDriveConnector {
         // handler's policy on unknown subscription types.
         let batch: ChangeNotificationCollection = serde_json::from_slice(body)?;
         if batch.value.is_empty() {
-            return Err(ConnectorError::Webhook("empty Graph changeNotification batch".to_string(),
+            return Err(ConnectorError::Webhook(
+                "empty Graph changeNotification batch".to_string(),
             ));
         }
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(batch.value.len());
         for n in batch.value {
             let occurred_at = n.event_time.unwrap_or_else(Utc::now);
-            let document_id = SourceDocumentId::new(n.resource
+            let document_id = SourceDocumentId::new(
+                n.resource
                     .rsplit('/')
                     .next()
                     .unwrap_or(&n.resource)
@@ -495,7 +509,8 @@ mod tests {
     struct FixedOAuth;
     impl OAuth2CodeExchange for FixedOAuth {
         fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
-            Ok(OAuth2Token::new("graph-access",
+            Ok(OAuth2Token::new(
+                "graph-access",
                 "graph-refresh",
                 Utc::now() + Duration::hours(1),
                 "Files.Read.All Sites.Read.All",
@@ -545,7 +560,8 @@ mod tests {
         let transport = MockHttpTransport::new();
         let now = Utc::now();
         let next_link = "https://api.test/graph/v1.0/me/drive/root/delta?$skiptoken=ABC";
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             DELTA_URL,
             ok_json(&serde_json::json!({
                 "value": [{
@@ -556,7 +572,8 @@ mod tests {
                 "@odata.nextLink": next_link,
             })),
         );
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             next_link,
             ok_json(&serde_json::json!({
                 "value": [{
@@ -577,7 +594,8 @@ mod tests {
             .events
             .iter()
             .all(|e| matches!(e, ConnectorEvent::DocumentCreated { .. })));
-        assert_eq!(res.next_cursor.as_deref(),
+        assert_eq!(
+            res.next_cursor.as_deref(),
             Some("https://api.test/graph/v1.0/me/drive/root/delta?token=tok-1")
         );
     }
@@ -585,7 +603,8 @@ mod tests {
     #[test]
     fn initial_sync_emits_deleted_for_deleted_facet() {
         let transport = MockHttpTransport::new();
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             DELTA_URL,
             ok_json(&serde_json::json!({
                 "value": [{
@@ -601,7 +620,8 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert!(matches!(res.events[0],
+        assert!(matches!(
+            res.events[0],
             ConnectorEvent::DocumentDeleted { .. }
         ));
     }
@@ -610,14 +630,16 @@ mod tests {
     fn paginate_delta_loop_guard_stops_on_repeated_link() {
         let transport = MockHttpTransport::new();
         // Same URL echoed as nextLink — pathological.
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             DELTA_URL,
             ok_json(&serde_json::json!({
                 "value": [{"id":"a", "name":"A"}],
                 "@odata.nextLink": "https://api.test/graph/v1.0/me/drive/root/delta?stuck=1",
             })),
         );
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             "https://api.test/graph/v1.0/me/drive/root/delta?stuck=1",
             ok_json(&serde_json::json!({
                 "value": [{"id":"b", "name":"B"}],
@@ -635,7 +657,8 @@ mod tests {
     fn incremental_sync_walks_delta_link_verbatim() {
         let transport = MockHttpTransport::new();
         let cursor = "https://api.test/graph/v1.0/me/drive/root/delta?token=prev";
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             cursor,
             ok_json(&serde_json::json!({
                 "value": [
@@ -664,7 +687,8 @@ mod tests {
             .count();
         assert_eq!(updates, 1);
         assert_eq!(deletes, 1);
-        assert_eq!(res.next_cursor.as_deref(),
+        assert_eq!(
+            res.next_cursor.as_deref(),
             Some("https://api.test/graph/v1.0/me/drive/root/delta?token=next")
         );
     }
@@ -673,7 +697,8 @@ mod tests {
     fn incremental_sync_falls_back_to_existing_cursor_when_no_new_delta_link() {
         let transport = MockHttpTransport::new();
         let cursor = "https://api.test/graph/v1.0/me/drive/root/delta?token=hold";
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             cursor,
             ok_json(&serde_json::json!({"value": []})),
         );
@@ -703,7 +728,8 @@ mod tests {
     #[test]
     fn subscribe_webhook_posts_subscription_and_captures_id() {
         let transport = MockHttpTransport::new();
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/graph/v1.0/subscriptions",
             ok_json(&serde_json::json!({
                 "id": "sub-abc",
@@ -724,7 +750,8 @@ mod tests {
     #[test]
     fn subscribe_webhook_falls_back_to_local_ttl_when_server_omits_expiration() {
         let transport = MockHttpTransport::new();
-        transport.expect(HttpMethod::Post,
+        transport.expect(
+            HttpMethod::Post,
             "https://api.test/graph/v1.0/subscriptions",
             ok_json(&serde_json::json!({"id": "sub-xyz"})),
         );
@@ -740,7 +767,8 @@ mod tests {
     #[test]
     fn unauthorized_status_maps_to_auth_error() {
         let transport = MockHttpTransport::new();
-        transport.with_default_response(MockResponse::status(401,
+        transport.with_default_response(MockResponse::status(
+            401,
             br#"{"error":"unauthorized"}"#.to_vec(),
         ));
         let transport: Arc<dyn HttpTransport> = Arc::new(transport);
@@ -831,7 +859,8 @@ mod tests {
         let transport = MockHttpTransport::new();
         let created = Utc::now() - Duration::days(7);
         let modified = Utc::now();
-        transport.expect(HttpMethod::Get,
+        transport.expect(
+            HttpMethod::Get,
             DELTA_URL,
             ok_json(&serde_json::json!({
                 "value": [
@@ -857,7 +886,8 @@ mod tests {
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 2);
         for ev in &res.events {
-            assert!(matches!(ev, ConnectorEvent::DocumentCreated { .. }),
+            assert!(
+                matches!(ev, ConnectorEvent::DocumentCreated { .. }),
                 "initial_sync must emit DocumentCreated for every non-deleted item, got {ev:?}"
             );
         }

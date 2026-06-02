@@ -65,7 +65,8 @@ fn test_master_key() -> crypto::MasterKey {
     for (i, slot) in k.iter_mut().enumerate() {
         // `i` is bounded by MASTER_KEY_LEN = 32 < 256, so masking
         // to a byte never truncates the meaningful bits.
-        #[allow(clippy::cast_possible_truncation,
+        #[allow(
+            clippy::cast_possible_truncation,
             reason = "deterministic test key seed; i < MASTER_KEY_LEN < 256"
         )]
         let byte = (i & 0xff) as u8;
@@ -88,11 +89,13 @@ fn test_master_key() -> crypto::MasterKey {
 /// uses its own dedicated payload below.
 fn multilingual_payloads() -> Vec<(&'static str, String)> {
     vec![
-        ("ascii",
+        (
+            "ascii",
             "the quick brown fox jumps over the lazy dog".to_string(),
         ),
         // Japanese: hiragana + katakana + CJK ideographs.
-        ("ja",
+        (
+            "ja",
             "東京の電車は時間通りに到着します。カタカナとひらがなを混ぜた文章。".to_string(),
         ),
         // Arabic: RTL, includes combining diacritics (fatha,
@@ -125,13 +128,15 @@ fn add_merge_round_trip_preserves_multilingual_bytes() {
     let (state, _supers) = receiver.state().unwrap();
     let observed: HashSet<&String> = state.elements().collect();
     for (label, body) in &payloads {
-        assert!(observed.contains(&body),
+        assert!(
+            observed.contains(&body),
             "receiver did not observe `{label}` payload after merge",
         );
     }
     // Defensive: every payload is byte-distinct so the receiver
     // must surface exactly five elements (no accidental folding).
-    assert_eq!(observed.len(),
+    assert_eq!(
+        observed.len(),
         payloads.len(),
         "receiver's element count diverged from sender's: {observed:?}",
     );
@@ -156,7 +161,8 @@ fn delta_encode_decode_preserves_multilingual_bytes() {
 
     let (state, _supers) = receiver.state().unwrap();
     for (label, body) in &payloads {
-        assert!(state.contains(body),
+        assert!(
+            state.contains(body),
             "receiver missing `{label}` payload after delta apply",
         );
     }
@@ -177,7 +183,8 @@ fn snapshot_restore_preserves_multilingual_bytes() {
     let restored: SyncEngine<String> = SyncEngine::restore_snapshot(&snap).unwrap();
     let (state, _supers) = restored.state().unwrap();
     for (label, body) in &payloads {
-        assert!(state.contains(body),
+        assert!(
+            state.contains(body),
             "restored engine missing `{label}` payload",
         );
     }
@@ -214,7 +221,8 @@ fn sqlcipher_persist_reload_preserves_multilingual_bytes() {
     let p2 = PersistentSyncEngine::<String>::open(&path, scope, replica, &mk).unwrap();
     let (state, _supers) = p2.engine().state().unwrap();
     for (label, body) in &payloads {
-        assert!(state.contains(body),
+        assert!(
+            state.contains(body),
             "persisted DB missing `{label}` payload after reload",
         );
     }
@@ -261,11 +269,13 @@ fn two_replica_merge_with_multilingual_payloads_is_commutative() {
 
     // Convergence: both replicas land on the same set of
     // byte-exact UTF-8 elements regardless of merge order.
-    assert_eq!(a_set, b_set,
+    assert_eq!(
+        a_set, b_set,
         "two-replica merge did not converge for multilingual payloads",
     );
     for (label, body) in &payloads {
-        assert!(a_set.contains(&body),
+        assert!(
+            a_set.contains(&body),
             "merged state missing `{label}` payload",
         );
     }
@@ -303,17 +313,20 @@ fn nfc_and_nfd_inputs_are_distinct_crdt_identities() {
     merged.merge(&replica_b);
 
     let (state, _supers) = merged.state().unwrap();
-    assert!(state.contains(&nfc),
+    assert!(
+        state.contains(&nfc),
         "NFC element must remain present after merge",
     );
-    assert!(state.contains(&nfd),
+    assert!(
+        state.contains(&nfd),
         "NFD element must remain present after merge",
     );
 
     // Two byte-distinct elements, not one — pinning the contract
     // so a future "smart" normaliser cannot quietly fold these.
     let live: HashSet<&String> = state.elements().collect();
-    assert_eq!(live.len(),
+    assert_eq!(
+        live.len(),
         2,
         "NFC and NFD must be distinct CRDT identities; got {live:?}",
     );
@@ -351,7 +364,8 @@ fn bidi_control_marks_are_preserved_through_merge() {
 
     let (state, _supers) = merged.state().unwrap();
     let live: HashSet<&String> = state.elements().collect();
-    assert_eq!(live.len(),
+    assert_eq!(
+        live.len(),
         3,
         "three byte-distinct strings must remain distinct after merge; got {live:?}",
     );
@@ -385,7 +399,8 @@ fn compatibility_decomposition_pairs_are_distinct_crdt_identities() {
 
     let (state, _supers) = merged.state().unwrap();
     let live: HashSet<&String> = state.elements().collect();
-    assert_eq!(live.len(),
+    assert_eq!(
+        live.len(),
         2,
         "full-width and ASCII `A` must be distinct CRDT identities; got {live:?}",
     );
@@ -431,7 +446,8 @@ fn multilingual_delta_round_trip_through_sqlcipher_is_byte_clean() {
 
     let (state, _supers) = receiver.state().unwrap();
     for (label, body) in &payloads {
-        assert!(state.contains(body),
+        assert!(
+            state.contains(body),
             "receiver missing `{label}` payload after persist-then-delta round-trip",
         );
     }
