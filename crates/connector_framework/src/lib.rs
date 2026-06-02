@@ -78,6 +78,7 @@ pub use error::{ConnectorError, Result};
 pub use event::{ConnectorEvent, SourceDocumentId, SourceUserId};
 #[cfg(feature = "http-client")]
 pub use http::{BlockingHttpTransport, DEFAULT_HTTP_TIMEOUT_SECS};
+// STABLE
 pub use http::{
     HttpMethod, HttpRequest, HttpResponse, HttpTransport, RetryPolicy, DEFAULT_MAX_RETRY_AFTER,
 };
@@ -91,12 +92,14 @@ pub use http_helpers::{
 };
 #[cfg(feature = "http-client")]
 pub use oauth::default_oauth_client;
+// STABLE
 pub use oauth::{
     ClientSecretResolver, ConfiguredRefresher, OAuth2Client, DEFAULT_OAUTH_TIMEOUT_SECS,
 };
 // Deprecated transport-suggestive alias, retained for one minor
 // cycle so external consumers can migrate without an API break.
 // New code should reach for `OAuth2Client` directly.
+// STABLE (deprecated alias — will be removed in a future minor release).
 #[allow(deprecated)]
 pub use oauth::ReqwestOAuth2Client;
 // UNSTABLE — internal rate-limiter; API may change.

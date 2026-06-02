@@ -17,7 +17,7 @@ highest-priority available adapter.
 | `InferenceRouter` | Central dispatcher. |
 | `InferenceAdapter` | Trait for pluggable backends. |
 | `InferenceTask` | Task enum (`SynthSummary`, etc.). |
-| `LlamaCppAdapter` / `MlxAdapter` / `FallbackAdapter` | Built-in adapters. |
+| `LlamaCppAdapter` / `MlxAdapter` / `FallbackAdapter` | Built-in adapters *(unstable, `#[doc(hidden)]` — prefer `InferenceRouter`)*. |
 | `RouterConfig` / `DeviceTier` | Configuration. |
 | `SummaryBundle` | Structured output from synthesis tasks. |
 
