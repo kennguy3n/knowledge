@@ -59,8 +59,7 @@ impl StorageConfig {
     pub fn validate(&self) -> Result<()> {
         if let (Some(soft), Some(hard)) = (self.soft_cap_bytes, self.hard_cap_bytes) {
             if soft > hard {
-                return Err(TenantError::InvalidConfig(
-                    "soft_cap_bytes must be <= hard_cap_bytes".into(),
+                return Err(TenantError::InvalidConfig("soft_cap_bytes must be <= hard_cap_bytes".into(),
                 ));
             }
         }
@@ -99,8 +98,7 @@ impl SynthesisConfig {
     /// Validate the config. Rejects sub-minute windows.
     pub fn validate(&self) -> Result<()> {
         if self.tenant_window_secs < 60 || self.domain_window_secs < 60 {
-            return Err(TenantError::InvalidConfig(
-                "synthesis windows must be at least 60 seconds".into(),
+            return Err(TenantError::InvalidConfig("synthesis windows must be at least 60 seconds".into(),
             ));
         }
         Ok(())

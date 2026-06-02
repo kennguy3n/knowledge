@@ -61,8 +61,7 @@ fn bench_ingest_inline(c: &mut Criterion) {
         // table — keeps the measurement free of monotonic FTS-bloat.
         b.iter_with_setup(fresh_store, |(_dir, mut store)| {
             let res = store
-                .ingest(
-                    black_box(scope),
+                .ingest(black_box(scope),
                     black_box(&body),
                     Some("bench:inline"),
                     ImportanceClass::Important,
@@ -84,8 +83,7 @@ fn bench_ingest_body_table(c: &mut Criterion) {
     group.bench_function("10KB_Important", |b| {
         b.iter_with_setup(fresh_store, |(_dir, mut store)| {
             let res = store
-                .ingest(
-                    black_box(scope),
+                .ingest(black_box(scope),
                     black_box(&body),
                     Some("bench:body-table"),
                     ImportanceClass::Important,
@@ -125,8 +123,7 @@ fn bench_search_fts(c: &mut Criterion) {
         // both selective and selective-but-multi-hit FTS queries.
         let body = format!("alpha bravo charlie unique-token-{i} migration deadline channel-recap");
         store
-            .ingest(
-                scope,
+            .ingest(scope,
                 body.as_bytes(),
                 Some("bench:fts"),
                 ImportanceClass::Important,
@@ -170,8 +167,7 @@ fn bench_ring_buffer_insert(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    store_benches,
+criterion_group!(store_benches,
     bench_ingest_inline,
     bench_ingest_body_table,
     bench_read_body,

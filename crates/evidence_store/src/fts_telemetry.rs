@@ -1,9 +1,9 @@
 //! Process-singleton observability counters for the multilingual
-//! FTS5 path (Phase 1.10).
+//! FTS5 path.
 //!
 //! Phases 1.2 – 1.9 split the lexical retrieval pipeline into
 //! three FTS5 lanes (`evidence_fts` unicode61, `evidence_fts_cjk`
-//! trigram, `evidence_fts_bigram` bigram) with Phase 1.9
+//! trigram, `evidence_fts_bigram` bigram) with 
 //! per-script stopword stripping wrapped around the two recall
 //! lanes — but no metrics were ever exposed for which lane
 //! produced rows, how often the trigram / bigram lane short-
@@ -182,12 +182,10 @@ pub enum Lane {
 pub fn record_lane_query(lane: Lane, rows: u64) {
     let c = counters();
     let (q, r) = match lane {
-        Lane::Unicode61 => (
-            &c.unicode61_lane_queries_total,
+        Lane::Unicode61 => (&c.unicode61_lane_queries_total,
             &c.unicode61_lane_rows_total,
         ),
-        Lane::CjkTrigram => (
-            &c.cjk_trigram_lane_queries_total,
+        Lane::CjkTrigram => (&c.cjk_trigram_lane_queries_total,
             &c.cjk_trigram_lane_rows_total,
         ),
         Lane::Bigram => (&c.bigram_lane_queries_total, &c.bigram_lane_rows_total),
@@ -396,12 +394,10 @@ mod tests {
         let before = snapshot();
         record_lane_query(Lane::Unicode61, 5);
         let after = snapshot();
-        assert_eq!(
-            after.unicode61_lane_queries_total,
+        assert_eq!(after.unicode61_lane_queries_total,
             before.unicode61_lane_queries_total + 1
         );
-        assert_eq!(
-            after.unicode61_lane_rows_total,
+        assert_eq!(after.unicode61_lane_rows_total,
             before.unicode61_lane_rows_total + 5
         );
     }
@@ -414,12 +410,10 @@ mod tests {
         let before = snapshot();
         record_lane_query(Lane::CjkTrigram, 0);
         let after = snapshot();
-        assert_eq!(
-            after.cjk_trigram_lane_queries_total,
+        assert_eq!(after.cjk_trigram_lane_queries_total,
             before.cjk_trigram_lane_queries_total + 1
         );
-        assert_eq!(
-            after.cjk_trigram_lane_rows_total, before.cjk_trigram_lane_rows_total,
+        assert_eq!(after.cjk_trigram_lane_rows_total, before.cjk_trigram_lane_rows_total,
             "zero-rows query must NOT bump _rows_total"
         );
     }
@@ -431,20 +425,16 @@ mod tests {
         let before = snapshot();
         record_lane_query(Lane::Bigram, 3);
         let after = snapshot();
-        assert_eq!(
-            after.bigram_lane_queries_total,
+        assert_eq!(after.bigram_lane_queries_total,
             before.bigram_lane_queries_total + 1
         );
-        assert_eq!(
-            after.bigram_lane_rows_total,
+        assert_eq!(after.bigram_lane_rows_total,
             before.bigram_lane_rows_total + 3
         );
-        assert_eq!(
-            after.unicode61_lane_queries_total, before.unicode61_lane_queries_total,
+        assert_eq!(after.unicode61_lane_queries_total, before.unicode61_lane_queries_total,
             "Bigram query must NOT bump Unicode61 counters"
         );
-        assert_eq!(
-            after.cjk_trigram_lane_queries_total, before.cjk_trigram_lane_queries_total,
+        assert_eq!(after.cjk_trigram_lane_queries_total, before.cjk_trigram_lane_queries_total,
             "Bigram query must NOT bump CjkTrigram counters"
         );
     }
@@ -460,16 +450,13 @@ mod tests {
         record_lane_skip(SkipReason::BigramPureStopwordQuery);
         record_lane_skip(SkipReason::BigramNoCjkQuery);
         let after = snapshot();
-        assert_eq!(
-            after.cjk_trigram_lane_skips_pure_stopword_query_total,
+        assert_eq!(after.cjk_trigram_lane_skips_pure_stopword_query_total,
             before.cjk_trigram_lane_skips_pure_stopword_query_total + 1
         );
-        assert_eq!(
-            after.bigram_lane_skips_pure_stopword_query_total,
+        assert_eq!(after.bigram_lane_skips_pure_stopword_query_total,
             before.bigram_lane_skips_pure_stopword_query_total + 1
         );
-        assert_eq!(
-            after.bigram_lane_skips_no_cjk_query_total,
+        assert_eq!(after.bigram_lane_skips_no_cjk_query_total,
             before.bigram_lane_skips_no_cjk_query_total + 1
         );
     }
@@ -483,16 +470,13 @@ mod tests {
         record_stopwords_stripped(StripSite::QueryTime, 2);
         record_stopwords_stripped(StripSite::V16Migration, 100);
         let after = snapshot();
-        assert_eq!(
-            after.index_write_stopwords_stripped_total,
+        assert_eq!(after.index_write_stopwords_stripped_total,
             before.index_write_stopwords_stripped_total + 7
         );
-        assert_eq!(
-            after.query_time_stopwords_stripped_total,
+        assert_eq!(after.query_time_stopwords_stripped_total,
             before.query_time_stopwords_stripped_total + 2
         );
-        assert_eq!(
-            after.v16_migration_stopwords_stripped_total,
+        assert_eq!(after.v16_migration_stopwords_stripped_total,
             before.v16_migration_stopwords_stripped_total + 100
         );
     }

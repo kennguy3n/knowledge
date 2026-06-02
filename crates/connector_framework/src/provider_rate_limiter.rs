@@ -95,8 +95,7 @@ pub struct ProviderPolicy {
 impl ProviderPolicy {
     /// Construct a policy from `(refill_per_sec, max_tokens)`.
     pub fn new(refill_rate_per_sec: f64, max_tokens: f64) -> Self {
-        assert!(
-            refill_rate_per_sec > 0.0,
+        assert!(refill_rate_per_sec > 0.0,
             "refill_rate_per_sec must be strictly positive"
         );
         assert!(max_tokens > 0.0, "max_tokens must be strictly positive");
@@ -377,16 +376,13 @@ mod tests {
 
     #[test]
     fn provider_key_lowercases_and_strips_port() {
-        assert_eq!(
-            provider_key_for_url("https://API.notion.com/v1/databases/xyz"),
+        assert_eq!(provider_key_for_url("https://API.notion.com/v1/databases/xyz"),
             "api.notion.com"
         );
-        assert_eq!(
-            provider_key_for_url("https://graph.microsoft.com:443/v1.0/me"),
+        assert_eq!(provider_key_for_url("https://graph.microsoft.com:443/v1.0/me"),
             "graph.microsoft.com"
         );
-        assert_eq!(
-            provider_key_for_url("http://user:pass@example.com:8080/path"),
+        assert_eq!(provider_key_for_url("http://user:pass@example.com:8080/path"),
             "example.com"
         );
         assert_eq!(provider_key_for_url("/relative/path"), "<unparsed-url>");
@@ -395,8 +391,7 @@ mod tests {
     #[test]
     fn provider_key_handles_ipv6_authority() {
         assert_eq!(provider_key_for_url("https://[::1]:8443/healthz"), "[::1]");
-        assert_eq!(
-            provider_key_for_url("https://[2001:db8::1]/"),
+        assert_eq!(provider_key_for_url("https://[2001:db8::1]/"),
             "[2001:db8::1]"
         );
     }
@@ -407,24 +402,21 @@ mod tests {
         let start = Instant::now();
         limiter.acquire("api.notion.com");
         let elapsed = start.elapsed();
-        assert!(
-            elapsed < Duration::from_millis(50),
+        assert!(elapsed < Duration::from_millis(50),
             "first acquire should be near-instant; took {elapsed:?}"
         );
         // We deducted one token from a default-50-token bucket.
         let tokens = limiter
             .tokens_for_host("api.notion.com")
             .expect("bucket exists after acquire");
-        assert!(
-            tokens > 48.0 && tokens < 50.0,
+        assert!(tokens > 48.0 && tokens < 50.0,
             "expected ~49 tokens left, got {tokens}"
         );
     }
 
     #[test]
     fn try_acquire_returns_wait_when_bucket_empty() {
-        let limiter = ProviderRateLimiter::with_default_policy(
-            // 1 token/sec, max 2 tokens — small numbers so the
+        let limiter = ProviderRateLimiter::with_default_policy(// 1 token/sec, max 2 tokens — small numbers so the
             // test exhausts the bucket in two acquires.
             ProviderPolicy::new(1.0, 2.0),
         );
@@ -435,12 +427,10 @@ mod tests {
             .try_acquire("api.example.com")
             .expect_err("third token must wait");
         // At 1 token/sec, the wait should be ~1 second.
-        assert!(
-            wait >= Duration::from_millis(500),
+        assert!(wait >= Duration::from_millis(500),
             "expected ≥ 500 ms wait, got {wait:?}"
         );
-        assert!(
-            wait <= Duration::from_secs(2),
+        assert!(wait <= Duration::from_secs(2),
             "expected ≤ 2 s wait, got {wait:?}"
         );
     }
@@ -455,12 +445,10 @@ mod tests {
         let start = Instant::now();
         limiter.acquire("api.example.com");
         let elapsed = start.elapsed();
-        assert!(
-            elapsed >= Duration::from_millis(5),
+        assert!(elapsed >= Duration::from_millis(5),
             "second acquire must wait at least a few ms; took {elapsed:?}"
         );
-        assert!(
-            elapsed <= Duration::from_millis(200),
+        assert!(elapsed <= Duration::from_millis(200),
             "second acquire shouldn't take that long; took {elapsed:?}"
         );
     }
@@ -473,8 +461,7 @@ mod tests {
         let start = Instant::now();
         limiter.acquire("slack.com");
         let elapsed = start.elapsed();
-        assert!(
-            elapsed < Duration::from_millis(50),
+        assert!(elapsed < Duration::from_millis(50),
             "fresh host must not be throttled by sibling host"
         );
     }
@@ -488,16 +475,14 @@ mod tests {
         let wait = limiter
             .try_acquire("slack.com")
             .expect_err("override caps Slack at 2 tokens");
-        assert!(
-            wait >= Duration::from_millis(250),
+        assert!(wait >= Duration::from_millis(250),
             "expected ≥ 250 ms wait under the 2 req/s override; got {wait:?}"
         );
     }
 
     #[test]
     fn concurrent_acquires_on_same_host_serialise() {
-        let limiter = Arc::new(ProviderRateLimiter::with_default_policy(
-            ProviderPolicy::new(20.0, 4.0),
+        let limiter = Arc::new(ProviderRateLimiter::with_default_policy(ProviderPolicy::new(20.0, 4.0),
         ));
         let mut handles = Vec::new();
         for _ in 0..8 {
@@ -517,8 +502,7 @@ mod tests {
         // 200 ms aggregate. The total of `elapsed_total` is the
         // *sum* of per-thread durations; with serialised sleeps
         // it should be at least ~200 ms aggregate.
-        assert!(
-            elapsed_total >= Duration::from_millis(100),
+        assert!(elapsed_total >= Duration::from_millis(100),
             "expected aggregate wait ≥ 100 ms; got {elapsed_total:?}"
         );
     }
@@ -534,8 +518,7 @@ mod tests {
         // `acquire()` retry loop would spin.
         let mut bucket = TokenBucket::from_policy(ProviderPolicy::new(50.0, 1.0), Instant::now());
         bucket.tokens = 1.0 - f64::EPSILON;
-        assert!(
-            bucket.tokens < 1.0,
+        assert!(bucket.tokens < 1.0,
             "guard precondition: token balance must be strictly below 1.0 \
              to exercise the epsilon admission path; got {}",
             bucket.tokens
@@ -543,8 +526,7 @@ mod tests {
         bucket
             .try_consume()
             .expect("epsilon-tolerant admission must accept an effectively-full bucket");
-        assert!(
-            bucket.tokens >= 0.0,
+        assert!(bucket.tokens >= 0.0,
             "post-deduction balance must never drift negative; got {}",
             bucket.tokens
         );
@@ -564,8 +546,7 @@ mod tests {
         // `(1.0 - 0.5) / 50.0 = 10 ms` — already above the
         // 1 ms floor — so the assertion below also rejects an
         // accidental regression of the deficit math itself.
-        assert!(
-            wait >= Duration::from_millis(1),
+        assert!(wait >= Duration::from_millis(1),
             "denied requests must surface at least the MIN_WAIT_SECS floor; got {wait:?}"
         );
     }

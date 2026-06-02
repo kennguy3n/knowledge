@@ -36,8 +36,7 @@ pub type AeadCiphertext = Vec<u8>;
 /// appended. The caller is responsible for storing the nonce and AAD
 /// alongside the ciphertext (typically the evidence row id, scope id,
 /// and content hash).
-pub fn encrypt_aead(
-    key: &AeadKey,
+pub fn encrypt_aead(key: &AeadKey,
     nonce: &AeadNonce,
     plaintext: &[u8],
     aad: &[u8],
@@ -57,8 +56,7 @@ pub fn encrypt_aead(
 ///
 /// Returns [`CryptoError::AeadDecryption`] if the key is wrong, the
 /// nonce is wrong, the AAD is wrong, or the ciphertext was tampered with.
-pub fn decrypt_aead(
-    key: &AeadKey,
+pub fn decrypt_aead(key: &AeadKey,
     nonce: &AeadNonce,
     ciphertext: &[u8],
     aad: &[u8],

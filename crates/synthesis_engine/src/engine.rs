@@ -56,8 +56,7 @@ pub trait SynthesisEngine: Send + Sync {
     ///   window).
     /// * [`crate::error::EngineError::Hierarchy`] if `input` does not
     ///   target the same scope as `handle`.
-    fn synthesize_domain(
-        &self,
+    fn synthesize_domain(&self,
         windows: &mut SynthesisWindowManager,
         handle: TieredWindowHandle,
         input: DomainSynthesisInput,
@@ -65,8 +64,7 @@ pub trait SynthesisEngine: Send + Sync {
 
     /// Synthesise a [`synthesis_pipeline::SynthesisObjectType::TenantSummary`]
     /// for `handle` from `input`.
-    fn synthesize_tenant(
-        &self,
+    fn synthesize_tenant(&self,
         windows: &mut SynthesisWindowManager,
         handle: TieredWindowHandle,
         input: TenantSynthesisInput,

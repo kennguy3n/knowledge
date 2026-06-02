@@ -18,7 +18,7 @@
 //! 3. A round-trippable [`NapiError`] mapped from [`ffi::FfiError`]
 //!    so the Electron host gets a stable JSON envelope.
 //!
-//! Phase 4 — the [`#[napi]`] proc-macros are live. The cdylib that
+//!  — the [`#[napi]`] proc-macros are live. The cdylib that
 //! `napi build` produces is loaded by Node via `require('./*.node')`.
 //! The [`bindings`] module is the JS-facing surface; the freestanding
 //! `pub fn`s in this file remain the canonical Rust-facing API so
@@ -127,8 +127,7 @@ pub fn close_store(handle: NapiHandle) -> NapiResult<()> {
 /// Returns [`NapiError`] if the request body is malformed or the
 /// underlying FFI surface returns an error.
 pub fn ingest_message(handle: NapiHandle, req: IngestRequest) -> NapiResult<serde_json::Value> {
-    ffi::ingest_message(
-        RuntimeHandle(handle),
+    ffi::ingest_message(RuntimeHandle(handle),
         req.scope_id,
         req.body,
         req.source,
@@ -144,8 +143,7 @@ pub fn ingest_message(handle: NapiHandle, req: IngestRequest) -> NapiResult<serd
 ///
 /// Forwards [`ffi::query`] errors as [`NapiError`].
 pub fn query(handle: NapiHandle, req: QueryRequest) -> NapiResult<Vec<QueryResult>> {
-    ffi::query(
-        RuntimeHandle(handle),
+    ffi::query(RuntimeHandle(handle),
         req.scope_id,
         req.query_text,
         req.limit,
@@ -167,8 +165,7 @@ pub fn get_evidence(handle: NapiHandle, evidence_id: String) -> NapiResult<Evide
 /// # Errors
 ///
 /// Forwards [`ffi::get_user_memory`] errors as [`NapiError`].
-pub fn get_user_memory(
-    handle: NapiHandle,
+pub fn get_user_memory(handle: NapiHandle,
     scope_id: ScopeIdString,
 ) -> NapiResult<Vec<MemoryRecord>> {
     ffi::get_user_memory(RuntimeHandle(handle), scope_id).map_err(NapiError::from)
@@ -223,8 +220,7 @@ pub fn escape_fts_query(input: String) -> String {
 /// # Errors
 ///
 /// Forwards [`ffi::list_memories`] errors as [`NapiError`].
-pub fn list_memories(
-    handle: NapiHandle,
+pub fn list_memories(handle: NapiHandle,
     scope_id: ScopeIdString,
     filter: MemoryFilter,
 ) -> NapiResult<Vec<MemoryRecord>> {
@@ -236,8 +232,7 @@ pub fn list_memories(
 /// # Errors
 ///
 /// Forwards [`ffi::get_channel_memory`] errors as [`NapiError`].
-pub fn get_channel_memory(
-    handle: NapiHandle,
+pub fn get_channel_memory(handle: NapiHandle,
     scope_id: ScopeIdString,
 ) -> NapiResult<Option<MemoryRecord>> {
     ffi::get_channel_memory(RuntimeHandle(handle), scope_id).map_err(NapiError::from)
@@ -263,8 +258,7 @@ pub fn run_decay_sweep(handle: NapiHandle, scope_id: ScopeIdString) -> NapiResul
 /// # Errors
 ///
 /// Forwards [`ffi::trigger_synthesis`] errors as [`NapiError`].
-pub fn trigger_synthesis(
-    handle: NapiHandle,
+pub fn trigger_synthesis(handle: NapiHandle,
     scope_id: ScopeIdString,
     trigger: SynthesisTrigger,
 ) -> NapiResult<String> {
@@ -288,8 +282,7 @@ pub fn generate_keypair() -> NapiResult<FfiKeypair> {
 ///
 /// Forwards [`ffi::encrypt`] errors as [`NapiError`].
 #[allow(clippy::needless_pass_by_value)] // FFI: napi-derive hands owned strings across the JS boundary on every call; borrowing here would force an extra copy in generated code.
-pub fn encrypt(
-    handle: NapiHandle,
+pub fn encrypt(handle: NapiHandle,
     scope_id: ScopeIdString,
     plaintext_b64: String,
 ) -> NapiResult<String> {
@@ -305,8 +298,7 @@ pub fn encrypt(
 ///
 /// Forwards [`ffi::decrypt`] errors as [`NapiError`].
 #[allow(clippy::needless_pass_by_value)] // FFI: napi-derive hands owned strings across the JS boundary on every call; borrowing here would force an extra copy in generated code.
-pub fn decrypt(
-    handle: NapiHandle,
+pub fn decrypt(handle: NapiHandle,
     scope_id: ScopeIdString,
     ciphertext_b64: String,
 ) -> NapiResult<String> {
@@ -328,7 +320,7 @@ pub fn core_version() -> String {
 }
 
 /// Full health envelope sourced from the substrate's metrics +
-/// tracing layer (Phase 6).
+/// tracing layer.
 ///
 /// `handle` is optional:
 /// * `None` (or [`RuntimeHandle::NONE`]) returns a bridge-only
@@ -417,8 +409,7 @@ pub fn health_check(handle: Option<NapiHandle>) -> NapiResult<ffi::HealthStatus>
 /// # Errors
 ///
 /// Forwards [`ffi::create_connector`] errors as [`NapiError`].
-pub fn create_connector(
-    handle: NapiHandle,
+pub fn create_connector(handle: NapiHandle,
     kind: ConnectorKindTag,
     scope_id: ScopeIdString,
     config_json: String,
@@ -434,8 +425,7 @@ pub fn create_connector(
 /// # Errors
 ///
 /// Forwards [`ffi::authenticate_connector`] errors as [`NapiError`].
-pub fn authenticate_connector(
-    handle: NapiHandle,
+pub fn authenticate_connector(handle: NapiHandle,
     instance_id: String,
     auth_code: String,
 ) -> NapiResult<()> {
@@ -480,8 +470,7 @@ pub fn list_connectors(handle: NapiHandle) -> NapiResult<Vec<ConnectorStatus>> {
 /// * [`ffi::FfiError::NotFound`] with `kind = "connector_instance"`
 ///   if no row matches `instance_id`, or `kind = "scope"` if the
 ///   instance's bound scope has been tombstoned.
-pub fn connector_status(
-    handle: NapiHandle,
+pub fn connector_status(handle: NapiHandle,
     instance_id: String,
 ) -> NapiResult<ffi::ConnectorHealthRecord> {
     ffi::connector_status(RuntimeHandle(handle), instance_id).map_err(NapiError::from)
@@ -509,8 +498,7 @@ pub fn remove_connector(handle: NapiHandle, instance_id: String) -> NapiResult<(
 /// carrying the framework's `TokenRefresh` diagnostic as
 /// "re-authorisation required" and prompt the user through
 /// [`authenticate_connector`] rather than retrying the refresh.
-pub fn refresh_connector_token(
-    handle: NapiHandle,
+pub fn refresh_connector_token(handle: NapiHandle,
     instance_id: String,
 ) -> NapiResult<RefreshReport> {
     ffi::refresh_connector_token(RuntimeHandle(handle), instance_id).map_err(NapiError::from)
@@ -529,8 +517,7 @@ pub fn refresh_connector_token(
 ///
 /// Forwards [`ffi::set_oauth_client_secret_resolver`] errors as
 /// [`NapiError`].
-pub fn set_oauth_client_secret_resolver(
-    handle: NapiHandle,
+pub fn set_oauth_client_secret_resolver(handle: NapiHandle,
     resolver: std::sync::Arc<dyn ffi::OAuthClientSecretResolver>,
 ) -> NapiResult<()> {
     ffi::set_oauth_client_secret_resolver(RuntimeHandle(handle), resolver).map_err(NapiError::from)
@@ -571,8 +558,7 @@ pub fn clear_oauth_client_secret_resolver(handle: NapiHandle) -> NapiResult<()> 
 ///
 /// Forwards [`ffi::set_key_storage_resolver`] errors as
 /// [`NapiError`].
-pub fn set_key_storage_resolver(
-    handle: NapiHandle,
+pub fn set_key_storage_resolver(handle: NapiHandle,
     resolver: std::sync::Arc<dyn ffi::KeyStorageResolver>,
 ) -> NapiResult<()> {
     ffi::set_key_storage_resolver(RuntimeHandle(handle), resolver).map_err(NapiError::from)
@@ -612,8 +598,7 @@ pub fn clear_key_storage_resolver(handle: NapiHandle) -> NapiResult<()> {
 /// [`NapiError`]. See that function's doc comment for the
 /// resolver contract (unknown-id re-tagging, invalid-hex
 /// rejection, verbatim propagation of non-`NotFound` errors).
-pub fn open_store_with_resolver(
-    path: String,
+pub fn open_store_with_resolver(path: String,
     key_id: String,
     resolver: std::sync::Arc<dyn ffi::KeyStorageResolver>,
 ) -> NapiResult<NapiHandle> {
@@ -622,7 +607,7 @@ pub fn open_store_with_resolver(
         .map_err(NapiError::from)
 }
 
-// ───────────────────────── Webhook receiver (Phase 5) ─────────────
+// ───────────────────────── Webhook receiver ─────────────
 
 /// Start a webhook receiver server bound to `bind_addr` (parsed as
 /// a `SocketAddr`). Mirrors [`ffi::start_webhook_server`].
@@ -634,8 +619,7 @@ pub fn open_store_with_resolver(
 /// # Errors
 ///
 /// Forwards [`ffi::start_webhook_server`] errors as [`NapiError`].
-pub fn start_webhook_server(
-    handle: NapiHandle,
+pub fn start_webhook_server(handle: NapiHandle,
     bind_addr: String,
 ) -> NapiResult<ffi::WebhookServerHandle> {
     ffi::start_webhook_server(RuntimeHandle(handle), bind_addr).map_err(NapiError::from)
@@ -647,8 +631,7 @@ pub fn start_webhook_server(
 /// # Errors
 ///
 /// Forwards [`ffi::stop_webhook_server`] errors as [`NapiError`].
-pub fn stop_webhook_server(
-    handle: NapiHandle,
+pub fn stop_webhook_server(handle: NapiHandle,
     server_handle: ffi::WebhookServerHandle,
 ) -> NapiResult<()> {
     ffi::stop_webhook_server(RuntimeHandle(handle), server_handle).map_err(NapiError::from)
@@ -660,14 +643,12 @@ pub fn stop_webhook_server(
 /// # Errors
 ///
 /// Forwards [`ffi::register_webhook_dispatch`] errors as [`NapiError`].
-pub fn register_webhook_dispatch(
-    handle: NapiHandle,
+pub fn register_webhook_dispatch(handle: NapiHandle,
     server_handle: ffi::WebhookServerHandle,
     provider_id: String,
     instance_id: String,
 ) -> NapiResult<()> {
-    ffi::register_webhook_dispatch(
-        RuntimeHandle(handle),
+    ffi::register_webhook_dispatch(RuntimeHandle(handle),
         server_handle,
         provider_id,
         instance_id,
@@ -681,8 +662,7 @@ pub fn register_webhook_dispatch(
 /// # Errors
 ///
 /// Forwards [`ffi::unregister_webhook_dispatch`] errors as [`NapiError`].
-pub fn unregister_webhook_dispatch(
-    handle: NapiHandle,
+pub fn unregister_webhook_dispatch(handle: NapiHandle,
     server_handle: ffi::WebhookServerHandle,
     provider_id: String,
 ) -> NapiResult<()> {
@@ -700,7 +680,7 @@ pub fn list_webhook_servers(handle: NapiHandle) -> NapiResult<Vec<ffi::WebhookSe
     ffi::list_webhook_servers(RuntimeHandle(handle)).map_err(NapiError::from)
 }
 
-/// Start the background sync scheduler (Phase 6).
+/// Start the background sync scheduler.
 ///
 /// Spawns a dedicated OS thread that wakes every
 /// `tick_interval_secs` and dispatches [`ffi::sync_connector`] for
@@ -710,14 +690,12 @@ pub fn list_webhook_servers(handle: NapiHandle) -> NapiResult<Vec<ffi::WebhookSe
 /// # Errors
 ///
 /// Forwards [`ffi::start_sync_scheduler`] errors as [`NapiError`].
-pub fn start_sync_scheduler(
-    handle: NapiHandle,
+pub fn start_sync_scheduler(handle: NapiHandle,
     default_interval_secs: u64,
     default_max_backoff_secs: u64,
     tick_interval_secs: u64,
 ) -> NapiResult<()> {
-    ffi::start_sync_scheduler(
-        RuntimeHandle(handle),
+    ffi::start_sync_scheduler(RuntimeHandle(handle),
         default_interval_secs,
         default_max_backoff_secs,
         tick_interval_secs,
@@ -725,7 +703,7 @@ pub fn start_sync_scheduler(
     .map_err(NapiError::from)
 }
 
-/// Stop the background sync scheduler (Phase 6).
+/// Stop the background sync scheduler.
 ///
 /// Idempotent — calling this on a runtime with no scheduler running
 /// returns `Ok(())`. Mirrors [`ffi::stop_sync_scheduler`].
@@ -738,19 +716,17 @@ pub fn stop_sync_scheduler(handle: NapiHandle) -> NapiResult<()> {
 }
 
 /// Override the scheduler's policy for a specific connector
-/// instance (Phase 6). Mirrors [`ffi::configure_sync_schedule`].
+/// instance. Mirrors [`ffi::configure_sync_schedule`].
 ///
 /// # Errors
 ///
 /// Forwards [`ffi::configure_sync_schedule`] errors as [`NapiError`].
-pub fn configure_sync_schedule(
-    handle: NapiHandle,
+pub fn configure_sync_schedule(handle: NapiHandle,
     instance_id: String,
     sync_interval_secs: u64,
     max_backoff_secs: u64,
 ) -> NapiResult<()> {
-    ffi::configure_sync_schedule(
-        RuntimeHandle(handle),
+    ffi::configure_sync_schedule(RuntimeHandle(handle),
         instance_id,
         sync_interval_secs,
         max_backoff_secs,
@@ -759,7 +735,7 @@ pub fn configure_sync_schedule(
 }
 
 /// Remove the per-instance scheduler policy override for
-/// `instance_id` (Phase 6). Mirrors [`ffi::clear_sync_schedule`].
+/// `instance_id`. Mirrors [`ffi::clear_sync_schedule`].
 ///
 /// # Errors
 ///
@@ -768,7 +744,7 @@ pub fn clear_sync_schedule(handle: NapiHandle, instance_id: String) -> NapiResul
     ffi::clear_sync_schedule(RuntimeHandle(handle), instance_id).map_err(NapiError::from)
 }
 
-/// Snapshot the scheduler's diagnostic state (Phase 6). Mirrors
+/// Snapshot the scheduler's diagnostic state. Mirrors
 /// [`ffi::sync_scheduler_status`].
 ///
 /// # Errors
@@ -779,14 +755,13 @@ pub fn sync_scheduler_status(handle: NapiHandle) -> NapiResult<ffi::SyncSchedule
 }
 
 /// Toggle the post-sync auto-synthesis hook for a connector
-/// instance (Phase 7). Mirrors [`ffi::configure_sync_auto_synthesize`].
+/// instance. Mirrors [`ffi::configure_sync_auto_synthesize`].
 ///
 /// # Errors
 ///
 /// Forwards [`ffi::configure_sync_auto_synthesize`] errors as
 /// [`NapiError`].
-pub fn configure_sync_auto_synthesize(
-    handle: NapiHandle,
+pub fn configure_sync_auto_synthesize(handle: NapiHandle,
     instance_id: String,
     enabled: bool,
 ) -> NapiResult<()> {
@@ -795,21 +770,20 @@ pub fn configure_sync_auto_synthesize(
 }
 
 /// Install the server-side synthesis engine on the runtime
-/// (Phase 7). Mirrors [`ffi::configure_synthesis_engine`].
+///. Mirrors [`ffi::configure_synthesis_engine`].
 ///
 /// # Errors
 ///
 /// Forwards [`ffi::configure_synthesis_engine`] errors as
 /// [`NapiError`].
 #[allow(clippy::needless_pass_by_value)] // FFI: napi-derive hands owned values across the JS boundary on every call.
-pub fn configure_synthesis_engine(
-    handle: NapiHandle,
+pub fn configure_synthesis_engine(handle: NapiHandle,
     config: ffi::SynthesisEngineConfig,
 ) -> NapiResult<()> {
     ffi::configure_synthesis_engine(RuntimeHandle(handle), config).map_err(NapiError::from)
 }
 
-/// Dispatch a server-side synthesis run (Phase 7). Mirrors
+/// Dispatch a server-side synthesis run. Mirrors
 /// [`ffi::trigger_server_synthesis`]. Returns the UUID of the
 /// newly-opened synthesis window.
 ///
@@ -817,42 +791,39 @@ pub fn configure_synthesis_engine(
 ///
 /// Forwards [`ffi::trigger_server_synthesis`] errors as
 /// [`NapiError`].
-pub fn trigger_server_synthesis(
-    handle: NapiHandle,
+pub fn trigger_server_synthesis(handle: NapiHandle,
     scope_id: ScopeIdString,
     tier: ffi::SynthesisTierKind,
 ) -> NapiResult<String> {
     ffi::trigger_server_synthesis(RuntimeHandle(handle), scope_id, tier).map_err(NapiError::from)
 }
 
-/// Look up the lifecycle state of a synthesis window (Phase 7).
+/// Look up the lifecycle state of a synthesis window.
 /// Mirrors [`ffi::synthesis_status`].
 ///
 /// # Errors
 ///
 /// Forwards [`ffi::synthesis_status`] errors as [`NapiError`].
-pub fn synthesis_status(
-    handle: NapiHandle,
+pub fn synthesis_status(handle: NapiHandle,
     synthesis_id: String,
 ) -> NapiResult<ffi::SynthesisStatusRecord> {
     ffi::synthesis_status(RuntimeHandle(handle), synthesis_id).map_err(NapiError::from)
 }
 
-/// Enumerate recent synthesis windows for a scope (Phase 7).
+/// Enumerate recent synthesis windows for a scope.
 /// Mirrors [`ffi::list_recent_syntheses`].
 ///
 /// # Errors
 ///
 /// Forwards [`ffi::list_recent_syntheses`] errors as [`NapiError`].
-pub fn list_recent_syntheses(
-    handle: NapiHandle,
+pub fn list_recent_syntheses(handle: NapiHandle,
     scope_id: ScopeIdString,
 ) -> NapiResult<Vec<ffi::SynthesisStatusRecord>> {
     ffi::list_recent_syntheses(RuntimeHandle(handle), scope_id).map_err(NapiError::from)
 }
 
-/// Re-run synthesis on an existing `Complete` window (Phase 10
-/// Item 4). Mirrors [`ffi::replay_synthesis`]. The window is
+/// Re-run synthesis on an existing `Complete` window (
+///). Mirrors [`ffi::replay_synthesis`]. The window is
 /// re-driven through `Complete → Pending → InProgress →
 /// Complete` (or `→ Failed`) on the same `(scope, window_id)`
 /// pair; the prior synthesis object is archived to the history
@@ -861,8 +832,7 @@ pub fn list_recent_syntheses(
 /// # Errors
 ///
 /// Forwards [`ffi::replay_synthesis`] errors as [`NapiError`].
-pub fn replay_synthesis(
-    handle: NapiHandle,
+pub fn replay_synthesis(handle: NapiHandle,
     scope_id: ScopeIdString,
     synthesis_id: String,
 ) -> NapiResult<ffi::SynthesisStatusRecord> {
@@ -877,22 +847,20 @@ pub fn replay_synthesis(
 /// # Errors
 ///
 /// Forwards [`ffi::list_synthesis_versions`] errors as [`NapiError`].
-pub fn list_synthesis_versions(
-    handle: NapiHandle,
+pub fn list_synthesis_versions(handle: NapiHandle,
     synthesis_id: String,
 ) -> NapiResult<Vec<ffi::SynthesisVersionSummary>> {
     ffi::list_synthesis_versions(RuntimeHandle(handle), synthesis_id).map_err(NapiError::from)
 }
 
 /// Admit an approved document onto a tenant memory and persist the
-/// AEAD-encrypted payload alongside (Phase 8). Mirrors
+/// AEAD-encrypted payload alongside. Mirrors
 /// [`ffi::admit_approved_document`].
 ///
 /// # Errors
 ///
 /// Forwards [`ffi::admit_approved_document`] errors as [`NapiError`].
-pub fn admit_approved_document(
-    handle: NapiHandle,
+pub fn admit_approved_document(handle: NapiHandle,
     scope_id: ScopeIdString,
     label: String,
     approver: String,
@@ -903,22 +871,20 @@ pub fn admit_approved_document(
 }
 
 /// Replace the payload + metadata of an existing approved document
-/// while keeping its document id stable (Phase 9). Mirrors
+/// while keeping its document id stable. Mirrors
 /// [`ffi::replace_approved_document`].
 ///
 /// # Errors
 ///
 /// Forwards [`ffi::replace_approved_document`] errors as [`NapiError`].
-pub fn replace_approved_document(
-    handle: NapiHandle,
+pub fn replace_approved_document(handle: NapiHandle,
     scope_id: ScopeIdString,
     document_id: String,
     label: String,
     approver: String,
     payload: Vec<u8>,
 ) -> NapiResult<ffi::ApprovedDocumentSummary> {
-    ffi::replace_approved_document(
-        RuntimeHandle(handle),
+    ffi::replace_approved_document(RuntimeHandle(handle),
         scope_id,
         document_id,
         label,
@@ -929,14 +895,13 @@ pub fn replace_approved_document(
 }
 
 /// Revoke a previously-admitted approved document and purge the
-/// AEAD-encrypted payload row (Phase 8). Mirrors
+/// AEAD-encrypted payload row. Mirrors
 /// [`ffi::revoke_approved_document`].
 ///
 /// # Errors
 ///
 /// Forwards [`ffi::revoke_approved_document`] errors as [`NapiError`].
-pub fn revoke_approved_document(
-    handle: NapiHandle,
+pub fn revoke_approved_document(handle: NapiHandle,
     scope_id: ScopeIdString,
     document_id: String,
 ) -> NapiResult<()> {
@@ -945,14 +910,13 @@ pub fn revoke_approved_document(
 }
 
 /// List approved documents admitted onto a tenant memory along
-/// with their persisted payload metadata (Phase 8). Mirrors
+/// with their persisted payload metadata. Mirrors
 /// [`ffi::list_approved_documents`].
 ///
 /// # Errors
 ///
 /// Forwards [`ffi::list_approved_documents`] errors as [`NapiError`].
-pub fn list_approved_documents(
-    handle: NapiHandle,
+pub fn list_approved_documents(handle: NapiHandle,
     scope_id: ScopeIdString,
 ) -> NapiResult<Vec<ffi::ApprovedDocumentSummary>> {
     ffi::list_approved_documents(RuntimeHandle(handle), scope_id).map_err(NapiError::from)
@@ -1145,8 +1109,7 @@ mod tests {
         // `list_memories` is wired — the surface
         // validates the scope id is a UUID before reaching the
         // memory layer.
-        let err = list_memories(
-            RuntimeHandle::NONE.0,
+        let err = list_memories(RuntimeHandle::NONE.0,
             "scope".into(),
             MemoryFilter {
                 state: Some(MemoryState::Reinforced),
@@ -1162,15 +1125,12 @@ mod tests {
         // `get_channel_memory` is wired; `trigger_synthesis` parses
         // the scope id before returning the `Unavailable`
         // marker. Both should report InvalidId for a malformed id.
-        assert_eq!(
-            get_channel_memory(RuntimeHandle::NONE.0, "scope".into())
+        assert_eq!(get_channel_memory(RuntimeHandle::NONE.0, "scope".into())
                 .unwrap_err()
                 .kind(),
             "InvalidId"
         );
-        assert_eq!(
-            trigger_synthesis(
-                RuntimeHandle::NONE.0,
+        assert_eq!(trigger_synthesis(RuntimeHandle::NONE.0,
                 "scope".into(),
                 SynthesisTrigger::ManualUserAction
             )
@@ -1205,15 +1165,13 @@ mod tests {
         // The N-API layer base64-decodes the payload and forwards to
         // FFI. With a malformed scope string FFI rejects with
         // InvalidId before any crypto work happens.
-        let err = encrypt(
-            RuntimeHandle::NONE.0,
+        let err = encrypt(RuntimeHandle::NONE.0,
             "scope".into(),
             encode_b64(&[1, 2, 3]),
         )
         .unwrap_err();
         assert_eq!(err.kind(), "InvalidId");
-        let err = decrypt(
-            RuntimeHandle::NONE.0,
+        let err = decrypt(RuntimeHandle::NONE.0,
             "scope".into(),
             encode_b64(&[1, 2, 3]),
         )

@@ -212,8 +212,7 @@ impl HubSpotConnector {
     ///
     /// Production wires `transport` to `BlockingHttpTransport` and
     /// `oauth` to `OAuth2Client`; tests use `MockHttpTransport`.
-    pub fn new(
-        instance: ConnectorInstanceId,
+    pub fn new(instance: ConnectorInstanceId,
         transport: Arc<dyn HttpTransport>,
         oauth: Arc<dyn OAuth2CodeExchange>,
     ) -> Self {
@@ -246,8 +245,7 @@ impl HubSpotConnector {
             .auth_config_json
             .get("api_base_url")
             .and_then(serde_json::Value::as_str)
-            .map_or_else(
-                || self.api_base_url.clone(),
+            .map_or_else(|| self.api_base_url.clone(),
                 std::string::ToString::to_string,
             )
     }
@@ -270,15 +268,13 @@ impl HubSpotConnector {
                         kinds.push(k);
                     }
                 } else {
-                    return Err(ConnectorError::Sync(format!(
-                        "hubspot: auth_config_json.object_kinds[{s}] is not a known kind"
+                    return Err(ConnectorError::Sync(format!("hubspot: auth_config_json.object_kinds[{s}] is not a known kind"
                     )));
                 }
             }
         }
         if kinds.is_empty() {
-            return Err(ConnectorError::Sync(
-                "hubspot: auth_config_json.object_kinds was present but contained no kinds".into(),
+            return Err(ConnectorError::Sync("hubspot: auth_config_json.object_kinds was present but contained no kinds".into(),
             ));
         }
         Ok(kinds)
@@ -293,8 +289,7 @@ impl HubSpotConnector {
             .filter(|s| !s.is_empty())
             .map(std::string::ToString::to_string)
             .ok_or_else(|| {
-                ConnectorError::Webhook(
-                    "hubspot subscribe_webhook: auth_config_json.app_id is required".into(),
+                ConnectorError::Webhook("hubspot subscribe_webhook: auth_config_json.app_id is required".into(),
                 )
             })
     }
@@ -320,8 +315,7 @@ impl HubSpotConnector {
     /// error is always preserved by the caller via `return Err(_)`
     /// after this method returns. Mirrors the equivalent helper in
     /// `figma.rs::rollback_partial_webhooks`.
-    fn rollback_partial_webhooks(
-        &self,
+    fn rollback_partial_webhooks(&self,
         base_url: &str,
         app_id: &str,
         token: &OAuth2Token,
@@ -340,8 +334,7 @@ impl HubSpotConnector {
         }
     }
 
-    fn paginate_list(
-        &self,
+    fn paginate_list(&self,
         base_url: &str,
         token: &OAuth2Token,
         kind: HubSpotObjectKind,
@@ -350,20 +343,17 @@ impl HubSpotConnector {
         let mut after: Option<String> = None;
         for _ in 0..MAX_LIST_PAGES {
             let url = match after.as_deref() {
-                Some(cursor) => format!(
-                    "{base_url}/crm/v3/objects/{}?limit={}&after={}",
+                Some(cursor) => format!("{base_url}/crm/v3/objects/{}?limit={}&after={}",
                     kind.as_path_segment(),
                     self.page_size,
                     connector_framework::percent_encode_path_component(cursor),
                 ),
-                None => format!(
-                    "{base_url}/crm/v3/objects/{}?limit={}",
+                None => format!("{base_url}/crm/v3/objects/{}?limit={}",
                     kind.as_path_segment(),
                     self.page_size,
                 ),
             };
-            let resp: HubSpotListResponse = bearer_get_json(
-                &self.transport,
+            let resp: HubSpotListResponse = bearer_get_json(&self.transport,
                 "hubspot",
                 "/crm/v3/objects",
                 &url,
@@ -387,21 +377,18 @@ impl HubSpotConnector {
             }
             after = Some(next.after);
         }
-        Err(ConnectorError::Sync(format!(
-            "hubspot /crm/v3/objects/{} exceeded {MAX_LIST_PAGES} pages without exhausting cursor",
+        Err(ConnectorError::Sync(format!("hubspot /crm/v3/objects/{} exceeded {MAX_LIST_PAGES} pages without exhausting cursor",
             kind.as_path_segment()
         )))
     }
 
-    fn paginate_search(
-        &self,
+    fn paginate_search(&self,
         base_url: &str,
         token: &OAuth2Token,
         kind: HubSpotObjectKind,
         cursor_ms: i64,
     ) -> Result<Vec<HubSpotObject>> {
-        let url = format!(
-            "{base_url}/crm/v3/objects/{}/search",
+        let url = format!("{base_url}/crm/v3/objects/{}/search",
             kind.as_path_segment()
         );
         let mut objects = Vec::<HubSpotObject>::new();
@@ -422,13 +409,11 @@ impl HubSpotConnector {
                 "limit": self.page_size,
             });
             if let Some(cursor) = after.as_deref() {
-                body.as_object_mut().unwrap().insert(
-                    "after".to_string(),
+                body.as_object_mut().unwrap().insert("after".to_string(),
                     serde_json::Value::String(cursor.to_string()),
                 );
             }
-            let resp: HubSpotListResponse = bearer_post_json(
-                &self.transport,
+            let resp: HubSpotListResponse = bearer_post_json(&self.transport,
                 "hubspot",
                 "/crm/v3/objects/search",
                 &url,
@@ -451,8 +436,7 @@ impl HubSpotConnector {
             }
             after = Some(next.after);
         }
-        Err(ConnectorError::Sync(format!(
-            "hubspot /crm/v3/objects/{}/search exceeded {MAX_LIST_PAGES} pages without exhausting cursor",
+        Err(ConnectorError::Sync(format!("hubspot /crm/v3/objects/{}/search exceeded {MAX_LIST_PAGES} pages without exhausting cursor",
             kind.as_path_segment()
         )))
     }
@@ -513,8 +497,7 @@ fn parse_role(role: &str) -> Option<SourcePermissionLevel> {
 /// caller can skip them without aborting the rest of the batch — see
 /// `handle_webhook_event` for why an unknown entry must not discard
 /// already-processed valid events.
-fn subscription_to_event(
-    sub: &str,
+fn subscription_to_event(sub: &str,
     object_id: i64,
     occurred_at: DateTime<Utc>,
     user_id: Option<String>,
@@ -556,8 +539,7 @@ impl Connector for HubSpotConnector {
             .get("authorization_code")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Auth(
-                    "hubspot authenticate: auth_config_json.authorization_code is required".into(),
+                ConnectorError::Auth("hubspot authenticate: auth_config_json.authorization_code is required".into(),
                 )
             })?;
         self.oauth.exchange_code(config, auth_code)
@@ -583,8 +565,7 @@ impl Connector for HubSpotConnector {
         })
     }
 
-    fn incremental_sync(
-        &self,
+    fn incremental_sync(&self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         state: &SyncState,
@@ -626,8 +607,7 @@ impl Connector for HubSpotConnector {
         })
     }
 
-    fn subscribe_webhook(
-        &self,
+    fn subscribe_webhook(&self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         callback_url: &str,
@@ -647,8 +627,7 @@ impl Connector for HubSpotConnector {
                     "active": true,
                     "propertyName": serde_json::Value::Null,
                 });
-                let resp: HubSpotSubscriptionCreateResponse = match bearer_post_json(
-                    &self.transport,
+                let resp: HubSpotSubscriptionCreateResponse = match bearer_post_json(&self.transport,
                     "hubspot",
                     "/webhooks/v3/{appId}/subscriptions",
                     &url,
@@ -672,8 +651,7 @@ impl Connector for HubSpotConnector {
                 };
                 let Some(id) = resp.id else {
                     self.rollback_partial_webhooks(&base_url, &app_id, token, &registered);
-                    return Err(ConnectorError::Webhook(format!(
-                        "hubspot /webhooks/v3/{app_id}/subscriptions returned no id for {event_type}"
+                    return Err(ConnectorError::Webhook(format!("hubspot /webhooks/v3/{app_id}/subscriptions returned no id for {event_type}"
                     )));
                 };
                 registered.push(id.to_string());
@@ -684,8 +662,7 @@ impl Connector for HubSpotConnector {
             .get("webhook_secret")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("hubspot-app-secret");
-        let mut subscription = WebhookSubscription::new(
-            self.instance,
+        let mut subscription = WebhookSubscription::new(self.instance,
             callback_url,
             WebhookSecret::new(secret),
             WebhookEventTypes::all(),
@@ -711,8 +688,7 @@ impl Connector for HubSpotConnector {
         // handler's policy on unknown `changeType`s.
         let batch: Vec<HubSpotWebhookEvent> = serde_json::from_slice(body)?;
         if batch.is_empty() {
-            return Err(ConnectorError::Webhook(
-                "empty HubSpot webhook batch".to_string(),
+            return Err(ConnectorError::Webhook("empty HubSpot webhook batch".to_string(),
             ));
         }
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(batch.len());
@@ -721,8 +697,7 @@ impl Connector for HubSpotConnector {
                 .occurred_at_ms
                 .and_then(DateTime::<Utc>::from_timestamp_millis)
                 .unwrap_or_else(Utc::now);
-            if let Some(ev) = subscription_to_event(
-                &e.subscription_type,
+            if let Some(ev) = subscription_to_event(&e.subscription_type,
                 e.object_id,
                 occurred_at,
                 e.user_id,
@@ -760,8 +735,7 @@ mod tests {
     struct FixedOAuth;
     impl OAuth2CodeExchange for FixedOAuth {
         fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
-            Ok(OAuth2Token::new(
-                "hubspot-access",
+            Ok(OAuth2Token::new("hubspot-access",
                 "hubspot-refresh",
                 Utc::now() + Duration::hours(6),
                 "crm.objects.contacts.read crm.objects.companies.read crm.objects.deals.read",
@@ -821,8 +795,7 @@ mod tests {
         let now = Utc::now();
         let transport = Arc::new(MockHttpTransport::new());
         // Page 1 — paging.next.after points to "next-token"
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/hubspot/crm/v3/objects/contacts?limit=100",
             ok_json(&serde_json::json!({
                 "results": [{
@@ -834,8 +807,7 @@ mod tests {
             })),
         );
         // Page 2 — no more.
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/hubspot/crm/v3/objects/contacts?limit=100&after=next-token",
             ok_json(&serde_json::json!({
                 "results": [{
@@ -849,12 +821,10 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 2);
-        assert!(matches!(
-            res.events[0],
+        assert!(matches!(res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
-        assert!(matches!(
-            res.events[1],
+        assert!(matches!(res.events[1],
             ConnectorEvent::DocumentCreated { .. }
         ));
         assert!(res.next_cursor.is_some());
@@ -864,8 +834,7 @@ mod tests {
     fn initial_sync_walks_multiple_kinds_when_configured() {
         let now = Utc::now();
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/hubspot/crm/v3/objects/contacts?limit=100",
             ok_json(&serde_json::json!({
                 "results": [{
@@ -875,8 +844,7 @@ mod tests {
                 }]
             })),
         );
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/hubspot/crm/v3/objects/companies?limit=100",
             ok_json(&serde_json::json!({
                 "results": [{
@@ -889,8 +857,7 @@ mod tests {
         let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c
-            .initial_sync(
-                &cfg_with(&serde_json::json!({"object_kinds": ["contacts", "companies"]})),
+            .initial_sync(&cfg_with(&serde_json::json!({"object_kinds": ["contacts", "companies"]})),
                 &tok,
             )
             .unwrap();
@@ -913,8 +880,7 @@ mod tests {
         let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let err = c
-            .initial_sync(
-                &cfg_with(&serde_json::json!({"object_kinds": ["weird_kind"]})),
+            .initial_sync(&cfg_with(&serde_json::json!({"object_kinds": ["weird_kind"]})),
                 &tok,
             )
             .unwrap_err();
@@ -929,8 +895,7 @@ mod tests {
         let now = Utc::now();
         let cursor = (now - Duration::hours(1)).to_rfc3339();
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.test/hubspot/crm/v3/objects/contacts/search",
             ok_json(&serde_json::json!({
                 "results": [
@@ -958,19 +923,16 @@ mod tests {
         // "old" matches GTE-cursor exactly → dropped, "new" emits
         // Updated, "archived" emits Deleted.
         assert_eq!(res.events.len(), 2);
-        assert!(matches!(
-            res.events[0],
+        assert!(matches!(res.events[0],
             ConnectorEvent::DocumentUpdated { .. }
         ));
-        assert!(matches!(
-            res.events[1],
+        assert!(matches!(res.events[1],
             ConnectorEvent::DocumentDeleted { .. }
         ));
         // The body must include the lastmodifieddate filter.
         let recorded = transport.recorded();
         let body: serde_json::Value = serde_json::from_slice(&recorded[0].body).unwrap();
-        assert_eq!(
-            body["filterGroups"][0]["filters"][0]["propertyName"],
+        assert_eq!(body["filterGroups"][0]["filters"][0]["propertyName"],
             "hs_lastmodifieddate"
         );
         assert_eq!(body["filterGroups"][0]["filters"][0]["operator"], "GTE");
@@ -979,8 +941,7 @@ mod tests {
     #[test]
     fn list_401_propagates_as_auth_error() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/hubspot/crm/v3/objects/contacts?limit=100",
             MockResponse::status(401, b"unauthorized".to_vec()),
         );
@@ -995,8 +956,7 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         // 3 subscription kinds × 1 object kind = 3 POSTs.
         for id in [10_i64, 11, 12] {
-            transport.expect(
-                HttpMethod::Post,
+            transport.expect(HttpMethod::Post,
                 "https://api.test/hubspot/webhooks/v3/12345/subscriptions",
                 ok_json(&serde_json::json!({"id": id, "active": true})),
             );
@@ -1017,8 +977,7 @@ mod tests {
                 b["eventType"].as_str().unwrap().to_string()
             })
             .collect();
-        assert_eq!(
-            event_types,
+        assert_eq!(event_types,
             vec![
                 "contact.creation".to_string(),
                 "contact.propertyChange".to_string(),
@@ -1054,29 +1013,24 @@ mod tests {
         // returns 500. After the failure, the connector MUST issue
         // DELETE requests for `10` and `11` before returning Err.
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.test/hubspot/webhooks/v3/12345/subscriptions",
             ok_json(&serde_json::json!({"id": 10_i64, "active": true})),
         );
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.test/hubspot/webhooks/v3/12345/subscriptions",
             ok_json(&serde_json::json!({"id": 11_i64, "active": true})),
         );
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.test/hubspot/webhooks/v3/12345/subscriptions",
             MockResponse::status(500, b"internal server error".to_vec()),
         );
         // Rollback DELETEs — these are the assertions we care about.
-        transport.expect(
-            HttpMethod::Delete,
+        transport.expect(HttpMethod::Delete,
             "https://api.test/hubspot/webhooks/v3/12345/subscriptions/10",
             MockResponse::status(204, Vec::new()),
         );
-        transport.expect(
-            HttpMethod::Delete,
+        transport.expect(HttpMethod::Delete,
             "https://api.test/hubspot/webhooks/v3/12345/subscriptions/11",
             MockResponse::status(204, Vec::new()),
         );
@@ -1086,9 +1040,7 @@ mod tests {
         let err = c
             .subscribe_webhook(&cfg(), &tok, "https://demo.example/webhooks/hubspot")
             .unwrap_err();
-        assert!(
-            matches!(
-                err,
+        assert!(matches!(err,
                 ConnectorError::Sync(_) | ConnectorError::Webhook(_) | ConnectorError::Auth(_)
             ),
             "subscribe_webhook must surface the upstream failure"
@@ -1099,17 +1051,14 @@ mod tests {
             .into_iter()
             .filter(|r| r.method == HttpMethod::Delete)
             .collect();
-        assert_eq!(
-            deletes.len(),
+        assert_eq!(deletes.len(),
             2,
             "must issue one DELETE per successfully-registered subscription id"
         );
-        assert_eq!(
-            deletes[0].url,
+        assert_eq!(deletes[0].url,
             "https://api.test/hubspot/webhooks/v3/12345/subscriptions/10"
         );
-        assert_eq!(
-            deletes[1].url,
+        assert_eq!(deletes[1].url,
             "https://api.test/hubspot/webhooks/v3/12345/subscriptions/11"
         );
     }
@@ -1120,19 +1069,16 @@ mod tests {
         // field, the connector must still tear down everything it
         // *did* register before failing.
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.test/hubspot/webhooks/v3/12345/subscriptions",
             ok_json(&serde_json::json!({"id": 20_i64, "active": true})),
         );
         // Second POST: 200 OK but no `id` — connector must rollback.
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.test/hubspot/webhooks/v3/12345/subscriptions",
             ok_json(&serde_json::json!({"active": true})),
         );
-        transport.expect(
-            HttpMethod::Delete,
+        transport.expect(HttpMethod::Delete,
             "https://api.test/hubspot/webhooks/v3/12345/subscriptions/20",
             MockResponse::status(204, Vec::new()),
         );
@@ -1148,8 +1094,7 @@ mod tests {
             .filter(|r| r.method == HttpMethod::Delete)
             .collect();
         assert_eq!(deletes.len(), 1);
-        assert_eq!(
-            deletes[0].url,
+        assert_eq!(deletes[0].url,
             "https://api.test/hubspot/webhooks/v3/12345/subscriptions/20"
         );
     }
@@ -1248,8 +1193,7 @@ mod tests {
         let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
-        assert_eq!(
-            evs.len(),
+        assert_eq!(evs.len(),
             2,
             "valid events on either side of an unknown subscriptionType must still surface",
         );

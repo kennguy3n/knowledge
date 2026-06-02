@@ -65,8 +65,7 @@ impl InferenceAdapter for FallbackAdapter {
         task.is_classification()
     }
 
-    fn generate(
-        &self,
+    fn generate(&self,
         task_tag: &str,
         prompt: &str,
         _grammar: &str,
@@ -358,8 +357,7 @@ fn extract_entities(body: &str) -> String {
         if i > 0 {
             out.push(',');
         }
-        let _ = write!(
-            out,
+        let _ = write!(out,
             r#"{{"name":"{name}","type":"{kind}"}}"#,
             name = json_escape(name),
         );
@@ -630,8 +628,7 @@ mod tests {
     #[test]
     fn fallback_classification_picks_critical_on_outage_word() {
         let adapter = FallbackAdapter::new();
-        let prompt = format!(
-            "{}\n\nMessage:\nProduction outage, page on-call now",
+        let prompt = format!("{}\n\nMessage:\nProduction outage, page on-call now",
             InferenceTask::TagImportance.prompt_template()
         );
         let out = adapter
@@ -696,8 +693,7 @@ mod tests {
         // what the grammar sees — `"0.95"` either way.
         let c = confidence_from_density(10, 10);
         let epsilon = f64::EPSILON * 16.0;
-        assert!(
-            (0.55..=0.95 + epsilon).contains(&c),
+        assert!((0.55..=0.95 + epsilon).contains(&c),
             "got {c} (epsilon={epsilon})",
         );
         assert_eq!(format!("{c:.2}"), "0.95");
@@ -732,8 +728,7 @@ mod tests {
             let cstart = out.find("\"confidence\":").expect("has field") + "\"confidence\":".len();
             let cend = out[cstart..].find('}').expect("closes") + cstart;
             let confidence_str = &out[cstart..cend];
-            assert!(
-                confidence_str.starts_with("0."),
+            assert!(confidence_str.starts_with("0."),
                 "{body:?} produced non-grammar-compliant confidence {confidence_str:?} in {out}",
             );
             // And the full numeric must parse back as a float in
@@ -790,8 +785,7 @@ mod tests {
             .iter()
             .map(|e| e["name"].as_str().unwrap().to_string())
             .collect();
-        assert!(
-            names.iter().any(|n| n.contains("Knowledge Substrate")),
+        assert!(names.iter().any(|n| n.contains("Knowledge Substrate")),
             "got {names:?}"
         );
     }
@@ -832,8 +826,7 @@ mod tests {
         let adapter = FallbackAdapter::new();
         let prompt = "Stuff\n\nObservation:\nThis ticket was reassigned to alice yesterday";
         let out = adapter.generate("promote_observation", prompt, "").unwrap();
-        assert!(
-            out.contains("\"promote\":false"),
+        assert!(out.contains("\"promote\":false"),
             "expected false promotion for substring-only task match, got {out}"
         );
     }
@@ -848,8 +841,7 @@ mod tests {
         let adapter = FallbackAdapter::new();
         let prompt = "Stuff\n\nObservation:\nHere's the action item: @bob owns the rollout";
         let out = adapter.generate("promote_observation", prompt, "").unwrap();
-        assert!(
-            out.contains("\"promote\":true"),
+        assert!(out.contains("\"promote\":true"),
             "expected true promotion for word-bounded task match, got {out}"
         );
     }
@@ -881,8 +873,7 @@ mod tests {
     fn extract_body_preserves_body_that_contains_the_marker_text() {
         let body = "Hello\n\nMessage:\nWorld";
         let prompt = format!("Scaffold instructions\n\nMessage:\n{body}");
-        assert_eq!(
-            extract_body(&prompt),
+        assert_eq!(extract_body(&prompt),
             body,
             "extract_body must keep the full body even when it contains the marker text",
         );
@@ -940,8 +931,7 @@ mod tests {
                 continue;
             }
             let prompt = template.replace("{body}", SENTINEL);
-            assert_eq!(
-                extract_body(&prompt),
+            assert_eq!(extract_body(&prompt),
                 SENTINEL,
                 "extract_body missed the marker for {:?}; BODY_MARKERS is out of sync with prompt_template",
                 task.tag(),

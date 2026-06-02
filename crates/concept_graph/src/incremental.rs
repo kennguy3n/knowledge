@@ -284,8 +284,7 @@ impl IncrementalUpdateEngine {
 
     /// Compute the minimal set of nodes that need
     /// re-evaluation after `event`.
-    pub fn recompute_scope(
-        &self,
+    pub fn recompute_scope(&self,
         graph: &ConceptGraph,
         event: &ChangeEvent,
         affected: &AffectedSubgraph,
@@ -347,8 +346,7 @@ impl IncrementalUpdateEngine {
     ///
     /// In all cases the affected-subgraph walk runs first so
     /// the caller gets a consistent view of what was touched.
-    pub fn propagate(
-        &self,
+    pub fn propagate(&self,
         graph: &mut ConceptGraph,
         event: ChangeEvent,
     ) -> Result<UpdatePropagation> {
@@ -476,8 +474,7 @@ mod tests {
 
         let engine = IncrementalUpdateEngine::default();
         let prop = engine
-            .propagate(
-                &mut g,
+            .propagate(&mut g,
                 ChangeEvent::NodeSuperseded {
                     predecessor: a,
                     successor: a2,
@@ -506,12 +503,10 @@ mod tests {
 
         assert_eq!(g.get_node(a).unwrap().state, NodeState::Contradicted);
         assert_eq!(g.get_node(b).unwrap().state, NodeState::Contradicted);
-        assert_eq!(
-            prop.state_transitions.get(&a),
+        assert_eq!(prop.state_transitions.get(&a),
             Some(&NodeState::Contradicted)
         );
-        assert_eq!(
-            prop.state_transitions.get(&b),
+        assert_eq!(prop.state_transitions.get(&b),
             Some(&NodeState::Contradicted)
         );
     }

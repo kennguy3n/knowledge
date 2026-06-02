@@ -223,8 +223,7 @@ impl InferenceRouter {
                 let _guard = NotifyOnDrop(&me);
                 let results = me.bootstrap();
                 for (kind, result) in &results {
-                    tracing::info!(
-                        adapter = kind.as_str(),
+                    tracing::info!(adapter = kind.as_str(),
                         probe = ?result,
                         "inference_router adapter probed (background)",
                     );
@@ -297,8 +296,7 @@ impl InferenceRouter {
             // expected, documented outcome for standalone-embedder
             // teardown, not a fault. Dropping `h` here detaches the
             // join slot.
-            tracing::debug!(
-                "inference-router-bootstrap thread is dropping its own router; \
+            tracing::debug!("inference-router-bootstrap thread is dropping its own router; \
                  skipping self-join (detaching join handle)",
             );
             drop(h);
@@ -312,8 +310,7 @@ impl InferenceRouter {
         // `wait_for_bootstrap` have already unblocked. Logging
         // the join failure is the most we can usefully do.
         if let Err(e) = h.join() {
-            tracing::warn!(
-                error = ?e,
+            tracing::warn!(error = ?e,
                 "inference-router-bootstrap thread panicked during shutdown",
             );
         }
@@ -485,7 +482,7 @@ impl InferenceRouter {
     /// availability (post-`probe`), its `loaded` flag (post-idle-
     /// sweep), and the list of [`InferenceTask`]s it supports.
     ///
-    /// Used by the Phase 6 `ffi::health::health_check` envelope so
+    /// Used by the  `ffi::health::health_check` envelope so
     /// platform hosts can render a per-adapter status panel without
     /// having to thread separate accessors for every property.
     /// The result is a snapshot — concurrent dispatches may flip
@@ -563,8 +560,7 @@ mod tests {
     }
 
     impl MockAdapter {
-        fn new(
-            kind: AdapterKind,
+        fn new(kind: AdapterKind,
             available: bool,
             supported: Vec<InferenceTask>,
             response: Result<String, RouterError>,
@@ -600,8 +596,7 @@ mod tests {
             self.supported.contains(&task)
         }
 
-        fn generate(
-            &self,
+        fn generate(&self,
             _task_tag: &str,
             _prompt: &str,
             _grammar: &str,
@@ -629,8 +624,7 @@ mod tests {
 
     #[test]
     fn adapter_states_lists_every_adapter_in_priority_order() {
-        let mlx = MockAdapter::new(
-            AdapterKind::Mlx,
+        let mlx = MockAdapter::new(AdapterKind::Mlx,
             true,
             vec![
                 InferenceTask::TagImportance,
@@ -639,8 +633,7 @@ mod tests {
             ],
             Ok("ok".into()),
         );
-        let fallback = MockAdapter::new(
-            AdapterKind::Fallback,
+        let fallback = MockAdapter::new(AdapterKind::Fallback,
             true,
             vec![
                 InferenceTask::TagImportance,
@@ -669,8 +662,7 @@ mod tests {
 
     #[test]
     fn adapter_states_reflects_unavailability() {
-        let offline = MockAdapter::new(
-            AdapterKind::LlamaCpp,
+        let offline = MockAdapter::new(AdapterKind::LlamaCpp,
             false,
             vec![InferenceTask::SynthSummary],
             Err(RouterError::Unavailable { task: "x" }),
@@ -697,14 +689,12 @@ mod tests {
 
     #[test]
     fn priority_routes_to_first_available_adapter_supporting_task() {
-        let primary = MockAdapter::new(
-            AdapterKind::Mlx,
+        let primary = MockAdapter::new(AdapterKind::Mlx,
             true,
             vec![InferenceTask::TagImportance],
             Ok("primary-response".into()),
         );
-        let secondary = MockAdapter::new(
-            AdapterKind::LlamaCpp,
+        let secondary = MockAdapter::new(AdapterKind::LlamaCpp,
             true,
             vec![InferenceTask::TagImportance],
             Ok("secondary-response".into()),
@@ -719,14 +709,12 @@ mod tests {
 
     #[test]
     fn router_falls_through_when_primary_unsupported() {
-        let primary = MockAdapter::new(
-            AdapterKind::Mlx,
+        let primary = MockAdapter::new(AdapterKind::Mlx,
             true,
             vec![InferenceTask::TagImportance],
             Ok("never".into()),
         );
-        let secondary = MockAdapter::new(
-            AdapterKind::LlamaCpp,
+        let secondary = MockAdapter::new(AdapterKind::LlamaCpp,
             true,
             vec![InferenceTask::SynthSummary],
             Ok("synth-response".into()),
@@ -741,14 +729,12 @@ mod tests {
 
     #[test]
     fn router_falls_through_when_primary_unavailable() {
-        let primary = MockAdapter::new(
-            AdapterKind::Mlx,
+        let primary = MockAdapter::new(AdapterKind::Mlx,
             false,
             vec![InferenceTask::TagImportance],
             Ok("never".into()),
         );
-        let secondary = MockAdapter::new(
-            AdapterKind::LlamaCpp,
+        let secondary = MockAdapter::new(AdapterKind::LlamaCpp,
             true,
             vec![InferenceTask::TagImportance],
             Ok("secondary-response".into()),
@@ -763,16 +749,14 @@ mod tests {
 
     #[test]
     fn router_falls_through_on_unavailable_error() {
-        let primary = MockAdapter::new(
-            AdapterKind::Mlx,
+        let primary = MockAdapter::new(AdapterKind::Mlx,
             true,
             vec![InferenceTask::TagImportance],
             Err(RouterError::Unavailable {
                 task: "tag_importance",
             }),
         );
-        let secondary = MockAdapter::new(
-            AdapterKind::LlamaCpp,
+        let secondary = MockAdapter::new(AdapterKind::LlamaCpp,
             true,
             vec![InferenceTask::TagImportance],
             Ok("secondary".into()),
@@ -787,14 +771,12 @@ mod tests {
 
     #[test]
     fn router_does_not_fall_through_on_inference_failure() {
-        let primary = MockAdapter::new(
-            AdapterKind::Mlx,
+        let primary = MockAdapter::new(AdapterKind::Mlx,
             true,
             vec![InferenceTask::TagImportance],
             Err(RouterError::InferenceFailure("boom".into())),
         );
-        let secondary = MockAdapter::new(
-            AdapterKind::LlamaCpp,
+        let secondary = MockAdapter::new(AdapterKind::LlamaCpp,
             true,
             vec![InferenceTask::TagImportance],
             Ok("secondary".into()),
@@ -809,8 +791,7 @@ mod tests {
 
     #[test]
     fn router_emits_unavailable_when_no_adapter_serves_task() {
-        let only = MockAdapter::new(
-            AdapterKind::Fallback,
+        let only = MockAdapter::new(AdapterKind::Fallback,
             true,
             vec![InferenceTask::TagImportance],
             Ok("never".into()),
@@ -825,8 +806,7 @@ mod tests {
 
     #[test]
     fn warm_up_marks_router_warmed_and_loads_adapter() {
-        let adapter = MockAdapter::new(
-            AdapterKind::LlamaCpp,
+        let adapter = MockAdapter::new(AdapterKind::LlamaCpp,
             true,
             vec![InferenceTask::TagImportance],
             Ok("warmup".into()),
@@ -844,8 +824,7 @@ mod tests {
         let cfg = RouterConfig::default()
             .with_device_tier(DeviceTier::High)
             .with_idle_timeout(60);
-        let adapter = MockAdapter::new(
-            AdapterKind::LlamaCpp,
+        let adapter = MockAdapter::new(AdapterKind::LlamaCpp,
             true,
             vec![InferenceTask::TagImportance],
             Ok("ok".into()),
@@ -870,15 +849,12 @@ mod tests {
         use crate::adapters::mlx::MlxAdapter;
         let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
         let mlx = MlxAdapter::with_platform_override(cfg.clone(), false);
-        let llama = LlamaCppAdapter::new(
-            cfg.clone(),
-            Box::new(MockLlamaServerClient::ok(
-                r#"{"class":"useful","confidence":0.4}"#,
+        let llama = LlamaCppAdapter::new(cfg.clone(),
+            Box::new(MockLlamaServerClient::ok(r#"{"class":"useful","confidence":0.4}"#,
             )),
         );
         let fallback = FallbackAdapter::new();
-        let router = InferenceRouter::new(
-            cfg,
+        let router = InferenceRouter::new(cfg,
             vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
         );
         router.bootstrap();
@@ -904,8 +880,7 @@ mod tests {
         let llama =
             LlamaCppAdapter::new(cfg.clone(), Box::new(MockLlamaServerClient::unreachable()));
         let fallback = FallbackAdapter::new();
-        let router = InferenceRouter::new(
-            cfg,
+        let router = InferenceRouter::new(cfg,
             vec![Box::new(mlx), Box::new(llama), Box::new(fallback)],
         );
         router.bootstrap();
@@ -1024,8 +999,7 @@ mod tests {
         // The atomic stays false because the panic prevented the
         // happy-path `bootstrapped.store(true)`. Dispatch routes to
         // `NotProbed` rather than hanging.
-        assert!(
-            !router.is_bootstrapped(),
+        assert!(!router.is_bootstrapped(),
             "panicking probe must leave bootstrapped == false",
         );
     }
@@ -1134,8 +1108,7 @@ mod tests {
         // the atomic MUST be false. Before the fix, the atomic stayed
         // `true` from the prior bootstrap and a `dispatch` here would
         // race past the in-flight probe.
-        assert!(
-            !router.is_bootstrapped(),
+        assert!(!router.is_bootstrapped(),
             "second spawn_bootstrap MUST reset bootstrapped to false until the new probe completes",
         );
 
@@ -1158,8 +1131,7 @@ mod tests {
         // bootstrap, `wait_for_bootstrap` would short-circuit
         // immediately and the flag would already be set.
         std::thread::sleep(Duration::from_millis(50));
-        assert!(
-            !waiter_done.load(Ordering::SeqCst),
+        assert!(!waiter_done.load(Ordering::SeqCst),
             "wait_for_bootstrap MUST block until the new probe completes \
              — it observed stale done==true from the prior bootstrap",
         );

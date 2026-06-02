@@ -139,8 +139,7 @@ fn build_legacy_fixture(legacy_version: i32) -> (tempfile::TempDir, std::path::P
         let inline_body = b"shipment ETA monday";
         assert!(inline_body.len() <= DEFAULT_INLINE_THRESHOLD_BYTES);
         store
-            .ingest(
-                scope,
+            .ingest(scope,
                 inline_body,
                 Some("source:inline"),
                 ImportanceClass::Important,
@@ -149,8 +148,7 @@ fn build_legacy_fixture(legacy_version: i32) -> (tempfile::TempDir, std::path::P
 
         let large_body = vec![b'Q'; DEFAULT_INLINE_THRESHOLD_BYTES * 4];
         store
-            .ingest(
-                scope,
+            .ingest(scope,
                 &large_body,
                 Some("source:large"),
                 ImportanceClass::Important,
@@ -179,8 +177,7 @@ fn build_legacy_fixture(legacy_version: i32) -> (tempfile::TempDir, std::path::P
 /// * `body_store` still has the dedup'd large-row payload.
 fn assert_post_migration_state(path: &Path, store: &EvidenceStore) {
     let stamped = read_user_version(path);
-    assert_eq!(
-        stamped, SCHEMA_VERSION,
+    assert_eq!(stamped, SCHEMA_VERSION,
         "post-migration user_version must equal SCHEMA_VERSION"
     );
 
@@ -193,21 +190,18 @@ fn assert_post_migration_state(path: &Path, store: &EvidenceStore) {
     let body_store_count = store
         .body_store_count()
         .expect("body_store count after upgrade");
-    assert_eq!(
-        body_store_count, 1,
+    assert_eq!(body_store_count, 1,
         "body_store must still hold the large-body row after upgrade"
     );
 
     let fts_hits: i64 = store
         .raw_conn()
-        .query_row(
-            "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH 'shipment'",
+        .query_row("SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH 'shipment'",
             [],
             |r| r.get(0),
         )
         .expect("FTS query after upgrade");
-    assert!(
-        fts_hits >= 1,
+    assert!(fts_hits >= 1,
         "FTS5 index over the inline plaintext must still match after upgrade"
     );
 }
@@ -260,8 +254,7 @@ fn opens_v12_database_and_upgrades_to_current_with_language_tag_column() {
     let (_dir, path) = build_legacy_fixture(12);
     {
         let conn = open_sqlcipher(&path);
-        conn.execute_batch(
-            "BEGIN;\n\
+        conn.execute_batch("BEGIN;\n\
              DROP TRIGGER IF EXISTS evidence_no_update;\n\
              DROP TRIGGER IF EXISTS evidence_no_delete;\n\
              ALTER TABLE evidence RENAME TO evidence_v12_tmp;\n\
@@ -300,8 +293,7 @@ fn opens_v12_database_and_upgrades_to_current_with_language_tag_column() {
                 found = true;
             }
         }
-        assert!(
-            !found,
+        assert!(!found,
             "test setup must leave the schema without language_tag before reopen"
         );
         conn.pragma_update(None, "user_version", 12_i64)
@@ -325,8 +317,7 @@ fn opens_v12_database_and_upgrades_to_current_with_language_tag_column() {
             found = true;
         }
     }
-    assert!(
-        found,
+    assert!(found,
         "v12 -> v13 upgrade must restore the language_tag column"
     );
 }
@@ -393,16 +384,14 @@ fn opens_v13_database_and_upgrades_to_current_with_evidence_fts_cjk_backfilled()
         let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
             .expect("open fresh store at SCHEMA_VERSION");
         store
-            .ingest(
-                scope,
+            .ingest(scope,
                 cjk_body.as_bytes(),
                 Some("source:cjk"),
                 ImportanceClass::Important,
             )
             .expect("ingest cjk row");
         store
-            .ingest(
-                scope,
+            .ingest(scope,
                 latin_body,
                 Some("source:latin"),
                 ImportanceClass::Important,
@@ -421,15 +410,13 @@ fn opens_v13_database_and_upgrades_to_current_with_evidence_fts_cjk_backfilled()
             .expect("drop evidence_fts_cjk to reach v13 shape");
         // Confirm the table really is gone before re-opening.
         let exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master \
+            .query_row("SELECT COUNT(*) FROM sqlite_master \
                  WHERE type = 'table' AND name = 'evidence_fts_cjk'",
                 [],
                 |r| r.get(0),
             )
             .expect("query sqlite_master for evidence_fts_cjk");
-        assert_eq!(
-            exists, 0,
+        assert_eq!(exists, 0,
             "test setup must leave the schema without evidence_fts_cjk before reopen"
         );
         conn.pragma_update(None, "user_version", 13_i64)
@@ -444,8 +431,7 @@ fn opens_v13_database_and_upgrades_to_current_with_evidence_fts_cjk_backfilled()
 
     // user_version stamped forward, original rows still readable,
     // FTS index over the Latin row still works.
-    assert_eq!(
-        read_user_version(&path),
+    assert_eq!(read_user_version(&path),
         SCHEMA_VERSION,
         "post-migration user_version must equal SCHEMA_VERSION"
     );
@@ -453,20 +439,17 @@ fn opens_v13_database_and_upgrades_to_current_with_evidence_fts_cjk_backfilled()
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence", [], |r| r.get(0))
         .expect("count evidence rows");
-    assert_eq!(
-        evidence, 2,
+    assert_eq!(evidence, 2,
         "both seeded rows must survive the v13 -> v14 upgrade"
     );
     let fts_hits: i64 = store
         .raw_conn()
-        .query_row(
-            "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH 'shipment'",
+        .query_row("SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH 'shipment'",
             [],
             |r| r.get(0),
         )
         .expect("FTS query after upgrade");
-    assert!(
-        fts_hits >= 1,
+    assert!(fts_hits >= 1,
         "FTS5 unicode61 index over the Latin row must still match after v14 upgrade"
     );
 
@@ -476,8 +459,7 @@ fn opens_v13_database_and_upgrades_to_current_with_evidence_fts_cjk_backfilled()
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
         .expect("count cjk rows after upgrade");
-    assert_eq!(
-        cjk_rows, 1,
+    assert_eq!(cjk_rows, 1,
         "v13 -> v14 backfill must re-insert the CJK row into evidence_fts_cjk"
     );
 
@@ -486,15 +468,13 @@ fn opens_v13_database_and_upgrades_to_current_with_evidence_fts_cjk_backfilled()
     // inflate the trigram index for no recall benefit).
     let latin_in_cjk: i64 = store
         .raw_conn()
-        .query_row(
-            "SELECT COUNT(*) FROM evidence_fts_cjk \
+        .query_row("SELECT COUNT(*) FROM evidence_fts_cjk \
              WHERE evidence_fts_cjk MATCH 'shipment'",
             [],
             |r| r.get(0),
         )
         .expect("query cjk table for latin term");
-    assert_eq!(
-        latin_in_cjk, 0,
+    assert_eq!(latin_in_cjk, 0,
         "v13 -> v14 backfill must skip pure-Latin rows"
     );
 
@@ -504,8 +484,7 @@ fn opens_v13_database_and_upgrades_to_current_with_evidence_fts_cjk_backfilled()
     let hits = store
         .search_fts(scope, "重要な会議", 10)
         .expect("search_fts post-upgrade");
-    assert_eq!(
-        hits.len(),
+    assert_eq!(hits.len(),
         1,
         "search_fts must hit the back-filled CJK row after v14 upgrade"
     );
@@ -531,8 +510,7 @@ fn v14_migration_is_idempotent_on_already_populated_database() {
         let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
             .expect("open fresh store");
         store
-            .ingest(
-                scope,
+            .ingest(scope,
                 cjk_body.as_bytes(),
                 Some("source:cjk-idem"),
                 ImportanceClass::Important,
@@ -556,8 +534,7 @@ fn v14_migration_is_idempotent_on_already_populated_database() {
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
         .expect("count cjk rows after re-migration");
-    assert_eq!(
-        cjk_after, 1,
+    assert_eq!(cjk_after, 1,
         "idempotent v14 re-migration must not duplicate evidence_fts_cjk rows"
     );
     assert_eq!(read_user_version(&path), SCHEMA_VERSION);
@@ -565,7 +542,7 @@ fn v14_migration_is_idempotent_on_already_populated_database() {
 
 #[test]
 fn v14_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
-    // Regression test for sweep-2 Devin Review ANALYSIS-0004
+    // Regression test for a follow-up Devin Review ANALYSIS-0004
     // (`migrate_v14_backfill_evidence_fts_cjk` previously loaded
     // the entire `evidence_fts` table into a single `Vec`). The
     // fix paginates the read in chunks of `MIGRATION_CHUNK_SIZE`
@@ -628,8 +605,7 @@ fn v14_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
             .expect("begin tx for bulk seed");
         {
             let mut insert = tx
-                .prepare(
-                    "INSERT INTO evidence_fts (content, evidence_id, scope_id) \
+                .prepare("INSERT INTO evidence_fts (content, evidence_id, scope_id) \
                      VALUES (?1, ?2, ?3)",
                 )
                 .expect("prepare bulk-seed insert");
@@ -653,20 +629,17 @@ fn v14_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
         let fts_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM evidence_fts", [], |r| r.get(0))
             .expect("count evidence_fts after seed");
-        assert_eq!(
-            fts_count, SEEDED_ROWS,
+        assert_eq!(fts_count, SEEDED_ROWS,
             "bulk seed must populate evidence_fts with SEEDED_ROWS rows"
         );
         let companion_exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master \
+            .query_row("SELECT COUNT(*) FROM sqlite_master \
                  WHERE type = 'table' AND name = 'evidence_fts_cjk'",
                 [],
                 |r| r.get(0),
             )
             .expect("inspect sqlite_master for evidence_fts_cjk");
-        assert_eq!(
-            companion_exists, 0,
+        assert_eq!(companion_exists, 0,
             "evidence_fts_cjk must be absent before re-open so the migration backfill arm runs"
         );
     }
@@ -684,8 +657,7 @@ fn v14_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
         .expect("count evidence_fts_cjk after multi-chunk backfill");
-    assert_eq!(
-        cjk_total, SEEDED_ROWS,
+    assert_eq!(cjk_total, SEEDED_ROWS,
         "multi-chunk v14 backfill must produce exactly one evidence_fts_cjk row per seeded \
          evidence_fts row (rowid cursor advanced past a chunk boundary, no rows dropped, no rows \
          duplicated)"
@@ -697,8 +669,7 @@ fn v14_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
     let hits = store
         .search_fts(scope, "重要な会議", seeded_rows_usize)
         .expect("search_fts post-multi-chunk migration");
-    assert_eq!(
-        hits.len(),
+    assert_eq!(hits.len(),
         seeded_rows_usize,
         "public search_fts must surface every back-filled CJK row after multi-chunk migration"
     );
@@ -727,16 +698,14 @@ fn opens_v14_database_and_upgrades_to_current_with_evidence_fts_bigram_backfille
         let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
             .expect("open fresh store at SCHEMA_VERSION");
         store
-            .ingest(
-                scope,
+            .ingest(scope,
                 cjk_body.as_bytes(),
                 Some("source:cjk"),
                 ImportanceClass::Important,
             )
             .expect("ingest cjk row");
         store
-            .ingest(
-                scope,
+            .ingest(scope,
                 latin_body,
                 Some("source:latin"),
                 ImportanceClass::Important,
@@ -754,15 +723,13 @@ fn opens_v14_database_and_upgrades_to_current_with_evidence_fts_bigram_backfille
         conn.execute_batch("DROP TABLE evidence_fts_bigram;")
             .expect("drop evidence_fts_bigram to reach v14 shape");
         let exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master \
+            .query_row("SELECT COUNT(*) FROM sqlite_master \
                  WHERE type = 'table' AND name = 'evidence_fts_bigram'",
                 [],
                 |r| r.get(0),
             )
             .expect("query sqlite_master for evidence_fts_bigram");
-        assert_eq!(
-            exists, 0,
+        assert_eq!(exists, 0,
             "test setup must leave the schema without evidence_fts_bigram before reopen"
         );
         conn.pragma_update(None, "user_version", 14_i64)
@@ -772,8 +739,7 @@ fn opens_v14_database_and_upgrades_to_current_with_evidence_fts_bigram_backfille
     let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
         .expect("re-open v14 db (post-reshape) must run v15 migration");
 
-    assert_eq!(
-        read_user_version(&path),
+    assert_eq!(read_user_version(&path),
         SCHEMA_VERSION,
         "post-migration user_version must equal SCHEMA_VERSION"
     );
@@ -784,12 +750,11 @@ fn opens_v14_database_and_upgrades_to_current_with_evidence_fts_bigram_backfille
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
         .expect("count bigram rows after upgrade");
-    assert_eq!(
-        bigram_rows, 1,
+    assert_eq!(bigram_rows, 1,
         "v14 -> v15 backfill must re-insert the CJK row into evidence_fts_bigram"
     );
 
-    // Defensive content-column inspection (closes sweep-2
+    // Defensive content-column inspection (closes a follow-up
     // finding #6: prior assertion only verified row count). The
     // backfilled `content` column must hold the precomputed-bigram
     // string emitted by `crate::bigram::compute_cjk_bigrams` over
@@ -805,17 +770,14 @@ fn opens_v14_database_and_upgrades_to_current_with_evidence_fts_bigram_backfille
             row.get(0)
         })
         .expect("read evidence_fts_bigram.content after upgrade");
-    assert!(
-        !stored_bigram_content.is_empty(),
+    assert!(!stored_bigram_content.is_empty(),
         "v14 -> v15 backfill must populate evidence_fts_bigram.content"
     );
-    assert_ne!(
-        stored_bigram_content, cjk_body,
+    assert_ne!(stored_bigram_content, cjk_body,
         "v14 -> v15 backfill must transform the body into bigram form, not store raw content"
     );
     for expected_bigram in ["会議", "議事", "今日", "重要"] {
-        assert!(
-            stored_bigram_content.contains(expected_bigram),
+        assert!(stored_bigram_content.contains(expected_bigram),
             "backfilled bigram content must contain '{expected_bigram}' \
              from `{cjk_body}` (was: `{stored_bigram_content}`)"
         );
@@ -829,8 +791,7 @@ fn opens_v14_database_and_upgrades_to_current_with_evidence_fts_bigram_backfille
     let hits = store
         .search_fts(scope, "会議", 10)
         .expect("search_fts post-upgrade for 2-char query");
-    assert_eq!(
-        hits.len(),
+    assert_eq!(hits.len(),
         1,
         "v14 -> v15 backfill must make 2-char CJK queries hit via the bigram lane"
     );
@@ -845,21 +806,18 @@ fn opens_v14_database_and_upgrades_to_current_with_evidence_fts_bigram_backfille
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts", [], |r| r.get(0))
         .expect("count evidence_fts rows after upgrade");
-    assert!(
-        total_evidence_rows >= 2,
+    assert!(total_evidence_rows >= 2,
         "expected at least the cjk + latin rows in evidence_fts"
     );
     let latin_bytes_len = latin_body.len();
-    assert!(
-        latin_bytes_len > 0,
+    assert!(latin_bytes_len > 0,
         "latin_body fixture must be non-empty to make the next assertion meaningful"
     );
     let bigram_count_after: i64 = store
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
         .expect("recount bigram rows for latin guard");
-    assert_eq!(
-        bigram_count_after, 1,
+    assert_eq!(bigram_count_after, 1,
         "v14 -> v15 backfill must NOT insert the pure-Latin row into evidence_fts_bigram"
     );
 }
@@ -879,8 +837,7 @@ fn v15_migration_is_idempotent_on_already_populated_database() {
         let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
             .expect("open fresh store");
         store
-            .ingest(
-                scope,
+            .ingest(scope,
                 cjk_body.as_bytes(),
                 Some("source:cjk-idem-bigram"),
                 ImportanceClass::Important,
@@ -901,8 +858,7 @@ fn v15_migration_is_idempotent_on_already_populated_database() {
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
         .expect("count bigram rows after re-migration");
-    assert_eq!(
-        bigram_after, 1,
+    assert_eq!(bigram_after, 1,
         "idempotent v15 re-migration must not duplicate evidence_fts_bigram rows"
     );
     assert_eq!(read_user_version(&path), SCHEMA_VERSION);
@@ -938,8 +894,7 @@ fn v15_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
             .expect("begin tx for bulk seed");
         {
             let mut insert = tx
-                .prepare(
-                    "INSERT INTO evidence_fts (content, evidence_id, scope_id) \
+                .prepare("INSERT INTO evidence_fts (content, evidence_id, scope_id) \
                      VALUES (?1, ?2, ?3)",
                 )
                 .expect("prepare bulk-seed insert");
@@ -959,20 +914,17 @@ fn v15_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
         let fts_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM evidence_fts", [], |r| r.get(0))
             .expect("count evidence_fts after seed");
-        assert_eq!(
-            fts_count, SEEDED_ROWS,
+        assert_eq!(fts_count, SEEDED_ROWS,
             "bulk seed must populate evidence_fts with SEEDED_ROWS rows"
         );
         let companion_exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master \
+            .query_row("SELECT COUNT(*) FROM sqlite_master \
                  WHERE type = 'table' AND name = 'evidence_fts_bigram'",
                 [],
                 |r| r.get(0),
             )
             .expect("inspect sqlite_master for evidence_fts_bigram");
-        assert_eq!(
-            companion_exists, 0,
+        assert_eq!(companion_exists, 0,
             "evidence_fts_bigram must be absent before re-open so the migration backfill arm runs"
         );
     }
@@ -984,8 +936,7 @@ fn v15_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
         .expect("count evidence_fts_bigram after multi-chunk backfill");
-    assert_eq!(
-        bigram_total, SEEDED_ROWS,
+    assert_eq!(bigram_total, SEEDED_ROWS,
         "multi-chunk v15 backfill must produce exactly one evidence_fts_bigram row per seeded \
          evidence_fts row (rowid cursor advanced past a chunk boundary, no rows dropped, no rows \
          duplicated)"
@@ -995,8 +946,7 @@ fn v15_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
     let hits = store
         .search_fts(scope, "会議", seeded_rows_usize)
         .expect("search_fts post-multi-chunk migration for 2-char query");
-    assert_eq!(
-        hits.len(),
+    assert_eq!(hits.len(),
         seeded_rows_usize,
         "public search_fts must surface every back-filled CJK row via the bigram lane (2-char \
          query that the trigram floor blocks) after multi-chunk migration"
@@ -1004,12 +954,12 @@ fn v15_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
 }
 
 // ----------------------------------------------------------------------
-// Phase 1.9 / schema v16 — Symmetric stopword stripping migration
+//  / schema v16 — Symmetric stopword stripping migration
 // ----------------------------------------------------------------------
 //
 // The v16 migration deletes every row from `evidence_fts_cjk` and
 // `evidence_fts_bigram` (the two recall-lane shadow tables) and
-// rewrites them from `evidence_fts.content` with the Phase 1.9
+// rewrites them from `evidence_fts.content` with the 
 // stopword strip applied. Re-running the migration twice produces
 // the same final state (idempotency-by-reconstruction).
 
@@ -1020,11 +970,11 @@ fn opens_v15_database_and_upgrades_to_current_with_recall_lanes_re_stripped() {
     // verbatim), then re-stamp `user_version = 15` to put the
     // database in a pre-v16 shape on disk. The v16 migration
     // must re-tokenise the bigram + trigram lanes with the
-    // Phase 1.9 stopword strip applied.
+    //  stopword strip applied.
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("evidence.db");
     let scope = ScopeId::new_v4();
-    // Body contains the genitive particle `の` — a Phase 1.9
+    // Body contains the genitive particle `の` — a 
     // stopword — so the post-migration bigram content must not
     // contain `日本` adjacent to `の` (the stopword is replaced
     // with a single ASCII space and the lane filters whitespace
@@ -1035,8 +985,7 @@ fn opens_v15_database_and_upgrades_to_current_with_recall_lanes_re_stripped() {
         let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
             .expect("open fresh store at SCHEMA_VERSION");
         store
-            .ingest(
-                scope,
+            .ingest(scope,
                 cjk_body.as_bytes(),
                 Some("source:cjk-v16-strip"),
                 ImportanceClass::Important,
@@ -1058,14 +1007,13 @@ fn opens_v15_database_and_upgrades_to_current_with_recall_lanes_re_stripped() {
         // `evidence_fts.content` with the strip applied.
         conn.execute_batch("DELETE FROM evidence_fts_bigram;")
             .expect("delete pre-v16 bigram seeds");
-        // Re-insert with the pre-Phase-1.9 (unstripped) bigram
+        // Re-insert with the earlier (unstripped) bigram
         // form so we can prove the migration overwrites it. The
         // pre-v16 form contained the `の` particle in the
         // computed bigrams (e.g. `日本`, `本の`, `のオ`, ...).
         // We use a sentinel bigram `本の` that would never appear
         // in the post-v16 stripped form.
-        conn.execute_batch(
-            "INSERT INTO evidence_fts_bigram(content, evidence_id, scope_id) \
+        conn.execute_batch("INSERT INTO evidence_fts_bigram(content, evidence_id, scope_id) \
              SELECT '日本 本の のオ オリ リン ンピ ピッ ック', evidence_id, scope_id \
              FROM evidence_fts;",
         )
@@ -1077,8 +1025,7 @@ fn opens_v15_database_and_upgrades_to_current_with_recall_lanes_re_stripped() {
     let store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
         .expect("re-open v15 db (post-reshape) must run v16 migration");
 
-    assert_eq!(
-        read_user_version(&path),
+    assert_eq!(read_user_version(&path),
         SCHEMA_VERSION,
         "post-migration user_version must equal SCHEMA_VERSION"
     );
@@ -1093,21 +1040,18 @@ fn opens_v15_database_and_upgrades_to_current_with_recall_lanes_re_stripped() {
             row.get(0)
         })
         .expect("read evidence_fts_bigram.content after v16 upgrade");
-    assert!(
-        !stored_bigram_content.contains("本の"),
+    assert!(!stored_bigram_content.contains("本の"),
         "v16 migration must rewrite bigram lane WITHOUT the pre-strip `本の` window \
          (was: `{stored_bigram_content}`)"
     );
-    assert!(
-        !stored_bigram_content.contains("のオ"),
+    assert!(!stored_bigram_content.contains("のオ"),
         "v16 migration must rewrite bigram lane WITHOUT the pre-strip `のオ` window \
          (was: `{stored_bigram_content}`)"
     );
     // The post-strip content-side bigrams must still be present
     // — proving the migration didn't simply purge the row.
     for expected_bigram in ["オリ", "リン", "ンピ", "ピッ", "ック"] {
-        assert!(
-            stored_bigram_content.contains(expected_bigram),
+        assert!(stored_bigram_content.contains(expected_bigram),
             "post-v16 stripped bigram content must contain `{expected_bigram}` \
              (was: `{stored_bigram_content}`)"
         );
@@ -1119,8 +1063,7 @@ fn opens_v15_database_and_upgrades_to_current_with_recall_lanes_re_stripped() {
     let hits = store
         .search_fts(scope, "日本オリンピック", 10)
         .expect("post-v16 read path must find body via stripped bigram windows");
-    assert_eq!(
-        hits.len(),
+    assert_eq!(hits.len(),
         1,
         "post-v16 symmetric strip must let particle-free query match particle-containing body",
     );
@@ -1144,8 +1087,7 @@ fn v16_migration_is_idempotent_on_already_stripped_database() {
         let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
             .expect("open fresh store");
         store
-            .ingest(
-                scope,
+            .ingest(scope,
                 cjk_body.as_bytes(),
                 Some("source:cjk-v16-idem"),
                 ImportanceClass::Important,
@@ -1169,16 +1111,14 @@ fn v16_migration_is_idempotent_on_already_stripped_database() {
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_bigram", [], |r| r.get(0))
         .expect("count bigram rows after re-migration");
-    assert_eq!(
-        bigram_after, 1,
+    assert_eq!(bigram_after, 1,
         "idempotent v16 re-migration must not duplicate evidence_fts_bigram rows"
     );
     let trigram_after: i64 = store
         .raw_conn()
         .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
         .expect("count trigram rows after re-migration");
-    assert_eq!(
-        trigram_after, 1,
+    assert_eq!(trigram_after, 1,
         "idempotent v16 re-migration must not duplicate evidence_fts_cjk rows"
     );
     assert_eq!(read_user_version(&path), SCHEMA_VERSION);
@@ -1191,8 +1131,7 @@ fn v16_migration_is_idempotent_on_already_stripped_database() {
             row.get(0)
         })
         .expect("read evidence_fts_bigram.content after idempotent re-migration");
-    assert!(
-        !stored_bigram_content.contains("本の"),
+    assert!(!stored_bigram_content.contains("本の"),
         "idempotent v16 re-migration must keep the strip applied (was: `{stored_bigram_content}`)"
     );
 }

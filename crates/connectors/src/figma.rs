@@ -186,8 +186,7 @@ impl FigmaConnector {
     ///
     /// Production wires `transport` to `BlockingHttpTransport` and
     /// `oauth` to `OAuth2Client`; tests use `MockHttpTransport`.
-    pub fn new(
-        instance: ConnectorInstanceId,
+    pub fn new(instance: ConnectorInstanceId,
         transport: Arc<dyn HttpTransport>,
         oauth: Arc<dyn OAuth2CodeExchange>,
     ) -> Self {
@@ -211,8 +210,7 @@ impl FigmaConnector {
             .auth_config_json
             .get("api_base_url")
             .and_then(serde_json::Value::as_str)
-            .map_or_else(
-                || self.api_base_url.clone(),
+            .map_or_else(|| self.api_base_url.clone(),
                 std::string::ToString::to_string,
             )
     }
@@ -223,8 +221,7 @@ impl FigmaConnector {
             .get("file_keys")
             .and_then(serde_json::Value::as_array)
             .ok_or_else(|| {
-                ConnectorError::Sync(
-                    "figma sync: auth_config_json.file_keys (array of file keys) is required"
+                ConnectorError::Sync("figma sync: auth_config_json.file_keys (array of file keys) is required"
                         .into(),
                 )
             })?;
@@ -234,8 +231,7 @@ impl FigmaConnector {
             .filter(|s| !s.is_empty())
             .collect();
         if keys.is_empty() {
-            return Err(ConnectorError::Sync(
-                "figma sync: auth_config_json.file_keys was present but empty".into(),
+            return Err(ConnectorError::Sync("figma sync: auth_config_json.file_keys was present but empty".into(),
             ));
         }
         Ok(keys)
@@ -247,8 +243,7 @@ impl FigmaConnector {
             .get("team_ids")
             .and_then(serde_json::Value::as_array)
             .ok_or_else(|| {
-                ConnectorError::Webhook(
-                    "figma subscribe_webhook: auth_config_json.team_ids (array) is required".into(),
+                ConnectorError::Webhook("figma subscribe_webhook: auth_config_json.team_ids (array) is required".into(),
                 )
             })?;
         let ids: Vec<String> = raw
@@ -257,22 +252,19 @@ impl FigmaConnector {
             .filter(|s| !s.is_empty())
             .collect();
         if ids.is_empty() {
-            return Err(ConnectorError::Webhook(
-                "figma subscribe_webhook: auth_config_json.team_ids was present but empty".into(),
+            return Err(ConnectorError::Webhook("figma subscribe_webhook: auth_config_json.team_ids was present but empty".into(),
             ));
         }
         Ok(ids)
     }
 
-    fn fetch_file(
-        &self,
+    fn fetch_file(&self,
         base_url: &str,
         token: &OAuth2Token,
         file_key: &str,
     ) -> Result<FigmaFileResponse> {
         let url = format!("{base_url}/v1/files/{file_key}");
-        let raw: FigmaFileResponseRaw = bearer_get_json(
-            &self.transport,
+        let raw: FigmaFileResponseRaw = bearer_get_json(&self.transport,
             "figma",
             "/v1/files/{key}",
             &url,
@@ -377,8 +369,7 @@ impl Connector for FigmaConnector {
             .get("authorization_code")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Auth(
-                    "figma authenticate: auth_config_json.authorization_code is required".into(),
+                ConnectorError::Auth("figma authenticate: auth_config_json.authorization_code is required".into(),
                 )
             })?;
         self.oauth.exchange_code(config, auth_code)
@@ -414,8 +405,7 @@ impl Connector for FigmaConnector {
         })
     }
 
-    fn incremental_sync(
-        &self,
+    fn incremental_sync(&self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         state: &SyncState,
@@ -457,8 +447,7 @@ impl Connector for FigmaConnector {
         })
     }
 
-    fn subscribe_webhook(
-        &self,
+    fn subscribe_webhook(&self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         callback_url: &str,
@@ -493,8 +482,7 @@ impl Connector for FigmaConnector {
                     "endpoint": callback_url,
                     "passcode": passcode,
                 });
-                let resp: Result<FigmaWebhookCreateResponse> = bearer_post_json(
-                    &self.transport,
+                let resp: Result<FigmaWebhookCreateResponse> = bearer_post_json(&self.transport,
                     "figma",
                     "/v2/webhooks",
                     &url,
@@ -515,8 +503,7 @@ impl Connector for FigmaConnector {
                             // dashboard isn't littered with orphan
                             // webhooks.
                             self.rollback_partial_webhooks(&base_url, token, &registered_ids);
-                            return Err(ConnectorError::Webhook(
-                                "figma /v2/webhooks returned no id on registration".into(),
+                            return Err(ConnectorError::Webhook("figma /v2/webhooks returned no id on registration".into(),
                             ));
                         }
                     }
@@ -533,12 +520,10 @@ impl Connector for FigmaConnector {
             // list. Surface this as a webhook error so the
             // substrate doesn't persist a half-formed subscription
             // with an empty `provider_subscription_id`.
-            return Err(ConnectorError::Webhook(
-                "figma subscribe_webhook: no event_types were registered (empty team_ids?)".into(),
+            return Err(ConnectorError::Webhook("figma subscribe_webhook: no event_types were registered (empty team_ids?)".into(),
             ));
         }
-        let mut subscription = WebhookSubscription::new(
-            self.instance,
+        let mut subscription = WebhookSubscription::new(self.instance,
             callback_url,
             WebhookSecret::new(passcode),
             WebhookEventTypes::all(),
@@ -570,8 +555,7 @@ impl Connector for FigmaConnector {
             },
             "FILE_PERMISSION_UPDATE" => ConnectorEvent::PermissionChanged {
                 document_id,
-                user_id: SourceUserId::new(
-                    p.triggered_by
+                user_id: SourceUserId::new(p.triggered_by
                         .as_ref()
                         .map_or_else(String::new, |u| u.id.clone()),
                 ),
@@ -579,8 +563,7 @@ impl Connector for FigmaConnector {
                 occurred_at,
             },
             other => {
-                return Err(ConnectorError::Webhook(format!(
-                    "unknown Figma event_type: {other}"
+                return Err(ConnectorError::Webhook(format!("unknown Figma event_type: {other}"
                 )))
             }
         };
@@ -600,8 +583,7 @@ mod tests {
     struct FixedOAuth;
     impl OAuth2CodeExchange for FixedOAuth {
         fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
-            Ok(OAuth2Token::new(
-                "figma-access",
+            Ok(OAuth2Token::new("figma-access",
                 "figma-refresh",
                 Utc::now() + Duration::hours(24),
                 "files:read file_metadata:read library_assets:read webhooks:write",
@@ -680,8 +662,7 @@ mod tests {
     #[test]
     fn initial_sync_emits_per_file_and_per_component() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/figma/v1/files/F1",
             ok_json(&wire_file("100")),
         );
@@ -713,8 +694,7 @@ mod tests {
         // Cursor pins F1 at version 100. The transport returns
         // version 100 again — incremental_sync must emit nothing.
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/figma/v1/files/F1",
             ok_json(&wire_file("100")),
         );
@@ -726,8 +706,7 @@ mod tests {
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert!(res.events.is_empty());
         // Cursor must round-trip — same versions retained.
-        assert_eq!(
-            decode_cursor(res.next_cursor.as_deref())
+        assert_eq!(decode_cursor(res.next_cursor.as_deref())
                 .get("F1")
                 .map(String::as_str),
             Some("100"),
@@ -739,8 +718,7 @@ mod tests {
         // Cursor at 9 → version 10 must register as newer (regression
         // against lexicographic compare that would treat "10" <= "9").
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/figma/v1/files/F1",
             ok_json(&wire_file("10")),
         );
@@ -752,8 +730,7 @@ mod tests {
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         // File + 1 component → 2 events.
         assert_eq!(res.events.len(), 2);
-        assert!(matches!(
-            res.events[0],
+        assert!(matches!(res.events[0],
             ConnectorEvent::DocumentUpdated { .. }
         ));
         let next = decode_cursor(res.next_cursor.as_deref());
@@ -781,8 +758,7 @@ mod tests {
         // joined id list reaches `provider_subscription_id`.
         let transport = Arc::new(MockHttpTransport::new());
         for id in ["w1", "w2", "w3", "w4", "w5"] {
-            transport.expect(
-                HttpMethod::Post,
+            transport.expect(HttpMethod::Post,
                 "https://api.test/figma/v2/webhooks",
                 ok_json(&serde_json::json!({"id": id})),
             );
@@ -792,8 +768,7 @@ mod tests {
         let sub = c
             .subscribe_webhook(&cfg(), &tok, "https://demo.example/webhooks/figma")
             .unwrap();
-        assert_eq!(
-            sub.provider_subscription_id.as_deref(),
+        assert_eq!(sub.provider_subscription_id.as_deref(),
             Some("w1,w2,w3,w4,w5"),
         );
         // Every recorded request must carry the configured passcode
@@ -817,32 +792,27 @@ mod tests {
         // orphan webhooks linger in Figma's dashboard.
         let transport = Arc::new(MockHttpTransport::new());
         // FIFO success POSTs:
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.test/figma/v2/webhooks",
             ok_json(&serde_json::json!({"id": "w1"})),
         );
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.test/figma/v2/webhooks",
             ok_json(&serde_json::json!({"id": "w2"})),
         );
         // Third POST returns a hard 4xx (no transport retry; the
         // failure propagates as ConnectorError::Sync or Webhook).
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.test/figma/v2/webhooks",
             MockResponse::status(403, b"forbidden".to_vec()),
         );
         // Expected rollback DELETEs — these are the assertions we
         // care about for this test.
-        transport.expect(
-            HttpMethod::Delete,
+        transport.expect(HttpMethod::Delete,
             "https://api.test/figma/v2/webhooks/w1",
             MockResponse::status(204, Vec::new()),
         );
-        transport.expect(
-            HttpMethod::Delete,
+        transport.expect(HttpMethod::Delete,
             "https://api.test/figma/v2/webhooks/w2",
             MockResponse::status(204, Vec::new()),
         );
@@ -852,9 +822,7 @@ mod tests {
         let err = c
             .subscribe_webhook(&cfg(), &tok, "https://demo.example/webhooks/figma")
             .unwrap_err();
-        assert!(
-            matches!(
-                err,
+        assert!(matches!(err,
                 ConnectorError::Sync(_) | ConnectorError::Webhook(_) | ConnectorError::Auth(_)
             ),
             "subscribe_webhook must surface the upstream failure"
@@ -865,8 +833,7 @@ mod tests {
             .into_iter()
             .filter(|r| r.method == HttpMethod::Delete)
             .collect();
-        assert_eq!(
-            deletes.len(),
+        assert_eq!(deletes.len(),
             2,
             "must issue one DELETE per successfully-registered webhook id"
         );
@@ -895,8 +862,7 @@ mod tests {
     #[test]
     fn list_500_propagates_as_sync_error() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/figma/v1/files/F1",
             MockResponse::status(500, b"upstream boom".to_vec()),
         );

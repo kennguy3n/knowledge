@@ -169,8 +169,7 @@ impl UserMemoryObject {
     }
 
     /// Add a brand-new candidate observation. Returns the new id.
-    pub fn add_observation(
-        &mut self,
+    pub fn add_observation(&mut self,
         observation_type: impl Into<String>,
         content: impl Into<String>,
         sensitivity_class: crate::object::SensitivityClass,

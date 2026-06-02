@@ -213,8 +213,7 @@ impl CitationRegistry {
     pub fn get(&self, observation_id: Uuid) -> Result<&Citation> {
         self.by_observation
             .get(&observation_id)
-            .ok_or(ObservationError::Internal(
-                "no citation registered for observation".into(),
+            .ok_or(ObservationError::Internal("no citation registered for observation".into(),
             ))
     }
 
@@ -266,8 +265,7 @@ impl CitationRegistry {
 /// Build a citation directly from a [`DocumentRef`] and a
 /// `(start, end)` byte range, bypassing chunk metadata. Useful
 /// for callers that want to citationise a free-form span.
-pub fn citation_from_document_span(
-    document: &DocumentRef,
+pub fn citation_from_document_span(document: &DocumentRef,
     chunk_range: (usize, usize),
     section_ref: Option<String>,
 ) -> Citation {
@@ -289,8 +287,7 @@ mod tests {
 
     fn chunk_meta() -> ChunkMetadata {
         ChunkMetadata {
-            document: DocumentRef::new(
-                "notion",
+            document: DocumentRef::new("notion",
                 "doc-123",
                 Some("https://notion.so/doc-123".into()),
             ),

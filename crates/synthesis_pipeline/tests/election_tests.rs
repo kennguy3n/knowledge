@@ -85,12 +85,10 @@ fn election_re_runs_after_synthesizer_marked_offline() {
 #[test]
 fn synthesizer_role_str_tags_match_proposal_table() {
     assert_eq!(SynthesizerRole::ElectedDevice.as_str(), "elected_device");
-    assert_eq!(
-        SynthesizerRole::ManagedEndpoint.as_str(),
+    assert_eq!(SynthesizerRole::ManagedEndpoint.as_str(),
         "managed_endpoint"
     );
-    assert_eq!(
-        SynthesizerRole::ConfidentialCompute.as_str(),
+    assert_eq!(SynthesizerRole::ConfidentialCompute.as_str(),
         "confidential_compute"
     );
 }

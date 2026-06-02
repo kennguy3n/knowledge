@@ -92,8 +92,7 @@ pub struct Lexicon {
 impl Lexicon {
     /// Build a fresh lexicon from explicit lists. All inputs are
     /// lower-cased.
-    pub fn new(
-        noise_tokens: Vec<&str>,
+    pub fn new(noise_tokens: Vec<&str>,
         noise_phrases: Vec<&str>,
         critical_keywords: Vec<&str>,
         important_keywords: Vec<&str>,
@@ -117,8 +116,7 @@ impl Lexicon {
     /// Builder-friendly default lexicon for English chat messages.
     /// Production deployments should override per-tenant.
     pub fn default_english() -> Self {
-        Self::new(
-            // noise_tokens — short reaction-style tokens
+        Self::new(// noise_tokens — short reaction-style tokens
             vec![
                 "hi", "hello", "hey", "yo", "sup", "ok", "okay", "k", "kk", "thanks", "thx", "ty",
                 "+1", "-1", "lol", "lmao", "rofl", "nice", "great", "cool", "yes", "no", "yep",
@@ -309,16 +307,13 @@ mod tests {
     #[test]
     fn critical_detection() {
         let c = LexiconClassifier::english_default();
-        assert_eq!(
-            c.classify("This change is required by our compliance policy."),
+        assert_eq!(c.classify("This change is required by our compliance policy."),
             ImportanceClass::Critical
         );
-        assert_eq!(
-            c.classify("Budget confirmed for FY27 expansion."),
+        assert_eq!(c.classify("Budget confirmed for FY27 expansion."),
             ImportanceClass::Critical
         );
-        assert_eq!(
-            c.classify("Legal hold issued on the marketing channel."),
+        assert_eq!(c.classify("Legal hold issued on the marketing channel."),
             ImportanceClass::Critical
         );
     }
@@ -326,16 +321,13 @@ mod tests {
     #[test]
     fn important_detection() {
         let c = LexiconClassifier::english_default();
-        assert_eq!(
-            c.classify("Friday is the deadline for the migration."),
+        assert_eq!(c.classify("Friday is the deadline for the migration."),
             ImportanceClass::Important
         );
-        assert_eq!(
-            c.classify("This task is assigned to Anna."),
+        assert_eq!(c.classify("This task is assigned to Anna."),
             ImportanceClass::Important
         );
-        assert_eq!(
-            c.classify("Launch is set for next quarter."),
+        assert_eq!(c.classify("Launch is set for next quarter."),
             ImportanceClass::Important
         );
     }
@@ -343,8 +335,7 @@ mod tests {
     #[test]
     fn default_useful_for_normal_text() {
         let c = LexiconClassifier::english_default();
-        assert_eq!(
-            c.classify("Let's revisit the dashboard design tomorrow."),
+        assert_eq!(c.classify("Let's revisit the dashboard design tomorrow."),
             ImportanceClass::Useful
         );
     }
@@ -355,12 +346,10 @@ mod tests {
         // with no critical keywords should never produce Critical.
         let lexicon = Lexicon::new(vec!["noise"], vec!["just noise"], vec![], vec!["urgent"], 5);
         let c = LexiconClassifier::new(lexicon);
-        assert_eq!(
-            c.classify("This change is required by our compliance policy."),
+        assert_eq!(c.classify("This change is required by our compliance policy."),
             ImportanceClass::Useful
         );
-        assert_eq!(
-            c.classify("This is urgent please."),
+        assert_eq!(c.classify("This is urgent please."),
             ImportanceClass::Important
         );
         assert_eq!(c.classify("noise"), ImportanceClass::Noise);

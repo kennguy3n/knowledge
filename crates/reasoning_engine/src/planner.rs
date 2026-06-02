@@ -149,20 +149,16 @@ impl Default for PlannerHeuristics {
         use RetrievalMode::{Fts, GraphTraversal, RawEvidence, SemanticVector, Summary};
         Self {
             chains: vec![
-                (
-                    QueryClass::PointLookup,
+                (QueryClass::PointLookup,
                     vec![Summary, Fts, SemanticVector, RawEvidence],
                 ),
-                (
-                    QueryClass::Relational,
+                (QueryClass::Relational,
                     vec![GraphTraversal, Fts, RawEvidence],
                 ),
-                (
-                    QueryClass::Temporal,
+                (QueryClass::Temporal,
                     vec![Fts, SemanticVector, Summary, RawEvidence],
                 ),
-                (
-                    QueryClass::Holistic,
+                (QueryClass::Holistic,
                     vec![GraphTraversal, Summary, RawEvidence],
                 ),
             ],
@@ -348,8 +344,7 @@ mod tests {
     fn classifier_routes_relational_queries() {
         let c = QueryClassifier;
         assert_eq!(c.classify("Who decided by Sara?"), QueryClass::Relational);
-        assert_eq!(
-            c.classify("What is assigned to Eng?"),
+        assert_eq!(c.classify("What is assigned to Eng?"),
             QueryClass::Relational
         );
     }
@@ -365,8 +360,7 @@ mod tests {
     fn classifier_routes_holistic_queries() {
         let c = QueryClassifier;
         assert_eq!(c.classify("Catch me up"), QueryClass::Holistic);
-        assert_eq!(
-            c.classify("Give me an overview of the project"),
+        assert_eq!(c.classify("Give me an overview of the project"),
             QueryClass::Holistic
         );
     }
@@ -385,8 +379,7 @@ mod tests {
         let p = QueryPlanner::new();
         let plan = p.plan("Who is the decider on the launch decided by Sara?");
         assert_eq!(plan.class, QueryClass::Relational);
-        assert_eq!(
-            plan.steps.first().unwrap().mode,
+        assert_eq!(plan.steps.first().unwrap().mode,
             RetrievalMode::GraphTraversal
         );
     }
@@ -397,8 +390,7 @@ mod tests {
         let plan = p.plan("Catch me up on the launch");
         assert_eq!(plan.class, QueryClass::Holistic);
         let first = plan.steps.first().unwrap().mode;
-        assert!(matches!(
-            first,
+        assert!(matches!(first,
             RetrievalMode::GraphTraversal | RetrievalMode::Summary
         ));
     }

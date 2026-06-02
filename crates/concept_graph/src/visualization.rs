@@ -318,8 +318,7 @@ fn edge_passes(edge: &ConceptEdge, filter: &ViewFilter, access: &impl ScopeAcces
 /// Returns an empty [`GraphView`] if `start` is missing or fails
 /// the filter/access check. Truncation reason explains whether the
 /// view is partial.
-pub fn explore_from(
-    graph: &ConceptGraph,
+pub fn explore_from(graph: &ConceptGraph,
     start: NodeId,
     filter: &ViewFilter,
     access: &impl ScopeAccess,
@@ -341,8 +340,7 @@ pub fn explore_from(
 /// the call site easy to read: `subgraph_for_scope(g, my_scope,
 /// &ViewFilter::default(), &access)` returns exactly the nodes /
 /// edges in `my_scope`.
-pub fn subgraph_for_scope(
-    graph: &ConceptGraph,
+pub fn subgraph_for_scope(graph: &ConceptGraph,
     scope_id: ScopeId,
     filter: &ViewFilter,
     access: &impl ScopeAccess,
@@ -422,8 +420,7 @@ pub fn subgraph_for_scope(
 /// [`explore_from`] but with `filter.max_depth` *forced* to
 /// `depth`. If the caller already set a stricter `max_depth`, the
 /// stricter value wins.
-pub fn neighborhood(
-    graph: &ConceptGraph,
+pub fn neighborhood(graph: &ConceptGraph,
     center: NodeId,
     depth: usize,
     filter: &ViewFilter,
@@ -442,8 +439,7 @@ pub fn neighborhood(
 /// `definition`, returning at most [`ViewFilter::effective_max_nodes`]
 /// results (after access-gating). Results are sorted by id for
 /// determinism.
-pub fn search_nodes(
-    graph: &ConceptGraph,
+pub fn search_nodes(graph: &ConceptGraph,
     query_text: &str,
     filter: &ViewFilter,
     access: &impl ScopeAccess,
@@ -468,8 +464,7 @@ pub fn search_nodes(
         .collect()
 }
 
-fn bfs_collect(
-    graph: &ConceptGraph,
+fn bfs_collect(graph: &ConceptGraph,
     seeds: impl IntoIterator<Item = NodeId>,
     filter: &ViewFilter,
     access: &impl ScopeAccess,
@@ -595,8 +590,7 @@ mod tests {
     fn empty_graph_returns_empty_view() {
         let g = ConceptGraph::new();
         let scope = ScopeId::new_v4();
-        let v = explore_from(
-            &g,
+        let v = explore_from(&g,
             NodeId::new_v4(),
             &ViewFilter::default(),
             &AllowAllScopes,
@@ -749,8 +743,7 @@ mod tests {
         let mut g = ConceptGraph::new();
         let canonical = g.add_node(promote(mk_node(scope, "Canon"))).unwrap();
         let candidate = g.add_node(mk_node(scope, "Cand")).unwrap();
-        g.add_edge(ConceptEdge::new(
-            canonical,
+        g.add_edge(ConceptEdge::new(canonical,
             candidate,
             RelationType::IsA,
             scope,

@@ -24,8 +24,7 @@ use crate::AuditEntryId;
 /// * `concepts_exported` — the ids of the concepts that ended up in
 ///   the rendered view. Stored in the entry's `details` field as a
 ///   `concepts_exported` JSON array.
-pub fn log_export(
-    log: &mut AuditLog,
+pub fn log_export(log: &mut AuditLog,
     profile_id: Uuid,
     scope_id: ScopeId,
     actor: Actor,
@@ -49,8 +48,7 @@ pub fn log_export(
 /// The export plane produces an audit entry every time
 /// [`PolicySimulator::simulate`](https://docs.rs/) is run so operators
 /// can prove a simulation occurred without producing a real export.
-pub fn log_export_simulated(
-    log: &mut AuditLog,
+pub fn log_export_simulated(log: &mut AuditLog,
     profile_id: Uuid,
     scope_id: ScopeId,
     actor: Actor,
@@ -73,8 +71,7 @@ pub fn log_export_simulated(
 /// Append an [`AuditActionType::AgentProposalSubmitted`] entry.
 ///
 /// Records that an agent submitted a new proposal awaiting review.
-pub fn log_proposal_submitted(
-    log: &mut AuditLog,
+pub fn log_proposal_submitted(log: &mut AuditLog,
     proposal_id: Uuid,
     agent_id: Uuid,
     scope_id: ScopeId,
@@ -101,8 +98,7 @@ pub fn log_proposal_submitted(
 /// the [`log_export`] / [`log_export_simulated`] convention; the
 /// actor's id is carried by the entry's [`crate::Actor`] field, so
 /// the `details` payload no longer duplicates it.
-pub fn log_proposal_promoted(
-    log: &mut AuditLog,
+pub fn log_proposal_promoted(log: &mut AuditLog,
     proposal_id: Uuid,
     actor: Actor,
     scope_id: ScopeId,
@@ -125,8 +121,7 @@ pub fn log_proposal_promoted(
 /// [`agent_contract::ProposalStore::review`]) record the correct
 /// actor kind in the audit trail. `reason` is a free-form
 /// human-readable string captured into the entry's `details` field.
-pub fn log_proposal_rejected(
-    log: &mut AuditLog,
+pub fn log_proposal_rejected(log: &mut AuditLog,
     proposal_id: Uuid,
     actor: Actor,
     scope_id: ScopeId,
@@ -165,8 +160,7 @@ mod tests {
         assert_eq!(entry.target.target_type, TargetType::ExportProfile);
         assert_eq!(entry.target.target_id, profile);
         assert_eq!(entry.scope_id, Some(scope));
-        assert_eq!(
-            entry
+        assert_eq!(entry
                 .details
                 .get("count")
                 .and_then(serde_json::Value::as_u64),
@@ -182,15 +176,13 @@ mod tests {
         let id = log_export_simulated(&mut log, profile, scope, Actor::System, 3, 2).expect("log");
         let entry = log.get(id).expect("present");
         assert_eq!(entry.action_type, AuditActionType::ExportSimulated);
-        assert_eq!(
-            entry
+        assert_eq!(entry
                 .details
                 .get("included_count")
                 .and_then(serde_json::Value::as_u64),
             Some(3)
         );
-        assert_eq!(
-            entry
+        assert_eq!(entry
                 .details
                 .get("excluded_count")
                 .and_then(serde_json::Value::as_u64),
@@ -246,8 +238,7 @@ mod tests {
         let mut log = AuditLog::new();
         let proposal = Uuid::new_v4();
         let user = Uuid::new_v4();
-        let id = log_proposal_rejected(
-            &mut log,
+        let id = log_proposal_rejected(&mut log,
             proposal,
             Actor::User(user),
             fixture_scope(),
@@ -256,8 +247,7 @@ mod tests {
         .expect("log");
         let entry = log.get(id).expect("present");
         assert_eq!(entry.action_type, AuditActionType::AgentProposalRejected);
-        assert_eq!(
-            entry
+        assert_eq!(entry
                 .details
                 .get("reason")
                 .and_then(serde_json::Value::as_str),
@@ -275,8 +265,7 @@ mod tests {
         // Actor::System rather than hardcoding Actor::User.
         let mut log = AuditLog::new();
         let proposal = Uuid::new_v4();
-        let id = log_proposal_rejected(
-            &mut log,
+        let id = log_proposal_rejected(&mut log,
             proposal,
             Actor::System,
             fixture_scope(),
@@ -286,8 +275,7 @@ mod tests {
         let entry = log.get(id).expect("present");
         assert_eq!(entry.action_type, AuditActionType::AgentProposalRejected);
         assert!(matches!(entry.actor, Actor::System));
-        assert_eq!(
-            entry
+        assert_eq!(entry
                 .details
                 .get("reason")
                 .and_then(serde_json::Value::as_str),

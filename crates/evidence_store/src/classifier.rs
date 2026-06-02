@@ -231,8 +231,7 @@ mod tests {
         fn supports(&self, _task: InferenceTask) -> bool {
             true
         }
-        fn generate(
-            &self,
+        fn generate(&self,
             _task_tag: &str,
             _prompt: &str,
             _grammar: &str,
@@ -250,20 +249,17 @@ mod tests {
 
     #[test]
     fn slm_classifier_parses_critical_verdict() {
-        let router = router_with(Box::new(ConstAdapter::ok(
-            r#"{"class":"critical","confidence":0.9}"#,
+        let router = router_with(Box::new(ConstAdapter::ok(r#"{"class":"critical","confidence":0.9}"#,
         )));
         let c = SlmClassifier::new(router);
-        assert_eq!(
-            c.classify("the regulator demands a 24h response"),
+        assert_eq!(c.classify("the regulator demands a 24h response"),
             ImportanceClass::Critical
         );
     }
 
     #[test]
     fn slm_classifier_parses_useful_verdict() {
-        let router = router_with(Box::new(ConstAdapter::ok(
-            r#"{"class":"useful","confidence":0.4}"#,
+        let router = router_with(Box::new(ConstAdapter::ok(r#"{"class":"useful","confidence":0.4}"#,
         )));
         let c = SlmClassifier::new(router);
         assert_eq!(c.classify("any text here"), ImportanceClass::Useful);
@@ -276,20 +272,17 @@ mod tests {
         })));
         let c = SlmClassifier::new(router);
         // Lexicon would mark this as critical via `compliance` keyword.
-        assert_eq!(
-            c.classify("compliance review needed"),
+        assert_eq!(c.classify("compliance review needed"),
             ImportanceClass::Critical
         );
     }
 
     #[test]
     fn slm_classifier_falls_back_on_inference_failure() {
-        let router = router_with(Box::new(ConstAdapter::err(RouterError::InferenceFailure(
-            "network down".into(),
+        let router = router_with(Box::new(ConstAdapter::err(RouterError::InferenceFailure("network down".into(),
         ))));
         let c = SlmClassifier::new(router);
-        assert_eq!(
-            c.classify("the deadline is tomorrow"),
+        assert_eq!(c.classify("the deadline is tomorrow"),
             ImportanceClass::Important
         );
     }
@@ -298,34 +291,29 @@ mod tests {
     fn slm_classifier_falls_back_on_malformed_json() {
         let router = router_with(Box::new(ConstAdapter::ok("not-json")));
         let c = SlmClassifier::new(router);
-        assert_eq!(
-            c.classify("the deadline is tomorrow"),
+        assert_eq!(c.classify("the deadline is tomorrow"),
             ImportanceClass::Important
         );
     }
 
     #[test]
     fn slm_classifier_rejects_out_of_range_confidence() {
-        let router = router_with(Box::new(ConstAdapter::ok(
-            r#"{"class":"critical","confidence":42.0}"#,
+        let router = router_with(Box::new(ConstAdapter::ok(r#"{"class":"critical","confidence":42.0}"#,
         )));
         let c = SlmClassifier::new(router);
         // 42.0 is invalid → fall back to lexicon. Without lexicon-level
         // critical/important keywords the lexicon settles on Useful.
-        assert_eq!(
-            c.classify("the team should review this in detail"),
+        assert_eq!(c.classify("the team should review this in detail"),
             ImportanceClass::Useful
         );
     }
 
     #[test]
     fn slm_classifier_rejects_unknown_class_label() {
-        let router = router_with(Box::new(ConstAdapter::ok(
-            r#"{"class":"super-critical","confidence":0.9}"#,
+        let router = router_with(Box::new(ConstAdapter::ok(r#"{"class":"super-critical","confidence":0.9}"#,
         )));
         let c = SlmClassifier::new(router);
-        assert_eq!(
-            c.classify("compliance review needed"),
+        assert_eq!(c.classify("compliance review needed"),
             ImportanceClass::Critical // via lexicon fallback
         );
     }
@@ -333,11 +321,9 @@ mod tests {
     #[test]
     fn composite_short_circuits_on_lexicon_noise() {
         // SLM would have said Critical; composite must keep Noise.
-        let router = router_with(Box::new(ConstAdapter::ok(
-            r#"{"class":"critical","confidence":0.99}"#,
+        let router = router_with(Box::new(ConstAdapter::ok(r#"{"class":"critical","confidence":0.99}"#,
         )));
-        let comp = CompositeClassifier::new(
-            LexiconClassifier::english_default(),
+        let comp = CompositeClassifier::new(LexiconClassifier::english_default(),
             SlmClassifier::new(router),
         );
         assert_eq!(comp.classify("hi"), ImportanceClass::Noise);
@@ -346,15 +332,12 @@ mod tests {
     #[test]
     fn composite_short_circuits_on_lexicon_critical() {
         // SLM would have said Useful; composite must keep Critical.
-        let router = router_with(Box::new(ConstAdapter::ok(
-            r#"{"class":"useful","confidence":0.4}"#,
+        let router = router_with(Box::new(ConstAdapter::ok(r#"{"class":"useful","confidence":0.4}"#,
         )));
-        let comp = CompositeClassifier::new(
-            LexiconClassifier::english_default(),
+        let comp = CompositeClassifier::new(LexiconClassifier::english_default(),
             SlmClassifier::new(router),
         );
-        assert_eq!(
-            comp.classify("Legal hold issued on the marketing channel."),
+        assert_eq!(comp.classify("Legal hold issued on the marketing channel."),
             ImportanceClass::Critical
         );
     }
@@ -364,15 +347,12 @@ mod tests {
         // Lexicon would classify "let's revisit the dashboard" as
         // Useful. The SLM upgrades that to Important, and the
         // composite must use the SLM verdict.
-        let router = router_with(Box::new(ConstAdapter::ok(
-            r#"{"class":"important","confidence":0.7}"#,
+        let router = router_with(Box::new(ConstAdapter::ok(r#"{"class":"important","confidence":0.7}"#,
         )));
-        let comp = CompositeClassifier::new(
-            LexiconClassifier::english_default(),
+        let comp = CompositeClassifier::new(LexiconClassifier::english_default(),
             SlmClassifier::new(router),
         );
-        assert_eq!(
-            comp.classify("let's revisit the dashboard tomorrow"),
+        assert_eq!(comp.classify("let's revisit the dashboard tomorrow"),
             ImportanceClass::Important
         );
     }
@@ -381,8 +361,7 @@ mod tests {
     fn composite_lexicon_only_when_slm_is_absent() {
         let comp = CompositeClassifier::lexicon_only(LexiconClassifier::english_default());
         assert!(!comp.has_slm());
-        assert_eq!(
-            comp.classify("Friday is the deadline for the migration."),
+        assert_eq!(comp.classify("Friday is the deadline for the migration."),
             ImportanceClass::Important
         );
     }
@@ -394,12 +373,10 @@ mod tests {
         let router = router_with(Box::new(ConstAdapter::err(RouterError::Unavailable {
             task: "tag_importance",
         })));
-        let comp = CompositeClassifier::new(
-            LexiconClassifier::english_default(),
+        let comp = CompositeClassifier::new(LexiconClassifier::english_default(),
             SlmClassifier::new(router),
         );
-        assert_eq!(
-            comp.classify("let's revisit the dashboard tomorrow"),
+        assert_eq!(comp.classify("let's revisit the dashboard tomorrow"),
             ImportanceClass::Useful
         );
     }
@@ -430,31 +407,26 @@ mod tests {
         // `ImportanceClass`. Feed it bodies that exercise each class
         // and assert the round-trip mapping.
         let cfg = RouterConfig::default();
-        let router = Arc::new(InferenceRouter::new(
-            cfg,
+        let router = Arc::new(InferenceRouter::new(cfg,
             vec![Box::new(FallbackAdapter::new())],
         ));
         router.bootstrap();
         let c = SlmClassifier::new(router);
 
         // "Critical" lexicon term.
-        assert_eq!(
-            c.classify("Security incident in production — please page on-call"),
+        assert_eq!(c.classify("Security incident in production — please page on-call"),
             ImportanceClass::Critical
         );
         // "Important" lexicon term.
-        assert_eq!(
-            c.classify("Please review the deadline for the launch"),
+        assert_eq!(c.classify("Please review the deadline for the launch"),
             ImportanceClass::Important
         );
         // "Useful" lexicon term (question / interrogative).
-        assert_eq!(
-            c.classify("Could you investigate the question on routing?"),
+        assert_eq!(c.classify("Could you investigate the question on routing?"),
             ImportanceClass::Useful
         );
         // No signal at all → noise class.
-        assert_eq!(
-            c.classify("any random body without keywords"),
+        assert_eq!(c.classify("any random body without keywords"),
             ImportanceClass::Noise
         );
     }

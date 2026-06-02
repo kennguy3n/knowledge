@@ -65,8 +65,7 @@ impl PartialEq for TenantError {
         #[allow(clippy::match_same_arms)]
         match (self, other) {
             (Self::NotFound(a), Self::NotFound(b)) => a == b,
-            (
-                Self::InvalidLifecycleTransition { from: a1, to: a2 },
+            (Self::InvalidLifecycleTransition { from: a1, to: a2 },
                 Self::InvalidLifecycleTransition { from: b1, to: b2 },
             ) => a1 == b1 && a2 == b2,
             (Self::InvalidConfig(a), Self::InvalidConfig(b)) => a == b,

@@ -37,10 +37,8 @@ use export_plane::{
 use memory_manager::SensitivityClass;
 
 fn provenance_for(concept_id: Uuid) -> ProvenanceBundle {
-    ProvenanceBundle::new(
-        concept_id,
-        SynthesisActivity::new(
-            "export-plane-test",
+    ProvenanceBundle::new(concept_id,
+        SynthesisActivity::new("export-plane-test",
             "test-model@v1",
             "synth.test.v1",
             Uuid::new_v4(),
@@ -53,8 +51,7 @@ fn provenance_for(concept_id: Uuid) -> ProvenanceBundle {
 /// Build a fresh `ConceptGraph` containing one canonical concept and
 /// register it in the export control registry. Returns the concept id
 /// alongside the populated graph and registry.
-fn graph_with_canonical_concept(
-    label: &str,
+fn graph_with_canonical_concept(label: &str,
     definition: &str,
     scope: ScopeId,
 ) -> (ConceptGraph, ExportControlRegistry, Uuid) {
@@ -83,8 +80,7 @@ fn full_export_pipeline_emits_concepts_only_view_and_audit_trail() {
     let mut workflow = ConceptApprovalWorkflow::new();
     let profile_id = Uuid::new_v4();
     let approved = workflow
-        .approve_for_export(
-            concept_id,
+        .approve_for_export(concept_id,
             scope,
             profile_id,
             SensitivityClass::Useful,
@@ -95,8 +91,7 @@ fn full_export_pipeline_emits_concepts_only_view_and_audit_trail() {
     assert_eq!(approved.concept_id, concept_id);
 
     // 3. Build a portable concept profile.
-    let mut profile = PortableConceptProfile::new(
-        "atlas-launch-export",
+    let mut profile = PortableConceptProfile::new("atlas-launch-export",
         "Atlas launch concept profile for downstream tools",
         "downstream-tool",
         scope,
@@ -120,8 +115,7 @@ fn full_export_pipeline_emits_concepts_only_view_and_audit_trail() {
     assert_eq!(result.included_concepts, vec![concept_id]);
     assert!(result.excluded_concepts.is_empty());
     assert!(!result.would_include_evidence);
-    log_export_simulated(
-        &mut audit,
+    log_export_simulated(&mut audit,
         profile.id,
         scope,
         Actor::User(admin),
@@ -136,8 +130,7 @@ fn full_export_pipeline_emits_concepts_only_view_and_audit_trail() {
     //    exactly the engine's `approved` list.
     let decision = PolicyEngine::new().evaluate(&policy, &profile.concepts);
     assert_eq!(decision.approved.len(), 1);
-    let view = ExportView::from_decision(
-        &decision,
+    let view = ExportView::from_decision(&decision,
         profile.id,
         scope,
         ExportViewRequest::ConceptsOnly,
@@ -151,8 +144,7 @@ fn full_export_pipeline_emits_concepts_only_view_and_audit_trail() {
     assert!(!decision.allow_raw_evidence);
 
     // 7. Audit the actual render.
-    log_export(
-        &mut audit,
+    log_export(&mut audit,
         profile.id,
         scope,
         Actor::User(admin),
@@ -179,8 +171,7 @@ fn unapproved_concept_cannot_appear_in_export() {
     let scope = ScopeId::new_v4();
     let mut profile = PortableConceptProfile::new("p", "d", "tool", scope);
     let unapproved_concept_id = Uuid::new_v4();
-    profile.push_concept(ApprovedConcept::new(
-        unapproved_concept_id,
+    profile.push_concept(ApprovedConcept::new(unapproved_concept_id,
         "Phantom",
         "Not actually approved",
         scope,
@@ -203,8 +194,7 @@ fn critical_sensitivity_concept_is_blocked_by_default_policy() {
     // approved concept must be filtered out by the engine.
     let scope = ScopeId::new_v4();
     let concept_id = Uuid::new_v4();
-    let approved = ApprovedConcept::new(
-        concept_id,
+    let approved = ApprovedConcept::new(concept_id,
         "Crown Jewels",
         "Most-sensitive concept",
         scope,
@@ -237,8 +227,7 @@ fn export_view_from_decision_rejects_unauthorised_evidence_pack() {
     // refused to permit.
     let scope = ScopeId::new_v4();
     let concept_id = Uuid::new_v4();
-    let approved = ApprovedConcept::new(
-        concept_id,
+    let approved = ApprovedConcept::new(concept_id,
         "Atlas",
         "definition",
         scope,
@@ -253,8 +242,7 @@ fn export_view_from_decision_rejects_unauthorised_evidence_pack() {
     let mut pack = EvidencePack::new();
     pack.evidence_refs
         .push(EvidenceRef::from_uuid(Uuid::new_v4()));
-    let err = ExportView::from_decision(
-        &decision,
+    let err = ExportView::from_decision(&decision,
         Uuid::new_v4(),
         scope,
         ExportViewRequest::WithEvidencePack {
@@ -273,8 +261,7 @@ fn export_view_from_decision_admits_evidence_pack_when_authorised() {
     // resulting view carries the evidence pack verbatim.
     let scope = ScopeId::new_v4();
     let concept_id = Uuid::new_v4();
-    let approved = ApprovedConcept::new(
-        concept_id,
+    let approved = ApprovedConcept::new(concept_id,
         "Atlas",
         "definition",
         scope,
@@ -291,8 +278,7 @@ fn export_view_from_decision_admits_evidence_pack_when_authorised() {
     let evidence_id = Uuid::new_v4();
     let mut pack = EvidencePack::new();
     pack.evidence_refs.push(EvidenceRef::from_uuid(evidence_id));
-    let view = ExportView::from_decision(
-        &decision,
+    let view = ExportView::from_decision(&decision,
         Uuid::new_v4(),
         scope,
         ExportViewRequest::WithEvidencePack {
@@ -319,16 +305,14 @@ fn export_view_from_decision_uses_decision_approved_set_verbatim() {
     // concepts because the `ExportViewRequest` enum has no way to
     // override the concept list.
     let scope = ScopeId::new_v4();
-    let smuggled = ApprovedConcept::new(
-        Uuid::new_v4(),
+    let smuggled = ApprovedConcept::new(Uuid::new_v4(),
         "Smuggled",
         "should not appear",
         scope,
         provenance_for(Uuid::new_v4()),
         SensitivityClass::Useful,
     );
-    let admitted = ApprovedConcept::new(
-        Uuid::new_v4(),
+    let admitted = ApprovedConcept::new(Uuid::new_v4(),
         "Atlas",
         "definition",
         scope,
@@ -341,8 +325,7 @@ fn export_view_from_decision_uses_decision_approved_set_verbatim() {
     let _ = smuggled; // The struct exists, but the request enum
                       // gives the caller no place to attach it.
 
-    let view = ExportView::from_decision(
-        &decision,
+    let view = ExportView::from_decision(&decision,
         Uuid::new_v4(),
         scope,
         ExportViewRequest::ConceptsOnly,
@@ -359,8 +342,7 @@ fn raw_evidence_blocked_when_critical_concept_is_approved() {
     // approved concept is `Critical`.
     let scope = ScopeId::new_v4();
     let concept_id = Uuid::new_v4();
-    let approved = ApprovedConcept::new(
-        concept_id,
+    let approved = ApprovedConcept::new(concept_id,
         "Crown Jewels",
         "Most-sensitive concept",
         scope,
@@ -393,8 +375,7 @@ fn concept_in_candidate_state_cannot_be_approved() {
     };
     let mut wf = ConceptApprovalWorkflow::new();
     let err = wf
-        .approve_for_export(
-            id.0,
+        .approve_for_export(id.0,
             scope,
             Uuid::new_v4(),
             SensitivityClass::Useful,
@@ -411,8 +392,7 @@ fn revocation_removes_concept_from_approved_set() {
     let (graph, registry, concept_id) = graph_with_canonical_concept("Atlas", "definition", scope);
     let mut wf = ConceptApprovalWorkflow::new();
     let approved = wf
-        .approve_for_export(
-            concept_id,
+        .approve_for_export(concept_id,
             scope,
             Uuid::new_v4(),
             SensitivityClass::Useful,
@@ -429,8 +409,7 @@ fn revocation_removes_concept_from_approved_set() {
 fn time_window_filters_old_concept_in_engine_pass() {
     let scope = ScopeId::new_v4();
     let concept_id = Uuid::new_v4();
-    let mut approved = ApprovedConcept::new(
-        concept_id,
+    let mut approved = ApprovedConcept::new(concept_id,
         "Atlas",
         "definition",
         scope,
@@ -447,8 +426,7 @@ fn time_window_filters_old_concept_in_engine_pass() {
     let decision = PolicyEngine::new().evaluate(&policy, &[approved]);
     assert!(decision.approved.is_empty());
     assert_eq!(decision.rejected.len(), 1);
-    assert!(matches!(
-        decision.rejected[0].reason,
+    assert!(matches!(decision.rejected[0].reason,
         ExportRejectionReason::OutsideTimeWindow
     ));
 }
@@ -477,8 +455,7 @@ fn cross_crate_proposal_to_export_pipeline() {
     let agent_id = Uuid::new_v4();
     let identity = AgentIdentity::new(agent_id, "ada", "bonsai-1.7b", "v1");
     let mut store = ProposalStore::new();
-    let proposal = AgentProposal::new(
-        ProposalKind::Concept,
+    let proposal = AgentProposal::new(ProposalKind::Concept,
         scope,
         ConceptProposal::new("Atlas", "Q3 launch program"),
         vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -518,8 +495,7 @@ fn cross_crate_proposal_to_export_pipeline() {
     let mut wf = ConceptApprovalWorkflow::new();
     let profile_id = Uuid::new_v4();
     let approved = wf
-        .approve_for_export(
-            canonical_concept_id,
+        .approve_for_export(canonical_concept_id,
             scope,
             profile_id,
             SensitivityClass::Useful,
@@ -543,8 +519,7 @@ fn cross_crate_proposal_to_export_pipeline() {
     let sim = PolicySimulator::new(&export_policy, &registry);
     let result = sim.simulate(&profile);
     assert_eq!(result.included_concepts, vec![canonical_concept_id]);
-    log_export_simulated(
-        &mut audit,
+    log_export_simulated(&mut audit,
         profile.id,
         scope,
         Actor::User(agent_id),
@@ -554,16 +529,14 @@ fn cross_crate_proposal_to_export_pipeline() {
     .expect("audit simulate");
 
     let decision = PolicyEngine::new().evaluate(&export_policy, &profile.concepts);
-    let view = ExportView::from_decision(
-        &decision,
+    let view = ExportView::from_decision(&decision,
         profile.id,
         scope,
         ExportViewRequest::ConceptsOnly,
     )
     .expect("render concepts-only view");
     assert!(view.content.evidence_pack().is_none());
-    log_export(
-        &mut audit,
+    log_export(&mut audit,
         profile.id,
         scope,
         Actor::User(agent_id),
@@ -578,12 +551,10 @@ fn cross_crate_proposal_to_export_pipeline() {
     // 6. Audit log has all 4 events.
     let entries = audit.entries();
     assert_eq!(entries.len(), 4);
-    assert_eq!(
-        entries[0].action_type,
+    assert_eq!(entries[0].action_type,
         AuditActionType::AgentProposalSubmitted
     );
-    assert_eq!(
-        entries[1].action_type,
+    assert_eq!(entries[1].action_type,
         AuditActionType::AgentProposalPromoted
     );
     assert_eq!(entries[2].action_type, AuditActionType::ExportSimulated);

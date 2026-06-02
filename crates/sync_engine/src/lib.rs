@@ -32,7 +32,7 @@
 //!   the op log to a SQLCipher database (per-scope AEAD on the
 //!   payload column, following the `concept_graph` pattern).
 //!
-//! # Multilingual contract (Phase 2.3 audit)
+//! # Multilingual contract ( audit)
 //!
 //! `SyncEngine<T>` is parameterised over an arbitrary
 //! `T: Eq + Hash + Clone` element type, so the CRDT machinery in
@@ -121,8 +121,7 @@ pub const DEFAULT_COMPACT_THRESHOLD: usize = 10_000;
 /// Identifier for a sync scope (channel / domain / tenant memory
 /// object).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SyncScopeId(
-    /// Underlying UUID.
+pub struct SyncScopeId(/// Underlying UUID.
     pub Uuid,
 );
 
@@ -178,8 +177,7 @@ pub struct CrdtDelta {
 /// dedup invariant *and* the bootstrap-without-replay invariant
 /// promised in `docs/DESIGN.md` §3.2.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "T: Serialize + Eq + Hash + Clone",
+#[serde(bound(serialize = "T: Serialize + Eq + Hash + Clone",
     deserialize = "T: serde::de::DeserializeOwned + Eq + Hash + Clone"
 ))]
 pub struct EngineSnapshot<T>
@@ -436,8 +434,7 @@ where
                     // metric pipelines) can alert on a rising
                     // failure rate rather than discover the
                     // unbounded op-log growth at the next OOM.
-                    tracing::warn!(
-                        target: "sync_engine::auto_compact",
+                    tracing::warn!(target: "sync_engine::auto_compact",
                         op_log_len = self.log.ops.len(),
                         threshold = threshold,
                         error = %err,
@@ -605,8 +602,7 @@ where
         let len = self.log.ops.len();
         let mut slot = self.cached_state.borrow_mut();
         let watermark = self.cache_watermark.get();
-        debug_assert!(
-            slot.is_none() || watermark <= len,
+        debug_assert!(slot.is_none() || watermark <= len,
             "sync_engine cache invariant violated: watermark={watermark} > log.ops.len()={len}; \
              a caller mutated the op log without going through op_log_mut() / invalidate_cache()"
         );
@@ -783,8 +779,7 @@ where
             .map_err(|_| SyncError::Serialisation("could not deserialise engine snapshot"))?;
 
         if snap.log.replica_id != snap.replica_id {
-            return Err(SyncError::Serialisation(
-                "snapshot replica_id does not match log.replica_id",
+            return Err(SyncError::Serialisation("snapshot replica_id does not match log.replica_id",
             ));
         }
 
@@ -841,8 +836,7 @@ where
     /// pin the receiver's `replica_id` — used by the persistence
     /// layer to keep the on-disk replica identity stable across
     /// process restarts even when bootstrapping from a snapshot.
-    pub fn bootstrap_from_snapshot_with_replica_id(
-        bytes: &[u8],
+    pub fn bootstrap_from_snapshot_with_replica_id(bytes: &[u8],
         new_replica_id: Uuid,
     ) -> Result<Self>
     where
@@ -852,8 +846,7 @@ where
             .map_err(|_| SyncError::Serialisation("could not deserialise engine snapshot"))?;
 
         if snap.log.replica_id != snap.replica_id {
-            return Err(SyncError::Serialisation(
-                "snapshot replica_id does not match log.replica_id",
+            return Err(SyncError::Serialisation("snapshot replica_id does not match log.replica_id",
             ));
         }
 
@@ -949,18 +942,15 @@ mod auto_compact_tests {
         // than the unmodified path's length (32 ops without
         // compaction).
         let (set, _supers) = engine.state().unwrap();
-        assert_eq!(
-            set.elements_count(),
+        assert_eq!(set.elements_count(),
             0,
             "all values were removed; set must be empty"
         );
-        assert!(
-            engine.op_log().ops.len() < 32,
+        assert!(engine.op_log().ops.len() < 32,
             "auto-compaction must drop superseded Add/Remove pairs; got log_len={}",
             engine.op_log().ops.len()
         );
-        assert!(
-            engine.compaction_epoch() >= 1,
+        assert!(engine.compaction_epoch() >= 1,
             "compaction must have run, bumping the epoch"
         );
     }
@@ -975,8 +965,7 @@ mod auto_compact_tests {
             engine.remove(v);
         }
 
-        assert_eq!(
-            engine.compaction_epoch(),
+        assert_eq!(engine.compaction_epoch(),
             epoch_before,
             "compaction_epoch must not bump when auto-compaction is disabled"
         );
@@ -995,8 +984,7 @@ mod auto_compact_tests {
         // a is empty, threshold 5; merging in b's 8 ops should
         // overshoot and trigger.
         a.merge(&b);
-        assert!(
-            a.op_log().ops.len() <= 5,
+        assert!(a.op_log().ops.len() <= 5,
             "post-merge auto-compaction must drop tombstones; got log_len={}",
             a.op_log().ops.len()
         );
@@ -1057,8 +1045,7 @@ mod auto_compact_tests {
         // multiple).
         let amortised_upper_bound = (total_mutations / threshold) * 2;
         let epoch_usize = usize::try_from(epoch).expect("epoch fits in usize on supported targets");
-        assert!(
-            epoch_usize <= amortised_upper_bound,
+        assert!(epoch_usize <= amortised_upper_bound,
             "auto-compaction must amortise to O(N/threshold) passes; \
              got epoch={epoch} for {total_mutations} all-live-Adds against threshold={threshold} \
              (naive log.ops.len()>threshold would inflate the epoch to ~{} here)",
@@ -1072,16 +1059,14 @@ mod auto_compact_tests {
         // regression to per-mutation triggering even with generous
         // slack for unrelated implementation churn.
         let naive_lower_bound = total_mutations.saturating_sub(threshold) / 2;
-        assert!(
-            epoch_usize < naive_lower_bound,
+        assert!(epoch_usize < naive_lower_bound,
             "auto-compaction must NOT re-fire on every mutation; \
              got epoch={epoch}, naive-trigger lower bound is {naive_lower_bound}"
         );
 
         // Sanity: the set still contains everything we added.
         let (set, _supers) = engine.state().unwrap();
-        assert_eq!(
-            set.elements_count(),
+        assert_eq!(set.elements_count(),
             total_mutations,
             "all live values survived"
         );
@@ -1098,8 +1083,7 @@ mod auto_compact_tests {
         engine.add(2);
         let bytes = engine.snapshot().unwrap();
         let restored: SyncEngine<u64> = SyncEngine::restore_snapshot(&bytes).unwrap();
-        assert_eq!(
-            restored.compact_threshold(),
+        assert_eq!(restored.compact_threshold(),
             Some(42),
             "non-default threshold must survive snapshot/restore round-trip"
         );
@@ -1116,8 +1100,7 @@ mod auto_compact_tests {
         engine.add(1);
         let bytes = engine.snapshot().unwrap();
         let restored: SyncEngine<u64> = SyncEngine::restore_snapshot(&bytes).unwrap();
-        assert_eq!(
-            restored.compact_threshold(),
+        assert_eq!(restored.compact_threshold(),
             None,
             "explicit `None` (auto-compaction disabled) must survive snapshot/restore"
         );
@@ -1145,8 +1128,7 @@ mod auto_compact_tests {
         let stripped = serde_json::to_vec(&value).unwrap();
 
         let restored: SyncEngine<u64> = SyncEngine::restore_snapshot(&stripped).unwrap();
-        assert_eq!(
-            restored.compact_threshold(),
+        assert_eq!(restored.compact_threshold(),
             Some(DEFAULT_COMPACT_THRESHOLD),
             "pre-versioning snapshot must fall back to the default threshold, \
              not silently re-apply some stale value"
@@ -1167,13 +1149,11 @@ mod auto_compact_tests {
         let receiver_id = Uuid::new_v4();
         let receiver: SyncEngine<u64> =
             SyncEngine::bootstrap_from_snapshot_with_replica_id(&bytes, receiver_id).unwrap();
-        assert_eq!(
-            receiver.compact_threshold(),
+        assert_eq!(receiver.compact_threshold(),
             Some(7),
             "bootstrap must inherit the snapshot's compact_threshold as a starting point"
         );
-        assert_eq!(
-            receiver.replica_id(),
+        assert_eq!(receiver.replica_id(),
             receiver_id,
             "bootstrap must keep the receiver's own replica_id, not the author's"
         );

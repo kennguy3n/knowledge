@@ -102,16 +102,14 @@ pub fn hybrid_keypair() -> Result<(HybridPublicKey, HybridSecretKey), CryptoErro
 }
 
 /// Generate a fresh hybrid keypair with an explicit ML-KEM-768 backend.
-pub fn hybrid_keypair_with_backend<B: KemBackend>(
-    backend: &B,
+pub fn hybrid_keypair_with_backend<B: KemBackend>(backend: &B,
 ) -> Result<(HybridPublicKey, HybridSecretKey), CryptoError> {
     let x25519_sk = X25519Secret::random_from_rng(OsRng);
     let x25519_pk = X25519Public::from(&x25519_sk);
 
     let (mlkem_pk, mlkem_sk) = backend.keypair()?;
 
-    Ok((
-        HybridPublicKey {
+    Ok((HybridPublicKey {
             x25519: x25519_pk.to_bytes(),
             mlkem768: mlkem_pk,
         },
@@ -124,16 +122,14 @@ pub fn hybrid_keypair_with_backend<B: KemBackend>(
 
 /// Encapsulate a fresh hybrid shared secret to `recipient_pk` using the
 /// default ML-KEM-768 backend.
-pub fn hybrid_kem_encap(
-    recipient_pk: &HybridPublicKey,
+pub fn hybrid_kem_encap(recipient_pk: &HybridPublicKey,
 ) -> Result<(HybridSharedSecret, HybridCiphertext), CryptoError> {
     hybrid_kem_encap_with_backend(&MlKem768Backend, recipient_pk)
 }
 
 /// Encapsulate a fresh hybrid shared secret using an explicit
 /// ML-KEM-768 backend.
-pub fn hybrid_kem_encap_with_backend<B: KemBackend>(
-    backend: &B,
+pub fn hybrid_kem_encap_with_backend<B: KemBackend>(backend: &B,
     recipient_pk: &HybridPublicKey,
 ) -> Result<(HybridSharedSecret, HybridCiphertext), CryptoError> {
     if recipient_pk.x25519.len() != X25519_PUBLIC_LEN {
@@ -162,8 +158,7 @@ pub fn hybrid_kem_encap_with_backend<B: KemBackend>(
 
     let shared = combine(dh.as_bytes(), &mlkem_ss)?;
 
-    Ok((
-        shared,
+    Ok((shared,
         HybridCiphertext {
             x25519_eph_pub: eph_pk.to_bytes(),
             mlkem768_ct: mlkem_ct,
@@ -172,16 +167,14 @@ pub fn hybrid_kem_encap_with_backend<B: KemBackend>(
 }
 
 /// Decapsulate a hybrid ciphertext with the default ML-KEM-768 backend.
-pub fn hybrid_kem_decap(
-    recipient_sk: &HybridSecretKey,
+pub fn hybrid_kem_decap(recipient_sk: &HybridSecretKey,
     ciphertext: &HybridCiphertext,
 ) -> Result<HybridSharedSecret, CryptoError> {
     hybrid_kem_decap_with_backend(&MlKem768Backend, recipient_sk, ciphertext)
 }
 
 /// Decapsulate a hybrid ciphertext with an explicit ML-KEM-768 backend.
-pub fn hybrid_kem_decap_with_backend<B: KemBackend>(
-    backend: &B,
+pub fn hybrid_kem_decap_with_backend<B: KemBackend>(backend: &B,
     recipient_sk: &HybridSecretKey,
     ciphertext: &HybridCiphertext,
 ) -> Result<HybridSharedSecret, CryptoError> {
@@ -216,8 +209,7 @@ pub fn hybrid_kem_decap_with_backend<B: KemBackend>(
 }
 
 /// Concatenate-then-KDF combiner shared between encap and decap.
-fn combine(
-    x25519_dh: &[u8; X25519_SHARED_LEN],
+fn combine(x25519_dh: &[u8; X25519_SHARED_LEN],
     mlkem768_ss: &[u8; AEAD_KEY_LEN],
 ) -> Result<HybridSharedSecret, CryptoError> {
     let mut ikm = [0u8; X25519_SHARED_LEN + AEAD_KEY_LEN];

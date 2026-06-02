@@ -101,8 +101,7 @@ pub struct EndpointConfig {
 
 impl EndpointConfig {
     /// Construct a fresh endpoint config.
-    pub fn new(
-        url: impl Into<String>,
+    pub fn new(url: impl Into<String>,
         api_key_ref: impl Into<String>,
         model_id: impl Into<String>,
     ) -> Self {
@@ -286,8 +285,7 @@ pub trait HttpClient: Send + Sync {
     /// # Errors
     ///
     /// See [`EndpointError`] for the variants surfaced.
-    fn send(
-        &self,
+    fn send(&self,
         cfg: &EndpointConfig,
         req: &SynthesisRequest,
     ) -> std::result::Result<SynthesisResponse, EndpointError>;
@@ -373,8 +371,7 @@ impl MockHttpClient {
 }
 
 impl HttpClient for MockHttpClient {
-    fn send(
-        &self,
+    fn send(&self,
         cfg: &EndpointConfig,
         req: &SynthesisRequest,
     ) -> std::result::Result<SynthesisResponse, EndpointError> {
@@ -552,7 +549,7 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
     /// `SynthesisBatcher`).
     pub fn new(cfg: EndpointConfig, client: C) -> Self {
         // Honour the per-endpoint cap declared in the
-        // `EndpointConfig` (added in Item 19) so a freshly-built
+        // `EndpointConfig` (added in) so a freshly-built
         // synthesizer respects whatever throttle the caller already
         // pinned in config. Operators that want to disable rate
         // limiting leave `max_requests_per_minute` as `None` and
@@ -579,8 +576,7 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
     /// `SynthesisBatcher`'s `Arc<RateLimiter>` pool), use
     /// [`Self::with_shared_rate_limiter`] instead.
     pub fn with_rate_limit(mut self, max_per_minute: u64) -> Self {
-        self.rate_limiter = Some(std::sync::Arc::new(crate::rate_limiter::RateLimiter::new(
-            max_per_minute,
+        self.rate_limiter = Some(std::sync::Arc::new(crate::rate_limiter::RateLimiter::new(max_per_minute,
         )));
         self
     }
@@ -590,8 +586,7 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
     /// Used by the synthesis batcher to enforce one cap across
     /// every synthesizer instance it dispatches through, so a
     /// many-scope flush respects the operator's per-minute cap.
-    pub fn with_shared_rate_limiter(
-        mut self,
+    pub fn with_shared_rate_limiter(mut self,
         limiter: std::sync::Arc<crate::rate_limiter::RateLimiter>,
     ) -> Self {
         self.rate_limiter = Some(limiter);
@@ -649,8 +644,7 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
         &self.client
     }
 
-    fn build_request(
-        &self,
+    fn build_request(&self,
         scope_tier: WindowScopeTier,
         target_scope: ScopeId,
         input_objects: Vec<InputObjectRef>,
@@ -682,8 +676,7 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
     fn check_rate_limit(&self) -> Result<()> {
         if let Some(limiter) = self.rate_limiter.as_ref() {
             if let Err(remaining) = limiter.check() {
-                return Err(EngineError::engine(format!(
-                    "rate limited; retry after {:?} (cap {} req/min)",
+                return Err(EngineError::engine(format!("rate limited; retry after {:?} (cap {} req/min)",
                     remaining,
                     limiter.max_per_window()
                 )));
@@ -704,13 +697,11 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
             .send(&self.cfg, req)
             .map_err(|e| EngineError::Endpoint(e.to_string()))?;
         if resp.output_text.is_empty() {
-            return Err(EngineError::Endpoint(
-                "synthesis endpoint returned empty output_text".into(),
+            return Err(EngineError::Endpoint("synthesis endpoint returned empty output_text".into(),
             ));
         }
         if resp.model_version.is_empty() {
-            return Err(EngineError::Endpoint(
-                "synthesis endpoint returned empty model_version".into(),
+            return Err(EngineError::Endpoint("synthesis endpoint returned empty model_version".into(),
             ));
         }
         Ok(resp)
@@ -725,8 +716,7 @@ fn map_validation_error(e: PipelineError) -> EngineError {
 }
 
 impl<C: HttpClient> SynthesisEngine for HttpManagedEndpointSynthesizer<C> {
-    fn synthesize_domain(
-        &self,
+    fn synthesize_domain(&self,
         windows: &mut SynthesisWindowManager,
         handle: TieredWindowHandle,
         input: DomainSynthesisInput,
@@ -735,8 +725,7 @@ impl<C: HttpClient> SynthesisEngine for HttpManagedEndpointSynthesizer<C> {
             .validate_domain_input(&handle, &input)
             .map_err(map_validation_error)?;
         if input.channel_outputs.is_empty() {
-            return Err(EngineError::Hierarchy(
-                "domain synthesis requires at least one channel output".into(),
+            return Err(EngineError::Hierarchy("domain synthesis requires at least one channel output".into(),
             ));
         }
         // Rate-limit admission *before* the window transitions so
@@ -776,8 +765,7 @@ impl<C: HttpClient> SynthesisEngine for HttpManagedEndpointSynthesizer<C> {
             }
         };
 
-        let object = build_domain_summary_object(
-            input.domain_scope,
+        let object = build_domain_summary_object(input.domain_scope,
             handle.window_id,
             resp.output_text.into_bytes(),
             self.provenance_ref,
@@ -786,8 +774,7 @@ impl<C: HttpClient> SynthesisEngine for HttpManagedEndpointSynthesizer<C> {
         Ok(DomainSynthesisResult { object })
     }
 
-    fn synthesize_tenant(
-        &self,
+    fn synthesize_tenant(&self,
         windows: &mut SynthesisWindowManager,
         handle: TieredWindowHandle,
         input: TenantSynthesisInput,
@@ -796,8 +783,7 @@ impl<C: HttpClient> SynthesisEngine for HttpManagedEndpointSynthesizer<C> {
             .validate_tenant_input(&handle, &input)
             .map_err(map_validation_error)?;
         if input.domain_outputs.is_empty() {
-            return Err(EngineError::Hierarchy(
-                "tenant synthesis requires at least one domain output".into(),
+            return Err(EngineError::Hierarchy("tenant synthesis requires at least one domain output".into(),
             ));
         }
         // Same admission-before-transition discipline as
@@ -844,8 +830,7 @@ impl<C: HttpClient> SynthesisEngine for HttpManagedEndpointSynthesizer<C> {
             }
         };
 
-        let object = build_tenant_summary_object(
-            input.tenant_scope,
+        let object = build_tenant_summary_object(input.tenant_scope,
             handle.window_id,
             resp.output_text.into_bytes(),
             self.provenance_ref,
@@ -875,8 +860,7 @@ mod tests {
             .with_grammar("{root: 'string'}")
     }
 
-    fn open_managed_window(
-        mgr: &mut SynthesisWindowManager,
+    fn open_managed_window(mgr: &mut SynthesisWindowManager,
         scope: ScopeId,
     ) -> synthesis_pipeline::WindowId {
         let now = Utc::now();
@@ -887,8 +871,7 @@ mod tests {
     fn channel_recap(scope: ScopeId, payload: &[u8]) -> SynthesisObject {
         let mut mgr = SynthesisWindowManager::new();
         let win = open_managed_window(&mut mgr, scope);
-        SynthesisObject::new(
-            scope,
+        SynthesisObject::new(scope,
             win,
             SynthesisObjectType::ChannelRecap,
             payload.to_vec(),
@@ -899,8 +882,7 @@ mod tests {
     fn domain_summary(scope: ScopeId, payload: &[u8]) -> SynthesisObject {
         let mut mgr = SynthesisWindowManager::new();
         let win = open_managed_window(&mut mgr, scope);
-        SynthesisObject::new(
-            scope,
+        SynthesisObject::new(scope,
             win,
             SynthesisObjectType::DomainSummary,
             payload.to_vec(),
@@ -908,13 +890,11 @@ mod tests {
         )
     }
 
-    fn open_domain_window(
-        mgr: &mut SynthesisWindowManager,
+    fn open_domain_window(mgr: &mut SynthesisWindowManager,
         domain_scope: ScopeId,
     ) -> TieredWindowHandle {
         let now = Utc::now();
-        mgr.open_tiered_window(
-            domain_scope,
+        mgr.open_tiered_window(domain_scope,
             WindowScopeTier::Domain,
             now - ChronoDuration::seconds(60),
             now,
@@ -922,13 +902,11 @@ mod tests {
         .unwrap()
     }
 
-    fn open_tenant_window(
-        mgr: &mut SynthesisWindowManager,
+    fn open_tenant_window(mgr: &mut SynthesisWindowManager,
         tenant_scope: ScopeId,
     ) -> TieredWindowHandle {
         let now = Utc::now();
-        mgr.open_tiered_window(
-            tenant_scope,
+        mgr.open_tiered_window(tenant_scope,
             WindowScopeTier::Tenant,
             now - ChronoDuration::seconds(60),
             now,
@@ -1005,8 +983,7 @@ mod tests {
             DomainOutput::from_domain_object(domain_summary(domain_a, b"a-domain")).unwrap(),
             DomainOutput::from_domain_object(domain_summary(domain_b, b"b-domain")).unwrap(),
         ];
-        let docs = vec![ApprovedDocument::new(
-            approved_ref,
+        let docs = vec![ApprovedDocument::new(approved_ref,
             b"approved-blob".to_vec(),
         )];
         let input = TenantSynthesisInput::new(&tenant, outputs, docs).unwrap();
@@ -1167,8 +1144,7 @@ mod tests {
             .expect_err("dispatch should fail");
 
         let after = mgr.get(window_id).expect("window present");
-        assert_eq!(
-            after.status,
+        assert_eq!(after.status,
             WindowStatus::Failed,
             "dispatch failure must transition the window to Failed (not leave it InProgress)"
         );
@@ -1239,8 +1215,7 @@ mod tests {
             .synthesize_domain(&mut mgr, handle, input)
             .unwrap_err();
         let msg = err.to_string();
-        assert!(
-            msg.contains("timed out"),
+        assert!(msg.contains("timed out"),
             "expected Timeout variant to survive, got: {msg}"
         );
     }
@@ -1299,21 +1274,18 @@ mod tests {
             }
         }
 
-        assert_eq!(
-            admitted, 2,
+        assert_eq!(admitted, 2,
             "rate limiter must admit exactly `cap` requests inside one window"
         );
         let err = last_err.expect("third call must be rejected by the rate limiter");
         let msg = err.to_string();
-        assert!(
-            msg.contains("rate limited"),
+        assert!(msg.contains("rate limited"),
             "rate-limit refusal must surface a `rate limited` message; got: {msg}"
         );
         // The synthesizer's limiter slot is observable for
         // operator dashboards; verify the count matches what we
         // admitted.
-        assert_eq!(
-            synth
+        assert_eq!(synth
                 .rate_limiter()
                 .expect("limiter is wired")
                 .current_window_count(),
@@ -1363,8 +1335,7 @@ mod tests {
         let err = synth
             .synthesize_domain(&mut mgr, handle, input)
             .expect_err("call beyond cap must be refused at the rate-limit gate");
-        assert!(
-            err.to_string().contains("rate limited"),
+        assert!(err.to_string().contains("rate limited"),
             "refusal must surface as the local rate-limit error; got: {err}"
         );
 
@@ -1373,8 +1344,7 @@ mod tests {
         // fix that hoisted the rate-limit check out of
         // `dispatch` and ahead of `mark_in_progress`.
         let after = mgr.get(denied_window_id).expect("denied window present");
-        assert_eq!(
-            after.status,
+        assert_eq!(after.status,
             WindowStatus::Pending,
             "rate-limited window must stay Pending (never cycle through \
              InProgress → Failed for a purely-billing-driven refusal); \
@@ -1395,8 +1365,7 @@ mod tests {
     #[test]
     fn rate_limit_is_opt_in() {
         let synth = HttpManagedEndpointSynthesizer::new(cfg(), MockHttpClient::echo());
-        assert!(
-            synth.rate_limiter().is_none(),
+        assert!(synth.rate_limiter().is_none(),
             "default synthesizer must have no rate limiter attached"
         );
     }
@@ -1432,8 +1401,7 @@ mod tests {
     fn set_config_re_derives_rate_limiter() {
         // Start with NO rate limit so `rate_limiter()` is `None`.
         let mut synth = HttpManagedEndpointSynthesizer::new(cfg(), MockHttpClient::echo());
-        assert!(
-            synth.rate_limiter().is_none(),
+        assert!(synth.rate_limiter().is_none(),
             "precondition: default cfg has no rate limiter"
         );
 
@@ -1450,13 +1418,11 @@ mod tests {
             .rate_limiter()
             .expect("set_config(Some) must install a limiter")
             .clone();
-        assert_eq!(
-            limiter_after_set.max_per_window(),
+        assert_eq!(limiter_after_set.max_per_window(),
             42,
             "set_config(Some(n)) must install a limiter with cap n"
         );
-        assert_eq!(
-            synth.config().max_requests_per_minute,
+        assert_eq!(synth.config().max_requests_per_minute,
             Some(42),
             "config must reflect the new cap"
         );
@@ -1476,13 +1442,11 @@ mod tests {
             .rate_limiter()
             .expect("set_config(Some) must install a limiter")
             .clone();
-        assert_eq!(
-            limiter_after_replace.max_per_window(),
+        assert_eq!(limiter_after_replace.max_per_window(),
             100,
             "set_config(Some(n)) must REPLACE the limiter, not retain the old cap"
         );
-        assert!(
-            !std::sync::Arc::ptr_eq(&limiter_after_set, &limiter_after_replace),
+        assert!(!std::sync::Arc::ptr_eq(&limiter_after_set, &limiter_after_replace),
             "set_config must install a fresh limiter Arc, not mutate the existing one"
         );
 
@@ -1494,12 +1458,10 @@ mod tests {
                 .with_timeout(Duration::from_secs(5))
                 .with_grammar("{root: 'string'}");
         synth.set_config(cfg_no_cap);
-        assert!(
-            synth.rate_limiter().is_none(),
+        assert!(synth.rate_limiter().is_none(),
             "set_config(None) must clear the limiter slot"
         );
-        assert!(
-            synth.config().max_requests_per_minute.is_none(),
+        assert!(synth.config().max_requests_per_minute.is_none(),
             "config must reflect the cleared cap"
         );
     }

@@ -82,8 +82,7 @@ pub struct PromotionResult {
 /// surrounding batch — typically computed once per pipeline run.
 /// `importance` is the importance class assigned to `observation`
 /// by the upstream classifier.
-pub fn should_promote(
-    observation: &Observation,
+pub fn should_promote(observation: &Observation,
     importance: ImportanceClass,
     corroboration_count: u32,
     batch_noise_ratio: f64,
@@ -127,8 +126,7 @@ mod tests {
     use evidence_store::ScopeId;
 
     fn fixture_obs() -> Observation {
-        Observation::new_candidate(
-            ObservationType::Decision,
+        Observation::new_candidate(ObservationType::Decision,
             "approved policy",
             ScopeId::new_v4(),
             0.9,

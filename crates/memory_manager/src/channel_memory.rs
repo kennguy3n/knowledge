@@ -371,16 +371,14 @@ impl ChannelMemoryObject {
     /// Mirrors [`crate::decay::decay_sweep`] for the channel memory's
     /// short-lived items. Returns counters describing the sweep.
     pub fn decay_sweep(&mut self, now: DateTime<Utc>) -> ChannelDecayReport {
-        self.decay_sweep_with(
-            now,
+        self.decay_sweep_with(now,
             Duration::days(DEFAULT_COMPLETED_TASK_TTL_DAYS),
             Duration::days(DEFAULT_RESOLVED_QUESTION_TTL_DAYS),
         )
     }
 
     /// Lower-level [`Self::decay_sweep`] exposing the per-class TTLs.
-    pub fn decay_sweep_with(
-        &mut self,
+    pub fn decay_sweep_with(&mut self,
         now: DateTime<Utc>,
         completed_task_ttl: Duration,
         resolved_question_ttl: Duration,
@@ -488,12 +486,10 @@ mod tests {
         let c = ActiveTask::new(scope, "Draft RFC").with_assignee("@bob");
 
         assert!(chan.add_task_dedup(a).is_some());
-        assert!(
-            chan.add_task_dedup(b).is_none(),
+        assert!(chan.add_task_dedup(b).is_none(),
             "case/whitespace normalised match must dedup"
         );
-        assert!(
-            chan.add_task_dedup(c).is_some(),
+        assert!(chan.add_task_dedup(c).is_some(),
             "different assignee is a different task"
         );
         assert_eq!(chan.active_tasks.len(), 2);

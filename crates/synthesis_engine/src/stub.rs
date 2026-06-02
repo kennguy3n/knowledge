@@ -48,8 +48,7 @@ impl ManagedEndpointSynthesizer {
 }
 
 impl SynthesisEngine for ManagedEndpointSynthesizer {
-    fn synthesize_domain(
-        &self,
+    fn synthesize_domain(&self,
         windows: &mut SynthesisWindowManager,
         handle: TieredWindowHandle,
         input: DomainSynthesisInput,
@@ -69,8 +68,7 @@ impl SynthesisEngine for ManagedEndpointSynthesizer {
             payload.extend_from_slice(&o.object().payload);
         }
 
-        let object = build_domain_summary_object(
-            input.domain_scope,
+        let object = build_domain_summary_object(input.domain_scope,
             handle.window_id,
             payload,
             self.provenance_ref,
@@ -79,8 +77,7 @@ impl SynthesisEngine for ManagedEndpointSynthesizer {
         Ok(DomainSynthesisResult { object })
     }
 
-    fn synthesize_tenant(
-        &self,
+    fn synthesize_tenant(&self,
         windows: &mut SynthesisWindowManager,
         handle: TieredWindowHandle,
         input: TenantSynthesisInput,
@@ -103,8 +100,7 @@ impl SynthesisEngine for ManagedEndpointSynthesizer {
             payload.extend_from_slice(&d.payload);
         }
 
-        let object = build_tenant_summary_object(
-            input.tenant_scope,
+        let object = build_tenant_summary_object(input.tenant_scope,
             handle.window_id,
             payload,
             self.provenance_ref,

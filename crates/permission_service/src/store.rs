@@ -88,8 +88,7 @@ impl TupleStore {
     /// All tuples matching `(object, relation)` via the
     /// secondary index — `O(k)` where `k` is the size of the
     /// matching set.
-    pub fn iter_for_object_relation(
-        &self,
+    pub fn iter_for_object_relation(&self,
         object: ObjectRef,
         relation: Relation,
     ) -> impl Iterator<Item = &RelationTuple> + '_ {
@@ -156,8 +155,7 @@ impl PartialEq for TupleStore {
 impl Eq for TupleStore {}
 
 impl Serialize for TupleStore {
-    fn serialize<S: serde::Serializer>(
-        &self,
+    fn serialize<S: serde::Serializer>(&self,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
         #[derive(Serialize)]
@@ -172,8 +170,7 @@ impl Serialize for TupleStore {
 }
 
 impl<'de> Deserialize<'de> for TupleStore {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
         #[derive(Deserialize)]
         struct Wire {
@@ -196,8 +193,7 @@ mod tests {
     use uuid::Uuid;
 
     fn fixture_tuple(rel: Relation, obj_id: Uuid, sub_id: Uuid) -> RelationTuple {
-        RelationTuple::new(
-            ObjectRef::new(ObjectType::Channel, obj_id),
+        RelationTuple::new(ObjectRef::new(ObjectType::Channel, obj_id),
             rel,
             SubjectRef::direct(SubjectType::User, sub_id),
         )
@@ -244,8 +240,7 @@ mod tests {
         store.remove(&t).unwrap();
 
         let chan_ref = ObjectRef::new(ObjectType::Channel, chan);
-        assert_eq!(
-            store
+        assert_eq!(store
                 .iter_for_object_relation(chan_ref, Relation::Member)
                 .count(),
             0
@@ -266,8 +261,7 @@ mod tests {
         let round: TupleStore = serde_json::from_str(&json).unwrap();
         assert_eq!(round, original);
         let chan_ref = ObjectRef::new(ObjectType::Channel, chan);
-        assert_eq!(
-            round
+        assert_eq!(round
                 .iter_for_object_relation(chan_ref, Relation::Member)
                 .count(),
             1

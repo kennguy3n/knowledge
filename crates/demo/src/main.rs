@@ -15,11 +15,11 @@ use std::time::Instant;
 
 mod assertions;
 mod dataset;
-mod phases;
+mod stages;
 mod report;
 
 use crate::assertions::AssertionLog;
-use crate::phases::runtime::RuntimeState;
+use crate::stages::runtime::RuntimeState;
 use crate::report::DemoReport;
 
 fn main() -> std::io::Result<()> {
@@ -33,18 +33,18 @@ fn main() -> std::io::Result<()> {
     let dataset = dataset::build_dataset();
     report.dataset_size = dataset.messages.len();
 
-    phases::evidence::run(&dataset, &mut state, &mut report, &mut log);
-    phases::observation::run(&dataset, &mut state, &mut report, &mut log);
-    phases::memory::run(&dataset, &mut state, &mut report, &mut log);
-    phases::concept_graph::run(&dataset, &mut state, &mut report, &mut log);
-    phases::synthesis::run(&dataset, &mut state, &mut report, &mut log);
-    phases::permissions::run(&dataset, &mut state, &mut report, &mut log);
-    phases::crypto::run(&dataset, &mut state, &mut report, &mut log);
-    phases::export::run(&dataset, &mut state, &mut report, &mut log);
-    phases::agent::run(&dataset, &mut state, &mut report, &mut log);
-    phases::reasoning::run(&dataset, &mut state, &mut report, &mut log);
-    phases::connectors::run(&dataset, &mut state, &mut report, &mut log);
-    phases::audit::run(&dataset, &mut state, &mut report, &mut log);
+    stages::evidence::run(&dataset, &mut state, &mut report, &mut log);
+    stages::observation::run(&dataset, &mut state, &mut report, &mut log);
+    stages::memory::run(&dataset, &mut state, &mut report, &mut log);
+    stages::concept_graph::run(&dataset, &mut state, &mut report, &mut log);
+    stages::synthesis::run(&dataset, &mut state, &mut report, &mut log);
+    stages::permissions::run(&dataset, &mut state, &mut report, &mut log);
+    stages::crypto::run(&dataset, &mut state, &mut report, &mut log);
+    stages::export::run(&dataset, &mut state, &mut report, &mut log);
+    stages::agent::run(&dataset, &mut state, &mut report, &mut log);
+    stages::reasoning::run(&dataset, &mut state, &mut report, &mut log);
+    stages::connectors::run(&dataset, &mut state, &mut report, &mut log);
+    stages::audit::run(&dataset, &mut state, &mut report, &mut log);
 
     report.total_wall_clock = started.elapsed();
     report.attach_assertions(&log);
@@ -59,8 +59,7 @@ fn main() -> std::io::Result<()> {
 
     println!("demo complete in {:?}", report.total_wall_clock);
     println!("results written to {out_path}");
-    println!(
-        "{} of {} assertions passed",
+    println!("{} of {} assertions passed",
         log.passed_count(),
         log.total_count()
     );

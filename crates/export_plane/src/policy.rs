@@ -267,8 +267,7 @@ impl ExportView {
     /// A [`ExportViewRequest::WithEvidencePack`] request whose
     /// decision did not authorise raw evidence is rejected with
     /// [`ExportViewError::RawEvidenceNotAuthorised`].
-    pub fn from_decision(
-        decision: &ExportDecision,
+    pub fn from_decision(decision: &ExportDecision,
         profile_id: Uuid,
         scope_id: ScopeId,
         request: ExportViewRequest,
@@ -311,8 +310,7 @@ impl PolicyEngine {
     /// Evaluate `candidates` against `policy` and return the
     /// resulting [`ExportDecision`]. The engine is pure / stateless;
     /// callers may invoke it from any thread.
-    pub fn evaluate(
-        &self,
+    pub fn evaluate(&self,
         policy: &ExportPolicy,
         candidates: &[ApprovedConcept],
     ) -> ExportDecision {
@@ -398,8 +396,7 @@ impl PolicyEngine {
             .any(|c| c.sensitivity_class == SensitivityClass::Critical);
         let allow_raw_evidence = policy.allow_raw_evidence && !any_critical;
         if policy.allow_raw_evidence && any_critical {
-            warnings.push(
-                "raw evidence requested but suppressed because the approved set contains a Critical concept"
+            warnings.push("raw evidence requested but suppressed because the approved set contains a Critical concept"
                     .into(),
             );
         }
@@ -460,8 +457,7 @@ mod tests {
         } else {
             vec![EvidenceRef::from_uuid(Uuid::new_v4())]
         };
-        ProvenanceBundle::new(
-            Uuid::new_v4(),
+        ProvenanceBundle::new(Uuid::new_v4(),
             SynthesisActivity::new("agent", "model", "prompt", Uuid::new_v4()),
             ProvenanceAgent::software("test"),
             derivations,
@@ -469,8 +465,7 @@ mod tests {
     }
 
     fn fixture(scope: ScopeId, sensitivity: SensitivityClass) -> ApprovedConcept {
-        ApprovedConcept::new(
-            Uuid::new_v4(),
+        ApprovedConcept::new(Uuid::new_v4(),
             "label",
             "definition",
             scope,
@@ -501,8 +496,7 @@ mod tests {
     /// `ConceptApprovalWorkflow` produces and the policy engine must
     /// admit it under `require_provenance: true`.
     fn workflow_provenance() -> ProvenanceBundle {
-        ProvenanceBundle::new(
-            Uuid::new_v4(),
+        ProvenanceBundle::new(Uuid::new_v4(),
             SynthesisActivity::new("workflow", "model", "prompt", Uuid::new_v4()),
             ProvenanceAgent::software("workflow"),
             Vec::new(),
@@ -526,16 +520,14 @@ mod tests {
     fn nil_entity_id_rejected_when_provenance_required() {
         let scope = ScopeId::new_v4();
         let mut c = fixture(scope, SensitivityClass::Useful);
-        c.provenance = ProvenanceBundle::new(
-            Uuid::nil(),
+        c.provenance = ProvenanceBundle::new(Uuid::nil(),
             SynthesisActivity::new("agent", "model", "prompt", Uuid::new_v4()),
             ProvenanceAgent::software("test"),
             Vec::new(),
         );
         let decision = PolicyEngine::new().evaluate(&ExportPolicy::default(), &[c]);
         assert_eq!(decision.approved.len(), 0);
-        assert!(matches!(
-            decision.rejected[0].reason,
+        assert!(matches!(decision.rejected[0].reason,
             ExportRejectionReason::MissingProvenance
         ));
     }
@@ -544,16 +536,14 @@ mod tests {
     fn empty_activity_agent_rejected_when_provenance_required() {
         let scope = ScopeId::new_v4();
         let mut c = fixture(scope, SensitivityClass::Useful);
-        c.provenance = ProvenanceBundle::new(
-            Uuid::new_v4(),
+        c.provenance = ProvenanceBundle::new(Uuid::new_v4(),
             SynthesisActivity::new("", "model", "prompt", Uuid::new_v4()),
             ProvenanceAgent::software("test"),
             Vec::new(),
         );
         let decision = PolicyEngine::new().evaluate(&ExportPolicy::default(), &[c]);
         assert_eq!(decision.approved.len(), 0);
-        assert!(matches!(
-            decision.rejected[0].reason,
+        assert!(matches!(decision.rejected[0].reason,
             ExportRejectionReason::MissingProvenance
         ));
     }
@@ -562,16 +552,14 @@ mod tests {
     fn empty_activity_model_rejected_when_provenance_required() {
         let scope = ScopeId::new_v4();
         let mut c = fixture(scope, SensitivityClass::Useful);
-        c.provenance = ProvenanceBundle::new(
-            Uuid::new_v4(),
+        c.provenance = ProvenanceBundle::new(Uuid::new_v4(),
             SynthesisActivity::new("agent", "", "prompt", Uuid::new_v4()),
             ProvenanceAgent::software("test"),
             Vec::new(),
         );
         let decision = PolicyEngine::new().evaluate(&ExportPolicy::default(), &[c]);
         assert_eq!(decision.approved.len(), 0);
-        assert!(matches!(
-            decision.rejected[0].reason,
+        assert!(matches!(decision.rejected[0].reason,
             ExportRejectionReason::MissingProvenance
         ));
     }
@@ -582,8 +570,7 @@ mod tests {
         // bundle is admitted.
         let scope = ScopeId::new_v4();
         let mut c = fixture(scope, SensitivityClass::Useful);
-        c.provenance = ProvenanceBundle::new(
-            Uuid::nil(),
+        c.provenance = ProvenanceBundle::new(Uuid::nil(),
             SynthesisActivity::new("", "", "", Uuid::new_v4()),
             ProvenanceAgent::software(""),
             Vec::new(),
@@ -620,8 +607,7 @@ mod tests {
         };
         let decision = PolicyEngine::new().evaluate(&p, &candidates);
         assert_eq!(decision.approved.len(), 1);
-        assert!(matches!(
-            decision.rejected[0].reason,
+        assert!(matches!(decision.rejected[0].reason,
             ExportRejectionReason::ScopeNotWhitelisted { .. }
         ));
     }
@@ -656,8 +642,7 @@ mod tests {
         };
         let decision = PolicyEngine::new().evaluate(&p, &[c]);
         assert_eq!(decision.approved.len(), 0);
-        assert!(matches!(
-            decision.rejected[0].reason,
+        assert!(matches!(decision.rejected[0].reason,
             ExportRejectionReason::OutsideTimeWindow
         ));
     }
@@ -669,8 +654,7 @@ mod tests {
             .with_expiry(Utc::now() - chrono::Duration::seconds(60));
         let decision = PolicyEngine::new().evaluate(&ExportPolicy::default(), &[c]);
         assert_eq!(decision.approved.len(), 0);
-        assert!(matches!(
-            decision.rejected[0].reason,
+        assert!(matches!(decision.rejected[0].reason,
             ExportRejectionReason::Expired
         ));
     }
@@ -811,8 +795,7 @@ mod tests {
             sensitivity_ceiling: SensitivityClass::Important,
             ..ExportPolicy::default()
         };
-        let folded = p.with_constraints(&[ExportConstraint::SensitivityCeiling(
-            SensitivityClass::Useful,
+        let folded = p.with_constraints(&[ExportConstraint::SensitivityCeiling(SensitivityClass::Useful,
         )]);
         assert_eq!(folded.sensitivity_ceiling, SensitivityClass::Useful);
     }
@@ -823,8 +806,7 @@ mod tests {
             sensitivity_ceiling: SensitivityClass::Useful,
             ..ExportPolicy::default()
         };
-        let folded = p.with_constraints(&[ExportConstraint::SensitivityCeiling(
-            SensitivityClass::Important,
+        let folded = p.with_constraints(&[ExportConstraint::SensitivityCeiling(SensitivityClass::Important,
         )]);
         assert_eq!(folded.sensitivity_ceiling, SensitivityClass::Useful);
     }

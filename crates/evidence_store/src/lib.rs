@@ -29,7 +29,7 @@
 //!
 //! * `EvidenceStore::search_fts_with_weighted_ranks_for_tests` —
 //!   exposes the cross-lane merged BM25 ranks (after lane-weight
-//!   application) so Phase 1.8 tests can assert the precision
+//!   application) so  tests can assert the precision
 //!   hierarchy `unicode61 < trigram < bigram` rather than just the
 //!   evidence-id ordering surfaced by the public retrieval path.
 //! * `EvidenceStore::inject_with_transaction_failure_for_tests` —
@@ -42,7 +42,7 @@
 //!   injection fires exactly once.
 //! * `EvidenceStore::write_legacy_approved_doc_payload_for_tests` —
 //!   surgically reshapes `approved_document_payloads` back to its
-//!   pre-v12 (Phase 8 / v10) inline layout and writes a single
+//!   pre-v12 ( / v10) inline layout and writes a single
 //!   legacy-shape row so the v12-onwards re-migration code path
 //!   has a controllable starting state. The next
 //!   `EvidenceStore::open` silently re-migrates the row.

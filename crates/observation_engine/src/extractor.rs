@@ -16,7 +16,7 @@
 //! pipeline stage (XLM-R + SLM-assisted extraction)
 //! refines them.
 //!
-//! ## Phase 1.4 — multilingual sentence + question handling
+//! ## multilingual sentence + question handling
 //!
 //! [`split_sentences_with_terminator`] recognises CJK
 //! (`。！？`), Arabic (`؟ ۔`), Devanagari (`। ॥`),
@@ -52,10 +52,10 @@ use crate::types::{Observation, ObservationType};
 
 /// Extract structured observations from raw evidence text.
 ///
-/// # Language stamping contract (Phase 1.4)
+/// # Language stamping contract
 ///
 /// Implementations of `extract` are responsible for stamping each
-/// returned [`Observation`]'s `language_tag` field. Phase 1.4 of
+/// returned [`Observation`]'s `language_tag` field.  of
 /// the multilingual roadmap moved language detection from the
 /// pipeline level (one tag per whole message) to the extractor
 /// level (per-sentence for sentence-class observations, dominant
@@ -80,8 +80,8 @@ use crate::types::{Observation, ObservationType};
 /// not classifiable / not reliable), the observation's
 /// `language_tag` must remain `None` rather than substituting a
 /// default — downstream consumers treat `None` as "unknown" and
-/// fail-closed on language-dependent operations (Phase 1.1
-/// `LexiconRegistry` lookup, Phase 1.2 FTS5 tokenizer selection).
+/// fail-closed on language-dependent operations (
+/// `LexiconRegistry` lookup,  FTS5 tokenizer selection).
 ///
 /// # Mutual-delegation hazard ⚠
 ///
@@ -147,8 +147,7 @@ pub trait ObservationExtractor {
     /// **Do not** delegate back to [`Self::extract`] from a custom
     /// [`Self::extract`] override — see the mutual-delegation
     /// hazard noted in the trait-level documentation above.
-    fn extract_with_dominant_language(
-        &self,
+    fn extract_with_dominant_language(&self,
         text: &str,
         scope: ScopeId,
         _dominant_language: Option<&LanguageTag>,
@@ -159,7 +158,7 @@ pub trait ObservationExtractor {
 
 /// Lexicon extractor (`docs/DESIGN.md` §3.2 first pass).
 ///
-/// Phase 1.1: keyword tables come from a
+/// keyword tables come from a
 /// [`LexiconRegistry`] indexed by BCP-47 primary subtag, so
 /// each sentence is classified against keywords from the
 /// sentence's detected language rather than against a single
@@ -188,7 +187,7 @@ enum LexiconSource {
     /// every sentence regardless of detected language —
     /// equivalent to a single-language registry containing
     /// only an English lexicon with the supplied entries.
-    /// Preserved for back-compat with pre-Phase-1.1 callers
+    /// Preserved for back-compat with earlier callers
     /// of [`LexiconExtractor::new`].
     Inline {
         decision_keywords: Vec<String>,
@@ -212,10 +211,9 @@ impl LexiconExtractor {
     ///
     /// New callers should prefer [`Self::with_registry`] for
     /// multilingual matching. This constructor is retained
-    /// for back-compat with pre-Phase-1.1 call sites that
+    /// for back-compat with earlier call sites that
     /// pass tenant-specific keyword overrides.
-    pub fn new(
-        decision_keywords: Vec<&str>,
+    pub fn new(decision_keywords: Vec<&str>,
         task_keywords: Vec<&str>,
         task_imperative_verbs: Vec<&str>,
         stop_words: Vec<&str>,
@@ -248,10 +246,10 @@ impl LexiconExtractor {
     }
 
     /// Default extractor: registry-backed with the built-in
-    /// [`default_registry`]. Replaces the pre-Phase-1.1
+    /// [`default_registry`]. Replaces the earlier
     /// English-only inline lexicon — the built-in registry's
     /// English lexicon carries the same keyword entries as
-    /// the pre-Phase-1.1 inline default, plus 15 additional
+    /// the earlier inline default, plus 15 additional
     /// languages with their own keyword tables.
     pub fn english_default() -> Self {
         Self::with_registry(default_registry())
@@ -262,7 +260,7 @@ impl LexiconExtractor {
 ///
 /// The terminator is `None` for the trailing fragment of
 /// unterminated input. Stored as a `char` (not a `u8`) because
-/// Phase 1.4 supports multi-byte UTF-8 terminators — CJK `。`,
+/// supports multi-byte UTF-8 terminators — CJK `。`,
 /// Arabic `؟`, Devanagari `।`, Tibetan `།`, Khmer `។`,
 /// Myanmar `။`, etc. — that don't fit in a single byte.
 #[derive(Debug, Clone, Copy)]
@@ -273,7 +271,7 @@ struct SentenceSlice<'a> {
 
 /// All sentence-terminator code points the splitter recognises.
 ///
-/// Coverage rationale (per Phase 1.4 of the multilingual
+/// Coverage rationale (multilingual
 /// roadmap):
 ///
 /// * `. ! ? \n` — Latin script (English, Spanish, French,
@@ -303,32 +301,31 @@ struct SentenceSlice<'a> {
 ///   `༎` (U+0F0E TIBETAN MARK NYIS SHAD) — Tibetan single
 ///   shad ends a clause / sentence; the nyis shad (double
 ///   shad) ends a paragraph or verse, structurally parallel to
-///   the Devanagari single / double danda pair above. Phase 1.5
+///   the Devanagari single / double danda pair above. 
 ///   addition.
-/// * `។` (U+17D4 KHMER SIGN KHAN) — Khmer full stop. Phase
-///   1.5 addition. The Khmer bariyoosan `៕` (U+17D5) is a
+/// * `។` (U+17D4 KHMER SIGN KHAN) — Khmer full stop. ///
+/// 1.5 addition. The Khmer bariyoosan `៕` (U+17D5) is a
 ///   paragraph-end marker rather than a sentence-end marker
 ///   and is intentionally absent here — matching the precedent
 ///   of excluding the Armenian combining question mark `՞`.
 /// * `။` (U+104B MYANMAR SIGN SECTION) — Myanmar / Burmese
-///   full stop ("visarga"). Phase 1.5 addition. The Myanmar
+///   full stop ("visarga"). addition. The Myanmar
 ///   little section `၊` (U+104A) is a clause-level marker
 ///   (Burmese comma) rather than a sentence-end marker and is
 ///   intentionally absent.
 ///
-/// Phase 1.5 closure of #BUG_pr-review-job-..._0001:
+/// #BUG_pr-review-job-..._0001 closure:
 /// without the Tibetan / Khmer / Myanmar arms a multi-sentence
 /// body in these scripts (e.g. `statement1။statement2`) was
 /// treated as a single sentence, so (a) the interrogative
 /// classifier applied substring matching to the entire body
 /// rather than per-sentence, and (b) a body with two
 /// declaratives produced one Fact observation instead of two.
-/// These three scripts ship full Phase 1.5 lexicon +
+/// These three scripts ship full  lexicon +
 /// interrogative coverage; their terminators belong in the
 /// splitter alongside them.
 fn is_sentence_terminator(c: char) -> bool {
-    matches!(
-        c,
+    matches!(c,
         // ASCII / Latin
         '.' | '!' | '?' | '\n'
         // CJK
@@ -345,12 +342,12 @@ fn is_sentence_terminator(c: char) -> bool {
         | '\u{0589}' // ։
         // Ethiopic
         | '\u{1362}' // ።
-        // Tibetan (Phase 1.5)
+        // Tibetan
         | '\u{0F0D}' // །  shad (sentence / clause end)
         | '\u{0F0E}' // ༎  nyis shad (paragraph / verse end)
-        // Khmer (Phase 1.5)
+        // Khmer
         | '\u{17D4}' // ។  khan (full stop)
-        // Myanmar (Phase 1.5)
+        // Myanmar
         | '\u{104B}' // ။  sign section (full stop / visarga)
     )
 }
@@ -359,8 +356,7 @@ fn is_sentence_terminator(c: char) -> bool {
 /// the sentence terminators — only those that unambiguously
 /// signal a question.
 fn is_question_terminator(c: char) -> bool {
-    matches!(
-        c,
+    matches!(c,
         '?'
         | '\u{FF1F}' // ？  CJK fullwidth question
         | '\u{061F}' // ؟   Arabic question
@@ -392,7 +388,7 @@ fn split_sentences_with_terminator(text: &str) -> Vec<SentenceSlice<'_>> {
     out
 }
 
-/// Phase 1.4 question detector — consults the per-language
+/// question detector — consults the per-language
 /// interrogative tables in [`crate::interrogatives`] keyed by the
 /// sentence's detected language tag.
 ///
@@ -411,13 +407,13 @@ fn split_sentences_with_terminator(text: &str) -> Vec<SentenceSlice<'_>> {
 ///    interrogative may appear anywhere in the sentence and the
 ///    scripts are not whitespace-segmented at word boundaries);
 ///    Vietnamese uses
-///    [`crate::lexicon::MatchStrategy::FirstBigram`] (Phase 1.1
+///    [`crate::lexicon::MatchStrategy::FirstBigram`] (
 ///    #ANALYSIS-0004 closure — `tại sao` / `khi nào` / `vì sao`
 ///    are bigram entries while the bare unambiguous
 ///    interrogatives still match via the first-token arm);
 ///    Arabic uses
 ///    [`crate::lexicon::MatchStrategy::FirstTokenWithArabicClitics`]
-///    (Phase 1.6 — peels productive Arabic proclitic prefixes
+///    (peels productive Arabic proclitic prefixes
 ///    `و` / `ف` / `ب` / `ل` and the 2-char definite article
 ///    `ال` / `أل` from the first token before re-checking
 ///    equality, so `وكيف` / `فمتى` / `بأي` / `لمن` etc. surface
@@ -428,7 +424,7 @@ fn split_sentences_with_terminator(text: &str) -> Vec<SentenceSlice<'_>> {
 ///    English first-token check so substantive English
 ///    questions in unknown-language threads still get caught.
 ///
-/// Phase 1.1 #ANALYSIS-0002 closure: normalisation is delegated
+/// #ANALYSIS-0002 closure: normalisation is delegated
 /// to the registry's [`normalize_for_lookup`] primitive, which
 /// strips Arabic tashkeel + tatweel (when the language tag is
 /// Arabic-script), strips bidi/ZWJ format controls, then
@@ -452,8 +448,7 @@ fn split_sentences_with_terminator(text: &str) -> Vec<SentenceSlice<'_>> {
 /// with the pre-normalised string the rest of `do_extract`
 /// already shares.
 #[cfg(test)]
-fn looks_like_question(
-    sentence: &str,
+fn looks_like_question(sentence: &str,
     terminator: Option<char>,
     language: Option<&LanguageTag>,
 ) -> bool {
@@ -478,12 +473,11 @@ fn looks_like_question(
 /// values once per sentence (for decision / task matching) and
 /// reuses them here. The pre-normalised signature exists
 /// specifically to close Devin Review finding #ANALYSIS-0002
-/// (Phase 1.1 sweep 2): the per-sentence question path was
+///: the per-sentence question path was
 /// re-running the NFC + lowercase + tashkeel/bidi-strip pass
 /// over the same sentence that decision/task matching had
 /// already normalised.
-fn looks_like_question_normalised(
-    normalised: &str,
+fn looks_like_question_normalised(normalised: &str,
     terminator: Option<char>,
     primary_tag: Option<&str>,
 ) -> bool {
@@ -495,8 +489,8 @@ fn looks_like_question_normalised(
     }
     // Look up per-language interrogatives; fall back to English
     // when the tag is unknown or unconfigured. Promote the
-    // Phase 1.4 InterrogativeMatch into the unified
-    // Phase 1.1 MatchStrategy so the shared table_matches entry
+    //  InterrogativeMatch into the unified
+    //  MatchStrategy so the shared table_matches entry
     // point handles the FirstToken / FirstBigram / Substring
     // semantics in one place.
     let (table, strategy) = primary_tag
@@ -816,7 +810,7 @@ fn extract_at_mentions(text: &str) -> Vec<String> {
 /// (mixed) case and is responsible for any case folding it
 /// needs to do internally.
 ///
-/// Phase 1.1 #BUG-0001 closure: this used to take
+/// #BUG-0001 closure: this used to take
 /// `stop_words: &[String]` and compare via
 /// `str::eq_ignore_ascii_case`, which only folds the ASCII
 /// A–Z / a–z range. That silently failed for stop-words
@@ -831,7 +825,7 @@ fn extract_at_mentions(text: &str) -> Vec<String> {
 /// `Vec<String>` allocation the previous shape required for the
 /// registry-backed path.
 fn extract_capitalised_words(text: &str, is_stop_word: impl Fn(&str) -> bool) -> Vec<String> {
-    // Phase 1.1 sweep 2 #ANALYSIS-0005 closure: fold
+    // #ANALYSIS-0005 closure: fold
     // typographic / modifier apostrophe variants — U+2019 RIGHT
     // SINGLE QUOTATION MARK (the standard French / English IME
     // / typographically-correct apostrophe used by Word /
@@ -884,8 +878,7 @@ fn fold_typographic_apostrophes(text: &str) -> Cow<'_, str> {
         .chars()
         .any(|c| matches!(c, '\u{2019}' | '\u{2018}' | '\u{02BC}'))
     {
-        Cow::Owned(
-            text.chars()
+        Cow::Owned(text.chars()
                 .map(|c| match c {
                     '\u{2019}' | '\u{2018}' | '\u{02BC}' => '\'',
                     other => other,
@@ -913,20 +906,20 @@ fn fold_typographic_apostrophes(text: &str) -> Cow<'_, str> {
 /// classifiers for CJK / Thai / Khmer / Myanmar but NOT for
 /// Lao or Tibetan (`Lang::Bod` is absent). The fact-shape gate
 /// runs even when language detection produces `None`, and
-/// Phase 1.5 ships `lo` and `bo` lexicons reachable via
+/// ships `lo` and `bo` lexicons reachable via
 /// explicit-tag callers (FFI / connector pipelines that stamp
 /// the language tag directly). The arms exist so a Lao or
 /// Tibetan body is admitted as a Fact candidate on shape alone,
 /// with `language_tag = None` via the fail-closed contract
 /// when whatlang cannot classify it.
 ///
-/// History: Phase 1.4 added the CJK arm; the Thai arm was added
+/// History: added the CJK arm; the Thai arm was added
 /// in the first Devin Review fixup pass (so Thai declaratives
 /// like `กรุงเทพมหานครเป็นเมืองหลวงของประเทศไทย` can become Fact
 /// observations); the Lao / Khmer / Myanmar arms were added in
-/// the sixth Devin Review fixup pass; Phase 1.5 sweep 3 added
+/// the sixth Devin Review fixup pass; a later revision added
 /// the Tibetan arm and extended the Myanmar arm to Extended-A
-/// / -B. Phase 1.5 sweep 4 closed the asymmetry on Khmer
+/// / -B. a later revision closed the asymmetry on Khmer
 /// Symbols (U+19E0..=U+19FF) inside `is_khmer_codepoint`. See
 /// Devin Review findings ANALYSIS-0001b and
 /// BUG_pr-review-job-25cf9148_0001.
@@ -961,8 +954,8 @@ fn is_sentence_shaped_for_fact(sentence: &str) -> bool {
 /// also be admitted by the fact-shape gate; otherwise a body
 /// composed entirely of (say) CJK Compatibility Ideographs or
 /// Halfwidth Katakana would be indexed-and-searchable but
-/// silently rejected from becoming a Fact observation. Phase
-/// 1.5 sweep 6 extended this predicate to cover the full CJK
+/// silently rejected from becoming a Fact observation. ///
+/// 1.5 a later revision extended this predicate to cover the full CJK
 /// block set, closing the same asymmetry that sweeps 3 (Myanmar
 /// Extended-A / -B) and 4 (Khmer Symbols) closed for the
 /// Brahmic scripts.
@@ -1031,7 +1024,7 @@ fn is_thai_codepoint(c: char) -> bool {
 /// no-inter-word-whitespace convention. whatlang 0.18 does not
 /// currently detect Lao (the next-largest open-source detector
 /// `lingua-rs` does — this arm anticipates the LexiconRegistry
-/// landing in Phase 1.1 with richer detection), but the
+/// with richer detection), but the
 /// fact-shape gate runs even when language detection produces
 /// `None`, so this codepoint check ensures a Lao declarative is
 /// still admitted as a Fact candidate on shape alone, with the
@@ -1049,7 +1042,7 @@ fn is_lao_codepoint(c: char) -> bool {
 ///   date symbols used in liturgical / horoscopic corpora.
 ///
 /// Both blocks are routed to the FTS5 dual / bigram lanes by
-/// [`crate::script::is_cjk_or_thai_codepoint`] (Phase 1.5). This
+/// [`crate::script::is_cjk_or_thai_codepoint`]. This
 /// predicate is kept in lockstep with the FTS5 routing predicate
 /// — same defense-in-depth principle as Myanmar Extended-A / -B
 /// above and Tibetan below: a body composed entirely of symbols
@@ -1082,7 +1075,7 @@ fn is_khmer_codepoint(c: char) -> bool {
 ///   (Unicode 7.0, 2014).
 ///
 /// All three blocks are routed to the FTS5 dual / bigram lanes
-/// by [`crate::script::is_cjk_or_thai_codepoint`] (Phase 1.5).
+/// by [`crate::script::is_cjk_or_thai_codepoint`].
 /// This predicate is kept in lockstep with the FTS5 routing
 /// predicate so that a body in a Myanmar minority script (e.g.
 /// pure Shan text using Extended-B codepoints) is admitted by
@@ -1114,7 +1107,7 @@ fn is_myanmar_codepoint(c: char) -> bool {
 /// is absent), so the per-sentence detector will normally
 /// leave the `language_tag` as `None` for Tibetan bodies — but
 /// the fact-shape gate runs even when language detection
-/// produces `None`, and Phase 1.5 ships a `bo` lexicon
+/// produces `None`, and ships a `bo` lexicon
 /// reachable via explicit-tag callers (FFI / connector
 /// pipelines), so the Tibetan body is fully indexable, fully
 /// FTS-routable, and (with this arm) fully Fact-eligible.
@@ -1147,11 +1140,10 @@ impl LexiconExtractor {
     /// In registry-backed mode the lookup is per-sentence-language
     /// (with English fallback for unconfigured tags). In legacy
     /// inline mode the inline keyword list is applied
-    /// regardless of language (matching pre-Phase-1.1 behaviour
+    /// regardless of language (matching earlier behaviour
     /// exactly, including the substring-style match for the
     /// inline decision / task lists).
-    fn sentence_matches_class(
-        &self,
+    fn sentence_matches_class(&self,
         normalised_sentence: &str,
         primary_tag: Option<&str>,
         class: KeywordClass,
@@ -1208,14 +1200,14 @@ impl LexiconExtractor {
     /// mode it uses the inline stop-word list (already
     /// lowercased by [`LexiconExtractor::new`]).
     ///
-    /// Phase 1.1 #BUG-0001 closure: the pre-Phase-1.1 path
+    /// #BUG-0001 closure: the earlier path
     /// compared via `str::eq_ignore_ascii_case` which silently
     /// failed for non-ASCII stop-words. We now lowercase the
     /// raw candidate once via [`str::to_lowercase`] (Unicode-
     /// aware) and compare against the already-lowercase entries,
     /// matching what the rest of the lexicon matcher does.
     ///
-    /// Phase 1.1 #ANALYSIS-0005 closure: the predicate shape
+    /// #ANALYSIS-0005 closure: the predicate shape
     /// avoids the per-call `Vec<String>` allocation the previous
     /// `stop_words_for_entity_extraction` returned for the
     /// registry path. The lowercase allocation per candidate is
@@ -1247,8 +1239,7 @@ impl LexiconExtractor {
     /// the mutual-delegation infinite-recursion trap documented on
     /// the [`ObservationExtractor`] trait. See Devin Review
     /// finding #ANALYSIS-0002b.
-    fn do_extract(
-        &self,
+    fn do_extract(&self,
         text: &str,
         scope: ScopeId,
         dominant_language: Option<&LanguageTag>,
@@ -1256,7 +1247,7 @@ impl LexiconExtractor {
         let mut out = Vec::new();
         let mut seen_entities: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        // Phase 1.4: dominant language for entity-class observations
+        // dominant language for entity-class observations
         // (mentions / URLs / dates / numerics span the whole input,
         // so the dominant language is the only language that makes
         // semantic sense to stamp on them).
@@ -1274,20 +1265,19 @@ impl LexiconExtractor {
         // Entity extraction over the entire input.
         for mention in extract_at_mentions(text) {
             if seen_entities.insert(mention.clone()) {
-                out.push(
-                    Observation::new_candidate(ObservationType::Entity, mention, scope, 0.85)
+                out.push(Observation::new_candidate(ObservationType::Entity, mention, scope, 0.85)
                         .with_language_tag(dominant_language.clone()),
                 );
             }
         }
-        // Phase 1.1: stop-word check uses
+        // stop-word check uses
         // [`Self::is_stop_word`], which routes to the per-message
         // dominant language's lexicon when registry-backed, falls
         // back to the English lexicon's stop-words for
         // unconfigured languages, and falls back to the inline
         // list when the extractor was constructed via the legacy
         // [`LexiconExtractor::new`] path. Comparison is Unicode-
-        // lowercase aware (Phase 1.1 #BUG-0001 closure) so
+        // lowercase aware ( #BUG-0001 closure) so
         // Cyrillic and Vietnamese stop-words match their
         // capitalised forms. The capitalised-token entity
         // heuristic is itself only meaningful for case-bearing
@@ -1301,47 +1291,42 @@ impl LexiconExtractor {
             extract_capitalised_words(text, |raw| self.is_stop_word(raw, dominant_for_stop_words))
         {
             if seen_entities.insert(word.clone()) {
-                out.push(
-                    Observation::new_candidate(ObservationType::Entity, word, scope, 0.55)
+                out.push(Observation::new_candidate(ObservationType::Entity, word, scope, 0.55)
                         .with_language_tag(dominant_language.clone()),
                 );
             }
         }
         for url in extract_urls(text) {
             if seen_entities.insert(url.clone()) {
-                out.push(
-                    Observation::new_candidate(ObservationType::Entity, url, scope, 0.9)
+                out.push(Observation::new_candidate(ObservationType::Entity, url, scope, 0.9)
                         .with_language_tag(dominant_language.clone()),
                 );
             }
         }
         for email in extract_emails(text) {
             if seen_entities.insert(email.clone()) {
-                out.push(
-                    Observation::new_candidate(ObservationType::Entity, email, scope, 0.9)
+                out.push(Observation::new_candidate(ObservationType::Entity, email, scope, 0.9)
                         .with_language_tag(dominant_language.clone()),
                 );
             }
         }
         for date_ref in extract_date_refs(text) {
             if seen_entities.insert(date_ref.clone()) {
-                out.push(
-                    Observation::new_candidate(ObservationType::Entity, date_ref, scope, 0.6)
+                out.push(Observation::new_candidate(ObservationType::Entity, date_ref, scope, 0.6)
                         .with_language_tag(dominant_language.clone()),
                 );
             }
         }
         for numeric in extract_numeric_refs(text) {
             if seen_entities.insert(numeric.clone()) {
-                out.push(
-                    Observation::new_candidate(ObservationType::Entity, numeric, scope, 0.7)
+                out.push(Observation::new_candidate(ObservationType::Entity, numeric, scope, 0.7)
                         .with_language_tag(dominant_language.clone()),
                 );
             }
         }
 
         // Sentence-level extraction for tasks / decisions / questions
-        // / facts. Phase 1.4: each sentence is independently
+        // / facts. : each sentence is independently
         // language-detected so a bilingual chat message
         // (`"Hello. 안녕하세요. Let's ship Friday."`) gets per-sentence
         // tags. When whatlang refuses to classify a short sentence,
@@ -1352,7 +1337,7 @@ impl LexiconExtractor {
             let sentence_language = detect_language(sentence)
                 .map(|d| d.tag)
                 .or_else(|| dominant_language.clone());
-            // Phase 1.1: normalise the sentence ONCE through
+            // normalise the sentence ONCE through
             // [`normalize_for_lookup`] (NFC + lowercase +
             // script-aware combining-mark strip) and reuse the
             // result for every keyword class. This is the
@@ -1361,7 +1346,7 @@ impl LexiconExtractor {
             let primary_tag = sentence_language.as_ref().map(|t| t.primary().to_string());
             let normalised = normalize_for_lookup(sentence, primary_tag.as_deref());
 
-            // Class precedence (Phase 1.1): Question first, then
+            // Class precedence: Question first, then
             // Decision, then Task. Speech-act signals (question
             // terminator `?` / `？` / `؟` + per-language
             // interrogative words) are unambiguous — a sentence
@@ -1370,10 +1355,10 @@ impl LexiconExtractor {
             // contains a polite-request opener like Japanese
             // `お願い`, Spanish `por favor` or Vietnamese
             // `vui lòng` that would otherwise route to the Task
-            // class. Pre-Phase-1.1 the inline English keyword set
+            // class. earlier the inline English keyword set
             // never overlapped this way (English `please` is in
             // the task list but rarely co-occurs with a `?`-
-            // terminator), but per-language Phase 1.1 lexicons
+            // terminator), but per-language  lexicons
             // include polite-request openers that ARE common in
             // interrogative sentences, so question-first
             // precedence is required to avoid mis-routing.
@@ -1381,7 +1366,7 @@ impl LexiconExtractor {
             // sentences like "We decided to please everyone"
             // (decision-class) should not become tasks because
             // they happen to contain the substring `please`.
-            // Phase 1.1 #ANALYSIS-0002 closure: pass the
+            // #ANALYSIS-0002 closure: pass the
             // already-normalised sentence + primary tag into the
             // pre-normalised variant so the question path
             // doesn't re-run NFC + lowercase + tashkeel/bidi-
@@ -1392,9 +1377,7 @@ impl LexiconExtractor {
             // raw-sentence convenience.
             if looks_like_question_normalised(&normalised, slice.terminator, primary_tag.as_deref())
             {
-                out.push(
-                    Observation::new_candidate(
-                        ObservationType::Question,
+                out.push(Observation::new_candidate(ObservationType::Question,
                         sentence.to_string(),
                         scope,
                         0.7,
@@ -1403,14 +1386,11 @@ impl LexiconExtractor {
                 );
                 continue;
             }
-            if self.sentence_matches_class(
-                &normalised,
+            if self.sentence_matches_class(&normalised,
                 primary_tag.as_deref(),
                 KeywordClass::Decision,
             ) {
-                out.push(
-                    Observation::new_candidate(
-                        ObservationType::Decision,
+                out.push(Observation::new_candidate(ObservationType::Decision,
                         sentence.to_string(),
                         scope,
                         0.75,
@@ -1420,15 +1400,12 @@ impl LexiconExtractor {
                 continue;
             }
             if self.sentence_matches_class(&normalised, primary_tag.as_deref(), KeywordClass::Task)
-                || self.sentence_matches_class(
-                    &normalised,
+                || self.sentence_matches_class(&normalised,
                     primary_tag.as_deref(),
                     KeywordClass::TaskImperative,
                 )
             {
-                out.push(
-                    Observation::new_candidate(
-                        ObservationType::Task,
+                out.push(Observation::new_candidate(ObservationType::Task,
                         sentence.to_string(),
                         scope,
                         0.7,
@@ -1464,9 +1441,7 @@ impl LexiconExtractor {
             // fragment too short to be a fact" without needing
             // per-script length thresholds.
             if sentence.len() >= 6 && is_sentence_shaped_for_fact(sentence) {
-                out.push(
-                    Observation::new_candidate(
-                        ObservationType::Fact,
+                out.push(Observation::new_candidate(ObservationType::Fact,
                         sentence.to_string(),
                         scope,
                         0.5,
@@ -1495,8 +1470,7 @@ impl ObservationExtractor for LexiconExtractor {
         self.do_extract(text, scope, dominant_language.as_ref())
     }
 
-    fn extract_with_dominant_language(
-        &self,
+    fn extract_with_dominant_language(&self,
         text: &str,
         scope: ScopeId,
         dominant_language: Option<&LanguageTag>,
@@ -1536,8 +1510,7 @@ mod tests {
     fn detects_tasks_via_keywords_and_imperatives() {
         let scope = ScopeId::new_v4();
         let ext = LexiconExtractor::default();
-        let obs = ext.extract(
-            "TODO: draft the RFC. Please send it by Friday. Schedule a review.",
+        let obs = ext.extract("TODO: draft the RFC. Please send it by Friday. Schedule a review.",
             scope,
         );
         let tasks: Vec<_> = obs
@@ -1568,7 +1541,7 @@ mod tests {
     }
 
     // ===================================================================
-    // Phase 1.4 — multilingual sentence terminator + question detection
+    //  — multilingual sentence terminator + question detection
     // tests. These exercise the new char-based splitter, the per-language
     // interrogative tables, and per-sentence language stamping.
     // ===================================================================
@@ -1581,8 +1554,7 @@ mod tests {
         // produce 3 slices.
         let text = "今日は晴れです。とても暑い！明日はどうですか？";
         let slices = split_sentences_with_terminator(text);
-        assert_eq!(
-            slices.len(),
+        assert_eq!(slices.len(),
             3,
             "expected 3 CJK sentences, got {}: {slices:?}",
             slices.len()
@@ -1637,7 +1609,7 @@ mod tests {
 
     #[test]
     fn split_sentences_recognises_tibetan_shad() {
-        // Phase 1.5 sweep 5: Tibetan ends sentences with shad
+        // Tibetan ends sentences with shad
         // (་།, U+0F0D) and paragraphs / verses with nyis shad
         // (༎, U+0F0E) — structurally parallel to Devanagari
         // single / double danda above. Without these arms in
@@ -1656,7 +1628,7 @@ mod tests {
 
     #[test]
     fn split_sentences_recognises_khmer_khan() {
-        // Phase 1.5 sweep 5: Khmer ends sentences with khan
+        // Khmer ends sentences with khan
         // (។, U+17D4). Statement 1 = "Phnom Penh is the
         // capital of Cambodia"; statement 2 = "Khmer is the
         // language of Cambodia".
@@ -1669,7 +1641,7 @@ mod tests {
 
     #[test]
     fn split_sentences_recognises_myanmar_visarga() {
-        // Phase 1.5 sweep 5: Myanmar / Burmese ends sentences
+        // Myanmar / Burmese ends sentences
         // with sign section / "visarga" (။, U+104B).
         // Statement 1 = "Yangon is the largest city of
         // Myanmar"; statement 2 = "Naypyidaw is the capital
@@ -1682,9 +1654,9 @@ mod tests {
     }
 
     #[test]
-    fn split_sentences_phase_1_5_terminators_do_not_swallow_non_terminator_punctuation() {
+    fn split_sentences_terminators_do_not_swallow_non_terminator_punctuation() {
         // Defense in depth: codepoints adjacent to or visually
-        // similar to the Phase 1.5 terminators must NOT trigger
+        // similar to the  terminators must NOT trigger
         // a split. Locks the precision contract so a future
         // sweep doesn't accidentally add the Khmer bariyoosan
         // (\u{17D5}, paragraph-end), Myanmar little section
@@ -1697,8 +1669,7 @@ mod tests {
             '\u{0F11}', // ༑  Tibetan rin chen spungs shad
             '\u{0F0C}', // ་ Tibetan delimiter mark tsheg bstar
         ] {
-            assert!(
-                !is_sentence_terminator(non_terminator),
+            assert!(!is_sentence_terminator(non_terminator),
                 "{:?} (U+{:04X}) must not be a sentence terminator",
                 non_terminator,
                 non_terminator as u32,
@@ -1708,7 +1679,7 @@ mod tests {
 
     #[test]
     fn split_sentences_mixed_script_message() {
-        // The motivating Phase 1.4 example: a bilingual chat
+        // The motivating  example: a bilingual chat
         // message ("Hello. 안녕하세요. Let's ship Friday.") splits
         // into 3 sentences across Latin + Hangul scripts.
         let text = "Hello. 안녕하세요. Let's ship Friday.";
@@ -1737,8 +1708,7 @@ mod tests {
         // interrogative `何`. Substring matching for ja must
         // catch this.
         let ja = LanguageTag::new("ja").unwrap();
-        assert!(looks_like_question(
-            "今日は何曜日ですか",
+        assert!(looks_like_question("今日は何曜日ですか",
             Some('。'),
             Some(&ja)
         ));
@@ -1751,8 +1721,7 @@ mod tests {
         // Our table includes `ですか` as an interrogative so
         // substring match catches it.
         let ja = LanguageTag::new("ja").unwrap();
-        assert!(looks_like_question(
-            "明日は晴れですか",
+        assert!(looks_like_question("明日は晴れですか",
             Some('。'),
             Some(&ja)
         ));
@@ -1762,8 +1731,7 @@ mod tests {
     fn korean_interrogative_substring_match() {
         let ko = LanguageTag::new("ko").unwrap();
         // No `?`; the interrogative `무엇` (what) is in the middle.
-        assert!(looks_like_question(
-            "오늘은 무엇을 먹을까요",
+        assert!(looks_like_question("오늘은 무엇을 먹을까요",
             Some('.'),
             Some(&ko)
         ));
@@ -1788,8 +1756,7 @@ mod tests {
     #[test]
     fn french_first_token_interrogative_no_question_mark() {
         let fr = LanguageTag::new("fr").unwrap();
-        assert!(looks_like_question(
-            "Pourquoi tu fais ça",
+        assert!(looks_like_question("Pourquoi tu fais ça",
             Some('.'),
             Some(&fr)
         ));
@@ -1798,8 +1765,7 @@ mod tests {
     #[test]
     fn german_first_token_interrogative_no_question_mark() {
         let de = LanguageTag::new("de").unwrap();
-        assert!(looks_like_question(
-            "Wer hat das gemacht",
+        assert!(looks_like_question("Wer hat das gemacht",
             Some('.'),
             Some(&de)
         ));
@@ -1812,13 +1778,11 @@ mod tests {
         // substring ("whole" contains "who", "whether" contains
         // "when's" stem, etc.).
         let en = LanguageTag::new("en").unwrap();
-        assert!(!looks_like_question(
-            "The whole team approved this",
+        assert!(!looks_like_question("The whole team approved this",
             Some('.'),
             Some(&en)
         ));
-        assert!(!looks_like_question(
-            "Whether we ship Friday is up to legal",
+        assert!(!looks_like_question("Whether we ship Friday is up to legal",
             Some('.'),
             Some(&en)
         ));
@@ -1841,23 +1805,19 @@ mod tests {
         // Manually construct the NFD form (e + COMBINING ACUTE ACCENT).
         let nfd = "que\u{0301} pasa";
         assert_ne!(nfc, nfd, "NFC and NFD forms must differ at the byte level");
-        assert!(
-            looks_like_question(nfc, Some('.'), Some(&es)),
+        assert!(looks_like_question(nfc, Some('.'), Some(&es)),
             "NFC form should match"
         );
-        assert!(
-            looks_like_question(nfd, Some('.'), Some(&es)),
+        assert!(looks_like_question(nfd, Some('.'), Some(&es)),
             "NFD form should match after NFC normalisation"
         );
 
         // Same check for French `où` (NFD: `o + U+0300` GRAVE).
         let fr = LanguageTag::new("fr").unwrap();
-        assert!(
-            looks_like_question("où est le bureau", Some('.'), Some(&fr)),
+        assert!(looks_like_question("où est le bureau", Some('.'), Some(&fr)),
             "french NFC form should match"
         );
-        assert!(
-            looks_like_question("ou\u{0300} est le bureau", Some('.'), Some(&fr)),
+        assert!(looks_like_question("ou\u{0300} est le bureau", Some('.'), Some(&fr)),
             "french NFD form should match after NFC normalisation"
         );
     }
@@ -1870,7 +1830,7 @@ mod tests {
         // Japanese question + long English task. Each sentence
         // is long enough on its own that whatlang reliably
         // classifies it — that's the per-sentence guarantee
-        // Phase 1.4 makes.
+        //  makes.
         let text = "Please review the migration plan for the deadline this Friday. \
                     今日の会議では何時に開始する予定でしょうか、教えてください。 \
                     Please send the agenda document to the entire team today.";
@@ -1880,8 +1840,7 @@ mod tests {
             .iter()
             .find(|o| o.observation_type == ObservationType::Question)
             .expect("japanese question should be detected (interrogative 何 substring match)");
-        assert_eq!(
-            question
+        assert_eq!(question
                 .language_tag
                 .as_ref()
                 .map(|t| t.primary().to_string()),
@@ -1902,8 +1861,7 @@ mod tests {
                     && o.language_tag.as_ref().is_some_and(|t| t.primary() == "en")
             })
             .unwrap_or_else(|| {
-                panic!(
-                    "expected at least one english-tagged task observation; got tags: {:?}",
+                panic!("expected at least one english-tagged task observation; got tags: {:?}",
                     obs.iter()
                         .filter(|o| o.observation_type == ObservationType::Task)
                         .map(|o| o.language_tag.clone())
@@ -1915,7 +1873,7 @@ mod tests {
 
     #[test]
     fn cjk_fact_shaped_without_whitespace() {
-        // Regression: pre-Phase-1.4 the fact gate required a
+        // Regression: earlier the fact gate required a
         // space character. A CJK declarative sentence has no
         // spaces, so it would have been silently dropped. Verify
         // CJK declaratives now produce Fact candidates.
@@ -1923,8 +1881,7 @@ mod tests {
         let ext = LexiconExtractor::default();
         // "Tokyo Tower is 333 meters tall."
         let obs = ext.extract("東京タワーの高さは三百三十三メートルです。", scope);
-        assert!(
-            obs.iter()
+        assert!(obs.iter()
                 .any(|o| o.observation_type == ObservationType::Fact),
             "expected at least one Fact from CJK declarative; got {:?}",
             obs.iter().map(|o| o.observation_type).collect::<Vec<_>>()
@@ -1940,8 +1897,7 @@ mod tests {
         // Short single-clause utterances — should NOT produce
         // facts.
         let obs = ext.extract("はい。", scope);
-        assert!(
-            !obs.iter()
+        assert!(!obs.iter()
                 .any(|o| o.observation_type == ObservationType::Fact),
             "expected no Fact from very short CJK utterance"
         );
@@ -1961,8 +1917,7 @@ mod tests {
         // the fallback for `"Yes."`).
         for o in &obs {
             if let Some(tag) = o.language_tag.as_ref() {
-                assert_eq!(
-                    tag.primary(),
+                assert_eq!(tag.primary(),
                     "en",
                     "observation {o:?} should fall back to en"
                 );
@@ -1988,16 +1943,14 @@ mod tests {
             .find(|o| o.observation_type == ObservationType::Entity && o.content == "@sara")
             .expect("@sara mention should be extracted");
         let dominant = detect_language(text).map(|d| d.tag);
-        assert_eq!(
-            mention.language_tag, dominant,
+        assert_eq!(mention.language_tag, dominant,
             "@mention must carry the dominant-language tag computed from the whole input \
              (got {:?}, expected {:?})",
             mention.language_tag, dominant
         );
         // And separately: when the dominant is reliable, the
         // mention should carry that exact tag.
-        assert!(
-            mention.language_tag.is_some(),
+        assert!(mention.language_tag.is_some(),
             "english input should produce a reliable dominant tag"
         );
         assert_eq!(mention.language_tag.as_ref().unwrap().primary(), "en");
@@ -2022,8 +1975,7 @@ mod tests {
             .find(|o| o.observation_type == ObservationType::Entity && o.content == "@bob")
             .expect("@bob mention should be extracted");
         let dominant = detect_language(text).map(|d| d.tag);
-        assert_eq!(
-            mention.language_tag, dominant,
+        assert_eq!(mention.language_tag, dominant,
             "@mention must carry the dominant tag exactly, whatever it is (got {:?}, \
              expected {:?})",
             mention.language_tag, dominant
@@ -2043,7 +1995,7 @@ mod tests {
         assert!(!is_cjk_codepoint('क')); // Devanagari
         assert!(!is_cjk_codepoint('ก')); // Thai (handled separately)
 
-        // Phase 1.5 sweep 6: extended CJK coverage to mirror the
+        // extended CJK coverage to mirror the
         // FTS5 routing predicate `script::is_cjk_or_thai_codepoint`,
         // closing the same lockstep asymmetry that sweeps 3
         // (Myanmar Extended-A / -B) and 4 (Khmer Symbols)
@@ -2124,7 +2076,7 @@ mod tests {
 
     #[test]
     fn thai_fact_shaped_without_whitespace() {
-        // Regression for Devin Review #BUG-0002: Phase 1.4
+        // Regression for Devin Review #BUG-0002: 
         // shipped CJK fact-shape support but missed Thai, the
         // other major no-inter-word-whitespace script. A Thai
         // declarative sentence (no spaces, ≥ 4 Thai codepoints)
@@ -2133,8 +2085,7 @@ mod tests {
         let ext = LexiconExtractor::default();
         // "Bangkok is the capital of Thailand."
         let obs = ext.extract("กรุงเทพมหานครเป็นเมืองหลวงของประเทศไทย", scope);
-        assert!(
-            obs.iter()
+        assert!(obs.iter()
                 .any(|o| o.observation_type == ObservationType::Fact),
             "expected at least one Fact from Thai declarative; got {:?}",
             obs.iter().map(|o| o.observation_type).collect::<Vec<_>>()
@@ -2150,8 +2101,7 @@ mod tests {
         let ext = LexiconExtractor::default();
         // "ใช่" — "yes" in Thai, 3 Thai codepoints, no spaces.
         let obs = ext.extract("ใช่", scope);
-        assert!(
-            !obs.iter()
+        assert!(!obs.iter()
                 .any(|o| o.observation_type == ObservationType::Fact),
             "expected no Fact from very short Thai utterance"
         );
@@ -2159,7 +2109,7 @@ mod tests {
 
     #[test]
     fn is_lao_khmer_myanmar_codepoint_classifies_correctly() {
-        // Devin Review #ANALYSIS-0006 (sweep 6): widen
+        // Devin Review #ANALYSIS-0006: widen
         // no-whitespace-script fact-shape coverage from CJK +
         // Thai to also include the three other major Brahmic-
         // family scripts present in whatlang's detection set
@@ -2184,7 +2134,7 @@ mod tests {
         assert!(!is_khmer_codepoint('म')); // Devanagari (visually similar)
         assert!(!is_khmer_codepoint('a')); // ASCII
 
-        // Phase 1.5 sweep 4: Khmer Symbols (astronomical /
+        // Khmer Symbols (astronomical /
         // lunar date symbols). The FTS5 routing predicate at
         // `script::is_cjk_or_thai_codepoint` covers the
         // supplementary block, so the extractor predicate must
@@ -2208,7 +2158,7 @@ mod tests {
         assert!(!is_myanmar_codepoint('ก')); // Thai (handled separately)
         assert!(!is_myanmar_codepoint('a')); // ASCII
 
-        // Phase 1.5 sweep 3: Myanmar Extended-A (Pao + Pwo
+        // Myanmar Extended-A (Pao + Pwo
         // Karen) and Extended-B (Shan). The FTS5 routing
         // predicate at `script::is_cjk_or_thai_codepoint`
         // covers both blocks, so the extractor predicate
@@ -2239,7 +2189,7 @@ mod tests {
 
     #[test]
     fn is_tibetan_codepoint_classifies_correctly() {
-        // Phase 1.5 sweep 3: Tibetan is now in the fact-shape
+        // Tibetan is now in the fact-shape
         // gate's codepoint set. Spot-check the predicate at
         // boundaries, against neighbouring scripts in the
         // gate, and against ASCII.
@@ -2267,12 +2217,12 @@ mod tests {
 
     #[test]
     fn lao_khmer_myanmar_tibetan_fact_shaped_without_whitespace() {
-        // Devin Review #ANALYSIS-0006 (sweep 6) + Phase 1.5
-        // sweep 3: a declarative Khmer / Myanmar / Lao /
+        // Devin Review #ANALYSIS-0006 + 
+        // a declarative Khmer / Myanmar / Lao /
         // Tibetan sentence (no-inter-word-whitespace scripts
         // so the `contains(' ')` fast path does not fire)
         // must produce a Fact candidate via the codepoint-
-        // count gate. Tibetan was added in Phase 1.5 sweep 3
+        // count gate. Tibetan was added later
         // for parity with the BO_LEXICON shipped in this PR —
         // explicit-tag callers (FFI / connector pipelines
         // passing `bo`) MUST be able to round-trip a Tibetan
@@ -2283,8 +2233,7 @@ mod tests {
         // "Phnom Penh is the capital of Cambodia." — Khmer, no
         // inter-word spaces, well over 4 Khmer codepoints.
         let obs_km = ext.extract("ភ្នំពេញគឺជារដ្ឋធានីនៃប្រទេសកម្ពុជា", scope);
-        assert!(
-            obs_km
+        assert!(obs_km
                 .iter()
                 .any(|o| o.observation_type == ObservationType::Fact),
             "expected at least one Fact from Khmer declarative; got {:?}",
@@ -2297,8 +2246,7 @@ mod tests {
         // "Yangon is the largest city in Myanmar." — Burmese, no
         // inter-word spaces, well over 4 Myanmar codepoints.
         let obs_my = ext.extract("ရန်ကုန်သည်မြန်မာနိုင်ငံ၏အကြီးဆုံးမြို့ဖြစ်သည်", scope);
-        assert!(
-            obs_my
+        assert!(obs_my
                 .iter()
                 .any(|o| o.observation_type == ObservationType::Fact),
             "expected at least one Fact from Burmese declarative; got {:?}",
@@ -2313,8 +2261,7 @@ mod tests {
         // the codepoint-count gate must still admit it as a
         // Fact (the row will just carry `language_tag = None`).
         let obs_lo = ext.extract("ວຽງຈັນເປັນນະຄອນຫຼວງຂອງປະເທດລາວ", scope);
-        assert!(
-            obs_lo
+        assert!(obs_lo
                 .iter()
                 .any(|o| o.observation_type == ObservationType::Fact),
             "expected at least one Fact from Lao declarative on shape alone; got {:?}",
@@ -2331,12 +2278,11 @@ mod tests {
         // carries `language_tag = None`, but the codepoint-
         // count gate MUST still admit it as a Fact — same
         // defense-in-depth as the Lao arm above. Without the
-        // Tibetan arm added in Phase 1.5 sweep 3 this
+        // Tibetan arm added later this
         // assertion fails and no Tibetan declarative ever
         // becomes a Fact.
         let obs_bo = ext.extract("ལྷ་ས་ནི་བོད་ཀྱི་རྒྱལ་ས་ཡིན", scope);
-        assert!(
-            obs_bo
+        assert!(obs_bo
                 .iter()
                 .any(|o| o.observation_type == ObservationType::Fact),
             "expected at least one Fact from Tibetan declarative on shape alone; got {:?}",
@@ -2348,30 +2294,28 @@ mod tests {
     }
 
     #[test]
-    fn is_sentence_terminator_covers_phase_1_4_set() {
+    fn is_sentence_terminator_covers_initial_multilingual_set() {
         // Defensive: pin the exact terminator set so accidental
         // additions/removals fail tests instead of silently
         // changing behaviour. The scope of this test is
-        // intentionally limited to the Phase 1.4 codepoints so
-        // that an accidental REMOVAL of any Phase 1.4 terminator
-        // (regression of the original multilingual terminator
-        // work) fires here with an unambiguous error. Phase 1.5
-        // additions have their own sibling pinning test below
-        // (`is_sentence_terminator_covers_phase_1_5_set`).
+        // intentionally limited to the original multilingual
+        // codepoints so that an accidental REMOVAL of any
+        // terminator (regression of the original multilingual
+        // terminator work) fires here with an unambiguous
+        // error. Later additions have their own sibling pinning
+        // test below (`is_sentence_terminator_covers_extended_set`).
         let terminators = [
             '.', '!', '?', '\n', '。', '！', '？', '؟', '۔', '।', '॥', '։', '።',
         ];
         for c in terminators {
-            assert!(
-                is_sentence_terminator(c),
+            assert!(is_sentence_terminator(c),
                 "{c:?} (U+{:04X}) must be a sentence terminator",
                 c as u32
             );
         }
         let non_terminators = ['a', 'あ', ',', ';', '¿', '¡', ':', '\t'];
         for c in non_terminators {
-            assert!(
-                !is_sentence_terminator(c),
+            assert!(!is_sentence_terminator(c),
                 "{c:?} (U+{:04X}) must NOT be a sentence terminator",
                 c as u32
             );
@@ -2379,18 +2323,18 @@ mod tests {
     }
 
     #[test]
-    fn is_sentence_terminator_covers_phase_1_5_set() {
-        // Phase 1.5 sweep 6 sibling to the Phase 1.4 pinning
-        // test above. Pins the four Phase 1.5 sentence-final
-        // marks added in sweep 5 so an accidental removal fires
-        // here independently of the Phase 1.4 set.
+    fn is_sentence_terminator_covers_extended_set() {
+        // A sibling to the initial-set pinning test above.
+        // Pins the four extended (Tibetan / Khmer / Myanmar /
+        // Lao) sentence-final marks added later so an accidental
+        // removal fires here independently of the initial set.
         //
-        // The split between this and the Phase 1.4 test is
+        // The split between this and the  test is
         // intentional: each test fails with a phase-specific
         // error message, so a regression that drops (say) the
-        // Khmer khan can be triaged to the Phase 1.5 commit
+        // Khmer khan can be triaged to the  commit
         // line that introduced it without first ruling out a
-        // Phase 1.4 regression.
+        //  regression.
         let terminators = [
             ('\u{0F0D}', "Tibetan shad (sentence / clause end)"),
             ('\u{0F0E}', "Tibetan nyis shad (paragraph / verse end)"),
@@ -2398,8 +2342,7 @@ mod tests {
             ('\u{104B}', "Myanmar sign section / visarga (full stop)"),
         ];
         for (c, role) in terminators {
-            assert!(
-                is_sentence_terminator(c),
+            assert!(is_sentence_terminator(c),
                 "{c:?} (U+{:04X}, {role}) must be a sentence terminator",
                 c as u32
             );
@@ -2408,7 +2351,7 @@ mod tests {
         // block U+0E80..=U+0EFF) has no dedicated sentence-end
         // punctuation; modern Lao typography uses ASCII `.`,
         // `!`, `?` for sentence termination, which are already
-        // in the Phase 1.4 set. The 3-new-terminators-vs-
+        // in the  set. The 3-new-terminators-vs-
         // 4-new-scripts asymmetry is documented by absence
         // here and at the doc-comment of `is_sentence_terminator`.
     }
@@ -2436,8 +2379,7 @@ mod tests {
             .iter()
             .find(|o| o.observation_type == ObservationType::Entity && o.content == "@sara")
             .expect("@sara mention should be extracted");
-        assert_eq!(
-            mention.language_tag.as_ref(),
+        assert_eq!(mention.language_tag.as_ref(),
             Some(&hint),
             "@mention must inherit the supplied dominant-language hint \
              instead of re-detecting (got {:?})",
@@ -2465,8 +2407,7 @@ mod tests {
             .find(|o| o.observation_type == ObservationType::Entity && o.content == "@sara")
             .expect("@sara mention should be extracted");
         let en = LanguageTag::new("en").expect("en tag");
-        assert_eq!(
-            mention.language_tag.as_ref(),
+        assert_eq!(mention.language_tag.as_ref(),
             Some(&en),
             "extract() must run detect_language once at the public-API boundary \
              and stamp the detected tag on entity-class observations (got {:?})",
@@ -2496,8 +2437,7 @@ mod tests {
         // would re-derive `en`.
         let text = "@sara please draft the rollout schedule by Friday and ship the migration plan.";
         let pre_detect = detect_language(text).map(|d| d.tag);
-        assert!(
-            pre_detect.is_some(),
+        assert!(pre_detect.is_some(),
             "test premise: detect_language must succeed on this input so the \
              regression test is sensitive to a future re-introduction of the \
              fallback detection inside do_extract"
@@ -2508,8 +2448,7 @@ mod tests {
             .iter()
             .find(|o| o.observation_type == ObservationType::Entity && o.content == "@sara")
             .expect("@sara mention should be extracted");
-        assert!(
-            mention.language_tag.is_none(),
+        assert!(mention.language_tag.is_none(),
             "@mention must inherit the authoritative None hint, NOT re-detect \
              the dominant language inside do_extract (got {:?})",
             mention.language_tag
@@ -2517,7 +2456,7 @@ mod tests {
     }
 
     // ====================================================================
-    // Phase 1.1: per-language registry-backed sentence classification
+    // per-language registry-backed sentence classification
     // ====================================================================
 
     /// Helper: find observations of a given type.
@@ -2527,9 +2466,9 @@ mod tests {
 
     #[test]
     fn french_decision_keyword_matches_through_registry() {
-        // Phase 1.1: French sentence with `approuvé` (past
+        // French sentence with `approuvé` (past
         // participle of `approuver` — "approve") must route to
-        // Decision via the FR lexicon. Pre-Phase-1.1 this was
+        // Decision via the FR lexicon. earlier this was
         // never matched because the inline English lexicon
         // didn't carry `approuvé`.
         let scope = ScopeId::new_v4();
@@ -2537,15 +2476,13 @@ mod tests {
         let text = "Le plan de lancement a été approuvé par l'équipe lors de la réunion d'hier.";
         let obs = ext.extract(text, scope);
         let decisions = find_obs_by_type(&obs, ObservationType::Decision);
-        assert!(
-            !decisions.is_empty(),
+        assert!(!decisions.is_empty(),
             "expected a Decision from French `approuvé`; got {:?}",
             obs.iter()
                 .map(|o| (o.observation_type, o.content.clone()))
                 .collect::<Vec<_>>()
         );
-        assert_eq!(
-            decisions[0]
+        assert_eq!(decisions[0]
                 .language_tag
                 .as_ref()
                 .map(|t| t.primary().to_string()),
@@ -2557,7 +2494,7 @@ mod tests {
 
     #[test]
     fn spanish_task_imperative_matches_through_registry() {
-        // Phase 1.1: Spanish sentence opening with the
+        // Spanish sentence opening with the
         // 2nd-person-singular imperative `envía` ("send") must
         // route to Task via FirstBigram-strategy lookup against
         // the ES imperative-verb table. Inline English
@@ -2580,15 +2517,13 @@ mod tests {
         let text = "Envía el informe de migración al equipo de operaciones antes del viernes.";
         let obs = ext.extract_with_dominant_language(text, scope, Some(&es));
         let tasks = find_obs_by_type(&obs, ObservationType::Task);
-        assert!(
-            !tasks.is_empty(),
+        assert!(!tasks.is_empty(),
             "expected a Task from Spanish imperative `envía`; got {:?}",
             obs.iter()
                 .map(|o| (o.observation_type, o.content.clone()))
                 .collect::<Vec<_>>()
         );
-        assert_eq!(
-            tasks[0]
+        assert_eq!(tasks[0]
                 .language_tag
                 .as_ref()
                 .map(|t| t.primary().to_string()),
@@ -2598,7 +2533,7 @@ mod tests {
 
     #[test]
     fn vietnamese_task_imperative_matches_through_first_bigram() {
-        // Phase 1.1 closes Phase 1.4 deferred FLAG-0002d /
+        //  closes  deferred FLAG-0002d /
         // BUG-0001: multi-word collocations need
         // FirstBigram-strategy matching. Vietnamese
         // `triển khai` ("deploy", "roll out") is a single
@@ -2612,15 +2547,13 @@ mod tests {
         let text = "Triển khai bản kế hoạch di trú vào sáng thứ Sáu này nhé.";
         let obs = ext.extract(text, scope);
         let tasks = find_obs_by_type(&obs, ObservationType::Task);
-        assert!(
-            !tasks.is_empty(),
+        assert!(!tasks.is_empty(),
             "expected a Task from Vietnamese `triển khai`; got {:?}",
             obs.iter()
                 .map(|o| (o.observation_type, o.content.clone()))
                 .collect::<Vec<_>>()
         );
-        assert_eq!(
-            tasks[0]
+        assert_eq!(tasks[0]
                 .language_tag
                 .as_ref()
                 .map(|t| t.primary().to_string()),
@@ -2630,7 +2563,7 @@ mod tests {
 
     #[test]
     fn arabic_decision_keyword_matches_after_tashkeel_strip() {
-        // Phase 1.1 closes Phase 1.4 deferred ANALYSIS-0001:
+        //  closes  deferred ANALYSIS-0001:
         // Arabic combining marks (tashkeel) like fatha / kasra
         // would otherwise split the FirstToken matcher's view
         // of the word boundary because the marks are category
@@ -2648,7 +2581,7 @@ mod tests {
         // [`ObservationExtractor::extract_with_dominant_language`]
         // to isolate the tashkeel-strip + lexicon-matching
         // behaviour from whatlang's per-sentence-reliability
-        // heuristic. The Phase 1.4 bilingual pipeline test
+        // heuristic. The  bilingual pipeline test
         // already exercises end-to-end whatlang detection.
         let scope = ScopeId::new_v4();
         let ext = LexiconExtractor::default();
@@ -2663,15 +2596,13 @@ mod tests {
         let text = "قَررـنا الخطة في الاجتماع.";
         let obs = ext.extract_with_dominant_language(text, scope, Some(&ar));
         let decisions = find_obs_by_type(&obs, ObservationType::Decision);
-        assert!(
-            !decisions.is_empty(),
+        assert!(!decisions.is_empty(),
             "expected a Decision from Arabic `قررنا` (tashkeel+tatweel-stripped); got {:?}",
             obs.iter()
                 .map(|o| (o.observation_type, o.content.clone()))
                 .collect::<Vec<_>>()
         );
-        assert_eq!(
-            decisions[0]
+        assert_eq!(decisions[0]
                 .language_tag
                 .as_ref()
                 .map(|t| t.primary().to_string()),
@@ -2681,7 +2612,7 @@ mod tests {
 
     #[test]
     fn japanese_task_keyword_matches_via_substring_strategy() {
-        // Phase 1.1: CJK lexicons use Substring strategy
+        // CJK lexicons use Substring strategy
         // because there is no inter-word whitespace to split
         // into tokens. Japanese `お願い` ("please" / polite
         // request opener) must match anywhere in the sentence.
@@ -2689,21 +2620,19 @@ mod tests {
         let ext = LexiconExtractor::default();
         // Pure Japanese declarative ending in `。` (no
         // interrogative terminator) carrying `お願い`. Pre-
-        // Phase-1.1 this would have fallen through to Fact
+        // earlier this would have fallen through to Fact
         // because the inline English keyword set never matched
         // `お願い`.
         let text = "明日の朝までに移行プランをレビューしてくださいお願いします。";
         let obs = ext.extract(text, scope);
         let tasks = find_obs_by_type(&obs, ObservationType::Task);
-        assert!(
-            !tasks.is_empty(),
+        assert!(!tasks.is_empty(),
             "expected a Task from Japanese `お願い`; got {:?}",
             obs.iter()
                 .map(|o| (o.observation_type, o.content.clone()))
                 .collect::<Vec<_>>()
         );
-        assert_eq!(
-            tasks[0]
+        assert_eq!(tasks[0]
                 .language_tag
                 .as_ref()
                 .map(|t| t.primary().to_string()),
@@ -2713,7 +2642,7 @@ mod tests {
 
     #[test]
     fn unsupported_language_falls_back_to_english_lexicon() {
-        // Phase 1.1: a primary subtag NOT in
+        // a primary subtag NOT in
         // [`BUILTIN_LEXICONS`] must transparently fall back to
         // the English lexicon (so English keywords still work
         // in an `xx`-tagged or unconfigured-language sentence,
@@ -2737,8 +2666,7 @@ mod tests {
         let text = "Please review the migration plan and ship by Friday.";
         let obs = ext.extract_with_dominant_language(text, scope, Some(&xx));
         let tasks = find_obs_by_type(&obs, ObservationType::Task);
-        assert!(
-            !tasks.is_empty(),
+        assert!(!tasks.is_empty(),
             "english `please` must still trigger Task even with `xx` dominant hint; got {:?}",
             obs.iter()
                 .map(|o| (o.observation_type, o.content.clone()))
@@ -2747,16 +2675,15 @@ mod tests {
     }
 
     #[test]
-    fn legacy_inline_constructor_preserves_pre_phase_1_1_behaviour() {
+    fn legacy_inline_constructor_preserves_pre_behaviour() {
         // Back-compat: callers of [`LexiconExtractor::new`]
-        // (pre-Phase-1.1 single-language inline keyword
-        // overrides) get exactly the pre-Phase-1.1
+        // (earlier single-language inline keyword
+        // overrides) get exactly the earlier
         // substring-match semantics regardless of detected
         // language. This pins the API contract so future
         // refactors don't silently drop the inline path.
         let scope = ScopeId::new_v4();
-        let ext = LexiconExtractor::new(
-            vec!["wir haben entschieden"], // German decision phrase
+        let ext = LexiconExtractor::new(vec!["wir haben entschieden"], // German decision phrase
             vec!["bitte"],                 // German task opener
             vec!["beschicke"],             // German imperative
             vec!["The", "Today"],
@@ -2764,8 +2691,7 @@ mod tests {
         let text = "Wir haben entschieden, das Migrationsdokument zu veröffentlichen.";
         let obs = ext.extract(text, scope);
         let decisions = find_obs_by_type(&obs, ObservationType::Decision);
-        assert!(
-            !decisions.is_empty(),
+        assert!(!decisions.is_empty(),
             "inline German decision phrase must still match through legacy constructor; got {:?}",
             obs.iter()
                 .map(|o| (o.observation_type, o.content.clone()))
@@ -2775,7 +2701,7 @@ mod tests {
 
     #[test]
     fn class_precedence_question_beats_task_keyword() {
-        // Phase 1.1 ordering invariant: question detection
+        //  ordering invariant: question detection
         // (sentence terminator + per-language interrogative
         // table) runs BEFORE task-keyword detection so that a
         // sentence that ends in `？` or contains an
@@ -2791,8 +2717,7 @@ mod tests {
         let text = "今日の会議では何時に開始する予定でしょうかご確認お願いします。";
         let obs = ext.extract(text, scope);
         let questions = find_obs_by_type(&obs, ObservationType::Question);
-        assert!(
-            !questions.is_empty(),
+        assert!(!questions.is_empty(),
             "Japanese interrogative containing polite-request opener must be a Question \
              (question-first precedence); got {:?}",
             obs.iter()
@@ -2803,7 +2728,7 @@ mod tests {
 
     #[test]
     fn capitalised_extractor_skips_non_ascii_stop_words_unicode_lowercase() {
-        // Phase 1.1 #BUG-0001 closure: the pre-Phase-1.1 path
+        // #BUG-0001 closure: the earlier path
         // compared capitalised tokens against stop-words via
         // `str::eq_ignore_ascii_case`, which only folds the
         // ASCII A–Z / a–z range. Non-ASCII stop-words (Cyrillic
@@ -2821,13 +2746,11 @@ mod tests {
         // entity observation.
         let ru = LanguageTag::new("ru").unwrap();
         let ext = LexiconExtractor::default();
-        assert!(
-            ext.is_stop_word("Это", Some(&ru)),
+        assert!(ext.is_stop_word("Это", Some(&ru)),
             "Cyrillic capitalised `Это` must match lexicon stop-word `это` under \
              Unicode lowercase folding (Devin Review #BUG-0001)"
         );
-        assert!(
-            !ext.is_stop_word("Москва", Some(&ru)),
+        assert!(!ext.is_stop_word("Москва", Some(&ru)),
             "Real Russian entity `Москва` must not match any stop-word"
         );
 
@@ -2836,13 +2759,11 @@ mod tests {
         // fold to `đó` (Vietnamese-specific `Đ` → `đ` is a
         // standard Unicode lowercase mapping, not ASCII).
         let vi = LanguageTag::new("vi").unwrap();
-        assert!(
-            ext.is_stop_word("Đó", Some(&vi)),
+        assert!(ext.is_stop_word("Đó", Some(&vi)),
             "Vietnamese capitalised `Đó` must match lexicon stop-word `đó` under \
              Unicode lowercase folding"
         );
-        assert!(
-            !ext.is_stop_word("Hà", Some(&vi)),
+        assert!(!ext.is_stop_word("Hà", Some(&vi)),
             "Real Vietnamese entity fragment `Hà` must not match any stop-word"
         );
 
@@ -2850,8 +2771,7 @@ mod tests {
         // still work (regression guard against the new predicate
         // accidentally dropping ASCII coverage).
         let en = LanguageTag::new("en").unwrap();
-        assert!(
-            ext.is_stop_word("The", Some(&en)),
+        assert!(ext.is_stop_word("The", Some(&en)),
             "English capitalised `The` must continue to match stop-word `the`"
         );
     }
@@ -2869,8 +2789,7 @@ mod tests {
         let text = "Это просто текст для теста.";
         let obs = ext.extract_with_dominant_language(text, scope, Some(&ru));
         let entities = find_obs_by_type(&obs, ObservationType::Entity);
-        assert!(
-            !entities.iter().any(|o| o.content == "Это"),
+        assert!(!entities.iter().any(|o| o.content == "Это"),
             "Russian function word `Это` must not surface as an Entity observation \
              (Devin Review #BUG-0001); got entities {:?}",
             entities.iter().map(|o| &o.content).collect::<Vec<_>>()
@@ -2879,7 +2798,7 @@ mod tests {
 
     #[test]
     fn looks_like_question_strips_arabic_tashkeel_via_normalize_for_lookup() {
-        // Phase 1.1 #ANALYSIS-0002 closure: the question detector
+        // #ANALYSIS-0002 closure: the question detector
         // used to apply its own ad-hoc NFC + lowercase pass that
         // did NOT strip Arabic tashkeel + tatweel, so an Arabic
         // interrogative decorated with vowel marks (`كَيْفَ`) did
@@ -2897,12 +2816,10 @@ mod tests {
         // never match the bare `كيف` entry.
         let with_tashkeel = "كَيْفَ يمكنني المساعدة";
         let without_tashkeel = "كيف يمكنني المساعدة";
-        assert!(
-            looks_like_question(without_tashkeel, Some('.'), Some(&ar)),
+        assert!(looks_like_question(without_tashkeel, Some('.'), Some(&ar)),
             "Bare Arabic `كيف` interrogative must classify as a question"
         );
-        assert!(
-            looks_like_question(with_tashkeel, Some('.'), Some(&ar)),
+        assert!(looks_like_question(with_tashkeel, Some('.'), Some(&ar)),
             "Tashkeel-decorated Arabic `كَيْفَ` must classify as a question \
              after normalize_for_lookup strips the tashkeel \
              (Devin Review #ANALYSIS-0002)"
@@ -2911,7 +2828,7 @@ mod tests {
 
     #[test]
     fn looks_like_question_recovers_vietnamese_bigram_interrogatives() {
-        // Phase 1.1 #ANALYSIS-0004 closure: Vietnamese now uses
+        // #ANALYSIS-0004 closure: Vietnamese now uses
         // `InterrogativeMatch::FirstBigram` so the high-frequency
         // bare prepositions / conjunctions `tại` / `khi` / `vì`
         // recover their interrogative readings via the two-token
@@ -2924,8 +2841,7 @@ mod tests {
         // exercised, since the terminator short-circuits first).
         for question in ["tại sao bạn buồn", "khi nào chúng ta đi", "vì sao trời mưa"]
         {
-            assert!(
-                looks_like_question(question, Some('.'), Some(&vi)),
+            assert!(looks_like_question(question, Some('.'), Some(&vi)),
                 "Vietnamese bigram interrogative {question:?} must classify as a question \
                  via FirstBigram (Devin Review #ANALYSIS-0004)"
             );
@@ -2937,16 +2853,14 @@ mod tests {
             "tại Hà Nội mọi thứ rất khác",
             "vì tôi bận nên không thể đến",
         ] {
-            assert!(
-                !looks_like_question(declarative, Some('.'), Some(&vi)),
+            assert!(!looks_like_question(declarative, Some('.'), Some(&vi)),
                 "Vietnamese declarative {declarative:?} starting with bare function word must \
                  NOT classify as a question (regression guard against re-adding bare forms)"
             );
         }
         // Bare unambiguous interrogatives must still classify via
         // the FirstToken arm of FirstBigram.
-        assert!(
-            looks_like_question("ai là người đó", Some('.'), Some(&vi)),
+        assert!(looks_like_question("ai là người đó", Some('.'), Some(&vi)),
             "Vietnamese bare interrogative `ai` must still classify via FirstBigram's \
              first-token arm"
         );
@@ -2954,7 +2868,7 @@ mod tests {
 
     #[test]
     fn hindi_devanagari_virama_imperatives_match_via_substring() {
-        // Phase 1.1 sweep 2 #BUG-0001 + #ANALYSIS-0003 closure.
+        // #BUG-0001 + #ANALYSIS-0003 closure.
         // Hindi `task_imperative_verbs` containing the Devanagari
         // virama `U+094D` (Category Mn) — `मर्ज` (merge),
         // `समीक्षा` (review), `प्रकाशित` (publish), `अद्यतन`
@@ -2989,8 +2903,7 @@ mod tests {
         ];
         for (sentence, label) in cases {
             let obs = extractor.extract_with_dominant_language(sentence, scope, Some(&hi));
-            assert!(
-                obs.iter()
+            assert!(obs.iter()
                     .any(|o| matches!(o.observation_type, ObservationType::Task)),
                 "Hindi imperative containing virama {label:?} must produce a Task \
                  observation under MatchStrategy::Substring (Devin Review #BUG-0001 + \
@@ -3001,7 +2914,7 @@ mod tests {
 
     #[test]
     fn french_aujourdhui_with_typographic_apostrophe_is_recognised_as_stop_word() {
-        // Phase 1.1 sweep 2 #ANALYSIS-0005 closure. The French
+        // #ANALYSIS-0005 closure. The French
         // stop-word `aujourd'hui` is stored in `FR_LEXICON` with
         // ASCII apostrophe `U+0027`, but most French IMEs
         // (macOS smart-quotes, iOS, Word) emit `U+2019` RIGHT
@@ -3035,19 +2948,16 @@ mod tests {
             .map(|o| o.content)
             .collect();
 
-        assert_eq!(
-            entities_ascii, entities_typographic,
+        assert_eq!(entities_ascii, entities_typographic,
             "French Aujourd\u{2019}hui (typographic U+2019) must produce the same \
              entity set as Aujourd'hui (ASCII U+0027) after typographic-apostrophe \
              folding in extract_capitalised_words \
-             (Devin Review #ANALYSIS-0005 sweep 2)"
+             (Devin Review #ANALYSIS-0005 a follow-up)"
         );
-        assert!(
-            entities_typographic.iter().any(|e| e == "Paris"),
+        assert!(entities_typographic.iter().any(|e| e == "Paris"),
             "Paris must be emitted as an entity from the typographic-apostrophe input"
         );
-        assert!(
-            !entities_typographic
+        assert!(!entities_typographic
                 .iter()
                 .any(|e| e.starts_with("Aujourd")),
             "No Aujourd-prefixed fragment may be emitted as an entity — the stop-word \
@@ -3066,12 +2976,11 @@ mod tests {
         // lookup table itself must mirror that canonical form
         // or the fold-then-compare path would silently miss.
         // See `extract_capitalised_words` doc + Devin Review
-        // sweep 2 #ANALYSIS-0005.
+        // a follow-up #ANALYSIS-0005.
         for lexicon in default_registry().iter() {
             for entry in lexicon.stop_words {
                 for c in entry.chars() {
-                    assert!(
-                        !matches!(c, '\u{2019}' | '\u{2018}' | '\u{02BC}'),
+                    assert!(!matches!(c, '\u{2019}' | '\u{2018}' | '\u{02BC}'),
                         "Stop-word entry {:?} in lexicon {:?} contains a non-ASCII \
                          apostrophe variant U+{:04X}. Stop-word entries must use ASCII \
                          apostrophe `'` (U+0027) so the fold-then-compare path in \
@@ -3086,12 +2995,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 1.6 — Arabic proclitic-aware classification, end-to-end
+    //  — Arabic proclitic-aware classification, end-to-end
     // -----------------------------------------------------------------
 
     #[test]
-    fn phase_1_6_arabic_proclitic_prefixed_interrogatives_classify_as_questions() {
-        // Phase 1.6 entry point: the productive Arabic proclitic
+    fn arabic_proclitic_prefixed_interrogatives_classify_as_questions() {
+        //  entry point: the productive Arabic proclitic
         // prefix forms of canonical interrogatives must classify
         // as questions through the LexiconExtractor's
         // `looks_like_question` path, including when the
@@ -3114,9 +3023,8 @@ mod tests {
             ("لمن هذا الكتاب", "ل+من"),
         ];
         for (sentence, label) in cases {
-            assert!(
-                looks_like_question(sentence, Some('.'), Some(&ar)),
-                "Phase 1.6: proclitic-prefixed Arabic interrogative {label:?} in \
+            assert!(looks_like_question(sentence, Some('.'), Some(&ar)),
+                "proclitic-prefixed Arabic interrogative {label:?} in \
                  sentence {sentence:?} must classify as a question via the \
                  FirstTokenWithArabicClitics matcher even with `.` terminator (the \
                  `؟` short-circuit is bypassed in this test on purpose)"
@@ -3125,14 +3033,14 @@ mod tests {
     }
 
     #[test]
-    fn phase_1_6_arabic_proclitic_prefixed_imperatives_emit_task_observations() {
-        // Phase 1.6 entry point: the productive Arabic proclitic
+    fn arabic_proclitic_prefixed_imperatives_emit_task_observations() {
+        //  entry point: the productive Arabic proclitic
         // prefix forms of canonical imperative verbs must emit
         // Task observations through the LexiconExtractor when
         // routed via the FirstTokenWithArabicClitics matcher.
         // Each sentence chains the imperative behind a proclitic
         // (`و` / `ف`), which is the realistic multi-clause Arabic
-        // task directive pattern that pre-Phase-1.6 FirstBigram
+        // task directive pattern that earlier FirstBigram
         // missed.
         let extractor = LexiconExtractor::default();
         let ar = LanguageTag::new("ar").unwrap();
@@ -3140,21 +3048,18 @@ mod tests {
         let cases = [
             ("واكتب التقرير غدا", "و+اكتب (write the report tomorrow)"),
             ("وأرسل البريد الآن", "و+أرسل (send the email now)"),
-            (
-                "فجدول الاجتماع الأسبوع القادم",
+            ("فجدول الاجتماع الأسبوع القادم",
                 "ف+جدول (schedule the meeting next week)",
             ),
-            (
-                "وراجع الخطة قبل الاجتماع",
+            ("وراجع الخطة قبل الاجتماع",
                 "و+راجع (review the plan before the meeting)",
             ),
         ];
         for (sentence, label) in cases {
             let obs = extractor.extract_with_dominant_language(sentence, scope, Some(&ar));
-            assert!(
-                obs.iter()
+            assert!(obs.iter()
                     .any(|o| matches!(o.observation_type, ObservationType::Task)),
-                "Phase 1.6: proclitic-prefixed Arabic imperative {label:?} in sentence \
+                "proclitic-prefixed Arabic imperative {label:?} in sentence \
                  {sentence:?} must produce a Task observation via the \
                  FirstTokenWithArabicClitics matcher"
             );
@@ -3162,8 +3067,8 @@ mod tests {
     }
 
     #[test]
-    fn phase_1_6_arabic_declaratives_do_not_falsely_classify_as_questions() {
-        // Phase 1.6 false-positive guard: a declarative whose
+    fn arabic_declaratives_do_not_falsely_classify_as_questions() {
+        //  false-positive guard: a declarative whose
         // first token starts with `أ` (interrogative-hamza
         // orthography) must NOT classify as a question, because
         // `أ` is deliberately omitted from the peel set —
@@ -3171,8 +3076,8 @@ mod tests {
         // `أ`-initial nouns / pronouns / proper names.
         //
         // Each case is an Arabic declarative with a leading
-        // `أ`-word that pre-Phase-1.6 was correctly NOT detected
-        // (no proclitic stripping happened); Phase 1.6 must
+        // `أ`-word that earlier was correctly NOT detected
+        // (no proclitic stripping happened);  must
         // preserve that correctness.
         let ar = LanguageTag::new("ar").unwrap();
         let declaratives = [
@@ -3182,9 +3087,8 @@ mod tests {
             "أبي يعمل في الشركة",  // "My father works at the company" — `أبي` (my father).
         ];
         for sentence in declaratives {
-            assert!(
-                !looks_like_question(sentence, Some('.'), Some(&ar)),
-                "Phase 1.6: Arabic declarative {sentence:?} starting with `أ`-prefixed \
+            assert!(!looks_like_question(sentence, Some('.'), Some(&ar)),
+                "Arabic declarative {sentence:?} starting with `أ`-prefixed \
                  word must NOT classify as a question — `أ` is deliberately omitted \
                  from the proclitic peel set to avoid over-classifying the open class \
                  of `أ`-initial nouns/pronouns/proper-names"
@@ -3193,8 +3097,8 @@ mod tests {
     }
 
     #[test]
-    fn phase_1_6_arabic_definite_article_in_declarative_does_not_emit_task() {
-        // Phase 1.6 false-positive guard for the imperative
+    fn arabic_definite_article_in_declarative_does_not_emit_task() {
+        //  false-positive guard for the imperative
         // path: a noun starting with the definite article `ال`
         // must NOT trigger a Task observation just because the
         // peel surfaces a substring that happens to share
@@ -3219,10 +3123,9 @@ mod tests {
         ];
         for sentence in declaratives {
             let obs = extractor.extract_with_dominant_language(sentence, scope, Some(&ar));
-            assert!(
-                !obs.iter()
+            assert!(!obs.iter()
                     .any(|o| matches!(o.observation_type, ObservationType::Task)),
-                "Phase 1.6: Arabic declarative {sentence:?} starting with `ال` must NOT \
+                "Arabic declarative {sentence:?} starting with `ال` must NOT \
                  emit a Task observation — peeling `ال` produces a noun residual that is \
                  not in the imperative table, so exact-equality must hold and the false \
                  positive must not surface"
@@ -3231,8 +3134,8 @@ mod tests {
     }
 
     #[test]
-    fn phase_1_6_arabic_proclitic_stack_resolves_through_two_peels() {
-        // Phase 1.6: 2-peel realistic stack. `فلكتاب` (`ف` +
+    fn arabic_proclitic_stack_resolves_through_two_peels() {
+        // 2-peel realistic stack. `فلكتاب` (`ف` +
         // `ل` + `كتاب`) appears in formal Arabic prose meaning
         // "then for-book" / "so as-for-the-book". The Task
         // path does NOT trigger here (no `كتاب` in the
@@ -3255,24 +3158,22 @@ mod tests {
         let scope = ScopeId::new_v4();
         let sentence = "فلكتاب أهمية كبيرة";
         let obs = extractor.extract_with_dominant_language(sentence, scope, Some(&ar));
-        assert!(
-            !obs.iter()
+        assert!(!obs.iter()
                 .any(|o| matches!(o.observation_type, ObservationType::Task)),
-            "Phase 1.6: 2-peel-deep stack `فلكتاب` must not trigger Task on a noun residual"
+            "2-peel-deep stack `فلكتاب` must not trigger Task on a noun residual"
         );
-        assert!(
-            !looks_like_question(sentence, Some('.'), Some(&ar)),
-            "Phase 1.6: 2-peel-deep stack `فلكتاب` on a declarative noun phrase must not \
+        assert!(!looks_like_question(sentence, Some('.'), Some(&ar)),
+            "2-peel-deep stack `فلكتاب` on a declarative noun phrase must not \
              trigger Question on a noun residual"
         );
     }
 
     #[test]
-    fn phase_1_6_arabic_clitic_aware_strategy_preserves_tashkeel_path() {
-        // Phase 1.6 cross-feature interaction: the
+    fn arabic_clitic_aware_strategy_preserves_tashkeel_path() {
+        //  cross-feature interaction: the
         // FirstTokenWithArabicClitics matcher must compose
         // correctly with the tashkeel-strip normalisation path
-        // (Phase 1.4 #ANALYSIS-0002 / Phase 1.1). A
+        // ( #ANALYSIS-0002 / ). A
         // tashkeel-decorated proclitic-prefixed interrogative
         // (`وَكَيْفَ` = `و` + tashkeel-decorated `كيف`) must
         // classify as a question because (a) `normalize_for_lookup`
@@ -3281,20 +3182,18 @@ mod tests {
         let ar = LanguageTag::new("ar").unwrap();
         let with_tashkeel = "وَكَيْفَ يمكنني المساعدة";
         let without_tashkeel = "وكيف يمكنني المساعدة";
-        assert!(
-            looks_like_question(without_tashkeel, Some('.'), Some(&ar)),
-            "Phase 1.6: bare proclitic-prefixed `وكيف` must classify as a question"
+        assert!(looks_like_question(without_tashkeel, Some('.'), Some(&ar)),
+            "bare proclitic-prefixed `وكيف` must classify as a question"
         );
-        assert!(
-            looks_like_question(with_tashkeel, Some('.'), Some(&ar)),
-            "Phase 1.6: tashkeel-decorated proclitic-prefixed `وَكَيْفَ` must compose \
+        assert!(looks_like_question(with_tashkeel, Some('.'), Some(&ar)),
+            "tashkeel-decorated proclitic-prefixed `وَكَيْفَ` must compose \
              tashkeel-strip + proclitic-peel correctly and classify as a question"
         );
     }
 
     #[test]
-    fn phase_1_6_arabic_first_person_future_does_not_emit_task() {
-        // Phase 1.6 sweep-1 precision guard (Devin Review
+    fn arabic_first_person_future_does_not_emit_task() {
+        //  a follow-up precision guard (Devin Review
         // #ANALYSIS-0004), end-to-end: 1st-person future-tense
         // declaratives that share a verb root with an `أ`-initial
         // imperative must NOT emit a Task observation. The future
@@ -3320,10 +3219,9 @@ mod tests {
         ];
         for sentence in declaratives {
             let obs = extractor.extract_with_dominant_language(sentence, scope, Some(&ar));
-            assert!(
-                !obs.iter()
+            assert!(!obs.iter()
                     .any(|o| matches!(o.observation_type, ObservationType::Task)),
-                "Phase 1.6 sweep-1 precision: 1st-person future declarative {sentence:?} \
+                "1st-person future declarative {sentence:?} \
                  must NOT emit a Task observation — `س` is deliberately omitted from the \
                  peel set so the future marker cannot conflate with the imperative table"
             );

@@ -1,6 +1,6 @@
 //! Per-language interrogative-word tables for question detection.
 //!
-//! Phase 1.4 of the multilingual roadmap: the lexicon extractor's
+//! multilingual roadmap: the lexicon extractor's
 //! [`crate::extractor::looks_like_question`] check used to consult a
 //! single English-only `INTERROGATIVES` constant — fine for the
 //! initial English-only extractor, but it silently mis-classified
@@ -14,9 +14,9 @@
 //! ## Cross-references
 //!
 //! * `docs/DESIGN.md` §3.2 — observation extractor responsibilities.
-//! * `docs/MULTILINGUAL.md` (Phase 1.1 spec, the multilingual
-//!   `LexiconRegistry` Phase 1.1 will ship) — this table is the
-//!   precursor / minimal viable version; once Phase 1.1 lands, the
+//! * `docs/MULTILINGUAL.md` ( spec, the multilingual
+//!   `LexiconRegistry`  will ship) — this table is the
+//!   precursor / minimal viable version; once  lands, the
 //!   `LexiconRegistry` should subsume this map alongside the
 //!   decision / task keyword lists.
 //!
@@ -56,7 +56,7 @@ pub enum InterrogativeMatch {
     /// where the question word is canonically sentence-initial and
     /// word boundaries are clear from whitespace (English, German,
     /// Romance languages, Indonesian). Arabic used `FirstToken`
-    /// before Phase 1.6 but now uses
+    /// before  but now uses
     /// [`Self::FirstTokenWithArabicClitics`] to recover the
     /// proclitic prefix forms (`وكيف`, `فمتى`, `بأي`,
     /// `لمن`) that the bare FirstToken matcher misses.
@@ -81,7 +81,7 @@ pub enum InterrogativeMatch {
     /// and/or because the language permits non-initial interrogative
     /// placement.
     Substring,
-    /// Phase 1.6 strategy for Arabic-script languages whose
+    ///  strategy for Arabic-script languages whose
     /// proclitics agglutinate to the host word: tries first-token
     /// equality, then iteratively peels the recognised Arabic
     /// proclitic prefixes (`و` "and", `ف` "then", `ب` "with",
@@ -89,14 +89,14 @@ pub enum InterrogativeMatch {
     /// `أل` "the") and re-checks equality after each peel. The
     /// preposition `ك` ("like / as") and the future marker `س`
     /// ("will") were initially in the peel set but were removed
-    /// in sweep 1 (Devin Review #ANALYSIS-0004) for precision
+    /// in (Devin Review #ANALYSIS-0004) for precision
     /// reasons. See
     /// [`crate::lexicon::MatchStrategy::FirstTokenWithArabicClitics`]
     /// for the full design notes (peel inventory, why `أ`
     /// interrogative hamza is excluded, why `Substring` is
     /// rejected for short Arabic interrogatives).
     FirstTokenWithArabicClitics,
-    /// Phase 1.7 strategy for Hebrew: tries first-token equality,
+    ///  strategy for Hebrew: tries first-token equality,
     /// then iteratively peels the recognised Hebrew proclitic
     /// prefixes (`ו` "and", `ש` "that / which", `מ` "from",
     /// `ל` "to / for", `ב` "in / at / with") and re-checks
@@ -119,14 +119,12 @@ pub enum InterrogativeMatch {
 /// Tag matching is exact on the primary subtag (`"en"`, `"ja"`,
 /// `"zh"`, …). Region-tagged inputs should be reduced via
 /// [`crate::language::LanguageTag::primary`] before lookup.
-pub fn interrogatives_for(
-    primary_tag: &str,
+pub fn interrogatives_for(primary_tag: &str,
 ) -> Option<(&'static [&'static str], InterrogativeMatch)> {
     match primary_tag {
         // English — Cambridge Grammar of the English Language §10
         // ("Interrogative clauses"). The classical "wh-" set.
-        "en" => Some((
-            &[
+        "en" => Some((&[
                 "who", "what", "when", "where", "why", "how", "which", "whose", "whom",
             ],
             InterrogativeMatch::FirstToken,
@@ -151,8 +149,7 @@ pub fn interrogatives_for(
         // sentence-shape gate elsewhere in the extractor already
         // surfaces these via the `?` terminator. See Devin Review
         // finding #FLAG-0003.
-        "es" => Some((
-            &[
+        "es" => Some((&[
                 "qué", "quién", "quiénes", "cuándo", "dónde", "adónde", "cómo", "cuál", "cuáles",
                 "cuánto", "cuánta", "cuántos", "cuántas",
             ],
@@ -190,8 +187,7 @@ pub fn interrogatives_for(
         // adequate. Same class of bug as Spanish / Portuguese
         // `por` (FLAG-0003), Indonesian / Malay `di` / `yang`
         // (FLAG-0005b). See Devin Review finding #FLAG-0001c.
-        "fr" => Some((
-            &[
+        "fr" => Some((&[
                 "qui",
                 "quoi",
                 "quand",
@@ -214,8 +210,7 @@ pub fn interrogatives_for(
         // German — Duden, Die Grammatik §1140 ("Interrogativpronomen
         // und -adverbien"). Includes both interrogative pronouns
         // (wer/was) and adverbs (wann/wo/wie/warum).
-        "de" => Some((
-            &[
+        "de" => Some((&[
                 "wer", "wen", "wem", "wessen", "was", "wann", "wo", "wohin", "woher", "wie",
                 "warum", "weshalb", "wieso", "welche", "welcher", "welches", "welchen", "welchem",
                 "wieviel", "wieviele",
@@ -252,8 +247,7 @@ pub fn interrogatives_for(
         // (which tokenises to `o`, missed regardless) combined
         // with the `?` terminator on `que ...?` openers give
         // adequate recall. See Devin Review finding #FLAG-0001c.
-        "pt" => Some((
-            &[
+        "pt" => Some((&[
                 "quem", "quê", "qual", "quais", "quando", "onde", "aonde", "como", "porquê",
                 "porque", "quanto", "quanta", "quantos", "quantas",
             ],
@@ -279,8 +273,7 @@ pub fn interrogatives_for(
         // terminator on `che ...?` openers, recall stays adequate.
         // Same class of bug as French `que` and Portuguese `que`.
         // See Devin Review finding #FLAG-0001c.
-        "it" => Some((
-            &[
+        "it" => Some((&[
                 "chi", "cosa", "quando", "dove", "come", "perché", "quale", "quali", "quanto",
                 "quanta", "quanti", "quante",
             ],
@@ -291,8 +284,7 @@ pub fn interrogatives_for(
         // ("Вопросительные местоимения и наречия"). The Cyrillic
         // forms; case-folding handles uppercase Cyrillic correctly
         // via `char::to_lowercase`.
-        "ru" => Some((
-            &[
+        "ru" => Some((&[
                 "кто",
                 "что",
                 "когда",
@@ -319,7 +311,7 @@ pub fn interrogatives_for(
         // initial case and rely on `?`/`?` terminator for the
         // sentence-final case.
         //
-        // Phase 1.1 (Devin Review finding #ANALYSIS-0004,
+        //  (Devin Review finding #ANALYSIS-0004,
         // closing the deferred #FLAG-0002d): Vietnamese now uses
         // FirstBigram so the high-frequency leading prepositions
         // / conjunctions `tại` / `khi` / `vì` recover their
@@ -337,8 +329,7 @@ pub fn interrogatives_for(
         // single ASCII space and checked against the space-joined
         // first two alphabetic tokens; see
         // [`crate::lexicon::first_alphabetic_bigram`].
-        "vi" => Some((
-            &[
+        "vi" => Some((&[
                 "ai",
                 "gì",
                 "nào",
@@ -373,8 +364,7 @@ pub fn interrogatives_for(
         // `Mana yang lebih baik?` form; the `?` terminator handles
         // the sentence-final cases (`Bagus, di mana?`) on its own.
         // See Devin Review finding #FLAG-0005b.
-        "id" | "ms" => Some((
-            &[
+        "id" | "ms" => Some((&[
                 "siapa",
                 "apa",
                 "kapan",
@@ -392,7 +382,7 @@ pub fn interrogatives_for(
         // Standard Arabic; dialects use additional forms but
         // these cover MSA news / docs / formal IM.
         //
-        // Phase 1.6: promoted from
+        // promoted from
         // [`InterrogativeMatch::FirstToken`] to
         // [`InterrogativeMatch::FirstTokenWithArabicClitics`] so
         // the productive Arabic proclitic-prefix forms recover
@@ -407,7 +397,7 @@ pub fn interrogatives_for(
         // * `لمن هذا الكتاب؟` ("to whom is this
         //   book?") — `ل` + `من`.
         //
-        // Pre-Phase-1.6 these all bypassed the interrogative
+        // earlier these all bypassed the interrogative
         // table (the first alphabetic token was the prefixed
         // form `وكيف` / `فمتى` / … which never appeared in
         // the table), so question detection relied entirely on
@@ -438,8 +428,7 @@ pub fn interrogatives_for(
         // `أرسل`). See the docstring on
         // [`crate::lexicon::MatchStrategy::FirstTokenWithArabicClitics`]
         // for the full omission rationale on `ك` / `س` / `أ`.
-        "ar" => Some((
-            &[
+        "ar" => Some((&[
                 "من",
                 "ما",
                 "ماذا",
@@ -466,7 +455,7 @@ pub fn interrogatives_for(
         // "which" (masc / fem / pl), `כמה` "how much / many",
         // and the formal/written yes-no particle `האם`.
         //
-        // Phase 1.7: Hebrew uses
+        // Hebrew uses
         // [`InterrogativeMatch::FirstTokenWithHebrewClitics`]
         // so the productive clitic-prefixed forms recover their
         // interrogative reading via iterative prefix peeling:
@@ -477,7 +466,7 @@ pub fn interrogatives_for(
         // * `לאיזה` ("to which?") — `ל` + `איזה`.
         // * `באיזה` ("in which?") — `ב` + `איזה`.
         //
-        // Pre-Phase-1.7 these all bypassed the interrogative
+        // earlier these all bypassed the interrogative
         // table (the first alphabetic token was the prefixed
         // form `ומתי` / `שמה` / … which never appeared in the
         // table), so Hebrew question detection without an
@@ -499,8 +488,7 @@ pub fn interrogatives_for(
         // a question. The formal yes-no particle `האם`
         // (`ה` + `אם`) is kept as the unambiguous, written-
         // register interrogative form.
-        "he" => Some((
-            &[
+        "he" => Some((&[
                 "מי",   // "who"
                 "מה",   // "what"
                 "מתי",  // "when"
@@ -534,8 +522,7 @@ pub fn interrogatives_for(
         // tokenise to `क` + `या` and never match the literal.
         // Substring matching sidesteps both problems and still
         // catches the canonical initial-position questions.
-        "hi" => Some((
-            &[
+        "hi" => Some((&[
                 "कौन",
                 "क्या",
                 "कब",
@@ -556,8 +543,7 @@ pub fn interrogatives_for(
         // `何` lands mid-sentence). The sentence-final particle
         // `か` is included as a strong question marker (the
         // canonical Japanese question construction).
-        "ja" => Some((
-            &[
+        "ja" => Some((&[
                 "何",
                 "誰",
                 "いつ",
@@ -580,8 +566,7 @@ pub fn interrogatives_for(
         // typically marks questions with the sentence-final
         // ending `-까` / `-니` / `-나`, but the interrogative
         // root can land anywhere in the clause. Substring match.
-        "ko" => Some((
-            &[
+        "ko" => Some((&[
                 "누구",
                 "무엇",
                 "언제",
@@ -603,8 +588,7 @@ pub fn interrogatives_for(
         // boundaries; the `吗` sentence-final particle is the
         // canonical yes/no question marker and is included for
         // catching `这是…吗` constructions.
-        "zh" => Some((
-            &[
+        "zh" => Some((&[
                 "什么",
                 "谁",
                 "何时",
@@ -648,8 +632,7 @@ pub fn interrogatives_for(
 
         // Thai — Royal Institute of Thailand Grammar §3.7
         // (สรรพนามคำถาม). No word boundaries — substring match.
-        "th" => Some((
-            &[
+        "th" => Some((&[
                 "ใคร",
                 "อะไร",
                 "เมื่อไหร่",
@@ -668,7 +651,7 @@ pub fn interrogatives_for(
             InterrogativeMatch::Substring,
         )),
 
-        // Tibetan — Phase 1.5. Tibetan script uses the tsheg
+        // Tibetan. Tibetan script uses the tsheg
         // (་, U+0F0B) as a syllable separator rather than a
         // word boundary; the interrogative root can land
         // anywhere in the clause. Sources: Goldstein, *The
@@ -678,8 +661,7 @@ pub fn interrogatives_for(
         // built on those roots. Substring match because the
         // tsheg-segmented syllables do not align with
         // whitespace word boundaries.
-        "bo" => Some((
-            &[
+        "bo" => Some((&[
                 "སུ",    // "who"
                 "ག་རེ",  // "what"
                 "ག་གི",  // "which / what (alternative spelling)"
@@ -695,7 +677,7 @@ pub fn interrogatives_for(
             InterrogativeMatch::Substring,
         )),
 
-        // Khmer — Phase 1.5. Khmer script has no inter-word
+        // Khmer. Khmer script has no inter-word
         // whitespace; interrogatives can land anywhere in the
         // clause. Sources: Headley et al., *Khmer-English
         // Dictionary* (Dunwoody Press 1997) entries for
@@ -715,10 +697,9 @@ pub fn interrogatives_for(
         // canonical interrogative shapes; the yes/no
         // construction in Khmer also commonly uses the
         // sentence-final `ឬទេ` ("or not?") which we could add
-        // in a future sweep if a Phase-2 Khmer corpus needs
+        // in a future sweep if a earlier Khmer corpus needs
         // it.
-        "km" => Some((
-            &[
+        "km" => Some((&[
                 "នរណា",   // "who"
                 "អ្នកណា",   // "who" (informal / collective)
                 "អ្វី",      // "what"
@@ -735,7 +716,7 @@ pub fn interrogatives_for(
             InterrogativeMatch::Substring,
         )),
 
-        // Myanmar / Burmese — Phase 1.5. Myanmar script has
+        // Myanmar / Burmese. Myanmar script has
         // no inter-word whitespace; interrogatives can land
         // anywhere in the clause. The sentence-final particle
         // လား is the canonical yes/no question marker (`-la`
@@ -744,8 +725,7 @@ pub fn interrogatives_for(
         // Language Commission, *Myanmar-English Dictionary*
         // (Yangon 1993) entries for ဘယ် ("what / which")
         // and the regular compounds built on it.
-        "my" => Some((
-            &[
+        "my" => Some((&[
                 "ဘယ်သူ",    // "who"
                 "ဘာ",     // "what"
                 "ဘယ်အရာ",  // "what (alternative)"
@@ -763,7 +743,7 @@ pub fn interrogatives_for(
             InterrogativeMatch::Substring,
         )),
 
-        // Lao — Phase 1.5. Lao script is structurally
+        // Lao. Lao script is structurally
         // parallel to Thai: no inter-word whitespace,
         // interrogatives can appear anywhere. Sources:
         // Reinhorn, *Dictionnaire Laotien-Français*
@@ -787,10 +767,9 @@ pub fn interrogatives_for(
         // shapes; the yes/no construction in Lao also
         // commonly uses the A-not-A form (e.g.
         // `ມີ...ບໍ່ມີ` "have or not have") which a future
-        // sweep can add as a multi-token rule if a Phase-2
+        // sweep can add as a multi-token rule if a earlier
         // Lao corpus needs it.
-        "lo" => Some((
-            &[
+        "lo" => Some((&[
                 "ໃຜ",     // "who"
                 "ຫຍັງ",    // "what"
                 "ເມື່ອໃດ",  // "when"
@@ -866,7 +845,7 @@ mod tests {
 
     #[test]
     fn arabic_first_token_with_clitics_strategy() {
-        // Phase 1.6: Arabic moved from `FirstToken` to
+        // Arabic moved from `FirstToken` to
         // `FirstTokenWithArabicClitics` so the productive
         // proclitic-prefix forms (`وكيف` = `و` + `كيف`,
         // `فمتى` = `ف` + `متى`, etc.) recover their interrogative
@@ -879,9 +858,8 @@ mod tests {
         let (list, strat) = interrogatives_for("ar").expect("arabic configured");
         assert!(list.contains(&"من"));
         assert!(list.contains(&"كيف"));
-        assert!(
-            !list.contains(&"أ"),
-            "Phase 1.6: the bare interrogative-hamza `أ` must NOT appear in the Arabic \
+        assert!(!list.contains(&"أ"),
+            "the bare interrogative-hamza `أ` must NOT appear in the Arabic \
              interrogative table — see the dedicated-omission comment in interrogatives_for"
         );
         assert_eq!(strat, InterrogativeMatch::FirstTokenWithArabicClitics);
@@ -912,8 +890,7 @@ mod tests {
         // interrogatives_for to make sure no entry is documented
         // but unbacked.
         for tag in SUPPORTED_PRIMARY_TAGS {
-            assert!(
-                interrogatives_for(tag).is_some(),
+            assert!(interrogatives_for(tag).is_some(),
                 "tag {tag} is in SUPPORTED_PRIMARY_TAGS but has no interrogative entry"
             );
         }
@@ -936,7 +913,7 @@ mod tests {
         // combining marks (virama, tsheg, coeng, asat)
         // interfere with the FirstToken tokeniser and which
         // additionally permits non-initial interrogative
-        // placement. As of Phase 1.5 this is:
+        // placement. As of  this is:
         // - CJK / Thai (no inter-word whitespace at all)
         // - Hindi (Devanagari virama)
         // - Tibetan (tsheg syllable-separator, stacked
@@ -955,8 +932,7 @@ mod tests {
         for tag in SUPPORTED_PRIMARY_TAGS {
             let strat = matching_strategy_for(tag).unwrap();
             let is_substring = strat == InterrogativeMatch::Substring;
-            assert_eq!(
-                is_substring,
+            assert_eq!(is_substring,
                 expected_substring.contains(tag),
                 "tag {tag}: substring expected={}, got strategy={:?}",
                 expected_substring.contains(tag),
@@ -967,7 +943,7 @@ mod tests {
 
     #[test]
     fn first_bigram_languages_are_vietnamese_only_for_now() {
-        // FirstBigram is the Phase 1.1 strategy introduced for
+        // FirstBigram is the  strategy introduced for
         // languages whose canonical interrogatives include
         // two-token collocations whose bare leading token is too
         // high-frequency to use on its own. Today only Vietnamese
@@ -978,8 +954,7 @@ mod tests {
         for tag in SUPPORTED_PRIMARY_TAGS {
             let strat = matching_strategy_for(tag).unwrap();
             let is_first_bigram = strat == InterrogativeMatch::FirstBigram;
-            assert_eq!(
-                is_first_bigram,
+            assert_eq!(is_first_bigram,
                 expected_first_bigram.contains(tag),
                 "tag {tag}: first-bigram expected={}, got strategy={:?}",
                 expected_first_bigram.contains(tag),
@@ -990,7 +965,7 @@ mod tests {
 
     #[test]
     fn first_token_with_arabic_clitics_languages_are_arabic_only_for_now() {
-        // Phase 1.6 sweep-4 (Devin Review #3331706213): the
+        //  a follow-up (Devin Review #3331706213): the
         // proclitic-aware first-token strategy was introduced
         // specifically for the Arabic agglutinative-prefix
         // morphology (و / ف / ب / ل / ال / أل clitically attaching
@@ -1016,8 +991,7 @@ mod tests {
         for tag in SUPPORTED_PRIMARY_TAGS {
             let strat = matching_strategy_for(tag).unwrap();
             let is_clitic_aware = strat == InterrogativeMatch::FirstTokenWithArabicClitics;
-            assert_eq!(
-                is_clitic_aware,
+            assert_eq!(is_clitic_aware,
                 expected_clitic_aware.contains(tag),
                 "tag {tag}: clitic-aware expected={}, got strategy={:?} \
                  — FirstTokenWithArabicClitics must remain Arabic-only \
@@ -1030,7 +1004,7 @@ mod tests {
 
     #[test]
     fn first_token_with_hebrew_clitics_languages_are_hebrew_only_for_now() {
-        // Phase 1.7: the Hebrew clitic-aware first-token strategy
+        // the Hebrew clitic-aware first-token strategy
         // was introduced specifically for the Hebrew agglutinative-
         // prefix morphology (ו / ש / מ / ל / ב clitically attaching
         // to the next word). It is NOT a generic "FirstToken with
@@ -1069,8 +1043,7 @@ mod tests {
         for tag in SUPPORTED_PRIMARY_TAGS {
             let strat = matching_strategy_for(tag).unwrap();
             let is_he_clitic_aware = strat == InterrogativeMatch::FirstTokenWithHebrewClitics;
-            assert_eq!(
-                is_he_clitic_aware,
+            assert_eq!(is_he_clitic_aware,
                 expected_he_clitic_aware.contains(tag),
                 "tag {tag}: hebrew-clitic-aware expected={}, got strategy={:?} \
                  — FirstTokenWithHebrewClitics must remain Hebrew-only \
@@ -1083,7 +1056,7 @@ mod tests {
 
     #[test]
     fn hebrew_first_token_with_clitics_strategy() {
-        // Phase 1.7: Hebrew moved from non-existent (no entry) to
+        // Hebrew moved from non-existent (no entry) to
         // `FirstTokenWithHebrewClitics` so the productive proclitic-
         // prefix forms (`ומתי` = `ו` + `מתי`, `שמה` = `ש` + `מה`,
         // `מאיזה` = `מ` + `איזה`, …) recover their interrogative
@@ -1102,14 +1075,12 @@ mod tests {
         assert!(list.contains(&"למה"));
         assert!(list.contains(&"כמה"));
         assert!(list.contains(&"האם"));
-        assert!(
-            !list.contains(&"ה"),
-            "Phase 1.7: the bare definite article `ה` must NOT appear in the Hebrew \
+        assert!(!list.contains(&"ה"),
+            "the bare definite article `ה` must NOT appear in the Hebrew \
              interrogative table — see the dedicated-omission comment in interrogatives_for"
         );
-        assert!(
-            !list.contains(&"כי"),
-            "Phase 1.7: the bare conjunction `כי` must NOT appear in the Hebrew interrogative \
+        assert!(!list.contains(&"כי"),
+            "the bare conjunction `כי` must NOT appear in the Hebrew interrogative \
              table — see the dedicated-omission comment in interrogatives_for"
         );
         assert_eq!(strat, InterrogativeMatch::FirstTokenWithHebrewClitics);
@@ -1125,7 +1096,7 @@ mod tests {
         // language's entries.
         for tag in SUPPORTED_PRIMARY_TAGS {
             let (list, strat) = interrogatives_for(tag).unwrap();
-            // Phase 1.6 sweep-1 extension (Devin Review
+            //  a follow-up extension (Devin Review
             // #3331604782): the invariant applies to every
             // strategy whose matcher consults the extractor's
             // alphabetic-only tokeniser — i.e. both bare
@@ -1141,7 +1112,7 @@ mod tests {
             // tokens (`tại sao`) or are intentionally matched as
             // substrings (`何ですか`).
             //
-            // Phase 1.7 extension: same invariant applies to the
+            //  extension: same invariant applies to the
             // Hebrew clitic-aware strategy by identical reasoning
             // — the peel strips only alphabetic Hebrew proclitics
             // (never tokeniser-boundary chars), so any non-
@@ -1154,8 +1125,7 @@ mod tests {
                 continue;
             }
             for entry in list {
-                assert!(
-                    entry.chars().all(char::is_alphabetic),
+                assert!(entry.chars().all(char::is_alphabetic),
                     "tag {tag}: interrogative {entry:?} contains a non-alphabetic char \
                      and is unreachable under FirstToken matching"
                 );
@@ -1177,16 +1147,14 @@ mod tests {
             }
             for entry in list {
                 let space_count = entry.chars().filter(|c| *c == ' ').count();
-                assert!(
-                    space_count <= 1,
+                assert!(space_count <= 1,
                     "tag {tag}: FirstBigram entry {entry:?} has more than one space \
                      (would never match a two-token bigram)"
                 );
                 let valid = entry
                     .split(' ')
                     .all(|part| !part.is_empty() && part.chars().all(char::is_alphabetic));
-                assert!(
-                    valid,
+                assert!(valid,
                     "tag {tag}: FirstBigram entry {entry:?} contains a non-alphabetic char or \
                      an empty part — the matcher would never reach it"
                 );
@@ -1203,8 +1171,7 @@ mod tests {
             let (list, _) = interrogatives_for(tag).unwrap();
             let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
             for entry in list {
-                assert!(
-                    seen.insert(*entry),
+                assert!(seen.insert(*entry),
                     "tag {tag}: entry {entry:?} appears more than once in the table"
                 );
             }
@@ -1217,13 +1184,11 @@ mod tests {
         // preposition in both languages to use as a FirstToken
         // question trigger. Guard against accidental re-addition.
         let (es_list, _) = interrogatives_for("es").unwrap();
-        assert!(
-            !es_list.contains(&"por"),
+        assert!(!es_list.contains(&"por"),
             "spanish list must not contain 'por' (high false-positive risk)"
         );
         let (pt_list, _) = interrogatives_for("pt").unwrap();
-        assert!(
-            !pt_list.contains(&"por"),
+        assert!(!pt_list.contains(&"por"),
             "portuguese list must not contain 'por' (high false-positive risk)"
         );
     }
@@ -1234,8 +1199,7 @@ mod tests {
         // split `est-ce` on the hyphen, so the entry was dead
         // code. Verify it stays removed.
         let (fr_list, _) = interrogatives_for("fr").unwrap();
-        assert!(
-            !fr_list.contains(&"est-ce"),
+        assert!(!fr_list.contains(&"est-ce"),
             "french list must not contain unreachable 'est-ce' entry"
         );
     }
@@ -1250,18 +1214,15 @@ mod tests {
         // against accidental re-addition.
         for tag in ["id", "ms"] {
             let (list, _) = interrogatives_for(tag).unwrap();
-            assert!(
-                !list.contains(&"di"),
+            assert!(!list.contains(&"di"),
                 "{tag} list must not contain high-frequency preposition 'di'"
             );
-            assert!(
-                !list.contains(&"yang"),
+            assert!(!list.contains(&"yang"),
                 "{tag} list must not contain high-frequency relative pronoun 'yang'"
             );
             // The bare `mana` should remain so `Mana yang lebih baik?`
             // and similar canonical openers still classify.
-            assert!(
-                list.contains(&"mana"),
+            assert!(list.contains(&"mana"),
                 "{tag} list must still contain bare interrogative 'mana'"
             );
         }
@@ -1280,47 +1241,39 @@ mod tests {
         // distinction. Guard against accidental re-addition of the
         // unaccented forms.
         let (fr_list, _) = interrogatives_for("fr").unwrap();
-        assert!(
-            !fr_list.contains(&"que"),
+        assert!(!fr_list.contains(&"que"),
             "french list must not contain bare 'que' (high false-positive risk on \
              relative-pronoun / subjunctive-opener / exclamation declaratives)"
         );
-        assert!(
-            fr_list.contains(&"quoi"),
+        assert!(fr_list.contains(&"quoi"),
             "french list must still contain interrogative-only 'quoi'"
         );
 
         let (pt_list, _) = interrogatives_for("pt").unwrap();
-        assert!(
-            !pt_list.contains(&"que"),
+        assert!(!pt_list.contains(&"que"),
             "portuguese list must not contain bare 'que' (high false-positive risk on \
              relative-pronoun / subjunctive-opener / exclamation declaratives)"
         );
-        assert!(
-            pt_list.contains(&"quê"),
+        assert!(pt_list.contains(&"quê"),
             "portuguese list must still contain accented interrogative 'quê'"
         );
 
         let (it_list, _) = interrogatives_for("it").unwrap();
-        assert!(
-            !it_list.contains(&"che"),
+        assert!(!it_list.contains(&"che"),
             "italian list must not contain bare 'che' (high false-positive risk on \
              relative-pronoun / conjunction / exclamation declaratives)"
         );
-        assert!(
-            it_list.contains(&"cosa"),
+        assert!(it_list.contains(&"cosa"),
             "italian list must still contain bare interrogative 'cosa' (equivalent to 'che')"
         );
 
         // Spanish is the orthographically distinct case: `qué` is
         // kept, bare `que` is never present.
         let (es_list, _) = interrogatives_for("es").unwrap();
-        assert!(
-            es_list.contains(&"qué"),
+        assert!(es_list.contains(&"qué"),
             "spanish list must still contain accented interrogative 'qué'"
         );
-        assert!(
-            !es_list.contains(&"que"),
+        assert!(!es_list.contains(&"que"),
             "spanish list must not contain unaccented 'que' (only 'qué' is interrogative)"
         );
     }
@@ -1341,70 +1294,61 @@ mod tests {
         // for yes/no.
         let (zh_list, strat) = interrogatives_for("zh").unwrap();
         assert_eq!(strat, InterrogativeMatch::Substring);
-        assert!(
-            !zh_list.contains(&"几"),
+        assert!(!zh_list.contains(&"几"),
             "chinese list must not contain bare '几' (substring match would \
              mis-classify '几乎' / '几何' / '几率' / '几个月' declaratives as questions)"
         );
         // The replacements: tight collocations that are
         // unambiguously interrogative.
-        assert!(
-            zh_list.contains(&"几点"),
+        assert!(zh_list.contains(&"几点"),
             "chinese list must contain canonical interrogative collocation '几点' (\"what time\")"
         );
-        assert!(
-            zh_list.contains(&"几岁"),
+        assert!(zh_list.contains(&"几岁"),
             "chinese list must contain canonical interrogative collocation '几岁' (\"how old\")"
         );
         // The general quantity fallback `多少` should remain so
         // `多少钱？` ("how much money?") and similar still classify.
-        assert!(
-            zh_list.contains(&"多少"),
+        assert!(zh_list.contains(&"多少"),
             "chinese list must still contain general quantity interrogative '多少'"
         );
         // The yes/no particle `吗` should remain so any `…吗？`
         // sentence still classifies.
-        assert!(
-            zh_list.contains(&"吗"),
+        assert!(zh_list.contains(&"吗"),
             "chinese list must still contain yes/no particle '吗'"
         );
         // Sanity-check a sample of other canonical interrogatives
         // to guard against accidental wholesale list edits.
-        assert!(
-            zh_list.contains(&"什么"),
+        assert!(zh_list.contains(&"什么"),
             "chinese list must still contain interrogative '什么' (\"what\")"
         );
-        assert!(
-            zh_list.contains(&"为什么"),
+        assert!(zh_list.contains(&"为什么"),
             "chinese list must still contain interrogative '为什么' (\"why\")"
         );
     }
 
     #[test]
     fn vietnamese_omits_high_frequency_bare_conjunctions_but_keeps_bigrams() {
-        // Devin Review #FLAG-0002d / #ANALYSIS-0004 (Phase 1.1):
+        // Devin Review #FLAG-0002d / #ANALYSIS-0004:
         // `khi`, `tại`, `vì` are extremely common Vietnamese
         // conjunctions / prepositions whose interrogative
         // readings only manifest as part of bigrams (`khi nào`,
         // `tại sao`, `vì sao`). The bare forms remain absent so
         // `Khi tôi đến...` / `Tại Hà Nội...` / `Vì tôi bận...`
-        // declaratives do not mis-classify, but Phase 1.1 added
+        // declaratives do not mis-classify, but added
         // the bigram entries themselves so `Tại sao bạn buồn?` /
         // `Khi nào chúng ta đi?` / `Vì sao trời mưa?` recover
         // their interrogative reading under FirstBigram.
         let (vi_list, strat) = interrogatives_for("vi").unwrap();
         assert_eq!(strat, InterrogativeMatch::FirstBigram);
         for bare in ["khi", "tại", "vì"] {
-            assert!(
-                !vi_list.contains(&bare),
+            assert!(!vi_list.contains(&bare),
                 "vietnamese list must not contain bare high-frequency function word {bare:?} \
                  (matches all declaratives starting with the conjunction/preposition)"
             );
         }
         for bigram in ["tại sao", "khi nào", "vì sao"] {
-            assert!(
-                vi_list.contains(&bigram),
-                "vietnamese list must contain bigram interrogative {bigram:?} (Phase 1.1 \
+            assert!(vi_list.contains(&bigram),
+                "vietnamese list must contain bigram interrogative {bigram:?} ( \
                  #ANALYSIS-0004 closure)"
             );
         }
@@ -1413,8 +1357,7 @@ mod tests {
         // `Nào là...?` / `Đâu là...?` / `Sao thế?` / `Bao nhiêu?`
         // still classify (via the FirstToken arm of FirstBigram).
         for kept in ["ai", "gì", "nào", "đâu", "bao", "sao", "thế"] {
-            assert!(
-                vi_list.contains(&kept),
+            assert!(vi_list.contains(&kept),
                 "vietnamese list must still contain bare interrogative {kept:?}"
             );
         }

@@ -73,7 +73,7 @@ pub struct Observation {
     /// [`MemoryState::Candidate`] for fresh extractions.
     pub memory_state: MemoryState,
     /// BCP-47 primary language subtag for the source text the
-    /// observation was extracted from (Phase 1.3). `None` when the
+    /// observation was extracted from. `None` when the
     /// upstream language detector either declined to classify the
     /// input or marked the result as unreliable. Downstream
     /// consumers (multilingual lexicon registry, per-locale FTS5
@@ -86,8 +86,7 @@ pub struct Observation {
 
 impl Observation {
     /// Construct a fresh candidate observation.
-    pub fn new_candidate(
-        observation_type: ObservationType,
+    pub fn new_candidate(observation_type: ObservationType,
         content: impl Into<String>,
         scope_id: ScopeId,
         confidence: f64,

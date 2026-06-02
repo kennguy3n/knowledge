@@ -4,7 +4,7 @@
 //! classifies each synthetic message with the
 //! [`evidence_store::classifier::CompositeClassifier`] (lexicon-only
 //! configuration — no SLM available in the demo run), runs the
-//! Phase 1.3 [`observation_engine::detect_language`] trigram detector
+//!  [`observation_engine::detect_language`] trigram detector
 //! against the plaintext body, and ingests every message via the
 //! public [`EvidenceStore::ingest_with_language`] API so the
 //! schema-v13 `language_tag` column is populated end-to-end on the
@@ -17,7 +17,7 @@
 //! English / Japanese / Korean / Chinese / Spanish so the demo
 //! report breaks down the row count by detected BCP-47 primary
 //! subtag — exactly mirroring what the multilingual lexicon
-//! registry (Phase 1.1) and CJK-aware FTS5 tokenizer (Phase 1.2)
+//! registry and CJK-aware FTS5 tokenizer
 //! will read on the retrieval side.
 
 use std::time::Instant;
@@ -31,19 +31,18 @@ use tempfile::TempDir;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::{Dataset, ScopeTier, SyntheticMessage};
-use crate::phases::runtime::{IngestedRow, RuntimeState};
-use crate::report::{DemoReport, PhaseReport};
+use crate::stages::runtime::{IngestedRow, RuntimeState};
+use crate::report::{DemoReport, StageReport};
 
-const PHASE: &str = "evidence";
+const STAGE: &str = "evidence";
 
-pub fn run(
-    dataset: &Dataset,
+pub fn run(dataset: &Dataset,
     state: &mut RuntimeState,
     report: &mut DemoReport,
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Stage 1: Evidence Ingestion");
+    let mut stage = StageReport::new("Stage 1: Evidence Ingestion");
 
     let temp = TempDir::new().expect("create demo evidence tempdir");
     let db_path = temp.path().join("evidence.sqlcipher");
@@ -67,7 +66,7 @@ pub fn run(
     // "language unknown". The demo report surfaces this breakdown so
     // the multilingual ingest pipeline is visibly exercised end-to-
     // end rather than silently leaving the column NULL (which is
-    // what the pre-Phase-1.3 legacy `ingest()` shim would have done
+    // what the earlier legacy `ingest()` shim would have done
     // — and what Devin Review correctly flagged as a usability gap).
     let mut by_language: std::collections::BTreeMap<String, u64> =
         std::collections::BTreeMap::new();
@@ -86,7 +85,7 @@ pub fn run(
         };
         *by_class.entry(class_tag).or_default() += 1;
 
-        // Phase 1.3 — run language detection at the demo's persistent
+        //  — run language detection at the demo's persistent
         // write boundary so the schema-v13 `language_tag` column is
         // populated for inline / body-table rows. Noise-class rows
         // are still routed to the ring buffer by
@@ -98,8 +97,7 @@ pub fn run(
         let language_tag = detection.as_ref().map(|d| d.tag.as_str());
 
         let result = store
-            .ingest_with_language(
-                scope,
+            .ingest_with_language(scope,
                 msg.body.as_bytes(),
                 Some(&msg.source_ref),
                 class,
@@ -117,8 +115,7 @@ pub fn run(
         // bypass the `language_tag` column entirely, so attributing
         // their detection outcome to the breakdown would overstate
         // what the schema-v13 column actually carries.
-        if matches!(
-            result.storage_path,
+        if matches!(result.storage_path,
             StoragePath::Inline | StoragePath::BodyTable
         ) {
             let lang_key = language_tag.map_or_else(|| "<none>".to_string(), str::to_string);
@@ -126,8 +123,7 @@ pub fn run(
         }
         ingest_count += 1;
 
-        if matches!(
-            result.storage_path,
+        if matches!(result.storage_path,
             StoragePath::Inline | StoragePath::BodyTable
         ) {
             ingested.push(IngestedRow {
@@ -149,35 +145,30 @@ pub fn run(
     let ring_size = store.ring_buffer_current_size().expect("ring buffer size") as u64;
     let ring_len = store.ring_buffer_len().expect("ring buffer len") as u64;
 
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "evidence rows match inline+body_table ingest count",
         evidence_rows as u64 == inline + body_table,
     );
-    log.check(PHASE, "at least one inline row was created", inline > 0);
-    log.check(
-        PHASE,
+    log.check(STAGE, "at least one inline row was created", inline > 0);
+    log.check(STAGE,
         "at least one body-table row was created",
         body_table > 0,
     );
-    log.check(PHASE, "at least one ring-buffer row was created", ring > 0);
-    log.check(
-        PHASE,
+    log.check(STAGE, "at least one ring-buffer row was created", ring > 0);
+    log.check(STAGE,
         "ring buffer length matches noise count",
         ring_len == ring,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "body_store dedup compresses duplicate long bodies",
         body_rows as u64 <= body_table,
     );
-    log.check(PHASE, "ring buffer holds bytes", ring_size > 0);
-    log.check(
-        PHASE,
+    log.check(STAGE, "ring buffer holds bytes", ring_size > 0);
+    log.check(STAGE,
         "all four scope tiers contributed evidence",
         scope_tier_coverage(&ingested) == 4,
     );
-    // Phase 1.3 — at least one persisted row has a non-NULL
+    //  — at least one persisted row has a non-NULL
     // `language_tag` after detection runs at the demo's write
     // boundary. The synthetic dataset includes plain-English bodies
     // long enough to clear whatlang's reliability threshold, so the
@@ -191,34 +182,32 @@ pub fn run(
         .filter(|(k, _)| k.as_str() != "<none>")
         .map(|(_, v)| *v)
         .sum();
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "at least one persisted row carries a detected language_tag",
         language_tagged_rows > 0,
     );
 
-    phase.timing = started.elapsed();
-    phase.stat("messages", dataset.messages.len().to_string());
-    phase.stat("inline_rows", inline.to_string());
-    phase.stat("body_table_rows", body_table.to_string());
-    phase.stat("ring_buffer_rows", ring.to_string());
-    phase.stat("dedup_body_rows", body_rows.to_string());
-    phase.stat("ring_buffer_bytes", ring_size.to_string());
+    stage.timing = started.elapsed();
+    stage.stat("messages", dataset.messages.len().to_string());
+    stage.stat("inline_rows", inline.to_string());
+    stage.stat("body_table_rows", body_table.to_string());
+    stage.stat("ring_buffer_rows", ring.to_string());
+    stage.stat("dedup_body_rows", body_rows.to_string());
+    stage.stat("ring_buffer_bytes", ring_size.to_string());
     for (k, v) in &by_class {
-        phase.stat(format!("class_{k}"), v.to_string());
+        stage.stat(format!("class_{k}"), v.to_string());
     }
-    // Phase 1.3 breakdown: how many persisted rows carry each BCP-47
+    //  breakdown: how many persisted rows carry each BCP-47
     // primary subtag the substrate detected at ingest. `<none>`
     // collects the fail-closed outcomes (detector declined to
-    // classify). The Phase 1.1 multilingual lexicon registry reads
+    // classify). The  multilingual lexicon registry reads
     // these tags on every retrieval to pick a per-locale lexicon, so
     // surfacing the breakdown here makes the multilingual ingest
     // pipeline visibly exercised end-to-end on every demo run.
     for (k, v) in &by_language {
-        phase.stat(format!("language_{k}"), v.to_string());
+        stage.stat(format!("language_{k}"), v.to_string());
     }
-    phase.note(format!(
-        "Stored evidence at {} (encrypted SQLCipher, master key derived in-process)",
+    stage.note(format!("Stored evidence at {} (encrypted SQLCipher, master key derived in-process)",
         db_path.display()
     ));
 
@@ -227,7 +216,7 @@ pub fn run(
     report.count("evidence_rows_body_table", body_table);
     report.count("evidence_rows_ring_buffer", ring);
     report.count("evidence_dedup_bodies", body_rows as u64);
-    report.add_phase(phase);
+    report.add_stage(stage);
     report.add_benchmark("evidence_ingest_per_message", ingest_count, bench_total);
 
     state.evidence_temp = Some(temp);

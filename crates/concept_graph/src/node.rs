@@ -98,8 +98,7 @@ pub struct ConceptNode {
 
 impl ConceptNode {
     /// Construct a fresh candidate node.
-    pub fn new_candidate(
-        label: impl Into<String>,
+    pub fn new_candidate(label: impl Into<String>,
         definition: impl Into<String>,
         scope_id: ScopeId,
     ) -> Self {

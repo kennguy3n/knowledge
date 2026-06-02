@@ -56,8 +56,7 @@ fn detects_tasks_via_keyword_and_imperative_verb() {
 #[test]
 fn detects_decisions() {
     let scope = ScopeId::new_v4();
-    let obs = ext().extract(
-        "We agreed to ship next Friday. We approved the new policy.",
+    let obs = ext().extract("We agreed to ship next Friday. We approved the new policy.",
         scope,
     );
     let decisions: Vec<_> = obs
@@ -89,8 +88,7 @@ fn follow_up_phrasings_are_detected_as_tasks() {
         "follow-up: ping the design review",
     ] {
         let obs = ext().extract(line, scope);
-        assert!(
-            obs.iter()
+        assert!(obs.iter()
                 .any(|o| o.observation_type == ObservationType::Task),
             "lexicon must surface a task for: {line:?}",
         );
@@ -131,8 +129,7 @@ fn very_long_input_is_processed_without_panic() {
 #[test]
 fn input_with_only_urls_extracts_url_entities() {
     let scope = ScopeId::new_v4();
-    let obs = ext().extract(
-        "https://example.com/path/to/doc and http://acme.io/post.",
+    let obs = ext().extract("https://example.com/path/to/doc and http://acme.io/post.",
         scope,
     );
     let urls: Vec<_> = obs
@@ -148,8 +145,7 @@ fn input_with_only_urls_extracts_url_entities() {
 #[test]
 fn email_addresses_are_extracted_as_entities() {
     let scope = ScopeId::new_v4();
-    let obs = ext().extract(
-        "Reach out to alice@example.com or bob.jones+foo@acme.co",
+    let obs = ext().extract("Reach out to alice@example.com or bob.jones+foo@acme.co",
         scope,
     );
     let emails: Vec<_> = obs
@@ -210,8 +206,7 @@ fn date_refs_handle_unicode_with_length_changing_lowercase() {
         .filter(|o| o.observation_type == ObservationType::Entity)
         .map(|o| o.content.as_str())
         .collect();
-    assert!(
-        entities.iter().any(|e| e.eq_ignore_ascii_case("next week")),
+    assert!(entities.iter().any(|e| e.eq_ignore_ascii_case("next week")),
         "got entities {entities:?}"
     );
 
@@ -235,8 +230,7 @@ fn date_refs_handle_unicode_with_length_changing_lowercase() {
         .filter(|o| o.observation_type == ObservationType::Entity)
         .map(|o| o.content.as_str())
         .collect();
-    assert!(
-        entities3.iter().any(|d| d.starts_with("Q3")),
+    assert!(entities3.iter().any(|d| d.starts_with("Q3")),
         "got entities {entities3:?}"
     );
 }
@@ -275,8 +269,7 @@ fn questions_are_detected_via_interrogative_word() {
 #[test]
 fn multiline_input_emits_per_line_observations() {
     let scope = ScopeId::new_v4();
-    let obs = ext().extract(
-        "TODO: draft the RFC\nWe approved the new policy\nWho owns the rollout?",
+    let obs = ext().extract("TODO: draft the RFC\nWe approved the new policy\nWho owns the rollout?",
         scope,
     );
     assert!(obs
@@ -293,8 +286,7 @@ fn multiline_input_emits_per_line_observations() {
 #[test]
 fn unicode_and_emoji_input_does_not_panic() {
     let scope = ScopeId::new_v4();
-    let obs = ext().extract(
-        "We agreed 🚀 to ship Friday.\nSchedule a review with Аня.",
+    let obs = ext().extract("We agreed 🚀 to ship Friday.\nSchedule a review with Аня.",
         scope,
     );
     // We don't assert specifics — only that the extractor returns
@@ -334,7 +326,7 @@ fn fresh_observations_are_candidate_state() {
         .all(|o| o.memory_state == memory_manager::MemoryState::Candidate));
 }
 
-/// Phase 1.10 end-to-end test: confirm the lexicon-telemetry
+///  end-to-end test: confirm the lexicon-telemetry
 /// counters tick through the public extraction surface.
 ///
 /// This is the cross-cutting "do the counters actually tick
@@ -360,8 +352,7 @@ fn lexicon_telemetry_counters_advance_through_public_extractor() {
     // language detector resolves at least one sentence to a
     // lexicon (the `en` fallback at minimum) and exercises the
     // FirstToken strategy on the question class via "?".
-    let _ = ext().extract(
-        "Please review the deck before Friday. Can you sign off by EOD?",
+    let _ = ext().extract("Please review the deck before Friday. Can you sign off by EOD?",
         scope,
     );
 
@@ -414,8 +405,7 @@ fn lexicon_telemetry_counters_advance_through_public_extractor() {
         + after.hits_th
         + after.hits_vi
         + after.hits_zh;
-    assert!(
-        total_lexicon_hits_after > total_lexicon_hits_before,
+    assert!(total_lexicon_hits_after > total_lexicon_hits_before,
         "no lexicon-hit counter advanced through the public extractor — the wire is broken"
     );
 
@@ -430,8 +420,7 @@ fn lexicon_telemetry_counters_advance_through_public_extractor() {
         + after.strategy_substring
         + after.strategy_first_token_with_arabic_clitics
         + after.strategy_first_token_with_hebrew_clitics;
-    assert!(
-        total_strategy_fires_after > total_strategy_fires_before,
+    assert!(total_strategy_fires_after > total_strategy_fires_before,
         "no match-strategy-fire counter advanced through the public extractor — the wire is broken"
     );
 }

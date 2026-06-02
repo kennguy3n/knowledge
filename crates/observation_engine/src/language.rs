@@ -1,4 +1,4 @@
-//! Language detection for observation ingestion (Phase 1.3).
+//! Language detection for observation ingestion.
 //!
 //! The substrate is multilingual (B2C and B2B tenants ingest chat,
 //! mail, docs in dozens of languages). Every downstream consumer
@@ -48,7 +48,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 ///
 /// The inner field is an [`Arc<str>`] rather than a [`String`] so
 /// that [`Clone`] is an O(1) refcount bump rather than a heap
-/// allocation + memcpy of the underlying 2-5 byte tag. The Phase
+/// allocation + memcpy of the underlying 2-5 byte tag. The ///
 /// 1.4 extractor clones the dominant `Option<LanguageTag>` once
 /// per entity-class observation (6+ classes per call: `@mentions`,
 /// capitalised words, URLs, emails, date refs, numeric refs), and
@@ -110,8 +110,7 @@ impl<'de> Deserialize<'de> for LanguageTag {
     {
         let raw = String::deserialize(deserializer)?;
         LanguageTag::new(&raw).ok_or_else(|| {
-            serde::de::Error::custom(
-                "language_tag must be a non-empty BCP-47 primary subtag after trim",
+            serde::de::Error::custom("language_tag must be a non-empty BCP-47 primary subtag after trim",
             )
         })
     }
@@ -320,8 +319,7 @@ mod tests {
 
     #[test]
     fn detects_english() {
-        let det = detect_language(
-            "The migration ships next Friday and we approved the rollout plan in yesterday's review meeting.",
+        let det = detect_language("The migration ships next Friday and we approved the rollout plan in yesterday's review meeting.",
         )
         .expect("english should be reliably detected");
         assert_eq!(det.tag.as_str(), "en");
@@ -346,8 +344,7 @@ mod tests {
 
     #[test]
     fn detects_korean() {
-        let det = detect_language(
-            "다음 주 금요일에 새로운 마이그레이션을 배포할 예정이니 회의에서 검토 부탁드립니다.",
+        let det = detect_language("다음 주 금요일에 새로운 마이그레이션을 배포할 예정이니 회의에서 검토 부탁드립니다.",
         )
         .expect("korean should be reliably detected");
         assert_eq!(det.tag.as_str(), "ko");
@@ -355,8 +352,7 @@ mod tests {
 
     #[test]
     fn detects_spanish() {
-        let det = detect_language(
-            "Aprobamos el plan de migración y enviaremos el comunicado a todo el equipo el próximo viernes.",
+        let det = detect_language("Aprobamos el plan de migración y enviaremos el comunicado a todo el equipo el próximo viernes.",
         )
         .expect("spanish should be reliably detected");
         assert_eq!(det.tag.as_str(), "es");
@@ -364,8 +360,7 @@ mod tests {
 
     #[test]
     fn detects_french() {
-        let det = detect_language(
-            "Nous avons décidé de déployer la nouvelle migration vendredi prochain et de présenter les résultats à toute l'équipe.",
+        let det = detect_language("Nous avons décidé de déployer la nouvelle migration vendredi prochain et de présenter les résultats à toute l'équipe.",
         )
         .expect("french should be reliably detected");
         assert_eq!(det.tag.as_str(), "fr");
@@ -373,8 +368,7 @@ mod tests {
 
     #[test]
     fn detects_german() {
-        let det = detect_language(
-            "Wir haben beschlossen, die neue Migration am nächsten Freitag freizugeben und die Ergebnisse dem gesamten Team vorzustellen.",
+        let det = detect_language("Wir haben beschlossen, die neue Migration am nächsten Freitag freizugeben und die Ergebnisse dem gesamten Team vorzustellen.",
         )
         .expect("german should be reliably detected");
         assert_eq!(det.tag.as_str(), "de");
@@ -382,8 +376,7 @@ mod tests {
 
     #[test]
     fn detects_portuguese() {
-        let det = detect_language(
-            "Decidimos lançar a nova migração na próxima sexta-feira e apresentar os resultados a toda a equipe.",
+        let det = detect_language("Decidimos lançar a nova migração na próxima sexta-feira e apresentar os resultados a toda a equipe.",
         )
         .expect("portuguese should be reliably detected");
         assert_eq!(det.tag.as_str(), "pt");
@@ -391,8 +384,7 @@ mod tests {
 
     #[test]
     fn detects_arabic() {
-        let det = detect_language(
-            "قررنا إطلاق عملية الترحيل الجديدة يوم الجمعة المقبل وعرض النتائج على الفريق بأكمله.",
+        let det = detect_language("قررنا إطلاق عملية الترحيل الجديدة يوم الجمعة المقبل وعرض النتائج على الفريق بأكمله.",
         )
         .expect("arabic should be reliably detected");
         assert_eq!(det.tag.as_str(), "ar");
@@ -400,8 +392,7 @@ mod tests {
 
     #[test]
     fn detects_vietnamese() {
-        let det = detect_language(
-            "Chúng tôi đã quyết định triển khai bản di chuyển mới vào thứ Sáu tuần sau và trình bày kết quả cho toàn đội.",
+        let det = detect_language("Chúng tôi đã quyết định triển khai bản di chuyển mới vào thứ Sáu tuần sau và trình bày kết quả cho toàn đội.",
         )
         .expect("vietnamese should be reliably detected");
         assert_eq!(det.tag.as_str(), "vi");
@@ -416,8 +407,7 @@ mod tests {
 
     #[test]
     fn detects_indonesian() {
-        let det = detect_language(
-            "Kami memutuskan untuk meluncurkan migrasi baru pada hari Jumat depan dan menyajikan hasilnya kepada seluruh tim.",
+        let det = detect_language("Kami memutuskan untuk meluncurkan migrasi baru pada hari Jumat depan dan menyajikan hasilnya kepada seluruh tim.",
         )
         .expect("indonesian should be reliably detected");
         assert_eq!(det.tag.as_str(), "id");
@@ -441,12 +431,10 @@ mod tests {
         // for whatever subset the detector chose to classify.
         for input in ["ok", "hi", "no", "yes", "the cat"] {
             if let Some(det) = detect_language(input) {
-                assert!(
-                    det.is_reliable,
+                assert!(det.is_reliable,
                     "detect_language must only surface reliable results: {det:?}"
                 );
-                assert!(
-                    (0.0..=1.0).contains(&det.confidence),
+                assert!((0.0..=1.0).contains(&det.confidence),
                     "confidence must be in [0, 1]: {det:?}"
                 );
             }
@@ -467,8 +455,7 @@ mod tests {
         // location (the single Arc'd buffer).
         let a = LanguageTag::new("ja").unwrap();
         let b = a.clone();
-        assert_eq!(
-            a.as_str().as_ptr(),
+        assert_eq!(a.as_str().as_ptr(),
             b.as_str().as_ptr(),
             "LanguageTag::clone must share the underlying Arc<str> allocation \
              (got distinct data pointers — Clone is allocating again, which \
@@ -483,8 +470,7 @@ mod tests {
         let mut hasher_c = std::collections::hash_map::DefaultHasher::new();
         std::hash::Hash::hash(&a, &mut hasher_a);
         std::hash::Hash::hash(&c, &mut hasher_c);
-        assert_eq!(
-            std::hash::Hasher::finish(&hasher_a),
+        assert_eq!(std::hash::Hasher::finish(&hasher_a),
             std::hash::Hasher::finish(&hasher_c),
             "tags with identical content must hash equal regardless of Arc identity"
         );
@@ -526,8 +512,7 @@ mod tests {
         // represent as `Option<LanguageTag>::None`).
         for empty in ["\"\"", "\"   \""] {
             let res: Result<LanguageTag, _> = serde_json::from_str(empty);
-            assert!(
-                res.is_err(),
+            assert!(res.is_err(),
                 "deserialising empty / whitespace-only input must fail: {empty}"
             );
         }

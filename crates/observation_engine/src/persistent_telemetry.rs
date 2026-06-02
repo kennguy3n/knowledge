@@ -1,9 +1,9 @@
-//! Phase 2.2 — Persistent telemetry snapshot.
+//!  — Persistent telemetry snapshot.
 //!
 //! The three sibling telemetry modules
 //! ([`evidence_store::fts_telemetry`], [`crate::lexicon_telemetry`],
 //! [`evidence_store::vector_telemetry`]) and the unified
-//! [`crate::retrieval_telemetry::snapshot`] read surface (Phase 2.0)
+//! [`crate::retrieval_telemetry::snapshot`] read surface
 //! all expose **process-singleton** counters: they live in
 //! [`std::sync::atomic`] statics for the lifetime of the running
 //! process and reset to zero on restart.
@@ -242,8 +242,7 @@ pub fn write_snapshot(path: &Path) -> Result<PersistentRetrievalSnapshot, Persis
 /// # Errors
 ///
 /// Same as [`write_snapshot`].
-pub fn write_envelope(
-    path: &Path,
+pub fn write_envelope(path: &Path,
     envelope: &PersistentRetrievalSnapshot,
 ) -> Result<(), PersistError> {
     // Serialise first so a JSON failure doesn't leave behind a
@@ -352,8 +351,7 @@ pub struct RetrievalSnapshotDelta {
 /// pure and never panics — every arithmetic step uses saturating
 /// variants — so it is safe to call from any context.
 #[must_use]
-pub fn delta(
-    prior: &PersistentRetrievalSnapshot,
+pub fn delta(prior: &PersistentRetrievalSnapshot,
     latest: &PersistentRetrievalSnapshot,
 ) -> RetrievalSnapshotDelta {
     let elapsed_ms = latest
@@ -373,8 +371,7 @@ pub fn delta(
 /// counter to any of the three upstream snapshots requires
 /// extending the corresponding sub-function below, no need to
 /// touch [`delta`] directly.
-fn retrieval_metrics_saturating_sub(
-    latest: &RetrievalMetricsSnapshot,
+fn retrieval_metrics_saturating_sub(latest: &RetrievalMetricsSnapshot,
     prior: &RetrievalMetricsSnapshot,
 ) -> RetrievalMetricsSnapshot {
     RetrievalMetricsSnapshot {
@@ -384,8 +381,7 @@ fn retrieval_metrics_saturating_sub(
     }
 }
 
-fn fts_saturating_sub(
-    latest: &evidence_store::fts_telemetry::FtsTelemetrySnapshot,
+fn fts_saturating_sub(latest: &evidence_store::fts_telemetry::FtsTelemetrySnapshot,
     prior: &evidence_store::fts_telemetry::FtsTelemetrySnapshot,
 ) -> evidence_store::fts_telemetry::FtsTelemetrySnapshot {
     use evidence_store::fts_telemetry::FtsTelemetrySnapshot;
@@ -429,8 +425,7 @@ fn fts_saturating_sub(
     }
 }
 
-fn lexicon_saturating_sub(
-    latest: &crate::lexicon_telemetry::LexiconTelemetrySnapshot,
+fn lexicon_saturating_sub(latest: &crate::lexicon_telemetry::LexiconTelemetrySnapshot,
     prior: &crate::lexicon_telemetry::LexiconTelemetrySnapshot,
 ) -> crate::lexicon_telemetry::LexiconTelemetrySnapshot {
     use crate::lexicon_telemetry::LexiconTelemetrySnapshot;
@@ -507,8 +502,7 @@ fn lexicon_saturating_sub(
     }
 }
 
-fn vector_saturating_sub(
-    latest: &evidence_store::vector_telemetry::VectorTelemetrySnapshot,
+fn vector_saturating_sub(latest: &evidence_store::vector_telemetry::VectorTelemetrySnapshot,
     prior: &evidence_store::vector_telemetry::VectorTelemetrySnapshot,
 ) -> evidence_store::vector_telemetry::VectorTelemetrySnapshot {
     use evidence_store::vector_telemetry::VectorTelemetrySnapshot;
@@ -570,8 +564,7 @@ mod tests {
     #[test]
     fn capture_uses_current_schema_version() {
         let envelope = capture();
-        assert_eq!(
-            envelope.schema_version,
+        assert_eq!(envelope.schema_version,
             PersistentRetrievalSnapshot::SCHEMA_VERSION
         );
     }

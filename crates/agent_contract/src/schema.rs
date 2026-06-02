@@ -84,8 +84,7 @@ impl ValidatePayload for ObservationProposal {
             return Err(ProposalValidationError::EmptyPayloadField("claim"));
         }
         if self.observation_type.trim().is_empty() {
-            return Err(ProposalValidationError::EmptyPayloadField(
-                "observation_type",
+            return Err(ProposalValidationError::EmptyPayloadField("observation_type",
             ));
         }
         Ok(())
@@ -138,15 +137,13 @@ impl ValidatePayload for SummaryProposal {
 ///
 /// Returns the first violated invariant as a
 /// [`ProposalValidationError`].
-pub fn validate_proposal<T: ValidatePayload>(
-    proposal: &AgentProposal<T>,
+pub fn validate_proposal<T: ValidatePayload>(proposal: &AgentProposal<T>,
 ) -> Result<(), ProposalValidationError> {
     if proposal.confidence.is_nan() {
         return Err(ProposalValidationError::ConfidenceNaN);
     }
     if !(0.0..=1.0).contains(&proposal.confidence) {
-        return Err(ProposalValidationError::ConfidenceOutOfRange(
-            proposal.confidence,
+        return Err(ProposalValidationError::ConfidenceOutOfRange(proposal.confidence,
         ));
     }
     if proposal.evidence_refs.is_empty() {
@@ -204,8 +201,7 @@ mod tests {
     }
 
     fn fixture_observation() -> AgentProposal<ObservationProposal> {
-        AgentProposal::new(
-            ProposalKind::Observation,
+        AgentProposal::new(ProposalKind::Observation,
             ScopeId::new_v4(),
             ObservationProposal::new("claim", "fact"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -224,8 +220,7 @@ mod tests {
     fn confidence_out_of_range_low() {
         let mut p = fixture_observation();
         p.confidence = -0.1;
-        assert!(matches!(
-            validate_proposal(&p),
+        assert!(matches!(validate_proposal(&p),
             Err(ProposalValidationError::ConfidenceOutOfRange(_))
         ));
     }
@@ -234,8 +229,7 @@ mod tests {
     fn confidence_out_of_range_high() {
         let mut p = fixture_observation();
         p.confidence = 1.1;
-        assert!(matches!(
-            validate_proposal(&p),
+        assert!(matches!(validate_proposal(&p),
             Err(ProposalValidationError::ConfidenceOutOfRange(_))
         ));
     }
@@ -244,8 +238,7 @@ mod tests {
     fn confidence_nan_rejected() {
         let mut p = fixture_observation();
         p.confidence = f64::NAN;
-        assert_eq!(
-            validate_proposal(&p),
+        assert_eq!(validate_proposal(&p),
             Err(ProposalValidationError::ConfidenceNaN)
         );
     }
@@ -254,8 +247,7 @@ mod tests {
     fn no_evidence_rejected() {
         let mut p = fixture_observation();
         p.evidence_refs.clear();
-        assert_eq!(
-            validate_proposal(&p),
+        assert_eq!(validate_proposal(&p),
             Err(ProposalValidationError::NoEvidence)
         );
     }
@@ -264,8 +256,7 @@ mod tests {
     fn nil_scope_rejected() {
         let mut p = fixture_observation();
         p.scope_id = ScopeId(Uuid::nil());
-        assert_eq!(
-            validate_proposal(&p),
+        assert_eq!(validate_proposal(&p),
             Err(ProposalValidationError::NilScope)
         );
     }
@@ -274,8 +265,7 @@ mod tests {
     fn nil_agent_id_rejected() {
         let mut p = fixture_observation();
         p.agent_identity.agent_id = Uuid::nil();
-        assert_eq!(
-            validate_proposal(&p),
+        assert_eq!(validate_proposal(&p),
             Err(ProposalValidationError::NilAgentId)
         );
     }
@@ -284,8 +274,7 @@ mod tests {
     fn empty_agent_name_rejected() {
         let mut p = fixture_observation();
         p.agent_identity.name = String::new();
-        assert_eq!(
-            validate_proposal(&p),
+        assert_eq!(validate_proposal(&p),
             Err(ProposalValidationError::EmptyAgentName)
         );
     }
@@ -294,14 +283,12 @@ mod tests {
     fn empty_model_fields_rejected() {
         let mut p = fixture_observation();
         p.agent_identity.model_name = String::new();
-        assert_eq!(
-            validate_proposal(&p),
+        assert_eq!(validate_proposal(&p),
             Err(ProposalValidationError::EmptyModelName)
         );
         let mut q = fixture_observation();
         q.agent_identity.model_version = String::new();
-        assert_eq!(
-            validate_proposal(&q),
+        assert_eq!(validate_proposal(&q),
             Err(ProposalValidationError::EmptyModelVersion)
         );
     }
@@ -310,14 +297,12 @@ mod tests {
     fn empty_skill_recipe_rejected() {
         let mut p = fixture_observation();
         p.agent_identity.skill_id = Some(String::new());
-        assert_eq!(
-            validate_proposal(&p),
+        assert_eq!(validate_proposal(&p),
             Err(ProposalValidationError::EmptySkillId)
         );
         let mut q = fixture_observation();
         q.agent_identity.recipe_id = Some(String::new());
-        assert_eq!(
-            validate_proposal(&q),
+        assert_eq!(validate_proposal(&q),
             Err(ProposalValidationError::EmptyRecipeId)
         );
     }
@@ -333,16 +318,14 @@ mod tests {
     fn empty_payload_observation_rejected() {
         let mut p = fixture_observation();
         p.payload.claim = String::new();
-        assert_eq!(
-            validate_proposal(&p),
+        assert_eq!(validate_proposal(&p),
             Err(ProposalValidationError::EmptyPayloadField("claim"))
         );
     }
 
     #[test]
     fn empty_payload_concept_rejected() {
-        let p = AgentProposal::new(
-            ProposalKind::Concept,
+        let p = AgentProposal::new(ProposalKind::Concept,
             ScopeId::new_v4(),
             ConceptProposal::new("", "definition"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -350,8 +333,7 @@ mod tests {
             SensitivityClass::Useful,
             fixture_identity(),
         );
-        assert_eq!(
-            validate_proposal(&p),
+        assert_eq!(validate_proposal(&p),
             Err(ProposalValidationError::EmptyPayloadField("label"))
         );
     }
@@ -359,8 +341,7 @@ mod tests {
     #[test]
     fn relation_self_loop_rejected() {
         let same = Uuid::new_v4();
-        let p = AgentProposal::new(
-            ProposalKind::Relation,
+        let p = AgentProposal::new(ProposalKind::Relation,
             ScopeId::new_v4(),
             RelationProposal::new(same, same, RelationType::new("is_a")),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -368,16 +349,14 @@ mod tests {
             SensitivityClass::Useful,
             fixture_identity(),
         );
-        assert_eq!(
-            validate_proposal(&p),
+        assert_eq!(validate_proposal(&p),
             Err(ProposalValidationError::SelfRelation)
         );
     }
 
     #[test]
     fn relation_nil_endpoint_rejected() {
-        let p = AgentProposal::new(
-            ProposalKind::Relation,
+        let p = AgentProposal::new(ProposalKind::Relation,
             ScopeId::new_v4(),
             RelationProposal::new(Uuid::nil(), Uuid::new_v4(), RelationType::new("is_a")),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -385,16 +364,14 @@ mod tests {
             SensitivityClass::Useful,
             fixture_identity(),
         );
-        assert_eq!(
-            validate_proposal(&p),
+        assert_eq!(validate_proposal(&p),
             Err(ProposalValidationError::NilRelationEndpoint)
         );
     }
 
     #[test]
     fn empty_payload_summary_rejected() {
-        let p = AgentProposal::new(
-            ProposalKind::Summary,
+        let p = AgentProposal::new(ProposalKind::Summary,
             ScopeId::new_v4(),
             SummaryProposal::new("", "episodic"),
             vec![EvidenceRef::from_uuid(Uuid::new_v4())],
@@ -402,8 +379,7 @@ mod tests {
             SensitivityClass::Useful,
             fixture_identity(),
         );
-        assert_eq!(
-            validate_proposal(&p),
+        assert_eq!(validate_proposal(&p),
             Err(ProposalValidationError::EmptyPayloadField("text"))
         );
     }

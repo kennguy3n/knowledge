@@ -12,7 +12,7 @@
 //! (`unicode61`, `trigram`, and a CJK-aware dual-table design); a
 //! point-release of SQLite has, historically, shipped subtle
 //! tokeniser-behaviour fixes that would change recall against the
-//! Phase 2.1 cross-lingual benchmark corpus.
+//!  cross-lingual benchmark corpus.
 //!
 //! The existing `fts5_*` tests in `store_integration.rs` and the
 //! `cross_lingual_recall_benchmark.rs` integration test do catch
@@ -28,7 +28,7 @@
 //!
 //! 1. Run the full `evidence_store` test suite — every `fts5_*` test
 //!    must still pass against the new bundled SQLite.
-//! 2. Run `cross_lingual_recall_benchmark.rs` (the Phase 2.1 canary)
+//! 2. Run `cross_lingual_recall_benchmark.rs` (the  canary)
 //!    — mean `recall@12 ≥ 0.99` and `hit-rate@{1,3} ≥ 0.95` must hold.
 //! 3. Check the upstream SQLite release notes for changes to the
 //!    `unicode61` and `trigram` tokenisers between the pinned version
@@ -65,14 +65,13 @@ fn bundled_sqlite_version_matches_pin() {
     let actual: String = conn
         .query_row("SELECT sqlite_version()", [], |row| row.get(0))
         .expect("SELECT sqlite_version()");
-    assert_eq!(
-        actual, EXPECTED_SQLITE_VERSION,
+    assert_eq!(actual, EXPECTED_SQLITE_VERSION,
         "Bundled SQLite version moved from the pinned {EXPECTED_SQLITE_VERSION} \
          to {actual}. This usually means a rusqlite or libsqlite3-sys bump \
          changed which SQLite the substrate ships with. Before updating the \
          literal in `bundled_sqlite_canary.rs`, follow the steps in the \
          module-level docs of this file: re-run all `fts5_*` tests, re-run \
-         the Phase 2.1 cross-lingual recall benchmark, and audit the \
+         the  cross-lingual recall benchmark, and audit the \
          upstream SQLite release notes for unicode61 / trigram tokeniser \
          changes between {EXPECTED_SQLITE_VERSION} and {actual}."
     );
@@ -91,8 +90,7 @@ fn bundled_sqlite_source_id_matches_pin() {
     // upstream SQLite hash for the same dotted version (the "alt1"
     // suffix is SQLCipher's marker), so a tree-hash-anchored check
     // would be too aggressive.
-    assert!(
-        actual.starts_with(EXPECTED_SQLITE_SOURCE_PREFIX),
+    assert!(actual.starts_with(EXPECTED_SQLITE_SOURCE_PREFIX),
         "Bundled SQLite source ID prefix moved from \
          '{EXPECTED_SQLITE_SOURCE_PREFIX}' to '{actual}'. See the \
          module-level docs in `bundled_sqlite_canary.rs` for the audit \
@@ -121,9 +119,7 @@ fn unicode61_tokeniser_emits_expected_tokens_for_canary_corpus() {
     // Set up an FTS5 vtable with the exact tokeniser config we use
     // in production. The `tokenize` clause here mirrors what the
     // substrate's schema emits at `schema.rs:314` and `schema.rs:356`.
-    conn.execute_batch(
-        "CREATE VIRTUAL TABLE canary USING fts5(
-            body,
+    conn.execute_batch("CREATE VIRTUAL TABLE canary USING fts5(body,
             tokenize = 'unicode61 remove_diacritics 2'
         );",
     )
@@ -145,8 +141,7 @@ fn unicode61_tokeniser_emits_expected_tokens_for_canary_corpus() {
         (5, "שלום עולם"),
     ];
     for (rowid, text) in corpus {
-        conn.execute(
-            "INSERT INTO canary(rowid, body) VALUES (?1, ?2)",
+        conn.execute("INSERT INTO canary(rowid, body) VALUES (?1, ?2)",
             (rowid, text),
         )
         .expect("insert canary row");
@@ -182,8 +177,7 @@ fn unicode61_tokeniser_emits_expected_tokens_for_canary_corpus() {
             .expect("query_map")
             .map(|r| r.expect("row"))
             .collect();
-        assert_eq!(
-            &actual, *expected,
+        assert_eq!(&actual, *expected,
             "unicode61 tokeniser behaviour drift: query {query:?} matched \
              rows {actual:?} but the canary expected {expected:?}. If a \
              rusqlite/libsqlite3-sys bump caused this, see the audit \
@@ -211,22 +205,18 @@ fn unicode61_tokeniser_emits_expected_tokens_for_canary_corpus() {
 #[test]
 fn trigram_tokeniser_recalls_substring_for_canary_corpus() {
     let conn = Connection::open_in_memory().expect("open in-memory db");
-    conn.execute_batch(
-        // Match production exactly: `tokenize = 'trigram'`, no
+    conn.execute_batch(// Match production exactly: `tokenize = 'trigram'`, no
         // options. See `crates/evidence_store/src/schema.rs:329`.
-        "CREATE VIRTUAL TABLE canary_tri USING fts5(
-            body,
+        "CREATE VIRTUAL TABLE canary_tri USING fts5(body,
             tokenize = 'trigram'
         );",
     )
     .expect("create trigram fts5 vtable");
-    conn.execute(
-        "INSERT INTO canary_tri(rowid, body) VALUES (?1, ?2)",
+    conn.execute("INSERT INTO canary_tri(rowid, body) VALUES (?1, ?2)",
         (1i64, "the quick brown fox jumps over the lazy dog"),
     )
     .expect("insert canary trigram row");
-    conn.execute(
-        "INSERT INTO canary_tri(rowid, body) VALUES (?1, ?2)",
+    conn.execute("INSERT INTO canary_tri(rowid, body) VALUES (?1, ?2)",
         (2i64, "ការសិក្សា"), // Khmer "education"
     )
     .expect("insert canary trigram row");
@@ -248,8 +238,7 @@ fn trigram_tokeniser_recalls_substring_for_canary_corpus() {
             .expect("query_map")
             .map(|r| r.expect("row"))
             .collect();
-        assert_eq!(
-            &actual, *expected,
+        assert_eq!(&actual, *expected,
             "trigram tokeniser behaviour drift: query {query:?} matched \
              rows {actual:?} but the canary expected {expected:?}. If a \
              rusqlite/libsqlite3-sys bump caused this, see the audit \
@@ -283,14 +272,11 @@ fn trigram_tokeniser_silently_accepts_unknown_options() {
     // trigram tokeniser doesn't recognise it. We expect SQLCipher
     // 4.6.1 to accept the unknown option as a no-op rather than
     // erroring out at CREATE time.
-    let result = conn.execute_batch(
-        "CREATE VIRTUAL TABLE canary_tri_unknown USING fts5(
-            body,
+    let result = conn.execute_batch("CREATE VIRTUAL TABLE canary_tri_unknown USING fts5(body,
             tokenize = 'trigram remove_diacritics 1'
         );",
     );
-    assert!(
-        result.is_ok(),
+    assert!(result.is_ok(),
         "Expected SQLite to silently accept the unknown \
          `remove_diacritics` option on the trigram tokeniser \
          (it's a unicode61-only option), but CREATE failed with: \

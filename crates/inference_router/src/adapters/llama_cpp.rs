@@ -55,8 +55,7 @@ impl InferenceAdapter for LlamaCppAdapter {
     }
 
     fn probe(&self) -> ProbeResult {
-        let tier_ok = matches!(
-            self.config.device_tier,
+        let tier_ok = matches!(self.config.device_tier,
             DeviceTier::Medium | DeviceTier::High
         );
         let reachable = tier_ok && self.client.ping();
@@ -251,8 +250,7 @@ mod http_client {
         /// Returns `Err` if the underlying `reqwest::blocking::Client`
         /// builder rejects the timeout configuration.
         pub fn new(server_url: impl Into<String>) -> Result<Self, String> {
-            Self::with_timeouts(
-                server_url,
+            Self::with_timeouts(server_url,
                 Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
                 Duration::from_secs(DEFAULT_HTTP_PROBE_TIMEOUT_SECS),
             )
@@ -266,12 +264,10 @@ mod http_client {
         ///
         /// Returns `Err` if the underlying `reqwest::blocking::Client`
         /// builder rejects the timeout configuration.
-        pub fn with_timeout(
-            server_url: impl Into<String>,
+        pub fn with_timeout(server_url: impl Into<String>,
             timeout: Duration,
         ) -> Result<Self, String> {
-            Self::with_timeouts(
-                server_url,
+            Self::with_timeouts(server_url,
                 timeout,
                 Duration::from_secs(DEFAULT_HTTP_PROBE_TIMEOUT_SECS),
             )
@@ -287,8 +283,7 @@ mod http_client {
         ///
         /// Returns `Err` if the underlying `reqwest::blocking::Client`
         /// builder rejects either timeout configuration.
-        pub fn with_timeouts(
-            server_url: impl Into<String>,
+        pub fn with_timeouts(server_url: impl Into<String>,
             completion_timeout: Duration,
             probe_timeout: Duration,
         ) -> Result<Self, String> {
@@ -355,8 +350,7 @@ mod http_client {
             let status = resp.status();
             if !status.is_success() {
                 let detail = resp.text().unwrap_or_default();
-                return Err(format!(
-                    "llama-server returned {status} from {url}: {detail}"
+                return Err(format!("llama-server returned {status} from {url}: {detail}"
                 ));
             }
             let json: serde_json::Value = resp
@@ -403,8 +397,7 @@ mod http_client {
         fn ping_against_unreachable_host_returns_false() {
             // Pick a port that nothing in CI should be listening on.
             // `reqwest` returns `Err` -> our `ping` returns `false`.
-            let c = HttpLlamaServerClient::with_timeout(
-                "http://127.0.0.1:1",
+            let c = HttpLlamaServerClient::with_timeout("http://127.0.0.1:1",
                 Duration::from_millis(50),
             )
             .expect("client should build");
@@ -485,7 +478,7 @@ pub use http_client_async::{AsyncHttpLlamaServerClient, AsyncLlamaServerClient};
 
 #[cfg(feature = "async-http-client")]
 mod http_client_async {
-    //! Phase 5 — async HTTP transport for the llama.cpp loopback
+    //!  — async HTTP transport for the llama.cpp loopback
     //! server.
     //!
     //! Mirror of [`super::http_client::HttpLlamaServerClient`] that
@@ -553,8 +546,7 @@ mod http_client_async {
         /// Returns `Err` if the underlying `reqwest::Client`
         /// builder rejects either timeout configuration.
         pub fn new(server_url: impl Into<String>) -> Result<Self, String> {
-            Self::with_timeouts(
-                server_url,
+            Self::with_timeouts(server_url,
                 Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
                 Duration::from_secs(DEFAULT_HTTP_PROBE_TIMEOUT_SECS),
             )
@@ -567,12 +559,10 @@ mod http_client_async {
         ///
         /// Returns `Err` if the underlying `reqwest::Client`
         /// builder rejects the timeout configuration.
-        pub fn with_timeout(
-            server_url: impl Into<String>,
+        pub fn with_timeout(server_url: impl Into<String>,
             timeout: Duration,
         ) -> Result<Self, String> {
-            Self::with_timeouts(
-                server_url,
+            Self::with_timeouts(server_url,
                 timeout,
                 Duration::from_secs(DEFAULT_HTTP_PROBE_TIMEOUT_SECS),
             )
@@ -584,8 +574,7 @@ mod http_client_async {
         ///
         /// Returns `Err` if the underlying `reqwest::Client`
         /// builder rejects either timeout configuration.
-        pub fn with_timeouts(
-            server_url: impl Into<String>,
+        pub fn with_timeouts(server_url: impl Into<String>,
             completion_timeout: Duration,
             probe_timeout: Duration,
         ) -> Result<Self, String> {
@@ -642,8 +631,7 @@ mod http_client_async {
             let status = resp.status();
             if !status.is_success() {
                 let detail = resp.text().await.unwrap_or_default();
-                return Err(format!(
-                    "llama-server returned {status} from {url}: {detail}"
+                return Err(format!("llama-server returned {status} from {url}: {detail}"
                 ));
             }
             let json: serde_json::Value = resp
@@ -671,8 +659,7 @@ mod http_client_async {
 
         #[tokio::test]
         async fn ping_against_unreachable_host_returns_false() {
-            let c = AsyncHttpLlamaServerClient::with_timeout(
-                "http://127.0.0.1:1",
+            let c = AsyncHttpLlamaServerClient::with_timeout("http://127.0.0.1:1",
                 Duration::from_millis(50),
             )
             .expect("client should build");
@@ -681,8 +668,7 @@ mod http_client_async {
 
         #[tokio::test]
         async fn complete_against_unreachable_host_returns_err() {
-            let c = AsyncHttpLlamaServerClient::with_timeout(
-                "http://127.0.0.1:1",
+            let c = AsyncHttpLlamaServerClient::with_timeout("http://127.0.0.1:1",
                 Duration::from_millis(50),
             )
             .expect("client should build");

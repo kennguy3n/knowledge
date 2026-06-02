@@ -65,15 +65,13 @@ pub trait KemBackend {
     fn keypair(&self) -> Result<(KemPublicKey, KemSecretKey), CryptoError>;
 
     /// Encapsulate a fresh shared secret to `recipient_pk`.
-    fn encap(
-        &self,
+    fn encap(&self,
         recipient_pk: &KemPublicKey,
     ) -> Result<(KemSharedSecret, KemCiphertext), CryptoError>;
 
     /// Decapsulate `ciphertext` with `recipient_sk` and recover the
     /// shared secret.
-    fn decap(
-        &self,
+    fn decap(&self,
         recipient_sk: &KemSecretKey,
         ciphertext: &KemCiphertext,
     ) -> Result<KemSharedSecret, CryptoError>;
@@ -103,8 +101,7 @@ impl KemBackend for MlKem768Backend {
         Ok((pk, sk))
     }
 
-    fn encap(
-        &self,
+    fn encap(&self,
         recipient_pk: &KemPublicKey,
     ) -> Result<(KemSharedSecret, KemCiphertext), CryptoError> {
         use ml_kem::kem::Encapsulate;
@@ -127,8 +124,7 @@ impl KemBackend for MlKem768Backend {
         Ok((ss_out, ct_out))
     }
 
-    fn decap(
-        &self,
+    fn decap(&self,
         recipient_sk: &KemSecretKey,
         ciphertext: &KemCiphertext,
     ) -> Result<KemSharedSecret, CryptoError> {
@@ -187,8 +183,7 @@ impl KemBackend for StubKemBackend {
         Ok((pk, sk))
     }
 
-    fn encap(
-        &self,
+    fn encap(&self,
         recipient_pk: &KemPublicKey,
     ) -> Result<(KemSharedSecret, KemCiphertext), CryptoError> {
         // See keypair() above for why this import targets `rand_core`
@@ -201,8 +196,7 @@ impl KemBackend for StubKemBackend {
         Ok((ss, ct))
     }
 
-    fn decap(
-        &self,
+    fn decap(&self,
         recipient_sk: &KemSecretKey,
         ciphertext: &KemCiphertext,
     ) -> Result<KemSharedSecret, CryptoError> {

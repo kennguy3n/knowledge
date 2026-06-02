@@ -525,10 +525,8 @@ mod tests {
     use uuid::Uuid;
 
     fn fixture_bundle() -> ProvenanceBundle {
-        ProvenanceBundle::new(
-            Uuid::nil(),
-            SynthesisActivity::new(
-                "synth-pipeline:elected:device-7",
+        ProvenanceBundle::new(Uuid::nil(),
+            SynthesisActivity::new("synth-pipeline:elected:device-7",
                 "bonsai-1.7b@q1_0_g128",
                 "synth.summary.v1",
                 Uuid::nil(),
@@ -551,8 +549,7 @@ mod tests {
         let bundle = fixture_bundle();
         let signed = signer.sign(bundle).expect("sign");
         assert!(signer.verify(&signed).expect("verify"));
-        assert_eq!(
-            signed.signature.as_bytes().len(),
+        assert_eq!(signed.signature.as_bytes().len(),
             SPHINCS_PLUS_SIGNATURE_LEN
         );
     }
@@ -758,8 +755,7 @@ mod tests {
         let Err(err) = CoVerifier::from_encoded(&encoded) else {
             panic!("expected error from truncated SPHINCS+ verifying key");
         };
-        assert!(
-            matches!(err, CryptoError::ProvenanceSerialisation(_)),
+        assert!(matches!(err, CryptoError::ProvenanceSerialisation(_)),
             "expected ProvenanceSerialisation, got {err:?}"
         );
     }
@@ -771,8 +767,7 @@ mod tests {
         // Re-build the same verifier from per-algorithm parts so
         // callers that reload the two halves independently (e.g. from
         // separate storage shards) can stitch them back together.
-        let from_parts = CoVerifier::from_parts(
-            from_signer.ml_dsa_65.clone(),
+        let from_parts = CoVerifier::from_parts(from_signer.ml_dsa_65.clone(),
             from_signer.sphincs_plus.clone(),
         );
 

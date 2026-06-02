@@ -66,8 +66,7 @@ use crate::op_log::{OpLog, SyncOp, SyncOpKind};
 use crate::{SyncEngine, SyncScopeId};
 
 const SCHEMA_SQL: &str = "
-CREATE TABLE IF NOT EXISTS sync_ops (
-    scope_id BLOB NOT NULL,
+CREATE TABLE IF NOT EXISTS sync_ops (scope_id BLOB NOT NULL,
     replica_id BLOB NOT NULL,
     seq INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
@@ -78,8 +77,7 @@ CREATE TABLE IF NOT EXISTS sync_ops (
 );
 CREATE INDEX IF NOT EXISTS sync_ops_scope_idx ON sync_ops(scope_id);
 
-CREATE TABLE IF NOT EXISTS sync_meta (
-    scope_id BLOB PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS sync_meta (scope_id BLOB PRIMARY KEY,
     replica_id BLOB NOT NULL,
     clock INTEGER NOT NULL,
     compaction_epoch INTEGER NOT NULL
@@ -173,8 +171,7 @@ where
     /// SQLCipher page-encryption key is derived from it via HKDF
     /// context `b"sqlcipher:sync_engine:v1"`. The per-scope AEAD key
     /// is derived via context `b"scope:{scope_uuid}:sync_op:v1"`.
-    pub fn open<P: AsRef<Path>>(
-        path: P,
+    pub fn open<P: AsRef<Path>>(path: P,
         scope: SyncScopeId,
         replica: Uuid,
         master_key: &MasterKey,
@@ -208,8 +205,7 @@ where
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap_or(0);
         if existing_version != 0 && existing_version != SCHEMA_VERSION {
-            return Err(SyncError::Persistence(
-                "schema version mismatch — refusing to open",
+            return Err(SyncError::Persistence("schema version mismatch — refusing to open",
             ));
         }
 
@@ -322,8 +318,7 @@ where
 
     /// Number of ops currently persisted on disk for this scope.
     pub fn persisted_len(&self) -> Result<usize> {
-        let n: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM sync_ops WHERE scope_id = ?1",
+        let n: i64 = self.conn.query_row("SELECT COUNT(*) FROM sync_ops WHERE scope_id = ?1",
             params![self.scope.as_uuid().as_bytes().to_vec()],
             |row| row.get(0),
         )?;
@@ -393,8 +388,7 @@ where
         let scope_bytes = self.scope.as_uuid().as_bytes().to_vec();
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result: Result<()> = (|| {
-            self.conn.execute(
-                "DELETE FROM sync_ops WHERE scope_id = ?1",
+            self.conn.execute("DELETE FROM sync_ops WHERE scope_id = ?1",
                 params![scope_bytes.clone()],
             )?;
             for op in &self.engine.op_log().ops {
@@ -428,8 +422,7 @@ where
         let aad = op_aad(self.scope, op.replica_id, op.seq);
         let ct = encrypt_aead(&self.scope_key, &nonce, &payload, &aad)?;
 
-        self.conn.execute(
-            "INSERT INTO sync_ops
+        self.conn.execute("INSERT INTO sync_ops
               (scope_id, replica_id, seq, created_at, op_kind, nonce, payload)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(scope_id, replica_id, seq) DO UPDATE SET
@@ -462,8 +455,7 @@ where
     /// roll `compaction_epoch` back and let the delta-sync epoch
     /// guard accept stale deltas.
     fn upsert_meta_inner(&self) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO sync_meta (scope_id, replica_id, clock, compaction_epoch)
+        self.conn.execute("INSERT INTO sync_meta (scope_id, replica_id, clock, compaction_epoch)
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(scope_id) DO UPDATE SET
                replica_id = excluded.replica_id,
@@ -492,8 +484,7 @@ where
         // pin `self.conn`.
         let mut raw_rows: Vec<([u8; AEAD_NONCE_LEN], Vec<u8>, Uuid, u64)> = Vec::new();
         {
-            let mut stmt = self.conn.prepare(
-                "SELECT replica_id, seq, nonce, payload FROM sync_ops
+            let mut stmt = self.conn.prepare("SELECT replica_id, seq, nonce, payload FROM sync_ops
                  WHERE scope_id = ?1
                  ORDER BY replica_id ASC, seq ASC",
             )?;
@@ -528,8 +519,7 @@ where
         }
 
         // Restore meta (clock / compaction_epoch) if a row exists.
-        if let Ok((clock, epoch)) = self.conn.query_row(
-            "SELECT clock, compaction_epoch FROM sync_meta WHERE scope_id = ?1",
+        if let Ok((clock, epoch)) = self.conn.query_row("SELECT clock, compaction_epoch FROM sync_meta WHERE scope_id = ?1",
             params![scope_bytes],
             |row| {
                 let clock: i64 = row.get(0)?;
@@ -634,8 +624,7 @@ mod tests {
         for (i, slot) in k.iter_mut().enumerate() {
             // `i` is bounded by `MASTER_KEY_LEN` (32) so masking
             // to a byte never truncates the meaningful bits.
-            #[allow(
-                clippy::cast_possible_truncation,
+            #[allow(clippy::cast_possible_truncation,
                 reason = "deterministic test key seed; i < MASTER_KEY_LEN < 256"
             )]
             let byte = (i & 0xFF) as u8;
@@ -686,8 +675,7 @@ mod tests {
         // `pragma_update("cipher_page_size", ...)` rather than the
         // `SELECT 1` verification. Either error path is acceptable as
         // long as the open *fails*.
-        assert!(
-            matches!(err, SyncError::Persistence(_) | SyncError::Sqlite(_)),
+        assert!(matches!(err, SyncError::Persistence(_) | SyncError::Sqlite(_)),
             "expected open failure with wrong key, got {err:?}",
         );
     }

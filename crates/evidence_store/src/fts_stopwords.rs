@@ -1,4 +1,4 @@
-//! Phase 1.9 — per-script stopword inventory for the FTS5 trigram /
+//!  — per-script stopword inventory for the FTS5 trigram /
 //! bigram recall lanes.
 //!
 //! # Architectural rationale
@@ -512,8 +512,7 @@ mod tests {
             ("STOPWORDS_LO", STOPWORDS_LO),
         ] {
             for entry in list {
-                assert!(
-                    ALL_RECALL_LANE_STOPWORDS.contains(entry),
+                assert!(ALL_RECALL_LANE_STOPWORDS.contains(entry),
                     "{name} entry {entry:?} missing from ALL_RECALL_LANE_STOPWORDS"
                 );
             }
@@ -546,8 +545,7 @@ mod tests {
         // Pin uniqueness so the inventory stays minimal.
         let mut seen = std::collections::BTreeSet::new();
         for sw in ALL_RECALL_LANE_STOPWORDS {
-            assert!(
-                seen.insert(*sw),
+            assert!(seen.insert(*sw),
                 "ALL_RECALL_LANE_STOPWORDS contains duplicate entry {sw:?}"
             );
         }

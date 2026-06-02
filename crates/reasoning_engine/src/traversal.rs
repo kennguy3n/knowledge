@@ -532,8 +532,7 @@ mod tests {
             .with_depth_penalty(0.1);
         let high = s.score(1, &[RelationType::IsA]);
         let low = s.score(1, &[RelationType::PartOf]);
-        let deep = s.score(
-            3,
+        let deep = s.score(3,
             &[RelationType::IsA, RelationType::IsA, RelationType::IsA],
         );
         assert!(high > low);

@@ -97,8 +97,7 @@ impl TraceRecorder {
     }
 
     /// Record one step.
-    pub fn record_step(
-        &mut self,
+    pub fn record_step(&mut self,
         mode: RetrievalMode,
         succeeded: bool,
         elapsed_ms: u64,
@@ -238,8 +237,7 @@ pub struct PatternMatcher;
 
 impl PatternMatcher {
     /// Find the best matching pattern for `class` in `memory`.
-    pub fn best_for<'a>(
-        &self,
+    pub fn best_for<'a>(&self,
         memory: &'a WorkflowMemory,
         class: QueryClass,
     ) -> Option<&'a WorkflowPattern> {

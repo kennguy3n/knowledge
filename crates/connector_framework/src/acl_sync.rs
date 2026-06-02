@@ -72,8 +72,7 @@ pub struct SourcePermission {
 
 impl SourcePermission {
     /// Construct a new source permission.
-    pub fn new(
-        user: SourceUserId,
+    pub fn new(user: SourceUserId,
         document: SourceDocumentId,
         level: SourcePermissionLevel,
     ) -> Self {
@@ -227,8 +226,7 @@ impl<'a> AclSyncEngine<'a> {
     /// The `connector` argument is currently informational — it is
     /// not stored in the resulting tuples but is reserved for
     /// future provenance / audit metadata.
-    pub fn sync(
-        &mut self,
+    pub fn sync(&mut self,
         _connector: ConnectorInstanceId,
         deltas: &[PermissionDelta],
     ) -> Result<AclSyncReport> {
@@ -331,13 +329,11 @@ mod tests {
         PermissionMapping::new(ObjectType::Concept, SubjectType::User)
     }
 
-    fn make_grant(
-        user: &str,
+    fn make_grant(user: &str,
         doc: &str,
         level: SourcePermissionLevel,
     ) -> (SourcePermission, Uuid, Uuid) {
-        (
-            SourcePermission::new(SourceUserId::new(user), SourceDocumentId::new(doc), level),
+        (SourcePermission::new(SourceUserId::new(user), SourceDocumentId::new(doc), level),
             Uuid::new_v4(),
             Uuid::new_v4(),
         )
@@ -346,16 +342,13 @@ mod tests {
     #[test]
     fn level_projects_to_default_relations() {
         let m = fresh_mapping();
-        assert_eq!(
-            m.relation_for(SourcePermissionLevel::Read),
+        assert_eq!(m.relation_for(SourcePermissionLevel::Read),
             Relation::Viewer
         );
-        assert_eq!(
-            m.relation_for(SourcePermissionLevel::Write),
+        assert_eq!(m.relation_for(SourcePermissionLevel::Write),
             Relation::Editor
         );
-        assert_eq!(
-            m.relation_for(SourcePermissionLevel::Admin),
+        assert_eq!(m.relation_for(SourcePermissionLevel::Admin),
             Relation::Admin
         );
     }
@@ -363,8 +356,7 @@ mod tests {
     #[test]
     fn custom_level_relation_overrides_default() {
         let m = fresh_mapping().with_relation_for(SourcePermissionLevel::Write, Relation::Member);
-        assert_eq!(
-            m.relation_for(SourcePermissionLevel::Write),
+        assert_eq!(m.relation_for(SourcePermissionLevel::Write),
             Relation::Member
         );
     }
@@ -378,8 +370,7 @@ mod tests {
         mapping.map_user(grant.source_user_id.clone(), user_uuid);
         let mut engine = AclSyncEngine::new(&mut store, &mapping);
         let report = engine
-            .sync(
-                ConnectorInstanceId::new_v4(),
+            .sync(ConnectorInstanceId::new_v4(),
                 &[PermissionDelta::Grant(grant)],
             )
             .unwrap();
@@ -421,20 +412,16 @@ mod tests {
         let mut engine = AclSyncEngine::new(&mut store, &mapping);
         let cid = ConnectorInstanceId::new_v4();
         engine
-            .sync(
-                cid,
-                &[PermissionDelta::Grant(SourcePermission::new(
-                    user.clone(),
+            .sync(cid,
+                &[PermissionDelta::Grant(SourcePermission::new(user.clone(),
                     doc.clone(),
                     SourcePermissionLevel::Read,
                 ))],
             )
             .unwrap();
         let r = engine
-            .sync(
-                cid,
-                &[PermissionDelta::Grant(SourcePermission::new(
-                    user,
+            .sync(cid,
+                &[PermissionDelta::Grant(SourcePermission::new(user,
                     doc,
                     SourcePermissionLevel::Admin,
                 ))],
@@ -457,18 +444,15 @@ mod tests {
         let mut engine = AclSyncEngine::new(&mut store, &mapping);
         let cid = ConnectorInstanceId::new_v4();
         engine
-            .sync(
-                cid,
-                &[PermissionDelta::Grant(SourcePermission::new(
-                    user.clone(),
+            .sync(cid,
+                &[PermissionDelta::Grant(SourcePermission::new(user.clone(),
                     doc.clone(),
                     SourcePermissionLevel::Write,
                 ))],
             )
             .unwrap();
         let r = engine
-            .sync(
-                cid,
+            .sync(cid,
                 &[PermissionDelta::Revoke(SourceRevocation {
                     source_user_id: user,
                     source_document_id: doc,
@@ -487,10 +471,8 @@ mod tests {
         mapping.map_document(SourceDocumentId::new("d-5"), Uuid::new_v4());
         let mut engine = AclSyncEngine::new(&mut store, &mapping);
         let r = engine
-            .sync(
-                ConnectorInstanceId::new_v4(),
-                &[PermissionDelta::Grant(SourcePermission::new(
-                    SourceUserId::new("ghost"),
+            .sync(ConnectorInstanceId::new_v4(),
+                &[PermissionDelta::Grant(SourcePermission::new(SourceUserId::new("ghost"),
                     SourceDocumentId::new("d-5"),
                     SourcePermissionLevel::Read,
                 ))],
@@ -507,10 +489,8 @@ mod tests {
         mapping.map_user(SourceUserId::new("u-known"), Uuid::new_v4());
         let mut engine = AclSyncEngine::new(&mut store, &mapping);
         let r = engine
-            .sync(
-                ConnectorInstanceId::new_v4(),
-                &[PermissionDelta::Grant(SourcePermission::new(
-                    SourceUserId::new("u-known"),
+            .sync(ConnectorInstanceId::new_v4(),
+                &[PermissionDelta::Grant(SourcePermission::new(SourceUserId::new("u-known"),
                     SourceDocumentId::new("d-ghost"),
                     SourcePermissionLevel::Read,
                 ))],

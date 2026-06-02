@@ -77,7 +77,7 @@ pub struct EvidenceRow {
     /// Unix epoch seconds at ingest.
     pub created_at: i64,
     /// BCP-47 primary language subtag detected on the plaintext
-    /// body at ingest time (schema v13, Phase 1.3). `None` when
+    /// body at ingest time (schema v13, ). `None` when
     /// the row was ingested via the legacy
     /// [`EvidenceStore::ingest`] shim, when the language detector
     /// declined to classify, or when the row predates schema v13.
@@ -197,19 +197,16 @@ impl EvidenceStore {
     /// Per `ARCHITECTURE.md` §2.2, in a real deployment the master key
     /// is itself unwrapped by the hybrid X25519 + ML-KEM-768 KEM at
     /// boot.
-    pub fn open<P: AsRef<Path>>(
-        path: P,
+    pub fn open<P: AsRef<Path>>(path: P,
         master_key: &MasterKey,
         config: EvidenceStoreConfig,
     ) -> Result<Self> {
         if config.ring_buffer_max_bytes == 0 {
-            return Err(EvidenceError::InvalidConfig(
-                "ring_buffer_max_bytes must be > 0",
+            return Err(EvidenceError::InvalidConfig("ring_buffer_max_bytes must be > 0",
             ));
         }
         if config.inline_threshold_bytes == 0 {
-            return Err(EvidenceError::InvalidConfig(
-                "inline_threshold_bytes must be > 0",
+            return Err(EvidenceError::InvalidConfig("inline_threshold_bytes must be > 0",
             ));
         }
 
@@ -270,8 +267,7 @@ impl EvidenceStore {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap_or(0);
         if detected_version > SCHEMA_VERSION {
-            return Err(EvidenceError::Schema(
-                "evidence_store database was written by a newer schema version",
+            return Err(EvidenceError::Schema("evidence_store database was written by a newer schema version",
             ));
         }
 
@@ -347,7 +343,7 @@ impl EvidenceStore {
             store.backfill_legacy_body_wraps()?;
         }
 
-        // v11→v12 (Phase 10 Item 6) — move every existing inline
+        // v11→v12  — move every existing inline
         // approved-document payload ciphertext into the deduplicated
         // `body_store` table, then drop the legacy `nonce` + `payload`
         // columns from `approved_document_payloads`. This is
@@ -375,8 +371,7 @@ impl EvidenceStore {
             .conn
             .pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version != SCHEMA_VERSION {
-            return Err(EvidenceError::Schema(
-                "post-migration user_version does not match SCHEMA_VERSION",
+            return Err(EvidenceError::Schema("post-migration user_version does not match SCHEMA_VERSION",
             ));
         }
         Ok(())
@@ -416,8 +411,7 @@ impl EvidenceStore {
     ///   body lives inline in the evidence row.
     /// * Else the encrypted body lives in the deduplicated `body_store`
     ///   table keyed by its BLAKE3 content hash.
-    pub fn ingest(
-        &mut self,
+    pub fn ingest(&mut self,
         scope_id: ScopeId,
         body: &[u8],
         source_ref: Option<&str>,
@@ -427,7 +421,7 @@ impl EvidenceStore {
     }
 
     /// Same contract as [`Self::ingest`], but additionally stamps
-    /// the row's `language_tag` column (schema v13, Phase 1.3) with
+    /// the row's `language_tag` column (schema v13, ) with
     /// a BCP-47 primary subtag.
     ///
     /// The substrate's ingest path runs
@@ -439,16 +433,14 @@ impl EvidenceStore {
     /// detection on every downstream consumer. Noise-class rows go
     /// to the ring buffer and therefore do not retain the language
     /// tag (the ring buffer is plaintext-only, append-and-evict).
-    pub fn ingest_with_language(
-        &mut self,
+    pub fn ingest_with_language(&mut self,
         scope_id: ScopeId,
         body: &[u8],
         source_ref: Option<&str>,
         importance: ImportanceClass,
         language_tag: Option<&str>,
     ) -> Result<IngestResult> {
-        let path = route_storage_with_threshold(
-            body.len(),
+        let path = route_storage_with_threshold(body.len(),
             importance,
             self.config.inline_threshold_bytes,
         );
@@ -476,8 +468,7 @@ impl EvidenceStore {
         }
     }
 
-    fn ingest_inline(
-        &mut self,
+    fn ingest_inline(&mut self,
         scope_id: ScopeId,
         body: &[u8],
         source_ref: Option<&str>,
@@ -495,8 +486,7 @@ impl EvidenceStore {
         let path_tag = StoragePath::Inline as i64;
 
         let tx = self.conn.transaction()?;
-        tx.execute(
-            "INSERT INTO evidence
+        tx.execute("INSERT INTO evidence
              (id, scope_id, content_hash, body, body_ref, nonce,
               source_ref, acl_pointer, importance, storage_path,
               created_at, language_tag)
@@ -515,8 +505,7 @@ impl EvidenceStore {
             ],
         )?;
         Self::index_fts(&tx, evidence_id, scope_id, body)?;
-        Self::index_embedding(
-            &tx,
+        Self::index_embedding(&tx,
             evidence_id,
             body,
             self.embedding_model.as_deref(),
@@ -532,8 +521,7 @@ impl EvidenceStore {
         })
     }
 
-    fn ingest_body_table(
-        &mut self,
+    fn ingest_body_table(&mut self,
         scope_id: ScopeId,
         body: &[u8],
         source_ref: Option<&str>,
@@ -552,16 +540,14 @@ impl EvidenceStore {
         let dedup_donor: Option<(Vec<u8>, Vec<u8>, AeadKey)> = {
             let existing_wrap: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = self
                 .conn
-                .query_row(
-                    "SELECT w.wrapped_cek, w.nonce, w.scope_id \
+                .query_row("SELECT w.wrapped_cek, w.nonce, w.scope_id \
                      FROM body_store_key_wraps w \
                      WHERE w.content_hash = ?1 \
                        AND w.scope_id != ?2 \
                      LIMIT 1",
                     params![hash.as_slice(), scope_id.as_uuid().as_bytes().as_slice(),],
                     |row| {
-                        Ok((
-                            row.get::<_, Vec<u8>>(0)?,
+                        Ok((row.get::<_, Vec<u8>>(0)?,
                             row.get::<_, Vec<u8>>(1)?,
                             row.get::<_, Vec<u8>>(2)?,
                         ))
@@ -581,24 +567,21 @@ impl EvidenceStore {
         let tx = self.conn.transaction()?;
         // Dedup index lookup.
         let existing: Option<i64> = tx
-            .query_row(
-                "SELECT ref_count FROM body_store WHERE content_hash = ?1",
+            .query_row("SELECT ref_count FROM body_store WHERE content_hash = ?1",
                 params![hash.as_slice()],
                 |row| row.get::<_, i64>(0),
             )
             .optional()?;
 
         if existing.is_some() {
-            tx.execute(
-                "UPDATE body_store SET ref_count = ref_count + 1 WHERE content_hash = ?1",
+            tx.execute("UPDATE body_store SET ref_count = ref_count + 1 WHERE content_hash = ?1",
                 params![hash.as_slice()],
             )?;
             // Dedup hit — create a CEK wrap for this scope if one
             // does not already exist (INSERT OR IGNORE makes
             // same-scope re-ingest idempotent).
             let already_has_wrap: bool = tx
-                .query_row(
-                    "SELECT 1 FROM body_store_key_wraps \
+                .query_row("SELECT 1 FROM body_store_key_wraps \
                      WHERE content_hash = ?1 AND scope_id = ?2",
                     params![hash.as_slice(), scope_id.as_uuid().as_bytes().as_slice(),],
                     |_| Ok(()),
@@ -610,8 +593,7 @@ impl EvidenceStore {
                     let cek = unwrap_cek(donor_key, donor_wrapped, donor_nonce, &hash)?;
                     let wrap_nonce = random_nonce();
                     let wrapped = wrap_cek(&scope_key, &cek, &wrap_nonce, &hash)?;
-                    tx.execute(
-                        "INSERT OR IGNORE INTO body_store_key_wraps \
+                    tx.execute("INSERT OR IGNORE INTO body_store_key_wraps \
                          (content_hash, scope_id, wrapped_cek, nonce) \
                          VALUES (?1, ?2, ?3, ?4)",
                         params![
@@ -627,8 +609,7 @@ impl EvidenceStore {
                     // was forgotten). The ciphertext is unrecoverable,
                     // so delete the stale row and fall through to the
                     // new-body path below.
-                    tx.execute(
-                        "DELETE FROM body_store WHERE content_hash = ?1",
+                    tx.execute("DELETE FROM body_store WHERE content_hash = ?1",
                         params![hash.as_slice()],
                     )?;
                     // Re-encrypt from scratch.
@@ -636,15 +617,13 @@ impl EvidenceStore {
                     let body_nonce = random_nonce();
                     let aad = body_table_aad(&hash);
                     let ciphertext = encrypt_aead(&cek, &body_nonce, body, &aad)?;
-                    tx.execute(
-                        "INSERT INTO body_store (content_hash, body, nonce, ref_count) \
+                    tx.execute("INSERT INTO body_store (content_hash, body, nonce, ref_count) \
                          VALUES (?1, ?2, ?3, 1)",
                         params![hash.as_slice(), ciphertext, body_nonce.as_slice()],
                     )?;
                     let wrap_nonce = random_nonce();
                     let wrapped = wrap_cek(&scope_key, &cek, &wrap_nonce, &hash)?;
-                    tx.execute(
-                        "INSERT INTO body_store_key_wraps \
+                    tx.execute("INSERT INTO body_store_key_wraps \
                          (content_hash, scope_id, wrapped_cek, nonce) \
                          VALUES (?1, ?2, ?3, ?4)",
                         params![
@@ -664,15 +643,13 @@ impl EvidenceStore {
             let body_nonce = random_nonce();
             let aad = body_table_aad(&hash);
             let ciphertext = encrypt_aead(&cek, &body_nonce, body, &aad)?;
-            tx.execute(
-                "INSERT INTO body_store (content_hash, body, nonce, ref_count)
+            tx.execute("INSERT INTO body_store (content_hash, body, nonce, ref_count)
                  VALUES (?1, ?2, ?3, 1)",
                 params![hash.as_slice(), ciphertext, body_nonce.as_slice()],
             )?;
             let wrap_nonce = random_nonce();
             let wrapped = wrap_cek(&scope_key, &cek, &wrap_nonce, &hash)?;
-            tx.execute(
-                "INSERT INTO body_store_key_wraps \
+            tx.execute("INSERT INTO body_store_key_wraps \
                  (content_hash, scope_id, wrapped_cek, nonce) \
                  VALUES (?1, ?2, ?3, ?4)",
                 params![
@@ -686,8 +663,7 @@ impl EvidenceStore {
 
         let now = Utc::now().timestamp();
         let path_tag = StoragePath::BodyTable as i64;
-        tx.execute(
-            "INSERT INTO evidence
+        tx.execute("INSERT INTO evidence
              (id, scope_id, content_hash, body, body_ref, nonce,
               source_ref, acl_pointer, importance, storage_path,
               created_at, language_tag)
@@ -705,8 +681,7 @@ impl EvidenceStore {
             ],
         )?;
         Self::index_fts(&tx, evidence_id, scope_id, body)?;
-        Self::index_embedding_or_copy_dedup(
-            &tx,
+        Self::index_embedding_or_copy_dedup(&tx,
             evidence_id,
             &hash,
             body,
@@ -758,8 +733,7 @@ impl EvidenceStore {
     /// part of the same architectural invariant — the source of
     /// truth (`evidence_fts`) is always consistent with the
     /// additive lanes whenever every write transaction commits.
-    fn index_fts(
-        tx: &rusqlite::Transaction<'_>,
+    fn index_fts(tx: &rusqlite::Transaction<'_>,
         evidence_id: EvidenceId,
         scope_id: ScopeId,
         body: &[u8],
@@ -779,11 +753,10 @@ impl EvidenceStore {
         // Cyrillic, Greek, Arabic, Hangul, Devanagari) including any
         // Latin terms embedded inside an otherwise-CJK document, so
         // this is the universal lexical index.
-        tx.execute(
-            "INSERT INTO evidence_fts (content, evidence_id, scope_id) VALUES (?1, ?2, ?3)",
+        tx.execute("INSERT INTO evidence_fts (content, evidence_id, scope_id) VALUES (?1, ?2, ?3)",
             params![text, evidence_id_bytes, scope_id_bytes],
         )?;
-        // Phase 1.2 / schema v14: rows whose body contains any CJK
+        //  / schema v14: rows whose body contains any CJK
         // Han / Hiragana / Katakana / Thai codepoint *additionally*
         // go into `evidence_fts_cjk` (trigram). `unicode61` emits
         // zero tokens for those codepoints, so without this branch
@@ -794,7 +767,7 @@ impl EvidenceStore {
         // table. See `crate::script::contains_cjk_or_thai` for the
         // codepoint membership rationale.
         if crate::script::contains_cjk_or_thai(text) {
-            // Phase 1.9 / schema v16: strip recall-lane stopwords
+            //  / schema v16: strip recall-lane stopwords
             // (Japanese / Chinese / Thai / Tibetan / Khmer /
             // Myanmar / Lao function words) BEFORE the trigram and
             // bigram lanes index the body. Stripping replaces each
@@ -818,21 +791,19 @@ impl EvidenceStore {
             // produce the bridging trigram that the unstripped
             // side still expects). See [`crate::fts_stopwords`]
             // for the symmetric-stripping rationale.
-            // Counted variant feeds the Phase 1.10 index-write
+            // Counted variant feeds the  index-write
             // stopword strip telemetry — `strip_count` is the
             // number of stopword instances replaced.
             let (stripped, strip_count) =
                 crate::fts_stopwords::strip_recall_lane_stopwords_counted(text);
-            crate::fts_telemetry::record_stopwords_stripped(
-                crate::fts_telemetry::StripSite::IndexWrite,
+            crate::fts_telemetry::record_stopwords_stripped(crate::fts_telemetry::StripSite::IndexWrite,
                 strip_count,
             );
-            tx.execute(
-                "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
+            tx.execute("INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
                  VALUES (?1, ?2, ?3)",
                 params![stripped.as_ref(), evidence_id_bytes, scope_id_bytes],
             )?;
-            // Phase 1.2.1 / schema v15: rows that route to
+            //  / schema v15: rows that route to
             // `evidence_fts_cjk` *additionally* go into
             // `evidence_fts_bigram`, which stores the
             // whitespace-separated overlapping 2-codepoint
@@ -869,8 +840,7 @@ impl EvidenceStore {
             // query whenever it would be produced by the body.
             let bigrams = crate::bigram::compute_cjk_bigrams(stripped.as_ref());
             if !bigrams.is_empty() {
-                tx.execute(
-                    "INSERT INTO evidence_fts_bigram (content, evidence_id, scope_id) \
+                tx.execute("INSERT INTO evidence_fts_bigram (content, evidence_id, scope_id) \
                      VALUES (?1, ?2, ?3)",
                     params![bigrams, evidence_id_bytes, scope_id_bytes],
                 )?;
@@ -891,8 +861,7 @@ impl EvidenceStore {
     /// otherwise abort the surrounding `ingest_*` transaction and
     /// take down the evidence row itself, which has no functional
     /// dependency on the cache.
-    fn index_embedding(
-        tx: &rusqlite::Transaction<'_>,
+    fn index_embedding(tx: &rusqlite::Transaction<'_>,
         evidence_id: EvidenceId,
         body: &[u8],
         model: Option<&dyn EmbeddingModel>,
@@ -906,7 +875,7 @@ impl EvidenceStore {
         if text.is_empty() {
             return;
         }
-        // Phase 1.12 pre-embedding routing gate.  A body
+        //  pre-embedding routing gate.  A body
         // classified as noise-only (pure punctuation / emoji /
         // digits / whitespace) is still indexed via FTS5 by the
         // caller — we just skip writing a vector row for it.
@@ -926,8 +895,7 @@ impl EvidenceStore {
         // see the adapter-health signal alongside the lane invocations.
         let vec = match model.embed(text) {
             Ok(v) => {
-                crate::vector_telemetry::record_embedding_computed(
-                    crate::vector_telemetry::EmbedSite::IndexWrite,
+                crate::vector_telemetry::record_embedding_computed(crate::vector_telemetry::EmbedSite::IndexWrite,
                 );
                 v
             }
@@ -948,8 +916,7 @@ impl EvidenceStore {
         // with `RUST_LOG=evidence_store=debug` can spot a degraded
         // cache (out-of-disk, schema drift, SQLite I/O hiccup)
         // instead of having the failure stay completely invisible.
-        if let Err(err) = tx.execute(
-            "INSERT OR REPLACE INTO evidence_embeddings
+        if let Err(err) = tx.execute("INSERT OR REPLACE INTO evidence_embeddings
                  (evidence_id, embedding, model_tag, created_at)
              VALUES (?1, ?2, ?3, ?4)",
             params![
@@ -959,8 +926,7 @@ impl EvidenceStore {
                 created_at,
             ],
         ) {
-            tracing::debug!(
-                evidence_id = %evidence_id.as_uuid(),
+            tracing::debug!(evidence_id = %evidence_id.as_uuid(),
                 model_tag,
                 error = %err,
                 "evidence_embeddings INSERT swallowed; the row is still recoverable via FTS + the retriever re-embed fallback",
@@ -984,8 +950,7 @@ impl EvidenceStore {
     ///
     /// Like the underlying helper, the cache INSERT is best-effort
     /// and never fails the surrounding ingest transaction.
-    fn index_embedding_or_copy_dedup(
-        tx: &rusqlite::Transaction<'_>,
+    fn index_embedding_or_copy_dedup(tx: &rusqlite::Transaction<'_>,
         evidence_id: EvidenceId,
         hash: &ContentHash,
         body: &[u8],
@@ -1003,8 +968,7 @@ impl EvidenceStore {
         // copy a stale vector that the retriever would have rejected
         // on dimension mismatch.
         let copied: Option<Vec<u8>> = tx
-            .query_row(
-                "SELECT ee.embedding
+            .query_row("SELECT ee.embedding
                  FROM evidence_embeddings ee
                  JOIN evidence e ON e.id = ee.evidence_id
                  WHERE e.content_hash = ?1 AND ee.model_tag = ?2
@@ -1026,8 +990,7 @@ impl EvidenceStore {
             // the cache row is non-load-bearing data so an INSERT
             // failure must not abort the surrounding transaction,
             // but it should at least show up under `RUST_LOG=debug`.
-            if let Err(err) = tx.execute(
-                "INSERT OR REPLACE INTO evidence_embeddings
+            if let Err(err) = tx.execute("INSERT OR REPLACE INTO evidence_embeddings
                      (evidence_id, embedding, model_tag, created_at)
                  VALUES (?1, ?2, ?3, ?4)",
                 params![
@@ -1037,8 +1000,7 @@ impl EvidenceStore {
                     created_at,
                 ],
             ) {
-                tracing::debug!(
-                    evidence_id = %evidence_id.as_uuid(),
+                tracing::debug!(evidence_id = %evidence_id.as_uuid(),
                     model_tag,
                     error = %err,
                     "evidence_embeddings dedup-copy INSERT swallowed; the row is still recoverable via FTS + the retriever re-embed fallback",
@@ -1054,8 +1016,7 @@ impl EvidenceStore {
 
     /// Read the plaintext body of an evidence row.
     pub fn read_body(&self, evidence_id: EvidenceId) -> Result<Vec<u8>> {
-        let row: Option<(
-            Vec<u8>,
+        let row: Option<(Vec<u8>,
             Vec<u8>,
             Option<Vec<u8>>,
             Option<Vec<u8>>,
@@ -1063,14 +1024,12 @@ impl EvidenceStore {
             i64,
         )> = self
             .conn
-            .query_row(
-                "SELECT scope_id, content_hash, body, body_ref, COALESCE(nonce, X''),
+            .query_row("SELECT scope_id, content_hash, body, body_ref, COALESCE(nonce, X''),
                             storage_path
                      FROM evidence WHERE id = ?1",
                 params![evidence_id.as_uuid().as_bytes().as_slice()],
                 |row| {
-                    Ok((
-                        row.get::<_, Vec<u8>>(0)?,
+                    Ok((row.get::<_, Vec<u8>>(0)?,
                         row.get::<_, Vec<u8>>(1)?,
                         row.get::<_, Option<Vec<u8>>>(2)?,
                         row.get::<_, Option<Vec<u8>>>(3)?,
@@ -1110,8 +1069,7 @@ impl EvidenceStore {
                     body_ref.ok_or(EvidenceError::Schema("body-table row missing body_ref"))?;
                 let (ct, body_nonce_bytes): (Vec<u8>, Vec<u8>) = self
                     .conn
-                    .query_row(
-                        "SELECT body, nonce FROM body_store WHERE content_hash = ?1",
+                    .query_row("SELECT body, nonce FROM body_store WHERE content_hash = ?1",
                         params![body_ref.as_slice()],
                         |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?)),
                     )
@@ -1130,8 +1088,7 @@ impl EvidenceStore {
                 let scope_key = self.scope_key(scope_id)?;
                 let (wrapped_cek, wrap_nonce_bytes): (Vec<u8>, Vec<u8>) = self
                     .conn
-                    .query_row(
-                        "SELECT wrapped_cek, nonce FROM body_store_key_wraps \
+                    .query_row("SELECT wrapped_cek, nonce FROM body_store_key_wraps \
                          WHERE content_hash = ?1 AND scope_id = ?2",
                         params![
                             body_ref.as_slice(),
@@ -1143,8 +1100,7 @@ impl EvidenceStore {
                         rusqlite::Error::QueryReturnedNoRows => EvidenceError::DanglingBodyRef,
                         other => EvidenceError::Sqlite(other),
                     })?;
-                let cek = unwrap_cek(
-                    &scope_key,
+                let cek = unwrap_cek(&scope_key,
                     &wrapped_cek,
                     &wrap_nonce_bytes,
                     &content_hash_arr,
@@ -1153,8 +1109,7 @@ impl EvidenceStore {
                 let pt = decrypt_aead(&cek, &body_nonce, &ct, &aad)?;
                 Ok(pt)
             }
-            _ => Err(EvidenceError::Schema(
-                "evidence row has unknown storage_path tag",
+            _ => Err(EvidenceError::Schema("evidence row has unknown storage_path tag",
             )),
         }
     }
@@ -1163,14 +1118,12 @@ impl EvidenceStore {
     pub fn get(&self, evidence_id: EvidenceId) -> Result<Option<EvidenceRow>> {
         let row = self
             .conn
-            .query_row(
-                "SELECT scope_id, content_hash, source_ref, acl_pointer, importance,
+            .query_row("SELECT scope_id, content_hash, source_ref, acl_pointer, importance,
                         storage_path, created_at, language_tag
                  FROM evidence WHERE id = ?1",
                 params![evidence_id.as_uuid().as_bytes().as_slice()],
                 |r| {
-                    Ok((
-                        r.get::<_, Vec<u8>>(0)?,
+                    Ok((r.get::<_, Vec<u8>>(0)?,
                         r.get::<_, Vec<u8>>(1)?,
                         r.get::<_, Option<String>>(2)?,
                         r.get::<_, Option<String>>(3)?,
@@ -1183,8 +1136,7 @@ impl EvidenceStore {
             )
             .optional()?;
 
-        let Some((
-            scope_bytes,
+        let Some((scope_bytes,
             hash_bytes,
             source_ref,
             acl_pointer,
@@ -1204,15 +1156,13 @@ impl EvidenceStore {
         let mut content_hash_arr = [0u8; 32];
         content_hash_arr.copy_from_slice(&hash_bytes);
 
-        let importance = ImportanceClass::from_tag(imp_tag).ok_or(EvidenceError::Schema(
-            "evidence row has unknown importance tag",
+        let importance = ImportanceClass::from_tag(imp_tag).ok_or(EvidenceError::Schema("evidence row has unknown importance tag",
         ))?;
         let storage_path = match path_tag {
             t if t == StoragePath::Inline as i64 => StoragePath::Inline,
             t if t == StoragePath::BodyTable as i64 => StoragePath::BodyTable,
             _ => {
-                return Err(EvidenceError::Schema(
-                    "evidence row has unknown storage_path tag",
+                return Err(EvidenceError::Schema("evidence row has unknown storage_path tag",
                 ))
             }
         };
@@ -1240,19 +1190,16 @@ impl EvidenceStore {
     /// returned ids through [`Self::read_body`] when they need the
     /// plaintext payloads — the synthesis pipeline uses this to build
     /// SLM prompts from a scope's recent evidence window.
-    pub fn recent_evidence_ids_for_scope(
-        &self,
+    pub fn recent_evidence_ids_for_scope(&self,
         scope_id: ScopeId,
         limit: usize,
     ) -> Result<Vec<EvidenceId>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id FROM evidence
+        let mut stmt = self.conn.prepare("SELECT id FROM evidence
              WHERE scope_id = ?1
              ORDER BY created_at DESC, id DESC
              LIMIT ?2",
         )?;
-        let rows = stmt.query_map(
-            params![
+        let rows = stmt.query_map(params![
                 scope_id.as_uuid().as_bytes().as_slice(),
                 clamp_limit_to_sqlite(limit),
             ],
@@ -1271,18 +1218,18 @@ impl EvidenceStore {
     /// pre-process per FTS5's syntax (e.g. quote phrases). The result
     /// is the matching evidence ids ordered by FTS5 rank.
     ///
-    /// As of schema v15 (Phase 1.2.1) the search fans out across
+    /// As of schema v15 the search fans out across
     /// **three** lexical indexes and de-duplicates on `evidence_id`,
     /// taking the best (smallest, since FTS5 rank is negative-and-
     /// smaller-is-better) of whichever ranks the row appears under:
     ///
     /// * `evidence_fts` (unicode61, schema v1) — universal lane for
     ///   whitespace / punctuation-segmented scripts.
-    /// * `evidence_fts_cjk` (trigram, schema v14, Phase 1.2) — CJK /
+    /// * `evidence_fts_cjk` (trigram, schema v14, ) — CJK /
     ///   Thai substring lane for queries of ≥ 3 codepoints (FTS5's
     ///   built-in trigram tokeniser cannot serve shorter queries).
     /// * `evidence_fts_bigram` (precomputed bigrams under
-    ///   `unicode61`, schema v15, Phase 1.2.1) — CJK / Thai recall
+    ///   `unicode61`, schema v15, ) — CJK / Thai recall
     ///   lane for **2-codepoint** queries like `天気` (Japanese
     ///   "weather") that the trigram lane cannot serve. Bigrams are
     ///   computed at write time over the CJK / Thai portion of the
@@ -1335,12 +1282,12 @@ impl EvidenceStore {
     ///   is **purely additive recall** on the same contract as the
     ///   trigram branch. Queries with fewer than 2 CJK / Thai
     ///   codepoints round-trip as empty bigram matches, so adding
-    ///   the branch never changes the result set of a pre-Phase-1.2.1
+    ///   the branch never changes the result set of a earlier
     ///   pure-Latin query.
     ///
     /// Concretely, a 2-codepoint CJK query like `天気` — which the
     /// v14 trigram lane could not serve — now returns matches via
-    /// the bigram lane (Phase 1.2.1 closes the documented Phase 1.2
+    /// the bigram lane ( closes the documented 
     /// floor). A mixed query like `"to OR 良い天気"` still returns
     /// the `unicode61` hit on `to` even though the trigram branch
     /// rejects the 2-char `to` token, AND additionally picks up CJK
@@ -1355,8 +1302,7 @@ impl EvidenceStore {
     /// `search_fts` contract is unchanged.
     ///
     /// [trigram-doc]: <https://www.sqlite.org/fts5.html#the_trigram_tokenizer>
-    pub fn search_fts(
-        &self,
+    pub fn search_fts(&self,
         scope_id: ScopeId,
         query: &str,
         limit: usize,
@@ -1367,7 +1313,7 @@ impl EvidenceStore {
 
     /// Test-only variant of [`Self::search_fts`] that exposes the
     /// post-lane-weighting BM25 rank for every returned row, so
-    /// Phase 1.8 integration tests can pin the cross-lane
+    ///  integration tests can pin the cross-lane
     /// precision-vs-recall hierarchy at the rank-arithmetic level
     /// (and not just at the recall-preservation level that
     /// [`Self::search_fts`] would surface).
@@ -1379,7 +1325,7 @@ impl EvidenceStore {
     /// [`crate::fts_weights::EVIDENCE_FTS_BIGRAM_LANE_WEIGHT`].
     /// This is the integration-test counterpart to the unit-test
     /// pinning in [`crate::fts_weights::tests`] and the SQL-
-    /// shape pinning in [`phase_1_8_lane_sql_tests`].
+    /// shape pinning in [`lane_sql_tests`].
     ///
     /// Only available with the `test-support` feature (or in unit
     /// tests of this crate). The public surface remains the
@@ -1389,8 +1335,7 @@ impl EvidenceStore {
     /// in the public API would leak the lane-weight constants as
     /// a stable interface, which they are not.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn search_fts_with_weighted_ranks_for_tests(
-        &self,
+    pub fn search_fts_with_weighted_ranks_for_tests(&self,
         scope_id: ScopeId,
         query: &str,
         limit: usize,
@@ -1417,8 +1362,7 @@ impl EvidenceStore {
         let now = Utc::now().timestamp();
 
         let tx = self.conn.transaction()?;
-        tx.execute(
-            "INSERT INTO ring_buffer (scope_id, body, nonce, payload_size, created_at)
+        tx.execute("INSERT INTO ring_buffer (scope_id, body, nonce, payload_size, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 scope_id.as_uuid().as_bytes().as_slice(),
@@ -1435,8 +1379,7 @@ impl EvidenceStore {
         // saturating to i64::MAX expresses.
         let cap = i64::try_from(self.config.ring_buffer_max_bytes).unwrap_or(i64::MAX);
         loop {
-            let total: i64 = tx.query_row(
-                "SELECT COALESCE(SUM(payload_size), 0) FROM ring_buffer",
+            let total: i64 = tx.query_row("SELECT COALESCE(SUM(payload_size), 0) FROM ring_buffer",
                 [],
                 |r| r.get(0),
             )?;
@@ -1445,9 +1388,7 @@ impl EvidenceStore {
             }
             // Delete the oldest row by created_at, then by id as a
             // tiebreaker.
-            let rows_changed = tx.execute(
-                "DELETE FROM ring_buffer WHERE id = (
-                     SELECT id FROM ring_buffer ORDER BY created_at ASC, id ASC LIMIT 1
+            let rows_changed = tx.execute("DELETE FROM ring_buffer WHERE id = (SELECT id FROM ring_buffer ORDER BY created_at ASC, id ASC LIMIT 1
                  )",
                 [],
             )?;
@@ -1466,15 +1407,13 @@ impl EvidenceStore {
     /// newest. Bodies are decrypted on read.
     pub fn ring_buffer_read_window(&mut self, scope_id: ScopeId) -> Result<Vec<RingBufferEntry>> {
         let key = self.scope_key(scope_id)?;
-        let mut stmt = self.conn.prepare(
-            "SELECT id, body, nonce, created_at
+        let mut stmt = self.conn.prepare("SELECT id, body, nonce, created_at
              FROM ring_buffer WHERE scope_id = ?1
              ORDER BY created_at ASC, id ASC",
         )?;
         let aad = ring_buffer_aad(scope_id);
         let rows = stmt.query_map(params![scope_id.as_uuid().as_bytes().as_slice()], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
+            Ok((row.get::<_, i64>(0)?,
                 row.get::<_, Vec<u8>>(1)?,
                 row.get::<_, Vec<u8>>(2)?,
                 row.get::<_, i64>(3)?,
@@ -1503,8 +1442,7 @@ impl EvidenceStore {
     /// Return the current ring-buffer size in bytes (sum of encrypted
     /// payloads + nonces across all scopes).
     pub fn ring_buffer_current_size(&self) -> Result<usize> {
-        let total: i64 = self.conn.query_row(
-            "SELECT COALESCE(SUM(payload_size), 0) FROM ring_buffer",
+        let total: i64 = self.conn.query_row("SELECT COALESCE(SUM(payload_size), 0) FROM ring_buffer",
             [],
             |r| r.get(0),
         )?;
@@ -1546,8 +1484,7 @@ impl EvidenceStore {
     pub fn body_ref_count(&self, hash: &ContentHash) -> Result<Option<i64>> {
         let val: Option<i64> = self
             .conn
-            .query_row(
-                "SELECT ref_count FROM body_store WHERE content_hash = ?1",
+            .query_row("SELECT ref_count FROM body_store WHERE content_hash = ?1",
                 params![hash.as_slice()],
                 |r| r.get(0),
             )
@@ -1591,8 +1528,7 @@ impl EvidenceStore {
     /// Like its sibling, this is idempotent — re-recording an
     /// existing tombstone is a no-op via `INSERT OR IGNORE`.
     pub fn record_forgotten_scope_at(&mut self, scope_id: ScopeId, at: i64) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR IGNORE INTO forgotten_scopes (scope_id, forgotten_at) VALUES (?1, ?2)",
+        self.conn.execute("INSERT OR IGNORE INTO forgotten_scopes (scope_id, forgotten_at) VALUES (?1, ?2)",
             params![scope_id.as_uuid().as_bytes().as_slice(), at],
         )?;
         Ok(())
@@ -1650,8 +1586,7 @@ impl EvidenceStore {
     /// Idempotent via `INSERT OR IGNORE` on the `(scope_id,
     /// epoch_id)` primary key — re-recording an existing tombstone
     /// is a no-op rather than an error.
-    pub fn record_epoch_tombstone(
-        &mut self,
+    pub fn record_epoch_tombstone(&mut self,
         scope_id: ScopeId,
         epoch_id: u64,
         at: i64,
@@ -1667,8 +1602,7 @@ impl EvidenceStore {
         let epoch_signed = i64::try_from(epoch_id).map_err(|_| {
             EvidenceError::Schema("epoch_id overflows i64 — refusing to persist tombstone")
         })?;
-        self.conn.execute(
-            "INSERT OR IGNORE INTO epoch_tombstones (scope_id, epoch_id, forgotten_at) \
+        self.conn.execute("INSERT OR IGNORE INTO epoch_tombstones (scope_id, epoch_id, forgotten_at) \
              VALUES (?1, ?2, ?3)",
             params![scope_id.as_uuid().as_bytes().as_slice(), epoch_signed, at],
         )?;
@@ -1687,8 +1621,7 @@ impl EvidenceStore {
             .conn
             .prepare("SELECT scope_id, epoch_id, forgotten_at FROM epoch_tombstones")?;
         let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, Vec<u8>>(0)?,
+            Ok((row.get::<_, Vec<u8>>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, i64>(2)?,
             ))
@@ -1756,8 +1689,7 @@ impl EvidenceStore {
         let aad = scope_dek_aad(scope_id);
         let wrapped = encrypt_aead(&wrap_key, &nonce, dek.as_slice(), &aad)?;
         let now = Utc::now().timestamp();
-        let rows_changed = self.conn.execute(
-            "INSERT OR IGNORE INTO scope_deks (scope_id, wrapped_dek, nonce, created_at) \
+        let rows_changed = self.conn.execute("INSERT OR IGNORE INTO scope_deks (scope_id, wrapped_dek, nonce, created_at) \
              VALUES (?1, ?2, ?3, ?4)",
             params![
                 scope_id.as_uuid().as_bytes().as_slice(),
@@ -1786,8 +1718,7 @@ impl EvidenceStore {
             .conn
             .prepare("SELECT scope_id, wrapped_dek, nonce FROM scope_deks")?;
         let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, Vec<u8>>(0)?,
+            Ok((row.get::<_, Vec<u8>>(0)?,
                 row.get::<_, Vec<u8>>(1)?,
                 row.get::<_, Vec<u8>>(2)?,
             ))
@@ -1798,16 +1729,14 @@ impl EvidenceStore {
             let scope = ScopeId::from_uuid(slice_to_uuid(&scope_bytes)?);
             let aad = scope_dek_aad(scope);
             if nonce_bytes.len() != AEAD_NONCE_LEN {
-                return Err(EvidenceError::Schema(
-                    "scope DEK nonce has wrong length in scope_deks table",
+                return Err(EvidenceError::Schema("scope DEK nonce has wrong length in scope_deks table",
                 ));
             }
             let mut nonce = [0u8; AEAD_NONCE_LEN];
             nonce.copy_from_slice(&nonce_bytes);
             let plain = decrypt_aead(&wrap_key, &nonce, &wrapped, &aad)?;
             if plain.len() != AEAD_KEY_LEN {
-                return Err(EvidenceError::Schema(
-                    "unwrapped scope DEK has wrong length",
+                return Err(EvidenceError::Schema("unwrapped scope DEK has wrong length",
                 ));
             }
             let mut key = [0u8; AEAD_KEY_LEN];
@@ -1834,8 +1763,7 @@ impl EvidenceStore {
     /// called during `open_store` iteration where the cache is
     /// managed separately via [`Self::evict_cached_scope_key`].
     pub fn delete_scope_dek_row(&self, scope_id: ScopeId) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM scope_deks WHERE scope_id = ?1",
+        self.conn.execute("DELETE FROM scope_deks WHERE scope_id = ?1",
             params![scope_id.as_uuid().as_bytes().as_slice()],
         )?;
         Ok(())
@@ -1865,16 +1793,14 @@ impl EvidenceStore {
         let wrap_key = self.dek_wrapping_key()?;
         let db_row: Option<(Vec<u8>, Vec<u8>)> = self
             .conn
-            .query_row(
-                "SELECT wrapped_dek, nonce FROM scope_deks WHERE scope_id = ?1",
+            .query_row("SELECT wrapped_dek, nonce FROM scope_deks WHERE scope_id = ?1",
                 params![scope_id.as_uuid().as_bytes().as_slice()],
                 |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
             )
             .optional()?;
         if let Some((wrapped, nonce_bytes)) = db_row {
             if nonce_bytes.len() != AEAD_NONCE_LEN {
-                return Err(EvidenceError::Schema(
-                    "scope DEK nonce has wrong length in scope_deks table",
+                return Err(EvidenceError::Schema("scope DEK nonce has wrong length in scope_deks table",
                 ));
             }
             let mut nonce = [0u8; AEAD_NONCE_LEN];
@@ -1882,8 +1808,7 @@ impl EvidenceStore {
             let aad = scope_dek_aad(scope_id);
             let plain = decrypt_aead(&wrap_key, &nonce, &wrapped, &aad)?;
             if plain.len() != AEAD_KEY_LEN {
-                return Err(EvidenceError::Schema(
-                    "unwrapped scope DEK has wrong length",
+                return Err(EvidenceError::Schema("unwrapped scope DEK has wrong length",
                 ));
             }
             let mut key = [0u8; AEAD_KEY_LEN];
@@ -1895,8 +1820,7 @@ impl EvidenceStore {
         // 3. Legacy check: if evidence rows exist for this scope
         //    they were encrypted under the HKDF-derived key. Adopt
         //    that key and persist it so future opens find it.
-        let has_evidence: bool = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM evidence WHERE scope_id = ?1)",
+        let has_evidence: bool = self.conn.query_row("SELECT EXISTS(SELECT 1 FROM evidence WHERE scope_id = ?1)",
             params![scope_id.as_uuid().as_bytes().as_slice()],
             |row| row.get(0),
         )?;
@@ -1951,8 +1875,7 @@ impl EvidenceStore {
             // (disk full); the injected `reason` is preserved in the
             // `Option<String>` slot so it surfaces in the rendered
             // error message.
-            return Err(EvidenceError::Sqlite(rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+            return Err(EvidenceError::Sqlite(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
                 Some(reason),
             )));
         }
@@ -1993,7 +1916,7 @@ impl EvidenceStore {
     }
 
     /// Test-only helper that surgically reshapes
-    /// `approved_document_payloads` back to its pre-v12 (Phase 8 /
+    /// `approved_document_payloads` back to its pre-v12 ( /
     /// v10) inline layout and writes a single legacy-shape row.
     ///
     /// The post-bootstrap migration
@@ -2014,8 +1937,7 @@ impl EvidenceStore {
     /// — the legacy table shape is unsupported under v12 and the
     /// next [`Self::open`] will silently re-migrate it.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn write_legacy_approved_doc_payload_for_tests(
-        &self,
+    pub fn write_legacy_approved_doc_payload_for_tests(&self,
         scope_id: ScopeId,
         document_id: uuid::Uuid,
         plaintext: &[u8],
@@ -2031,8 +1953,7 @@ impl EvidenceStore {
         // database, and SQLCipher's transactional DDL keeps the
         // reshape atomic. Default expressions keep any existing v12
         // metadata-only rows valid for the duration of the test.
-        self.conn.execute_batch(
-            "ALTER TABLE approved_document_payloads \
+        self.conn.execute_batch("ALTER TABLE approved_document_payloads \
                  ADD COLUMN nonce BLOB NOT NULL DEFAULT x'';\n\
              ALTER TABLE approved_document_payloads \
                  ADD COLUMN payload BLOB NOT NULL DEFAULT x'';",
@@ -2040,8 +1961,7 @@ impl EvidenceStore {
 
         let size_bytes = i64::try_from(plaintext.len()).unwrap_or(i64::MAX);
         let updated_at = chrono::Utc::now().timestamp();
-        self.conn.execute(
-            "INSERT OR REPLACE INTO approved_document_payloads \
+        self.conn.execute("INSERT OR REPLACE INTO approved_document_payloads \
              (scope_id, document_id, content_hash, size_bytes, updated_at, nonce, payload) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
@@ -2076,8 +1996,7 @@ impl EvidenceStore {
     /// callers that need to bundle this write with others under one
     /// transaction must use [`Self::with_transaction`] +
     /// [`Self::save_memory_blob_in_tx`].
-    pub fn save_memory_blob(
-        &self,
+    pub fn save_memory_blob(&self,
         scope_id: ScopeId,
         kind: &str,
         plaintext_json: &[u8],
@@ -2092,8 +2011,7 @@ impl EvidenceStore {
     /// inside an existing `Transaction<'_>` so multiple writes can be
     /// grouped atomically. Identical AEAD framing (scope-bound AAD,
     /// random nonce, `INSERT OR REPLACE`) to the autocommit path.
-    pub fn save_memory_blob_in_tx(
-        &self,
+    pub fn save_memory_blob_in_tx(&self,
         tx: &rusqlite::Transaction<'_>,
         scope_id: ScopeId,
         kind: &str,
@@ -2109,8 +2027,7 @@ impl EvidenceStore {
         aad.extend_from_slice(scope_id.as_uuid().as_bytes());
         let ciphertext = encrypt_aead(&key, &nonce, plaintext_json, &aad)?;
         let now = chrono::Utc::now().timestamp();
-        tx.execute(
-            "INSERT OR REPLACE INTO memory_objects \
+        tx.execute("INSERT OR REPLACE INTO memory_objects \
              (scope_id, kind, nonce, payload, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
@@ -2129,8 +2046,7 @@ impl EvidenceStore {
     pub fn load_memory_blob(&self, scope_id: ScopeId, kind: &str) -> Result<Option<Vec<u8>>> {
         let row: Option<(Vec<u8>, Vec<u8>)> = self
             .conn
-            .query_row(
-                "SELECT nonce, payload FROM memory_objects \
+            .query_row("SELECT nonce, payload FROM memory_objects \
                  WHERE scope_id = ?1 AND kind = ?2",
                 params![scope_id.as_uuid().as_bytes().as_slice(), kind],
                 |row| Ok((row.get(0)?, row.get(1)?)),
@@ -2140,8 +2056,7 @@ impl EvidenceStore {
             return Ok(None);
         };
         if nonce_bytes.len() != AEAD_NONCE_LEN {
-            return Err(EvidenceError::Schema(
-                "memory_objects nonce has wrong length",
+            return Err(EvidenceError::Schema("memory_objects nonce has wrong length",
             ));
         }
         let mut nonce = [0u8; AEAD_NONCE_LEN];
@@ -2159,8 +2074,7 @@ impl EvidenceStore {
 
     /// Delete all memory blobs for `scope_id` (all kinds).
     pub fn delete_memory_blobs_for_scope(&self, scope_id: ScopeId) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM memory_objects WHERE scope_id = ?1",
+        self.conn.execute("DELETE FROM memory_objects WHERE scope_id = ?1",
             params![scope_id.as_uuid().as_bytes().as_slice()],
         )?;
         Ok(())
@@ -2216,10 +2130,9 @@ impl EvidenceStore {
     /// fails to decrypt.
     ///
     /// Upserts: calling this with the same `instance_id` overwrites the
-    /// previous blob (used by `sync_connector` Phase 3 to advance the
+    /// previous blob (used by `sync_connector`  to advance the
     /// stored `SyncState` cursor).
-    pub fn save_connector_instance(
-        &self,
+    pub fn save_connector_instance(&self,
         instance_id: uuid::Uuid,
         scope_id: ScopeId,
         kind_tag: &str,
@@ -2244,8 +2157,7 @@ impl EvidenceStore {
         // connector_instances.scope_id, connector_instances.kind`
         // and bubble up as a structured `rusqlite::Error` instead
         // of silently destroying the existing row.
-        self.conn.execute(
-            "INSERT INTO connector_instances \
+        self.conn.execute("INSERT INTO connector_instances \
              (instance_id, scope_id, kind, nonce, payload, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
              ON CONFLICT(instance_id) DO UPDATE SET \
@@ -2270,8 +2182,7 @@ impl EvidenceStore {
     /// the row does not exist (idempotent — matches the
     /// `remove_connector` contract on the FFI surface).
     pub fn delete_connector_instance(&self, instance_id: uuid::Uuid) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM connector_instances WHERE instance_id = ?1",
+        self.conn.execute("DELETE FROM connector_instances WHERE instance_id = ?1",
             params![instance_id.as_bytes().as_slice()],
         )?;
         Ok(())
@@ -2282,8 +2193,7 @@ impl EvidenceStore {
     /// forgotten scope's connector state from disk. Returns the count
     /// of rows deleted so the caller can log it for diagnostics.
     pub fn delete_connector_instances_for_scope(&self, scope_id: ScopeId) -> Result<usize> {
-        let n = self.conn.execute(
-            "DELETE FROM connector_instances WHERE scope_id = ?1",
+        let n = self.conn.execute("DELETE FROM connector_instances WHERE scope_id = ?1",
             params![scope_id.as_uuid().as_bytes().as_slice()],
         )?;
         Ok(n)
@@ -2296,13 +2206,11 @@ impl EvidenceStore {
     /// `open_store`. Returns `(instance_id, scope_id, kind_tag,
     /// plaintext_json)` tuples in unspecified order.
     pub fn load_connector_instances(&self) -> Result<Vec<(uuid::Uuid, ScopeId, String, Vec<u8>)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT instance_id, scope_id, kind, nonce, payload \
+        let mut stmt = self.conn.prepare("SELECT instance_id, scope_id, kind, nonce, payload \
              FROM connector_instances",
         )?;
         let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, Vec<u8>>(0)?,
+            Ok((row.get::<_, Vec<u8>>(0)?,
                 row.get::<_, Vec<u8>>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, Vec<u8>>(3)?,
@@ -2315,8 +2223,7 @@ impl EvidenceStore {
             let instance_id = match slice_to_uuid(&instance_bytes) {
                 Ok(id) => id,
                 Err(e) => {
-                    tracing::warn!(
-                        instance_bytes_len = instance_bytes.len(),
+                    tracing::warn!(instance_bytes_len = instance_bytes.len(),
                         error = %e,
                         "connector_instances row has malformed instance_id; skipping",
                     );
@@ -2326,8 +2233,7 @@ impl EvidenceStore {
             let scope_id = match slice_to_uuid(&scope_bytes) {
                 Ok(id) => ScopeId::from_uuid(id),
                 Err(e) => {
-                    tracing::warn!(
-                        instance = %instance_id,
+                    tracing::warn!(instance = %instance_id,
                         scope_bytes_len = scope_bytes.len(),
                         error = %e,
                         "connector_instances row has malformed scope_id; skipping",
@@ -2336,8 +2242,7 @@ impl EvidenceStore {
                 }
             };
             if nonce_bytes.len() != AEAD_NONCE_LEN {
-                tracing::warn!(
-                    instance = %instance_id,
+                tracing::warn!(instance = %instance_id,
                     "connector_instances row has malformed nonce; skipping",
                 );
                 continue;
@@ -2347,8 +2252,7 @@ impl EvidenceStore {
             let key = match self.scope_key(scope_id) {
                 Ok(k) => k,
                 Err(e) => {
-                    tracing::warn!(
-                        instance = %instance_id,
+                    tracing::warn!(instance = %instance_id,
                         scope = %scope_id.as_uuid(),
                         error = %e,
                         "connector_instances scope key unavailable; skipping row",
@@ -2360,8 +2264,7 @@ impl EvidenceStore {
             match decrypt_aead(&key, &nonce, &ciphertext, &aad) {
                 Ok(plaintext) => out.push((instance_id, scope_id, kind_tag, plaintext)),
                 Err(e) => {
-                    tracing::warn!(
-                        instance = %instance_id,
+                    tracing::warn!(instance = %instance_id,
                         scope = %scope_id.as_uuid(),
                         error = %e,
                         "connector_instances row failed to decrypt; skipping",
@@ -2376,8 +2279,7 @@ impl EvidenceStore {
     /// caller supplies an already-JSON-encoded `OAuth2Token`; the AAD
     /// binds both `scope_id` and `instance_id` so a ciphertext copied
     /// to a different row fails to decrypt.
-    pub fn save_connector_token(
-        &self,
+    pub fn save_connector_token(&self,
         instance_id: uuid::Uuid,
         scope_id: ScopeId,
         plaintext_json: &[u8],
@@ -2396,8 +2298,7 @@ impl EvidenceStore {
         // safety-critical) and pre-empts a future schema migration
         // that adds a secondary unique constraint here from silently
         // becoming a defense-in-depth regression.
-        self.conn.execute(
-            "INSERT INTO connector_tokens \
+        self.conn.execute("INSERT INTO connector_tokens \
              (instance_id, scope_id, nonce, payload, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5) \
              ON CONFLICT(instance_id) DO UPDATE SET \
@@ -2419,8 +2320,7 @@ impl EvidenceStore {
     /// Delete the persisted token row for `instance_id`. No-op if the
     /// row does not exist.
     pub fn delete_connector_token(&self, instance_id: uuid::Uuid) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM connector_tokens WHERE instance_id = ?1",
+        self.conn.execute("DELETE FROM connector_tokens WHERE instance_id = ?1",
             params![instance_id.as_bytes().as_slice()],
         )?;
         Ok(())
@@ -2431,8 +2331,7 @@ impl EvidenceStore {
     /// disk. Returns the count of rows deleted so the caller can log
     /// it for diagnostics.
     pub fn delete_connector_tokens_for_scope(&self, scope_id: ScopeId) -> Result<usize> {
-        let n = self.conn.execute(
-            "DELETE FROM connector_tokens WHERE scope_id = ?1",
+        let n = self.conn.execute("DELETE FROM connector_tokens WHERE scope_id = ?1",
             params![scope_id.as_uuid().as_bytes().as_slice()],
         )?;
         Ok(n)
@@ -2443,13 +2342,11 @@ impl EvidenceStore {
     /// with a `tracing::warn!`. Returns `(instance_id, scope_id,
     /// plaintext_json)` tuples.
     pub fn load_connector_tokens(&self) -> Result<Vec<(uuid::Uuid, ScopeId, Vec<u8>)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT instance_id, scope_id, nonce, payload \
+        let mut stmt = self.conn.prepare("SELECT instance_id, scope_id, nonce, payload \
              FROM connector_tokens",
         )?;
         let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, Vec<u8>>(0)?,
+            Ok((row.get::<_, Vec<u8>>(0)?,
                 row.get::<_, Vec<u8>>(1)?,
                 row.get::<_, Vec<u8>>(2)?,
                 row.get::<_, Vec<u8>>(3)?,
@@ -2461,8 +2358,7 @@ impl EvidenceStore {
             let instance_id = match slice_to_uuid(&instance_bytes) {
                 Ok(id) => id,
                 Err(e) => {
-                    tracing::warn!(
-                        instance_bytes_len = instance_bytes.len(),
+                    tracing::warn!(instance_bytes_len = instance_bytes.len(),
                         error = %e,
                         "connector_tokens row has malformed instance_id; skipping",
                     );
@@ -2472,8 +2368,7 @@ impl EvidenceStore {
             let scope_id = match slice_to_uuid(&scope_bytes) {
                 Ok(id) => ScopeId::from_uuid(id),
                 Err(e) => {
-                    tracing::warn!(
-                        instance = %instance_id,
+                    tracing::warn!(instance = %instance_id,
                         scope_bytes_len = scope_bytes.len(),
                         error = %e,
                         "connector_tokens row has malformed scope_id; skipping",
@@ -2482,8 +2377,7 @@ impl EvidenceStore {
                 }
             };
             if nonce_bytes.len() != AEAD_NONCE_LEN {
-                tracing::warn!(
-                    instance = %instance_id,
+                tracing::warn!(instance = %instance_id,
                     "connector_tokens row has malformed nonce; skipping",
                 );
                 continue;
@@ -2493,8 +2387,7 @@ impl EvidenceStore {
             let key = match self.scope_key(scope_id) {
                 Ok(k) => k,
                 Err(e) => {
-                    tracing::warn!(
-                        instance = %instance_id,
+                    tracing::warn!(instance = %instance_id,
                         scope = %scope_id.as_uuid(),
                         error = %e,
                         "connector_tokens scope key unavailable; skipping row",
@@ -2506,8 +2399,7 @@ impl EvidenceStore {
             match decrypt_aead(&key, &nonce, &ciphertext, &aad) {
                 Ok(plaintext) => out.push((instance_id, scope_id, plaintext)),
                 Err(e) => {
-                    tracing::warn!(
-                        instance = %instance_id,
+                    tracing::warn!(instance = %instance_id,
                         scope = %scope_id.as_uuid(),
                         error = %e,
                         "connector_tokens row failed to decrypt; skipping",
@@ -2518,8 +2410,8 @@ impl EvidenceStore {
         Ok(out)
     }
 
-    // ───────────── Approved-document payloads (v10 / Phase 8;
-    //               v12 / Phase 10 Item 6: body-store dedup) ──────────
+    // ───────────── Approved-document payloads (v10 / ;
+    //               v12 / : body-store dedup) ──────────
     //
     // Tenant memory carries the *reference* (id / label / approver /
     // approved_at) for every admitted approved document, but the
@@ -2564,7 +2456,7 @@ impl EvidenceStore {
     /// Upsert an opaque approved-document payload for
     /// `(scope_id, document_id)`.
     ///
-    /// As of v12 (Phase 10 Item 6) the plaintext is stored in the
+    /// As of v12  the plaintext is stored in the
     /// content-hash-deduplicated `body_store` table — admitting the
     /// same content into N tenant scopes costs one body row + N
     /// per-scope CEK wraps in `body_store_key_wraps` instead of N
@@ -2584,16 +2476,14 @@ impl EvidenceStore {
     /// is GCed if no other scope still wraps it. The caller is
     /// responsible for enforcing any size cap before invoking this
     /// method — the store does not impose one.
-    pub fn save_approved_document_payload(
-        &self,
+    pub fn save_approved_document_payload(&self,
         scope_id: ScopeId,
         document_id: uuid::Uuid,
         plaintext: &[u8],
         content_hash: &ContentHash,
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        self.save_approved_document_payload_in_tx(
-            &tx,
+        self.save_approved_document_payload_in_tx(&tx,
             scope_id,
             document_id,
             plaintext,
@@ -2615,8 +2505,7 @@ impl EvidenceStore {
     /// metadata row. Both writes happen under the caller's `tx`,
     /// so a host-level crash between the two — or any sub-call
     /// failure — rolls everything back atomically.
-    pub fn save_approved_document_payload_in_tx(
-        &self,
+    pub fn save_approved_document_payload_in_tx(&self,
         tx: &rusqlite::Transaction<'_>,
         scope_id: ScopeId,
         document_id: uuid::Uuid,
@@ -2626,8 +2515,7 @@ impl EvidenceStore {
         self.admit_approved_doc_body_in_tx(tx, scope_id, plaintext, content_hash)?;
         let now = chrono::Utc::now().timestamp();
         let size_bytes = i64::try_from(plaintext.len()).unwrap_or(i64::MAX);
-        tx.execute(
-            "INSERT INTO approved_document_payloads \
+        tx.execute("INSERT INTO approved_document_payloads \
              (scope_id, document_id, content_hash, size_bytes, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5) \
              ON CONFLICT(scope_id, document_id) DO UPDATE SET \
@@ -2677,8 +2565,7 @@ impl EvidenceStore {
     /// the body GC) — falls through to the new-body path after
     /// deleting the stale body row. This matches the same
     /// defense-in-depth handling in [`Self::ingest_body_table`].
-    fn admit_approved_doc_body_in_tx(
-        &self,
+    fn admit_approved_doc_body_in_tx(&self,
         tx: &rusqlite::Transaction<'_>,
         scope_id: ScopeId,
         plaintext: &[u8],
@@ -2687,8 +2574,7 @@ impl EvidenceStore {
         let scope_key = self.scope_key(scope_id)?;
 
         let existing: Option<i64> = tx
-            .query_row(
-                "SELECT ref_count FROM body_store WHERE content_hash = ?1",
+            .query_row("SELECT ref_count FROM body_store WHERE content_hash = ?1",
                 params![hash.as_slice()],
                 |row| row.get::<_, i64>(0),
             )
@@ -2696,8 +2582,7 @@ impl EvidenceStore {
 
         if existing.is_some() {
             let already_has_wrap: bool = tx
-                .query_row(
-                    "SELECT 1 FROM body_store_key_wraps \
+                .query_row("SELECT 1 FROM body_store_key_wraps \
                      WHERE content_hash = ?1 AND scope_id = ?2",
                     params![hash.as_slice(), scope_id.as_uuid().as_bytes().as_slice(),],
                     |_| Ok(()),
@@ -2712,16 +2597,14 @@ impl EvidenceStore {
 
             // Case 3: cross-scope dedup. Locate any donor wrap.
             let donor: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = tx
-                .query_row(
-                    "SELECT w.wrapped_cek, w.nonce, w.scope_id \
+                .query_row("SELECT w.wrapped_cek, w.nonce, w.scope_id \
                      FROM body_store_key_wraps w \
                      WHERE w.content_hash = ?1 \
                        AND w.scope_id != ?2 \
                      LIMIT 1",
                     params![hash.as_slice(), scope_id.as_uuid().as_bytes().as_slice(),],
                     |row| {
-                        Ok((
-                            row.get::<_, Vec<u8>>(0)?,
+                        Ok((row.get::<_, Vec<u8>>(0)?,
                             row.get::<_, Vec<u8>>(1)?,
                             row.get::<_, Vec<u8>>(2)?,
                         ))
@@ -2731,8 +2614,7 @@ impl EvidenceStore {
 
             if let Some((wrapped_cek, donor_wrap_nonce_bytes, donor_scope_bytes)) = donor {
                 if donor_wrap_nonce_bytes.len() != AEAD_NONCE_LEN {
-                    return Err(EvidenceError::Schema(
-                        "body_store_key_wraps row has malformed nonce",
+                    return Err(EvidenceError::Schema("body_store_key_wraps row has malformed nonce",
                     ));
                 }
                 let mut donor_wrap_nonce = [0u8; AEAD_NONCE_LEN];
@@ -2742,8 +2624,7 @@ impl EvidenceStore {
                 let cek = unwrap_cek(&donor_key, &wrapped_cek, &donor_wrap_nonce, hash)?;
                 let new_wrap_nonce = random_nonce();
                 let new_wrapped = wrap_cek(&scope_key, &cek, &new_wrap_nonce, hash)?;
-                tx.execute(
-                    "INSERT INTO body_store_key_wraps \
+                tx.execute("INSERT INTO body_store_key_wraps \
                      (content_hash, scope_id, wrapped_cek, nonce) \
                      VALUES (?1, ?2, ?3, ?4)",
                     params![
@@ -2753,8 +2634,7 @@ impl EvidenceStore {
                         new_wrap_nonce.as_slice(),
                     ],
                 )?;
-                tx.execute(
-                    "UPDATE body_store SET ref_count = ref_count + 1 \
+                tx.execute("UPDATE body_store SET ref_count = ref_count + 1 \
                      WHERE content_hash = ?1",
                     params![hash.as_slice()],
                 )?;
@@ -2763,12 +2643,10 @@ impl EvidenceStore {
                 // been purged. Treat as orphan — delete the stale
                 // ciphertext and admit the new plaintext from
                 // scratch under a fresh CEK.
-                tx.execute(
-                    "DELETE FROM body_store WHERE content_hash = ?1",
+                tx.execute("DELETE FROM body_store WHERE content_hash = ?1",
                     params![hash.as_slice()],
                 )?;
-                Self::insert_new_approved_doc_body_in_tx(
-                    tx, scope_id, &scope_key, plaintext, hash,
+                Self::insert_new_approved_doc_body_in_tx(tx, scope_id, &scope_key, plaintext, hash,
                 )?;
             }
         } else {
@@ -2788,8 +2666,7 @@ impl EvidenceStore {
     /// SQL + crypto over the borrowed `tx` — taking `&self` would
     /// confuse the borrow checker for no benefit (clippy flags it as
     /// `unused_self`).
-    fn insert_new_approved_doc_body_in_tx(
-        tx: &rusqlite::Transaction<'_>,
+    fn insert_new_approved_doc_body_in_tx(tx: &rusqlite::Transaction<'_>,
         scope_id: ScopeId,
         scope_key: &AeadKey,
         plaintext: &[u8],
@@ -2799,15 +2676,13 @@ impl EvidenceStore {
         let body_nonce = random_nonce();
         let aad = body_table_aad(hash);
         let ciphertext = encrypt_aead(&cek, &body_nonce, plaintext, &aad)?;
-        tx.execute(
-            "INSERT INTO body_store (content_hash, body, nonce, ref_count) \
+        tx.execute("INSERT INTO body_store (content_hash, body, nonce, ref_count) \
              VALUES (?1, ?2, ?3, 1)",
             params![hash.as_slice(), ciphertext, body_nonce.as_slice()],
         )?;
         let wrap_nonce = random_nonce();
         let wrapped = wrap_cek(scope_key, &cek, &wrap_nonce, hash)?;
-        tx.execute(
-            "INSERT INTO body_store_key_wraps \
+        tx.execute("INSERT INTO body_store_key_wraps \
              (content_hash, scope_id, wrapped_cek, nonce) \
              VALUES (?1, ?2, ?3, ?4)",
             params![
@@ -2823,7 +2698,7 @@ impl EvidenceStore {
     /// Load the plaintext payload bytes for `(scope_id, document_id)`.
     /// Returns `None` if no metadata row exists.
     ///
-    /// As of v12 (Phase 10 Item 6) the read path joins
+    /// As of v12  the read path joins
     /// `approved_document_payloads` (metadata: content_hash, size,
     /// updated_at) against the deduplicated `body_store` table via
     /// the per-scope CEK wrap in `body_store_key_wraps`. Returns
@@ -2832,15 +2707,13 @@ impl EvidenceStore {
     /// scope no longer wraps (defensive — a healthy DB should never
     /// produce this, but a forget-races-rehydrate edge case would
     /// surface here rather than silently returning corrupt bytes).
-    pub fn load_approved_document_payload(
-        &self,
+    pub fn load_approved_document_payload(&self,
         scope_id: ScopeId,
         document_id: uuid::Uuid,
     ) -> Result<Option<Vec<u8>>> {
         let row: Option<Vec<u8>> = self
             .conn
-            .query_row(
-                "SELECT content_hash FROM approved_document_payloads \
+            .query_row("SELECT content_hash FROM approved_document_payloads \
                  WHERE scope_id = ?1 AND document_id = ?2",
                 params![
                     scope_id.as_uuid().as_bytes().as_slice(),
@@ -2853,16 +2726,14 @@ impl EvidenceStore {
             return Ok(None);
         };
         if content_hash_bytes.len() != crypto::CONTENT_HASH_LEN {
-            return Err(EvidenceError::Schema(
-                "approved_document_payloads content_hash has wrong length",
+            return Err(EvidenceError::Schema("approved_document_payloads content_hash has wrong length",
             ));
         }
         let mut content_hash = [0u8; crypto::CONTENT_HASH_LEN];
         content_hash.copy_from_slice(&content_hash_bytes);
         let plaintext = self
             .load_approved_doc_body(scope_id, &content_hash)?
-            .ok_or(EvidenceError::Schema(
-                "approved_document_payloads row references a body that is no longer wrapped \
+            .ok_or(EvidenceError::Schema("approved_document_payloads row references a body that is no longer wrapped \
                  for this scope (body_store row gone, or wrap purged before metadata)",
             ))?;
         Ok(Some(plaintext))
@@ -2872,15 +2743,13 @@ impl EvidenceStore {
     /// `scope_id`'s CEK wrap. Returns `None` when the wrap or the
     /// body row is absent — caller decides whether absence is an
     /// error (e.g. read path) or normal (e.g. cleanup path).
-    fn load_approved_doc_body(
-        &self,
+    fn load_approved_doc_body(&self,
         scope_id: ScopeId,
         content_hash: &ContentHash,
     ) -> Result<Option<Vec<u8>>> {
         let wrap_row: Option<(Vec<u8>, Vec<u8>)> = self
             .conn
-            .query_row(
-                "SELECT wrapped_cek, nonce FROM body_store_key_wraps \
+            .query_row("SELECT wrapped_cek, nonce FROM body_store_key_wraps \
                  WHERE content_hash = ?1 AND scope_id = ?2",
                 params![
                     content_hash.as_slice(),
@@ -2893,8 +2762,7 @@ impl EvidenceStore {
             return Ok(None);
         };
         if wrap_nonce_bytes.len() != AEAD_NONCE_LEN {
-            return Err(EvidenceError::Schema(
-                "body_store_key_wraps row has malformed nonce",
+            return Err(EvidenceError::Schema("body_store_key_wraps row has malformed nonce",
             ));
         }
         let mut wrap_nonce = [0u8; AEAD_NONCE_LEN];
@@ -2904,8 +2772,7 @@ impl EvidenceStore {
 
         let body_row: Option<(Vec<u8>, Vec<u8>)> = self
             .conn
-            .query_row(
-                "SELECT body, nonce FROM body_store WHERE content_hash = ?1",
+            .query_row("SELECT body, nonce FROM body_store WHERE content_hash = ?1",
                 params![content_hash.as_slice()],
                 |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
             )
@@ -2928,12 +2795,10 @@ impl EvidenceStore {
     /// ciphertext decryption). Order is unspecified — the caller
     /// joins against the tenant-memory ref list (which IS ordered)
     /// to produce a stable host-facing view.
-    pub fn list_approved_document_payload_meta_for_scope(
-        &self,
+    pub fn list_approved_document_payload_meta_for_scope(&self,
         scope_id: ScopeId,
     ) -> Result<Vec<ApprovedDocumentPayloadMeta>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT document_id, content_hash, size_bytes, updated_at \
+        let mut stmt = self.conn.prepare("SELECT document_id, content_hash, size_bytes, updated_at \
              FROM approved_document_payloads WHERE scope_id = ?1",
         )?;
         let rows = stmt.query_map(params![scope_id.as_uuid().as_bytes().as_slice()], |row| {
@@ -2941,8 +2806,7 @@ impl EvidenceStore {
             let content_hash_bytes: Vec<u8> = row.get(1)?;
             let size_bytes: i64 = row.get(2)?;
             let updated_at: i64 = row.get(3)?;
-            Ok((
-                document_id_bytes,
+            Ok((document_id_bytes,
                 content_hash_bytes,
                 size_bytes,
                 updated_at,
@@ -2953,8 +2817,7 @@ impl EvidenceStore {
             let (document_id_bytes, content_hash_bytes, size_bytes, updated_at) = row?;
             let document_id = slice_to_uuid(&document_id_bytes)?;
             if content_hash_bytes.len() != crypto::CONTENT_HASH_LEN {
-                return Err(EvidenceError::Schema(
-                    "approved_document_payloads content_hash has wrong length",
+                return Err(EvidenceError::Schema("approved_document_payloads content_hash has wrong length",
                 ));
             }
             let mut content_hash = [0u8; crypto::CONTENT_HASH_LEN];
@@ -2972,13 +2835,11 @@ impl EvidenceStore {
     /// Delete the payload row for `(scope_id, document_id)`. No-op
     /// if the row does not exist. Returns the count of rows deleted
     /// so the caller can log it for diagnostics.
-    pub fn delete_approved_document_payload(
-        &self,
+    pub fn delete_approved_document_payload(&self,
         scope_id: ScopeId,
         document_id: uuid::Uuid,
     ) -> Result<usize> {
-        let n = self.conn.execute(
-            "DELETE FROM approved_document_payloads \
+        let n = self.conn.execute("DELETE FROM approved_document_payloads \
              WHERE scope_id = ?1 AND document_id = ?2",
             params![
                 scope_id.as_uuid().as_bytes().as_slice(),
@@ -2993,8 +2854,7 @@ impl EvidenceStore {
     /// already been destroyed, as a best-effort byte purge.
     /// Returns the count of rows deleted so the caller can log it.
     pub fn delete_approved_document_payloads_for_scope(&self, scope_id: ScopeId) -> Result<usize> {
-        let n = self.conn.execute(
-            "DELETE FROM approved_document_payloads WHERE scope_id = ?1",
+        let n = self.conn.execute("DELETE FROM approved_document_payloads WHERE scope_id = ?1",
             params![scope_id.as_uuid().as_bytes().as_slice()],
         )?;
         Ok(n)
@@ -3032,16 +2892,14 @@ impl EvidenceStore {
         for row in rows {
             let (scope_bytes, doc_bytes) = row?;
             let Ok(scope_id) = uuid::Uuid::from_slice(&scope_bytes) else {
-                tracing::warn!(
-                    scope_bytes_len = scope_bytes.len(),
+                tracing::warn!(scope_bytes_len = scope_bytes.len(),
                     "list_all_approved_document_payload_keys: skipping row with non-UUID scope_id; \
                      orphan sweep will leave this row untouched (manual purge required to recover)",
                 );
                 continue;
             };
             let Ok(doc_id) = uuid::Uuid::from_slice(&doc_bytes) else {
-                tracing::warn!(
-                    scope = %scope_id,
+                tracing::warn!(scope = %scope_id,
                     doc_bytes_len = doc_bytes.len(),
                     "list_all_approved_document_payload_keys: skipping row with non-UUID document_id; \
                      orphan sweep will leave this row untouched (manual purge required to recover)",
@@ -3053,7 +2911,7 @@ impl EvidenceStore {
         Ok(result)
     }
 
-    // ────────── synthesis_object_versions (Phase 10 Item 4) ──────────
+    // ────────── synthesis_object_versions  ──────────
     //
     // The live `synthesis_objects` blob (memory_objects row keyed by
     // `kind = 'synthesis_object'`) carries only the latest version
@@ -3081,8 +2939,7 @@ impl EvidenceStore {
     /// [`synthesis_pipeline::SynthesisObject`] JSON bytes; AEAD AAD
     /// binds `(scope, window, version)` so cross-row relocation
     /// fails to decrypt.
-    pub fn save_synthesis_object_version(
-        &self,
+    pub fn save_synthesis_object_version(&self,
         scope_id: ScopeId,
         window_id: uuid::Uuid,
         version: u32,
@@ -3100,8 +2957,7 @@ impl EvidenceStore {
     /// blob (e.g. the FFI `replay_synthesis` entry point) can group
     /// all three writes under one SQLCipher transaction via
     /// [`Self::with_transaction`].
-    pub fn save_synthesis_object_version_in_tx(
-        &self,
+    pub fn save_synthesis_object_version_in_tx(&self,
         tx: &rusqlite::Transaction<'_>,
         scope_id: ScopeId,
         window_id: uuid::Uuid,
@@ -3113,8 +2969,7 @@ impl EvidenceStore {
         let aad = synthesis_object_version_aad(scope_id, window_id, version);
         let ciphertext = encrypt_aead(&key, &nonce, plaintext, &aad)?;
         let now = chrono::Utc::now().timestamp();
-        tx.execute(
-            "INSERT INTO synthesis_object_versions \
+        tx.execute("INSERT INTO synthesis_object_versions \
              (scope_id, window_id, version, nonce, payload, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
              ON CONFLICT(scope_id, window_id, version) DO UPDATE SET \
@@ -3146,16 +3001,14 @@ impl EvidenceStore {
     /// * [`EvidenceError::Crypto`] if the AEAD decrypt fails (e.g.
     ///   the ciphertext has been relocated to the wrong row or the
     ///   scope DEK has rotated).
-    pub fn load_synthesis_object_version(
-        &self,
+    pub fn load_synthesis_object_version(&self,
         scope_id: ScopeId,
         window_id: uuid::Uuid,
         version: u32,
     ) -> Result<Option<Vec<u8>>> {
         let row: Option<(Vec<u8>, Vec<u8>)> = self
             .conn
-            .query_row(
-                "SELECT nonce, payload FROM synthesis_object_versions \
+            .query_row("SELECT nonce, payload FROM synthesis_object_versions \
                  WHERE scope_id = ?1 AND window_id = ?2 AND version = ?3",
                 params![
                     scope_id.as_uuid().as_bytes().as_slice(),
@@ -3169,8 +3022,7 @@ impl EvidenceStore {
             return Ok(None);
         };
         if nonce_bytes.len() != AEAD_NONCE_LEN {
-            return Err(EvidenceError::Schema(
-                "synthesis_object_versions row has malformed nonce length",
+            return Err(EvidenceError::Schema("synthesis_object_versions row has malformed nonce length",
             ));
         }
         let mut nonce = [0u8; AEAD_NONCE_LEN];
@@ -3189,17 +3041,14 @@ impl EvidenceStore {
     /// This is a metadata-only scan — no AEAD decryption — so it is
     /// safe to call on the hot path of a host listing replay
     /// history for UI / debugging.
-    pub fn list_synthesis_object_versions(
-        &self,
+    pub fn list_synthesis_object_versions(&self,
         scope_id: ScopeId,
         window_id: uuid::Uuid,
     ) -> Result<Vec<(u32, i64)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT version, created_at FROM synthesis_object_versions \
+        let mut stmt = self.conn.prepare("SELECT version, created_at FROM synthesis_object_versions \
              WHERE scope_id = ?1 AND window_id = ?2 ORDER BY version ASC",
         )?;
-        let rows = stmt.query_map(
-            params![
+        let rows = stmt.query_map(params![
                 scope_id.as_uuid().as_bytes().as_slice(),
                 window_id.as_bytes().as_slice(),
             ],
@@ -3209,8 +3058,7 @@ impl EvidenceStore {
         for row in rows {
             let (version_i64, created_at) = row?;
             let version = u32::try_from(version_i64).map_err(|_| {
-                EvidenceError::Schema(
-                    "synthesis_object_versions row has out-of-range version (>= 2^32)",
+                EvidenceError::Schema("synthesis_object_versions row has out-of-range version (>= 2^32)",
                 )
             })?;
             out.push((version, created_at));
@@ -3225,14 +3073,12 @@ impl EvidenceStore {
     /// new-version insert. Returns the number of rows deleted
     /// (zero if the window had no archived versions yet, one
     /// otherwise).
-    pub fn delete_oldest_synthesis_object_version_in_tx(
-        &self,
+    pub fn delete_oldest_synthesis_object_version_in_tx(&self,
         tx: &rusqlite::Transaction<'_>,
         scope_id: ScopeId,
         window_id: uuid::Uuid,
     ) -> Result<usize> {
-        let n = tx.execute(
-            "DELETE FROM synthesis_object_versions \
+        let n = tx.execute("DELETE FROM synthesis_object_versions \
              WHERE scope_id = ?1 AND window_id = ?2 \
                AND version = ( \
                    SELECT MIN(version) FROM synthesis_object_versions \
@@ -3251,8 +3097,7 @@ impl EvidenceStore {
     /// already been destroyed, as a best-effort byte purge.
     /// Returns the count of rows deleted so the caller can log it.
     pub fn delete_synthesis_object_versions_for_scope(&self, scope_id: ScopeId) -> Result<usize> {
-        let n = self.conn.execute(
-            "DELETE FROM synthesis_object_versions WHERE scope_id = ?1",
+        let n = self.conn.execute("DELETE FROM synthesis_object_versions WHERE scope_id = ?1",
             params![scope_id.as_uuid().as_bytes().as_slice()],
         )?;
         Ok(n)
@@ -3262,13 +3107,11 @@ impl EvidenceStore {
     /// `(scope_id, window_id)` pair. Used by the `open_store`
     /// orphan-sweep when the parent window has vanished from the
     /// live `SynthesisWindowManager`. Returns the row count.
-    pub fn delete_synthesis_object_versions_for_window(
-        &self,
+    pub fn delete_synthesis_object_versions_for_window(&self,
         scope_id: ScopeId,
         window_id: uuid::Uuid,
     ) -> Result<usize> {
-        let n = self.conn.execute(
-            "DELETE FROM synthesis_object_versions \
+        let n = self.conn.execute("DELETE FROM synthesis_object_versions \
              WHERE scope_id = ?1 AND window_id = ?2",
             params![
                 scope_id.as_uuid().as_bytes().as_slice(),
@@ -3292,8 +3135,7 @@ impl EvidenceStore {
     /// non-UUID row must not block cleanup of every legitimate
     /// orphan; surface the corruption to operators via WARN and
     /// move on.
-    pub fn list_all_synthesis_object_version_window_keys(
-        &self,
+    pub fn list_all_synthesis_object_version_window_keys(&self,
     ) -> Result<Vec<(ScopeId, uuid::Uuid)>> {
         // SELECT DISTINCT so a window with N archived versions
         // contributes a single row to the diff set instead of N
@@ -3310,8 +3152,7 @@ impl EvidenceStore {
         for row in rows {
             let (scope_bytes, window_bytes) = row?;
             let Ok(scope_id) = uuid::Uuid::from_slice(&scope_bytes) else {
-                tracing::warn!(
-                    scope_bytes_len = scope_bytes.len(),
+                tracing::warn!(scope_bytes_len = scope_bytes.len(),
                     "list_all_synthesis_object_version_window_keys: skipping row with \
                      non-UUID scope_id; orphan sweep will leave this row untouched \
                      (manual purge required to recover)",
@@ -3319,8 +3160,7 @@ impl EvidenceStore {
                 continue;
             };
             let Ok(window_id) = uuid::Uuid::from_slice(&window_bytes) else {
-                tracing::warn!(
-                    scope = %scope_id,
+                tracing::warn!(scope = %scope_id,
                     window_bytes_len = window_bytes.len(),
                     "list_all_synthesis_object_version_window_keys: skipping row with \
                      non-UUID window_id; orphan sweep will leave this row untouched \
@@ -3353,7 +3193,7 @@ impl EvidenceStore {
     ///   contains a CJK Han / Hiragana / Katakana / Thai
     ///   codepoint, regardless of AEAD key.
     /// * `evidence_fts_bigram` — the v15 precomputed-bigram
-    ///   recall lane (Phase 1.2.1). Same property as the trigram
+    ///   recall lane. Same property as the trigram
     ///   shadow: the table's `content` column retains the
     ///   whitespace-separated overlapping 2-codepoint windows
     ///   derived from the plaintext body for any row whose body
@@ -3461,8 +3301,7 @@ impl EvidenceStore {
     /// keeping the delete logic in one place ensures the two
     /// entry points cannot drift on which tables they touch or
     /// how parameter batching is sized.
-    fn purge_fts_for_scope_in_tx(
-        tx: &rusqlite::Transaction<'_>,
+    fn purge_fts_for_scope_in_tx(tx: &rusqlite::Transaction<'_>,
         scope_id: ScopeId,
     ) -> Result<usize> {
         let evidence_ids: Vec<Vec<u8>> = {
@@ -3483,13 +3322,13 @@ impl EvidenceStore {
         // cap. `SQLITE_MAX_VARIABLE_NUMBER` is 999 on the default
         // build; we stay well under it.
         //
-        // Per Phase 1.2 / schema v14, `evidence_fts_cjk` (trigram-
+        // Per  / schema v14, `evidence_fts_cjk` (trigram-
         // tokenised CJK / Thai index) is purged alongside the
         // primary `evidence_fts` (unicode61) in the same
         // transaction so the two indexes can never drift apart
         // under crash-recovery, and so a forgotten scope leaves
         // zero plaintext tokens in either FTS shadow table after
-        // the subsequent `REBUILD`. Phase 1.2.1 / schema v15
+        // the subsequent `REBUILD`.  / schema v15
         // extends the same invariant to `evidence_fts_bigram`
         // (precomputed-bigram recall lane) — the three FTS
         // shadow tables are purged together inside the same
@@ -3518,12 +3357,10 @@ impl EvidenceStore {
                 chunk.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
             fts_rows_deleted +=
                 tx.execute(&fts_sql, rusqlite::params_from_iter(params.iter().copied()))?;
-            fts_rows_deleted += tx.execute(
-                &fts_cjk_sql,
+            fts_rows_deleted += tx.execute(&fts_cjk_sql,
                 rusqlite::params_from_iter(params.iter().copied()),
             )?;
-            fts_rows_deleted += tx.execute(
-                &fts_bigram_sql,
+            fts_rows_deleted += tx.execute(&fts_bigram_sql,
                 rusqlite::params_from_iter(params.iter().copied()),
             )?;
             tx.execute(&emb_sql, rusqlite::params_from_iter(params.iter().copied()))?;
@@ -3562,16 +3399,13 @@ impl EvidenceStore {
     /// exposes; the alternative would be a full `VACUUM` at a
     /// higher layer, which is owned by the host.
     fn rebuild_evidence_fts_in_tx(tx: &rusqlite::Transaction<'_>) -> Result<()> {
-        tx.execute(
-            "INSERT INTO evidence_fts(evidence_fts) VALUES('rebuild')",
+        tx.execute("INSERT INTO evidence_fts(evidence_fts) VALUES('rebuild')",
             [],
         )?;
-        tx.execute(
-            "INSERT INTO evidence_fts_cjk(evidence_fts_cjk) VALUES('rebuild')",
+        tx.execute("INSERT INTO evidence_fts_cjk(evidence_fts_cjk) VALUES('rebuild')",
             [],
         )?;
-        tx.execute(
-            "INSERT INTO evidence_fts_bigram(evidence_fts_bigram) VALUES('rebuild')",
+        tx.execute("INSERT INTO evidence_fts_bigram(evidence_fts_bigram) VALUES('rebuild')",
             [],
         )?;
         Ok(())
@@ -3605,8 +3439,7 @@ impl EvidenceStore {
         };
 
         // Delete all wraps for the forgotten scope.
-        tx.execute(
-            "DELETE FROM body_store_key_wraps WHERE scope_id = ?1",
+        tx.execute("DELETE FROM body_store_key_wraps WHERE scope_id = ?1",
             params![scope_id.as_uuid().as_bytes().as_slice()],
         )?;
 
@@ -3628,8 +3461,7 @@ impl EvidenceStore {
                 .map(|i| format!("?{}", i + 1))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let sql = format!(
-                "DELETE FROM body_store \
+            let sql = format!("DELETE FROM body_store \
                  WHERE content_hash IN ({placeholders}) \
                  AND NOT EXISTS ( \
                      SELECT 1 FROM body_store_key_wraps w \
@@ -3638,8 +3470,7 @@ impl EvidenceStore {
             );
             let params: Vec<&dyn rusqlite::ToSql> =
                 chunk.iter().map(|h| h as &dyn rusqlite::ToSql).collect();
-            tx.execute(
-                sql.as_str(),
+            tx.execute(sql.as_str(),
                 rusqlite::params_from_iter(params.iter().copied()),
             )?;
         }
@@ -3659,8 +3490,7 @@ impl EvidenceStore {
 
         // Find body_store rows that have zero wraps.
         let orphans: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = {
-            let mut stmt = self.conn.prepare(
-                "SELECT bs.content_hash, bs.body, bs.nonce \
+            let mut stmt = self.conn.prepare("SELECT bs.content_hash, bs.body, bs.nonce \
                  FROM body_store bs \
                  WHERE NOT EXISTS ( \
                      SELECT 1 FROM body_store_key_wraps w \
@@ -3668,8 +3498,7 @@ impl EvidenceStore {
                  )",
             )?;
             let rows = stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, Vec<u8>>(0)?,
+                Ok((r.get::<_, Vec<u8>>(0)?,
                     r.get::<_, Vec<u8>>(1)?,
                     r.get::<_, Vec<u8>>(2)?,
                 ))
@@ -3709,19 +3538,16 @@ impl EvidenceStore {
             let cek = random_cek();
             let new_nonce = random_nonce();
             let new_ct = encrypt_aead(&cek, &new_nonce, &pt, &aad)?;
-            tx.execute(
-                "UPDATE body_store SET body = ?1, nonce = ?2 WHERE content_hash = ?3",
+            tx.execute("UPDATE body_store SET body = ?1, nonce = ?2 WHERE content_hash = ?3",
                 params![new_ct, new_nonce.as_slice(), hash_bytes.as_slice()],
             )?;
 
             // Create a CEK wrap for every scope that references this hash.
             let scope_ids: Vec<Vec<u8>> = {
-                let mut s = tx.prepare(
-                    "SELECT DISTINCT scope_id FROM evidence \
+                let mut s = tx.prepare("SELECT DISTINCT scope_id FROM evidence \
                      WHERE content_hash = ?1 AND storage_path = ?2",
                 )?;
-                let rows = s.query_map(
-                    params![hash_bytes.as_slice(), StoragePath::BodyTable as i64],
+                let rows = s.query_map(params![hash_bytes.as_slice(), StoragePath::BodyTable as i64],
                     |r| r.get::<_, Vec<u8>>(0),
                 )?;
                 let mut out = Vec::new();
@@ -3742,8 +3568,7 @@ impl EvidenceStore {
                 };
                 let wrap_nonce = random_nonce();
                 let wrapped = wrap_cek(&scope_key, &cek, &wrap_nonce, &content_hash)?;
-                tx.execute(
-                    "INSERT OR IGNORE INTO body_store_key_wraps \
+                tx.execute("INSERT OR IGNORE INTO body_store_key_wraps \
                      (content_hash, scope_id, wrapped_cek, nonce) \
                      VALUES (?1, ?2, ?3, ?4)",
                     params![
@@ -3759,7 +3584,7 @@ impl EvidenceStore {
         Ok(())
     }
 
-    /// v11→v12 migration (Phase 10 Item 6) — move every existing
+    /// v11→v12 migration  — move every existing
     /// inline approved-document payload ciphertext into the
     /// deduplicated `body_store` table and drop the legacy `nonce` +
     /// `payload` columns from `approved_document_payloads`.
@@ -3793,8 +3618,7 @@ impl EvidenceStore {
         // `payload` column is missing, the table is already in v12
         // shape and there is nothing to do.
         let has_payload_column = {
-            let mut stmt = self.conn.prepare(
-                "SELECT 1 FROM pragma_table_info('approved_document_payloads') \
+            let mut stmt = self.conn.prepare("SELECT 1 FROM pragma_table_info('approved_document_payloads') \
                  WHERE name = 'payload'",
             )?;
             stmt.query_row([], |_| Ok(())).optional()?.is_some()
@@ -3808,13 +3632,11 @@ impl EvidenceStore {
         // intentional — the rows are about to be re-encrypted into
         // a new shape so we own the bytes from here on.
         let legacy_rows: Vec<LegacyRow> = {
-            let mut stmt = self.conn.prepare(
-                "SELECT scope_id, document_id, nonce, payload, content_hash \
+            let mut stmt = self.conn.prepare("SELECT scope_id, document_id, nonce, payload, content_hash \
                  FROM approved_document_payloads",
             )?;
             let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, Vec<u8>>(0)?,
+                Ok((row.get::<_, Vec<u8>>(0)?,
                     row.get::<_, Vec<u8>>(1)?,
                     row.get::<_, Vec<u8>>(2)?,
                     row.get::<_, Vec<u8>>(3)?,
@@ -3841,8 +3663,7 @@ impl EvidenceStore {
         let tx = self.conn.unchecked_transaction()?;
         for row in &legacy_rows {
             if row.nonce_bytes.len() != AEAD_NONCE_LEN {
-                tracing::warn!(
-                    scope = %row.scope_id.as_uuid(),
+                tracing::warn!(scope = %row.scope_id.as_uuid(),
                     document_id = %row.document_id,
                     "v11→v12 migration: approved_document_payloads row has malformed nonce; \
                      skipping (row will be visible as orphan metadata at next open_store)",
@@ -3850,8 +3671,7 @@ impl EvidenceStore {
                 continue;
             }
             if row.content_hash_bytes.len() != crypto::CONTENT_HASH_LEN {
-                tracing::warn!(
-                    scope = %row.scope_id.as_uuid(),
+                tracing::warn!(scope = %row.scope_id.as_uuid(),
                     document_id = %row.document_id,
                     "v11→v12 migration: approved_document_payloads row has malformed \
                      content_hash; skipping (row will be visible as orphan metadata at \
@@ -3870,8 +3690,7 @@ impl EvidenceStore {
             let plaintext = match decrypt_aead(&scope_key, &nonce, &row.ciphertext, &aad) {
                 Ok(pt) => pt,
                 Err(e) => {
-                    tracing::warn!(
-                        scope = %row.scope_id.as_uuid(),
+                    tracing::warn!(scope = %row.scope_id.as_uuid(),
                         document_id = %row.document_id,
                         error = %e,
                         "v11→v12 migration: approved_document_payloads row failed to \
@@ -3888,8 +3707,7 @@ impl EvidenceStore {
             // Recompute and verify before admitting.
             let computed = content_hash(&plaintext);
             if computed != stored_hash {
-                tracing::warn!(
-                    scope = %row.scope_id.as_uuid(),
+                tracing::warn!(scope = %row.scope_id.as_uuid(),
                     document_id = %row.document_id,
                     "v11→v12 migration: approved_document_payloads row has stored content_hash \
                      that does not match the decrypted plaintext; skipping (row will be \
@@ -3909,12 +3727,10 @@ impl EvidenceStore {
         // builds against modern SQLite; both are required by the
         // substrate so a downlevel SQLCipher would fail open_store
         // earlier on a SCHEMA mismatch.
-        tx.execute(
-            "ALTER TABLE approved_document_payloads DROP COLUMN payload",
+        tx.execute("ALTER TABLE approved_document_payloads DROP COLUMN payload",
             [],
         )?;
-        tx.execute(
-            "ALTER TABLE approved_document_payloads DROP COLUMN nonce",
+        tx.execute("ALTER TABLE approved_document_payloads DROP COLUMN nonce",
             [],
         )?;
         tx.commit()?;
@@ -3933,8 +3749,7 @@ impl EvidenceStore {
     /// let store = EvidenceStore::open(&path, &key, cfg)?
     ///     .with_embedding_model(my_model, "xlm-r-v1");
     /// ```
-    pub fn with_embedding_model<M: EmbeddingModel + 'static>(
-        mut self,
+    pub fn with_embedding_model<M: EmbeddingModel + 'static>(mut self,
         model: M,
         model_tag: impl Into<String>,
     ) -> Self {
@@ -3951,8 +3766,7 @@ impl EvidenceStore {
 
     /// Same as [`Self::with_embedding_model`] but takes `&mut self`
     /// for callers that already own a `&mut` handle to the store.
-    pub fn set_embedding_model<M: EmbeddingModel + 'static>(
-        &mut self,
+    pub fn set_embedding_model<M: EmbeddingModel + 'static>(&mut self,
         model: M,
         model_tag: impl Into<String>,
     ) {
@@ -3982,16 +3796,14 @@ impl EvidenceStore {
     /// that compute embeddings asynchronously after ingest.
     ///
     /// The embedding is serialised as little-endian raw `f32` bytes.
-    pub fn store_embedding(
-        &mut self,
+    pub fn store_embedding(&mut self,
         evidence_id: EvidenceId,
         embedding: &[f32],
         model_tag: &str,
     ) -> Result<()> {
         let bytes = embedding_to_bytes(embedding);
         let now = Utc::now().timestamp();
-        self.conn.execute(
-            "INSERT OR REPLACE INTO evidence_embeddings
+        self.conn.execute("INSERT OR REPLACE INTO evidence_embeddings
                  (evidence_id, embedding, model_tag, created_at)
              VALUES (?1, ?2, ?3, ?4)",
             params![
@@ -4034,8 +3846,7 @@ impl EvidenceStore {
     pub fn get_embedding(&self, evidence_id: EvidenceId) -> Result<Option<Vec<f32>>> {
         let bytes: Option<Vec<u8>> = self
             .conn
-            .query_row(
-                "SELECT embedding FROM evidence_embeddings
+            .query_row("SELECT embedding FROM evidence_embeddings
                  WHERE evidence_id = ?1
                  ORDER BY created_at DESC
                  LIMIT 1",
@@ -4065,15 +3876,13 @@ impl EvidenceStore {
     /// Errors with [`EvidenceError::Schema`] when the stored BLOB has a
     /// length that is not a multiple of 4 (i.e. the row was corrupted
     /// or written by a future schema).
-    pub fn get_embedding_for_model(
-        &self,
+    pub fn get_embedding_for_model(&self,
         evidence_id: EvidenceId,
         model_tag: &str,
     ) -> Result<Option<Vec<f32>>> {
         let bytes: Option<Vec<u8>> = self
             .conn
-            .query_row(
-                "SELECT embedding FROM evidence_embeddings
+            .query_row("SELECT embedding FROM evidence_embeddings
                  WHERE evidence_id = ?1 AND model_tag = ?2",
                 params![evidence_id.as_uuid().as_bytes().as_slice(), model_tag],
                 |r| r.get::<_, Vec<u8>>(0),
@@ -4100,8 +3909,7 @@ fn embedding_to_bytes(emb: &[f32]) -> Vec<u8> {
 /// of 4 (a corrupted row, since `f32` is 4 bytes wide).
 fn bytes_to_embedding(bytes: &[u8]) -> Result<Vec<f32>> {
     if bytes.len() % 4 != 0 {
-        return Err(EvidenceError::Schema(
-            "evidence_embeddings.embedding has length not a multiple of 4",
+        return Err(EvidenceError::Schema("evidence_embeddings.embedding has length not a multiple of 4",
         ));
     }
     let mut out = Vec::with_capacity(bytes.len() / 4);
@@ -4161,14 +3969,14 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // v8: add `epoch_tombstones`. Purely additive; handled
         // by SCHEMA_SQL's `CREATE TABLE IF NOT EXISTS`.
         8 => Ok(()),
-        // v9 (Phase 3): add `connector_instances` + `connector_tokens`.
+        // v9: add `connector_instances` + `connector_tokens`.
         // Purely additive; handled by SCHEMA_SQL's
         // `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`
         // (the unique index on `(scope_id, kind)` is part of that
         // bootstrap, so a fresh-DB open and a v8→v9 upgrade both end
         // up with the same shape).
         9 => Ok(()),
-        // v10 (Phase 8): add `approved_document_payloads`. Purely
+        // v10: add `approved_document_payloads`. Purely
         // additive; handled by SCHEMA_SQL's
         // `CREATE TABLE IF NOT EXISTS`. No separate covering index
         // is created: the composite PK `(scope_id, document_id)`
@@ -4178,9 +3986,9 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // Pre-v10 databases simply do not have any approved-document
         // payload rows yet, which matches the "tenant memory carries
         // refs but the substrate never persisted payloads" state
-        // that Phase 7 shipped.
+        // that shipped.
         10 => Ok(()),
-        // v11 (Phase 10 Item 4): add `synthesis_object_versions`
+        // v11 : add `synthesis_object_versions`
         // and the supplemental `idx_synthesis_object_versions_scope`
         // index. Purely additive; both are handled by SCHEMA_SQL's
         // `CREATE TABLE / INDEX IF NOT EXISTS` so a v10 -> v11
@@ -4189,7 +3997,7 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // matches the pre-Item-4 contract where every synthesis
         // output overwrote the prior one with no recoverable trail.
         11 => Ok(()),
-        // v12 (Phase 10 Item 6): destructive shape change to
+        // v12 : destructive shape change to
         // `approved_document_payloads` — drop the inline `nonce` +
         // `payload` columns and route the bytes through the
         // deduplicated `body_store` table. The actual data move +
@@ -4210,7 +4018,7 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // skips the post-bootstrap step because the legacy columns
         // never exist.
         12 => Ok(()),
-        // v13 (Phase 1.3 — multilingual ingestion): add the
+        // v13 (multilingual ingestion): add the
         // optional `language_tag` column to the `evidence` table
         // so the BCP-47 primary subtag detected on the row's
         // plaintext body at ingest time can flow through to the
@@ -4225,7 +4033,7 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // EXISTS`; only the v12 -> v13 upgrade path needs the
         // explicit ALTER.
         13 => migrate_v13_add_evidence_language_tag(conn),
-        // v14 (Phase 1.2 — CJK-aware FTS5 tokeniser): add the
+        // v14 (CJK-aware FTS5 tokeniser): add the
         // `evidence_fts_cjk` virtual table and backfill it from the
         // pre-existing `evidence_fts.content` rows whose plaintext
         // body contains any CJK Han / Hiragana / Katakana / Thai
@@ -4238,7 +4046,7 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // re-running the migration on an already-populated v14
         // database is a no-op rather than producing duplicate rows.
         14 => migrate_v14_backfill_evidence_fts_cjk(conn),
-        // v15 (Phase 1.2.1 — CJK / Thai bigram recall lane): add the
+        // v15 (CJK / Thai bigram recall lane): add the
         // `evidence_fts_bigram` virtual table and backfill it from
         // the pre-existing `evidence_fts.content` rows whose
         // plaintext body routes CJK / Thai. The
@@ -4251,7 +4059,7 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // re-running the migration on an already-populated v15
         // database is a no-op rather than producing duplicate rows.
         15 => migrate_v15_backfill_evidence_fts_bigram(conn),
-        // v16 (Phase 1.9 — symmetric recall-lane stopword
+        // v16 (symmetric recall-lane stopword
         // stripping): re-tokenise every existing `evidence_fts_cjk`
         // and `evidence_fts_bigram` row from the source
         // `evidence_fts.content` column with
@@ -4267,8 +4075,7 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // chunked-streaming + idempotency-by-reconstruction
         // contract.
         16 => migrate_v16_strip_recall_lane_stopwords(conn),
-        _ => Err(EvidenceError::Schema(
-            "no migration registered for the requested schema version",
+        _ => Err(EvidenceError::Schema("no migration registered for the requested schema version",
         )),
     }
 }
@@ -4302,7 +4109,7 @@ fn migrate_v13_add_evidence_language_tag(conn: &Connection) -> Result<()> {
 /// Chunk size for [`migrate_v14_backfill_evidence_fts_cjk`]'s
 /// streaming read of `evidence_fts`. Bounded so peak migration
 /// memory is O(chunk * row_size) regardless of how many evidence
-/// rows the user has accumulated (sweep-2 Devin Review
+/// rows the user has accumulated (a follow-up Devin Review
 /// ANALYSIS-0004).
 const V14_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 
@@ -4354,7 +4161,7 @@ const V14_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 /// Memory bound: the backfill iterates `evidence_fts` in
 /// rowid-ordered chunks of [`V14_MIGRATION_CHUNK_SIZE`] rows, so
 /// peak memory is O(chunk * row_size) rather than O(total_rows *
-/// row_size). This was the architectural fix for sweep-2 Devin
+/// row_size). This was the architectural fix for a follow-up Devin
 /// Review ANALYSIS-0004 — on a large pre-v14 database the
 /// "materialise everything into a single `Vec`" version would
 /// have allocated proportional to the entire body corpus, which
@@ -4377,7 +4184,7 @@ fn migrate_v14_backfill_evidence_fts_cjk(conn: &Connection) -> Result<()> {
     // whole `evidence_fts` table into a single `Vec`. This bounds
     // peak migration memory to O(chunk * row_size) regardless of
     // how many evidence rows the user has accumulated, addressing
-    // sweep-2 Devin Review ANALYSIS-0004 (memory pressure during
+    // a follow-up Devin Review ANALYSIS-0004 (memory pressure during
     // one-time v13→v14 migration on large databases).
     //
     // We page on the FTS5 virtual table's implicit `rowid` rather
@@ -4399,16 +4206,14 @@ fn migrate_v14_backfill_evidence_fts_cjk(conn: &Connection) -> Result<()> {
     let mut last_rowid: i64 = 0;
     loop {
         let chunk: Vec<(i64, String, Vec<u8>, Vec<u8>)> = {
-            let mut stmt = tx.prepare(
-                "SELECT rowid, content, evidence_id, scope_id FROM evidence_fts
+            let mut stmt = tx.prepare("SELECT rowid, content, evidence_id, scope_id FROM evidence_fts
                  WHERE rowid > ?1
                  ORDER BY rowid
                  LIMIT ?2",
             )?;
             let collected = stmt
                 .query_map(params![last_rowid, V14_MIGRATION_CHUNK_SIZE], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
+                    Ok((row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, Vec<u8>>(2)?,
                         row.get::<_, Vec<u8>>(3)?,
@@ -4430,8 +4235,7 @@ fn migrate_v14_backfill_evidence_fts_cjk(conn: &Connection) -> Result<()> {
             if !crate::script::contains_cjk_or_thai(&content) {
                 continue;
             }
-            tx.execute(
-                "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
+            tx.execute("INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
                  VALUES (?1, ?2, ?3)",
                 params![content, evidence_id, scope_id],
             )?;
@@ -4471,7 +4275,7 @@ const V15_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 /// maintains row-count metadata in
 /// `evidence_fts_bigram_docsize`.
 ///
-/// Reachability of partial-population states (sweep-2 inline
+/// Reachability of partial-population states (a follow-up inline
 /// 3331173175 contract for future migration authors). The
 /// `COUNT(*) > 0` guard is *deliberately coarse*: it treats
 /// "any rows" as "migration already ran". This is sound for
@@ -4503,7 +4307,7 @@ const V15_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 /// ([`crate::bigram::compute_cjk_bigrams`]) is non-empty. The
 /// secondary non-empty gate matches the write path's gate so
 /// the migration produces exactly the same set of rows the
-/// write path would have written had Phase 1.2.1 been active
+/// write path would have written had  been active
 /// from day one. The pre-existing `evidence_fts` /
 /// `evidence_fts_cjk` rows themselves are untouched.
 ///
@@ -4551,16 +4355,14 @@ fn migrate_v15_backfill_evidence_fts_bigram(conn: &Connection) -> Result<()> {
     let mut last_rowid: i64 = 0;
     loop {
         let chunk: Vec<(i64, String, Vec<u8>, Vec<u8>)> = {
-            let mut stmt = tx.prepare(
-                "SELECT rowid, content, evidence_id, scope_id FROM evidence_fts
+            let mut stmt = tx.prepare("SELECT rowid, content, evidence_id, scope_id FROM evidence_fts
                  WHERE rowid > ?1
                  ORDER BY rowid
                  LIMIT ?2",
             )?;
             let collected = stmt
                 .query_map(params![last_rowid, V15_MIGRATION_CHUNK_SIZE], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
+                    Ok((row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, Vec<u8>>(2)?,
                         row.get::<_, Vec<u8>>(3)?,
@@ -4590,8 +4392,7 @@ fn migrate_v15_backfill_evidence_fts_bigram(conn: &Connection) -> Result<()> {
             if bigrams.is_empty() {
                 continue;
             }
-            tx.execute(
-                "INSERT INTO evidence_fts_bigram (content, evidence_id, scope_id) \
+            tx.execute("INSERT INTO evidence_fts_bigram (content, evidence_id, scope_id) \
                  VALUES (?1, ?2, ?3)",
                 params![bigrams, evidence_id, scope_id],
             )?;
@@ -4651,7 +4452,7 @@ const V16_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 /// precomputed bigram string of the *stripped* content is
 /// non-empty. The two-stage gate matches the write path exactly
 /// so the migration produces precisely the set of rows the write
-/// path would have written had Phase 1.9 been active from day
+/// path would have written had  been active from day
 /// one.
 ///
 /// Crash-safety: the rewrite runs inside an explicit
@@ -4697,16 +4498,14 @@ fn migrate_v16_strip_recall_lane_stopwords(conn: &Connection) -> Result<()> {
     let mut last_rowid: i64 = 0;
     loop {
         let chunk: Vec<(i64, String, Vec<u8>, Vec<u8>)> = {
-            let mut stmt = tx.prepare(
-                "SELECT rowid, content, evidence_id, scope_id FROM evidence_fts
+            let mut stmt = tx.prepare("SELECT rowid, content, evidence_id, scope_id FROM evidence_fts
                  WHERE rowid > ?1
                  ORDER BY rowid
                  LIMIT ?2",
             )?;
             let collected = stmt
                 .query_map(params![last_rowid, V16_MIGRATION_CHUNK_SIZE], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
+                    Ok((row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, Vec<u8>>(2)?,
                         row.get::<_, Vec<u8>>(3)?,
@@ -4734,18 +4533,16 @@ fn migrate_v16_strip_recall_lane_stopwords(conn: &Connection) -> Result<()> {
                 continue;
             }
             // Apply the same stopword strip the write path uses
-            // post-Phase-1.9 so the recall-lane indexes here are
+            // earlier so the recall-lane indexes here are
             // identical to what a fresh-DB ingest of the same
             // bodies would produce.  Counted variant feeds the
-            // Phase 1.10 v16-migration stopword strip telemetry.
+            //  v16-migration stopword strip telemetry.
             let (stripped, strip_count) =
                 crate::fts_stopwords::strip_recall_lane_stopwords_counted(&content);
-            crate::fts_telemetry::record_stopwords_stripped(
-                crate::fts_telemetry::StripSite::V16Migration,
+            crate::fts_telemetry::record_stopwords_stripped(crate::fts_telemetry::StripSite::V16Migration,
                 strip_count,
             );
-            tx.execute(
-                "INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
+            tx.execute("INSERT INTO evidence_fts_cjk (content, evidence_id, scope_id) \
                  VALUES (?1, ?2, ?3)",
                 params![stripped.as_ref(), evidence_id, scope_id],
             )?;
@@ -4759,8 +4556,7 @@ fn migrate_v16_strip_recall_lane_stopwords(conn: &Connection) -> Result<()> {
             if bigrams.is_empty() {
                 continue;
             }
-            tx.execute(
-                "INSERT INTO evidence_fts_bigram (content, evidence_id, scope_id) \
+            tx.execute("INSERT INTO evidence_fts_bigram (content, evidence_id, scope_id) \
                  VALUES (?1, ?2, ?3)",
                 params![bigrams, evidence_id, scope_id],
             )?;
@@ -4814,8 +4610,7 @@ fn migrate_evidence_embeddings_to_composite_pk(conn: &Connection) -> Result<()> 
             // the composite PK directly). Nothing to do.
             Ok(())
         }
-        0 => Err(EvidenceError::Schema(
-            "v3 migration: evidence_embeddings table is missing after schema bootstrap",
+        0 => Err(EvidenceError::Schema("v3 migration: evidence_embeddings table is missing after schema bootstrap",
         )),
         1 => {
             // Legacy single-PK v2 shape. Rewrite the table atomically:
@@ -4833,9 +4628,7 @@ fn migrate_evidence_embeddings_to_composite_pk(conn: &Connection) -> Result<()> 
             // All inside `unchecked_transaction` so a crash anywhere
             // in the sequence rolls back to the v2 shape.
             let tx = conn.unchecked_transaction()?;
-            tx.execute_batch(
-                "CREATE TABLE evidence_embeddings_v3 (
-                     evidence_id     BLOB    NOT NULL,
+            tx.execute_batch("CREATE TABLE evidence_embeddings_v3 (evidence_id     BLOB    NOT NULL,
                      embedding       BLOB    NOT NULL,
                      model_tag       TEXT    NOT NULL,
                      created_at      INTEGER NOT NULL,
@@ -4852,8 +4645,7 @@ fn migrate_evidence_embeddings_to_composite_pk(conn: &Connection) -> Result<()> 
             tx.commit()?;
             Ok(())
         }
-        _ => Err(EvidenceError::Schema(
-            "v3 migration: evidence_embeddings has an unexpected primary key arity",
+        _ => Err(EvidenceError::Schema("v3 migration: evidence_embeddings has an unexpected primary key arity",
         )),
     }
 }
@@ -4889,8 +4681,7 @@ fn random_cek() -> AeadKey {
 /// Wrap (encrypt) a CEK under `wrapper_key` with a freshly drawn
 /// nonce.  AAD binds the content hash so a wrap cannot be re-labelled
 /// across bodies.
-fn wrap_cek(
-    wrapper_key: &AeadKey,
+fn wrap_cek(wrapper_key: &AeadKey,
     cek: &AeadKey,
     nonce: &AeadNonce,
     content_hash: &ContentHash,
@@ -4901,15 +4692,13 @@ fn wrap_cek(
 
 /// Unwrap a previously-wrapped CEK, recovering the 32-byte symmetric
 /// key.
-fn unwrap_cek(
-    wrapper_key: &AeadKey,
+fn unwrap_cek(wrapper_key: &AeadKey,
     wrapped: &[u8],
     nonce_bytes: &[u8],
     content_hash: &ContentHash,
 ) -> Result<AeadKey> {
     if nonce_bytes.len() != AEAD_NONCE_LEN {
-        return Err(EvidenceError::Schema(
-            "body_store_key_wraps row has malformed nonce",
+        return Err(EvidenceError::Schema("body_store_key_wraps row has malformed nonce",
         ));
     }
     let mut nonce = [0u8; AEAD_NONCE_LEN];
@@ -5065,14 +4854,13 @@ pub(crate) fn clamp_limit_to_sqlite(n: usize) -> i64 {
 /// can reuse the same merge logic (both call sites need identical
 /// dedupe + error-containment semantics; diverging implementations
 /// would silently drift apart and was one of the failure modes the
-/// sweep-2 Devin Review BUG-0001 finding flagged).
+/// a follow-up Devin Review BUG-0001 finding flagged).
 ///
 /// The function is named `merged_fts_search` rather than
 /// `dual_/triple_fts_search` so the public-crate-internal name
 /// stays stable as the schema grows additional tokeniser branches
 /// over future phases.
-pub(crate) fn merged_fts_search(
-    conn: &Connection,
+pub(crate) fn merged_fts_search(conn: &Connection,
     scope_id: ScopeId,
     query: &str,
     limit: usize,
@@ -5084,7 +4872,7 @@ pub(crate) fn merged_fts_search(
     let scope_uuid = scope_id.as_uuid();
     let scope_bytes = scope_uuid.as_bytes().as_slice();
 
-    // Phase 1.9 / schema v16: the trigram and bigram recall lanes
+    //  / schema v16: the trigram and bigram recall lanes
     // are queried against stopword-stripped indexed content (see
     // [`EvidenceStore::index_fts`]). The query side must apply the
     // same strip so that tokenisation is symmetric — without it a
@@ -5099,14 +4887,13 @@ pub(crate) fn merged_fts_search(
     // [`crate::fts_stopwords`] for the symmetric-stripping
     // rationale and [`crate::schema::SCHEMA_VERSION`] v16 for the
     // index-time migration.
-    // Counted variant feeds the Phase 1.10 query-time stopword
+    // Counted variant feeds the  query-time stopword
     // strip telemetry — `strip_count` is the number of stopword
     // instances replaced.  See [`crate::fts_telemetry`] for the
     // counter semantics.
     let (stripped_query, strip_count) =
         crate::fts_stopwords::strip_recall_lane_stopwords_counted(query);
-    crate::fts_telemetry::record_stopwords_stripped(
-        crate::fts_telemetry::StripSite::QueryTime,
+    crate::fts_telemetry::record_stopwords_stripped(crate::fts_telemetry::StripSite::QueryTime,
         strip_count,
     );
 
@@ -5175,7 +4962,7 @@ pub(crate) fn merged_fts_search(
     // unicode61 branch remains the sole source of truth for
     // query validity even if `evidence_fts_cjk` ever returned a
     // corrupted UUID (e.g. external database tampering). This is
-    // the long-form fix for sweep-3 Devin Review INFO-0001 —
+    // the long-form fix for a follow-up Devin Review INFO-0001 —
     // moving the UUID parse inside the swallow-scope means the
     // doc-comment's "errors swallowed" contract holds without
     // any post-closure exception.
@@ -5184,7 +4971,7 @@ pub(crate) fn merged_fts_search(
     // caller never has to re-parse a `Vec<u8>` — and so the only
     // post-closure code is the `MIN(rank)` merge, which is
     // infallible.
-    // Phase 1.9: skip the trigram branch entirely when the
+    // skip the trigram branch entirely when the
     // stopword-stripped query collapses to whitespace-only — for
     // example a query of pure particles like `のはがを` strips to
     // `    `. Feeding an all-whitespace MATCH operand to FTS5 is
@@ -5196,7 +4983,7 @@ pub(crate) fn merged_fts_search(
     // codepoint scan because the strip output's whitespace is
     // exactly the ASCII spaces we inserted at strip sites.
     //
-    // Phase 1.10 sweep 1 (BUG-0001 fix): the skip-check is
+    // a follow-up (BUG-0001 fix): the skip-check is
     // hoisted OUT of the closure so the skip-counter and
     // lane-query-counter branches are mutually exclusive by
     // construction — matches the bigram lane's `if let Some / else`
@@ -5224,22 +5011,21 @@ pub(crate) fn merged_fts_search(
     // Operators reading `cjk_trigram_lane_rows_total /
     // cjk_trigram_lane_queries_total` will observe lower precision
     // on Latin-dominant workloads — that signal is intentional and
-    // not a bug.  See sweep-3 (commit `4aaccba`) which tried to
+    // not a bug.  See a follow-up (commit `4aaccba`) which tried to
     // structurally skip Latin queries here and was reverted in
-    // sweep 4 once the trigram tokeniser's cross-script behaviour
+    // a follow-up once the trigram tokeniser's cross-script behaviour
     // was correctly identified.
     if stripped_query.as_ref().trim().is_empty() {
         // Telemetry: pure-stopword query collapsed to empty
         // after stripping — the trigram lane is declined
         // without invoking SQLite.
-        crate::fts_telemetry::record_lane_skip(
-            crate::fts_telemetry::SkipReason::CjkTrigramPureStopwordQuery,
+        crate::fts_telemetry::record_lane_skip(crate::fts_telemetry::SkipReason::CjkTrigramPureStopwordQuery,
         );
     } else {
         let trigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
             // `prepare_cached` — see Branch 1 comment for rationale.
             //
-            // Phase 1.9: the bound query parameter is
+            // the bound query parameter is
             // `stripped_query.as_ref()` — NOT the raw `query` — so
             // the FTS5 trigram MATCH runs against the same
             // stopword-stripped content the index was written with
@@ -5249,8 +5035,7 @@ pub(crate) fn merged_fts_search(
             // longer contains.
             let sql = trigram_lane_sql();
             let mut stmt = conn.prepare_cached(sql)?;
-            let rows = stmt.query_map(
-                params![stripped_query.as_ref(), scope_bytes, limit_sql],
+            let rows = stmt.query_map(params![stripped_query.as_ref(), scope_bytes, limit_sql],
                 |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, f64>(1)?)),
             )?;
             let mut out = Vec::new();
@@ -5272,7 +5057,7 @@ pub(crate) fn merged_fts_search(
             Ok(out)
         })();
         if let Ok(trigram_rows) = trigram_attempt {
-            // Phase 1.8: apply the trigram lane's inter-lane weight
+            // apply the trigram lane's inter-lane weight
             // (`EVIDENCE_FTS_CJK_LANE_WEIGHT`, < 1.0) before merging
             // so the trigram lane's precision penalty propagates into
             // the cross-lane min-rank comparison. See
@@ -5293,8 +5078,7 @@ pub(crate) fn merged_fts_search(
             // swallowed" contract); the telemetry counter is
             // bumped only when the lane contributed rows that
             // the merge actually consumed.
-            crate::fts_telemetry::record_lane_query(
-                crate::fts_telemetry::Lane::CjkTrigram,
+            crate::fts_telemetry::record_lane_query(crate::fts_telemetry::Lane::CjkTrigram,
                 row_count,
             );
         }
@@ -5324,8 +5108,8 @@ pub(crate) fn merged_fts_search(
     // The same "every error path in the closure, post-retrieval
     // UUID parse inside the swallow scope" pattern from Branch
     // 2 applies here — see the trigram branch comment for the
-    // architectural rationale (sweep-3 Devin Review INFO-0001).
-    // Phase 1.9: feed `compute_cjk_bigram_query` the stopword-
+    // architectural rationale (a follow-up Devin Review INFO-0001).
+    // feed `compute_cjk_bigram_query` the stopword-
     // stripped query (not the raw `query`) so the bigram windows
     // it generates are computed over the same character set that
     // the index-time write path windowed for storage. This is the
@@ -5339,7 +5123,7 @@ pub(crate) fn merged_fts_search(
     // bigram is requested by the query whenever it would be
     // produced by the body).
     //
-    // Phase 1.10 sweep 2 (ANALYSIS-0004 fix): the bigram lane's
+    // a follow-up (ANALYSIS-0004 fix): the bigram lane's
     // skip taxonomy now matches the trigram lane's structural
     // shape — the pure-stopword check runs BEFORE
     // `compute_cjk_bigram_query` so a CJK pure-stopword query
@@ -5358,8 +5142,7 @@ pub(crate) fn merged_fts_search(
         // genuinely non-CJK query path from a CJK-input-but-
         // pure-particles path.  Parallels the trigram-lane
         // pure-stopword branch above.
-        crate::fts_telemetry::record_lane_skip(
-            crate::fts_telemetry::SkipReason::BigramPureStopwordQuery,
+        crate::fts_telemetry::record_lane_skip(crate::fts_telemetry::SkipReason::BigramPureStopwordQuery,
         );
     } else if let Some(bigram_match) =
         crate::bigram::compute_cjk_bigram_query(stripped_query.as_ref())
@@ -5391,7 +5174,7 @@ pub(crate) fn merged_fts_search(
             Ok(out)
         })();
         if let Ok(bigram_rows) = bigram_attempt {
-            // Phase 1.8: apply the bigram lane's inter-lane weight
+            // apply the bigram lane's inter-lane weight
             // (`EVIDENCE_FTS_BIGRAM_LANE_WEIGHT`, < trigram's <
             // 1.0) before merging — the bigram lane is the
             // highest-recall and lowest-precision lane so its
@@ -5433,7 +5216,7 @@ pub(crate) fn merged_fts_search(
     // the resulting order is also stable across process restarts
     // (UUIDs are persisted, hash seeds are not).
     //
-    // This is the long-form fix for sweep-4 Devin Review INFO-0004
+    // This is the long-form fix for a follow-up Devin Review INFO-0004
     // — pinning the result order so that downstream tests and
     // any caller that does NOT re-score (e.g. the raw `search_fts`
     // public surface) sees identical output across runs for the
@@ -5469,11 +5252,11 @@ pub(crate) fn merged_fts_search(
 /// `f64` so this codepath is unreachable in production today, but
 /// pinning the merge to `f64::min` removes the trap entirely and
 /// aligns with the defensive `partial_cmp().unwrap_or(Equal)` used
-/// in the sort comparator at `merged_fts_search` (sweep-4 INFO-0004)
+/// in the sort comparator at `merged_fts_search` (a follow-up INFO-0004)
 /// — both halves of the merge pipeline now treat NaN identically
 /// instead of skewing in opposite directions.
 ///
-/// This is the long-form fix for sweep-5 Devin Review INFO-0002.
+/// This is the long-form fix for a follow-up Devin Review INFO-0002.
 fn merge_min_rank(best_rank: &mut HashMap<EvidenceId, f64>, id: EvidenceId, rank: f64) {
     best_rank
         .entry(id)
@@ -5483,7 +5266,7 @@ fn merge_min_rank(best_rank: &mut HashMap<EvidenceId, f64>, id: EvidenceId, rank
         .or_insert(rank);
 }
 
-/// Phase 1.8: cached SQL string for the unicode61 lane's MATCH
+/// cached SQL string for the unicode61 lane's MATCH
 /// query in [`merged_fts_search`]. The `bm25(<table>, w...)`
 /// fragment is built once at first use via
 /// [`crate::fts_weights::bm25_select_fragment`] so a future
@@ -5497,8 +5280,7 @@ fn merge_min_rank(best_rank: &mut HashMap<EvidenceId, f64>, id: EvidenceId, rank
 fn unicode61_lane_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
-        format!(
-            // `ORDER BY rank` (FTS5's built-in pseudo-column),
+        format!(// `ORDER BY rank` (FTS5's built-in pseudo-column),
             // NOT `ORDER BY weighted_rank` — the former triggers
             // FTS5's documented incremental-rank optimisation
             // which retrieves rows in best-to-worst order without
@@ -5510,8 +5292,7 @@ fn unicode61_lane_sql() -> &'static str {
             // and reading the SELECT-list column `weighted_rank`
             // are numerically equivalent. When a future schema
             // tunes column weights off `1.0`, the FTS5 rank
-            // configuration (`INSERT INTO evidence_fts(
-            // evidence_fts, rank) VALUES('rank', 'bm25(w1, w2)')`)
+            // configuration (`INSERT INTO evidence_fts(// evidence_fts, rank) VALUES('rank', 'bm25(w1, w2)')`)
             // re-configures the built-in `rank` to use the
             // matching weights and preserves the optimisation —
             // see `EVIDENCE_FTS_*_COLUMN_WEIGHTS` doc-comments.
@@ -5523,15 +5304,14 @@ fn unicode61_lane_sql() -> &'static str {
     })
 }
 
-/// Phase 1.8: cached SQL string for the trigram lane's MATCH
+/// cached SQL string for the trigram lane's MATCH
 /// query. Same shape as [`unicode61_lane_sql`] but against
 /// `evidence_fts_cjk` and with the trigram-lane column-weight
 /// vector. See [`unicode61_lane_sql`] for the caching rationale.
 fn trigram_lane_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
-        format!(
-            // See [`unicode61_lane_sql`] for the rationale on using
+        format!(// See [`unicode61_lane_sql`] for the rationale on using
             // `ORDER BY rank` (FTS5 built-in) rather than
             // `ORDER BY weighted_rank` (the SELECT-list alias) —
             // it preserves FTS5's incremental-rank optimisation.
@@ -5543,15 +5323,14 @@ fn trigram_lane_sql() -> &'static str {
     })
 }
 
-/// Phase 1.8: cached SQL string for the bigram lane's MATCH
+/// cached SQL string for the bigram lane's MATCH
 /// query. Same shape as [`unicode61_lane_sql`] but against
 /// `evidence_fts_bigram` and with the bigram-lane column-weight
 /// vector. See [`unicode61_lane_sql`] for the caching rationale.
 fn bigram_lane_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
-        format!(
-            // See [`unicode61_lane_sql`] for the rationale on using
+        format!(// See [`unicode61_lane_sql`] for the rationale on using
             // `ORDER BY rank` (FTS5 built-in) rather than
             // `ORDER BY weighted_rank` (the SELECT-list alias) —
             // it preserves FTS5's incremental-rank optimisation.
@@ -5683,8 +5462,8 @@ mod merge_min_rank_tests {
 }
 
 #[cfg(test)]
-mod phase_1_8_lane_sql_tests {
-    //! Phase 1.8: pin the exact SQL emitted by
+mod lane_sql_tests {
+    //! pin the exact SQL emitted by
     //! [`super::unicode61_lane_sql`] / [`super::trigram_lane_sql`]
     //! / [`super::bigram_lane_sql`] so a refactor of either
     //! [`crate::fts_weights::bm25_select_fragment`] or the SELECT
@@ -5702,13 +5481,11 @@ mod phase_1_8_lane_sql_tests {
     #[test]
     fn unicode61_lane_sql_contains_explicit_bm25_call_and_match_clause() {
         let sql = unicode61_lane_sql();
-        assert!(
-            sql.contains("bm25(evidence_fts, 1.0)"),
+        assert!(sql.contains("bm25(evidence_fts, 1.0)"),
             "unicode61 lane SQL must invoke bm25() with explicit \
              column weights — got: {sql}"
         );
-        assert!(
-            sql.contains("evidence_fts MATCH ?1"),
+        assert!(sql.contains("evidence_fts MATCH ?1"),
             "unicode61 lane SQL must MATCH against `evidence_fts` — got: {sql}"
         );
         // The SELECT-list alias is `weighted_rank` so a future
@@ -5724,21 +5501,18 @@ mod phase_1_8_lane_sql_tests {
         // configuration is updated in lockstep to keep the
         // optimisation valid (see the `EVIDENCE_FTS_*_COLUMN_WEIGHTS`
         // doc-comments for the forward-compat protocol).
-        assert!(
-            sql.contains("AS weighted_rank"),
+        assert!(sql.contains("AS weighted_rank"),
             "unicode61 lane SQL must alias the bm25() expression as \
              `weighted_rank` so the SELECT column name remains \
              unambiguous when column weights diverge from 1.0 — \
              got: {sql}"
         );
-        assert!(
-            sql.contains("ORDER BY rank LIMIT"),
+        assert!(sql.contains("ORDER BY rank LIMIT"),
             "unicode61 lane SQL must `ORDER BY rank` (FTS5's \
              built-in pseudo-column) to keep the incremental-rank \
              optimisation — got: {sql}"
         );
-        assert!(
-            !sql.contains("ORDER BY weighted_rank"),
+        assert!(!sql.contains("ORDER BY weighted_rank"),
             "unicode61 lane SQL must not ORDER BY the alias — \
              that disables FTS5's incremental-rank optimisation — \
              got: {sql}"
@@ -5748,17 +5522,14 @@ mod phase_1_8_lane_sql_tests {
     #[test]
     fn trigram_lane_sql_contains_explicit_bm25_call_and_match_clause() {
         let sql = trigram_lane_sql();
-        assert!(
-            sql.contains("bm25(evidence_fts_cjk, 1.0)"),
+        assert!(sql.contains("bm25(evidence_fts_cjk, 1.0)"),
             "trigram lane SQL must invoke bm25() with explicit \
              column weights — got: {sql}"
         );
-        assert!(
-            sql.contains("evidence_fts_cjk MATCH ?1"),
+        assert!(sql.contains("evidence_fts_cjk MATCH ?1"),
             "trigram lane SQL must MATCH against `evidence_fts_cjk` — got: {sql}"
         );
-        assert!(
-            sql.contains("AS weighted_rank") && sql.contains("ORDER BY rank LIMIT"),
+        assert!(sql.contains("AS weighted_rank") && sql.contains("ORDER BY rank LIMIT"),
             "trigram lane SQL must alias the bm25() column as \
              `weighted_rank` AND sort on FTS5's built-in `rank` \
              pseudo-column (preserves the incremental-rank \
@@ -5769,17 +5540,14 @@ mod phase_1_8_lane_sql_tests {
     #[test]
     fn bigram_lane_sql_contains_explicit_bm25_call_and_match_clause() {
         let sql = bigram_lane_sql();
-        assert!(
-            sql.contains("bm25(evidence_fts_bigram, 1.0)"),
+        assert!(sql.contains("bm25(evidence_fts_bigram, 1.0)"),
             "bigram lane SQL must invoke bm25() with explicit \
              column weights — got: {sql}"
         );
-        assert!(
-            sql.contains("evidence_fts_bigram MATCH ?1"),
+        assert!(sql.contains("evidence_fts_bigram MATCH ?1"),
             "bigram lane SQL must MATCH against `evidence_fts_bigram` — got: {sql}"
         );
-        assert!(
-            sql.contains("AS weighted_rank") && sql.contains("ORDER BY rank LIMIT"),
+        assert!(sql.contains("AS weighted_rank") && sql.contains("ORDER BY rank LIMIT"),
             "bigram lane SQL must alias the bm25() column as \
              `weighted_rank` AND sort on FTS5's built-in `rank` \
              pseudo-column (preserves the incremental-rank \
@@ -5789,29 +5557,26 @@ mod phase_1_8_lane_sql_tests {
 
     #[test]
     fn lane_sql_helpers_are_idempotent_across_calls() {
-        // Phase 1.8: the OnceLock caching contract — every call
+        // the OnceLock caching contract — every call
         // returns the same `&'static str` pointer (not just an
         // equal string), so a future contributor cannot
         // accidentally swap in a `format!()` that pays the
         // allocation cost on every query.
         let a = unicode61_lane_sql();
         let b = unicode61_lane_sql();
-        assert!(
-            std::ptr::eq(a, b),
+        assert!(std::ptr::eq(a, b),
             "unicode61_lane_sql() must return the cached pointer \
              on every call (OnceLock caching invariant)"
         );
         let a = trigram_lane_sql();
         let b = trigram_lane_sql();
-        assert!(
-            std::ptr::eq(a, b),
+        assert!(std::ptr::eq(a, b),
             "trigram_lane_sql() must return the cached pointer \
              on every call (OnceLock caching invariant)"
         );
         let a = bigram_lane_sql();
         let b = bigram_lane_sql();
-        assert!(
-            std::ptr::eq(a, b),
+        assert!(std::ptr::eq(a, b),
             "bigram_lane_sql() must return the cached pointer \
              on every call (OnceLock caching invariant)"
         );

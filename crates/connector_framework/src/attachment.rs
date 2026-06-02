@@ -116,8 +116,7 @@ impl AttachmentRegistry {
     }
 
     /// Look up the attachment bound to `(scope, kind)`, if any.
-    pub fn get_by_scope_kind(
-        &self,
+    pub fn get_by_scope_kind(&self,
         scope_id: ScopeId,
         kind: ConnectorKind,
     ) -> Option<&ConnectorAttachment> {
@@ -141,8 +140,7 @@ impl AttachmentRegistry {
     /// scope (modelled as a `Channel` object — domain attachments
     /// can use the same code path with a `Domain` object type by
     /// constructing a domain-typed [`ObjectRef`] before this call).
-    pub fn attach(
-        &mut self,
+    pub fn attach(&mut self,
         connector: ConnectorInstanceId,
         kind: ConnectorKind,
         scope_id: ScopeId,
@@ -168,8 +166,7 @@ impl AttachmentRegistry {
 
     /// Detach a connector. Requires the same permission as
     /// [`Self::attach`].
-    pub fn detach(
-        &mut self,
+    pub fn detach(&mut self,
         connector: ConnectorInstanceId,
         store: &TupleStore,
         namespaces: &NamespaceRegistry,
@@ -198,8 +195,7 @@ impl AttachmentRegistry {
     }
 }
 
-fn require_admin_or_editor(
-    scope_id: ScopeId,
+fn require_admin_or_editor(scope_id: ScopeId,
     store: &TupleStore,
     namespaces: &NamespaceRegistry,
     subject: SubjectRef,
@@ -225,8 +221,7 @@ mod tests {
 
     fn grant(store: &mut TupleStore, scope: ScopeId, relation: Relation, user: Uuid) {
         store
-            .insert(RelationTuple::new(
-                ObjectRef::new(ObjectType::Channel, scope.as_uuid()),
+            .insert(RelationTuple::new(ObjectRef::new(ObjectType::Channel, scope.as_uuid()),
                 relation,
                 SubjectRef::direct(SubjectType::User, user),
             ))
@@ -243,8 +238,7 @@ mod tests {
         let mut reg = AttachmentRegistry::new();
         let connector = ConnectorInstanceId::new_v4();
         let attachment = reg
-            .attach(
-                connector,
+            .attach(connector,
                 ConnectorKind::Notion,
                 scope,
                 &store,
@@ -266,8 +260,7 @@ mod tests {
 
         let mut reg = AttachmentRegistry::new();
         let err = reg
-            .attach(
-                ConnectorInstanceId::new_v4(),
+            .attach(ConnectorInstanceId::new_v4(),
                 ConnectorKind::Notion,
                 scope,
                 &store,
@@ -285,8 +278,7 @@ mod tests {
         let user = Uuid::new_v4();
         let mut reg = AttachmentRegistry::new();
         let err = reg
-            .attach(
-                ConnectorInstanceId::new_v4(),
+            .attach(ConnectorInstanceId::new_v4(),
                 ConnectorKind::Jira,
                 scope,
                 &store,
@@ -304,8 +296,7 @@ mod tests {
         let user = Uuid::new_v4();
         grant(&mut store, scope, Relation::Admin, user);
         let mut reg = AttachmentRegistry::new();
-        reg.attach(
-            ConnectorInstanceId::new_v4(),
+        reg.attach(ConnectorInstanceId::new_v4(),
             ConnectorKind::GoogleDrive,
             scope,
             &store,
@@ -323,8 +314,7 @@ mod tests {
         grant(&mut store, scope, Relation::Editor, user);
         let mut reg = AttachmentRegistry::new();
         let subject = SubjectRef::direct(SubjectType::User, user);
-        reg.attach(
-            ConnectorInstanceId::new_v4(),
+        reg.attach(ConnectorInstanceId::new_v4(),
             ConnectorKind::Notion,
             scope,
             &store,
@@ -333,8 +323,7 @@ mod tests {
         )
         .unwrap();
         let err = reg
-            .attach(
-                ConnectorInstanceId::new_v4(),
+            .attach(ConnectorInstanceId::new_v4(),
                 ConnectorKind::Notion,
                 scope,
                 &store,
@@ -353,8 +342,7 @@ mod tests {
         grant(&mut store, scope, Relation::Editor, user);
         let mut reg = AttachmentRegistry::new();
         let subject = SubjectRef::direct(SubjectType::User, user);
-        reg.attach(
-            ConnectorInstanceId::new_v4(),
+        reg.attach(ConnectorInstanceId::new_v4(),
             ConnectorKind::Notion,
             scope,
             &store,
@@ -362,8 +350,7 @@ mod tests {
             subject,
         )
         .unwrap();
-        reg.attach(
-            ConnectorInstanceId::new_v4(),
+        reg.attach(ConnectorInstanceId::new_v4(),
             ConnectorKind::Jira,
             scope,
             &store,
@@ -396,8 +383,7 @@ mod tests {
         let (store, ns) = fresh();
         let mut reg = AttachmentRegistry::new();
         let err = reg
-            .detach(
-                ConnectorInstanceId::new_v4(),
+            .detach(ConnectorInstanceId::new_v4(),
                 &store,
                 &ns,
                 SubjectRef::direct(SubjectType::User, Uuid::new_v4()),
@@ -414,8 +400,7 @@ mod tests {
         grant(&mut store, scope, Relation::Editor, user);
         let mut reg = AttachmentRegistry::new();
         let connector = ConnectorInstanceId::new_v4();
-        reg.attach(
-            connector,
+        reg.attach(connector,
             ConnectorKind::OneDrive,
             scope,
             &store,

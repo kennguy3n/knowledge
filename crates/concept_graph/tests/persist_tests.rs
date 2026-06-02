@@ -190,8 +190,7 @@ fn rescoped_node_save_lands_in_new_scope() {
 
     let mut g = PersistentConceptGraph::open(&path, &key).unwrap();
     let (n_a, _) = g.load_scope(scope_a).unwrap();
-    assert_eq!(
-        n_a, 0,
+    assert_eq!(n_a, 0,
         "node must no longer be reachable under its old scope"
     );
 }
@@ -206,8 +205,7 @@ fn raw_sqlite_view_is_encrypted() {
     let plaintext_label = "Sensitive Project Phoenix";
     {
         let mut g = PersistentConceptGraph::open(&path, &key).unwrap();
-        g.add_node(ConceptNode::new_candidate(
-            plaintext_label,
+        g.add_node(ConceptNode::new_candidate(plaintext_label,
             "should not appear in plaintext on disk",
             scope,
         ))
@@ -219,8 +217,7 @@ fn raw_sqlite_view_is_encrypted() {
     // the per-scope AEAD ciphertext should hide it.
     let bytes = std::fs::read(&path).unwrap();
     let needle = plaintext_label.as_bytes();
-    assert!(
-        !bytes.windows(needle.len()).any(|w| w == needle),
+    assert!(!bytes.windows(needle.len()).any(|w| w == needle),
         "plaintext label leaked into the on-disk database"
     );
 }
@@ -235,8 +232,7 @@ fn load_scope_paginated_returns_only_the_requested_window() {
     {
         let mut g = PersistentConceptGraph::open(&path, &key).unwrap();
         for i in 0..50 {
-            g.add_node(ConceptNode::new_candidate(
-                format!("node_{i}"),
+            g.add_node(ConceptNode::new_candidate(format!("node_{i}"),
                 "fixture",
                 scope,
             ))
@@ -280,16 +276,14 @@ fn query_neighbors_from_disk_returns_incident_edges_without_loading_graph() {
             .add_node(ConceptNode::new_candidate("b", "x", scope))
             .unwrap();
         graph
-            .add_edge(ConceptEdge::new(
-                center,
+            .add_edge(ConceptEdge::new(center,
                 neighbor_a,
                 RelationType::PartOf,
                 scope,
             ))
             .unwrap();
         graph
-            .add_edge(ConceptEdge::new(
-                neighbor_b,
+            .add_edge(ConceptEdge::new(neighbor_b,
                 center,
                 RelationType::PartOf,
                 scope,
@@ -300,8 +294,7 @@ fn query_neighbors_from_disk_returns_incident_edges_without_loading_graph() {
             .add_node(ConceptNode::new_candidate("z", "x", scope))
             .unwrap();
         graph
-            .add_edge(ConceptEdge::new(
-                neighbor_a,
+            .add_edge(ConceptEdge::new(neighbor_a,
                 unrelated,
                 RelationType::PartOf,
                 scope,
@@ -319,8 +312,7 @@ fn query_neighbors_from_disk_returns_incident_edges_without_loading_graph() {
     // Each returned edge must touch `center`.
     for edge in edges {
         assert!(edge.from == center || edge.to == center);
-        assert!(
-            edge.from == neighbor_a
+        assert!(edge.from == neighbor_a
                 || edge.to == neighbor_a
                 || edge.from == neighbor_b
                 || edge.to == neighbor_b

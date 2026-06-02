@@ -1,4 +1,4 @@
-//! Phase 1.12 — pre-embedding routing hook.
+//!  — pre-embedding routing hook.
 //!
 //! XLM-R (the embedding model wired into [`crate::embeddings`]) is
 //! genuinely multilingual: it produces meaningful vectors across
@@ -42,7 +42,7 @@
 //!
 //! ## Why `whatlang::detect` and not `observation_engine::detect_language`
 //!
-//! [`observation_engine::language::detect_language`] (Phase 1.3)
+//! [`observation_engine::language::detect_language`]
 //! layers an additional `is_reliable()` filter on top of
 //! [`whatlang::detect`] for the *classifier* lane — the
 //! per-sentence language tag drives lexicon selection where a
@@ -90,10 +90,10 @@
 //! * **False negative (Skip → Embed)**: a noise-dominant input
 //!   that `whatlang` *does* classify (e.g. ``"yes"`` is short
 //!   but linguistic) proceeds to embedding.  No regression vs.
-//!   pre-Phase-1.12 behaviour.
+//!   earlier behaviour.
 //!
 //! There is no path where the router introduces a new failure
-//! mode that did not exist before this phase.
+//! mode that did not exist before the routing hook landed.
 //!
 //! # Telemetry
 //!
@@ -199,8 +199,7 @@ mod tests {
 
     #[test]
     fn empty_string_routes_to_skip_empty_after_trim() {
-        assert_eq!(
-            classify_for_embedding(""),
+        assert_eq!(classify_for_embedding(""),
             EmbeddingRoute::Skip(SkipReason::EmptyAfterTrim),
         );
     }
@@ -212,8 +211,7 @@ mod tests {
         // whitespace handling" change does not silently regress
         // the gate.
         for input in [" ", "\t", "\n", "\r", "  \t\n  ", "\u{00A0}"] {
-            assert_eq!(
-                classify_for_embedding(input),
+            assert_eq!(classify_for_embedding(input),
                 EmbeddingRoute::Skip(SkipReason::EmptyAfterTrim),
                 "input {input:?} should route to EmptyAfterTrim",
             );
@@ -223,8 +221,7 @@ mod tests {
     #[test]
     fn pure_punctuation_routes_to_skip_no_linguistic_content() {
         for input in ["!!!", "...", "?!?!", "()[]{}", "<<<>>>", "---===---"] {
-            assert_eq!(
-                classify_for_embedding(input),
+            assert_eq!(classify_for_embedding(input),
                 EmbeddingRoute::Skip(SkipReason::NoLinguisticContent),
                 "input {input:?} should route to NoLinguisticContent",
             );
@@ -234,8 +231,7 @@ mod tests {
     #[test]
     fn pure_emoji_routes_to_skip_no_linguistic_content() {
         for input in ["😀", "😀😀😀😀", "👍🎉🚀", "❤️🌟⭐"] {
-            assert_eq!(
-                classify_for_embedding(input),
+            assert_eq!(classify_for_embedding(input),
                 EmbeddingRoute::Skip(SkipReason::NoLinguisticContent),
                 "input {input:?} should route to NoLinguisticContent",
             );
@@ -250,8 +246,7 @@ mod tests {
         // all land here — they are still indexed via FTS but
         // are not worth embedding.
         for input in ["1234567890", "42", "1.23", "1,234,567"] {
-            assert_eq!(
-                classify_for_embedding(input),
+            assert_eq!(classify_for_embedding(input),
                 EmbeddingRoute::Skip(SkipReason::NoLinguisticContent),
                 "input {input:?} should route to NoLinguisticContent",
             );
@@ -260,13 +255,12 @@ mod tests {
 
     #[test]
     fn single_short_english_word_routes_to_embed() {
-        // "yes" / "no" are short but linguistic.  Phase 1.11
+        // "yes" / "no" are short but linguistic.  
         // cross-lingual recall benchmarks rely on the embedding
         // lane admitting short bodies, so a regression here
         // would degrade benchmark recall@k.
         for input in ["yes", "no", "hello", "world"] {
-            assert_eq!(
-                classify_for_embedding(input),
+            assert_eq!(classify_for_embedding(input),
                 EmbeddingRoute::Embed,
                 "input {input:?} should route to Embed",
             );
@@ -275,7 +269,7 @@ mod tests {
 
     #[test]
     fn multilingual_text_routes_to_embed() {
-        // Cross-script sanity — every script family Phase 1.5
+        // Cross-script sanity — every script family 
         // / 1.6 / 1.7 added a lexicon for should admit to the
         // embedding lane.  This pins the "XLM-R is multilingual"
         // contract from the router's side.
@@ -291,8 +285,7 @@ mod tests {
             "मौसम की भविष्यवाणी",
             "พยากรณ์อากาศพรุ่งนี้",
         ] {
-            assert_eq!(
-                classify_for_embedding(input),
+            assert_eq!(classify_for_embedding(input),
                 EmbeddingRoute::Embed,
                 "input {input:?} should route to Embed",
             );
@@ -310,8 +303,7 @@ mod tests {
             "明日の天気予報 ☔",
             "*** important: meeting at 3pm ***",
         ] {
-            assert_eq!(
-                classify_for_embedding(input),
+            assert_eq!(classify_for_embedding(input),
                 EmbeddingRoute::Embed,
                 "input {input:?} should route to Embed",
             );

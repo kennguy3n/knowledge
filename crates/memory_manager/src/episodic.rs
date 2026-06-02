@@ -49,8 +49,7 @@ pub struct Observation {
 
 impl Observation {
     /// Construct a new observation.
-    pub fn new(
-        evidence_id: EvidenceId,
+    pub fn new(evidence_id: EvidenceId,
         scope_id: ScopeId,
         occurred_at: DateTime<Utc>,
         body: impl Into<String>,
@@ -149,8 +148,7 @@ pub struct EpisodicSummary {
 
 impl EpisodicSummary {
     /// Construct a new candidate episodic summary.
-    pub fn new_candidate(
-        scope_id: ScopeId,
+    pub fn new_candidate(scope_id: ScopeId,
         session_id: Uuid,
         summary_text: impl Into<String>,
         key_observations: Vec<EvidenceId>,
@@ -205,8 +203,7 @@ impl StubSummarizer {
 impl Summarizer for StubSummarizer {
     fn summarize(&self, session: &Session) -> Result<String> {
         if session.observations.is_empty() {
-            return Err(MemoryError::Validation(
-                "cannot summarise an empty session".into(),
+            return Err(MemoryError::Validation("cannot summarise an empty session".into(),
             ));
         }
         let parts: Vec<&str> = session
@@ -284,8 +281,7 @@ impl Summarizer for SlmSummarizer {
             },
             Err(err) if err.is_fallback() => self.fallback.summarize(session),
             Err(RouterError::InferenceFailure(_)) => self.fallback.summarize(session),
-            Err(err) => Err(MemoryError::Validation(format!(
-                "summariser router error: {err}"
+            Err(err) => Err(MemoryError::Validation(format!("summariser router error: {err}"
             ))),
         }
     }
@@ -517,8 +513,7 @@ impl<S: Summarizer> EpisodicMemory<S> {
             }
             let text = self.summarizer.summarize(&session)?;
             let key_obs = session.observations.iter().map(|o| o.evidence_id).collect();
-            let summary = EpisodicSummary::new_candidate(
-                session.scope_id,
+            let summary = EpisodicSummary::new_candidate(session.scope_id,
                 session.id,
                 text,
                 key_obs,
@@ -672,8 +667,7 @@ mod tests {
         fn supports(&self, _t: InferenceTask) -> bool {
             true
         }
-        fn generate(
-            &self,
+        fn generate(&self,
             _t: &str,
             _p: &str,
             _g: &str,
@@ -722,8 +716,7 @@ mod tests {
         assert_eq!(out, "the team did alpha and beta");
         // Defensive: the raw JSON would have started with `{` and
         // contained `"recap"`; the plaintext must not.
-        assert!(
-            !out.contains('{') && !out.contains("\"recap\""),
+        assert!(!out.contains('{') && !out.contains("\"recap\""),
             "summary_text leaked raw JSON: {out}"
         );
     }
@@ -745,8 +738,7 @@ mod tests {
             boundary: SessionBoundary::TimeGap,
             observations: vec![obs(scope, t0, "alpha"), obs(scope, t0, "beta")],
         };
-        let s = SlmSummarizer::new(router(Box::new(ConstAdapter::ok(
-            "the team did alpha and beta",
+        let s = SlmSummarizer::new(router(Box::new(ConstAdapter::ok("the team did alpha and beta",
         ))));
         let out = s.summarize(&session).unwrap();
         // StubSummarizer concatenates observation bodies.
@@ -765,8 +757,7 @@ mod tests {
             boundary: SessionBoundary::TimeGap,
             observations: vec![obs(scope, t0, "alpha"), obs(scope, t0, "beta")],
         };
-        let s = SlmSummarizer::new(router(Box::new(ConstAdapter::err(
-            RouterError::Unavailable {
+        let s = SlmSummarizer::new(router(Box::new(ConstAdapter::err(RouterError::Unavailable {
                 task: "synth_summary",
             },
         ))));
@@ -787,8 +778,7 @@ mod tests {
             boundary: SessionBoundary::TimeGap,
             observations: vec![obs(scope, t0, "alpha"), obs(scope, t0, "beta")],
         };
-        let s = SlmSummarizer::new(router(Box::new(ConstAdapter::err(
-            RouterError::InferenceFailure("crash".into()),
+        let s = SlmSummarizer::new(router(Box::new(ConstAdapter::err(RouterError::InferenceFailure("crash".into()),
         ))));
         let out = s.summarize(&session).unwrap();
         assert_eq!(out, "alpha / beta");
@@ -827,8 +817,7 @@ mod tests {
         let mut store = EpisodicStore::new();
         let t = Utc::now();
         let s1 = EpisodicSummary::new_candidate(scope, Uuid::new_v4(), "old", vec![], t, t);
-        let s2 = EpisodicSummary::new_candidate(
-            scope,
+        let s2 = EpisodicSummary::new_candidate(scope,
             Uuid::new_v4(),
             "new",
             vec![],
@@ -846,8 +835,7 @@ mod tests {
     fn store_forget_unknown_id_returns_not_found() {
         let mut store = EpisodicStore::new();
         let id = Uuid::new_v4();
-        assert!(matches!(
-            store.forget(&id).unwrap_err(),
+        assert!(matches!(store.forget(&id).unwrap_err(),
             MemoryError::NotFound { .. }
         ));
     }
@@ -905,8 +893,7 @@ mod tests {
         let sessions = SessionDetector::default().detect(&stream);
         assert_eq!(sessions.len(), 2);
         assert_eq!(sessions[0].boundary, SessionBoundary::ExplicitAction);
-        assert_eq!(
-            sessions[1].boundary,
+        assert_eq!(sessions[1].boundary,
             SessionBoundary::TimeGap,
             "trailing session must default to TimeGap, not inherit prior close reason"
         );

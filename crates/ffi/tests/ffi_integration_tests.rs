@@ -68,8 +68,7 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
     let phrase = "xyzzyintegrationroundtrip";
     let body = format!("Schedule the {phrase} review for Q4 close.");
 
-    let evidence_id = ingest_message(
-        h,
+    let evidence_id = ingest_message(h,
         scope.clone(),
         body.clone(),
         SourceKind::Slack,
@@ -87,7 +86,7 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
     assert_eq!(record.body, body);
     assert_eq!(record.source, SourceKind::Slack);
     assert_eq!(record.scope_id, scope);
-    // Phase 1.3 / schema v13: `ingest_message` runs
+    //  / schema v13: `ingest_message` runs
     // `observation_engine::detect_language` on the plaintext
     // body at the production write boundary. The body here
     // embeds the synthetic FTS5 marker token
@@ -114,16 +113,14 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
     // specific whatlang reliability decision for a
     // synthetic-token corpus that may drift across crate
     // versions.
-    assert_eq!(
-        record.language_tag, None,
+    assert_eq!(record.language_tag, None,
         "synthetic-token English body is correctly classified as unreliable; language_tag must stay NULL"
     );
 
     forget(h, evidence_id.clone()).expect("forget");
 
     let hits_after = query(h, scope.clone(), phrase.into(), 10).expect("query after forget");
-    assert!(
-        hits_after.is_empty(),
+    assert!(hits_after.is_empty(),
         "post-forget query must return no rows for the forgotten scope"
     );
     match get_evidence(h, evidence_id) {
@@ -134,7 +131,7 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
     close_store(h).expect("close_store");
 }
 
-/// Phase 1.3 / schema v13 — `ingest_message` MUST stamp
+///  / schema v13 — `ingest_message` MUST stamp
 /// `Some("en")` onto a reliably-English plaintext body. The
 /// surface-coverage test above uses a synthetic FTS5 marker token
 /// that whatlang refuses to classify; this is the dedicated
@@ -154,8 +151,7 @@ fn ingest_message_stamps_language_tag_for_plain_english_body() {
     let body =
         "Please review the quarterly financial report before tomorrow's board meeting.".to_string();
 
-    let evidence_id = ingest_message(
-        h,
+    let evidence_id = ingest_message(h,
         scope.clone(),
         body.clone(),
         SourceKind::Slack,
@@ -165,8 +161,7 @@ fn ingest_message_stamps_language_tag_for_plain_english_body() {
 
     let record = get_evidence(h, evidence_id).expect("get_evidence");
     assert_eq!(record.body, body);
-    assert_eq!(
-        record.language_tag.as_deref(),
+    assert_eq!(record.language_tag.as_deref(),
         Some("en"),
         "ingest_message FFI path must stamp language_tag = Some(\"en\") for plain English plaintext"
     );
@@ -174,7 +169,7 @@ fn ingest_message_stamps_language_tag_for_plain_english_body() {
     close_store(h).expect("close_store");
 }
 
-/// Phase 1.3 / schema v13 — the FFI ingest write path MUST stamp
+///  / schema v13 — the FFI ingest write path MUST stamp
 /// the detected BCP-47 primary subtag onto **non-Latin** scripts
 /// too, not just Latin English. This pins the contract with a
 /// Japanese sentence; whatlang's trigram model classifies it
@@ -195,8 +190,7 @@ fn ingest_message_stamps_language_tag_for_japanese_body() {
     let body =
         "今日は会議の議事録を整理してから、新しいプロジェクトの計画を立てる予定です。".to_string();
 
-    let evidence_id = ingest_message(
-        h,
+    let evidence_id = ingest_message(h,
         scope.clone(),
         body.clone(),
         SourceKind::Slack,
@@ -206,8 +200,7 @@ fn ingest_message_stamps_language_tag_for_japanese_body() {
 
     let record = get_evidence(h, evidence_id).expect("get_evidence");
     assert_eq!(record.body, body);
-    assert_eq!(
-        record.language_tag.as_deref(),
+    assert_eq!(record.language_tag.as_deref(),
         Some("ja"),
         "ingest_message FFI path must stamp language_tag = Some(\"ja\") for Japanese plaintext"
     );
@@ -215,11 +208,11 @@ fn ingest_message_stamps_language_tag_for_japanese_body() {
     close_store(h).expect("close_store");
 }
 
-/// Phase 1.3 / schema v13 — `detect_language` is fail-closed: when
+///  / schema v13 — `detect_language` is fail-closed: when
 /// the input is too short, pure punctuation / pure emoji, or
 /// otherwise unreliable on whatlang's internal heuristic, it
 /// returns `None` and the column stays NULL. This is the correct
-/// "language unknown" outcome — downstream consumers (Phase 1.1
+/// "language unknown" outcome — downstream consumers (
 /// lexicon registry) treat NULL as "fall back to scope-default
 /// locale" rather than guessing. Pinning this avoids a future
 /// "helpful" change that silently substitutes `"en"` as a default
@@ -234,8 +227,7 @@ fn ingest_message_leaves_language_tag_null_for_unclassifiable_body() {
     // classify and `detect_language` returns `None`.
     let body = "!!! ... ??? 12345 !!!".to_string();
 
-    let evidence_id = ingest_message(
-        h,
+    let evidence_id = ingest_message(h,
         scope.clone(),
         body.clone(),
         SourceKind::Slack,
@@ -245,8 +237,7 @@ fn ingest_message_leaves_language_tag_null_for_unclassifiable_body() {
 
     let record = get_evidence(h, evidence_id).expect("get_evidence");
     assert_eq!(record.body, body);
-    assert_eq!(
-        record.language_tag, None,
+    assert_eq!(record.language_tag, None,
         "ingest_message FFI path must leave language_tag NULL when whatlang refuses to classify"
     );
 
@@ -309,8 +300,7 @@ fn synthesis_surface_returns_stable_partial_implementation() {
     // NotFound rather than wasting an inference call.
     let empty_scope = uuid::Uuid::new_v4().to_string();
     let recap = get_channel_memory(h, empty_scope.clone()).expect("get_channel_memory");
-    assert!(
-        recap.is_none(),
+    assert!(recap.is_none(),
         "channel recap must be None before synthesis runs"
     );
     match trigger_synthesis(h, empty_scope, SynthesisTrigger::ManualUserAction) {
@@ -321,8 +311,7 @@ fn synthesis_surface_returns_stable_partial_implementation() {
     // Case 2: scope with evidence — router has no synth-capable
     // adapter on this build, so we get Unavailable.
     let scope = uuid::Uuid::new_v4().to_string();
-    ingest_message(
-        h,
+    ingest_message(h,
         scope.clone(),
         "hello world".into(),
         SourceKind::Manual,
@@ -330,8 +319,7 @@ fn synthesis_surface_returns_stable_partial_implementation() {
     )
     .expect("ingest seed evidence");
     match trigger_synthesis(h, scope, SynthesisTrigger::ManualUserAction) {
-        Err(FfiError::Unavailable { subsystem }) => assert!(
-            subsystem.starts_with("synthesis"),
+        Err(FfiError::Unavailable { subsystem }) => assert!(subsystem.starts_with("synthesis"),
             "expected synthesis subsystem, got {subsystem}"
         ),
         other => panic!("expected Unavailable, got {other:?}"),
@@ -350,8 +338,7 @@ fn crypto_surface_round_trips_via_scope_aead() {
     let scope = uuid::Uuid::new_v4().to_string();
     // Ingesting a message registers the scope DEK (v6 schema) so
     // encrypt/decrypt can find the per-scope key.
-    let _ = ingest_message(
-        h,
+    let _ = ingest_message(h,
         scope.clone(),
         "setup".into(),
         SourceKind::Slack,
@@ -360,8 +347,7 @@ fn crypto_surface_round_trips_via_scope_aead() {
     .expect("ingest to register scope");
     let plaintext = b"hello, knowledge".to_vec();
     let ciphertext = encrypt(h, scope.clone(), plaintext.clone()).expect("encrypt");
-    assert!(
-        ciphertext.len() > plaintext.len(),
+    assert!(ciphertext.len() > plaintext.len(),
         "envelope must include the nonce prefix and Poly1305 tag"
     );
 
@@ -373,8 +359,7 @@ fn crypto_surface_round_trips_via_scope_aead() {
     // `NotFound { kind: "scope" }` rather than `Crypto`.
     let other_scope = uuid::Uuid::new_v4().to_string();
     let err = decrypt(h, other_scope, ciphertext).unwrap_err();
-    assert!(
-        err.kind() == "Crypto" || err.kind() == "NotFound",
+    assert!(err.kind() == "Crypto" || err.kind() == "NotFound",
         "expected Crypto or NotFound, got {}",
         err.kind()
     );
@@ -399,8 +384,7 @@ fn distinct_handles_isolate_independent_stores() {
 
     let scope = uuid::Uuid::new_v4().to_string();
     let phrase = "isolationintegrationphrase";
-    let evidence_id = ingest_message(
-        h1,
+    let evidence_id = ingest_message(h1,
         scope.clone(),
         format!("body containing {phrase}"),
         SourceKind::Manual,
@@ -469,8 +453,7 @@ fn close_store_blocks_on_inflight_calls() {
     let h = open_store(path_str.clone(), key.to_string()).expect("open_store");
     let scope = uuid::Uuid::new_v4().to_string();
     let phrase = "closestoresynchronousteardown";
-    let evidence_id = ingest_message(
-        h,
+    let evidence_id = ingest_message(h,
         scope.clone(),
         format!("body containing {phrase}"),
         SourceKind::Manual,
@@ -489,8 +472,7 @@ fn close_store_blocks_on_inflight_calls() {
                 // Tolerate `Unavailable` — once `close_store` has
                 // removed the registry entry, subsequent calls
                 // from this worker will start observing it.
-                let _ = ingest_message(
-                    h,
+                let _ = ingest_message(h,
                     scope.clone(),
                     format!("race body w{w} i{i}"),
                     SourceKind::Manual,
@@ -520,8 +502,7 @@ fn close_store_blocks_on_inflight_calls() {
     //    drop), and we read it back immediately, with no retry.
     let h2 = open_store(path_str, key.to_string()).expect("re-open after close_store");
     let hits = query(h2, scope.clone(), phrase.into(), 10).expect("query reopened handle");
-    assert!(
-        hits.iter().any(|hit| hit.evidence_id == evidence_id),
+    assert!(hits.iter().any(|hit| hit.evidence_id == evidence_id),
         "re-opened handle must observe the row the closed handle wrote"
     );
     close_store(h2).expect("close re-opened handle");
@@ -543,51 +524,43 @@ fn close_store_blocks_on_inflight_calls() {
 #[test]
 fn ffi_error_variants_are_wire_stable() {
     let cases = vec![
-        (
-            FfiError::Unimplemented {
+        (FfiError::Unimplemented {
                 method: "ingest_message".into(),
             },
             "Unimplemented",
         ),
-        (
-            FfiError::InvalidId {
+        (FfiError::InvalidId {
                 message: "not a uuid".into(),
             },
             "InvalidId",
         ),
-        (
-            FfiError::NotFound {
+        (FfiError::NotFound {
                 kind: "evidence".into(),
                 id: "abc".into(),
             },
             "NotFound",
         ),
-        (
-            FfiError::Evidence {
+        (FfiError::Evidence {
                 message: "fts boom".into(),
             },
             "Evidence",
         ),
-        (
-            FfiError::Memory {
+        (FfiError::Memory {
                 message: "decay sweep failed".into(),
             },
             "Memory",
         ),
-        (
-            FfiError::Synthesis {
+        (FfiError::Synthesis {
                 message: "router timeout".into(),
             },
             "Synthesis",
         ),
-        (
-            FfiError::Crypto {
+        (FfiError::Crypto {
                 message: "aead tampered".into(),
             },
             "Crypto",
         ),
-        (
-            FfiError::Unavailable {
+        (FfiError::Unavailable {
                 subsystem: "tee_worker".into(),
             },
             "Unavailable",
@@ -598,8 +571,7 @@ fn ffi_error_variants_are_wire_stable() {
         // unusable result). Hosts switch on `kind` and the
         // detail field to drive retry policy — silently
         // collapsing the two would erase that signal.
-        (
-            FfiError::InferenceFailure {
+        (FfiError::InferenceFailure {
                 message: "synthesis: grammar violation on SummaryBundle".into(),
             },
             "InferenceFailure",
@@ -645,7 +617,7 @@ fn evidence_round_trip_via_wire_types() {
         body: "a sample evidence body with unicode: 한글 / café".into(),
         source: SourceKind::Slack,
         created_at: 1_700_000_000,
-        // Schema v13 (Phase 1.3): the bridge MUST surface the
+        // Schema v13: the bridge MUST surface the
         // detected BCP-47 tag end-to-end so host shells don't
         // re-run detection on the read side. NULL stays NULL.
         language_tag: Some("ko".into()),
@@ -733,7 +705,7 @@ fn source_kind_variants_all_round_trip() {
 }
 
 /// `health_check` over a freshly-opened runtime must include the
-/// new `connector` subsystem entry. Phase 2 wires the connector
+/// new `connector` subsystem entry. wires the connector
 /// framework into the substrate and `CONTRIBUTING.md` §4 mandates a
 /// matching `health_check` probe per subsystem — this test pins
 /// that wiring contract so a future regression that drops the probe
@@ -763,7 +735,7 @@ fn health_check_envelope_includes_connector_subsystem() {
     assert!(detail.contains("total=0"), "detail={detail}");
     assert!(detail.contains("authenticated=0"), "detail={detail}");
     assert!(detail.contains("failed=0"), "detail={detail}");
-    // Phase 4.1: the probe also surfaces the
+    // the probe also surfaces the
     // `ClientSecretResolver` registration state alongside the
     // per-status counts. A fresh runtime has no resolver wired up,
     // so the host should see `oauth_resolver=unset` — this is the
@@ -772,8 +744,8 @@ fn health_check_envelope_includes_connector_subsystem() {
     #[cfg(feature = "http-client")]
     assert!(detail.contains("oauth_resolver=unset"), "detail={detail}");
 
-    // Sanity-check the probe ordering — the Phase 2 wiring appends
-    // `connector` after the four Phase 1 subsystems, and Phase 7
+    // Sanity-check the probe ordering — the  wiring appends
+    // `connector` after the four  subsystems, and 
     // appends `synthesis_engine` after that. A host rendering
     // subsystems in array order therefore sees the tiles in this
     // exact order. The array order is part of the host UI contract
@@ -781,8 +753,7 @@ fn health_check_envelope_includes_connector_subsystem() {
     // they appear in the envelope), so changes here are intentional
     // and require updating the host shells.
     let names: Vec<&str> = env.subsystems.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(
-        names,
+    assert_eq!(names,
         vec![
             "bridge",
             "evidence_store",
@@ -819,7 +790,7 @@ fn health_check_envelope_includes_connector_subsystem() {
 /// Gated on `http-client` because `create_connector` requires a
 /// live `BlockingHttpTransport` — without the feature every
 /// connector lifecycle call returns `FfiError::Unavailable`, which
-/// is the surface this test is *not* exercising. The Phase 2 CI
+/// is the surface this test is *not* exercising. The  CI
 /// workflow builds + tests this crate with `--all-features` so the
 /// gate keeps the unit test deterministic on every developer's
 /// local `cargo test` while still being exercised by the
@@ -842,15 +813,13 @@ fn forget_scope_purges_connectors_bound_to_the_forgotten_scope() {
         "redirect_uri": "https://example.invalid/oauth/callback",
         "token_url": "https://example.invalid/oauth/token"
     }"#;
-    let id_a = create_connector(
-        h,
+    let id_a = create_connector(h,
         ConnectorKindTag::Notion,
         scope_a.clone(),
         cfg.to_string(),
     )
     .expect("create_connector A");
-    let id_b = create_connector(
-        h,
+    let id_b = create_connector(h,
         ConnectorKindTag::Notion,
         scope_b.clone(),
         cfg.to_string(),
@@ -865,17 +834,14 @@ fn forget_scope_purges_connectors_bound_to_the_forgotten_scope() {
     forget_scope(h, scope_a.clone()).expect("forget_scope A");
 
     let after = list_connectors(h).expect("list after forget_scope A");
-    assert_eq!(
-        after.len(),
+    assert_eq!(after.len(),
         1,
         "exactly one connector should survive — the one bound to scope B"
     );
-    assert!(
-        after.iter().all(|s| s.instance_id != id_a),
+    assert!(after.iter().all(|s| s.instance_id != id_a),
         "connector A (instance_id={id_a}) must be purged"
     );
-    assert!(
-        after.iter().any(|s| s.instance_id == id_b),
+    assert!(after.iter().any(|s| s.instance_id == id_b),
         "connector B (instance_id={id_b}) must survive"
     );
 
@@ -909,8 +875,7 @@ fn forget_by_evidence_id_also_purges_connectors_bound_to_the_resolved_scope() {
     // Ingest evidence in scope A so `forget(evidence_id)` has a row
     // to resolve to. The ingest path registers the per-scope DEK,
     // which is also what `connector` instances expect to be live.
-    let evidence_id_a = ingest_message(
-        h,
+    let evidence_id_a = ingest_message(h,
         scope_a.clone(),
         "forget-by-evidence-id integration test message".into(),
         SourceKind::Slack,
@@ -923,15 +888,13 @@ fn forget_by_evidence_id_also_purges_connectors_bound_to_the_resolved_scope() {
         "redirect_uri": "https://example.invalid/oauth/callback",
         "token_url": "https://example.invalid/oauth/token"
     }"#;
-    let id_a = create_connector(
-        h,
+    let id_a = create_connector(h,
         ConnectorKindTag::Notion,
         scope_a.clone(),
         cfg.to_string(),
     )
     .expect("create_connector A");
-    let id_b = create_connector(
-        h,
+    let id_b = create_connector(h,
         ConnectorKindTag::Notion,
         scope_b.clone(),
         cfg.to_string(),
@@ -947,17 +910,14 @@ fn forget_by_evidence_id_also_purges_connectors_bound_to_the_resolved_scope() {
     forget(h, evidence_id_a).expect("forget by evidence id");
 
     let after = list_connectors(h).expect("list after forget");
-    assert_eq!(
-        after.len(),
+    assert_eq!(after.len(),
         1,
         "exactly one connector should survive — the one bound to scope B"
     );
-    assert!(
-        after.iter().all(|s| s.instance_id != id_a),
+    assert!(after.iter().all(|s| s.instance_id != id_a),
         "connector A (instance_id={id_a}) must be purged by forget(evidence_id)"
     );
-    assert!(
-        after.iter().any(|s| s.instance_id == id_b),
+    assert!(after.iter().any(|s| s.instance_id == id_b),
         "connector B (instance_id={id_b}) must survive the forget"
     );
 
@@ -1013,8 +973,7 @@ fn authenticate_connector_splices_auth_code_under_correct_json_key() {
     let err = authenticate_connector(h, instance_id, "test-authorization-code".into())
         .expect_err("authenticate_connector should fail against example.invalid");
     let msg = format!("{err}");
-    assert!(
-        !msg.contains("auth_config_json.authorization_code is required"),
+    assert!(!msg.contains("auth_config_json.authorization_code is required"),
         "regression: authenticate_connector spliced auth code under wrong JSON key; \
          every concrete connector reads from `authorization_code` and surfaced \
          the missing-key error — got: {msg}",
@@ -1031,8 +990,7 @@ fn authenticate_connector_splices_auth_code_under_correct_json_key() {
         || msg.contains("error sending request")
         || msg.contains("connect")
         || msg.contains("network");
-    assert!(
-        reached_transport,
+    assert!(reached_transport,
         "authenticate_connector reached neither the connector's HTTP transport \
          nor the missing-key path — got: {msg}",
     );
@@ -1074,20 +1032,17 @@ fn create_connector_rejects_duplicate_scope_and_kind_pair() {
     // Duplicate (same scope, same kind) is rejected.
     let err = create_connector(h, ConnectorKindTag::Notion, scope.clone(), cfg.to_string())
         .expect_err("second create_connector for same (scope, kind) must be rejected");
-    assert!(
-        matches!(err, FfiError::Connector { .. }),
+    assert!(matches!(err, FfiError::Connector { .. }),
         "duplicate-create must surface as FfiError::Connector, got: {err:?}",
     );
     let msg = format!("{err}");
-    assert!(
-        msg.contains("connector instance already exists"),
+    assert!(msg.contains("connector instance already exists"),
         "duplicate-create message must mention the framework's DuplicateConnector \
          variant — got: {msg}",
     );
 
     // Different scope, same kind: allowed (the constraint is per pair).
-    let id_b = create_connector(
-        h,
+    let id_b = create_connector(h,
         ConnectorKindTag::Notion,
         other_scope.clone(),
         cfg.to_string(),
@@ -1104,8 +1059,7 @@ fn create_connector_rejects_duplicate_scope_and_kind_pair() {
     // Existing instance preserved after the duplicate rejection —
     // no partial state leaked.
     let registered = list_connectors(h).expect("list_connectors");
-    assert_eq!(
-        registered.len(),
+    assert_eq!(registered.len(),
         3,
         "duplicate-create must not leak a partial entry; \
          expected exactly the three allowed connectors"
@@ -1120,8 +1074,7 @@ fn create_connector_rejects_duplicate_scope_and_kind_pair() {
     remove_connector(h, id_a.clone()).expect("remove_connector(id_a)");
     let id_a_v2 = create_connector(h, ConnectorKindTag::Notion, scope.clone(), cfg.to_string())
         .expect("re-create after remove_connector should succeed");
-    assert_ne!(
-        id_a, id_a_v2,
+    assert_ne!(id_a, id_a_v2,
         "re-created instance must have a fresh id (uuid v4)",
     );
 
@@ -1144,9 +1097,9 @@ fn synthesis_trigger_variants_all_round_trip() {
     }
 }
 
-// ─────────────────── Phase 3 connector persistence ──────────────────
+// ───────────────────  connector persistence ──────────────────
 //
-// These tests pin the **Phase 3 contract**: the connector lifecycle
+// These tests pin the ** contract**: the connector lifecycle
 // state (instances + sync state + OAuth2 tokens) is durable across
 // `close_store` / `open_store` and respects the cryptographic
 // forgetting contract (forgotten scopes never resurrect).
@@ -1197,8 +1150,7 @@ fn connector_instance_persists_across_close_store_reopen() {
 
     let scope = uuid::Uuid::new_v4().to_string();
     let h1 = open_at(&path);
-    let instance_id = create_connector(
-        h1,
+    let instance_id = create_connector(h1,
         ConnectorKindTag::Notion,
         scope.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
@@ -1214,21 +1166,17 @@ fn connector_instance_persists_across_close_store_reopen() {
     // Re-open the same on-disk file under a new runtime handle.
     let h2 = open_at(&path);
     let after = list_connectors(h2).expect("list_connectors post-reopen");
-    assert_eq!(
-        after.len(),
+    assert_eq!(after.len(),
         1,
         "post-reopen: persisted instance must be rehydrated"
     );
-    assert_eq!(
-        after[0].instance_id, instance_id,
+    assert_eq!(after[0].instance_id, instance_id,
         "rehydrated instance must keep its original UUID",
     );
-    assert_eq!(
-        after[0].scope_id, scope,
+    assert_eq!(after[0].scope_id, scope,
         "rehydrated instance must keep its original scope_id",
     );
-    assert!(
-        matches!(after[0].kind, ConnectorKindTag::Notion),
+    assert!(matches!(after[0].kind, ConnectorKindTag::Notion),
         "rehydrated instance must keep its original kind",
     );
     close_store(h2).expect("close_store re-opened");
@@ -1246,16 +1194,14 @@ fn remove_connector_deletes_persisted_rows() {
 
     let scope = uuid::Uuid::new_v4().to_string();
     let h1 = open_at(&path);
-    let instance_id = create_connector(
-        h1,
+    let instance_id = create_connector(h1,
         ConnectorKindTag::Notion,
         scope.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
     )
     .expect("create_connector");
     remove_connector(h1, instance_id.clone()).expect("remove_connector");
-    assert!(
-        list_connectors(h1)
+    assert!(list_connectors(h1)
             .expect("list_connectors after remove")
             .is_empty(),
         "post-remove pre-close: list should be empty",
@@ -1264,8 +1210,7 @@ fn remove_connector_deletes_persisted_rows() {
 
     let h2 = open_at(&path);
     let after = list_connectors(h2).expect("list_connectors post-reopen");
-    assert!(
-        after.is_empty(),
+    assert!(after.is_empty(),
         "removed connector must not resurrect across close_store/open_store"
     );
     close_store(h2).expect("close_store re-opened");
@@ -1288,15 +1233,13 @@ fn forget_scope_purges_persisted_connector_instances_and_tokens() {
     let scope_b = uuid::Uuid::new_v4().to_string();
 
     let h1 = open_at(&path);
-    let id_a = create_connector(
-        h1,
+    let id_a = create_connector(h1,
         ConnectorKindTag::Notion,
         scope_a.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
     )
     .expect("create_connector A");
-    let id_b = create_connector(
-        h1,
+    let id_b = create_connector(h1,
         ConnectorKindTag::Notion,
         scope_b.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
@@ -1308,13 +1251,11 @@ fn forget_scope_purges_persisted_connector_instances_and_tokens() {
 
     let h2 = open_at(&path);
     let after = list_connectors(h2).expect("list_connectors post-reopen");
-    assert_eq!(
-        after.len(),
+    assert_eq!(after.len(),
         1,
         "post-reopen: only the un-forgotten scope's connector should rehydrate",
     );
-    assert_eq!(
-        after[0].instance_id, id_b,
+    assert_eq!(after[0].instance_id, id_b,
         "connector bound to forgotten scope must not reappear (id_a={id_a})",
     );
     assert_eq!(after[0].scope_id, scope_b);
@@ -1339,8 +1280,7 @@ fn rehydration_skips_tombstoned_scopes() {
     let scope_a = uuid::Uuid::new_v4().to_string();
 
     let h1 = open_at(&path);
-    let _id_a = create_connector(
-        h1,
+    let _id_a = create_connector(h1,
         ConnectorKindTag::Notion,
         scope_a.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
@@ -1350,8 +1290,7 @@ fn rehydration_skips_tombstoned_scopes() {
     close_store(h1).expect("close_store");
 
     let h2 = open_at(&path);
-    assert!(
-        list_connectors(h2)
+    assert!(list_connectors(h2)
             .expect("list_connectors post-reopen")
             .is_empty(),
         "connectors bound to a tombstoned scope must not rehydrate",
@@ -1375,23 +1314,20 @@ fn dedup_constraint_pinned_on_persisted_rows() {
     let scope = uuid::Uuid::new_v4().to_string();
 
     let h = open_at(&path);
-    let _ = create_connector(
-        h,
+    let _ = create_connector(h,
         ConnectorKindTag::Notion,
         scope.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
     )
     .expect("first create_connector");
-    let err = create_connector(
-        h,
+    let err = create_connector(h,
         ConnectorKindTag::Notion,
         scope.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
     )
     .expect_err("duplicate create_connector must be rejected");
     let msg = format!("{err}");
-    assert!(
-        msg.contains("already exists") || msg.contains("DuplicateConnector"),
+    assert!(msg.contains("already exists") || msg.contains("DuplicateConnector"),
         "duplicate rejection should surface a DuplicateConnector message — got: {msg}",
     );
     close_store(h).expect("close_store");
@@ -1400,16 +1336,14 @@ fn dedup_constraint_pinned_on_persisted_rows() {
     // duplicate-rejection contract holds — the runtime check sees
     // the rehydrated instance and refuses the duplicate.
     let h2 = open_at(&path);
-    let err2 = create_connector(
-        h2,
+    let err2 = create_connector(h2,
         ConnectorKindTag::Notion,
         scope.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
     )
     .expect_err("duplicate create_connector after reopen must also be rejected");
     let msg2 = format!("{err2}");
-    assert!(
-        msg2.contains("already exists") || msg2.contains("DuplicateConnector"),
+    assert!(msg2.contains("already exists") || msg2.contains("DuplicateConnector"),
         "post-rehydrate duplicate rejection must also surface DuplicateConnector — got: {msg2}",
     );
     close_store(h2).expect("close_store re-opened");
@@ -1432,22 +1366,19 @@ fn multiple_scope_connectors_all_persist_and_rehydrate() {
     let scope_b = uuid::Uuid::new_v4().to_string();
 
     let h1 = open_at(&path);
-    let id_a_notion = create_connector(
-        h1,
+    let id_a_notion = create_connector(h1,
         ConnectorKindTag::Notion,
         scope_a.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
     )
     .expect("create A/Notion");
-    let id_a_slack = create_connector(
-        h1,
+    let id_a_slack = create_connector(h1,
         ConnectorKindTag::Slack,
         scope_a.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
     )
     .expect("create A/Slack");
-    let id_b_notion = create_connector(
-        h1,
+    let id_b_notion = create_connector(h1,
         ConnectorKindTag::Notion,
         scope_b.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
@@ -1457,8 +1388,7 @@ fn multiple_scope_connectors_all_persist_and_rehydrate() {
 
     let h2 = open_at(&path);
     let after = list_connectors(h2).expect("list post-reopen");
-    assert_eq!(
-        after.len(),
+    assert_eq!(after.len(),
         3,
         "all three persisted instances across both scopes must rehydrate",
     );
@@ -1501,15 +1431,13 @@ fn corrupted_payload_doesnt_block_open_store() {
     let scope_a = uuid::Uuid::new_v4().to_string();
     let scope_b = uuid::Uuid::new_v4().to_string();
     let h1 = open_at(&db_path);
-    let id_a = create_connector(
-        h1,
+    let id_a = create_connector(h1,
         ConnectorKindTag::Notion,
         scope_a.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
     )
     .expect("create A");
-    let id_b = create_connector(
-        h1,
+    let id_b = create_connector(h1,
         ConnectorKindTag::Slack,
         scope_b.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
@@ -1532,8 +1460,7 @@ fn corrupted_payload_doesnt_block_open_store() {
         let scope_a_id =
             ScopeId::from_uuid(uuid::Uuid::parse_str(&scope_a).expect("parse scope_a"));
         store
-            .save_connector_instance(
-                id_a_uuid,
+            .save_connector_instance(id_a_uuid,
                 scope_a_id,
                 connector_framework::ConnectorKind::Notion.as_str(),
                 b"not a valid JSON envelope",
@@ -1545,14 +1472,12 @@ fn corrupted_payload_doesnt_block_open_store() {
     // rehydrates while the deserialise-fail row is skipped.
     let h2 = open_at(&db_path);
     let after = list_connectors(h2).expect("list post-reopen");
-    assert_eq!(
-        after.len(),
+    assert_eq!(after.len(),
         1,
         "corrupted row must be skipped while the healthy row rehydrates; got {} rows",
         after.len(),
     );
-    assert_eq!(
-        after[0].instance_id, id_b,
+    assert_eq!(after[0].instance_id, id_b,
         "the surviving row should be the un-corrupted instance B (id_a={id_a})",
     );
     close_store(h2).expect("close_store re-opened");
@@ -1579,8 +1504,7 @@ fn sync_state_advance_persists_across_close_store_reopen() {
 
     let scope = uuid::Uuid::new_v4().to_string();
     let h1 = open_at(&db_path);
-    let instance_id = create_connector(
-        h1,
+    let instance_id = create_connector(h1,
         ConnectorKindTag::Notion,
         scope.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
@@ -1624,8 +1548,7 @@ fn sync_state_advance_persists_across_close_store_reopen() {
         let store = EvidenceStore::open(&db_path, &master_key, EvidenceStoreConfig::default())
             .expect("EvidenceStore::open");
         store
-            .save_connector_instance(
-                instance_uuid,
+            .save_connector_instance(instance_uuid,
                 scope_id,
                 ConnectorKind::Notion.as_str(),
                 &plaintext_json,
@@ -1643,25 +1566,20 @@ fn sync_state_advance_persists_across_close_store_reopen() {
     let status = &after[0];
     assert_eq!(status.instance_id, instance_id);
     assert_eq!(status.scope_id, scope);
-    assert!(
-        matches!(status.sync_mode, ffi::SyncModeKind::Incremental),
+    assert!(matches!(status.sync_mode, ffi::SyncModeKind::Incremental),
         "advanced mode (Incremental) must survive close/reopen",
     );
-    assert!(
-        matches!(status.sync_status, ffi::SyncStatusKind::Succeeded),
+    assert!(matches!(status.sync_status, ffi::SyncStatusKind::Succeeded),
         "advanced status (Succeeded) must survive close/reopen",
     );
-    assert_eq!(
-        status.last_synced_at,
-        Some(
-            Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0)
+    assert_eq!(status.last_synced_at,
+        Some(Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0)
                 .unwrap()
                 .timestamp()
         ),
         "advanced last_synced_at must survive close/reopen",
     );
-    assert!(
-        status.last_error.is_none(),
+    assert!(status.last_error.is_none(),
         "Succeeded sync_state should not carry a last_error; got {:?}",
         status.last_error,
     );
@@ -1689,8 +1607,7 @@ fn sync_state_advance_persists_across_close_store_reopen() {
         .get("sync_state")
         .and_then(|s| s.get("cursor"))
         .and_then(|c| c.as_str());
-    assert_eq!(
-        cursor,
+    assert_eq!(cursor,
         Some("cursor-after-sync-7"),
         "advanced cursor must survive close/reopen in the persisted ciphertext",
     );
@@ -1702,7 +1619,7 @@ fn sync_state_advance_persists_across_close_store_reopen() {
 /// `OAuth2Token` JSON survives bit-for-bit. We drive the test
 /// through the evidence-store API directly (rather than via
 /// `authenticate_connector`) because the FFI surface requires a
-/// live OAuth2 provider for the Phase 2 exchange — the *persistence*
+/// live OAuth2 provider for the  exchange — the *persistence*
 /// contract is the same regardless of how the token was acquired,
 /// so testing the evidence-store round-trip pins the at-rest
 /// encryption + AAD-binding behaviour without standing up a fake
@@ -1722,8 +1639,7 @@ fn oauth_token_persists_across_close_store_reopen() {
     // Use the FFI to create a connector — this registers the scope
     // DEK in `scope_deks` so subsequent direct EvidenceStore calls
     // can encrypt under the same scope key the FFI uses.
-    let instance_id = create_connector(
-        h1,
+    let instance_id = create_connector(h1,
         ConnectorKindTag::Notion,
         scope.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
@@ -1737,8 +1653,7 @@ fn oauth_token_persists_across_close_store_reopen() {
     let instance_uuid = uuid::Uuid::parse_str(&instance_id).expect("uuid parse instance");
     let scope_id = ScopeId::from_uuid(uuid::Uuid::parse_str(&scope).expect("uuid parse scope"));
     let master_key: [u8; 32] = [0xa5_u8; 32];
-    let original = OAuth2Token::new(
-        "test-access-token-deadbeef",
+    let original = OAuth2Token::new("test-access-token-deadbeef",
         "test-refresh-token-cafebabe",
         Utc.with_ymd_and_hms(2030, 1, 1, 0, 0, 0).unwrap(),
         "drive.readonly profile",
@@ -1759,8 +1674,7 @@ fn oauth_token_persists_across_close_store_reopen() {
     let tokens = store
         .load_connector_tokens()
         .expect("load_connector_tokens");
-    assert_eq!(
-        tokens.len(),
+    assert_eq!(tokens.len(),
         1,
         "exactly one token row should round-trip; got {}",
         tokens.len(),
@@ -1769,8 +1683,7 @@ fn oauth_token_persists_across_close_store_reopen() {
     assert_eq!(*loaded_instance, instance_uuid);
     assert_eq!(*loaded_scope, scope_id);
     let decoded: OAuth2Token = serde_json::from_slice(loaded_plain).expect("decode token");
-    assert_eq!(
-        decoded, original,
+    assert_eq!(decoded, original,
         "loaded OAuth2Token must equal what was persisted (access + refresh + expiry + scope + token_type)",
     );
 
@@ -1788,8 +1701,7 @@ fn oauth_token_persists_across_close_store_reopen() {
     let after_delete = store
         .load_connector_tokens()
         .expect("load_connector_tokens after delete");
-    assert!(
-        after_delete.is_empty(),
+    assert!(after_delete.is_empty(),
         "delete_connector_token must clear the row; got {} rows after delete",
         after_delete.len(),
     );
@@ -1812,8 +1724,7 @@ fn remove_connector_is_idempotent_across_reopen() {
 
     let scope = uuid::Uuid::new_v4().to_string();
     let h1 = open_at(&path);
-    let id = create_connector(
-        h1,
+    let id = create_connector(h1,
         ConnectorKindTag::Notion,
         scope.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
@@ -1858,8 +1769,7 @@ fn orphan_token_skipped_and_cleaned_up_on_rehydrate() {
 
     let scope = uuid::Uuid::new_v4().to_string();
     let h1 = open_at(&db_path);
-    let instance_id = create_connector(
-        h1,
+    let instance_id = create_connector(h1,
         ConnectorKindTag::Notion,
         scope.clone(),
         PERSISTENCE_CONNECTOR_CFG.into(),
@@ -1877,8 +1787,7 @@ fn orphan_token_skipped_and_cleaned_up_on_rehydrate() {
     {
         let store = EvidenceStore::open(&db_path, &master_key, EvidenceStoreConfig::default())
             .expect("EvidenceStore::open for setup");
-        let token = OAuth2Token::new(
-            "orphan-access",
+        let token = OAuth2Token::new("orphan-access",
             "orphan-refresh",
             Utc.with_ymd_and_hms(2030, 1, 1, 0, 0, 0).unwrap(),
             "drive.readonly",
@@ -1890,15 +1799,13 @@ fn orphan_token_skipped_and_cleaned_up_on_rehydrate() {
         // Corrupt the instance payload — AEAD still seals cleanly,
         // but the JSON envelope parse fails so rehydrate skips it.
         store
-            .save_connector_instance(
-                instance_uuid,
+            .save_connector_instance(instance_uuid,
                 scope_id,
                 connector_framework::ConnectorKind::Notion.as_str(),
                 b"orphan: not a valid envelope",
             )
             .expect("corrupt instance payload");
-        assert_eq!(
-            store
+        assert_eq!(store
                 .load_connector_tokens()
                 .expect("load before reopen")
                 .len(),
@@ -1913,8 +1820,7 @@ fn orphan_token_skipped_and_cleaned_up_on_rehydrate() {
     // purged from disk.
     let h2 = open_at(&db_path);
     let listed = list_connectors(h2).expect("list post-reopen");
-    assert!(
-        listed.is_empty(),
+    assert!(listed.is_empty(),
         "corrupted instance row must skip rehydrate; got {} entries",
         listed.len(),
     );
@@ -1928,8 +1834,7 @@ fn orphan_token_skipped_and_cleaned_up_on_rehydrate() {
     let remaining = store
         .load_connector_tokens()
         .expect("load_connector_tokens post-reopen");
-    assert!(
-        remaining.is_empty(),
+    assert!(remaining.is_empty(),
         "orphan token row must be cleaned up by rehydration; {} row(s) remain",
         remaining.len(),
     );
@@ -1980,8 +1885,7 @@ fn save_connector_instance_propagates_secondary_unique_violation() {
         .save_connector_instance(instance_b, scope_id, kind_tag, b"{\"schema\":1}")
         .expect_err("colliding save_connector_instance must error, not silently overwrite");
     let msg = format!("{err}");
-    assert!(
-        msg.contains("UNIQUE constraint failed")
+    assert!(msg.contains("UNIQUE constraint failed")
             && msg.contains("connector_instances")
             && msg.contains("scope_id")
             && msg.contains("kind"),
@@ -1994,22 +1898,20 @@ fn save_connector_instance_propagates_secondary_unique_violation() {
     let rows = store
         .load_connector_instances()
         .expect("load_connector_instances after collision");
-    assert_eq!(
-        rows.len(),
+    assert_eq!(rows.len(),
         1,
         "secondary-unique collision must leave the existing row untouched",
     );
     let (loaded_id, _scope, loaded_kind, _payload) = &rows[0];
-    assert_eq!(
-        loaded_id, &instance_a,
+    assert_eq!(loaded_id, &instance_a,
         "the surviving row must be instance_a"
     );
     assert_eq!(loaded_kind.as_str(), kind_tag);
 }
 
-// ───────────── Phase 4: OAuth2 token refresh via FFI ─────────────
+// ───────────── : OAuth2 token refresh via FFI ─────────────
 //
-// Phase 4 wires `refresh_connector_token` and the auto-refresh path
+// wires `refresh_connector_token` and the auto-refresh path
 // inside `sync_connector` through the FFI surface. The substrate-side
 // primitives (`OAuth2Client::refresh_with_config`,
 // `ConfiguredRefresher`, `OAuth2TokenVault::refresh_if_expiring`)
@@ -2044,7 +1946,7 @@ use std::sync::{
 #[cfg(feature = "http-client")]
 use std::thread::JoinHandle;
 
-/// Tiny single-connection HTTP/1.1 server used by the Phase 4
+/// Tiny single-connection HTTP/1.1 server used by the 
 /// integration tests to back the connector's OAuth2 token endpoint.
 ///
 /// Scope is deliberately minimal: each call to
@@ -2054,7 +1956,7 @@ use std::thread::JoinHandle;
 /// back `HTTP/1.1 200 OK` with `Content-Type: application/json`.
 ///
 /// Lives in the integration-test file (not the test-support crate)
-/// because Phase 4 is the first test surface that needs it; if a
+/// because  is the first test surface that needs it; if a
 /// future test wants the same plumbing the helper graduates to a
 /// shared module.
 #[cfg(feature = "http-client")]
@@ -2103,8 +2005,7 @@ impl OAuthTestServer {
                         g.push(captured_body);
                     }
                     counter.fetch_add(1, AtomicOrdering::SeqCst);
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                         body.len(),
                         body,
                     );
@@ -2126,7 +2027,7 @@ impl OAuthTestServer {
     /// the 64 KiB safety bound.
     ///
     /// Previously a single 4 KiB `stream.read` was sufficient for
-    /// every Phase 4 / 4.1 test fixture (OAuth2 form bodies over
+    /// every  / 4.1 test fixture (OAuth2 form bodies over
     /// localhost loopback never fragment in practice), but the
     /// single-read pattern silently truncates if a future test
     /// adds a larger payload OR if the network path ever changes
@@ -2134,7 +2035,7 @@ impl OAuthTestServer {
     /// hyper-v vNIC, container bridges with low MTU). The read
     /// loop is the correctness-preserving way to capture an
     /// arbitrary HTTP/1.1 message and matches how production
-    /// servers consume a request — see the discussion in Phase 4.1
+    /// servers consume a request — see the discussion in 
     /// Devin Review (`ANALYSIS_0005` on commit b29bc3c).
     ///
     /// Parsing strategy:
@@ -2273,7 +2174,7 @@ impl OAuthTestServer {
     }
 
     /// Snapshot the captured form bodies (one per accepted request,
-    /// in FIFO order). Used by Phase 4.1 tests to assert that the
+    /// in FIFO order). Used by  tests to assert that the
     /// `client_secret=` form field is — or isn't — included in the
     /// POST body the substrate sent.
     fn request_bodies(&self) -> Vec<String> {
@@ -2293,7 +2194,7 @@ impl Drop for OAuthTestServer {
     }
 }
 
-// ───── Phase 4.2 — OAuthTestServer read-loop self-tests ─────
+// ─────  — OAuthTestServer read-loop self-tests ─────
 
 /// Pin the OAuthTestServer's multi-read loop against TCP
 /// fragmentation: write the HTTP/1.1 request in TWO segments with
@@ -2327,8 +2228,7 @@ fn oauth_test_server_reassembles_fragmented_request() {
 
     // Hand-craft a POST with a body that requires reassembly.
     let body = "grant_type=refresh_token&refresh_token=RT-FRAG&client_id=client-abc&client_secret=FRAGMENTED-SECRET";
-    let request = format!(
-        "POST /oauth/token HTTP/1.1\r\n\
+    let request = format!("POST /oauth/token HTTP/1.1\r\n\
          Host: 127.0.0.1\r\n\
          Content-Type: application/x-www-form-urlencoded\r\n\
          Content-Length: {}\r\n\
@@ -2374,13 +2274,11 @@ fn oauth_test_server_reassembles_fragmented_request() {
     drop(server);
 
     assert_eq!(bodies.len(), 1, "expected exactly one captured request");
-    assert_eq!(
-        bodies[0], body,
+    assert_eq!(bodies[0], body,
         "the fragmented request body should be reassembled byte-for-byte; \
          single-read fixtures would truncate at the first chunk",
     );
-    assert!(
-        bodies[0].contains("client_secret=FRAGMENTED-SECRET"),
+    assert!(bodies[0].contains("client_secret=FRAGMENTED-SECRET"),
         "the second-segment field must survive reassembly; got body={}",
         bodies[0],
     );
@@ -2436,8 +2334,7 @@ fn refresh_connector_token_round_trips_and_persists_across_close_store_reopen() 
     let scope = ScopeId::new_v4();
     let instance = ConnectorInstanceId::new_v4();
     let kind_tag = connector_framework::ConnectorKind::Notion.as_str();
-    let config = connector_framework::ConnectorConfig::new(
-        connector_framework::ConnectorKind::Notion,
+    let config = connector_framework::ConnectorConfig::new(connector_framework::ConnectorKind::Notion,
         connector_framework::AuthKind::OAuth2,
         scope,
     )
@@ -2458,8 +2355,7 @@ fn refresh_connector_token_round_trips_and_persists_across_close_store_reopen() 
         "config": config,
         "sync_state": sync_state,
     });
-    let initial_token = OAuth2Token::new(
-        "AT-INITIAL",
+    let initial_token = OAuth2Token::new("AT-INITIAL",
         "RT-INITIAL",
         chrono::Utc::now() + ChronoDuration::seconds(10),
         "read",
@@ -2470,16 +2366,14 @@ fn refresh_connector_token_round_trips_and_persists_across_close_store_reopen() 
     // they get encrypted under the right scope DEK.
     {
         let cfg = evidence_store::EvidenceStoreConfig::default();
-        let mut store = evidence_store::EvidenceStore::open(
-            path.to_string_lossy().as_ref(),
+        let mut store = evidence_store::EvidenceStore::open(path.to_string_lossy().as_ref(),
             &master_key_bytes,
             cfg,
         )
         .expect("EvidenceStore::open");
         store.ensure_scope_dek(scope).expect("ensure_scope_dek");
         store
-            .save_connector_instance(
-                instance.0,
+            .save_connector_instance(instance.0,
                 scope,
                 kind_tag,
                 serde_json::to_vec(&instance_payload)
@@ -2500,8 +2394,7 @@ fn refresh_connector_token_round_trips_and_persists_across_close_store_reopen() 
         .expect("refresh_connector_token must succeed against local test server");
     assert!(report.refreshed, "first refresh must report refreshed=true");
     assert_eq!(report.instance_id, instance.0.to_string());
-    assert_eq!(
-        server.request_count(),
+    assert_eq!(server.request_count(),
         1,
         "first refresh must drive exactly one HTTP POST",
     );
@@ -2517,12 +2410,10 @@ fn refresh_connector_token_round_trips_and_persists_across_close_store_reopen() 
         .expect("open_store (post-rotation)");
     let report2 = refresh_connector_token(handle, instance.0.to_string())
         .expect("refresh_connector_token must succeed post-reopen");
-    assert!(
-        report2.refreshed,
+    assert!(report2.refreshed,
         "second refresh must also report refreshed=true",
     );
-    assert_eq!(
-        server.request_count(),
+    assert_eq!(server.request_count(),
         2,
         "second refresh must drive a second HTTP POST",
     );
@@ -2532,8 +2423,7 @@ fn refresh_connector_token_round_trips_and_persists_across_close_store_reopen() 
     // refresh must hold RT-ROTATED-2.
     {
         let cfg = evidence_store::EvidenceStoreConfig::default();
-        let store = evidence_store::EvidenceStore::open(
-            path.to_string_lossy().as_ref(),
+        let store = evidence_store::EvidenceStore::open(path.to_string_lossy().as_ref(),
             &master_key_bytes,
             cfg,
         )
@@ -2546,8 +2436,7 @@ fn refresh_connector_token_round_trips_and_persists_across_close_store_reopen() 
             .find(|(id, _, _)| *id == instance.0)
             .expect("token row for instance");
         let parsed: OAuth2Token = serde_json::from_slice(payload).expect("rehydrate OAuth2Token");
-        assert_eq!(
-            parsed
+        assert_eq!(parsed
                 .refresh_token
                 .as_ref()
                 .expect("rotated token must have refresh_token")
@@ -2591,8 +2480,7 @@ fn refresh_connector_token_short_circuits_when_no_refresh_token_stored() {
     let scope = ScopeId::new_v4();
     let instance = ConnectorInstanceId::new_v4();
     let kind_tag = connector_framework::ConnectorKind::Slack.as_str();
-    let config = connector_framework::ConnectorConfig::new(
-        connector_framework::ConnectorKind::Slack,
+    let config = connector_framework::ConnectorConfig::new(connector_framework::ConnectorKind::Slack,
         connector_framework::AuthKind::OAuth2,
         scope,
     )
@@ -2607,8 +2495,7 @@ fn refresh_connector_token_short_circuits_when_no_refresh_token_stored() {
         "config": config,
         "sync_state": sync_state,
     });
-    let legacy_token = OAuth2Token::new_without_refresh(
-        "LEGACY-SLACK-AT",
+    let legacy_token = OAuth2Token::new_without_refresh("LEGACY-SLACK-AT",
         chrono::Utc::now() + ChronoDuration::seconds(5),
         "read",
     );
@@ -2616,16 +2503,14 @@ fn refresh_connector_token_short_circuits_when_no_refresh_token_stored() {
 
     {
         let cfg = evidence_store::EvidenceStoreConfig::default();
-        let mut store = evidence_store::EvidenceStore::open(
-            path.to_string_lossy().as_ref(),
+        let mut store = evidence_store::EvidenceStore::open(path.to_string_lossy().as_ref(),
             &master_key_bytes,
             cfg,
         )
         .expect("EvidenceStore::open");
         store.ensure_scope_dek(scope).expect("ensure_scope_dek");
         store
-            .save_connector_instance(
-                instance.0,
+            .save_connector_instance(instance.0,
                 scope,
                 kind_tag,
                 serde_json::to_vec(&instance_payload)
@@ -2644,8 +2529,7 @@ fn refresh_connector_token_short_circuits_when_no_refresh_token_stored() {
         .expect_err("refresh without refresh_token must short-circuit");
     match err {
         FfiError::Connector { message } => {
-            assert!(
-                message.contains("no refresh_token stored")
+            assert!(message.contains("no refresh_token stored")
                     && message.contains(&instance.0.to_string())
                     && message.contains("re-authorisation required"),
                 "expected substrate-side `no refresh_token stored` diagnostic naming the \
@@ -2654,8 +2538,7 @@ fn refresh_connector_token_short_circuits_when_no_refresh_token_stored() {
         }
         other => panic!("expected Connector(no refresh_token …); got {other:?}"),
     }
-    assert_eq!(
-        server.request_count(),
+    assert_eq!(server.request_count(),
         0,
         "substrate must NOT POST refresh_token= to the provider when none is stored",
     );
@@ -2665,9 +2548,9 @@ fn refresh_connector_token_short_circuits_when_no_refresh_token_stored() {
     drop(dir);
 }
 
-// ───────────────── Phase 4.1: client_secret resolver tests ─────────────────
+// ───────────────── : client_secret resolver tests ─────────────────
 
-/// Helper resolver used by the Phase 4.1 tests. Holds a closure that
+/// Helper resolver used by the  tests. Holds a closure that
 /// produces the secret on demand and a counter so tests can assert
 /// on the number of times the resolver was consulted.
 #[cfg(feature = "http-client")]
@@ -2706,15 +2589,13 @@ impl ffi::OAuthClientSecretResolver for TestResolver {
 
 /// Set up an instance + initial token row in SQLCipher with the
 /// supplied `auth_config_json` blob and return the path + master key
-/// bytes + scope + instance ids. Centralised so the four Phase 4.1
+/// bytes + scope + instance ids. Centralised so the four 
 /// resolver tests stay focused on the resolver-resolution behaviour
 /// rather than the persistence boilerplate.
 #[cfg(feature = "http-client")]
-fn seed_oauth_refresh_fixture(
-    auth_config: serde_json::Value,
+fn seed_oauth_refresh_fixture(auth_config: serde_json::Value,
     kind: connector_framework::ConnectorKind,
-) -> (
-    std::path::PathBuf,
+) -> (std::path::PathBuf,
     [u8; 32],
     evidence_store::ScopeId,
     connector_framework::ConnectorInstanceId,
@@ -2729,8 +2610,7 @@ fn seed_oauth_refresh_fixture(
     let master_key_bytes: [u8; 32] = [0xa5_u8; 32];
     let scope = ScopeId::new_v4();
     let instance = ConnectorInstanceId::new_v4();
-    let config = connector_framework::ConnectorConfig::new(
-        kind,
+    let config = connector_framework::ConnectorConfig::new(kind,
         connector_framework::AuthKind::OAuth2,
         scope,
     )
@@ -2741,8 +2621,7 @@ fn seed_oauth_refresh_fixture(
         "config": config,
         "sync_state": sync_state,
     });
-    let initial_token = OAuth2Token::new(
-        "AT-INITIAL",
+    let initial_token = OAuth2Token::new("AT-INITIAL",
         "RT-INITIAL",
         chrono::Utc::now() + ChronoDuration::seconds(10),
         "read",
@@ -2750,16 +2629,14 @@ fn seed_oauth_refresh_fixture(
     let token_payload = serde_json::to_string(&initial_token).expect("serialize OAuth2Token");
 
     let cfg = evidence_store::EvidenceStoreConfig::default();
-    let mut store = evidence_store::EvidenceStore::open(
-        path.to_string_lossy().as_ref(),
+    let mut store = evidence_store::EvidenceStore::open(path.to_string_lossy().as_ref(),
         &master_key_bytes,
         cfg,
     )
     .expect("EvidenceStore::open");
     store.ensure_scope_dek(scope).expect("ensure_scope_dek");
     store
-        .save_connector_instance(
-            instance.0,
+        .save_connector_instance(instance.0,
             scope,
             kind.as_str(),
             serde_json::to_vec(&instance_payload)
@@ -2774,7 +2651,7 @@ fn seed_oauth_refresh_fixture(
     (path, master_key_bytes, scope, instance, dir)
 }
 
-/// Phase 4.1 layer 1: when a resolver returns `Some(secret)`, that
+///  layer 1: when a resolver returns `Some(secret)`, that
 /// secret is what appears in the OAuth2 `refresh_token` POST body's
 /// `client_secret=` form field — taking precedence over the
 /// `auth_config_json["client_secret"]` value AND short-circuiting the
@@ -2791,8 +2668,7 @@ fn client_secret_resolver_layer_1_wins_over_auth_config_json() {
             .to_string(),
     ]);
     let token_url = format!("{}/oauth/token", server.base_url());
-    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
-        serde_json::json!({
+    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(serde_json::json!({
             "client_id": "phase4_1-client",
             "client_secret": "FALLBACK-SECRET-NOT-SENT",
             "redirect_uri": "https://example.invalid/oauth/callback",
@@ -2807,8 +2683,7 @@ fn client_secret_resolver_layer_1_wins_over_auth_config_json() {
 
     let resolver = Arc::new(TestResolver::new(Some("RESOLVER-WINS")));
     let calls = Arc::clone(&resolver.calls);
-    set_oauth_client_secret_resolver(
-        handle,
+    set_oauth_client_secret_resolver(handle,
         resolver.clone() as Arc<dyn ffi::OAuthClientSecretResolver>,
     )
     .expect("set_oauth_client_secret_resolver");
@@ -2816,19 +2691,16 @@ fn client_secret_resolver_layer_1_wins_over_auth_config_json() {
     refresh_connector_token(handle, instance.0.to_string())
         .expect("refresh_connector_token must succeed against local test server");
 
-    assert!(
-        calls.load(AtomicOrdering::SeqCst) >= 1,
+    assert!(calls.load(AtomicOrdering::SeqCst) >= 1,
         "resolver must be consulted at least once during the refresh grant",
     );
     let bodies = server.request_bodies();
     assert_eq!(bodies.len(), 1, "exactly one refresh POST expected");
     let body = &bodies[0];
-    assert!(
-        body.contains("client_secret=RESOLVER-WINS"),
+    assert!(body.contains("client_secret=RESOLVER-WINS"),
         "POST body must carry the resolver-supplied secret; got body={body}",
     );
-    assert!(
-        !body.contains("FALLBACK-SECRET-NOT-SENT"),
+    assert!(!body.contains("FALLBACK-SECRET-NOT-SENT"),
         "POST body must NOT include the auth_config_json[\"client_secret\"] when the \
          resolver short-circuited; got body={body}",
     );
@@ -2838,7 +2710,7 @@ fn client_secret_resolver_layer_1_wins_over_auth_config_json() {
     drop(dir);
 }
 
-/// Phase 4.1 layer 2: when no resolver is registered, the
+///  layer 2: when no resolver is registered, the
 /// substrate falls through to `auth_config_json["client_secret"]`
 /// and includes it as the form field on the refresh POST. Pins the
 /// test / single-tenant dev host path.
@@ -2852,8 +2724,7 @@ fn client_secret_resolver_layer_2_auth_config_json_when_no_resolver() {
             .to_string(),
     ]);
     let token_url = format!("{}/oauth/token", server.base_url());
-    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
-        serde_json::json!({
+    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(serde_json::json!({
             "client_id": "phase4_1-client",
             "client_secret": "AUTH-CONFIG-SECRET",
             "redirect_uri": "https://example.invalid/oauth/callback",
@@ -2872,8 +2743,7 @@ fn client_secret_resolver_layer_2_auth_config_json_when_no_resolver() {
     let bodies = server.request_bodies();
     assert_eq!(bodies.len(), 1);
     let body = &bodies[0];
-    assert!(
-        body.contains("client_secret=AUTH-CONFIG-SECRET"),
+    assert!(body.contains("client_secret=AUTH-CONFIG-SECRET"),
         "with no resolver registered the POST body must carry \
          auth_config_json[\"client_secret\"]; got body={body}",
     );
@@ -2883,7 +2753,7 @@ fn client_secret_resolver_layer_2_auth_config_json_when_no_resolver() {
     drop(dir);
 }
 
-/// Phase 4.1 layer 2b: when a resolver IS registered but returns
+///  layer 2b: when a resolver IS registered but returns
 /// `None`, the framework falls through to the
 /// `auth_config_json["client_secret"]` layer instead of omitting
 /// the form field. Pins the multi-tenant "secret not yet loaded
@@ -2898,8 +2768,7 @@ fn client_secret_resolver_layer_2_when_resolver_returns_none() {
             .to_string(),
     ]);
     let token_url = format!("{}/oauth/token", server.base_url());
-    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
-        serde_json::json!({
+    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(serde_json::json!({
             "client_id": "phase4_1-client",
             "client_secret": "FALLBACK-SECRET",
             "redirect_uri": "https://example.invalid/oauth/callback",
@@ -2914,8 +2783,7 @@ fn client_secret_resolver_layer_2_when_resolver_returns_none() {
 
     let resolver = Arc::new(TestResolver::new(None));
     let calls = Arc::clone(&resolver.calls);
-    set_oauth_client_secret_resolver(
-        handle,
+    set_oauth_client_secret_resolver(handle,
         resolver.clone() as Arc<dyn ffi::OAuthClientSecretResolver>,
     )
     .expect("set_oauth_client_secret_resolver");
@@ -2923,15 +2791,13 @@ fn client_secret_resolver_layer_2_when_resolver_returns_none() {
     refresh_connector_token(handle, instance.0.to_string())
         .expect("refresh_connector_token must succeed");
 
-    assert!(
-        calls.load(AtomicOrdering::SeqCst) >= 1,
+    assert!(calls.load(AtomicOrdering::SeqCst) >= 1,
         "resolver must be consulted at least once even when it returns None",
     );
     let bodies = server.request_bodies();
     assert_eq!(bodies.len(), 1);
     let body = &bodies[0];
-    assert!(
-        body.contains("client_secret=FALLBACK-SECRET"),
+    assert!(body.contains("client_secret=FALLBACK-SECRET"),
         "resolver-returns-None must fall through to auth_config_json fallback; got body={body}",
     );
 
@@ -2940,7 +2806,7 @@ fn client_secret_resolver_layer_2_when_resolver_returns_none() {
     drop(dir);
 }
 
-/// Phase 4.1 layer 3: when no resolver is registered AND
+///  layer 3: when no resolver is registered AND
 /// `auth_config_json["client_secret"]` is absent, the substrate
 /// MUST NOT include a `client_secret=` form field at all. Public-
 /// client / PKCE-only providers accept this (Slack legacy);
@@ -2957,8 +2823,7 @@ fn client_secret_resolver_layer_3_omits_form_field_when_no_secret_available() {
             .to_string(),
     ]);
     let token_url = format!("{}/oauth/token", server.base_url());
-    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
-        serde_json::json!({
+    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(serde_json::json!({
             "client_id": "phase4_1-public-client",
             "redirect_uri": "https://example.invalid/oauth/callback",
             "token_url": token_url,
@@ -2976,8 +2841,7 @@ fn client_secret_resolver_layer_3_omits_form_field_when_no_secret_available() {
     let bodies = server.request_bodies();
     assert_eq!(bodies.len(), 1);
     let body = &bodies[0];
-    assert!(
-        !body.contains("client_secret"),
+    assert!(!body.contains("client_secret"),
         "with neither resolver nor auth_config_json secret, the POST body must \
          OMIT the client_secret form field entirely; got body={body}",
     );
@@ -2987,7 +2851,7 @@ fn client_secret_resolver_layer_3_omits_form_field_when_no_secret_available() {
     drop(dir);
 }
 
-/// Phase 4.1 lifecycle: registering a resolver, then clearing it,
+///  lifecycle: registering a resolver, then clearing it,
 /// must restore the auth_config_json fallback semantics. Pins the
 /// `clear_oauth_client_secret_resolver` FFI function's contract.
 #[cfg(feature = "http-client")]
@@ -3005,8 +2869,7 @@ fn client_secret_resolver_clear_restores_fallback() {
             .to_string(),
     ]);
     let token_url = format!("{}/oauth/token", server.base_url());
-    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
-        serde_json::json!({
+    let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(serde_json::json!({
             "client_id": "phase4_1-client",
             "client_secret": "RESTORED-FALLBACK",
             "redirect_uri": "https://example.invalid/oauth/callback",
@@ -3031,13 +2894,11 @@ fn client_secret_resolver_clear_restores_fallback() {
 
     let bodies = server.request_bodies();
     assert_eq!(bodies.len(), 2);
-    assert!(
-        bodies[0].contains("client_secret=RESOLVER-FIRST"),
+    assert!(bodies[0].contains("client_secret=RESOLVER-FIRST"),
         "first grant must carry the resolver-supplied secret; got body={}",
         bodies[0],
     );
-    assert!(
-        bodies[1].contains("client_secret=RESTORED-FALLBACK"),
+    assert!(bodies[1].contains("client_secret=RESTORED-FALLBACK"),
         "second grant (after clear) must carry the auth_config_json fallback; \
          got body={}",
         bodies[1],
@@ -3048,7 +2909,7 @@ fn client_secret_resolver_clear_restores_fallback() {
     drop(dir);
 }
 
-/// Phase 4.1 negative path: `set_oauth_client_secret_resolver` on a
+///  negative path: `set_oauth_client_secret_resolver` on a
 /// runtime that never had an OAuth2 client built (only happens on
 /// `--no-default-features` builds where `http-client` is off) must
 /// surface `Unavailable { subsystem: "connector-http-client" }`. We
@@ -3076,7 +2937,7 @@ fn client_secret_resolver_set_and_clear_are_idempotent() {
     close_store(h).expect("close_store");
 }
 
-/// Phase 4.1 health-probe wiring: the `connector` subsystem must
+///  health-probe wiring: the `connector` subsystem must
 /// flip its `oauth_resolver=` field from `unset` to `registered`
 /// after a successful `set_oauth_client_secret_resolver` call, and
 /// back to `unset` after `clear_oauth_client_secret_resolver`.
@@ -3098,8 +2959,7 @@ fn health_probe_surfaces_oauth_resolver_registration_state() {
         .find(|s| s.name == "connector")
         .and_then(|s| s.detail.clone())
         .expect("connector subsystem detail (baseline)");
-    assert!(
-        baseline_detail.contains("oauth_resolver=unset"),
+    assert!(baseline_detail.contains("oauth_resolver=unset"),
         "baseline detail={baseline_detail}"
     );
 
@@ -3115,12 +2975,10 @@ fn health_probe_surfaces_oauth_resolver_registration_state() {
         .find(|s| s.name == "connector")
         .and_then(|s| s.detail.clone())
         .expect("connector subsystem detail (post-set)");
-    assert!(
-        post_set_detail.contains("oauth_resolver=registered"),
+    assert!(post_set_detail.contains("oauth_resolver=registered"),
         "post-set detail={post_set_detail}"
     );
-    assert!(
-        !post_set_detail.contains("oauth_resolver=unset"),
+    assert!(!post_set_detail.contains("oauth_resolver=unset"),
         "post-set detail must not contain unset; got {post_set_detail}"
     );
 
@@ -3134,15 +2992,14 @@ fn health_probe_surfaces_oauth_resolver_registration_state() {
         .find(|s| s.name == "connector")
         .and_then(|s| s.detail.clone())
         .expect("connector subsystem detail (post-clear)");
-    assert!(
-        post_clear_detail.contains("oauth_resolver=unset"),
+    assert!(post_clear_detail.contains("oauth_resolver=unset"),
         "post-clear detail={post_clear_detail}"
     );
 
     close_store(h).expect("close_store");
 }
 
-/// Phase 4.1 helper: hex-encode `bytes` as a lowercase string.
+///  helper: hex-encode `bytes` as a lowercase string.
 /// Mirrors the encoding used by `open_store(master_key_hex)`.
 #[cfg(feature = "http-client")]
 fn hex_encode(bytes: &[u8]) -> String {
@@ -3154,11 +3011,11 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-// ───────────────────── Phase 5: webhook receiver ─────────────────
+// ───────────────────── : webhook receiver ─────────────────
 
 #[cfg(feature = "http-client")]
 mod webhook {
-    //! Integration tests for the Phase 5 webhook-receiver FFI
+    //! Integration tests for the  webhook-receiver FFI
     //! surface. Each test stands up a temp-dir SQLCipher store,
     //! binds an axum server on `127.0.0.1:0` (ephemeral port), and
     //! exercises the FFI surface end-to-end through real HTTP
@@ -3198,8 +3055,7 @@ mod webhook {
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .expect("set_read_timeout");
-        let req = format!(
-            "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\n\
+        let req = format!("POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\n\
              Content-Type: application/json\r\nConnection: close\r\n\r\n",
             body.len()
         );
@@ -3260,8 +3116,7 @@ mod webhook {
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].server_handle, server);
         assert!(servers[0].bind_addr.starts_with("127.0.0.1:"));
-        assert_ne!(
-            servers[0].bind_addr, "127.0.0.1:0",
+        assert_ne!(servers[0].bind_addr, "127.0.0.1:0",
             "list must surface OS-resolved port, not the requested 0",
         );
         assert_eq!(servers[0].registration_count, 0);
@@ -3273,8 +3128,7 @@ mod webhook {
         // Healthz endpoint MUST be live on the server immediately
         // after `start_webhook_server` returns.
         let (code, body) = http_get(&servers[0].bind_addr, "/healthz");
-        assert_eq!(
-            code, 200,
+        assert_eq!(code, 200,
             "/healthz must return 200; got {code} body={body}"
         );
 
@@ -3292,8 +3146,7 @@ mod webhook {
     fn webhook_dispatch_routes_to_handle_webhook_event() {
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-00000000beef".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -3324,8 +3177,7 @@ mod webhook {
                 assert_eq!(summary.dispatch_bad_gateway_total, 0);
                 break;
             }
-            assert!(
-                Instant::now() <= deadline,
+            assert!(Instant::now() <= deadline,
                 "dispatch_ok_total never reached 1: {:?}",
                 summary,
             );
@@ -3334,8 +3186,7 @@ mod webhook {
 
         // Process-singleton counter should track too.
         let snap = metrics_snapshot();
-        assert!(
-            snap.webhook_dispatch_ok_total >= 1,
+        assert!(snap.webhook_dispatch_ok_total >= 1,
             "process metric should increment alongside per-server counter",
         );
 
@@ -3356,8 +3207,7 @@ mod webhook {
         // `webhook_dispatch_serde_failure_returns_502`.
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-00000000cafe".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -3379,8 +3229,7 @@ mod webhook {
                 assert_eq!(s.dispatch_ok_total, 0);
                 break;
             }
-            assert!(
-                Instant::now() <= deadline,
+            assert!(Instant::now() <= deadline,
                 "dispatch_bad_request_total never reached 1: {:?}",
                 s,
             );
@@ -3403,8 +3252,7 @@ mod webhook {
         // signature failures). This test pins that contract.
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-00000000c0fe".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -3424,8 +3272,7 @@ mod webhook {
                 assert_eq!(s.dispatch_ok_total, 0);
                 break;
             }
-            assert!(
-                Instant::now() <= deadline,
+            assert!(Instant::now() <= deadline,
                 "dispatch_bad_gateway_total never reached 1: {:?}",
                 s,
             );
@@ -3449,8 +3296,7 @@ mod webhook {
         // registered…") which the framework maps to 400.
         let body = br#"{"type":"url_verification","challenge":"x"}"#;
         let (code, _) = http_post(&addr, "/webhooks/slack", body);
-        assert_eq!(
-            code, 400,
+        assert_eq!(code, 400,
             "unregistered provider_id must return 400, not 404",
         );
 
@@ -3462,8 +3308,7 @@ mod webhook {
     fn register_then_unregister_round_trip() {
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-00000000a0a0".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -3471,29 +3316,25 @@ mod webhook {
         .expect("create_connector");
         let server = start_webhook_server(h, "127.0.0.1:0".into()).expect("start");
 
-        assert_eq!(
-            list_webhook_servers(h).expect("list")[0].registration_count,
+        assert_eq!(list_webhook_servers(h).expect("list")[0].registration_count,
             0
         );
 
         register_webhook_dispatch(h, server, "slack".into(), instance.clone()).expect("register");
-        assert_eq!(
-            list_webhook_servers(h).expect("list")[0].registration_count,
+        assert_eq!(list_webhook_servers(h).expect("list")[0].registration_count,
             1
         );
 
         // Re-register replaces (idempotent), count stays at 1.
         register_webhook_dispatch(h, server, "slack".into(), instance.clone())
             .expect("re-register replaces");
-        assert_eq!(
-            list_webhook_servers(h).expect("list")[0].registration_count,
+        assert_eq!(list_webhook_servers(h).expect("list")[0].registration_count,
             1
         );
 
         // Unregister returns Ok regardless of prior state.
         unregister_webhook_dispatch(h, server, "slack".into()).expect("unregister bound provider");
-        assert_eq!(
-            list_webhook_servers(h).expect("list")[0].registration_count,
+        assert_eq!(list_webhook_servers(h).expect("list")[0].registration_count,
             0
         );
 
@@ -3508,8 +3349,7 @@ mod webhook {
     fn register_rejects_unknown_provider_id() {
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-00000000b0b0".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -3519,8 +3359,7 @@ mod webhook {
 
         let err = register_webhook_dispatch(h, server, "totally-not-a-provider".into(), instance)
             .expect_err("unknown provider_id must be rejected");
-        assert!(
-            matches!(err, FfiError::Connector { .. }),
+        assert!(matches!(err, FfiError::Connector { .. }),
             "unknown provider_id must surface as FfiError::Connector, got {err:?}",
         );
 
@@ -3532,8 +3371,7 @@ mod webhook {
     fn register_rejects_unknown_server_handle() {
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-00000000c0c0".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -3543,8 +3381,7 @@ mod webhook {
         let bogus = ffi::WebhookServerHandle(99_999_999);
         let err = register_webhook_dispatch(h, bogus, "slack".into(), instance)
             .expect_err("unknown server_handle must be rejected");
-        assert!(
-            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "webhook_server"),
+        assert!(matches!(err, FfiError::NotFound { ref kind, .. } if kind == "webhook_server"),
             "got {err:?}",
         );
 
@@ -3559,8 +3396,7 @@ mod webhook {
         let bogus_uuid = "00000000-0000-0000-0000-00000000dead".to_string();
         let err = register_webhook_dispatch(h, server, "slack".into(), bogus_uuid)
             .expect_err("unknown instance_id must be rejected");
-        assert!(
-            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "connector_instance"),
+        assert!(matches!(err, FfiError::NotFound { ref kind, .. } if kind == "connector_instance"),
             "got {err:?}",
         );
 
@@ -3594,8 +3430,7 @@ mod webhook {
         let t0 = Instant::now();
         close_store(h).expect("close_store must drain servers, not hang");
         let elapsed = t0.elapsed();
-        assert!(
-            elapsed < Duration::from_secs(10),
+        assert!(elapsed < Duration::from_secs(10),
             "close_store with drained servers should be sub-10s, took {elapsed:?}",
         );
     }
@@ -3613,12 +3448,10 @@ mod webhook {
             .expect("connector subsystem");
         assert_eq!(connector.status, SubsystemStatus::Ok);
         let detail0 = connector.detail.as_deref().unwrap_or("");
-        assert!(
-            detail0.contains("webhook_servers=0"),
+        assert!(detail0.contains("webhook_servers=0"),
             "baseline detail must include webhook_servers=0: {detail0}",
         );
-        assert!(
-            detail0.contains("webhook_registrations=0"),
+        assert!(detail0.contains("webhook_registrations=0"),
             "baseline detail must include webhook_registrations=0: {detail0}",
         );
 
@@ -3626,8 +3459,7 @@ mod webhook {
         let s1 = start_webhook_server(h, "127.0.0.1:0".into()).expect("start s1");
         let _s2 = start_webhook_server(h, "127.0.0.1:0".into()).expect("start s2");
         let scope = "00000000-0000-0000-0000-00000000d0d0".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -3642,12 +3474,10 @@ mod webhook {
             .find(|s| s.name == "connector")
             .expect("connector subsystem");
         let detail1 = connector.detail.as_deref().unwrap_or("");
-        assert!(
-            detail1.contains("webhook_servers=2"),
+        assert!(detail1.contains("webhook_servers=2"),
             "post-start detail must include webhook_servers=2: {detail1}",
         );
-        assert!(
-            detail1.contains("webhook_registrations=1"),
+        assert!(detail1.contains("webhook_registrations=1"),
             "post-register detail must include webhook_registrations=1: {detail1}",
         );
 
@@ -3669,20 +3499,17 @@ mod webhook {
         stop_webhook_server(h, server).expect("stop");
 
         let after = metrics_snapshot();
-        assert!(
-            after.start_webhook_server_total > before.start_webhook_server_total,
+        assert!(after.start_webhook_server_total > before.start_webhook_server_total,
             "start counter must increment by at least 1: before={} after={}",
             before.start_webhook_server_total,
             after.start_webhook_server_total,
         );
-        assert!(
-            after.stop_webhook_server_total > before.stop_webhook_server_total,
+        assert!(after.stop_webhook_server_total > before.stop_webhook_server_total,
             "stop counter must increment by at least 1: before={} after={}",
             before.stop_webhook_server_total,
             after.stop_webhook_server_total,
         );
-        assert!(
-            after.list_webhook_servers_total > before.list_webhook_servers_total,
+        assert!(after.list_webhook_servers_total > before.list_webhook_servers_total,
             "list counter must increment",
         );
 
@@ -3700,8 +3527,7 @@ mod webhook {
         // mid-flight.
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-00000000e0e0".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -3721,11 +3547,11 @@ mod webhook {
     }
 }
 
-// ───────────────────── Phase 6: background sync scheduler ─────────
+// ───────────────────── : background sync scheduler ─────────
 
 #[cfg(feature = "http-client")]
 mod sync_scheduler_tests {
-    //! Integration tests for the Phase 6 background sync scheduler
+    //! Integration tests for the  background sync scheduler
     //! FFI surface. Each test stands up a temp-dir SQLCipher store
     //! and exercises the scheduler entry points end-to-end. The
     //! scheduler thread is a real `std::thread` — we drive it on
@@ -3805,8 +3631,7 @@ mod sync_scheduler_tests {
 
         // Wait for at least one tick to fire so the worker thread
         // is actually live, then stop.
-        assert!(
-            wait_until(Duration::from_secs(5), || {
+        assert!(wait_until(Duration::from_secs(5), || {
                 sync_scheduler_status(h)
                     .ok()
                     .is_some_and(|s| s.ticks_completed >= 1)
@@ -3849,8 +3674,7 @@ mod sync_scheduler_tests {
     fn configure_and_clear_per_instance_policy() {
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-000000005c01".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -3918,8 +3742,7 @@ mod sync_scheduler_tests {
         // counter rises with at least one dispatch, then stop.
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-000000005c02".to_string();
-        let _instance = create_connector(
-            h,
+        let _instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -3934,8 +3757,7 @@ mod sync_scheduler_tests {
         // dispatch — bounded by 5 s to keep the test snappy even
         // on a loaded CI host. (Slack at `.invalid` cannot
         // resolve, so the dispatch errors out quickly.)
-        assert!(
-            wait_until(Duration::from_secs(5), || {
+        assert!(wait_until(Duration::from_secs(5), || {
                 sync_scheduler_status(h)
                     .ok()
                     .is_some_and(|s| s.dispatches_attempted >= 1)
@@ -3983,20 +3805,17 @@ mod sync_scheduler_tests {
         // exactly the reason `metrics.rs:779-796` documents; the
         // existing `metrics_snapshot_includes_webhook_counters`
         // test (line 3501) uses the same `>=` discipline.
-        assert!(
-            after.start_sync_scheduler_total > baseline_start,
+        assert!(after.start_sync_scheduler_total > baseline_start,
             "start counter must advance \
              (baseline={baseline_start}, after={})",
             after.start_sync_scheduler_total,
         );
-        assert!(
-            after.stop_sync_scheduler_total > baseline_stop,
+        assert!(after.stop_sync_scheduler_total > baseline_stop,
             "stop counter must advance \
              (baseline={baseline_stop}, after={})",
             after.stop_sync_scheduler_total,
         );
-        assert!(
-            after.sync_scheduler_status_total > baseline_status,
+        assert!(after.sync_scheduler_status_total > baseline_status,
             "status counter must advance",
         );
 
@@ -4020,8 +3839,7 @@ mod sync_scheduler_tests {
             .expect("connector subsystem");
         assert_eq!(connector.status, SubsystemStatus::Ok);
         let detail = connector.detail.clone().unwrap_or_default();
-        assert!(
-            detail.contains("sync_scheduler=stopped"),
+        assert!(detail.contains("sync_scheduler=stopped"),
             "pre-start probe must contain sync_scheduler=stopped, got: {detail}",
         );
 
@@ -4033,8 +3851,7 @@ mod sync_scheduler_tests {
             .find(|s| s.name == "connector")
             .expect("connector subsystem");
         let detail = connector.detail.clone().unwrap_or_default();
-        assert!(
-            detail.contains("sync_scheduler=running"),
+        assert!(detail.contains("sync_scheduler=running"),
             "post-start probe must contain sync_scheduler=running, got: {detail}",
         );
 
@@ -4053,8 +3870,7 @@ mod sync_scheduler_tests {
         // `close_store` without an explicit stop.
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-000000005c03".to_string();
-        let _instance = create_connector(
-            h,
+        let _instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -4066,8 +3882,7 @@ mod sync_scheduler_tests {
         // Wait until the scheduler has ticked at least once, so
         // we know `close_store` is racing a live worker thread,
         // not a freshly-spawned one that hasn't run yet.
-        assert!(
-            wait_until(Duration::from_secs(5), || {
+        assert!(wait_until(Duration::from_secs(5), || {
                 sync_scheduler_status(h)
                     .ok()
                     .is_some_and(|s| s.ticks_completed >= 1)
@@ -4082,8 +3897,7 @@ mod sync_scheduler_tests {
         let started = Instant::now();
         close_store(h).expect("close_store must drain scheduler cleanly");
         let elapsed = started.elapsed();
-        assert!(
-            elapsed < Duration::from_secs(10),
+        assert!(elapsed < Duration::from_secs(10),
             "close_store must not hang on scheduler drain (took {elapsed:?})",
         );
     }
@@ -4098,8 +3912,7 @@ mod sync_scheduler_tests {
         // surface as a hang on this test.
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-000000005c04".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -4119,8 +3932,7 @@ mod sync_scheduler_tests {
             clear_sync_schedule(h, instance.clone()).expect("clear must not deadlock");
             iterations += 1;
         }
-        assert!(
-            iterations >= 5,
+        assert!(iterations >= 5,
             "expected configure+clear to round-trip many times; got {iterations}",
         );
 
@@ -4133,8 +3945,7 @@ mod sync_scheduler_tests {
         let (h, _dir) = fresh_store();
 
         let scope = "00000000-0000-0000-0000-000000005c05".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -4147,16 +3958,14 @@ mod sync_scheduler_tests {
         configure_sync_schedule(h, instance.clone(), 2, 10).expect("configure");
         let status = sync_scheduler_status(h).expect("status");
         assert_eq!(status.policy_override_count, 1, "one instance configured");
-        assert_eq!(
-            status.total_instance_count, 1,
+        assert_eq!(status.total_instance_count, 1,
             "one connector instance exists in the runtime",
         );
 
         // Remove the connector — should prune the scheduler state.
         remove_connector(h, instance.clone()).expect("remove_connector");
         let status2 = sync_scheduler_status(h).expect("status after remove");
-        assert_eq!(
-            status2.policy_override_count, 0,
+        assert_eq!(status2.policy_override_count, 0,
             "prune_instance must remove the per-instance policy on remove_connector",
         );
         // `remove_connector` also drops the instance from
@@ -4164,8 +3973,7 @@ mod sync_scheduler_tests {
         // fall to zero as well. Pin this together with
         // `policy_override_count` so a regression that prunes only
         // one of the two maps is caught here.
-        assert_eq!(
-            status2.total_instance_count, 0,
+        assert_eq!(status2.total_instance_count, 0,
             "remove_connector must drop the connector from connector_instances",
         );
 
@@ -4192,8 +4000,7 @@ mod sync_scheduler_tests {
         // Create two connectors in the same scope so we exercise
         // the loop body (one-shot would mask an early-break bug).
         let scope = "00000000-0000-0000-0000-000000005c06".to_string();
-        let i1 = create_connector(
-            h,
+        let i1 = create_connector(h,
             ConnectorKindTag::Slack,
             scope.clone(),
             SLACK_CONNECTOR_CFG.into(),
@@ -4202,8 +4009,7 @@ mod sync_scheduler_tests {
         // Use a different `ConnectorKindTag` for i2 because
         // (scope, kind) is the duplicate-constraint key —
         // `(scope, Slack)` is already taken by i1.
-        let i2 = create_connector(
-            h,
+        let i2 = create_connector(h,
             ConnectorKindTag::Notion,
             scope.clone(),
             SLACK_CONNECTOR_CFG.into(),
@@ -4216,12 +4022,10 @@ mod sync_scheduler_tests {
         configure_sync_schedule(h, i1.clone(), 2, 10).expect("configure 1");
         configure_sync_schedule(h, i2.clone(), 2, 10).expect("configure 2");
         let status = sync_scheduler_status(h).expect("status");
-        assert_eq!(
-            status.policy_override_count, 2,
+        assert_eq!(status.policy_override_count, 2,
             "two instances configured before forget_scope",
         );
-        assert_eq!(
-            status.total_instance_count, 2,
+        assert_eq!(status.total_instance_count, 2,
             "two connector instances exist before forget_scope",
         );
 
@@ -4229,16 +4033,14 @@ mod sync_scheduler_tests {
         // scheduler state (not just the first one).
         forget_scope(h, scope).expect("forget_scope");
         let status2 = sync_scheduler_status(h).expect("status after forget_scope");
-        assert_eq!(
-            status2.policy_override_count, 0,
+        assert_eq!(status2.policy_override_count, 0,
             "forget_scope must prune scheduler state for every connector in scope",
         );
         // The connectors themselves must also be evicted from
         // `connector_instances` by `forget_scope`. Pin that the
         // scheduler's `total_instance_count` falls to zero, not
         // just `policy_override_count`.
-        assert_eq!(
-            status2.total_instance_count, 0,
+        assert_eq!(status2.total_instance_count, 0,
             "forget_scope must evict every connector in the scope from connector_instances",
         );
 
@@ -4251,9 +4053,9 @@ mod sync_scheduler_tests {
         close_store(h).expect("close_store");
     }
 
-    /// Phase 9: `clear_sync_schedule` must preserve the
+    /// `clear_sync_schedule` must preserve the
     /// `auto_synthesize` flag set via
-    /// `configure_sync_auto_synthesize`. Without the Phase 9 fix
+    /// `configure_sync_auto_synthesize`. Without the  fix
     /// the flag was lost on clear, silently disabling post-sync
     /// synthesis.
     #[test]
@@ -4262,8 +4064,7 @@ mod sync_scheduler_tests {
 
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-000000005d01".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -4277,8 +4078,7 @@ mod sync_scheduler_tests {
         configure_sync_auto_synthesize(h, instance.clone(), true).expect("enable auto-synth");
 
         let before = sync_scheduler_status(h).expect("status before clear");
-        assert_eq!(
-            before.policy_override_count, 1,
+        assert_eq!(before.policy_override_count, 1,
             "instance has a policy override",
         );
 
@@ -4288,8 +4088,7 @@ mod sync_scheduler_tests {
 
         let after = sync_scheduler_status(h).expect("status after clear");
         // The policy entry stays because auto_synthesize is true.
-        assert_eq!(
-            after.policy_override_count, 1,
+        assert_eq!(after.policy_override_count, 1,
             "policy entry must survive clear when auto_synthesize was true",
         );
 
@@ -4299,8 +4098,7 @@ mod sync_scheduler_tests {
         clear_sync_schedule(h, instance).expect("clear again");
 
         let final_status = sync_scheduler_status(h).expect("status after full clear");
-        assert_eq!(
-            final_status.policy_override_count, 0,
+        assert_eq!(final_status.policy_override_count, 0,
             "policy entry must be removed when auto_synthesize is false",
         );
 
@@ -4309,8 +4107,8 @@ mod sync_scheduler_tests {
     }
 }
 
-/// Phase 10 Item 3 — `connector_status` is the per-instance health
-/// probe symmetric with `synthesis_status`. The Phase 6 surfaces
+///  — `connector_status` is the per-instance health
+/// probe symmetric with `synthesis_status`. The surfaces
 /// (`list_connectors`, `sync_scheduler_status`) only expose
 /// fleet-wide views; hosts that want to render a single
 /// connector's health page were forced to fetch both and reassemble
@@ -4334,7 +4132,7 @@ mod sync_scheduler_tests {
 /// 4. Error cases — bad UUID, missing instance, forgotten scope.
 ///
 /// Gated on `http-client` because `create_connector` requires the
-/// real `BlockingHttpTransport`. The Phase 2 CI workflow builds
+/// real `BlockingHttpTransport`. The  CI workflow builds
 /// with `--all-features` so this test still runs in CI; local
 /// `cargo test` developers see it skip the way the rest of the
 /// connector-lifecycle tests do.
@@ -4368,8 +4166,7 @@ mod connector_status_tests {
         // `is_scheduled` separately).
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-00000000c001".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope.clone(),
             SLACK_CONNECTOR_CFG.into(),
@@ -4391,8 +4188,7 @@ mod connector_status_tests {
         assert!(!probe.auto_synthesize);
         assert_eq!(probe.consecutive_failures, 0);
         assert!(probe.next_attempt_unix.is_none());
-        assert!(
-            !probe.in_cooldown,
+        assert!(!probe.in_cooldown,
             "in_cooldown must be false when scheduler isn't running",
         );
 
@@ -4405,12 +4201,11 @@ mod connector_status_tests {
         // surface the scheduler defaults; configure_sync_schedule
         // must flip those fields to the override; clear_sync_schedule
         // must revert them to defaults (and DROP `auto_synthesize`
-        // unless it was previously set — same Phase-9 contract as
+        // unless it was previously set — same earlier contract as
         // `configure_sync_auto_synthesize`).
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-00000000c002".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope,
             SLACK_CONNECTOR_CFG.into(),
@@ -4463,8 +4258,7 @@ mod connector_status_tests {
         // Unknown instance (well-formed UUID, just not registered).
         let err = connector_status(h, "00000000-0000-0000-0000-00000000beef".into())
             .expect_err("unknown instance must reject as NotFound");
-        assert!(matches!(
-            err,
+        assert!(matches!(err,
             FfiError::NotFound { ref kind, .. } if kind == "connector_instance"
         ));
 
@@ -4472,8 +4266,7 @@ mod connector_status_tests {
         // then probe — the tombstoned-scope shield must surface as
         // NotFound { kind = "scope" } matching the rest of the FFI.
         let scope = "00000000-0000-0000-0000-00000000c003".to_string();
-        let instance = create_connector(
-            h,
+        let instance = create_connector(h,
             ConnectorKindTag::Slack,
             scope.clone(),
             SLACK_CONNECTOR_CFG.into(),
@@ -4490,8 +4283,7 @@ mod connector_status_tests {
         // test.)
         let err = connector_status(h, instance.clone())
             .expect_err("probing a purged connector must reject");
-        assert!(matches!(
-            err,
+        assert!(matches!(err,
             FfiError::NotFound { ref kind, .. } if kind == "connector_instance"
         ));
 

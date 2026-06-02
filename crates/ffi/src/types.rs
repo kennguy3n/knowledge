@@ -80,7 +80,7 @@ pub struct EvidenceRecord {
     /// Unix epoch (seconds) when the row was ingested.
     pub created_at: i64,
     /// BCP-47 primary language subtag detected on the plaintext
-    /// body at ingest time (schema v13, Phase 1.3). `None` when
+    /// body at ingest time (schema v13, ). `None` when
     /// the row was ingested via the legacy
     /// `EvidenceStore::ingest()` shim, when the language detector
     /// declined to classify (empty / pure-punctuation / pure-emoji
@@ -355,7 +355,7 @@ pub struct ConnectorStatus {
 }
 
 /// Wire-flat result returned by [`super::connector_status`]
-/// (Phase 10 Item 3 — single-instance health probe symmetric with
+/// (single-instance health probe symmetric with
 /// [`super::synthesis_status`]).
 ///
 /// Bundles three independent slices of per-connector state that
@@ -668,7 +668,7 @@ pub struct WebhookServerSummary {
 }
 
 /// Wire-flat diagnostic snapshot returned by
-/// [`super::sync_scheduler_status`] (Phase 6).
+/// [`super::sync_scheduler_status`].
 ///
 /// Reports the background scheduler's running state, configuration
 /// echo, and per-counter totals so hosts can render a "Sync
@@ -718,7 +718,7 @@ pub struct SyncSchedulerStatus {
     /// scheduler considers, but instances without an override are
     /// counted only in `total_instance_count`.
     ///
-    /// Was named `scheduled_instance_count` through Phase 6 round 5;
+    /// Was named `scheduled_instance_count` through  round 5;
     /// renamed in round 6 (ANALYSIS_0003) to disambiguate from
     /// `total_instance_count`. A host UI that wants "how many
     /// connectors is the scheduler driving" should read
@@ -918,7 +918,7 @@ pub struct SynthesisEngineConfig {
 
     /// Burst capacity for the global rate-shaping token bucket
     /// gating [`crate::synthesis::trigger_server_synthesis`]
-    /// (Phase 10 Item 5). `0` falls back to
+    /// . `0` falls back to
     /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY`] (8) —
     /// the same sentinel-zero pattern used by `max_tokens` and
     /// `timeout_ms`. Hosts that want to disable rate-shaping
@@ -931,7 +931,7 @@ pub struct SynthesisEngineConfig {
     /// Refill rate (tokens per second) for the global
     /// rate-shaping token bucket gating
     /// [`crate::synthesis::trigger_server_synthesis`]
-    /// (Phase 10 Item 5). `0.0` falls back to
+    /// . `0.0` falls back to
     /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC`]
     /// (1.0). Fractional values are supported (e.g. `0.5` ==
     /// one token every 2 seconds). Negative values are rejected
@@ -954,7 +954,7 @@ pub struct SynthesisEngineConfig {
 ///
 /// `payload_bytes == 0` and `content_hash_hex.is_empty()` indicate
 /// a tenant-memory ref that has no corresponding evidence-store
-/// payload row. Under Phase 8 this should only occur transiently
+/// payload row. Under  this should only occur transiently
 /// (e.g. between a host's call to `admit_approved_document` and a
 /// crash before tenant memory was flushed), but the substrate
 /// surfaces it explicitly rather than synthesising fake metadata.
@@ -1051,7 +1051,7 @@ mod tests {
         assert_eq!(r, back);
     }
 
-    /// Schema-v13 backward-compat (Phase 1.3): an
+    /// Schema-v13 backward-compat: an
     /// `EvidenceRecord` JSON blob emitted by a pre-v13 host
     /// bridge — i.e. one that doesn't know about the
     /// `language_tag` key — must still deserialise. The
@@ -1186,8 +1186,7 @@ mod tests {
         let err = serde_json::from_str::<MemoryFilter>(payload)
             .expect_err("MemoryFilter must reject unknown camelCase keys like `pinnedOnly`");
         let msg = err.to_string();
-        assert!(
-            msg.contains("unknown field") && msg.contains("pinnedOnly"),
+        assert!(msg.contains("unknown field") && msg.contains("pinnedOnly"),
             "expected `unknown field `pinnedOnly``, got {msg}"
         );
     }
@@ -1198,8 +1197,7 @@ mod tests {
         let payload = r#"{"state":null,"pinned_only":false,"junk":42}"#;
         let err = serde_json::from_str::<MemoryFilter>(payload)
             .expect_err("MemoryFilter must reject stray unknown keys");
-        assert!(
-            err.to_string().contains("unknown field"),
+        assert!(err.to_string().contains("unknown field"),
             "expected `unknown field` error, got {err}"
         );
     }
@@ -1271,8 +1269,7 @@ mod tests {
             "dispatchesFailed",
             "dispatchesSkippedInProgress",
         ] {
-            assert!(
-                obj.contains_key(camel),
+            assert!(obj.contains_key(camel),
                 "SyncSchedulerStatus JSON must contain camelCase key `{camel}`; got {v}"
             );
         }
@@ -1291,8 +1288,7 @@ mod tests {
             "dispatches_failed",
             "dispatches_skipped_in_progress",
         ] {
-            assert!(
-                !obj.contains_key(snake),
+            assert!(!obj.contains_key(snake),
                 "SyncSchedulerStatus JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
@@ -1301,13 +1297,11 @@ mod tests {
         // their values come through distinct from each other (so a
         // future refactor that conflates them in code is caught
         // here, not by a host reporting wrong telemetry).
-        assert_eq!(
-            obj.get("policyOverrideCount").and_then(serde_json::Value::as_u64),
+        assert_eq!(obj.get("policyOverrideCount").and_then(serde_json::Value::as_u64),
             Some(3),
             "policyOverrideCount must serialize as the configured value, distinct from totalInstanceCount"
         );
-        assert_eq!(
-            obj.get("totalInstanceCount").and_then(serde_json::Value::as_u64),
+        assert_eq!(obj.get("totalInstanceCount").and_then(serde_json::Value::as_u64),
             Some(11),
             "totalInstanceCount must serialize as the configured value, distinct from policyOverrideCount"
         );
@@ -1317,7 +1311,7 @@ mod tests {
         assert_eq!(back, status);
     }
 
-    /// Phase 5's `WebhookServerSummary` had the same latent wire
+    /// 's `WebhookServerSummary` had the same latent wire
     /// format mismatch (doc at `crates/napi/src/bindings.rs::
     /// js_list_webhook_servers` documents camelCase but the type
     /// originally derived `Serialize` without `rename_all`). Pin the
@@ -1345,8 +1339,7 @@ mod tests {
             "dispatchBadRequestTotal",
             "dispatchBadGatewayTotal",
         ] {
-            assert!(
-                obj.contains_key(camel),
+            assert!(obj.contains_key(camel),
                 "WebhookServerSummary JSON must contain camelCase key `{camel}`; got {v}"
             );
         }
@@ -1359,8 +1352,7 @@ mod tests {
             "dispatch_bad_request_total",
             "dispatch_bad_gateway_total",
         ] {
-            assert!(
-                !obj.contains_key(snake),
+            assert!(!obj.contains_key(snake),
                 "WebhookServerSummary JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
@@ -1387,14 +1379,12 @@ mod tests {
         let v = serde_json::to_value(&r).expect("serialize");
         let obj = v.as_object().expect("object");
         for camel in ["instanceId", "refreshed", "expiresAt", "refreshedAt"] {
-            assert!(
-                obj.contains_key(camel),
+            assert!(obj.contains_key(camel),
                 "RefreshReport JSON must contain camelCase key `{camel}`; got {v}"
             );
         }
         for snake in ["instance_id", "expires_at", "refreshed_at"] {
-            assert!(
-                !obj.contains_key(snake),
+            assert!(!obj.contains_key(snake),
                 "RefreshReport JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
@@ -1433,8 +1423,7 @@ mod tests {
             "startedAt",
             "completedAt",
         ] {
-            assert!(
-                obj.contains_key(camel),
+            assert!(obj.contains_key(camel),
                 "SyncReport JSON must contain camelCase key `{camel}`; got {v}"
             );
         }
@@ -1447,8 +1436,7 @@ mod tests {
             "started_at",
             "completed_at",
         ] {
-            assert!(
-                !obj.contains_key(snake),
+            assert!(!obj.contains_key(snake),
                 "SyncReport JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
@@ -1458,8 +1446,7 @@ mod tests {
         // NOT the camelCase `"Incremental"` the struct-level rename
         // would suggest. The struct-level `rename_all` only
         // governs field names, not nested enum variants.
-        assert_eq!(
-            obj.get("mode").and_then(|m| m.as_str()),
+        assert_eq!(obj.get("mode").and_then(|m| m.as_str()),
             Some("incremental"),
             "SyncModeKind variant tag must remain snake_case"
         );
@@ -1499,8 +1486,7 @@ mod tests {
             "lastSyncedAt",
             "lastError",
         ] {
-            assert!(
-                obj.contains_key(camel),
+            assert!(obj.contains_key(camel),
                 "ConnectorStatus JSON must contain camelCase key `{camel}`; got {v}"
             );
         }
@@ -1512,8 +1498,7 @@ mod tests {
             "last_synced_at",
             "last_error",
         ] {
-            assert!(
-                !obj.contains_key(snake),
+            assert!(!obj.contains_key(snake),
                 "ConnectorStatus JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
@@ -1525,18 +1510,15 @@ mod tests {
         // `camelCase` (which would silently break every JS
         // consumer matching `"google_drive"`, `"incremental"`,
         // `"succeeded"`) gets caught here.
-        assert_eq!(
-            obj.get("kind").and_then(|m| m.as_str()),
+        assert_eq!(obj.get("kind").and_then(|m| m.as_str()),
             Some("google_drive"),
             "ConnectorKindTag variant tag must remain snake_case"
         );
-        assert_eq!(
-            obj.get("syncMode").and_then(|m| m.as_str()),
+        assert_eq!(obj.get("syncMode").and_then(|m| m.as_str()),
             Some("incremental"),
             "SyncModeKind variant tag must remain snake_case"
         );
-        assert_eq!(
-            obj.get("syncStatus").and_then(|m| m.as_str()),
+        assert_eq!(obj.get("syncStatus").and_then(|m| m.as_str()),
             Some("succeeded"),
             "SyncStatusKind variant tag must remain snake_case"
         );
@@ -1544,7 +1526,7 @@ mod tests {
         assert_eq!(back, s);
     }
 
-    /// Phase 10 Item 3 — `ConnectorHealthRecord` is the new
+    ///  — `ConnectorHealthRecord` is the new
     /// single-instance probe envelope returned by
     /// [`crate::connector::connector_status`], symmetric with
     /// [`crate::synthesis::synthesis_status`]. Pin the camelCase
@@ -1595,8 +1577,7 @@ mod tests {
             "nextAttemptUnix",
             "inCooldown",
         ] {
-            assert!(
-                obj.contains_key(camel),
+            assert!(obj.contains_key(camel),
                 "ConnectorHealthRecord JSON must contain camelCase key `{camel}`; got {v}"
             );
         }
@@ -1615,8 +1596,7 @@ mod tests {
             "next_attempt_unix",
             "in_cooldown",
         ] {
-            assert!(
-                !obj.contains_key(snake),
+            assert!(!obj.contains_key(snake),
                 "ConnectorHealthRecord JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
@@ -1627,18 +1607,15 @@ mod tests {
         // `camelCase` would silently break every JS consumer
         // matching on `"google_drive"` / `"incremental"` /
         // `"failed"`.
-        assert_eq!(
-            obj.get("kind").and_then(|m| m.as_str()),
+        assert_eq!(obj.get("kind").and_then(|m| m.as_str()),
             Some("google_drive"),
             "ConnectorKindTag variant tag must remain snake_case"
         );
-        assert_eq!(
-            obj.get("syncMode").and_then(|m| m.as_str()),
+        assert_eq!(obj.get("syncMode").and_then(|m| m.as_str()),
             Some("incremental"),
             "SyncModeKind variant tag must remain snake_case"
         );
-        assert_eq!(
-            obj.get("syncStatus").and_then(|m| m.as_str()),
+        assert_eq!(obj.get("syncStatus").and_then(|m| m.as_str()),
             Some("failed"),
             "SyncStatusKind variant tag must remain snake_case"
         );
@@ -1651,8 +1628,7 @@ mod tests {
         for kind in [SynthesisTierKind::Domain, SynthesisTierKind::Tenant] {
             let serialized = serde_json::to_string(&kind).expect("serialize");
             // snake_case discipline keeps platform JSON decoders happy.
-            assert!(
-                serialized == "\"domain\"" || serialized == "\"tenant\"",
+            assert!(serialized == "\"domain\"" || serialized == "\"tenant\"",
                 "SynthesisTierKind must serialize as snake_case: {serialized}"
             );
             let back: SynthesisTierKind = serde_json::from_str(&serialized).expect("deserialize");
@@ -1690,8 +1666,7 @@ mod tests {
             "objectId",
             "objectVersion",
         ] {
-            assert!(
-                obj.contains_key(camel),
+            assert!(obj.contains_key(camel),
                 "SynthesisStatusRecord JSON must contain camelCase key `{camel}`: {v}"
             );
         }
@@ -1703,8 +1678,7 @@ mod tests {
             "object_id",
             "object_version",
         ] {
-            assert!(
-                !obj.contains_key(snake),
+            assert!(!obj.contains_key(snake),
                 "SynthesisStatusRecord JSON must NOT contain snake_case key `{snake}`: {v}"
             );
         }
@@ -1723,14 +1697,12 @@ mod tests {
         let v = serde_json::to_value(&summary).expect("serialize");
         let obj = v.as_object().expect("object");
         for camel in ["version", "createdAtUnix", "objectType", "isLatest"] {
-            assert!(
-                obj.contains_key(camel),
+            assert!(obj.contains_key(camel),
                 "SynthesisVersionSummary JSON must contain camelCase key `{camel}`: {v}"
             );
         }
         for snake in ["created_at_unix", "object_type", "is_latest"] {
-            assert!(
-                !obj.contains_key(snake),
+            assert!(!obj.contains_key(snake),
                 "SynthesisVersionSummary JSON must NOT contain snake_case key `{snake}`: {v}"
             );
         }
@@ -1769,8 +1741,7 @@ mod tests {
             "rateCapacity",
             "rateRefillPerSec",
         ] {
-            assert!(
-                obj.contains_key(camel),
+            assert!(obj.contains_key(camel),
                 "SynthesisEngineConfig JSON must contain camelCase key `{camel}`: {v}"
             );
         }
@@ -1784,8 +1755,7 @@ mod tests {
             "rate_capacity",
             "rate_refill_per_sec",
         ] {
-            assert!(
-                !obj.contains_key(snake),
+            assert!(!obj.contains_key(snake),
                 "SynthesisEngineConfig JSON must NOT contain snake_case key `{snake}`: {v}"
             );
         }

@@ -92,8 +92,7 @@ where
 ///   bootstrap from a snapshot instead.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "OpLogOnDisk<T>")]
-#[serde(bound(
-    serialize = "T: Serialize + Eq + Hash + Clone",
+#[serde(bound(serialize = "T: Serialize + Eq + Hash + Clone",
     deserialize = "T: DeserializeOwned + Eq + Hash + Clone"
 ))]
 pub struct OpLog<T>
@@ -458,12 +457,10 @@ mod tests {
 
         let (set_ab, _) = ab.replay().unwrap();
         let (set_ba, _) = ba.replay().unwrap();
-        assert_eq!(
-            set_ab.contains(&"alpha".to_string()),
+        assert_eq!(set_ab.contains(&"alpha".to_string()),
             set_ba.contains(&"alpha".to_string())
         );
-        assert_eq!(
-            set_ab.contains(&"beta".to_string()),
+        assert_eq!(set_ab.contains(&"beta".to_string()),
             set_ba.contains(&"beta".to_string())
         );
 

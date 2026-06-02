@@ -201,8 +201,7 @@ pub struct KeyExchangeAudit {
 
 impl KeyExchangeAudit {
     /// Construct an audit row.
-    pub fn new(
-        mode: HybridMode,
+    pub fn new(mode: HybridMode,
         primitives: KemPrimitives,
         direction: KeyExchangeDirection,
         outcome: KeyExchangeOutcome,
@@ -234,8 +233,7 @@ pub trait KeyExchangeAuditor {
 /// The same predicate is used by [`enforce_hybrid_kem_encap`] and
 /// [`enforce_hybrid_kem_decap`] as well as offline validation paths
 /// (e.g. inspecting an MLS commit's KEM tag).
-pub fn enforce_hybrid_kem(
-    policy: &CryptoPolicy,
+pub fn enforce_hybrid_kem(policy: &CryptoPolicy,
     primitives: KemPrimitives,
 ) -> Result<(), CryptoError> {
     match policy.mode {
@@ -280,8 +278,7 @@ pub fn enforce_hybrid_kem(
 ///
 /// On policy reject the row is recorded as `Rejected` and the underlying
 /// encap is **not** executed.
-pub fn enforce_hybrid_kem_encap<A: KeyExchangeAuditor>(
-    policy: &CryptoPolicy,
+pub fn enforce_hybrid_kem_encap<A: KeyExchangeAuditor>(policy: &CryptoPolicy,
     auditor: &mut A,
     recipient_pk: &HybridPublicKey,
 ) -> Result<(HybridSharedSecret, HybridCiphertext), CryptoError> {
@@ -289,8 +286,7 @@ pub fn enforce_hybrid_kem_encap<A: KeyExchangeAuditor>(
 }
 
 /// Backend-flexible variant of [`enforce_hybrid_kem_encap`].
-pub fn enforce_hybrid_kem_encap_with_backend<A, B>(
-    policy: &CryptoPolicy,
+pub fn enforce_hybrid_kem_encap_with_backend<A, B>(policy: &CryptoPolicy,
     auditor: &mut A,
     backend: &B,
     recipient_pk: &HybridPublicKey,
@@ -301,8 +297,7 @@ where
 {
     let primitives = KemPrimitives::hybrid();
     if let Err(err) = enforce_hybrid_kem(policy, primitives) {
-        let audit = KeyExchangeAudit::new(
-            policy.mode,
+        let audit = KeyExchangeAudit::new(policy.mode,
             primitives,
             KeyExchangeDirection::Encap,
             KeyExchangeOutcome::Rejected,
@@ -319,8 +314,7 @@ where
         KeyExchangeOutcome::Rejected
     };
     let reason = result.as_ref().err().map(std::string::ToString::to_string);
-    let audit = KeyExchangeAudit::new(
-        policy.mode,
+    let audit = KeyExchangeAudit::new(policy.mode,
         primitives,
         KeyExchangeDirection::Encap,
         outcome,
@@ -331,14 +325,12 @@ where
 }
 
 /// Policy-checked decap. Same shape as [`enforce_hybrid_kem_encap`].
-pub fn enforce_hybrid_kem_decap<A: KeyExchangeAuditor>(
-    policy: &CryptoPolicy,
+pub fn enforce_hybrid_kem_decap<A: KeyExchangeAuditor>(policy: &CryptoPolicy,
     auditor: &mut A,
     recipient_sk: &HybridSecretKey,
     ciphertext: &HybridCiphertext,
 ) -> Result<HybridSharedSecret, CryptoError> {
-    enforce_hybrid_kem_decap_with_backend(
-        policy,
+    enforce_hybrid_kem_decap_with_backend(policy,
         auditor,
         &MlKem768Backend,
         recipient_sk,
@@ -347,8 +339,7 @@ pub fn enforce_hybrid_kem_decap<A: KeyExchangeAuditor>(
 }
 
 /// Backend-flexible variant of [`enforce_hybrid_kem_decap`].
-pub fn enforce_hybrid_kem_decap_with_backend<A, B>(
-    policy: &CryptoPolicy,
+pub fn enforce_hybrid_kem_decap_with_backend<A, B>(policy: &CryptoPolicy,
     auditor: &mut A,
     backend: &B,
     recipient_sk: &HybridSecretKey,
@@ -360,8 +351,7 @@ where
 {
     let primitives = KemPrimitives::hybrid();
     if let Err(err) = enforce_hybrid_kem(policy, primitives) {
-        let audit = KeyExchangeAudit::new(
-            policy.mode,
+        let audit = KeyExchangeAudit::new(policy.mode,
             primitives,
             KeyExchangeDirection::Decap,
             KeyExchangeOutcome::Rejected,
@@ -378,8 +368,7 @@ where
         KeyExchangeOutcome::Rejected
     };
     let reason = result.as_ref().err().map(std::string::ToString::to_string);
-    let audit = KeyExchangeAudit::new(
-        policy.mode,
+    let audit = KeyExchangeAudit::new(policy.mode,
         primitives,
         KeyExchangeDirection::Decap,
         outcome,

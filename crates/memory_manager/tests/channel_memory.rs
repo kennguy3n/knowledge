@@ -138,8 +138,7 @@ fn channel_memory_is_serde_round_trippable() {
 fn decisions_carry_important_sensitivity() {
     let scope = ScopeId::new_v4();
     let d = Decision::new(scope, "approved policy");
-    assert_eq!(
-        d.memory.sensitivity_class,
+    assert_eq!(d.memory.sensitivity_class,
         memory_manager::SensitivityClass::Important
     );
     assert_eq!(d.memory.state, MemoryState::Candidate);

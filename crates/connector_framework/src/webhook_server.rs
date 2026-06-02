@@ -1,6 +1,6 @@
-//! Phase 5 — Tokio + axum webhook receiver.
+//!  — Tokio + axum webhook receiver.
 //!
-//! The pre-Phase-5 substrate had no in-process HTTP server: the
+//! The earlier substrate had no in-process HTTP server: the
 //! deployment pattern was to terminate webhook traffic at a separate
 //! cloud relay (Cloudflare Workers, a small Node forwarder) which
 //! then poked the substrate's IPC channel. That's still supported,
@@ -256,11 +256,9 @@ fn build_router(state: ServerState) -> Router {
 /// version so external load balancers can pin a build during a
 /// rolling deploy.
 async fn healthz_handler() -> impl IntoResponse {
-    (
-        StatusCode::OK,
+    (StatusCode::OK,
         [("content-type", "application/json")],
-        format!(
-            r#"{{"status":"ok","version":"{}"}}"#,
+        format!(r#"{{"status":"ok","version":"{}"}}"#,
             env!("CARGO_PKG_VERSION")
         ),
     )
@@ -269,8 +267,7 @@ async fn healthz_handler() -> impl IntoResponse {
 /// Webhook route handler. Looks up the dispatcher for
 /// `provider_id`, hands it the body, and translates the result
 /// into an HTTP response.
-async fn webhook_handler(
-    Path(provider_id): Path<String>,
+async fn webhook_handler(Path(provider_id): Path<String>,
     State(state): State<ServerState>,
     body: Bytes,
 ) -> impl IntoResponse {
@@ -294,13 +291,11 @@ async fn webhook_handler(
         // (Webhook providers typically only inspect the status code
         // anyway and retry any 5xx.)
         Err(e) => {
-            tracing::warn!(
-                provider_id = %provider_id,
+            tracing::warn!(provider_id = %provider_id,
                 error = %e,
                 "webhook dispatcher failed; returning 502 to provider",
             );
-            (
-                StatusCode::BAD_GATEWAY,
+            (StatusCode::BAD_GATEWAY,
                 "internal dispatcher error".to_string(),
             )
         }
@@ -364,8 +359,7 @@ mod tests {
             mode,
         });
         let mut table: HashMap<String, Arc<dyn WebhookDispatcher>> = HashMap::new();
-        table.insert(
-            "slack".into(),
+        table.insert("slack".into(),
             collector.clone() as Arc<dyn WebhookDispatcher>,
         );
         let state = ServerState {
@@ -450,8 +444,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
         let body = String::from_utf8(body_bytes(resp).await).expect("utf8");
         assert_eq!(body, "internal dispatcher error");
-        assert!(
-            !body.contains("queue down"),
+        assert!(!body.contains("queue down"),
             "502 body must not leak ConnectorError detail; got: {body}"
         );
     }
@@ -469,8 +462,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = String::from_utf8(body_bytes(resp).await).expect("utf8");
         assert!(body.contains("\"status\":\"ok\""), "got: {body}");
-        assert!(
-            body.contains(env!("CARGO_PKG_VERSION")),
+        assert!(body.contains(env!("CARGO_PKG_VERSION")),
             "version not in body: {body}",
         );
     }
@@ -525,8 +517,7 @@ mod tests {
             .expect("response within deadline")
             .expect("read resp");
         let resp = String::from_utf8_lossy(&buf);
-        assert!(
-            resp.starts_with("HTTP/1.1 200"),
+        assert!(resp.starts_with("HTTP/1.1 200"),
             "expected 200 status line, got: {resp}"
         );
 
@@ -552,8 +543,7 @@ mod tests {
         // dropped its socket; the `timeout` wrapper is belt-and
         // -braces in case a platform stalls instead of refusing.
         // Either "connect failed" path proves the listener is gone.
-        let connect = tokio::time::timeout(
-            Duration::from_millis(200),
+        let connect = tokio::time::timeout(Duration::from_millis(200),
             tokio::net::TcpStream::connect(addr),
         )
         .await;

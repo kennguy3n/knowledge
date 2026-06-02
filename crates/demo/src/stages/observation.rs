@@ -20,19 +20,18 @@ use observation_engine::{
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::phases::runtime::RuntimeState;
-use crate::report::{DemoReport, PhaseReport};
+use crate::stages::runtime::RuntimeState;
+use crate::report::{DemoReport, StageReport};
 
-const PHASE: &str = "observation";
+const STAGE: &str = "observation";
 
-pub fn run(
-    _dataset: &Dataset,
+pub fn run(_dataset: &Dataset,
     state: &mut RuntimeState,
     report: &mut DemoReport,
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Stage 2: Observation Extraction");
+    let mut stage = StageReport::new("Stage 2: Observation Extraction");
 
     let extractor = LexiconExtractor::english_default();
     let classifier = LexiconClassifier::english_default();
@@ -90,8 +89,7 @@ pub fn run(
             // Corroboration count is the number of other ingested rows
             // whose body contains the observation's content as a
             // substring. Cheap O(n*m) — fine for the demo dataset.
-            let corroboration = u32::try_from(
-                state
+            let corroboration = u32::try_from(state
                     .ingested_rows
                     .iter()
                     .filter(|other| other.body.contains(obs.content.trim()))
@@ -111,62 +109,52 @@ pub fn run(
     }
     let bench_total = bench_started.elapsed();
 
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "at least one observation extracted per non-noise row on average",
         rows_processed > 0 && total_obs >= rows_processed,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "extractor produced at least one decision",
         by_type.get("decision").copied().unwrap_or(0) > 0,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "extractor produced at least one task",
         by_type.get("task").copied().unwrap_or(0) > 0,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "extractor produced at least one fact",
         by_type.get("fact").copied().unwrap_or(0) > 0,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "extractor produced at least one entity",
         by_type.get("entity").copied().unwrap_or(0) > 0,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "promotion gate accepted at least one observation",
         promoted > 0,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "promotion gate rejected below-importance observations",
         rejected_importance > 0,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "promoted + rejected == total observations",
         promoted + rejected_importance + rejected_corroboration + rejected_noise == total_obs,
     );
 
-    phase.timing = started.elapsed();
-    phase.stat("rows_processed", rows_processed.to_string());
-    phase.stat("total_observations", total_obs.to_string());
-    phase.stat("promoted", promoted.to_string());
-    phase.stat("rejected_below_importance", rejected_importance.to_string());
-    phase.stat(
-        "rejected_insufficient_corroboration",
+    stage.timing = started.elapsed();
+    stage.stat("rows_processed", rows_processed.to_string());
+    stage.stat("total_observations", total_obs.to_string());
+    stage.stat("promoted", promoted.to_string());
+    stage.stat("rejected_below_importance", rejected_importance.to_string());
+    stage.stat("rejected_insufficient_corroboration",
         rejected_corroboration.to_string(),
     );
-    phase.stat("rejected_batch_too_noisy", rejected_noise.to_string());
+    stage.stat("rejected_batch_too_noisy", rejected_noise.to_string());
     for (k, v) in &by_type {
-        phase.stat(format!("type_{k}"), v.to_string());
+        stage.stat(format!("type_{k}"), v.to_string());
     }
-    phase.note(
-        "LexiconExtractor (english_default) -> ChannelPromotionPolicy::default; \
+    stage.note("LexiconExtractor (english_default) -> ChannelPromotionPolicy::default; \
          corroboration scored against the full ingested batch."
             .to_string(),
     );
@@ -174,15 +162,14 @@ pub fn run(
     report.count("observations_total", total_obs);
     report.count("observations_promoted", promoted);
     report.count("observations_rejected_importance", rejected_importance);
-    report.count(
-        "observations_rejected_corroboration",
+    report.count("observations_rejected_corroboration",
         rejected_corroboration,
     );
     report.count("observations_rejected_noise", rejected_noise);
     for (k, v) in &by_type {
         report.count(format!("observations_type_{k}"), *v);
     }
-    report.add_phase(phase);
+    report.add_stage(stage);
     report.add_benchmark("observation_extract_per_row", rows_processed, bench_total);
 
     state.observations = all_observations;

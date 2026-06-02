@@ -67,7 +67,7 @@
 //! path rather than being scored as if it had been produced by
 //! the active model (see
 //! [`crate::store::EvidenceStore::get_embedding_for_model`]).
-//! Phase 1.11 added runtime telemetry around this rule:
+//! added runtime telemetry around this rule:
 //! [`crate::vector_telemetry::record_observed_dimension`] is
 //! called every time an [`EmbeddingModel`] is wired in and every
 //! time `index_embedding` writes a fresh vector. A same-tag /
@@ -272,8 +272,7 @@ impl EmbeddingModel for OnnxEmbeddingAdapter {
         self.ensure_loaded()?;
         let v = self.runtime.run(text)?;
         if v.len() != self.config.dimension {
-            return Err(EmbeddingError::InferenceFailure(format!(
-                "runtime returned dim={}, expected {}",
+            return Err(EmbeddingError::InferenceFailure(format!("runtime returned dim={}, expected {}",
                 v.len(),
                 self.config.dimension
             )));
@@ -579,8 +578,7 @@ mod ort_runtime_impl {
             // (well below i64::MAX); the explicit conversion makes
             // the bound and the failure mode explicit.
             let len_i64 = i64::try_from(len).map_err(|_| {
-                EmbeddingError::InferenceFailure(format!(
-                    "token sequence length {len} exceeds i64::MAX"
+                EmbeddingError::InferenceFailure(format!("token sequence length {len} exceeds i64::MAX"
                 ))
             })?;
             let shape = [1_i64, len_i64];
@@ -617,13 +615,11 @@ mod ort_runtime_impl {
                 let seq_len_ok =
                     usize::try_from(shape.get(1).copied().unwrap_or(-1)).is_ok_and(|s| s == len);
                 if shape.len() != 3 || shape[0] != 1 || !seq_len_ok {
-                    return Err(EmbeddingError::InferenceFailure(format!(
-                        "unexpected output shape: {shape:?} (expected [1, {len}, hidden])"
+                    return Err(EmbeddingError::InferenceFailure(format!("unexpected output shape: {shape:?} (expected [1, {len}, hidden])"
                     )));
                 }
                 let hidden = usize::try_from(shape[2]).map_err(|_| {
-                    EmbeddingError::InferenceFailure(format!(
-                        "negative hidden-dim in output shape: {shape:?}"
+                    EmbeddingError::InferenceFailure(format!("negative hidden-dim in output shape: {shape:?}"
                     ))
                 })?;
                 let mut pooled = vec![0.0_f32; hidden];
@@ -776,8 +772,7 @@ mod tests {
     #[test]
     fn stub_rejects_empty_input() {
         let m = StubEmbeddingModel::new(8);
-        assert!(matches!(
-            m.embed("").unwrap_err(),
+        assert!(matches!(m.embed("").unwrap_err(),
             EmbeddingError::EmptyInput
         ));
     }
@@ -847,8 +842,7 @@ mod tests {
     #[test]
     fn onnx_adapter_eager_load_succeeds_when_runtime_available() {
         let runtime = MockOnnxRuntime::ok(4);
-        let adapter = OnnxEmbeddingAdapter::with_eager_load(
-            OnnxModelConfig {
+        let adapter = OnnxEmbeddingAdapter::with_eager_load(OnnxModelConfig {
                 model_path: "x".into(),
                 dimension: 4,
                 quantization: Quantization::Int8,
@@ -863,8 +857,7 @@ mod tests {
     #[test]
     fn onnx_adapter_returns_runtime_unavailable_when_probe_fails() {
         let runtime = MockOnnxRuntime::unavailable(4);
-        let err = OnnxEmbeddingAdapter::with_eager_load(
-            OnnxModelConfig {
+        let err = OnnxEmbeddingAdapter::with_eager_load(OnnxModelConfig {
                 model_path: "x".into(),
                 dimension: 4,
                 quantization: Quantization::Int8,
@@ -887,8 +880,7 @@ mod tests {
     #[test]
     fn onnx_adapter_rejects_dimension_mismatch_from_runtime() {
         let runtime = MockOnnxRuntime::ok(/* runtime dim */ 4);
-        let adapter = OnnxEmbeddingAdapter::new(
-            OnnxModelConfig {
+        let adapter = OnnxEmbeddingAdapter::new(OnnxModelConfig {
                 model_path: "x".into(),
                 dimension: 768, // adapter expects 768
                 quantization: Quantization::Int8,
@@ -901,12 +893,10 @@ mod tests {
 
     #[test]
     fn onnx_adapter_rejects_empty_text() {
-        let adapter = OnnxEmbeddingAdapter::new(
-            OnnxModelConfig::default(),
+        let adapter = OnnxEmbeddingAdapter::new(OnnxModelConfig::default(),
             Box::new(MockOnnxRuntime::ok(768)),
         );
-        assert!(matches!(
-            adapter.embed("").unwrap_err(),
+        assert!(matches!(adapter.embed("").unwrap_err(),
             EmbeddingError::EmptyInput
         ));
     }
@@ -990,8 +980,7 @@ mod ort_runtime_tests {
         // can't directly inspect the OnceLock from here, but calling
         // again should be a pure get — the result must match.
         let second = rt.is_available();
-        assert_eq!(
-            first, second,
+        assert_eq!(first, second,
             "is_available must be cached across calls; got first={first} second={second}",
         );
     }
@@ -1004,15 +993,13 @@ mod ort_runtime_tests {
             .expect_err("run() must fail before load() succeeds");
         match err {
             super::EmbeddingError::InferenceFailure(reason) => {
-                assert!(
-                    reason.to_lowercase().contains("not loaded")
+                assert!(reason.to_lowercase().contains("not loaded")
                         || reason.to_lowercase().contains("session"),
                     "InferenceFailure should mention the missing session, \
                      got: {reason}",
                 );
             }
-            other => panic!(
-                "expected InferenceFailure when run() is called before \
+            other => panic!("expected InferenceFailure when run() is called before \
                  load(); got {other:?}",
             ),
         }

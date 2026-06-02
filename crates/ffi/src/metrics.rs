@@ -1,4 +1,4 @@
-//! Substrate-wide metrics counters and gauges (Phase 6).
+//! Substrate-wide metrics counters and gauges.
 //!
 //! Every public [`crate::*`] entry point increments the counters in this
 //! module so platform hosts can observe the substrate's lifetime
@@ -124,7 +124,7 @@ pub(crate) struct Metrics {
     /// Total `list_connectors` calls initiated.
     pub(crate) list_connectors_total: AtomicU64,
     /// Total `connector_status` calls initiated
-    /// (Phase 10 Item 3 — single-instance health probe symmetric
+    /// (single-instance health probe symmetric
     /// with [`Self::synthesis_status_total`]).
     pub(crate) connector_status_total: AtomicU64,
     /// Total `remove_connector` calls initiated.
@@ -132,10 +132,10 @@ pub(crate) struct Metrics {
     /// Total `refresh_connector_token` calls initiated.
     pub(crate) refresh_connector_token_total: AtomicU64,
     /// Total `set_oauth_client_secret_resolver` calls initiated
-    /// (Phase 4.1 — host-supplied resolver registration).
+    /// (host-supplied resolver registration).
     pub(crate) set_oauth_client_secret_resolver_total: AtomicU64,
     /// Total `clear_oauth_client_secret_resolver` calls initiated
-    /// (Phase 4.1 — host-supplied resolver de-registration).
+    /// (host-supplied resolver de-registration).
     pub(crate) clear_oauth_client_secret_resolver_total: AtomicU64,
     /// Total `set_key_storage_resolver` calls initiated. Increments
     /// every time a host (re-)registers a [`crate::key_storage::
@@ -147,51 +147,51 @@ pub(crate) struct Metrics {
     /// Total `clear_key_storage_resolver` calls initiated.
     pub(crate) clear_key_storage_resolver_total: AtomicU64,
     /// Total `start_webhook_server` calls initiated
-    /// (Phase 5 — webhook receiver server startup).
+    /// (webhook receiver server startup).
     pub(crate) start_webhook_server_total: AtomicU64,
     /// Total `stop_webhook_server` calls initiated
-    /// (Phase 5 — webhook receiver server shutdown).
+    /// (webhook receiver server shutdown).
     pub(crate) stop_webhook_server_total: AtomicU64,
     /// Total `register_webhook_dispatch` calls initiated
-    /// (Phase 5 — bind a `provider_id` to a connector instance).
+    /// (bind a `provider_id` to a connector instance).
     pub(crate) register_webhook_dispatch_total: AtomicU64,
     /// Total `unregister_webhook_dispatch` calls initiated
-    /// (Phase 5 — drop a `(server, provider_id)` binding).
+    /// (drop a `(server, provider_id)` binding).
     pub(crate) unregister_webhook_dispatch_total: AtomicU64,
     /// Total `list_webhook_servers` calls initiated
-    /// (Phase 5 — diagnostic enumeration of running servers).
+    /// (diagnostic enumeration of running servers).
     pub(crate) list_webhook_servers_total: AtomicU64,
     /// Total `start_sync_scheduler` calls initiated
-    /// (Phase 6 — background sync scheduler startup).
+    /// (background sync scheduler startup).
     pub(crate) start_sync_scheduler_total: AtomicU64,
     /// Total `stop_sync_scheduler` calls initiated
-    /// (Phase 6 — background sync scheduler shutdown).
+    /// (background sync scheduler shutdown).
     pub(crate) stop_sync_scheduler_total: AtomicU64,
     /// Total `configure_sync_schedule` calls initiated
-    /// (Phase 6 — per-instance policy override).
+    /// (per-instance policy override).
     pub(crate) configure_sync_schedule_total: AtomicU64,
     /// Total `clear_sync_schedule` calls initiated
-    /// (Phase 6 — per-instance policy clear).
+    /// (per-instance policy clear).
     pub(crate) clear_sync_schedule_total: AtomicU64,
     /// Total `sync_scheduler_status` calls initiated
-    /// (Phase 6 — diagnostic snapshot read).
+    /// (diagnostic snapshot read).
     pub(crate) sync_scheduler_status_total: AtomicU64,
     /// Total ticks the scheduler worker thread has completed
     /// across every scheduler instance the process has ever run
-    /// (Phase 6). Process-singleton sum because per-runtime
+    ///. Process-singleton sum because per-runtime
     /// counters live inside the per-runtime
     /// [`crate::sync_scheduler::RunningSyncScheduler`] and would
     /// be invisible to a host that polls only `metrics_snapshot`.
     pub(crate) sync_scheduler_ticks_total: AtomicU64,
     /// Total scheduler-initiated dispatches attempted across every
-    /// runtime (Phase 6). Counts `sync_connector` calls made by
+    /// runtime. Counts `sync_connector` calls made by
     /// scheduler worker threads, not their success/failure.
     pub(crate) sync_scheduler_dispatches_attempted_total: AtomicU64,
     /// Total scheduler-initiated dispatches that completed with
-    /// `Ok(SyncReport)` (Phase 6).
+    /// `Ok(SyncReport)`.
     pub(crate) sync_scheduler_dispatches_succeeded_total: AtomicU64,
     /// Total scheduler-initiated dispatches that completed with
-    /// `Err(_)` (Phase 6). Drives the per-instance
+    /// `Err(_)`. Drives the per-instance
     /// exponential-backoff curve.
     pub(crate) sync_scheduler_dispatches_failed_total: AtomicU64,
     /// Total candidate instances the scheduler skipped because
@@ -200,7 +200,7 @@ pub(crate) struct Metrics {
     /// tick fired (a host-driven sync was running concurrently).
     /// Distinct from `*_dispatches_failed_total` because the
     /// scheduler never invoked `sync_connector` for these
-    /// (Phase 6).
+    ///.
     pub(crate) sync_scheduler_dispatches_skipped_in_progress_total: AtomicU64,
     /// Total webhook dispatches that completed with `200 OK`
     /// across every running server in this process. Tracked as a
@@ -232,52 +232,52 @@ pub(crate) struct Metrics {
     /// module.
     pub(crate) init_tracing_total: AtomicU64,
     /// Total `configure_synthesis_engine` calls initiated
-    /// (Phase 7 — host installs the server-side synthesis
+    /// (host installs the server-side synthesis
     /// endpoint configuration on a runtime).
     pub(crate) configure_synthesis_engine_total: AtomicU64,
     /// Total `trigger_server_synthesis` calls initiated
-    /// (Phase 7 — host explicitly dispatches a domain / tenant
+    /// (host explicitly dispatches a domain / tenant
     /// synthesis on a configured engine).
     pub(crate) trigger_server_synthesis_total: AtomicU64,
     /// Total `synthesis_status` calls initiated
-    /// (Phase 7 — host polls the status of a previously
+    /// (host polls the status of a previously
     /// dispatched window).
     pub(crate) synthesis_status_total: AtomicU64,
     /// Total `list_recent_syntheses` calls initiated
-    /// (Phase 7 — host enumerates per-scope synthesis history).
+    /// (host enumerates per-scope synthesis history).
     pub(crate) list_recent_syntheses_total: AtomicU64,
     /// Total `configure_sync_auto_synthesize` calls initiated
-    /// (Phase 7 — host toggles the per-instance auto-synthesise
+    /// (host toggles the per-instance auto-synthesise
     /// flag on the sync scheduler).
     pub(crate) configure_sync_auto_synthesize_total: AtomicU64,
     /// Total `admit_approved_document` calls initiated
-    /// (Phase 8 — host attaches an approved-document payload to
+    /// (host attaches an approved-document payload to
     /// the tenant memory).
     pub(crate) admit_approved_document_total: AtomicU64,
     /// Total `revoke_approved_document` calls initiated
-    /// (Phase 8 — host removes a previously admitted approved
+    /// (host removes a previously admitted approved
     /// document from tenant memory).
     pub(crate) revoke_approved_document_total: AtomicU64,
     /// Total `replace_approved_document` calls initiated
-    /// (Phase 9 — host replaces payload on an existing
+    /// (host replaces payload on an existing
     /// approved document without revoking and re-admitting).
     pub(crate) replace_approved_document_total: AtomicU64,
     /// Total `list_approved_documents` calls initiated
-    /// (Phase 8 — host enumerates approved-document refs for a
+    /// (host enumerates approved-document refs for a
     /// tenant scope).
     pub(crate) list_approved_documents_total: AtomicU64,
     /// Total synthesis windows transitioned from `Pending` → `Failed`
-    /// by the `open_store` stuck-Pending recovery sweep (Phase 10
-    /// Item 1). Incremented once per swept window. A non-zero value
-    /// here indicates a prior host run crashed mid-dispatch (between
-    /// the Phase-1 `flush_synthesis_windows` and the Phase-3
-    /// `apply_dispatch_outcome` commit) OR a Phase-3 commit failed
+    /// by the `open_store` stuck-Pending recovery sweep.
+    /// Incremented once per swept window. A non-zero value here
+    /// indicates a prior host run crashed mid-dispatch (between
+    /// the Step-1 `flush_synthesis_windows` and the Step-3
+    /// `apply_dispatch_outcome` commit) OR a Step-3 commit failed
     /// and the in-process recovery flush also failed to land. Either
     /// way the next `open_store` reclaimed the stranded window so
     /// the host can retry it.
     pub(crate) stuck_pending_window_recovered_total: AtomicU64,
     /// Total `trigger_server_synthesis` calls rejected by the
-    /// global token-bucket rate limiter (Phase 10 Item 5).
+    /// global token-bucket rate limiter .
     /// Incremented once per `Throttled` return. Distinct from
     /// the per-kind [`Self::errors_throttled`] counter — that
     /// one ticks on every `FfiError::Throttled` regardless of
@@ -286,13 +286,13 @@ pub(crate) struct Metrics {
     /// throttles separately from any future throttled
     /// surfaces.
     pub(crate) trigger_server_synthesis_throttled_total: AtomicU64,
-    /// Total `replay_synthesis` calls initiated (Phase 10 Item 4).
+    /// Total `replay_synthesis` calls initiated .
     /// Counts entries to the surface — both successful replays
     /// AND failure paths (engine error, transaction commit
     /// failure, invalid-state refusal). Per-kind error counters
     /// can be cross-referenced to disambiguate.
     pub(crate) replay_synthesis_total: AtomicU64,
-    /// Total `list_synthesis_versions` calls (Phase 10 Item 4).
+    /// Total `list_synthesis_versions` calls .
     pub(crate) list_synthesis_versions_total: AtomicU64,
 
     // Per-kind error counters. The set mirrors `FfiError::kind`
@@ -573,7 +573,7 @@ pub struct MetricsSnapshot {
     #[serde(default)]
     pub list_connectors_total: u64,
     /// Total `connector_status` calls initiated
-    /// (Phase 10 Item 3 — single-instance health probe symmetric
+    /// (single-instance health probe symmetric
     /// with [`Self::synthesis_status_total`]).
     #[serde(default)]
     pub connector_status_total: u64,
@@ -587,7 +587,7 @@ pub struct MetricsSnapshot {
     #[serde(default)]
     pub refresh_connector_token_total: u64,
     /// Total `set_oauth_client_secret_resolver` calls initiated
-    /// (Phase 4.1). Increments every time a host (re-)registers a
+    ///. Increments every time a host (re-)registers a
     /// resolver; high frequency indicates the host is treating the
     /// resolver registration as a per-request operation rather
     /// than a once-per-`open_store` lifecycle event — worth
@@ -595,7 +595,7 @@ pub struct MetricsSnapshot {
     #[serde(default)]
     pub set_oauth_client_secret_resolver_total: u64,
     /// Total `clear_oauth_client_secret_resolver` calls initiated
-    /// (Phase 4.1).
+    ///.
     #[serde(default)]
     pub clear_oauth_client_secret_resolver_total: u64,
     /// Total `set_key_storage_resolver` calls initiated. Mirrors
@@ -606,38 +606,38 @@ pub struct MetricsSnapshot {
     /// Total `clear_key_storage_resolver` calls initiated.
     #[serde(default)]
     pub clear_key_storage_resolver_total: u64,
-    /// Total `start_webhook_server` calls initiated (Phase 5).
+    /// Total `start_webhook_server` calls initiated.
     #[serde(default)]
     pub start_webhook_server_total: u64,
-    /// Total `stop_webhook_server` calls initiated (Phase 5).
+    /// Total `stop_webhook_server` calls initiated.
     #[serde(default)]
     pub stop_webhook_server_total: u64,
-    /// Total `register_webhook_dispatch` calls initiated (Phase 5).
+    /// Total `register_webhook_dispatch` calls initiated.
     #[serde(default)]
     pub register_webhook_dispatch_total: u64,
-    /// Total `unregister_webhook_dispatch` calls initiated (Phase 5).
+    /// Total `unregister_webhook_dispatch` calls initiated.
     #[serde(default)]
     pub unregister_webhook_dispatch_total: u64,
-    /// Total `list_webhook_servers` calls initiated (Phase 5).
+    /// Total `list_webhook_servers` calls initiated.
     #[serde(default)]
     pub list_webhook_servers_total: u64,
-    /// Total `start_sync_scheduler` calls initiated (Phase 6).
+    /// Total `start_sync_scheduler` calls initiated.
     #[serde(default)]
     pub start_sync_scheduler_total: u64,
-    /// Total `stop_sync_scheduler` calls initiated (Phase 6).
+    /// Total `stop_sync_scheduler` calls initiated.
     #[serde(default)]
     pub stop_sync_scheduler_total: u64,
-    /// Total `configure_sync_schedule` calls initiated (Phase 6).
+    /// Total `configure_sync_schedule` calls initiated.
     #[serde(default)]
     pub configure_sync_schedule_total: u64,
-    /// Total `clear_sync_schedule` calls initiated (Phase 6).
+    /// Total `clear_sync_schedule` calls initiated.
     #[serde(default)]
     pub clear_sync_schedule_total: u64,
-    /// Total `sync_scheduler_status` calls initiated (Phase 6).
+    /// Total `sync_scheduler_status` calls initiated.
     #[serde(default)]
     pub sync_scheduler_status_total: u64,
     /// Total ticks the scheduler worker thread has completed
-    /// across every scheduler instance in this process (Phase 6).
+    /// across every scheduler instance in this process.
     /// Tracked as a process-singleton sum because the per-runtime
     /// counter lives inside the per-runtime
     /// [`crate::sync_scheduler::RunningSyncScheduler`] and would
@@ -645,25 +645,25 @@ pub struct MetricsSnapshot {
     #[serde(default)]
     pub sync_scheduler_ticks_total: u64,
     /// Total scheduler-initiated dispatches attempted across every
-    /// runtime (Phase 6).
+    /// runtime.
     #[serde(default)]
     pub sync_scheduler_dispatches_attempted_total: u64,
     /// Total scheduler-initiated dispatches that completed with
-    /// `Ok(SyncReport)` (Phase 6).
+    /// `Ok(SyncReport)`.
     #[serde(default)]
     pub sync_scheduler_dispatches_succeeded_total: u64,
     /// Total scheduler-initiated dispatches that completed with
-    /// `Err(_)` (Phase 6).
+    /// `Err(_)`.
     #[serde(default)]
     pub sync_scheduler_dispatches_failed_total: u64,
     /// Total candidate instances the scheduler skipped because
     /// they were already in
     /// [`connector_framework::SyncStatus::InProgress`] when the
-    /// tick fired (Phase 6).
+    /// tick fired.
     #[serde(default)]
     pub sync_scheduler_dispatches_skipped_in_progress_total: u64,
     /// Total webhook dispatches that returned `200 OK` across every
-    /// running server in this process (Phase 5). The per-server
+    /// running server in this process. The per-server
     /// counters live in
     /// [`crate::types::WebhookServerSummary::dispatch_ok_total`];
     /// this counter is the process-wide sum, surfaced through
@@ -672,12 +672,12 @@ pub struct MetricsSnapshot {
     #[serde(default)]
     pub webhook_dispatch_ok_total: u64,
     /// Total webhook dispatches that returned `400 Bad Request`
-    /// across every running server in this process (Phase 5).
+    /// across every running server in this process.
     /// Companion to [`Self::webhook_dispatch_ok_total`].
     #[serde(default)]
     pub webhook_dispatch_bad_request_total: u64,
     /// Total webhook dispatches that returned `502 Bad Gateway`
-    /// across every running server in this process (Phase 5).
+    /// across every running server in this process.
     /// Companion to [`Self::webhook_dispatch_ok_total`].
     #[serde(default)]
     pub webhook_dispatch_bad_gateway_total: u64,
@@ -693,44 +693,44 @@ pub struct MetricsSnapshot {
     /// shape unconditionally to keep the wire contract stable
     /// across features.
     pub init_tracing_total: u64,
-    /// Total `configure_synthesis_engine` calls initiated (Phase 7).
+    /// Total `configure_synthesis_engine` calls initiated.
     #[serde(default)]
     pub configure_synthesis_engine_total: u64,
-    /// Total `trigger_server_synthesis` calls initiated (Phase 7).
+    /// Total `trigger_server_synthesis` calls initiated.
     #[serde(default)]
     pub trigger_server_synthesis_total: u64,
-    /// Total `synthesis_status` calls initiated (Phase 7).
+    /// Total `synthesis_status` calls initiated.
     #[serde(default)]
     pub synthesis_status_total: u64,
-    /// Total `list_recent_syntheses` calls initiated (Phase 7).
+    /// Total `list_recent_syntheses` calls initiated.
     #[serde(default)]
     pub list_recent_syntheses_total: u64,
     /// Total `configure_sync_auto_synthesize` calls initiated
-    /// (Phase 7).
+    ///.
     #[serde(default)]
     pub configure_sync_auto_synthesize_total: u64,
-    /// Total `admit_approved_document` calls initiated (Phase 8).
+    /// Total `admit_approved_document` calls initiated.
     #[serde(default)]
     pub admit_approved_document_total: u64,
-    /// Total `revoke_approved_document` calls initiated (Phase 8).
+    /// Total `revoke_approved_document` calls initiated.
     #[serde(default)]
     pub revoke_approved_document_total: u64,
-    /// Total `replace_approved_document` calls initiated (Phase 9).
+    /// Total `replace_approved_document` calls initiated.
     #[serde(default)]
     pub replace_approved_document_total: u64,
-    /// Total `list_approved_documents` calls initiated (Phase 8).
+    /// Total `list_approved_documents` calls initiated.
     #[serde(default)]
     pub list_approved_documents_total: u64,
     /// Total synthesis windows transitioned from `Pending` → `Failed`
-    /// by the `open_store` stuck-Pending recovery sweep (Phase 10
-    /// Item 1). A non-zero value indicates a prior run left at least
+    /// by the `open_store` stuck-Pending recovery sweep.
+    /// A non-zero value indicates a prior run left at least
     /// one window stranded mid-dispatch and the next `open_store`
     /// reclaimed it; the host can retry the recovered window via the
     /// normal trigger path.
     #[serde(default)]
     pub stuck_pending_window_recovered_total: u64,
     /// Total `trigger_server_synthesis` calls rejected by the
-    /// FFI-wide rate-shaping token bucket (Phase 10 Item 5).
+    /// FFI-wide rate-shaping token bucket .
     /// Distinct from `errors_by_kind.throttled` because that
     /// total covers every surface returning
     /// `FfiError::Throttled` — currently only this one, but
@@ -738,13 +738,13 @@ pub struct MetricsSnapshot {
     /// minting a new one.
     #[serde(default)]
     pub trigger_server_synthesis_throttled_total: u64,
-    /// Total `replay_synthesis` calls (Phase 10 Item 4). Counts
+    /// Total `replay_synthesis` calls . Counts
     /// every entry to the surface, regardless of outcome — pair
     /// with `errors_by_kind.synthesis` / `.evidence` for failure
     /// rates.
     #[serde(default)]
     pub replay_synthesis_total: u64,
-    /// Total `list_synthesis_versions` calls (Phase 10 Item 4).
+    /// Total `list_synthesis_versions` calls .
     #[serde(default)]
     pub list_synthesis_versions_total: u64,
     /// Per-kind error counter snapshot.
@@ -762,7 +762,7 @@ pub struct MetricsSnapshot {
     /// initialised. Used to compute `uptime_secs` on the health
     /// envelope.
     pub boot_unix_secs: u64,
-    /// Multilingual lexicon-path telemetry (Phase 1.10).  Counts
+    /// Multilingual lexicon-path telemetry.  Counts
     /// per-BCP-47 lexicon hits, [`observation_engine::MatchStrategy`]
     /// fires, and Arabic / Hebrew clitic-peel depth distribution.
     /// `#[serde(default)]` per the additive-wire-contract rule —
@@ -770,13 +770,13 @@ pub struct MetricsSnapshot {
     /// [`LexiconTelemetry::default()`] (all zeroes).
     #[serde(default)]
     pub lexicon_telemetry: LexiconTelemetry,
-    /// Multilingual FTS5-path telemetry (Phase 1.10).  Counts
+    /// Multilingual FTS5-path telemetry.  Counts
     /// per-lane query / row totals, recall-lane skip causes, and
     /// stopword strip volumes per call site.
     /// `#[serde(default)]` per the additive-wire-contract rule.
     #[serde(default)]
     pub fts_telemetry: FtsTelemetry,
-    /// Multilingual embedding / vector-retrieval telemetry (Phase 1.11).
+    /// Multilingual embedding / vector-retrieval telemetry.
     /// Counts live embeddings computed per call site,
     /// `evidence_embeddings` cache outcomes, dedup-copy hits,
     /// per-variant adapter errors, and `model_tag` rotation-rule
@@ -784,7 +784,7 @@ pub struct MetricsSnapshot {
     /// rule.
     #[serde(default)]
     pub vector_telemetry: VectorTelemetry,
-    /// Unified retrieval-telemetry view (Phase 2.0) — the three
+    /// Unified retrieval-telemetry view — the three
     /// per-lane telemetry sub-structs grouped under one namespace
     /// for dashboard ergonomics.  Always populated identically to
     /// the flat [`Self::fts_telemetry`] / [`Self::lexicon_telemetry`]
@@ -799,7 +799,7 @@ pub struct MetricsSnapshot {
 }
 
 /// Multilingual lexicon-path observability counters mirrored from
-/// [`observation_engine::lexicon_telemetry`] (Phase 1.10).
+/// [`observation_engine::lexicon_telemetry`].
 ///
 /// The mirror lives here rather than upstream because the FFI
 /// crate is where the `uniffi::Record` / serde derive lives, and
@@ -827,7 +827,7 @@ pub struct MetricsSnapshot {
 /// divide by their measured calls-per-document ratio rather
 /// than reading the counter directly.  See the upstream
 /// `observation_engine::lexicon_telemetry` module doc for the
-/// full rationale (Phase 1.10 sweep 2 ANALYSIS-0003).
+/// full rationale (a follow-up ANALYSIS-0003).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
 pub struct LexiconTelemetry {
     /// Resolved-lexicon hits for `ar`.
@@ -949,7 +949,7 @@ pub struct LexiconTelemetry {
 }
 
 /// Multilingual FTS5-path observability counters mirrored from
-/// [`evidence_store::fts_telemetry`] (Phase 1.10).
+/// [`evidence_store::fts_telemetry`].
 ///
 /// See [`LexiconTelemetry`] for the wire-mirror rationale.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, uniffi::Record)]
@@ -997,7 +997,7 @@ pub struct FtsTelemetry {
     /// query like `の の の` bumps this counter and NOT the
     /// no-CJK counter.  See the upstream
     /// `evidence_store::fts_telemetry::SkipReason` doc for the
-    /// taxonomic rationale (added Phase 1.10 sweep 2).
+    /// taxonomic rationale (added a follow-up).
     #[serde(default)]
     pub bigram_lane_skips_pure_stopword_query_total: u64,
     /// Times the CJK bigram lane was skipped because the
@@ -1022,7 +1022,7 @@ pub struct FtsTelemetry {
 }
 
 /// Multilingual embedding / vector-retrieval observability counters
-/// mirrored from [`evidence_store::vector_telemetry`] (Phase 1.11).
+/// mirrored from [`evidence_store::vector_telemetry`].
 ///
 /// See [`LexiconTelemetry`] for the wire-mirror rationale; the
 /// `#[serde(default)]` discipline applies symmetrically here so an
@@ -1089,7 +1089,7 @@ pub struct VectorTelemetry {
     /// `evidence_store::vector_telemetry::record_observed_dimension`.
     #[serde(default)]
     pub model_tag_dimension_violations_total: u64,
-    /// Pre-embedding router (Phase 1.12) admitted the input —
+    /// Pre-embedding router admitted the input —
     /// `model.embed(text)` was invoked.  See upstream
     /// `evidence_store::embedding_routing::classify_for_embedding`
     /// for the routing rationale.
@@ -1109,7 +1109,7 @@ pub struct VectorTelemetry {
     pub pre_embed_skipped_no_linguistic_content_total: u64,
 }
 
-/// Unified retrieval-telemetry read surface (Phase 2.0) — the
+/// Unified retrieval-telemetry read surface — the
 /// three per-lane telemetry sub-structs grouped under a single
 /// namespace for dashboard ergonomics.
 ///
@@ -1194,7 +1194,7 @@ pub struct ErrorCounters {
     // reader without surfacing a `missing field 'connector'` error.
     #[serde(default)]
     pub connector: u64,
-    /// `FfiError::Throttled` (Phase 10 Item 5). `#[serde(default)]`
+    /// `FfiError::Throttled` . `#[serde(default)]`
     /// per the additive-wire-contract rule — older emitters'
     /// `ErrorCounters` JSON lacks the `throttled` key and must
     /// still deserialise without surfacing a missing-field
@@ -1226,7 +1226,7 @@ pub fn snapshot() -> MetricsSnapshot {
     // exactly one read — this is documented on the field.
     inc_metrics_snapshot();
     let m = metrics();
-    // Phase 2.0: read the upstream retrieval-telemetry aggregator
+    // read the upstream retrieval-telemetry aggregator
     // ONCE and project into both the flat fields and the new
     // grouped `retrieval_metrics` view from the same read pass —
     // see the populate-block comment below for why a single read
@@ -1345,7 +1345,7 @@ pub fn snapshot() -> MetricsSnapshot {
         open_handles: m.open_handles.load(Ordering::Relaxed),
         tombstone_count: m.tombstone_count.load(Ordering::Relaxed),
         boot_unix_secs: m.boot_unix_secs.load(Ordering::Relaxed),
-        // Phase 2.0: read the upstream aggregator once and project
+        // read the upstream aggregator once and project
         // into BOTH the flat fields and the grouped `retrieval_metrics`
         // view from the same read pass.  This guarantees the
         // `metrics_snapshot_retrieval_metrics_matches_flat_fields`
@@ -1445,8 +1445,7 @@ fn project_fts_telemetry(s: &evidence_store::fts_telemetry::FtsTelemetrySnapshot
 /// [`project_lexicon_telemetry`] for the rationale.  The field
 /// lists are kept symmetric by the
 /// `vector_telemetry_mirror_round_trips` test below.
-fn project_vector_telemetry(
-    s: &evidence_store::vector_telemetry::VectorTelemetrySnapshot,
+fn project_vector_telemetry(s: &evidence_store::vector_telemetry::VectorTelemetrySnapshot,
 ) -> VectorTelemetry {
     VectorTelemetry {
         query_embeddings_total: s.query_embeddings_total,
@@ -1630,16 +1629,13 @@ mod tests {
         assert!(after.synthesis_status_total > before.synthesis_status_total);
         assert!(after.connector_status_total > before.connector_status_total);
         assert!(after.list_recent_syntheses_total > before.list_recent_syntheses_total);
-        assert!(
-            after.configure_sync_auto_synthesize_total
+        assert!(after.configure_sync_auto_synthesize_total
                 > before.configure_sync_auto_synthesize_total
         );
-        assert!(
-            after.stuck_pending_window_recovered_total
+        assert!(after.stuck_pending_window_recovered_total
                 > before.stuck_pending_window_recovered_total
         );
-        assert!(
-            after.trigger_server_synthesis_throttled_total
+        assert!(after.trigger_server_synthesis_throttled_total
                 > before.trigger_server_synthesis_throttled_total
         );
         assert!(after.replay_synthesis_total > before.replay_synthesis_total);
@@ -1714,12 +1710,10 @@ mod tests {
         // moment. (Either we still see our unique value, or someone
         // else overwrote it after — which itself proves the field is
         // writable.)
-        assert!(
-            pre_open == handles_uniq || post_open != pre_open,
+        assert!(pre_open == handles_uniq || post_open != pre_open,
             "open_handles atomic store was not observable"
         );
-        assert!(
-            pre_tomb == tombs_uniq || post_tomb != pre_tomb,
+        assert!(pre_tomb == tombs_uniq || post_tomb != pre_tomb,
             "tombstone_count atomic store was not observable"
         );
 
@@ -1728,15 +1722,13 @@ mod tests {
         // them under sequential consistency).
         let (open_lo, open_hi) = (pre_open.min(post_open), pre_open.max(post_open));
         let (tomb_lo, tomb_hi) = (pre_tomb.min(post_tomb), pre_tomb.max(post_tomb));
-        assert!(
-            (open_lo..=open_hi).contains(&a.open_handles),
+        assert!((open_lo..=open_hi).contains(&a.open_handles),
             "snapshot.open_handles={} not in [{}, {}]",
             a.open_handles,
             open_lo,
             open_hi
         );
-        assert!(
-            (tomb_lo..=tomb_hi).contains(&a.tombstone_count),
+        assert!((tomb_lo..=tomb_hi).contains(&a.tombstone_count),
             "snapshot.tombstone_count={} not in [{}, {}]",
             a.tombstone_count,
             tomb_lo,
@@ -1753,7 +1745,7 @@ mod tests {
         assert!(snap.boot_unix_secs > 0);
     }
 
-    /// Pin the lexicon-telemetry mirror field parity (Phase 1.10).
+    /// Pin the lexicon-telemetry mirror field parity.
     ///
     /// Every field on
     /// [`observation_engine::LexiconTelemetrySnapshot`] must have
@@ -1855,12 +1847,10 @@ mod tests {
         assert!(mirror.strategy_first_token >= upstream.strategy_first_token);
         assert!(mirror.strategy_first_bigram >= upstream.strategy_first_bigram);
         assert!(mirror.strategy_substring >= upstream.strategy_substring);
-        assert!(
-            mirror.strategy_first_token_with_arabic_clitics
+        assert!(mirror.strategy_first_token_with_arabic_clitics
                 >= upstream.strategy_first_token_with_arabic_clitics
         );
-        assert!(
-            mirror.strategy_first_token_with_hebrew_clitics
+        assert!(mirror.strategy_first_token_with_hebrew_clitics
                 >= upstream.strategy_first_token_with_hebrew_clitics
         );
         assert!(mirror.arabic_peel_depth_0_matches >= upstream.arabic_peel_depth_0_matches);
@@ -1900,75 +1890,59 @@ mod tests {
         assert!(mirror.hits_th > before.hits_th, "hits_th not plumbed");
         assert!(mirror.hits_vi > before.hits_vi, "hits_vi not plumbed");
         assert!(mirror.hits_zh > before.hits_zh, "hits_zh not plumbed");
-        assert!(
-            mirror.unknown_tag_fallbacks_total > before.unknown_tag_fallbacks_total,
+        assert!(mirror.unknown_tag_fallbacks_total > before.unknown_tag_fallbacks_total,
             "unknown_tag_fallbacks_total not plumbed"
         );
-        assert!(
-            mirror.strategy_first_token > before.strategy_first_token,
+        assert!(mirror.strategy_first_token > before.strategy_first_token,
             "strategy_first_token not plumbed"
         );
-        assert!(
-            mirror.strategy_first_bigram > before.strategy_first_bigram,
+        assert!(mirror.strategy_first_bigram > before.strategy_first_bigram,
             "strategy_first_bigram not plumbed"
         );
-        assert!(
-            mirror.strategy_substring > before.strategy_substring,
+        assert!(mirror.strategy_substring > before.strategy_substring,
             "strategy_substring not plumbed"
         );
-        assert!(
-            mirror.strategy_first_token_with_arabic_clitics
+        assert!(mirror.strategy_first_token_with_arabic_clitics
                 > before.strategy_first_token_with_arabic_clitics,
             "strategy_first_token_with_arabic_clitics not plumbed"
         );
-        assert!(
-            mirror.strategy_first_token_with_hebrew_clitics
+        assert!(mirror.strategy_first_token_with_hebrew_clitics
                 > before.strategy_first_token_with_hebrew_clitics,
             "strategy_first_token_with_hebrew_clitics not plumbed"
         );
-        assert!(
-            mirror.arabic_peel_depth_0_matches > before.arabic_peel_depth_0_matches,
+        assert!(mirror.arabic_peel_depth_0_matches > before.arabic_peel_depth_0_matches,
             "arabic_peel_depth_0_matches not plumbed"
         );
-        assert!(
-            mirror.arabic_peel_depth_1_matches > before.arabic_peel_depth_1_matches,
+        assert!(mirror.arabic_peel_depth_1_matches > before.arabic_peel_depth_1_matches,
             "arabic_peel_depth_1_matches not plumbed"
         );
-        assert!(
-            mirror.arabic_peel_depth_2_matches > before.arabic_peel_depth_2_matches,
+        assert!(mirror.arabic_peel_depth_2_matches > before.arabic_peel_depth_2_matches,
             "arabic_peel_depth_2_matches not plumbed"
         );
-        assert!(
-            mirror.arabic_peel_depth_3_matches > before.arabic_peel_depth_3_matches,
+        assert!(mirror.arabic_peel_depth_3_matches > before.arabic_peel_depth_3_matches,
             "arabic_peel_depth_3_matches not plumbed"
         );
-        assert!(
-            mirror.arabic_peel_depth_exhausted > before.arabic_peel_depth_exhausted,
+        assert!(mirror.arabic_peel_depth_exhausted > before.arabic_peel_depth_exhausted,
             "arabic_peel_depth_exhausted not plumbed"
         );
-        assert!(
-            mirror.hebrew_peel_depth_0_matches > before.hebrew_peel_depth_0_matches,
+        assert!(mirror.hebrew_peel_depth_0_matches > before.hebrew_peel_depth_0_matches,
             "hebrew_peel_depth_0_matches not plumbed"
         );
-        assert!(
-            mirror.hebrew_peel_depth_1_matches > before.hebrew_peel_depth_1_matches,
+        assert!(mirror.hebrew_peel_depth_1_matches > before.hebrew_peel_depth_1_matches,
             "hebrew_peel_depth_1_matches not plumbed"
         );
-        assert!(
-            mirror.hebrew_peel_depth_2_matches > before.hebrew_peel_depth_2_matches,
+        assert!(mirror.hebrew_peel_depth_2_matches > before.hebrew_peel_depth_2_matches,
             "hebrew_peel_depth_2_matches not plumbed"
         );
-        assert!(
-            mirror.hebrew_peel_depth_3_matches > before.hebrew_peel_depth_3_matches,
+        assert!(mirror.hebrew_peel_depth_3_matches > before.hebrew_peel_depth_3_matches,
             "hebrew_peel_depth_3_matches not plumbed"
         );
-        assert!(
-            mirror.hebrew_peel_depth_exhausted > before.hebrew_peel_depth_exhausted,
+        assert!(mirror.hebrew_peel_depth_exhausted > before.hebrew_peel_depth_exhausted,
             "hebrew_peel_depth_exhausted not plumbed"
         );
     }
 
-    /// Pin the FTS-telemetry mirror field parity (Phase 1.10).
+    /// Pin the FTS-telemetry mirror field parity.
     /// Mirror of `lexicon_telemetry_mirror_round_trips` for the
     /// FTS path.
     #[test]
@@ -1995,7 +1969,7 @@ mod tests {
         // snapshot.  This is the same monotonic-lower-bound
         // pattern used by [`snapshot_reflects_counter_increments`]
         // and by `lexicon_telemetry_mirror_round_trips` above.
-        // Phase 1.10 sweep 1 (INFO-0002 fix): the previous
+        // a follow-up (INFO-0002 fix): the previous
         // `assert_eq!(mirror.field, upstream.field)` shape was
         // accidentally racy — if any parallel test (today only
         // `store_integration::fts_telemetry_*`, but trivially
@@ -2011,57 +1985,45 @@ mod tests {
         // corresponding upstream counter.  Lower-bound by the
         // upstream value because parallel tests cannot decrement
         // counters but may increment them between the two reads.
-        assert!(
-            mirror.unicode61_lane_queries_total >= upstream.unicode61_lane_queries_total,
+        assert!(mirror.unicode61_lane_queries_total >= upstream.unicode61_lane_queries_total,
             "unicode61_lane_queries_total mirror < upstream"
         );
-        assert!(
-            mirror.unicode61_lane_rows_total >= upstream.unicode61_lane_rows_total,
+        assert!(mirror.unicode61_lane_rows_total >= upstream.unicode61_lane_rows_total,
             "unicode61_lane_rows_total mirror < upstream"
         );
-        assert!(
-            mirror.cjk_trigram_lane_queries_total >= upstream.cjk_trigram_lane_queries_total,
+        assert!(mirror.cjk_trigram_lane_queries_total >= upstream.cjk_trigram_lane_queries_total,
             "cjk_trigram_lane_queries_total mirror < upstream"
         );
-        assert!(
-            mirror.cjk_trigram_lane_rows_total >= upstream.cjk_trigram_lane_rows_total,
+        assert!(mirror.cjk_trigram_lane_rows_total >= upstream.cjk_trigram_lane_rows_total,
             "cjk_trigram_lane_rows_total mirror < upstream"
         );
-        assert!(
-            mirror.cjk_trigram_lane_skips_pure_stopword_query_total
+        assert!(mirror.cjk_trigram_lane_skips_pure_stopword_query_total
                 >= upstream.cjk_trigram_lane_skips_pure_stopword_query_total,
             "cjk_trigram_lane_skips_pure_stopword_query_total mirror < upstream"
         );
-        assert!(
-            mirror.bigram_lane_queries_total >= upstream.bigram_lane_queries_total,
+        assert!(mirror.bigram_lane_queries_total >= upstream.bigram_lane_queries_total,
             "bigram_lane_queries_total mirror < upstream"
         );
-        assert!(
-            mirror.bigram_lane_rows_total >= upstream.bigram_lane_rows_total,
+        assert!(mirror.bigram_lane_rows_total >= upstream.bigram_lane_rows_total,
             "bigram_lane_rows_total mirror < upstream"
         );
-        assert!(
-            mirror.bigram_lane_skips_pure_stopword_query_total
+        assert!(mirror.bigram_lane_skips_pure_stopword_query_total
                 >= upstream.bigram_lane_skips_pure_stopword_query_total,
             "bigram_lane_skips_pure_stopword_query_total mirror < upstream"
         );
-        assert!(
-            mirror.bigram_lane_skips_no_cjk_query_total
+        assert!(mirror.bigram_lane_skips_no_cjk_query_total
                 >= upstream.bigram_lane_skips_no_cjk_query_total,
             "bigram_lane_skips_no_cjk_query_total mirror < upstream"
         );
-        assert!(
-            mirror.index_write_stopwords_stripped_total
+        assert!(mirror.index_write_stopwords_stripped_total
                 >= upstream.index_write_stopwords_stripped_total,
             "index_write_stopwords_stripped_total mirror < upstream"
         );
-        assert!(
-            mirror.query_time_stopwords_stripped_total
+        assert!(mirror.query_time_stopwords_stripped_total
                 >= upstream.query_time_stopwords_stripped_total,
             "query_time_stopwords_stripped_total mirror < upstream"
         );
-        assert!(
-            mirror.v16_migration_stopwords_stripped_total
+        assert!(mirror.v16_migration_stopwords_stripped_total
                 >= upstream.v16_migration_stopwords_stripped_total,
             "v16_migration_stopwords_stripped_total mirror < upstream"
         );
@@ -2072,62 +2034,50 @@ mod tests {
         // the mirror dropped `unicode61_lane_queries_total`,
         // `mirror.unicode61_lane_queries_total - before.unicode61_lane_queries_total`
         // would be 0 even though our increment added 1.
-        assert!(
-            mirror.unicode61_lane_queries_total > before.unicode61_lane_queries_total,
+        assert!(mirror.unicode61_lane_queries_total > before.unicode61_lane_queries_total,
             "unicode61_lane_queries_total not plumbed"
         );
-        assert!(
-            mirror.unicode61_lane_rows_total > before.unicode61_lane_rows_total,
+        assert!(mirror.unicode61_lane_rows_total > before.unicode61_lane_rows_total,
             "unicode61_lane_rows_total not plumbed"
         );
-        assert!(
-            mirror.cjk_trigram_lane_queries_total > before.cjk_trigram_lane_queries_total,
+        assert!(mirror.cjk_trigram_lane_queries_total > before.cjk_trigram_lane_queries_total,
             "cjk_trigram_lane_queries_total not plumbed"
         );
-        assert!(
-            mirror.cjk_trigram_lane_rows_total > before.cjk_trigram_lane_rows_total,
+        assert!(mirror.cjk_trigram_lane_rows_total > before.cjk_trigram_lane_rows_total,
             "cjk_trigram_lane_rows_total not plumbed"
         );
-        assert!(
-            mirror.cjk_trigram_lane_skips_pure_stopword_query_total
+        assert!(mirror.cjk_trigram_lane_skips_pure_stopword_query_total
                 > before.cjk_trigram_lane_skips_pure_stopword_query_total,
             "cjk_trigram_lane_skips_pure_stopword_query_total not plumbed"
         );
-        assert!(
-            mirror.bigram_lane_queries_total > before.bigram_lane_queries_total,
+        assert!(mirror.bigram_lane_queries_total > before.bigram_lane_queries_total,
             "bigram_lane_queries_total not plumbed"
         );
-        assert!(
-            mirror.bigram_lane_rows_total > before.bigram_lane_rows_total,
+        assert!(mirror.bigram_lane_rows_total > before.bigram_lane_rows_total,
             "bigram_lane_rows_total not plumbed"
         );
-        assert!(
-            mirror.bigram_lane_skips_pure_stopword_query_total
+        assert!(mirror.bigram_lane_skips_pure_stopword_query_total
                 > before.bigram_lane_skips_pure_stopword_query_total,
             "bigram_lane_skips_pure_stopword_query_total not plumbed"
         );
-        assert!(
-            mirror.bigram_lane_skips_no_cjk_query_total
+        assert!(mirror.bigram_lane_skips_no_cjk_query_total
                 > before.bigram_lane_skips_no_cjk_query_total,
             "bigram_lane_skips_no_cjk_query_total not plumbed"
         );
-        assert!(
-            mirror.index_write_stopwords_stripped_total
+        assert!(mirror.index_write_stopwords_stripped_total
                 > before.index_write_stopwords_stripped_total,
             "index_write_stopwords_stripped_total not plumbed"
         );
-        assert!(
-            mirror.query_time_stopwords_stripped_total > before.query_time_stopwords_stripped_total,
+        assert!(mirror.query_time_stopwords_stripped_total > before.query_time_stopwords_stripped_total,
             "query_time_stopwords_stripped_total not plumbed"
         );
-        assert!(
-            mirror.v16_migration_stopwords_stripped_total
+        assert!(mirror.v16_migration_stopwords_stripped_total
                 > before.v16_migration_stopwords_stripped_total,
             "v16_migration_stopwords_stripped_total not plumbed"
         );
     }
 
-    /// Pin the vector-telemetry mirror field parity (Phase 1.11).
+    /// Pin the vector-telemetry mirror field parity.
     /// Mirror of `fts_telemetry_mirror_round_trips` for the
     /// embedding / vector-retrieval path.
     #[test]
@@ -2150,7 +2100,7 @@ mod tests {
         record_embedding_error(EmbeddingErrorKind::RuntimeUnavailable);
         record_embedding_error(EmbeddingErrorKind::ModelLoad);
         record_embedding_error(EmbeddingErrorKind::InferenceFailure);
-        // Phase 1.12 pre-embedding routing counters — bump one
+        //  pre-embedding routing counters — bump one
         // each so the three new fields participate in the same
         // monotonic-lower-bound + plumbed-from-baseline parity
         // discipline as every other vector-telemetry field.
@@ -2177,66 +2127,51 @@ mod tests {
 
         // Mirror ≥ upstream for every field — catches a
         // silently-dropped projection.
-        assert!(
-            mirror.query_embeddings_total >= upstream.query_embeddings_total,
+        assert!(mirror.query_embeddings_total >= upstream.query_embeddings_total,
             "query_embeddings_total mirror < upstream"
         );
-        assert!(
-            mirror.index_write_embeddings_total >= upstream.index_write_embeddings_total,
+        assert!(mirror.index_write_embeddings_total >= upstream.index_write_embeddings_total,
             "index_write_embeddings_total mirror < upstream"
         );
-        assert!(
-            mirror.live_body_embeddings_total >= upstream.live_body_embeddings_total,
+        assert!(mirror.live_body_embeddings_total >= upstream.live_body_embeddings_total,
             "live_body_embeddings_total mirror < upstream"
         );
-        assert!(
-            mirror.cache_hits_total >= upstream.cache_hits_total,
+        assert!(mirror.cache_hits_total >= upstream.cache_hits_total,
             "cache_hits_total mirror < upstream"
         );
-        assert!(
-            mirror.cache_misses_no_row_total >= upstream.cache_misses_no_row_total,
+        assert!(mirror.cache_misses_no_row_total >= upstream.cache_misses_no_row_total,
             "cache_misses_no_row_total mirror < upstream"
         );
-        assert!(
-            mirror.cache_misses_dimension_total >= upstream.cache_misses_dimension_total,
+        assert!(mirror.cache_misses_dimension_total >= upstream.cache_misses_dimension_total,
             "cache_misses_dimension_total mirror < upstream"
         );
-        assert!(
-            mirror.cache_misses_read_error_total >= upstream.cache_misses_read_error_total,
+        assert!(mirror.cache_misses_read_error_total >= upstream.cache_misses_read_error_total,
             "cache_misses_read_error_total mirror < upstream"
         );
-        assert!(
-            mirror.dedup_copy_hits_total >= upstream.dedup_copy_hits_total,
+        assert!(mirror.dedup_copy_hits_total >= upstream.dedup_copy_hits_total,
             "dedup_copy_hits_total mirror < upstream"
         );
-        assert!(
-            mirror.runtime_unavailable_total >= upstream.runtime_unavailable_total,
+        assert!(mirror.runtime_unavailable_total >= upstream.runtime_unavailable_total,
             "runtime_unavailable_total mirror < upstream"
         );
-        assert!(
-            mirror.model_load_errors_total >= upstream.model_load_errors_total,
+        assert!(mirror.model_load_errors_total >= upstream.model_load_errors_total,
             "model_load_errors_total mirror < upstream"
         );
-        assert!(
-            mirror.inference_failures_total >= upstream.inference_failures_total,
+        assert!(mirror.inference_failures_total >= upstream.inference_failures_total,
             "inference_failures_total mirror < upstream"
         );
-        assert!(
-            mirror.model_tag_dimension_violations_total
+        assert!(mirror.model_tag_dimension_violations_total
                 >= upstream.model_tag_dimension_violations_total,
             "model_tag_dimension_violations_total mirror < upstream"
         );
-        assert!(
-            mirror.pre_embed_admitted_total >= upstream.pre_embed_admitted_total,
+        assert!(mirror.pre_embed_admitted_total >= upstream.pre_embed_admitted_total,
             "pre_embed_admitted_total mirror < upstream"
         );
-        assert!(
-            mirror.pre_embed_skipped_empty_after_trim_total
+        assert!(mirror.pre_embed_skipped_empty_after_trim_total
                 >= upstream.pre_embed_skipped_empty_after_trim_total,
             "pre_embed_skipped_empty_after_trim_total mirror < upstream"
         );
-        assert!(
-            mirror.pre_embed_skipped_no_linguistic_content_total
+        assert!(mirror.pre_embed_skipped_no_linguistic_content_total
                 >= upstream.pre_embed_skipped_no_linguistic_content_total,
             "pre_embed_skipped_no_linguistic_content_total mirror < upstream"
         );
@@ -2247,72 +2182,57 @@ mod tests {
         // `query_embeddings_total: s.query_embeddings_total` in
         // [`vector_telemetry_snapshot`]) would leave the diff
         // at 0 even though our increment added 1.
-        assert!(
-            mirror.query_embeddings_total > before.query_embeddings_total,
+        assert!(mirror.query_embeddings_total > before.query_embeddings_total,
             "query_embeddings_total not plumbed"
         );
-        assert!(
-            mirror.index_write_embeddings_total > before.index_write_embeddings_total,
+        assert!(mirror.index_write_embeddings_total > before.index_write_embeddings_total,
             "index_write_embeddings_total not plumbed"
         );
-        assert!(
-            mirror.live_body_embeddings_total > before.live_body_embeddings_total,
+        assert!(mirror.live_body_embeddings_total > before.live_body_embeddings_total,
             "live_body_embeddings_total not plumbed"
         );
-        assert!(
-            mirror.cache_hits_total > before.cache_hits_total,
+        assert!(mirror.cache_hits_total > before.cache_hits_total,
             "cache_hits_total not plumbed"
         );
-        assert!(
-            mirror.cache_misses_no_row_total > before.cache_misses_no_row_total,
+        assert!(mirror.cache_misses_no_row_total > before.cache_misses_no_row_total,
             "cache_misses_no_row_total not plumbed"
         );
-        assert!(
-            mirror.cache_misses_dimension_total > before.cache_misses_dimension_total,
+        assert!(mirror.cache_misses_dimension_total > before.cache_misses_dimension_total,
             "cache_misses_dimension_total not plumbed"
         );
-        assert!(
-            mirror.cache_misses_read_error_total > before.cache_misses_read_error_total,
+        assert!(mirror.cache_misses_read_error_total > before.cache_misses_read_error_total,
             "cache_misses_read_error_total not plumbed"
         );
-        assert!(
-            mirror.dedup_copy_hits_total > before.dedup_copy_hits_total,
+        assert!(mirror.dedup_copy_hits_total > before.dedup_copy_hits_total,
             "dedup_copy_hits_total not plumbed"
         );
-        assert!(
-            mirror.runtime_unavailable_total > before.runtime_unavailable_total,
+        assert!(mirror.runtime_unavailable_total > before.runtime_unavailable_total,
             "runtime_unavailable_total not plumbed"
         );
-        assert!(
-            mirror.model_load_errors_total > before.model_load_errors_total,
+        assert!(mirror.model_load_errors_total > before.model_load_errors_total,
             "model_load_errors_total not plumbed"
         );
-        assert!(
-            mirror.inference_failures_total > before.inference_failures_total,
+        assert!(mirror.inference_failures_total > before.inference_failures_total,
             "inference_failures_total not plumbed"
         );
-        assert!(
-            mirror.model_tag_dimension_violations_total
+        assert!(mirror.model_tag_dimension_violations_total
                 > before.model_tag_dimension_violations_total,
             "model_tag_dimension_violations_total not plumbed"
         );
-        assert!(
-            mirror.pre_embed_admitted_total > before.pre_embed_admitted_total,
+        assert!(mirror.pre_embed_admitted_total > before.pre_embed_admitted_total,
             "pre_embed_admitted_total not plumbed"
         );
-        assert!(
-            mirror.pre_embed_skipped_empty_after_trim_total
+        assert!(mirror.pre_embed_skipped_empty_after_trim_total
                 > before.pre_embed_skipped_empty_after_trim_total,
             "pre_embed_skipped_empty_after_trim_total not plumbed"
         );
-        assert!(
-            mirror.pre_embed_skipped_no_linguistic_content_total
+        assert!(mirror.pre_embed_skipped_no_linguistic_content_total
                 > before.pre_embed_skipped_no_linguistic_content_total,
             "pre_embed_skipped_no_linguistic_content_total not plumbed"
         );
     }
 
-    /// Phase 2.0 parity invariant: the flat
+    ///  parity invariant: the flat
     /// `fts_telemetry` / `lexicon_telemetry` / `vector_telemetry`
     /// fields on a single [`MetricsSnapshot`] value MUST equal
     /// the grouped `retrieval_metrics.fts` /
@@ -2342,21 +2262,18 @@ mod tests {
 
         // The three flat fields MUST equal the three grouped
         // sub-fields, byte for byte, on the same snapshot.
-        assert_eq!(
-            snap.fts_telemetry, snap.retrieval_metrics.fts,
+        assert_eq!(snap.fts_telemetry, snap.retrieval_metrics.fts,
             "flat fts_telemetry must equal retrieval_metrics.fts on the same snapshot"
         );
-        assert_eq!(
-            snap.lexicon_telemetry, snap.retrieval_metrics.lexicon,
+        assert_eq!(snap.lexicon_telemetry, snap.retrieval_metrics.lexicon,
             "flat lexicon_telemetry must equal retrieval_metrics.lexicon on the same snapshot"
         );
-        assert_eq!(
-            snap.vector_telemetry, snap.retrieval_metrics.vector,
+        assert_eq!(snap.vector_telemetry, snap.retrieval_metrics.vector,
             "flat vector_telemetry must equal retrieval_metrics.vector on the same snapshot"
         );
     }
 
-    /// Phase 2.0 wire-default contract: a freshly-constructed
+    /// wire-default contract: a freshly-constructed
     /// [`RetrievalMetrics`] (via the `Default` derive) is all-zero
     /// across all three sub-fields, and serialises to a JSON
     /// object with three sub-objects that themselves serialise to
@@ -2400,21 +2317,18 @@ mod tests {
             .as_object_mut()
             .expect("MetricsSnapshot JSON is an object")
             .remove("retrieval_metrics");
-        assert!(
-            removed.is_some(),
+        assert!(removed.is_some(),
             "retrieval_metrics key must be present in a fresh MetricsSnapshot's JSON"
         );
         let without_retrieval_metrics: MetricsSnapshot = serde_json::from_value(as_value)
             .expect("MetricsSnapshot JSON without retrieval_metrics deserialises");
-        assert_eq!(
-            without_retrieval_metrics.retrieval_metrics,
+        assert_eq!(without_retrieval_metrics.retrieval_metrics,
             RetrievalMetrics::default(),
             "missing retrieval_metrics field must deserialise to all-zero default"
         );
         // The other flat fields must be preserved across the round trip.
         assert_eq!(without_retrieval_metrics.ingest_total, snap.ingest_total);
-        assert_eq!(
-            without_retrieval_metrics.lexicon_telemetry,
+        assert_eq!(without_retrieval_metrics.lexicon_telemetry,
             snap.lexicon_telemetry
         );
     }

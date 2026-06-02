@@ -140,8 +140,7 @@ impl InMemoryKeyStorage {
 impl KeyStorage for InMemoryKeyStorage {
     fn store_master_key(&self, key_id: &str, key: &MasterKey) -> Result<(), CryptoError> {
         let mut guard = self.keys.lock().map_err(|_| {
-            CryptoError::TombstonePersistence(
-                "in-memory key storage mutex poisoned during store".to_string(),
+            CryptoError::TombstonePersistence("in-memory key storage mutex poisoned during store".to_string(),
             )
         })?;
         // Overwrite-on-collision: zeroize any pre-existing entry
@@ -156,21 +155,18 @@ impl KeyStorage for InMemoryKeyStorage {
 
     fn load_master_key(&self, key_id: &str) -> Result<MasterKey, CryptoError> {
         let guard = self.keys.lock().map_err(|_| {
-            CryptoError::TombstonePersistence(
-                "in-memory key storage mutex poisoned during load".to_string(),
+            CryptoError::TombstonePersistence("in-memory key storage mutex poisoned during load".to_string(),
             )
         })?;
         guard.get(key_id).copied().ok_or_else(|| {
-            CryptoError::TombstonePersistence(format!(
-                "in-memory key storage: no key registered under id {key_id:?}"
+            CryptoError::TombstonePersistence(format!("in-memory key storage: no key registered under id {key_id:?}"
             ))
         })
     }
 
     fn delete_master_key(&self, key_id: &str) -> Result<(), CryptoError> {
         let mut guard = self.keys.lock().map_err(|_| {
-            CryptoError::TombstonePersistence(
-                "in-memory key storage mutex poisoned during delete".to_string(),
+            CryptoError::TombstonePersistence("in-memory key storage mutex poisoned during delete".to_string(),
             )
         })?;
         if let Some(mut victim) = guard.remove(key_id) {
@@ -225,8 +221,7 @@ mod tests {
         let store = InMemoryKeyStorage::new();
         let err = store.load_master_key("ghost").unwrap_err();
         let msg = err.to_string();
-        assert!(
-            msg.contains("ghost"),
+        assert!(msg.contains("ghost"),
             "error must mention the missing key id; got {msg:?}"
         );
     }

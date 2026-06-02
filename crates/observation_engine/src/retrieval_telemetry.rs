@@ -1,4 +1,4 @@
-//! Unified retrieval-telemetry read surface (Phase 2.0).
+//! Unified retrieval-telemetry read surface.
 //!
 //! Three sibling telemetry modules ship with the multilingual stack
 //! today, each tracking a distinct decision point on the retrieval
@@ -6,13 +6,13 @@
 //!
 //! * [`evidence_store::fts_telemetry`] — per-lane FTS5 query / row
 //!   totals, recall-lane structural skips, stopword-strip volumes
-//!   per call site (Phase 1.10).
+//!   per call site.
 //! * [`crate::lexicon_telemetry`] — per-BCP-47 lexicon hits,
 //!   [`MatchStrategy`](crate::MatchStrategy) fires, Arabic / Hebrew
-//!   clitic-peel depth distribution (Phase 1.10).
+//!   clitic-peel depth distribution.
 //! * [`evidence_store::vector_telemetry`] — embedding-call-site
 //!   volumes, `evidence_embeddings` cache outcomes, adapter error
-//!   variants, `model_tag` rotation-rule violations (Phase 1.11).
+//!   variants, `model_tag` rotation-rule violations.
 //!
 //! Operator dashboards need to read all three to assess retrieval
 //! health.  Today that means three separate
@@ -71,17 +71,17 @@ use crate::lexicon_telemetry::{self, LexiconTelemetrySnapshot};
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RetrievalMetricsSnapshot {
-    /// FTS5-path telemetry (Phase 1.10) — per-lane query / row totals,
+    /// FTS5-path telemetry — per-lane query / row totals,
     /// recall-lane structural skips, stopword-strip volumes per call
     /// site.  See [`evidence_store::fts_telemetry`] for the per-field
     /// rationale.
     pub fts: FtsTelemetrySnapshot,
-    /// Lexicon-path telemetry (Phase 1.10) — per-BCP-47 lexicon hits,
+    /// Lexicon-path telemetry — per-BCP-47 lexicon hits,
     /// match-strategy fires, Arabic / Hebrew clitic-peel depth
     /// distribution.  See [`crate::lexicon_telemetry`] for the
     /// per-field rationale.
     pub lexicon: LexiconTelemetrySnapshot,
-    /// Vector-path telemetry (Phase 1.11) — embedding-call-site
+    /// Vector-path telemetry — embedding-call-site
     /// volumes, `evidence_embeddings` cache outcomes, adapter error
     /// variants, `model_tag` rotation-rule violations.  See
     /// [`evidence_store::vector_telemetry`] for the per-field
@@ -210,28 +210,22 @@ mod tests {
         // concurrent activity).  Lower-bound + upper-bound pattern
         // matches the FFI metrics tests for the same race-free
         // reason documented at `ffi/src/metrics.rs:1403-1419`.
-        assert!(
-            unified.fts.unicode61_lane_queries_total >= s1_fts.unicode61_lane_queries_total,
+        assert!(unified.fts.unicode61_lane_queries_total >= s1_fts.unicode61_lane_queries_total,
             "unified fts.unicode61 must be >= pre-snapshot"
         );
-        assert!(
-            unified.fts.unicode61_lane_queries_total <= s2_fts.unicode61_lane_queries_total,
+        assert!(unified.fts.unicode61_lane_queries_total <= s2_fts.unicode61_lane_queries_total,
             "unified fts.unicode61 must be <= post-snapshot"
         );
-        assert!(
-            unified.lexicon.hits_en >= s1_lex.hits_en,
+        assert!(unified.lexicon.hits_en >= s1_lex.hits_en,
             "unified lexicon.hits_en must be >= pre-snapshot"
         );
-        assert!(
-            unified.lexicon.hits_en <= s2_lex.hits_en,
+        assert!(unified.lexicon.hits_en <= s2_lex.hits_en,
             "unified lexicon.hits_en must be <= post-snapshot"
         );
-        assert!(
-            unified.vector.query_embeddings_total >= s1_vec.query_embeddings_total,
+        assert!(unified.vector.query_embeddings_total >= s1_vec.query_embeddings_total,
             "unified vector.query must be >= pre-snapshot"
         );
-        assert!(
-            unified.vector.query_embeddings_total <= s2_vec.query_embeddings_total,
+        assert!(unified.vector.query_embeddings_total <= s2_vec.query_embeddings_total,
             "unified vector.query must be <= post-snapshot"
         );
     }

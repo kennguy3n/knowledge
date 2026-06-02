@@ -83,8 +83,7 @@ fn bench_traversal(c: &mut Criterion) {
     for (i, &id) in ids.iter().enumerate().skip(1) {
         if i % 2 == 0 {
             let leaf = g
-                .add_node(ConceptNode::new_candidate(
-                    format!("leaf-{i}"),
+                .add_node(ConceptNode::new_candidate(format!("leaf-{i}"),
                     "leaf def",
                     scope,
                 ))
@@ -173,8 +172,7 @@ fn bench_persist_load(c: &mut Criterion) {
     let mut group = c.benchmark_group("concept_graph/persist");
 
     group.bench_function("write_1000_nodes", |b| {
-        b.iter_with_setup(
-            || {
+        b.iter_with_setup(|| {
                 let dir = TempDir::new().expect("tempdir");
                 let path = dir.path().join("concepts.db");
                 let g = PersistentConceptGraph::open(&path, &key).expect("open");
@@ -182,8 +180,7 @@ fn bench_persist_load(c: &mut Criterion) {
             },
             |(_dir, mut g)| {
                 for i in 0..PERSIST_NODE_COUNT {
-                    let n = ConceptNode::new_candidate(
-                        format!("persist-node-{i}"),
+                    let n = ConceptNode::new_candidate(format!("persist-node-{i}"),
                         "definition",
                         scope,
                     );
@@ -202,8 +199,7 @@ fn bench_persist_load(c: &mut Criterion) {
         {
             let mut g = PersistentConceptGraph::open(&path, &key).expect("open");
             for i in 0..PERSIST_NODE_COUNT {
-                g.add_node(ConceptNode::new_candidate(
-                    format!("persist-node-{i}"),
+                g.add_node(ConceptNode::new_candidate(format!("persist-node-{i}"),
                     "definition",
                     scope,
                 ))
@@ -221,8 +217,7 @@ fn bench_persist_load(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    graph_benches,
+criterion_group!(graph_benches,
     bench_add_node,
     bench_traversal,
     bench_add_node_100k,

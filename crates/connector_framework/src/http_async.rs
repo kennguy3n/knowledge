@@ -1,4 +1,4 @@
-//! Phase 5 — async reqwest-backed HTTP transport.
+//!  — async reqwest-backed HTTP transport.
 //!
 //! Mirror of [`BlockingHttpTransport`](crate::http::BlockingHttpTransport)
 //! that drives the request loop with `tokio::time::sleep` instead of
@@ -132,8 +132,7 @@ impl ReqwestAsyncHttpTransport {
             .headers()
             .iter()
             .map(|(k, v)| {
-                (
-                    k.as_str().to_ascii_lowercase(),
+                (k.as_str().to_ascii_lowercase(),
                     v.to_str().unwrap_or("").to_string(),
                 )
             })
@@ -182,8 +181,7 @@ impl AsyncHttpTransport for ReqwestAsyncHttpTransport {
         // `attempt < max_retries`, which is false on the final
         // iteration. We panic on a future refactor that breaks the
         // invariant rather than fabricate an opaque `Err`.
-        unreachable!(
-            "ReqwestAsyncHttpTransport retry loop must always return inside the loop body",
+        unreachable!("ReqwestAsyncHttpTransport retry loop must always return inside the loop body",
         );
     }
 }

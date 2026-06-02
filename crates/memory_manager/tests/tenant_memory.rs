@@ -65,16 +65,13 @@ fn deprecate_unknown_returns_not_found() {
     let scope = ScopeId::new_v4();
     let mut t = TenantMemoryObject::new(scope);
     let bogus = Uuid::new_v4();
-    assert!(matches!(
-        t.deprecate_policy(bogus, None).unwrap_err(),
+    assert!(matches!(t.deprecate_policy(bogus, None).unwrap_err(),
         TenantMemoryError::NotFound(_)
     ));
-    assert!(matches!(
-        t.deprecate_taxonomy_entry(bogus).unwrap_err(),
+    assert!(matches!(t.deprecate_taxonomy_entry(bogus).unwrap_err(),
         TenantMemoryError::NotFound(_)
     ));
-    assert!(matches!(
-        t.deprecate_stable_fact(bogus, None).unwrap_err(),
+    assert!(matches!(t.deprecate_stable_fact(bogus, None).unwrap_err(),
         TenantMemoryError::NotFound(_)
     ));
 }
@@ -86,8 +83,7 @@ fn add_policy_rejects_non_critical_memory() {
     let mut policy = CanonicalPolicy::new(scope, "MFA required");
     policy.memory.sensitivity_class = SensitivityClass::Important;
     let err = t.add_policy(policy).unwrap_err();
-    assert_eq!(
-        err,
+    assert_eq!(err,
         TenantMemoryError::NotCritical(SensitivityClass::Important)
     );
 }
@@ -95,8 +91,7 @@ fn add_policy_rejects_non_critical_memory() {
 #[test]
 fn try_passive_decay_is_forbidden() {
     let t = TenantMemoryObject::new(ScopeId::new_v4());
-    assert_eq!(
-        t.try_passive_decay().unwrap_err(),
+    assert_eq!(t.try_passive_decay().unwrap_err(),
         TenantMemoryError::PassiveDecayForbidden
     );
 }
@@ -150,8 +145,7 @@ fn global_decay_sweep_is_a_noop_on_critical_items() {
     }
 
     let report = decay_sweep(&mut objs, chrono::Utc::now());
-    assert_eq!(
-        report.candidates_archived, 0,
+    assert_eq!(report.candidates_archived, 0,
         "tenant-memory items must never be archived by passive decay; \
          only explicit deprecation is allowed (docs/DESIGN.md §4.3)"
     );
@@ -174,8 +168,7 @@ fn approved_documents_admit_revoke_round_trip() {
 
     t.revoke_approved_document(id).unwrap();
     assert!(t.approved_documents.is_empty());
-    assert!(matches!(
-        t.revoke_approved_document(id).unwrap_err(),
+    assert!(matches!(t.revoke_approved_document(id).unwrap_err(),
         TenantMemoryError::NotFound(_)
     ));
 }

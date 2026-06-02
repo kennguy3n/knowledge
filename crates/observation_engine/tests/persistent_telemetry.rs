@@ -62,8 +62,7 @@ fn write_snapshot_uses_current_schema_version() {
     let path = dir.path().join("evidence_metrics.json");
 
     let written = write_snapshot(&path).expect("write_snapshot");
-    assert_eq!(
-        written.schema_version,
+    assert_eq!(written.schema_version,
         PersistentRetrievalSnapshot::SCHEMA_VERSION
     );
 
@@ -85,8 +84,7 @@ fn persisted_json_is_pretty_printed_and_parses_as_value() {
 
     // Pretty-print invariants — multi-line + indented + has the
     // outer keys we expect.
-    assert!(
-        text.contains('\n'),
+    assert!(text.contains('\n'),
         "expected pretty-printed JSON (multi-line), got: {text}"
     );
     assert!(text.contains("\"schema_version\""));
@@ -123,24 +121,21 @@ fn missing_counter_field_defaults_to_zero_on_read() {
             "vector": {}
         }
     });
-    std::fs::write(
-        &path,
+    std::fs::write(&path,
         serde_json::to_vec_pretty(&minimal).expect("serialize minimal"),
     )
     .expect("write minimal");
 
     let envelope = read_snapshot(&path).expect("read_snapshot");
     assert_eq!(envelope.captured_at_unix_ms, 42);
-    assert_eq!(
-        envelope.retrieval_metrics.fts.unicode61_lane_queries_total,
+    assert_eq!(envelope.retrieval_metrics.fts.unicode61_lane_queries_total,
         0
     );
     assert_eq!(envelope.retrieval_metrics.lexicon.hits_ja, 0);
     assert_eq!(envelope.retrieval_metrics.vector.query_embeddings_total, 0);
     // The entire sub-snapshot equals `Default::default()` even
     // though the on-disk JSON spelled out only `{}`.
-    assert_eq!(
-        envelope.retrieval_metrics.fts,
+    assert_eq!(envelope.retrieval_metrics.fts,
         evidence_store::fts_telemetry::FtsTelemetrySnapshot::default()
     );
 }
@@ -192,15 +187,13 @@ fn write_to_nonexistent_directory_returns_io_error() {
 
     let envelope = capture();
     let err = write_envelope(&bad, &envelope).expect_err("expected io error");
-    assert!(
-        matches!(err, PersistError::Io(_)),
+    assert!(matches!(err, PersistError::Io(_)),
         "expected PersistError::Io for missing parent dir, got: {err:?}"
     );
     // And no orphaned `.tmp` siblings left in the missing-parent
     // path's grandparent (the tempdir root) — the tempfile crate
     // takes care of this via the staging-file `Drop`.
-    assert!(
-        !bad.exists(),
+    assert!(!bad.exists(),
         "target path must not exist after failed write"
     );
 }
@@ -241,8 +234,7 @@ fn concurrent_reads_during_writes_never_observe_partial_file() {
                 // JSON) or PersistError::Io.
                 match read_snapshot(&path) {
                     Ok(env) => {
-                        assert_eq!(
-                            env.schema_version,
+                        assert_eq!(env.schema_version,
                             PersistentRetrievalSnapshot::SCHEMA_VERSION
                         );
                     }

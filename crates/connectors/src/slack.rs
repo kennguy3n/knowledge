@@ -437,8 +437,7 @@ impl SlackConnector {
     /// production substrate wires these to
     /// `BlockingHttpTransport` + `OAuth2Client`; tests use
     /// `MockHttpTransport`.
-    pub fn new(
-        instance: ConnectorInstanceId,
+    pub fn new(instance: ConnectorInstanceId,
         transport: Arc<dyn HttpTransport>,
         oauth: Arc<dyn OAuth2CodeExchange>,
     ) -> Self {
@@ -523,15 +522,13 @@ impl SlackConnector {
     /// pragmatic choice given that workspaces with > 2k channels
     /// already pay enough listing overhead that one extra page is
     /// noise.
-    fn project_channel_cache(
-        channels: &[SlackChannel],
+    fn project_channel_cache(channels: &[SlackChannel],
         now: DateTime<Utc>,
     ) -> (Vec<CachedChannel>, Option<DateTime<Utc>>) {
         if channels.len() > MAX_CACHED_CHANNELS {
             (Vec::new(), None)
         } else {
-            (
-                channels.iter().map(CachedChannel::from_channel).collect(),
+            (channels.iter().map(CachedChannel::from_channel).collect(),
                 Some(now),
             )
         }
@@ -544,8 +541,7 @@ impl SlackConnector {
             .auth_config_json
             .get("api_base_url")
             .and_then(serde_json::Value::as_str)
-            .map_or_else(
-                || self.api_base_url.clone(),
+            .map_or_else(|| self.api_base_url.clone(),
                 std::string::ToString::to_string,
             )
     }
@@ -558,14 +554,12 @@ impl SlackConnector {
             // connector also filters defensively in case a workspace
             // policy overrides the flag at the API gateway.
             let url = match &cursor {
-                Some(c) => format!(
-                    "{base_url}/conversations.list?exclude_archived=true&limit=200&cursor={}",
+                Some(c) => format!("{base_url}/conversations.list?exclude_archived=true&limit=200&cursor={}",
                     connector_framework::percent_encode_path_component(c)
                 ),
                 None => format!("{base_url}/conversations.list?exclude_archived=true&limit=200"),
             };
-            let resp: SlackChannelListResponse = bearer_get_json(
-                &self.transport,
+            let resp: SlackChannelListResponse = bearer_get_json(&self.transport,
                 "slack",
                 "conversations.list",
                 &url,
@@ -581,21 +575,18 @@ impl SlackConnector {
             // Defence-in-depth: if Slack ever returns the same cursor
             // twice in a row, break instead of looping forever.
             if Some(&next) == cursor.as_ref() {
-                return Err(ConnectorError::Sync(
-                    "slack conversations.list returned the same cursor twice; aborting to avoid \
+                return Err(ConnectorError::Sync("slack conversations.list returned the same cursor twice; aborting to avoid \
                      infinite loop"
                         .into(),
                 ));
             }
             cursor = Some(next);
         }
-        Err(ConnectorError::Sync(format!(
-            "slack conversations.list exceeded {MAX_LIST_PAGES} page cap; channel list truncated"
+        Err(ConnectorError::Sync(format!("slack conversations.list exceeded {MAX_LIST_PAGES} page cap; channel list truncated"
         )))
     }
 
-    fn fetch_history(
-        &self,
+    fn fetch_history(&self,
         base_url: &str,
         token: &OAuth2Token,
         channel_id: &str,
@@ -604,8 +595,7 @@ impl SlackConnector {
         let mut messages = Vec::new();
         let mut cursor: Option<String> = None;
         for _ in 0..MAX_HISTORY_PAGES_PER_CHANNEL {
-            let mut url = format!(
-                "{base_url}/conversations.history?channel={}&limit={}",
+            let mut url = format!("{base_url}/conversations.history?channel={}&limit={}",
                 connector_framework::percent_encode_path_component(channel_id),
                 self.history_page_limit
             );
@@ -617,8 +607,7 @@ impl SlackConnector {
                 url.push_str("&cursor=");
                 url.push_str(&connector_framework::percent_encode_path_component(c));
             }
-            let resp: SlackHistoryResponse = bearer_get_json(
-                &self.transport,
+            let resp: SlackHistoryResponse = bearer_get_json(&self.transport,
                 "slack",
                 "conversations.history",
                 &url,
@@ -640,15 +629,13 @@ impl SlackConnector {
                 return Ok(messages);
             }
             if Some(&next) == cursor.as_ref() {
-                return Err(ConnectorError::Sync(format!(
-                    "slack conversations.history returned the same cursor twice for channel \
+                return Err(ConnectorError::Sync(format!("slack conversations.history returned the same cursor twice for channel \
                      {channel_id}; aborting to avoid infinite loop"
                 )));
             }
             cursor = Some(next);
         }
-        Err(ConnectorError::Sync(format!(
-            "slack conversations.history exceeded {MAX_HISTORY_PAGES_PER_CHANNEL} page cap for \
+        Err(ConnectorError::Sync(format!("slack conversations.history exceeded {MAX_HISTORY_PAGES_PER_CHANNEL} page cap for \
              channel {channel_id}; history truncated"
         )))
     }
@@ -670,12 +657,10 @@ fn check_slack_ok(ok: bool, error: Option<&String>, endpoint: &str) -> Result<()
     // other ok=false maps to `Sync` for retriable failures.
     match msg.as_str() {
         "invalid_auth" | "not_authed" | "token_revoked" | "token_expired" | "account_inactive" => {
-            Err(ConnectorError::Auth(format!(
-                "slack {endpoint} responded ok=false error={msg}"
+            Err(ConnectorError::Auth(format!("slack {endpoint} responded ok=false error={msg}"
             )))
         }
-        _ => Err(ConnectorError::Sync(format!(
-            "slack {endpoint} responded ok=false error={msg}"
+        _ => Err(ConnectorError::Sync(format!("slack {endpoint} responded ok=false error={msg}"
         ))),
     }
 }
@@ -742,8 +727,7 @@ impl Connector for SlackConnector {
             .get("authorization_code")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Auth(
-                    "slack authenticate: auth_config_json.authorization_code is required".into(),
+                ConnectorError::Auth("slack authenticate: auth_config_json.authorization_code is required".into(),
                 )
             })?;
         self.oauth.exchange_code(config, auth_code)
@@ -784,8 +768,7 @@ impl Connector for SlackConnector {
         })
     }
 
-    fn incremental_sync(
-        &self,
+    fn incremental_sync(&self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         state: &SyncState,
@@ -881,8 +864,7 @@ impl Connector for SlackConnector {
         })
     }
 
-    fn subscribe_webhook(
-        &self,
+    fn subscribe_webhook(&self,
         config: &ConnectorConfig,
         _token: &OAuth2Token,
         callback_url: &str,
@@ -907,14 +889,12 @@ impl Connector for SlackConnector {
             .get("signing_secret")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Webhook(
-                    "slack subscribe_webhook: auth_config_json.signing_secret is required to \
+                ConnectorError::Webhook("slack subscribe_webhook: auth_config_json.signing_secret is required to \
                      verify incoming Events API payloads"
                         .into(),
                 )
             })?;
-        Ok(WebhookSubscription::new(
-            self.instance,
+        Ok(WebhookSubscription::new(self.instance,
             callback_url,
             WebhookSecret::new(signing_secret),
             WebhookEventTypes {
@@ -936,8 +916,7 @@ impl Connector for SlackConnector {
             // ingest, but the body parsed cleanly".
             "url_verification" => {
                 if env.challenge.is_none() {
-                    return Err(ConnectorError::Webhook(
-                        "url_verification envelope missing challenge".into(),
+                    return Err(ConnectorError::Webhook("url_verification envelope missing challenge".into(),
                     ));
                 }
                 Ok(Vec::new())
@@ -960,8 +939,7 @@ impl Connector for SlackConnector {
                         let id = SlackConnector::document_id(&channel, &ts);
                         match inner.subtype.as_deref() {
                             Some("message_deleted") => ConnectorEvent::DocumentDeleted {
-                                document_id: SlackConnector::document_id(
-                                    &channel,
+                                document_id: SlackConnector::document_id(&channel,
                                     inner.deleted_ts.as_deref().unwrap_or(&ts),
                                 ),
                                 occurred_at,
@@ -995,15 +973,13 @@ impl Connector for SlackConnector {
                         }
                     }
                     other => {
-                        return Err(ConnectorError::Webhook(format!(
-                            "unknown Slack inner event type: {other}"
+                        return Err(ConnectorError::Webhook(format!("unknown Slack inner event type: {other}"
                         )));
                     }
                 };
                 Ok(vec![event])
             }
-            other => Err(ConnectorError::Webhook(format!(
-                "unknown Slack envelope type: {other}"
+            other => Err(ConnectorError::Webhook(format!("unknown Slack envelope type: {other}"
             ))),
         }
     }
@@ -1040,8 +1016,7 @@ mod tests {
 
     impl OAuth2CodeExchange for FixedOAuthExchange {
         fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
-            Ok(OAuth2Token::new(
-                "test-access-token",
+            Ok(OAuth2Token::new("test-access-token",
                 "test-refresh-token",
                 Utc::now() + Duration::hours(12),
                 "channels:history channels:read files:read",
@@ -1059,16 +1034,14 @@ mod tests {
     }
 
     fn connector_with(transport: Arc<MockHttpTransport>) -> SlackConnector {
-        SlackConnector::new(
-            ConnectorInstanceId::new_v4(),
+        SlackConnector::new(ConnectorInstanceId::new_v4(),
             transport,
             Arc::new(FixedOAuthExchange),
         )
     }
 
     fn token() -> OAuth2Token {
-        OAuth2Token::new(
-            "test-access-token",
+        OAuth2Token::new("test-access-token",
             "test-refresh-token",
             Utc::now() + Duration::hours(12),
             "channels:history channels:read files:read",
@@ -1098,11 +1071,9 @@ mod tests {
     fn initial_sync_walks_channels_then_history_and_emits_chronologically() {
         let transport = Arc::new(MockHttpTransport::new());
         // conversations.list page 1 → two channels, no next cursor.
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channels": [
                         {"id": "C-A", "name": "general", "is_archived": false},
@@ -1114,11 +1085,9 @@ mod tests {
             ),
         );
         // C-A history — Slack returns newest-first.
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-A&limit=200",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-A",
                     "messages": [
@@ -1133,11 +1102,9 @@ mod tests {
             ),
         );
         // C-B history — empty.
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-B&limit=200",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-B",
                     "messages": [],
@@ -1152,12 +1119,10 @@ mod tests {
         assert_eq!(res.events.len(), 3);
         // Substrate emits chronologically — first event must be the oldest ts.
         let first = res.events[0].document_id().as_str().to_string();
-        assert!(
-            first.ends_with("1700000100.000000"),
+        assert!(first.ends_with("1700000100.000000"),
             "expected oldest first, got {first}",
         );
-        assert!(matches!(
-            res.events[0],
+        assert!(matches!(res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
         // Cursor advanced to the latest ts.
@@ -1169,11 +1134,9 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         // List page 1 → one archived channel + one active, plus a
         // next_cursor.
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channels": [
                         // Slack should already have filtered this
@@ -1188,11 +1151,9 @@ mod tests {
             ),
         );
         // List page 2 → one more channel.
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200&cursor=PAGE2",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channels": [
                         {"id": "C-B", "name": "design", "is_archived": false},
@@ -1204,11 +1165,9 @@ mod tests {
         );
         // History for both active channels — empty.
         for ch in ["C-A", "C-B"] {
-            transport.expect(
-                HttpMethod::Get,
+            transport.expect(HttpMethod::Get,
                 format!("https://api.test/slack/conversations.history?channel={ch}&limit=200"),
-                MockResponse::ok_json(
-                    serde_json::to_vec(&json!({
+                MockResponse::ok_json(serde_json::to_vec(&json!({
                         "ok": true,
                         "channel": ch,
                         "messages": [],
@@ -1229,8 +1188,7 @@ mod tests {
             .iter()
             .filter(|r| r.url.contains("conversations.history"))
             .count();
-        assert_eq!(
-            history_calls, 2,
+        assert_eq!(history_calls, 2,
             "archived channel must NOT trigger a history call: {recs:#?}"
         );
     }
@@ -1238,11 +1196,9 @@ mod tests {
     #[test]
     fn initial_sync_paginates_conversations_history() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channels": [{"id": "C-A", "name": "g", "is_archived": false}],
                     "response_metadata": {"next_cursor": ""},
@@ -1251,11 +1207,9 @@ mod tests {
             ),
         );
         // History page 1 → has_more=true with a cursor.
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-A&limit=200",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-A",
                     "messages": [{"ts": "1700000200.000000", "type": "message"}],
@@ -1266,11 +1220,9 @@ mod tests {
             ),
         );
         // History page 2 → has_more=false, no cursor.
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-A&limit=200&cursor=HCURSOR",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-A",
                     "messages": [{"ts": "1700000100.000000", "type": "message"}],
@@ -1288,8 +1240,7 @@ mod tests {
     #[test]
     fn initial_sync_maps_401_to_auth_error() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
             MockResponse {
                 status: 401,
@@ -1299,8 +1250,7 @@ mod tests {
         );
         let c = connector_with(Arc::clone(&transport));
         let err = c.initial_sync(&cfg(), &token()).unwrap_err();
-        assert!(
-            matches!(err, ConnectorError::Auth(_)),
+        assert!(matches!(err, ConnectorError::Auth(_)),
             "401 must map to Auth, got {err:?}"
         );
     }
@@ -1310,15 +1260,13 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         // Slack's HTTP layer can return 200 with ok=false for
         // invalidated tokens.
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
             MockResponse::ok_json(br#"{"ok":false,"error":"invalid_auth"}"#.to_vec()),
         );
         let c = connector_with(Arc::clone(&transport));
         let err = c.initial_sync(&cfg(), &token()).unwrap_err();
-        assert!(
-            matches!(err, ConnectorError::Auth(_)),
+        assert!(matches!(err, ConnectorError::Auth(_)),
             "ok=false invalid_auth must map to Auth, got {err:?}"
         );
     }
@@ -1326,15 +1274,13 @@ mod tests {
     #[test]
     fn initial_sync_maps_slack_ok_false_other_to_sync_error() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
             MockResponse::ok_json(br#"{"ok":false,"error":"ratelimited"}"#.to_vec()),
         );
         let c = connector_with(Arc::clone(&transport));
         let err = c.initial_sync(&cfg(), &token()).unwrap_err();
-        assert!(
-            matches!(err, ConnectorError::Sync(_)),
+        assert!(matches!(err, ConnectorError::Sync(_)),
             "ok=false ratelimited must map to Sync, got {err:?}"
         );
     }
@@ -1342,11 +1288,9 @@ mod tests {
     #[test]
     fn incremental_sync_uses_cursor_as_oldest_parameter() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channels": [{"id": "C-A", "name": "g", "is_archived": false}],
                     "response_metadata": {"next_cursor": ""},
@@ -1357,11 +1301,9 @@ mod tests {
         // Cursor "1700000200.000000" → should appear in the oldest
         // parameter on the history call (already in Slack's native
         // format — no RFC-3339 round-trip).
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-A&limit=200&oldest=1700000200.000000",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-A",
                     "messages": [{"ts": "1700000300.000000", "type": "message"}],
@@ -1382,8 +1324,7 @@ mod tests {
         };
         let res = c.incremental_sync(&cfg(), &token(), &state).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert!(matches!(
-            res.events[0],
+        assert!(matches!(res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
     }
@@ -1391,11 +1332,9 @@ mod tests {
     #[test]
     fn incremental_sync_keeps_prior_cursor_when_no_new_messages() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channels": [{"id": "C-A", "name": "g", "is_archived": false}],
                     "response_metadata": {"next_cursor": ""},
@@ -1403,11 +1342,9 @@ mod tests {
                 .unwrap(),
             ),
         );
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-A&limit=200&oldest=1700000999.000000",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-A",
                     "messages": [],
@@ -1449,11 +1386,9 @@ mod tests {
         // must round-trip it back into Slack's ts format for the
         // oldest parameter.
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channels": [{"id": "C-A", "name": "g", "is_archived": false}],
                     "response_metadata": {"next_cursor": ""},
@@ -1462,11 +1397,9 @@ mod tests {
             ),
         );
         // 2023-11-14T22:13:20Z → 1700000000.000000
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-A&limit=200&oldest=1700000000.000000",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-A",
                     "messages": [],
@@ -1569,8 +1502,7 @@ mod tests {
         assert_eq!(evs.len(), 1);
         match &evs[0] {
             ConnectorEvent::DocumentDeleted { document_id, .. } => {
-                assert!(
-                    document_id.as_str().ends_with("1699999999.000000"),
+                assert!(document_id.as_str().ends_with("1699999999.000000"),
                     "delete must use deleted_ts: {document_id:?}"
                 );
             }
@@ -1661,8 +1593,7 @@ mod tests {
             v: 1,
             watermark: Some("2023-11-14T22:13:20Z".into()),
             channels: vec![CachedChannel { id: "C-A".into() }],
-            channels_listed_at: Some(
-                DateTime::parse_from_rfc3339("2024-01-15T10:30:00Z")
+            channels_listed_at: Some(DateTime::parse_from_rfc3339("2024-01-15T10:30:00Z")
                     .unwrap()
                     .with_timezone(&Utc),
             ),
@@ -1764,11 +1695,9 @@ mod tests {
         // mock will fall through to `mock_not_configured` (HTTP 404)
         // and the test fails loudly.
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-CACHED&limit=200&oldest=1700000200.000000",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-CACHED",
                     "messages": [{"ts": "1700000300.000000", "type": "message", "text": "fresh"}],
@@ -1801,8 +1730,7 @@ mod tests {
         // Critical assertion: exactly ONE recorded request
         // (`conversations.history` only). If the connector regresses
         // and calls `conversations.list` first, this jumps to 2.
-        assert_eq!(
-            transport.recorded().len(),
+        assert_eq!(transport.recorded().len(),
             1,
             "cache hit must skip conversations.list — recorded: {:?}",
             transport.recorded()
@@ -1822,11 +1750,9 @@ mod tests {
         // connector MUST re-call `conversations.list` and update
         // the cache. We register both endpoints.
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     // Channel set changed since the prior listing —
                     // C-OLD is gone, C-NEW arrived. This is exactly
@@ -1839,11 +1765,9 @@ mod tests {
                 .unwrap(),
             ),
         );
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-NEW&limit=200&oldest=1700000200.000000",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-NEW",
                     "messages": [],
@@ -1876,12 +1800,10 @@ mod tests {
         // would error on `mock_not_configured`).
         let recorded = transport.recorded();
         assert_eq!(recorded.len(), 2, "must re-list + fetch new channel");
-        assert!(
-            recorded[0].url.contains("conversations.list"),
+        assert!(recorded[0].url.contains("conversations.list"),
             "first call is the fresh list"
         );
-        assert!(
-            recorded[1].url.contains("channel=C-NEW"),
+        assert!(recorded[1].url.contains("channel=C-NEW"),
             "second call uses the fresh channel set"
         );
         let next = SlackCursor::parse(&res.next_cursor.unwrap());
@@ -1898,11 +1820,9 @@ mod tests {
         // contract). The cache is then considered stale on any run
         // landing >1s after the prior listing.
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channels": [{"id": "C-A", "name": "g", "is_archived": false}],
                     "response_metadata": {"next_cursor": ""},
@@ -1910,11 +1830,9 @@ mod tests {
                 .unwrap(),
             ),
         );
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-A&limit=200&oldest=1700000200.000000",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-A",
                     "messages": [],
@@ -1962,13 +1880,11 @@ mod tests {
             .collect();
         let now = Utc::now();
         let (cached, listed_at) = SlackConnector::project_channel_cache(&too_many, now);
-        assert!(
-            cached.is_empty(),
+        assert!(cached.is_empty(),
             "above-cap workspaces must not persist channel cache (got {} entries)",
             cached.len()
         );
-        assert!(
-            listed_at.is_none(),
+        assert!(listed_at.is_none(),
             "above-cap workspaces must force re-list on next run"
         );
 

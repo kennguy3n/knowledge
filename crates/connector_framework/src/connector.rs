@@ -66,8 +66,7 @@ pub trait Connector: Send + Sync {
     fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult>;
 
     /// Steady-state pull — read the cursor from `state`.
-    fn incremental_sync(
-        &self,
+    fn incremental_sync(&self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         state: &SyncState,
@@ -75,8 +74,7 @@ pub trait Connector: Send + Sync {
 
     /// Install a push subscription with the provider. The returned
     /// [`WebhookSubscription`] should be persisted by the runtime.
-    fn subscribe_webhook(
-        &self,
+    fn subscribe_webhook(&self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         callback_url: &str,
@@ -113,16 +111,14 @@ mod tests {
 
     impl Connector for FakeConnector {
         fn authenticate(&self, _config: &ConnectorConfig) -> Result<OAuth2Token> {
-            Ok(OAuth2Token::new(
-                "access",
+            Ok(OAuth2Token::new("access",
                 "refresh",
                 Utc::now() + Duration::hours(1),
                 "scope.read",
             ))
         }
 
-        fn initial_sync(
-            &self,
+        fn initial_sync(&self,
             _config: &ConnectorConfig,
             _token: &OAuth2Token,
         ) -> Result<SyncRunResult> {
@@ -135,8 +131,7 @@ mod tests {
             })
         }
 
-        fn incremental_sync(
-            &self,
+        fn incremental_sync(&self,
             _config: &ConnectorConfig,
             _token: &OAuth2Token,
             _state: &SyncState,
@@ -147,14 +142,12 @@ mod tests {
             })
         }
 
-        fn subscribe_webhook(
-            &self,
+        fn subscribe_webhook(&self,
             _config: &ConnectorConfig,
             _token: &OAuth2Token,
             callback_url: &str,
         ) -> Result<WebhookSubscription> {
-            Ok(WebhookSubscription::new(
-                self.instance,
+            Ok(WebhookSubscription::new(self.instance,
                 callback_url,
                 WebhookSecret::new("fake-secret"),
                 WebhookEventTypes::all(),

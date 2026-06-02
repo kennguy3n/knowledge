@@ -187,8 +187,7 @@ mod tests {
     #[test]
     fn synthesis_output_always_carries_a_strip() {
         let s = SynthesisOutput::new("a summary".to_string(), build_strip());
-        assert_eq!(
-            s.privacy_strip().compute_location(),
+        assert_eq!(s.privacy_strip().compute_location(),
             ComputeLocation::OnDevice
         );
         assert_eq!(s.privacy_strip().model_name(), "bonsai-1.7b");

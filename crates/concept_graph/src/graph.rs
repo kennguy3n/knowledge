@@ -220,8 +220,7 @@ impl ConceptGraph {
             pred.mark_superseded_by(successor);
             pred.scope_id
         };
-        let edge = ConceptEdge::new(
-            predecessor,
+        let edge = ConceptEdge::new(predecessor,
             successor,
             RelationType::Supersedes,
             predecessor_scope,
@@ -273,8 +272,7 @@ impl ConceptGraph {
     /// the visited node ids in BFS order, **excluding** `start`
     /// itself (matching the convention of "neighbours within `n`
     /// hops").
-    pub fn traverse_typed(
-        &self,
+    pub fn traverse_typed(&self,
         start: NodeId,
         relation: RelationType,
         max_depth: Option<usize>,
@@ -351,8 +349,7 @@ mod tests {
         let (mut g, ids) = graph_with(scope, 3);
         g.add_edge(ConceptEdge::new(ids[0], ids[1], RelationType::IsA, scope))
             .unwrap();
-        g.add_edge(ConceptEdge::new(
-            ids[2],
+        g.add_edge(ConceptEdge::new(ids[2],
             ids[1],
             RelationType::PartOf,
             scope,

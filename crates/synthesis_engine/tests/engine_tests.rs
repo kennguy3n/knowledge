@@ -48,8 +48,7 @@ fn engine_emits_domain_summary_from_channel_outputs() {
     let mut wm = SynthesisWindowManager::new();
     let now = Utc::now();
     let handle = wm
-        .open_tiered_window(
-            dom_scope,
+        .open_tiered_window(dom_scope,
             WindowScopeTier::Domain,
             now - Duration::hours(1),
             now,
@@ -59,12 +58,10 @@ fn engine_emits_domain_summary_from_channel_outputs() {
     let engine = ManagedEndpointSynthesizer::new();
     let result = engine.synthesize_domain(&mut wm, handle, bundle).unwrap();
     assert_eq!(result.object.scope_id, dom_scope);
-    assert_eq!(
-        result.object.object_type,
+    assert_eq!(result.object.object_type,
         SynthesisObjectType::DomainSummary
     );
-    assert_eq!(
-        wm.get(handle.window_id).unwrap().status,
+    assert_eq!(wm.get(handle.window_id).unwrap().status,
         synthesis_pipeline::WindowStatus::Complete
     );
 }
@@ -96,32 +93,28 @@ fn engine_emits_tenant_summary_from_domain_outputs_and_docs() {
 
     let now = Utc::now();
     let h_a = wm
-        .open_tiered_window(
-            dom_a_scope,
+        .open_tiered_window(dom_a_scope,
             WindowScopeTier::Domain,
             now - Duration::hours(1),
             now,
         )
         .unwrap();
     let r_a = engine
-        .synthesize_domain(
-            &mut wm,
+        .synthesize_domain(&mut wm,
             h_a,
             dom_inputs(dom_a_scope, ScopeId::new_v4(), "A"),
         )
         .unwrap();
 
     let h_b = wm
-        .open_tiered_window(
-            dom_b_scope,
+        .open_tiered_window(dom_b_scope,
             WindowScopeTier::Domain,
             now - Duration::hours(1),
             now,
         )
         .unwrap();
     let r_b = engine
-        .synthesize_domain(
-            &mut wm,
+        .synthesize_domain(&mut wm,
             h_b,
             dom_inputs(dom_b_scope, ScopeId::new_v4(), "B"),
         )
@@ -129,8 +122,7 @@ fn engine_emits_tenant_summary_from_domain_outputs_and_docs() {
 
     // Now feed the two domain summaries + the approved doc into a
     // tenant synthesis run.
-    let inputs = TenantSynthesisInput::new(
-        &tenant,
+    let inputs = TenantSynthesisInput::new(&tenant,
         vec![
             DomainOutput::from_domain_object(r_a.object).unwrap(),
             DomainOutput::from_domain_object(r_b.object).unwrap(),
@@ -140,8 +132,7 @@ fn engine_emits_tenant_summary_from_domain_outputs_and_docs() {
     .unwrap();
 
     let h_t = wm
-        .open_tiered_window(
-            tenant_scope,
+        .open_tiered_window(tenant_scope,
             WindowScopeTier::Tenant,
             now - Duration::hours(1),
             now,
@@ -167,8 +158,7 @@ fn engine_rejects_domain_input_for_tenant_window_and_vice_versa() {
     let now = Utc::now();
     // Open a *tenant* window and try to feed a domain input.
     let tenant_handle = wm
-        .open_tiered_window(
-            tenant_scope,
+        .open_tiered_window(tenant_scope,
             WindowScopeTier::Tenant,
             now - Duration::hours(1),
             now,

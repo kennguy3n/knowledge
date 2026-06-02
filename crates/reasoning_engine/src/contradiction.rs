@@ -190,8 +190,7 @@ impl AdjudicationWorkflow {
             return Err(ReasoningError::InvalidAdjudicationTransition);
         }
         let now = Utc::now();
-        self.records.insert(
-            contradiction_id,
+        self.records.insert(contradiction_id,
             AdjudicationRecord {
                 contradiction_id,
                 state: AdjudicationState::Detected,
@@ -219,8 +218,7 @@ impl AdjudicationWorkflow {
 
     /// Resolve the contradiction. Valid from any non-terminal
     /// state; resolving a terminal state errors.
-    pub fn resolve(
-        &mut self,
+    pub fn resolve(&mut self,
         contradiction_id: Uuid,
         outcome: AdjudicationOutcome,
     ) -> Result<&AdjudicationRecord> {
@@ -330,8 +328,7 @@ mod tests {
             .unwrap();
         let rec = wf.get(cid).unwrap();
         assert_eq!(rec.state, AdjudicationState::Resolved);
-        assert!(matches!(
-            rec.outcome,
+        assert!(matches!(rec.outcome,
             Some(AdjudicationOutcome::Winner { .. })
         ));
     }

@@ -58,10 +58,10 @@ use tempfile::TempDir;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::{Dataset, NamedScope, ScopeTier};
-use crate::phases::runtime::RuntimeState;
-use crate::report::{DemoReport, PhaseReport};
+use crate::stages::runtime::RuntimeState;
+use crate::report::{DemoReport, StageReport};
 
-const PHASE: &str = "concept_graph";
+const STAGE: &str = "concept_graph";
 
 /// Canonical concept anchors that this stage seeds into the persistent
 /// graph. Picked so they cover every scope tier and resolve to terms
@@ -128,14 +128,12 @@ fn dataset_scopes(dataset: &Dataset) -> Vec<&NamedScope> {
 /// Insert a small intra-scope canonical cluster (two nodes joined by
 /// an `IsA` edge, all in `scope`) so per-scope `load_scope` rehydration
 /// returns a non-empty, self-consistent subgraph for that scope.
-fn add_scope_local_cluster(
-    g: &mut PersistentConceptGraph,
+fn add_scope_local_cluster(g: &mut PersistentConceptGraph,
     scope: ScopeId,
     label: &str,
     typed_edges: &mut HashMap<RelationType, u64>,
 ) -> (NodeId, NodeId, EdgeId) {
-    let mut parent = ConceptNode::new_candidate(
-        format!("{label}.root"),
+    let mut parent = ConceptNode::new_candidate(format!("{label}.root"),
         format!("scope-local root concept for {label}"),
         scope,
     );
@@ -146,8 +144,7 @@ fn add_scope_local_cluster(
     parent.mark_canonical();
     let parent_id = g.add_node(parent).expect("add scope-local root");
 
-    let mut child = ConceptNode::new_candidate(
-        format!("{label}.topic"),
+    let mut child = ConceptNode::new_candidate(format!("{label}.topic"),
         format!("scope-local topic concept for {label}"),
         scope,
     );
@@ -165,14 +162,13 @@ fn add_scope_local_cluster(
     (parent_id, child_id, edge_id)
 }
 
-pub fn run(
-    dataset: &Dataset,
+pub fn run(dataset: &Dataset,
     state: &mut RuntimeState,
     report: &mut DemoReport,
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Stage 4: Concept Graph");
+    let mut stage = StageReport::new("Stage 4: Concept Graph");
 
     // -- Open an encrypted, persistent concept graph in a fresh temp dir.
     let temp = TempDir::new().expect("tempdir for concept graph");
@@ -223,8 +219,7 @@ pub fn run(
         .copied();
 
     if let (Some(tenant), Some(domain)) = (tenant_root, domain_root) {
-        add_typed(
-            &mut pgraph,
+        add_typed(&mut pgraph,
             domain,
             tenant,
             RelationType::PartOf,
@@ -238,8 +233,7 @@ pub fn run(
             .into_iter()
             .flatten()
         {
-            add_typed(
-                &mut pgraph,
+            add_typed(&mut pgraph,
                 *ch,
                 domain,
                 RelationType::PartOf,
@@ -254,8 +248,7 @@ pub fn run(
             if id == tenant {
                 continue;
             }
-            add_typed(
-                &mut pgraph,
+            add_typed(&mut pgraph,
                 id,
                 tenant,
                 RelationType::IsA,
@@ -279,8 +272,7 @@ pub fn run(
     canonical_ids.push(assignee_id);
 
     if let Some(tenant) = tenant_root {
-        add_typed(
-            &mut pgraph,
+        add_typed(&mut pgraph,
             tenant,
             decider_id,
             RelationType::DecidedBy,
@@ -289,8 +281,7 @@ pub fn run(
         );
     }
     if let Some(domain) = domain_root {
-        add_typed(
-            &mut pgraph,
+        add_typed(&mut pgraph,
             domain,
             assignee_id,
             RelationType::AssignedTo,
@@ -306,8 +297,7 @@ pub fn run(
     // in metadata for downstream provenance audits.
     let mut evidence_node_ids: Vec<NodeId> = Vec::new();
     for row in &state.ingested_rows {
-        let mut ev_node = ConceptNode::new_candidate(
-            format!("evidence:{}", row.evidence_id.as_uuid()),
+        let mut ev_node = ConceptNode::new_candidate(format!("evidence:{}", row.evidence_id.as_uuid()),
             format!("provenance shim for {}", row.source_ref),
             tenant_scope,
         );
@@ -330,8 +320,7 @@ pub fn run(
             .enumerate()
         {
             let ev = evidence_node_ids[i % evidence_node_ids.len()];
-            add_typed(
-                &mut pgraph,
+            add_typed(&mut pgraph,
                 concept_id,
                 ev,
                 RelationType::DerivedFrom,
@@ -370,15 +359,13 @@ pub fn run(
         ConceptNode::new_candidate("draft-process-v1", "draft process candidate", tenant_scope);
     let candidate_id = pgraph.add_node(candidate).expect("add candidate");
     let promotion = engine
-        .propagate(
-            pgraph.graph_mut(),
+        .propagate(pgraph.graph_mut(),
             ChangeEvent::NodePromoted { node: candidate_id },
         )
         .expect("promote candidate");
     bench_ops += 1;
 
-    let mut successor = ConceptNode::new_candidate(
-        "draft-process-v2",
+    let mut successor = ConceptNode::new_candidate("draft-process-v2",
         "newer process replacing v1",
         tenant_scope,
     );
@@ -430,8 +417,7 @@ pub fn run(
     // the in-memory graph after propagation but is dropped on the
     // rehydration loop, which is exactly the contract we want to
     // demonstrate.
-    let mut engine_pred = ConceptNode::new_candidate(
-        "engine-pred",
+    let mut engine_pred = ConceptNode::new_candidate("engine-pred",
         "in-memory-only predecessor for engine propagation",
         tenant_scope,
     );
@@ -441,8 +427,7 @@ pub fn run(
         .graph_mut()
         .add_node(engine_pred)
         .expect("add engine-pred (in-memory only)");
-    let mut engine_succ = ConceptNode::new_candidate(
-        "engine-succ",
+    let mut engine_succ = ConceptNode::new_candidate("engine-succ",
         "in-memory-only successor for engine propagation",
         tenant_scope,
     );
@@ -453,8 +438,7 @@ pub fn run(
         .add_node(engine_succ)
         .expect("add engine-succ (in-memory only)");
     let supersession = engine
-        .propagate(
-            pgraph.graph_mut(),
+        .propagate(pgraph.graph_mut(),
             ChangeEvent::NodeSuperseded {
                 predecessor: engine_pred_id,
                 successor: engine_succ_id,
@@ -508,8 +492,7 @@ pub fn run(
         .map(|e| e.id)
         .expect("at least one DerivedFrom edge");
     let removal = engine
-        .propagate(
-            pgraph.graph_mut(),
+        .propagate(pgraph.graph_mut(),
             ChangeEvent::EdgeRemoved {
                 edge: stray_edge_id,
             },
@@ -523,8 +506,7 @@ pub fn run(
     // -- Visualization façade.
     let access = AllowAllScopes;
     let tenant_view = if let Some(tenant) = tenant_root {
-        explore_from(
-            pgraph.graph(),
+        explore_from(pgraph.graph(),
             tenant,
             &ViewFilter {
                 max_depth: Some(3),
@@ -534,8 +516,7 @@ pub fn run(
             &access,
         )
     } else {
-        explore_from(
-            pgraph.graph(),
+        explore_from(pgraph.graph(),
             canonical_ids[0],
             &ViewFilter::default(),
             &access,
@@ -551,8 +532,7 @@ pub fn run(
         subgraph_views += 1;
     }
 
-    let neighborhood_view = neighborhood(
-        pgraph.graph(),
+    let neighborhood_view = neighborhood(pgraph.graph(),
         canonical_ids[0],
         1,
         &ViewFilter::default(),
@@ -609,8 +589,7 @@ pub fn run(
         .filter(|n| n.state == NodeState::Superseded)
         .count() as u64;
 
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "concept graph carries seven typed relation tags",
         typed_edge_count
             .keys()
@@ -619,92 +598,78 @@ pub fn run(
             .len()
             == 7,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "supersession recorded the predecessor as Superseded",
         total_superseded >= 1
             && supersession.state_transitions.get(&engine_pred_id).copied()
                 == Some(NodeState::Superseded),
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "promotion flipped Candidate -> Canonical (no-op safe)",
         promotion.affected.contains_node(candidate_id),
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "contradiction marked at least two nodes",
         contradiction_propagated && total_contradicted >= 2,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "edge removal recorded a removed_edges entry",
         edge_removed_observed,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "explore_from produced a non-empty view from the tenant root",
         !tenant_view.nodes.is_empty(),
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "subgraph_for_scope returned per-scope nodes for every scope",
         subgraph_total_nodes > 0 && subgraph_views == scopes.len() as u64,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "every dataset scope rehydrated at least one node",
         rehydrated_per_scope.iter().all(|(_, n, _)| *n > 0),
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "neighborhood walk surfaced at least one neighbour",
         neighborhood_view.nodes.len() >= 2,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "search_nodes located the seeded 'atlas' concept",
         !search_results.is_empty(),
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "PersistentConceptGraph rehydration matches persisted counts",
         rehydrated_total_nodes as u64 == persisted_node_count
             && rehydrated_total_edges as u64 == persisted_edge_count,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "removed_edges from EdgeRemoved propagation == 1",
         removal.removed_edges.len() == 1,
     );
 
-    phase.timing = started.elapsed();
-    phase.stat("canonical_seeds", canonical_seed_count.to_string());
-    phase.stat("scope_local_clusters", scope_local_clusters.to_string());
-    phase.stat(
-        "scope_local_extra_nodes",
+    stage.timing = started.elapsed();
+    stage.stat("canonical_seeds", canonical_seed_count.to_string());
+    stage.stat("scope_local_clusters", scope_local_clusters.to_string());
+    stage.stat("scope_local_extra_nodes",
         scope_local_node_count.to_string(),
     );
-    phase.stat(
-        "scope_local_extra_edges",
+    stage.stat("scope_local_extra_edges",
         scope_local_edge_count.to_string(),
     );
-    phase.stat("persisted_nodes_baseline", persisted_node_count.to_string());
-    phase.stat("persisted_edges_baseline", persisted_edge_count.to_string());
-    phase.stat("total_nodes_in_memory", in_memory_node_count.to_string());
-    phase.stat("total_edges_in_memory", in_memory_edge_count.to_string());
-    phase.stat("rehydrated_node_total", rehydrated_total_nodes.to_string());
-    phase.stat("rehydrated_edge_total", rehydrated_total_edges.to_string());
+    stage.stat("persisted_nodes_baseline", persisted_node_count.to_string());
+    stage.stat("persisted_edges_baseline", persisted_edge_count.to_string());
+    stage.stat("total_nodes_in_memory", in_memory_node_count.to_string());
+    stage.stat("total_edges_in_memory", in_memory_edge_count.to_string());
+    stage.stat("rehydrated_node_total", rehydrated_total_nodes.to_string());
+    stage.stat("rehydrated_edge_total", rehydrated_total_edges.to_string());
     for (label, n, e) in &rehydrated_per_scope {
-        phase.stat(format!("rehydrated:{label}:nodes"), n.to_string());
-        phase.stat(format!("rehydrated:{label}:edges"), e.to_string());
+        stage.stat(format!("rehydrated:{label}:nodes"), n.to_string());
+        stage.stat(format!("rehydrated:{label}:edges"), e.to_string());
     }
-    phase.stat(
-        "canonical_after_supersede",
+    stage.stat("canonical_after_supersede",
         total_canonical_after_supersede.to_string(),
     );
-    phase.stat("superseded_total", total_superseded.to_string());
-    phase.stat("contradicted_total", total_contradicted.to_string());
+    stage.stat("superseded_total", total_superseded.to_string());
+    stage.stat("contradicted_total", total_contradicted.to_string());
     for rel in [
         RelationType::IsA,
         RelationType::PartOf,
@@ -714,24 +679,20 @@ pub fn run(
         RelationType::DerivedFrom,
         RelationType::AssignedTo,
     ] {
-        phase.stat(
-            format!("edges:{}", rel.as_str()),
+        stage.stat(format!("edges:{}", rel.as_str()),
             typed_edge_count.get(&rel).copied().unwrap_or(0).to_string(),
         );
     }
-    phase.stat("subgraph_views", subgraph_views.to_string());
-    phase.stat("subgraph_total_nodes", subgraph_total_nodes.to_string());
-    phase.stat(
-        "neighborhood_node_count",
+    stage.stat("subgraph_views", subgraph_views.to_string());
+    stage.stat("subgraph_total_nodes", subgraph_total_nodes.to_string());
+    stage.stat("neighborhood_node_count",
         neighborhood_view.nodes.len().to_string(),
     );
-    phase.stat("search_results", search_results.len().to_string());
-    phase.note(
-        "PersistentConceptGraph (SQLCipher) + IncrementalUpdateEngine + \
+    stage.stat("search_results", search_results.len().to_string());
+    stage.note("PersistentConceptGraph (SQLCipher) + IncrementalUpdateEngine + \
          all 7 RelationTypes + visualization façade.",
     );
-    phase.note(
-        "Substrate-level canonical concepts persisted in tenant scope; \
+    stage.note("Substrate-level canonical concepts persisted in tenant scope; \
          per-scope intra-scope IsA clusters added so every dataset \
          scope's load_scope round-trip is non-empty and \
          scope-cohesive.",
@@ -742,7 +703,7 @@ pub fn run(
     report.count("concept_edges_total", in_memory_edge_count);
     report.count("concept_superseded_total", total_superseded);
     report.count("concept_contradicted_total", total_contradicted);
-    report.add_phase(phase);
+    report.add_stage(stage);
     report.add_benchmark("concept_graph_propagations", bench_ops, bench_total);
 
     state.graph_temp = Some(temp);

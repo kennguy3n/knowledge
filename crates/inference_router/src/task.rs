@@ -73,8 +73,7 @@ impl InferenceTask {
     /// Classification tasks can be served by encoder-only fallbacks;
     /// synthesis tasks cannot.
     pub const fn is_classification(self) -> bool {
-        matches!(
-            self,
+        matches!(self,
             Self::TagImportance | Self::ExtractEntities | Self::PromoteObservation
         )
     }
@@ -83,8 +82,7 @@ impl InferenceTask {
     /// summaries, free-form concept text). Cannot be served by the
     /// encoder-only fallback adapter.
     pub const fn is_synthesis(self) -> bool {
-        matches!(
-            self,
+        matches!(self,
             Self::SynthSummary | Self::SynthConcept | Self::AdjudicateContradiction
         )
     }
@@ -286,8 +284,7 @@ mod tests {
         let g = InferenceTask::SynthSummary.grammar();
         assert!(!g.is_empty(), "synth_summary must constrain output");
         for field in ["recap", "decisions", "open_questions", "active_tasks"] {
-            assert!(
-                g.contains(field),
+            assert!(g.contains(field),
                 "GBNF must mention `{field}` so the SLM emits SummaryBundle JSON"
             );
         }
@@ -320,12 +317,10 @@ mod tests {
         let decisions_idx = json.find("\"decisions\"").unwrap();
         let questions_idx = json.find("\"open_questions\"").unwrap();
         let tasks_idx = json.find("\"active_tasks\"").unwrap();
-        assert!(
-            recap_idx < decisions_idx && decisions_idx < questions_idx && questions_idx < tasks_idx,
+        assert!(recap_idx < decisions_idx && decisions_idx < questions_idx && questions_idx < tasks_idx,
             "SummaryBundle serialisation drifted from GBNF field order; got: {json}"
         );
-        assert!(
-            json.starts_with("{\"recap\":"),
+        assert!(json.starts_with("{\"recap\":"),
             "GBNF root expects `{{\"recap\":` prefix, got: {json}"
         );
         // Round-trip the JSON back through the type so we know
@@ -371,8 +366,7 @@ mod tests {
         }
         assert_eq!(count, 6, "InferenceTask::ALL drifted from enum cardinality");
         // Order is part of the public contract — pin it explicitly.
-        assert_eq!(
-            InferenceTask::ALL
+        assert_eq!(InferenceTask::ALL
                 .iter()
                 .map(|t| t.tag())
                 .collect::<Vec<_>>(),

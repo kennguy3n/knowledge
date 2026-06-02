@@ -1,6 +1,6 @@
 //! Script-detection helpers used by the FTS5 write / read routing
-//! introduced in schema v14 (Phase 1.2 — CJK-aware FTS5 tokeniser)
-//! and extended in Phase 1.5 to cover the remaining Brahmic-family
+//! introduced in schema v14 (CJK-aware FTS5 tokeniser)
+//! and extended in  to cover the remaining Brahmic-family
 //! scripts that lack inter-word whitespace (Tibetan, Khmer, Myanmar,
 //! Lao).
 //!
@@ -8,9 +8,9 @@
 //! Katakana, Thai, **Tibetan, Khmer, Myanmar, and Lao** codepoints
 //! as non-letter *separators*, so a document composed entirely of
 //! those scripts produces zero tokens and is invisible to lexical
-//! search. Phase 1.2 added a parallel `evidence_fts_cjk` virtual
+//! search. added a parallel `evidence_fts_cjk` virtual
 //! table tokenised with `trigram` and an `evidence_fts_bigram`
-//! companion (Phase 1.2.1), and routes each ingest into both lanes
+//! companion, and routes each ingest into both lanes
 //! *additionally* iff the body contains any codepoint from one of
 //! the affected scripts.
 //!
@@ -18,13 +18,13 @@
 //! `contains_cjk_or_thai` are retained for stability — the predicate
 //! itself answers "is this codepoint one of the scripts that the
 //! `unicode61` tokeniser cannot segment and therefore needs the
-//! parallel CJK lane?". Phase 1.5 extends that scope to the four
+//! parallel CJK lane?".  extends that scope to the four
 //! Indic / Southeast-Asian scripts the substrate's connector
 //! pipelines now surface; the function name is the contract for the
 //! routing site, not a taxonomy claim about the codepoints.
 //!
 //! The routing decision is deliberately based on the **body** rather
-//! than on the row's stored `language_tag` (Phase 1.3): the language
+//! than on the row's stored `language_tag`: the language
 //! tag can be `NULL` (detection refused, e.g. whatlang 0.18 does not
 //! ship classifiers for Tibetan or Lao) or wrong (mixed-language
 //! body whose dominant language is Latin), and in both cases the
@@ -32,7 +32,7 @@
 //! membership check is robust to those misses and adds only a single
 //! linear pass over the bytes — much cheaper than re-running language
 //! detection at the storage layer. This property is what makes
-//! Phase 1.5's Tibetan/Lao coverage work despite the language
+//! 's Tibetan/Lao coverage work despite the language
 //! detector being unable to tag those scripts.
 //!
 //! Korean (Hangul, `U+AC00..U+D7AF`), Vietnamese (Latin with
@@ -117,7 +117,7 @@ pub fn contains_cjk_or_thai(text: &str) -> bool {
 /// * Thai (`U+0E00..=U+0E7F`) — Thai also lacks whitespace word
 ///   boundaries; `unicode61` produces zero tokens for it
 ///
-/// **Indic / Southeast-Asian (Phase 1.5)**
+/// **Indic / Southeast-Asian**
 /// * Lao (`U+0E80..=U+0EFF`) — Lao script lacks inter-word
 ///   whitespace and uses combining vowel signs / tone marks that
 ///   `unicode61` treats as separators; whole documents reduce to
@@ -176,8 +176,7 @@ pub fn contains_cjk_or_thai(text: &str) -> bool {
 /// routing design.
 #[inline]
 pub fn is_cjk_or_thai_codepoint(c: char) -> bool {
-    matches!(
-        c,
+    matches!(c,
         '\u{3040}'..='\u{309F}'      // Hiragana
         | '\u{30A0}'..='\u{30FF}'    // Katakana
         | '\u{31F0}'..='\u{31FF}'    // Katakana Phonetic Extensions
@@ -189,12 +188,12 @@ pub fn is_cjk_or_thai_codepoint(c: char) -> bool {
         | '\u{20000}'..='\u{2A6DF}'  // CJK Unified Ideographs Extension B
         | '\u{2A700}'..='\u{2EE5F}'  // CJK Unified Ideographs Extensions C..F + I
         | '\u{30000}'..='\u{33479}'  // CJK Unified Ideographs Extensions G..H + J
-        | '\u{0E00}'..='\u{0FFF}'    // Thai + Lao + Tibetan (contiguous; Phase 1.5)
-        | '\u{1000}'..='\u{109F}'    // Myanmar (Phase 1.5)
-        | '\u{1780}'..='\u{17FF}'    // Khmer (Phase 1.5)
-        | '\u{19E0}'..='\u{19FF}'    // Khmer Symbols (Phase 1.5)
-        | '\u{A9E0}'..='\u{A9FF}'    // Myanmar Extended-B / Shan (Phase 1.5)
-        | '\u{AA60}'..='\u{AA7F}'    // Myanmar Extended-A / Pao + Pwo Karen (Phase 1.5)
+        | '\u{0E00}'..='\u{0FFF}'    // Thai + Lao + Tibetan (contiguous; )
+        | '\u{1000}'..='\u{109F}'    // Myanmar
+        | '\u{1780}'..='\u{17FF}'    // Khmer
+        | '\u{19E0}'..='\u{19FF}'    // Khmer Symbols
+        | '\u{A9E0}'..='\u{A9FF}'    // Myanmar Extended-B / Shan
+        | '\u{AA60}'..='\u{AA7F}'    // Myanmar Extended-A / Pao + Pwo Karen
     )
 }
 
@@ -221,8 +220,7 @@ mod tests {
             "안녕하세요",       // Korean Hangul — uses whitespace word boundaries
             "Triển khai dự án", // Vietnamese Latin
         ] {
-            assert!(
-                !contains_cjk_or_thai(s),
+            assert!(!contains_cjk_or_thai(s),
                 "{s:?} unexpectedly classified as CJK/Thai"
             );
         }
@@ -393,7 +391,7 @@ mod tests {
     }
 
     // --------------------------------------------------------------
-    // Phase 1.5 — Tibetan / Khmer / Myanmar / Lao routing
+    //  — Tibetan / Khmer / Myanmar / Lao routing
     // --------------------------------------------------------------
 
     #[test]
@@ -444,7 +442,7 @@ mod tests {
         assert!(contains_cjk_or_thai("\u{19FF}"));
         // Just-outside boundaries on the Khmer Symbols block.
         // U+19DF is the last codepoint of New Tai Lue (a script
-        // we deliberately do not route in Phase 1.5).
+        // we deliberately do not route in ).
         assert!(!contains_cjk_or_thai("\u{19DF}"));
         // U+1A00 is Buginese — not routed.
         assert!(!contains_cjk_or_thai("\u{1A00}"));
@@ -483,7 +481,7 @@ mod tests {
 
     #[test]
     fn brahmic_scripts_we_deliberately_do_not_route_stay_out() {
-        // Phase 1.5's standing policy says "the next contributor
+        // 's standing policy says "the next contributor
         // adding a new non-whitespace-segmented script just adds
         // an arm here". Pin the current state so a future
         // contributor who adds e.g. Tai Tham must explicitly
@@ -491,7 +489,7 @@ mod tests {
         // side-effect of an unrelated change).
         //
         // Tai Tham (U+1A20..=U+1AAF) — Northern Thai / Lanna,
-        // Khün, Lue. Lacks word boundaries but Phase 1.5 does
+        // Khün, Lue. Lacks word boundaries but  does
         // not yet ship a lexicon for it, so we keep it out of
         // the routing predicate to preserve the
         // routing-aligns-with-lexicon-coverage invariant.
@@ -520,7 +518,7 @@ mod tests {
 
     #[test]
     fn mixed_latin_with_one_indic_codepoint_routes_to_cjk() {
-        // Phase 1.5 — same mixed-script behaviour as Phase 1.2's
+        //  — same mixed-script behaviour as 's
         // "Project 計画 review" test: a single codepoint from any
         // of the four newly-routed scripts is enough to route
         // the body.

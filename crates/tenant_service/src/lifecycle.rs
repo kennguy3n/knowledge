@@ -48,13 +48,10 @@ impl TenantStatus {
     /// [`TenantError::InvalidLifecycleTransition`] if the transition
     /// is not allowed.
     pub fn validate_transition(self, to: TenantStatus) -> Result<()> {
-        let allowed = matches!(
-            (self, to),
-            (
-                TenantStatus::Active,
+        let allowed = matches!((self, to),
+            (TenantStatus::Active,
                 TenantStatus::Suspended | TenantStatus::Deleted
-            ) | (
-                TenantStatus::Suspended,
+            ) | (TenantStatus::Suspended,
                 TenantStatus::Active | TenantStatus::Deleted
             )
         );

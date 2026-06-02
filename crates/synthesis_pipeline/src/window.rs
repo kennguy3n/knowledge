@@ -116,8 +116,8 @@ pub struct SynthesisWindow {
     /// the FFI `open_store` recovery sweep that wraps it) to detect
     /// `Pending` windows that have outlived the host's expected
     /// dispatch latency — typically because the host crashed mid-
-    /// dispatch between the Phase-1 `flush_synthesis_windows` and
-    /// the Phase-3 `apply_dispatch_outcome` commit, leaving the
+    /// dispatch between the earlier `flush_synthesis_windows` and
+    /// the earlier `apply_dispatch_outcome` commit, leaving the
     /// window stranded in `Pending` on disk with no in-flight
     /// worker. Distinct from [`window_start`] / [`window_end`],
     /// which describe the synthesis *interval* (often backfilled
@@ -138,8 +138,7 @@ impl SynthesisWindow {
     ///
     /// [`PipelineError::InvalidWindow`] if `window_end` is not strictly
     /// after `window_start`.
-    pub fn new(
-        scope_id: ScopeId,
+    pub fn new(scope_id: ScopeId,
         window_start: DateTime<Utc>,
         window_end: DateTime<Utc>,
     ) -> Result<Self> {
@@ -219,8 +218,7 @@ impl SynthesisWindowManager {
     }
 
     /// Open a fresh `Pending` window in `scope_id`.
-    pub fn open_window(
-        &mut self,
+    pub fn open_window(&mut self,
         scope_id: ScopeId,
         window_start: DateTime<Utc>,
         window_end: DateTime<Utc>,
@@ -377,8 +375,8 @@ impl SynthesisWindowManager {
     ///
     /// Used by the FFI `open_store` recovery sweep to clean up the
     /// state described in the docstring on [`SynthesisWindow::created_at`]:
-    /// `Pending` windows whose Phase-1 flush landed but whose
-    /// Phase-3 commit never did, either because the host crashed
+    /// `Pending` windows whose earlier flush landed but whose
+    /// earlier commit never did, either because the host crashed
     /// mid-dispatch or because the synthesis-apply transaction
     /// failed and the in-process recovery (`apply_dispatch_outcome`'s
     /// `fail_window_on_live_manager` on commit failure) also failed
@@ -388,8 +386,7 @@ impl SynthesisWindowManager {
     /// `fail_window_on_live_manager` (which keeps the
     /// `Pending → InProgress → Failed` chain so a live operator can
     /// correlate refusals in the warn log).
-    pub fn sweep_stuck_pending(
-        &mut self,
+    pub fn sweep_stuck_pending(&mut self,
         now: DateTime<Utc>,
         threshold: Duration,
     ) -> Vec<WindowId> {
@@ -629,12 +626,10 @@ mod tests {
         // `serde_json` fell back to the array-of-pairs encoding
         // and the manager is no longer rehydratable).
         let text = std::str::from_utf8(&bytes).expect("utf8");
-        assert!(
-            text.contains(&format!("\"{}\"", a1.as_uuid())),
+        assert!(text.contains(&format!("\"{}\"", a1.as_uuid())),
             "WindowId key must serialise as a hyphenated-UUID string",
         );
-        assert!(
-            text.contains(&format!("\"{}\"", scope_a.as_uuid())),
+        assert!(text.contains(&format!("\"{}\"", scope_a.as_uuid())),
             "ScopeId key must serialise as a hyphenated-UUID string",
         );
 
@@ -661,16 +656,14 @@ mod tests {
         let now = Utc::now();
 
         let dom_handle = mgr
-            .open_tiered_window(
-                scope_domain,
+            .open_tiered_window(scope_domain,
                 WindowScopeTier::Domain,
                 now - Duration::hours(1),
                 now,
             )
             .unwrap();
         let ten_handle = mgr
-            .open_tiered_window(
-                scope_tenant,
+            .open_tiered_window(scope_tenant,
                 WindowScopeTier::Tenant,
                 now - Duration::hours(1),
                 now,
@@ -683,16 +676,13 @@ mod tests {
 
         let bytes = serde_json::to_vec(&mgr).expect("serialise");
         let restored: SynthesisWindowManager = serde_json::from_slice(&bytes).expect("deserialise");
-        assert_eq!(
-            restored.get(dom_handle.window_id).unwrap().tier,
+        assert_eq!(restored.get(dom_handle.window_id).unwrap().tier,
             Some(WindowScopeTier::Domain),
         );
-        assert_eq!(
-            restored.get(ten_handle.window_id).unwrap().tier,
+        assert_eq!(restored.get(ten_handle.window_id).unwrap().tier,
             Some(WindowScopeTier::Tenant),
         );
-        assert_eq!(
-            restored.get(ten_handle.window_id).unwrap().status,
+        assert_eq!(restored.get(ten_handle.window_id).unwrap().status,
             WindowStatus::InProgress,
         );
     }

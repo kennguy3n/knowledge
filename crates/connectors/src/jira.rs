@@ -171,8 +171,7 @@ impl JiraConnector {
     /// `https://auth.atlassian.com/oauth/token`. The production
     /// substrate wires these to `BlockingHttpTransport` +
     /// `OAuth2Client`; tests use `MockHttpTransport`.
-    pub fn new(
-        instance: ConnectorInstanceId,
+    pub fn new(instance: ConnectorInstanceId,
         transport: Arc<dyn HttpTransport>,
         oauth: Arc<dyn OAuth2CodeExchange>,
     ) -> Self {
@@ -205,8 +204,7 @@ impl JiraConnector {
             .auth_config_json
             .get("api_base_url")
             .and_then(serde_json::Value::as_str)
-            .map_or_else(
-                || self.api_base_url.clone(),
+            .map_or_else(|| self.api_base_url.clone(),
                 std::string::ToString::to_string,
             )
     }
@@ -214,8 +212,7 @@ impl JiraConnector {
     /// Walk every JQL `/search` page until either `total` is
     /// satisfied, the server returns an empty page, or [`MAX_SEARCH_PAGES`]
     /// is hit.
-    fn paginate_search(
-        &self,
+    fn paginate_search(&self,
         base_url: &str,
         token: &OAuth2Token,
         jql: &str,
@@ -223,14 +220,12 @@ impl JiraConnector {
         let mut issues = Vec::<JiraIssue>::new();
         let mut start_at: u32 = 0;
         for _ in 0..MAX_SEARCH_PAGES {
-            let url = format!(
-                "{base_url}/rest/api/3/search?jql={}&startAt={start_at}&maxResults={}\
+            let url = format!("{base_url}/rest/api/3/search?jql={}&startAt={start_at}&maxResults={}\
                  &fields=summary,created,updated,status",
                 percent_encode_path_component(jql),
                 self.page_size,
             );
-            let resp: JiraSearchResponse = bearer_get_json(
-                &self.transport,
+            let resp: JiraSearchResponse = bearer_get_json(&self.transport,
                 "jira",
                 "/rest/api/3/search",
                 &url,
@@ -253,8 +248,7 @@ impl JiraConnector {
                 return Ok(issues);
             }
         }
-        Err(ConnectorError::Sync(format!(
-            "jira /rest/api/3/search exceeded {MAX_SEARCH_PAGES} pages without exhausting total"
+        Err(ConnectorError::Sync(format!("jira /rest/api/3/search exceeded {MAX_SEARCH_PAGES} pages without exhausting total"
         )))
     }
 }
@@ -307,8 +301,7 @@ impl Connector for JiraConnector {
             .get("authorization_code")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Auth(
-                    "jira authenticate: auth_config_json.authorization_code is required".into(),
+                ConnectorError::Auth("jira authenticate: auth_config_json.authorization_code is required".into(),
                 )
             })?;
         self.oauth.exchange_code(config, auth_code)
@@ -331,8 +324,7 @@ impl Connector for JiraConnector {
         })
     }
 
-    fn incremental_sync(
-        &self,
+    fn incremental_sync(&self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         state: &SyncState,
@@ -383,8 +375,7 @@ impl Connector for JiraConnector {
         })
     }
 
-    fn subscribe_webhook(
-        &self,
+    fn subscribe_webhook(&self,
         config: &ConnectorConfig,
         token: &OAuth2Token,
         callback_url: &str,
@@ -404,8 +395,7 @@ impl Connector for JiraConnector {
                 "jqlFilter": ""
             }],
         });
-        let resp: JiraWebhookCreateResponse = bearer_post_json(
-            &self.transport,
+        let resp: JiraWebhookCreateResponse = bearer_post_json(&self.transport,
             "jira",
             "/rest/api/3/webhook",
             &url,
@@ -421,29 +411,25 @@ impl Connector for JiraConnector {
             .into_iter()
             .next()
             .ok_or_else(|| {
-                ConnectorError::Webhook(
-                    "jira /rest/api/3/webhook returned empty registration result".into(),
+                ConnectorError::Webhook("jira /rest/api/3/webhook returned empty registration result".into(),
                 )
             })?;
         if !entry.errors.is_empty() {
-            return Err(ConnectorError::Webhook(format!(
-                "jira webhook registration failed: {}",
+            return Err(ConnectorError::Webhook(format!("jira webhook registration failed: {}",
                 entry.errors.join(", ")
             )));
         }
         let webhook_id = entry.created_webhook_id.ok_or_else(|| {
             ConnectorError::Webhook("jira /rest/api/3/webhook returned no createdWebhookId".into())
         })?;
-        let mut subscription = WebhookSubscription::new(
-            self.instance,
+        let mut subscription = WebhookSubscription::new(self.instance,
             callback_url,
             // Jira generates its own webhook secret out-of-band (set in
             // the developer console); we surface the configured secret
             // from `auth_config_json.webhook_secret` if present, else
             // we record a placeholder so the substrate can sign incoming
             // requests once the operator fills it in.
-            WebhookSecret::new(
-                config
+            WebhookSecret::new(config
                     .auth_config_json
                     .get("webhook_secret")
                     .and_then(serde_json::Value::as_str)
@@ -488,8 +474,7 @@ impl Connector for JiraConnector {
                     .issue_key
                     .or_else(|| p.issue.as_ref().map(|i| i.key.clone()))
                     .ok_or_else(|| {
-                        ConnectorError::Webhook(
-                            "permissionscheme_updated payload missing issueKey".into(),
+                        ConnectorError::Webhook("permissionscheme_updated payload missing issueKey".into(),
                         )
                     })?;
                 let occurred_at = p
@@ -504,8 +489,7 @@ impl Connector for JiraConnector {
                 }
             }
             other => {
-                return Err(ConnectorError::Webhook(format!(
-                    "unknown Jira webhookEvent: {other}"
+                return Err(ConnectorError::Webhook(format!("unknown Jira webhookEvent: {other}"
                 )))
             }
         };
@@ -525,8 +509,7 @@ mod tests {
     struct FixedOAuth;
     impl OAuth2CodeExchange for FixedOAuth {
         fn exchange_code(&self, _config: &ConnectorConfig, _code: &str) -> Result<OAuth2Token> {
-            Ok(OAuth2Token::new(
-                "jira-access",
+            Ok(OAuth2Token::new("jira-access",
                 "jira-refresh",
                 Utc::now() + Duration::hours(1),
                 "read:jira-work read:jira-user manage:jira-webhook",
@@ -585,8 +568,7 @@ mod tests {
     fn initial_sync_emits_created_events_and_watermark_cursor() {
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
             ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-1", now, now)],
@@ -597,8 +579,7 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert!(matches!(
-            res.events[0],
+        assert!(matches!(res.events[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
         assert!(res.next_cursor.is_some());
@@ -609,16 +590,14 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
         // First page: 2 issues, total=3 — must request page 2.
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
             ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-1", now, now), issue("PROJ-2", now, now)],
                 "startAt": 0, "maxResults": 50, "total": 3,
             })),
         );
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=2&maxResults=50&fields=summary,created,updated,status",
             ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-3", now, now)],
@@ -636,8 +615,7 @@ mod tests {
     fn initial_sync_stops_when_total_is_satisfied_without_extra_round_trip() {
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
             ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-1", now, now)],
@@ -657,10 +635,8 @@ mod tests {
         let now = Utc::now();
         let cursor = (now - Duration::hours(1)).to_rfc3339();
         let expected_jql = format!("updated >= '{cursor}' ORDER BY updated ASC");
-        transport.expect(
-            HttpMethod::Get,
-            format!(
-                "https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
+        transport.expect(HttpMethod::Get,
+            format!("https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
                 percent_encode_path_component(&expected_jql)
             ),
             ok_json(&serde_json::json!({
@@ -674,8 +650,7 @@ mod tests {
         state.cursor = Some(cursor);
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert_eq!(res.events.len(), 1);
-        assert!(matches!(
-            res.events[0],
+        assert!(matches!(res.events[0],
             ConnectorEvent::DocumentUpdated { .. }
         ));
     }
@@ -697,10 +672,8 @@ mod tests {
         // as cursor) and one strictly newer. Only the newer must
         // be emitted, and the watermark must advance to it.
         let newer = now;
-        transport.expect(
-            HttpMethod::Get,
-            format!(
-                "https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
+        transport.expect(HttpMethod::Get,
+            format!("https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
                 percent_encode_path_component(&expected_jql)
             ),
             ok_json(&serde_json::json!({
@@ -716,13 +689,11 @@ mod tests {
         let mut state = SyncState::new(c.instance);
         state.cursor = Some(cursor);
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
-        assert_eq!(
-            res.events.len(),
+        assert_eq!(res.events.len(),
             1,
             "boundary issue must be skipped; only strictly-newer remains"
         );
-        assert_eq!(
-            res.events[0].document_id().as_str(),
+        assert_eq!(res.events[0].document_id().as_str(),
             "PROJ-2",
             "the strictly-newer issue must be the one emitted"
         );
@@ -730,8 +701,7 @@ mod tests {
         let next_t = DateTime::parse_from_rfc3339(&next)
             .unwrap()
             .with_timezone(&Utc);
-        assert!(
-            next_t > cursor_t,
+        assert!(next_t > cursor_t,
             "watermark must advance past the boundary"
         );
     }
@@ -739,8 +709,7 @@ mod tests {
     #[test]
     fn initial_sync_maps_401_to_auth_error() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
             MockResponse::status(401, b"unauthorized".to_vec()),
         );
@@ -753,8 +722,7 @@ mod tests {
     #[test]
     fn subscribe_webhook_registers_and_captures_id() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.test/jira/rest/api/3/webhook",
             ok_json(&serde_json::json!({
                 "webhookRegistrationResult": [
@@ -774,8 +742,7 @@ mod tests {
     #[test]
     fn subscribe_webhook_propagates_registration_errors() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.test/jira/rest/api/3/webhook",
             ok_json(&serde_json::json!({
                 "webhookRegistrationResult": [

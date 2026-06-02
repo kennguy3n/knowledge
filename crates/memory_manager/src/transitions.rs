@@ -45,8 +45,7 @@ impl MemoryStateMachine {
     /// downstream decay sweep can use it as the "supersession time"
     /// reference point — the Superseded TTL counts forward from
     /// supersession, not from the row's last read.
-    pub fn supersede(
-        &self,
+    pub fn supersede(&self,
         obj: &mut MemoryObject,
         superseded_by: uuid::Uuid,
     ) -> Result<MemoryState> {
@@ -74,8 +73,7 @@ impl MemoryStateMachine {
         Self::expect(obj, &[MemoryState::Archived], MemoryState::Deleted)
     }
 
-    fn expect(
-        obj: &mut MemoryObject,
+    fn expect(obj: &mut MemoryObject,
         allowed_from: &[MemoryState],
         to: MemoryState,
     ) -> Result<MemoryState> {
@@ -127,8 +125,7 @@ mod tests {
         // Candidate -> Consolidated is invalid (must go through
         // Reinforced).
         let err = sm.consolidate(&mut obj).unwrap_err();
-        assert_eq!(
-            err,
+        assert_eq!(err,
             MemoryError::InvalidTransition {
                 from: MemoryState::Candidate,
                 to: MemoryState::Consolidated

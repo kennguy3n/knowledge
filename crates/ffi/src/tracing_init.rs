@@ -1,4 +1,4 @@
-//! Opt-in tracing subscriber initialisation for platform hosts (Phase 6).
+//! Opt-in tracing subscriber initialisation for platform hosts.
 //!
 //! The substrate emits `tracing::{warn, debug, info}!` calls from
 //! ~7 crates (`evidence_store`, `connector_framework`, `ffi`,

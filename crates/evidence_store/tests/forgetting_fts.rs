@@ -54,8 +54,7 @@ fn fts_index_is_purged_after_purge_fts_for_scope() {
     let path = dir.path().join("evidence.db");
 
     let scope = ScopeId::new_v4();
-    let body = format!(
-        "Reminder: the {FORGETTING_PHRASE} must be redacted before any \
+    let body = format!("Reminder: the {FORGETTING_PHRASE} must be redacted before any \
          end-of-quarter audit ships."
     );
     assert!(body.len() <= DEFAULT_INLINE_THRESHOLD_BYTES);
@@ -66,8 +65,7 @@ fn fts_index_is_purged_after_purge_fts_for_scope() {
             .expect("open store");
 
         let res = store
-            .ingest(
-                scope,
+            .ingest(scope,
                 body.as_bytes(),
                 Some("source:forgetting-test"),
                 ImportanceClass::Important,
@@ -79,8 +77,7 @@ fn fts_index_is_purged_after_purge_fts_for_scope() {
         let hits = store
             .search_fts(scope, FORGETTING_PHRASE, 10)
             .expect("search_fts pre-purge");
-        assert_eq!(
-            hits,
+        assert_eq!(hits,
             vec![evidence_id],
             "FTS5 must surface the phrase before purge_fts_for_scope runs"
         );
@@ -104,14 +101,12 @@ fn fts_index_is_purged_after_purge_fts_for_scope() {
 
     let raw_term_count: i64 = store
         .raw_conn()
-        .query_row(
-            "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1 AND scope_id = ?2",
+        .query_row("SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1 AND scope_id = ?2",
             rusqlite::params![FORGETTING_PHRASE, scope.as_uuid().as_bytes().as_slice()],
             |row| row.get(0),
         )
         .expect("count fts rows");
-    assert_eq!(
-        raw_term_count, 0,
+    assert_eq!(raw_term_count, 0,
         "FTS5 index must not contain any rows for the forgotten scope after purge_fts_for_scope"
     );
 
@@ -119,8 +114,7 @@ fn fts_index_is_purged_after_purge_fts_for_scope() {
     let hits = store
         .search_fts(scope, FORGETTING_PHRASE, 10)
         .expect("search_fts post-purge");
-    assert!(
-        hits.is_empty(),
+    assert!(hits.is_empty(),
         "search_fts must return no rows for a forgotten scope after purge_fts_for_scope: {hits:?}"
     );
 
@@ -130,8 +124,7 @@ fn fts_index_is_purged_after_purge_fts_for_scope() {
     // harmless. We only want to verify that the row was not
     // accidentally deleted along with the FTS rows.
     let row = store.get(evidence_id).expect("get evidence row");
-    assert!(
-        row.is_some(),
+    assert!(row.is_some(),
         "purge_fts_for_scope must not delete from the append-only evidence table"
     );
 }
@@ -154,16 +147,14 @@ fn purge_fts_for_scope_only_purges_target_scope() {
         .expect("open store");
 
     let res_a = store
-        .ingest(
-            scope_a,
+        .ingest(scope_a,
             body_a.as_bytes(),
             Some("a"),
             ImportanceClass::Important,
         )
         .expect("ingest a");
     let res_b = store
-        .ingest(
-            scope_b,
+        .ingest(scope_b,
             body_b.as_bytes(),
             Some("b"),
             ImportanceClass::Important,
@@ -177,16 +168,14 @@ fn purge_fts_for_scope_only_purges_target_scope() {
     let hits_a = store
         .search_fts(scope_a, FORGETTING_PHRASE, 10)
         .expect("search a");
-    assert!(
-        hits_a.is_empty(),
+    assert!(hits_a.is_empty(),
         "purged scope must have no FTS hits: {hits_a:?}"
     );
 
     let hits_b = store
         .search_fts(scope_b, FORGETTING_PHRASE, 10)
         .expect("search b");
-    assert_eq!(
-        hits_b,
+    assert_eq!(hits_b,
         vec![res_b.evidence_id],
         "untouched scope must still be searchable after a sibling scope is purged"
     );
@@ -210,8 +199,7 @@ fn fts5_rebuild_purges_shadow_tables_after_purge() {
     let path = dir.path().join("evidence.db");
 
     let scope = ScopeId::new_v4();
-    let body = format!(
-        "This message contains {FORGETTING_PHRASE} which must be fully \
+    let body = format!("This message contains {FORGETTING_PHRASE} which must be fully \
          purged from shadow tables after purge and REBUILD."
     );
 
@@ -220,8 +208,7 @@ fn fts5_rebuild_purges_shadow_tables_after_purge() {
             .expect("open store");
 
         store
-            .ingest(
-                scope,
+            .ingest(scope,
                 body.as_bytes(),
                 Some("source:rebuild-test"),
                 ImportanceClass::Important,
@@ -251,8 +238,7 @@ fn fts5_rebuild_purges_shadow_tables_after_purge() {
     let hits = store
         .search_fts(scope, FORGETTING_PHRASE, 10)
         .expect("search post-rebuild");
-    assert!(
-        hits.is_empty(),
+    assert!(hits.is_empty(),
         "FTS5 must return no results after purge + REBUILD"
     );
 
@@ -260,14 +246,12 @@ fn fts5_rebuild_purges_shadow_tables_after_purge() {
     // segment B-tree must contain no matching rows for the phrase.
     let raw_count: i64 = store
         .raw_conn()
-        .query_row(
-            "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1",
+        .query_row("SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1",
             rusqlite::params![FORGETTING_PHRASE],
             |row| row.get(0),
         )
         .expect("raw fts count");
-    assert_eq!(
-        raw_count, 0,
+    assert_eq!(raw_count, 0,
         "Raw FTS5 shadow tables must contain zero matching rows after REBUILD"
     );
 }
@@ -295,16 +279,14 @@ fn purge_fts_for_scope_is_idempotent_no_op_after_first_purge() {
 
     // Ingest into both scopes.
     store
-        .ingest(
-            purged_scope,
+        .ingest(purged_scope,
             format!("body with {FORGETTING_PHRASE} for purge").as_bytes(),
             Some("source:idempotent-purge"),
             ImportanceClass::Important,
         )
         .expect("ingest purged scope");
     store
-        .ingest(
-            surviving_scope,
+        .ingest(surviving_scope,
             format!("body with {surviving_phrase} for survival").as_bytes(),
             Some("source:idempotent-purge"),
             ImportanceClass::Important,
@@ -349,8 +331,7 @@ fn purge_fts_for_scope_is_idempotent_no_op_after_first_purge() {
         .collect::<rusqlite::Result<Vec<_>>>()
         .expect("collect segments");
 
-    assert_eq!(
-        segments_after_first_purge, segments_after_second_purge,
+    assert_eq!(segments_after_first_purge, segments_after_second_purge,
         "purge_fts_for_scope must skip REBUILD when zero FTS rows were deleted"
     );
 
@@ -359,8 +340,7 @@ fn purge_fts_for_scope_is_idempotent_no_op_after_first_purge() {
     let surviving_hits = store
         .search_fts(surviving_scope, surviving_phrase, 10)
         .expect("search surviving scope");
-    assert_eq!(
-        surviving_hits.len(),
+    assert_eq!(surviving_hits.len(),
         1,
         "Surviving scope's FTS row must remain after idempotent re-purge"
     );
@@ -397,8 +377,7 @@ fn purge_fts_for_scopes_batch_matches_per_scope_purge() {
         (scope_survivor, phrase_survivor),
     ] {
         store
-            .ingest(
-                scope,
+            .ingest(scope,
                 format!("body containing {phrase} for batch purge test").as_bytes(),
                 Some("source:batch-purge"),
                 ImportanceClass::Important,
@@ -432,8 +411,7 @@ fn purge_fts_for_scopes_batch_matches_per_scope_purge() {
         let hits = store
             .search_fts(scope, phrase, 10)
             .expect("search purged scope post-batch");
-        assert!(
-            hits.is_empty(),
+        assert!(hits.is_empty(),
             "phrase {phrase} must be gone after batch purge"
         );
 
@@ -443,14 +421,12 @@ fn purge_fts_for_scopes_batch_matches_per_scope_purge() {
         // only).
         let raw_count: i64 = store
             .raw_conn()
-            .query_row(
-                "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1",
+            .query_row("SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1",
                 rusqlite::params![phrase],
                 |row| row.get(0),
             )
             .expect("raw fts count");
-        assert_eq!(
-            raw_count, 0,
+        assert_eq!(raw_count, 0,
             "Raw FTS5 must contain zero rows for purged phrase {phrase} after batch purge"
         );
     }
@@ -458,8 +434,7 @@ fn purge_fts_for_scopes_batch_matches_per_scope_purge() {
     let survivor_hits = store
         .search_fts(scope_survivor, phrase_survivor, 10)
         .expect("search surviving scope post-batch");
-    assert_eq!(
-        survivor_hits.len(),
+    assert_eq!(survivor_hits.len(),
         1,
         "Surviving scope's FTS row must remain after batch purge"
     );
@@ -473,8 +448,7 @@ fn purge_fts_for_scopes_batch_matches_per_scope_purge() {
     let survivor_hits = store
         .search_fts(scope_survivor, phrase_survivor, 10)
         .expect("search surviving scope after idempotent batch repurge");
-    assert_eq!(
-        survivor_hits.len(),
+    assert_eq!(survivor_hits.len(),
         1,
         "Surviving scope's FTS row must remain after idempotent batch repurge"
     );
@@ -484,7 +458,7 @@ fn purge_fts_for_scopes_batch_matches_per_scope_purge() {
     store.purge_fts_for_scopes(&[]).expect("empty batch purge");
 }
 
-/// Phase 1.2 / schema v14: the v14 `evidence_fts_cjk` companion
+///  / schema v14: the v14 `evidence_fts_cjk` companion
 /// table (trigram-tokenised) is plaintext-derived in the same way
 /// the v0..v13 `evidence_fts` (unicode61) table is, so the
 /// cryptographic-forgetting contract requires both tables to be
@@ -508,8 +482,7 @@ fn fts_cjk_companion_table_is_purged_alongside_evidence_fts() {
         let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
             .expect("open store");
         let res = store
-            .ingest(
-                scope,
+            .ingest(scope,
                 body.as_bytes(),
                 Some("source:cjk-forgetting-test"),
                 ImportanceClass::Important,
@@ -521,8 +494,7 @@ fn fts_cjk_companion_table_is_purged_alongside_evidence_fts() {
         let hits = store
             .search_fts(scope, query, 10)
             .expect("search_fts pre-purge");
-        assert_eq!(
-            hits,
+        assert_eq!(hits,
             vec![evidence_id],
             "evidence_fts_cjk must surface the CJK substring before purge"
         );
@@ -531,14 +503,12 @@ fn fts_cjk_companion_table_is_purged_alongside_evidence_fts() {
         // evidence_fts_cjk specifically, not just evidence_fts.
         let cjk_rows: i64 = store
             .raw_conn()
-            .query_row(
-                "SELECT COUNT(*) FROM evidence_fts_cjk WHERE scope_id = ?1",
+            .query_row("SELECT COUNT(*) FROM evidence_fts_cjk WHERE scope_id = ?1",
                 rusqlite::params![scope.as_uuid().as_bytes().as_slice()],
                 |row| row.get(0),
             )
             .expect("count cjk rows pre-purge");
-        assert_eq!(
-            cjk_rows, 1,
+        assert_eq!(cjk_rows, 1,
             "ingest of CJK body must populate evidence_fts_cjk"
         );
 
@@ -553,27 +523,23 @@ fn fts_cjk_companion_table_is_purged_alongside_evidence_fts() {
 
     let primary_rows: i64 = store
         .raw_conn()
-        .query_row(
-            "SELECT COUNT(*) FROM evidence_fts WHERE scope_id = ?1",
+        .query_row("SELECT COUNT(*) FROM evidence_fts WHERE scope_id = ?1",
             rusqlite::params![scope.as_uuid().as_bytes().as_slice()],
             |row| row.get(0),
         )
         .expect("count primary fts rows post-purge");
-    assert_eq!(
-        primary_rows, 0,
+    assert_eq!(primary_rows, 0,
         "evidence_fts must contain no rows for the forgotten scope after purge"
     );
 
     let cjk_rows: i64 = store
         .raw_conn()
-        .query_row(
-            "SELECT COUNT(*) FROM evidence_fts_cjk WHERE scope_id = ?1",
+        .query_row("SELECT COUNT(*) FROM evidence_fts_cjk WHERE scope_id = ?1",
             rusqlite::params![scope.as_uuid().as_bytes().as_slice()],
             |row| row.get(0),
         )
         .expect("count cjk fts rows post-purge");
-    assert_eq!(
-        cjk_rows, 0,
+    assert_eq!(cjk_rows, 0,
         "evidence_fts_cjk must contain no rows for the forgotten scope after purge"
     );
 
@@ -581,8 +547,7 @@ fn fts_cjk_companion_table_is_purged_alongside_evidence_fts() {
     let hits = store
         .search_fts(scope, query, 10)
         .expect("search_fts post-purge");
-    assert!(
-        hits.is_empty(),
+    assert!(hits.is_empty(),
         "search_fts must return no rows for a forgotten scope after purge: {hits:?}"
     );
 }

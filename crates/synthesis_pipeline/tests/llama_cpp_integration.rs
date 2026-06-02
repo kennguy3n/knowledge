@@ -71,27 +71,23 @@ impl Drop for LlamaServerGuard {
 #[test]
 fn synthesizes_summary_bundle_against_real_llama_server() {
     let Some((binary, model)) = read_required_env() else {
-        eprintln!(
-            "skipping: set LLAMA_SERVER_BINARY and LLAMA_SERVER_MODEL to run the real \
+        eprintln!("skipping: set LLAMA_SERVER_BINARY and LLAMA_SERVER_MODEL to run the real \
              llama-server integration test"
         );
         return;
     };
 
     let port = parse_env_u16("LLAMA_SERVER_PORT").unwrap_or_else(pick_ephemeral_port);
-    let ready_timeout = Duration::from_secs(
-        parse_env_u64("LLAMA_SERVER_READY_TIMEOUT_SECS").unwrap_or(READY_TIMEOUT_SECS_DEFAULT),
+    let ready_timeout = Duration::from_secs(parse_env_u64("LLAMA_SERVER_READY_TIMEOUT_SECS").unwrap_or(READY_TIMEOUT_SECS_DEFAULT),
     );
-    let request_timeout = Duration::from_secs(
-        parse_env_u64("LLAMA_SERVER_REQUEST_TIMEOUT_SECS").unwrap_or(REQUEST_TIMEOUT_SECS_DEFAULT),
+    let request_timeout = Duration::from_secs(parse_env_u64("LLAMA_SERVER_REQUEST_TIMEOUT_SECS").unwrap_or(REQUEST_TIMEOUT_SECS_DEFAULT),
     );
 
     let guard = spawn_llama_server(&binary, &model, port, ready_timeout);
 
     let http = HttpLlamaServerClient::with_timeout(guard.server_url(), request_timeout)
         .expect("http client build");
-    assert!(
-        http.ping(),
+    assert!(http.ping(),
         "spawned llama-server should be reachable at {}",
         guard.server_url()
     );
@@ -123,8 +119,7 @@ fn synthesizes_summary_bundle_against_real_llama_server() {
     // if this assertion fires the GBNF or the prompt drifted.
     let bundle: SummaryBundle =
         serde_json::from_slice(&object.payload).expect("payload should parse as SummaryBundle");
-    assert!(
-        !bundle.recap.trim().is_empty(),
+    assert!(!bundle.recap.trim().is_empty(),
         "real SLM should produce a non-empty recap, got `{}`",
         bundle.recap
     );
@@ -158,8 +153,7 @@ fn pick_ephemeral_port() -> u16 {
     port
 }
 
-fn spawn_llama_server(
-    binary: &str,
+fn spawn_llama_server(binary: &str,
     model: &str,
     port: u16,
     ready_timeout: Duration,

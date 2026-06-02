@@ -137,7 +137,7 @@ pub enum FfiError {
     },
 
     /// A rate-shaping limiter at the FFI boundary rejected the
-    /// call (Phase 10 Item 5). Hosts SHOULD wait `retry_after_ms`
+    /// call . Hosts SHOULD wait `retry_after_ms`
     /// and retry the same call — the rejection is purely
     /// rate-driven, the request itself is valid.
     ///
@@ -282,76 +282,65 @@ mod tests {
 
     #[test]
     fn kind_strings_are_stable() {
-        assert_eq!(
-            FfiError::Unimplemented { method: "x".into() }.kind(),
+        assert_eq!(FfiError::Unimplemented { method: "x".into() }.kind(),
             "Unimplemented"
         );
-        assert_eq!(
-            FfiError::InvalidId {
+        assert_eq!(FfiError::InvalidId {
                 message: "x".into()
             }
             .kind(),
             "InvalidId"
         );
-        assert_eq!(
-            FfiError::NotFound {
+        assert_eq!(FfiError::NotFound {
                 kind: "x".into(),
                 id: "y".into()
             }
             .kind(),
             "NotFound"
         );
-        assert_eq!(
-            FfiError::Evidence {
+        assert_eq!(FfiError::Evidence {
                 message: "x".into()
             }
             .kind(),
             "Evidence"
         );
-        assert_eq!(
-            FfiError::Memory {
+        assert_eq!(FfiError::Memory {
                 message: "x".into()
             }
             .kind(),
             "Memory"
         );
-        assert_eq!(
-            FfiError::Synthesis {
+        assert_eq!(FfiError::Synthesis {
                 message: "x".into()
             }
             .kind(),
             "Synthesis"
         );
-        assert_eq!(
-            FfiError::Crypto {
+        assert_eq!(FfiError::Crypto {
                 message: "x".into()
             }
             .kind(),
             "Crypto"
         );
-        assert_eq!(
-            FfiError::Unavailable {
+        assert_eq!(FfiError::Unavailable {
                 subsystem: "x".into()
             }
             .kind(),
             "Unavailable"
         );
-        assert_eq!(
-            FfiError::InferenceFailure {
+        assert_eq!(FfiError::InferenceFailure {
                 message: "x".into()
             }
             .kind(),
             "InferenceFailure"
         );
-        assert_eq!(
-            FfiError::Connector {
+        assert_eq!(FfiError::Connector {
                 message: "x".into()
             }
             .kind(),
             "Connector"
         );
-        assert_eq!(
-            FfiError::Throttled {
+        assert_eq!(FfiError::Throttled {
                 subsystem: "x".into(),
                 retry_after_ms: 250,
             }

@@ -41,8 +41,7 @@ pub struct DocumentRef {
 
 impl DocumentRef {
     /// Convenience constructor.
-    pub fn new(
-        connector: impl Into<String>,
+    pub fn new(connector: impl Into<String>,
         document_id: impl Into<String>,
         url: Option<String>,
     ) -> Self {
@@ -299,8 +298,7 @@ where
     /// * Returns an empty observation list (but populated
     ///   `chunks`) when every chunk falls below the minimum
     ///   importance tag.
-    pub fn process(
-        &self,
+    pub fn process(&self,
         text: &str,
         document: &DocumentRef,
         kind: DocumentKind,
@@ -321,7 +319,7 @@ where
         let mut observations = Vec::new();
         let mut citations = HashMap::new();
         let mut dropped = 0_usize;
-        // Phase 1.4 (Devin Review #ANALYSIS-0001b): pre-compute the
+        //  (Devin Review #ANALYSIS-0001b): pre-compute the
         // per-chunk dominant language at the doc-pipeline level so
         // that (a) we can pass it through
         // `extract_with_dominant_language` to the extractor
@@ -343,22 +341,21 @@ where
                 dropped += 1;
                 continue;
             }
-            let mut extracted = self.extractor.extract_with_dominant_language(
-                &chunk.text,
+            let mut extracted = self.extractor.extract_with_dominant_language(&chunk.text,
                 scope,
                 chunk_language.as_ref(),
             );
             if extracted.is_empty() {
                 continue;
             }
-            // Phase 1.4: the lexicon extractor now stamps
+            // the lexicon extractor now stamps
             // per-sentence language tags inside each chunk (CJK
             // `。`, Arabic `؟`, Devanagari `।` etc. are recognised
             // by `split_sentences_with_terminator`, and
             // `detect_language` runs per sentence with the
             // chunk-level dominant tag as the fallback). The
             // resulting observations carry tighter language stamps
-            // than the chunk-level single tag we used in Phase 1.3
+            // than the chunk-level single tag we used in 
             // — so we *do not* overwrite them here. The previous
             // `obs.language_tag.clone_from(&chunk_language)` would
             // have clobbered, for instance, a Japanese sentence's
@@ -373,8 +370,7 @@ where
                         obs.source_evidence_ids.push(eid);
                     }
                 }
-                citations.insert(
-                    obs.id,
+                citations.insert(obs.id,
                     ObservationCitation {
                         observation_id: obs.id,
                         chunk: chunk.metadata.clone(),
@@ -411,8 +407,7 @@ pub fn default_document_pipeline() -> DocumentObservationPipeline<
     LexiconExtractor,
     evidence_store::LexiconClassifier,
 > {
-    DocumentObservationPipeline::new(
-        SlidingWindowChunker::default(),
+    DocumentObservationPipeline::new(SlidingWindowChunker::default(),
         LexiconExtractor::default(),
         evidence_store::LexiconClassifier::english_default(),
     )
@@ -490,8 +485,7 @@ mod tests {
         let scope = ScopeId::new_v4();
         let chunk_eid = EvidenceId::new_v4();
         let res = pipeline
-            .process(
-                "We approved the launch on Monday.",
+            .process("We approved the launch on Monday.",
                 &doc_ref(),
                 DocumentKind::PlainText,
                 scope,
@@ -513,8 +507,7 @@ mod tests {
         let pipeline = default_document_pipeline().with_min_importance(ImportanceClass::Critical);
         let scope = ScopeId::new_v4();
         let res = pipeline
-            .process(
-                "trivial chatter",
+            .process("trivial chatter",
                 &doc_ref(),
                 DocumentKind::PlainText,
                 scope,
@@ -531,8 +524,7 @@ mod tests {
         let scope = ScopeId::new_v4();
         let md = "# Heading\n\nWe approved the launch on Monday.";
         let res = pipeline
-            .process(
-                md,
+            .process(md,
                 &doc_ref(),
                 DocumentKind::Markdown,
                 scope,
@@ -543,8 +535,7 @@ mod tests {
 
         let json = r#"{"title":"Launch","decision":"approved on Monday"}"#;
         let res = pipeline
-            .process(
-                json,
+            .process(json,
                 &doc_ref(),
                 DocumentKind::Json,
                 scope,
@@ -558,15 +549,14 @@ mod tests {
     fn invalid_chunker_config_falls_back_to_default() {
         let c = SlidingWindowChunker::new(0, 100);
         assert_eq!(c.window_chars, SlidingWindowChunker::default().window_chars);
-        assert_eq!(
-            c.overlap_chars,
+        assert_eq!(c.overlap_chars,
             SlidingWindowChunker::default().overlap_chars
         );
     }
 
     #[test]
     fn document_pipeline_preserves_per_sentence_language_tags_in_chunk() {
-        // Phase 1.4 contract: the document pipeline must NOT
+        //  contract: the document pipeline must NOT
         // overwrite per-sentence language tags with the
         // chunk-level dominant tag. A document chunk containing
         // bilingual prose should yield observations with
@@ -580,8 +570,7 @@ mod tests {
                     今日の会議では何時に開始する予定でしょうか、ご確認お願いします。 \
                     Approved the rollout schedule on Monday for the entire team.";
         let res = pipeline
-            .process(
-                text,
+            .process(text,
                 &doc_ref(),
                 DocumentKind::PlainText,
                 scope,
@@ -600,16 +589,14 @@ mod tests {
             .iter()
             .filter(|o| o.language_tag.as_ref().is_some_and(|t| t.primary() == "en"))
             .count();
-        assert!(
-            ja_tag_count >= 1,
+        assert!(ja_tag_count >= 1,
             "expected at least one ja-tagged observation from the JA sentence, got tags: {:?}",
             res.observations
                 .iter()
                 .map(|o| o.language_tag.clone())
                 .collect::<Vec<_>>()
         );
-        assert!(
-            en_tag_count >= 1,
+        assert!(en_tag_count >= 1,
             "expected at least one en-tagged observation from the EN sentences, got tags: {:?}",
             res.observations
                 .iter()
@@ -634,26 +621,22 @@ mod tests {
                     Approved the rollout schedule on Monday for the entire team. \
                     The deadline for the next sprint has been moved to next Wednesday.";
         let res = pipeline
-            .process(
-                text,
+            .process(text,
                 &doc_ref(),
                 DocumentKind::PlainText,
                 scope,
                 &[EvidenceId::new_v4()],
             )
             .unwrap();
-        assert_eq!(
-            res.chunk_languages.len(),
+        assert_eq!(res.chunk_languages.len(),
             res.chunks.len(),
             "chunk_languages must be 1:1 with chunks"
         );
-        assert!(
-            res.chunk_languages.iter().any(Option::is_some),
+        assert!(res.chunk_languages.iter().any(Option::is_some),
             "expected at least one chunk to detect a dominant language, got {:?}",
             res.chunk_languages
         );
-        assert!(
-            res.chunk_languages
+        assert!(res.chunk_languages
                 .iter()
                 .all(|t| t.as_ref().is_none_or(|tag| tag.primary() == "en")),
             "expected all detected chunk languages to be `en`, got {:?}",

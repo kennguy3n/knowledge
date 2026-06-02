@@ -178,8 +178,7 @@ impl AuditLog {
     /// [`Self::append`] calls keep the monotonic invariant.
     pub fn replay_persisted(&mut self, entry: AuditEntry) -> Result<()> {
         if entry.sequence != self.next_sequence {
-            return Err(AuditError::Persistence(
-                "replayed audit entry sequence is not contiguous with next_sequence",
+            return Err(AuditError::Persistence("replayed audit entry sequence is not contiguous with next_sequence",
             ));
         }
         // `saturating_add` is the same overflow guard
@@ -265,8 +264,7 @@ impl AuditLog {
             return Some(self.intersect_with(owned, sets, q.actor_id));
         }
         if let Some(actor_id) = q.actor_id {
-            sets.push(
-                self.actor_index
+            sets.push(self.actor_index
                     .get(&actor_id)
                     .map_or(&[][..], Vec::as_slice),
             );
@@ -291,8 +289,7 @@ impl AuditLog {
     /// Intersect `seed` (already an ordered set) with `extra` (raw
     /// candidate slices not yet deduped) and optionally with the
     /// actor index for `actor_id`. Returns a sorted vector.
-    fn intersect_with(
-        &self,
+    fn intersect_with(&self,
         seed: Vec<usize>,
         extra: Vec<&[usize]>,
         actor_id: Option<Uuid>,
@@ -322,8 +319,7 @@ impl AuditLog {
     /// through [`index_entry_into`] so the live-append and
     /// deserialize-rebuild paths share one implementation.
     fn index_entry(&mut self, entry: &AuditEntry, position: usize) {
-        index_entry_into(
-            &mut self.scope_index,
+        index_entry_into(&mut self.scope_index,
             &mut self.action_index,
             &mut self.actor_index,
             &mut self.id_index,
@@ -371,8 +367,7 @@ impl AuditLog {
         let actor_index = &mut self.actor_index;
         let id_index = &mut self.id_index;
         for (position, entry) in entries.iter().enumerate() {
-            index_entry_into(
-                scope_index,
+            index_entry_into(scope_index,
                 action_index,
                 actor_index,
                 id_index,
@@ -390,8 +385,7 @@ impl AuditLog {
 /// `self.entries` (disjoint field borrows). Shared between the
 /// live-append path ([`AuditLog::index_entry`]) and the
 /// deserialize-rebuild path ([`AuditLog::rebuild_indexes`]).
-fn index_entry_into(
-    scope_index: &mut HashMap<ScopeId, Vec<usize>>,
+fn index_entry_into(scope_index: &mut HashMap<ScopeId, Vec<usize>>,
     action_index: &mut HashMap<AuditActionType, Vec<usize>>,
     actor_index: &mut HashMap<Uuid, Vec<usize>>,
     id_index: &mut HashMap<AuditEntryId, usize>,
@@ -418,8 +412,7 @@ fn index_entry_into(
 }
 
 impl<'de> Deserialize<'de> for AuditLog {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
         #[derive(Deserialize)]
         struct Wire {

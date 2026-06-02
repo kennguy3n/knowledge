@@ -96,8 +96,7 @@ pub fn compute_retention_score(object: &MemoryObject, now: DateTime<Utc>) -> Ret
 
 /// Lower-level variant of [`compute_retention_score`] exposing the
 /// weight set.
-pub fn compute_with_weights(
-    object: &MemoryObject,
+pub fn compute_with_weights(object: &MemoryObject,
     now: DateTime<Utc>,
     weights: RetentionWeights,
 ) -> RetentionScore {
@@ -227,8 +226,7 @@ mod tests {
         o.last_accessed_at = Utc::now();
         let s = compute_retention_score(&o, Utc::now());
         // 0.15 retrieval + 0.05 contradiction + 0.10 age + 0.10 non-use = 0.4.
-        assert!(
-            s.total > 0.35 && s.total < 0.55,
+        assert!(s.total > 0.35 && s.total < 0.55,
             "freq retrieved score: {}",
             s.total
         );

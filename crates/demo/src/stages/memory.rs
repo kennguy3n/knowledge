@@ -31,19 +31,18 @@ use uuid::Uuid;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::phases::runtime::RuntimeState;
-use crate::report::{DemoReport, PhaseReport};
+use crate::stages::runtime::RuntimeState;
+use crate::report::{DemoReport, StageReport};
 
-const PHASE: &str = "memory";
+const STAGE: &str = "memory";
 
-pub fn run(
-    _dataset: &Dataset,
+pub fn run(_dataset: &Dataset,
     state: &mut RuntimeState,
     report: &mut DemoReport,
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Stage 3: Memory Manager");
+    let mut stage = StageReport::new("Stage 3: Memory Manager");
 
     // -- Build a UserMemoryObject and seed it from the observation batch.
     let scope = state
@@ -177,100 +176,85 @@ pub fn run(
     let bench_total = bench_started.elapsed();
 
     // -- Assertions.
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "all walked observations reached Canonical",
         canonicals == walked_ids.len() as u64 && canonicals >= 2,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "pinning enforces the >= 0.9 retention floor",
         pinned_score >= 0.9,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "unpinned candidate score is below pinned floor",
         cand_score < 0.9,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "decay sweep archived at least one ancient candidate",
         sweep_report.candidates_archived >= 1,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "archived state is reachable via MemoryFilter",
         post_sweep_archived >= 1,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "forget(canonical) marks the row Deleted (not removed)",
         deleted_after >= 1,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "forget(non-canonical) physically removes the row",
         dropped == 1,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "post-walk Canonical count == initial canonicals - canonicals forgotten",
         canonical_after == canonicals - 1,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "WorkingMemory evicted entries past TTL",
         working_evicted > 0 && working_after == 0 && working_before_sleep > 0,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "EpisodicMemory produced at least one summary",
         !episodic_summaries.is_empty(),
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "every episodic summary carries non-empty key_observations",
         episodic_summaries
             .iter()
             .all(|s| !s.key_observations.is_empty()),
     );
 
-    phase.timing = started.elapsed();
-    phase.stat("seed_objects", seed_count.to_string());
-    phase.stat("walked_to_canonical", canonicals.to_string());
-    phase.stat("pinned_score", format!("{:.3}", pinned_score));
-    phase.stat("candidate_score_unpinned", format!("{:.3}", cand_score));
-    phase.stat("decay_swept_objects", sweep_report.scored.to_string());
-    phase.stat(
-        "decay_archived_candidates",
+    stage.timing = started.elapsed();
+    stage.stat("seed_objects", seed_count.to_string());
+    stage.stat("walked_to_canonical", canonicals.to_string());
+    stage.stat("pinned_score", format!("{:.3}", pinned_score));
+    stage.stat("candidate_score_unpinned", format!("{:.3}", cand_score));
+    stage.stat("decay_swept_objects", sweep_report.scored.to_string());
+    stage.stat("decay_archived_candidates",
         sweep_report.candidates_archived.to_string(),
     );
-    phase.stat(
-        "decay_archived_superseded",
+    stage.stat("decay_archived_superseded",
         sweep_report.superseded_archived.to_string(),
     );
-    phase.stat("decay_pre_sweep_total", pre_sweep.to_string());
-    phase.stat("canonical_after_forget", canonical_after.to_string());
-    phase.stat("deleted_after_forget", deleted_after.to_string());
-    phase.stat("working_memory_pre_evict", working_before_sleep.to_string());
-    phase.stat("working_memory_evicted", working_evicted.to_string());
-    phase.stat("working_memory_live_after", working_after.to_string());
-    phase.stat("episodic_summaries", episodic_summaries.len().to_string());
-    phase.note(
-        "MemoryStateMachine + decay_sweep + UserMemoryObject CRUD + WorkingMemory \
+    stage.stat("decay_pre_sweep_total", pre_sweep.to_string());
+    stage.stat("canonical_after_forget", canonical_after.to_string());
+    stage.stat("deleted_after_forget", deleted_after.to_string());
+    stage.stat("working_memory_pre_evict", working_before_sleep.to_string());
+    stage.stat("working_memory_evicted", working_evicted.to_string());
+    stage.stat("working_memory_live_after", working_after.to_string());
+    stage.stat("episodic_summaries", episodic_summaries.len().to_string());
+    stage.note("MemoryStateMachine + decay_sweep + UserMemoryObject CRUD + WorkingMemory \
          (50ms TTL) + EpisodicMemory(StubSummarizer + SessionDetector::default).",
     );
 
     report.count("memory_seed_objects", seed_count);
     report.count("memory_canonicals", canonicals);
-    report.count(
-        "memory_decay_archived",
+    report.count("memory_decay_archived",
         sweep_report.candidates_archived as u64,
     );
     report.count("memory_canonical_after_forget", canonical_after);
     report.count("memory_deleted_after_forget", deleted_after);
     report.count("memory_working_evicted", working_evicted as u64);
     report.count("memory_episodic_summaries", episodic_summaries.len() as u64);
-    report.add_phase(phase);
+    report.add_stage(stage);
     report.add_benchmark("memory_state_machine_ops", state_machine_ops, bench_total);
 }

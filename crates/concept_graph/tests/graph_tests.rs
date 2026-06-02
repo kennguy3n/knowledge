@@ -37,8 +37,7 @@ fn neighbors_filters_by_relation_type() {
     let (mut g, ids) = build(scope, 3);
     g.add_edge(ConceptEdge::new(ids[0], ids[1], RelationType::IsA, scope))
         .unwrap();
-    g.add_edge(ConceptEdge::new(
-        ids[0],
+    g.add_edge(ConceptEdge::new(ids[0],
         ids[2],
         RelationType::PartOf,
         scope,
@@ -56,8 +55,7 @@ fn remove_node_clears_dangling_edges() {
     let (mut g, ids) = build(scope, 3);
     g.add_edge(ConceptEdge::new(ids[0], ids[1], RelationType::IsA, scope))
         .unwrap();
-    g.add_edge(ConceptEdge::new(
-        ids[2],
+    g.add_edge(ConceptEdge::new(ids[2],
         ids[0],
         RelationType::PartOf,
         scope,
@@ -107,8 +105,7 @@ fn mark_contradiction_does_not_partially_mutate_when_b_missing() {
     let missing_b = concept_graph::NodeId::new_v4();
 
     let err = g.mark_contradiction(ids[0], missing_b).unwrap_err();
-    assert!(
-        matches!(err, GraphError::NodeNotFound(uuid) if uuid == missing_b.0),
+    assert!(matches!(err, GraphError::NodeNotFound(uuid) if uuid == missing_b.0),
         "expected NodeNotFound({}), got {err:?}",
         missing_b.0,
     );
@@ -129,8 +126,7 @@ fn mark_contradiction_does_not_create_edges_when_a_missing() {
     let missing_a = concept_graph::NodeId::new_v4();
 
     let err = g.mark_contradiction(missing_a, ids[0]).unwrap_err();
-    assert!(
-        matches!(err, GraphError::NodeNotFound(uuid) if uuid == missing_a.0),
+    assert!(matches!(err, GraphError::NodeNotFound(uuid) if uuid == missing_a.0),
         "expected NodeNotFound({}), got {err:?}",
         missing_a.0,
     );
@@ -150,13 +146,11 @@ fn mark_contradiction_rejects_self_with_dedicated_variant() {
     let scope = ScopeId::new_v4();
     let (mut g, ids) = build(scope, 1);
     let err = g.mark_contradiction(ids[0], ids[0]).unwrap_err();
-    assert!(
-        matches!(err, GraphError::SelfContradiction(_)),
+    assert!(matches!(err, GraphError::SelfContradiction(_)),
         "expected SelfContradiction, got {err:?}"
     );
     // And it must NOT be the supersession variant.
-    assert!(
-        !matches!(err, GraphError::SelfSupersession(_)),
+    assert!(!matches!(err, GraphError::SelfSupersession(_)),
         "must not reuse SelfSupersession for contradiction failures"
     );
 }
@@ -188,8 +182,7 @@ fn traverse_typed_walks_only_matching_relations() {
         .unwrap();
     g.add_edge(ConceptEdge::new(ids[1], ids[2], RelationType::IsA, scope))
         .unwrap();
-    g.add_edge(ConceptEdge::new(
-        ids[1],
+    g.add_edge(ConceptEdge::new(ids[1],
         ids[3],
         RelationType::PartOf,
         scope,
@@ -220,8 +213,7 @@ fn get_edges_returns_both_outgoing_and_incoming() {
     let (mut g, ids) = build(scope, 3);
     g.add_edge(ConceptEdge::new(ids[0], ids[1], RelationType::IsA, scope))
         .unwrap();
-    g.add_edge(ConceptEdge::new(
-        ids[2],
+    g.add_edge(ConceptEdge::new(ids[2],
         ids[1],
         RelationType::PartOf,
         scope,

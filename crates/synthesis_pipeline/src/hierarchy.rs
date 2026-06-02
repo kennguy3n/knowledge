@@ -61,8 +61,7 @@ impl ChannelOutput {
     /// [`SynthesisObjectType::ChannelRecap`].
     pub fn from_channel_object(object: SynthesisObject) -> Result<Self> {
         if object.object_type != SynthesisObjectType::ChannelRecap {
-            return Err(PipelineError::HierarchyViolation(format!(
-                "expected channel_recap synthesis object, got {}",
+            return Err(PipelineError::HierarchyViolation(format!("expected channel_recap synthesis object, got {}",
                 object.object_type.as_str()
             )));
         }
@@ -93,8 +92,7 @@ impl DomainOutput {
     /// [`SynthesisObjectType::DomainSummary`].
     pub fn from_domain_object(object: SynthesisObject) -> Result<Self> {
         if object.object_type != SynthesisObjectType::DomainSummary {
-            return Err(PipelineError::HierarchyViolation(format!(
-                "expected domain_summary synthesis object, got {}",
+            return Err(PipelineError::HierarchyViolation(format!("expected domain_summary synthesis object, got {}",
                 object.object_type.as_str()
             )));
         }
@@ -142,8 +140,7 @@ impl DomainSynthesisInput {
     pub fn new(domain: &DomainMemoryObject, channel_outputs: Vec<ChannelOutput>) -> Result<Self> {
         for o in &channel_outputs {
             if !domain.channel_scopes.contains(&o.channel_scope) {
-                return Err(PipelineError::HierarchyViolation(format!(
-                    "channel scope {} is not registered on domain {}",
+                return Err(PipelineError::HierarchyViolation(format!("channel scope {} is not registered on domain {}",
                     o.channel_scope, domain.scope_id,
                 )));
             }
@@ -164,8 +161,7 @@ impl DomainSynthesisInput {
     ///
     /// Always returns [`PipelineError::HierarchyViolation`].
     pub fn reject_raw_channel_memory(_: &ChannelMemoryObject) -> Result<Self> {
-        Err(PipelineError::HierarchyViolation(
-            "domain synthesis cannot consume raw ChannelMemoryObject; \
+        Err(PipelineError::HierarchyViolation("domain synthesis cannot consume raw ChannelMemoryObject; \
              feed channel-recap SynthesisObject outputs instead"
                 .into(),
         ))
@@ -225,15 +221,13 @@ impl TenantSynthesisInput {
     ///   `tenant.domain_scopes`.
     /// * [`PipelineError::HierarchyViolation`] if any
     ///   [`ApprovedDocument`] is not in `tenant.approved_documents`.
-    pub fn new(
-        tenant: &TenantMemoryObject,
+    pub fn new(tenant: &TenantMemoryObject,
         domain_outputs: Vec<DomainOutput>,
         approved_documents: Vec<ApprovedDocument>,
     ) -> Result<Self> {
         for o in &domain_outputs {
             if !tenant.domain_scopes.contains(&o.domain_scope) {
-                return Err(PipelineError::HierarchyViolation(format!(
-                    "domain scope {} is not registered on tenant {}",
+                return Err(PipelineError::HierarchyViolation(format!("domain scope {} is not registered on tenant {}",
                     o.domain_scope, tenant.scope_id,
                 )));
             }
@@ -244,8 +238,7 @@ impl TenantSynthesisInput {
                 .iter()
                 .any(|a| a.id == d.reference.id)
             {
-                return Err(PipelineError::HierarchyViolation(format!(
-                    "approved document {} is not admitted on tenant {}",
+                return Err(PipelineError::HierarchyViolation(format!("approved document {} is not admitted on tenant {}",
                     d.reference.id, tenant.scope_id,
                 )));
             }
@@ -267,8 +260,7 @@ impl TenantSynthesisInput {
     ///
     /// Always returns [`PipelineError::HierarchyViolation`].
     pub fn reject_channel_object(object: &SynthesisObject) -> Result<Self> {
-        Err(PipelineError::HierarchyViolation(format!(
-            "tenant synthesis cannot consume {} synthesis objects; \
+        Err(PipelineError::HierarchyViolation(format!("tenant synthesis cannot consume {} synthesis objects; \
              channel outputs must first be folded into a domain summary",
             object.object_type.as_str()
         )))
@@ -311,8 +303,7 @@ impl WindowScopeTier {
 /// windows require a [`TenantSynthesisInput`].
 pub trait HierarchyEnforcedWindowManager {
     /// Open a window tagged with `tier`.
-    fn open_tiered_window(
-        &mut self,
+    fn open_tiered_window(&mut self,
         scope_id: ScopeId,
         tier: WindowScopeTier,
         window_start: DateTime<Utc>,
@@ -323,8 +314,7 @@ pub trait HierarchyEnforcedWindowManager {
     /// `handle`. Returns [`PipelineError::HierarchyViolation`] if
     /// `handle` is not a domain window or if the input's
     /// `domain_scope` doesn't match.
-    fn validate_domain_input(
-        &self,
+    fn validate_domain_input(&self,
         handle: &TieredWindowHandle,
         input: &DomainSynthesisInput,
     ) -> Result<()>;
@@ -333,8 +323,7 @@ pub trait HierarchyEnforcedWindowManager {
     /// `handle`. Returns [`PipelineError::HierarchyViolation`] if
     /// `handle` is not a tenant window or if the input's
     /// `tenant_scope` doesn't match.
-    fn validate_tenant_input(
-        &self,
+    fn validate_tenant_input(&self,
         handle: &TieredWindowHandle,
         input: &TenantSynthesisInput,
     ) -> Result<()>;
@@ -353,8 +342,7 @@ pub struct TieredWindowHandle {
 }
 
 impl HierarchyEnforcedWindowManager for SynthesisWindowManager {
-    fn open_tiered_window(
-        &mut self,
+    fn open_tiered_window(&mut self,
         scope_id: ScopeId,
         tier: WindowScopeTier,
         window_start: DateTime<Utc>,
@@ -371,8 +359,7 @@ impl HierarchyEnforcedWindowManager for SynthesisWindowManager {
         // lookup here would indicate a manager-internal invariant
         // break rather than a recoverable runtime condition.
         if let Err(e) = self.set_tier(id, tier) {
-            debug_assert!(
-                false,
+            debug_assert!(false,
                 "open_window inserted id={id:?} but set_tier failed: {e}"
             );
         }
@@ -383,20 +370,17 @@ impl HierarchyEnforcedWindowManager for SynthesisWindowManager {
         })
     }
 
-    fn validate_domain_input(
-        &self,
+    fn validate_domain_input(&self,
         handle: &TieredWindowHandle,
         input: &DomainSynthesisInput,
     ) -> Result<()> {
         if handle.tier != WindowScopeTier::Domain {
-            return Err(PipelineError::HierarchyViolation(format!(
-                "{:?} window cannot consume DomainSynthesisInput",
+            return Err(PipelineError::HierarchyViolation(format!("{:?} window cannot consume DomainSynthesisInput",
                 handle.tier
             )));
         }
         if handle.scope_id != input.domain_scope {
-            return Err(PipelineError::HierarchyViolation(format!(
-                "domain input targets {} but window is for {}",
+            return Err(PipelineError::HierarchyViolation(format!("domain input targets {} but window is for {}",
                 input.domain_scope, handle.scope_id,
             )));
         }
@@ -408,8 +392,7 @@ impl HierarchyEnforcedWindowManager for SynthesisWindowManager {
         // points at scope S1 while `scope_id` claims S2. Refuse before
         // the synthesis engine touches the wrong window's lifecycle.
         if window.scope_id != handle.scope_id {
-            return Err(PipelineError::HierarchyViolation(format!(
-                "window {} belongs to scope {} but handle claims scope {}",
+            return Err(PipelineError::HierarchyViolation(format!("window {} belongs to scope {} but handle claims scope {}",
                 handle.window_id.0, window.scope_id, handle.scope_id,
             )));
         }
@@ -419,20 +402,17 @@ impl HierarchyEnforcedWindowManager for SynthesisWindowManager {
         Ok(())
     }
 
-    fn validate_tenant_input(
-        &self,
+    fn validate_tenant_input(&self,
         handle: &TieredWindowHandle,
         input: &TenantSynthesisInput,
     ) -> Result<()> {
         if handle.tier != WindowScopeTier::Tenant {
-            return Err(PipelineError::HierarchyViolation(format!(
-                "{:?} window cannot consume TenantSynthesisInput",
+            return Err(PipelineError::HierarchyViolation(format!("{:?} window cannot consume TenantSynthesisInput",
                 handle.tier
             )));
         }
         if handle.scope_id != input.tenant_scope {
-            return Err(PipelineError::HierarchyViolation(format!(
-                "tenant input targets {} but window is for {}",
+            return Err(PipelineError::HierarchyViolation(format!("tenant input targets {} but window is for {}",
                 input.tenant_scope, handle.scope_id,
             )));
         }
@@ -442,8 +422,7 @@ impl HierarchyEnforcedWindowManager for SynthesisWindowManager {
         // See `validate_domain_input` for the rationale; the same
         // public-field smuggling concern applies at tenant tier.
         if window.scope_id != handle.scope_id {
-            return Err(PipelineError::HierarchyViolation(format!(
-                "window {} belongs to scope {} but handle claims scope {}",
+            return Err(PipelineError::HierarchyViolation(format!("window {} belongs to scope {} but handle claims scope {}",
                 handle.window_id.0, window.scope_id, handle.scope_id,
             )));
         }
@@ -458,14 +437,12 @@ impl HierarchyEnforcedWindowManager for SynthesisWindowManager {
 /// [`SynthesisObjectType::DomainSummary`] for a window opened on a
 /// domain scope. Used by the synthesis-engine skeleton to emit the
 /// right object type without exposing the full constructor surface.
-pub fn build_domain_summary_object(
-    domain_scope: ScopeId,
+pub fn build_domain_summary_object(domain_scope: ScopeId,
     window_id: WindowId,
     payload: Vec<u8>,
     provenance_ref: Uuid,
 ) -> SynthesisObject {
-    SynthesisObject::new(
-        domain_scope,
+    SynthesisObject::new(domain_scope,
         window_id,
         SynthesisObjectType::DomainSummary,
         payload,
@@ -476,14 +453,12 @@ pub fn build_domain_summary_object(
 /// Convenience: build a [`SynthesisObject`] of type
 /// [`SynthesisObjectType::TenantSummary`] for a window opened on a
 /// tenant scope.
-pub fn build_tenant_summary_object(
-    tenant_scope: ScopeId,
+pub fn build_tenant_summary_object(tenant_scope: ScopeId,
     window_id: WindowId,
     payload: Vec<u8>,
     provenance_ref: Uuid,
 ) -> SynthesisObject {
-    SynthesisObject::new(
-        tenant_scope,
+    SynthesisObject::new(tenant_scope,
         window_id,
         SynthesisObjectType::TenantSummary,
         payload,
@@ -494,15 +469,13 @@ pub fn build_tenant_summary_object(
 /// Convenience: a fresh window covering the most recent `secs` for a
 /// domain scope, opened on `mgr` with the [`WindowScopeTier::Domain`]
 /// tag.
-pub fn open_domain_window(
-    mgr: &mut SynthesisWindowManager,
+pub fn open_domain_window(mgr: &mut SynthesisWindowManager,
     domain: &DomainMemoryObject,
     duration: chrono::Duration,
 ) -> Result<TieredWindowHandle> {
     let now = Utc::now();
     let window = SynthesisWindow::new(domain.scope_id, now - duration, now)?;
-    let handle = mgr.open_tiered_window(
-        domain.scope_id,
+    let handle = mgr.open_tiered_window(domain.scope_id,
         WindowScopeTier::Domain,
         window.window_start,
         window.window_end,
@@ -513,15 +486,13 @@ pub fn open_domain_window(
 /// Convenience: a fresh window covering the most recent `secs` for a
 /// tenant scope, opened on `mgr` with the [`WindowScopeTier::Tenant`]
 /// tag.
-pub fn open_tenant_window(
-    mgr: &mut SynthesisWindowManager,
+pub fn open_tenant_window(mgr: &mut SynthesisWindowManager,
     tenant: &TenantMemoryObject,
     duration: chrono::Duration,
 ) -> Result<TieredWindowHandle> {
     let now = Utc::now();
     let window = SynthesisWindow::new(tenant.scope_id, now - duration, now)?;
-    let handle = mgr.open_tiered_window(
-        tenant.scope_id,
+    let handle = mgr.open_tiered_window(tenant.scope_id,
         WindowScopeTier::Tenant,
         window.window_start,
         window.window_end,
@@ -534,8 +505,7 @@ mod tests {
     use super::*;
 
     fn channel_recap_object(scope: ScopeId) -> SynthesisObject {
-        SynthesisObject::new(
-            scope,
+        SynthesisObject::new(scope,
             WindowId::new_v4(),
             SynthesisObjectType::ChannelRecap,
             b"recap".to_vec(),
@@ -544,8 +514,7 @@ mod tests {
     }
 
     fn domain_summary_object(scope: ScopeId) -> SynthesisObject {
-        SynthesisObject::new(
-            scope,
+        SynthesisObject::new(scope,
             WindowId::new_v4(),
             SynthesisObjectType::DomainSummary,
             b"summary".to_vec(),
@@ -594,8 +563,7 @@ mod tests {
         let mut mgr = SynthesisWindowManager::new();
         let now = Utc::now();
         let handle_b = mgr
-            .open_tiered_window(
-                domain_b,
+            .open_tiered_window(domain_b,
                 WindowScopeTier::Domain,
                 now - chrono::Duration::seconds(60),
                 now,

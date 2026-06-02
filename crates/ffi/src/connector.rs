@@ -40,7 +40,7 @@
 //!    [`OAuthClientSecretResolver`] callback that the substrate
 //!    consults at every OAuth2 grant (both `authorization_code` and
 //!    `refresh_token`) to fetch the `client_secret` from the host's
-//!    keychain. Phase 4.1 wiring — production hosts use this to
+//!    keychain.  wiring — production hosts use this to
 //!    keep confidential credentials off the substrate's persisted
 //!    state.
 //! 8. [`clear_oauth_client_secret_resolver`] — unregister the
@@ -154,8 +154,7 @@ const AUTO_REFRESH_SKEW_SECS: i64 = 60;
 ///   (no real reqwest transport is linked in).
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
-pub fn create_connector(
-    handle: RuntimeHandle,
+pub fn create_connector(handle: RuntimeHandle,
     kind: ConnectorKindTag,
     scope_id: ScopeIdString,
     config_json: String,
@@ -184,8 +183,7 @@ pub fn create_connector(
                 .values()
                 .any(|inst| inst.config.scope_id == scope && inst.config.kind == kind_framework)
             {
-                return Err(FfiError::from(
-                    connector_framework::ConnectorError::DuplicateConnector,
+                return Err(FfiError::from(connector_framework::ConnectorError::DuplicateConnector,
                 ));
             }
             let instance_id = ConnectorInstanceId::new_v4();
@@ -255,14 +253,13 @@ pub fn create_connector(
 ///   failure, malformed token response).
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
-pub fn authenticate_connector(
-    handle: RuntimeHandle,
+pub fn authenticate_connector(handle: RuntimeHandle,
     instance_id: String,
     auth_code: String,
 ) -> FfiResult<()> {
     metrics::instrument(metrics::inc_authenticate_connector, || {
         let instance = parse_instance_id(&instance_id)?;
-        // ─────────────── Phase 1: snapshot (locked) ───────────────
+        // ─────────────── Step 1: snapshot (locked) ───────────────
         //
         // Clone the `Arc<dyn Connector>` handle + a fresh
         // `ConnectorConfig` out of the runtime, then drop the
@@ -290,7 +287,7 @@ pub fn authenticate_connector(
                 .clone();
             Ok((connector, config_clone))
         })?;
-        // ─────────── Phase 2: OAuth2 exchange (UNLOCKED) ────────────
+        // ─────────── Step 2: OAuth2 exchange (UNLOCKED) ────────────
         //
         // The connector's own `authenticate` impl drives the
         // OAuth2 exchange through its bundled
@@ -318,13 +315,12 @@ pub fn authenticate_connector(
             // `auth_code` is owned and never read after this point — move
             // it into the JSON value instead of cloning. One fewer heap
             // copy per authenticate call.
-            obj.insert(
-                "authorization_code".to_string(),
+            obj.insert("authorization_code".to_string(),
                 serde_json::Value::String(auth_code),
             );
         }
         let token = connector.authenticate(&config_with_code)?;
-        // ──────────────── Phase 3: persist (locked) ────────────────
+        // ──────────────── Step 3: persist (locked) ────────────────
         //
         // Re-acquire the mutex. We re-check the instance is still
         // registered because another thread could have called
@@ -345,7 +341,7 @@ pub fn authenticate_connector(
                 }
             };
             // Race with `forget_scope_state` on the same handle: if
-            // the scope was forgotten during Phase 2 the in-memory
+            // the scope was forgotten during  the in-memory
             // instance map is already empty (step 6 of the helper
             // drops every instance bound to the forgotten scope),
             // so the `get` above returns `None` and we bail. Still
@@ -365,7 +361,7 @@ pub fn authenticate_connector(
             // write failure surfaces to the host before the token
             // becomes the substrate-side source of truth. The
             // already-completed OAuth2 token endpoint exchange in
-            // Phase 2 cannot be undone — the access + refresh tokens
+            //  cannot be undone — the access + refresh tokens
             // are valid against the provider — but at-rest persistence
             // is what carries the token across `close_store`/`open_store`,
             // so a host that observes `Ok(())` should be able to rely
@@ -393,8 +389,8 @@ pub fn authenticate_connector(
 /// appears to be.
 ///
 /// The function follows the same three-phase locking discipline as
-/// [`authenticate_connector`] (Phase 1: snapshot under lock; Phase 2:
-/// unlocked HTTP refresh round-trip; Phase 3: re-acquire lock,
+/// [`authenticate_connector`] (Step 1: snapshot under lock; Step 2:
+/// unlocked HTTP refresh round-trip; Step 3: re-acquire lock,
 /// re-validate the instance + scope are still alive, persist
 /// BEFORE updating the in-memory vault). The runtime mutex is never
 /// held for the duration of the provider's network call, so
@@ -447,8 +443,8 @@ pub fn authenticate_connector(
 /// * [`FfiError::NotFound`] (`kind: "connector"`) if `instance_id`
 ///   is unknown.
 /// * [`FfiError::NotFound`] (`kind: "scope"`) if the connector's
-///   scope was cryptographically forgotten between Phase 1 and
-///   Phase 3.
+///   scope was cryptographically forgotten between  and
+///   Step 3.
 /// * [`FfiError::Connector`] (carrying the framework's
 ///   `TokenRefresh` diagnostic) if the provider rejects the
 ///   refresh grant — typically because the refresh token was
@@ -461,7 +457,7 @@ pub fn authenticate_connector(
 ///   above — the host must drive a fresh `authorization_code`
 ///   exchange.
 /// * [`FfiError::Evidence`] if the persist call to SQLCipher fails
-///   in Phase 3.
+///   in Step 3.
 ///
 /// # Confidential-client support
 ///
@@ -489,17 +485,16 @@ pub fn authenticate_connector(
 /// resolver registered.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
-pub fn refresh_connector_token(
-    handle: RuntimeHandle,
+pub fn refresh_connector_token(handle: RuntimeHandle,
     instance_id: String,
 ) -> FfiResult<RefreshReport> {
     metrics::instrument(metrics::inc_refresh_connector_token, || {
         let instance = parse_instance_id(&instance_id)?;
-        // ─────────────── Phase 1: snapshot (locked) ───────────────
+        // ─────────────── Step 1: snapshot (locked) ───────────────
         //
         // Mirror `authenticate_connector` / `sync_connector` —
         // clone every owned value out of the runtime mutex so the
-        // unlocked Phase 2 round-trip in `refresh_token_three_phase`
+        // unlocked  round-trip in `refresh_token_three_phase`
         // does NOT block concurrent FFI calls on the same handle.
         // `lookup_connector_handle` is still consulted so the host
         // sees the same `Unavailable` vs `NotFound` disambiguation
@@ -530,7 +525,7 @@ pub fn refresh_connector_token(
                 .clone();
             Ok((config, token))
         })?;
-        // ── Phase 2+3: refresh + persist (delegated helper) ──
+        // ── Step 2+3: refresh + persist (delegated helper) ──
         //
         // Force the refresh regardless of expiry by passing
         // `skew: None` (force-refresh mode). The helper skips the
@@ -563,8 +558,7 @@ pub fn refresh_connector_token(
         // noticeably and hosts use `refreshed_at` for correlation
         // / scheduling, so the post-round-trip stamp is the honest
         // one to surface.
-        let (new_token, refreshed) = refresh_token_three_phase(
-            handle,
+        let (new_token, refreshed) = refresh_token_three_phase(handle,
             instance,
             &instance_id,
             token,
@@ -607,7 +601,7 @@ pub fn refresh_connector_token(
 /// `last_synced_at`. On failure the state is marked
 /// [`SyncStatus::Failed`] with the diagnostic message.
 ///
-/// Before the HTTP dispatch (Phase 2 in the locking sequence — see
+/// Before the HTTP dispatch ( in the locking sequence — see
 /// the module-level docs), `sync_connector` transparently runs the
 /// same three-phase refresh path as [`refresh_connector_token`]
 /// when the cached OAuth2 token is within `AUTO_REFRESH_SKEW_SECS`
@@ -649,7 +643,7 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
     metrics::instrument(metrics::inc_sync_connector, || {
         let instance = parse_instance_id(&instance_id)?;
         let started_at = Utc::now();
-        // ─────────────── Phase 1: snapshot (locked) ───────────────
+        // ─────────────── Step 1: snapshot (locked) ───────────────
         //
         // Validate the instance + scope, ensure scope registration,
         // flip `SyncState` to `InProgress`, and snapshot the data
@@ -677,7 +671,7 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                         })?;
                 // Reject a second concurrent `sync_connector` against
                 // the same instance — the existing in-flight call
-                // owns the dispatch (and will Phase-3-ingest its
+                // owns the dispatch (and will earlier-ingest its
                 // events). Letting both calls proceed in parallel
                 // would double-ingest the same provider events into
                 // the evidence store (the connector framework's
@@ -694,8 +688,7 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                 // hatch from the conflict path.
                 if matches!(inst.sync_state.status, SyncStatus::InProgress) {
                     return Err(FfiError::Connector {
-                        message: format!(
-                            "sync_connector: another sync is already in progress for connector instance {instance_id} \
+                        message: format!("sync_connector: another sync is already in progress for connector instance {instance_id} \
                              (last_synced_at={:?}); call remove_connector + create_connector to abandon a stuck sync",
                             inst.sync_state.last_synced_at,
                         ),
@@ -706,8 +699,7 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                 } else {
                     SyncMode::Full
                 };
-                (
-                    inst.config.scope_id,
+                (inst.config.scope_id,
                     inst.config.clone(),
                     inst.config.kind,
                     mode,
@@ -747,7 +739,7 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                 connector,
             })
         })?;
-        // ──────── Phase 2a: auto-refresh (delegated helper) ────────
+        // ──────── Step 2a: auto-refresh (delegated helper) ────────
         //
         // Before the HTTP dispatch, transparently refresh the
         // cached OAuth2 access token if it is expiring within
@@ -783,8 +775,7 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
         // `snapshot.config` is taken when the cached token is
         // still outside the skew window — zero allocation cost on
         // the typical "sync against a fresh token" hot path.
-        match refresh_token_three_phase(
-            handle,
+        match refresh_token_three_phase(handle,
             instance,
             &instance_id,
             snapshot.token.clone(),
@@ -805,8 +796,7 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                         rt.connector_instances.get(&instance).map(|i| (*i).clone());
                     if let Some(inst_clone) = instance_snapshot {
                         if let Err(persist_err) = persist_connector_instance(rt, &inst_clone) {
-                            tracing::warn!(
-                                instance = %instance,
+                            tracing::warn!(instance = %instance,
                                 error = %persist_err,
                                 "failed to persist sync_state Failed status after auto-refresh failure; in-memory state still updated",
                             );
@@ -817,22 +807,21 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                 return Err(err);
             }
         }
-        // ──────────────── Phase 2: dispatch (UNLOCKED) ────────────────
+        // ──────────────── Step 2: dispatch (UNLOCKED) ────────────────
         //
         // Drive the connector's HTTP round-trip with the runtime
         // mutex released. Concurrent FFI calls against the same
         // handle (queries, memory reads, sync against a *different*
         // connector instance) run in parallel with this network
         // call. A second `sync_connector` against the **same**
-        // instance is rejected in Phase 1 with
+        // instance is rejected in  with
         // `FfiError::Connector` after the `SyncStatus::InProgress`
         // check above — the substrate refuses the race at the call
         // site rather than relying on the host to serialise, which
         // means we never double-ingest the same provider events
         // into the evidence store.
         let dispatch_result = if snapshot.mode == SyncMode::Incremental {
-            snapshot.connector.incremental_sync(
-                &snapshot.config,
+            snapshot.connector.incremental_sync(&snapshot.config,
                 &snapshot.token,
                 &snapshot.sync_state_snapshot,
             )
@@ -862,10 +851,9 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                         rt.connector_instances.get(&instance).map(|i| (*i).clone());
                     if let Some(inst_clone) = instance_snapshot {
                         if let Err(persist_err) = persist_connector_instance(rt, &inst_clone) {
-                            tracing::warn!(
-                                instance = %instance,
+                            tracing::warn!(instance = %instance,
                                 error = %persist_err,
-                                "failed to persist sync_state Failed status after Phase 2 dispatch failure; in-memory state still updated",
+                                "failed to persist sync_state Failed status after  dispatch failure; in-memory state still updated",
                             );
                         }
                     }
@@ -874,7 +862,7 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                 return Err(FfiError::from(err));
             }
         };
-        // ─────────────── Phase 3: persist (locked) ────────────────
+        // ─────────────── Step 3: persist (locked) ────────────────
         //
         // Re-acquire the mutex. TOCTOU defence: another thread may
         // have called `forget_scope(scope)` or `remove_connector(id)`
@@ -912,7 +900,7 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                 for ev in &run_result.events {
                     if let Some(body) = event_to_evidence_body(ev) {
                         let source_tag = connector_source_tag(snapshot.source_kind);
-                        // Phase 1.3 — stamp the BCP-47 primary
+                        //  — stamp the BCP-47 primary
                         // subtag on each ingested connector
                         // event. Connector events serialise as
                         // a small JSON shell (`kind` +
@@ -931,8 +919,7 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                         let language_tag = detection.as_ref().map(|d| d.tag.as_str());
                         let result = rt
                             .store_mut()
-                            .ingest_with_language(
-                                snapshot.scope,
+                            .ingest_with_language(snapshot.scope,
                                 body.as_bytes(),
                                 Some(source_tag),
                                 ImportanceClass::Important,
@@ -986,8 +973,7 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                         rt.connector_instances.get(&instance).map(|i| (*i).clone());
                     if let Some(inst_clone) = instance_snapshot {
                         if let Err(persist_err) = persist_connector_instance(rt, &inst_clone) {
-                            tracing::warn!(
-                                instance = %instance,
+                            tracing::warn!(instance = %instance,
                                 error = %persist_err,
                                 "failed to persist sync_state Failed status; in-memory state still updated",
                             );
@@ -1013,11 +999,11 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
 }
 
 /// Per-call snapshot captured under the runtime mutex in
-/// [`sync_connector`]'s Phase 1 and consumed by the unlocked
-/// dispatch in Phase 2 + the locked persist in Phase 3.
+/// [`sync_connector`]'s  and consumed by the unlocked
+/// dispatch in  + the locked persist in Step 3.
 ///
 /// Owning every field (no borrows back into `FfiRuntime`) is what
-/// lets the mutex drop between Phase 1 and Phase 2 — see the
+/// lets the mutex drop between  and  — see the
 /// function-level comments for the locking discipline.
 struct SyncSnapshot {
     scope: ScopeId,
@@ -1064,7 +1050,7 @@ pub fn list_connectors(handle: RuntimeHandle) -> FfiResult<Vec<ConnectorStatus>>
     })
 }
 
-/// Single-instance health probe (Phase 10 Item 3) — symmetric with
+/// Single-instance health probe  — symmetric with
 /// [`crate::synthesis::synthesis_status`]. Returns a wire-flat
 /// [`ConnectorHealthRecord`] that bundles the per-connector
 /// `ConnectorStatus` view (kind, scope, sync mode / status,
@@ -1112,8 +1098,7 @@ pub fn list_connectors(handle: RuntimeHandle) -> FfiResult<Vec<ConnectorStatus>>
 ///   been called.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
-pub fn connector_status(
-    handle: RuntimeHandle,
+pub fn connector_status(handle: RuntimeHandle,
     instance_id: String,
 ) -> FfiResult<ConnectorHealthRecord> {
     metrics::instrument(metrics::inc_connector_status, || {
@@ -1130,7 +1115,7 @@ pub fn connector_status(
             // row may still be hanging around after a partial
             // `forget_scope` (the SQLCipher delete cascade is
             // best-effort, see the matching guard in
-            // `sync_connector` Phase 1). Surfacing a stale
+            // `sync_connector` ). Surfacing a stale
             // connector row past tombstoning would let the host
             // act on a logically-removed scope.
             if rt.is_scope_forgotten(inst.config.scope_id) {
@@ -1227,7 +1212,7 @@ pub fn remove_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult
     })
 }
 
-// ──────────────── OAuth2 client-secret resolver (Phase 4.1) ────────────────
+// ──────────────── OAuth2 client-secret resolver ────────────────
 
 /// Host-implemented callback that the substrate consults at every
 /// OAuth2 grant to fetch the matching `client_secret` from the
@@ -1311,8 +1296,7 @@ impl connector_framework::ClientSecretResolver for FfiClientSecretResolverAdapte
         // ownership of the value as it crosses the language
         // boundary, so we can't loan `&str` here even though the
         // framework gave us borrowed input.
-        self.inner.resolve(
-            kind.to_string(),
+        self.inner.resolve(kind.to_string(),
             scope_id.to_string(),
             client_id.to_string(),
         )
@@ -1349,8 +1333,7 @@ impl connector_framework::ClientSecretResolver for FfiClientSecretResolverAdapte
 ///   `http-client` feature (no `OAuth2Client` exists to receive
 ///   the registration).
 #[uniffi::export]
-pub fn set_oauth_client_secret_resolver(
-    handle: RuntimeHandle,
+pub fn set_oauth_client_secret_resolver(handle: RuntimeHandle,
     resolver: Arc<dyn OAuthClientSecretResolver>,
 ) -> FfiResult<()> {
     metrics::instrument(metrics::inc_set_oauth_client_secret_resolver, || {
@@ -1450,13 +1433,12 @@ pub fn clear_oauth_client_secret_resolver(handle: RuntimeHandle) -> FfiResult<()
 ///   "host referenced an instance that was never created or has
 ///   been removed" case.
 ///
-/// Both call sites (`authenticate_connector` Phase 1 and
-/// `sync_connector` Phase 1) route through this helper so the
+/// Both call sites (`authenticate_connector`  and
+/// `sync_connector` ) route through this helper so the
 /// asymmetry between the create path (Unavailable on missing
 /// transport) and the post-rehydrate path (was NotFound, now also
 /// Unavailable) is eliminated.
-fn lookup_connector_handle(
-    rt: &FfiRuntime,
+fn lookup_connector_handle(rt: &FfiRuntime,
     instance: ConnectorInstanceId,
     instance_id_display: &str,
 ) -> FfiResult<Arc<dyn Connector>> {
@@ -1477,10 +1459,10 @@ fn lookup_connector_handle(
 /// Drive the three-phase refresh-and-persist sequence for the
 /// OAuth2 token bound to `instance`.
 ///
-/// The caller is responsible for Phase 1 (capturing
+/// The caller is responsible for  (capturing
 /// `current_token` + `config` under the runtime mutex and then
-/// dropping the lock). This helper owns Phase 2 (unlocked refresh
-/// round-trip against the provider) and Phase 3 (re-acquire the
+/// dropping the lock). This helper owns  (unlocked refresh
+/// round-trip against the provider) and  (re-acquire the
 /// lock, re-validate the instance + scope, persist the refreshed
 /// token to SQLCipher, update the in-memory vault).
 ///
@@ -1503,17 +1485,17 @@ fn lookup_connector_handle(
 /// Three-phase locking discipline (matches
 /// `authenticate_connector`):
 ///
-/// * **Phase 2 (here, UNLOCKED):** call
+/// * **Step 2 (here, UNLOCKED):** call
 ///   [`ConfiguredRefresher::refresh`] (via the
 ///   [`TokenRefresher`](connector_framework::TokenRefresher) trait
 ///   object) — the provider's network round-trip happens with the
 ///   runtime mutex released so concurrent FFI calls on the same
 ///   handle (`query`, `ingest_message`, …) keep running.
-/// * **Phase 3 (here, LOCKED):** re-acquire the mutex, re-check
+/// * **Step 3 (here, LOCKED):** re-acquire the mutex, re-check
 ///   the instance + scope are still alive (TOCTOU: a concurrent
 ///   [`forget_scope`](crate::forget_scope) or
 ///   [`remove_connector`] may have removed the row during the
-///   unlocked Phase 2). Persist the refreshed token to SQLCipher
+///   unlocked ). Persist the refreshed token to SQLCipher
 ///   BEFORE updating the in-memory vault — mirrors
 ///   `authenticate_connector`'s discipline so a SQLCipher write
 ///   failure surfaces to the host before the vault becomes the
@@ -1539,7 +1521,7 @@ fn lookup_connector_handle(
 ///   diagnostic) if the provider rejects the refresh grant.
 /// * [`FfiError::NotFound`] (`kind: "connector" | "scope"`) if
 ///   the instance was removed or the scope was forgotten during
-///   the unlocked Phase 2 round-trip.
+///   the unlocked  round-trip.
 /// * [`FfiError::Unavailable`] (`subsystem: "connector-http-client"`)
 ///   if the per-runtime [`OAuth2Client`] was not built (no
 ///   `http-client` feature, or transport construction failed at
@@ -1547,8 +1529,7 @@ fn lookup_connector_handle(
 ///   function unconditionally returns this error).
 /// * [`FfiError::Evidence`] if the SQLCipher persist call fails.
 #[cfg(feature = "http-client")]
-fn refresh_token_three_phase(
-    handle: RuntimeHandle,
+fn refresh_token_three_phase(handle: RuntimeHandle,
     instance: ConnectorInstanceId,
     instance_id_display: &str,
     current_token: connector_framework::OAuth2Token,
@@ -1577,8 +1558,7 @@ fn refresh_token_three_phase(
         Some(s) => s.expose().to_string(),
         None => {
             return Err(FfiError::Connector {
-                message: format!(
-                    "cannot refresh connector token: no refresh_token stored for instance {instance_id_display} \
+                message: format!("cannot refresh connector token: no refresh_token stored for instance {instance_id_display} \
                      — re-authorisation required",
                 ),
             });
@@ -1589,7 +1569,7 @@ fn refresh_token_three_phase(
     // whose Clone impl is itself an `Arc` refcount bump on the
     // shared transport plus a fresh allocation for the
     // `SecretToken`-wrapped client secret. We deliberately do this
-    // here (not inside Phase 2) so the unlocked refresh below
+    // here (not inside ) so the unlocked refresh below
     // doesn't have to revisit the mutex just to grab the client
     // handle.
     //
@@ -1599,7 +1579,7 @@ fn refresh_token_three_phase(
     // token is still fresh — does NOT pay the clone cost. We only
     // allocate when an actual refresh is happening.
     //
-    // `scope` (Copy) is read off `config` for Phase 3's
+    // `scope` (Copy) is read off `config` for Step 3's
     // `is_scope_forgotten(scope)` re-check, which guards against a
     // concurrent `forget_scope` running while the unlocked refresh
     // is in flight.
@@ -1613,18 +1593,16 @@ fn refresh_token_three_phase(
             .ok_or_else(|| FfiError::Unavailable {
                 subsystem: "connector-http-client".into(),
             })?;
-        Ok(connector_framework::ConfiguredRefresher::new(
-            (**client_arc).clone(),
+        Ok(connector_framework::ConfiguredRefresher::new((**client_arc).clone(),
             config.clone(),
         ))
     })?;
-    // ─────────── Phase 2: refresh (UNLOCKED) ────────────
-    let refreshed = <connector_framework::ConfiguredRefresher<_> as connector_framework::TokenRefresher>::refresh(
-        &refresher,
+    // ─────────── Step 2: refresh (UNLOCKED) ────────────
+    let refreshed = <connector_framework::ConfiguredRefresher<_> as connector_framework::TokenRefresher>::refresh(&refresher,
         &refresh_secret,
     )
     .map_err(FfiError::from)?;
-    // ─── Phase 3: persist + vault.put (LOCKED) ───
+    // ─── Step 3: persist + vault.put (LOCKED) ───
     let mut new_token = current_token;
     new_token.access_token = refreshed.access_token;
     if let Some(rt_tok) = refreshed.refresh_token {
@@ -1651,7 +1629,7 @@ fn refresh_token_three_phase(
         // `authenticate_connector` line 354) so a SQLCipher write
         // failure surfaces to the host before the vault becomes
         // the substrate-side source of truth. The just-completed
-        // refresh round-trip in Phase 2 cannot be undone — the
+        // refresh round-trip in  cannot be undone — the
         // provider has already minted the new access + refresh
         // tokens — but at-rest persistence is what carries the
         // token across `close_store`/`open_store`, so a host that
@@ -1672,8 +1650,7 @@ fn refresh_token_three_phase(
 /// call on a `not(http-client)` build.
 #[cfg(not(feature = "http-client"))]
 #[allow(clippy::needless_pass_by_value)] // signature matches the http-client-enabled variant for branch-free callers
-fn refresh_token_three_phase(
-    _handle: RuntimeHandle,
+fn refresh_token_three_phase(_handle: RuntimeHandle,
     _instance: ConnectorInstanceId,
     _instance_id_display: &str,
     _current_token: connector_framework::OAuth2Token,
@@ -1714,8 +1691,7 @@ fn refresh_token_three_phase(
 /// round-trip with the lock released. See those functions for the
 /// three-phase locking pattern.
 #[cfg(feature = "http-client")]
-fn build_connector(
-    rt: &FfiRuntime,
+fn build_connector(rt: &FfiRuntime,
     kind: ConnectorKind,
     instance: ConnectorInstanceId,
 ) -> FfiResult<Arc<dyn Connector>> {
@@ -1764,7 +1740,7 @@ fn build_connector(
         ConnectorKind::Slack => Arc::new(SlackConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Email => Arc::new(EmailConnector::new(instance, transport, oauth_client)),
         ConnectorKind::GitHub | ConnectorKind::GenericWebhook => {
-            // Phase 2 ships the nine listed connector implementations
+            // ships the nine listed connector implementations
             // in `crates/connectors/`. GitHub and the generic webhook
             // connector are described in `docs/DESIGN.md` §10.2 but
             // do not have concrete implementors yet.
@@ -1781,8 +1757,7 @@ fn build_connector(
 /// links a real HTTP transport.
 #[cfg(not(feature = "http-client"))]
 #[allow(clippy::unnecessary_wraps)] // signature matches the http-client-enabled variant for branch-free callers
-fn build_connector(
-    _rt: &FfiRuntime,
+fn build_connector(_rt: &FfiRuntime,
     _kind: ConnectorKind,
     _instance: ConnectorInstanceId,
 ) -> FfiResult<Arc<dyn Connector>> {
@@ -1815,8 +1790,7 @@ pub(crate) fn event_to_evidence_body(event: &ConnectorEvent) -> Option<String> {
         | ConnectorEvent::DocumentUpdated {
             document_id,
             occurred_at,
-        } => Some(
-            serde_json::to_string(&serde_json::json!({
+        } => Some(serde_json::to_string(&serde_json::json!({
                 "kind": event.kind(),
                 "document_id": document_id.as_str(),
                 "occurred_at": occurred_at,
@@ -1886,8 +1860,7 @@ struct PersistedConnectorInstance {
 /// as the field has a `#[serde(default)]` default.
 const PERSISTED_INSTANCE_SCHEMA: u32 = 1;
 
-pub(crate) fn persist_connector_instance(
-    rt: &FfiRuntime,
+pub(crate) fn persist_connector_instance(rt: &FfiRuntime,
     instance: &ConnectorInstance,
 ) -> FfiResult<()> {
     let payload = PersistedConnectorInstanceRef {
@@ -1899,8 +1872,7 @@ pub(crate) fn persist_connector_instance(
         message: format!("connector instance JSON encode failed: {e}"),
     })?;
     rt.store()
-        .save_connector_instance(
-            instance.id.0,
+        .save_connector_instance(instance.id.0,
             instance.config.scope_id,
             instance.config.kind.as_str(),
             &json,
@@ -1910,8 +1882,7 @@ pub(crate) fn persist_connector_instance(
         })
 }
 
-pub(crate) fn persist_connector_token(
-    rt: &FfiRuntime,
+pub(crate) fn persist_connector_token(rt: &FfiRuntime,
     instance: ConnectorInstanceId,
     scope: ScopeId,
     token: &connector_framework::OAuth2Token,
@@ -1958,8 +1929,7 @@ pub(crate) fn rehydrate_connectors(rt: &mut FfiRuntime, tombstones: &HashSet<Sco
     let rows = match rt.store().load_connector_instances() {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(
-                error = %e,
+            tracing::warn!(error = %e,
                 "load_connector_instances failed; connector subsystem starts empty for this open",
             );
             return;
@@ -1971,8 +1941,7 @@ pub(crate) fn rehydrate_connectors(rt: &mut FfiRuntime, tombstones: &HashSet<Sco
             // the next open does not re-walk it. Tracing-only on
             // failure — the AEAD payload is unrecoverable anyway.
             if let Err(e) = rt.store().delete_connector_instance(instance_uuid) {
-                tracing::warn!(
-                    instance = %instance_uuid,
+                tracing::warn!(instance = %instance_uuid,
                     scope = %scope_id.as_uuid(),
                     error = %e,
                     "failed to clean up dangling connector_instances row for forgotten scope",
@@ -1983,8 +1952,7 @@ pub(crate) fn rehydrate_connectors(rt: &mut FfiRuntime, tombstones: &HashSet<Sco
         let parsed = match serde_json::from_slice::<PersistedConnectorInstance>(&payload) {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!(
-                    instance = %instance_uuid,
+                tracing::warn!(instance = %instance_uuid,
                     scope = %scope_id.as_uuid(),
                     kind = %kind_tag,
                     error = %e,
@@ -1994,8 +1962,7 @@ pub(crate) fn rehydrate_connectors(rt: &mut FfiRuntime, tombstones: &HashSet<Sco
             }
         };
         if parsed.schema != PERSISTED_INSTANCE_SCHEMA {
-            tracing::warn!(
-                instance = %instance_uuid,
+            tracing::warn!(instance = %instance_uuid,
                 expected = PERSISTED_INSTANCE_SCHEMA,
                 actual = parsed.schema,
                 "connector_instances payload has unexpected schema version; row skipped",
@@ -2007,8 +1974,7 @@ pub(crate) fn rehydrate_connectors(rt: &mut FfiRuntime, tombstones: &HashSet<Sco
         // and the encrypted blob the AAD check should have caught
         // it already; this is belt-and-braces.
         if parsed.config.kind.as_str() != kind_tag {
-            tracing::warn!(
-                instance = %instance_uuid,
+            tracing::warn!(instance = %instance_uuid,
                 row_kind = %kind_tag,
                 payload_kind = %parsed.config.kind.as_str(),
                 "connector_instances row kind tag does not match payload; row skipped",
@@ -2019,16 +1985,14 @@ pub(crate) fn rehydrate_connectors(rt: &mut FfiRuntime, tombstones: &HashSet<Sco
         let connector = match build_connector(rt, parsed.config.kind, instance_id) {
             Ok(c) => Some(c),
             Err(FfiError::Unavailable { subsystem }) => {
-                tracing::debug!(
-                    instance = %instance_uuid,
+                tracing::debug!(instance = %instance_uuid,
                     subsystem = %subsystem,
                     "connector subsystem unavailable at rehydration time; instance loaded without live Arc<dyn Connector>",
                 );
                 None
             }
             Err(e) => {
-                tracing::warn!(
-                    instance = %instance_uuid,
+                tracing::warn!(instance = %instance_uuid,
                     error = %e,
                     "build_connector failed during rehydration; instance loaded without live Arc<dyn Connector>",
                 );
@@ -2050,8 +2014,7 @@ pub(crate) fn rehydrate_connectors(rt: &mut FfiRuntime, tombstones: &HashSet<Sco
     let token_rows = match rt.store().load_connector_tokens() {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(
-                error = %e,
+            tracing::warn!(error = %e,
                 "load_connector_tokens failed; token vault starts empty for this open",
             );
             return;
@@ -2060,8 +2023,7 @@ pub(crate) fn rehydrate_connectors(rt: &mut FfiRuntime, tombstones: &HashSet<Sco
     for (instance_uuid, scope_id, payload) in token_rows {
         if tombstones.contains(&scope_id) {
             if let Err(e) = rt.store().delete_connector_token(instance_uuid) {
-                tracing::warn!(
-                    instance = %instance_uuid,
+                tracing::warn!(instance = %instance_uuid,
                     scope = %scope_id.as_uuid(),
                     error = %e,
                     "failed to clean up dangling connector_tokens row for forgotten scope",
@@ -2079,14 +2041,12 @@ pub(crate) fn rehydrate_connectors(rt: &mut FfiRuntime, tombstones: &HashSet<Sco
         // Best-effort purge from disk too so the next open doesn't
         // re-walk it; tracing-only on failure.
         if !rt.connector_instances.contains_key(&instance_id) {
-            tracing::warn!(
-                instance = %instance_uuid,
+            tracing::warn!(instance = %instance_uuid,
                 scope = %scope_id.as_uuid(),
                 "connector_tokens row references an instance that did not rehydrate; skipping",
             );
             if let Err(e) = rt.store().delete_connector_token(instance_uuid) {
-                tracing::warn!(
-                    instance = %instance_uuid,
+                tracing::warn!(instance = %instance_uuid,
                     scope = %scope_id.as_uuid(),
                     error = %e,
                     "failed to clean up orphaned connector_tokens row",
@@ -2099,8 +2059,7 @@ pub(crate) fn rehydrate_connectors(rt: &mut FfiRuntime, tombstones: &HashSet<Sco
                 rt.token_vault.put(instance_id, token);
             }
             Err(e) => {
-                tracing::warn!(
-                    instance = %instance_uuid,
+                tracing::warn!(instance = %instance_uuid,
                     scope = %scope_id.as_uuid(),
                     error = %e,
                     "connector_tokens payload failed to deserialise; row skipped",
@@ -2478,8 +2437,7 @@ mod tests {
         let fresh_token =
             OAuth2Token::new_without_refresh("FRESH-AT", now + Duration::hours(1), "read");
 
-        let (returned, refreshed) = refresh_token_three_phase(
-            handle,
+        let (returned, refreshed) = refresh_token_three_phase(handle,
             instance,
             "irrelevant",
             fresh_token.clone(),
@@ -2489,8 +2447,7 @@ mod tests {
         )
         .expect("short-circuit must succeed");
         assert!(!refreshed, "fresh token must NOT trigger a refresh");
-        assert_eq!(
-            returned.access_token.expose(),
+        assert_eq!(returned.access_token.expose(),
             fresh_token.access_token.expose(),
             "short-circuit must return the original token verbatim",
         );
@@ -2530,8 +2487,7 @@ mod tests {
         let expiring_token =
             OAuth2Token::new_without_refresh("EXPIRING-AT", now + Duration::seconds(5), "read");
 
-        let err = refresh_token_three_phase(
-            handle,
+        let err = refresh_token_three_phase(handle,
             instance,
             "instance-display-xyz",
             expiring_token,
@@ -2542,8 +2498,7 @@ mod tests {
         .expect_err("missing refresh_token must error");
         match err {
             FfiError::Connector { message } => {
-                assert!(
-                    message.contains("no refresh_token stored")
+                assert!(message.contains("no refresh_token stored")
                         && message.contains("instance-display-xyz")
                         && message.contains("re-authorisation required"),
                     "expected substrate-side `no refresh_token stored` diagnostic naming the \
@@ -2582,8 +2537,7 @@ mod tests {
         let now = Utc::now();
         let token = OAuth2Token::new("AT", "RT", now + Duration::seconds(5), "read");
 
-        let err = refresh_token_three_phase(
-            handle,
+        let err = refresh_token_three_phase(handle,
             instance,
             "irrelevant",
             token,

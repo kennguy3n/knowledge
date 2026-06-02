@@ -104,8 +104,7 @@ fn invalid_candidate_to_canonical_rejected() {
     let mut obj = fresh();
     let sm = MemoryStateMachine::new();
     let err = sm.canonicalize(&mut obj).unwrap_err();
-    assert_eq!(
-        err,
+    assert_eq!(err,
         MemoryError::InvalidTransition {
             from: MemoryState::Candidate,
             to: MemoryState::Canonical

@@ -354,8 +354,7 @@ impl TenantMemoryObject {
     }
 
     /// Explicitly deprecate a stable org-knowledge fact.
-    pub fn deprecate_stable_fact(
-        &mut self,
+    pub fn deprecate_stable_fact(&mut self,
         fact_id: Uuid,
         superseded_by: Option<Uuid>,
     ) -> Result<()> {
@@ -433,8 +432,7 @@ mod tests {
     #[test]
     fn passive_decay_is_forbidden() {
         let t = TenantMemoryObject::new(ScopeId::new_v4());
-        assert_eq!(
-            t.try_passive_decay().unwrap_err(),
+        assert_eq!(t.try_passive_decay().unwrap_err(),
             TenantMemoryError::PassiveDecayForbidden
         );
     }
@@ -447,8 +445,7 @@ mod tests {
         // Mutate the underlying class out from under the constructor.
         policy.memory.sensitivity_class = SensitivityClass::Important;
         let err = t.add_policy(policy).unwrap_err();
-        assert_eq!(
-            err,
+        assert_eq!(err,
             TenantMemoryError::NotCritical(SensitivityClass::Important)
         );
     }

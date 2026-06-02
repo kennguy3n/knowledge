@@ -1,5 +1,5 @@
 //! Process-singleton observability counters for the multilingual
-//! lexicon path (Phase 1.10).
+//! lexicon path.
 //!
 //! Phases 1.1 – 1.7 introduced per-script [`crate::lexicon::
 //! LanguageLexicon`]s, [`crate::lexicon::MatchStrategy`] variants
@@ -41,8 +41,8 @@
 //!   `hits_en` increments (3 class checks + 5 stop-word checks).
 //!   Operators inferring "documents classified" from `hits_*`
 //!   should divide by their measured calls-per-document ratio
-//!   rather than reading the counter directly. Phase 1.10
-//!   sweep 2 (ANALYSIS-0003) added this clarification — the
+//!   rather than reading the counter directly. 
+//!   (ANALYSIS-0003) added this clarification — the
 //!   counter semantics itself are by design (counting calls is
 //!   what makes the ratio `strategy_fires / hits_*` a useful
 //!   "how-often-does-each-resolved-lexicon-actually-classify"
@@ -511,8 +511,7 @@ mod tests {
                     "th" => baseline.hits_th,
                     "vi" => baseline.hits_vi,
                     "zh" => baseline.hits_zh,
-                    other => panic!(
-                        "SUPPORTED_LEXICON_TAGS contains {other:?} but the test \
+                    other => panic!("SUPPORTED_LEXICON_TAGS contains {other:?} but the test \
                         match arm doesn't cover it — extend both this test and the \
                         record_lexicon_hit match arm"
                     ),
@@ -554,8 +553,7 @@ mod tests {
                 "zh" => after.hits_zh,
                 _ => unreachable!("baseline match already exhausted"),
             };
-            assert!(
-                v_after > *base,
+            assert!(v_after > *base,
                 "hits_{tag} did not increment — record_lexicon_hit \
                  must have a match arm for {tag:?}"
             );
@@ -570,13 +568,11 @@ mod tests {
         let before = snapshot();
         record_lexicon_hit(Some("xx-unsupported-tag"), "en");
         let after = snapshot();
-        assert_eq!(
-            after.hits_en,
+        assert_eq!(after.hits_en,
             before.hits_en + 1,
             "fallback must bump hits_en"
         );
-        assert_eq!(
-            after.unknown_tag_fallbacks_total,
+        assert_eq!(after.unknown_tag_fallbacks_total,
             before.unknown_tag_fallbacks_total + 1,
             "fallback must bump unknown_tag_fallbacks_total"
         );
@@ -589,13 +585,11 @@ mod tests {
         let before = snapshot();
         record_lexicon_hit(None, "en");
         let after = snapshot();
-        assert_eq!(
-            after.hits_en,
+        assert_eq!(after.hits_en,
             before.hits_en + 1,
             "None input still bumps hits_en"
         );
-        assert_eq!(
-            after.unknown_tag_fallbacks_total, before.unknown_tag_fallbacks_total,
+        assert_eq!(after.unknown_tag_fallbacks_total, before.unknown_tag_fallbacks_total,
             "None input is NOT a fallback — counter must NOT increment"
         );
     }
@@ -608,8 +602,7 @@ mod tests {
         record_lexicon_hit(Some("en"), "en");
         let after = snapshot();
         assert_eq!(after.hits_en, before.hits_en + 1);
-        assert_eq!(
-            after.unknown_tag_fallbacks_total, before.unknown_tag_fallbacks_total,
+        assert_eq!(after.unknown_tag_fallbacks_total, before.unknown_tag_fallbacks_total,
             "direct en hit is NOT a fallback"
         );
     }
@@ -628,17 +621,14 @@ mod tests {
         record_match_strategy_fire(MatchStrategy::FirstTokenWithHebrewClitics);
         let after = snapshot();
         assert_eq!(after.strategy_first_token, before.strategy_first_token + 1);
-        assert_eq!(
-            after.strategy_first_bigram,
+        assert_eq!(after.strategy_first_bigram,
             before.strategy_first_bigram + 1
         );
         assert_eq!(after.strategy_substring, before.strategy_substring + 1);
-        assert_eq!(
-            after.strategy_first_token_with_arabic_clitics,
+        assert_eq!(after.strategy_first_token_with_arabic_clitics,
             before.strategy_first_token_with_arabic_clitics + 1
         );
-        assert_eq!(
-            after.strategy_first_token_with_hebrew_clitics,
+        assert_eq!(after.strategy_first_token_with_hebrew_clitics,
             before.strategy_first_token_with_hebrew_clitics + 1
         );
     }
@@ -656,25 +646,20 @@ mod tests {
         record_arabic_peel_depth(PeelOutcome::MatchedAtDepth(4)); // clamps to bucket 3
         record_arabic_peel_depth(PeelOutcome::BudgetExhausted);
         let after = snapshot();
-        assert_eq!(
-            after.arabic_peel_depth_0_matches,
+        assert_eq!(after.arabic_peel_depth_0_matches,
             before.arabic_peel_depth_0_matches + 1
         );
-        assert_eq!(
-            after.arabic_peel_depth_1_matches,
+        assert_eq!(after.arabic_peel_depth_1_matches,
             before.arabic_peel_depth_1_matches + 1
         );
-        assert_eq!(
-            after.arabic_peel_depth_2_matches,
+        assert_eq!(after.arabic_peel_depth_2_matches,
             before.arabic_peel_depth_2_matches + 1
         );
         // depth 3 AND clamped depth 4 → +2 in the depth-3 bucket
-        assert_eq!(
-            after.arabic_peel_depth_3_matches,
+        assert_eq!(after.arabic_peel_depth_3_matches,
             before.arabic_peel_depth_3_matches + 2
         );
-        assert_eq!(
-            after.arabic_peel_depth_exhausted,
+        assert_eq!(after.arabic_peel_depth_exhausted,
             before.arabic_peel_depth_exhausted + 1
         );
     }
@@ -691,25 +676,20 @@ mod tests {
         record_hebrew_peel_depth(PeelOutcome::MatchedAtDepth(7)); // clamps to bucket 3
         record_hebrew_peel_depth(PeelOutcome::BudgetExhausted);
         let after = snapshot();
-        assert_eq!(
-            after.hebrew_peel_depth_0_matches,
+        assert_eq!(after.hebrew_peel_depth_0_matches,
             before.hebrew_peel_depth_0_matches + 1
         );
-        assert_eq!(
-            after.hebrew_peel_depth_1_matches,
+        assert_eq!(after.hebrew_peel_depth_1_matches,
             before.hebrew_peel_depth_1_matches + 1
         );
-        assert_eq!(
-            after.hebrew_peel_depth_2_matches,
+        assert_eq!(after.hebrew_peel_depth_2_matches,
             before.hebrew_peel_depth_2_matches + 1
         );
         // depth 3 AND clamped depth 7 → +2 in the depth-3 bucket
-        assert_eq!(
-            after.hebrew_peel_depth_3_matches,
+        assert_eq!(after.hebrew_peel_depth_3_matches,
             before.hebrew_peel_depth_3_matches + 2
         );
-        assert_eq!(
-            after.hebrew_peel_depth_exhausted,
+        assert_eq!(after.hebrew_peel_depth_exhausted,
             before.hebrew_peel_depth_exhausted + 1
         );
     }

@@ -187,8 +187,7 @@ mod tests {
 
     #[test]
     fn config_round_trips_through_json() {
-        let cfg = ConnectorConfig::new(
-            ConnectorKind::GoogleDrive,
+        let cfg = ConnectorConfig::new(ConnectorKind::GoogleDrive,
             AuthKind::OAuth2,
             ScopeId::new_v4(),
         )

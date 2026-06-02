@@ -63,16 +63,14 @@ fn ingest_query_forget_one_scope_preserves_the_other() {
     let mut ids_b = Vec::new();
     for i in 0..5 {
         let ra = store
-            .ingest(
-                scope_a,
+            .ingest(scope_a,
                 &body_for("A", i),
                 Some("integration:ingest"),
                 ImportanceClass::Useful,
             )
             .expect("ingest A");
         let rb = store
-            .ingest(
-                scope_b,
+            .ingest(scope_b,
                 &body_for("B", i),
                 Some("integration:ingest"),
                 ImportanceClass::Useful,
@@ -83,16 +81,14 @@ fn ingest_query_forget_one_scope_preserves_the_other() {
     }
 
     // 2. Both scopes are queryable + readable.
-    assert_eq!(
-        store
+    assert_eq!(store
             .search_fts(scope_a, "migration", 100)
             .expect("search A pre-forget")
             .len(),
         5,
         "scope A's FTS hits should be its own five rows"
     );
-    assert_eq!(
-        store
+    assert_eq!(store
             .search_fts(scope_b, "migration", 100)
             .expect("search B pre-forget")
             .len(),
@@ -121,8 +117,7 @@ fn ingest_query_forget_one_scope_preserves_the_other() {
     let post_forget_a: Vec<EvidenceId> = store
         .search_fts(scope_a, "migration", 100)
         .expect("search A post-forget");
-    assert!(
-        post_forget_a.is_empty(),
+    assert!(post_forget_a.is_empty(),
         "scope A must have no FTS hits after forget, got {} hits",
         post_forget_a.len()
     );
@@ -130,8 +125,7 @@ fn ingest_query_forget_one_scope_preserves_the_other() {
     // 4b. Scope A's body reads fail — the CEK wrap is gone.
     for &id in &ids_a {
         let err = store.read_body(id);
-        assert!(
-            err.is_err(),
+        assert!(err.is_err(),
             "scope A read_body must fail after forget, got {err:?}"
         );
     }
@@ -140,14 +134,12 @@ fn ingest_query_forget_one_scope_preserves_the_other() {
     let post_forget_b: Vec<EvidenceId> = store
         .search_fts(scope_b, "migration", 100)
         .expect("search B post-forget");
-    assert_eq!(
-        post_forget_b.len(),
+    assert_eq!(post_forget_b.len(),
         5,
         "scope B's FTS hits must survive scope A's forget"
     );
     for &id in &ids_b {
-        assert_eq!(
-            store.read_body(id).expect("read body B post-forget").len(),
+        assert_eq!(store.read_body(id).expect("read body B post-forget").len(),
             BODY_SIZE
         );
     }
@@ -156,12 +148,10 @@ fn ingest_query_forget_one_scope_preserves_the_other() {
     drop(store);
     let store = open_store(&path);
     let tombstones = store.load_forgotten_scopes().expect("load forgotten");
-    assert!(
-        tombstones.contains(&scope_a),
+    assert!(tombstones.contains(&scope_a),
         "scope A's tombstone must survive reopen, got {tombstones:?}"
     );
-    assert!(
-        !tombstones.contains(&scope_b),
+    assert!(!tombstones.contains(&scope_b),
         "scope B must NOT be tombstoned"
     );
 }

@@ -511,8 +511,7 @@ mod blocking_impl {
                 .headers()
                 .iter()
                 .map(|(k, v)| {
-                    (
-                        k.as_str().to_ascii_lowercase(),
+                    (k.as_str().to_ascii_lowercase(),
                         v.to_str().unwrap_or("").to_string(),
                     )
                 })
@@ -572,8 +571,7 @@ mod blocking_impl {
             // panics if the invariant is ever broken by a future
             // refactor) instead of a synthetic `Err` that would lie
             // about which retry failed.
-            unreachable!(
-                "BlockingHttpTransport retry loop must always return inside the loop body",
+            unreachable!("BlockingHttpTransport retry loop must always return inside the loop body",
             );
         }
     }
@@ -850,8 +848,7 @@ mod tests {
     fn retry_policy_honours_server_hint() {
         let p = RetryPolicy::default();
         // Server says "wait 60s" — that beats our exponential.
-        assert_eq!(
-            p.backoff(1, Some(Duration::from_secs(60))),
+        assert_eq!(p.backoff(1, Some(Duration::from_secs(60))),
             Duration::from_secs(60)
         );
         // Server says "wait 1ms" — our exponential floor still wins.
@@ -868,8 +865,7 @@ mod tests {
         let p = RetryPolicy::default();
         let pathological = Duration::from_secs(86_400); // 24 hours
         let observed = p.backoff(1, Some(pathological));
-        assert_eq!(
-            observed, DEFAULT_MAX_RETRY_AFTER,
+        assert_eq!(observed, DEFAULT_MAX_RETRY_AFTER,
             "Retry-After hint must be clamped to DEFAULT_MAX_RETRY_AFTER"
         );
     }
@@ -913,8 +909,7 @@ mod tests {
         // (every cloud SaaS we target issues 500 for transient
         // capacity / dependency-blip events that succeed on retry).
         for s in [408u16, 429, 500, 502, 503, 504] {
-            assert!(
-                HttpResponse {
+            assert!(HttpResponse {
                     status: s,
                     headers: vec![],
                     body: vec![],
@@ -924,8 +919,7 @@ mod tests {
             );
         }
         for s in [200u16, 301, 400, 401, 403, 404, 409, 422] {
-            assert!(
-                !HttpResponse {
+            assert!(!HttpResponse {
                     status: s,
                     headers: vec![],
                     body: vec![],
@@ -964,8 +958,7 @@ mod tests {
         assert_eq!(req.method, HttpMethod::Get);
         assert_eq!(req.headers.len(), 2);
         assert_eq!(req.headers[0], ("X-Trace".into(), "abc".into()));
-        assert_eq!(
-            req.headers[1],
+        assert_eq!(req.headers[1],
             ("Authorization".into(), "Bearer xyzzy".into())
         );
     }
@@ -973,8 +966,7 @@ mod tests {
     #[test]
     fn mock_transport_returns_canned_response() {
         let mock = MockHttpTransport::new();
-        mock.expect(
-            HttpMethod::Get,
+        mock.expect(HttpMethod::Get,
             "https://api.example.com/users",
             MockResponse::ok_json(br#"{"items":[]}"#.to_vec()),
         );
@@ -990,8 +982,7 @@ mod tests {
     fn mock_transport_returns_fifo_sequence() {
         let mock = MockHttpTransport::new();
         for i in 0..3 {
-            mock.expect(
-                HttpMethod::Get,
+            mock.expect(HttpMethod::Get,
                 "https://api.example.com/page",
                 MockResponse::ok_json(format!(r#"{{"page":{i}}}"#).into_bytes()),
             );
@@ -1011,8 +1002,7 @@ mod tests {
         // for any caller that constructed the mock with the
         // wire-style casing.
         let mock = MockHttpTransport::new();
-        mock.expect(
-            HttpMethod::Get,
+        mock.expect(HttpMethod::Get,
             "https://api.example.com/x",
             MockResponse {
                 status: 429,
@@ -1035,13 +1025,11 @@ mod tests {
     #[test]
     fn mock_transport_records_requests() {
         let mock = MockHttpTransport::new();
-        mock.expect(
-            HttpMethod::Post,
+        mock.expect(HttpMethod::Post,
             "https://api.example.com/token",
             MockResponse::ok_json(br#"{"access_token":"a"}"#.to_vec()),
         );
-        let _ = mock.post(
-            "https://api.example.com/token",
+        let _ = mock.post("https://api.example.com/token",
             &[("Content-Type", "application/x-www-form-urlencoded")],
             b"grant_type=refresh_token&refresh_token=r",
         );
@@ -1049,8 +1037,7 @@ mod tests {
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].method, HttpMethod::Post);
         assert_eq!(recorded[0].url, "https://api.example.com/token");
-        assert_eq!(
-            recorded[0].body,
+        assert_eq!(recorded[0].body,
             b"grant_type=refresh_token&refresh_token=r"
         );
     }

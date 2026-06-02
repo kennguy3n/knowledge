@@ -127,8 +127,7 @@ impl NsmGuard {
     /// bug" rationale.
     fn open() -> Self {
         let fd = driver::nsm_init();
-        assert!(
-            fd >= 0,
+        assert!(fd >= 0,
             "nitro-tee: nsm_init() returned {fd}; \
              the synthesis binary was built with the `nitro-tee` feature \
              but /dev/nsm is unavailable — this build must only run inside \
@@ -182,11 +181,9 @@ impl TeeRuntime for NitroTeeRuntime {
 
         let document_bytes: Vec<u8> = match response {
             Response::Attestation { document } => document,
-            Response::Error(err) => panic!(
-                "nitro-tee: NSM returned ErrorCode {err:?} for Attestation request"
+            Response::Error(err) => panic!("nitro-tee: NSM returned ErrorCode {err:?} for Attestation request"
             ),
-            other => panic!(
-                "nitro-tee: NSM returned unexpected response variant {other:?} for Attestation request"
+            other => panic!("nitro-tee: NSM returned unexpected response variant {other:?} for Attestation request"
             ),
         };
 
@@ -207,8 +204,7 @@ impl TeeRuntime for NitroTeeRuntime {
         // attestation document from the `signature` slot below.
         let measurement: ContentHash = truncate_or_pad_to_content_hash(&pcr0_bytes);
 
-        AttestationReport::new(
-            TeePlatform::NitroEnclaves,
+        AttestationReport::new(TeePlatform::NitroEnclaves,
             measurement,
             nonce.to_vec(),
             // Full COSE_Sign1 envelope so a downstream verifier can
@@ -247,16 +243,13 @@ pub(crate) fn parse_pcr0_from_attestation_document(document_bytes: &[u8]) -> Vec
         CborValue::Array(arr) => arr,
         CborValue::Tag(18, inner) => match *inner {
             CborValue::Array(arr) => arr,
-            other => panic!(
-                "nitro-tee: COSE_Sign1_Tagged (CBOR tag 18) inner value was not a CBOR array; got {other:?}"
+            other => panic!("nitro-tee: COSE_Sign1_Tagged (CBOR tag 18) inner value was not a CBOR array; got {other:?}"
             ),
         },
-        other => panic!(
-            "nitro-tee: COSE_Sign1 envelope was neither a bare CBOR array nor a CBOR tag 18 (COSE_Sign1_Tagged); got {other:?}"
+        other => panic!("nitro-tee: COSE_Sign1 envelope was neither a bare CBOR array nor a CBOR tag 18 (COSE_Sign1_Tagged); got {other:?}"
         ),
     };
-    assert!(
-        cose_array.len() == 4,
+    assert!(cose_array.len() == 4,
         "nitro-tee: COSE_Sign1 envelope must have exactly 4 elements per RFC 8152 §4.2; got {}",
         cose_array.len()
     );
@@ -358,10 +351,8 @@ mod tests {
     /// `COSE_Sign1_Tagged` shape.
     fn build_synthetic_attestation_document(pcr0: &[u8]) -> Vec<u8> {
         // Inner payload: a CBOR map { "pcrs": { 0u32: bstr(pcr0) } }.
-        let payload = CborValue::Map(vec![(
-            CborValue::Text("pcrs".into()),
-            CborValue::Map(vec![(
-                CborValue::Integer(0u32.into()),
+        let payload = CborValue::Map(vec![(CborValue::Text("pcrs".into()),
+            CborValue::Map(vec![(CborValue::Integer(0u32.into()),
                 CborValue::Bytes(pcr0.to_vec()),
             )]),
         )]);

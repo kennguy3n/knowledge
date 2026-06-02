@@ -1,19 +1,19 @@
 //! CJK / Thai bigram precomputation used by the schema v15 FTS5
-//! bigram lane (Phase 1.2.1 — custom bigram tokeniser).
+//! bigram lane (custom bigram tokeniser).
 //!
-//! Phase 1.2 added the [`crate::script::contains_cjk_or_thai`]
+//! added the [`crate::script::contains_cjk_or_thai`]
 //! routing predicate and a trigram-tokenised companion table
 //! `evidence_fts_cjk`. SQLite FTS5's built-in `trigram` tokeniser
 //! requires query terms to be **at least three codepoints** — a
 //! 2-codepoint CJK query like `天気` (Japanese "weather") returns
 //! `Ok(vec![])` because the tokeniser produces no trigrams for the
 //! query side and rejects the MATCH with an empty result set (or
-//! a swallowed error on some SQLite builds). Phase 1.2 documented
+//! a swallowed error on some SQLite builds).  documented
 //! this as a known limitation and noted "a future phase can
 //! register a Rust-side custom FTS5 bigram tokeniser via the
 //! `fts5_api` FFI to close that gap".
 //!
-//! Phase 1.2.1 implements that gap-closing recall lane **without
+//!  implements that gap-closing recall lane **without
 //! reaching for `fts5_api`** — the idiomatic SQLite approach is
 //! to pre-compute overlapping 2-codepoint windows over the
 //! CJK / Thai portion of the body at write time and store the
@@ -24,7 +24,7 @@
 //! `"天気 気予 予報"` tokenises as the three independent tokens
 //! `天気`, `気予`, `予報`. A 2-codepoint query `天気` then matches
 //! every row whose bigram-precomputed body contains the token
-//! `天気` — exactly the recall lane Phase 1.2 deferred.
+//! `天気` — exactly the recall lane  deferred.
 //!
 //! Why precomputed bigrams instead of a custom FTS5 tokeniser:
 //!
@@ -38,7 +38,7 @@
 //!   for the cryptographic-forgetting guarantee (REBUILD must
 //!   wipe residual plaintext tokens from a purged scope).
 //! * Tokeniser swaps are FTS5 table options, not column changes,
-//!   so the bigram lane is additive in the same shape Phase 1.2
+//!   so the bigram lane is additive in the same shape 
 //!   used for the trigram lane — purge / rebuild / search all
 //!   fan out across the new table without any restructure of
 //!   the existing two.
@@ -229,8 +229,7 @@ mod tests {
             "안녕하세요",       // Korean Hangul — whitespace-segmented
             "Triển khai dự án", // Vietnamese Latin
         ] {
-            assert_eq!(
-                compute_cjk_bigrams(s),
+            assert_eq!(compute_cjk_bigrams(s),
                 "",
                 "{s:?} unexpectedly produced bigrams"
             );
@@ -289,28 +288,24 @@ mod tests {
 
     #[test]
     fn compute_cjk_bigram_query_single_term_for_two_codepoints() {
-        assert_eq!(
-            compute_cjk_bigram_query("天気"),
+        assert_eq!(compute_cjk_bigram_query("天気"),
             Some("\"天気\"".to_string())
         );
     }
 
     #[test]
     fn compute_cjk_bigram_query_and_chain_for_longer_queries() {
-        assert_eq!(
-            compute_cjk_bigram_query("天気予報"),
+        assert_eq!(compute_cjk_bigram_query("天気予報"),
             Some("\"天気\" AND \"気予\" AND \"予報\"".to_string())
         );
     }
 
     #[test]
     fn compute_cjk_bigram_query_ignores_latin_chars_in_mixed_query() {
-        assert_eq!(
-            compute_cjk_bigram_query("Apple 天気"),
+        assert_eq!(compute_cjk_bigram_query("Apple 天気"),
             Some("\"天気\"".to_string())
         );
-        assert_eq!(
-            compute_cjk_bigram_query("Project 計画書 review"),
+        assert_eq!(compute_cjk_bigram_query("Project 計画書 review"),
             Some("\"計画\" AND \"画書\"".to_string())
         );
     }
@@ -334,14 +329,12 @@ mod tests {
             let written = compute_cjk_bigrams(s);
             match compute_cjk_bigram_query(s) {
                 None => {
-                    assert!(
-                        written.is_empty(),
+                    assert!(written.is_empty(),
                         "writer produced {written:?} but reader would skip for {s:?}"
                     );
                 }
                 Some(_) => {
-                    assert!(
-                        !written.is_empty(),
+                    assert!(!written.is_empty(),
                         "writer produced empty content but reader would query for {s:?}"
                     );
                 }

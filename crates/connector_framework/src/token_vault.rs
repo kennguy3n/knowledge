@@ -100,8 +100,7 @@ pub struct OAuth2Token {
 impl OAuth2Token {
     /// Construct a new token bundle with both access and refresh
     /// tokens — the common case for confidential-client flows.
-    pub fn new(
-        access_token: impl Into<String>,
+    pub fn new(access_token: impl Into<String>,
         refresh_token: impl Into<String>,
         expires_at: DateTime<Utc>,
         scope: impl Into<String>,
@@ -122,8 +121,7 @@ impl OAuth2Token {
     /// string to [`Self::new`]. The vault uses the `None` discriminant
     /// to surface a structured re-auth-required error instead of
     /// attempting an empty-token refresh grant.
-    pub fn new_without_refresh(
-        access_token: impl Into<String>,
+    pub fn new_without_refresh(access_token: impl Into<String>,
         expires_at: DateTime<Utc>,
         scope: impl Into<String>,
     ) -> Self {
@@ -213,8 +211,7 @@ pub trait OAuth2CodeExchange: Send + Sync {
     ///
     /// Returns [`ConnectorError::Auth`] on provider rejection or
     /// [`ConnectorError::Transport`] on network failure.
-    fn exchange_code(
-        &self,
+    fn exchange_code(&self,
         config: &crate::config::ConnectorConfig,
         auth_code: &str,
     ) -> Result<OAuth2Token>;
@@ -286,8 +283,7 @@ impl OAuth2TokenVault {
     /// expiring soon, the existing token is returned unchanged.
     ///
     /// `skew` defaults to [`Self::default_skew`] when `None`.
-    pub fn refresh_if_expiring(
-        &mut self,
+    pub fn refresh_if_expiring(&mut self,
         instance: ConnectorInstanceId,
         now: DateTime<Utc>,
         skew: Option<Duration>,
@@ -317,8 +313,7 @@ impl OAuth2TokenVault {
                 .refresh_token
                 .as_ref()
                 .ok_or_else(|| {
-                    ConnectorError::TokenRefresh(
-                        "cannot refresh: no refresh_token stored for connector instance — \
+                    ConnectorError::TokenRefresh("cannot refresh: no refresh_token stored for connector instance — \
                          re-authorisation required"
                             .into(),
                     )
@@ -380,8 +375,7 @@ mod tests {
     fn put_and_get_round_trip() {
         let mut vault = OAuth2TokenVault::new();
         let id = ConnectorInstanceId::new_v4();
-        let tok = OAuth2Token::new(
-            "access-1",
+        let tok = OAuth2Token::new("access-1",
             "refresh-1",
             Utc::now() + Duration::hours(1),
             "drive.read",
@@ -402,8 +396,7 @@ mod tests {
         let mut vault = OAuth2TokenVault::new();
         let id = ConnectorInstanceId::new_v4();
         let now = Utc::now();
-        let expired = OAuth2Token::new(
-            "old-access",
+        let expired = OAuth2Token::new("old-access",
             "old-refresh",
             now - Duration::seconds(5),
             "scope",
@@ -417,8 +410,7 @@ mod tests {
         };
         let updated = vault.refresh_if_expiring(id, now, None, &r).unwrap();
         assert_eq!(updated.access_token.expose(), "new-access");
-        assert_eq!(
-            updated.refresh_token.as_ref().map(SecretToken::expose),
+        assert_eq!(updated.refresh_token.as_ref().map(SecretToken::expose),
             Some("new-refresh")
         );
         assert_eq!(updated.expires_at, new_expiry);
@@ -429,8 +421,7 @@ mod tests {
         let mut vault = OAuth2TokenVault::new();
         let id = ConnectorInstanceId::new_v4();
         let now = Utc::now();
-        let tok = OAuth2Token::new(
-            "fresh-access",
+        let tok = OAuth2Token::new("fresh-access",
             "old-refresh",
             now + Duration::hours(2),
             "scope",
@@ -451,8 +442,7 @@ mod tests {
         let id = ConnectorInstanceId::new_v4();
         let now = Utc::now();
         // Expires in 30s, well within the 120s skew window.
-        let tok = OAuth2Token::new(
-            "soon-to-expire",
+        let tok = OAuth2Token::new("soon-to-expire",
             "old-refresh",
             now + Duration::seconds(30),
             "scope",
@@ -466,8 +456,7 @@ mod tests {
         let updated = vault.refresh_if_expiring(id, now, None, &r).unwrap();
         assert_eq!(updated.access_token.expose(), "after-skew-refresh");
         // Refresh token preserved when refresher omits one.
-        assert_eq!(
-            updated.refresh_token.as_ref().map(SecretToken::expose),
+        assert_eq!(updated.refresh_token.as_ref().map(SecretToken::expose),
             Some("old-refresh")
         );
     }
@@ -484,8 +473,7 @@ mod tests {
         let now = Utc::now();
         // Expired token with NO refresh token — Slack legacy / PKCE
         // public-client style.
-        vault.put(
-            id,
+        vault.put(id,
             OAuth2Token::new_without_refresh("old-access", now - Duration::seconds(5), "scope"),
         );
         // The refresher must never run — use the failing one to
@@ -496,8 +484,7 @@ mod tests {
         match err {
             ConnectorError::TokenRefresh(msg) => {
                 assert!(msg.contains("no refresh_token stored"));
-                assert!(
-                    !msg.contains("provider rejected"),
+                assert!(!msg.contains("provider rejected"),
                     "must not have called the refresher: {msg}"
                 );
             }
@@ -510,8 +497,7 @@ mod tests {
         let mut vault = OAuth2TokenVault::new();
         let id = ConnectorInstanceId::new_v4();
         let now = Utc::now();
-        vault.put(
-            id,
+        vault.put(id,
             OAuth2Token::new("a", "r", now - Duration::seconds(1), "scope"),
         );
         let err = vault
@@ -522,8 +508,7 @@ mod tests {
 
     #[test]
     fn debug_does_not_leak_tokens() {
-        let s = format!(
-            "{:?}",
+        let s = format!("{:?}",
             OAuth2Token::new("supersecret", "refresh", Utc::now(), "scope")
         );
         assert!(!s.contains("supersecret"));

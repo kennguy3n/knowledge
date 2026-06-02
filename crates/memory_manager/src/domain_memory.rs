@@ -375,8 +375,7 @@ impl DomainMemoryObject {
     /// matching the `Critical`-class "no passive decay" rule from
     /// `docs/DESIGN.md` §4.3.
     pub fn decay_sweep(&mut self, now: DateTime<Utc>) -> DomainDecayReport {
-        self.decay_sweep_with(
-            now,
+        self.decay_sweep_with(now,
             Duration::days(DEFAULT_COMPLETED_WORKSTREAM_TTL_DAYS),
             Duration::days(DEFAULT_RESOLVED_RISK_TTL_DAYS),
             Duration::days(DEFAULT_RESOLVED_RISK_TTL_DAYS),
@@ -384,8 +383,7 @@ impl DomainMemoryObject {
     }
 
     /// Lower-level [`Self::decay_sweep`] exposing the per-class TTLs.
-    pub fn decay_sweep_with(
-        &mut self,
+    pub fn decay_sweep_with(&mut self,
         now: DateTime<Utc>,
         completed_workstream_ttl: Duration,
         resolved_risk_ttl: Duration,

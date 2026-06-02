@@ -45,19 +45,18 @@ use uuid::Uuid;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::phases::runtime::RuntimeState;
-use crate::report::{DemoReport, PhaseReport};
+use crate::stages::runtime::RuntimeState;
+use crate::report::{DemoReport, StageReport};
 
-const PHASE: &str = "export";
+const STAGE: &str = "export";
 
-pub fn run(
-    dataset: &Dataset,
+pub fn run(dataset: &Dataset,
     state: &mut RuntimeState,
     report: &mut DemoReport,
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Stage 8: Export Plane");
+    let mut stage = StageReport::new("Stage 8: Export Plane");
 
     // -------- Re-open the persistent concept graph -----------------
     //
@@ -67,8 +66,7 @@ pub fn run(
     // does not rehydrate the in-memory graph automatically, so we
     // explicitly drive [`PersistentConceptGraph::load_scope`] to
     // restore the canonical set produced by the concept-graph stage.
-    let db_path = state.graph_db_path.clone().expect(
-        "concept-graph stage must run before export stage to materialise the concept graph",
+    let db_path = state.graph_db_path.clone().expect("concept-graph stage must run before export stage to materialise the concept graph",
     );
     let mut pgraph = PersistentConceptGraph::open(&db_path, &state.master_key)
         .expect("re-open the persistent concept graph");
@@ -82,8 +80,7 @@ pub fn run(
     // fixtures.
     let canonical_ids: Vec<Uuid> = state.canonical_concept_ids.clone();
     let canonical_total = canonical_ids.len();
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "concept-graph stage surfaced at least 3 canonical concepts to export",
         canonical_total >= 3,
     );
@@ -112,19 +109,16 @@ pub fn run(
     let registry_elapsed = registry_started.elapsed();
     let registered_count = controls.concepts().count();
 
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "registry contains a control row for every approved canonical concept",
         registered_count == registered_ids.len(),
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "deny-by-default: at least one canonical concept has no control row",
         unregistered_id.is_some(),
     );
     if let Some(id) = unregistered_id {
-        log.check(
-            PHASE,
+        log.check(STAGE,
             "registry rejects the un-registered canonical concept",
             !controls.allows_concept(id, Uuid::nil(), Uuid::nil(), chrono::Utc::now()),
         );
@@ -140,8 +134,7 @@ pub fn run(
     let blocked_summary_id = Uuid::new_v4();
     let scope_for_export = dataset.tenant_scope.id;
     controls
-        .insert_summary(SummaryExportControl::new(
-            summary_id,
+        .insert_summary(SummaryExportControl::new(summary_id,
             scope_for_export,
             RedactionLevel::Partial,
         ))
@@ -178,8 +171,7 @@ pub fn run(
             SensitivityClass::Useful
         };
         let approved = workflow
-            .approve_for_export(
-                *id,
+            .approve_for_export(*id,
                 scope_for_export,
                 profile_id,
                 sensitivity,
@@ -192,8 +184,7 @@ pub fn run(
     let approval_elapsed = approval_started.elapsed();
     let approval_count = approved_concept_ids.len();
 
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "approval workflow accepted every registered canonical concept",
         approval_count == registered_ids.len(),
     );
@@ -201,8 +192,7 @@ pub fn run(
     // Negative case: re-approving the same concept must fail.
     let duplicate_blocked = if let Some(first) = registered_ids.first() {
         workflow
-            .approve_for_export(
-                *first,
+            .approve_for_export(*first,
                 scope_for_export,
                 profile_id,
                 SensitivityClass::Useful,
@@ -213,15 +203,13 @@ pub fn run(
     } else {
         false
     };
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "duplicate approval is rejected by the workflow",
         duplicate_blocked,
     );
 
     // -------- Profile + constraints -------------------------------
-    let mut profile = PortableConceptProfile::new(
-        "demo-export-profile",
+    let mut profile = PortableConceptProfile::new("demo-export-profile",
         "Export demo profile rendering canonical concepts to a downstream tool",
         "demo-downstream-tool",
         scope_for_export,
@@ -240,19 +228,16 @@ pub fn run(
     // is exercised by `with_constraints_max_concepts_tightens` in
     // `crates/export_plane/src/policy.rs`.
     profile.push_constraint(ExportConstraint::MaxConcepts(64));
-    profile.push_constraint(ExportConstraint::SensitivityCeiling(
-        SensitivityClass::Important,
+    profile.push_constraint(ExportConstraint::SensitivityCeiling(SensitivityClass::Important,
     ));
     profile.push_constraint(ExportConstraint::ScopeRestriction(vec![scope_for_export.0]));
     let profile_concept_count = profile.concepts.len() as u64;
 
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "profile carries every approved concept",
         profile.concepts.len() == approval_count,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "profile carries a non-empty constraint set",
         !profile.constraints.is_empty(),
     );
@@ -269,39 +254,33 @@ pub fn run(
     let approved_by_engine = decision.approved.len() as u64;
     let rejected_by_engine = decision.rejected.len() as u64;
 
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "policy engine approves every concept under the demo policy",
         approved_by_engine == profile_concept_count,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "policy engine rejects no concept under the demo policy",
         rejected_by_engine == 0,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "policy engine refuses raw evidence by default",
         !decision.allow_raw_evidence,
     );
 
     // -------- Render: ConceptsOnly --------------------------------
     let render_started = Instant::now();
-    let concepts_only = ExportView::from_decision(
-        &decision,
+    let concepts_only = ExportView::from_decision(&decision,
         profile.id,
         scope_for_export,
         ExportViewRequest::ConceptsOnly,
     )
     .expect("render ConceptsOnly view");
     let concepts_only_elapsed = render_started.elapsed();
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "ConceptsOnly view surfaces every approved concept",
         concepts_only.content.concepts().len() as u64 == approved_by_engine,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "ConceptsOnly view exposes no summaries or evidence pack",
         concepts_only.content.summaries().is_empty()
             && concepts_only.content.evidence_pack().is_none(),
@@ -314,8 +293,7 @@ pub fn run(
         scope_id: scope_for_export,
         body: "Demo channel summary surfaced via the export plane.".into(),
     };
-    let with_summaries = ExportView::from_decision(
-        &decision,
+    let with_summaries = ExportView::from_decision(&decision,
         profile.id,
         scope_for_export,
         ExportViewRequest::WithSummaries {
@@ -324,13 +302,11 @@ pub fn run(
     )
     .expect("render WithSummaries view");
     let with_summaries_elapsed = with_summaries_started.elapsed();
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "WithSummaries view exposes the supplied summary",
         with_summaries.content.summaries().len() == 1,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "WithSummaries view still surfaces the full approved concept set",
         with_summaries.content.concepts().len() as u64 == approved_by_engine,
     );
@@ -351,12 +327,10 @@ pub fn run(
     };
     let evidence_attempt =
         ExportView::from_decision(&decision, profile.id, scope_for_export, evidence_request);
-    let evidence_blocked = matches!(
-        evidence_attempt,
+    let evidence_blocked = matches!(evidence_attempt,
         Err(ExportViewError::RawEvidenceNotAuthorised)
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "WithEvidencePack is rejected when policy disallows raw evidence",
         evidence_blocked,
     );
@@ -366,39 +340,33 @@ pub fn run(
     let simulator = PolicySimulator::new(&policy, &controls);
     let simulation = simulator.simulate(&profile);
     let simulate_elapsed = simulate_started.elapsed();
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "simulator's included-concept set matches the engine's approved set",
         simulation.included_concepts.len() as u64 == approved_by_engine,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "simulator surfaces the registered exportable summary",
         simulation.included_summaries.contains(&summary_id),
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "simulator excludes the non-exportable summary",
         simulation
             .excluded_summaries
             .iter()
             .any(|ex| ex.entity_id == blocked_summary_id),
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "simulator estimate is non-trivial when concepts are included",
         simulation.total_export_size_estimate > 0,
     );
-    log.check(
-        PHASE,
+    log.check(STAGE,
         "simulator does not authorise raw-evidence emission under the demo policy",
         !simulation.would_include_evidence,
     );
 
     // -------- Audit ------------------------------------------------
     let audit_started = Instant::now();
-    log_export(
-        &mut state.audit_log,
+    log_export(&mut state.audit_log,
         profile.id,
         scope_for_export,
         Actor::System,
@@ -409,8 +377,7 @@ pub fn run(
             .collect::<Vec<_>>(),
     )
     .expect("log_export must succeed");
-    log_export_simulated(
-        &mut state.audit_log,
+    log_export_simulated(&mut state.audit_log,
         profile.id,
         scope_for_export,
         Actor::System,
@@ -426,38 +393,31 @@ pub fn run(
     state.export_views_rendered += 2; // ConceptsOnly + WithSummaries
     state.export_simulations_run += 1;
 
-    phase.timing = started.elapsed();
-    phase.stat("canonical_concepts_total", canonical_total.to_string());
-    phase.stat("controls_registered", registered_count.to_string());
-    phase.stat("approvals_minted", approval_count.to_string());
-    phase.stat("engine_approved_concepts", approved_by_engine.to_string());
-    phase.stat("engine_rejected_concepts", rejected_by_engine.to_string());
-    phase.stat(
-        "view_concepts_only_concepts",
+    stage.timing = started.elapsed();
+    stage.stat("canonical_concepts_total", canonical_total.to_string());
+    stage.stat("controls_registered", registered_count.to_string());
+    stage.stat("approvals_minted", approval_count.to_string());
+    stage.stat("engine_approved_concepts", approved_by_engine.to_string());
+    stage.stat("engine_rejected_concepts", rejected_by_engine.to_string());
+    stage.stat("view_concepts_only_concepts",
         concepts_only.content.concepts().len().to_string(),
     );
-    phase.stat(
-        "view_with_summaries_summaries",
+    stage.stat("view_with_summaries_summaries",
         with_summaries.content.summaries().len().to_string(),
     );
-    phase.stat(
-        "simulator_included_concepts",
+    stage.stat("simulator_included_concepts",
         simulation.included_concepts.len().to_string(),
     );
-    phase.stat(
-        "simulator_excluded_concepts",
+    stage.stat("simulator_excluded_concepts",
         simulation.excluded_concepts.len().to_string(),
     );
-    phase.stat(
-        "simulator_included_summaries",
+    stage.stat("simulator_included_summaries",
         simulation.included_summaries.len().to_string(),
     );
-    phase.stat(
-        "simulator_size_estimate_bytes",
+    stage.stat("simulator_size_estimate_bytes",
         simulation.total_export_size_estimate.to_string(),
     );
-    phase.note(
-        "Deny-by-default ExportControlRegistry + PolicyEngine + PolicySimulator + \
+    stage.note("Deny-by-default ExportControlRegistry + PolicyEngine + PolicySimulator + \
          ConceptApprovalWorkflow + ExportView render pipeline driven by the concept-graph stage's \
          canonical concepts.",
     );
@@ -466,14 +426,12 @@ pub fn run(
     report.count("export_concepts_approved", state.export_concepts_approved);
     report.count("export_views_rendered", state.export_views_rendered);
     report.count("export_simulations_run", state.export_simulations_run);
-    report.add_phase(phase);
-    report.add_benchmark(
-        "export_registry_inserts",
+    report.add_stage(stage);
+    report.add_benchmark("export_registry_inserts",
         registered_count as u64,
         registry_elapsed,
     );
-    report.add_benchmark(
-        "export_concept_approvals",
+    report.add_benchmark("export_concept_approvals",
         approval_count as u64,
         approval_elapsed,
     );

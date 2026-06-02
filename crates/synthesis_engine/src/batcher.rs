@@ -114,8 +114,7 @@ impl<T> PendingHandle<T> {
             // (e.g. shutdown), in which case treat it as an engine
             // refusal so callers can surface a stable error to
             // upstream consumers.
-            Err(_) => Err(EngineError::engine(
-                "batcher dropped before this request was dispatched",
+            Err(_) => Err(EngineError::engine("batcher dropped before this request was dispatched",
             )),
         }
     }
@@ -128,8 +127,7 @@ impl<T> PendingHandle<T> {
         match self.rx.try_recv() {
             Ok(r) => r.map(Some),
             Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Disconnected) => Err(EngineError::engine(
-                "batcher dropped before this request was dispatched",
+            Err(TryRecvError::Disconnected) => Err(EngineError::engine("batcher dropped before this request was dispatched",
             )),
         }
     }
@@ -157,8 +155,7 @@ impl<C: HttpClient> SynthesisBatcher<C> {
     /// oldest pending request that the batcher will tolerate
     /// before flushing regardless of queue depth. Both are
     /// independent triggers — the first to fire flushes.
-    pub fn new(
-        synthesizer: HttpManagedEndpointSynthesizer<C>,
+    pub fn new(synthesizer: HttpManagedEndpointSynthesizer<C>,
         batch_size: usize,
         batch_timeout: Duration,
     ) -> Self {
@@ -174,7 +171,7 @@ impl<C: HttpClient> SynthesisBatcher<C> {
     /// Constructor variant that wires a shared [`RateLimiter`]
     /// onto the wrapped synthesizer before storing it.
     ///
-    /// This is the cost-control hook called out in Item 20: a
+    /// This is the cost-control hook called out in: a
     /// single limiter shared across every synthesizer instance
     /// the batcher dispatches through, so a many-scope flush
     /// respects the operator's per-minute cap even when the
@@ -187,8 +184,7 @@ impl<C: HttpClient> SynthesisBatcher<C> {
     /// throwaway `HttpClient`, both of which are clumsier than
     /// "wire it up before you hand the synthesizer to the
     /// batcher".
-    pub fn with_shared_rate_limiter(
-        synthesizer: HttpManagedEndpointSynthesizer<C>,
+    pub fn with_shared_rate_limiter(synthesizer: HttpManagedEndpointSynthesizer<C>,
         batch_size: usize,
         batch_timeout: Duration,
         limiter: Arc<RateLimiter>,
@@ -226,8 +222,7 @@ impl<C: HttpClient> SynthesisBatcher<C> {
     /// the batch is flushed. The caller is responsible for
     /// driving the flush (typically via
     /// [`Self::flush_if_ready`] on a worker tick).
-    pub fn submit_domain(
-        &self,
+    pub fn submit_domain(&self,
         handle: TieredWindowHandle,
         input: DomainSynthesisInput,
     ) -> PendingHandle<DomainSynthesisResult> {
@@ -247,8 +242,7 @@ impl<C: HttpClient> SynthesisBatcher<C> {
     }
 
     /// Enqueue a tenant-tier synthesis request.
-    pub fn submit_tenant(
-        &self,
+    pub fn submit_tenant(&self,
         handle: TieredWindowHandle,
         input: TenantSynthesisInput,
     ) -> PendingHandle<TenantSynthesisResult> {
@@ -363,8 +357,7 @@ mod tests {
         let win = mgr
             .open_window(scope, now - ChronoDuration::seconds(60), now)
             .unwrap();
-        SynthesisObject::new(
-            scope,
+        SynthesisObject::new(scope,
             win,
             SynthesisObjectType::ChannelRecap,
             payload.to_vec(),
@@ -378,8 +371,7 @@ mod tests {
         let win = mgr
             .open_window(scope, now - ChronoDuration::seconds(60), now)
             .unwrap();
-        SynthesisObject::new(
-            scope,
+        SynthesisObject::new(scope,
             win,
             SynthesisObjectType::DomainSummary,
             payload.to_vec(),
@@ -387,8 +379,7 @@ mod tests {
         )
     }
 
-    fn build_domain_input(
-        domain_scope: ScopeId,
+    fn build_domain_input(domain_scope: ScopeId,
         channel: ScopeId,
         body: &[u8],
     ) -> DomainSynthesisInput {
@@ -399,8 +390,7 @@ mod tests {
         DomainSynthesisInput::new(&domain, outputs).unwrap()
     }
 
-    fn build_tenant_input(
-        tenant_scope: ScopeId,
+    fn build_tenant_input(tenant_scope: ScopeId,
         domain_scope: ScopeId,
         body: &[u8],
     ) -> TenantSynthesisInput {
@@ -410,8 +400,7 @@ mod tests {
         tenant.admit_approved_document(approved_ref.clone());
         let outputs =
             vec![DomainOutput::from_domain_object(domain_summary(domain_scope, body)).unwrap()];
-        let docs = vec![ApprovedDocument::new(
-            approved_ref,
+        let docs = vec![ApprovedDocument::new(approved_ref,
             b"approved-blob".to_vec(),
         )];
         TenantSynthesisInput::new(&tenant, outputs, docs).unwrap()
@@ -419,8 +408,7 @@ mod tests {
 
     fn open_domain(mgr: &mut SynthesisWindowManager, scope: ScopeId) -> TieredWindowHandle {
         let now = Utc::now();
-        mgr.open_tiered_window(
-            scope,
+        mgr.open_tiered_window(scope,
             WindowScopeTier::Domain,
             now - ChronoDuration::seconds(60),
             now,
@@ -430,8 +418,7 @@ mod tests {
 
     fn open_tenant(mgr: &mut SynthesisWindowManager, scope: ScopeId) -> TieredWindowHandle {
         let now = Utc::now();
-        mgr.open_tiered_window(
-            scope,
+        mgr.open_tiered_window(scope,
             WindowScopeTier::Tenant,
             now - ChronoDuration::seconds(60),
             now,
@@ -453,8 +440,7 @@ mod tests {
 
         assert_eq!(batcher.pending_len(), 1);
         assert!(!batcher.should_flush(), "queue is below batch_size");
-        assert!(
-            matches!(pending.try_take(), Ok(None)),
+        assert!(matches!(pending.try_take(), Ok(None)),
             "submit must not dispatch eagerly"
         );
 
@@ -519,8 +505,7 @@ mod tests {
         // Sleep past the timeout; the next `should_flush` must
         // see the oldest pending crossing the threshold.
         std::thread::sleep(Duration::from_millis(80));
-        assert!(
-            batcher.should_flush(),
+        assert!(batcher.should_flush(),
             "batch_timeout must trigger flush even when below batch_size"
         );
         assert_eq!(batcher.flush_if_ready(&mut mgr), 1);
@@ -530,8 +515,7 @@ mod tests {
     fn shared_rate_limiter_caps_across_batch() {
         let synth = HttpManagedEndpointSynthesizer::new(cfg(), MockHttpClient::echo());
         let limiter = Arc::new(RateLimiter::new(2));
-        let batcher = SynthesisBatcher::with_shared_rate_limiter(
-            synth,
+        let batcher = SynthesisBatcher::with_shared_rate_limiter(synth,
             10,
             Duration::from_secs(60),
             Arc::clone(&limiter),
@@ -544,8 +528,7 @@ mod tests {
         for i in 0..3 {
             let handle = open_domain(&mut mgr, domain_scope);
             let body = format!("recap-{i}");
-            pendings.push(batcher.submit_domain(
-                handle,
+            pendings.push(batcher.submit_domain(handle,
                 build_domain_input(domain_scope, channel, body.as_bytes()),
             ));
         }
@@ -555,12 +538,10 @@ mod tests {
             pendings.into_iter().map(PendingHandle::wait).collect();
         let ok = outcomes.iter().filter(|r| r.is_ok()).count();
         let err = outcomes.iter().filter(|r| r.is_err()).count();
-        assert_eq!(
-            ok, 2,
+        assert_eq!(ok, 2,
             "shared rate limiter must admit exactly `cap` across the batch"
         );
-        assert_eq!(
-            err, 1,
+        assert_eq!(err, 1,
             "the third request must be rejected by the shared limiter"
         );
         assert_eq!(limiter.current_window_count(), 2);
@@ -576,8 +557,7 @@ mod tests {
         let mut mgr = SynthesisWindowManager::new();
         let handle = open_tenant(&mut mgr, tenant_scope);
 
-        let pending = batcher.submit_tenant(
-            handle,
+        let pending = batcher.submit_tenant(handle,
             build_tenant_input(tenant_scope, domain_scope, b"a-domain"),
         );
         assert!(batcher.should_flush());

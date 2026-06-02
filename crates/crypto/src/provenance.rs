@@ -110,8 +110,7 @@ pub struct SynthesisActivity {
 
 impl SynthesisActivity {
     /// Construct a fresh activity record.
-    pub fn new(
-        agent_identity: impl Into<String>,
+    pub fn new(agent_identity: impl Into<String>,
         model_version: impl Into<String>,
         prompt_id: impl Into<String>,
         run_id: Uuid,
@@ -174,8 +173,7 @@ pub struct ProvenanceBundle {
 
 impl ProvenanceBundle {
     /// Construct a fresh bundle.
-    pub fn new(
-        entity_id: Uuid,
+    pub fn new(entity_id: Uuid,
         activity: SynthesisActivity,
         agent: ProvenanceAgent,
         derivations: Vec<EvidenceRef>,
@@ -301,10 +299,8 @@ mod tests {
     }
 
     fn fixture_bundle() -> ProvenanceBundle {
-        ProvenanceBundle::new(
-            Uuid::nil(),
-            SynthesisActivity::new(
-                "synth-pipeline:elected:device-42",
+        ProvenanceBundle::new(Uuid::nil(),
+            SynthesisActivity::new("synth-pipeline:elected:device-42",
                 "bonsai-1.7b@q1_0_g128",
                 "synth.summary.v1",
                 Uuid::nil(),

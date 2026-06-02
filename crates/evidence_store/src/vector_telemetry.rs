@@ -1,5 +1,5 @@
 //! Process-singleton observability counters for the multilingual
-//! embedding / vector-retrieval path (Phase 1.11).
+//! embedding / vector-retrieval path.
 //!
 //! Phases 1.3 – 1.10 closed the multilingual gaps on the lexical
 //! ([`crate::fts_telemetry`]) and classifier
@@ -123,7 +123,7 @@
 //!     kernel error, tokenizer issue, dimension mismatch
 //!     between runtime output and `OnnxModelConfig::dimension`).
 //!
-//! * **Pre-embedding routing decisions (Phase 1.12)** — three
+//! * **Pre-embedding routing decisions** — three
 //!   sibling counters covering the disposition of every call to
 //!   [`crate::embedding_routing::classify_for_embedding`] on a
 //!   production code path.  The pre-embed router short-circuits
@@ -166,7 +166,7 @@
 //!   demoted to per-row misses, etc.); the goal is to make
 //!   the rotation-rule violation operator-visible without
 //!   adding a new failure mode that didn't exist before
-//!   Phase 1.11.
+//!   .
 //!
 //! # Wire-format stability
 //!
@@ -231,7 +231,7 @@ pub(crate) struct Counters {
     // ─── model_tag rotation invariant ──────────────────────────
     pub(crate) model_tag_dimension_violations_total: AtomicU64,
 
-    // ─── Pre-embedding routing decisions (Phase 1.12) ──────────
+    // ─── Pre-embedding routing decisions ──────────
     pub(crate) pre_embed_admitted_total: AtomicU64,
     pub(crate) pre_embed_skipped_empty_after_trim_total: AtomicU64,
     pub(crate) pre_embed_skipped_no_linguistic_content_total: AtomicU64,
@@ -489,8 +489,7 @@ pub fn record_observed_dimension(model_tag: &str, dim: usize) {
             counters()
                 .model_tag_dimension_violations_total
                 .fetch_add(1, Ordering::Relaxed);
-            tracing::warn!(
-                model_tag,
+            tracing::warn!(model_tag,
                 first_observed_dim = seen,
                 conflicting_dim = dim,
                 "vector_telemetry: model_tag rotation rule violated — a single model_tag must map to a single output dimension; bump the tag on any model change"
@@ -643,16 +642,13 @@ mod tests {
         record_embedding_computed(EmbedSite::IndexWrite);
         record_embedding_computed(EmbedSite::LiveBody);
         let after = snapshot();
-        assert!(
-            after.query_embeddings_total > before.query_embeddings_total,
+        assert!(after.query_embeddings_total > before.query_embeddings_total,
             "Query bump must move query_embeddings_total upward by at least 1"
         );
-        assert!(
-            after.index_write_embeddings_total > before.index_write_embeddings_total,
+        assert!(after.index_write_embeddings_total > before.index_write_embeddings_total,
             "IndexWrite bump must move index_write_embeddings_total upward by at least 1"
         );
-        assert!(
-            after.live_body_embeddings_total > before.live_body_embeddings_total,
+        assert!(after.live_body_embeddings_total > before.live_body_embeddings_total,
             "LiveBody bump must move live_body_embeddings_total upward by at least 1"
         );
     }
@@ -667,20 +663,16 @@ mod tests {
         record_cache_outcome(CacheOutcome::MissDimension);
         record_cache_outcome(CacheOutcome::MissReadError);
         let after = snapshot();
-        assert!(
-            after.cache_hits_total > before.cache_hits_total,
+        assert!(after.cache_hits_total > before.cache_hits_total,
             "Hit bump must move cache_hits_total upward by at least 1"
         );
-        assert!(
-            after.cache_misses_no_row_total > before.cache_misses_no_row_total,
+        assert!(after.cache_misses_no_row_total > before.cache_misses_no_row_total,
             "MissNoRow bump must move cache_misses_no_row_total upward by at least 1"
         );
-        assert!(
-            after.cache_misses_dimension_total > before.cache_misses_dimension_total,
+        assert!(after.cache_misses_dimension_total > before.cache_misses_dimension_total,
             "MissDimension bump must move cache_misses_dimension_total upward by at least 1"
         );
-        assert!(
-            after.cache_misses_read_error_total > before.cache_misses_read_error_total,
+        assert!(after.cache_misses_read_error_total > before.cache_misses_read_error_total,
             "MissReadError bump must move cache_misses_read_error_total upward by at least 1"
         );
     }
@@ -694,16 +686,13 @@ mod tests {
         record_embedding_error(EmbeddingErrorKind::ModelLoad);
         record_embedding_error(EmbeddingErrorKind::InferenceFailure);
         let after = snapshot();
-        assert!(
-            after.runtime_unavailable_total > before.runtime_unavailable_total,
+        assert!(after.runtime_unavailable_total > before.runtime_unavailable_total,
             "RuntimeUnavailable bump must move runtime_unavailable_total upward by at least 1"
         );
-        assert!(
-            after.model_load_errors_total > before.model_load_errors_total,
+        assert!(after.model_load_errors_total > before.model_load_errors_total,
             "ModelLoad bump must move model_load_errors_total upward by at least 1"
         );
-        assert!(
-            after.inference_failures_total > before.inference_failures_total,
+        assert!(after.inference_failures_total > before.inference_failures_total,
             "InferenceFailure bump must move inference_failures_total upward by at least 1"
         );
     }
@@ -715,8 +704,7 @@ mod tests {
         let before = snapshot();
         record_dedup_copy_hit();
         let after = snapshot();
-        assert!(
-            after.dedup_copy_hits_total > before.dedup_copy_hits_total,
+        assert!(after.dedup_copy_hits_total > before.dedup_copy_hits_total,
             "record_dedup_copy_hit must move dedup_copy_hits_total upward by at least 1"
         );
     }
@@ -743,8 +731,7 @@ mod tests {
         // binary, so we add a per-call discriminator to
         // distinguish call sites within the same process.
         static TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
-        let tag = format!(
-            "rotation-test-pid{}-n{}",
+        let tag = format!("rotation-test-pid{}-n{}",
             std::process::id(),
             TAG_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
@@ -758,8 +745,7 @@ mod tests {
         record_observed_dimension(&tag, 384);
         let after_violation = snapshot();
 
-        assert!(
-            after_violation.model_tag_dimension_violations_total
+        assert!(after_violation.model_tag_dimension_violations_total
                 > before_violation.model_tag_dimension_violations_total,
             "Dimension change for same tag MUST move violation counter upward by at least 1"
         );
@@ -794,8 +780,7 @@ mod tests {
         record_observed_dimension("", 768);
         record_observed_dimension("", 384); // would be a violation if not skipped
         let map = observed_tag_dims().lock().expect("observed_tag_dims lock");
-        assert!(
-            !map.contains_key(""),
+        assert!(!map.contains_key(""),
             "Empty model_tag must NOT be inserted into the OBSERVED_TAG_DIMS registry (would have allowed a future re-observation to bump the violation counter); registry currently has {} keys",
             map.len()
         );

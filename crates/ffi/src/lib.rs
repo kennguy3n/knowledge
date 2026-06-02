@@ -186,8 +186,7 @@ use runtime::with_runtime;
 ///   forgotten via [`forget`].
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
-pub fn ingest_message(
-    handle: RuntimeHandle,
+pub fn ingest_message(handle: RuntimeHandle,
     scope_id: ScopeIdString,
     body: String,
     source: SourceKind,
@@ -203,14 +202,14 @@ pub fn ingest_message(
                 });
             }
             rt.ensure_scope_registered(scope)?;
-            // Phase 1.3 — run language detection at the production
+            //  — run language detection at the production
             // write boundary so every persistent row stamps a
             // BCP-47 primary subtag onto the `language_tag` column
             // (schema v13). `detect_language` is fail-closed: empty
             // / pure-punctuation / pure-emoji / unreliable-short
             // input returns `None` and the column stays NULL,
             // which is the correct "language unknown" state for
-            // downstream consumers (the Phase 1.1 lexicon registry
+            // downstream consumers (the  lexicon registry
             // reads this column on every retrieval). Detection
             // runs unconditionally — including on the noise path
             // that gets routed to the ring buffer by
@@ -223,8 +222,7 @@ pub fn ingest_message(
             let language_tag = detection.as_ref().map(|d| d.tag.as_str());
             let result = rt
                 .store_mut()
-                .ingest_with_language(
-                    scope,
+                .ingest_with_language(scope,
                     body.as_bytes(),
                     Some(source_kind_tag(&source)),
                     ffi_importance_to_internal(importance),
@@ -272,8 +270,7 @@ pub fn ingest_message(
 /// the same as scopes that simply have no matching rows.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
-pub fn query(
-    handle: RuntimeHandle,
+pub fn query(handle: RuntimeHandle,
     scope_id: ScopeIdString,
     query_text: String,
     limit: u32,
@@ -420,8 +417,8 @@ pub fn get_evidence(handle: RuntimeHandle, evidence_id: String) -> FfiResult<Evi
                     .map_or(SourceKind::Other, parse_source_kind),
                 created_at: row.created_at,
                 // Forward the BCP-47 primary subtag the substrate
-                // stamped on the row at ingest (schema v13, Phase
-                // 1.3). NULL stays NULL across the bridge so host
+                // stamped on the row at ingest (schema v13, //
+// 1.3). NULL stays NULL across the bridge so host
                 // shells can distinguish "no detection" from a
                 // concrete tag like `"en"`. `row` is owned and not
                 // borrowed after this expression, and `source_ref`'s
@@ -461,8 +458,7 @@ pub fn get_evidence(handle: RuntimeHandle, evidence_id: String) -> FfiResult<Evi
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
-pub fn get_user_memory(
-    handle: RuntimeHandle,
+pub fn get_user_memory(handle: RuntimeHandle,
     scope_id: ScopeIdString,
 ) -> FfiResult<Vec<MemoryRecord>> {
     metrics::instrument(metrics::inc_get_user_memory, || {
@@ -717,7 +713,7 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
 ///    payloads cannot be recovered post-forget.
 /// 4. Persisted memory blob deletion so forgotten-scope memory
 ///    state does not survive the next `open_store`.
-/// 5. **(Phase 8)** Persisted approved-document payload row
+/// 5. **** Persisted approved-document payload row
 ///    deletion (`approved_document_payloads` table). Best-effort
 ///    — failure logs WARN and accumulates the error; the payload
 ///    ciphertext is sealed under the scope DEK that step 1 just
@@ -791,8 +787,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     //    on failure — we do NOT promote this to `first_error`
     //    because the documented recovery path handles it.
     if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
-        tracing::warn!(
-            scope = %scope.as_uuid(),
+        tracing::warn!(scope = %scope.as_uuid(),
             error = %e,
             "failed to delete scope DEK; will retry on next open_store",
         );
@@ -807,8 +802,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         let err = FfiError::Evidence {
             message: e.to_string(),
         };
-        tracing::warn!(
-            scope = %scope.as_uuid(),
+        tracing::warn!(scope = %scope.as_uuid(),
             error = %err,
             "forget_scope_state: purge_fts_for_scope failed; continuing to subsequent cleanups",
         );
@@ -818,8 +812,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         let err = FfiError::Evidence {
             message: e.to_string(),
         };
-        tracing::warn!(
-            scope = %scope.as_uuid(),
+        tracing::warn!(scope = %scope.as_uuid(),
             error = %err,
             "forget_scope_state: purge_body_key_wraps_for_scope failed; continuing to subsequent cleanups",
         );
@@ -832,15 +825,14 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         let err = FfiError::Evidence {
             message: e.to_string(),
         };
-        tracing::warn!(
-            scope = %scope.as_uuid(),
+        tracing::warn!(scope = %scope.as_uuid(),
             error = %err,
             "forget_scope_state: delete_memory_blobs_for_scope failed; continuing to connector teardown",
         );
         first_error.get_or_insert(err);
     }
 
-    // 5. Phase 8 / Phase 10 Item 6: delete persisted approved-
+    // 5.  / : delete persisted approved-
     //     document metadata rows for the scope. As of v12 these are
     //     metadata-only — the actual payload bytes live in
     //     `body_store` and the per-scope CEK wrap (already destroyed
@@ -860,8 +852,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     {
         Ok(deleted) => {
             if deleted > 0 {
-                tracing::debug!(
-                    scope = %scope.as_uuid(),
+                tracing::debug!(scope = %scope.as_uuid(),
                     deleted,
                     "forget_scope_state: purged approved-document payload rows",
                 );
@@ -871,8 +862,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
             let err = FfiError::Evidence {
                 message: e.to_string(),
             };
-            tracing::warn!(
-                scope = %scope.as_uuid(),
+            tracing::warn!(scope = %scope.as_uuid(),
                 error = %err,
                 "forget_scope_state: delete_approved_document_payloads_for_scope failed; \
                  ciphertext remains unrecoverable because the scope DEK is already destroyed",
@@ -881,7 +871,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         }
     }
 
-    // 5b. Phase-10-Item-4: delete archived synthesis-object version
+    // 5b. earlier: delete archived synthesis-object version
     //     rows for the scope. The ciphertext was sealed under the
     //     scope DEK that step 1 destroyed, so even if this SQL
     //     DELETE fails the bytes are cryptographically
@@ -894,8 +884,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     match rt.store().delete_synthesis_object_versions_for_scope(scope) {
         Ok(deleted) => {
             if deleted > 0 {
-                tracing::debug!(
-                    scope = %scope.as_uuid(),
+                tracing::debug!(scope = %scope.as_uuid(),
                     deleted,
                     "forget_scope_state: purged synthesis-object version rows",
                 );
@@ -905,8 +894,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
             let err = FfiError::Evidence {
                 message: e.to_string(),
             };
-            tracing::warn!(
-                scope = %scope.as_uuid(),
+            tracing::warn!(scope = %scope.as_uuid(),
                 error = %err,
                 "forget_scope_state: delete_synthesis_object_versions_for_scope failed; \
                  ciphertext remains unrecoverable because the scope DEK is already destroyed",
@@ -943,7 +931,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     // entries which is bounded by 2 × active scopes (Domain +
     // Tenant tiers) so the cost stays linear in the live runtime.
     rt.synthesis_cooldowns.retain(|(s, _), _| *s != scope);
-    // Phase-10-Item-2 nested shape: drop the whole sub-map for the
+    // earlier nested shape: drop the whole sub-map for the
     // forgotten scope in one O(1) outer-map removal. Before the
     // refactor we walked every window id owned by the scope and
     // removed each from the flat map; now the scope's entire object
@@ -978,8 +966,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     //
     // Best-effort warn is sufficient.
     if let Err(e) = rt.flush_synthesis_windows() {
-        tracing::warn!(
-            scope = %scope.as_uuid(),
+        tracing::warn!(scope = %scope.as_uuid(),
             error = ?e,
             "forget_scope_state: flush_synthesis_windows failed; in-memory state is clean and \
              open_store will purge the stale window row on next restart via the \
@@ -1000,8 +987,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         let err = FfiError::Evidence {
             message: e.to_string(),
         };
-        tracing::warn!(
-            scope = %scope.as_uuid(),
+        tracing::warn!(scope = %scope.as_uuid(),
             error = %err,
             "forget_scope_state: delete_connector_instances_for_scope failed; rows will be cleaned up on next open_store",
         );
@@ -1016,8 +1002,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         let err = FfiError::Evidence {
             message: e.to_string(),
         };
-        tracing::warn!(
-            scope = %scope.as_uuid(),
+        tracing::warn!(scope = %scope.as_uuid(),
             error = %err,
             "forget_scope_state: delete_connector_tokens_for_scope failed; rows will be cleaned up on next open_store",
         );
@@ -1085,8 +1070,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings/structs across the language boundary on every call.
 #[uniffi::export]
-pub fn list_memories(
-    handle: RuntimeHandle,
+pub fn list_memories(handle: RuntimeHandle,
     scope_id: ScopeIdString,
     filter: MemoryFilter,
 ) -> FfiResult<Vec<MemoryRecord>> {
@@ -1171,8 +1155,7 @@ pub fn run_decay_sweep(handle: RuntimeHandle, scope_id: ScopeIdString) -> FfiRes
 /// * [`FfiError::InvalidId`] if `scope_id` is not a valid UUID.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
-pub fn get_channel_memory(
-    handle: RuntimeHandle,
+pub fn get_channel_memory(handle: RuntimeHandle,
     scope_id: ScopeIdString,
 ) -> FfiResult<Option<MemoryRecord>> {
     metrics::instrument(metrics::inc_get_channel_memory, || {
@@ -1239,21 +1222,18 @@ pub fn get_channel_memory(
 ///   or memory-blob flush).
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned strings across the language boundary on every call.
 #[uniffi::export]
-pub fn trigger_synthesis(
-    handle: RuntimeHandle,
+pub fn trigger_synthesis(handle: RuntimeHandle,
     scope_id: ScopeIdString,
     trigger: SynthesisTrigger,
 ) -> FfiResult<String> {
     metrics::instrument(metrics::inc_synthesis_triggered, || {
         let scope = parse_scope_id(&scope_id)?;
-        tracing::info!(
-            scope = %scope.as_uuid(),
+        tracing::info!(scope = %scope.as_uuid(),
             trigger = ?trigger,
             "trigger_synthesis: dispatching SynthSummary",
         );
         synthesize_scope(handle, scope, &scope_id).map_err(|err| {
-            tracing::warn!(
-                scope = %scope.as_uuid(),
+            tracing::warn!(scope = %scope.as_uuid(),
                 error = ?err,
                 "trigger_synthesis: failed",
             );
@@ -1314,26 +1294,26 @@ pub const SYNTHESIS_EVIDENCE_WINDOW: usize = 50;
 ///
 /// # Lost-work race with `close_store`
 ///
-/// Because Phase 2 runs without the per-handle mutex, a host that
+/// Because  runs without the per-handle mutex, a host that
 /// calls [`close_store`](crate::close_store) **concurrently** with
-/// `trigger_synthesis` can land its close between Phase 2 and Phase 3:
+/// `trigger_synthesis` can land its close between  and Step 3:
 ///
-/// * Phase 1 captures the [`Arc<InferenceRouter>`] and drops the
+/// *  captures the [`Arc<InferenceRouter>`] and drops the
 ///   mutex.
-/// * Phase 2 issues the SLM dispatch. The host calls
+/// *  issues the SLM dispatch. The host calls
 ///   [`close_store`](crate::close_store) on a different thread, which
 ///   removes the handle from the registry and (after the drain loop
 ///   completes — see the docs on
 ///   [`close_store`](crate::close_store)) drops the runtime.
-/// * Phase 2 returns successfully with a parsed [`SummaryBundle`].
-/// * Phase 3's [`with_runtime`] re-lookup fails with
+/// *  returns successfully with a parsed [`SummaryBundle`].
+/// * Step 3's [`with_runtime`] re-lookup fails with
 ///   [`FfiError::Unavailable`] because the handle is no longer in
 ///   the registry.
 ///
 /// In that scenario the SLM did real work (and burned real wall
 /// clock / GPU time) but the recap is **discarded** — the host
 /// observes `Unavailable` even though synthesis "happened". This is
-/// a *safe* race — Phase 3 is the only phase that writes to the
+/// a *safe* race is the only phase that writes to the
 /// store, so no partial state is ever persisted — and the
 /// alternative (holding the mutex across the multi-second SLM
 /// dispatch) would freeze every other FFI call on the handle.
@@ -1342,14 +1322,13 @@ pub const SYNTHESIS_EVIDENCE_WINDOW: usize = 50;
 /// calling [`close_store`](crate::close_store); the substrate's
 /// recommended close path drains pending FFI calls externally rather
 /// than letting them race the close.
-fn synthesize_scope(
-    handle: RuntimeHandle,
+fn synthesize_scope(handle: RuntimeHandle,
     scope: ScopeId,
     scope_id: &ScopeIdString,
 ) -> FfiResult<String> {
     use inference_router::{InferenceTask, RouterError, SummaryBundle};
 
-    // ─────────────────── Phase 1: gather (locked) ───────────────────
+    // ─────────────────── Step 1: gather (locked) ───────────────────
     //
     // Returns the prompt to dispatch plus an owned `Arc` clone of the
     // router so the unlocked phase below can operate without re-entering
@@ -1405,8 +1384,7 @@ fn synthesize_scope(
                 }
                 Err(e) => {
                     skipped = skipped.saturating_add(1);
-                    tracing::warn!(
-                        scope = %scope.as_uuid(),
+                    tracing::warn!(scope = %scope.as_uuid(),
                         evidence = %evidence_id.as_uuid(),
                         error = %e,
                         "trigger_synthesis: skipping unreadable evidence row",
@@ -1416,16 +1394,14 @@ fn synthesize_scope(
         }
         if bodies.is_empty() {
             return Err(FfiError::Evidence {
-                message: format!(
-                    "synthesis: every evidence row in the {SYNTHESIS_EVIDENCE_WINDOW}-row \
+                message: format!("synthesis: every evidence row in the {SYNTHESIS_EVIDENCE_WINDOW}-row \
                      window for scope {} was unreadable ({skipped} skipped)",
                     scope.as_uuid()
                 ),
             });
         }
         if skipped > 0 {
-            tracing::warn!(
-                scope = %scope.as_uuid(),
+            tracing::warn!(scope = %scope.as_uuid(),
                 skipped,
                 kept = bodies.len(),
                 "trigger_synthesis: proceeding with partial evidence window",
@@ -1443,7 +1419,7 @@ fn synthesize_scope(
         Ok((rt.inference_router_arc(), prompt))
     })?;
 
-    // ───────────────── Phase 2: dispatch (UNLOCKED) ─────────────────
+    // ───────────────── Step 2: dispatch (UNLOCKED) ─────────────────
     //
     // The per-handle `FfiRuntime` mutex is released for the duration of
     // these calls so concurrent `ingest_message` / `query` /
@@ -1488,7 +1464,7 @@ fn synthesize_scope(
             message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
         })?;
 
-    // ─────────────────── Phase 3: apply (locked) ────────────────────
+    // ─────────────────── Step 3: apply (locked) ────────────────────
     //
     // Re-acquire the mutex. We must re-check `is_scope_forgotten` here
     // because another thread may have called `forget_scope` while the
@@ -1581,8 +1557,7 @@ pub fn generate_keypair() -> FfiResult<FfiKeypair> {
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned byte buffers across the language boundary on every call.
 #[uniffi::export]
-pub fn encrypt(
-    handle: RuntimeHandle,
+pub fn encrypt(handle: RuntimeHandle,
     scope_id: ScopeIdString,
     plaintext: Vec<u8>,
 ) -> FfiResult<Vec<u8>> {
@@ -1631,8 +1606,7 @@ pub fn encrypt(
 /// * [`FfiError::NotFound`] if `scope_id` has been forgotten.
 #[allow(clippy::needless_pass_by_value)] // FFI: UniFFI/N-API hand owned byte buffers across the language boundary on every call.
 #[uniffi::export]
-pub fn decrypt(
-    handle: RuntimeHandle,
+pub fn decrypt(handle: RuntimeHandle,
     scope_id: ScopeIdString,
     ciphertext: Vec<u8>,
 ) -> FfiResult<Vec<u8>> {
@@ -1780,8 +1754,7 @@ fn memory_object_to_record(obj: &memory_manager::MemoryObject) -> MemoryRecord {
         .metadata
         .get("content")
         .and_then(|v| v.as_str())
-        .map_or_else(
-            || {
+        .map_or_else(|| {
                 if obj.metadata.is_null() {
                     String::new()
                 } else {
@@ -1805,8 +1778,7 @@ fn memory_object_to_record(obj: &memory_manager::MemoryObject) -> MemoryRecord {
 /// [`memory_manager::MemoryFilter`] shape. `pinned_only` is applied
 /// at the call site because the internal filter has no native pin
 /// predicate.
-fn ffi_filter_to_memory_filter(
-    filter: &MemoryFilter,
+fn ffi_filter_to_memory_filter(filter: &MemoryFilter,
     scope: ScopeId,
 ) -> memory_manager::MemoryFilter {
     let mut mm = memory_manager::MemoryFilter::any().with_scope(scope);
@@ -1966,13 +1938,12 @@ impl runtime::FfiRuntime {
             registry, store, ..
         } = self;
         let mut adapter = runtime::EvidenceStoreTombstoneStore::new(store);
-        forgetting::destroy_scope_dek(registry, registry_scope, Some(&mut adapter)).map_err(
-            |e| FfiError::Evidence {
+        forgetting::destroy_scope_dek(registry, registry_scope, Some(&mut adapter)).map_err(|e| FfiError::Evidence {
                 message: e.to_string(),
             },
         )?;
         // Refresh the metrics tombstone gauge to match the post-
-        // destroy registry size. The Phase 6 health envelope reads
+        // destroy registry size. The  health envelope reads
         // this gauge on every `health_check` call.
         metrics::set_tombstone_count(self.registry().tombstones().count() as u64);
         Ok(())
@@ -2017,8 +1988,7 @@ mod tests {
         let err = parse_scope_id("00000000-0000-0000-0000-000000000000").unwrap_err();
         match err {
             FfiError::InvalidId { message } => {
-                assert!(
-                    message.contains("nil UUID"),
+                assert!(message.contains("nil UUID"),
                     "error message should call out the nil-UUID rejection, got: {message}",
                 );
             }
@@ -2037,8 +2007,7 @@ mod tests {
         let sentinel = crate::runtime::synthesis_windows_scope();
         let err = crate::runtime::with_runtime(h, |rt| forget_scope_state(rt, sentinel))
             .expect_err("must refuse sentinel scope");
-        assert!(
-            matches!(err, FfiError::InvalidId { ref message } if message.contains("sentinel")),
+        assert!(matches!(err, FfiError::InvalidId { ref message } if message.contains("sentinel")),
             "expected InvalidId with `sentinel` message, got {err:?}",
         );
         teardown(h);
@@ -2070,8 +2039,7 @@ mod tests {
 
         let scope = uuid::Uuid::new_v4().to_string();
         let phrase = "storeoneisolationphrase";
-        let _ = ingest_message(
-            h1,
+        let _ = ingest_message(h1,
             scope.clone(),
             format!("body contains {phrase}"),
             SourceKind::Manual,
@@ -2106,8 +2074,7 @@ mod tests {
         let phrase = "xyzzyffiroundtripphrase";
         let body = format!("Reminder: please file the {phrase} report by Friday.");
 
-        let evidence_id = ingest_message(
-            h,
+        let evidence_id = ingest_message(h,
             scope.clone(),
             body.clone(),
             SourceKind::Slack,
@@ -2129,8 +2096,7 @@ mod tests {
         forget(h, evidence_id.clone()).expect("forget");
 
         let hits_after = query(h, scope.clone(), phrase.into(), 10).expect("query after forget");
-        assert!(
-            hits_after.is_empty(),
+        assert!(hits_after.is_empty(),
             "post-forget query must not return rows"
         );
 
@@ -2139,8 +2105,7 @@ mod tests {
             other => panic!("expected NotFound after forget, got {other:?}"),
         }
 
-        match ingest_message(
-            h,
+        match ingest_message(h,
             scope.clone(),
             "second message".into(),
             SourceKind::Manual,
@@ -2198,15 +2163,13 @@ mod tests {
         let kp = generate_keypair().expect("generate_keypair");
         assert_eq!(kp.algorithm, "ml-dsa-65");
         // ML-DSA-65 verifying key is 1952 bytes (FIPS 204 §4.2).
-        assert!(
-            kp.public_key.len() >= 1500,
+        assert!(kp.public_key.len() >= 1500,
             "ml-dsa-65 verifying key suspiciously small: {}",
             kp.public_key.len()
         );
         // ml-dsa 0.1.0 represents the signing key as a 32-byte seed
         // (from which the full expanded key is derived at use time).
-        assert_eq!(
-            kp.private_key.len(),
+        assert_eq!(kp.private_key.len(),
             32,
             "ml-dsa-65 signing seed must be 32 bytes, got {}",
             kp.private_key.len()
@@ -2231,8 +2194,7 @@ mod tests {
         assert!(records.is_empty());
 
         // Filtering by state on a fresh scope is also empty.
-        let candidates = list_memories(
-            h,
+        let candidates = list_memories(h,
             scope,
             MemoryFilter {
                 state: Some(MemoryState::Candidate),
@@ -2271,8 +2233,7 @@ mod tests {
         let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
         let err = trigger_synthesis(h, scope, SynthesisTrigger::ManualUserAction).unwrap_err();
-        assert!(
-            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "evidence"),
+        assert!(matches!(err, FfiError::NotFound { ref kind, .. } if kind == "evidence"),
             "expected NotFound {{ kind: evidence }}, got {err:?}"
         );
         teardown(h);
@@ -2288,8 +2249,7 @@ mod tests {
         let (h, _dir) = fresh_store();
         let scope_uuid = uuid::Uuid::new_v4();
         let scope = scope_uuid.to_string();
-        ingest_message(
-            h,
+        ingest_message(h,
             scope.clone(),
             "hello world".into(),
             SourceKind::Manual,
@@ -2297,9 +2257,7 @@ mod tests {
         )
         .expect("ingest seed evidence");
         let err = trigger_synthesis(h, scope, SynthesisTrigger::ManualUserAction).unwrap_err();
-        assert!(
-            matches!(
-                err,
+        assert!(matches!(err,
                 FfiError::Unavailable { ref subsystem } if subsystem.starts_with("synthesis")
             ),
             "expected Unavailable {{ subsystem: synthesis* }}, got {err:?}"
@@ -2320,8 +2278,7 @@ mod tests {
         let mem_id = runtime::with_runtime(h, |rt| {
             let scope = parse_scope_id(&scope_str)?;
             let umo = rt.user_memory_mut(scope);
-            Ok(umo.add_observation(
-                "fact",
+            Ok(umo.add_observation("fact",
                 "Sara owns the rollout",
                 memory_manager::SensitivityClass::Useful,
             ))
@@ -2353,8 +2310,7 @@ mod tests {
         let (h, _dir) = fresh_store();
         let bogus = uuid::Uuid::new_v4().to_string();
         let err = pin(h, bogus).unwrap_err();
-        assert!(
-            matches!(err, FfiError::NotFound { ref kind, .. } if kind == "memory"),
+        assert!(matches!(err, FfiError::NotFound { ref kind, .. } if kind == "memory"),
             "expected NotFound {{ kind: memory }}, got {err:?}"
         );
         teardown(h);
@@ -2373,8 +2329,7 @@ mod tests {
         let (h, _dir) = fresh_store();
         let scope = uuid::Uuid::new_v4().to_string();
         let phrase = "memorymanagerforgetphrase";
-        let evidence_id = ingest_message(
-            h,
+        let evidence_id = ingest_message(h,
             scope.clone(),
             phrase.into(),
             SourceKind::Manual,
@@ -2387,8 +2342,7 @@ mod tests {
         runtime::with_runtime(h, |rt| {
             let s = parse_scope_id(&scope)?;
             let umo = rt.user_memory_mut(s);
-            let _ = umo.add_observation(
-                "note",
+            let _ = umo.add_observation("note",
                 "tombstone candidate",
                 memory_manager::SensitivityClass::Useful,
             );
@@ -2396,8 +2350,7 @@ mod tests {
         })
         .expect("seed");
 
-        assert_eq!(
-            get_user_memory(h, scope.clone()).expect("pre-forget").len(),
+        assert_eq!(get_user_memory(h, scope.clone()).expect("pre-forget").len(),
             1
         );
 
@@ -2424,8 +2377,7 @@ mod tests {
         let all = list_memories(h, scope.clone(), MemoryFilter::default()).expect("list all");
         assert_eq!(all.len(), 3);
 
-        let candidates = list_memories(
-            h,
+        let candidates = list_memories(h,
             scope.clone(),
             MemoryFilter {
                 state: Some(MemoryState::Candidate),
@@ -2435,8 +2387,7 @@ mod tests {
         .expect("list candidates");
         assert_eq!(candidates.len(), 3);
 
-        let reinforced = list_memories(
-            h,
+        let reinforced = list_memories(h,
             scope,
             MemoryFilter {
                 state: Some(MemoryState::Reinforced),
@@ -2475,8 +2426,7 @@ mod tests {
         .expect("seed");
         pin(h, pinned_id.to_string()).expect("pin");
 
-        let only_pinned = list_memories(
-            h,
+        let only_pinned = list_memories(h,
             scope.clone(),
             MemoryFilter {
                 state: Some(MemoryState::Pinned),
@@ -2484,8 +2434,7 @@ mod tests {
             },
         )
         .expect("list pinned");
-        assert_eq!(
-            only_pinned.len(),
+        assert_eq!(only_pinned.len(),
             1,
             "state = Some(Pinned) must filter out unpinned rows even when pinned_only is false"
         );
@@ -2509,8 +2458,7 @@ mod tests {
 
         // Seed one evidence row (so `forget` has a row to resolve to
         // a scope) and one memory object in the same scope.
-        let evidence_id = ingest_message(
-            h,
+        let evidence_id = ingest_message(h,
             scope.clone(),
             "pin-after-forget-seed-body".into(),
             SourceKind::Manual,
@@ -2520,8 +2468,7 @@ mod tests {
         let mem_id = runtime::with_runtime(h, |rt| {
             let s = parse_scope_id(&scope)?;
             let umo = rt.user_memory_mut(s);
-            Ok(umo.add_observation(
-                "pinnable",
+            Ok(umo.add_observation("pinnable",
                 "cache before forget",
                 memory_manager::SensitivityClass::Useful,
             ))
@@ -2533,15 +2480,13 @@ mod tests {
         // Pin must now return NotFound { kind: "memory" } — the same
         // shape the read surfaces present for the forgotten scope.
         let pin_err = pin(h, mem_id.to_string()).unwrap_err();
-        assert!(
-            matches!(pin_err, FfiError::NotFound { ref kind, .. } if kind == "memory"),
+        assert!(matches!(pin_err, FfiError::NotFound { ref kind, .. } if kind == "memory"),
             "pin after forget must return NotFound {{ kind: memory }}, got {pin_err:?}"
         );
 
         // Same contract for unpin.
         let unpin_err = unpin(h, mem_id.to_string()).unwrap_err();
-        assert!(
-            matches!(unpin_err, FfiError::NotFound { ref kind, .. } if kind == "memory"),
+        assert!(matches!(unpin_err, FfiError::NotFound { ref kind, .. } if kind == "memory"),
             "unpin after forget must return NotFound {{ kind: memory }}, got {unpin_err:?}"
         );
 
@@ -2567,8 +2512,7 @@ mod tests {
         assert!(listed.is_empty());
 
         let after = runtime::with_runtime(h, |rt| Ok(rt.user_memories.len())).expect("len after");
-        assert_eq!(
-            before, after,
+        assert_eq!(before, after,
             "read paths must not allocate per-scope user_memory entries"
         );
         teardown(h);
@@ -2603,8 +2547,7 @@ mod tests {
         // Case 2: scope has evidence but no SLM adapter → Unavailable,
         // no allocation.
         let scope_evidence = uuid::Uuid::new_v4().to_string();
-        ingest_message(
-            h,
+        ingest_message(h,
             scope_evidence.clone(),
             "hello world".into(),
             SourceKind::Manual,
@@ -2615,8 +2558,7 @@ mod tests {
             runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len before synth");
         match trigger_synthesis(h, scope_evidence, SynthesisTrigger::ManualUserAction) {
             Err(FfiError::Unavailable { subsystem }) => {
-                assert!(
-                    subsystem.starts_with("synthesis"),
+                assert!(subsystem.starts_with("synthesis"),
                     "expected synthesis subsystem, got {subsystem}"
                 );
             }
@@ -2624,8 +2566,7 @@ mod tests {
         }
         let after_synth =
             runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len after synth");
-        assert_eq!(
-            before_synth, after_synth,
+        assert_eq!(before_synth, after_synth,
             "trigger_synthesis must not allocate channel memory when returning a pre-dispatch error"
         );
         teardown(h);
@@ -2637,16 +2578,14 @@ mod tests {
         // reserved `NONE` sentinel must surface the structured
         // `Unavailable { subsystem: "evidence_store" }` so hosts can
         // present a uniform "not initialised" UI.
-        let err = ingest_message(
-            RuntimeHandle::NONE,
+        let err = ingest_message(RuntimeHandle::NONE,
             uuid::Uuid::new_v4().to_string(),
             "body".into(),
             SourceKind::Manual,
             FfiImportanceClass::Important,
         )
         .unwrap_err();
-        assert!(
-            matches!(err, FfiError::Unavailable { ref subsystem } if subsystem == "evidence_store")
+        assert!(matches!(err, FfiError::Unavailable { ref subsystem } if subsystem == "evidence_store")
         );
     }
 
@@ -2665,8 +2604,7 @@ mod tests {
         let h1 =
             open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open_store");
 
-        let evidence_id = ingest_message(
-            h1,
+        let evidence_id = ingest_message(h1,
             scope.clone(),
             "the persistent forgetting test body".into(),
             SourceKind::Manual,
@@ -2685,8 +2623,7 @@ mod tests {
         // `ingest_message` because that's the canonical
         // `is_scope_forgotten` short-circuit path that hosts hit
         // first after a restart.
-        match ingest_message(
-            h2,
+        match ingest_message(h2,
             scope,
             "second message after restart".into(),
             SourceKind::Manual,
@@ -2720,8 +2657,7 @@ mod tests {
         let h1 =
             open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open_store");
 
-        let evidence_id = ingest_message(
-            h1,
+        let evidence_id = ingest_message(h1,
             scope_str.clone(),
             PHRASE.into(),
             SourceKind::Manual,
@@ -2757,16 +2693,14 @@ mod tests {
             let raw_term_count: i64 = rt
                 .store()
                 .raw_conn()
-                .query_row(
-                    "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1 AND scope_id = ?2",
+                .query_row("SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1 AND scope_id = ?2",
                     rusqlite::params![PHRASE, scope.as_uuid().as_bytes().as_slice()],
                     |row| row.get(0),
                 )
                 .map_err(|e| FfiError::Evidence {
                     message: e.to_string(),
                 })?;
-            assert_eq!(
-                raw_term_count, 1,
+            assert_eq!(raw_term_count, 1,
                 "pre-condition: FTS row must survive a tombstone-only forget so the test exercises the re-purge"
             );
             Ok(())
@@ -2785,16 +2719,14 @@ mod tests {
             let raw_term_count: i64 = rt
                 .store()
                 .raw_conn()
-                .query_row(
-                    "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1 AND scope_id = ?2",
+                .query_row("SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1 AND scope_id = ?2",
                     rusqlite::params![PHRASE, scope.as_uuid().as_bytes().as_slice()],
                     |row| row.get(0),
                 )
                 .map_err(|e| FfiError::Evidence {
                     message: e.to_string(),
                 })?;
-            assert_eq!(
-                raw_term_count, 0,
+            assert_eq!(raw_term_count, 0,
                 "open_store must re-purge FTS rows for every persisted tombstone"
             );
             Ok(())
@@ -2806,8 +2738,7 @@ mod tests {
         // contract is now intact across crashes.
         let hits_after =
             query(h2, scope_str.clone(), PHRASE.into(), 10).expect("query post-reopen");
-        assert!(
-            hits_after.is_empty(),
+        assert!(hits_after.is_empty(),
             "post-reopen query must return no rows for the previously-tombstoned scope"
         );
 
@@ -2819,7 +2750,7 @@ mod tests {
     /// with a body that contains CJK Han / Hiragana / Katakana
     /// codepoints so the row is also written to
     /// `evidence_fts_cjk` (the trigram-tokenised companion
-    /// introduced in Phase 1.2 / schema v14). The Latin-only test
+    /// / schema v14). The Latin-only test
     /// above cannot exercise this code path because `unicode61`
     /// produces tokens for Latin but `script::contains_cjk_or_thai`
     /// returns false, so the row is never inserted into
@@ -2831,7 +2762,7 @@ mod tests {
     /// `evidence_fts_cjk` rows must survive the tombstone-only
     /// pre-reopen state (pre-condition), and both must be empty
     /// after the next `open_store` runs the re-purge. Closes the
-    /// coverage gap flagged by sweep-3 Devin Review INFO-0002.
+    /// coverage gap flagged by a follow-up Devin Review INFO-0002.
     #[test]
     fn open_store_repurges_evidence_fts_cjk_for_persisted_tombstones() {
         // The body intentionally contains a long CJK substring so
@@ -2854,8 +2785,7 @@ mod tests {
         let h1 =
             open_store(path.to_string_lossy().into_owned(), key_hex.clone()).expect("open_store");
 
-        let evidence_id = ingest_message(
-            h1,
+        let evidence_id = ingest_message(h1,
             scope_str.clone(),
             CJK_BODY.into(),
             SourceKind::Manual,
@@ -2868,8 +2798,7 @@ mod tests {
         // through the dual-table union and finds the row.
         let hits =
             query(h1, scope_str.clone(), CJK_PROBE.into(), 10).expect("query pre-forget cjk");
-        assert_eq!(
-            hits.len(),
+        assert_eq!(hits.len(),
             1,
             "FTS5 dual-table union must surface the seeded CJK phrase before forgetting"
         );
@@ -2909,8 +2838,7 @@ mod tests {
             let unicode61_count: i64 = rt
                 .store()
                 .raw_conn()
-                .query_row(
-                    "SELECT COUNT(*) FROM evidence_fts WHERE scope_id = ?1",
+                .query_row("SELECT COUNT(*) FROM evidence_fts WHERE scope_id = ?1",
                     rusqlite::params![scope_bytes.as_slice()],
                     |row| row.get(0),
                 )
@@ -2920,15 +2848,14 @@ mod tests {
             let trigram_count: i64 = rt
                 .store()
                 .raw_conn()
-                .query_row(
-                    "SELECT COUNT(*) FROM evidence_fts_cjk WHERE scope_id = ?1",
+                .query_row("SELECT COUNT(*) FROM evidence_fts_cjk WHERE scope_id = ?1",
                     rusqlite::params![scope_bytes.as_slice()],
                     |row| row.get(0),
                 )
                 .map_err(|e| FfiError::Evidence {
                     message: e.to_string(),
                 })?;
-            // Phase 1.2.1 / schema v15: the bigram shadow also
+            //  / schema v15: the bigram shadow also
             // holds a row for CJK bodies (precomputed-bigram
             // recall lane for 2-codepoint queries). Pre-condition
             // sanity-checks that the re-purge has a non-empty
@@ -2936,29 +2863,25 @@ mod tests {
             let bigram_count: i64 = rt
                 .store()
                 .raw_conn()
-                .query_row(
-                    "SELECT COUNT(*) FROM evidence_fts_bigram WHERE scope_id = ?1",
+                .query_row("SELECT COUNT(*) FROM evidence_fts_bigram WHERE scope_id = ?1",
                     rusqlite::params![scope_bytes.as_slice()],
                     |row| row.get(0),
                 )
                 .map_err(|e| FfiError::Evidence {
                     message: e.to_string(),
                 })?;
-            assert_eq!(
-                unicode61_count, 1,
+            assert_eq!(unicode61_count, 1,
                 "pre-condition: evidence_fts must still hold the row for the tombstoned CJK \
                  scope so the test exercises the re-purge"
             );
-            assert_eq!(
-                trigram_count, 1,
+            assert_eq!(trigram_count, 1,
                 "pre-condition: evidence_fts_cjk must still hold the row for the tombstoned CJK \
                  scope so the test exercises the dual-table re-purge"
             );
-            assert_eq!(
-                bigram_count, 1,
+            assert_eq!(bigram_count, 1,
                 "pre-condition: evidence_fts_bigram must still hold the row for the tombstoned \
                  CJK scope so the test exercises the three-table re-purge introduced in \
-                 Phase 1.2.1 / schema v15"
+                  / schema v15"
             );
             Ok(())
         })
@@ -2972,8 +2895,8 @@ mod tests {
         // All THREE FTS5 shadow tables must be empty for the
         // forgotten scope after the re-purge. Asserting on the
         // bigram table is what's new here vs the dual-table
-        // sweep-3 sibling test — the three-table atomic transaction
-        // invariant introduced in Phase 1.2.1 / schema v15 is what
+        // a follow-up sibling test — the three-table atomic transaction
+        // invariant / schema v15 is what
         // this regression guards.
         runtime::with_runtime(h2, |rt| {
             let scope = parse_scope_id(&scope_str)?;
@@ -2981,8 +2904,7 @@ mod tests {
             let unicode61_count: i64 = rt
                 .store()
                 .raw_conn()
-                .query_row(
-                    "SELECT COUNT(*) FROM evidence_fts WHERE scope_id = ?1",
+                .query_row("SELECT COUNT(*) FROM evidence_fts WHERE scope_id = ?1",
                     rusqlite::params![scope_bytes.as_slice()],
                     |row| row.get(0),
                 )
@@ -2992,8 +2914,7 @@ mod tests {
             let trigram_count: i64 = rt
                 .store()
                 .raw_conn()
-                .query_row(
-                    "SELECT COUNT(*) FROM evidence_fts_cjk WHERE scope_id = ?1",
+                .query_row("SELECT COUNT(*) FROM evidence_fts_cjk WHERE scope_id = ?1",
                     rusqlite::params![scope_bytes.as_slice()],
                     |row| row.get(0),
                 )
@@ -3003,28 +2924,24 @@ mod tests {
             let bigram_count: i64 = rt
                 .store()
                 .raw_conn()
-                .query_row(
-                    "SELECT COUNT(*) FROM evidence_fts_bigram WHERE scope_id = ?1",
+                .query_row("SELECT COUNT(*) FROM evidence_fts_bigram WHERE scope_id = ?1",
                     rusqlite::params![scope_bytes.as_slice()],
                     |row| row.get(0),
                 )
                 .map_err(|e| FfiError::Evidence {
                     message: e.to_string(),
                 })?;
-            assert_eq!(
-                unicode61_count, 0,
+            assert_eq!(unicode61_count, 0,
                 "open_store must re-purge evidence_fts rows for every persisted tombstone, \
                  including CJK-routed rows"
             );
-            assert_eq!(
-                trigram_count, 0,
+            assert_eq!(trigram_count, 0,
                 "open_store must re-purge evidence_fts_cjk rows for every persisted tombstone \
-                 (sweep-3 Devin Review INFO-0002 regression guard)"
+                 (a follow-up Devin Review INFO-0002 regression guard)"
             );
-            assert_eq!(
-                bigram_count, 0,
+            assert_eq!(bigram_count, 0,
                 "open_store must re-purge evidence_fts_bigram rows for every persisted \
-                 tombstone (Phase 1.2.1 / schema v15 three-table atomicity invariant)"
+                 tombstone ( / schema v15 three-table atomicity invariant)"
             );
             Ok(())
         })
@@ -3033,8 +2950,7 @@ mod tests {
         // Public query surface mirrors the raw dual-table probe.
         let hits_after =
             query(h2, scope_str.clone(), CJK_PROBE.into(), 10).expect("query post-reopen cjk");
-        assert!(
-            hits_after.is_empty(),
+        assert!(hits_after.is_empty(),
             "post-reopen CJK query must return no rows for the previously-tombstoned scope"
         );
 
@@ -3065,8 +2981,7 @@ mod tests {
         // Insert a memory object and pin it.
         runtime::with_runtime(h1, |rt| {
             let umo = rt.user_memory_mut(scope);
-            let obj = memory_manager::MemoryObject::new_candidate(
-                scope,
+            let obj = memory_manager::MemoryObject::new_candidate(scope,
                 memory_manager::SensitivityClass::Important,
             );
             let obj_id = obj.id;
@@ -3101,8 +3016,7 @@ mod tests {
         // Memory object must be rehydrated from disk.
         let after_reopen = list_memories(h2, scope_str.clone(), MemoryFilter::default())
             .expect("list after reopen");
-        assert_eq!(
-            after_reopen.len(),
+        assert_eq!(after_reopen.len(),
             1,
             "memory object must survive close/open cycle"
         );
@@ -3110,8 +3024,7 @@ mod tests {
             let umo = rt
                 .user_memory(scope)
                 .expect("scope must exist after reopen");
-            assert_eq!(
-                umo.objects[0].pin_count, 1,
+            assert_eq!(umo.objects[0].pin_count, 1,
                 "pin count must survive close/open cycle"
             );
             Ok(())
@@ -3143,8 +3056,7 @@ mod tests {
         // Insert a memory object and flush it.
         runtime::with_runtime(h1, |rt| {
             let umo = rt.user_memory_mut(scope);
-            let obj = memory_manager::MemoryObject::new_candidate(
-                scope,
+            let obj = memory_manager::MemoryObject::new_candidate(scope,
                 memory_manager::SensitivityClass::Useful,
             );
             umo.insert(obj);
@@ -3163,8 +3075,7 @@ mod tests {
 
         let after = list_memories(h2, scope_str.clone(), MemoryFilter::default())
             .expect("list after forget + reopen");
-        assert!(
-            after.is_empty(),
+        assert!(after.is_empty(),
             "forgotten-scope memories must not reappear after reopen"
         );
 
