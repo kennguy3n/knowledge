@@ -900,11 +900,14 @@ where
             //
             // For forward-compatibility with older engines that
             // don't recognise the `Adaptive` variant, we omit
-            // the field when the policy is the default Adaptive
+            // the field when the policy is the *default* Adaptive
             // — old code sees `None` and uses its own default
             // (Fixed(10_000)), which is a safe degradation.
+            // Custom Adaptive settings are serialized explicitly
+            // so they round-trip losslessly on same-version
+            // restore.
             compact_threshold: match self.compaction_policy {
-                CompactionPolicy::Adaptive { .. } => None,
+                p @ CompactionPolicy::Adaptive { .. } if p == CompactionPolicy::default() => None,
                 other => Some(CompactThresholdSetting::from_policy(other)),
             },
         };
