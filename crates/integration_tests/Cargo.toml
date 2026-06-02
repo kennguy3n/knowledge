@@ -40,15 +40,15 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 crypto = { path = "../crypto", features = ["test-support"] }
 concept_graph = { path = "../concept_graph" }
-observation_engine = { path = "../observation_engine" }
+observation_engine = { path = "../observation_engine", features = ["test-support"] }
 memory_manager = { path = "../memory_manager" }
 synthesis_pipeline = { path = "../synthesis_pipeline", features = ["test-support"] }
 export_plane = { path = "../export_plane" }
-connector_framework = { path = "../connector_framework" }
 sync_engine = { path = "../sync_engine" }
 agent_contract = { path = "../agent_contract" }
 audit_service = { path = "../audit_service" }
 permission_service = { path = "../permission_service" }
+serde_json = { workspace = true }
 # Self-referential dev-dep: enables the `test-support` feature when
 # compiling integration tests under `tests/`. Cargo's `cfg(test)` flag
 # is only set on the test binary, NOT on the library it links against,
@@ -60,9 +60,17 @@ integration_tests = { path = ".", features = ["test-support"] }
 # the bench's `target/criterion/report/index.html` artefact is
 # generated the same way as in `concept_graph`'s benches.
 criterion = { workspace = true }
+# Connector integration tests drive every connector through
+# MockHttpTransport + a fixed OAuth exchange — no network calls.
+connector_framework = { path = "../connector_framework", features = ["test-support"] }
+connectors = { path = "../connectors" }
 
 [[bench]]
 name = "load_bench"
+harness = false
+
+[[bench]]
+name = "observation_throughput"
 harness = false
 
 [[bench]]
