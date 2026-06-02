@@ -17,13 +17,15 @@
 //! backend later is a one-file change.
 
 // `OsRng` is imported from `rand_core` (kept at 0.6) rather than
-// `rand::rngs` (now 0.9) because `ml-kem 0.2` and `x25519-dalek 2`
-// consume the `rand_core 0.6 CryptoRngCore` / `CryptoRng + RngCore`
-// trait bounds. Mixing in a `rand 0.9 OsRng` produces an
-// `OsRng: rand_core::CryptoRngCore` trait-bound error because the two
-// `rand_core` versions have parallel, non-interconvertible trait
-// hierarchies. See the workspace `Cargo.toml` comment for the full
-// rationale on why `rand_core` stays at 0.6 while `rand` moves to 0.9.
+// from `rand::rngs` (now 0.10, where the OS RNG was renamed to
+// `SysRng`) because `ml-kem 0.2` and `x25519-dalek 2` consume the
+// `rand_core 0.6 CryptoRngCore` / `CryptoRng + RngCore` trait
+// bounds. Mixing in a `rand 0.10 SysRng` produces an
+// `SysRng: rand_core::CryptoRngCore` trait-bound error because the
+// two `rand_core` versions have parallel, non-interconvertible
+// trait hierarchies. See the workspace `Cargo.toml` comment for the
+// full rationale on why `rand_core` stays at 0.6 while the rest of
+// the workspace moves `rand` to 0.10.
 use rand_core::OsRng;
 
 use crate::errors::CryptoError;
@@ -169,8 +171,10 @@ impl KemBackend for StubKemBackend {
         // `RngCore` is imported from `rand_core` (0.6) because the
         // `OsRng` we're calling here is the `rand_core 0.6` variant
         // (see the import comment at the top of this file). The
-        // `rand 0.9::RngCore` trait would not be implemented for
-        // this `OsRng` type, so the bound would fail to resolve.
+        // `rand 0.10::Rng` trait would not be implemented for this
+        // `OsRng` type (rand 0.10 renamed the workspace OS RNG to
+        // `SysRng` and the infallible trait from `RngCore` to `Rng`),
+        // so the bound would fail to resolve.
         use rand_core::RngCore;
         let mut rng = OsRng;
         let mut pk = [0u8; KEM_PUBLIC_KEY_LEN];

@@ -199,8 +199,10 @@ pub fn create_connector(
             };
             // Register the scope's DEK *before* writing the encrypted
             // connector row so the new scope gets a random per-scope
-            // key from `OsRng` (via `ensure_scope_dek`) rather than
-            // the legacy HKDF fallback that `EvidenceStore::scope_key`
+            // key from the OS RNG (via `ensure_scope_dek`, which uses
+            // `rand::rngs::SysRng` per SECURITY.md §"Random number
+            // generation") rather than the legacy HKDF fallback that
+            // `EvidenceStore::scope_key`
             // would synthesise for an unregistered scope. Without
             // this, `create_connector` would be the first crypto
             // touch on a fresh scope and would silently bind every

@@ -1853,8 +1853,8 @@ impl EvidenceStore {
     ///    scope (pre-v6 database), the scope was encrypted under an
     ///    HKDF-derived key. We adopt that key and persist it in
     ///    `scope_deks` so future opens find it directly.
-    /// 4. Fresh random DEK via `OsRng` — only for genuinely new
-    ///    scopes with no prior evidence.
+    /// 4. Fresh random DEK drawn from the OS RNG (`SysRng`) — only
+    ///    for genuinely new scopes with no prior evidence.
     pub fn ensure_scope_dek(&mut self, scope_id: ScopeId) -> Result<AeadKey> {
         // 1. Fast path: already in memory.
         if let Some(k) = self.scope_keys.read().unwrap().get(&scope_id) {
@@ -4864,8 +4864,9 @@ fn random_nonce() -> AeadNonce {
     use rand::TryRng;
     let mut nonce = [0u8; AEAD_NONCE_LEN];
     // See SECURITY.md §"Random number generation" for why the
-    // substrate uses the OS RNG (not `ThreadRng`) for every per-row
-    // AEAD nonce. Panicking on OS RNG failure is intentional — a
+    // substrate uses the OS RNG (`SysRng`, not the userspace
+    // `ThreadRng`) for every per-row AEAD nonce, even on the hot
+    // path. Panicking on OS RNG failure is intentional — a
     // substrate that cannot draw entropy cannot encrypt safely.
     SysRng
         .try_fill_bytes(&mut nonce)
@@ -4874,11 +4875,13 @@ fn random_nonce() -> AeadNonce {
 }
 
 fn random_cek() -> AeadKey {
-    // rand 0.10 renamed `OsRng` to `SysRng` and the fallible RNG
-    // trait from `TryRngCore` to `TryRng`. Calling `try_fill_bytes`
-    // and `.expect(...)` keeps the previous semantics: panic on OS
-    // RNG failure (a substrate that cannot draw entropy cannot wrap
-    // content safely).
+    // `SysRng` is the rand-0.10 OS RNG (renamed from rand 0.9's
+    // `OsRng`) and impls the fallible `TryRng` trait (renamed from
+    // rand 0.9's `TryRngCore`). Calling `try_fill_bytes(...).expect(...)`
+    // panics on OS RNG failure — the correct posture, because a
+    // substrate that cannot draw entropy cannot wrap content safely.
+    // See SECURITY.md §"Random number generation" for the broader
+    // policy and the migration-history note.
     use rand::rngs::SysRng;
     use rand::TryRng;
     let mut key = [0u8; AEAD_KEY_LEN];

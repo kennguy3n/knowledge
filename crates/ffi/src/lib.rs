@@ -1601,8 +1601,9 @@ pub fn encrypt(
             let key = rt.scope_encrypt_key(scope)?;
             let mut nonce: AeadNonce = [0u8; AEAD_NONCE_LEN];
             // See SECURITY.md §"Random number generation" for why
-            // the substrate uses `OsRng` (not `ThreadRng`) for every
-            // per-encrypt AEAD nonce, even on the hot FFI path.
+            // the substrate uses the OS RNG (`SysRng`, not the
+            // userspace `ThreadRng`) for every per-encrypt AEAD
+            // nonce, even on the hot FFI path.
             rand::rngs::SysRng
                 .try_fill_bytes(&mut nonce)
                 .expect("OS RNG failure");
@@ -1924,7 +1925,8 @@ impl runtime::FfiRuntime {
     /// in the in-memory `DekRegistry` and persisted in the evidence
     /// store's `scope_deks` table.
     ///
-    /// New scopes get a fresh random DEK via `OsRng`. Existing scopes
+    /// New scopes get a fresh random DEK drawn from the OS RNG
+    /// (`rand::rngs::SysRng`, see `SECURITY.md`). Existing scopes
     /// (already in the registry) are a no-op.
     fn ensure_scope_registered(&mut self, scope: ScopeId) -> FfiResult<()> {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());
