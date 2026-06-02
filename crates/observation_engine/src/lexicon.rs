@@ -158,13 +158,13 @@ pub enum MatchStrategy {
     /// virama/asat `U+1039`/`U+103A`) that `unicode61` treats
     /// as token boundaries, fragmenting any meaningful
     /// keyword. Hindi and the four
-    ///  lexicons (Tibetan / Khmer / Myanmar / Lao)
+    /// lexicons (Tibetan / Khmer / Myanmar / Lao)
     /// all use this strategy. Adding any future script that
     /// shares either property (e.g. Tai Tham, Javanese,
     /// Cham) should default to `Substring` unless the script
     /// is provably whitespace-segmented at the word level.
     Substring,
-    ///  strategy for Arabic-script languages whose
+    /// strategy for Arabic-script languages whose
     /// morphology agglutinates short proclitic particles to the
     /// front of the host word with no orthographic separator.
     /// The matcher tries first-token exact equality first; if
@@ -231,7 +231,7 @@ pub enum MatchStrategy {
     /// instead via the `؟` terminator short-circuit in
     /// [`crate::extractor::looks_like_question`].
     FirstTokenWithArabicClitics,
-    ///  strategy for Hebrew, whose morphology
+    /// strategy for Hebrew, whose morphology
     /// agglutinates short single-letter proclitics to the front
     /// of the host word with no orthographic separator — the
     /// same shape as Arabic's productive proclitic stack but
@@ -2545,7 +2545,7 @@ mod tests {
 
     #[test]
     fn table_matches_arabic_clitic_strip_recovers_single_proclitic_prefix() {
-        //  main payload: each of the 4 single-character
+        // main payload: each of the 4 single-character
         // productive proclitic prefixes (`و`, `ف`, `ب`, `ل`)
         // recovers the bare interrogative under one peel. The
         // a follow-up removal of `ك` and `س` is exercised by the
@@ -2568,7 +2568,7 @@ mod tests {
 
     #[test]
     fn table_matches_arabic_clitic_strip_drops_unproductive_k_and_s_prefixes() {
-        //  a follow-up precision guard (an earlier review
+        // a follow-up precision guard (an earlier review
         // Earlier review: `ك` and `س` were initially in the
         // peel set but caused false positives on both the
         // interrogative path and (more dangerously) the
@@ -2687,7 +2687,7 @@ mod tests {
 
     #[test]
     fn table_matches_arabic_clitic_strip_rejects_unrelated_first_token() {
-        //  false-positive guard: a sentence whose
+        // false-positive guard: a sentence whose
         // first token contains zero proclitic prefixes and is
         // not itself a table entry must NOT match.
         let table = &["كيف", "متى", "أين", "لماذا"];
@@ -2709,7 +2709,7 @@ mod tests {
 
     #[test]
     fn table_matches_arabic_clitic_strip_rejects_bare_proclitic_token() {
-        //  edge case: a first token consisting only of
+        // edge case: a first token consisting only of
         // a proclitic prefix (e.g. just `و` with no host word)
         // must NOT match — there is no residual to compare
         // against the table. This guards against accidentally
@@ -2728,7 +2728,7 @@ mod tests {
 
     #[test]
     fn peel_one_arabic_proclitic_longest_first_priority() {
-        //  ordering invariant: 2-char `ال` peels before
+        // ordering invariant: 2-char `ال` peels before
         // 1-char `ا`/`ل` so leading `الكتاب` surfaces `كتاب`,
         // not the meaningless `لكتاب` that a `ا`-first peel
         // would produce. (`ا` is not in the peel set, so this
@@ -2771,7 +2771,7 @@ mod tests {
 
     #[test]
     fn arabic_clitic_peel_budget_bounds_worst_case_iteration() {
-        //  budget invariant: the helper must give up
+        // budget invariant: the helper must give up
         // after ARABIC_PROCLITIC_PEEL_BUDGET peels even on a
         // pathological input that could otherwise loop. A
         // string of N `و` characters followed by a non-matching
@@ -2809,7 +2809,7 @@ mod tests {
 
     #[test]
     fn arabic_clitic_strategy_is_strict_superset_of_first_token() {
-        //  invariant: the FirstTokenWithArabicClitics
+        // invariant: the FirstTokenWithArabicClitics
         // strategy must be a *strict superset* of FirstToken —
         // i.e. (a) every sentence that matches under FirstToken
         // must also match under FirstTokenWithArabicClitics
@@ -2880,7 +2880,7 @@ mod tests {
 
     #[test]
     fn arabic_clitic_strip_handles_nfd_hamza_alif_via_dual_prefix_entries() {
-        //  a follow-up (an earlier review #3331658913): the
+        // a follow-up (an earlier review #3331658913): the
         // `normalize_for_lookup` pipeline strips Arabic combining
         // marks (including U+0654 ARABIC HAMZA ABOVE) BEFORE NFC
         // composition, so an NFD-encoded `أل` (U+0627 ALEF +
@@ -3062,7 +3062,7 @@ mod tests {
 
     #[test]
     fn table_matches_hebrew_clitic_strip_rejects_unrelated_first_token() {
-        //  false-positive guard: declarative Hebrew
+        // false-positive guard: declarative Hebrew
         // sentences whose first token is not a recognised
         // interrogative (even after peeling) must NOT match.
         let table = &["מי", "מה", "מתי", "איפה"];
@@ -3083,7 +3083,7 @@ mod tests {
 
     #[test]
     fn table_matches_hebrew_clitic_strip_rejects_bare_proclitic_token() {
-        //  edge case: a first token consisting only of a
+        // edge case: a first token consisting only of a
         // proclitic prefix (e.g. just `ו` with no host word) must
         // NOT match — there is no residual to compare against the
         // table. This guards against accidentally matching the
@@ -3102,7 +3102,7 @@ mod tests {
 
     #[test]
     fn table_matches_hebrew_clitic_strip_drops_unproductive_h_and_k_prefixes() {
-        //  deliberate-omission regression: `ה` (definite
+        // deliberate-omission regression: `ה` (definite
         // article) and `כ` (preposition "like / as") are NOT in
         // HEBREW_PROCLITIC_PREFIXES, so they MUST NOT peel.
         //
@@ -3139,7 +3139,7 @@ mod tests {
 
     #[test]
     fn peel_one_hebrew_proclitic_longest_first_priority() {
-        //  ordering invariant: each Hebrew proclitic in
+        // ordering invariant: each Hebrew proclitic in
         // HEBREW_PROCLITIC_PREFIXES is exactly one codepoint, so
         // there is no "longest-first" ambiguity at the per-prefix
         // level (unlike Arabic's 2-char `ال` vs 1-char `ا`/`ل`).
@@ -3171,7 +3171,7 @@ mod tests {
 
     #[test]
     fn hebrew_clitic_peel_budget_bounds_worst_case_iteration() {
-        //  budget invariant: the helper must give up
+        // budget invariant: the helper must give up
         // after HEBREW_PROCLITIC_PEEL_BUDGET peels even on a
         // pathological input that could otherwise loop.
         let table = &["מתי"];
@@ -3206,7 +3206,7 @@ mod tests {
 
     #[test]
     fn hebrew_clitic_strategy_is_strict_superset_of_first_token() {
-        //  invariant: the FirstTokenWithHebrewClitics
+        // invariant: the FirstTokenWithHebrewClitics
         // strategy must be a *strict superset* of FirstToken —
         // (a) every sentence matching FirstToken matches under
         // FirstTokenWithHebrewClitics, AND (b) some sentences
@@ -3615,7 +3615,7 @@ mod tests {
     #[test]
     fn malay_and_indonesian_lexicons_are_identical() {
         // Documented design choice (see ID_LEXICON doc): until
-        //  differentiates them, ms aliases id. Pin so
+        // differentiates them, ms aliases id. Pin so
         // accidental drift fails the test rather than silently
         // diverging the two lexicons.
         let reg = default_registry();
@@ -3776,7 +3776,7 @@ mod tests {
 
     #[test]
     fn arabic_lexicon_strategy_per_class_is_intentional() {
-        //  a follow-up (an earlier review #3331684703): the
+        // a follow-up (an earlier review #3331684703): the
         // per-class strategy asymmetry in AR_LEXICON is the
         // architectural design, not an oversight. This test
         // pins each strategy at runtime so a contributor who
@@ -3866,7 +3866,7 @@ mod tests {
     #[test]
     fn decision_keyword_extracted_under_substring_matching() {
         // End-to-end smoke test: a sentence containing a
-        //  decision keyword must round-trip through
+        // decision keyword must round-trip through
         // the `table_matches` Substring path. This is the
         // path the LexiconExtractor exercises when
         // classifying CJK / Indic sentences.

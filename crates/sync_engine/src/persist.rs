@@ -66,7 +66,8 @@ use crate::op_log::{OpLog, SyncOp, SyncOpKind};
 use crate::{SyncEngine, SyncScopeId};
 
 const SCHEMA_SQL: &str = "
-CREATE TABLE IF NOT EXISTS sync_ops (scope_id BLOB NOT NULL,
+CREATE TABLE IF NOT EXISTS sync_ops (
+    scope_id BLOB NOT NULL,
     replica_id BLOB NOT NULL,
     seq INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
@@ -77,7 +78,8 @@ CREATE TABLE IF NOT EXISTS sync_ops (scope_id BLOB NOT NULL,
 );
 CREATE INDEX IF NOT EXISTS sync_ops_scope_idx ON sync_ops(scope_id);
 
-CREATE TABLE IF NOT EXISTS sync_meta (scope_id BLOB PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS sync_meta (
+    scope_id BLOB PRIMARY KEY,
     replica_id BLOB NOT NULL,
     clock INTEGER NOT NULL,
     compaction_epoch INTEGER NOT NULL

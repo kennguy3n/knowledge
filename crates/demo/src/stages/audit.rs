@@ -33,7 +33,7 @@ use crate::dataset::Dataset;
 use crate::report::{DemoReport, StageReport};
 use crate::stages::runtime::RuntimeState;
 
-const PHASE_LABEL: &str = "audit";
+const STAGE_LABEL: &str = "audit";
 
 pub fn run(
     dataset: &Dataset,
@@ -68,7 +68,7 @@ pub fn run(
 
     let total_entries = state.audit_log.len();
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "audit log accumulated entries from every audit-emitting stage",
         total_entries >= 12,
     );
@@ -82,7 +82,7 @@ pub fn run(
         }
     }
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "audit log assigns strictly monotonic sequence numbers",
         monotonic,
     );
@@ -102,7 +102,7 @@ pub fn run(
         stage.stat(format!("by_action.{}", action.as_str()), n.to_string());
     }
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "audit log surfaces at least four distinct action types",
         action_types.len() >= 4,
     );
@@ -117,7 +117,7 @@ pub fn run(
     let scope_match =
         !scope_hits.is_empty() && scope_hits.iter().all(|e| e.scope_id == Some(tenant_scope));
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "scope-filtered query returns only tenant-scope entries",
         scope_match,
     );
@@ -136,7 +136,7 @@ pub fn run(
     let promoted_hits: Vec<_> = state.audit_log.query(&promoted_query).collect();
     let promoted_q_elapsed = promoted_q_started.elapsed();
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "action-filtered query returns at least one AgentProposalPromoted entry",
         !promoted_hits.is_empty(),
     );
@@ -163,14 +163,14 @@ pub fn run(
     let since_hits: Vec<_> = state.audit_log.query(&since_query).collect();
     let time_q_elapsed = time_q_started.elapsed();
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "time-range (since) query reaches the just-appended lifecycle row",
         since_hits.iter().any(|e| e.id == lifecycle_id),
     );
     let until_query = AuditQuery::new().until(lifecycle_ts);
     let until_hits: Vec<_> = state.audit_log.query(&until_query).collect();
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "time-range (until) query covers earlier stages' entries",
         until_hits.len() >= total_entries.saturating_sub(1),
     );
@@ -216,7 +216,7 @@ pub fn run(
                 Actor::System => false,
             });
         log.record(
-            PHASE_LABEL,
+            STAGE_LABEL,
             "actor-filtered query returns only entries by the chosen actor",
             only_actor,
         );
@@ -234,7 +234,7 @@ pub fn run(
         // a safety net for future refactors. We still record the
         // assertion so it's surfaced rather than silently skipped.
         log.record(
-            PHASE_LABEL,
+            STAGE_LABEL,
             "audit log contains at least one non-system actor",
             false,
         );
@@ -251,7 +251,7 @@ pub fn run(
     let combined_q_elapsed = combined_q_started.elapsed();
     let combined_id_matches = combined_hits.iter().any(|e| e.id == lifecycle_id);
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "composite query (scope + action + since) recovers the lifecycle row",
         combined_id_matches,
     );
@@ -270,7 +270,7 @@ pub fn run(
     //    here is a runtime sanity check that `len()` only grew over
     //    the run.
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "audit log is append-only (no entries were removed)",
         state.audit_log.len() >= total_entries,
     );

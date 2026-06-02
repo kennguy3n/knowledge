@@ -1866,7 +1866,7 @@ mod tests {
         // Japanese question + long English task. Each sentence
         // is long enough on its own that whatlang reliably
         // classifies it — that's the per-sentence guarantee
-        //  makes.
+        // makes.
         let text = "Please review the migration plan for the deadline this Friday. \
                     今日の会議では何時に開始する予定でしょうか、教えてください。 \
                     Please send the agenda document to the entire team today.";
@@ -2386,7 +2386,7 @@ mod tests {
         // error message, so a regression that drops (say) the
         // Khmer khan can be triaged to the commit
         // line that introduced it without first ruling out a
-        //  regression.
+        // regression.
         let terminators = [
             ('\u{0F0D}', "Tibetan shad (sentence / clause end)"),
             ('\u{0F0E}', "Tibetan nyis shad (paragraph / verse end)"),
@@ -2594,7 +2594,7 @@ mod tests {
 
     #[test]
     fn vietnamese_task_imperative_matches_through_first_bigram() {
-        //  closes deferred an earlier review finding /
+        // closes deferred an earlier review finding /
         // an earlier review finding: multi-word collocations need
         // FirstBigram-strategy matching. Vietnamese
         // `triển khai` ("deploy", "roll out") is a single
@@ -2626,7 +2626,7 @@ mod tests {
 
     #[test]
     fn arabic_decision_keyword_matches_after_tashkeel_strip() {
-        //  closes deferred an earlier review finding:
+        // closes deferred an earlier review finding:
         // Arabic combining marks (tashkeel) like fatha / kasra
         // would otherwise split the FirstToken matcher's view
         // of the word boundary because the marks are category
@@ -2771,7 +2771,7 @@ mod tests {
 
     #[test]
     fn class_precedence_question_beats_task_keyword() {
-        //  ordering invariant: question detection
+        // ordering invariant: question detection
         // (sentence terminator + per-language interrogative
         // table) runs BEFORE task-keyword detection so that a
         // sentence that ends in `？` or contains an
@@ -3087,7 +3087,7 @@ mod tests {
 
     #[test]
     fn arabic_proclitic_prefixed_interrogatives_classify_as_questions() {
-        //  entry point: the productive Arabic proclitic
+        // entry point: the productive Arabic proclitic
         // prefix forms of canonical interrogatives must classify
         // as questions through the LexiconExtractor's
         // `looks_like_question` path, including when the
@@ -3122,7 +3122,7 @@ mod tests {
 
     #[test]
     fn arabic_proclitic_prefixed_imperatives_emit_task_observations() {
-        //  entry point: the productive Arabic proclitic
+        // entry point: the productive Arabic proclitic
         // prefix forms of canonical imperative verbs must emit
         // Task observations through the LexiconExtractor when
         // routed via the FirstTokenWithArabicClitics matcher.
@@ -3159,7 +3159,7 @@ mod tests {
 
     #[test]
     fn arabic_declaratives_do_not_falsely_classify_as_questions() {
-        //  false-positive guard: a declarative whose
+        // false-positive guard: a declarative whose
         // first token starts with `أ` (interrogative-hamza
         // orthography) must NOT classify as a question, because
         // `أ` is deliberately omitted from the peel set —
@@ -3190,7 +3190,7 @@ mod tests {
 
     #[test]
     fn arabic_definite_article_in_declarative_does_not_emit_task() {
-        //  false-positive guard for the imperative
+        // false-positive guard for the imperative
         // path: a noun starting with the definite article `ال`
         // must NOT trigger a Task observation just because the
         // peel surfaces a substring that happens to share
@@ -3265,7 +3265,7 @@ mod tests {
 
     #[test]
     fn arabic_clitic_aware_strategy_preserves_tashkeel_path() {
-        //  cross-feature interaction: the
+        // cross-feature interaction: the
         // FirstTokenWithArabicClitics matcher must compose
         // correctly with the tashkeel-strip normalisation path
         // ( an earlier review finding / ). A
@@ -3290,7 +3290,7 @@ mod tests {
 
     #[test]
     fn arabic_first_person_future_does_not_emit_task() {
-        //  a follow-up precision guard (an earlier review
+        // a follow-up precision guard (an earlier review
         // an earlier review finding), end-to-end: 1st-person future-tense
         // declaratives that share a verb root with an `أ`-initial
         // imperative must NOT emit a Task observation. The future

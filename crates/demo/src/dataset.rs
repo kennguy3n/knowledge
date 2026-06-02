@@ -73,11 +73,11 @@ Compliance: this change has been ratified under our internal data-handling polic
 
 const HUNDRED_DAY_DOC: &str = "Hundred-day plan for Project Helios. \
 Helios is the codename for our consumer subscription rollout. \
- (days 0-30): platform readiness — finalize the billing schema, \
+Phase 1 (days 0-30): platform readiness — finalize the billing schema, \
 ship the new entitlement service, and ratify the regional pricing matrix. \
- (days 30-60): private beta — enroll 250 users from the waitlist, \
+Phase 2 (days 30-60): private beta — enroll 250 users from the waitlist, \
 ship a referral program, and integrate the new Stripe payment intents flow. \
- (days 60-100): general availability — open signup to the public, \
+Phase 3 (days 60-100): general availability — open signup to the public, \
 launch the press tour, and begin paid acquisition through the marketing channel. \
 Decision: Anna will own day-to-day execution. Engineering reports to Sara. \
 Marketing reports to Priya. Legal sign-off is required before the GA milestone. \

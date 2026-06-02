@@ -2150,7 +2150,7 @@ mod tests {
         record_embedding_error(EmbeddingErrorKind::RuntimeUnavailable);
         record_embedding_error(EmbeddingErrorKind::ModelLoad);
         record_embedding_error(EmbeddingErrorKind::InferenceFailure);
-        //  pre-embedding routing counters — bump one
+        // pre-embedding routing counters — bump one
         // each so the three new fields participate in the same
         // monotonic-lower-bound + plumbed-from-baseline parity
         // discipline as every other vector-telemetry field.
@@ -2312,7 +2312,7 @@ mod tests {
         );
     }
 
-    ///  parity invariant: the flat
+    /// parity invariant: the flat
     /// `fts_telemetry` / `lexicon_telemetry` / `vector_telemetry`
     /// fields on a single [`MetricsSnapshot`] value MUST equal
     /// the grouped `retrieval_metrics.fts` /

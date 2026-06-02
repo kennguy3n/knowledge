@@ -1,4 +1,4 @@
-//!  — Persistent telemetry snapshot.
+//! Persistent telemetry snapshot.
 //!
 //! The three sibling telemetry modules
 //! ([`evidence_store::fts_telemetry`], [`crate::lexicon_telemetry`],

@@ -1,4 +1,4 @@
-//!  — pre-embedding routing hook.
+//! Pre-embedding routing hook.
 //!
 //! XLM-R (the embedding model wired into [`crate::embeddings`]) is
 //! genuinely multilingual: it produces meaningful vectors across

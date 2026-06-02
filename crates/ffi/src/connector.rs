@@ -365,7 +365,7 @@ pub fn authenticate_connector(
             // write failure surfaces to the host before the token
             // becomes the substrate-side source of truth. The
             // already-completed OAuth2 token endpoint exchange in
-            //  cannot be undone — the access + refresh tokens
+            // cannot be undone — the access + refresh tokens
             // are valid against the provider — but at-rest persistence
             // is what carries the token across `close_store`/`open_store`,
             // so a host that observes `Ok(())` should be able to rely

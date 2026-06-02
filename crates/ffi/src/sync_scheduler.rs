@@ -1236,7 +1236,7 @@ fn run_one_tick(
     // Each `sync_connector` call walks the substrate's three-phase
     // discipline itself; the scheduler is just another client.
     //
-    //  below uses a FRESH `Utc::now()` captured AFTER each
+    // below uses a FRESH `Utc::now()` captured AFTER each
     // dispatch returns — NOT the tick-start `now`. With small
     // intervals and slow upstream providers (e.g. 1 s `sync_interval`
     // against a 10 s dispatch) reusing the tick-start `now` would

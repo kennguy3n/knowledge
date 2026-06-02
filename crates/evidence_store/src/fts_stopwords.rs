@@ -1,5 +1,5 @@
-//!  — per-script stopword inventory for the FTS5 trigram /
-//! bigram recall lanes.
+//! Per-script stopword inventory for the FTS5 trigram / bigram
+//! recall lanes.
 //!
 //! # Architectural rationale
 //!

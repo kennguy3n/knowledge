@@ -544,7 +544,7 @@ impl MlsGroup {
         commit: &MlsCommit,
         verifier: &V,
     ) -> Result<(), CryptoError> {
-        // ---- : validate (read-only against `self`) ----
+        // ---- Step 1: validate (read-only against `self`) ----
         if commit.group_id != self.group_id {
             return Err(CryptoError::ProvenanceSerialisation(
                 "commit group_id mismatch",
@@ -610,7 +610,7 @@ impl MlsGroup {
             }
         }
 
-        // ---- : derive new state (fallible, but still no
+        // ---- Step 2: derive new state (fallible, but still no
         // mutations to `self`) ----
         //
         // `ratchet_epoch` returns both outputs wrapped in `Zeroizing`,
@@ -623,7 +623,7 @@ impl MlsGroup {
         // its own parameter copy on drop.
         let new_schedule = derive_schedule(self.group_id, new_epoch, epoch_secret)?;
 
-        // ---- : commit. From this point on no operation may
+        // ---- Step 3: commit. From this point on no operation may
         // fail — every mutation below is infallible. ----
         match &commit.operation {
             CommitOperation::Create { .. } => unreachable!("Create rejected above"),

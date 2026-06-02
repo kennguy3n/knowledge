@@ -1,4 +1,4 @@
-//!  — Tokio + axum webhook receiver.
+//! Tokio + axum webhook receiver.
 //!
 //! The earlier substrate had no in-process HTTP server: the
 //! deployment pattern was to terminate webhook traffic at a separate

@@ -59,7 +59,8 @@ use crate::store::TupleStore;
 use crate::tuple::{ObjectRef, ObjectType, Relation, RelationTuple, SubjectRef, SubjectType};
 
 const SCHEMA_SQL: &str = "
-CREATE TABLE IF NOT EXISTS relation_tuples (id BLOB PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS relation_tuples (
+    id BLOB PRIMARY KEY,
     object_type TEXT NOT NULL,
     object_id BLOB NOT NULL,
     relation TEXT NOT NULL,
@@ -265,7 +266,8 @@ impl PersistentTupleStore {
         {
             let mut stmt = self
                 .conn
-                .prepare("SELECT id, nonce, payload FROM relation_tuples ORDER BY created_at ASC, id ASC",
+                .prepare(
+                    "SELECT id, nonce, payload FROM relation_tuples ORDER BY created_at ASC, id ASC",
                 )
                 .map_err(PermissionError::Sqlite)?;
             let mut iter = stmt.query([]).map_err(PermissionError::Sqlite)?;

@@ -565,7 +565,7 @@ mod tests {
 
     #[test]
     fn document_pipeline_preserves_per_sentence_language_tags_in_chunk() {
-        //  contract: the document pipeline must NOT
+        // contract: the document pipeline must NOT
         // overwrite per-sentence language tags with the
         // chunk-level dominant tag. A document chunk containing
         // bilingual prose should yield observations with

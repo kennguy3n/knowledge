@@ -1097,7 +1097,7 @@ pub fn list_approved_documents(
 /// `windows_clone` is a deep copy of the live
 /// [`SynthesisWindowManager`] taken under the mutex; the engine
 /// validates `handle.window_id` against it during (unlocked).
-///  replays the Pending → InProgress → Complete transitions on
+/// replays the Pending → InProgress → Complete transitions on
 /// the live manager so the substrate's persisted state ends up
 /// identical to what the engine observed.
 struct DomainDispatchPlan {
@@ -1186,7 +1186,7 @@ fn dispatch_server_synthesis(
     apply_dispatch_outcome(handle, scope, tier, window_handle, dispatch_result)
 }
 
-///  body. Holds the runtime mutex.
+/// body. Holds the runtime mutex.
 fn build_dispatch_plan(
     rt: &mut FfiRuntime,
     scope: ScopeId,
@@ -1376,7 +1376,7 @@ enum MemoryAfter {
     Tenant(memory_manager::TenantMemoryObject),
 }
 
-///  body. Holds the runtime mutex.
+/// body. Holds the runtime mutex.
 fn apply_dispatch_outcome(
     handle: RuntimeHandle,
     scope: ScopeId,
@@ -1751,7 +1751,7 @@ fn apply_dispatch_outcome(
                     // reflects the failure. The flush itself is
                     // best-effort: if it fails too, the
                     // `open_store` stuck-Pending recovery sweep
-                    //  will catch the window on
+                    // will catch the window on
                     // the next start.
                     fail_window_on_live_manager(rt, window_handle.window_id, "tx_commit_failed");
                     if let Err(flush_err) = rt.flush_synthesis_windows() {
@@ -1827,7 +1827,7 @@ fn apply_dispatch_outcome(
     })
 }
 
-///  plan for [`replay_synthesis_inner`]. Mirrors
+/// plan for [`replay_synthesis_inner`]. Mirrors
 /// [`DispatchPlan`] but the window handle re-uses the existing
 /// `(scope, window_id)` rather than opening a fresh one — the
 /// replay walks the *same* window through
@@ -1926,7 +1926,7 @@ fn replay_synthesis_inner(
     })
 }
 
-///  body for replay. Holds the runtime mutex. Validates
+/// body for replay. Holds the runtime mutex. Validates
 /// the window is `Complete`, infers the tier from the existing
 /// `TieredWindowHandle`, gathers the appropriate hierarchy
 /// input, flips the window to `Pending` (persisted), and clones
@@ -2338,7 +2338,7 @@ fn newest_object_for_scope_of_type(
 
 /// Transition the live `SynthesisWindowManager` window into `Failed`.
 ///
-///  mutates a cloned manager so on the live manager the window
+/// mutates a cloned manager so on the live manager the window
 /// is still in `Pending`. `mark_failed` only accepts the
 /// `InProgress → Failed` transition, so we replay the
 /// `Pending → InProgress → Failed` chain here. Both steps are
@@ -3804,7 +3804,7 @@ mod tests {
     #[test]
     fn failing_engine_transitions_window_to_failed_not_pending() {
         // Regression test for the `mark_failed`-on-`Pending` bug.
-        //  mutates a cloned manager, so on the live manager
+        // mutates a cloned manager, so on the live manager
         // the window is still `Pending` when runs. The fix
         // replays `Pending → InProgress → Failed` so the live window
         // ends up `Failed`, surfacing the failure to operators and

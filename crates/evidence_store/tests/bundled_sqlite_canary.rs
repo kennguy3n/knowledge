@@ -12,7 +12,7 @@
 //! (`unicode61`, `trigram`, and a CJK-aware dual-table design); a
 //! point-release of SQLite has, historically, shipped subtle
 //! tokeniser-behaviour fixes that would change recall against the
-//!  cross-lingual benchmark corpus.
+//! cross-lingual benchmark corpus.
 //!
 //! The existing `fts5_*` tests in `store_integration.rs` and the
 //! `cross_lingual_recall_benchmark.rs` integration test do catch

@@ -75,7 +75,8 @@ use crate::member::{TenantMember, TenantMemberStatus};
 use crate::tenant::{Tenant, TenantId, TenantRegistry};
 
 const SCHEMA_SQL: &str = "
-CREATE TABLE IF NOT EXISTS tenants (id BLOB PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS tenants (
+    id BLOB PRIMARY KEY,
     name TEXT NOT NULL,
     status TEXT NOT NULL,
     created_at INTEGER NOT NULL,
@@ -87,7 +88,8 @@ CREATE TABLE IF NOT EXISTS tenants (id BLOB PRIMARY KEY,
 );
 CREATE INDEX IF NOT EXISTS tenants_status_idx ON tenants(status);
 
-CREATE TABLE IF NOT EXISTS tenant_members (tenant_id BLOB NOT NULL,
+CREATE TABLE IF NOT EXISTS tenant_members (
+    tenant_id BLOB NOT NULL,
     user_id BLOB NOT NULL,
     role TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -96,7 +98,8 @@ CREATE TABLE IF NOT EXISTS tenant_members (tenant_id BLOB NOT NULL,
     PRIMARY KEY (tenant_id, user_id)
 );
 
-CREATE TABLE IF NOT EXISTS tenant_configs (tenant_id BLOB PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS tenant_configs (
+    tenant_id BLOB PRIMARY KEY,
     encryption_key_ref BLOB,
     storage_config TEXT,
     synthesis_config TEXT

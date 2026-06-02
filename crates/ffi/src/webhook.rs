@@ -441,7 +441,7 @@ fn dispatch_blocking(
     //
     // Re-acquire the runtime mutex and ingest each event into the
     // encrypted evidence store. Re-validate the scope first (the
-    // host may have called `forget_scope` while phase 2 was in
+    // host may have called `forget_scope` while step 2 was in
     // flight); ingest the events under the source-tag contract the
     // sync path uses. Failures here are substrate-side faults → 502.
     let persisted = with_runtime(handle, |rt| {
@@ -529,7 +529,7 @@ pub(crate) struct RunningWebhookServer {
 impl RunningWebhookServer {
     /// Number of currently-registered `(provider_id, instance_id)`
     /// rows on this server's [`FfiWebhookRouter`]. Exposed for the
-    ///  connector health probe (`crates/ffi/src/health.rs`)
+    /// connector health probe (`crates/ffi/src/health.rs`)
     /// so the operator can see at a glance how much of the
     /// configured webhook surface is bound.
     pub(crate) fn router_registration_count(&self) -> usize {

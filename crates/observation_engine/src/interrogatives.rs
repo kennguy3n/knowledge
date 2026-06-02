@@ -81,7 +81,7 @@ pub enum InterrogativeMatch {
     /// and/or because the language permits non-initial interrogative
     /// placement.
     Substring,
-    ///  strategy for Arabic-script languages whose
+    /// strategy for Arabic-script languages whose
     /// proclitics agglutinate to the host word: tries first-token
     /// equality, then iteratively peels the recognised Arabic
     /// proclitic prefixes (`و` "and", `ف` "then", `ب` "with",
@@ -96,7 +96,7 @@ pub enum InterrogativeMatch {
     /// interrogative hamza is excluded, why `Substring` is
     /// rejected for short Arabic interrogatives).
     FirstTokenWithArabicClitics,
-    ///  strategy for Hebrew: tries first-token equality,
+    /// strategy for Hebrew: tries first-token equality,
     /// then iteratively peels the recognised Hebrew proclitic
     /// prefixes (`ו` "and", `ש` "that / which", `מ` "from",
     /// `ל` "to / for", `ב` "in / at / with") and re-checks
@@ -991,7 +991,7 @@ mod tests {
 
     #[test]
     fn first_token_with_arabic_clitics_languages_are_arabic_only_for_now() {
-        //  a follow-up (an earlier review #3331706213): the
+        // a follow-up (an earlier review #3331706213): the
         // proclitic-aware first-token strategy was introduced
         // specifically for the Arabic agglutinative-prefix
         // morphology (و / ف / ب / ل / ال / أل clitically attaching
@@ -1126,7 +1126,7 @@ mod tests {
         // language's entries.
         for tag in SUPPORTED_PRIMARY_TAGS {
             let (list, strat) = interrogatives_for(tag).unwrap();
-            //  a follow-up extension (an earlier review
+            // a follow-up extension (an earlier review
             // #3331604782): the invariant applies to every
             // strategy whose matcher consults the extractor's
             // alphabetic-only tokeniser — i.e. both bare
@@ -1142,7 +1142,7 @@ mod tests {
             // tokens (`tại sao`) or are intentionally matched as
             // substrings (`何ですか`).
             //
-            //  extension: same invariant applies to the
+            // extension: same invariant applies to the
             // Hebrew clitic-aware strategy by identical reasoning
             // — the peel strips only alphabetic Hebrew proclitics
             // (never tokeniser-boundary chars), so any non-

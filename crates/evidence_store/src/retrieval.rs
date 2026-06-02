@@ -272,12 +272,12 @@ impl<'a> HybridRetriever<'a> {
         let Some(model) = self.embedding_model.as_ref() else {
             return Ok(candidates);
         };
-        //  pre-embedding routing gate.  A noise-only
+        // pre-embedding routing gate. A noise-only
         // rerank query (pure punctuation / emoji / digits)
         // would burn an ONNX call to produce a near-zero vector
         // that scores every candidate body uniformly — worse
         // than just returning the FTS+recency candidates
-        // unchanged.  Skip the lane wholesale in that case.
+        // unchanged. Skip the lane wholesale in that case.
         let query_route = crate::embedding_routing::classify_for_embedding(query);
         crate::vector_telemetry::record_pre_embed_decision(query_route);
         if matches!(
@@ -308,12 +308,12 @@ impl<'a> HybridRetriever<'a> {
         for mut hit in candidates {
             let vector_score = match body_lookup.get(&hit.evidence_id) {
                 Some(body) => {
-                    // per-body pre-embed gate.  A
+                    // per-body pre-embed gate. A
                     // noise-only body would otherwise have its
                     // `vector_score` set from a near-zero embed
                     // that drags the fan-in score toward 0.5
                     // (the `cos == 0` projection per
-                    // `similarity_to_score`).  Skipping the
+                    // `similarity_to_score`). Skipping the
                     // embed and leaving `vector_score = 0.0`
                     // matches the existing "no body" branch
                     // below.
@@ -421,12 +421,12 @@ impl<'a> HybridRetriever<'a> {
         // adapter outage anyway). The success / error counters cover
         // both branches so the operator can see degraded mode in
         // metrics.
-        //  pre-embedding routing gate.  A noise-only
+        // pre-embedding routing gate. A noise-only
         // query (pure punctuation / emoji / digits) would have
         // its near-zero embedding score every candidate body at
         // roughly the same (low) cosine similarity, dragging
         // the fan-in score toward `0.5` and effectively
-        // randomising the top-k.  Skipping the lane wholesale
+        // randomising the top-k. Skipping the lane wholesale
         // is strictly better — the FTS+recency lanes still rank
         // the candidates by lexical signal.
         //
@@ -435,7 +435,7 @@ impl<'a> HybridRetriever<'a> {
         // sites where the model is actually available to service
         // the routing decision — matching the same pattern in
         // [`Self::rerank_with_embeddings`] above and
-        // [`EvidenceStore::index_embedding`].  Without this guard
+        // [`EvidenceStore::index_embedding`]. Without this guard
         // the admission-rate metric documented at
         // `vector_telemetry.rs` (`admitted / total = ONNX-call
         // admission rate`) would be inflated for retrievers
@@ -630,8 +630,8 @@ impl<'a> HybridRetriever<'a> {
                 return Ok(None);
             }
         };
-        //  pre-embedding routing gate for the
-        // cache-miss fallback.  A body classified as noise-only
+        // pre-embedding routing gate for the
+        // cache-miss fallback. A body classified as noise-only
         // would have its `vector_score` set from a near-zero
         // embed; skipping the embed and returning `None` here
         // matches the upstream caller's existing "no body"

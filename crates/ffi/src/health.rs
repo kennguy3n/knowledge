@@ -446,9 +446,9 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     // resolver is registered, because public-client providers
     // (Slack PKCE-only, Notion test mode) work fine without one;
     // the host might also be relying on the
-    // `auth_config_json["client_secret"]` fallback layer (//
-    // 4.1 layer 2). Only the `failed > 0 || !http_transport`
-    // conditions remain load-bearing for the subsystem status.
+    // `auth_config_json["client_secret"]` fallback layer. Only the
+    // `failed > 0 || !http_transport` conditions remain
+    // load-bearing for the subsystem status.
     //
     // Under `not(http-client)` the resolver slot is
     // architecturally inert (no `OAuth2Client` is ever

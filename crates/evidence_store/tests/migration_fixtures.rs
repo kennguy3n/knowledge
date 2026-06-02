@@ -1020,7 +1020,7 @@ fn opens_v15_database_and_upgrades_to_current_with_recall_lanes_re_stripped() {
     // verbatim), then re-stamp `user_version = 15` to put the
     // database in a pre-v16 shape on disk. The v16 migration
     // must re-tokenise the bigram + trigram lanes with the
-    //  stopword strip applied.
+    // stopword strip applied.
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("evidence.db");
     let scope = ScopeId::new_v4();

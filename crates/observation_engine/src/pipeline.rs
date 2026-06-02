@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn run_with_language_preserves_per_sentence_stamps_in_bilingual_input() {
-        //  contract: the pipeline runs `detect_language`
+        // contract: the pipeline runs `detect_language`
         // on the WHOLE input to set the row-level `language`
         // field, but it MUST NOT overwrite the per-sentence
         // language tags the extractor already attached to each

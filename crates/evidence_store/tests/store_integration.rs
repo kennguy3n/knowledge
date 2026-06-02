@@ -1477,7 +1477,7 @@ fn fts5_trigram_branch_error_is_silently_swallowed_so_unicode61_results_survive(
 
 #[test]
 fn bigram_lane_ranks_are_weighted_below_raw_bm25_baseline() {
-    //  invariant: a 2-codepoint CJK query routes exclusively
+    // invariant: a 2-codepoint CJK query routes exclusively
     // through the bigram lane (the unicode61 lane emits no tokens for
     // CJK, the trigram lane's 3-codepoint floor swallows 2-char
     // queries). The post-merge rank must therefore equal the raw FTS5
@@ -1526,7 +1526,7 @@ fn bigram_lane_ranks_are_weighted_below_raw_bm25_baseline() {
 
 #[test]
 fn unicode61_lane_ranks_are_identity_weighted_against_baseline() {
-    //  invariant: the unicode61 lane is the precision
+    // invariant: the unicode61 lane is the precision
     // baseline at weight 1.0, so a pure-Latin query that routes
     // exclusively through `evidence_fts` must produce ranks
     // numerically identical to the raw FTS5 BM25 ranks (the
@@ -1571,7 +1571,7 @@ fn unicode61_lane_ranks_are_identity_weighted_against_baseline() {
 
 #[test]
 fn trigram_lane_ranks_are_weighted_below_unicode61_baseline() {
-    //  invariant: a 3-codepoint CJK query routes through
+    // invariant: a 3-codepoint CJK query routes through
     // both the trigram lane (single trigram window) and the bigram
     // lane (two bigram windows). The per-row MIN-merge picks the
     // best (most negative) weighted score across lanes. Verify the
@@ -1604,7 +1604,7 @@ fn trigram_lane_ranks_are_weighted_below_unicode61_baseline() {
 
 #[test]
 fn lane_weight_precision_hierarchy_holds_at_query_time() {
-    //  invariant: when the SAME row hits via multiple
+    // invariant: when the SAME row hits via multiple
     // lanes, the unicode61 lane's `* 1.0` multiply produces a more-
     // negative rank than the trigram lane's `* 0.85` would for the
     // same raw FTS5 BM25 score, which in turn is more-negative
@@ -1639,7 +1639,7 @@ fn lane_weight_precision_hierarchy_holds_at_query_time() {
 //  — Symmetric recall-lane stopword stripping (schema v16)
 // ----------------------------------------------------------------------
 //
-//  strips a small, conservative inventory of per-script
+// strips a small, conservative inventory of per-script
 // function words (Japanese particles, Chinese connectives, Thai
 // prepositions, ...) from BOTH the index-time write path and the
 // query-time read path before the bigram / trigram lanes consume the

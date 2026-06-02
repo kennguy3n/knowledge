@@ -61,7 +61,8 @@ use crate::graph::ConceptGraph;
 use crate::node::{ConceptNode, NodeId, NodeState};
 
 const SCHEMA_SQL: &str = "
-CREATE TABLE IF NOT EXISTS concept_nodes (id BLOB PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS concept_nodes (
+    id BLOB PRIMARY KEY,
     scope_id BLOB NOT NULL,
     state TEXT NOT NULL,
     superseded_by BLOB,
@@ -72,7 +73,8 @@ CREATE TABLE IF NOT EXISTS concept_nodes (id BLOB PRIMARY KEY,
 );
 CREATE INDEX IF NOT EXISTS concept_nodes_scope_idx ON concept_nodes(scope_id);
 
-CREATE TABLE IF NOT EXISTS concept_edges (id BLOB PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS concept_edges (
+    id BLOB PRIMARY KEY,
     scope_id BLOB NOT NULL,
     from_node BLOB NOT NULL,
     to_node BLOB NOT NULL,

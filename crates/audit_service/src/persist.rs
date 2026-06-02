@@ -25,9 +25,9 @@
 //!     nonce BLOB NOT NULL,
 //!     payload BLOB NOT NULL
 //! );
-//! CREATE INDEX audit_log_action_idx ON audit_log(action_type);
-//! CREATE INDEX audit_log_actor_idx ON audit_log(actor_id);
-//! CREATE INDEX audit_log_scope_idx ON audit_log(scope_id);
+//! CREATE INDEX audit_log_action_idx   ON audit_log(action_type);
+//! CREATE INDEX audit_log_actor_idx    ON audit_log(actor_id);
+//! CREATE INDEX audit_log_scope_idx    ON audit_log(scope_id);
 //! ```
 //!
 //! `payload` is the AEAD ciphertext of the JSON-encoded
@@ -59,7 +59,8 @@ use crate::error::{AuditError, Result};
 use crate::log::AuditLog;
 
 const SCHEMA_SQL: &str = "
-CREATE TABLE IF NOT EXISTS audit_log (id BLOB PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS audit_log (
+    id BLOB PRIMARY KEY,
     sequence INTEGER NOT NULL UNIQUE,
     action_type TEXT NOT NULL,
     actor_type TEXT NOT NULL,

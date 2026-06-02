@@ -57,7 +57,7 @@
 ///   replays this table into the in-process [`DekRegistry`] on
 ///   every `open_store` so post-restart calls for forgotten epochs
 ///   continue to short-circuit. Purely additive.
-/// - v9 ( connector persistence): added `connector_instances`
+/// - v9 (connector persistence): added `connector_instances`
 ///   for AEAD-encrypted per-instance `(ConnectorConfig, SyncState)`
 ///   blobs and `connector_tokens` for AEAD-encrypted per-instance
 ///   `OAuth2Token` bundles. Both encrypted under the same per-scope
@@ -69,7 +69,7 @@
 ///   single-instance-per-(scope, kind) contract at the DB layer
 ///   (defense-in-depth against future regressions of the runtime-
 ///   side check). Purely additive.
-/// - v10 ( approved-document payloads): added
+/// - v10 (approved-document payloads): added
 ///   `approved_document_payloads` for per-(tenant scope, document)
 ///   AEAD-encrypted opaque payload bytes attached to a previously
 ///   admitted `ApprovedDocumentRef`. Encrypted under the per-scope
@@ -101,8 +101,8 @@
 ///   simply have no version history rows yet, matching the
 ///   pre-Item-4 contract where every synthesis output overwrote
 ///   the prior one with no recoverable trail.
-/// - v12 (body-store dedup for approved-document
-///   payloads): the `approved_document_payloads` table loses its
+/// - v12 (body-store dedup for approved-document payloads):
+///   the `approved_document_payloads` table loses its
 ///   inline `nonce` + `payload` columns and becomes metadata-only.
 ///   The plaintext bytes now live in the shared content-hash-
 ///   deduplicated `body_store` table, encrypted under a random
@@ -163,8 +163,8 @@
 ///   a hard 3-codepoint minimum for both indexed substrings and
 ///   query strings — 2-character CJK queries like `天気` return ∅
 ///   even when the substring is present in the indexed text.
-///   Schema v15 closes that gap via a precomputed-
-///   bigram lane in a parallel `evidence_fts_bigram` table; see
+///   Schema v15 closes that gap via a precomputed-bigram lane
+///   in a parallel `evidence_fts_bigram` table; see
 ///   the v15 history entry below.
 /// - v15 (CJK / Thai bigram recall lane): added
 ///   the `evidence_fts_bigram` virtual table that stores
@@ -239,7 +239,8 @@ pub const SCHEMA_VERSION: i32 = 16;
 pub const SCHEMA_SQL: &str = r#"
 -- Evidence rows are append-only. UPDATE / DELETE attempts are rejected
 -- by triggers below.
-CREATE TABLE IF NOT EXISTS evidence (id              BLOB    PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS evidence (
+    id              BLOB    PRIMARY KEY,
     scope_id        BLOB    NOT NULL,
     content_hash    BLOB    NOT NULL,
     body            BLOB,
@@ -276,7 +277,8 @@ BEGIN
 END;
 
 -- Deduplicated body table (BLAKE3 content-hash keyed).
-CREATE TABLE IF NOT EXISTS body_store (content_hash    BLOB PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS body_store (
+    content_hash    BLOB PRIMARY KEY,
     body            BLOB    NOT NULL,
     nonce           BLOB    NOT NULL,
     ref_count       INTEGER NOT NULL DEFAULT 0
@@ -284,7 +286,8 @@ CREATE TABLE IF NOT EXISTS body_store (content_hash    BLOB PRIMARY KEY,
 
 -- Ring buffer for noise-class messages. Configurable size cap is
 -- enforced in code; entries are FIFO-overwritten when the cap is hit.
-CREATE TABLE IF NOT EXISTS ring_buffer (id              INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE IF NOT EXISTS ring_buffer (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
     scope_id        BLOB    NOT NULL,
     body            BLOB    NOT NULL,
     nonce           BLOB    NOT NULL,
@@ -302,9 +305,10 @@ CREATE INDEX IF NOT EXISTS idx_ring_buffer_scope_created
 -- Devanagari, Hangul) including any Latin terms embedded inside a
 -- CJK or Thai document. CJK Han / Hiragana / Katakana / Thai
 -- substrings are routed *additionally* into `evidence_fts_cjk`
--- below ( / v14) — `unicode61` produces no tokens for
+-- below (schema v14) — `unicode61` produces no tokens for
 -- those codepoints because it classifies them as separators.
-CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(content,
+CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(
+    content,
     evidence_id UNINDEXED,
     scope_id    UNINDEXED,
     tokenize    = 'unicode61 remove_diacritics 2'
@@ -318,7 +322,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(content,
 -- UNIONs both tables and dedupes on `evidence_id`. Forget /
 -- purge / rebuild paths touch both tables in the same
 -- transaction so the two indexes can never drift apart.
-CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_cjk USING fts5(content,
+CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_cjk USING fts5(
+    content,
     evidence_id UNINDEXED,
     scope_id    UNINDEXED,
     tokenize    = 'trigram'
@@ -344,7 +349,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_cjk USING fts5(content,
 -- table alongside `evidence_fts` and `evidence_fts_cjk` in the
 -- same transaction so the three indexes can never drift apart
 -- under crash recovery.
-CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_bigram USING fts5(content,
+CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_bigram USING fts5(
+    content,
     evidence_id UNINDEXED,
     scope_id    UNINDEXED,
     tokenize    = 'unicode61 remove_diacritics 2'
@@ -364,7 +370,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_bigram USING fts5(content,
 -- `apply_migration` in `store.rs`. For an already-v3 database this
 -- statement is a no-op via `IF NOT EXISTS`; for a fresh database it
 -- creates the v3 shape directly.
-CREATE TABLE IF NOT EXISTS evidence_embeddings (evidence_id     BLOB    NOT NULL,
+CREATE TABLE IF NOT EXISTS evidence_embeddings (
+    evidence_id     BLOB    NOT NULL,
     embedding       BLOB    NOT NULL,
     model_tag       TEXT    NOT NULL,
     created_at      INTEGER NOT NULL,
@@ -384,7 +391,8 @@ CREATE TABLE IF NOT EXISTS evidence_embeddings (evidence_id     BLOB    NOT NULL
 -- bodies unrecoverable; the tombstone here makes that decision
 -- durable across process restarts. Re-inserts for an already-
 -- forgotten scope are no-ops by way of `INSERT OR IGNORE`.
-CREATE TABLE IF NOT EXISTS forgotten_scopes (scope_id        BLOB    PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS forgotten_scopes (
+    scope_id        BLOB    PRIMARY KEY,
     forgotten_at    INTEGER NOT NULL
 );
 
@@ -394,7 +402,8 @@ CREATE TABLE IF NOT EXISTS forgotten_scopes (scope_id        BLOB    PRIMARY KEY
 -- scope's access to shared bodies without affecting other scopes.
 -- When no wraps remain for a given `content_hash`, the body is
 -- cryptographically unrecoverable.
-CREATE TABLE IF NOT EXISTS body_store_key_wraps (content_hash    BLOB    NOT NULL,
+CREATE TABLE IF NOT EXISTS body_store_key_wraps (
+    content_hash    BLOB    NOT NULL,
     scope_id        BLOB    NOT NULL,
     wrapped_cek     BLOB    NOT NULL,
     nonce           BLOB    NOT NULL,
@@ -416,7 +425,8 @@ CREATE INDEX IF NOT EXISTS idx_body_wraps_scope
 -- time. On forget(), the row is deleted — without the wrapped DEK
 -- the scope key is truly unrecoverable even if the master key is
 -- later compromised.
-CREATE TABLE IF NOT EXISTS scope_deks (scope_id        BLOB    PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS scope_deks (
+    scope_id        BLOB    PRIMARY KEY,
     wrapped_dek     BLOB    NOT NULL,
     nonce           BLOB    NOT NULL,
     created_at      INTEGER NOT NULL
@@ -427,7 +437,8 @@ CREATE TABLE IF NOT EXISTS scope_deks (scope_id        BLOB    PRIMARY KEY,
 -- as a single AEAD-encrypted JSON blob. The `kind` column
 -- discriminates between user_memory and channel_memory.
 -- Mutations (pin, unpin, decay_sweep) upsert the entire blob.
-CREATE TABLE IF NOT EXISTS memory_objects (scope_id        BLOB    NOT NULL,
+CREATE TABLE IF NOT EXISTS memory_objects (
+    scope_id        BLOB    NOT NULL,
     kind            TEXT    NOT NULL,
     nonce           BLOB    NOT NULL,
     payload         BLOB    NOT NULL,
@@ -445,7 +456,8 @@ CREATE TABLE IF NOT EXISTS memory_objects (scope_id        BLOB    NOT NULL,
 -- short-circuit. Like `forgotten_scopes`, re-inserts for an
 -- already-forgotten (scope, epoch) are no-ops via the
 -- TombstoneStore implementation's `INSERT OR IGNORE`.
-CREATE TABLE IF NOT EXISTS epoch_tombstones (scope_id        BLOB    NOT NULL,
+CREATE TABLE IF NOT EXISTS epoch_tombstones (
+    scope_id        BLOB    NOT NULL,
     epoch_id        INTEGER NOT NULL,
     forgotten_at    INTEGER NOT NULL,
     PRIMARY KEY (scope_id, epoch_id)
@@ -466,7 +478,8 @@ CREATE TABLE IF NOT EXISTS epoch_tombstones (scope_id        BLOB    NOT NULL,
 -- (step 1 of the cryptographic-forgetting sequence in
 -- `crates/ffi/src/lib.rs::forget_scope_state`), so the row purge is
 -- best-effort defense in depth.
-CREATE TABLE IF NOT EXISTS connector_instances (instance_id     BLOB    PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS connector_instances (
+    instance_id     BLOB    PRIMARY KEY,
     scope_id        BLOB    NOT NULL,
     kind            TEXT    NOT NULL,
     nonce           BLOB    NOT NULL,
@@ -505,7 +518,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_instances_scope_kind
 -- different row (different scope or different instance) fails to
 -- decrypt and surfaces a structured error rather than silently
 -- returning a stale token from the wrong context.
-CREATE TABLE IF NOT EXISTS connector_tokens (instance_id     BLOB    PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS connector_tokens (
+    instance_id     BLOB    PRIMARY KEY,
     scope_id        BLOB    NOT NULL,
     nonce           BLOB    NOT NULL,
     payload         BLOB    NOT NULL,
@@ -525,8 +539,8 @@ CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
 -- the actual plaintext bytes stored in the deduplicated `body_store`
 -- table. The payload bytes themselves are AEAD-encrypted under a
 -- random per-row CEK that is wrapped under each referencing scope's
--- DEK in `body_store_key_wraps`, identical to how 
--- (WS1) handles the evidence body-table content.
+-- DEK in `body_store_key_wraps`, identical to how the evidence
+-- body-table content is handled.
 --
 -- The pre-v12 schema carried inline `nonce` + `payload` columns
 -- here, encrypted directly under the scope DEK with AAD binding
@@ -557,7 +571,8 @@ CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
 -- lookups on `scope_id`, so no separate covering index is needed for
 -- the `WHERE scope_id = ?` listing query — SQLite's PK index handles
 -- it directly.
-CREATE TABLE IF NOT EXISTS approved_document_payloads (scope_id        BLOB    NOT NULL,
+CREATE TABLE IF NOT EXISTS approved_document_payloads (
+    scope_id        BLOB    NOT NULL,
     document_id     BLOB    NOT NULL,
     content_hash    BLOB    NOT NULL,
     size_bytes      INTEGER NOT NULL,
@@ -612,7 +627,8 @@ CREATE TABLE IF NOT EXISTS approved_document_payloads (scope_id        BLOB    N
 -- supports the orphan-sweep walk at `open_store` time, which lists
 -- every `(scope, window)` pair across the table to diff against
 -- live window-manager state.
-CREATE TABLE IF NOT EXISTS synthesis_object_versions (scope_id        BLOB    NOT NULL,
+CREATE TABLE IF NOT EXISTS synthesis_object_versions (
+    scope_id        BLOB    NOT NULL,
     window_id       BLOB    NOT NULL,
     version         INTEGER NOT NULL,
     nonce           BLOB    NOT NULL,

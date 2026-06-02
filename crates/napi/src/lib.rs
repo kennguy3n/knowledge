@@ -18,7 +18,7 @@
 //! 3. A round-trippable [`NapiError`] mapped from [`ffi::FfiError`]
 //!    so the Electron host gets a stable JSON envelope.
 //!
-//!  — the [`#[napi]`] proc-macros are live. The cdylib that
+//! The [`#[napi]`] proc-macros are live. The cdylib that
 //! `napi build` produces is loaded by Node via `require('./*.node')`.
 //! The [`bindings`] module is the JS-facing surface; the freestanding
 //! `pub fn`s in this file remain the canonical Rust-facing API so
@@ -622,7 +622,7 @@ pub fn open_store_with_resolver(
         .map_err(NapiError::from)
 }
 
-// ───────────────────────── Webhook receiver ─────────────
+// ───────────────────────── Webhook receiver ─────────────────────
 
 /// Start a webhook receiver server bound to `bind_addr` (parsed as
 /// a `SocketAddr`). Mirrors [`ffi::start_webhook_server`].
@@ -794,8 +794,8 @@ pub fn configure_sync_auto_synthesize(
         .map_err(NapiError::from)
 }
 
-/// Install the server-side synthesis engine on the runtime
-///. Mirrors [`ffi::configure_synthesis_engine`].
+/// Install the server-side synthesis engine on the runtime.
+/// Mirrors [`ffi::configure_synthesis_engine`].
 ///
 /// # Errors
 ///
@@ -851,8 +851,8 @@ pub fn list_recent_syntheses(
     ffi::list_recent_syntheses(RuntimeHandle(handle), scope_id).map_err(NapiError::from)
 }
 
-/// Re-run synthesis on an existing `Complete` window (
-///). Mirrors [`ffi::replay_synthesis`]. The window is
+/// Re-run synthesis on an existing `Complete` window.
+/// Mirrors [`ffi::replay_synthesis`]. The window is
 /// re-driven through `Complete → Pending → InProgress →
 /// Complete` (or `→ Failed`) on the same `(scope, window_id)`
 /// pair; the prior synthesis object is archived to the history

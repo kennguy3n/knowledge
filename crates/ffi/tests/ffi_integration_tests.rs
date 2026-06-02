@@ -2770,7 +2770,7 @@ fn seed_oauth_refresh_fixture(
     (path, master_key_bytes, scope, instance, dir)
 }
 
-///  layer 1: when a resolver returns `Some(secret)`, that
+/// layer 1: when a resolver returns `Some(secret)`, that
 /// secret is what appears in the OAuth2 `refresh_token` POST body's
 /// `client_secret=` form field — taking precedence over the
 /// `auth_config_json["client_secret"]` value AND short-circuiting the
@@ -2834,7 +2834,7 @@ fn client_secret_resolver_layer_1_wins_over_auth_config_json() {
     drop(dir);
 }
 
-///  layer 2: when no resolver is registered, the
+/// layer 2: when no resolver is registered, the
 /// substrate falls through to `auth_config_json["client_secret"]`
 /// and includes it as the form field on the refresh POST. Pins the
 /// test / single-tenant dev host path.
@@ -2879,7 +2879,7 @@ fn client_secret_resolver_layer_2_auth_config_json_when_no_resolver() {
     drop(dir);
 }
 
-///  layer 2b: when a resolver IS registered but returns
+/// layer 2b: when a resolver IS registered but returns
 /// `None`, the framework falls through to the
 /// `auth_config_json["client_secret"]` layer instead of omitting
 /// the form field. Pins the multi-tenant "secret not yet loaded
@@ -2936,7 +2936,7 @@ fn client_secret_resolver_layer_2_when_resolver_returns_none() {
     drop(dir);
 }
 
-///  layer 3: when no resolver is registered AND
+/// layer 3: when no resolver is registered AND
 /// `auth_config_json["client_secret"]` is absent, the substrate
 /// MUST NOT include a `client_secret=` form field at all. Public-
 /// client / PKCE-only providers accept this (Slack legacy);
@@ -2983,7 +2983,7 @@ fn client_secret_resolver_layer_3_omits_form_field_when_no_secret_available() {
     drop(dir);
 }
 
-///  lifecycle: registering a resolver, then clearing it,
+/// lifecycle: registering a resolver, then clearing it,
 /// must restore the auth_config_json fallback semantics. Pins the
 /// `clear_oauth_client_secret_resolver` FFI function's contract.
 #[cfg(feature = "http-client")]
@@ -3044,7 +3044,7 @@ fn client_secret_resolver_clear_restores_fallback() {
     drop(dir);
 }
 
-///  negative path: `set_oauth_client_secret_resolver` on a
+/// negative path: `set_oauth_client_secret_resolver` on a
 /// runtime that never had an OAuth2 client built (only happens on
 /// `--no-default-features` builds where `http-client` is off) must
 /// surface `Unavailable { subsystem: "connector-http-client" }`. We
@@ -3072,7 +3072,7 @@ fn client_secret_resolver_set_and_clear_are_idempotent() {
     close_store(h).expect("close_store");
 }
 
-///  health-probe wiring: the `connector` subsystem must
+/// health-probe wiring: the `connector` subsystem must
 /// flip its `oauth_resolver=` field from `unset` to `registered`
 /// after a successful `set_oauth_client_secret_resolver` call, and
 /// back to `unset` after `clear_oauth_client_secret_resolver`.
@@ -3138,7 +3138,7 @@ fn health_probe_surfaces_oauth_resolver_registration_state() {
     close_store(h).expect("close_store");
 }
 
-///  helper: hex-encode `bytes` as a lowercase string.
+/// helper: hex-encode `bytes` as a lowercase string.
 /// Mirrors the encoding used by `open_store(master_key_hex)`.
 #[cfg(feature = "http-client")]
 fn hex_encode(bytes: &[u8]) -> String {

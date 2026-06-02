@@ -906,7 +906,7 @@ impl EvidenceStore {
         if text.is_empty() {
             return;
         }
-        //  pre-embedding routing gate. A body
+        // pre-embedding routing gate. A body
         // classified as noise-only (pure punctuation / emoji /
         // digits / whitespace) is still indexed via FTS5 by the
         // caller — we just skip writing a vector row for it.
@@ -1365,7 +1365,7 @@ impl EvidenceStore {
 
     /// Test-only variant of [`Self::search_fts`] that exposes the
     /// post-lane-weighting BM25 rank for every returned row, so
-    ///  integration tests can pin the cross-lane
+    /// integration tests can pin the cross-lane
     /// precision-vs-recall hierarchy at the rank-arithmetic level
     /// (and not just at the recall-preservation level that
     /// [`Self::search_fts`] would surface).
@@ -4716,7 +4716,7 @@ fn migrate_v16_strip_recall_lane_stopwords(conn: &Connection) -> Result<()> {
             // earlier so the recall-lane indexes here are
             // identical to what a fresh-DB ingest of the same
             // bodies would produce. Counted variant feeds the
-            //  v16-migration stopword strip telemetry.
+            // v16-migration stopword strip telemetry.
             let (stripped, strip_count) =
                 crate::fts_stopwords::strip_recall_lane_stopwords_counted(&content);
             crate::fts_telemetry::record_stopwords_stripped(

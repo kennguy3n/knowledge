@@ -334,7 +334,7 @@ fn fresh_observations_are_candidate_state() {
         .all(|o| o.memory_state == memory_manager::MemoryState::Candidate));
 }
 
-///  end-to-end test: confirm the lexicon-telemetry
+/// end-to-end test: confirm the lexicon-telemetry
 /// counters tick through the public extraction surface.
 ///
 /// This is the cross-cutting "do the counters actually tick

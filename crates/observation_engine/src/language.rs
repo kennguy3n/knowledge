@@ -48,8 +48,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 ///
 /// The inner field is an [`Arc<str>`] rather than a [`String`] so
 /// that [`Clone`] is an O(1) refcount bump rather than a heap
-/// allocation + memcpy of the underlying 2-5 byte tag. The ///
-/// 1.4 extractor clones the dominant `Option<LanguageTag>` once
+/// allocation + memcpy of the underlying 2-5 byte tag. The
+/// extractor clones the dominant `Option<LanguageTag>` once
 /// per entity-class observation (6+ classes per call: `@mentions`,
 /// capitalised words, URLs, emails, date refs, numeric refs), and
 /// it also clones the per-sentence tag once per sentence in the

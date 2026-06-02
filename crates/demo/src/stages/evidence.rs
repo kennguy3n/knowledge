@@ -207,7 +207,7 @@ pub fn run(
     for (k, v) in &by_class {
         stage.stat(format!("class_{k}"), v.to_string());
     }
-    //  breakdown: how many persisted rows carry each BCP-47
+    // breakdown: how many persisted rows carry each BCP-47
     // primary subtag the substrate detected at ingest. `<none>`
     // collects the fail-closed outcomes (detector declined to
     // classify). The multilingual lexicon registry reads

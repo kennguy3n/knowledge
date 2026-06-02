@@ -1,4 +1,4 @@
-//!  — Tokio async surface for the connector framework.
+//! Tokio async surface for the connector framework.
 //!
 //! The pre-existing [`Connector`](crate::connector::Connector)
 //! trait and [`HttpTransport`](crate::http::HttpTransport) are
@@ -8,7 +8,7 @@
 //! dependency for hosts that didn't need one. See the long-form
 //! rationale in `crate::http::HttpTransport`'s doc comment.
 //!
-//!  lifts that constraint *additively*. The substrate is
+//! The async surface lifts that constraint *additively*. The substrate is
 //! moving to a tokio-driven runtime so:
 //!
 //! * the webhook receiver server can serve concurrent provider

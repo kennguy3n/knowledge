@@ -203,7 +203,7 @@ pub fn ingest_message(
                 });
             }
             rt.ensure_scope_registered(scope)?;
-            //  — run language detection at the production
+            // Run language detection at the production
             // write boundary so every persistent row stamps a
             // BCP-47 primary subtag onto the `language_tag` column
             // (schema v13). `detect_language` is fail-closed: empty
@@ -420,8 +420,8 @@ pub fn get_evidence(handle: RuntimeHandle, evidence_id: String) -> FfiResult<Evi
                     .map_or(SourceKind::Other, parse_source_kind),
                 created_at: row.created_at,
                 // Forward the BCP-47 primary subtag the substrate
-                // stamped on the row at ingest (schema v13, //
-                // 1.3). NULL stays NULL across the bridge so host
+                // stamped on the row at ingest (schema v13). NULL
+                // stays NULL across the bridge so host
                 // shells can distinguish "no detection" from a
                 // concrete tag like `"en"`. `row` is owned and not
                 // borrowed after this expression, and `source_ref`'s
@@ -717,7 +717,7 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
 ///    payloads cannot be recovered post-forget.
 /// 4. Persisted memory blob deletion so forgotten-scope memory
 ///    state does not survive the next `open_store`.
-/// 5. **** Persisted approved-document payload row
+/// 5. Persisted approved-document payload row
 ///    deletion (`approved_document_payloads` table). Best-effort
 ///    — failure logs WARN and accumulates the error; the payload
 ///    ciphertext is sealed under the scope DEK that step 1 just
@@ -752,8 +752,7 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
 /// honest.
 fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> FfiResult<()> {
     // Defense in depth against the synthesis-windows sentinel
-    // collision :
-    // `parse_scope_id` already rejects the nil UUID at the host
+    // collision: `parse_scope_id` already rejects the nil UUID at the host
     // boundary, but internal callers (tests, future refactors)
     // can still synthesise a `ScopeId` directly. Forgetting the
     // sentinel scope would call `delete_memory_blobs_for_scope`
@@ -791,7 +790,8 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     //    on failure — we do NOT promote this to `first_error`
     //    because the documented recovery path handles it.
     if let Err(e) = rt.store_mut().delete_scope_dek(scope) {
-        tracing::warn!(scope = %scope.as_uuid(),
+        tracing::warn!(
+            scope = %scope.as_uuid(),
             error = %e,
             "failed to delete scope DEK; will retry on next open_store",
         );
@@ -806,7 +806,8 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         let err = FfiError::Evidence {
             message: e.to_string(),
         };
-        tracing::warn!(scope = %scope.as_uuid(),
+        tracing::warn!(
+            scope = %scope.as_uuid(),
             error = %err,
             "forget_scope_state: purge_fts_for_scope failed; continuing to subsequent cleanups",
         );
@@ -816,7 +817,8 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         let err = FfiError::Evidence {
             message: e.to_string(),
         };
-        tracing::warn!(scope = %scope.as_uuid(),
+        tracing::warn!(
+            scope = %scope.as_uuid(),
             error = %err,
             "forget_scope_state: purge_body_key_wraps_for_scope failed; continuing to subsequent cleanups",
         );
@@ -829,15 +831,16 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         let err = FfiError::Evidence {
             message: e.to_string(),
         };
-        tracing::warn!(scope = %scope.as_uuid(),
+        tracing::warn!(
+            scope = %scope.as_uuid(),
             error = %err,
             "forget_scope_state: delete_memory_blobs_for_scope failed; continuing to connector teardown",
         );
         first_error.get_or_insert(err);
     }
 
-    // 5. / : delete persisted approved-
-    //     document metadata rows for the scope. As of v12 these are
+    // 5. Delete persisted approved-document metadata rows for the
+    //     scope. As of v12 these are
     //     metadata-only — the actual payload bytes live in
     //     `body_store` and the per-scope CEK wrap (already destroyed
     //     in step 3 by `purge_body_key_wraps_for_scope`, which also
@@ -856,7 +859,8 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     {
         Ok(deleted) => {
             if deleted > 0 {
-                tracing::debug!(scope = %scope.as_uuid(),
+                tracing::debug!(
+                    scope = %scope.as_uuid(),
                     deleted,
                     "forget_scope_state: purged approved-document payload rows",
                 );
@@ -866,7 +870,8 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
             let err = FfiError::Evidence {
                 message: e.to_string(),
             };
-            tracing::warn!(scope = %scope.as_uuid(),
+            tracing::warn!(
+                scope = %scope.as_uuid(),
                 error = %err,
                 "forget_scope_state: delete_approved_document_payloads_for_scope failed; \
                  ciphertext remains unrecoverable because the scope DEK is already destroyed",
@@ -888,7 +893,8 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     match rt.store().delete_synthesis_object_versions_for_scope(scope) {
         Ok(deleted) => {
             if deleted > 0 {
-                tracing::debug!(scope = %scope.as_uuid(),
+                tracing::debug!(
+                    scope = %scope.as_uuid(),
                     deleted,
                     "forget_scope_state: purged synthesis-object version rows",
                 );
@@ -898,7 +904,8 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
             let err = FfiError::Evidence {
                 message: e.to_string(),
             };
-            tracing::warn!(scope = %scope.as_uuid(),
+            tracing::warn!(
+                scope = %scope.as_uuid(),
                 error = %err,
                 "forget_scope_state: delete_synthesis_object_versions_for_scope failed; \
                  ciphertext remains unrecoverable because the scope DEK is already destroyed",
@@ -970,7 +977,8 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     //
     // Best-effort warn is sufficient.
     if let Err(e) = rt.flush_synthesis_windows() {
-        tracing::warn!(scope = %scope.as_uuid(),
+        tracing::warn!(
+            scope = %scope.as_uuid(),
             error = ?e,
             "forget_scope_state: flush_synthesis_windows failed; in-memory state is clean and \
              open_store will purge the stale window row on next restart via the \
@@ -991,7 +999,8 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         let err = FfiError::Evidence {
             message: e.to_string(),
         };
-        tracing::warn!(scope = %scope.as_uuid(),
+        tracing::warn!(
+            scope = %scope.as_uuid(),
             error = %err,
             "forget_scope_state: delete_connector_instances_for_scope failed; rows will be cleaned up on next open_store",
         );
@@ -1006,7 +1015,8 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         let err = FfiError::Evidence {
             message: e.to_string(),
         };
-        tracing::warn!(scope = %scope.as_uuid(),
+        tracing::warn!(
+            scope = %scope.as_uuid(),
             error = %err,
             "forget_scope_state: delete_connector_tokens_for_scope failed; rows will be cleaned up on next open_store",
         );
@@ -1235,12 +1245,14 @@ pub fn trigger_synthesis(
 ) -> FfiResult<String> {
     metrics::instrument(metrics::inc_synthesis_triggered, || {
         let scope = parse_scope_id(&scope_id)?;
-        tracing::info!(scope = %scope.as_uuid(),
+        tracing::info!(
+            scope = %scope.as_uuid(),
             trigger = ?trigger,
             "trigger_synthesis: dispatching SynthSummary",
         );
         synthesize_scope(handle, scope, &scope_id).map_err(|err| {
-            tracing::warn!(scope = %scope.as_uuid(),
+            tracing::warn!(
+                scope = %scope.as_uuid(),
                 error = ?err,
                 "trigger_synthesis: failed",
             );
@@ -1392,7 +1404,8 @@ fn synthesize_scope(
                 }
                 Err(e) => {
                     skipped = skipped.saturating_add(1);
-                    tracing::warn!(scope = %scope.as_uuid(),
+                    tracing::warn!(
+                        scope = %scope.as_uuid(),
                         evidence = %evidence_id.as_uuid(),
                         error = %e,
                         "trigger_synthesis: skipping unreadable evidence row",
@@ -1410,7 +1423,8 @@ fn synthesize_scope(
             });
         }
         if skipped > 0 {
-            tracing::warn!(scope = %scope.as_uuid(),
+            tracing::warn!(
+                scope = %scope.as_uuid(),
                 skipped,
                 kept = bodies.len(),
                 "trigger_synthesis: proceeding with partial evidence window",

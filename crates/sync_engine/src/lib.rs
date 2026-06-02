@@ -32,7 +32,7 @@
 //!   the op log to a SQLCipher database (per-scope AEAD on the
 //!   payload column, following the `concept_graph` pattern).
 //!
-//! # Multilingual contract ( audit)
+//! # Multilingual contract
 //!
 //! `SyncEngine<T>` is parameterised over an arbitrary
 //! `T: Eq + Hash + Clone` element type, so the CRDT machinery in
