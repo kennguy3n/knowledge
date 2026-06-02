@@ -11,6 +11,16 @@ pub const WARM_UP_PROMPT: &str = "knowledge substrate boot probe";
 /// [`crate::InferenceRouter::sweep_idle_adapters`].
 pub const IDLE_UNLOAD_TIMEOUT_SECS: u64 = 60;
 
+/// RAM threshold (in bytes) below which the device is classified
+/// as [`DeviceTier::Low`]. 2 GiB is chosen because SLM inference
+/// models typically require >2 GiB of working memory.
+pub const LOW_TIER_RAM_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024;
+
+/// RAM threshold (in bytes) at or above which the device is
+/// classified as [`DeviceTier::High`]. 8 GiB allows comfortable
+/// full SLM synthesis with model + context window in memory.
+pub const HIGH_TIER_RAM_THRESHOLD: u64 = 8 * 1024 * 1024 * 1024;
+
 /// Device tier — drives which adapters / tasks are admitted.
 ///
 /// Per `ARCHITECTURE.md` §3 a `Low`-tier device runs only the
@@ -36,6 +46,89 @@ impl DeviceTier {
             Self::High => "high",
         }
     }
+
+    /// Auto-detect device tier from available system RAM.
+    ///
+    /// Heuristic:
+    /// - < 2 GiB → `Low` (encoder-only, no SLM)
+    /// - 2–8 GiB → `Medium` (llama.cpp classification)
+    /// - ≥ 8 GiB → `High` (full SLM synthesis)
+    ///
+    /// Falls back to `Medium` if RAM cannot be determined (e.g.
+    /// unsupported platform, sandboxed environment).
+    pub fn auto_detect() -> Self {
+        match detect_total_ram_bytes() {
+            Some(bytes) if bytes < LOW_TIER_RAM_THRESHOLD => Self::Low,
+            Some(bytes) if bytes >= HIGH_TIER_RAM_THRESHOLD => Self::High,
+            Some(_) => Self::Medium,
+            None => {
+                tracing::debug!("could not detect system RAM; falling back to DeviceTier::Medium");
+                Self::Medium
+            }
+        }
+    }
+}
+
+/// Attempt to read total physical RAM in bytes from the OS.
+///
+/// Returns `None` on unsupported platforms or if the query fails.
+fn detect_total_ram_bytes() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        // Parse /proc/meminfo for MemTotal.
+        let contents = std::fs::read_to_string("/proc/meminfo").ok()?;
+        for line in contents.lines() {
+            if let Some(rest) = line.strip_prefix("MemTotal:") {
+                let trimmed = rest.trim();
+                // Format: "<number> kB"
+                let kb_str = trimmed
+                    .strip_suffix("kB")
+                    .or_else(|| trimmed.strip_suffix("KB"))?
+                    .trim();
+                let kb: u64 = kb_str.parse().ok()?;
+                return Some(kb * 1024);
+            }
+        }
+        None
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Use sysctl hw.memsize.
+        use std::process::Command;
+        let output = Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let s = String::from_utf8(output.stdout).ok()?;
+        s.trim().parse::<u64>().ok()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Use wmic to query total physical memory.
+        use std::process::Command;
+        let output = Command::new("wmic")
+            .args(["computersystem", "get", "TotalPhysicalMemory"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let s = String::from_utf8(output.stdout).ok()?;
+        for line in s.lines().skip(1) {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                return trimmed.parse::<u64>().ok();
+            }
+        }
+        None
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        None
+    }
 }
 
 /// Router configuration. Held by [`crate::InferenceRouter`] and
@@ -59,13 +152,17 @@ pub struct RouterConfig {
 
 impl RouterConfig {
     /// Construct a fresh config with sensible defaults.
+    ///
+    /// The device tier is auto-detected from available system RAM
+    /// via [`DeviceTier::auto_detect`]. Use
+    /// [`Self::with_device_tier`] to override.
     pub fn new(server_url: impl Into<String>, model_path: impl Into<String>) -> Self {
         Self {
             server_url: server_url.into(),
             model_path: model_path.into(),
             idle_timeout_secs: IDLE_UNLOAD_TIMEOUT_SECS,
             warm_up_prompt: WARM_UP_PROMPT.into(),
-            device_tier: DeviceTier::Medium,
+            device_tier: DeviceTier::auto_detect(),
         }
     }
 
@@ -85,6 +182,22 @@ impl RouterConfig {
 impl Default for RouterConfig {
     fn default() -> Self {
         Self::new("http://127.0.0.1:8081", "/var/lib/knowledge/slm.gguf")
+    }
+}
+
+/// Construct a [`DeviceTier`] from a raw byte count — exposed for
+/// testing and for callers that already know the device's RAM
+/// budget without hitting the OS.
+impl DeviceTier {
+    /// Classify a device tier from a known RAM byte count.
+    pub fn from_ram_bytes(bytes: u64) -> Self {
+        if bytes < LOW_TIER_RAM_THRESHOLD {
+            Self::Low
+        } else if bytes >= HIGH_TIER_RAM_THRESHOLD {
+            Self::High
+        } else {
+            Self::Medium
+        }
     }
 }
 
@@ -113,5 +226,38 @@ mod tests {
         assert!(cfg.server_url.starts_with("http://127.0.0.1"));
         assert_eq!(cfg.idle_timeout_secs, IDLE_UNLOAD_TIMEOUT_SECS);
         assert_eq!(cfg.warm_up_prompt, WARM_UP_PROMPT);
+    }
+
+    #[test]
+    fn auto_detect_returns_a_valid_tier() {
+        let tier = DeviceTier::auto_detect();
+        // On any real machine this should succeed (not panic).
+        assert!(
+            matches!(
+                tier,
+                DeviceTier::Low | DeviceTier::Medium | DeviceTier::High
+            ),
+            "auto_detect must return a valid tier"
+        );
+    }
+
+    #[test]
+    fn from_ram_bytes_classifies_correctly() {
+        assert_eq!(DeviceTier::from_ram_bytes(1_000_000_000), DeviceTier::Low);
+        assert_eq!(
+            DeviceTier::from_ram_bytes(4_000_000_000),
+            DeviceTier::Medium
+        );
+        assert_eq!(DeviceTier::from_ram_bytes(16_000_000_000), DeviceTier::High);
+        // Boundary: exactly at LOW threshold → Medium
+        assert_eq!(
+            DeviceTier::from_ram_bytes(LOW_TIER_RAM_THRESHOLD),
+            DeviceTier::Medium
+        );
+        // Boundary: exactly at HIGH threshold → High
+        assert_eq!(
+            DeviceTier::from_ram_bytes(HIGH_TIER_RAM_THRESHOLD),
+            DeviceTier::High
+        );
     }
 }

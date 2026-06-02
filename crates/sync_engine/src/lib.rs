@@ -118,6 +118,70 @@ pub use op_log::{merge_logs, OpLog, SyncOp, SyncOpKind};
 /// activity for a power user before compaction kicks in.
 pub const DEFAULT_COMPACT_THRESHOLD: usize = 10_000;
 
+/// Default tombstone ratio threshold for [`CompactionPolicy::Adaptive`].
+/// When the proportion of `Remove`/`Supersede` ops in the growth
+/// window exceeds this value, compaction triggers.
+pub const DEFAULT_TOMBSTONE_RATIO_THRESHOLD: f64 = 0.3;
+
+/// Default maximum delta payload size (in bytes) for
+/// [`CompactionPolicy::Adaptive`]. When the estimated serialized
+/// size of ops accumulated since the last compaction exceeds this,
+/// compaction triggers. 1 MiB is sized to keep CRDT delta exchanges
+/// within a single mobile-friendly network round-trip.
+pub const DEFAULT_MAX_DELTA_BYTES: usize = 1_048_576;
+
+/// Estimated average serialized byte size per op, used by
+/// [`CompactionPolicy::Adaptive`] to approximate delta payload
+/// size without performing actual serialization on every mutation.
+const ESTIMATED_BYTES_PER_OP: usize = 256;
+
+/// Minimum number of ops that must accumulate in the growth window
+/// before [`CompactionPolicy::Adaptive`] evaluates its heuristics.
+/// Set to [`DEFAULT_COMPACT_THRESHOLD`] so the Adaptive policy is
+/// never more aggressive than the legacy Fixed default — it only
+/// differs in *what* it checks once the floor is reached (ratio +
+/// byte size vs. raw count).
+const MIN_ADAPTIVE_GROWTH: usize = DEFAULT_COMPACT_THRESHOLD;
+
+/// Policy governing when the [`SyncEngine`] triggers automatic
+/// compaction.
+///
+/// Consuming products can use the `Default` impl (which returns
+/// [`CompactionPolicy::Adaptive`] with sensible defaults) and never
+/// worry about tuning compaction manually.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CompactionPolicy {
+    /// Compact after a fixed number of ops accumulate since the
+    /// last compaction — the legacy behaviour.
+    Fixed(usize),
+    /// Adaptive compaction that triggers based on tombstone ratio
+    /// and estimated delta payload size, rather than a fixed op
+    /// count. This is the recommended default for consuming
+    /// products.
+    Adaptive {
+        /// Compact when the ratio of `Remove`/`Supersede` ops in
+        /// the growth window exceeds this value (0.0–1.0).
+        tombstone_ratio_threshold: f64,
+        /// Compact when the estimated serialized size of ops
+        /// accumulated since the last compaction exceeds this
+        /// byte count.
+        max_delta_bytes: usize,
+    },
+    /// Auto-compaction is disabled — callers must invoke
+    /// [`SyncEngine::compact`] explicitly.
+    Disabled,
+}
+
+impl Default for CompactionPolicy {
+    fn default() -> Self {
+        Self::Adaptive {
+            tombstone_ratio_threshold: DEFAULT_TOMBSTONE_RATIO_THRESHOLD,
+            max_delta_bytes: DEFAULT_MAX_DELTA_BYTES,
+        }
+    }
+}
+
 /// Identifier for a sync scope (channel / domain / tenant memory
 /// object).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -231,30 +295,51 @@ where
     pub compact_threshold: Option<CompactThresholdSetting>,
 }
 
-/// Tagged wire encoding of [`SyncEngine`]'s `compact_threshold`
-/// runtime configuration inside [`EngineSnapshot`]. Distinguishes
-/// the two on-engine states (`Some(n)` enabled, `None` disabled)
-/// without colliding with "field absent on the wire" the way a
-/// flat `Option<usize>` would.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "state", content = "value", rename_all = "snake_case")]
+/// Tagged wire encoding of [`SyncEngine`]'s compaction policy
+/// inside [`EngineSnapshot`]. Distinguishes the three on-engine
+/// states without colliding with "field absent on the wire".
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
 pub enum CompactThresholdSetting {
-    /// Auto-compaction is enabled, with the carried threshold.
-    Enabled(usize),
-    /// Auto-compaction is explicitly disabled — the engine will
-    /// only compact when [`SyncEngine::compact`] is called
-    /// directly.
+    /// Fixed-threshold auto-compaction.
+    Enabled {
+        /// Op-count threshold.
+        value: usize,
+    },
+    /// Auto-compaction is explicitly disabled.
     Disabled,
+    /// Adaptive compaction (tombstone ratio + delta byte size).
+    Adaptive {
+        /// Tombstone ratio threshold.
+        tombstone_ratio_threshold: f64,
+        /// Max estimated delta bytes.
+        max_delta_bytes: usize,
+    },
 }
 
 impl CompactThresholdSetting {
     /// Wrap an engine-level `compact_threshold` (`Option<usize>`)
     /// in its tagged snapshot encoding. `Some(n)` becomes
-    /// `Enabled(n)`; `None` becomes `Disabled`.
+    /// `Enabled`; `None` becomes `Disabled`.
     pub fn from_engine(value: Option<usize>) -> Self {
         match value {
-            Some(n) => Self::Enabled(n),
+            Some(n) => Self::Enabled { value: n },
             None => Self::Disabled,
+        }
+    }
+
+    /// Construct from a [`CompactionPolicy`].
+    pub fn from_policy(policy: CompactionPolicy) -> Self {
+        match policy {
+            CompactionPolicy::Fixed(n) => Self::Enabled { value: n },
+            CompactionPolicy::Disabled => Self::Disabled,
+            CompactionPolicy::Adaptive {
+                tombstone_ratio_threshold,
+                max_delta_bytes,
+            } => Self::Adaptive {
+                tombstone_ratio_threshold,
+                max_delta_bytes,
+            },
         }
     }
 
@@ -263,8 +348,23 @@ impl CompactThresholdSetting {
     /// [`SyncEngine::with_compact_threshold`].
     pub fn into_engine(self) -> Option<usize> {
         match self {
-            Self::Enabled(n) => Some(n),
-            Self::Disabled => None,
+            Self::Enabled { value } => Some(value),
+            Self::Disabled | Self::Adaptive { .. } => None,
+        }
+    }
+
+    /// Convert to a [`CompactionPolicy`].
+    pub fn into_policy(self) -> CompactionPolicy {
+        match self {
+            Self::Enabled { value } => CompactionPolicy::Fixed(value),
+            Self::Disabled => CompactionPolicy::Disabled,
+            Self::Adaptive {
+                tombstone_ratio_threshold,
+                max_delta_bytes,
+            } => CompactionPolicy::Adaptive {
+                tombstone_ratio_threshold,
+                max_delta_bytes,
+            },
         }
     }
 }
@@ -293,26 +393,9 @@ where
     /// is up to date; otherwise the cache must be rebuilt or
     /// incrementally extended before serving [`Self::state`].
     cache_watermark: std::cell::Cell<usize>,
-    /// Auto-compaction threshold. When the op-log has grown by
-    /// more than this many entries *since the last successful
-    /// compaction*, the engine runs [`Self::compact`] in-place to
-    /// keep tombstones bounded. `None` disables auto-compaction
-    /// (callers must invoke [`Self::compact`] explicitly); the
-    /// default is `Some(10_000)`.
-    ///
-    /// The check is against `log.ops.len() - compact_baseline`,
-    /// not against `log.ops.len()` directly — that matters because
-    /// `compact()` only removes historical `Remove`/superseded
-    /// `Add` ops. A log composed entirely of live `Add`s shrinks
-    /// by zero on compaction, so a naive `log.ops.len() >
-    /// threshold` check would re-fire on every subsequent mutation
-    /// once the set's *live* size exceeded the threshold, turning
-    /// each mutation into an O(n) replay. Tracking the post-
-    /// compaction baseline gives amortised O(1) per mutation
-    /// regardless of live-element count: compaction only re-fires
-    /// after `threshold` more *compactable* ops have accumulated
-    /// since the previous pass.
-    compact_threshold: Option<usize>,
+    /// Compaction policy governing when auto-compaction fires.
+    /// See [`CompactionPolicy`] for variants.
+    compaction_policy: CompactionPolicy,
     /// Op-log length immediately after the most recent successful
     /// compaction (or `0` on a fresh / never-compacted engine).
     /// Used as the watermark for the auto-compaction trigger; see
@@ -358,7 +441,7 @@ where
             log,
             cached_state: RefCell::new(None),
             cache_watermark: std::cell::Cell::new(0),
-            compact_threshold: Some(DEFAULT_COMPACT_THRESHOLD),
+            compaction_policy: CompactionPolicy::default(),
             compact_baseline: 0,
         }
     }
@@ -368,16 +451,45 @@ where
     /// grown by more than `n` entries since the previous successful
     /// compaction (so the trigger amortises to O(1) per mutation
     /// regardless of live-element count); `None` disables
-    /// auto-compaction. Default: `Some(10_000)`.
+    /// auto-compaction.
+    ///
+    /// **Backward-compatibility convenience** — this maps to
+    /// [`CompactionPolicy::Fixed(n)`] or
+    /// [`CompactionPolicy::Disabled`]. Prefer
+    /// [`Self::with_compaction_policy`] for new code.
     pub fn with_compact_threshold(mut self, threshold: Option<usize>) -> Self {
-        self.compact_threshold = threshold;
+        self.compaction_policy = match threshold {
+            Some(n) => CompactionPolicy::Fixed(n),
+            None => CompactionPolicy::Disabled,
+        };
         self
     }
 
     /// Currently-configured auto-compaction threshold (see
     /// [`Self::with_compact_threshold`]).
+    ///
+    /// Returns `Some(n)` for [`CompactionPolicy::Fixed(n)`],
+    /// `None` for `Disabled` or `Adaptive` (which do not use a
+    /// fixed threshold). Use [`Self::compaction_policy`] for full
+    /// introspection.
     pub fn compact_threshold(&self) -> Option<usize> {
-        self.compact_threshold
+        match self.compaction_policy {
+            CompactionPolicy::Fixed(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// Configure the compaction policy. See [`CompactionPolicy`]
+    /// for variants. Default is [`CompactionPolicy::Adaptive`]
+    /// with sensible defaults.
+    pub fn with_compaction_policy(mut self, policy: CompactionPolicy) -> Self {
+        self.compaction_policy = policy;
+        self
+    }
+
+    /// Currently-configured compaction policy.
+    pub fn compaction_policy(&self) -> CompactionPolicy {
+        self.compaction_policy
     }
 
     /// Internal hook: run a compaction pass if the configured
@@ -420,29 +532,46 @@ where
     /// another warn — repeated failures are inherently visible,
     /// not silent.
     fn maybe_auto_compact(&mut self) {
-        if let Some(threshold) = self.compact_threshold {
-            // Growth-since-baseline comparison, expressed via
-            // `saturating_sub` so a transient inversion (e.g. a
-            // restored snapshot whose log is shorter than the
-            // pre-restore baseline) cannot underflow.
-            let growth = self.log.ops.len().saturating_sub(self.compact_baseline);
-            if growth > threshold {
-                if let Err(err) = self.compact() {
-                    // Auto-compaction is best-effort housekeeping;
-                    // the mutator's `Ok(())` has already been
-                    // returned by the time we get here, so we
-                    // cannot propagate the failure. We surface it
-                    // via tracing so operator dashboards (logs ->
-                    // metric pipelines) can alert on a rising
-                    // failure rate rather than discover the
-                    // unbounded op-log growth at the next OOM.
-                    tracing::warn!(target: "sync_engine::auto_compact",
-                        op_log_len = self.log.ops.len(),
-                        threshold = threshold,
-                        error = %err,
-                        "auto-compaction pass failed; op-log will keep growing until the next successful compact() call"
-                    );
+        let should_compact = match self.compaction_policy {
+            CompactionPolicy::Disabled => false,
+            CompactionPolicy::Fixed(threshold) => {
+                let growth = self.log.ops.len().saturating_sub(self.compact_baseline);
+                growth > threshold
+            }
+            CompactionPolicy::Adaptive {
+                tombstone_ratio_threshold,
+                max_delta_bytes,
+            } => {
+                let growth = self.log.ops.len().saturating_sub(self.compact_baseline);
+                if growth < MIN_ADAPTIVE_GROWTH {
+                    false
+                } else {
+                    // Count tombstone ops (Remove + Supersede) in
+                    // the growth window.
+                    let tombstone_count = self.log.ops[self.compact_baseline..]
+                        .iter()
+                        .filter(|op| {
+                            matches!(
+                                op.op,
+                                SyncOpKind::Remove { .. } | SyncOpKind::Supersede { .. }
+                            )
+                        })
+                        .count();
+                    let ratio = tombstone_count as f64 / growth as f64;
+                    let estimated_bytes = growth * ESTIMATED_BYTES_PER_OP;
+                    ratio > tombstone_ratio_threshold || estimated_bytes > max_delta_bytes
                 }
+            }
+        };
+
+        if should_compact {
+            if let Err(err) = self.compact() {
+                tracing::warn!(target: "sync_engine::auto_compact",
+                    op_log_len = self.log.ops.len(),
+                    policy = ?self.compaction_policy,
+                    error = %err,
+                    "auto-compaction pass failed; op-log will keep growing until the next successful compact() call"
+                );
             }
         }
     }
@@ -739,7 +868,7 @@ where
             // distinguishes "enabled with value" from
             // "explicitly disabled" without ambiguity — see the
             // doc on [`EngineSnapshot::compact_threshold`].
-            compact_threshold: Some(CompactThresholdSetting::from_engine(self.compact_threshold)),
+            compact_threshold: Some(CompactThresholdSetting::from_policy(self.compaction_policy)),
         };
         serde_json::to_vec(&snap)
             .map_err(|_| SyncError::Serialisation("could not serialise engine snapshot"))
@@ -795,7 +924,7 @@ where
         // → re-apply (`setting` carries the explicit enabled
         // value or the explicit "disabled" state).
         if let Some(setting) = snap.compact_threshold {
-            engine = engine.with_compact_threshold(setting.into_engine());
+            engine = engine.with_compaction_policy(setting.into_policy());
         }
         *engine.cached_state.borrow_mut() = Some((snap.set, snap.supersessions));
         engine.cache_watermark.set(engine.log.ops.len());
@@ -873,7 +1002,7 @@ where
         // the snapshot carried one) — see
         // [`Self::bootstrap_from_snapshot`] for the rationale.
         if let Some(setting) = snap.compact_threshold {
-            engine = engine.with_compact_threshold(setting.into_engine());
+            engine = engine.with_compaction_policy(setting.into_policy());
         }
         *engine.cached_state.borrow_mut() = Some((snap.set, snap.supersessions));
         engine.cache_watermark.set(engine.log.ops.len());
@@ -1004,7 +1133,8 @@ mod auto_compact_tests {
     #[test]
     fn with_compact_threshold_round_trips_the_value() {
         let engine: SyncEngine<u64> = SyncEngine::new();
-        assert_eq!(engine.compact_threshold(), Some(DEFAULT_COMPACT_THRESHOLD));
+        // Default is now Adaptive, so compact_threshold() returns None.
+        assert_eq!(engine.compaction_policy(), CompactionPolicy::default());
         let engine = engine.with_compact_threshold(Some(42));
         assert_eq!(engine.compact_threshold(), Some(42));
         let engine = engine.with_compact_threshold(None);
@@ -1124,9 +1254,9 @@ mod auto_compact_tests {
 
     /// Snapshots produced by a pre-versioning engine (no
     /// `compact_threshold` field on the wire) must still
-    /// deserialise correctly and fall back to
-    /// [`DEFAULT_COMPACT_THRESHOLD`]. Simulated by snapshotting,
-    /// stripping the field from the wire JSON, then restoring.
+    /// deserialise correctly and fall back to the default
+    /// [`CompactionPolicy`]. Simulated by snapshotting, stripping
+    /// the field from the wire JSON, then restoring.
     #[test]
     fn restore_falls_back_to_default_for_pre_versioning_snapshot() {
         let mut engine: SyncEngine<u64> = SyncEngine::new().with_compact_threshold(Some(42));
@@ -1145,10 +1275,9 @@ mod auto_compact_tests {
 
         let restored: SyncEngine<u64> = SyncEngine::restore_snapshot(&stripped).unwrap();
         assert_eq!(
-            restored.compact_threshold(),
-            Some(DEFAULT_COMPACT_THRESHOLD),
-            "pre-versioning snapshot must fall back to the default threshold, \
-             not silently re-apply some stale value"
+            restored.compaction_policy(),
+            CompactionPolicy::default(),
+            "pre-versioning snapshot must fall back to the default policy"
         );
     }
 
