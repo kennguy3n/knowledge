@@ -211,6 +211,12 @@ enum Script {
     Han,
     /// Japanese kana (Hiragana / Katakana).
     Kana,
+    /// Japanese as written — Kanji (Han) *and* kana mixed. Real
+    /// Japanese text (and Bonsai's recaps of it) interleaves Han
+    /// ideographs with hiragana/katakana in proportions that vary per
+    /// sentence, so a Kana-only or Han-only floor is fragile; accept
+    /// either block.
+    Japanese,
     /// Korean Hangul syllables + Jamo.
     Hangul,
 }
@@ -228,6 +234,7 @@ impl Script {
             Self::Kana => {
                 ('\u{3040}'..='\u{309F}').contains(&c) || ('\u{30A0}'..='\u{30FF}').contains(&c)
             }
+            Self::Japanese => Self::Han.contains(c) || Self::Kana.contains(c),
             Self::Hangul => {
                 ('\u{AC00}'..='\u{D7AF}').contains(&c) || ('\u{1100}'..='\u{11FF}').contains(&c)
             }
@@ -295,11 +302,12 @@ fn assert_in_language(text: &str, case: &LangCase) {
 }
 
 /// Count "tokens" for the coherence floor. Whitespace-delimited scripts
-/// count words; scriptio-continua languages (Han / Kana / Thai) have no
-/// word spaces, so we count non-whitespace characters instead.
+/// count words; scriptio-continua languages (Han / Kana / Japanese /
+/// Thai) have no word spaces, so we count non-whitespace characters
+/// instead.
 fn token_count(text: &str, script: Script) -> usize {
     match script {
-        Script::Han | Script::Kana | Script::Thai => {
+        Script::Han | Script::Kana | Script::Japanese | Script::Thai => {
             text.chars().filter(|c| !c.is_whitespace()).count()
         }
         _ => text.split_whitespace().count(),
@@ -648,7 +656,7 @@ fn language_matrix() -> Vec<LangCase> {
         },
         LangCase {
             tag: "ja",
-            script: Script::Kana,
+            script: Script::Japanese,
             markers: &[],
             session: "金曜日に製品をリリースすることを決定しました。タスク：サラのためにRFCを起草する。移行の締め切りはいつですか？",
             entities: &["金曜日", "サラ", "RFC"],

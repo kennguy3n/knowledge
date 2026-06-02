@@ -2445,7 +2445,7 @@ const LO_LEXICON: LanguageLexicon = LanguageLexicon {
 ///   keyword bundle per language for the substrate's
 ///   built-in decision / task / imperative pipelines.
 ///
-/// 23 languages ship today — the 12-language
+/// 22 languages ship today — the 12-language
 /// base target (en/ja/ko/zh/es/fr/de/pt/ar/vi/th/id) plus the
 /// Hebrew (`he`) add-on, four further add-ons
 /// (`it`, `ru`, `hi`, `ms`) that already have
