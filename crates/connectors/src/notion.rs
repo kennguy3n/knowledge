@@ -330,6 +330,33 @@ impl NotionConnector {
         )))
     }
 
+    /// Best-effort fetch of a page's title via `GET /v1/pages/{id}`.
+    ///
+    /// The block-children endpoint returns body content but not the
+    /// page's own properties, so the title — which lives in the single
+    /// `title`-typed property — needs this extra call. Returns an empty
+    /// string when the page has no title property, the title is blank,
+    /// or the request fails; the body has already been reconstructed by
+    /// the caller, so a title lookup error must not fail the whole fetch.
+    fn fetch_page_title(&self, base_url: &str, token: &OAuth2Token, page_id: &str) -> String {
+        let url = format!(
+            "{base_url}/pages/{}",
+            percent_encode_path_component(page_id)
+        );
+        let page: serde_json::Value = match bearer_get_json(
+            &self.transport,
+            "notion",
+            "/v1/pages/{id}",
+            &url,
+            token,
+            &[Self::NOTION_VERSION_HEADER],
+        ) {
+            Ok(page) => page,
+            Err(_) => return String::new(),
+        };
+        notion_page_title(&page)
+    }
+
     /// Reconstruct Markdown for a list of blocks, recursing into
     /// children (capped at [`MAX_BLOCK_DEPTH`]). `depth` drives the
     /// indentation of nested list / toggle content.
@@ -353,6 +380,29 @@ impl NotionConnector {
         }
         Ok(())
     }
+}
+
+/// Extract a Notion page title from its `properties` map.
+///
+/// The title lives in the single property whose `type` is `"title"`,
+/// carried as a `plain_text` rich-text array. Returns an empty string
+/// when no such property exists or it is blank.
+fn notion_page_title(page: &serde_json::Value) -> String {
+    page.get("properties")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|props| {
+            props
+                .values()
+                .find(|p| p.get("type").and_then(serde_json::Value::as_str) == Some("title"))
+        })
+        .and_then(|p| p.get("title"))
+        .and_then(serde_json::Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|rt| rt.get("plain_text").and_then(serde_json::Value::as_str))
+                .collect::<String>()
+        })
+        .unwrap_or_default()
 }
 
 /// Join the `plain_text` of a Notion rich-text array.
@@ -603,9 +653,15 @@ impl Connector for NotionConnector {
         self.render_blocks(&base_url, token, &top, 0, &mut markdown)?;
         // Trim the trailing newline run for a tidy body.
         let body = markdown.trim_end().to_string();
+        // The body endpoint omits the page's own title, so fetch it
+        // separately (best-effort) from the page object's properties.
+        let title = self.fetch_page_title(&base_url, token, page_id);
         // Notion page URLs are the dash-stripped id under notion.so.
         let source_url = format!("https://www.notion.so/{}", page_id.replace('-', ""));
+        // `with_title` normalises a blank title to `None`, so an
+        // untitled page passes through unconditionally.
         Ok(FetchedContent::text(body, "text/markdown")
+            .with_title(title)
             .with_metadata(serde_json::json!({
                 "provider": "notion",
                 "page_id": page_id,
@@ -1068,6 +1124,78 @@ mod tests {
             .headers
             .iter()
             .any(|(k, v)| k == "Notion-Version" && v == "2022-06-28"));
+    }
+
+    #[test]
+    fn fetch_content_populates_title_from_page_object() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/notion/v1/blocks/page-1/children?page_size=100",
+            ok_json(&serde_json::json!({
+                "results": [
+                    { "id": "b1", "type": "paragraph", "has_children": false,
+                      "paragraph": { "rich_text": [{ "plain_text": "body text" }] } },
+                ],
+                "next_cursor": null,
+                "has_more": false,
+            })),
+        );
+        // The page object carries the title under its `title`-typed
+        // property — the key name is arbitrary (here "Name").
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/notion/v1/pages/page-1",
+            ok_json(&serde_json::json!({
+                "object": "page",
+                "id": "page-1",
+                "properties": {
+                    "Name": {
+                        "id": "title",
+                        "type": "title",
+                        "title": [
+                            { "plain_text": "Quarterly " },
+                            { "plain_text": "Report" },
+                        ],
+                    },
+                    "Status": { "type": "select", "select": { "name": "Done" } },
+                },
+            })),
+        );
+        let c = NotionConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("page-1"))
+            .unwrap();
+        assert_eq!(fc.title.as_deref(), Some("Quarterly Report"));
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("body text"), "body: {body}");
+    }
+
+    #[test]
+    fn fetch_content_omits_title_when_page_lookup_fails() {
+        // Only the body endpoint is configured; the title lookup 404s
+        // and must be swallowed so the body is still returned.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/notion/v1/blocks/page-1/children?page_size=100",
+            ok_json(&serde_json::json!({
+                "results": [
+                    { "id": "b1", "type": "paragraph", "has_children": false,
+                      "paragraph": { "rich_text": [{ "plain_text": "body only" }] } },
+                ],
+                "next_cursor": null,
+                "has_more": false,
+            })),
+        );
+        let c = NotionConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("page-1"))
+            .unwrap();
+        assert_eq!(fc.title, None);
+        assert!(String::from_utf8(fc.body).unwrap().contains("body only"));
     }
 
     #[test]

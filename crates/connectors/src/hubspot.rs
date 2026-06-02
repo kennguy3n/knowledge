@@ -55,6 +55,12 @@ pub const DEFAULT_PAGE_SIZE: u32 = 100;
 /// end-of-list.
 pub const MAX_LIST_PAGES: usize = 10_000;
 
+/// Upper bound on property names requested when rendering a single CRM
+/// object. Real object types expose well under this many properties;
+/// the cap keeps the `properties=` query string bounded for portals
+/// with a pathologically large custom-property catalogue.
+const MAX_FETCH_PROPERTIES: usize = 500;
+
 /// HubSpot CRM object kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -137,6 +143,24 @@ struct HubSpotObjectDetail {
 struct HubSpotAssociationGroup {
     #[serde(default)]
     results: Vec<HubSpotAssociationRef>,
+}
+
+/// `GET /crm/v3/properties/{objectType}` response — the catalogue of
+/// property definitions for an object type. Used to enumerate every
+/// property name to request on a single-object fetch (the CRM v3 object
+/// endpoint has no `*` wildcard; the `properties` query param is a
+/// comma-separated allow-list and unknown names are silently ignored).
+#[derive(Debug, Clone, Default, Deserialize)]
+struct HubSpotPropertyList {
+    #[serde(default)]
+    results: Vec<HubSpotPropertyDef>,
+}
+
+/// One property definition (only the `name` is needed).
+#[derive(Debug, Clone, Default, Deserialize)]
+struct HubSpotPropertyDef {
+    #[serde(default)]
+    name: String,
 }
 
 /// One associated object reference.
@@ -320,6 +344,43 @@ impl HubSpotConnector {
                 || self.api_base_url.clone(),
                 std::string::ToString::to_string,
             )
+    }
+
+    /// Enumerate every property name defined for an object type via
+    /// `GET /crm/v3/properties/{objectType}`.
+    ///
+    /// The CRM v3 single-object endpoint has no `*` wildcard — its
+    /// `properties` query param is a comma-separated allow-list and any
+    /// name it doesn't recognise is silently dropped, so a literal `*`
+    /// would return only the default properties. Listing the catalogue
+    /// first lets the object fetch request the full set. Names are
+    /// de-duplicated, sorted for a deterministic query string, and
+    /// capped at [`MAX_FETCH_PROPERTIES`].
+    fn fetch_object_property_names(
+        &self,
+        base_url: &str,
+        token: &OAuth2Token,
+        type_seg: &str,
+    ) -> Result<Vec<String>> {
+        let url = format!("{base_url}/crm/v3/properties/{type_seg}");
+        let list: HubSpotPropertyList = bearer_get_json(
+            &self.transport,
+            "hubspot",
+            "/crm/v3/properties/{type}",
+            &url,
+            token,
+            &[],
+        )?;
+        let mut names: Vec<String> = list
+            .results
+            .into_iter()
+            .map(|p| p.name)
+            .filter(|n| !n.is_empty())
+            .collect();
+        names.sort();
+        names.dedup();
+        names.truncate(MAX_FETCH_PROPERTIES);
+        Ok(names)
     }
 
     /// Resolve the configured object kinds. Defaults to
@@ -736,7 +797,21 @@ impl Connector for HubSpotConnector {
                 &[],
             )?
         } else {
-            let url = format!("{base_url}/crm/v3/objects/{type_seg}/{id_enc}?properties=*");
+            // Enumerate the full property catalogue, then request those
+            // names explicitly — the object endpoint has no `*` wildcard.
+            let names = self.fetch_object_property_names(&base_url, token, type_seg)?;
+            let url = if names.is_empty() {
+                // No catalogue (or all blank): fall back to the default
+                // property set the endpoint returns without the param.
+                format!("{base_url}/crm/v3/objects/{type_seg}/{id_enc}")
+            } else {
+                let props = names
+                    .iter()
+                    .map(|n| percent_encode_path_component(n))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("{base_url}/crm/v3/objects/{type_seg}/{id_enc}?properties={props}")
+            };
             bearer_get_json(
                 &self.transport,
                 "hubspot",
@@ -1479,9 +1554,25 @@ mod tests {
     #[test]
     fn fetch_content_renders_contact_properties() {
         let transport = Arc::new(MockHttpTransport::new());
+        // The catalogue is enumerated first; its names drive the (sorted,
+        // comma-separated) `properties` query on the object fetch.
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/hubspot/crm/v3/objects/contacts/501?properties=*",
+            "https://api.test/hubspot/crm/v3/properties/contacts",
+            ok_json(&serde_json::json!({
+                "results": [
+                    { "name": "firstname" },
+                    { "name": "lastname" },
+                    { "name": "email" },
+                    { "name": "company" },
+                    { "name": "empty_field" }
+                ]
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/objects/contacts/501\
+             ?properties=company,email,empty_field,firstname,lastname",
             ok_json(&serde_json::json!({
                 "id": "501",
                 "properties": {
@@ -1557,7 +1648,12 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/hubspot/crm/v3/objects/deals/404?properties=*",
+            "https://api.test/hubspot/crm/v3/properties/deals",
+            ok_json(&serde_json::json!({ "results": [ { "name": "dealname" } ] })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/objects/deals/404?properties=dealname",
             MockResponse::status(
                 404,
                 br#"{"status":"error","category":"OBJECT_NOT_FOUND"}"#.to_vec(),
@@ -1576,7 +1672,12 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         transport.expect(
             HttpMethod::Get,
-            "https://api.test/hubspot/crm/v3/objects/companies/9?properties=*",
+            "https://api.test/hubspot/crm/v3/properties/companies",
+            ok_json(&serde_json::json!({ "results": [ { "name": "name" } ] })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/objects/companies/9?properties=name",
             MockResponse::status(429, b"rate limited".to_vec()),
         );
         let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
@@ -1585,5 +1686,33 @@ mod tests {
             .fetch_content(&cfg(), &tok, &SourceDocumentId::new("company:9"))
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_falls_back_to_default_properties_when_catalogue_empty() {
+        // An empty property catalogue must not produce a `properties=`
+        // param — the object is fetched with the endpoint's defaults.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/properties/companies",
+            ok_json(&serde_json::json!({ "results": [] })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/objects/companies/9",
+            ok_json(&serde_json::json!({
+                "id": "9",
+                "properties": { "name": "Globex" }
+            })),
+        );
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("company:9"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("name: Globex"));
+        assert_eq!(fc.title.as_deref(), Some("Globex"));
     }
 }

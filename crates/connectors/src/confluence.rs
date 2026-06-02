@@ -532,13 +532,29 @@ impl Connector for ConfluenceConnector {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
         let text = strip_html(storage);
-        // Confluence v2 `webui` links are relative to the `/wiki`
-        // context root; prefix with the base so the citation resolves.
+        // Confluence Cloud v2 `_links.webui` is relative to the `/wiki`
+        // context root (e.g. `/spaces/OPS/pages/123/Runbook`), NOT the
+        // site root, so it must be joined onto the `/wiki` prefix. Prefer
+        // the API-provided `_links.base` (which already includes `/wiki`)
+        // and fall back to appending `/wiki` to the configured base URL;
+        // an already-absolute `webui` is used verbatim.
         let source_url = page
             .get("_links")
             .and_then(|l| l.get("webui"))
             .and_then(serde_json::Value::as_str)
-            .map(|rel| format!("{base_url}{rel}"));
+            .filter(|rel| !rel.is_empty())
+            .map(|rel| {
+                if rel.starts_with("http://") || rel.starts_with("https://") {
+                    return rel.to_string();
+                }
+                let base = page
+                    .get("_links")
+                    .and_then(|l| l.get("base"))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|b| !b.is_empty())
+                    .map_or_else(|| format!("{base_url}/wiki"), str::to_string);
+                format!("{}{}", base.trim_end_matches('/'), rel)
+            });
         let space_id = page.get("spaceId").and_then(|v| {
             v.as_str()
                 .map(str::to_string)
@@ -1146,6 +1162,8 @@ mod tests {
                     "representation": "storage",
                     "value": "<h1>Intro</h1><p>Step <strong>one</strong> &amp; two.</p>"
                 }},
+                // Real Confluence Cloud v2 `webui` links are relative to
+                // the `/wiki` context root (no `/wiki` prefix of their own).
                 "_links": { "webui": "/spaces/OPS/pages/123/Runbook" }
             })),
         );
@@ -1172,9 +1190,10 @@ mod tests {
         assert!(body.contains("Labels: runbook, oncall"));
         assert_eq!(fc.mime_type, "text/markdown");
         assert_eq!(fc.title.as_deref(), Some("Runbook"));
+        // The relative `webui` is joined onto the `/wiki` context root.
         assert_eq!(
             fc.source_url.as_deref(),
-            Some("https://api.test/confluence/spaces/OPS/pages/123/Runbook")
+            Some("https://api.test/confluence/wiki/spaces/OPS/pages/123/Runbook")
         );
         assert_eq!(fc.metadata["space_key"], serde_json::json!("OPS"));
         assert_eq!(
@@ -1209,6 +1228,41 @@ mod tests {
         assert_eq!(body, "# Bare\n\nHi");
         assert_eq!(fc.metadata["space_key"], serde_json::Value::Null);
         assert!(fc.source_url.is_none());
+    }
+
+    #[test]
+    fn fetch_content_prefers_links_base_for_source_url() {
+        // When the API returns an absolute `_links.base` (which already
+        // includes the `/wiki` context root), it is used verbatim in
+        // preference to the configured connector base URL.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/5?body-format=storage",
+            ok_json(&serde_json::json!({
+                "id": "5",
+                "title": "Linked",
+                "body": { "storage": { "value": "<p>x</p>" } },
+                "_links": {
+                    "base": "https://acme.atlassian.net/wiki",
+                    "webui": "/spaces/ENG/pages/5/Linked"
+                }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/5/labels",
+            ok_json(&serde_json::json!({ "results": [] })),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("5"))
+            .unwrap();
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://acme.atlassian.net/wiki/spaces/ENG/pages/5/Linked")
+        );
     }
 
     #[test]

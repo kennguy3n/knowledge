@@ -842,10 +842,23 @@ fn gmail_header<'a>(payload: &'a serde_json::Value, name: &str) -> Option<&'a st
     })
 }
 
+/// Recursion ceiling for the Gmail MIME-tree walkers. Real messages
+/// nest only a few levels (multipart/mixed → multipart/alternative →
+/// leaf); this cap stops a pathological or maliciously crafted
+/// `payload` from recursing without bound.
+const MAX_MIME_DEPTH: usize = 64;
+
 /// Depth-first search a Gmail `payload` tree for the first inline
 /// (non-attachment) part whose `mimeType` matches `target_mime`,
 /// returning its base64url-decoded body bytes.
-fn gmail_find_part_body(payload: &serde_json::Value, target_mime: &str) -> Option<Vec<u8>> {
+fn gmail_find_part_body(
+    payload: &serde_json::Value,
+    target_mime: &str,
+    depth: usize,
+) -> Option<Vec<u8>> {
+    if depth >= MAX_MIME_DEPTH {
+        return None;
+    }
     let mime = payload
         .get("mimeType")
         .and_then(serde_json::Value::as_str)
@@ -867,7 +880,7 @@ fn gmail_find_part_body(payload: &serde_json::Value, target_mime: &str) -> Optio
     }
     if let Some(parts) = payload.get("parts").and_then(serde_json::Value::as_array) {
         for part in parts {
-            if let Some(found) = gmail_find_part_body(part, target_mime) {
+            if let Some(found) = gmail_find_part_body(part, target_mime, depth + 1) {
                 return Some(found);
             }
         }
@@ -878,7 +891,14 @@ fn gmail_find_part_body(payload: &serde_json::Value, target_mime: &str) -> Optio
 /// Recursively collect attachment metadata (parts carrying a
 /// non-empty `filename`) from a Gmail payload tree. Bodies are not
 /// downloaded — only the metadata needed to enumerate attachments.
-fn gmail_collect_attachments(payload: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
+fn gmail_collect_attachments(
+    payload: &serde_json::Value,
+    depth: usize,
+    out: &mut Vec<serde_json::Value>,
+) {
+    if depth >= MAX_MIME_DEPTH {
+        return;
+    }
     let filename = payload
         .get("filename")
         .and_then(serde_json::Value::as_str)
@@ -893,7 +913,7 @@ fn gmail_collect_attachments(payload: &serde_json::Value, out: &mut Vec<serde_js
     }
     if let Some(parts) = payload.get("parts").and_then(serde_json::Value::as_array) {
         for part in parts {
-            gmail_collect_attachments(part, out);
+            gmail_collect_attachments(part, depth + 1, out);
         }
     }
 }
@@ -1078,9 +1098,10 @@ impl Connector for EmailConnector {
 
                 // Prefer text/plain; fall back to a stripped text/html
                 // body; finally to the single-part payload body.
-                let body_text = if let Some(bytes) = gmail_find_part_body(&payload, "text/plain") {
+                let body_text = if let Some(bytes) = gmail_find_part_body(&payload, "text/plain", 0)
+                {
                     String::from_utf8_lossy(&bytes).into_owned()
-                } else if let Some(bytes) = gmail_find_part_body(&payload, "text/html") {
+                } else if let Some(bytes) = gmail_find_part_body(&payload, "text/html", 0) {
                     strip_html(&String::from_utf8_lossy(&bytes))
                 } else {
                     payload
@@ -1093,7 +1114,7 @@ impl Connector for EmailConnector {
                 };
 
                 let mut attachments: Vec<serde_json::Value> = Vec::new();
-                gmail_collect_attachments(&payload, &mut attachments);
+                gmail_collect_attachments(&payload, 0, &mut attachments);
 
                 let source_url = format!("https://mail.google.com/mail/u/0/#all/{message_id}");
                 Ok(FetchedContent::text(body_text, "text/plain")

@@ -333,11 +333,19 @@ fn collapse_whitespace(s: &str) -> String {
 #[must_use]
 pub(crate) fn adf_to_text(node: &serde_json::Value) -> String {
     let mut out = String::new();
-    walk_adf(node, &mut out);
+    walk_adf(node, 0, &mut out);
     collapse_whitespace(&out)
 }
 
-fn walk_adf(node: &serde_json::Value, out: &mut String) {
+/// Recursion ceiling for [`walk_adf`]. Real ADF documents nest only a
+/// handful of levels deep; this cap stops a pathological or maliciously
+/// crafted payload from overflowing the stack.
+const MAX_ADF_DEPTH: usize = 64;
+
+fn walk_adf(node: &serde_json::Value, depth: usize, out: &mut String) {
+    if depth >= MAX_ADF_DEPTH {
+        return;
+    }
     let node_type = node.get("type").and_then(serde_json::Value::as_str);
     match node_type {
         Some("text") => {
@@ -359,7 +367,7 @@ fn walk_adf(node: &serde_json::Value, out: &mut String) {
     }
     if let Some(content) = node.get("content").and_then(serde_json::Value::as_array) {
         for child in content {
-            walk_adf(child, out);
+            walk_adf(child, depth + 1, out);
         }
     }
     // Block-level nodes terminate a line so adjacent paragraphs /

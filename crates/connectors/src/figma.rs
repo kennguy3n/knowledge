@@ -134,9 +134,17 @@ struct FigmaImagesResponse {
 /// the downstream render job bounded for very large files.
 const MAX_RENDER_NODES: usize = 50;
 
+/// Recursion ceiling for the Figma document-tree walkers. Figma files
+/// nest only a few dozen levels in practice; this cap stops a
+/// pathological or cyclic response from recursing without bound.
+const MAX_TREE_DEPTH: usize = 256;
+
 /// Recursively collect the `characters` of every `TEXT` node in the
 /// Figma document tree, depth-first, preserving document order.
-fn collect_text_nodes(node: &serde_json::Value, out: &mut Vec<String>) {
+fn collect_text_nodes(node: &serde_json::Value, depth: usize, out: &mut Vec<String>) {
+    if depth >= MAX_TREE_DEPTH {
+        return;
+    }
     if node.get("type").and_then(serde_json::Value::as_str) == Some("TEXT") {
         if let Some(chars) = node.get("characters").and_then(serde_json::Value::as_str) {
             if !chars.is_empty() {
@@ -146,16 +154,16 @@ fn collect_text_nodes(node: &serde_json::Value, out: &mut Vec<String>) {
     }
     if let Some(children) = node.get("children").and_then(serde_json::Value::as_array) {
         for child in children {
-            collect_text_nodes(child, out);
+            collect_text_nodes(child, depth + 1, out);
         }
     }
 }
 
 /// Recursively collect node ids worth rendering to PNG — top-level
 /// frames, components and component sets. Stops once [`MAX_RENDER_NODES`]
-/// ids have been gathered.
-fn collect_render_node_ids(node: &serde_json::Value, out: &mut Vec<String>) {
-    if out.len() >= MAX_RENDER_NODES {
+/// ids have been gathered or [`MAX_TREE_DEPTH`] is reached.
+fn collect_render_node_ids(node: &serde_json::Value, depth: usize, out: &mut Vec<String>) {
+    if out.len() >= MAX_RENDER_NODES || depth >= MAX_TREE_DEPTH {
         return;
     }
     let node_type = node.get("type").and_then(serde_json::Value::as_str);
@@ -166,7 +174,7 @@ fn collect_render_node_ids(node: &serde_json::Value, out: &mut Vec<String>) {
     }
     if let Some(children) = node.get("children").and_then(serde_json::Value::as_array) {
         for child in children {
-            collect_render_node_ids(child, out);
+            collect_render_node_ids(child, depth + 1, out);
         }
     }
 }
@@ -548,8 +556,8 @@ impl Connector for FigmaConnector {
         let mut text_nodes: Vec<String> = Vec::new();
         let mut render_ids: Vec<String> = Vec::new();
         if let Some(document) = file.get("document") {
-            collect_text_nodes(document, &mut text_nodes);
-            collect_render_node_ids(document, &mut render_ids);
+            collect_text_nodes(document, 0, &mut text_nodes);
+            collect_render_node_ids(document, 0, &mut render_ids);
         }
         let body = text_nodes.join("\n");
 

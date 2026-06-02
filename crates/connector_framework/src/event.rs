@@ -189,9 +189,20 @@ impl FetchedContent {
     }
 
     /// Builder: attach a document title. Returns `self` for chaining.
+    ///
+    /// An empty or whitespace-only `title` is treated as "no title" and
+    /// leaves [`Self::title`] as `None`. This lets connectors pass a
+    /// source field (page title, issue summary, file name) through
+    /// unconditionally without each one guarding for blanks, keeping
+    /// the "`None` when the source has no distinct title" contract.
     #[must_use]
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
-        self.title = Some(title.into());
+        let title = title.into();
+        self.title = if title.trim().is_empty() {
+            None
+        } else {
+            Some(title)
+        };
         self
     }
 
@@ -298,6 +309,30 @@ mod tests {
         assert_eq!(fc.title.as_deref(), Some("Greeting"));
         assert_eq!(fc.source_url.as_deref(), Some("https://example.test/doc/1"));
         assert_eq!(fc.metadata["labels"][0], "a");
+    }
+
+    #[test]
+    fn with_title_treats_blank_as_none() {
+        // Empty and whitespace-only titles normalise to `None` so
+        // connectors can pass a source field through unconditionally.
+        assert_eq!(
+            FetchedContent::text("b", "text/plain").with_title("").title,
+            None
+        );
+        assert_eq!(
+            FetchedContent::text("b", "text/plain")
+                .with_title("   \n\t")
+                .title,
+            None
+        );
+        // A title with surrounding whitespace is preserved as-is.
+        assert_eq!(
+            FetchedContent::text("b", "text/plain")
+                .with_title(" Real Title ")
+                .title
+                .as_deref(),
+            Some(" Real Title ")
+        );
     }
 
     #[test]
