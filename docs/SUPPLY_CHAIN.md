@@ -127,7 +127,7 @@ yanked-crate rejection, source restrictions.
 ### SBOM generation (job: `sbom`)
 
 ```yaml
-- run: cargo install cargo-cyclonedx --locked || true
+- run: cargo install cargo-cyclonedx --locked
 - run: cargo cyclonedx --all
 ```
 

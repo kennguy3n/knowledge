@@ -60,19 +60,17 @@ fn hybrid_secret_key_contains_nonzero_bytes() {
 
 #[test]
 fn zeroize_clears_hybrid_secret_key_in_place() {
-    // Generate a real keypair.
-    let (_pk, mut sk) = hybrid_keypair().expect("keypair");
+    // Generate a real keypair and encapsulate BEFORE zeroize so
+    // the ciphertext is bound to this keypair's public key.
+    let (pk, mut sk) = hybrid_keypair().expect("keypair");
+    let (ss_send, ct) = crypto::hybrid_kem_encap(&pk).expect("encap");
+
+    // Sanity: decap succeeds before zeroize.
+    let ss_pre = crypto::hybrid_kem_decap(&sk, &ct).expect("decap pre-zeroize");
+    assert_eq!(ss_pre, ss_send, "decap must succeed before zeroize");
 
     // Explicitly call zeroize (the same code path that Drop triggers).
     sk.zeroize();
-
-    // After zeroize, the x25519 static secret and ML-KEM secret key
-    // fields should be zeroed. We cannot directly inspect private
-    // fields, but we can verify that the key is no longer usable for
-    // decapsulation — if zeroize actually cleared the memory, the
-    // decap operation should produce a different shared secret or fail.
-    let (pk2, _sk2) = hybrid_keypair().expect("keypair 2");
-    let (ss_send, ct) = crypto::hybrid_kem_encap(&pk2).expect("encap");
 
     // Decap with the zeroed key — ML-KEM's implicit rejection will
     // return a pseudorandom value rather than an error, but it must
@@ -84,5 +82,5 @@ fn zeroize_clears_hybrid_secret_key_in_place() {
             "zeroed key must not recover the correct shared secret"
         );
     }
-    // Err is expected: decap with corrupted key may error.
+    // Err is also acceptable: decap with corrupted key may error.
 }
