@@ -59,7 +59,7 @@ impl DeviceTier {
     ///
     /// The result is cached in a process-global [`std::sync::OnceLock`]
     /// so repeated calls (including multiple `RouterConfig::new()`
-    /// constructions) never spawn more than one subprocess.
+    /// constructions) pay the syscall cost at most once.
     pub fn auto_detect() -> Self {
         static CACHED: std::sync::OnceLock<DeviceTier> = std::sync::OnceLock::new();
         *CACHED.get_or_init(|| match detect_total_ram_bytes() {
