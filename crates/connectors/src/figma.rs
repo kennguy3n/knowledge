@@ -565,6 +565,7 @@ impl Connector for FigmaConnector {
         //    Figma returns a node id → URL map; null entries are
         //    dropped). Skipped entirely when there are no frames.
         let mut images: BTreeMap<String, String> = BTreeMap::new();
+        let mut image_render_error: Option<String> = None;
         if !render_ids.is_empty() {
             // Encode each node id individually, then join with literal
             // commas so Figma sees a comma-delimited `ids=` list.
@@ -582,11 +583,13 @@ impl Connector for FigmaConnector {
                 token,
                 &[],
             )?;
-            if let Some(err) = resp.err.filter(|e| !e.is_empty()) {
-                return Err(ConnectorError::Sync(format!(
-                    "figma /v1/images/{file_key} returned err={err}"
-                )));
-            }
+            // A non-empty `err` describes a (possibly partial) render
+            // failure. The text body is already extracted and Figma may
+            // still return URLs for the nodes that did render, so record
+            // the error in metadata rather than discarding the whole
+            // fetch. Transport/HTTP failures (404/429/500) still surface
+            // via the `?` above.
+            image_render_error = resp.err.filter(|e| !e.is_empty());
             for (node_id, url) in resp.images {
                 if let Some(url) = url {
                     images.insert(node_id, url);
@@ -595,14 +598,18 @@ impl Connector for FigmaConnector {
         }
 
         let source_url = format!("https://www.figma.com/file/{file_key}");
+        let mut metadata = serde_json::json!({
+            "provider": "figma",
+            "file_key": file_key,
+            "text_node_count": text_nodes.len(),
+            "rendered_images": images,
+        });
+        if let Some(err) = image_render_error {
+            metadata["image_render_error"] = serde_json::Value::String(err);
+        }
         Ok(FetchedContent::text(body, "text/plain")
             .with_title(name)
-            .with_metadata(serde_json::json!({
-                "provider": "figma",
-                "file_key": file_key,
-                "text_node_count": text_nodes.len(),
-                "rendered_images": images,
-            }))
+            .with_metadata(metadata)
             .with_source_url(source_url))
     }
 
@@ -1157,6 +1164,54 @@ mod tests {
             fc.metadata["rendered_images"]["1:2"],
             serde_json::json!("https://figma-cdn.test/render/1-2.png")
         );
+    }
+
+    #[test]
+    fn fetch_content_keeps_text_when_image_render_partially_fails() {
+        // A non-empty `err` from /v1/images must NOT discard the
+        // already-extracted text body; the error is surfaced in
+        // metadata and any successfully rendered node URLs are kept.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/figma/v1/files/F1",
+            ok_json(&serde_json::json!({
+                "name": "Onboarding",
+                "document": {
+                    "id": "0:0", "type": "DOCUMENT",
+                    "children": [{
+                        "id": "0:1", "type": "CANVAS", "name": "Page 1",
+                        "children": [{
+                            "id": "1:2", "type": "FRAME", "name": "Welcome",
+                            "children": [
+                                { "id": "1:3", "type": "TEXT", "characters": "Welcome aboard" }
+                            ]
+                        }]
+                    }]
+                }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/figma/v1/images/F1?ids=1%3A2&format=png",
+            ok_json(&serde_json::json!({
+                "err": "Something went wrong rendering some nodes",
+                "images": { "1:2": serde_json::Value::Null }
+            })),
+        );
+        let c = FigmaConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("F1"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert_eq!(body, "Welcome aboard");
+        assert_eq!(
+            fc.metadata["image_render_error"],
+            serde_json::json!("Something went wrong rendering some nodes")
+        );
+        // The failed node produced no URL, so the map stays empty.
+        assert_eq!(fc.metadata["rendered_images"], serde_json::json!({}));
     }
 
     #[test]

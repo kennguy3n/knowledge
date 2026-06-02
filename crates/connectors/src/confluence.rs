@@ -561,39 +561,45 @@ impl Connector for ConfluenceConnector {
                 .or_else(|| v.as_i64().map(|n| n.to_string()))
         });
 
-        // 2. Labels.
+        // 2. Labels (best-effort metadata enrichment). The page body is
+        //    already retrieved above, so a labels failure (e.g. 429 on a
+        //    secondary call) must not discard it — fall back to none.
         let labels_url = format!("{base_url}/wiki/api/v2/pages/{id_enc}/labels");
-        let labels: ConfluenceLabelList = bearer_get_json(
+        let labels: Result<ConfluenceLabelList> = bearer_get_json(
             &self.transport,
             "confluence",
             "/wiki/api/v2/pages/{id}/labels",
             &labels_url,
             token,
             &[],
-        )?;
+        );
         let label_names: Vec<String> = labels
-            .results
-            .into_iter()
-            .map(|l| l.name)
-            .filter(|n| !n.is_empty())
-            .collect();
+            .map(|l| {
+                l.results
+                    .into_iter()
+                    .map(|x| x.name)
+                    .filter(|n| !n.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
 
-        // 3. Space key — resolve the numeric spaceId when present.
+        // 3. Space key — resolve the numeric spaceId when present, also
+        //    best-effort (used only for metadata, not the body/url).
         let space_key = match &space_id {
             Some(sid) if !sid.is_empty() => {
                 let space_url = format!(
                     "{base_url}/wiki/api/v2/spaces/{}",
                     percent_encode_path_component(sid)
                 );
-                let space: ConfluenceSpace = bearer_get_json(
+                let space: Result<ConfluenceSpace> = bearer_get_json(
                     &self.transport,
                     "confluence",
                     "/wiki/api/v2/spaces/{id}",
                     &space_url,
                     token,
                     &[],
-                )?;
-                Some(space.key)
+                );
+                space.ok().map(|s| s.key)
             }
             _ => None,
         };
@@ -1228,6 +1234,44 @@ mod tests {
         assert_eq!(body, "# Bare\n\nHi");
         assert_eq!(fc.metadata["space_key"], serde_json::Value::Null);
         assert!(fc.source_url.is_none());
+    }
+
+    #[test]
+    fn fetch_content_returns_body_when_label_and_space_lookups_fail() {
+        // The labels and space-key calls are best-effort enrichment: a
+        // 429 on labels and a 500 on the space lookup must not discard
+        // the already-fetched page body.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/123?body-format=storage",
+            ok_json(&serde_json::json!({
+                "id": "123",
+                "title": "Runbook",
+                "spaceId": 4567,
+                "body": { "storage": { "value": "<p>Body survives</p>" } }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/123/labels",
+            MockResponse::status(429, b"slow down".to_vec()),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/spaces/4567",
+            MockResponse::status(500, b"boom".to_vec()),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("123"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("Body survives"));
+        // Enrichment degraded gracefully to empty/none.
+        assert_eq!(fc.metadata["labels"], serde_json::json!([]));
+        assert_eq!(fc.metadata["space_key"], serde_json::Value::Null);
     }
 
     #[test]

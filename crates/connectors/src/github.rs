@@ -387,6 +387,27 @@ fn parse_role(role: &str) -> Option<SourcePermissionLevel> {
     }
 }
 
+/// Derive the human-facing web host from the configured REST API base
+/// URL so citation `source_url`s resolve on the right instance instead
+/// of always pointing at public `github.com`.
+///
+/// * Public GitHub — `https://api.github.com` → `https://github.com`.
+/// * GitHub Enterprise Server — the REST API is rooted at `/api/v3`
+///   while the web UI lives at the host root, so
+///   `https://github.acme.com/api/v3` → `https://github.acme.com`.
+/// * Any other shape is returned trimmed of a trailing slash, which is
+///   still a better basis for a link than a hard-coded host.
+fn web_base_url(api_base_url: &str) -> String {
+    let trimmed = api_base_url.trim_end_matches('/');
+    if let Some(web) = trimmed.strip_suffix("/api/v3") {
+        return web.to_string();
+    }
+    if trimmed == "https://api.github.com" {
+        return "https://github.com".to_string();
+    }
+    trimmed.to_string()
+}
+
 impl Connector for GitHubConnector {
     fn authenticate(&self, config: &ConnectorConfig) -> Result<OAuth2Token> {
         let auth_code = config
@@ -524,11 +545,9 @@ impl Connector for GitHubConnector {
         }
 
         let is_pr = issue.pull_request.is_some();
-        let source_url = if is_pr {
-            format!("https://github.com/{repo}/pull/{number}")
-        } else {
-            format!("https://github.com/{repo}/issues/{number}")
-        };
+        let web_base = web_base_url(&base_url);
+        let kind_seg = if is_pr { "pull" } else { "issues" };
+        let source_url = format!("{web_base}/{repo}/{kind_seg}/{number}");
 
         Ok(FetchedContent::text(md, "text/markdown")
             .with_title(issue.title.clone())
@@ -1120,9 +1139,11 @@ mod tests {
         assert_eq!(fc.title.as_deref(), Some("Login flow broken"));
         assert_eq!(fc.metadata["comment_count"], serde_json::json!(1));
         assert_eq!(fc.metadata["is_pull_request"], serde_json::json!(false));
+        // The web host is derived from the API base URL (the mock base
+        // here), not hard-coded to public github.com.
         assert_eq!(
             fc.source_url.as_deref(),
-            Some("https://github.com/owner/test-repo/issues/12")
+            Some("https://api.test/github/owner/test-repo/issues/12")
         );
     }
 
@@ -1160,7 +1181,7 @@ mod tests {
         assert_eq!(fc.metadata["is_pull_request"], serde_json::json!(true));
         assert_eq!(
             fc.source_url.as_deref(),
-            Some("https://github.com/owner/test-repo/pull/5")
+            Some("https://api.test/github/owner/test-repo/pull/5")
         );
     }
 
@@ -1205,5 +1226,70 @@ mod tests {
             .fetch_content(&cfg(), &tok, &SourceDocumentId::new("7"))
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn web_base_url_maps_api_hosts_to_web_hosts() {
+        // Public GitHub's API host maps to the web host.
+        assert_eq!(web_base_url("https://api.github.com"), "https://github.com");
+        assert_eq!(
+            web_base_url("https://api.github.com/"),
+            "https://github.com"
+        );
+        // GitHub Enterprise Server: the REST API lives under `/api/v3`,
+        // the web UI at the host root.
+        assert_eq!(
+            web_base_url("https://github.acme.com/api/v3"),
+            "https://github.acme.com"
+        );
+        // Unknown shapes are returned trimmed, not rewritten to github.com.
+        assert_eq!(
+            web_base_url("https://api.test/github"),
+            "https://api.test/github"
+        );
+    }
+
+    #[test]
+    fn fetch_content_source_url_uses_enterprise_host() {
+        const GHE_API: &str = "https://github.acme.com/api/v3";
+        let ghe_cfg = || {
+            ConnectorConfig::new(ConnectorKind::GitHub, AuthKind::OAuth2, ScopeId::new_v4())
+                .with_auth_config(serde_json::json!({
+                    "authorization_code": "demo-code",
+                    "api_base_url": GHE_API,
+                    "repository": "owner/test-repo",
+                    "webhook_secret": "test-webhook-secret",
+                }))
+        };
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GHE_API}/repos/owner/test-repo/issues/3"),
+            MockResponse::ok_json(
+                serde_json::to_vec(&serde_json::json!({
+                    "number": 3,
+                    "title": "Enterprise issue",
+                    "state": "open",
+                    "body": "x",
+                    "user": { "login": "ada" }
+                }))
+                .unwrap(),
+            ),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GHE_API}/repos/owner/test-repo/issues/3/comments?per_page=100&page=1"),
+            MockResponse::ok_json(b"[]".to_vec()),
+        );
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&ghe_cfg()).unwrap();
+        let fc = c
+            .fetch_content(&ghe_cfg(), &tok, &SourceDocumentId::new("3"))
+            .unwrap();
+        // Citation resolves on the Enterprise host, not public github.com.
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://github.acme.com/owner/test-repo/issues/3")
+        );
     }
 }
