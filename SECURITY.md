@@ -127,8 +127,11 @@ adversarial tests exercising:
   within bounded time without stack overflow.
 
 These test suites run in CI (`cargo test --all --all-features`)
-and are designed to be re-run by an auditor with `proptest`'s
-seed-replay capability for full reproducibility.
+and are designed to be re-run by an auditor. The AEAD and
+signature tests use `proptest`'s seed-replay for full
+reproducibility; the KEM tests use OS-RNG internally and are
+therefore non-deterministic (run N times rather than replayed
+from a seed).
 
 ### Host key handling
 
