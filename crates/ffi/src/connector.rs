@@ -862,7 +862,7 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                         if let Err(persist_err) = persist_connector_instance(rt, &inst_clone) {
                             tracing::warn!(instance = %instance,
                                 error = %persist_err,
-                                "failed to persist sync_state Failed status after  dispatch failure; in-memory state still updated",
+                                "failed to persist sync_state Failed status after dispatch failure; in-memory state still updated",
                             );
                         }
                     }

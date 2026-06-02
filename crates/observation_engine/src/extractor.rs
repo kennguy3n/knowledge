@@ -426,8 +426,8 @@ fn split_sentences_with_terminator(text: &str) -> Vec<SentenceSlice<'_>> {
 ///    English first-token check so substantive English
 ///    questions in unknown-language threads still get caught.
 ///
-/// collocation closure: normalisation is delegated
-/// to the registry's [`normalize_for_lookup`] primitive, which
+/// Normalisation closure: the question path delegates to the
+/// registry's [`normalize_for_lookup`] primitive, which
 /// strips Arabic tashkeel + tatweel (when the language tag is
 /// Arabic-script), strips bidi/ZWJ format controls, then
 /// NFC-composes + lowercases. Routing the question path through

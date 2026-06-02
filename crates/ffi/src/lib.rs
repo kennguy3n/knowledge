@@ -942,11 +942,11 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     // entries which is bounded by 2 × active scopes (Domain +
     // Tenant tiers) so the cost stays linear in the live runtime.
     rt.synthesis_cooldowns.retain(|(s, _), _| *s != scope);
-    // earlier nested shape: drop the whole sub-map for the
-    // forgotten scope in one O(1) outer-map removal. Before the
-    // refactor we walked every window id owned by the scope and
-    // removed each from the flat map; now the scope's entire object
-    // set is a single value addressable by `scope`. Window ids stay
+    // Drop the whole sub-map for the forgotten scope in one O(1)
+    // outer-map removal. An earlier nested shape walked every window
+    // id owned by the scope and removed each from the flat map; the
+    // current shape addresses the scope's entire object set as a
+    // single value keyed by `scope`. Window ids stay
     // globally unique so no other scope's objects can be caught by
     // this — but as a defense-in-depth measure (and to match the
     // documented invariant in the runtime's `synthesis_objects`

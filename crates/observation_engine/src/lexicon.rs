@@ -3823,7 +3823,7 @@ mod tests {
             "AR_LEXICON.task_imperative_strategy must be \
              FirstTokenWithArabicClitics — see per-class asymmetry doc block \
              on AR_LEXICON for rationale (positional + clitic-aware matching \
-             is what makes  architecturally correct)"
+             is what makes the imperative class architecturally correct)"
         );
     }
 

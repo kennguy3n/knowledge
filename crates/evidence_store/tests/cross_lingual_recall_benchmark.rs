@@ -583,7 +583,7 @@ const PER_QUERY_HIT_RATE_AT_1_FLOOR: f64 = 0.95;
 /// because the mock makes both exactly `1.0`.
 const PER_QUERY_HIT_RATE_AT_3_FLOOR: f64 = 0.95;
 
-/// The  cross-lingual recall benchmark.  Walks every
+/// The cross-lingual recall benchmark. Walks every
 /// (query_lang × concept) cell of the 120-entry corpus, computes
 /// `hit-rate@{1, 3}` (via [`hit_rate_at_k`]) and `recall@12`
 /// (via [`recall_at_k`]) per query, asserts both the per-query

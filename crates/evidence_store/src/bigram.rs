@@ -39,10 +39,10 @@
 //!   for the cryptographic-forgetting guarantee (REBUILD must
 //!   wipe residual plaintext tokens from a purged scope).
 //! * Tokeniser swaps are FTS5 table options, not column changes,
-//!   so the bigram lane is additive in the same shape
-//!   used for the trigram lane — purge / rebuild / search all
-//!   fan out across the new table without any restructure of
-//!   the existing two.
+//!   so the bigram lane is additive in the same shape used by
+//!   the trigram lane — purge / rebuild / search all fan out
+//!   across the new table without any restructure of the
+//!   existing two.
 //!
 //! The bigram column is purely additive recall. The unicode61
 //! `evidence_fts` table remains the source of truth for query
