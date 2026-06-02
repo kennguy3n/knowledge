@@ -255,9 +255,8 @@ impl GitHubConnector {
         let extra = Self::extra_headers();
         for page in 1..=MAX_LIST_PAGES {
             let mut url = format!(
-                "{base_url}/repos/{}/issues?state=all&sort=updated&direction=asc\
+                "{base_url}/repos/{repo}/issues?state=all&sort=updated&direction=asc\
                  &per_page={}&page={page}",
-                percent_encode_path_component(repo),
                 self.page_size,
             );
             if let Some(s) = since {
@@ -284,7 +283,7 @@ impl GitHubConnector {
     }
 }
 
-fn issue_to_created_event(issue: &GitHubIssue) -> ConnectorEvent {
+fn issue_to_event(issue: &GitHubIssue) -> ConnectorEvent {
     let occurred_at = issue
         .created_at
         .or(issue.updated_at)
@@ -303,7 +302,7 @@ fn issue_to_created_event(issue: &GitHubIssue) -> ConnectorEvent {
     }
 }
 
-fn issue_to_updated_event(issue: &GitHubIssue) -> ConnectorEvent {
+fn issue_to_sync_event(issue: &GitHubIssue) -> ConnectorEvent {
     let occurred_at = issue
         .updated_at
         .or(issue.created_at)
@@ -352,7 +351,7 @@ impl Connector for GitHubConnector {
         let mut events: Vec<ConnectorEvent> = Vec::with_capacity(issues.len());
         let mut watermark: Option<DateTime<Utc>> = None;
         for issue in &issues {
-            events.push(issue_to_created_event(issue));
+            events.push(issue_to_event(issue));
             if let Some(t) = issue.updated_at.or(issue.created_at) {
                 watermark = Some(watermark.map_or(t, |w| w.max(t)));
             }
@@ -390,7 +389,7 @@ impl Connector for GitHubConnector {
                     continue;
                 }
             }
-            events.push(issue_to_updated_event(issue));
+            events.push(issue_to_sync_event(issue));
             if let Some(t) = when {
                 watermark = Some(watermark.map_or(t, |w| w.max(t)));
             }
@@ -409,15 +408,16 @@ impl Connector for GitHubConnector {
     ) -> Result<WebhookSubscription> {
         let base_url = self.resolved_base_url(config);
         let repo = Self::resolved_repo(config)?;
-        let url = format!(
-            "{base_url}/repos/{}/hooks",
-            percent_encode_path_component(&repo),
-        );
+        let url = format!("{base_url}/repos/{repo}/hooks");
         let webhook_secret = config
             .auth_config_json
             .get("webhook_secret")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or("github-webhook-secret")
+            .ok_or_else(|| {
+                ConnectorError::Auth(
+                    "github subscribe_webhook: auth_config_json.webhook_secret is required".into(),
+                )
+            })?
             .to_string();
         let body = serde_json::json!({
             "name": "web",
@@ -485,7 +485,7 @@ impl Connector for GitHubConnector {
                 let pr = p
                     .pull_request
                     .ok_or_else(|| ConnectorError::Webhook("missing pull_request body".into()))?;
-                let id = SourceDocumentId::new(format!("pr-{}", pr.number));
+                let id = SourceDocumentId::new(pr.number.to_string());
                 let occurred_at = pr.updated_at.or(pr.created_at).unwrap_or_else(Utc::now);
                 match p.action.as_str() {
                     "opened" => ConnectorEvent::DocumentCreated {
@@ -598,9 +598,8 @@ mod tests {
         response: &[GitHubIssue],
     ) {
         let mut url = format!(
-            "{base_url}/repos/{}/issues?state=all&sort=updated&direction=asc\
+            "{base_url}/repos/{repo}/issues?state=all&sort=updated&direction=asc\
              &per_page={}&page={page}",
-            percent_encode_path_component(repo),
             DEFAULT_PAGE_SIZE,
         );
         if let Some(s) = since {
@@ -727,7 +726,7 @@ mod tests {
         let transport = MockHttpTransport::new();
         let base = "https://api.test/github";
         let repo = "owner/test-repo";
-        let url = format!("{base}/repos/{}/hooks", percent_encode_path_component(repo));
+        let url = format!("{base}/repos/{repo}/hooks");
 
         transport.expect(
             HttpMethod::Post,
@@ -823,7 +822,7 @@ mod tests {
         assert!(matches!(evs[0], ConnectorEvent::DocumentCreated { .. }));
         assert_eq!(
             evs[0].document_id(),
-            &SourceDocumentId::new("pr-10".to_string())
+            &SourceDocumentId::new("10".to_string())
         );
     }
 

@@ -57,7 +57,6 @@ fn github_full_sync_cycle() {
     let now = Utc::now();
     let base = "https://api.test";
     let repo = "owner/test-repo";
-    let encoded_repo = percent_encode_path_component(repo);
 
     // initial_sync: page 1 (final — fewer than 100 results).
     let issues = vec![
@@ -78,7 +77,7 @@ fn github_full_sync_cycle() {
     transport.expect(
         HttpMethod::Get,
         format!(
-            "{base}/repos/{encoded_repo}/issues\
+            "{base}/repos/{repo}/issues\
              ?state=all&sort=updated&direction=asc&per_page=100&page=1"
         ),
         MockResponse::ok_json(serde_json::to_vec(&issues).unwrap()),
@@ -92,6 +91,7 @@ fn github_full_sync_cycle() {
             "authorization_code": "code",
             "repository": repo,
             "api_base_url": base,
+            "webhook_secret": "test-webhook-secret",
         }));
 
     // Step 1: authenticate.
@@ -118,7 +118,7 @@ fn github_full_sync_cycle() {
     transport2.expect(
         HttpMethod::Get,
         format!(
-            "{base}/repos/{encoded_repo}/issues\
+            "{base}/repos/{repo}/issues\
              ?state=all&sort=updated&direction=asc\
              &per_page=100&page=1&since={encoded_cursor}"
         ),
@@ -147,7 +147,7 @@ fn github_full_sync_cycle() {
     let transport3 = MockHttpTransport::new();
     transport3.expect(
         HttpMethod::Post,
-        format!("{base}/repos/{encoded_repo}/hooks"),
+        format!("{base}/repos/{repo}/hooks"),
         MockResponse::ok_json(
             serde_json::to_vec(&serde_json::json!({
                 "id": 99,
