@@ -1733,6 +1733,7 @@ dependencies = [
  "crypto",
  "evidence_store",
  "export_plane",
+ "integration_tests",
  "memory_manager",
  "observation_engine",
  "permission_service",
