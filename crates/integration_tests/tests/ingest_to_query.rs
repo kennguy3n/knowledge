@@ -22,22 +22,9 @@
 //!    * Scope A's `read_body` for the surviving evidence rows fails.
 //!    * Scope B's queries and body reads are unaffected.
 
-use evidence_store::{
-    EvidenceId, EvidenceStore, EvidenceStoreConfig, ImportanceClass, ScopeId,
-    DEFAULT_INLINE_THRESHOLD_BYTES,
-};
+use evidence_store::{EvidenceId, ImportanceClass};
+use integration_tests::test_helpers::{open_store, ScopeId, BODY_SIZE};
 use tempfile::TempDir;
-
-const MASTER_KEY: [u8; 32] = [0xA5; 32];
-/// Bodies must exceed the inline threshold so they take the
-/// body-table path — that path is the one cryptographic forgetting
-/// actually shreds.
-const BODY_SIZE: usize = DEFAULT_INLINE_THRESHOLD_BYTES * 4;
-
-fn open_store(path: &std::path::Path) -> EvidenceStore {
-    EvidenceStore::open(path, &MASTER_KEY, EvidenceStoreConfig::default())
-        .expect("open evidence store")
-}
 
 fn body_for(scope_tag: &str, idx: usize) -> Vec<u8> {
     // Two-token shape so search_fts has both a per-row unique token

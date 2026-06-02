@@ -20,9 +20,10 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
-# Production deps stay empty — the parent crate has no runtime
-# behaviour of its own.
+# The parent crate re-exports shared test constants and helpers so
+# integration-test binaries under `tests/` don't duplicate them.
 [dependencies]
+evidence_store = { path = "../evidence_store" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -33,7 +34,6 @@ uuid = { workspace = true }
 # open for explicit mock injection if other tests need it.
 chrono = { workspace = true }
 crypto = { path = "../crypto", features = ["test-support"] }
-evidence_store = { path = "../evidence_store" }
 concept_graph = { path = "../concept_graph" }
 observation_engine = { path = "../observation_engine" }
 memory_manager = { path = "../memory_manager" }

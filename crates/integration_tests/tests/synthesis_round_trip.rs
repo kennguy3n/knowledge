@@ -8,7 +8,8 @@
 use uuid::Uuid;
 
 use crypto::{ProvenanceAgent, ProvenanceBundle, SynthesisActivity};
-use evidence_store::{EvidenceStore, EvidenceStoreConfig, ImportanceClass, ScopeId};
+use evidence_store::ImportanceClass;
+use integration_tests::test_helpers::{EvidenceStore, EvidenceStoreConfig, ScopeId, MASTER_KEY};
 use memory_manager::{
     ApprovedDocumentRef, DomainMemoryObject, SensitivityClass, TenantMemoryObject,
 };
@@ -22,8 +23,6 @@ use synthesis_pipeline::{
 };
 
 use export_plane::profile::{ApprovedConcept, PortableConceptProfile};
-
-const MASTER_KEY: [u8; 32] = [0xA5; 32];
 
 fn scope_key() -> crypto::AeadKey {
     [0xBB; crypto::AEAD_KEY_LEN]

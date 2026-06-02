@@ -10,26 +10,12 @@ use uuid::Uuid;
 use connector_framework::{
     AttachmentRegistry, ConnectorEvent, ConnectorInstanceId, ConnectorKind, SyncRunResult,
 };
-use evidence_store::{
-    EvidenceStore, EvidenceStoreConfig, ImportanceClass, ScopeId, DEFAULT_INLINE_THRESHOLD_BYTES,
-};
+use evidence_store::ImportanceClass;
+use integration_tests::test_helpers::{open_store, padded_body, ScopeId};
 use permission_service::{
     NamespaceRegistry, ObjectRef, ObjectType, Relation, RelationTuple, SubjectRef, SubjectType,
     TupleStore,
 };
-
-const MASTER_KEY: [u8; 32] = [0xA5; 32];
-const BODY_SIZE: usize = DEFAULT_INLINE_THRESHOLD_BYTES * 4;
-
-fn open_store(path: &std::path::Path) -> EvidenceStore {
-    EvidenceStore::open(path, &MASTER_KEY, EvidenceStoreConfig::default()).expect("open store")
-}
-
-fn padded_body(prefix: &str) -> Vec<u8> {
-    let mut body = prefix.as_bytes().to_vec();
-    body.resize(BODY_SIZE, b'.');
-    body
-}
 
 #[test]
 fn connector_attach_sync_detach_lifecycle() {

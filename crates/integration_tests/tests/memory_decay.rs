@@ -4,26 +4,12 @@
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 
-use evidence_store::{
-    EvidenceStore, EvidenceStoreConfig, ImportanceClass, ScopeId, DEFAULT_INLINE_THRESHOLD_BYTES,
-};
+use evidence_store::ImportanceClass;
+use integration_tests::test_helpers::{open_store, padded_body, ScopeId};
 use memory_manager::{
     compute_retention_score, decay_sweep, MemoryObject, MemoryState, MemoryStateMachine,
     SensitivityClass,
 };
-
-const MASTER_KEY: [u8; 32] = [0xA5; 32];
-const BODY_SIZE: usize = DEFAULT_INLINE_THRESHOLD_BYTES * 4;
-
-fn padded_body(prefix: &str) -> Vec<u8> {
-    let mut body = prefix.as_bytes().to_vec();
-    body.resize(BODY_SIZE, b'.');
-    body
-}
-
-fn open_store(path: &std::path::Path) -> EvidenceStore {
-    EvidenceStore::open(path, &MASTER_KEY, EvidenceStoreConfig::default()).expect("open store")
-}
 
 #[test]
 fn ingest_verify_retention_and_decay_transitions() {
@@ -104,7 +90,7 @@ fn decay_sweep_archives_stale_candidates() {
 }
 
 #[test]
-fn pinning_prevents_decay() {
+fn pinning_boosts_retention_and_survives_sweep() {
     let scope = ScopeId::new_v4();
     let mut obj = MemoryObject::new_candidate(scope, SensitivityClass::Useful);
     obj.created_at = Utc::now() - Duration::days(365);
@@ -115,10 +101,18 @@ fn pinning_prevents_decay() {
 
     let now = Utc::now();
     let score = compute_retention_score(&obj, now);
-    // Pinned object should have much higher retention.
     assert!(
         score.total > 0.5,
         "pinned object should have high retention"
+    );
+
+    // Sweep-level: pinned candidate survives despite old age.
+    let mut objects = vec![obj];
+    let _report = decay_sweep(&mut objects, now);
+    assert_eq!(
+        objects[0].state,
+        MemoryState::Candidate,
+        "pinned candidate must not be archived by sweep"
     );
 }
 

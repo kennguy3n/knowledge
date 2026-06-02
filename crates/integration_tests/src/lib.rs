@@ -1,9 +1,7 @@
 //! Cross-crate integration tests for the Knowledge substrate.
 //!
-//! This crate intentionally exports nothing — it only exists so the
-//! files under `tests/` (each one a standalone cargo integration-test
-//! binary) can pull in `crypto`, `evidence_store`, `concept_graph`,
-//! and `permission_service` together and exercise the full pipeline.
+//! This crate re-exports shared test constants and helpers used by
+//! the per-file integration-test binaries under `tests/`.
 //!
 //! See:
 //!
@@ -18,4 +16,30 @@
 //!   sign/verify, SPHINCS+ sign/verify, co-sign/co-verify, and
 //!   AEAD ciphertext-after-forgetting failure.
 
-#![deny(missing_docs)]
+/// Shared test constants and helpers for integration tests.
+pub mod test_helpers {
+    pub use evidence_store::{
+        EvidenceStore, EvidenceStoreConfig, ImportanceClass, ScopeId,
+        DEFAULT_INLINE_THRESHOLD_BYTES,
+    };
+
+    /// Fixed master key for all test stores.
+    pub const MASTER_KEY: [u8; 32] = [0xA5; 32];
+
+    /// Body size above the inline threshold so evidence takes the
+    /// body-table path where cryptographic forgetting actually shreds.
+    pub const BODY_SIZE: usize = DEFAULT_INLINE_THRESHOLD_BYTES * 4;
+
+    /// Open a fresh [`EvidenceStore`] at `path` using [`MASTER_KEY`].
+    pub fn open_store(path: &std::path::Path) -> EvidenceStore {
+        EvidenceStore::open(path, &MASTER_KEY, EvidenceStoreConfig::default())
+            .expect("open evidence store")
+    }
+
+    /// Create a body of [`BODY_SIZE`] bytes prefixed with `prefix`.
+    pub fn padded_body(prefix: &str) -> Vec<u8> {
+        let mut body = prefix.as_bytes().to_vec();
+        body.resize(BODY_SIZE, b'.');
+        body
+    }
+}

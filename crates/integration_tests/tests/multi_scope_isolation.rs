@@ -6,27 +6,13 @@
 
 use uuid::Uuid;
 
-use evidence_store::{
-    EvidenceStore, EvidenceStoreConfig, ImportanceClass, ScopeId, DEFAULT_INLINE_THRESHOLD_BYTES,
-};
+use evidence_store::ImportanceClass;
+use integration_tests::test_helpers::{open_store, padded_body, ScopeId};
 use observation_engine::{LexiconExtractor, ObservationExtractor};
 use permission_service::{
     check_permission, NamespaceRegistry, ObjectRef, ObjectType, Relation, RelationTuple,
     SubjectRef, SubjectType, TupleStore,
 };
-
-const MASTER_KEY: [u8; 32] = [0xA5; 32];
-const BODY_SIZE: usize = DEFAULT_INLINE_THRESHOLD_BYTES * 4;
-
-fn padded_body(prefix: &str) -> Vec<u8> {
-    let mut body = prefix.as_bytes().to_vec();
-    body.resize(BODY_SIZE, b'.');
-    body
-}
-
-fn open_store(path: &std::path::Path) -> EvidenceStore {
-    EvidenceStore::open(path, &MASTER_KEY, EvidenceStoreConfig::default()).expect("open store")
-}
 
 #[test]
 fn cross_scope_evidence_isolation() {
