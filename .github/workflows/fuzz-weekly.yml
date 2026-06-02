@@ -30,9 +30,9 @@ jobs:
           - fuzz_hkdf_derive
           - fuzz_sphincs_sign_verify
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@nightly
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -67,7 +67,7 @@ jobs:
         run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=3600
       - name: Upload corpus + artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crypto-fuzz-${{ matrix.target }}
           path: |
