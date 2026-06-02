@@ -36,6 +36,7 @@ pub mod citation;
 pub mod document;
 // STABLE
 pub mod error;
+// UNSTABLE — test-only evaluation framework; gated behind `test-support`.
 #[cfg(any(test, feature = "test-support"))]
 pub mod eval;
 // STABLE
