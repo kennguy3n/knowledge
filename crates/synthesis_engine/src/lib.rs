@@ -69,6 +69,7 @@ compile_error!("test-support must not be enabled in release builds");
 // UNSTABLE — internal batcher; API may change.
 #[doc(hidden)]
 pub mod batcher;
+// STABLE
 #[cfg(feature = "http-client")]
 pub mod blocking_client;
 // STABLE
@@ -89,9 +90,11 @@ pub mod tee_worker;
 // when the `nitro-tee` feature is on — `mod` declaration sits
 // behind the cfg so default builds neither try to link the nsm-
 // api kernel-driver shim nor pull in the CBOR codec.
+// STABLE
 #[cfg(feature = "nitro-tee")]
 pub mod tee_runtime_nitro;
 
+// STABLE
 #[cfg(feature = "http-client")]
 pub use blocking_client::BlockingHttpClientAdapter;
 // STABLE

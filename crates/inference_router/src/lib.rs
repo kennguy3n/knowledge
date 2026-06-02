@@ -32,6 +32,7 @@ pub mod task;
 
 // STABLE
 pub use adapter::{AdapterKind, InferenceAdapter, ProbeResult};
+// STABLE
 #[cfg(feature = "http-client")]
 pub use adapters::HttpLlamaServerClient;
 // UNSTABLE — adapter internals; prefer InferenceRouter.

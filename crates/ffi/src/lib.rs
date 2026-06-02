@@ -118,6 +118,7 @@ pub mod sync_scheduler;
 // STABLE
 pub mod synthesis;
 pub(crate) mod synthesis_rate;
+// STABLE
 #[cfg(feature = "tracing-subscriber")]
 pub mod tracing_init;
 // STABLE
@@ -157,6 +158,7 @@ pub use synthesis::{
     MAX_APPROVED_DOCUMENT_METADATA_BYTES, MAX_SYNTHESIS_OUTPUT_BYTES,
     MAX_SYNTHESIS_VERSIONS_PER_WINDOW, PER_SCOPE_COOLDOWN_SECS, WINDOW_RETENTION_CAP_PER_SCOPE,
 };
+// STABLE
 #[cfg(feature = "tracing-subscriber")]
 pub use tracing_init::try_init_tracing;
 // STABLE

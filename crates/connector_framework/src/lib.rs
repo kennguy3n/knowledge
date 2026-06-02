@@ -54,10 +54,13 @@ pub mod token_vault;
 // STABLE
 pub mod webhook;
 
+// STABLE
 #[cfg(feature = "async-runtime")]
 pub mod async_runtime;
+// STABLE
 #[cfg(feature = "async-http-client")]
 pub mod http_async;
+// STABLE
 #[cfg(feature = "webhook-server")]
 pub mod webhook_server;
 
@@ -76,6 +79,7 @@ pub use connector::{Connector, SyncRunResult};
 pub use error::{ConnectorError, Result};
 // STABLE
 pub use event::{ConnectorEvent, SourceDocumentId, SourceUserId};
+// STABLE
 #[cfg(feature = "http-client")]
 pub use http::{BlockingHttpTransport, DEFAULT_HTTP_TIMEOUT_SECS};
 // STABLE
@@ -90,6 +94,7 @@ pub use http_helpers::{
     bearer_get_json, bearer_post_form, bearer_post_json, classify_failure, encode_form,
     percent_encode_form_component, percent_encode_path_component,
 };
+// STABLE
 #[cfg(feature = "http-client")]
 pub use oauth::default_oauth_client;
 // STABLE
@@ -121,9 +126,12 @@ pub use webhook::{
     WebhookSubscription,
 };
 
+// STABLE
 #[cfg(feature = "async-runtime")]
 pub use async_runtime::{AsyncConnector, AsyncHttpTransport, BlockingConnectorAdapter};
+// STABLE
 #[cfg(feature = "async-http-client")]
 pub use http_async::ReqwestAsyncHttpTransport;
+// STABLE
 #[cfg(feature = "webhook-server")]
 pub use webhook_server::{WebhookDispatch, WebhookDispatcher, WebhookServer, WebhookServerConfig};
