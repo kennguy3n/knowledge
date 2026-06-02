@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 crypto = { path = "../crypto" }
 evidence_store = { path = "../evidence_store" }

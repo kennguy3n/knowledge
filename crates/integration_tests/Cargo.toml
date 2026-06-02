@@ -33,6 +33,7 @@ uuid = { workspace = true }
 # open for explicit mock injection if other tests need it.
 crypto = { path = "../crypto", features = ["test-support"] }
 evidence_store = { path = "../evidence_store" }
+observation_engine = { path = "../observation_engine", features = ["test-support"] }
 concept_graph = { path = "../concept_graph" }
 permission_service = { path = "../permission_service" }
 sync_engine = { path = "../sync_engine" }
@@ -47,6 +48,10 @@ criterion = { workspace = true }
 
 [[bench]]
 name = "load_bench"
+harness = false
+
+[[bench]]
+name = "observation_throughput"
 harness = false
 
 [[bench]]

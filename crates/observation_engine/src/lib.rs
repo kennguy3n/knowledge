@@ -14,8 +14,21 @@
 //!   first, only candidates that clear the cheap classifier go to
 //!   more expensive stages).
 //! * Observation deliverables: `docs/DESIGN.md` §3.2.
+//!
+//! # Test-only types (`test-support` feature)
+//!
+//! `CONTRIBUTING.md` requires that test-only types be gated behind
+//! `cfg(any(test, feature = "test-support"))` and documented here.
+//! The `test-support` feature is declared in `Cargo.toml` as a
+//! no-op feature flag; enabling it exposes the `eval` module which
+//! contains `GoldenDataset`, `TestCase`, `ExpectedObservation`,
+//! `EvalReport`, `TypeMetrics`, and `run_eval` — the observation
+//! extraction quality evaluation framework.
 
 #![deny(missing_docs)]
+
+#[cfg(all(feature = "test-support", not(debug_assertions)))]
+compile_error!("test-support must not be enabled in release builds");
 
 // STABLE
 pub mod citation;
@@ -23,6 +36,9 @@ pub mod citation;
 pub mod document;
 // STABLE
 pub mod error;
+// UNSTABLE — test-only evaluation framework; gated behind `test-support`.
+#[cfg(any(test, feature = "test-support"))]
+pub mod eval;
 // STABLE
 pub mod extractor;
 // UNSTABLE — interrogative tables; internal heuristic.
