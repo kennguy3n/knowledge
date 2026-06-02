@@ -403,6 +403,12 @@ where
     /// Used as the watermark for the auto-compaction trigger; see
     /// [`Self::compact_threshold`] for the rationale.
     compact_baseline: usize,
+    /// Incrementally-maintained count of tombstone ops
+    /// (`Remove` + `Supersede`) appended since the last
+    /// compaction. Avoids O(growth) scans in the adaptive
+    /// heuristic — bumped on each tombstone-producing mutation,
+    /// reset on compact.
+    tombstone_count_since_baseline: usize,
 }
 
 impl<T> std::fmt::Debug for SyncEngine<T>
@@ -445,6 +451,7 @@ where
             cache_watermark: std::cell::Cell::new(0),
             compaction_policy: CompactionPolicy::default(),
             compact_baseline: 0,
+            tombstone_count_since_baseline: 0,
         }
     }
 
@@ -474,6 +481,16 @@ where
     /// `None` for `Disabled` or `Adaptive` (which do not use a
     /// fixed threshold). Use [`Self::compaction_policy`] for full
     /// introspection.
+    ///
+    /// # Migration
+    ///
+    /// This accessor predates the `CompactionPolicy` enum. With
+    /// the default now set to `Adaptive`, this returns `None` even
+    /// though auto-compaction **is** active. Callers that branch
+    /// on `compact_threshold().is_some()` to detect whether auto-
+    /// compaction is enabled should migrate to
+    /// [`Self::compaction_policy`] and check for
+    /// `CompactionPolicy::Disabled` instead.
     pub fn compact_threshold(&self) -> Option<usize> {
         match self.compaction_policy {
             CompactionPolicy::Fixed(n) => Some(n),
@@ -548,18 +565,7 @@ where
                 if growth <= MIN_ADAPTIVE_GROWTH {
                     false
                 } else {
-                    // Count tombstone ops (Remove + Supersede) in
-                    // the growth window.
-                    let tombstone_count = self.log.ops[self.compact_baseline..]
-                        .iter()
-                        .filter(|op| {
-                            matches!(
-                                op.op,
-                                SyncOpKind::Remove { .. } | SyncOpKind::Supersede { .. }
-                            )
-                        })
-                        .count();
-                    let ratio = tombstone_count as f64 / growth as f64;
+                    let ratio = self.tombstone_count_since_baseline as f64 / growth as f64;
                     let estimated_bytes = growth * ESTIMATED_BYTES_PER_OP;
                     ratio > tombstone_ratio_threshold || estimated_bytes > max_delta_bytes
                 }
@@ -665,6 +671,7 @@ where
             return;
         }
         self.log.record_remove(value.clone(), observed.clone());
+        self.tombstone_count_since_baseline += 1;
         if let Some((set, _supers)) = self.cached_state.get_mut().as_mut() {
             set.remove_tags(&value, &observed);
             self.cache_watermark.set(self.log.ops.len());
@@ -693,6 +700,7 @@ where
         };
         self.log
             .record_supersede(value.clone(), successor.clone(), observed.clone());
+        self.tombstone_count_since_baseline += 1;
         if let Some((set, supers)) = self.cached_state.get_mut().as_mut() {
             set.remove_tags(&value, &observed);
             supers.push((value, successor));
@@ -771,6 +779,15 @@ where
         let before = self.log.ops.len();
         self.log.merge(&other.log);
         let after = self.log.ops.len();
+        self.tombstone_count_since_baseline += self.log.ops[before..after]
+            .iter()
+            .filter(|op| {
+                matches!(
+                    op.op,
+                    SyncOpKind::Remove { .. } | SyncOpKind::Supersede { .. }
+                )
+            })
+            .count();
         if let Some((set, supers)) = self.cached_state.get_mut().as_mut() {
             for entry in &self.log.ops[before..after] {
                 apply_op_to(set, supers, entry);
@@ -800,6 +817,15 @@ where
         }
         let after = self.log.ops.len();
         self.log.compaction_epoch = self.log.compaction_epoch.max(envelope.compaction_epoch);
+        self.tombstone_count_since_baseline += self.log.ops[before..after]
+            .iter()
+            .filter(|op| {
+                matches!(
+                    op.op,
+                    SyncOpKind::Remove { .. } | SyncOpKind::Supersede { .. }
+                )
+            })
+            .count();
         if let Some((set, supers)) = self.cached_state.get_mut().as_mut() {
             for entry in &self.log.ops[before..after] {
                 apply_op_to(set, supers, entry);
@@ -832,6 +858,7 @@ where
         // post-compaction log length — see
         // [`Self::maybe_auto_compact`] for why this matters.
         self.compact_baseline = self.log.ops.len();
+        self.tombstone_count_since_baseline = 0;
         Ok(removed)
     }
 
@@ -870,7 +897,16 @@ where
             // distinguishes "enabled with value" from
             // "explicitly disabled" without ambiguity — see the
             // doc on [`EngineSnapshot::compact_threshold`].
-            compact_threshold: Some(CompactThresholdSetting::from_policy(self.compaction_policy)),
+            //
+            // For forward-compatibility with older engines that
+            // don't recognise the `Adaptive` variant, we omit
+            // the field when the policy is the default Adaptive
+            // — old code sees `None` and uses its own default
+            // (Fixed(10_000)), which is a safe degradation.
+            compact_threshold: match self.compaction_policy {
+                CompactionPolicy::Adaptive { .. } => None,
+                other => Some(CompactThresholdSetting::from_policy(other)),
+            },
         };
         serde_json::to_vec(&snap)
             .map_err(|_| SyncError::Serialisation("could not serialise engine snapshot"))

@@ -56,8 +56,13 @@ impl DeviceTier {
     ///
     /// Falls back to `Medium` if RAM cannot be determined (e.g.
     /// unsupported platform, sandboxed environment).
+    ///
+    /// The result is cached in a process-global [`std::sync::OnceLock`]
+    /// so repeated calls (including multiple `RouterConfig::new()`
+    /// constructions) never spawn more than one subprocess.
     pub fn auto_detect() -> Self {
-        match detect_total_ram_bytes() {
+        static CACHED: std::sync::OnceLock<DeviceTier> = std::sync::OnceLock::new();
+        *CACHED.get_or_init(|| match detect_total_ram_bytes() {
             Some(bytes) if bytes < LOW_TIER_RAM_THRESHOLD => Self::Low,
             Some(bytes) if bytes >= HIGH_TIER_RAM_THRESHOLD => Self::High,
             Some(_) => Self::Medium,
@@ -65,7 +70,7 @@ impl DeviceTier {
                 tracing::debug!("could not detect system RAM; falling back to DeviceTier::Medium");
                 Self::Medium
             }
-        }
+        })
     }
 }
 
