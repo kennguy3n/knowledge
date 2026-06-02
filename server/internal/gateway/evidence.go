@@ -95,8 +95,8 @@ func (h *handlers) query(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) getEvidence(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if _, err := validate.ScopeID(id); err != nil {
+	id, err := validate.ScopeID(chi.URLParam(r, "id"))
+	if err != nil {
 		httpx.WriteError(w, httpx.BadRequest("evidence id must be a UUID"))
 		return
 	}

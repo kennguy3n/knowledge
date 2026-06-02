@@ -45,15 +45,27 @@ func NewRateLimiter(ipRPS, tenantRPS float64, burst int) *RateLimiter {
 	}
 }
 
-// Middleware rejects requests that exceed either the per-IP or the
-// per-tenant budget with 429 and a Retry-After header.
-func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
+// PerIPMiddleware enforces the per-IP budget. It is mounted *before*
+// authentication so that unauthenticated traffic — credential
+// stuffing/brute-force, scanners — is throttled per source IP before it
+// reaches (and can hammer) the auth layer. Over-budget requests get 429
+// with a Retry-After header.
+func (rl *RateLimiter) PerIPMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
-		if !rl.allow(rl.ipBucket, ip, rl.ipRPS) {
+		if !rl.allow(rl.ipBucket, clientIP(r), rl.ipRPS) {
 			rl.reject(w)
 			return
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// PerTenantMiddleware enforces the per-tenant budget. It is mounted
+// *after* authentication because it keys on the resolved tenant from the
+// request context; requests without a tenant (e.g. raw API-key callers)
+// pass through untouched, already having cleared the per-IP gate.
+func (rl *RateLimiter) PerTenantMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if tenant := TenantID(r.Context()); tenant != "" {
 			if !rl.allow(rl.tnBucket, tenant, rl.tenantRPS) {
 				rl.reject(w)

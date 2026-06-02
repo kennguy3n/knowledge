@@ -87,11 +87,19 @@ func NewRouter(d Deps) http.Handler {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.BodyLimit)
+		// Per-IP rate limiting runs *before* auth so unauthenticated
+		// traffic (credential stuffing, scanners) is throttled per source
+		// IP before it can hammer the auth layer.
+		if d.RateLimiter != nil {
+			r.Use(d.RateLimiter.PerIPMiddleware)
+		}
 		if d.Auth != nil {
 			r.Use(d.Auth.Middleware)
 		}
+		// Per-tenant rate limiting runs *after* auth: it keys on the
+		// resolved tenant from the request context.
 		if d.RateLimiter != nil {
-			r.Use(d.RateLimiter.Middleware)
+			r.Use(d.RateLimiter.PerTenantMiddleware)
 		}
 
 		// Evidence.

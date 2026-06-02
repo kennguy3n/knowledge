@@ -175,10 +175,10 @@ func TestBodyLimit(t *testing.T) {
 	}
 }
 
-func TestRateLimiter(t *testing.T) {
+func TestRateLimiterPerIP(t *testing.T) {
 	t.Parallel()
 	rl := NewRateLimiter(1, 1, 1) // burst 1
-	h := rl.Middleware(http.HandlerFunc(ok))
+	h := rl.PerIPMiddleware(http.HandlerFunc(ok))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "10.0.0.1:1234"
@@ -191,5 +191,48 @@ func TestRateLimiter(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("burst exceeded not blocked: %d", rec.Code)
+	}
+
+	// A different source IP has its own bucket and is not affected.
+	other := httptest.NewRequest(http.MethodGet, "/", nil)
+	other.RemoteAddr = "10.0.0.2:1234"
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, other)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second IP blocked by first IP's bucket: %d", rec.Code)
+	}
+}
+
+func TestRateLimiterPerTenant(t *testing.T) {
+	t.Parallel()
+	rl := NewRateLimiter(1, 1, 1) // burst 1
+	h := rl.PerTenantMiddleware(http.HandlerFunc(ok))
+
+	// Requests carrying a tenant share that tenant's bucket regardless
+	// of source IP.
+	withTenant := func(ip string) *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = ip
+		ctx := withPrincipal(req.Context(), Principal{Subject: "u", TenantID: "tenant-a"})
+		return req.WithContext(ctx)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, withTenant("10.0.0.1:1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first tenant request blocked: %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, withTenant("10.0.0.2:1"))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("tenant burst exceeded not blocked: %d", rec.Code)
+	}
+
+	// A request with no tenant in context bypasses the per-tenant gate.
+	rec = httptest.NewRecorder()
+	noTenant := httptest.NewRequest(http.MethodGet, "/", nil)
+	noTenant.RemoteAddr = "10.0.0.3:1"
+	h.ServeHTTP(rec, noTenant)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("untenanted request blocked by per-tenant limiter: %d", rec.Code)
 	}
 }
