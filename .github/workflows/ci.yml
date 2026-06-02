@@ -13,7 +13,7 @@ concurrency:
 
 # Principle of least privilege: every job in this workflow only needs
 # read access to the repo contents. The `fuzz` job's
-# `actions/upload-artifact@v4` step uploads to the per-run actions
+# `actions/upload-artifact@v7` step uploads to the per-run actions
 # scope, which is granted automatically and does not require an
 # additional permission grant.
 permissions:
@@ -29,7 +29,7 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -39,11 +39,11 @@ jobs:
     name: clippy (default features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -66,7 +66,7 @@ jobs:
     # author to justify the relaxation in review instead of slipping
     # it past the workspace-level guarantee.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install ripgrep
         # The `*.rs` scan below uses `rg --multiline` to catch attribute
         # forms broken across newlines. `rg` is listed in the
@@ -289,11 +289,11 @@ jobs:
     name: clippy (all features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -307,9 +307,9 @@ jobs:
     name: build (default features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -323,9 +323,9 @@ jobs:
     name: build (release, default features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -339,9 +339,9 @@ jobs:
     name: test (default features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -355,9 +355,9 @@ jobs:
     name: test (all features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -379,9 +379,9 @@ jobs:
     # crate's `--features http-client` in isolation pins the
     # feature-flag boundary cleanly.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -398,9 +398,9 @@ jobs:
     name: MSRV (1.85.0)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.85.0
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -419,11 +419,11 @@ jobs:
     name: cross-check (aarch64-apple-ios)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -437,11 +437,11 @@ jobs:
     name: cross-check (aarch64-linux-android)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -477,14 +477,14 @@ jobs:
     name: ios-build (.xcframework + Swift package)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           # `cargo swift package` walks all the iOS slices it
           # knows about; pre-installing the targets here saves the
           # script ~30s of `rustup target add` time on every run.
           targets: aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -504,7 +504,7 @@ jobs:
       - name: Build iOS Swift package + XCFramework
         run: crates/ffi/scripts/build_ios.sh
       - name: Upload iOS artefacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: knowledge-ios
           path: crates/ffi/ios
@@ -522,11 +522,11 @@ jobs:
     name: android-build (Kotlin bindings + JNI .so)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,x86_64-linux-android
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -585,7 +585,7 @@ jobs:
       - name: Build Android JNI .so + Kotlin bindings
         run: crates/ffi/scripts/build_android.sh
       - name: Upload Android artefacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: knowledge-android
           path: crates/ffi/android
@@ -595,7 +595,7 @@ jobs:
     name: security audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: cargo install cargo-audit --locked
       - run: cargo audit
 
@@ -603,7 +603,7 @@ jobs:
     name: cargo deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: cargo install cargo-deny --locked
       - run: cargo deny check
 
@@ -614,9 +614,9 @@ jobs:
     # itself stays on stable, so this job is the only place the
     # nightly toolchain is used.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@nightly
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -662,7 +662,7 @@ jobs:
         run: cargo +nightly fuzz run fuzz_sphincs_sign_verify -- -max_total_time=120
       - name: Upload fuzz artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crypto-fuzz-artifacts
           path: crates/crypto/fuzz/artifacts/
@@ -718,14 +718,14 @@ jobs:
       !contains(github.event.pull_request.labels.*.name, 'ci:full')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-gnu
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -806,14 +806,14 @@ jobs:
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -864,7 +864,7 @@ jobs:
         working-directory: crates/napi
         run: node --test 'test/*.test.mjs'
       - name: Upload .node artefact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: napi-addon-${{ matrix.target }}
           path: crates/napi/knowledge.*.node

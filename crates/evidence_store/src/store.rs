@@ -1918,8 +1918,7 @@ impl EvidenceStore {
         // (`rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, …)`)
         // to avoid a mid-function `use` that clippy's
         // `items-after-statements` lint would flag.
-        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut dek)
-            .expect("OS RNG failure");
+        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut dek).expect("OS RNG failure");
         self.store_scope_dek(scope_id, &dek)?;
         Ok(dek)
     }
@@ -4868,9 +4867,7 @@ fn random_nonce() -> AeadNonce {
     // `ThreadRng`) for every per-row AEAD nonce, even on the hot
     // path. Panicking on OS RNG failure is intentional — a
     // substrate that cannot draw entropy cannot encrypt safely.
-    SysRng
-        .try_fill_bytes(&mut nonce)
-        .expect("OS RNG failure");
+    SysRng.try_fill_bytes(&mut nonce).expect("OS RNG failure");
     nonce
 }
 
@@ -4885,9 +4882,7 @@ fn random_cek() -> AeadKey {
     use rand::rngs::SysRng;
     use rand::TryRng;
     let mut key = [0u8; AEAD_KEY_LEN];
-    SysRng
-        .try_fill_bytes(&mut key)
-        .expect("OS RNG failure");
+    SysRng.try_fill_bytes(&mut key).expect("OS RNG failure");
     key
 }
 
