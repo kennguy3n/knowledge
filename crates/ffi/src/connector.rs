@@ -40,9 +40,8 @@
 //!    [`OAuthClientSecretResolver`] callback that the substrate
 //!    consults at every OAuth2 grant (both `authorization_code` and
 //!    `refresh_token`) to fetch the `client_secret` from the host's
-//!    keychain. wiring — production hosts use this to
-//!    keep confidential credentials off the substrate's persisted
-//!    state.
+//!    keychain — production hosts use this to keep confidential
+//!    credentials off the substrate's persisted state.
 //! 8. [`clear_oauth_client_secret_resolver`] — unregister the
 //!    previously-registered resolver. After this call the framework
 //!    falls back to `auth_config_json["client_secret"]` (and then
@@ -345,11 +344,12 @@ pub fn authenticate_connector(
                 }
             };
             // Race with `forget_scope_state` on the same handle: if
-            // the scope was forgotten during the in-memory
-            // instance map is already empty (step 6 of the helper
-            // drops every instance bound to the forgotten scope),
-            // so the `get` above returns `None` and we bail. Still
-            // re-check `is_scope_forgotten` here as defense in depth
+            // the scope was forgotten during the unlocked dispatch,
+            // the in-memory instance map is already empty (step 6 of
+            // the helper drops every instance bound to the forgotten
+            // scope), so the `get` above returns `None` and we bail.
+            // Still re-check `is_scope_forgotten` here as defense in
+            // depth
             // — a future refactor could decouple the in-memory map
             // from `forget_scope_state`'s sweep, and we want the
             // token to land on a removed-but-not-forgotten instance

@@ -1356,7 +1356,7 @@ mod tests {
         );
     }
 
-    // ───────── : ClientSecretResolver resolution-ladder tests ─────────
+    // ───────── ClientSecretResolver resolution-ladder tests ─────────
 
     /// Test resolver that records every `(kind, scope_id, client_id)`
     /// tuple it's asked about and returns a preset answer. Mirrors the
@@ -1830,7 +1830,7 @@ mod tests {
         );
     }
 
-    // ───── — WARN-once-per-instance dedup tests ─────
+    // ───── WARN-once-per-instance dedup tests ─────
 
     /// Resolver that always returns `None`. Used to drive
     /// `client_secret_for` through the layer-2 / layer-3 fallback

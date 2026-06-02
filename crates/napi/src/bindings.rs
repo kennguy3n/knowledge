@@ -2120,7 +2120,7 @@ mod tests {
         js_init(cfg.into()).expect("valid config should accept");
     }
 
-    // ───── — N-API resolver recv-timeout validation ─────
+    // ───── N-API resolver recv-timeout validation ─────
     //
     // The full `JsClientSecretResolver::resolve` path requires a
     // live napi env to construct a `ThreadsafeFunction`, which is

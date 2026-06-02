@@ -2004,10 +2004,10 @@ fn save_connector_instance_propagates_secondary_unique_violation() {
     assert_eq!(loaded_kind.as_str(), kind_tag);
 }
 
-// ───────────── : OAuth2 token refresh via FFI ─────────────
+// ───────────── OAuth2 token refresh via FFI ─────────────
 //
-// wires `refresh_connector_token` and the auto-refresh path
-// inside `sync_connector` through the FFI surface. The substrate-side
+// This block wires `refresh_connector_token` and the auto-refresh
+// path inside `sync_connector` through the FFI surface. The substrate-side
 // primitives (`OAuth2Client::refresh_with_config`,
 // `ConfiguredRefresher`, `OAuth2TokenVault::refresh_if_expiring`)
 // are exhaustively unit-tested at the connector_framework level;
@@ -2051,7 +2051,7 @@ use std::thread::JoinHandle;
 /// back `HTTP/1.1 200 OK` with `Content-Type: application/json`.
 ///
 /// Lives in the integration-test file (not the test-support crate)
-/// because is the first test surface that needs it; if a
+/// because this is the first test surface that needs it; if a
 /// future test wants the same plumbing the helper graduates to a
 /// shared module.
 #[cfg(feature = "http-client")]
@@ -2289,7 +2289,7 @@ impl Drop for OAuthTestServer {
     }
 }
 
-// ───── — OAuthTestServer read-loop self-tests ─────
+// ───── OAuthTestServer read-loop self-tests ─────
 
 /// Pin the OAuthTestServer's multi-read loop against TCP
 /// fragmentation: write the HTTP/1.1 request in TWO segments with
@@ -2661,7 +2661,7 @@ fn refresh_connector_token_short_circuits_when_no_refresh_token_stored() {
     drop(dir);
 }
 
-// ───────────────── : client_secret resolver tests ─────────────────
+// ───────────────── client_secret resolver tests ─────────────────
 
 /// Helper resolver used by the tests. Holds a closure that
 /// produces the secret on demand and a counter so tests can assert
@@ -3150,7 +3150,7 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-// ───────────────────── : webhook receiver ─────────────────
+// ───────────────────── webhook receiver ─────────────────
 
 #[cfg(feature = "http-client")]
 mod webhook {
@@ -3717,7 +3717,7 @@ mod webhook {
     }
 }
 
-// ───────────────────── : background sync scheduler ─────────
+// ───────────────────── background sync scheduler ─────────
 
 #[cfg(feature = "http-client")]
 mod sync_scheduler_tests {

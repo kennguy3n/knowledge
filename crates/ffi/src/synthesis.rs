@@ -3031,7 +3031,7 @@ mod tests {
         teardown(handle);
     }
 
-    // ─────────── : rate-shaping gate ──────────────
+    // ─────────── rate-shaping gate ──────────────
 
     /// End-to-end test for the global token-bucket rate limiter:
     /// configure a tight bucket (capacity 2, near-zero refill
@@ -3971,7 +3971,7 @@ mod tests {
         assert!(endpoint.timeout.is_none());
     }
 
-    // ─────────── : rate-limiter validation ────────
+    // ─────────── rate-limiter validation ────────
 
     /// Zero values must fall back to the published defaults.
     #[test]
