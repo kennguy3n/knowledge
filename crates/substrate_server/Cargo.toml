@@ -1,0 +1,62 @@
+[package]
+name = "substrate_server"
+description = "Internal HTTP loopback server exposing the Knowledge substrate FFI surface to the Go server tier."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Binary entrypoint: `substrate_server` boots the axum loopback
+# service. A `lib` target is also produced so the integration tests
+# (and, in future, other in-tree Rust consumers) can build the
+# router + state in-process without spawning the binary.
+[[bin]]
+name = "substrate_server"
+path = "src/main.rs"
+
+[lib]
+name = "substrate_server"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Forwards to `ffi/http-client`, enabling the real reqwest-based
+# connector transport + OAuth2 client so connector create / sync /
+# authenticate calls actually reach upstream providers. Gated (not
+# default) so the cross-compile CI checks (`cargo check --workspace`
+# for aarch64-apple-ios / aarch64-linux-android) do NOT pull the
+# reqwest/ring build chain into the loopback binary. Production
+# deployments build with `--features http-client`.
+http-client = ["ffi/http-client"]
+
+[dependencies]
+ffi = { path = "../ffi" }
+crypto = { path = "../crypto" }
+permission_service = { path = "../permission_service" }
+export_plane = { path = "../export_plane" }
+
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+tempfile = { workspace = true }
+# Exercise the router in-process via `tower::ServiceExt::oneshot`
+# (axum's official testing pattern) rather than binding a TCP port.
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"
+# Used by the export-evaluate integration test to mint a `ScopeId`
+# when building a `PortableConceptProfile` fixture.
+evidence_store = { path = "../evidence_store" }
+
+[lints]
+workspace = true

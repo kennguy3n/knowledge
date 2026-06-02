@@ -19,6 +19,7 @@ members = [
     "crates/observation_engine",
     "crates/permission_service",
     "crates/reasoning_engine",
+    "crates/substrate_server",
     "crates/sync_engine",
     "crates/synthesis_engine",
     "crates/synthesis_pipeline",
