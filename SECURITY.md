@@ -64,10 +64,36 @@ are tracked openly:
    macOS, Windows) and a threat model for master-key leakage — is
    now provided in [`docs/HOST_KEY_HANDLING.md`](docs/HOST_KEY_HANDLING.md).
 
+## Compliance and supply chain
+
+The substrate's capabilities are mapped to **GDPR**, **SOC 2**
+(CC1–CC9), and **HIPAA** technical safeguards in
+[`docs/COMPLIANCE.md`](docs/COMPLIANCE.md). That mapping cites the
+concrete code paths behind each control — cryptographic forgetting
+(`ffi::forget_scope`), data portability (`export_plane`), the
+proposal-only agent contract, the decay state machine, and the
+noise ring buffer — and is explicit about which controls are the
+responsibility of the embedding host rather than the substrate.
+
+The dependency supply chain is governed by
+[`docs/SUPPLY_CHAIN.md`](docs/SUPPLY_CHAIN.md): the `deny.toml`
+policy (no known advisories, no yanked crates, permissive
+license allow-list with no strong copyleft, crates.io-only
+sources), the direct-dependency inventory, and the
+`cargo-audit` / `cargo-deny` CI gates. A **CycloneDX SBOM** is
+generated for every workspace member on each CI run by the
+`sbom` job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+and published as the `knowledge-sbom-cyclonedx` artifact, giving
+every commit an auditable, machine-readable dependency manifest.
+
 ## Third-party audit
 
 The project has not yet undergone an independent security audit.
-The planned audit scope covers:
+As of 2026-Q2 no engagement has begun; the maintainers intend to
+commission an external review before the first stable (1.0)
+release, once the connector transport layer (see limitation 1
+above) graduates from fixture parsers to live traffic. The
+planned audit scope covers:
 
 - `crates/crypto/` — hybrid KEM combiner (X25519 + ML-KEM-768),
   HKDF key derivation, XChaCha20-Poly1305 AEAD usage, zeroize
@@ -125,6 +151,14 @@ adversarial tests exercising:
 - Performance: deep chains (500 hops), wide fan-outs (1 000
   tuples), and combined deep+wide graphs (50 × 10) complete
   within bounded time without stack overflow.
+
+Additional security-hardening suites extend this coverage:
+`crates/crypto/tests/security_hardening.rs` (ML-KEM-768 size and
+implicit-rejection invariants, scope-DEK rotation / forward
+secrecy, AEAD timing data-independence, zeroize verification) and
+`crates/evidence_store/tests/recovery_hardening.rs` (crash-recovery
+via tombstone replay, the full schema-migration chain, and
+ring-buffer FIFO eviction).
 
 These test suites run in CI (`cargo test --all --all-features`)
 and are designed to be re-run by an auditor. The AEAD and
