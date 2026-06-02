@@ -177,7 +177,8 @@ func TestBodyLimit(t *testing.T) {
 
 func TestRateLimiterPerIP(t *testing.T) {
 	t.Parallel()
-	rl := NewRateLimiter(1, 1, 1) // burst 1
+	rl := NewRateLimiter(1, 1, 1, nil) // burst 1, no trusted proxies
+	defer rl.Stop()
 	h := rl.PerIPMiddleware(http.HandlerFunc(ok))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -205,7 +206,8 @@ func TestRateLimiterPerIP(t *testing.T) {
 
 func TestRateLimiterPerTenant(t *testing.T) {
 	t.Parallel()
-	rl := NewRateLimiter(1, 1, 1) // burst 1
+	rl := NewRateLimiter(1, 1, 1, nil) // burst 1, no trusted proxies
+	defer rl.Stop()
 	h := rl.PerTenantMiddleware(http.HandlerFunc(ok))
 
 	// Requests carrying a tenant share that tenant's bucket regardless

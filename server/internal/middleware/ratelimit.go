@@ -11,17 +11,22 @@ import (
 )
 
 // RateLimiter enforces independent per-IP and per-tenant token-bucket
-// budgets. Buckets are created lazily and evicted after an idle
-// window to bound memory.
+// budgets. Buckets are created lazily and reclaimed by a background
+// sweeper after an idle window, bounding memory without paying an
+// eviction scan on the hot request path.
 type RateLimiter struct {
 	ipRPS     rate.Limit
 	tenantRPS rate.Limit
 	burst     int
 	idleTTL   time.Duration
+	trust     *ProxyTrust
 
 	mu       sync.Mutex
 	ipBucket map[string]*bucket
 	tnBucket map[string]*bucket
+
+	stopOnce sync.Once
+	done     chan struct{}
 }
 
 type bucket struct {
@@ -30,18 +35,52 @@ type bucket struct {
 }
 
 // NewRateLimiter builds a limiter with the given per-IP and per-tenant
-// refill rates (requests/second) and a shared burst size.
-func NewRateLimiter(ipRPS, tenantRPS float64, burst int) *RateLimiter {
+// refill rates (requests/second) and a shared burst size. trust governs
+// how the per-IP key is derived from a request (see [ProxyTrust]); a nil
+// trust ignores X-Forwarded-For and keys on the transport peer.
+//
+// A background goroutine reclaims idle buckets; call [RateLimiter.Stop]
+// to shut it down (e.g. on graceful server shutdown).
+func NewRateLimiter(ipRPS, tenantRPS float64, burst int, trust *ProxyTrust) *RateLimiter {
 	if burst < 1 {
 		burst = 1
 	}
-	return &RateLimiter{
+	rl := &RateLimiter{
 		ipRPS:     rate.Limit(ipRPS),
 		tenantRPS: rate.Limit(tenantRPS),
 		burst:     burst,
 		idleTTL:   10 * time.Minute,
+		trust:     trust,
 		ipBucket:  make(map[string]*bucket),
 		tnBucket:  make(map[string]*bucket),
+		done:      make(chan struct{}),
+	}
+	go rl.sweepLoop()
+	return rl
+}
+
+// Stop terminates the background eviction sweeper. It is safe to call
+// more than once.
+func (rl *RateLimiter) Stop() {
+	rl.stopOnce.Do(func() { close(rl.done) })
+}
+
+// sweepLoop periodically reclaims idle buckets from both maps. Running
+// eviction on a timer (rather than on every request) keeps allow() O(1)
+// regardless of how many distinct keys are tracked.
+func (rl *RateLimiter) sweepLoop() {
+	t := time.NewTicker(rl.idleTTL / 2)
+	defer t.Stop()
+	for {
+		select {
+		case <-rl.done:
+			return
+		case now := <-t.C:
+			rl.mu.Lock()
+			rl.evictLocked(rl.ipBucket, now)
+			rl.evictLocked(rl.tnBucket, now)
+			rl.mu.Unlock()
+		}
 	}
 }
 
@@ -52,7 +91,7 @@ func NewRateLimiter(ipRPS, tenantRPS float64, burst int) *RateLimiter {
 // with a Retry-After header.
 func (rl *RateLimiter) PerIPMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !rl.allow(rl.ipBucket, clientIP(r), rl.ipRPS) {
+		if !rl.allow(rl.ipBucket, rl.trust.ClientIP(r), rl.ipRPS) {
 			rl.reject(w)
 			return
 		}
@@ -79,14 +118,12 @@ func (rl *RateLimiter) PerTenantMiddleware(next http.Handler) http.Handler {
 func (rl *RateLimiter) allow(m map[string]*bucket, key string, limit rate.Limit) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	now := time.Now()
-	rl.evictLocked(m, now)
 	b, ok := m[key]
 	if !ok {
 		b = &bucket{lim: rate.NewLimiter(limit, rl.burst)}
 		m[key] = b
 	}
-	b.seen = now
+	b.seen = time.Now()
 	return b.lim.Allow()
 }
 

@@ -9,8 +9,11 @@
 //! never accidentally logged via the derived `Debug`.
 
 use std::net::SocketAddr;
+use std::path::Path;
 
 use zeroize::Zeroizing;
+
+use crypto::{MasterKey, MASTER_KEY_LEN};
 
 /// Environment variable naming the loopback bind address.
 pub const ENV_BIND_ADDR: &str = "KNOWLEDGE_SUBSTRATE_ADDR";
@@ -18,6 +21,10 @@ pub const ENV_BIND_ADDR: &str = "KNOWLEDGE_SUBSTRATE_ADDR";
 pub const ENV_STORE_PATH: &str = "KNOWLEDGE_STORE_PATH";
 /// Environment variable carrying the 64-hex-char master key.
 pub const ENV_MASTER_KEY: &str = "KNOWLEDGE_MASTER_KEY";
+/// Environment variable naming the SQLCipher-backed permission-tuple
+/// store path. When unset it defaults to a `permissions.db` sibling of
+/// the evidence store (see [`ServerConfig::from_env`]).
+pub const ENV_PERMISSIONS_PATH: &str = "KNOWLEDGE_PERMISSIONS_PATH";
 
 /// Default loopback bind address — internal only, never exposed to
 /// the public network. The Go API gateway is the only client.
@@ -65,6 +72,39 @@ pub struct ServerConfig {
     /// 64-hex-char master key forwarded verbatim to
     /// [`ffi::open_store`].
     pub master_key_hex: Zeroizing<String>,
+    /// Filesystem path of the SQLCipher-backed permission-tuple store.
+    /// Permission grants are mirrored here so they survive a restart.
+    pub permissions_path: String,
+}
+
+/// Decode a 64-hex-char string into a 32-byte [`MasterKey`]. The bytes
+/// are returned in a [`Zeroizing`] wrapper so the parsed key is wiped
+/// from the heap on drop. Returns `None` if `hex` is not exactly
+/// [`MASTER_KEY_HEX_LEN`] ASCII-hex characters.
+#[must_use]
+pub fn decode_master_key(hex: &str) -> Option<Zeroizing<MasterKey>> {
+    if hex.len() != MASTER_KEY_HEX_LEN {
+        return None;
+    }
+    let mut out: MasterKey = [0u8; MASTER_KEY_LEN];
+    for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+        let s = std::str::from_utf8(chunk).ok()?;
+        out[i] = u8::from_str_radix(s, 16).ok()?;
+    }
+    Some(Zeroizing::new(out))
+}
+
+/// Default permission-store path derived from the evidence-store path:
+/// a `permissions.db` file in the same directory. Falls back to a bare
+/// `permissions.db` when `store_path` has no parent component.
+fn default_permissions_path(store_path: &str) -> String {
+    Path::new(store_path)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map_or_else(
+            || "permissions.db".to_string(),
+            |dir| dir.join("permissions.db").to_string_lossy().into_owned(),
+        )
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -72,6 +112,7 @@ impl std::fmt::Debug for ServerConfig {
         f.debug_struct("ServerConfig")
             .field("bind_addr", &self.bind_addr)
             .field("store_path", &self.store_path)
+            .field("permissions_path", &self.permissions_path)
             .field("master_key_hex", &"<redacted>")
             .finish()
     }
@@ -116,10 +157,14 @@ impl ServerConfig {
             return Err(ConfigError::BadMasterKey(ENV_MASTER_KEY));
         }
 
+        let permissions_path = non_empty_env(ENV_PERMISSIONS_PATH)
+            .unwrap_or_else(|| default_permissions_path(&store_path));
+
         Ok(Self {
             bind_addr,
             store_path,
             master_key_hex,
+            permissions_path,
         })
     }
 }
@@ -164,9 +209,27 @@ mod tests {
             bind_addr: DEFAULT_BIND_ADDR.parse().unwrap(),
             store_path: "/tmp/x.db".into(),
             master_key_hex: Zeroizing::new("a".repeat(MASTER_KEY_HEX_LEN)),
+            permissions_path: "/tmp/permissions.db".into(),
         };
         let rendered = format!("{cfg:?}");
         assert!(rendered.contains("<redacted>"));
         assert!(!rendered.contains(&"a".repeat(MASTER_KEY_HEX_LEN)));
+    }
+
+    #[test]
+    fn decode_master_key_round_trips() {
+        let key = decode_master_key(&"ab".repeat(32)).expect("valid hex");
+        assert_eq!(*key, [0xAB; 32]);
+        assert!(decode_master_key("ab").is_none());
+        assert!(decode_master_key(&"zz".repeat(32)).is_none());
+    }
+
+    #[test]
+    fn default_permissions_path_is_store_sibling() {
+        assert_eq!(
+            default_permissions_path("/var/lib/knowledge/substrate.db"),
+            "/var/lib/knowledge/permissions.db"
+        );
+        assert_eq!(default_permissions_path("substrate.db"), "permissions.db");
     }
 }

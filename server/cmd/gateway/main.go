@@ -112,6 +112,10 @@ func run() error {
 		ready["nats"] = true
 	}
 
+	rateLimiter := middleware.NewRateLimiter(cfg.RateIPRPS, cfg.RateTenantRPS, cfg.RateBurst,
+		middleware.NewProxyTrust(cfg.TrustedProxies))
+	defer rateLimiter.Stop()
+
 	router := gateway.NewRouter(gateway.Deps{
 		Substrate:   sub,
 		Connectors:  connSvc,
@@ -120,7 +124,7 @@ func run() error {
 		Exports:     exportSvc,
 		Audit:       auditSvc,
 		Auth:        middleware.NewAuthenticator(cfg.APIKey, cfg.JWTSecret),
-		RateLimiter: middleware.NewRateLimiter(cfg.RateIPRPS, cfg.RateTenantRPS, cfg.RateBurst),
+		RateLimiter: rateLimiter,
 		CORSOrigins: cfg.CORSOrigins,
 		Log:         log,
 		Ready:       ready,
@@ -131,8 +135,11 @@ func run() error {
 		Handler:           router,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      0, // unbounded: SSE synthesis streams are long-lived
-		IdleTimeout:       120 * time.Second,
+		// Bounded write timeout protects every REST route from slow-read
+		// clients. The long-lived SSE synthesis stream opts out per-request
+		// by clearing its write deadline (see gateway.streamSynthesis).
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	errCh := make(chan error, 1)

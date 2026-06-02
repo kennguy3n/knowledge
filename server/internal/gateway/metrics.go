@@ -72,3 +72,10 @@ func (s *statusRecorder) Flush() {
 		f.Flush()
 	}
 }
+
+// Unwrap exposes the wrapped ResponseWriter so [http.ResponseController]
+// can reach deadline (and other) methods on the underlying connection —
+// e.g. the SSE handler clearing its per-request write deadline.
+func (s *statusRecorder) Unwrap() http.ResponseWriter {
+	return s.ResponseWriter
+}

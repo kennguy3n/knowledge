@@ -53,7 +53,7 @@ type PipelineResult struct {
 // succeed while Session B's endpoint is unmerged.
 func (s *Service) runPipeline(ctx context.Context, instanceID, scopeID, kind string, refs []string) (PipelineResult, error) {
 	var res PipelineResult
-	for _, ref := range refs {
+	for i, ref := range refs {
 		raw, err := s.sub.FetchContent(ctx, substrate.FetchContentRequest{
 			InstanceID: instanceID,
 			ContentRef: ref,
@@ -61,7 +61,10 @@ func (s *Service) runPipeline(ctx context.Context, instanceID, scopeID, kind str
 		if err != nil {
 			if isNotImplemented(err) {
 				res.Unavailable = true
-				res.Skipped++
+				// Short-circuit: count the current ref plus every
+				// not-yet-attempted ref as skipped so the invariant
+				// Fetched+Ingested+Skipped == len(refs) holds.
+				res.Skipped += len(refs) - i
 				return res, nil
 			}
 			return res, err

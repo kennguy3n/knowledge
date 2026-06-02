@@ -96,6 +96,13 @@ func (h *handlers) streamSynthesis(w http.ResponseWriter, r *http.Request, id st
 		httpx.WriteError(w, httpx.Internal("streaming unsupported"))
 		return
 	}
+	// SSE streams are long-lived, so opt this request out of the
+	// server's bounded WriteTimeout by clearing the write deadline. The
+	// zero deadline means "no timeout". Failure is non-fatal (e.g. the
+	// test ResponseWriter doesn't support deadlines); the streamMaxPolls
+	// cap still bounds the stream's lifetime.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -106,6 +113,11 @@ func (h *handlers) streamSynthesis(w http.ResponseWriter, r *http.Request, id st
 	ctx := r.Context()
 
 	for i := 0; i < streamMaxPolls; i++ {
+		// Emit a comment heartbeat before the (potentially slow)
+		// status fetch so bytes keep flowing and HTTP intermediaries
+		// with short idle timeouts don't drop a stream that is merely
+		// waiting on a slow substrate poll.
+		writeSSEComment(w, flusher, "keepalive")
 		raw, err := h.sub.SynthesisStatus(ctx, id)
 		if err != nil {
 			writeSSE(w, flusher, "error", json.RawMessage(`{"message":"status unavailable"}`))
@@ -141,6 +153,14 @@ func writeSSE(w http.ResponseWriter, f http.Flusher, event string, data json.Raw
 	f.Flush()
 }
 
+// writeSSEComment writes an SSE comment line (a frame beginning with
+// ':'), used as a keepalive. Comments are ignored by SSE clients but
+// keep the connection warm through idle-sensitive proxies.
+func writeSSEComment(w http.ResponseWriter, f http.Flusher, text string) {
+	_, _ = w.Write([]byte(": " + text + "\n\n"))
+	f.Flush()
+}
+
 // isTerminalStatus reports whether a synthesis status document
 // represents a completed or failed run.
 func isTerminalStatus(raw json.RawMessage) bool {
@@ -151,7 +171,9 @@ func isTerminalStatus(raw json.RawMessage) bool {
 	if err := json.Unmarshal(raw, &probe); err != nil {
 		return true // undecodable: stop streaming rather than loop forever
 	}
-	s := strings.ToLower(probe.Status + probe.State)
+	// Join with a separator so a keyword can never form across the
+	// Status/State boundary (e.g. "incom" + "plete").
+	s := strings.ToLower(probe.Status + " " + probe.State)
 	return strings.Contains(s, "complete") || strings.Contains(s, "fail") ||
 		strings.Contains(s, "done") || strings.Contains(s, "error")
 }

@@ -35,6 +35,11 @@ const (
 	EnvRateBurst = "KNOWLEDGE_RATE_BURST"
 	// EnvCORSOrigins is a comma-separated allow-list of origins.
 	EnvCORSOrigins = "KNOWLEDGE_CORS_ORIGINS"
+	// EnvTrustedProxies is a comma-separated list of trusted reverse-proxy
+	// CIDRs or IPs. When unset, X-Forwarded-For is ignored and the per-IP
+	// rate limiter keys on the transport peer (secure default for a
+	// directly-exposed gateway).
+	EnvTrustedProxies = "KNOWLEDGE_TRUSTED_PROXIES"
 	// EnvSyncInterval is the default per-connector sync cadence.
 	EnvSyncInterval = "KNOWLEDGE_SYNC_INTERVAL"
 	// EnvPublicBaseURL is the externally reachable base URL, used to
@@ -78,6 +83,9 @@ type Config struct {
 	RateBurst int
 	// CORSOrigins is the parsed origin allow-list. Empty means "*".
 	CORSOrigins []string
+	// TrustedProxies is the parsed list of trusted reverse-proxy CIDRs/IPs
+	// from which X-Forwarded-For is honoured. Empty means trust none.
+	TrustedProxies []string
 	// SyncInterval is the default connector sync cadence.
 	SyncInterval time.Duration
 	// PublicBaseURL is the externally reachable base URL.
@@ -118,6 +126,9 @@ func Load() (*Config, error) {
 	if origins := os.Getenv(EnvCORSOrigins); origins != "" {
 		c.CORSOrigins = splitTrim(origins)
 	}
+	if proxies := os.Getenv(EnvTrustedProxies); proxies != "" {
+		c.TrustedProxies = splitTrim(proxies)
+	}
 	return c, nil
 }
 
@@ -142,6 +153,7 @@ func (c *Config) Redacted() map[string]any {
 		"rate_tenant_rps": c.RateTenantRPS,
 		"rate_burst":      c.RateBurst,
 		"cors_origins":    c.CORSOrigins,
+		"trusted_proxies": c.TrustedProxies,
 		"sync_interval":   c.SyncInterval.String(),
 		"public_base_url": c.PublicBaseURL,
 	}

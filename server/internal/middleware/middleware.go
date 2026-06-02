@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"crypto/subtle"
-	"net"
 	"net/http"
 	"strings"
 
@@ -173,18 +172,3 @@ func bearerToken(r *http.Request) string {
 	return strings.TrimSpace(h[len(prefix):])
 }
 
-// clientIP extracts the client IP, honouring X-Forwarded-For (first
-// hop) then falling back to the remote address.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if comma := strings.IndexByte(xff, ','); comma >= 0 {
-			return strings.TrimSpace(xff[:comma])
-		}
-		return strings.TrimSpace(xff)
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}

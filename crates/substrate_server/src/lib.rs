@@ -257,7 +257,7 @@ async fn permission_grant(
     Json(tuple): Json<RelationTuple>,
 ) -> ApiResult<StatusCode> {
     let mut guard = st.permissions.lock().map_err(|_| permission_poisoned())?;
-    let inserted = guard.store.upsert(tuple);
+    let inserted = guard.store.upsert(tuple).map_err(map_permission_err)?;
     // Idempotent: a repeat grant is a no-op `200`; a fresh grant is
     // `201 Created`.
     Ok(if inserted {
@@ -274,17 +274,13 @@ async fn permission_revoke(
     Json(tuple): Json<RelationTuple>,
 ) -> ApiResult<StatusCode> {
     let mut guard = st.permissions.lock().map_err(|_| permission_poisoned())?;
-    if !guard.store.contains(&tuple) {
+    if !guard.store.store().contains(&tuple) {
         return Err(ApiError(FfiError::NotFound {
             kind: "relation_tuple".to_string(),
             id: format!("{:?}", tuple.relation),
         }));
     }
-    guard.store.remove(&tuple).map_err(|e| {
-        ApiError(FfiError::Evidence {
-            message: e.to_string(),
-        })
-    })?;
+    guard.store.remove(&tuple).map_err(map_permission_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -296,7 +292,7 @@ async fn permission_check(
 ) -> ApiResult<Json<PermissionCheckResponse>> {
     let guard = st.permissions.lock().map_err(|_| permission_poisoned())?;
     let allowed = check_permission(
-        &guard.store,
+        guard.store.store(),
         &guard.namespaces,
         tuple.object,
         tuple.relation,
@@ -311,6 +307,22 @@ fn permission_poisoned() -> ApiError {
     ApiError(FfiError::Unavailable {
         subsystem: "permission-store (mutex poisoned)".to_string(),
     })
+}
+
+/// Map a [`permission_service::PermissionError`] (raised by a
+/// persistent-store mutation) onto the wire error type. `NotFound`
+/// becomes a `404`; everything else is a persistence/`Unavailable`
+/// failure of the permission subsystem.
+fn map_permission_err(e: permission_service::PermissionError) -> ApiError {
+    match e {
+        permission_service::PermissionError::NotFound => ApiError(FfiError::NotFound {
+            kind: "relation_tuple".to_string(),
+            id: String::new(),
+        }),
+        other => ApiError(FfiError::Unavailable {
+            subsystem: format!("permission-store: {other}"),
+        }),
+    }
 }
 
 // ────────────────────────────── Crypto ──────────────────────────────
@@ -518,7 +530,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .map_err(|_| "substrate_server: store-open thread panicked")??;
     tracing::info!(%bind_addr, "substrate_server: evidence store opened, binding loopback");
 
-    let state = AppState::new(handle, config);
+    let state = AppState::new(handle, config)?;
     let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;

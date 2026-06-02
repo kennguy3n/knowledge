@@ -23,10 +23,12 @@ const TEST_MASTER_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0
 fn test_state() -> (AppState, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let store_path = dir.path().join("substrate.db");
+    let permissions_path = dir.path().join("permissions.db");
     let config = ServerConfig {
         bind_addr: "127.0.0.1:0".parse().expect("addr"),
         store_path: store_path.to_string_lossy().into_owned(),
         master_key_hex: zeroize::Zeroizing::new(TEST_MASTER_KEY.to_string()),
+        permissions_path: permissions_path.to_string_lossy().into_owned(),
     };
     let config = Arc::new(config);
     // `open_runtime` may build and drop a short-lived Tokio runtime
@@ -40,7 +42,10 @@ fn test_state() -> (AppState, tempfile::TempDir) {
         .join()
         .expect("open-store thread")
         .expect("open store");
-    (AppState::new(handle, config), dir)
+    (
+        AppState::new(handle, config).expect("open permission store"),
+        dir,
+    )
 }
 
 /// Send a JSON request through the router and return `(status, body)`.
@@ -360,4 +365,56 @@ async fn export_evaluate_empty_profile_approves_nothing() {
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(body["approved"].as_array().unwrap().is_empty());
     assert!(body["rejected"].as_array().unwrap().is_empty());
+}
+
+/// A permission grant must survive re-opening the permission store
+/// (i.e. a substrate_server restart). Exercises [`PermissionState`]
+/// directly so it does not collide with the global evidence-store
+/// handle registry by re-opening the same `RuntimeHandle`.
+#[test]
+fn permission_grants_persist_across_reopen() {
+    use permission_service::{
+        check_permission, ObjectRef, ObjectType, Relation, RelationTuple, SubjectRef, SubjectType,
+    };
+    use substrate_server::config::decode_master_key;
+    use substrate_server::state::PermissionState;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("permissions.db");
+    let path = path.to_string_lossy().into_owned();
+    let key = decode_master_key(TEST_MASTER_KEY).expect("valid key");
+
+    let tenant = uuid::Uuid::new_v4();
+    let user = uuid::Uuid::new_v4();
+    let tuple = RelationTuple::new(
+        ObjectRef::new(ObjectType::Tenant, tenant),
+        Relation::Owner,
+        SubjectRef::direct(SubjectType::User, user),
+    );
+
+    // First instance: grant, then drop (flushing to SQLCipher).
+    {
+        let mut perms = PermissionState::open(&path, &key).expect("open #1");
+        assert!(perms.store.upsert(tuple).expect("upsert"));
+        assert!(check_permission(
+            perms.store.store(),
+            &perms.namespaces,
+            tuple.object,
+            tuple.relation,
+            tuple.subject,
+        ));
+    }
+
+    // Second instance: rehydrated from disk — the grant is still there.
+    let perms = PermissionState::open(&path, &key).expect("open #2");
+    assert!(
+        check_permission(
+            perms.store.store(),
+            &perms.namespaces,
+            tuple.object,
+            tuple.relation,
+            tuple.subject,
+        ),
+        "grant should survive reopening the permission store"
+    );
 }
