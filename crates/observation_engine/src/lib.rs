@@ -20,6 +20,7 @@
 pub mod citation;
 pub mod document;
 pub mod error;
+pub mod eval;
 pub mod extractor;
 pub mod interrogatives;
 pub mod language;
