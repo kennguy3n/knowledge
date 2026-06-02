@@ -1338,7 +1338,7 @@ impl EvidenceStore {
     ///
     /// Concretely, a 2-codepoint CJK query like `天気` — which the
     /// v14 trigram lane could not serve — now returns matches via
-    /// the bigram lane ( closes the documented
+    /// the bigram lane (closing the documented 2-codepoint recall
     /// floor). A mixed query like `"to OR 良い天気"` still returns
     /// the `unicode61` hit on `to` even though the trigram branch
     /// rejects the 2-char `to` token, AND additionally picks up CJK

@@ -44,7 +44,7 @@
 //! (update consecutive_failures + next_attempt_at) phases. The
 //! actual `sync_connector` call runs UNLOCKED — the entry point
 //! itself walks the substrate's own three-phase discipline (Step 1
-//! snapshot, HTTP, result) so any deadlock here
+//! snapshot, Step 2 HTTP, Step 3 result) so any deadlock here
 //! would also have caused one for host-driven syncs.
 //!
 //! **4. `close_store` pre-drain.** `close_store` consumes the
@@ -1093,11 +1093,11 @@ fn run_scheduler_loop(
 /// # Timestamp discipline (load-bearing — read before refactoring)
 ///
 /// `now = Utc::now()` is captured ONCE at tick start and used
-/// only for the due-instance check. captures a
+/// only for the Step 1 due-instance check. Step 3 captures a
 /// FRESH `dispatch_completed_at = Utc::now()` after each
 /// `sync_connector` call returns and uses that for the
 /// `next_attempt_at` arithmetic. Reusing the tick-start `now`
-/// for would (a) schedule retries in the past whenever
+/// for Step 3 would (a) schedule retries in the past whenever
 /// the backoff delay is shorter than the cumulative dispatch
 /// time of preceding instances in the same tick — defeating
 /// exponential backoff entirely — and (b) synchronise every
@@ -1237,7 +1237,7 @@ fn run_one_tick(
     // Each `sync_connector` call walks the substrate's three-phase
     // discipline itself; the scheduler is just another client.
     //
-    // below uses a FRESH `Utc::now()` captured AFTER each
+    // Step 3 below uses a FRESH `Utc::now()` captured AFTER each
     // dispatch returns — NOT the tick-start `now`. With small
     // intervals and slow upstream providers (e.g. 1 s `sync_interval`
     // against a 10 s dispatch) reusing the tick-start `now` would

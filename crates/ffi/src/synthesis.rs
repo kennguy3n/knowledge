@@ -3456,8 +3456,8 @@ mod tests {
             // synthesis_object rows, so this is a sanity check
             // on the two paths staying in sync.
             //
-            // earlier the runtime stores objects in
-            // per-scope sub-maps; `synthesis_object_by_window` is
+            // The runtime stores objects in per-scope sub-maps;
+            // `synthesis_object_by_window` is
             // the cross-scope lookup that walks every bucket, so
             // it's the right tool for asserting "no inner map
             // contains this window".
@@ -4779,8 +4779,8 @@ mod tests {
         let scope_str = scope.as_uuid().to_string();
 
         // Arm the one-shot failure on the next `with_transaction`
-        // call — that will be earlier's apply commit ( flush
-        // uses `save_memory_blob` autocommit; dispatch does
+        // call — that will be the apply commit (the synthesis
+        // flush uses `save_memory_blob` autocommit; dispatch does
         // not touch the store).
         with_runtime(handle, |rt| {
             rt.store()

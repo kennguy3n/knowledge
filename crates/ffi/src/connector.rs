@@ -607,8 +607,9 @@ pub fn refresh_connector_token(
 /// `last_synced_at`. On failure the state is marked
 /// [`SyncStatus::Failed`] with the diagnostic message.
 ///
-/// Before the HTTP dispatch ( in the locking sequence — see
-/// the module-level docs), `sync_connector` transparently runs the
+/// Before the HTTP dispatch (the unlocked phase in the locking
+/// sequence — see the module-level docs), `sync_connector`
+/// transparently runs the
 /// same three-phase refresh path as [`refresh_connector_token`]
 /// when the cached OAuth2 token is within `AUTO_REFRESH_SKEW_SECS`
 /// of expiry. This recovers from the

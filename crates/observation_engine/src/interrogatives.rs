@@ -14,11 +14,11 @@
 //! ## Cross-references
 //!
 //! * `docs/DESIGN.md` §3.2 — observation extractor responsibilities.
-//! * `docs/MULTILINGUAL.md` ( spec, the multilingual
-//!   `LexiconRegistry` will ship) — this table is the
-//!   precursor / minimal viable version; once lands, the
-//!   `LexiconRegistry` should subsume this map alongside the
-//!   decision / task keyword lists.
+//! * `docs/MULTILINGUAL.md` (the multilingual `LexiconRegistry`
+//!   spec) — this table is the precursor / minimal viable
+//!   version; once the registry lands, the `LexiconRegistry`
+//!   should subsume this map alongside the decision / task
+//!   keyword lists.
 //!
 //! ## Matching strategy
 //!
@@ -55,8 +55,8 @@ pub enum InterrogativeMatch {
     /// exactly equal one of the interrogatives. Used for languages
     /// where the question word is canonically sentence-initial and
     /// word boundaries are clear from whitespace (English, German,
-    /// Romance languages, Indonesian). Arabic used `FirstToken`
-    /// before but now uses
+    /// Romance languages, Indonesian). Arabic originally used
+    /// `FirstToken` but now uses
     /// [`Self::FirstTokenWithArabicClitics`] to recover the
     /// proclitic prefix forms (`وكيف`, `فمتى`, `بأي`,
     /// `لمن`) that the bare FirstToken matcher misses.
@@ -934,7 +934,7 @@ mod tests {
         // combining marks (virama, tsheg, coeng, asat)
         // interfere with the FirstToken tokeniser and which
         // additionally permits non-initial interrogative
-        // placement. As of this is:
+        // placement. Currently this is:
         // - CJK / Thai (no inter-word whitespace at all)
         // - Hindi (Devanagari virama)
         // - Tibetan (tsheg syllable-separator, stacked

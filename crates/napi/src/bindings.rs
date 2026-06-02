@@ -500,7 +500,7 @@ pub fn js_replay_synthesis(
 }
 
 /// Enumerate the archived synthesis-object versions for
-/// `synthesisId` , newest first. The latest
+/// `synthesisId`, newest first. The latest
 /// version is included as the first entry with
 /// `isLatest = true`. Hosts that need to paginate the history
 /// without a separate `synthesisStatus` round trip should use

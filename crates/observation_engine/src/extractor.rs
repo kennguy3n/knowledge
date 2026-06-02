@@ -1365,10 +1365,10 @@ impl LexiconExtractor {
             // contains a polite-request opener like Japanese
             // `お願い`, Spanish `por favor` or Vietnamese
             // `vui lòng` that would otherwise route to the Task
-            // class. earlier the inline English keyword set
+            // class. The earlier inline English keyword set
             // never overlapped this way (English `please` is in
             // the task list but rarely co-occurs with a `?`-
-            // terminator), but per-language lexicons
+            // terminator), but the per-language lexicons
             // include polite-request openers that ARE common in
             // interrogative sentences, so question-first
             // precedence is required to avoid mis-routing.
@@ -1910,8 +1910,8 @@ mod tests {
 
     #[test]
     fn cjk_fact_shaped_without_whitespace() {
-        // Regression: earlier the fact gate required a
-        // space character. A CJK declarative sentence has no
+        // Regression: an earlier version of the fact gate required
+        // a space character. A CJK declarative sentence has no
         // spaces, so it would have been silently dropped. Verify
         // CJK declaratives now produce Fact candidates.
         let scope = ScopeId::new_v4();

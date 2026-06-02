@@ -581,7 +581,7 @@ pub fn run(
         bench_execute,
     );
 
-    report.stages.push(stage);
+    report.add_stage(stage);
 }
 
 fn build_namespace_registry() -> NamespaceRegistry {
