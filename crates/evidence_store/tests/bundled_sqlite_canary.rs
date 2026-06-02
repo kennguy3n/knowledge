@@ -103,20 +103,28 @@ fn bundled_sqlite_source_id_matches_pin() {
 /// Pin the `unicode61` tokeniser as the substrate sees it. The
 /// multilingual lexical lane delegates Latin / Greek / Cyrillic /
 /// Devanagari / Arabic / Hebrew / etc. to this tokeniser via
-/// `tokenize = "unicode61 remove_diacritics 1"` (see
-/// `crates/evidence_store/src/schema.rs`), so any change to its
-/// token boundaries or case-folding rules would propagate directly
-/// to recall@k.
+/// `tokenize = 'unicode61 remove_diacritics 2'` (see
+/// `crates/evidence_store/src/schema.rs:314` and `:356`), so any
+/// change to its token boundaries or case-folding rules would
+/// propagate directly to recall@k.
+///
+/// `remove_diacritics 2` is the more aggressive level that strips
+/// diacritics across the entire combining-sequence space (level 1
+/// only strips a fixed legacy set inherited from SQLite 3.x's
+/// original implementation); the substrate uses level 2 so
+/// queries against bodies with combining marks (Vietnamese tone
+/// marks, Arabic harakat, Hebrew niqqud, etc.) still round-trip
+/// when the query is unmarked.
 #[test]
 fn unicode61_tokeniser_emits_expected_tokens_for_canary_corpus() {
     let conn = Connection::open_in_memory().expect("open in-memory db");
     // Set up an FTS5 vtable with the exact tokeniser config we use
     // in production. The `tokenize` clause here mirrors what the
-    // substrate's schema emits (see schema.rs around lines 130-200).
+    // substrate's schema emits at `schema.rs:314` and `schema.rs:356`.
     conn.execute_batch(
         "CREATE VIRTUAL TABLE canary USING fts5(
             body,
-            tokenize = 'unicode61 remove_diacritics 1'
+            tokenize = 'unicode61 remove_diacritics 2'
         );",
     )
     .expect("create unicode61 fts5 vtable");
@@ -186,17 +194,29 @@ fn unicode61_tokeniser_emits_expected_tokens_for_canary_corpus() {
 
 /// Pin the `trigram` tokeniser. The multilingual lexical lane uses
 /// trigram-tokenised tables for the second recall lane on scripts
-/// where unicode61 over-segments (Tibetan / Khmer / Myanmar / Lao,
-/// per Phase 1.5). Trigram-tokeniser behaviour is more sensitive
-/// to SQLite point releases than unicode61's because the trigram
-/// tokeniser has shipped multiple bugfixes in the 3.4x line.
+/// where unicode61 over-segments (CJK / Thai / Tibetan / Khmer /
+/// Myanmar / Lao, per Phases 1.2 / 1.5). Trigram-tokeniser
+/// behaviour is more sensitive to SQLite point releases than
+/// unicode61's because the trigram tokeniser has shipped multiple
+/// bugfixes in the 3.4x line.
+///
+/// Note: the trigram tokeniser intentionally takes **no**
+/// arguments — `remove_diacritics` is a `unicode61`-only option
+/// and the production schema (`schema.rs:329`) reflects this.
+/// SQLCipher 4.6.1 / SQLite 3.46.1 silently accepts unknown
+/// options on `trigram` (we verified this empirically; specifying
+/// `remove_diacritics N` does not error but is a no-op), so this
+/// canary mirrors the production schema exactly to make the
+/// no-op-vs-supported distinction unambiguous.
 #[test]
 fn trigram_tokeniser_recalls_substring_for_canary_corpus() {
     let conn = Connection::open_in_memory().expect("open in-memory db");
     conn.execute_batch(
+        // Match production exactly: `tokenize = 'trigram'`, no
+        // options. See `crates/evidence_store/src/schema.rs:329`.
         "CREATE VIRTUAL TABLE canary_tri USING fts5(
             body,
-            tokenize = 'trigram remove_diacritics 1'
+            tokenize = 'trigram'
         );",
     )
     .expect("create trigram fts5 vtable");
@@ -236,4 +256,48 @@ fn trigram_tokeniser_recalls_substring_for_canary_corpus() {
              procedure in the module-level docs of `bundled_sqlite_canary.rs`."
         );
     }
+}
+
+/// Pin SQLite's behaviour around the trigram tokeniser's
+/// option-parsing surface. The doc comment on
+/// `trigram_tokeniser_recalls_substring_for_canary_corpus` claims
+/// SQLCipher 4.6.1 / SQLite 3.46.1 silently accepts unknown
+/// options on `trigram` (treating them as no-ops rather than
+/// errors). This test pins that behaviour so a future SQLite
+/// version that tightens the parser to error on unknown options
+/// surfaces immediately — important because if it ever does, any
+/// FTS5 schema in the substrate that mistakenly passes options to
+/// a non-unicode61 tokeniser would start failing schema creation
+/// at startup, and we'd rather catch that here than at runtime in
+/// the field.
+///
+/// If this assertion fires, the right response is *not* to change
+/// what we do in the substrate (we already match production
+/// schema), but to update the doc on
+/// `trigram_tokeniser_recalls_substring_for_canary_corpus` so
+/// future maintainers don't pattern-match the empirical claim.
+#[test]
+fn trigram_tokeniser_silently_accepts_unknown_options() {
+    let conn = Connection::open_in_memory().expect("open in-memory db");
+    // The `remove_diacritics` option is unicode61-specific; the
+    // trigram tokeniser doesn't recognise it. We expect SQLCipher
+    // 4.6.1 to accept the unknown option as a no-op rather than
+    // erroring out at CREATE time.
+    let result = conn.execute_batch(
+        "CREATE VIRTUAL TABLE canary_tri_unknown USING fts5(
+            body,
+            tokenize = 'trigram remove_diacritics 1'
+        );",
+    );
+    assert!(
+        result.is_ok(),
+        "Expected SQLite to silently accept the unknown \
+         `remove_diacritics` option on the trigram tokeniser \
+         (it's a unicode61-only option), but CREATE failed with: \
+         {result:?}. If this assertion fires, SQLite has tightened \
+         its FTS5 option parser. Audit any FTS5 schema in the \
+         substrate that passes options to non-unicode61 tokenisers, \
+         and update the doc on \
+         `trigram_tokeniser_recalls_substring_for_canary_corpus`."
+    );
 }
