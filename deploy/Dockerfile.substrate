@@ -1,0 +1,29 @@
+# ── Builder ──────────────────────────────────────────────────────
+FROM rust:1.85 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libssl-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+
+# Build the substrate_server binary in release mode.
+RUN cargo build --release --bin substrate_server \
+    && strip /src/target/release/substrate_server
+
+# ── Runtime ──────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/target/release/substrate_server /usr/local/bin/substrate_server
+
+EXPOSE 9090
+ENTRYPOINT ["substrate_server"]

@@ -1,0 +1,92 @@
+groups:
+  - name: knowledge-alerts
+    rules:
+      # ── KnowledgeHighErrorRate ────────────────────────────────
+      - alert: KnowledgeHighErrorRate
+        expr: |
+          (
+            rate(knowledge_errors_total[5m])
+            / on() group_left()
+            (rate(knowledge_ingest_total[5m]) + rate(knowledge_query_total[5m]) + 1e-10)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Error rate exceeds 5% for 5 minutes"
+          description: >-
+            The combined error rate across ingest and query surfaces has
+            exceeded 5% for the last 5 minutes. Check
+            knowledge_errors_by_kind_* for per-kind breakdown.
+          runbook_url: "docs/OPERATOR_GUIDE.md#knowledgehigherrorrate"
+
+      # ── KnowledgeSubsystemDown ───────────────────────────────
+      - alert: KnowledgeSubsystemDown
+        expr: knowledge_subsystem_status == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Subsystem {{ $labels.subsystem }} is down"
+          description: >-
+            The {{ $labels.subsystem }} subsystem has reported
+            status == 0 (Unavailable) for more than 2 minutes.
+          runbook_url: "docs/OPERATOR_GUIDE.md#knowledgesubsystemdown"
+
+      # ── KnowledgeSynthesisBacklog ────────────────────────────
+      - alert: KnowledgeSynthesisBacklog
+        expr: knowledge_stuck_pending_window_recovered_total > 0 and rate(knowledge_synthesis_triggered_total[30m]) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Synthesis windows stuck in Pending for 30 minutes"
+          description: >-
+            There are pending synthesis windows that have not been
+            processed in the last 30 minutes. The synthesis pipeline
+            may be stalled.
+          runbook_url: "docs/OPERATOR_GUIDE.md#knowledgesynthesisbacklog"
+
+      # ── KnowledgeConnectorFailing ────────────────────────────
+      - alert: KnowledgeConnectorFailing
+        expr: increase(knowledge_sync_connector_failed_total[15m]) >= 3
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Connector has 3+ consecutive sync failures"
+          description: >-
+            A connector has experienced 3 or more sync failures in the
+            last 15 minutes. Check connector logs and upstream provider
+            status.
+          runbook_url: "docs/OPERATOR_GUIDE.md#knowledgeconnectorfailing"
+
+      # ── KnowledgeHighLatency ─────────────────────────────────
+      - alert: KnowledgeHighLatency
+        expr: histogram_quantile(0.99, rate(knowledge_query_duration_seconds_bucket[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p99 query latency > 500ms for 5 minutes"
+          description: >-
+            The 99th percentile query latency has exceeded 500ms for
+            the last 5 minutes. Investigate query complexity, index
+            health, and system resources.
+          runbook_url: "docs/OPERATOR_GUIDE.md#knowledgehighlatency"
+
+      # ── KnowledgeDiskPressure ────────────────────────────────
+      - alert: KnowledgeDiskPressure
+        expr: |
+          (
+            1 - (node_filesystem_avail_bytes / node_filesystem_size_bytes)
+          ) > 0.80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk usage exceeds 80%"
+          description: >-
+            A volume (postgres_data, minio_data, or nats_data) has
+            exceeded 80% capacity. Expand storage or prune stale data.
+          runbook_url: "docs/OPERATOR_GUIDE.md#knowledgediskpressure"

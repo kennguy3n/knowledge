@@ -1,0 +1,274 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Knowledge Platform operational overview — ingest, query, synthesis, connectors, errors, and subsystem health.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Ingest Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "rate(knowledge_ingest_total[5m])",
+          "legendFormat": "ingest/s",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Query Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "rate(knowledge_query_total[5m])",
+          "legendFormat": "queries/s",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Query Latency (p50 / p90 / p99)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1 }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(knowledge_query_duration_seconds_bucket[5m]))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.90, rate(knowledge_query_duration_seconds_bucket[5m]))",
+          "legendFormat": "p90",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(knowledge_query_duration_seconds_bucket[5m]))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "title": "Synthesis Rates",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "rate(knowledge_synthesis_triggered_total[5m])",
+          "legendFormat": "triggered/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(knowledge_trigger_server_synthesis_total[5m])",
+          "legendFormat": "server synthesis/s",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(knowledge_trigger_server_synthesis_throttled_total[5m])",
+          "legendFormat": "throttled/s",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "title": "Connector Sync Status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "bars", "fillOpacity": 50, "lineWidth": 1 }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "rate(knowledge_sync_connector_total[5m])",
+          "legendFormat": "sync attempts/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(knowledge_sync_scheduler_dispatches_succeeded_total[5m])",
+          "legendFormat": "succeeded/s",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(knowledge_sync_scheduler_dispatches_failed_total[5m])",
+          "legendFormat": "failed/s",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "title": "Error Breakdown by Kind",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "bars", "fillOpacity": 50, "lineWidth": 1, "stacking": { "mode": "normal" } }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "rate(knowledge_errors_by_kind{kind!=\"\"}[5m])",
+          "legendFormat": "{{ kind }}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Subsystem Health Status",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "DEGRADED", "color": "yellow" }, "2": { "text": "OK", "color": "green" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "green", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "knowledge_subsystem_status",
+          "legendFormat": "{{ subsystem }}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "title": "Memory & CPU Usage",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "RSS (bytes)" },
+            "properties": [{ "id": "unit", "value": "bytes" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "CPU %" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "process_resident_memory_bytes{job=~\"knowledge-.*\"}",
+          "legendFormat": "{{ job }} RSS (bytes)",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(process_cpu_seconds_total{job=~\"knowledge-.*\"}[5m])",
+          "legendFormat": "{{ job }} CPU %",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "title": "PostgreSQL Connection Pool",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "knowledge_db_pool_active_connections",
+          "legendFormat": "active",
+          "refId": "A"
+        },
+        {
+          "expr": "knowledge_db_pool_idle_connections",
+          "legendFormat": "idle",
+          "refId": "B"
+        },
+        {
+          "expr": "knowledge_db_pool_max_connections",
+          "legendFormat": "max",
+          "refId": "C"
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["knowledge", "platform"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Knowledge Platform Overview",
+  "uid": "knowledge-overview",
+  "version": 1
+}

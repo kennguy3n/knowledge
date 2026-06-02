@@ -1,0 +1,31 @@
+# ── Builder ──────────────────────────────────────────────────────
+FROM ubuntu:22.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone the PrismML fork of llama.cpp.
+RUN git clone --depth 1 --branch prism \
+    https://github.com/kennguy3n/llama.cpp.git /llama.cpp
+
+WORKDIR /llama.cpp
+RUN cmake -B build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --config Release --target llama-server -j "$(nproc)"
+
+# ── Runtime ──────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    wget \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+
+EXPOSE 8081
+ENTRYPOINT ["llama-server"]

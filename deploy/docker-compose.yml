@@ -1,0 +1,204 @@
+version: "3.9"
+
+networks:
+  knowledge-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  nats_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+
+services:
+  # ── Go API gateway ────────────────────────────────────────────
+  knowledge-gateway:
+    build:
+      context: ../server
+      dockerfile: ../deploy/Dockerfile.gateway
+    ports:
+      - "8080:8080"
+    environment:
+      KNOWLEDGE_API_KEY: ${KNOWLEDGE_API_KEY:-changeme}
+      DATABASE_URL: ${DATABASE_URL:-postgres://knowledge:knowledge@postgres:5432/knowledge?sslmode=disable}
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      SUBSTRATE_URL: http://knowledge-substrate:9090
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      knowledge-substrate:
+        condition: service_healthy
+    networks:
+      - knowledge-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  # ── Rust substrate server ─────────────────────────────────────
+  knowledge-substrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.substrate
+    ports:
+      - "9090:9090"
+    environment:
+      KNOWLEDGE_MASTER_KEY: ${KNOWLEDGE_MASTER_KEY:-000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f}
+      LLAMA_SERVER_URL: http://llama-server:8081
+      SUBSTRATE_LISTEN_ADDR: 0.0.0.0:9090
+    depends_on:
+      llama-server:
+        condition: service_healthy
+    networks:
+      - knowledge-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/substrate/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── PostgreSQL + pgvector ─────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-knowledge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-knowledge}
+      POSTGRES_DB: ${POSTGRES_DB:-knowledge}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - knowledge-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-knowledge} -d ${POSTGRES_DB:-knowledge}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── NATS with JetStream ───────────────────────────────────────
+  nats:
+    image: nats:latest
+    command: ["-js", "-sd", "/data/nats"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats_data:/data/nats
+    networks:
+      - knowledge-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  # ── MinIO object storage ──────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - knowledge-net
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── llama.cpp PrismML server (Bonsai-1.7B) ───────────────────
+  llama-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.llama-server
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./models/bonsai-1.7b-q1_0.gguf:/models/model.gguf:ro
+    command: ["llama-server", "-m", "/models/model.gguf", "--port", "8081", "--host", "0.0.0.0"]
+    networks:
+      - knowledge-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
+  # ── Prometheus ────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+    networks:
+      - knowledge-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── Grafana ───────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    networks:
+      - knowledge-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
