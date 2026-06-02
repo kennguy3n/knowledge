@@ -248,8 +248,9 @@ pub fn interrogatives_for(
         // shame!", `Que dia chato!` — "What a boring day!",
         // `Que ele venha amanhã` — "(I hope) he comes tomorrow",
         // `O livro que li`, ...). The FirstToken false-positive
-        // surface is the same as French `que` and Italian `che`
-        // . The accented `quê` and the
+        // surface is the same as French `que` and Italian `che` —
+        // a high-frequency declarative connector that would
+        // false-fire if peeled blindly. The accented `quê` and the
         // bare `o que` (which tokenises to `o`, missed regardless)
         // combined with the `?` terminator on `que ...?` openers
         // give adequate recall.

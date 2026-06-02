@@ -1989,8 +1989,8 @@ impl EvidenceStore {
     }
 
     /// Test-only helper that surgically reshapes
-    /// `approved_document_payloads` back to its pre-v12 ( /
-    /// v10) inline layout and writes a single legacy-shape row.
+    /// `approved_document_payloads` back to its pre-v12 (v10)
+    /// inline layout and writes a single legacy-shape row.
     ///
     /// The post-bootstrap migration
     /// [`Self::migrate_approved_doc_payloads_to_body_store`] runs

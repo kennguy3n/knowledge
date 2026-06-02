@@ -3262,10 +3262,9 @@ mod tests {
 
     #[test]
     fn arabic_clitic_aware_strategy_preserves_tashkeel_path() {
-        // cross-feature interaction: the
+        // Cross-feature interaction: the
         // FirstTokenWithArabicClitics matcher must compose
-        // correctly with the tashkeel-strip normalisation path
-        // . A
+        // correctly with the tashkeel-strip normalisation path. A
         // tashkeel-decorated proclitic-prefixed interrogative
         // (`وَكَيْفَ` = `و` + tashkeel-decorated `كيف`) must
         // classify as a question because (a) `normalize_for_lookup`
