@@ -443,14 +443,19 @@ where
 
     /// Construct an engine from an existing op log. Used by the
     /// persistence layer to rehydrate after a restart.
+    ///
+    /// The compaction baseline is set to the current log length so
+    /// that the Adaptive heuristic only considers *new* mutations
+    /// (the restored log is assumed to be in a reasonable state).
     pub fn from_log(replica_id: Uuid, log: OpLog<T>) -> Self {
+        let baseline = log.ops.len();
         Self {
             replica_id,
             log,
             cached_state: RefCell::new(None),
             cache_watermark: std::cell::Cell::new(0),
             compaction_policy: CompactionPolicy::default(),
-            compact_baseline: 0,
+            compact_baseline: baseline,
             tombstone_count_since_baseline: 0,
         }
     }

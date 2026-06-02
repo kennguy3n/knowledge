@@ -1788,6 +1788,7 @@ mod tests {
             "timeout_ms",
             "scope_bindings",
             "single_tenant",
+            "max_requests_per_minute",
             "rate_capacity",
             "rate_refill_per_sec",
         ] {
