@@ -563,8 +563,10 @@ where
 
 fn random_nonce() -> [u8; AEAD_NONCE_LEN] {
     let mut n = [0u8; AEAD_NONCE_LEN];
-    // See the import comment for why `.unwrap_err()` is required
-    // under rand 0.9.
+    // See the import-site comment for why `SysRng` + the fallible
+    // `TryRng::try_fill_bytes(...).expect(...)` is the correct
+    // shape under rand 0.10 (panic on OS RNG failure rather than
+    // silently producing weak nonces).
     rand::rngs::SysRng
         .try_fill_bytes(&mut n)
         .expect("OS RNG failure");
