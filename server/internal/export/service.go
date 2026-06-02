@@ -5,6 +5,7 @@ package export
 import (
 	"context"
 	"fmt"
+	"html"
 	"time"
 
 	"github.com/google/uuid"
@@ -142,22 +143,22 @@ func renderMarkdown(channelMem *substrate.MemoryRecord, queryResp *substrate.Que
 }
 
 func renderHTML(channelMem *substrate.MemoryRecord, queryResp *substrate.QueryResponse) string {
-	html := "<html><body><h1>Knowledge Profile</h1>"
+	out := "<html><body><h1>Knowledge Profile</h1>"
 
 	if channelMem != nil {
-		html += "<h2>Synthesis Summary</h2><p>" + channelMem.Summary + "</p>"
+		out += "<h2>Synthesis Summary</h2><p>" + html.EscapeString(channelMem.Summary) + "</p>"
 	}
 
 	if queryResp != nil && len(queryResp.Results) > 0 {
-		html += "<h2>Evidence</h2><ol>"
+		out += "<h2>Evidence</h2><ol>"
 		for _, r := range queryResp.Results {
-			html += fmt.Sprintf("<li>%s (score: %.2f)</li>", r.Snippet, r.Score)
+			out += fmt.Sprintf("<li>%s (score: %.2f)</li>", html.EscapeString(r.Snippet), r.Score)
 		}
-		html += "</ol>"
+		out += "</ol>"
 	}
 
-	html += "</body></html>"
-	return html
+	out += "</body></html>"
+	return out
 }
 
 func renderJSON(channelMem *substrate.MemoryRecord, queryResp *substrate.QueryResponse) string {

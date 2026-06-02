@@ -67,9 +67,6 @@ func RateLimit(perIP, perTenant *RateLimiter, logger *zap.Logger) func(http.Hand
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := r.RemoteAddr
-			if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-				ip = fwd
-			}
 
 			if !perIP.allow(ip) {
 				logger.Warn("rate limit exceeded", zap.String("ip", ip))

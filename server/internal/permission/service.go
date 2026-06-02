@@ -9,6 +9,8 @@ import (
 	"sync"
 
 	"go.uber.org/zap"
+
+	"github.com/kennguy3n/knowledge/server/internal/middleware"
 )
 
 // Tuple represents a (user, relation, object) permission tuple.
@@ -133,7 +135,7 @@ func (s *Service) Middleware(relation string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Permission middleware is opt-in; skip if no actor context.
-			actor := r.Context().Value("actor_id")
+			actor := r.Context().Value(middleware.ActorIDKey)
 			if actor == nil {
 				next.ServeHTTP(w, r)
 				return

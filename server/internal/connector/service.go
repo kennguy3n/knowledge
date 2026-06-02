@@ -183,21 +183,24 @@ func (s *Service) Authenticate(_ context.Context, id string) (*OAuthStartRespons
 func (s *Service) Sync(ctx context.Context, id string) (*SyncResponse, error) {
 	s.mu.RLock()
 	inst, ok := s.instances[id]
-	s.mu.RUnlock()
-
 	if !ok {
+		s.mu.RUnlock()
 		return nil, fmt.Errorf("connector %s not found", id)
 	}
+	authenticated := inst.Authenticated
+	scopeID := inst.ScopeID
+	kind := inst.Kind
+	s.mu.RUnlock()
 
-	if !inst.Authenticated {
+	if !authenticated {
 		return nil, fmt.Errorf("connector %s not authenticated", id)
 	}
 
 	// Ingest a sync marker via substrate.
 	_, err := s.substrate.Ingest(ctx, &substrate.IngestRequest{
-		ScopeID:    inst.ScopeID,
-		Body:       fmt.Sprintf("[sync] %s connector %s synced at %s", inst.Kind, inst.ID, time.Now().UTC().Format(time.RFC3339)),
-		Source:     string(inst.Kind),
+		ScopeID:    scopeID,
+		Body:       fmt.Sprintf("[sync] %s connector %s synced at %s", kind, id, time.Now().UTC().Format(time.RFC3339)),
+		Source:     string(kind),
 		Importance: "Important",
 	})
 	if err != nil {
