@@ -45,7 +45,7 @@ updates:
       # 1.94+ for the stable `cfg_select!` macro. See the comment
       # block immediately above the `rusqlite = ` line in the
       # workspace `Cargo.toml` for the full rationale. We still
-      # allow patch bumps within the 0.32.x line and minor bumps
+      # allow patch bumps within the 0.36.x line and minor bumps
       # up to (but not including) 0.37 so the substrate-side
       # rusqlite surface can be migrated incrementally if a future
       # maint sweep targets an intermediate.

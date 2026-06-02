@@ -106,22 +106,19 @@ ml-dsa = { version = "0.1.0", features = ["zeroize"] }
 pqcrypto-sphincsplus = "0.7"
 pqcrypto-traits = "0.3"
 
-# Storage. Pinned to `0.32` because rusqlite `0.37+` (libsqlite3-sys
+# Storage. Pinned to `0.36` because rusqlite `0.37+` (libsqlite3-sys
 # `0.36+`) raised its effective MSRV by adopting the
 # `cfg_select!` macro that did not stabilise until Rust 1.94 — well
-# beyond the workspace's `MSRV (1.85.0)` CI gate. The `0.32.x` line
+# beyond the workspace's `MSRV (1.85.0)` CI gate. The `0.36.x` line
 # is the last release that still compiles under our pinned
-# toolchain; intermediate majors (`0.33`–`0.36`) carry breaking
-# changes to `VTab` / `Connection` APIs that we do not benefit from
-# but would have to migrate through if we picked one of them up
-# pending the MSRV bump anyway.
+# toolchain.
 #
 # Bumping rusqlite past `0.36` is gated on a workspace MSRV bump to
 # `≥1.94`, which is itself enforced by the `MSRV (1.85.0)` CI job
 # in `.github/workflows/ci.yml` (which pins the toolchain via
 # `dtolnay/rust-toolchain@1.85.0`). The matching Dependabot ignore
 # lives in `.github/dependabot.yml`.
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl", "blob"] }
+rusqlite = { version = "0.36", features = ["bundled-sqlcipher-vendored-openssl", "blob"] }
 
 # Time
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }

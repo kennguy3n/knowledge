@@ -189,12 +189,12 @@ on the `ort` line.
 These are not in the multilingual surface but interact with it in
 ways worth flagging for future maintainers:
 
-- **`rusqlite = "0.32"`** — pinned at `0.32.x` (workspace MSRV
-  ceiling, would otherwise be on `0.36`). The bundled SQLite
+- **`rusqlite = "0.36"`** — pinned at `0.36.x` (workspace MSRV
+  ceiling, would otherwise be on `0.37`+). The bundled SQLite
   carries the `unicode61` and `trigram` FTS5 tokenisers used by
   the multilingual lexical lane (Phases 1.2 / 1.2.1 / 1.8 / 1.9).
   See the inline pin-rationale comment block above the
-  `rusqlite = { version = "0.32", … }` line in
+  `rusqlite = { version = "0.36", … }` line in
   [`Cargo.toml`](../Cargo.toml).
 - **`unicode-segmentation`** — `1.13.x`, **transitive only** via
   `convert_case` ← `napi-derive`. Not a direct workspace concern;
@@ -227,12 +227,13 @@ When the workspace MSRV is bumped, walk this list in order:
 3. **`1.91`** — drops the workspace's `async-trait` dep (regular
    `async fn` in traits via AFIT-on-dyn-trait). No multilingual
    surface changes.
-4. **`1.94`** — unlocks `rusqlite 0.36`+ (the `cfg_select!` macro
-   that didn't stabilise until 1.94). The bundled SQLite version
-   would advance too, which would refresh the `unicode61` /
-   `trigram` tokenisers — verify the multilingual lexical-lane
-   tests still pass and re-run the Phase 2.1 cross-lingual recall
-   benchmark to detect tokenisation regressions.
+4. **`1.94`** — unlocks `rusqlite 0.37`+ / `libsqlite3-sys 0.36`+
+   (the `cfg_select!` macro that didn't stabilise until 1.94).
+   The bundled SQLite version would advance too, which would
+   refresh the `unicode61` / `trigram` tokenisers — verify the
+   multilingual lexical-lane tests still pass and re-run the
+   Phase 2.1 cross-lingual recall benchmark to detect tokenisation
+   regressions.
 
 Subsequent freshness audits should refresh this document and the
 inline comments together; the pin-rationale comments stay
