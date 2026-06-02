@@ -35,6 +35,16 @@ async-http-client = ["dep:reqwest", "dep:tokio", "dep:async-trait"]
 # them. Production builds leave this off so the helpers are
 # unreachable from the FFI surface.
 test-support = []
+# Compiles the live, model-backed multilingual validation suite in
+# `tests/multilingual_bonsai.rs`. These tests stand up a real
+# `llama-server` sidecar serving the Bonsai-1.7B GGUF and exercise the
+# `LlamaCppAdapter` end-to-end, so they are gated behind a feature
+# (and further behind the `LLAMA_SERVER_BINARY` env var at runtime,
+# skipping gracefully when unset). Pulls in `http-client` because the
+# suite drives the server through the real `HttpLlamaServerClient`
+# transport. Off by default so the normal CI build / unit-test suite
+# stays hermetic and network-free.
+live-integration = ["http-client"]
 
 [dependencies]
 crypto = { path = "../crypto" }

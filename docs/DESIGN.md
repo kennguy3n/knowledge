@@ -281,6 +281,57 @@ relies on directly.
   channel / domain summary generation, concept synthesis,
   contradiction adjudication.
 
+**Validated languages (15).** Bonsai-1.7B synthesis and the
+lexicon-first observation pipeline are validated across the
+following 15 languages:
+
+| BCP-47 | Language | Script | Auto-detected as |
+|---|---|---|---|
+| `en` | English | Latin | `en` |
+| `zh` | Chinese | Han | `zh` |
+| `es` | Spanish | Latin | `es` |
+| `hi` | Hindi | Devanagari | `hi` |
+| `fr` | French | Latin | `fr` |
+| `ar` | Arabic | Arabic | `ar` |
+| `th` | Thai | Thai | `th` |
+| `vi` | Vietnamese | Latin (diacritics) | `vi` |
+| `ms` | Malay | Latin | `id` (see note) |
+| `tl` | Tagalog / Filipino | Latin | `tl` |
+| `de` | German | Latin | `de` |
+| `pt` | Portuguese | Latin | `pt` |
+| `ja` | Japanese | Kana + Kanji | `ja` |
+| `ko` | Korean | Hangul | `ko` |
+| `ru` | Russian | Cyrillic | `ru` |
+
+Each language ships a lexicon (decision / task keywords,
+imperative verbs, stop-words) and an interrogative table; see
+`crates/observation_engine/src/lexicon.rs` and
+`interrogatives.rs`. Two validation suites pin this coverage:
+
+- `crates/observation_engine/tests/multilingual_pipeline.rs`
+  ingests a realistic decision / task / question message per
+  language through `default_pipeline` and asserts correct
+  language detection, correct (non-English-fallback) lexicon
+  selection, and no English-keyword false positives.
+- `crates/inference_router/tests/multilingual_bonsai.rs`
+  exercises the real `LlamaCppAdapter` against a live
+  `llama-server` serving the Bonsai-1.7B GGUF for summary
+  generation, entity extraction, importance classification, and
+  concept synthesis in each language. It is gated behind the
+  `live-integration` feature and the `LLAMA_SERVER_BINARY`
+  env var, skipping gracefully when no model checkpoint is
+  present.
+
+**Note on Malay (`ms`).** `whatlang` has no Malay classifier and
+detects Malay text as Indonesian (`Ind` → `id`), so
+auto-detected Malay routes through the Indonesian lexicon (the
+two share a large common core). The dedicated `ms` lexicon —
+with register-specific forms such as `diluluskan` and the
+deadline collocation `tarikh akhir` — is reachable when a caller
+supplies the `ms` tag explicitly (e.g. a connector that knows
+the source locale). Per-language quality notes are tabulated in
+the README's "Multilingual support" section.
+
 ### 5.2 XLM-R for embeddings and classification
 
 - **Model:** XLM-R (multilingual encoder).
