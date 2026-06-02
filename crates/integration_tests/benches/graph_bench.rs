@@ -1,7 +1,7 @@
 //! Concept graph traversal benchmarks.
 //!
-//! Measures BFS/DFS traversal performance over graphs with 10K,
-//! 100K, and 1M nodes using typed-edge traversal.
+//! Measures BFS/DFS traversal performance over graphs with 10K and
+//! 100K nodes using typed-edge traversal.
 //!
 //! Run with:
 //!

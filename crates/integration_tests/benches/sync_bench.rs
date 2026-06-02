@@ -164,6 +164,7 @@ fn bench_delta_payload_size(c: &mut Criterion) {
 
     for &(threshold_label, threshold) in thresholds {
         let size = 15_000usize;
+        group.throughput(Throughput::Elements(size as u64));
         group.bench_with_input(
             BenchmarkId::new("snapshot_size", threshold_label),
             &(),

@@ -95,7 +95,7 @@ inference time.
   allow Criterion's adaptive warm-up to stabilise variance.
 - **Isolation**: Each iteration (where expensive) uses `iter_with_setup`
   to separate setup cost from the measured path.
-- **Throughput annotation**: All benchmarks report `Throughput::Elements`
+- **Throughput annotation**: Benchmarks report `Throughput::Elements`
   or `Throughput::Bytes` so Criterion can compute ops/sec or MB/sec.
 - **Determinism**: Where possible, UUIDs and data are generated
   during setup (`iter_with_setup`) so the measured path operates on
