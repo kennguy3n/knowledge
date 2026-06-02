@@ -92,7 +92,9 @@ fn detect_total_ram_bytes() -> Option<u64> {
         let pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) };
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) };
         let host_bytes = if pages > 0 && page_size > 0 {
-            u64::try_from(pages).ok()? * u64::try_from(page_size).ok()?
+            u64::try_from(pages)
+                .ok()?
+                .checked_mul(u64::try_from(page_size).ok()?)?
         } else {
             return None;
         };
