@@ -919,7 +919,10 @@ pub struct SynthesisEngineConfig {
     /// Per-endpoint requests-per-minute cap for the synthesis
     /// rate limiter. `None` uses the library default
     /// ([`synthesis_engine::DEFAULT_MAX_RPM`], 60). Set to
-    /// `Some(n)` for enterprise-negotiated higher caps.
+    /// `Some(n)` for enterprise-negotiated higher caps, or use a
+    /// very large value (e.g. `u64::MAX`) to effectively disable
+    /// rate limiting. `Some(0)` is rejected as invalid because a
+    /// zero-cap limiter blocks every request.
     #[serde(default)]
     pub max_requests_per_minute: Option<u64>,
 

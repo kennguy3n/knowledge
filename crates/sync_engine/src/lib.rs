@@ -571,7 +571,7 @@ where
                     false
                 } else {
                     let ratio = self.tombstone_count_since_baseline as f64 / growth as f64;
-                    let estimated_bytes = growth * ESTIMATED_BYTES_PER_OP;
+                    let estimated_bytes = growth.saturating_mul(ESTIMATED_BYTES_PER_OP);
                     ratio > tombstone_ratio_threshold || estimated_bytes > max_delta_bytes
                 }
             }

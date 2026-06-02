@@ -2503,6 +2503,14 @@ fn endpoint_config_from_ffi(cfg: &SynthesisEngineConfig) -> FfiResult<EndpointCo
         endpoint = endpoint.with_grammar(grammar.clone());
     }
     if let Some(rpm) = cfg.max_requests_per_minute {
+        if rpm == 0 {
+            return Err(crate::FfiError::Synthesis {
+                message: "max_requests_per_minute must be > 0 (a zero cap rejects every \
+                          request; omit the field to use the library default, or set a \
+                          high value to effectively disable rate limiting)"
+                    .into(),
+            });
+        }
         endpoint = endpoint.with_max_requests_per_minute(rpm);
     }
     Ok(endpoint)
