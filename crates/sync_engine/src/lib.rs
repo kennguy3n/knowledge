@@ -161,6 +161,13 @@ pub enum CompactionPolicy {
     /// and estimated delta payload size, rather than a fixed op
     /// count. This is the recommended default for consuming
     /// products.
+    ///
+    /// **Note:** A hardcoded floor of [`DEFAULT_COMPACT_THRESHOLD`]
+    /// (10 000) ops must accumulate before *any* heuristic is
+    /// evaluated, ensuring Adaptive is never more aggressive than
+    /// the legacy `Fixed` default. Custom thresholds that imply
+    /// earlier compaction (e.g. very small `max_delta_bytes`) will
+    /// not take effect until the floor is reached.
     Adaptive {
         /// Compact when the ratio of `Remove`/`Supersede` ops in
         /// the growth window exceeds this value (0.0–1.0).
