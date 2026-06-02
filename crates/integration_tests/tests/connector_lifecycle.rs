@@ -10,8 +10,7 @@ use uuid::Uuid;
 use connector_framework::{
     AttachmentRegistry, ConnectorEvent, ConnectorInstanceId, ConnectorKind, SyncRunResult,
 };
-use evidence_store::ImportanceClass;
-use integration_tests::test_helpers::{open_store, padded_body, ScopeId};
+use integration_tests::test_helpers::{open_store, padded_body, ImportanceClass, ScopeId};
 use permission_service::{
     NamespaceRegistry, ObjectRef, ObjectType, Relation, RelationTuple, SubjectRef, SubjectType,
     TupleStore,

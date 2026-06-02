@@ -13,7 +13,7 @@ use audit_service::{
     log_proposal_promoted, log_proposal_submitted, Actor, AuditActionType, AuditLog, AuditQuery,
 };
 use crypto::EvidenceRef;
-use evidence_store::ScopeId;
+use integration_tests::test_helpers::ScopeId;
 use memory_manager::SensitivityClass;
 
 #[test]

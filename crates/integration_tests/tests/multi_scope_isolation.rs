@@ -6,8 +6,7 @@
 
 use uuid::Uuid;
 
-use evidence_store::ImportanceClass;
-use integration_tests::test_helpers::{open_store, padded_body, ScopeId};
+use integration_tests::test_helpers::{open_store, padded_body, ImportanceClass, ScopeId};
 use observation_engine::{LexiconExtractor, ObservationExtractor};
 use permission_service::{
     check_permission, NamespaceRegistry, ObjectRef, ObjectType, Relation, RelationTuple,

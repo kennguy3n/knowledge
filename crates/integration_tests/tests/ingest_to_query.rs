@@ -22,8 +22,8 @@
 //!    * Scope A's `read_body` for the surviving evidence rows fails.
 //!    * Scope B's queries and body reads are unaffected.
 
-use evidence_store::{EvidenceId, ImportanceClass};
-use integration_tests::test_helpers::{open_store, ScopeId, BODY_SIZE};
+use evidence_store::EvidenceId;
+use integration_tests::test_helpers::{open_store, ImportanceClass, ScopeId, BODY_SIZE};
 use tempfile::TempDir;
 
 fn body_for(scope_tag: &str, idx: usize) -> Vec<u8> {

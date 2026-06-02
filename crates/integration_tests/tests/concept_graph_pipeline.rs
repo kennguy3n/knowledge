@@ -18,8 +18,9 @@
 //!    `Superseded`, points at the successor, and has a `Supersedes`
 //!    edge persisted alongside it.
 
-use evidence_store::ImportanceClass;
-use integration_tests::test_helpers::{open_store, ScopeId, BODY_SIZE, MASTER_KEY};
+use integration_tests::test_helpers::{
+    open_store, ImportanceClass, ScopeId, BODY_SIZE, MASTER_KEY,
+};
 use tempfile::TempDir;
 
 use concept_graph::{

@@ -4,8 +4,7 @@
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 
-use evidence_store::ImportanceClass;
-use integration_tests::test_helpers::{open_store, padded_body, ScopeId};
+use integration_tests::test_helpers::{open_store, padded_body, ImportanceClass, ScopeId};
 use memory_manager::{
     compute_retention_score, decay_sweep, MemoryObject, MemoryState, MemoryStateMachine,
     SensitivityClass,

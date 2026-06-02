@@ -37,6 +37,7 @@
 //! * [`test_helpers::BODY_SIZE`] — body size above the inline threshold.
 //! * [`test_helpers::open_store`] — open a fresh [`EvidenceStore`](evidence_store::EvidenceStore) at a path.
 //! * [`test_helpers::padded_body`] — create a body of [`BODY_SIZE`](test_helpers::BODY_SIZE) bytes.
+//! * Re-exports: [`ScopeId`](evidence_store::ScopeId), [`ImportanceClass`](evidence_store::ImportanceClass), etc.
 
 #![deny(missing_docs)]
 
@@ -47,7 +48,8 @@ compile_error!("test-support must not be enabled in release builds");
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_helpers {
     pub use evidence_store::{
-        EvidenceStore, EvidenceStoreConfig, ScopeId, DEFAULT_INLINE_THRESHOLD_BYTES,
+        EvidenceStore, EvidenceStoreConfig, ImportanceClass, ScopeId,
+        DEFAULT_INLINE_THRESHOLD_BYTES,
     };
 
     /// Fixed master key for all test stores.

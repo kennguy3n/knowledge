@@ -8,8 +8,7 @@
 use uuid::Uuid;
 
 use crypto::{ProvenanceAgent, ProvenanceBundle, SynthesisActivity};
-use evidence_store::ImportanceClass;
-use integration_tests::test_helpers::{open_store, ScopeId};
+use integration_tests::test_helpers::{open_store, ImportanceClass, ScopeId};
 use memory_manager::{
     ApprovedDocumentRef, DomainMemoryObject, SensitivityClass, TenantMemoryObject,
 };
