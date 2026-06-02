@@ -887,6 +887,9 @@ pub struct LexiconTelemetry {
     /// Resolved-lexicon hits for `th`.
     #[serde(default)]
     pub hits_th: u64,
+    /// Resolved-lexicon hits for `tl`.
+    #[serde(default)]
+    pub hits_tl: u64,
     /// Resolved-lexicon hits for `vi`.
     #[serde(default)]
     pub hits_vi: u64,
@@ -1394,6 +1397,7 @@ fn project_lexicon_telemetry(s: &observation_engine::LexiconTelemetrySnapshot) -
         hits_pt: s.hits_pt,
         hits_ru: s.hits_ru,
         hits_th: s.hits_th,
+        hits_tl: s.hits_tl,
         hits_vi: s.hits_vi,
         hits_zh: s.hits_zh,
         unknown_tag_fallbacks_total: s.unknown_tag_fallbacks_total,
@@ -1786,7 +1790,7 @@ mod tests {
         // counter so every field exercises a non-zero delta.
         for tag in [
             "ar", "bo", "de", "en", "es", "fr", "he", "hi", "id", "it", "ja", "km", "ko", "lo",
-            "ms", "my", "pt", "ru", "th", "vi", "zh",
+            "ms", "my", "pt", "ru", "th", "tl", "vi", "zh",
         ] {
             record_lexicon_hit(Some(tag), tag);
         }
@@ -1847,6 +1851,7 @@ mod tests {
         assert!(mirror.hits_pt >= upstream.hits_pt);
         assert!(mirror.hits_ru >= upstream.hits_ru);
         assert!(mirror.hits_th >= upstream.hits_th);
+        assert!(mirror.hits_tl >= upstream.hits_tl);
         assert!(mirror.hits_vi >= upstream.hits_vi);
         assert!(mirror.hits_zh >= upstream.hits_zh);
         assert!(mirror.unknown_tag_fallbacks_total >= upstream.unknown_tag_fallbacks_total);
@@ -1896,6 +1901,7 @@ mod tests {
         assert!(mirror.hits_pt > before.hits_pt, "hits_pt not plumbed");
         assert!(mirror.hits_ru > before.hits_ru, "hits_ru not plumbed");
         assert!(mirror.hits_th > before.hits_th, "hits_th not plumbed");
+        assert!(mirror.hits_tl > before.hits_tl, "hits_tl not plumbed");
         assert!(mirror.hits_vi > before.hits_vi, "hits_vi not plumbed");
         assert!(mirror.hits_zh > before.hits_zh, "hits_zh not plumbed");
         assert!(
