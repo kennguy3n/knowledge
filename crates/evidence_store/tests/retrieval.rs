@@ -1372,7 +1372,7 @@ fn vector_telemetry_cross_lingual_recall_via_rerank() {
         cooking_score = cooking_hit.vector_score,
     );
 
-    // Regression coverage for an earlier Bug fix:
+    // Telemetry-instrumentation regression:
     // `rerank_with_embeddings` MUST bump `query_embeddings_total` at
     // least once for the query embed AND `live_body_embeddings_total`
     // at least once per body it embeds. Before the fix the
@@ -1602,7 +1602,7 @@ fn search_hybrid_skips_vector_lane_on_noise_only_query() {
     let _ = (hits, r1);
 }
 
-/// Regression for an earlier review finding (PR #114):
+/// Regression (PR #114):
 /// when the retriever is configured WITHOUT an embedding model
 /// (FTS+recency-only mode), the pre-embed routing gate must NOT
 /// be consulted — otherwise `pre_embed_admitted_total` would be

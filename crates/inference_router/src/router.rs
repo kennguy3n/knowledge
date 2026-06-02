@@ -1082,7 +1082,7 @@ mod tests {
         }
     }
 
-    /// Regression for the bug an earlier review flagged on commit d5b0a61:
+    /// Regression (commit d5b0a61:
     /// `spawn_bootstrap` (second call) must reset both the
     /// `bootstrapped` atomic *and* the condvar `done` flag, otherwise
     /// `wait_for_bootstrap` short-circuits on the prior bootstrap's
@@ -1170,7 +1170,7 @@ mod tests {
         assert!(router.is_bootstrapped());
     }
 
-    /// Regression for the latent self-join footgun an earlier review
+    /// Regression for the latent self-join footgun
     /// flagged on commit 8c8ed4f: a standalone embedder that
     /// constructs `Arc<InferenceRouter>`, calls `spawn_bootstrap`,
     /// then drops its only `Arc` without joining or waiting MUST

@@ -1149,7 +1149,7 @@ fn fts5_bigram_lane_closes_2char_cjk_recall_floor() {
 
 #[test]
 fn fts5_three_lane_merge_dedupes_mixed_query_across_all_three_tables() {
-    // Regression guard from an earlier review — exercises the
+    // Regression guard — exercises the
     // `merged_fts_search` three-lane fan-out across a single
     // mixed Latin + 2-codepoint CJK query so all three FTS5
     // shadow tables contribute hits that the merge must
@@ -1982,7 +1982,7 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
 ///   (pure-stopword Japanese input like "の の の").
 /// - `bigram_lane_skips_pure_stopword_query_total` advances on
 ///   the same pure-stopword input as the trigram skip above —
-///   an earlier review added this variant so
+///   this variant was added so
 ///   the bigram lane can distinguish "Latin-only query, lane
 ///   correctly declined" from "CJK query annihilated by
 ///   stopword stripping". Before the earlier skip-taxonomy
@@ -2096,7 +2096,7 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
 /// structural skip on the trigram lane for Latin-only queries
 /// under the false premise that `evidence_fts_cjk` "cannot
 /// contain a matching row" for such queries. A later commit
-/// reverted that change after an earlier review correctly
+/// reverted that change after a subsequent fix correctly
 /// identified that the
 /// trigram tokeniser DOES index Latin substrings inside CJK
 /// bodies, so the structural skip was a recall risk dressed as a

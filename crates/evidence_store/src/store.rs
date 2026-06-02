@@ -5040,7 +5040,7 @@ pub(crate) fn clamp_limit_to_sqlite(n: usize) -> i64 {
 /// `pub(crate)` so [`crate::retrieval::HybridRetriever::search_fts`]
 /// can reuse the same merge logic (both call sites need identical
 /// dedupe + error-containment semantics; diverging implementations
-/// would silently drift apart, which an earlier review flagged as
+/// would silently drift apart, which is
 /// a latent failure mode).
 ///
 /// The function is named `merged_fts_search` rather than
@@ -5151,7 +5151,7 @@ pub(crate) fn merged_fts_search(
     // unicode61 branch remains the sole source of truth for
     // query validity even if `evidence_fts_cjk` ever returned a
     // corrupted UUID (e.g. external database tampering). The
-    // architectural fix from an earlier review was to move the
+    // architectural fix moved the
     // UUID parse inside the swallow-scope; that means the
     // doc-comment's "errors swallowed" contract holds without
     // any post-closure exception.
@@ -5409,8 +5409,7 @@ pub(crate) fn merged_fts_search(
     // the resulting order is also stable across process restarts
     // (UUIDs are persisted, hash seeds are not).
     //
-    // The pinned result order is the long-form fix from an
-    // earlier review — ensuring downstream tests and
+    // The pinned result order ensures downstream tests and
     // any caller that does NOT re-score (e.g. the raw `search_fts`
     // public surface) sees identical output across runs for the
     // same input.
@@ -5449,7 +5448,7 @@ pub(crate) fn merged_fts_search(
 /// — both halves of the merge pipeline now treat NaN identically
 /// instead of skewing in opposite directions.
 ///
-/// This is the long-form fix from an earlier review.
+/// This is the long-form fix.
 fn merge_min_rank(best_rank: &mut HashMap<EvidenceId, f64>, id: EvidenceId, rank: f64) {
     best_rank
         .entry(id)

@@ -371,7 +371,7 @@ pub struct LanguageLexicon {
     /// every non-alphabetic char and would never produce the
     /// virama-spanning token. Per-language override structurally
     /// prevents the unreachable-entry class of bug for future
-    /// languages — see an earlier review for context.
+    /// languages —
     pub task_imperative_strategy: MatchStrategy,
     /// Stop-words for the capitalised-token entity extractor.
     /// Only relevant for languages with case distinction —
@@ -403,7 +403,7 @@ impl LanguageLexicon {
             // because the virama `U+094D` is non-alphabetic and
             // splits intra-word imperatives like `मर्ज` /
             // `समीक्षा` that no first-token / first-bigram check
-            // could ever reassemble. See an earlier review for context.
+            // could ever reassemble.
             KeywordClass::TaskImperative => {
                 Some((self.task_imperative_verbs, self.task_imperative_strategy))
             }
@@ -425,7 +425,7 @@ impl LanguageLexicon {
             //   Returning `None` here makes that contract
             //   explicit at the type level so a future caller
             //   can't accidentally route stop-words through
-            //   the wrong matcher (per an earlier review's
+            //   the wrong matcher (per the prior
             //   guidance).
             // * `Interrogative`: served by
             //   [`LexiconRegistry::interrogatives_for`] —
@@ -1605,7 +1605,7 @@ const RU_LEXICON: LanguageLexicon = LanguageLexicon {
 /// recover the prefixed verb form without these false
 /// positives).
 ///
-/// An earlier review reduced the proclitic peel set from
+/// The proclitic peel set was reduced from
 /// 8 to 6 entries after `س` (1st-person future marker) was
 /// shown to falsely surface imperatives on plain declarative
 /// future-tense statements (`سأرسل البريد غدا` "I will send
@@ -2563,7 +2563,7 @@ mod tests {
 
     #[test]
     fn table_matches_arabic_clitic_strip_drops_unproductive_k_and_s_prefixes() {
-        // Precision guard from an earlier review: `ك` and `س`
+        // Precision guard: `ك` and `س`
         // were initially in the peel set but caused false
         // positives on both the
         // interrogative path and (more dangerously) the
@@ -2875,7 +2875,7 @@ mod tests {
 
     #[test]
     fn arabic_clitic_strip_handles_nfd_hamza_alif_via_dual_prefix_entries() {
-        // Regression guard from an earlier review:
+        // Regression guard:
         // `normalize_for_lookup` strips Arabic combining
         // marks (including U+0654 ARABIC HAMZA ABOVE) BEFORE NFC
         // composition, so an NFD-encoded `أل` (U+0627 ALEF +
@@ -3772,7 +3772,7 @@ mod tests {
 
     #[test]
     fn arabic_lexicon_strategy_per_class_is_intentional() {
-        // Regression guard from an earlier review:
+        // Regression guard:
         // the per-class strategy asymmetry in AR_LEXICON is the
         // architectural design, not an oversight. This test
         // pins each strategy at runtime so a contributor who

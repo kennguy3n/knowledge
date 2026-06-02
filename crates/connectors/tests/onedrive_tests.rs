@@ -144,7 +144,7 @@ fn full_lifecycle_against_fixture_data() {
 
 #[test]
 fn batched_webhook_emits_every_notification() {
-    // Regression test for an earlier review finding that
+    // Regression test that
     // `OneDriveConnector::handle_webhook_event` used to drop every
     // entry past index 0 of the Graph `changeNotification` batch. A
     // single Graph subscription POST routinely carries multiple

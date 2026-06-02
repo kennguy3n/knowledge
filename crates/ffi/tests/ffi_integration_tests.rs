@@ -883,7 +883,7 @@ fn forget_scope_purges_connectors_bound_to_the_forgotten_scope() {
 /// `forget(evidence_id)` resolves the row to its scope and MUST run
 /// the *exact same* cryptographic-forgetting sequence as
 /// `forget_scope(scope_uuid)` — including the connector lifecycle
-/// purge. This pins the bug surfaced by an earlier review on PR #54:
+/// purge. Regression (PR #54):
 /// before the fix, `forget()` left `ConnectorInstance` rows, live
 /// `Arc<dyn Connector>` handles, and cached OAuth2 tokens behind
 /// for the forgotten scope, while `forget_scope()` cleaned them up
@@ -971,7 +971,7 @@ fn forget_by_evidence_id_also_purges_connectors_bound_to_the_resolved_scope() {
 /// `ConnectorError::Auth("…auth_config_json.authorization_code is
 /// required")` if the key is missing.
 ///
-/// This pins an earlier review bug on PR #54: the FFI
+/// Regression (PR #54): the FFI
 /// previously spliced the code under `"auth_code"`, which would
 /// cause every host `authenticate_connector` call to surface
 /// `auth_config_json.authorization_code is required` even when the
@@ -2131,7 +2131,7 @@ impl OAuthTestServer {
     /// loop is the correctness-preserving way to capture an
     /// arbitrary HTTP/1.1 message and matches how production
     /// servers consume a request — see the discussion in
-    /// an earlier review on commit b29bc3c.
+    /// commit b29bc3c.
     ///
     /// Parsing strategy:
     ///

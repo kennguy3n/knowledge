@@ -248,9 +248,9 @@ pub struct DocumentExtractionResult {
     ///
     /// Surfaces the chunk-level tag for downstream consumers that
     /// want a coarse per-chunk language without re-running
-    /// detection — addresses earlier review findings (consistency with
+    /// detection — addresses consistency with
     /// [`crate::pipeline::ObservationPipeline::run_with_language`])
-    /// and an earlier review finding that the doc
+    /// and the requirement that the doc
     /// pipeline didn't surface a chunk-level language for chunks
     /// that produced no observations.
     pub chunk_languages: Vec<Option<LanguageTag>>,

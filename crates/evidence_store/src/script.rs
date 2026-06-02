@@ -155,8 +155,7 @@ pub fn contains_cjk_or_thai(text: &str) -> bool {
 /// / Tessera / connector pipelines, including the awkward edge
 /// cases (half-width katakana, compatibility ideographs, Myanmar
 /// minority-language extensions) that are easy to miss with a
-/// "BMP-only / no compatibility" check and that an earlier review
-/// finding explicitly called out.
+/// naïve "BMP-only / no compatibility" check.
 ///
 /// Korean Hangul (`U+AC00..=U+D7AF`), Vietnamese (Latin with
 /// diacritics), Hindi (Devanagari, whitespace-separated words) and

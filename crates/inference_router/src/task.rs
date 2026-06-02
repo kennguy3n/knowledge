@@ -345,7 +345,7 @@ mod tests {
     /// deletes a variant from `ALL` (without also removing it from
     /// the enum) gets a `cargo test` failure.
     ///
-    /// Concretely this is the structural defence an earlier review asked
+    /// Concretely this is the structural defence asked
     /// for: the router's `ALL_TASKS` constant now derives from
     /// `InferenceTask::ALL`, and `InferenceTask::ALL` is pinned to
     /// the enum's discriminants here.

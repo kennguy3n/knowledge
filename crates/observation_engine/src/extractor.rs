@@ -474,7 +474,7 @@ fn looks_like_question(
 /// caller in [`LexiconExtractor::do_extract`] computes both
 /// values once per sentence (for decision / task matching) and
 /// reuses them here. The pre-normalised signature exists
-/// specifically to close an earlier review finding: the
+/// the
 /// per-sentence question path was
 /// re-running the NFC + lowercase + tashkeel/bidi-strip pass
 /// over the same sentence that decision/task matching had
@@ -824,7 +824,7 @@ fn extract_at_mentions(text: &str) -> Vec<String> {
 /// [`str::to_lowercase`] fold against the lexicon's
 /// already-lowercase entries, which is the same normalisation
 /// the rest of the lexicon matcher uses. The signature change
-/// also closes an earlier review finding by removing the per-call
+/// also removes the per-call
 /// `Vec<String>` allocation the previous shape required for the
 /// registry-backed path.
 fn extract_capitalised_words(text: &str, is_stop_word: impl Fn(&str) -> bool) -> Vec<String> {
@@ -919,7 +919,7 @@ fn fold_typographic_apostrophes(text: &str) -> Cow<'_, str> {
 /// classify it.
 ///
 /// History: the predicate started as CJK-only and grew to
-/// cover Thai (after an earlier review surfaced Thai declaratives
+/// cover Thai declaratives
 /// like `กรุงเทพมหานครเป็นเมืองหลวงของประเทศไทย`), then Lao /
 /// Khmer / Myanmar, then Tibetan and Myanmar Extended-A / -B.
 /// A later revision closed the asymmetry on Khmer Symbols
@@ -1501,7 +1501,7 @@ impl ObservationExtractor for LexiconExtractor {
         // observations, and callers that supply `None` get
         // `None`-stamped entities (i.e. "language unknown"). We do
         // not fall back to running [`detect_language`] on `None`
-        // hints — see an earlier review finding and the comment inside
+        // hints — see the comment inside
         // [`Self::do_extract`].
         self.do_extract(text, scope, dominant_language)
     }
@@ -2623,7 +2623,7 @@ mod tests {
 
     #[test]
     fn arabic_decision_keyword_matches_after_tashkeel_strip() {
-        // Closes an earlier-review finding: Arabic combining
+        // Closes: Arabic combining
         // marks (tashkeel) like fatha / kasra
         // would otherwise split the FirstToken matcher's view
         // of the word boundary because the marks are category
@@ -2987,7 +2987,7 @@ mod tests {
                     .any(|o| matches!(o.observation_type, ObservationType::Task)),
                 "Hindi imperative containing virama {label:?} must produce a Task \
                  observation under MatchStrategy::Substring \
-                 (per an earlier-review finding)"
+                 "
             );
         }
     }
@@ -3265,7 +3265,7 @@ mod tests {
         // cross-feature interaction: the
         // FirstTokenWithArabicClitics matcher must compose
         // correctly with the tashkeel-strip normalisation path
-        // (per an earlier-review finding). A
+        // . A
         // tashkeel-decorated proclitic-prefixed interrogative
         // (`وَكَيْفَ` = `و` + tashkeel-decorated `كيف`) must
         // classify as a question because (a) `normalize_for_lookup`
@@ -3287,7 +3287,7 @@ mod tests {
 
     #[test]
     fn arabic_first_person_future_does_not_emit_task() {
-        // Precision guard from earlier reviews, end-to-end:
+        // Precision guard, end-to-end:
         // 1st-person future-tense declaratives that share a
         // verb root with an `أ`-initial
         // imperative must NOT emit a Task observation. The future

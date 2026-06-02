@@ -43,7 +43,7 @@
 //!   Operators inferring "documents classified" from `hits_*`
 //!   should divide by their measured calls-per-document ratio
 //!   rather than reading the counter directly.
-//!   an earlier review added this clarification — the
+//!   this clarification was added — the
 //!   counter semantics itself are by design (counting calls is
 //!   what makes the ratio `strategy_fires / hits_*` a useful
 //!   "how-often-does-each-resolved-lexicon-actually-classify"

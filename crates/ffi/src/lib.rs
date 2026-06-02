@@ -1686,7 +1686,7 @@ pub fn decrypt(
 /// Originally this helper lived only in `lib.rs`; `connector.rs`
 /// duplicated it with a near-identical implementation (different
 /// error-message format, equivalent semantics). The two copies
-/// drifted under an earlier review which flagged the duplication — they
+/// drifted into duplication — they
 /// were consolidated here so a future change to scope-id validation
 /// touches exactly one site. `pub(crate)` visibility intentionally
 /// keeps it out of the FFI surface (UniFFI/N-API hosts call the
@@ -2824,7 +2824,7 @@ mod tests {
     /// `evidence_fts_cjk` rows must survive the tombstone-only
     /// pre-reopen state (pre-condition), and both must be empty
     /// after the next `open_store` runs the re-purge. Closes the
-    /// coverage gap flagged by an earlier review.
+    /// coverage gap.
     #[test]
     fn open_store_repurges_evidence_fts_cjk_for_persisted_tombstones() {
         // The body intentionally contains a long CJK substring so
@@ -3012,7 +3012,7 @@ mod tests {
             assert_eq!(
                 trigram_count, 0,
                 "open_store must re-purge evidence_fts_cjk rows for every persisted tombstone \
-                 (regression guard from an earlier review)"
+                 (regression guard)"
             );
             assert_eq!(
                 bigram_count, 0,

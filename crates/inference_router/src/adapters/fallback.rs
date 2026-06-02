@@ -675,7 +675,7 @@ mod tests {
         assert!(parsed["confidence"].is_f64());
     }
 
-    /// Regression for an earlier review: the GBNF
+    /// Regression: the GBNF
     /// grammar at [`crate::task::GRAMMAR_TAG_IMPORTANCE`] only accepts
     /// `"0" "." [0-9]+ | "1.0" | "1"`. A formatted confidence of
     /// `"1.00"` would NOT match (the `"1.0"` alternative requires

@@ -432,7 +432,7 @@ impl<T: HttpTransport> OAuth2Client<T> {
         // resolver is not registered AND the fallback layer
         // succeeds should not pay for the allocation. `OnceCell`
         // gives us compute-on-first-use with at-most-one allocation
-        // across the whole grant — see the earlier review on
+        // across the whole grant — see commit
         // PR #60 for the rationale.
         let scope_id_cell: std::cell::OnceCell<String> = std::cell::OnceCell::new();
         let scope_id = || -> &str {

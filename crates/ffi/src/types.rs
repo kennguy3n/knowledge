@@ -207,7 +207,7 @@ pub struct FfiKeypair {
 /// only emits Swift / Kotlin types reachable from `#[uniffi::export]`
 /// functions; deriving `Record` on a type that no exported function
 /// consumes registers metadata that the bindgen quietly drops, which
-/// is the kind of dead contract an earlier review flagged on PR #52
+/// is the kind of dead contract (PR #52)
 /// (`crates/ffi/src/types.rs:186`). The derive is intentionally
 /// deferred until a `sign(handle, data) -> FfiResult<FfiSignature>` /
 /// `verify(handle, sig, data) -> FfiResult<bool>` FFI pair lands;
@@ -1230,7 +1230,7 @@ mod tests {
     /// Pin the JSON wire format `crates/napi/src/bindings.rs::
     /// js_sync_scheduler_status` documents — every key MUST be the
     /// camelCase form documented in the rustdoc (`isRunning`,
-    /// `startedAtUnix`, …). The bug surfaced by an earlier review
+    /// `startedAtUnix`, …). The regression
     /// was that the doc promised camelCase but the type derived
     /// `Serialize` without `rename_all`, producing snake_case keys
     /// that would surface as `undefined` when destructured by a JS

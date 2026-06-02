@@ -463,7 +463,7 @@ mod tests {
             b.as_str().as_ptr(),
             "LanguageTag::clone must share the underlying Arc<str> allocation \
              (got distinct data pointers — Clone is allocating again, which \
-             defeats the Arc<str> refactor for an earlier review finding)"
+             defeats the whole point of the Arc<str> refactor)"
         );
         // Equality + hashing still behave as `str`-based comparison
         // (a fresh-construction "ja" allocates a separate buffer

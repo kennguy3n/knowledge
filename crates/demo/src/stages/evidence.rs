@@ -67,8 +67,9 @@ pub fn run(
     // "language unknown". The demo report surfaces this breakdown so
     // the multilingual ingest pipeline is visibly exercised end-to-
     // end rather than silently leaving the column NULL (which is
-    // what the earlier legacy `ingest()` shim would have done
-    // — and what an earlier review correctly flagged as a usability gap).
+    // what the earlier legacy `ingest()` shim would have done —
+    // an unprintable demo step that hides whether language
+    // detection is even reaching the storage layer).
     let mut by_language: std::collections::BTreeMap<String, u64> =
         std::collections::BTreeMap::new();
     let mut ingested: Vec<IngestedRow> = Vec::new();
@@ -184,8 +185,8 @@ pub fn run(
     // detector should emit at least one concrete BCP-47 tag (e.g.
     // `"en"`) on the inline / body-table path. A failure here would
     // mean the demo silently regressed back to the legacy `ingest()`
-    // shim that leaves the column NULL — which is exactly the
-    // showcase-gap an earlier review flagged on the previous commit.
+    // shim that leaves the column NULL — exactly the showcase-gap
+    // this stage exists to surface.
     let language_tagged_rows: u64 = by_language
         .iter()
         .filter(|(k, _)| k.as_str() != "<none>")

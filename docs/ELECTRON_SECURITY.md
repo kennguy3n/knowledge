@@ -148,9 +148,8 @@ so the main process can deny / log / rate-limit as needed.
 When a new N-API export lands in `crates/napi/src/bindings.rs`,
 the corresponding `knowledge:*` channel name must be added to the
 preload allowlist **and** to the main-process `ipcMain.handle`
-registration in the same commit. An earlier review configuration
-in this repo flags drifts between the addon exports and the
-preload bundle.
+registration in the same commit. CI in this repo flags drifts
+between the addon exports and the preload bundle.
 
 ## 4. Preload script isolation pattern
 

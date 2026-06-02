@@ -575,7 +575,9 @@ fn synthesis_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     // posture on the detail string so operators can confirm
     // `configure_synthesis_engine` actually landed the host's
     // rate-shaping values. Same diagnostic-gap rationale as the
-    // `single_tenant=` token from an earlier review.
+    // `single_tenant=` token below: without these fields the only
+    // way to verify the host's configuration is in-process state
+    // inspection, which the health probe is meant to obviate.
     let rate_capacity = rt.synthesis_rate_limiter.capacity();
     let rate_refill_per_sec = rt.synthesis_rate_limiter.refill_per_sec();
 

@@ -70,8 +70,9 @@ pub enum InterrogativeMatch {
     /// short two-token collocations whose bare leading token is
     /// too high-frequency to use on its own (Vietnamese, where
     /// `tại` / `khi` / `vì` are common prepositions /
-    /// conjunctions in declaratives — see an earlier review for
-    /// context).
+    /// conjunctions in declaratives — a first-bigram match would
+    /// false-fire on declaratives that simply begin with these
+    /// tokens).
     FirstBigram,
     /// Any interrogative appearing as a substring of the
     /// case-folded sentence counts as a match. Used for languages
@@ -187,9 +188,9 @@ pub fn interrogatives_for(
         // interrogative-only and stays in the list; combined with
         // the `?` terminator on `que ...?` openers, recall stays
         // adequate. Same class of bug as Spanish / Portuguese
-        // `por` (flagged by an earlier review) and
-        // Indonesian / Malay `di` / `yang` (flagged by an earlier
-        // review).
+        // `por` and Indonesian / Malay `di` / `yang` — each is a
+        // declarative-frequent token that would false-fire if
+        // peeled blindly.
         "fr" => Some((
             &[
                 "qui",
@@ -248,7 +249,7 @@ pub fn interrogatives_for(
         // `Que ele venha amanhã` — "(I hope) he comes tomorrow",
         // `O livro que li`, ...). The FirstToken false-positive
         // surface is the same as French `que` and Italian `che`
-        // (per an earlier review). The accented `quê` and the
+        // . The accented `quê` and the
         // bare `o que` (which tokenises to `o`, missed regardless)
         // combined with the `?` terminator on `que ...?` openers
         // give adequate recall.
@@ -427,7 +428,7 @@ pub fn interrogatives_for(
         // recovered instead via the `؟` terminator short-
         // circuit in [`crate::extractor::looks_like_question`].
         //
-        // An earlier review narrowed the proclitic peel set
+        // The proclitic peel set was narrowed
         // from 8 to 6 entries: `ك` ("like/as") and
         // `س` ("will") were excluded after surfacing both
         // interrogative-path false positives (`كمن` ➜ `من`,
@@ -988,7 +989,7 @@ mod tests {
 
     #[test]
     fn first_token_with_arabic_clitics_languages_are_arabic_only_for_now() {
-        // Pinned by an earlier review: the
+        // Pinned regression: the
         // proclitic-aware first-token strategy was introduced
         // specifically for the Arabic agglutinative-prefix
         // morphology (و / ف / ب / ل / ال / أل clitically attaching
@@ -1123,7 +1124,7 @@ mod tests {
         // language's entries.
         for tag in SUPPORTED_PRIMARY_TAGS {
             let (list, strat) = interrogatives_for(tag).unwrap();
-            // An earlier review extended the invariant to every
+            // The invariant was extended to every
             // strategy whose matcher consults the extractor's
             // alphabetic-only tokeniser — i.e. both bare
             // FirstToken AND FirstTokenWithArabicClitics, which
@@ -1379,8 +1380,7 @@ mod tests {
 
     #[test]
     fn vietnamese_omits_high_frequency_bare_conjunctions_but_keeps_bigrams() {
-        // Per an earlier-review finding:
-        // `khi`, `tại`, `vì` are extremely common Vietnamese
+        // // `khi`, `tại`, `vì` are extremely common Vietnamese
         // conjunctions / prepositions whose interrogative
         // readings only manifest as part of bigrams (`khi nào`,
         // `tại sao`, `vì sao`). The bare forms remain absent so
