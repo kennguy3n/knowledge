@@ -150,9 +150,9 @@ criterion = { version = "0.7", features = ["html_reports"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Language detection (Phase 1.3) — pure-Rust trigram-statistics
-# detector that returns an ISO 639-3 enum + a confidence + an
-# `is_reliable` heuristic. The substrate uses it inside the
+# Language detection — pure-Rust trigram-statistics detector that
+# returns an ISO 639-3 enum + a confidence + an `is_reliable`
+# heuristic. The substrate uses it inside the
 # observation pipeline to stamp every produced `Observation` with a
 # BCP-47 primary subtag so the multilingual lexicon registry, the
 # CJK-aware FTS5 tokenizer, and the per-language extractor heuristics
@@ -166,25 +166,21 @@ serde_json = "1"
 # script presence rather than the language tag, which is the right
 # architecture independently and not a workaround we need to lift.
 #
-# Freshness audited in Phase 2.4 against `index.crates.io`; on the
-# latest published version. See `docs/MULTILINGUAL_DEPENDENCY_AUDIT.md`
-# for the per-dep audit log and the future-bump policy.
+# On the latest published version; see `docs/DEPENDENCIES.md` for
+# the MSRV policy and the future-bump checklist.
 whatlang = "0.18"
 
-# Unicode NFC normalization (Phase 1.4) — used by the interrogative
-# first-token extractor to handle NFD-decomposed input (e.g. `qué` as
+# Unicode NFC normalization — used by the interrogative first-token
+# extractor to handle NFD-decomposed input (e.g. `qué` as
 # `q u e \u{0301}`) so accented interrogatives match the NFC-composed
-# table entries. Pure Rust, no_std-compatible, MIT.
-#
-# Freshness audited in Phase 2.4 against `index.crates.io`; on the
-# latest published version (`0.1.25`, upstream MSRV `1.36`). See
-# `docs/MULTILINGUAL_DEPENDENCY_AUDIT.md`.
+# table entries. Pure Rust, no_std-compatible, MIT. On the latest
+# published version; see `docs/DEPENDENCIES.md`.
 unicode-normalization = "0.1"
 
 # HTTP client. The blocking client is used by the synchronous
 # inference path (`inference_router`'s `http-client` feature talks
 # to the llama.cpp loopback `llama-server`); the async client is
-# used by the Phase 5 async-runtime path (`connector_framework`'s
+# used by the async-runtime path (`connector_framework`'s
 # `async-http-client` feature + `inference_router`'s
 # `async-http-client` feature). Both are gated so cross-checks and
 # offline lints that don't link the network stack can still build
@@ -200,7 +196,7 @@ unicode-normalization = "0.1"
 # doc comment promises.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
-# Tokio multi-thread runtime for the Phase 5 async surface. Gated
+# Tokio multi-thread runtime for the async surface. Gated
 # behind `[features]` on the crates that opt-in — the synchronous
 # core stays free of `tokio` so the crypto / evidence-store /
 # memory-manager / observation-engine surface compiles on hosts
@@ -215,7 +211,7 @@ tokio = { version = "1", default-features = false, features = ["rt-multi-thread"
 # `connector_framework::AsyncConnector`.
 async-trait = "0.1"
 
-# Axum + tower for the Phase 5 webhook receiver. Axum is built on
+# Axum + tower for the webhook receiver. Axum is built on
 # top of `hyper` 1.x and the `tower` middleware ecosystem. The
 # specific features are chosen so the webhook server compiles
 # without pulling in tokio macros that the rest of the workspace
@@ -314,9 +310,9 @@ pedantic = { level = "warn", priority = -1 }
 # behaviour opt in locally with a `#[allow(clippy::cast_…)]`
 # attribute next to the cast, justifying the bound in a comment
 # — see e.g. `crates/audit_service/src/persist.rs:393` (clamped
-# `u64 -> i64` for SQLite row IDs) and `crates/demo/src/phases/crypto.rs`
-# (deterministic test vectors where the cast cannot truncate by
-# construction).
+# `u64 -> i64` for SQLite row IDs) and the demo crate's crypto
+# stage (deterministic test vectors where the cast cannot truncate
+# by construction).
 #
 # Note that `crates/crypto/Cargo.toml` does NOT inherit
 # `[lints] workspace = true` — it maintains its own fully

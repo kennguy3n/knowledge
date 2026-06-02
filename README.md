@@ -215,8 +215,8 @@ follow-on integration points (callback bridge and lexicon-based
 classifier respectively). Host UI shells (Swift, Kotlin,
 Electron) are out of scope for this repository.
 
-`trigger_server_synthesis` is the server-side counterpart
-(Phase 7). It dispatches a domain- or tenant-tier synthesis run
+`trigger_server_synthesis` is the server-side counterpart.
+It dispatches a domain- or tenant-tier synthesis run
 for the named scope through the configured
 `HttpManagedEndpointSynthesizer`, gathers admissible inputs
 (channel outputs feeding a domain; domain outputs and approved
@@ -267,14 +267,14 @@ matching counter, grouped here by responsibility:
 - **Synthesis pipeline.** `synthesis_triggered_total` (any
   trigger path), `configure_synthesis_engine_total` (server-side
   slot configuration), `trigger_server_synthesis_total`,
-  `trigger_server_synthesis_throttled_total` (Phase 10 Item 5
-  — rate-shaping token-bucket rejections),
-  `synthesis_status_total`, `list_recent_syntheses_total`,
-  `replay_synthesis_total` (Phase 10 Item 4 — versioned re-run
-  of an existing window), `list_synthesis_versions_total`, and
-  `stuck_pending_window_recovered_total` (Phase 10 Item 1 —
-  age-based `open_store` sweep marking unrecoverable Pending
-  windows Failed-with-retry).
+  `trigger_server_synthesis_throttled_total` (rate-shaping
+  token-bucket rejections), `synthesis_status_total`,
+  `list_recent_syntheses_total`, `replay_synthesis_total`
+  (versioned re-run of an existing window),
+  `list_synthesis_versions_total`, and
+  `stuck_pending_window_recovered_total` (age-based
+  `open_store` sweep marking unrecoverable Pending windows
+  Failed-with-retry).
 - **Decay & cryptographic forgetting.** `decay_sweeps_total`,
   `forgets_total` (per-evidence forget), `forget_scopes_total`
   (per-scope forget).
@@ -289,9 +289,8 @@ matching counter, grouped here by responsibility:
 - **Connectors.** `create_connector_total`,
   `authenticate_connector_total`, `sync_connector_total`,
   `refresh_connector_token_total`, `list_connectors_total`,
-  `remove_connector_total`, `connector_status_total` (Phase 10
-  Item 3 — per-instance health probe symmetric with
-  `synthesis_status`).
+  `remove_connector_total`, `connector_status_total` (per-
+  instance health probe symmetric with `synthesis_status`).
 - **Host-supplied resolvers.**
   `set_oauth_client_secret_resolver_total`,
   `clear_oauth_client_secret_resolver_total`,
@@ -391,14 +390,14 @@ the `http-client` feature. The FFI surface exposes it through
 (rate-shaped by a token-bucket gate that surfaces
 `FfiError::Throttled` with the `Retry-After` window the host
 should honour), `synthesis_status`, `list_recent_syntheses`, and
-`replay_synthesis` (Phase 10 Item 4 — re-runs an existing window
-through the engine and writes a versioned
+`replay_synthesis` (re-runs an existing window through the
+engine and writes a versioned
 `synthesis_object_versions` row so callers can inspect every
 historical output for a given window). Hierarchy enforcement and
 scope-binding checks are applied at the FFI layer before the HTTP
 dispatch. Connector instances expose a symmetric per-instance
-health probe via `connector_status` (Phase 10 Item 3). The Go
-gateway / SLM frontends live outside this repository.
+health probe via `connector_status`. The Go gateway / SLM
+frontends live outside this repository.
 
 ---
 
