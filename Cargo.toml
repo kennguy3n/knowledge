@@ -4,6 +4,7 @@ exclude = ["crates/crypto/fuzz"]
 members = [
     "crates/agent_contract",
     "crates/audit_service",
+    "crates/benchmarks",
     "crates/concept_graph",
     "crates/connector_framework",
     "crates/connectors",

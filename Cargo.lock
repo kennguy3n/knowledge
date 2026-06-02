@@ -268,6 +268,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "benchmarks"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "concept_graph",
+ "connector_framework",
+ "connectors",
+ "criterion",
+ "crypto",
+ "evidence_store",
+ "memory_manager",
+ "observation_engine",
+ "permission_service",
+ "serde_json",
+ "synthesis_pipeline",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
