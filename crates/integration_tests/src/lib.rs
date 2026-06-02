@@ -15,14 +15,25 @@
 //! * `tests/crypto_round_trip.rs` — hybrid KEM encap/decap, ML-DSA-65
 //!   sign/verify, SPHINCS+ sign/verify, co-sign/co-verify, and
 //!   AEAD ciphertext-after-forgetting failure.
+//! * `tests/synthesis_round_trip.rs` — full pipeline from evidence
+//!   ingest through synthesis (channel → domain → tenant) to export.
+//! * `tests/connector_lifecycle.rs` — connector attach/detach with
+//!   scope inheritance and DEK destroy.
+//! * `tests/memory_decay.rs` — retention scoring, decay state
+//!   transitions, and cryptographic forgetting.
+//! * `tests/sync_merge.rs` — CRDT convergence via delta exchange
+//!   with add-wins, supersession, and idempotent merge.
+//! * `tests/agent_proposal.rs` — proposal lifecycle, canonical
+//!   promotion, and audit log entries.
+//! * `tests/multi_scope_isolation.rs` — cross-scope evidence,
+//!   observation, and permission isolation.
 
 #![deny(missing_docs)]
 
 /// Shared test constants and helpers for integration tests.
 pub mod test_helpers {
     pub use evidence_store::{
-        EvidenceStore, EvidenceStoreConfig, ImportanceClass, ScopeId,
-        DEFAULT_INLINE_THRESHOLD_BYTES,
+        EvidenceStore, EvidenceStoreConfig, ScopeId, DEFAULT_INLINE_THRESHOLD_BYTES,
     };
 
     /// Fixed master key for all test stores.
