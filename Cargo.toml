@@ -26,6 +26,14 @@ members = [
     "crates/uniffi-bindgen",
 ]
 
+# The bench profile inherits from release (no debug_assertions), which
+# triggers the compile_error! guards in crates that gate test-support
+# behind `not(debug_assertions)`. We enable debug-assertions for
+# benchmarks so dev-dependencies with test-support features compile
+# correctly under `cargo bench`.
+[profile.bench]
+debug-assertions = true
+
 [workspace.package]
 version = "0.1.0"
 # Workspace crates stay on Rust 2021 even though some dependencies

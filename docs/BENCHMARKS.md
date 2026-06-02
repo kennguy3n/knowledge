@@ -97,9 +97,11 @@ inference time.
   to separate setup cost from the measured path.
 - **Throughput annotation**: All benchmarks report `Throughput::Elements`
   or `Throughput::Bytes` so Criterion can compute ops/sec or MB/sec.
-- **Determinism**: No randomisation in the measurement path; UUIDs
-  are generated during setup but the measured work is deterministic
-  over the pre-built data.
+- **Determinism**: Where possible, UUIDs and data are generated
+  during setup (`iter_with_setup`) so the measured path operates on
+  pre-built data. Some throughput benchmarks (e.g. insert benchmarks)
+  include UUID generation in the hot path since it is intrinsic to
+  the operation being measured.
 
 ## CI integration
 
