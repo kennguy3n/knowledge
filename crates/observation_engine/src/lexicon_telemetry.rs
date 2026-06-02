@@ -116,10 +116,12 @@ pub(crate) struct Counters {
     // ─── Lexicon hits per BCP-47 primary subtag ────────────────
     // One counter per resolved-lexicon `primary_tag` (so a fall-
     // back to English shows up here as `hits_en`, not as the
-    // requested tag). The 21 fields below mirror
-    // `crate::lexicon::SUPPORTED_LEXICON_TAGS` exactly — every
-    // new lexicon added to the registry must extend this struct
-    // (and the snapshot, and the FFI mirror) symmetrically.
+    // requested tag). The `hits_*` fields below mirror
+    // `crate::lexicon::SUPPORTED_LEXICON_TAGS` one-for-one (the
+    // exact-coverage invariant is enforced by a unit test, so the
+    // set is kept honest without a hand-maintained count here) —
+    // every new lexicon added to the registry must extend this
+    // struct (and the snapshot, and the FFI mirror) symmetrically.
     pub(crate) hits_ar: AtomicU64,
     pub(crate) hits_bo: AtomicU64,
     pub(crate) hits_de: AtomicU64,
