@@ -87,7 +87,12 @@ impl NamespaceRegistry {
     /// scope-style object type.
     pub fn with_defaults() -> Self {
         let mut reg = Self::new();
-        for object_type in [ObjectType::Tenant, ObjectType::Domain, ObjectType::Channel] {
+        for object_type in [
+            ObjectType::Tenant,
+            ObjectType::Domain,
+            ObjectType::Channel,
+            ObjectType::User,
+        ] {
             let cfg = NamespaceConfig::new(object_type)
                 .imply(Relation::Owner, &[Relation::Admin])
                 .imply(Relation::Admin, &[Relation::Editor])
