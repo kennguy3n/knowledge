@@ -1380,7 +1380,7 @@ mod tests {
 
     #[test]
     fn vietnamese_omits_high_frequency_bare_conjunctions_but_keeps_bigrams() {
-        // // `khi`, `tại`, `vì` are extremely common Vietnamese
+        // `khi`, `tại`, `vì` are extremely common Vietnamese
         // conjunctions / prepositions whose interrogative
         // readings only manifest as part of bigrams (`khi nào`,
         // `tại sao`, `vì sao`). The bare forms remain absent so

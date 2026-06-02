@@ -432,8 +432,8 @@ impl<T: HttpTransport> OAuth2Client<T> {
         // resolver is not registered AND the fallback layer
         // succeeds should not pay for the allocation. `OnceCell`
         // gives us compute-on-first-use with at-most-one allocation
-        // across the whole grant — see commit
-        // PR #60 for the rationale.
+        // across the whole grant, so the fast path never pays for
+        // a `scope_id.to_string()` it doesn't use.
         let scope_id_cell: std::cell::OnceCell<String> = std::cell::OnceCell::new();
         let scope_id = || -> &str {
             scope_id_cell
@@ -1707,10 +1707,9 @@ mod tests {
         );
     }
 
-    /// Regression test for review finding
-    ///
-    /// `client_secret_for` must NOT hold the resolver's read lock
-    /// across the `resolve(...)` call, or a concurrent
+    /// Regression test: `client_secret_for` must NOT hold the
+    /// resolver's read lock across the `resolve(...)` call, or a
+    /// concurrent
     /// `set_resolver` from another thread (e.g. the JS event loop
     /// in the N-API path) deadlocks the worker thread.
     ///

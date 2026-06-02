@@ -42,17 +42,17 @@
 //!
 //! ## Provider env var matrix
 //!
-//! | Connector | Token env var | Optional config env var(s) |
+//! | Connector     | Token env var               | Optional config env var(s)              |
 //! | ------------- | --------------------------- | --------------------------------------- |
-//! | Notion | `NOTION_TEST_TOKEN` | — |
-//! | Google Drive | `GOOGLE_DRIVE_TEST_TOKEN` | — |
-//! | Slack | `SLACK_TEST_TOKEN` | — |
-//! | Jira | `JIRA_TEST_TOKEN` | `JIRA_TEST_BASE_URL` |
-//! | Confluence | `CONFLUENCE_TEST_TOKEN` | `CONFLUENCE_TEST_BASE_URL` |
-//! | OneDrive | `ONEDRIVE_TEST_TOKEN` | — |
-//! | HubSpot | `HUBSPOT_TEST_TOKEN` | — |
-//! | Figma | `FIGMA_TEST_TOKEN` | — |
-//! | Email (Gmail) | `EMAIL_TEST_TOKEN` | `EMAIL_TEST_PROVIDER` (gmail \| graph) |
+//! | Notion        | `NOTION_TEST_TOKEN`         | —                                       |
+//! | Google Drive  | `GOOGLE_DRIVE_TEST_TOKEN`   | —                                       |
+//! | Slack         | `SLACK_TEST_TOKEN`          | —                                       |
+//! | Jira          | `JIRA_TEST_TOKEN`           | `JIRA_TEST_BASE_URL`                    |
+//! | Confluence    | `CONFLUENCE_TEST_TOKEN`     | `CONFLUENCE_TEST_BASE_URL`              |
+//! | OneDrive      | `ONEDRIVE_TEST_TOKEN`       | —                                       |
+//! | HubSpot       | `HUBSPOT_TEST_TOKEN`        | —                                       |
+//! | Figma         | `FIGMA_TEST_TOKEN`          | —                                       |
+//! | Email (Gmail) | `EMAIL_TEST_TOKEN`          | `EMAIL_TEST_PROVIDER` (gmail \| graph)  |
 //!
 //! Tests assert `initial_sync` returns at least one
 //! [`ConnectorEvent`] — a connected sandbox account is expected
