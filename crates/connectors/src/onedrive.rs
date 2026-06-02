@@ -36,12 +36,14 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use connector_framework::{
-    bearer_get_json, bearer_post_json, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
-    ConnectorInstanceId, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId,
+    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::content::{bearer_get_raw, get_raw, response_header, strip_charset};
 
 /// Default Graph base URL. Override via
 /// `auth_config_json.api_base_url` for sandboxes / sovereign clouds.
@@ -300,6 +302,32 @@ fn parse_role(role: &str) -> Option<SourcePermissionLevel> {
     }
 }
 
+/// The `file` facet of a Graph `DriveItem` — present on files, absent
+/// on folders. Carries the source MIME type.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct OneDriveFileFacet {
+    #[serde(default, rename = "mimeType")]
+    mime_type: Option<String>,
+}
+
+/// Item metadata needed by `fetch_content`: title, citation URL, MIME
+/// type, and the pre-authenticated `@microsoft.graph.downloadUrl`
+/// short-lived link Graph mints for direct content download (used for
+/// Office docs and every other downloadable item).
+#[derive(Debug, Clone, Default, Deserialize)]
+struct OneDriveItemMeta {
+    #[serde(default)]
+    name: String,
+    #[serde(default, rename = "webUrl")]
+    web_url: Option<String>,
+    #[serde(default, rename = "@microsoft.graph.downloadUrl")]
+    download_url: Option<String>,
+    #[serde(default)]
+    file: Option<OneDriveFileFacet>,
+    #[serde(default)]
+    folder: Option<serde_json::Value>,
+}
+
 /// Which sync pass produced this item — we use this instead of
 /// comparing `createdDateTime == lastModifiedDateTime` because
 /// during `initial_sync` the substrate is seeing every non-deleted
@@ -398,6 +426,94 @@ impl Connector for OneDriveConnector {
             events,
             next_cursor,
         })
+    }
+
+    fn fetch_content(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        document_id: &SourceDocumentId,
+    ) -> Result<FetchedContent> {
+        let base = self.resolved_base_url(config);
+        let version = self.resolved_api_version(config);
+        let drive_path = Self::resolved_drive_path(config);
+        let id = document_id.as_str();
+        let id_enc = percent_encode_path_component(id);
+
+        // 1. Item metadata: title, citation URL, MIME type, and the
+        //    short-lived pre-authenticated download URL.
+        let meta_url = format!(
+            "{base}{version}{drive_path}/items/{id_enc}\
+             ?$select=id,name,webUrl,file,folder,@microsoft.graph.downloadUrl"
+        );
+        let meta: OneDriveItemMeta = bearer_get_json(
+            &self.transport,
+            "onedrive",
+            "/drive/items/{id}",
+            &meta_url,
+            token,
+            &[],
+        )?;
+
+        // Folders carry no content stream.
+        if meta.folder.is_some() && meta.file.is_none() {
+            return Err(ConnectorError::Sync(format!(
+                "onedrive fetch_content: item {id} is a folder with no content"
+            )));
+        }
+
+        let source_mime = meta
+            .file
+            .as_ref()
+            .and_then(|f| f.mime_type.clone())
+            .unwrap_or_default();
+
+        // 2. Download the bytes. Graph hands back a pre-authenticated
+        //    `@microsoft.graph.downloadUrl` (Office docs and ordinary
+        //    files alike) — fetch it WITHOUT the bearer so the
+        //    downstream CDN / SharePoint host doesn't reject the
+        //    duplicate credential. If Graph omitted it (some mock /
+        //    proxy setups), fall back to the authenticated
+        //    `/items/{id}/content` redirect endpoint.
+        let resp = if let Some(download_url) = meta.download_url.as_deref() {
+            get_raw(
+                &self.transport,
+                "onedrive",
+                "@microsoft.graph.downloadUrl",
+                download_url,
+                &[],
+            )?
+        } else {
+            let content_url = format!("{base}{version}{drive_path}/items/{id_enc}/content");
+            bearer_get_raw(
+                &self.transport,
+                "onedrive",
+                "/drive/items/{id}/content",
+                &content_url,
+                token,
+                &[],
+            )?
+        };
+
+        let mime = response_header(&resp, "content-type")
+            .map(strip_charset)
+            .filter(|m| !m.is_empty())
+            .map(str::to_string)
+            .or_else(|| (!source_mime.is_empty()).then(|| source_mime.clone()))
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+
+        let source_url = meta.web_url.clone();
+        let mut fc = FetchedContent::binary(resp.body, mime)
+            .with_title(meta.name)
+            .with_metadata(serde_json::json!({
+                "provider": "onedrive",
+                "item_id": id,
+                "source_mime_type": source_mime,
+            }));
+        if let Some(url) = source_url {
+            fc = fc.with_source_url(url);
+        }
+        Ok(fc)
     }
 
     fn subscribe_webhook(
@@ -891,5 +1007,152 @@ mod tests {
                 "initial_sync must emit DocumentCreated for every non-deleted item, got {ev:?}"
             );
         }
+    }
+
+    // ───────────── fetch_content ─────────────
+
+    const META_URL: &str = "https://api.test/graph/v1.0/me/drive/items/item-1\
+        ?$select=id,name,webUrl,file,folder,@microsoft.graph.downloadUrl";
+
+    fn raw_response(content_type: &str, body: impl Into<Vec<u8>>) -> MockResponse {
+        MockResponse {
+            status: 200,
+            headers: vec![("content-type".into(), content_type.into())],
+            body: body.into(),
+        }
+    }
+
+    #[test]
+    fn fetch_content_uses_pre_authenticated_download_url() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            META_URL,
+            ok_json(&serde_json::json!({
+                "id": "item-1",
+                "name": "report.docx",
+                "webUrl": "https://contoso-my.sharepoint.com/report.docx",
+                "file": { "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+                "@microsoft.graph.downloadUrl": "https://contoso.sharepoint.com/download/abc?tempauth=xyz",
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://contoso.sharepoint.com/download/abc?tempauth=xyz",
+            raw_response(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                vec![0x50, 0x4B, 0x03, 0x04],
+            ),
+        );
+        let c = OneDriveConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("item-1"))
+            .unwrap();
+        assert_eq!(fc.body, vec![0x50, 0x4B, 0x03, 0x04]);
+        assert_eq!(
+            fc.mime_type,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+        assert_eq!(fc.title.as_deref(), Some("report.docx"));
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://contoso-my.sharepoint.com/report.docx")
+        );
+        // The pre-signed download URL must be fetched WITHOUT a bearer
+        // header (it carries its own tempauth credential).
+        let dl = transport
+            .recorded()
+            .into_iter()
+            .find(|r| r.url.contains("tempauth"))
+            .unwrap();
+        assert!(!dl
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("authorization")));
+    }
+
+    #[test]
+    fn fetch_content_falls_back_to_content_endpoint() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            META_URL,
+            ok_json(&serde_json::json!({
+                "id": "item-1",
+                "name": "notes.txt",
+                "file": { "mimeType": "text/plain" },
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/graph/v1.0/me/drive/items/item-1/content",
+            raw_response("text/plain; charset=utf-8", b"plain body".to_vec()),
+        );
+        let c = OneDriveConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("item-1"))
+            .unwrap();
+        assert_eq!(fc.body, b"plain body");
+        assert_eq!(fc.mime_type, "text/plain");
+        // The /content fall-back DOES carry the bearer.
+        let dl = transport
+            .recorded()
+            .into_iter()
+            .find(|r| r.url.ends_with("/content"))
+            .unwrap();
+        assert!(dl
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Authorization" && v == "Bearer graph-access"));
+    }
+
+    #[test]
+    fn fetch_content_rejects_folder() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            META_URL,
+            ok_json(&serde_json::json!({
+                "id": "item-1",
+                "name": "Documents",
+                "folder": { "childCount": 3 },
+            })),
+        );
+        let c = OneDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("item-1"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_404_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            META_URL,
+            MockResponse::status(404, br#"{"error":{"code":"itemNotFound"}}"#.to_vec()),
+        );
+        let c = OneDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("item-1"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_429_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(HttpMethod::Get, META_URL, MockResponse::too_many_requests());
+        let c = OneDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("item-1"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
     }
 }

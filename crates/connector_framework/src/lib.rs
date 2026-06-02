@@ -78,7 +78,7 @@ pub use connector::{Connector, SyncRunResult};
 // STABLE
 pub use error::{ConnectorError, Result};
 // STABLE
-pub use event::{ConnectorEvent, SourceDocumentId, SourceUserId};
+pub use event::{ConnectorEvent, FetchedContent, SourceDocumentId, SourceUserId};
 // STABLE
 #[cfg(feature = "http-client")]
 pub use http::{BlockingHttpTransport, DEFAULT_HTTP_TIMEOUT_SECS};

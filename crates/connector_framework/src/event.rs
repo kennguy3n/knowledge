@@ -97,6 +97,130 @@ pub enum ConnectorEvent {
     },
 }
 
+/// The materialised body of a source document, fetched on demand by
+/// [`Connector::fetch_content`](crate::connector::Connector::fetch_content).
+///
+/// A [`ConnectorEvent`] only carries the source-side *identifier* of a
+/// document — it deliberately stays a small `(document, action,
+/// permission)` delta (per `docs/DESIGN.md` §10.2) so the sync loop can
+/// move millions of change notifications cheaply. When the runtime
+/// decides a document is worth ingesting, it calls `fetch_content` to
+/// pull the actual bytes; `FetchedContent` is the normalised shape that
+/// every connector returns regardless of whether the source delivered
+/// Markdown, XHTML, a binary blob, or a structured JSON document.
+///
+/// # Field contract
+///
+/// * [`body`](Self::body) — the raw content bytes. Text-oriented
+///   providers (Notion, Jira, Confluence, GitHub, …) emit UTF-8 text
+///   (Markdown or plain text) here; binary providers (Drive / OneDrive
+///   downloads, Slack file attachments) emit the file bytes verbatim.
+///   The [`mime_type`](Self::mime_type) tells the runtime how to treat
+///   it.
+/// * [`mime_type`](Self::mime_type) — an RFC 6838 media type
+///   (`text/markdown`, `text/plain`, `text/html`, `application/pdf`, …).
+///   Connectors that reconstruct text always report a `text/*` type so
+///   the runtime can ingest the body directly without sniffing.
+/// * [`title`](Self::title) — the human-readable document title when the
+///   source exposes one (page title, issue summary, file name); `None`
+///   when the source has no distinct title field.
+/// * [`metadata`](Self::metadata) — provider-specific structured
+///   metadata (labels, space keys, author, attachment manifests, …)
+///   kept as free-form JSON so a connector can surface useful context
+///   without bloating the strongly-typed surface. Never contains secret
+///   material — tokens stay in the [`OAuth2TokenVault`](crate::token_vault::OAuth2TokenVault).
+/// * [`source_url`](Self::source_url) — a canonical, human-navigable URL
+///   for the document (the Notion page URL, the Jira browse URL, …) when
+///   the provider exposes one, for citation / provenance.
+///
+/// `FetchedContent` does **not** derive `Serialize`/`Deserialize`: the
+/// body may be large and is meant to be streamed straight into
+/// `ffi::ingest_message` by the runtime, not round-tripped through the
+/// connector's JSON cursor state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchedContent {
+    /// Raw content bytes (UTF-8 text for text-oriented providers,
+    /// file bytes for binary downloads). Interpret via [`Self::mime_type`].
+    pub body: Vec<u8>,
+    /// RFC 6838 media type describing [`Self::body`] (e.g.
+    /// `text/markdown`, `text/plain`, `application/pdf`).
+    pub mime_type: String,
+    /// Human-readable document title, when the source exposes one.
+    pub title: Option<String>,
+    /// Provider-specific structured metadata as free-form JSON.
+    /// Must never carry secret material (tokens, refresh secrets).
+    pub metadata: serde_json::Value,
+    /// Canonical, human-navigable URL for the document, for citation
+    /// / provenance, when the provider exposes one.
+    pub source_url: Option<String>,
+}
+
+impl FetchedContent {
+    /// Construct a text-bodied [`FetchedContent`] from a string.
+    ///
+    /// Convenience for the common case where a connector reconstructs
+    /// the document into UTF-8 text (Markdown or plain text) — sets
+    /// [`Self::body`] to the string's bytes and leaves
+    /// [`Self::metadata`] as JSON `null` for the caller to fill in.
+    #[must_use]
+    pub fn text(body: impl Into<String>, mime_type: impl Into<String>) -> Self {
+        Self {
+            body: body.into().into_bytes(),
+            mime_type: mime_type.into(),
+            title: None,
+            metadata: serde_json::Value::Null,
+            source_url: None,
+        }
+    }
+
+    /// Construct a binary-bodied [`FetchedContent`] from raw bytes.
+    ///
+    /// Convenience for binary downloads (Drive / OneDrive blobs, Slack
+    /// file attachments) — leaves [`Self::metadata`] as JSON `null`.
+    #[must_use]
+    pub fn binary(body: Vec<u8>, mime_type: impl Into<String>) -> Self {
+        Self {
+            body,
+            mime_type: mime_type.into(),
+            title: None,
+            metadata: serde_json::Value::Null,
+            source_url: None,
+        }
+    }
+
+    /// Builder: attach a document title. Returns `self` for chaining.
+    ///
+    /// An empty or whitespace-only `title` is treated as "no title" and
+    /// leaves [`Self::title`] as `None`. This lets connectors pass a
+    /// source field (page title, issue summary, file name) through
+    /// unconditionally without each one guarding for blanks, keeping
+    /// the "`None` when the source has no distinct title" contract.
+    #[must_use]
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        let title = title.into();
+        self.title = if title.trim().is_empty() {
+            None
+        } else {
+            Some(title)
+        };
+        self
+    }
+
+    /// Builder: attach provider-specific metadata. Returns `self`.
+    #[must_use]
+    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// Builder: attach a canonical source URL. Returns `self`.
+    #[must_use]
+    pub fn with_source_url(mut self, url: impl Into<String>) -> Self {
+        self.source_url = Some(url.into());
+        self
+    }
+}
+
 impl ConnectorEvent {
     /// Stable string tag for the event variant — used for routing
     /// and metrics.
@@ -156,6 +280,59 @@ mod tests {
         };
         assert_eq!(ev.kind(), "permission_changed");
         assert_eq!(ev.document_id().as_str(), "doc-9");
+    }
+
+    #[test]
+    fn fetched_content_text_builder_sets_body_and_defaults() {
+        let fc = FetchedContent::text("# Title\nbody", "text/markdown");
+        assert_eq!(fc.body, b"# Title\nbody");
+        assert_eq!(fc.mime_type, "text/markdown");
+        assert!(fc.title.is_none());
+        assert!(fc.source_url.is_none());
+        assert_eq!(fc.metadata, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn fetched_content_binary_builder_preserves_bytes() {
+        let bytes = vec![0x00, 0xFF, 0x10, 0x42];
+        let fc = FetchedContent::binary(bytes.clone(), "application/pdf");
+        assert_eq!(fc.body, bytes);
+        assert_eq!(fc.mime_type, "application/pdf");
+    }
+
+    #[test]
+    fn fetched_content_builders_chain() {
+        let fc = FetchedContent::text("hello", "text/plain")
+            .with_title("Greeting")
+            .with_source_url("https://example.test/doc/1")
+            .with_metadata(serde_json::json!({ "labels": ["a", "b"] }));
+        assert_eq!(fc.title.as_deref(), Some("Greeting"));
+        assert_eq!(fc.source_url.as_deref(), Some("https://example.test/doc/1"));
+        assert_eq!(fc.metadata["labels"][0], "a");
+    }
+
+    #[test]
+    fn with_title_treats_blank_as_none() {
+        // Empty and whitespace-only titles normalise to `None` so
+        // connectors can pass a source field through unconditionally.
+        assert_eq!(
+            FetchedContent::text("b", "text/plain").with_title("").title,
+            None
+        );
+        assert_eq!(
+            FetchedContent::text("b", "text/plain")
+                .with_title("   \n\t")
+                .title,
+            None
+        );
+        // A title with surrounding whitespace is preserved as-is.
+        assert_eq!(
+            FetchedContent::text("b", "text/plain")
+                .with_title(" Real Title ")
+                .title
+                .as_deref(),
+            Some(" Real Title ")
+        );
     }
 
     #[test]

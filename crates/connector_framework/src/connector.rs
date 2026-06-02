@@ -14,8 +14,8 @@
 //! connector to maintain two parallel impls.
 
 use crate::config::ConnectorConfig;
-use crate::error::Result;
-use crate::event::ConnectorEvent;
+use crate::error::{ConnectorError, Result};
+use crate::event::{ConnectorEvent, FetchedContent, SourceDocumentId};
 use crate::sync::SyncState;
 use crate::token_vault::OAuth2Token;
 use crate::webhook::WebhookSubscription;
@@ -40,6 +40,9 @@ pub struct SyncRunResult {
 /// * `initial_sync` — full pull when the connector first comes up.
 /// * `incremental_sync` — steady-state pull keyed off the
 ///   [`SyncState`] cursor.
+/// * `fetch_content` — pull the materialised body of one document
+///   (called lazily by the runtime for each `DocumentCreated` /
+///   `DocumentUpdated` event the sync passes surface).
 /// * `subscribe_webhook` — install a push subscription with the
 ///   provider so the substrate can react to changes without
 ///   polling.
@@ -72,6 +75,74 @@ pub trait Connector: Send + Sync {
         token: &OAuth2Token,
         state: &SyncState,
     ) -> Result<SyncRunResult>;
+
+    /// Fetch the materialised body of a single source document.
+    ///
+    /// `initial_sync` / `incremental_sync` emit lightweight
+    /// `(document, action, permission)` deltas — they carry only the
+    /// [`SourceDocumentId`], never the document bytes, so the sync
+    /// loop can move large change feeds cheaply. This method is the
+    /// second half of the contract: given one document id, it issues
+    /// the provider-specific content API call(s) over the injected
+    /// [`crate::http::HttpTransport`] and returns the normalised
+    /// [`FetchedContent`] (body bytes + MIME type + title + metadata
+    /// + canonical URL).
+    ///
+    /// # Runtime wiring contract
+    ///
+    /// `fetch_content` is **not** called from the connector itself —
+    /// the substrate runtime (`crates/substrate_server`) owns the
+    /// orchestration. For every [`ConnectorEvent::DocumentCreated`]
+    /// and [`ConnectorEvent::DocumentUpdated`] a sync run surfaces, the
+    /// runtime is expected to:
+    ///
+    /// 1. call `fetch_content(config, token, event.document_id())` to
+    ///    pull the body;
+    /// 2. chunk large bodies with
+    ///    `observation_engine::DocumentChunker` before ingest (so a
+    ///    multi-megabyte page is split into embedding-sized windows
+    ///    rather than ingested as one oversized record); and
+    /// 3. feed each chunk into the substrate via `ffi::ingest_message`,
+    ///    tagging it with the connector's scope and the document's
+    ///    [`FetchedContent::source_url`] / [`FetchedContent::title`]
+    ///    for citation.
+    ///
+    /// [`ConnectorEvent::DocumentDeleted`] events skip `fetch_content`
+    /// entirely (there is nothing to fetch — the runtime issues a
+    /// `forget` instead), and [`ConnectorEvent::PermissionChanged`]
+    /// events route to the ACL projection rather than ingestion.
+    ///
+    /// The connector crate intentionally does **not** depend on
+    /// `observation_engine` or `ffi` for this — chunking and ingest
+    /// live on the runtime side of the trait boundary so connectors
+    /// stay a thin, independently-testable HTTP layer.
+    ///
+    /// # Default implementation
+    ///
+    /// The default returns [`ConnectorError::Unimplemented`] so a
+    /// connector that has not yet wired content fetching still
+    /// compiles. Every production connector in this workspace
+    /// overrides it; a runtime that receives `Unimplemented` should
+    /// treat it as a wiring bug, not a transient sync error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConnectorError::Auth`] when the provider rejects the
+    /// token (401/403), [`ConnectorError::Sync`] for any other non-2xx
+    /// status, a malformed body, or an unfetchable document (e.g. a
+    /// Google Workspace doc with no export path), and
+    /// [`ConnectorError::Transport`] for low-level network failures.
+    fn fetch_content(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        document_id: &SourceDocumentId,
+    ) -> Result<FetchedContent> {
+        let _ = (config, token);
+        Err(ConnectorError::Unimplemented(format!(
+            "fetch_content not implemented for document {document_id}"
+        )))
+    }
 
     /// Install a push subscription with the provider. The returned
     /// [`WebhookSubscription`] should be persisted by the runtime.
@@ -183,6 +254,24 @@ mod tests {
             .subscribe_webhook(&cfg, &tok, "https://substrate.example/webhook")
             .unwrap();
         assert_eq!(sub.connector, inst);
+    }
+
+    #[test]
+    fn default_fetch_content_returns_unimplemented() {
+        let inst = ConnectorInstanceId::new_v4();
+        let connector = FakeConnector { instance: inst };
+        let cfg = ConnectorConfig::new(ConnectorKind::Notion, AuthKind::OAuth2, ScopeId::new_v4());
+        let tok = connector.authenticate(&cfg).unwrap();
+        let err = connector
+            .fetch_content(&cfg, &tok, &SourceDocumentId::new("doc-1"))
+            .unwrap_err();
+        match err {
+            ConnectorError::Unimplemented(msg) => assert!(
+                msg.contains("doc-1"),
+                "Unimplemented message should name the document: {msg}"
+            ),
+            other => panic!("expected Unimplemented, got {other:?}"),
+        }
     }
 
     #[test]

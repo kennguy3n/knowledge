@@ -23,11 +23,13 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
-    ConnectorError, ConnectorEvent, ConnectorInstanceId, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId, SyncRunResult,
-    SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId,
+    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::content::adf_to_text;
 
 /// Default Atlassian Jira REST base URL. Per-instance overrides go
 /// through `auth_config_json.api_base_url` (Jira Cloud sites are
@@ -78,6 +80,31 @@ pub struct JiraFields {
 pub struct JiraStatus {
     /// Status name.
     pub name: String,
+}
+
+/// `GET /rest/api/3/issue/{key}/comment` response (subset).
+#[derive(Debug, Clone, Default, Deserialize)]
+struct JiraCommentsResponse {
+    #[serde(default)]
+    comments: Vec<JiraComment>,
+}
+
+/// One Jira comment — `body` is an ADF document node.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct JiraComment {
+    #[serde(default)]
+    body: serde_json::Value,
+    #[serde(default)]
+    author: Option<JiraCommentAuthor>,
+    #[serde(default)]
+    created: Option<String>,
+}
+
+/// Author sub-object of a comment.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct JiraCommentAuthor {
+    #[serde(default, rename = "displayName")]
+    display_name: String,
 }
 
 /// One page of a JQL `/search` response.
@@ -381,6 +408,107 @@ impl Connector for JiraConnector {
             events,
             next_cursor: watermark.map(|t| t.to_rfc3339()),
         })
+    }
+
+    fn fetch_content(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        document_id: &SourceDocumentId,
+    ) -> Result<FetchedContent> {
+        let base_url = self.resolved_base_url(config);
+        let key = document_id.as_str();
+        let key_enc = percent_encode_path_component(key);
+
+        // 1. Issue: summary + ADF description. `expand` pulls the
+        //    rendered HTML + field display names for completeness; we
+        //    parse the structured ADF `description` for the body text.
+        let issue_url =
+            format!("{base_url}/rest/api/3/issue/{key_enc}?expand=renderedFields,names");
+        let issue: serde_json::Value = bearer_get_json(
+            &self.transport,
+            "jira",
+            "/rest/api/3/issue/{key}",
+            &issue_url,
+            token,
+            &[],
+        )?;
+        let fields = issue.get("fields");
+        let summary = fields
+            .and_then(|f| f.get("summary"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let status = fields
+            .and_then(|f| f.get("status"))
+            .and_then(|s| s.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let description = fields
+            .and_then(|f| f.get("description"))
+            .filter(|d| !d.is_null())
+            .map(adf_to_text)
+            .unwrap_or_default();
+
+        // 2. Comments — separate endpoint so long threads don't bloat
+        //    the issue payload.
+        let comments_url = format!("{base_url}/rest/api/3/issue/{key_enc}/comment");
+        let comments: JiraCommentsResponse = bearer_get_json(
+            &self.transport,
+            "jira",
+            "/rest/api/3/issue/{key}/comment",
+            &comments_url,
+            token,
+            &[],
+        )?;
+
+        // 3. Assemble a Markdown body: title, description, comments.
+        let mut md = String::new();
+        if !summary.is_empty() {
+            md.push_str("# ");
+            md.push_str(&summary);
+            md.push_str("\n\n");
+        }
+        if !description.is_empty() {
+            md.push_str(&description);
+            md.push_str("\n\n");
+        }
+        if !comments.comments.is_empty() {
+            md.push_str("## Comments\n\n");
+            for c in &comments.comments {
+                let author = c
+                    .author
+                    .as_ref()
+                    .map(|a| a.display_name.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("Unknown");
+                let created = c.created.as_deref().unwrap_or("");
+                md.push_str("**");
+                md.push_str(author);
+                md.push_str("**");
+                if !created.is_empty() {
+                    md.push_str(" (");
+                    md.push_str(created);
+                    md.push(')');
+                }
+                md.push_str(":\n");
+                md.push_str(&adf_to_text(&c.body));
+                md.push_str("\n\n");
+            }
+        }
+        let body = md.trim_end().to_string();
+
+        let source_url = format!("{base_url}/browse/{key}");
+        Ok(FetchedContent::text(body, "text/markdown")
+            .with_title(summary)
+            .with_metadata(serde_json::json!({
+                "provider": "jira",
+                "issue_key": key,
+                "status": status,
+                "comment_count": comments.comments.len(),
+            }))
+            .with_source_url(source_url))
     }
 
     fn subscribe_webhook(
@@ -838,5 +966,125 @@ mod tests {
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    // ───────────── fetch_content ─────────────
+
+    fn adf_doc(text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "doc",
+            "version": 1,
+            "content": [{
+                "type": "paragraph",
+                "content": [{ "type": "text", "text": text }]
+            }]
+        })
+    }
+
+    #[test]
+    fn fetch_content_assembles_summary_description_and_comments() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/jira/rest/api/3/issue/PROJ-7?expand=renderedFields,names",
+            ok_json(&serde_json::json!({
+                "key": "PROJ-7",
+                "fields": {
+                    "summary": "Login is broken",
+                    "status": { "name": "In Progress" },
+                    "description": adf_doc("Users cannot sign in."),
+                }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/jira/rest/api/3/issue/PROJ-7/comment",
+            ok_json(&serde_json::json!({
+                "comments": [
+                    { "author": { "displayName": "Ada" }, "created": "2024-01-02T03:04:05.000+0000",
+                      "body": adf_doc("I can repro this.") }
+                ]
+            })),
+        );
+        let c = JiraConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("PROJ-7"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("# Login is broken"));
+        assert!(body.contains("Users cannot sign in."));
+        assert!(body.contains("## Comments"));
+        assert!(body.contains("**Ada**"));
+        assert!(body.contains("I can repro this."));
+        assert_eq!(fc.mime_type, "text/markdown");
+        assert_eq!(fc.title.as_deref(), Some("Login is broken"));
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://api.test/jira/browse/PROJ-7")
+        );
+        assert_eq!(fc.metadata["status"], serde_json::json!("In Progress"));
+        assert_eq!(fc.metadata["comment_count"], serde_json::json!(1));
+    }
+
+    #[test]
+    fn fetch_content_handles_missing_description_and_no_comments() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/jira/rest/api/3/issue/PROJ-8?expand=renderedFields,names",
+            ok_json(&serde_json::json!({
+                "key": "PROJ-8",
+                "fields": { "summary": "Empty issue", "description": serde_json::Value::Null }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/jira/rest/api/3/issue/PROJ-8/comment",
+            ok_json(&serde_json::json!({ "comments": [] })),
+        );
+        let c = JiraConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("PROJ-8"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert_eq!(body, "# Empty issue");
+        assert_eq!(fc.metadata["comment_count"], serde_json::json!(0));
+    }
+
+    #[test]
+    fn fetch_content_maps_404_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/jira/rest/api/3/issue/NOPE-1?expand=renderedFields,names",
+            MockResponse::status(
+                404,
+                br#"{"errorMessages":["Issue does not exist"]}"#.to_vec(),
+            ),
+        );
+        let c = JiraConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("NOPE-1"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_429_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/jira/rest/api/3/issue/PROJ-9?expand=renderedFields,names",
+            MockResponse::status(429, b"rate limited".to_vec()),
+        );
+        let c = JiraConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("PROJ-9"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
     }
 }
