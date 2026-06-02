@@ -877,9 +877,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo install cargo-cyclonedx --locked || true
+      - run: cargo install cargo-cyclonedx --locked
       - run: cargo cyclonedx --all
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: "**/*.cdx.json"
