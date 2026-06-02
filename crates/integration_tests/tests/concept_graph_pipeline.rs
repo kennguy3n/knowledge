@@ -18,8 +18,8 @@
 //!    `Superseded`, points at the successor, and has a `Supersedes`
 //!    edge persisted alongside it.
 
-use evidence_store::{
-    EvidenceStore, EvidenceStoreConfig, ImportanceClass, ScopeId, DEFAULT_INLINE_THRESHOLD_BYTES,
+use integration_tests::test_helpers::{
+    open_store, ImportanceClass, ScopeId, BODY_SIZE, MASTER_KEY,
 };
 use tempfile::TempDir;
 
@@ -27,14 +27,10 @@ use concept_graph::{
     ConceptEdge, ConceptNode, NodeId, NodeState, PersistentConceptGraph, RelationType,
 };
 
-const MASTER_KEY: [u8; 32] = [0xA5; 32];
-
 fn evidence_text(label: &str, definition: &str) -> Vec<u8> {
-    // Pad up above the inline threshold so the body lives in the
-    // body table — exercises the dedup + per-CEK path.
     let mut buf =
         format!("observation: {label} :: {definition} :: integration:promotion").into_bytes();
-    buf.resize(DEFAULT_INLINE_THRESHOLD_BYTES * 4, b' ');
+    buf.resize(BODY_SIZE, b' ');
     buf
 }
 
@@ -54,9 +50,7 @@ fn evidence_promotion_and_supersession_round_trip() {
     ];
 
     // 1. Open both stores and ingest evidence rows.
-    let mut store =
-        EvidenceStore::open(&evidence_path, &MASTER_KEY, EvidenceStoreConfig::default())
-            .expect("open evidence store");
+    let mut store = open_store(&evidence_path);
 
     let mut evidence_ids = Vec::new();
     for (label, def) in observations {

@@ -13,16 +13,22 @@ publish = false
 # Each file under `tests/` is its own cargo integration-test binary —
 # Cargo's standard layout — so they can be filtered individually with
 # `cargo test -p integration_tests --test ingest_to_query`. The
-# `src/lib.rs` is a deliberately empty crate root just to satisfy
-# Cargo's "tests/ requires a parent crate" rule; the real test code
-# lives under `tests/`.
+# `src/lib.rs` exports shared test helpers (`test_helpers` module)
+# behind the `test-support` feature; the per-scenario test code lives
+# under `tests/`.
+
+[features]
+# Shared test constants and helpers (`MASTER_KEY`, `BODY_SIZE`,
+# `open_store`, `padded_body`) gated behind this feature so production
+# deps stay empty in default builds. A `compile_error!` in `src/lib.rs`
+# rejects enabling this feature in release builds.
+test-support = ["dep:evidence_store"]
 
 [lib]
 path = "src/lib.rs"
 
-# Production deps stay empty — the parent crate has no runtime
-# behaviour of its own.
 [dependencies]
+evidence_store = { path = "../evidence_store", optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -31,15 +37,24 @@ uuid = { workspace = true }
 # `StubKemBackend`. We use the real ML-DSA-65 + SPHINCS+ backends in
 # `crypto_round_trip.rs`, but enabling the feature keeps the door
 # open for explicit mock injection if other tests need it.
-crypto = { path = "../crypto", features = ["test-support"] }
-evidence_store = { path = "../evidence_store" }
-observation_engine = { path = "../observation_engine", features = ["test-support"] }
-concept_graph = { path = "../concept_graph" }
-permission_service = { path = "../permission_service" }
-sync_engine = { path = "../sync_engine" }
-synthesis_pipeline = { path = "../synthesis_pipeline", features = ["test-support"] }
 chrono = { workspace = true }
+crypto = { path = "../crypto", features = ["test-support"] }
+concept_graph = { path = "../concept_graph" }
+observation_engine = { path = "../observation_engine", features = ["test-support"] }
+memory_manager = { path = "../memory_manager" }
+synthesis_pipeline = { path = "../synthesis_pipeline", features = ["test-support"] }
+export_plane = { path = "../export_plane" }
+sync_engine = { path = "../sync_engine" }
+agent_contract = { path = "../agent_contract" }
+audit_service = { path = "../audit_service" }
+permission_service = { path = "../permission_service" }
 serde_json = { workspace = true }
+# Self-referential dev-dep: enables the `test-support` feature when
+# compiling integration tests under `tests/`. Cargo's `cfg(test)` flag
+# is only set on the test binary, NOT on the library it links against,
+# so without this the `test_helpers` module would be invisible to the
+# integration test binaries.
+integration_tests = { path = ".", features = ["test-support"] }
 # Criterion drives the multi-scope load bench under `benches/`. The
 # workspace dependency carries the shared `html_reports` feature so
 # the bench's `target/criterion/report/index.html` artefact is
