@@ -70,10 +70,15 @@ pub struct ConnectorAttachment {
     /// Permission-model object type for this scope (e.g. `Channel`,
     /// `User`, `Domain`).  Stored so that `detach` uses the same
     /// authorization context that `attach` established.
-    #[serde(default)]
+    #[serde(default = "default_object_type")]
     pub object_type: ObjectType,
     /// Wall-clock attachment time.
     pub attached_at: DateTime<Utc>,
+}
+
+/// Legacy default: pre-existing attachments were always channel-scoped.
+fn default_object_type() -> ObjectType {
+    ObjectType::Channel
 }
 
 impl ConnectorAttachment {
