@@ -280,6 +280,16 @@ relies on directly.
   entity extraction, observation promotion, episodic /
   channel / domain summary generation, concept synthesis,
   contradiction adjudication.
+- **Validated languages (22 lexicons):**
+  `ar`, `bo`, `de`, `en`, `es`, `fr`, `he`, `hi`, `id`, `it`,
+  `ja`, `km`, `ko`, `lo`, `ms`, `my`, `pt`, `ru`, `th`, `tl`,
+  `vi`, `zh`.
+  The 15-language quality gate (en, zh, es, hi, fr, ar, th, vi,
+  ms, tl, de, pt, ja, ko, ru) covers the primary inference tasks
+  (summary generation, entity extraction, importance
+  classification, concept synthesis) via the `multilingual_bonsai`
+  integration test suite (gated on `live-integration` feature +
+  `LLAMA_SERVER_BINARY` env var).
 
 **Validated languages (15).** Bonsai-1.7B synthesis and the
 lexicon-first observation pipeline are validated across the

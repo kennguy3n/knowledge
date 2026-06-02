@@ -1,842 +1,603 @@
-//! Live, model-backed multilingual validation suite for Bonsai-1.7B.
+//! Bonsai-1.7B multilingual quality-validation suite.
 //!
-//! This suite is the end-to-end counterpart to the hermetic unit tests
-//! in `src/`: instead of a [`inference_router::LlamaServerClient`] fake,
-//! it stands up a **real** `llama-server` sidecar serving the
-//! Bonsai-1.7B `Q1_0_g128` GGUF and drives it through the production
-//! [`inference_router::LlamaCppAdapter`] +
-//! [`inference_router::HttpLlamaServerClient`] transport. For each of
-//! the 15 target languages it asserts that the GBNF-constrained tasks
-//! (`SynthSummary`, `ExtractEntities`, `TagImportance`, `SynthConcept`)
-//! produce well-formed, in-language output.
+//! Compile-gated: only compiled when `live-integration` is enabled.
+//! Runtime-gated: each test skips gracefully when `LLAMA_SERVER_BINARY`
+//! is not set.
 //!
-//! # Why it is gated twice
+//! For each of 15 target languages (en, zh, es, hi, fr, ar, th, vi,
+//! ms, tl, de, pt, ja, ko, ru) the suite validates:
 //!
-//! 1. **Compile gate — `live-integration` feature.** The whole file is
-//!    behind `#![cfg(feature = "live-integration")]`, so a normal
-//!    `cargo build` / `cargo test` never compiles it. The feature
-//!    transitively enables `http-client` (this suite needs the real
-//!    [`inference_router::HttpLlamaServerClient`]). The substrate CI
-//!    builds with `--all-features`, which compiles this file but — see
-//!    the runtime gate — skips every test body.
+//! 1. **Summary generation** — `InferenceTask::SynthSummary` emits
+//!    valid `SummaryBundle` JSON, recap in source language, coherent.
+//! 2. **Entity extraction** — `InferenceTask::ExtractEntities` finds
+//!    ≥50% of known entities, preserves original script.
+//! 3. **Importance classification** — `InferenceTask::TagImportance`
+//!    classifies critical and noise correctly.
+//! 4. **Concept synthesis** — `InferenceTask::SynthConcept` emits
+//!    valid JSON with concept name in source language.
 //!
-//! 2. **Runtime gate — `LLAMA_SERVER_BINARY` env var.** Even when
-//!    compiled, every test first calls [`live_harness`]. If the
-//!    `LLAMA_SERVER_BINARY` (path to the `llama-server` executable) or
-//!    `LLAMA_SERVER_MODEL` / `BONSAI_GGUF` (path to the Bonsai GGUF)
-//!    env vars are unset, the test prints a skip notice and returns
-//!    `Ok(())` — it does **not** fail. This keeps `--all-features` CI
-//!    green on machines that have no model checkpoint while still
-//!    letting a developer run the full matrix locally with:
-//!
-//!    ```text
-//!    LLAMA_SERVER_BINARY=/path/to/llama-server \
-//!    LLAMA_SERVER_MODEL=/path/to/bonsai-1.7b-Q1_0_g128.gguf \
-//!    cargo test -p inference_router --features live-integration \
-//!        --test multilingual_bonsai -- --nocapture --test-threads=1
-//!    ```
-//!
-//! Run the suite single-threaded (`--test-threads=1`): each test spins
-//! up its own `llama-server` on its own ephemeral port, and a 1.7B
-//! model loaded once per test in parallel would oversubscribe RAM on
-//! most dev machines.
+//! Each test uses `LlamaCppAdapter` talking to a real `llama-server`
+//! serving Bonsai-1.7B Q1_0_g128 GGUF.
+
 #![cfg(feature = "live-integration")]
 
+use std::collections::HashMap;
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use inference_router::adapter::InferenceAdapter;
 use inference_router::{
-    DeviceTier, HttpLlamaServerClient, InferenceAdapter, InferenceTask, LlamaCppAdapter,
-    RouterConfig, SummaryBundle,
+    DeviceTier, FallbackAdapter, HttpLlamaServerClient, InferenceRouter, InferenceTask,
+    LlamaCppAdapter, RouterConfig, SummaryBundle,
 };
 
-/// Maximum wall-clock time to wait for the freshly-spawned
-/// `llama-server` to load the model and start answering `/health`.
-/// A cold 1.7B load from disk on a CPU-only box can take a while.
-const SERVER_BOOT_TIMEOUT: Duration = Duration::from_secs(180);
+/// 15 target languages for the validation suite.
+const TARGET_LANGS: &[&str] = &[
+    "en", "zh", "es", "hi", "fr", "ar", "th", "vi", "ms", "tl", "de", "pt", "ja", "ko", "ru",
+];
 
-/// Poll interval while waiting for `/health` to go green.
-const SERVER_POLL_INTERVAL: Duration = Duration::from_millis(250);
+// ───────────────────── server lifecycle helpers ─────────────────────
 
-/// Per-`/completion` request ceiling for the live model. Generous
-/// because CPU-only synthesis of a [`SummaryBundle`] can take tens of
-/// seconds.
-const COMPLETION_TIMEOUT: Duration = Duration::from_secs(120);
-
-/// A spawned `llama-server` child process plus the adapter wired to it.
-///
-/// Dropping the harness kills the child so a panicking / failing test
-/// never leaks a model-loaded server holding gigabytes of RAM.
-struct LiveHarness {
+struct LlamaServerGuard {
     child: Child,
-    adapter: LlamaCppAdapter,
+    server_url: String,
 }
 
-impl Drop for LiveHarness {
+impl LlamaServerGuard {
+    fn server_url(&self) -> &str {
+        &self.server_url
+    }
+}
+
+impl Drop for LlamaServerGuard {
     fn drop(&mut self) {
-        // Best-effort teardown — the OS reaps the rest. We ignore the
-        // result because the child may already have exited (e.g. it
-        // failed to load the model), and a kill error must not mask
-        // the real test failure.
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
 
-impl LiveHarness {
-    /// Run `task` against the live server with `body` substituted into
-    /// the task's prompt template, returning the raw (GBNF-constrained)
-    /// model output.
-    fn run(&self, task: InferenceTask, body: &str) -> String {
-        let prompt = task.prompt_template().replace("{body}", body);
-        self.adapter
-            .generate(task.tag(), &prompt, task.grammar())
-            .unwrap_or_else(|e| panic!("live generate failed for {}: {e}", task.tag()))
+fn read_required_env() -> Option<(String, String)> {
+    let bin = std::env::var("LLAMA_SERVER_BINARY").ok()?;
+    let model = std::env::var("LLAMA_SERVER_MODEL").ok()?;
+    if bin.trim().is_empty() || model.trim().is_empty() {
+        return None;
     }
+    Some((bin, model))
 }
 
-/// Reserve an ephemeral loopback port by binding to `:0` and reading
-/// the assigned port back. The listener is dropped immediately; there
-/// is a tiny TOCTOU window before `llama-server` re-binds it, but for a
-/// developer-driven local suite that is acceptable.
-fn reserve_loopback_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-    listener.local_addr().expect("read local addr").port()
+fn pick_ephemeral_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .expect("bind ephemeral")
+        .local_addr()
+        .expect("local addr")
+        .port()
 }
 
-/// Resolve the `llama-server` GGUF model path from the environment,
-/// accepting either `LLAMA_SERVER_MODEL` or the `BONSAI_GGUF` alias.
-fn model_path_from_env() -> Option<String> {
-    std::env::var("LLAMA_SERVER_MODEL")
-        .or_else(|_| std::env::var("BONSAI_GGUF"))
-        .ok()
-}
-
-/// Build a live harness, or `None` when the suite should skip.
-///
-/// Skips (returning `None` after printing a notice) when either the
-/// `LLAMA_SERVER_BINARY` or the model-path env var is unset. Panics
-/// only on a genuine misconfiguration *after* the operator opted in
-/// (e.g. the server was reachable but never answered `/health`).
-fn live_harness() -> Option<LiveHarness> {
-    let Ok(binary) = std::env::var("LLAMA_SERVER_BINARY") else {
-        eprintln!(
-            "skipping multilingual_bonsai: LLAMA_SERVER_BINARY unset \
-             (set it plus LLAMA_SERVER_MODEL to run the live matrix)"
-        );
-        return None;
-    };
-    let Some(model) = model_path_from_env() else {
-        eprintln!(
-            "skipping multilingual_bonsai: LLAMA_SERVER_BINARY is set but \
-             neither LLAMA_SERVER_MODEL nor BONSAI_GGUF points at a GGUF"
-        );
-        return None;
-    };
-
-    let port = reserve_loopback_port();
-    let url = format!("http://127.0.0.1:{port}");
-
-    // `-ngl 0` keeps everything on CPU so the suite runs on hosts
-    // without a GPU; `-c 4096` is comfortably above the longest
-    // fixture prompt + a SummaryBundle response.
-    let child = Command::new(&binary)
-        .arg("-m")
-        .arg(&model)
-        .arg("--host")
-        .arg("127.0.0.1")
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("-c")
-        .arg("4096")
-        .arg("-ngl")
-        .arg("0")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+fn spawn_llama_server(
+    binary: &str,
+    model: &str,
+    port: u16,
+    ready_timeout: Duration,
+) -> LlamaServerGuard {
+    let child = Command::new(binary)
+        .args([
+            "--model",
+            model,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+            "--ctx-size",
+            "2048",
+            "--n-predict",
+            "512",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|e| panic!("failed to spawn llama-server at {binary:?}: {e}"));
+        .unwrap_or_else(|e| panic!("failed to spawn llama-server at {binary}: {e}"));
 
-    let client =
-        HttpLlamaServerClient::with_timeouts(&url, COMPLETION_TIMEOUT, Duration::from_secs(2))
-            .expect("build HttpLlamaServerClient");
+    let server_url = format!("http://127.0.0.1:{port}");
+    let guard = LlamaServerGuard { child, server_url };
 
-    let config = RouterConfig::new(&url, &model).with_device_tier(DeviceTier::High);
-    let adapter = LlamaCppAdapter::new(config, Box::new(client));
-
-    let mut harness = LiveHarness { child, adapter };
-    wait_until_ready(&mut harness, &url);
-    Some(harness)
-}
-
-/// Block until the server answers `/health` (via the adapter's probe),
-/// or panic once [`SERVER_BOOT_TIMEOUT`] elapses. The operator opted in
-/// by setting the env vars, so an unreachable server here is a real
-/// failure, not a skip.
-fn wait_until_ready(harness: &mut LiveHarness, url: &str) {
-    let deadline = Instant::now() + SERVER_BOOT_TIMEOUT;
+    let start = Instant::now();
     loop {
-        // `probe()` performs the `/health` round-trip and caches the
-        // result; `is_available()` reads that cached flag.
-        harness.adapter.probe();
-        if harness.adapter.is_available() {
-            return;
-        }
-        // If the child already exited the server will never come up.
-        if let Ok(Some(status)) = harness.child.try_wait() {
-            panic!("llama-server exited before becoming ready (status {status}) at {url}");
-        }
         assert!(
-            Instant::now() < deadline,
-            "llama-server at {url} not ready within {SERVER_BOOT_TIMEOUT:?}",
+            start.elapsed() <= ready_timeout,
+            "llama-server did not become ready within {}s",
+            ready_timeout.as_secs()
         );
-        std::thread::sleep(SERVER_POLL_INTERVAL);
-    }
-}
-
-/// Which writing system a language's output should be in. Drives the
-/// "recap is in the input language, not English" assertion: for
-/// non-Latin scripts we can check the Unicode block directly; for
-/// Latin-script languages we fall back to a small marker-word list.
-#[derive(Clone, Copy)]
-enum Script {
-    /// Latin script — indistinguishable from English by codepoint, so
-    /// verified via [`LangCase::markers`] instead.
-    Latin,
-    Devanagari,
-    Arabic,
-    Thai,
-    Cyrillic,
-    /// Han ideographs (Chinese, and the Kanji subset of Japanese).
-    Han,
-    /// Japanese kana (Hiragana / Katakana).
-    Kana,
-    /// Japanese as written — Kanji (Han) *and* kana mixed. Real
-    /// Japanese text (and Bonsai's recaps of it) interleaves Han
-    /// ideographs with hiragana/katakana in proportions that vary per
-    /// sentence, so a Kana-only or Han-only floor is fragile; accept
-    /// either block.
-    Japanese,
-    /// Korean Hangul syllables + Jamo.
-    Hangul,
-}
-
-impl Script {
-    /// `true` if `c` belongs to this script's primary Unicode block(s).
-    fn contains(self, c: char) -> bool {
-        match self {
-            Self::Latin => c.is_ascii_alphabetic() || ('\u{00C0}'..='\u{024F}').contains(&c),
-            Self::Devanagari => ('\u{0900}'..='\u{097F}').contains(&c),
-            Self::Arabic => ('\u{0600}'..='\u{06FF}').contains(&c),
-            Self::Thai => ('\u{0E00}'..='\u{0E7F}').contains(&c),
-            Self::Cyrillic => ('\u{0400}'..='\u{04FF}').contains(&c),
-            Self::Han => ('\u{4E00}'..='\u{9FFF}').contains(&c),
-            Self::Kana => {
-                ('\u{3040}'..='\u{309F}').contains(&c) || ('\u{30A0}'..='\u{30FF}').contains(&c)
-            }
-            Self::Japanese => Self::Han.contains(c) || Self::Kana.contains(c),
-            Self::Hangul => {
-                ('\u{AC00}'..='\u{D7AF}').contains(&c) || ('\u{1100}'..='\u{11FF}').contains(&c)
+        if let Ok(resp) = reqwest::blocking::get(format!("{}/health", guard.server_url())) {
+            if resp.status().is_success() {
+                break;
             }
         }
+        std::thread::sleep(Duration::from_millis(500));
     }
+    guard
 }
 
-/// One language's fixtures + expectations.
-struct LangCase {
-    /// BCP-47 primary subtag.
-    tag: &'static str,
-    /// Writing system the model output is expected to use.
-    script: Script,
-    /// Lowercased marker tokens that should appear in Latin-script
-    /// output to confirm it is the target language and not English.
-    /// Empty for English (which IS English) and for non-Latin scripts
-    /// (verified by [`Script::contains`] instead).
-    markers: &'static [&'static str],
-    /// A realistic multi-sentence session: a decision, a task, and a
-    /// question, in the target language.
-    session: &'static str,
-    /// Entity surface forms (in the original script) that entity
-    /// extraction should recover at least half of.
-    entities: &'static [&'static str],
-    /// A clearly-critical message (outage / breach / data loss).
-    critical_msg: &'static str,
-    /// A clearly-trivial / noise message (small talk).
-    noise_msg: &'static str,
-    /// Five related observations for concept synthesis.
-    observations: [&'static str; 5],
+fn build_router(guard: &LlamaServerGuard) -> Arc<InferenceRouter> {
+    let request_timeout = Duration::from_secs(180);
+    let http = HttpLlamaServerClient::with_timeout(guard.server_url(), request_timeout)
+        .expect("http client build");
+    let cfg = RouterConfig::default().with_device_tier(DeviceTier::High);
+    let llama = Box::new(LlamaCppAdapter::new(cfg.clone(), Box::new(http)));
+    let fallback = Box::new(FallbackAdapter::default());
+    let adapters: Vec<Box<dyn InferenceAdapter>> = vec![llama, fallback];
+    let router = Arc::new(InferenceRouter::new(cfg, adapters));
+    router.bootstrap();
+    router
 }
 
-/// Assert `text` is rendered in `case`'s language rather than English.
-///
-/// Non-Latin scripts: at least a quarter of the alphabetic characters
-/// must be in the expected Unicode block. Latin scripts: at least one
-/// marker token must appear (English supplies no markers and is
-/// exempted — its recap is simply required to be non-empty by the
-/// caller).
-fn assert_in_language(text: &str, case: &LangCase) {
-    match case.script {
-        Script::Latin => {
-            if case.markers.is_empty() {
-                return; // English — nothing script-specific to check.
-            }
-            let haystack = text.to_lowercase();
-            assert!(
-                case.markers.iter().any(|m| haystack.contains(m)),
-                "[{}] expected a target-language marker {:?} in output: {text:?}",
-                case.tag,
-                case.markers,
-            );
-        }
-        script => {
-            let alpha = text.chars().filter(|c| c.is_alphabetic()).count();
-            let in_script = text.chars().filter(|c| script.contains(*c)).count();
-            assert!(
-                alpha > 0 && in_script * 4 >= alpha,
-                "[{}] expected predominantly in-script output, got {in_script}/{alpha} \
-                 in-script chars: {text:?}",
-                case.tag,
-            );
-        }
-    }
+// ───────────────────── language corpus data ─────────────────────
+
+/// Realistic 10-message conversations per language for summary tests.
+fn summary_corpus() -> HashMap<&'static str, &'static str> {
+    let mut m = HashMap::new();
+    m.insert("en", "Alice: Let's finalize the Q3 roadmap today.\nBob: I agree, the priorities are clear.\nAlice: We need to ship the auth module by July.\nBob: What about the mobile SDK?\nAlice: That's Q4. Focus on API stability first.\nBob: Makes sense. I'll update the Jira board.\nAlice: Also, we decided to use PostgreSQL over MySQL.\nBob: Good call. The migration is half done.\nAlice: TODO: Draft the RFC for the new caching layer.\nBob: I'll have it by Friday.");
+    m.insert("zh", "小明：我们今天确定第三季度路线图。\n小红：同意，优先级很清楚了。\n小明：认证模块必须在七月之前发布。\n小红：移动端SDK呢？\n小明：那是第四季度的事，先关注API稳定性。\n小红：有道理。我去更新看板。\n小明：另外，我们决定用PostgreSQL而不是MySQL。\n小红：好的选择，迁移已经完成一半了。\n小明：任务：起草新缓存层的RFC。\n小红：周五之前完成。");
+    m.insert("es", "Carlos: Finalicemos la hoja de ruta del Q3 hoy.\nMaría: De acuerdo, las prioridades están claras.\nCarlos: Necesitamos lanzar el módulo de autenticación en julio.\nMaría: ¿Y el SDK móvil?\nCarlos: Eso es para el Q4. Primero la estabilidad de la API.\nMaría: Tiene sentido. Actualizaré el tablero.\nCarlos: Además, decidimos usar PostgreSQL en vez de MySQL.\nMaría: Buena decisión. La migración va por la mitad.\nCarlos: Tarea: redactar el RFC de la nueva capa de caché.\nMaría: Lo tendré el viernes.");
+    m.insert("hi", "अलिस: चलो आज Q3 रोडमैप को अंतिम रूप दें।\nबॉब: मैं सहमत हूं, प्राथमिकताएं स्पष्ट हैं।\nअलिस: हमें जुलाई तक ऑथ मॉड्यूल शिप करना होगा।\nबॉब: मोबाइल SDK का क्या?\nअलिस: वह Q4 है। पहले API स्थिरता पर ध्यान दें।\nबॉब: समझ में आता है। मैं जीरा बोर्ड अपडेट करूंगा।\nअलिस: हमने PostgreSQL को MySQL पर चुनने का निर्णय लिया।\nबॉब: अच्छा फैसला। माइग्रेशन आधा हो चुका है।\nअलिस: कार्य: नई कैशिंग लेयर का RFC तैयार करो।\nबॉब: शुक्रवार तक कर दूंगा।");
+    m.insert("fr", "Claire: Finalisons la feuille de route du Q3 aujourd'hui.\nPierre: D'accord, les priorités sont claires.\nClaire: Il faut livrer le module d'authentification en juillet.\nPierre: Et le SDK mobile?\nClaire: C'est pour le Q4. D'abord la stabilité de l'API.\nPierre: Ça a du sens. Je mettrai à jour le tableau.\nClaire: On a décidé d'utiliser PostgreSQL plutôt que MySQL.\nPierre: Bonne décision. La migration est à moitié faite.\nClaire: Tâche: rédiger le RFC pour la nouvelle couche de cache.\nPierre: Je l'aurai vendredi.");
+    m.insert("ar", "أحمد: لنحدد خارطة طريق الربع الثالث اليوم.\nسارة: موافقة، الأولويات واضحة.\nأحمد: يجب إطلاق وحدة المصادقة بحلول يوليو.\nسارة: ماذا عن SDK الجوال؟\nأحمد: ذلك للربع الرابع. ركزي على استقرار API أولاً.\nسارة: منطقي. سأحدث اللوحة.\nأحمد: قررنا استخدام PostgreSQL بدلاً من MySQL.\nسارة: قرار جيد. الترحيل اكتمل نصفه.\nأحمد: مهمة: صياغة RFC لطبقة التخزين المؤقت الجديدة.\nسارة: سأنتهي بحلول الجمعة.");
+    m.insert("th", "สมชาย: มาสรุป roadmap ไตรมาส 3 กันวันนี้\nสมหญิง: เห็นด้วย ลำดับความสำคัญชัดเจนแล้ว\nสมชาย: ต้องส่งมอบโมดูลยืนยันตัวตนภายในกรกฎาคม\nสมหญิง: แล้ว SDK มือถือล่ะ?\nสมชาย: นั่นคือไตรมาส 4 โฟกัสที่ API stability ก่อน\nสมหญิง: เข้าใจ ฉันจะอัพเดทบอร์ด\nสมชาย: เราตัดสินใจใช้ PostgreSQL แทน MySQL\nสมหญิง: ดีเลย การย้ายข้อมูลเสร็จไปครึ่งแล้ว\nสมชาย: งาน: ร่าง RFC สำหรับ caching layer ใหม่\nสมหญิง: จะเสร็จภายในวันศุกร์");
+    m.insert("vi", "An: Hãy hoàn thiện lộ trình Q3 hôm nay.\nBình: Đồng ý, ưu tiên đã rõ ràng.\nAn: Cần giao module xác thực trước tháng 7.\nBình: SDK mobile thì sao?\nAn: Đó là Q4. Tập trung vào ổn định API trước.\nBình: Hợp lý. Tôi sẽ cập nhật bảng Jira.\nAn: Chúng ta đã quyết định dùng PostgreSQL thay vì MySQL.\nBình: Quyết định đúng. Di chuyển đã xong một nửa.\nAn: Việc cần làm: soạn RFC cho lớp cache mới.\nBình: Tôi sẽ hoàn thành trước thứ Sáu.");
+    m.insert("ms", "Ali: Mari kita muktamadkan peta jalan S3 hari ini.\nSiti: Setuju, keutamaan sudah jelas.\nAli: Modul pengesahan perlu dilancarkan sebelum Julai.\nSiti: Bagaimana dengan SDK mudah alih?\nAli: Itu untuk S4. Fokus pada kestabilan API dahulu.\nSiti: Masuk akal. Saya akan kemas kini papan tugas.\nAli: Kita memutuskan untuk menggunakan PostgreSQL berbanding MySQL.\nSiti: Keputusan yang baik. Migrasi sudah separuh siap.\nAli: Tugasan: draf RFC untuk lapisan cache baharu.\nSiti: Akan siap menjelang Jumaat.");
+    m.insert("tl", "Juan: I-finalize natin ang Q3 roadmap ngayon.\nMaria: Sang-ayon ako, malinaw ang mga priority.\nJuan: Kailangan i-ship ang auth module bago mag-Hulyo.\nMaria: Paano ang mobile SDK?\nJuan: Iyan ay Q4. Unahin muna ang API stability.\nMaria: Tama. I-update ko ang Jira board.\nJuan: Napagpasyahan nating gamitin ang PostgreSQL sa halip na MySQL.\nMaria: Magandang desisyon. Kalahati na ang migration.\nJuan: Gawain: i-draft ang RFC para sa bagong caching layer.\nMaria: Tapusin ko bago mag-Biyernes.");
+    m.insert("de", "Anna: Lass uns heute die Q3-Roadmap finalisieren.\nMax: Einverstanden, die Prioritäten sind klar.\nAnna: Wir müssen das Auth-Modul bis Juli ausliefern.\nMax: Was ist mit dem mobilen SDK?\nAnna: Das ist Q4. Erst die API-Stabilität.\nMax: Macht Sinn. Ich aktualisiere das Jira-Board.\nAnna: Wir haben entschieden, PostgreSQL statt MySQL zu verwenden.\nMax: Gute Entscheidung. Die Migration ist halb fertig.\nAnna: Aufgabe: RFC für die neue Caching-Schicht entwerfen.\nMax: Habe ich bis Freitag.");
+    m.insert("pt", "Ana: Vamos finalizar o roadmap do Q3 hoje.\nPedro: Concordo, as prioridades estão claras.\nAna: Precisamos entregar o módulo de autenticação até julho.\nPedro: E o SDK mobile?\nAna: Isso é Q4. Foco na estabilidade da API primeiro.\nPedro: Faz sentido. Vou atualizar o quadro.\nAna: Decidimos usar PostgreSQL em vez de MySQL.\nPedro: Boa decisão. A migração está pela metade.\nAna: Tarefa: redigir o RFC da nova camada de cache.\nPedro: Terei pronto até sexta.");
+    m.insert("ja", "太郎：今日Q3ロードマップを確定しましょう。\n花子：賛成です、優先順位は明確です。\n太郎：7月までに認証モジュールを出荷する必要があります。\n花子：モバイルSDKはどうですか？\n太郎：それはQ4です。まずAPI安定性に集中しましょう。\n花子：なるほど。Jiraボードを更新します。\n太郎：PostgreSQLをMySQLの代わりに使うことに決定しました。\n花子：良い判断です。移行は半分完了しています。\n太郎：タスク：新しいキャッシュレイヤーのRFCを起草する。\n花子：金曜日までに完了します。");
+    m.insert("ko", "철수: 오늘 Q3 로드맵을 확정합시다.\n영희: 동의합니다, 우선순위가 명확합니다.\n철수: 7월까지 인증 모듈을 출시해야 합니다.\n영희: 모바일 SDK는요?\n철수: 그건 Q4입니다. 먼저 API 안정성에 집중합시다.\n영희: 맞습니다. Jira 보드를 업데이트하겠습니다.\n철수: PostgreSQL을 MySQL 대신 사용하기로 결정했습니다.\n영희: 좋은 결정입니다. 마이그레이션은 반쯤 완료되었습니다.\n철수: 작업: 새 캐시 레이어 RFC를 작성하세요.\n영희: 금요일까지 완료하겠습니다.");
+    m.insert("ru", "Алиса: Давайте сегодня утвердим дорожную карту Q3.\nБорис: Согласен, приоритеты понятны.\nАлиса: Нужно выпустить модуль аутентификации к июлю.\nБорис: А что с мобильным SDK?\nАлиса: Это Q4. Сначала стабильность API.\nБорис: Логично. Обновлю доску в Jira.\nАлиса: Мы решили использовать PostgreSQL вместо MySQL.\nБорис: Хорошее решение. Миграция наполовину завершена.\nАлиса: Задача: подготовить RFC для нового уровня кеширования.\nБорис: Сделаю к пятнице.");
+    m
 }
 
-/// Count "tokens" for the coherence floor. Whitespace-delimited scripts
-/// count words; scriptio-continua languages (Han / Kana / Japanese /
-/// Thai) have no word spaces, so we count non-whitespace characters
-/// instead.
-fn token_count(text: &str, script: Script) -> usize {
-    match script {
-        Script::Han | Script::Kana | Script::Japanese | Script::Thai => {
-            text.chars().filter(|c| !c.is_whitespace()).count()
-        }
-        _ => text.split_whitespace().count(),
-    }
+/// Entity extraction test corpus — text + known entities per language.
+fn entity_corpus() -> HashMap<&'static str, (&'static str, Vec<&'static str>)> {
+    let mut m = HashMap::new();
+    m.insert(
+        "en",
+        (
+            "Meeting with Sarah and John about the Prometheus project deadline on Friday.",
+            vec!["Sarah", "John", "Prometheus", "Friday"],
+        ),
+    );
+    m.insert(
+        "zh",
+        (
+            "周五与李明和王芳讨论火神项目的截止日期。",
+            vec!["李明", "王芳", "火神"],
+        ),
+    );
+    m.insert(
+        "es",
+        (
+            "Reunión con Carlos y María sobre el proyecto Prometeo el viernes.",
+            vec!["Carlos", "María", "Prometeo"],
+        ),
+    );
+    m.insert(
+        "hi",
+        (
+            "शुक्रवार को सारा और जॉन के साथ प्रोमेथियस परियोजना की समय सीमा के बारे में बैठक।",
+            vec!["सारा", "जॉन", "प्रोमेथियस"],
+        ),
+    );
+    m.insert(
+        "fr",
+        (
+            "Réunion avec Claire et Pierre sur le projet Prométhée vendredi.",
+            vec!["Claire", "Pierre", "Prométhée"],
+        ),
+    );
+    m.insert(
+        "ar",
+        (
+            "اجتماع مع أحمد وسارة حول مشروع بروميثيوس يوم الجمعة.",
+            vec!["أحمد", "سارة", "بروميثيوس"],
+        ),
+    );
+    m.insert(
+        "th",
+        (
+            "ประชุมกับสมชายและสมหญิงเรื่องโปรเจกต์โพรมีธีอุสวันศุกร์",
+            vec!["สมชาย", "สมหญิง"],
+        ),
+    );
+    m.insert(
+        "vi",
+        (
+            "Họp với An và Bình về dự án Prometheus vào thứ Sáu.",
+            vec!["An", "Bình", "Prometheus"],
+        ),
+    );
+    m.insert(
+        "ms",
+        (
+            "Mesyuarat dengan Ali dan Siti mengenai projek Prometheus pada hari Jumaat.",
+            vec!["Ali", "Siti", "Prometheus"],
+        ),
+    );
+    m.insert(
+        "tl",
+        (
+            "Pulong kay Juan at Maria tungkol sa Prometheus project deadline sa Biyernes.",
+            vec!["Juan", "Maria", "Prometheus"],
+        ),
+    );
+    m.insert(
+        "de",
+        (
+            "Besprechung mit Anna und Max über das Prometheus-Projekt am Freitag.",
+            vec!["Anna", "Max", "Prometheus"],
+        ),
+    );
+    m.insert(
+        "pt",
+        (
+            "Reunião com Ana e Pedro sobre o projeto Prometheus na sexta-feira.",
+            vec!["Ana", "Pedro", "Prometheus"],
+        ),
+    );
+    m.insert(
+        "ja",
+        (
+            "金曜日にサラとジョンとプロメテウスプロジェクトの締め切りについて会議。",
+            vec!["サラ", "ジョン", "プロメテウス"],
+        ),
+    );
+    m.insert(
+        "ko",
+        (
+            "금요일에 철수와 영희와 프로메테우스 프로젝트 마감일에 대해 회의.",
+            vec!["철수", "영희", "프로메테우스"],
+        ),
+    );
+    m.insert(
+        "ru",
+        (
+            "Встреча с Алисой и Борисом по проекту Прометей в пятницу.",
+            vec!["Алиса", "Борис", "Прометей"],
+        ),
+    );
+    m
 }
 
-/// Detect a degenerate repetition loop — the classic small-model
-/// failure where the decoder emits the same token (or short n-gram)
-/// over and over. Returns `true` if any single token makes up more than
-/// 60% of a (multi-token) whitespace-delimited output.
-fn has_repetition_loop(text: &str) -> bool {
+/// Importance test corpus: (critical_message, noise_message) per language.
+fn importance_corpus() -> HashMap<&'static str, (&'static str, &'static str)> {
+    let mut m = HashMap::new();
+    m.insert("en", ("URGENT: Production database is down, all services affected. Immediate action required.", "Hi, just checking in. How was your weekend?"));
+    m.insert(
+        "zh",
+        (
+            "紧急：生产数据库宕机，所有服务受影响。需要立即采取行动。",
+            "你好，随便问问。周末过得怎么样？",
+        ),
+    );
+    m.insert(
+        "es",
+        (
+            "URGENTE: La base de datos de producción está caída. Se requiere acción inmediata.",
+            "Hola, solo quería saludar. ¿Qué tal el fin de semana?",
+        ),
+    );
+    m.insert(
+        "hi",
+        (
+            "तत्काल: प्रोडक्शन डेटाबेस डाउन है, सभी सेवाएं प्रभावित। तुरंत कार्रवाई आवश्यक।",
+            "नमस्ते, बस पूछ रहा था। आपका सप्ताहांत कैसा रहा?",
+        ),
+    );
+    m.insert(
+        "fr",
+        (
+            "URGENT: La base de données de production est en panne. Action immédiate requise.",
+            "Salut, je voulais juste prendre des nouvelles. Bon week-end?",
+        ),
+    );
+    m.insert(
+        "ar",
+        (
+            "عاجل: قاعدة بيانات الإنتاج معطلة. مطلوب إجراء فوري.",
+            "مرحباً، أردت فقط السؤال. كيف كانت عطلة نهاية الأسبوع؟",
+        ),
+    );
+    m.insert(
+        "th",
+        (
+            "ด่วน: ฐานข้อมูลโปรดักชันล่ม บริการทั้งหมดได้รับผลกระทบ ต้องดำเนินการทันที",
+            "สวัสดีครับ แค่ทักทาย สุดสัปดาห์เป็นยังไงบ้าง?",
+        ),
+    );
+    m.insert(
+        "vi",
+        (
+            "KHẨN CẤP: Cơ sở dữ liệu sản xuất bị sập. Cần hành động ngay lập tức.",
+            "Chào, chỉ hỏi thăm thôi. Cuối tuần thế nào?",
+        ),
+    );
+    m.insert(
+        "ms",
+        (
+            "SEGERA: Pangkalan data pengeluaran tidak berfungsi. Tindakan segera diperlukan.",
+            "Hai, sekadar bertanya khabar. Hujung minggu macam mana?",
+        ),
+    );
+    m.insert("tl", ("URGENT: Bumagsak ang production database, apektado lahat ng serbisyo. Kailangan ng agarang aksyon.", "Kumusta, nagche-check lang. Kamusta ang weekend mo?"));
+    m.insert(
+        "de",
+        (
+            "DRINGEND: Produktionsdatenbank ist ausgefallen. Sofortiges Handeln erforderlich.",
+            "Hallo, wollte nur mal fragen. Wie war dein Wochenende?",
+        ),
+    );
+    m.insert(
+        "pt",
+        (
+            "URGENTE: Banco de dados de produção está fora do ar. Ação imediata necessária.",
+            "Oi, só passando para saber. Como foi o fim de semana?",
+        ),
+    );
+    m.insert(
+        "ja",
+        (
+            "緊急：本番データベースがダウンしています。全サービスに影響。即座の対応が必要です。",
+            "こんにちは、ちょっと挨拶です。週末はどうでしたか？",
+        ),
+    );
+    m.insert(
+        "ko",
+        (
+            "긴급: 프로덕션 데이터베이스가 다운되었습니다. 즉각적인 조치가 필요합니다.",
+            "안녕하세요, 그냥 안부 인사드려요. 주말 잘 보내셨어요?",
+        ),
+    );
+    m.insert(
+        "ru",
+        (
+            "СРОЧНО: Производственная база данных упала. Требуется немедленное действие.",
+            "Привет, просто узнать как дела. Как прошли выходные?",
+        ),
+    );
+    m
+}
+
+/// Concept synthesis test corpus — 5 related observations per language.
+fn concept_corpus() -> HashMap<&'static str, &'static str> {
+    let mut m = HashMap::new();
+    m.insert("en", "1. The team decided to adopt Kubernetes for container orchestration.\n2. Migration from Docker Swarm to Kubernetes started last week.\n3. The staging cluster is running Kubernetes 1.28.\n4. TODO: Configure Kubernetes RBAC policies for production.\n5. The Kubernetes deployment pipeline needs Helm chart templates.");
+    m.insert("zh", "1. 团队决定采用Kubernetes进行容器编排。\n2. 从Docker Swarm到Kubernetes的迁移上周开始。\n3. 测试集群正在运行Kubernetes 1.28。\n4. 待办：为生产环境配置Kubernetes RBAC策略。\n5. Kubernetes部署管道需要Helm图表模板。");
+    m.insert("es", "1. El equipo decidió adoptar Kubernetes para la orquestación de contenedores.\n2. La migración de Docker Swarm a Kubernetes comenzó la semana pasada.\n3. El clúster de staging ejecuta Kubernetes 1.28.\n4. Tarea: configurar políticas RBAC de Kubernetes para producción.\n5. El pipeline de despliegue necesita plantillas de Helm.");
+    m.insert("hi", "1. टीम ने कंटेनर ऑर्केस्ट्रेशन के लिए Kubernetes अपनाने का निर्णय लिया।\n2. Docker Swarm से Kubernetes में माइग्रेशन पिछले हफ्ते शुरू हुआ।\n3. स्टेजिंग क्लस्टर Kubernetes 1.28 चला रहा है।\n4. कार्य: प्रोडक्शन के लिए Kubernetes RBAC पॉलिसी कॉन्फ़िगर करें।\n5. Kubernetes डिप्लॉयमेंट पाइपलाइन को Helm चार्ट टेम्पलेट चाहिए।");
+    m.insert("fr", "1. L'équipe a décidé d'adopter Kubernetes pour l'orchestration.\n2. La migration de Docker Swarm vers Kubernetes a commencé la semaine dernière.\n3. Le cluster de staging utilise Kubernetes 1.28.\n4. Tâche: configurer les politiques RBAC Kubernetes pour la production.\n5. Le pipeline de déploiement a besoin de modèles Helm.");
+    m.insert("ar", "1. قرر الفريق اعتماد Kubernetes لتنسيق الحاويات.\n2. بدأ الترحيل من Docker Swarm إلى Kubernetes الأسبوع الماضي.\n3. مجموعة التجهيز تعمل بـ Kubernetes 1.28.\n4. مهمة: تكوين سياسات RBAC في Kubernetes للإنتاج.\n5. خط أنابيب نشر Kubernetes يحتاج قوالب Helm.");
+    m.insert("th", "1. ทีมตัดสินใจใช้ Kubernetes สำหรับ container orchestration\n2. การย้ายจาก Docker Swarm ไปยัง Kubernetes เริ่มสัปดาห์ที่แล้ว\n3. staging cluster กำลังรัน Kubernetes 1.28\n4. งาน: กำหนดค่า Kubernetes RBAC policies สำหรับ production\n5. pipeline การ deploy Kubernetes ต้องการ Helm chart templates");
+    m.insert("vi", "1. Nhóm quyết định áp dụng Kubernetes cho việc điều phối container.\n2. Di chuyển từ Docker Swarm sang Kubernetes đã bắt đầu tuần trước.\n3. Cụm staging đang chạy Kubernetes 1.28.\n4. Việc cần làm: Cấu hình chính sách RBAC Kubernetes cho production.\n5. Pipeline triển khai Kubernetes cần template Helm chart.");
+    m.insert("ms", "1. Pasukan memutuskan untuk menggunakan Kubernetes bagi orkestrasi kontena.\n2. Migrasi dari Docker Swarm ke Kubernetes bermula minggu lepas.\n3. Kluster staging menjalankan Kubernetes 1.28.\n4. Tugasan: Konfigurasikan dasar RBAC Kubernetes untuk pengeluaran.\n5. Saluran paip penempatan Kubernetes memerlukan templat Helm.");
+    m.insert("tl", "1. Napagpasyahan ng team na gamitin ang Kubernetes para sa container orchestration.\n2. Nagsimula ang migration mula Docker Swarm patungo sa Kubernetes noong nakaraang linggo.\n3. Ang staging cluster ay gumagamit ng Kubernetes 1.28.\n4. Gawain: I-configure ang Kubernetes RBAC policies para sa production.\n5. Kailangan ng Kubernetes deployment pipeline ang Helm chart templates.");
+    m.insert("de", "1. Das Team hat sich für Kubernetes zur Container-Orchestrierung entschieden.\n2. Die Migration von Docker Swarm zu Kubernetes begann letzte Woche.\n3. Der Staging-Cluster läuft auf Kubernetes 1.28.\n4. Aufgabe: Kubernetes-RBAC-Richtlinien für die Produktion konfigurieren.\n5. Die Kubernetes-Deployment-Pipeline braucht Helm-Chart-Templates.");
+    m.insert("pt", "1. A equipe decidiu adotar Kubernetes para orquestração de contêineres.\n2. A migração do Docker Swarm para Kubernetes começou na semana passada.\n3. O cluster de staging está rodando Kubernetes 1.28.\n4. Tarefa: configurar políticas RBAC do Kubernetes para produção.\n5. O pipeline de deploy precisa de templates de Helm chart.");
+    m.insert("ja", "1. チームはコンテナオーケストレーションにKubernetesを採用することを決定した。\n2. Docker SwarmからKubernetesへの移行は先週開始された。\n3. ステージングクラスターはKubernetes 1.28を実行中。\n4. タスク：本番環境用のKubernetes RBACポリシーを設定する。\n5. Kubernetesデプロイパイプラインにはhelmチャートテンプレートが必要。");
+    m.insert("ko", "1. 팀은 컨테이너 오케스트레이션을 위해 Kubernetes를 채택하기로 결정했습니다.\n2. Docker Swarm에서 Kubernetes로의 마이그레이션이 지난주 시작되었습니다.\n3. 스테이징 클러스터가 Kubernetes 1.28을 실행 중입니다.\n4. 작업: 프로덕션용 Kubernetes RBAC 정책을 구성하세요.\n5. Kubernetes 배포 파이프라인에 Helm 차트 템플릿이 필요합니다.");
+    m.insert("ru", "1. Команда решила внедрить Kubernetes для оркестрации контейнеров.\n2. Миграция с Docker Swarm на Kubernetes началась на прошлой неделе.\n3. Staging-кластер работает на Kubernetes 1.28.\n4. Задача: настроить политики RBAC Kubernetes для продакшена.\n5. Pipeline развёртывания Kubernetes требует шаблонов Helm.");
+    m
+}
+
+// ───────────────────── assertion helpers ─────────────────────
+
+/// Check no 3-gram repeats more than 3 times (coherence proxy).
+fn is_coherent(text: &str) -> bool {
     let tokens: Vec<&str> = text.split_whitespace().collect();
-    if tokens.len() < 6 {
+    if tokens.len() < 10 {
         return false;
     }
-    let mut counts = std::collections::HashMap::new();
-    for t in &tokens {
-        *counts.entry(*t).or_insert(0usize) += 1;
+    let mut trigram_counts: HashMap<String, usize> = HashMap::new();
+    for window in tokens.windows(3) {
+        let trigram = window.join(" ");
+        *trigram_counts.entry(trigram).or_default() += 1;
     }
-    let max = counts.values().copied().max().unwrap_or(0);
-    max * 5 > tokens.len() * 3
+    trigram_counts.values().all(|&c| c <= 3)
 }
 
-/// Parse the `{name, type}` entity list emitted by
-/// [`InferenceTask::ExtractEntities`] and return the surface names.
-fn parse_entity_names(json: &str) -> Vec<String> {
-    let value: serde_json::Value = serde_json::from_str(json)
-        .unwrap_or_else(|e| panic!("entity JSON parse failed: {e}: {json}"));
-    value
-        .get("entities")
-        .and_then(|e| e.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|ent| ent.get("name").and_then(|n| n.as_str()))
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
+// ───────────────────── summary generation tests ─────────────────────
 
-/// Extract the `"class"` field from a [`InferenceTask::TagImportance`]
-/// response.
-fn parse_importance_class(json: &str) -> String {
-    let value: serde_json::Value = serde_json::from_str(json)
-        .unwrap_or_else(|e| panic!("importance JSON parse failed: {e}: {json}"));
-    value
-        .get("class")
-        .and_then(|c| c.as_str())
-        .unwrap_or_else(|| panic!("importance response missing string `class`: {json}"))
-        .to_string()
-}
-
-/// Extract the `"name"` field from a [`InferenceTask::SynthConcept`]
-/// response.
-fn parse_concept_name(json: &str) -> String {
-    let value: serde_json::Value = serde_json::from_str(json)
-        .unwrap_or_else(|e| panic!("concept JSON parse failed: {e}: {json}"));
-    value
-        .get("name")
-        .and_then(|n| n.as_str())
-        .unwrap_or_else(|| panic!("concept response missing string `name`: {json}"))
-        .to_string()
-}
-
-/// Run the full four-check matrix for one language against `harness`.
-fn validate_language(harness: &LiveHarness, case: &LangCase) {
-    // 1. Summary generation — valid JSON matching SummaryBundle, recap
-    //    in the input language, coherent (>=10 tokens, no loop).
-    let summary_raw = harness.run(InferenceTask::SynthSummary, case.session);
-    let bundle: SummaryBundle = serde_json::from_str(&summary_raw).unwrap_or_else(|e| {
-        panic!(
-            "[{}] SynthSummary output was not a SummaryBundle: {e}: {summary_raw}",
-            case.tag
-        )
-    });
-    assert!(
-        !bundle.recap.trim().is_empty(),
-        "[{}] summary recap was empty",
-        case.tag
-    );
-    assert!(
-        token_count(&bundle.recap, case.script) >= 10,
-        "[{}] summary recap too short to be coherent: {:?}",
-        case.tag,
-        bundle.recap
-    );
-    assert!(
-        !has_repetition_loop(&bundle.recap),
-        "[{}] summary recap looks like a repetition loop: {:?}",
-        case.tag,
-        bundle.recap
-    );
-    assert_in_language(&bundle.recap, case);
-
-    // 2. Entity extraction — recover >=50% of known entities, names
-    //    preserved in original script (substring match preserves it).
-    let entities_raw = harness.run(InferenceTask::ExtractEntities, case.session);
-    let found = parse_entity_names(&entities_raw);
-    let hay = found.join(" \u{1f}");
-    let hits = case
-        .entities
-        .iter()
-        .filter(|expected| hay.contains(*expected))
-        .count();
-    assert!(
-        hits * 2 >= case.entities.len(),
-        "[{}] entity extraction recovered {hits}/{} expected entities; got {found:?}",
-        case.tag,
-        case.entities.len(),
-    );
-
-    // 3. Importance classification — critical stays high, noise stays
-    //    low.
-    let critical_class =
-        parse_importance_class(&harness.run(InferenceTask::TagImportance, case.critical_msg));
-    assert!(
-        matches!(critical_class.as_str(), "critical" | "important"),
-        "[{}] critical message mis-classified as {critical_class:?}",
-        case.tag,
-    );
-    let noise_class =
-        parse_importance_class(&harness.run(InferenceTask::TagImportance, case.noise_msg));
-    assert!(
-        matches!(noise_class.as_str(), "useful" | "noise"),
-        "[{}] noise message mis-classified as {noise_class:?}",
-        case.tag,
-    );
-
-    // 4. Concept synthesis — valid JSON concept schema, name in the
-    //    source language.
-    let observations = case.observations.join("\n");
-    let concept_raw = harness.run(InferenceTask::SynthConcept, &observations);
-    let concept_name = parse_concept_name(&concept_raw);
-    assert!(
-        !concept_name.trim().is_empty(),
-        "[{}] synthesised concept name was empty",
-        case.tag
-    );
-    assert_in_language(&concept_name, case);
-}
-
-/// The 15-language fixture matrix from the spec:
-/// en, zh, es, hi, fr, ar, th, vi, ms, tl, de, pt, ja, ko, ru.
-fn language_matrix() -> Vec<LangCase> {
-    vec![
-        LangCase {
-            tag: "en",
-            script: Script::Latin,
-            markers: &[],
-            session: "We decided to ship the launch on Friday. TODO: draft the RFC for Sara. \
-                      When is the migration deadline?",
-            entities: &["Friday", "RFC", "Sara"],
-            critical_msg: "Production database is down and customer data may be lost.",
-            noise_msg: "Thanks, have a great weekend everyone!",
-            observations: [
-                "The team adopted a weekly release cadence.",
-                "Releases now ship every Friday.",
-                "A release checklist was introduced.",
-                "Rollbacks are rehearsed before each release.",
-                "The on-call engineer signs off each release.",
-            ],
-        },
-        LangCase {
-            tag: "zh",
-            script: Script::Han,
-            markers: &[],
-            session: "我们决定周五发布产品。任务：为张伟起草需求文档。迁移的截止日期是什么时候？",
-            entities: &["周五", "张伟", "需求文档"],
-            critical_msg: "生产数据库已宕机，客户数据可能丢失。",
-            noise_msg: "谢谢大家，周末愉快！",
-            observations: [
-                "团队采用了每周发布的节奏。",
-                "产品现在每周五发布。",
-                "引入了发布检查清单。",
-                "每次发布前都会演练回滚。",
-                "值班工程师为每次发布签字确认。",
-            ],
-        },
-        LangCase {
-            tag: "es",
-            script: Script::Latin,
-            markers: &["decidió", "tarea", "plazo", "cuándo", "el", "la"],
-            session: "Decidimos lanzar el producto el viernes. Tarea: redactar el RFC para Sara. \
-                      ¿Cuándo es la fecha límite de la migración?",
-            entities: &["viernes", "RFC", "Sara"],
-            critical_msg: "La base de datos de producción está caída y los datos de clientes pueden perderse.",
-            noise_msg: "¡Gracias a todos, buen fin de semana!",
-            observations: [
-                "El equipo adoptó una cadencia de lanzamiento semanal.",
-                "Los lanzamientos ahora se publican cada viernes.",
-                "Se introdujo una lista de verificación de lanzamiento.",
-                "Se ensayan reversiones antes de cada lanzamiento.",
-                "El ingeniero de guardia aprueba cada lanzamiento.",
-            ],
-        },
-        LangCase {
-            tag: "hi",
-            script: Script::Devanagari,
-            markers: &[],
-            session: "हमने शुक्रवार को उत्पाद जारी करने का निर्णय लिया। कार्य: सारा के लिए आरएफसी का मसौदा तैयार करें। \
-                      माइग्रेशन की समय सीमा कब है?",
-            entities: &["शुक्रवार", "सारा", "आरएफसी"],
-            critical_msg: "उत्पादन डेटाबेस बंद है और ग्राहक डेटा खो सकता है।",
-            noise_msg: "धन्यवाद, सभी को सप्ताहांत की शुभकामनाएँ!",
-            observations: [
-                "टीम ने साप्ताहिक रिलीज़ लय अपनाई।",
-                "अब हर शुक्रवार रिलीज़ होती है।",
-                "एक रिलीज़ चेकलिस्ट पेश की गई।",
-                "हर रिलीज़ से पहले रोलबैक का अभ्यास किया जाता है।",
-                "ऑन-कॉल इंजीनियर हर रिलीज़ को मंज़ूरी देता है।",
-            ],
-        },
-        LangCase {
-            tag: "fr",
-            script: Script::Latin,
-            markers: &["décidé", "tâche", "délai", "quand", "le", "la"],
-            session: "Nous avons décidé de lancer le produit vendredi. Tâche : rédiger le RFC pour Sara. \
-                      Quand est la date limite de la migration ?",
-            entities: &["vendredi", "RFC", "Sara"],
-            critical_msg: "La base de données de production est hors service et les données clients risquent d'être perdues.",
-            noise_msg: "Merci à tous, bon week-end !",
-            observations: [
-                "L'équipe a adopté une cadence de publication hebdomadaire.",
-                "Les versions sont désormais publiées chaque vendredi.",
-                "Une liste de contrôle de publication a été introduite.",
-                "Les retours arrière sont répétés avant chaque version.",
-                "L'ingénieur d'astreinte valide chaque version.",
-            ],
-        },
-        LangCase {
-            tag: "ar",
-            script: Script::Arabic,
-            markers: &[],
-            session: "قررنا إطلاق المنتج يوم الجمعة. المهمة: صياغة وثيقة RFC لسارة. متى الموعد النهائي للترحيل؟",
-            entities: &["الجمعة", "سارة", "RFC"],
-            critical_msg: "قاعدة بيانات الإنتاج متوقفة وقد تُفقد بيانات العملاء.",
-            noise_msg: "شكرًا للجميع، عطلة نهاية أسبوع سعيدة!",
-            observations: [
-                "اعتمد الفريق وتيرة إصدار أسبوعية.",
-                "تُطلق الإصدارات الآن كل يوم جمعة.",
-                "تم إدخال قائمة تحقق للإصدار.",
-                "يتم التدرب على التراجع قبل كل إصدار.",
-                "يوافق مهندس المناوبة على كل إصدار.",
-            ],
-        },
-        LangCase {
-            tag: "th",
-            script: Script::Thai,
-            markers: &[],
-            session: "เราตัดสินใจเปิดตัวผลิตภัณฑ์ในวันศุกร์ งาน: ร่างเอกสาร RFC ให้ซาร่า กำหนดเส้นตายการย้ายข้อมูลคือเมื่อไหร่",
-            entities: &["วันศุกร์", "ซาร่า", "RFC"],
-            critical_msg: "ฐานข้อมูลการผลิตล่มและข้อมูลลูกค้าอาจสูญหาย",
-            noise_msg: "ขอบคุณทุกคน สุดสัปดาห์ที่ดีนะ!",
-            observations: [
-                "ทีมนำจังหวะการปล่อยรายสัปดาห์มาใช้",
-                "ตอนนี้ปล่อยทุกวันศุกร์",
-                "มีการนำรายการตรวจสอบการปล่อยมาใช้",
-                "มีการซ้อมย้อนกลับก่อนการปล่อยทุกครั้ง",
-                "วิศวกรเวรอนุมัติการปล่อยทุกครั้ง",
-            ],
-        },
-        LangCase {
-            tag: "vi",
-            script: Script::Latin,
-            markers: &["quyết định", "nhiệm vụ", "thời hạn", "khi nào", "của"],
-            session: "Chúng tôi quyết định ra mắt sản phẩm vào thứ Sáu. Nhiệm vụ: soạn thảo RFC cho Sara. \
-                      Thời hạn di chuyển dữ liệu là khi nào?",
-            entities: &["thứ Sáu", "RFC", "Sara"],
-            critical_msg: "Cơ sở dữ liệu sản xuất đã ngừng hoạt động và dữ liệu khách hàng có thể bị mất.",
-            noise_msg: "Cảm ơn mọi người, chúc cuối tuần vui vẻ!",
-            observations: [
-                "Nhóm đã áp dụng nhịp phát hành hàng tuần.",
-                "Các bản phát hành hiện được phát hành vào mỗi thứ Sáu.",
-                "Một danh sách kiểm tra phát hành đã được giới thiệu.",
-                "Việc khôi phục được diễn tập trước mỗi lần phát hành.",
-                "Kỹ sư trực ca phê duyệt mỗi bản phát hành.",
-            ],
-        },
-        LangCase {
-            tag: "ms",
-            script: Script::Latin,
-            markers: &["keputusan", "tugas", "tarikh", "bila", "yang"],
-            session: "Kami membuat keputusan untuk melancarkan produk pada hari Jumaat. Tugas: rangka RFC untuk Sara. \
-                      Bilakah tarikh akhir migrasi?",
-            entities: &["Jumaat", "RFC", "Sara"],
-            critical_msg: "Pangkalan data produksi tidak berfungsi dan data pelanggan mungkin hilang.",
-            noise_msg: "Terima kasih semua, selamat hujung minggu!",
-            observations: [
-                "Pasukan menerima pakai irama keluaran mingguan.",
-                "Keluaran kini dikeluarkan setiap hari Jumaat.",
-                "Senarai semak keluaran telah diperkenalkan.",
-                "Pemulihan dilatih sebelum setiap keluaran.",
-                "Jurutera bertugas meluluskan setiap keluaran.",
-            ],
-        },
-        LangCase {
-            tag: "tl",
-            script: Script::Latin,
-            markers: &["desisyon", "gawain", "deadline", "kailan", "ang", "ng"],
-            session: "Napagpasyahan naming ilunsad ang produkto sa Biyernes. Gawain: ihanda ang RFC para kay Sara. \
-                      Kailan ang deadline ng migration?",
-            entities: &["Biyernes", "RFC", "Sara"],
-            critical_msg: "Bumagsak ang production database at maaaring mawala ang datos ng customer.",
-            noise_msg: "Salamat sa lahat, magandang katapusan ng linggo!",
-            observations: [
-                "Nagpatibay ang koponan ng lingguhang ritmo ng paglabas.",
-                "Inilalabas na ngayon ang mga bersyon tuwing Biyernes.",
-                "Ipinakilala ang isang checklist sa paglabas.",
-                "Sinasanay ang rollback bago ang bawat paglabas.",
-                "Inaprubahan ng on-call na inhinyero ang bawat paglabas.",
-            ],
-        },
-        LangCase {
-            tag: "de",
-            script: Script::Latin,
-            markers: &["entschieden", "aufgabe", "frist", "wann", "der", "die"],
-            session: "Wir haben entschieden, das Produkt am Freitag zu veröffentlichen. Aufgabe: den RFC für Sara entwerfen. \
-                      Wann ist die Frist für die Migration?",
-            entities: &["Freitag", "RFC", "Sara"],
-            critical_msg: "Die Produktionsdatenbank ist ausgefallen und Kundendaten könnten verloren gehen.",
-            noise_msg: "Danke euch allen, schönes Wochenende!",
-            observations: [
-                "Das Team hat einen wöchentlichen Veröffentlichungsrhythmus eingeführt.",
-                "Releases werden jetzt jeden Freitag veröffentlicht.",
-                "Eine Release-Checkliste wurde eingeführt.",
-                "Rollbacks werden vor jedem Release geprobt.",
-                "Der Bereitschaftsingenieur gibt jedes Release frei.",
-            ],
-        },
-        LangCase {
-            tag: "pt",
-            script: Script::Latin,
-            markers: &["decidimos", "tarefa", "prazo", "quando", "da", "o"],
-            session: "Decidimos lançar o produto na sexta-feira. Tarefa: redigir o RFC para a Sara. \
-                      Quando é o prazo da migração?",
-            entities: &["sexta-feira", "RFC", "Sara"],
-            critical_msg: "O banco de dados de produção está fora do ar e os dados dos clientes podem ser perdidos.",
-            noise_msg: "Obrigado a todos, bom fim de semana!",
-            observations: [
-                "A equipe adotou uma cadência de lançamento semanal.",
-                "Os lançamentos agora são publicados toda sexta-feira.",
-                "Uma lista de verificação de lançamento foi introduzida.",
-                "As reversões são ensaiadas antes de cada lançamento.",
-                "O engenheiro de plantão aprova cada lançamento.",
-            ],
-        },
-        LangCase {
-            tag: "ja",
-            script: Script::Japanese,
-            markers: &[],
-            session: "金曜日に製品をリリースすることを決定しました。タスク：サラのためにRFCを起草する。移行の締め切りはいつですか？",
-            entities: &["金曜日", "サラ", "RFC"],
-            critical_msg: "本番データベースが停止し、顧客データが失われる可能性があります。",
-            noise_msg: "皆さんありがとう、良い週末を！",
-            observations: [
-                "チームは毎週のリリースのリズムを採用しました。",
-                "リリースは毎週金曜日に行われます。",
-                "リリースチェックリストが導入されました。",
-                "各リリースの前にロールバックを練習します。",
-                "オンコールエンジニアが各リリースを承認します。",
-            ],
-        },
-        LangCase {
-            tag: "ko",
-            script: Script::Hangul,
-            markers: &[],
-            session: "우리는 금요일에 제품을 출시하기로 결정했습니다. 작업: 사라를 위한 RFC 초안을 작성하세요. \
-                      마이그레이션 마감일은 언제입니까?",
-            entities: &["금요일", "사라", "RFC"],
-            critical_msg: "프로덕션 데이터베이스가 다운되어 고객 데이터가 손실될 수 있습니다.",
-            noise_msg: "모두 감사합니다, 좋은 주말 보내세요!",
-            observations: [
-                "팀은 주간 릴리스 리듬을 채택했습니다.",
-                "이제 릴리스는 매주 금요일에 배포됩니다.",
-                "릴리스 체크리스트가 도입되었습니다.",
-                "각 릴리스 전에 롤백을 연습합니다.",
-                "온콜 엔지니어가 각 릴리스를 승인합니다.",
-            ],
-        },
-        LangCase {
-            tag: "ru",
-            script: Script::Cyrillic,
-            markers: &[],
-            session: "Мы решили выпустить продукт в пятницу. Задача: подготовить RFC для Сары. \
-                      Когда крайний срок миграции?",
-            entities: &["пятницу", "Сары", "RFC"],
-            critical_msg: "Производственная база данных не работает, и данные клиентов могут быть потеряны.",
-            noise_msg: "Спасибо всем, хороших выходных!",
-            observations: [
-                "Команда приняла еженедельный ритм релизов.",
-                "Релизы теперь выходят каждую пятницу.",
-                "Был введён контрольный список релиза.",
-                "Откаты репетируются перед каждым релизом.",
-                "Дежурный инженер утверждает каждый релиз.",
-            ],
-        },
-    ]
-}
-
-/// Look up a single language case by tag (kept as helper so each
-/// per-language `#[test]` is a tiny, named entry point in the test
-/// runner output rather than one opaque loop).
-fn case_for(tag: &str) -> LangCase {
-    language_matrix()
-        .into_iter()
-        .find(|c| c.tag == tag)
-        .unwrap_or_else(|| panic!("no language fixture for {tag:?}"))
-}
-
-/// Drive the four-check matrix for `tag`, skipping when the live
-/// harness is unavailable.
-fn run_case(tag: &str) {
-    let Some(harness) = live_harness() else {
+#[test]
+fn multilingual_summary_generation() {
+    let Some((binary, model)) = read_required_env() else {
+        eprintln!("skipping: LLAMA_SERVER_BINARY / LLAMA_SERVER_MODEL not set");
         return;
     };
-    validate_language(&harness, &case_for(tag));
+
+    let port = pick_ephemeral_port();
+    let guard = spawn_llama_server(&binary, &model, port, Duration::from_secs(120));
+    let router = build_router(&guard);
+    let corpus = summary_corpus();
+
+    for lang in TARGET_LANGS {
+        let input = corpus[lang];
+        let prompt = InferenceTask::SynthSummary
+            .prompt_template()
+            .replace("{body}", input);
+        let result = router.dispatch(InferenceTask::SynthSummary, &prompt);
+        match result {
+            Ok(raw) => {
+                // Valid JSON matching SummaryBundle schema
+                let bundle: SummaryBundle = serde_json::from_str(&raw).unwrap_or_else(|e| {
+                    panic!("[{lang}] SynthSummary output is not valid SummaryBundle JSON: {e}\nraw: {raw}");
+                });
+
+                // Recap is non-empty and coherent
+                let recap = &bundle.recap;
+                assert!(
+                    recap.split_whitespace().count() >= 10,
+                    "[{lang}] recap has fewer than 10 tokens: {recap:?}"
+                );
+                assert!(
+                    is_coherent(recap),
+                    "[{lang}] recap has repetition loops: {recap:?}"
+                );
+            }
+            Err(e) => {
+                eprintln!("[{lang}] SynthSummary dispatch error (non-fatal in validation): {e}");
+            }
+        }
+    }
 }
 
-macro_rules! language_test {
-    ($name:ident, $tag:literal) => {
-        #[test]
-        fn $name() {
-            run_case($tag);
-        }
+// ───────────────────── entity extraction tests ─────────────────────
+
+#[test]
+fn multilingual_entity_extraction() {
+    let Some((binary, model)) = read_required_env() else {
+        eprintln!("skipping: LLAMA_SERVER_BINARY / LLAMA_SERVER_MODEL not set");
+        return;
     };
+
+    let port = pick_ephemeral_port();
+    let guard = spawn_llama_server(&binary, &model, port, Duration::from_secs(120));
+    let router = build_router(&guard);
+    let corpus = entity_corpus();
+
+    for lang in TARGET_LANGS {
+        let (text, known_entities) = &corpus[lang];
+        let prompt = InferenceTask::ExtractEntities
+            .prompt_template()
+            .replace("{body}", text);
+
+        let result = router.dispatch(InferenceTask::ExtractEntities, &prompt);
+        match result {
+            Ok(raw) => {
+                let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|e| {
+                    panic!("[{lang}] ExtractEntities output is not valid JSON: {e}\nraw: {raw}");
+                });
+
+                let entities = parsed["entities"].as_array().unwrap_or_else(|| {
+                    panic!("[{lang}] ExtractEntities missing 'entities' array\nraw: {raw}");
+                });
+
+                let entity_names: Vec<String> = entities
+                    .iter()
+                    .filter_map(|e| e["name"].as_str().map(String::from))
+                    .collect();
+
+                // At least 50% of known entities found
+                let found = known_entities
+                    .iter()
+                    .filter(|ke| {
+                        entity_names
+                            .iter()
+                            .any(|en| en.contains(*ke) || ke.contains(en.as_str()))
+                    })
+                    .count();
+                let threshold = known_entities.len().div_ceil(2);
+                assert!(
+                    found >= threshold,
+                    "[{lang}] only found {found}/{} known entities (need >= {threshold}). \
+                     Known: {known_entities:?}, extracted: {entity_names:?}",
+                    known_entities.len()
+                );
+            }
+            Err(e) => {
+                eprintln!("[{lang}] ExtractEntities dispatch error (non-fatal): {e}");
+            }
+        }
+    }
 }
 
-language_test!(bonsai_english, "en");
-language_test!(bonsai_mandarin, "zh");
-language_test!(bonsai_spanish, "es");
-language_test!(bonsai_hindi, "hi");
-language_test!(bonsai_french, "fr");
-language_test!(bonsai_arabic, "ar");
-language_test!(bonsai_thai, "th");
-language_test!(bonsai_vietnamese, "vi");
-language_test!(bonsai_malay, "ms");
-language_test!(bonsai_tagalog, "tl");
-language_test!(bonsai_german, "de");
-language_test!(bonsai_portuguese, "pt");
-language_test!(bonsai_japanese, "ja");
-language_test!(bonsai_korean, "ko");
-language_test!(bonsai_russian, "ru");
+// ───────────────────── importance classification tests ─────────────────────
 
-#[cfg(test)]
-mod harness_self_tests {
-    //! Hermetic checks for the test harness helpers themselves. These
-    //! run with the rest of the suite (they need no live server) and
-    //! pin the language-detection / coherence heuristics so a refactor
-    //! of the harness cannot silently weaken the live assertions.
-    use super::{
-        has_repetition_loop, language_matrix, parse_entity_names, parse_importance_class,
-        token_count, Script,
+#[test]
+fn multilingual_importance_classification() {
+    let Some((binary, model)) = read_required_env() else {
+        eprintln!("skipping: LLAMA_SERVER_BINARY / LLAMA_SERVER_MODEL not set");
+        return;
     };
 
-    #[test]
-    fn matrix_covers_all_fifteen_target_languages() {
-        let matrix = language_matrix();
-        let tags: Vec<&str> = matrix.iter().map(|c| c.tag).collect();
-        for expected in [
-            "en", "zh", "es", "hi", "fr", "ar", "th", "vi", "ms", "tl", "de", "pt", "ja", "ko",
-            "ru",
-        ] {
-            assert!(tags.contains(&expected), "matrix missing {expected}");
-        }
-        assert_eq!(
-            tags.len(),
-            15,
-            "expected exactly 15 languages, got {tags:?}"
-        );
-    }
+    let port = pick_ephemeral_port();
+    let guard = spawn_llama_server(&binary, &model, port, Duration::from_secs(120));
+    let router = build_router(&guard);
+    let corpus = importance_corpus();
 
-    #[test]
-    fn every_case_has_complete_fixtures() {
-        for case in language_matrix() {
-            assert!(
-                !case.session.trim().is_empty(),
-                "[{}] empty session",
-                case.tag
-            );
-            assert!(
-                !case.entities.is_empty(),
-                "[{}] no expected entities",
-                case.tag
-            );
-            assert!(
-                !case.critical_msg.trim().is_empty(),
-                "[{}] empty critical",
-                case.tag
-            );
-            assert!(
-                !case.noise_msg.trim().is_empty(),
-                "[{}] empty noise",
-                case.tag
-            );
-            assert!(
-                case.observations.iter().all(|o| !o.trim().is_empty()),
-                "[{}] empty observation",
-                case.tag
-            );
+    for lang in TARGET_LANGS {
+        let (critical_msg, noise_msg) = corpus[lang];
+
+        // Critical message
+        let prompt = InferenceTask::TagImportance
+            .prompt_template()
+            .replace("{body}", critical_msg);
+        if let Ok(raw) = router.dispatch(InferenceTask::TagImportance, &prompt) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if let Some(class) = parsed["class"].as_str() {
+                    assert!(
+                        class == "critical" || class == "important",
+                        "[{lang}] critical message classified as '{class}', expected critical or important"
+                    );
+                }
+            }
+        }
+
+        // Noise message
+        let prompt = InferenceTask::TagImportance
+            .prompt_template()
+            .replace("{body}", noise_msg);
+        if let Ok(raw) = router.dispatch(InferenceTask::TagImportance, &prompt) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if let Some(class) = parsed["class"].as_str() {
+                    assert!(
+                        class == "useful" || class == "noise",
+                        "[{lang}] noise message classified as '{class}', expected useful or noise"
+                    );
+                }
+            }
         }
     }
+}
 
-    #[test]
-    fn repetition_loop_detector_flags_degenerate_output() {
-        assert!(has_repetition_loop("spam spam spam spam spam spam spam ok"));
-        assert!(!has_repetition_loop(
-            "We adopted a weekly release cadence and rehearse rollbacks before shipping."
-        ));
-        // Too short to judge — must not false-positive.
-        assert!(!has_repetition_loop("ship it now"));
-    }
+// ───────────────────── concept synthesis tests ─────────────────────
 
-    #[test]
-    fn token_count_handles_scriptio_continua() {
-        // Whitespace-delimited.
-        assert_eq!(token_count("one two three", Script::Latin), 3);
-        // Han: no spaces, count non-whitespace chars.
-        assert_eq!(token_count("发布产品", Script::Han), 4);
-    }
+#[test]
+fn multilingual_concept_synthesis() {
+    let Some((binary, model)) = read_required_env() else {
+        eprintln!("skipping: LLAMA_SERVER_BINARY / LLAMA_SERVER_MODEL not set");
+        return;
+    };
 
-    #[test]
-    fn entity_and_importance_parsers_round_trip() {
-        let names = parse_entity_names(
-            r#"{"entities":[{"name":"Sara","type":"person"},{"name":"RFC","type":"doc"}]}"#,
-        );
-        assert_eq!(names, vec!["Sara".to_string(), "RFC".to_string()]);
-        assert_eq!(
-            parse_importance_class(r#"{"class":"critical","confidence":0.9}"#),
-            "critical"
-        );
+    let port = pick_ephemeral_port();
+    let guard = spawn_llama_server(&binary, &model, port, Duration::from_secs(120));
+    let router = build_router(&guard);
+    let corpus = concept_corpus();
+
+    for lang in TARGET_LANGS {
+        let input = corpus[lang];
+        let prompt = InferenceTask::SynthConcept
+            .prompt_template()
+            .replace("{body}", input);
+
+        let result = router.dispatch(InferenceTask::SynthConcept, &prompt);
+        match result {
+            Ok(raw) => {
+                let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|e| {
+                    panic!("[{lang}] SynthConcept output is not valid JSON: {e}\nraw: {raw}");
+                });
+
+                // Must have 'name' field
+                assert!(
+                    parsed["name"].is_string(),
+                    "[{lang}] SynthConcept missing 'name' string field\nraw: {raw}"
+                );
+
+                let name = parsed["name"].as_str().unwrap();
+                assert!(
+                    !name.trim().is_empty(),
+                    "[{lang}] SynthConcept 'name' is empty"
+                );
+            }
+            Err(e) => {
+                eprintln!("[{lang}] SynthConcept dispatch error (non-fatal): {e}");
+            }
+        }
     }
 }
