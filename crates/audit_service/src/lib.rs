@@ -44,6 +44,7 @@ pub use entry::{
 // STABLE
 pub use error::{AuditError, Result};
 // UNSTABLE — convenience helpers; signatures may change.
+#[doc(hidden)]
 pub use helpers::{
     log_export, log_export_simulated, log_proposal_promoted, log_proposal_rejected,
     log_proposal_submitted,
