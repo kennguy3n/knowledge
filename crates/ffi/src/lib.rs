@@ -157,11 +157,11 @@ use crypto::{
     AEAD_NONCE_LEN,
 };
 use evidence_store::{EvidenceId, ImportanceClass, ScopeId};
-// `TryRngCore` is needed alongside `RngCore` because rand 0.9 made
-// `OsRng` fallible-only. See SECURITY.md §"Random number
-// generation" for the rationale behind the workspace-wide
-// `OsRng`-for-everything policy.
-use rand::{RngCore, TryRngCore};
+// `TryRng` is the fallible RNG trait in rand 0.10 (which renamed
+// `TryRngCore` to `TryRng` and `OsRng` to `SysRng`). See SECURITY.md
+// §"Random number generation" for the rationale behind the
+// workspace-wide OS-RNG-for-everything policy.
+use rand::TryRng;
 
 use runtime::with_runtime;
 
@@ -1601,9 +1601,12 @@ pub fn encrypt(
             let key = rt.scope_encrypt_key(scope)?;
             let mut nonce: AeadNonce = [0u8; AEAD_NONCE_LEN];
             // See SECURITY.md §"Random number generation" for why
-            // the substrate uses `OsRng` (not `ThreadRng`) for every
-            // per-encrypt AEAD nonce, even on the hot FFI path.
-            rand::rngs::OsRng.unwrap_err().fill_bytes(&mut nonce);
+            // the substrate uses the OS RNG (`SysRng`, not the
+            // userspace `ThreadRng`) for every per-encrypt AEAD
+            // nonce, even on the hot FFI path.
+            rand::rngs::SysRng
+                .try_fill_bytes(&mut nonce)
+                .expect("OS RNG failure");
             let aad = scope_aad(scope);
             let ciphertext =
                 encrypt_aead(&key, &nonce, &plaintext, &aad).map_err(|e| FfiError::Crypto {
@@ -1922,7 +1925,8 @@ impl runtime::FfiRuntime {
     /// in the in-memory `DekRegistry` and persisted in the evidence
     /// store's `scope_deks` table.
     ///
-    /// New scopes get a fresh random DEK via `OsRng`. Existing scopes
+    /// New scopes get a fresh random DEK drawn from the OS RNG
+    /// (`rand::rngs::SysRng`, see `SECURITY.md`). Existing scopes
     /// (already in the registry) are a no-op.
     fn ensure_scope_registered(&mut self, scope: ScopeId) -> FfiResult<()> {
         let registry_scope = forgetting::ScopeId(scope.as_uuid());

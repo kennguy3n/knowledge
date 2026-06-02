@@ -1,6 +1,6 @@
 //! Integration tests for the encrypted publish / consume round-trip.
 
-use rand::RngCore;
+use rand::Rng;
 
 use crypto::{AeadKey, AEAD_KEY_LEN};
 use evidence_store::ScopeId;
@@ -11,7 +11,10 @@ use synthesis_pipeline::{
 
 fn fresh_key() -> AeadKey {
     let mut key = [0u8; AEAD_KEY_LEN];
-    // `rand::thread_rng()` was renamed to `rand::rng()` in rand 0.9.
+    // `rand::rng()` returns a `ThreadRng` which impls the infallible
+    // `Rng` trait (rand 0.10's rename of `RngCore`). Tests don't
+    // need OS-grade entropy here — `ThreadRng` is fine and never
+    // fails. Production code uses `SysRng` + `TryRng` instead.
     rand::rng().fill_bytes(&mut key);
     key
 }

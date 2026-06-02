@@ -35,8 +35,10 @@
 ///   is cryptographically unrecoverable. Purely additive.
 /// - v6 (C2): added `scope_deks` for independently generated scope
 ///   Data Encryption Keys. Each scope key is now randomly generated
-///   via `OsRng` rather than HKDF-derived from the master key.
-///   The DEK is AEAD-wrapped under a master-derived wrapping key and
+///   from the OS RNG (`rand::rngs::SysRng`, see `SECURITY.md`
+///   §"Random number generation") rather than HKDF-derived from
+///   the master key. The DEK is AEAD-wrapped under a master-derived
+///   wrapping key and
 ///   stored in this table. `forget()` deletes the row, making the
 ///   scope key truly unrecoverable even if the master key is
 ///   compromised. Purely additive.
@@ -415,8 +417,10 @@ CREATE INDEX IF NOT EXISTS idx_body_wraps_scope
     ON body_store_key_wraps (scope_id);
 
 -- v6 (C2) — independently generated per-scope DEKs.
--- Each scope's AEAD key is generated via OsRng (not HKDF-derived from
--- the master key). The raw DEK is AEAD-wrapped under a wrapping key
+-- Each scope's AEAD key is generated from the OS RNG (rand-0.10's
+-- `SysRng`; see SECURITY.md §"Random number generation"), not
+-- HKDF-derived from the master key. The raw DEK is AEAD-wrapped
+-- under a wrapping key
 -- derived from the master key, so it can be unwrapped at open_store
 -- time. On forget(), the row is deleted — without the wrapped DEK
 -- the scope key is truly unrecoverable even if the master key is

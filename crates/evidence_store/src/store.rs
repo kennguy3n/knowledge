@@ -1853,8 +1853,8 @@ impl EvidenceStore {
     ///    scope (pre-v6 database), the scope was encrypted under an
     ///    HKDF-derived key. We adopt that key and persist it in
     ///    `scope_deks` so future opens find it directly.
-    /// 4. Fresh random DEK via `OsRng` — only for genuinely new
-    ///    scopes with no prior evidence.
+    /// 4. Fresh random DEK drawn from the OS RNG (`SysRng`) — only
+    ///    for genuinely new scopes with no prior evidence.
     pub fn ensure_scope_dek(&mut self, scope_id: ScopeId) -> Result<AeadKey> {
         // 1. Fast path: already in memory.
         if let Some(k) = self.scope_keys.read().unwrap().get(&scope_id) {
@@ -1909,19 +1909,17 @@ impl EvidenceStore {
 
         // 4. Genuinely new scope: generate a fresh random DEK.
         let mut dek = [0u8; AEAD_KEY_LEN];
-        // rand 0.9 made `OsRng` fallible-only (impls `TryRngCore`,
-        // not `RngCore`). `TryRngCore::unwrap_err` produces
-        // `UnwrapErr<OsRng>` which impls infallible `RngCore` by
-        // panicking on OS RNG failure — the correct behavior for
-        // DEK generation: a substrate that cannot draw entropy
-        // cannot safely create new encrypted scopes, so panicking
-        // surfaces the breakage rather than silently producing weak
-        // keys. Called via UFCS to avoid a mid-function `use` that
-        // clippy's `items-after-statements` lint would flag.
-        rand::RngCore::fill_bytes(
-            &mut rand::TryRngCore::unwrap_err(rand::rngs::OsRng),
-            &mut dek,
-        );
+        // `SysRng` is fallible (rand 0.10's `TryRng` trait); calling
+        // `try_fill_bytes(...).expect(...)` panics on OS RNG failure
+        // — the correct behavior for DEK generation, because a
+        // substrate that cannot draw entropy cannot safely create
+        // new encrypted scopes. Panicking surfaces the breakage
+        // rather than silently producing weak keys. Called via UFCS
+        // (`rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, …)`)
+        // to avoid a mid-function `use` that clippy's
+        // `items-after-statements` lint would flag.
+        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut dek)
+            .expect("OS RNG failure");
         self.store_scope_dek(scope_id, &dek)?;
         Ok(dek)
     }
@@ -4862,27 +4860,34 @@ fn migrate_evidence_embeddings_to_composite_pk(conn: &Connection) -> Result<()> 
 }
 
 fn random_nonce() -> AeadNonce {
-    use rand::rngs::OsRng;
-    use rand::{RngCore, TryRngCore};
+    use rand::rngs::SysRng;
+    use rand::TryRng;
     let mut nonce = [0u8; AEAD_NONCE_LEN];
     // See SECURITY.md §"Random number generation" for why the
-    // substrate uses `OsRng` (not `ThreadRng`) for every per-row
-    // AEAD nonce. Panicking on OS RNG failure is intentional — a
+    // substrate uses the OS RNG (`SysRng`, not the userspace
+    // `ThreadRng`) for every per-row AEAD nonce, even on the hot
+    // path. Panicking on OS RNG failure is intentional — a
     // substrate that cannot draw entropy cannot encrypt safely.
-    OsRng.unwrap_err().fill_bytes(&mut nonce);
+    SysRng
+        .try_fill_bytes(&mut nonce)
+        .expect("OS RNG failure");
     nonce
 }
 
 fn random_cek() -> AeadKey {
-    use rand::rngs::OsRng;
-    // `TryRngCore` is needed because rand 0.9 made `OsRng` fallible.
-    // The `.unwrap_err()` adapter restores the infallible `RngCore`
-    // surface that this CEK generator depends on (panics on OS RNG
-    // failure, which is the correct behavior — a substrate that
-    // cannot draw entropy cannot wrap content safely).
-    use rand::{RngCore, TryRngCore};
+    // `SysRng` is the rand-0.10 OS RNG (renamed from rand 0.9's
+    // `OsRng`) and impls the fallible `TryRng` trait (renamed from
+    // rand 0.9's `TryRngCore`). Calling `try_fill_bytes(...).expect(...)`
+    // panics on OS RNG failure — the correct posture, because a
+    // substrate that cannot draw entropy cannot wrap content safely.
+    // See SECURITY.md §"Random number generation" for the broader
+    // policy and the migration-history note.
+    use rand::rngs::SysRng;
+    use rand::TryRng;
     let mut key = [0u8; AEAD_KEY_LEN];
-    OsRng.unwrap_err().fill_bytes(&mut key);
+    SysRng
+        .try_fill_bytes(&mut key)
+        .expect("OS RNG failure");
     key
 }
 

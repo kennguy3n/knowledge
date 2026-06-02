@@ -23,13 +23,15 @@
 
 use hkdf::Hkdf;
 // `OsRng` is imported from `rand_core` (kept at 0.6) rather than
-// `rand::rngs` (now 0.9) because `x25519-dalek 2`'s
-// `X25519Secret::random_from_rng` consumes the `rand_core 0.6
-// RngCore + CryptoRng` trait bound. Mixing in a `rand 0.9 OsRng`
-// produces a trait-bound error because the two `rand_core` versions
-// have parallel, non-interconvertible trait hierarchies. See the
-// workspace `Cargo.toml` comment for the full rationale on why
-// `rand_core` stays at 0.6 while `rand` moves to 0.9.
+// from `rand::rngs` (now 0.10, where the OS RNG was renamed to
+// `SysRng`) because `x25519-dalek 2`'s `X25519Secret::random_from_rng`
+// consumes the `rand_core 0.6 RngCore + CryptoRng` trait bound.
+// Mixing in a `rand 0.10 SysRng` produces a trait-bound error
+// because the two `rand_core` versions have parallel,
+// non-interconvertible trait hierarchies. See the workspace
+// `Cargo.toml` comment for the full rationale on why
+// `rand_core` stays at 0.6 while the rest of the workspace moves
+// to `rand` 0.10.
 use rand_core::OsRng;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey as X25519Public, StaticSecret as X25519Secret};

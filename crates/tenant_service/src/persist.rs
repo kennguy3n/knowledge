@@ -56,11 +56,11 @@
 
 use std::path::Path;
 
-// `TryRngCore` is needed alongside `RngCore` because rand 0.9 made
-// `OsRng` fallible-only. See SECURITY.md §"Random number
-// generation" for the rationale behind the workspace-wide
-// `OsRng`-for-everything policy.
-use rand::{RngCore, TryRngCore};
+// `TryRng` is the fallible RNG trait in rand 0.10 (which renamed
+// `TryRngCore` to `TryRng` and `OsRng` to `SysRng`). See SECURITY.md
+// §"Random number generation" for the rationale behind the
+// workspace-wide OS-RNG-for-everything policy.
+use rand::TryRng;
 use rusqlite::{params, Connection};
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
@@ -495,7 +495,9 @@ fn tenant_aad(id: Uuid) -> Vec<u8> {
 fn random_nonce() -> [u8; AEAD_NONCE_LEN] {
     let mut n = [0u8; AEAD_NONCE_LEN];
     // See SECURITY.md §"Random number generation".
-    rand::rngs::OsRng.unwrap_err().fill_bytes(&mut n);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut n)
+        .expect("OS RNG failure");
     n
 }
 
