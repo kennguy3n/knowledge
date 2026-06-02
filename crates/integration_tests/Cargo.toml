@@ -54,5 +54,21 @@ criterion = { workspace = true }
 name = "load_bench"
 harness = false
 
+[[bench]]
+name = "graph_bench"
+harness = false
+
+[[bench]]
+name = "sync_bench"
+harness = false
+
+[[bench]]
+name = "permission_bench"
+harness = false
+
+[[bench]]
+name = "synthesis_bench"
+harness = false
+
 [lints]
 workspace = true

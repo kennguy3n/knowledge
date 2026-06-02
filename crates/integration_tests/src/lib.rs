@@ -16,6 +16,8 @@
 //!   sign/verify, SPHINCS+ sign/verify, co-sign/co-verify, and
 //!   AEAD ciphertext-after-forgetting failure.
 
+#![deny(missing_docs)]
+
 /// Shared test constants and helpers for integration tests.
 pub mod test_helpers {
     pub use evidence_store::{
