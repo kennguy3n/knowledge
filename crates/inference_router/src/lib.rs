@@ -16,21 +16,35 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(missing_docs)]
 
+// STABLE
 pub mod adapter;
+// UNSTABLE — adapter implementations; internal wiring may change.
+#[doc(hidden)]
 pub mod adapters;
+// STABLE
 pub mod config;
+// STABLE
 pub mod error;
+// STABLE
 pub mod router;
+// STABLE
 pub mod task;
 
+// STABLE
 pub use adapter::{AdapterKind, InferenceAdapter, ProbeResult};
 #[cfg(feature = "http-client")]
 pub use adapters::HttpLlamaServerClient;
+// UNSTABLE — adapter internals; prefer InferenceRouter.
+#[doc(hidden)]
 pub use adapters::{
     get_mlx_generate_fn, set_mlx_generate_fn, set_mlx_runtime_linked, FallbackAdapter,
     LlamaCppAdapter, LlamaServerClient, MlxAdapter, MlxGenerateFn,
 };
+// STABLE
 pub use config::{DeviceTier, RouterConfig, IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PROMPT};
+// STABLE
 pub use error::RouterError;
+// STABLE
 pub use router::{AdapterState, InferenceRouter};
+// STABLE
 pub use task::{InferenceTask, SummaryBundle, TaskTag};

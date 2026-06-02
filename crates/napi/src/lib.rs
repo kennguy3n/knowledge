@@ -42,13 +42,18 @@
 // by-value taking in internal helpers that don't cross the FFI
 // boundary.
 
+// STABLE
 pub mod bindings;
+// STABLE
 pub mod error;
+// STABLE
 pub mod types;
 
+// STABLE
 pub use error::{NapiError, NapiResult};
 #[cfg(feature = "tracing-subscriber")]
 pub use ffi::try_init_tracing;
+// STABLE
 pub use ffi::{
     AdapterReport, ApprovedDocumentSummary, ConnectorHealthRecord, ConnectorKindTag,
     ConnectorStatus, EvidenceRecord, FfiImportanceClass, FfiKeypair, FfiSignature, HealthStatus,
@@ -56,6 +61,7 @@ pub use ffi::{
     RuntimeHandle, ScopeIdString, SourceKind, SubsystemHealth, SubsystemStatus, SyncModeKind,
     SyncReport, SyncSchedulerStatus, SyncStatusKind, SynthesisTrigger, SynthesisVersionSummary,
 };
+// STABLE
 pub use types::{IngestRequest, InitConfig, QueryRequest};
 
 /// Wire-stable handle to an open store. Hosts receive this from

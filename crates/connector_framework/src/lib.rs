@@ -25,18 +25,33 @@
 
 #![deny(missing_docs)]
 
+// STABLE
 pub mod acl_sync;
+// STABLE
 pub mod attachment;
+// STABLE
 pub mod config;
+// STABLE
 pub mod connector;
+// STABLE
 pub mod error;
+// STABLE
 pub mod event;
+// STABLE
 pub mod http;
+// UNSTABLE — internal HTTP helpers; signatures may change.
+#[doc(hidden)]
 pub mod http_helpers;
+// STABLE
 pub mod oauth;
+// UNSTABLE — internal rate-limiter; API may change.
+#[doc(hidden)]
 pub mod provider_rate_limiter;
+// STABLE
 pub mod sync;
+// STABLE
 pub mod token_vault;
+// STABLE
 pub mod webhook;
 
 #[cfg(feature = "async-runtime")]
@@ -46,14 +61,20 @@ pub mod http_async;
 #[cfg(feature = "webhook-server")]
 pub mod webhook_server;
 
+// STABLE
 pub use acl_sync::{
     AclSyncEngine, AclSyncReport, PermissionDelta, PermissionMapping, SourcePermission,
     SourcePermissionLevel, SourceRevocation,
 };
+// STABLE
 pub use attachment::{AttachmentId, AttachmentRegistry, ConnectorAttachment};
+// STABLE
 pub use config::{AuthKind, ConnectorConfig, ConnectorInstance, ConnectorKind};
+// STABLE
 pub use connector::{Connector, SyncRunResult};
+// STABLE
 pub use error::{ConnectorError, Result};
+// STABLE
 pub use event::{ConnectorEvent, SourceDocumentId, SourceUserId};
 #[cfg(feature = "http-client")]
 pub use http::{BlockingHttpTransport, DEFAULT_HTTP_TIMEOUT_SECS};
@@ -62,6 +83,8 @@ pub use http::{
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use http::{MockHttpTransport, MockResponse, RecordedRequest};
+// UNSTABLE — internal HTTP helpers; signatures may change.
+#[doc(hidden)]
 pub use http_helpers::{
     bearer_get_json, bearer_post_form, bearer_post_json, classify_failure, encode_form,
     percent_encode_form_component, percent_encode_path_component,
@@ -76,15 +99,20 @@ pub use oauth::{
 // New code should reach for `OAuth2Client` directly.
 #[allow(deprecated)]
 pub use oauth::ReqwestOAuth2Client;
+// UNSTABLE — internal rate-limiter; API may change.
+#[doc(hidden)]
 pub use provider_rate_limiter::{
     provider_key_for_url, ProviderPolicy, ProviderRateLimiter, DEFAULT_MAX_TOKENS,
     DEFAULT_REFILL_RATE_PER_SEC,
 };
+// STABLE
 pub use sync::{SyncMode, SyncState, SyncStatus};
+// STABLE
 pub use token_vault::{
     ConnectorInstanceId, OAuth2CodeExchange, OAuth2Token, OAuth2TokenVault, RefreshedToken,
     SecretToken, TokenRefresher,
 };
+// STABLE
 pub use webhook::{
     parse_webhook_event, WebhookEventTypes, WebhookId, WebhookSecret, WebhookStatus,
     WebhookSubscription,

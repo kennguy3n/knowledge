@@ -25,19 +25,30 @@
 
 #![deny(missing_docs)]
 
+// STABLE
 pub mod entry;
+// STABLE
 pub mod error;
+// UNSTABLE — convenience helpers; signatures may change.
+#[doc(hidden)]
 pub mod helpers;
+// STABLE
 pub mod log;
+// STABLE
 pub mod persist;
 
+// STABLE
 pub use entry::{
     Actor, AuditActionType, AuditEntry, AuditEntryBuilder, AuditEntryId, TargetRef, TargetType,
 };
+// STABLE
 pub use error::{AuditError, Result};
+// UNSTABLE — convenience helpers; signatures may change.
 pub use helpers::{
     log_export, log_export_simulated, log_proposal_promoted, log_proposal_rejected,
     log_proposal_submitted,
 };
+// STABLE
 pub use log::{AuditLog, AuditQuery};
+// STABLE
 pub use persist::PersistentAuditLog;

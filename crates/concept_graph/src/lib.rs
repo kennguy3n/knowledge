@@ -22,22 +22,36 @@
 
 #![deny(missing_docs)]
 
+// STABLE
 pub mod edge;
+// STABLE
 pub mod error;
+// STABLE
 pub mod graph;
+// UNSTABLE — incremental update engine; API may change.
 pub mod incremental;
+// STABLE
 pub mod node;
+// STABLE
 pub mod persist;
+// UNSTABLE — visualization helpers; API may change.
 pub mod visualization;
 
+// STABLE
 pub use edge::{ConceptEdge, EdgeId, RelationType};
+// STABLE
 pub use error::{GraphError, Result};
+// STABLE
 pub use graph::ConceptGraph;
+// UNSTABLE — incremental update engine; API may change.
 pub use incremental::{
     AffectedSubgraph, ChangeEvent, IncrementalUpdateEngine, RecomputeScope, UpdatePropagation,
 };
+// STABLE
 pub use node::{ConceptNode, NodeId, NodeState};
+// STABLE
 pub use persist::PersistentConceptGraph;
+// UNSTABLE — visualization helpers; API may change.
 pub use visualization::{
     explore_from, neighborhood, search_nodes, subgraph_for_scope, AllowAllScopes, AllowedScopeSet,
     EdgeVisual, GraphView, NodeVisual, PositionHint, ScopeAccess, TruncationReason, ViewFilter,

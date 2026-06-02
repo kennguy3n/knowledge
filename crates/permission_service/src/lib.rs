@@ -42,16 +42,28 @@
 
 #![deny(missing_docs)]
 
+// STABLE
 pub mod check;
+// STABLE
 pub mod error;
+// STABLE
 pub mod namespace;
+// STABLE
 pub mod persist;
+// STABLE
 pub mod store;
+// STABLE
 pub mod tuple;
 
+// STABLE
 pub use check::{check_permission, PermissionCheck};
+// STABLE
 pub use error::{PermissionError, Result};
+// STABLE
 pub use namespace::{NamespaceConfig, NamespaceRegistry};
+// STABLE
 pub use persist::PersistentTupleStore;
+// STABLE
 pub use store::TupleStore;
+// STABLE
 pub use tuple::{ObjectRef, ObjectType, Relation, RelationTuple, SubjectRef, SubjectType};
