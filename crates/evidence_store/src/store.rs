@@ -1909,15 +1909,15 @@ impl EvidenceStore {
 
         // 4. Genuinely new scope: generate a fresh random DEK.
         let mut dek = [0u8; AEAD_KEY_LEN];
-        // rand 0.9 made `OsRng` fallible-only (impls `TryRngCore`,
-        // not `RngCore`). `TryRngCore::unwrap_err` produces
-        // `UnwrapErr<OsRng>` which impls infallible `RngCore` by
-        // panicking on OS RNG failure — the correct behavior for
-        // DEK generation: a substrate that cannot draw entropy
-        // cannot safely create new encrypted scopes, so panicking
-        // surfaces the breakage rather than silently producing weak
-        // keys. Called via UFCS to avoid a mid-function `use` that
-        // clippy's `items-after-statements` lint would flag.
+        // `SysRng` is fallible (rand 0.10's `TryRng` trait); calling
+        // `try_fill_bytes(...).expect(...)` panics on OS RNG failure
+        // — the correct behavior for DEK generation, because a
+        // substrate that cannot draw entropy cannot safely create
+        // new encrypted scopes. Panicking surfaces the breakage
+        // rather than silently producing weak keys. Called via UFCS
+        // (`rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, …)`)
+        // to avoid a mid-function `use` that clippy's
+        // `items-after-statements` lint would flag.
         rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut dek)
             .expect("OS RNG failure");
         self.store_scope_dek(scope_id, &dek)?;
