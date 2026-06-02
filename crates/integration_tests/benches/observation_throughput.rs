@@ -51,8 +51,6 @@ fn bench_extraction_throughput(c: &mut Criterion) {
     let extractor = LexiconExtractor::default();
     let scope = ScopeId::new_v4();
 
-    let total_bytes: u64 = BENCH_INPUTS.iter().map(|s| s.len() as u64).sum();
-
     let mut group = c.benchmark_group("observation_extraction");
     group.throughput(Throughput::Elements(BENCH_INPUTS.len() as u64));
 
@@ -67,6 +65,7 @@ fn bench_extraction_throughput(c: &mut Criterion) {
     group.finish();
 
     // Per-byte throughput variant for comparison.
+    let total_bytes: u64 = BENCH_INPUTS.iter().map(|s| s.len() as u64).sum();
     let mut byte_group = c.benchmark_group("observation_extraction_bytes");
     byte_group.throughput(Throughput::Bytes(total_bytes));
 
