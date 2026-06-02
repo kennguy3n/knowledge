@@ -354,13 +354,3 @@ unreadable_literal = "allow"
 uninlined_format_args = "allow"
 needless_continue = "allow"
 
-# ── Profile overrides ──────────────────────────────────────────────
-#
-# The bench profile inherits from release (debug_assertions = false).
-# Several crates (crypto, observation_engine) gate test-only code
-# behind `compile_error!` when test-support is enabled without
-# debug_assertions. dev-dependencies with `features = ["test-support"]`
-# are compiled for bench targets, so `cargo bench` would fail without
-# this override.
-[profile.bench]
-debug-assertions = true
