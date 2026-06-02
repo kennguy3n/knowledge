@@ -16,7 +16,7 @@ test-rust:
 	cargo test --all --all-features
 
 bench:
-	cargo bench -p benchmarks
+	cargo bench --workspace
 
 lint:
 	cargo fmt --all -- --check
