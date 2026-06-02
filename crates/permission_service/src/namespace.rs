@@ -10,7 +10,8 @@
 //! Owner ⇒ Admin ⇒ Editor ⇒ Member ⇒ Viewer
 //! ```
 //!
-//! to every scope-style object type (`Tenant`, `Domain`, `Channel`).
+//! to every scope-style object type (`Tenant`, `Domain`, `Channel`,
+//! `User`).
 //! Other relations (`Synthesizer`, `Proposer`) are orthogonal and not
 //! part of the inheritance chain.
 

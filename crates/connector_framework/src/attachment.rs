@@ -1,8 +1,8 @@
-//! Channel-scoped connector attachments.
+//! Scope-typed connector attachments.
 //!
 //! Per `docs/DESIGN.md` §10.2 (point 4) every connector instance is
-//! attached to exactly one substrate scope (channel / domain). The
-//! attachment binding is the source of truth for:
+//! attached to exactly one substrate scope (channel / domain / user).
+//! The attachment binding is the source of truth for:
 //!
 //! * Which scope an inbound observation should inherit (per
 //!   `ARCHITECTURE.md` §5.2).
@@ -65,20 +65,30 @@ pub struct ConnectorAttachment {
     /// registry can enforce uniqueness without round-tripping
     /// through the connector instance.
     pub kind: ConnectorKind,
-    /// Substrate scope (channel / domain) the connector is bound to.
+    /// Substrate scope (channel / domain / user) the connector is bound to.
     pub scope_id: ScopeId,
+    /// Permission-model object type for this scope (e.g. `Channel`,
+    /// `User`, `Domain`).  Stored so that `detach` uses the same
+    /// authorization context that `attach` established.
+    pub object_type: ObjectType,
     /// Wall-clock attachment time.
     pub attached_at: DateTime<Utc>,
 }
 
 impl ConnectorAttachment {
     /// Construct a fresh attachment.
-    pub fn new(connector: ConnectorInstanceId, kind: ConnectorKind, scope_id: ScopeId) -> Self {
+    pub fn new(
+        connector: ConnectorInstanceId,
+        kind: ConnectorKind,
+        scope_id: ScopeId,
+        object_type: ObjectType,
+    ) -> Self {
         Self {
             id: AttachmentId::new_v4(),
             connector,
             kind,
             scope_id,
+            object_type,
             attached_at: Utc::now(),
         }
     }
@@ -162,7 +172,7 @@ impl AttachmentRegistry {
             return Err(ConnectorError::DuplicateAttachment);
         }
 
-        let attachment = ConnectorAttachment::new(connector, kind, scope_id);
+        let attachment = ConnectorAttachment::new(connector, kind, scope_id, object_type);
         self.by_scope_kind
             .insert((scope_id, kind), attachment.clone());
         self.by_connector.insert(connector, attachment);
@@ -170,11 +180,13 @@ impl AttachmentRegistry {
     }
 
     /// Detach a connector. Requires the same permission as
-    /// [`Self::attach`].
+    /// [`Self::attach`] — the `object_type` stored on the
+    /// attachment at attach-time is used for the authorization
+    /// check so callers cannot bypass it by supplying a different
+    /// type.
     pub fn detach(
         &mut self,
         connector: ConnectorInstanceId,
-        object_type: ObjectType,
         store: &TupleStore,
         namespaces: &NamespaceRegistry,
         subject: SubjectRef,
@@ -185,7 +197,8 @@ impl AttachmentRegistry {
             .ok_or(ConnectorError::AttachmentNotFound)?;
         let scope = existing.scope_id;
         let kind = existing.kind;
-        require_admin_or_editor(scope, object_type, store, namespaces, subject)?;
+        let ot = existing.object_type;
+        require_admin_or_editor(scope, ot, store, namespaces, subject)?;
 
         self.by_scope_kind.remove(&(scope, kind));
         Ok(self.by_connector.remove(&connector).expect("checked above"))
@@ -418,9 +431,7 @@ mod tests {
             subject,
         )
         .unwrap();
-        let removed = reg
-            .detach(connector, ObjectType::Channel, &store, &ns, subject)
-            .unwrap();
+        let removed = reg.detach(connector, &store, &ns, subject).unwrap();
         assert_eq!(removed.connector, connector);
         assert!(reg.is_empty());
         assert!(reg.get_by_connector(connector).is_none());
@@ -433,7 +444,6 @@ mod tests {
         let err = reg
             .detach(
                 ConnectorInstanceId::new_v4(),
-                ObjectType::Channel,
                 &store,
                 &ns,
                 SubjectRef::direct(SubjectType::User, Uuid::new_v4()),
@@ -537,9 +547,7 @@ mod tests {
             subject,
         )
         .unwrap();
-        let removed = reg
-            .detach(connector, ObjectType::User, &store, &ns, subject)
-            .unwrap();
+        let removed = reg.detach(connector, &store, &ns, subject).unwrap();
         assert_eq!(removed.connector, connector);
         assert!(reg.is_empty());
     }
@@ -623,9 +631,7 @@ mod tests {
             subject,
         )
         .unwrap();
-        let removed = reg
-            .detach(connector, ObjectType::Domain, &store, &ns, subject)
-            .unwrap();
+        let removed = reg.detach(connector, &store, &ns, subject).unwrap();
         assert_eq!(removed.connector, connector);
         assert!(reg.is_empty());
     }

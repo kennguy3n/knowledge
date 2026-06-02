@@ -152,10 +152,8 @@ fn domain_scoped_connector_full_path() {
 
     assert_eq!(reg.scope_for(connector).unwrap(), domain_scope);
 
-    // Detach.
-    let removed = reg
-        .detach(connector, ObjectType::Domain, &store, &ns, subject)
-        .unwrap();
+    // Detach — object_type is read from the stored attachment.
+    let removed = reg.detach(connector, &store, &ns, subject).unwrap();
     assert_eq!(removed.scope_id, domain_scope);
     assert!(reg.is_empty());
 }
