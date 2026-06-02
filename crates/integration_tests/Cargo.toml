@@ -13,16 +13,22 @@ publish = false
 # Each file under `tests/` is its own cargo integration-test binary —
 # Cargo's standard layout — so they can be filtered individually with
 # `cargo test -p integration_tests --test ingest_to_query`. The
-# `src/lib.rs` exports shared test helpers (`test_helpers` module);
-# the per-scenario test code lives under `tests/`.
+# `src/lib.rs` exports shared test helpers (`test_helpers` module)
+# behind the `test-support` feature; the per-scenario test code lives
+# under `tests/`.
+
+[features]
+# Shared test constants and helpers (`MASTER_KEY`, `BODY_SIZE`,
+# `open_store`, `padded_body`) gated behind this feature so production
+# deps stay empty in default builds. A `compile_error!` in `src/lib.rs`
+# rejects enabling this feature in release builds.
+test-support = ["dep:evidence_store"]
 
 [lib]
 path = "src/lib.rs"
 
-# The parent crate re-exports shared test constants and helpers so
-# integration-test binaries under `tests/` don't duplicate them.
 [dependencies]
-evidence_store = { path = "../evidence_store" }
+evidence_store = { path = "../evidence_store", optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -43,6 +49,12 @@ sync_engine = { path = "../sync_engine" }
 agent_contract = { path = "../agent_contract" }
 audit_service = { path = "../audit_service" }
 permission_service = { path = "../permission_service" }
+# Self-referential dev-dep: enables the `test-support` feature when
+# compiling integration tests under `tests/`. Cargo's `cfg(test)` flag
+# is only set on the test binary, NOT on the library it links against,
+# so without this the `test_helpers` module would be invisible to the
+# integration test binaries.
+integration_tests = { path = ".", features = ["test-support"] }
 # Criterion drives the multi-scope load bench under `benches/`. The
 # workspace dependency carries the shared `html_reports` feature so
 # the bench's `target/criterion/report/index.html` artefact is

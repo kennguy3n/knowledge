@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crypto::{ProvenanceAgent, ProvenanceBundle, SynthesisActivity};
 use evidence_store::ImportanceClass;
-use integration_tests::test_helpers::{EvidenceStore, EvidenceStoreConfig, ScopeId, MASTER_KEY};
+use integration_tests::test_helpers::{open_store, ScopeId};
 use memory_manager::{
     ApprovedDocumentRef, DomainMemoryObject, SensitivityClass, TenantMemoryObject,
 };
@@ -44,8 +44,7 @@ fn full_pipeline_produces_export_bundle_with_provenance() {
 
     // 1. Ingest evidence.
     let scope = ScopeId::new_v4();
-    let mut store =
-        EvidenceStore::open(&db_path, &MASTER_KEY, EvidenceStoreConfig::default()).unwrap();
+    let mut store = open_store(&db_path);
     let body = b"Project Atlas launches Q3 2026. Sara owns the migration.";
     let result = store
         .ingest(scope, body, None, ImportanceClass::Important)

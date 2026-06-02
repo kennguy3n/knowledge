@@ -19,9 +19,7 @@
 //!    edge persisted alongside it.
 
 use evidence_store::ImportanceClass;
-use integration_tests::test_helpers::{
-    EvidenceStore, EvidenceStoreConfig, ScopeId, BODY_SIZE, MASTER_KEY,
-};
+use integration_tests::test_helpers::{open_store, ScopeId, BODY_SIZE, MASTER_KEY};
 use tempfile::TempDir;
 
 use concept_graph::{
@@ -51,9 +49,7 @@ fn evidence_promotion_and_supersession_round_trip() {
     ];
 
     // 1. Open both stores and ingest evidence rows.
-    let mut store =
-        EvidenceStore::open(&evidence_path, &MASTER_KEY, EvidenceStoreConfig::default())
-            .expect("open evidence store");
+    let mut store = open_store(&evidence_path);
 
     let mut evidence_ids = Vec::new();
     for (label, def) in observations {

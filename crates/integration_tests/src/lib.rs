@@ -27,10 +27,24 @@
 //!   promotion, and audit log entries.
 //! * `tests/multi_scope_isolation.rs` — cross-scope evidence,
 //!   observation, and permission isolation.
+//!
+//! # Test-support items (feature-gated)
+//!
+//! When the `test-support` feature is enabled the crate exposes a
+//! [`test_helpers`] module with:
+//!
+//! * [`test_helpers::MASTER_KEY`] — fixed 32-byte key for all test stores.
+//! * [`test_helpers::BODY_SIZE`] — body size above the inline threshold.
+//! * [`test_helpers::open_store`] — open a fresh [`EvidenceStore`](evidence_store::EvidenceStore) at a path.
+//! * [`test_helpers::padded_body`] — create a body of [`BODY_SIZE`](test_helpers::BODY_SIZE) bytes.
 
 #![deny(missing_docs)]
 
+#[cfg(all(feature = "test-support", not(debug_assertions)))]
+compile_error!("test-support must not be enabled in release builds");
+
 /// Shared test constants and helpers for integration tests.
+#[cfg(any(test, feature = "test-support"))]
 pub mod test_helpers {
     pub use evidence_store::{
         EvidenceStore, EvidenceStoreConfig, ScopeId, DEFAULT_INLINE_THRESHOLD_BYTES,
