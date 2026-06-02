@@ -74,6 +74,12 @@ func Forbidden(msg string) *Error { return NewError(http.StatusForbidden, "Forbi
 // NotFound builds a 404 error.
 func NotFound(msg string) *Error { return NewError(http.StatusNotFound, "NotFound", msg) }
 
+// TooManyRequests builds a 429 error, used to shed load when a bounded
+// work queue (e.g. webhook-triggered syncs) is saturated.
+func TooManyRequests(msg string) *Error {
+	return NewError(http.StatusTooManyRequests, "TooManyRequests", msg)
+}
+
 // Internal builds a 500 error.
 func Internal(msg string) *Error { return NewError(http.StatusInternalServerError, "Internal", msg) }
 

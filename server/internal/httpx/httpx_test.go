@@ -56,6 +56,27 @@ func TestWriteErrorPreservesAPIError(t *testing.T) {
 	}
 }
 
+func TestErrorConstructors(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		err  *Error
+		want int
+		kind string
+	}{
+		{BadRequest("x"), http.StatusBadRequest, "BadRequest"},
+		{Unauthorized("x"), http.StatusUnauthorized, "Unauthorized"},
+		{Forbidden("x"), http.StatusForbidden, "Forbidden"},
+		{NotFound("x"), http.StatusNotFound, "NotFound"},
+		{TooManyRequests("x"), http.StatusTooManyRequests, "TooManyRequests"},
+		{Internal("x"), http.StatusInternalServerError, "Internal"},
+	}
+	for _, c := range cases {
+		if c.err.Status != c.want || c.err.Kind != c.kind {
+			t.Errorf("got (%d,%q), want (%d,%q)", c.err.Status, c.err.Kind, c.want, c.kind)
+		}
+	}
+}
+
 func TestDecodeJSONStrict(t *testing.T) {
 	t.Parallel()
 	type payload struct {

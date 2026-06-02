@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -15,6 +16,13 @@ import (
 	"github.com/kennguy3n/knowledge/server/internal/validate"
 )
 
+// defaultMaxWebhookConcurrency bounds how many inbound webhooks may be
+// processed concurrently when [Options.MaxWebhookConcurrency] is unset.
+// Each inbound webhook kicks off a sync+pipeline run on a background
+// goroutine; without a ceiling a burst of provider callbacks could spawn
+// unbounded goroutines and exhaust memory/connections.
+const defaultMaxWebhookConcurrency = 32
+
 // Service drives connector lifecycle, OAuth, webhooks, scheduling and
 // the content pipeline.
 type Service struct {
@@ -24,6 +32,13 @@ type Service struct {
 	sched         *Scheduler
 	publicBaseURL string
 	syncInterval  time.Duration
+	// webhookSem is a counting semaphore (buffered channel) that caps the
+	// number of concurrent webhook-triggered background syncs. A full
+	// channel sheds load with HTTP 429 rather than spawning more work.
+	webhookSem chan struct{}
+	// webhookWG tracks in-flight webhook syncs so [Service.Stop] can drain
+	// them for a graceful shutdown.
+	webhookWG sync.WaitGroup
 }
 
 // Options configures a connector [Service].
@@ -33,6 +48,9 @@ type Options struct {
 	PublicBaseURL string
 	// SyncInterval is the default per-connector sync cadence.
 	SyncInterval time.Duration
+	// MaxWebhookConcurrency caps concurrent webhook-triggered background
+	// syncs. Values <= 0 fall back to [defaultMaxWebhookConcurrency].
+	MaxWebhookConcurrency int
 }
 
 // New constructs a connector Service. The scheduler is created but not
@@ -44,12 +62,17 @@ func New(sub substrateAPI, log *zap.Logger, opts Options) *Service {
 	if opts.SyncInterval <= 0 {
 		opts.SyncInterval = 15 * time.Minute
 	}
+	maxWebhook := opts.MaxWebhookConcurrency
+	if maxWebhook <= 0 {
+		maxWebhook = defaultMaxWebhookConcurrency
+	}
 	s := &Service{
 		sub:           sub,
 		log:           log,
 		store:         newStore(),
 		publicBaseURL: strings.TrimRight(opts.PublicBaseURL, "/"),
 		syncInterval:  opts.SyncInterval,
+		webhookSem:    make(chan struct{}, maxWebhook),
 	}
 	s.sched = NewScheduler(s.syncAndProcess)
 	return s
@@ -59,8 +82,12 @@ func New(sub substrateAPI, log *zap.Logger, opts Options) *Service {
 // is cancelled.
 func (s *Service) Start(ctx context.Context) { s.sched.Start(ctx) }
 
-// Stop tears down the scheduler.
-func (s *Service) Stop() { s.sched.Stop() }
+// Stop tears down the scheduler and drains any in-flight
+// webhook-triggered syncs so they are not abandoned mid-shutdown.
+func (s *Service) Stop() {
+	s.sched.Stop()
+	s.webhookWG.Wait()
+}
 
 // Routes returns the connector chi router.
 func (s *Service) Routes() http.Handler {

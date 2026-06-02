@@ -321,14 +321,33 @@ fn permission_poisoned() -> ApiError {
 /// it is returned to the Go tenant service for per-tenant key
 /// management and MUST NOT be logged or exposed beyond the internal
 /// loopback boundary.
-#[derive(Debug, Clone, Serialize)]
 struct HybridKeypairResponse {
     /// Algorithm tag: classical + post-quantum hybrid.
     algorithm: String,
     /// Hex of `x25519 (32B) || ML-KEM-768 (1184B)` public key.
     public_key_hex: String,
     /// Hex of `x25519 (32B) || ML-KEM-768 (2400B)` secret key.
-    secret_key_hex: String,
+    ///
+    /// Wrapped in [`zeroize::Zeroizing`] so the hex of the private key
+    /// is wiped from the heap when this response drops (immediately
+    /// after the loopback body is serialised) instead of lingering in
+    /// the allocator's freelist. No `Debug`/`Clone` is derived, to
+    /// avoid accidentally copying or logging the secret material.
+    secret_key_hex: zeroize::Zeroizing<String>,
+}
+
+impl Serialize for HybridKeypairResponse {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut st = serializer.serialize_struct("HybridKeypairResponse", 3)?;
+        st.serialize_field("algorithm", &self.algorithm)?;
+        st.serialize_field("public_key_hex", &self.public_key_hex)?;
+        st.serialize_field("secret_key_hex", self.secret_key_hex.as_str())?;
+        st.end()
+    }
 }
 
 /// `POST /crypto/hybrid_keypair` — generate a fresh hybrid KEM
@@ -343,13 +362,16 @@ async fn hybrid_keypair() -> ApiResult<Json<HybridKeypairResponse>> {
     let mut public = Vec::with_capacity(pk.x25519.len() + pk.mlkem768.len());
     public.extend_from_slice(&pk.x25519);
     public.extend_from_slice(&pk.mlkem768);
-    let mut secret = Vec::with_capacity(sk.x25519.len() + sk.mlkem768.len());
+    // Hold the raw secret bytes in `Zeroizing` so the concatenated
+    // private key is wiped from the heap when this handler returns.
+    let mut secret =
+        zeroize::Zeroizing::new(Vec::with_capacity(sk.x25519.len() + sk.mlkem768.len()));
     secret.extend_from_slice(&sk.x25519);
     secret.extend_from_slice(&sk.mlkem768);
     Ok(Json(HybridKeypairResponse {
         algorithm: "x25519+ml-kem-768".to_string(),
         public_key_hex: to_hex(&public),
-        secret_key_hex: to_hex(&secret),
+        secret_key_hex: zeroize::Zeroizing::new(to_hex(secret.as_slice())),
     }))
 }
 

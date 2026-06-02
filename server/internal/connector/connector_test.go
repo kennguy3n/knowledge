@@ -30,6 +30,10 @@ type fakeSub struct {
 	ingestCalls int
 	synthCalls  int
 	fetchCalls  int
+	// syncGate, when non-nil, blocks SyncConnector until the channel is
+	// closed or receives a value. Used to pin a webhook-triggered sync
+	// in-flight so the concurrency semaphore can be exercised.
+	syncGate chan struct{}
 }
 
 func (f *fakeSub) CreateConnector(context.Context, substrate.CreateConnectorRequest) (substrate.IDResponse, error) {
@@ -49,6 +53,9 @@ func (f *fakeSub) AuthenticateConnector(context.Context, string, substrate.Authe
 	return f.authRaw, nil
 }
 func (f *fakeSub) SyncConnector(context.Context, string) (json.RawMessage, error) {
+	if f.syncGate != nil {
+		<-f.syncGate
+	}
 	return f.syncRaw, f.syncErr
 }
 func (f *fakeSub) RemoveConnector(context.Context, string) error { return f.removeErr }
@@ -298,6 +305,57 @@ func TestWebhookRegisterAndReceive(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("receive code = %d", rec.Code)
 	}
+}
+
+func TestWebhookConcurrencyBound(t *testing.T) {
+	t.Parallel()
+	gate := make(chan struct{})
+	report := `{"instanceId":"inst-1","mode":"incremental","ingestedEvidenceIds":[]}`
+	sub := &fakeSub{syncRaw: json.RawMessage(report), syncGate: gate}
+	s := New(sub, nil, Options{
+		PublicBaseURL:         "https://api.example.com",
+		SyncInterval:          time.Minute,
+		MaxWebhookConcurrency: 1,
+	})
+	s.store.put(registration{InstanceID: "inst-1", Kind: "GoogleDrive", ScopeID: scopeUUID, WebhookActive: true})
+	h := s.Routes()
+
+	// First webhook acquires the only slot; its sync blocks on the gate.
+	if rec := req(h, http.MethodPost, "/inst-1/webhook", ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("first webhook code = %d", rec.Code)
+	}
+	waitFor(t, func() bool { return len(s.webhookSem) == 1 })
+
+	// Second webhook finds the semaphore saturated → 429 (load shed),
+	// and must NOT spawn another goroutine.
+	if rec := req(h, http.MethodPost, "/inst-1/webhook", ""); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second webhook code = %d, want 429", rec.Code)
+	}
+
+	// Release the in-flight sync and let it drain.
+	close(gate)
+	waitFor(t, func() bool { return len(s.webhookSem) == 0 })
+
+	// With the slot free again, a fresh webhook is accepted.
+	if rec := req(h, http.MethodPost, "/inst-1/webhook", ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("third webhook code = %d", rec.Code)
+	}
+	// Drain the scheduler + in-flight syncs before the test exits.
+	s.Stop()
+}
+
+// waitFor polls cond up to two seconds, failing the test if it never
+// becomes true. Used to observe async goroutine state deterministically.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("condition not met within timeout")
 }
 
 func TestRemoveUnschedules(t *testing.T) {

@@ -107,8 +107,21 @@ func (s *Service) handleWebhookReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := detachedContext(r)
+	// Bound the number of concurrent webhook-triggered syncs. If the
+	// semaphore is full we shed load with 429 instead of spawning an
+	// unbounded goroutine; providers retry webhooks on non-2xx.
+	select {
+	case s.webhookSem <- struct{}{}:
+	default:
+		cancel()
+		httpx.WriteError(w, httpx.TooManyRequests("webhook processing at capacity; retry later"))
+		return
+	}
+	s.webhookWG.Add(1)
 	go func() {
+		defer s.webhookWG.Done()
 		defer cancel()
+		defer func() { <-s.webhookSem }()
 		s.syncAndProcess(ctx, id)
 	}()
 	w.WriteHeader(http.StatusAccepted)
