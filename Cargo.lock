@@ -1723,11 +1723,21 @@ dependencies = [
 name = "integration_tests"
 version = "0.1.0"
 dependencies = [
+ "agent_contract",
+ "audit_service",
+ "chrono",
  "concept_graph",
+ "connector_framework",
  "criterion",
  "crypto",
  "evidence_store",
+ "export_plane",
+ "memory_manager",
+ "observation_engine",
  "permission_service",
+ "serde_json",
+ "sync_engine",
+ "synthesis_pipeline",
  "tempfile",
  "uuid",
 ]

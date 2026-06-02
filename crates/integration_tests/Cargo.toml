@@ -31,10 +31,20 @@ uuid = { workspace = true }
 # `StubKemBackend`. We use the real ML-DSA-65 + SPHINCS+ backends in
 # `crypto_round_trip.rs`, but enabling the feature keeps the door
 # open for explicit mock injection if other tests need it.
+chrono = { workspace = true }
 crypto = { path = "../crypto", features = ["test-support"] }
 evidence_store = { path = "../evidence_store" }
 concept_graph = { path = "../concept_graph" }
+observation_engine = { path = "../observation_engine" }
+memory_manager = { path = "../memory_manager" }
+synthesis_pipeline = { path = "../synthesis_pipeline", features = ["test-support"] }
+export_plane = { path = "../export_plane" }
+connector_framework = { path = "../connector_framework" }
+sync_engine = { path = "../sync_engine" }
+agent_contract = { path = "../agent_contract" }
+audit_service = { path = "../audit_service" }
 permission_service = { path = "../permission_service" }
+serde_json = { workspace = true }
 # Criterion drives the multi-scope load bench under `benches/`. The
 # workspace dependency carries the shared `html_reports` feature so
 # the bench's `target/criterion/report/index.html` artefact is
