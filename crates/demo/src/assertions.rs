@@ -1,4 +1,4 @@
-//! Lightweight pass/fail assertion log used by the demo phases.
+//! Lightweight pass/fail assertion log used by the demo stages.
 
 #[derive(Debug, Clone)]
 pub struct AssertionRecord {

@@ -530,7 +530,7 @@ CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
     ON connector_tokens (scope_id);
 
 -- v10 — opaque approved-document payloads.
--- v12  — content-hash dedup via `body_store`.
+-- v12 — content-hash dedup via `body_store`.
 --
 -- Each row attaches metadata to an `ApprovedDocumentRef` previously
 -- admitted onto a `TenantMemoryObject`. The ref lives inside the

@@ -5046,7 +5046,7 @@ pub(crate) fn clamp_limit_to_sqlite(n: usize) -> i64 {
 /// The function is named `merged_fts_search` rather than
 /// `dual_/triple_fts_search` so the public-crate-internal name
 /// stays stable as the schema grows additional tokeniser branches
-/// over future phases.
+/// over future schema bumps.
 pub(crate) fn merged_fts_search(
     conn: &Connection,
     scope_id: ScopeId,
