@@ -880,7 +880,9 @@ impl Connector for HubSpotConnector {
         }
 
         let mut fc = FetchedContent::text(body, "text/plain").with_metadata(metadata);
-        if let Some(t) = title.filter(|s| !s.is_empty()) {
+        // `with_title` normalises a blank title to `None`, so the source
+        // value passes through unconditionally.
+        if let Some(t) = title {
             fc = fc.with_title(t);
         }
         Ok(fc)
