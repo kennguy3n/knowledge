@@ -22,6 +22,7 @@ members = [
     "crates/sync_engine",
     "crates/synthesis_engine",
     "crates/synthesis_pipeline",
+    "crates/substrate_server",
     "crates/tenant_service",
     "crates/uniffi-bindgen",
 ]

@@ -1,0 +1,25 @@
+[package]
+name = "substrate_server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Axum REST server wrapping every ffi::* function on 127.0.0.1:9090."
+
+[[bin]]
+name = "substrate-server"
+path = "src/main.rs"
+
+[dependencies]
+ffi = { path = "../ffi", features = ["http-client", "tracing-subscriber"] }
+axum = { workspace = true, features = ["query"] }
+tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+base64 = "0.22"
+
+[lints]
+workspace = true
