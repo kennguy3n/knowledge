@@ -2380,12 +2380,11 @@ mod tests {
         // Lao) sentence-final marks added later so an accidental
         // removal fires here independently of the initial set.
         //
-        // The split between this and the test is
-        // intentional: each test fails with a phase-specific
-        // error message, so a regression that drops (say) the
-        // Khmer khan can be triaged to the commit
-        // line that introduced it without first ruling out a
-        // regression.
+        // The split between this and the initial-set test is
+        // intentional: each test fails with a set-specific error
+        // message, so a regression that drops (say) the Khmer khan
+        // can be triaged to the commit line that introduced it
+        // without first ruling out a regression in the initial set.
         let terminators = [
             ('\u{0F0D}', "Tibetan shad (sentence / clause end)"),
             ('\u{0F0E}', "Tibetan nyis shad (paragraph / verse end)"),

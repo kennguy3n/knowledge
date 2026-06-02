@@ -3584,7 +3584,7 @@ mod tests {
     /// (`apply_dispatch_outcome` only clones the dispatching
     /// scope's sub-map) by exercising two unrelated scopes and
     /// asserting cross-tenant isolation along with each of the
-    /// helpers added in this phase.
+    /// per-scope accessor helpers.
     #[test]
     fn synthesis_objects_per_scope_isolation_and_accessors() {
         let (handle, dir) = fresh_store();
