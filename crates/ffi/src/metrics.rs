@@ -760,7 +760,7 @@ pub struct MetricsSnapshot {
     /// initialised. Used to compute `uptime_secs` on the health
     /// envelope.
     pub boot_unix_secs: u64,
-    /// Multilingual lexicon-path telemetry.  Counts
+    /// Multilingual lexicon-path telemetry. Counts
     /// per-BCP-47 lexicon hits, [`observation_engine::MatchStrategy`]
     /// fires, and Arabic / Hebrew clitic-peel depth distribution.
     /// `#[serde(default)]` per the additive-wire-contract rule —
@@ -768,7 +768,7 @@ pub struct MetricsSnapshot {
     /// [`LexiconTelemetry::default()`] (all zeroes).
     #[serde(default)]
     pub lexicon_telemetry: LexiconTelemetry,
-    /// Multilingual FTS5-path telemetry.  Counts
+    /// Multilingual FTS5-path telemetry. Counts
     /// per-lane query / row totals, recall-lane skip causes, and
     /// stopword strip volumes per call site.
     /// `#[serde(default)]` per the additive-wire-contract rule.
@@ -784,7 +784,7 @@ pub struct MetricsSnapshot {
     pub vector_telemetry: VectorTelemetry,
     /// Unified retrieval-telemetry view — the three
     /// per-lane telemetry sub-structs grouped under one namespace
-    /// for dashboard ergonomics.  Always populated identically to
+    /// for dashboard ergonomics. Always populated identically to
     /// the flat [`Self::fts_telemetry`] / [`Self::lexicon_telemetry`]
     /// / [`Self::vector_telemetry`] fields; the
     /// `metrics_snapshot_retrieval_metrics_matches_flat_fields`
@@ -802,7 +802,7 @@ pub struct MetricsSnapshot {
 /// The mirror lives here rather than upstream because the FFI
 /// crate is where the `uniffi::Record` / serde derive lives, and
 /// the upstream `observation_engine` crate intentionally does not
-/// depend on either FFI runtime.  The field list mirrors
+/// depend on either FFI runtime. The field list mirrors
 /// [`observation_engine::LexiconTelemetrySnapshot`] verbatim
 /// — adding a counter requires extending both structs
 /// symmetrically.
@@ -816,11 +816,11 @@ pub struct MetricsSnapshot {
 /// Each `hits_<tag>` field counts *lexicon-resolution calls*
 /// (every invocation of
 /// `LexiconRegistry::lexicon_for_or_english`), NOT unique
-/// sentences or documents.  A typical sentence triggers several
+/// sentences or documents. A typical sentence triggers several
 /// resolution calls — up to three classifier-loop resolutions
 /// plus one per inspected capitalised word for the stop-word
 /// filter — so e.g. a 5-capitalised-word English sentence with
-/// no class match will bump `hits_en` ~8 times.  Operators
+/// no class match will bump `hits_en` ~8 times. Operators
 /// inferring "documents classified" from these counters should
 /// divide by their measured calls-per-document ratio rather
 /// than reading the counter directly. See the upstream
@@ -837,7 +837,7 @@ pub struct LexiconTelemetry {
     /// Resolved-lexicon hits for `de`.
     #[serde(default)]
     pub hits_de: u64,
-    /// Resolved-lexicon hits for `en`.  Includes the
+    /// Resolved-lexicon hits for `en`. Includes the
     /// unknown-tag → English fallback path (see
     /// [`Self::unknown_tag_fallbacks_total`]).
     #[serde(default)]
@@ -895,7 +895,7 @@ pub struct LexiconTelemetry {
     pub hits_zh: u64,
     /// Times an input primary_tag was `Some(t)` but no lexicon
     /// was configured for `t`, so the registry fell back to
-    /// English.  Always satisfies
+    /// English. Always satisfies
     /// `unknown_tag_fallbacks_total <= hits_en`.
     #[serde(default)]
     pub unknown_tag_fallbacks_total: u64,
@@ -993,14 +993,14 @@ pub struct FtsTelemetry {
     /// [`Self::bigram_lane_skips_no_cjk_query_total`] — the
     /// pure-stopword check runs first, so a pure-stopword CJK
     /// query like `の の の` bumps this counter and NOT the
-    /// no-CJK counter.  See the upstream
+    /// no-CJK counter. See the upstream
     /// `evidence_store::fts_telemetry::SkipReason` doc for the
     /// taxonomic rationale (added in a follow-up).
     #[serde(default)]
     pub bigram_lane_skips_pure_stopword_query_total: u64,
     /// Times the CJK bigram lane was skipped because the
     /// stripped query was non-empty but contained no adjacent-
-    /// CJK codepoint pair (e.g. a Latin-only query).  Mutually
+    /// CJK codepoint pair (e.g. a Latin-only query). Mutually
     /// exclusive with
     /// [`Self::bigram_lane_skips_pure_stopword_query_total`].
     #[serde(default)]
@@ -1088,13 +1088,13 @@ pub struct VectorTelemetry {
     #[serde(default)]
     pub model_tag_dimension_violations_total: u64,
     /// Pre-embedding router admitted the input —
-    /// `model.embed(text)` was invoked.  See upstream
+    /// `model.embed(text)` was invoked. See upstream
     /// `evidence_store::embedding_routing::classify_for_embedding`
     /// for the routing rationale.
     #[serde(default)]
     pub pre_embed_admitted_total: u64,
     /// Pre-embedding router diverted the call site because the
-    /// input was empty after `str::trim`.  Usually signals an
+    /// input was empty after `str::trim`. Usually signals an
     /// upstream extraction bug rather than legitimate noise.
     #[serde(default)]
     pub pre_embed_skipped_empty_after_trim_total: u64,
@@ -1143,19 +1143,19 @@ pub struct VectorTelemetry {
 pub struct RetrievalMetrics {
     /// FTS5-path telemetry — per-lane query / row totals,
     /// recall-lane structural skips, stopword-strip volumes
-    /// per call site.  Identical to
+    /// per call site. Identical to
     /// [`MetricsSnapshot::fts_telemetry`].
     #[serde(default)]
     pub fts: FtsTelemetry,
     /// Lexicon-path telemetry — per-BCP-47 lexicon hits, match-
     /// strategy fires, Arabic / Hebrew clitic-peel depth
-    /// distribution.  Identical to
+    /// distribution. Identical to
     /// [`MetricsSnapshot::lexicon_telemetry`].
     #[serde(default)]
     pub lexicon: LexiconTelemetry,
     /// Vector-path telemetry — embedding-call-site volumes,
     /// `evidence_embeddings` cache outcomes, adapter error
-    /// variants, `model_tag` rotation-rule violations.  Identical
+    /// variants, `model_tag` rotation-rule violations. Identical
     /// to [`MetricsSnapshot::vector_telemetry`].
     #[serde(default)]
     pub vector: VectorTelemetry,
@@ -1345,7 +1345,7 @@ pub fn snapshot() -> MetricsSnapshot {
         boot_unix_secs: m.boot_unix_secs.load(Ordering::Relaxed),
         // read the upstream aggregator once and project
         // into BOTH the flat fields and the grouped `retrieval_metrics`
-        // view from the same read pass.  This guarantees the
+        // view from the same read pass. This guarantees the
         // `metrics_snapshot_retrieval_metrics_matches_flat_fields`
         // parity invariant holds even under concurrent telemetry
         // writes — if we did two separate reads (one for the flat
@@ -1367,7 +1367,7 @@ pub fn snapshot() -> MetricsSnapshot {
 
 /// Project an upstream
 /// [`observation_engine::LexiconTelemetrySnapshot`] into the FFI
-/// mirror struct.  Pure (no I/O) — separated from the
+/// mirror struct. Pure (no I/O) — separated from the
 /// singleton-read so [`snapshot`] can read the upstream
 /// aggregator once and project into both the flat fields and the
 /// grouped [`RetrievalMetrics`] view from the same read pass.
@@ -1417,7 +1417,7 @@ fn project_lexicon_telemetry(s: &observation_engine::LexiconTelemetrySnapshot) -
 
 /// Project an upstream
 /// [`evidence_store::fts_telemetry::FtsTelemetrySnapshot`] into
-/// the FFI mirror struct.  Pure (no I/O) — see
+/// the FFI mirror struct. Pure (no I/O) — see
 /// [`project_lexicon_telemetry`] for the rationale.
 fn project_fts_telemetry(s: &evidence_store::fts_telemetry::FtsTelemetrySnapshot) -> FtsTelemetry {
     FtsTelemetry {
@@ -1439,8 +1439,8 @@ fn project_fts_telemetry(s: &evidence_store::fts_telemetry::FtsTelemetrySnapshot
 
 /// Project an upstream
 /// [`evidence_store::vector_telemetry::VectorTelemetrySnapshot`]
-/// into the FFI mirror struct.  Pure (no I/O) — see
-/// [`project_lexicon_telemetry`] for the rationale.  The field
+/// into the FFI mirror struct. Pure (no I/O) — see
+/// [`project_lexicon_telemetry`] for the rationale. The field
 /// lists are kept symmetric by the
 /// `vector_telemetry_mirror_round_trips` test below.
 fn project_vector_telemetry(
@@ -1468,7 +1468,7 @@ fn project_vector_telemetry(
 
 /// Read the upstream
 /// [`observation_engine::lexicon_telemetry::snapshot`] and
-/// project it into the FFI mirror struct.  Test-only convenience
+/// project it into the FFI mirror struct. Test-only convenience
 /// wrapper — the production [`snapshot`] path now goes through the
 /// upstream aggregator in
 /// [`observation_engine::retrieval_telemetry::snapshot`] and the
@@ -1482,7 +1482,7 @@ fn lexicon_telemetry_snapshot() -> LexiconTelemetry {
 
 /// Read the upstream
 /// [`evidence_store::fts_telemetry::snapshot`] and project it
-/// into the FFI mirror struct.  See [`lexicon_telemetry_snapshot`]
+/// into the FFI mirror struct. See [`lexicon_telemetry_snapshot`]
 /// for the relationship to the new aggregator-based read path.
 #[cfg(test)]
 fn fts_telemetry_snapshot() -> FtsTelemetry {
@@ -1491,7 +1491,7 @@ fn fts_telemetry_snapshot() -> FtsTelemetry {
 
 /// Read the upstream
 /// [`evidence_store::vector_telemetry::snapshot`] and project it
-/// into the FFI mirror struct.  See [`lexicon_telemetry_snapshot`]
+/// into the FFI mirror struct. See [`lexicon_telemetry_snapshot`]
 /// for the relationship to the new aggregator-based read path.
 #[cfg(test)]
 fn vector_telemetry_snapshot() -> VectorTelemetry {
@@ -1756,18 +1756,18 @@ mod tests {
     /// Every field on
     /// [`observation_engine::LexiconTelemetrySnapshot`] must have
     /// a one-to-one counterpart on the FFI [`LexiconTelemetry`]
-    /// struct.  The check is byte-by-byte: we read the upstream
+    /// struct. The check is byte-by-byte: we read the upstream
     /// snapshot, project into the FFI mirror via
     /// [`lexicon_telemetry_snapshot`], and then re-project field
     /// values by name to make sure no field was dropped or
-    /// silently zeroed.  When this test fails after an
+    /// silently zeroed. When this test fails after an
     /// upstream-counter addition, the FFI mirror is missing the
     /// new field — extend [`LexiconTelemetry`] and the
     /// projection helper symmetrically.
     ///
     /// The test bumps the upstream counters first so all fields
     /// have non-zero distinct values, then asserts the projection
-    /// preserves them.  We use distinct prime-ish increments per
+    /// preserves them. We use distinct prime-ish increments per
     /// counter so a swapped-field-order bug surfaces as a value
     /// mismatch rather than silently aliasing.
     #[test]
@@ -1815,9 +1815,9 @@ mod tests {
         // (potentially advanced) read of the same singleton;
         // parallel tests may bump counters in between, so the
         // mirror values are bounded *below* by the upstream
-        // snapshot.  This is the same monotonic-lower-bound
+        // snapshot. This is the same monotonic-lower-bound
         // pattern used by [`snapshot_reflects_counter_increments`]
-        // above.  We additionally lower-bound the mirror by
+        // above. We additionally lower-bound the mirror by
         // `before + N` so the test catches a mirror that
         // silently zeroes a field (mirror==0 would be < before+1
         // even on a clean process).
@@ -1825,7 +1825,7 @@ mod tests {
         let mirror = lexicon_telemetry_snapshot();
 
         // Verify each FFI mirror field plumbs through to the
-        // corresponding upstream counter.  Lower-bound by the
+        // corresponding upstream counter. Lower-bound by the
         // upstream value because parallel tests cannot decrement
         // counters but may increment them between the two reads.
         assert!(mirror.hits_ar >= upstream.hits_ar);
@@ -1990,7 +1990,7 @@ mod tests {
         // (potentially advanced) read of the same singleton;
         // parallel tests may bump counters in between, so the
         // mirror values are bounded *below* by the upstream
-        // snapshot.  This is the same monotonic-lower-bound
+        // snapshot. This is the same monotonic-lower-bound
         // pattern used by [`snapshot_reflects_counter_increments`]
         // and by `lexicon_telemetry_mirror_round_trips` above.
         // Earlier review fix: the previous
@@ -1999,14 +1999,14 @@ mod tests {
         // `store_integration::fts_telemetry_*`, but trivially
         // any future ffi-binary test that touches FTS) bumped a
         // counter between the two reads, the assertion would
-        // fail.  Switching to `>=` makes the test correct under
+        // fail. Switching to `>=` makes the test correct under
         // arbitrary concurrent telemetry traffic and matches
         // the lexicon mirror test pattern verbatim.
         let upstream = evidence_store::fts_telemetry::snapshot();
         let mirror = fts_telemetry_snapshot();
 
         // Verify each FFI mirror field plumbs through to the
-        // corresponding upstream counter.  Lower-bound by the
+        // corresponding upstream counter. Lower-bound by the
         // upstream value because parallel tests cannot decrement
         // counters but may increment them between the two reads.
         assert!(
@@ -2167,7 +2167,7 @@ mod tests {
         // Upstream is read AFTER the bumps but BEFORE the mirror,
         // so concurrent tests bumping counters in between would
         // only increase the mirror's value relative to the
-        // upstream snapshot.  Lower-bound the mirror by upstream
+        // upstream snapshot. Lower-bound the mirror by upstream
         // (the same monotonic-lower-bound pattern as the FTS
         // mirror test).
         let upstream = evidence_store::vector_telemetry::snapshot();
@@ -2322,7 +2322,7 @@ mod tests {
     /// populated from a single upstream
     /// [`observation_engine::retrieval_telemetry::snapshot`] read
     /// pass in [`super::snapshot`], so they cannot drift even
-    /// under heavy concurrent telemetry writes.  Without the
+    /// under heavy concurrent telemetry writes. Without the
     /// single-read-pass discipline this would be flaky — see
     /// the comment in the `snapshot` populate block.
     #[test]
@@ -2377,7 +2377,7 @@ mod tests {
 
         // Cross-check: an empty JSON object should deserialise to
         // the all-zero default via the per-field `#[serde(default)]`
-        // attributes.  This is the wire-contract invariant for
+        // attributes. This is the wire-contract invariant for
         // forward compatibility with older snapshot emitters.
         let from_empty: RetrievalMetrics =
             serde_json::from_str("{}").expect("empty JSON deserialises to default");
@@ -2386,7 +2386,7 @@ mod tests {
         // The flat MetricsSnapshot JSON must also accept missing
         // `retrieval_metrics`: an older emitter's JSON that lacks
         // the field entirely must still deserialise under the new
-        // reader.  We test this by serialising a full snapshot,
+        // reader. We test this by serialising a full snapshot,
         // surgically removing the `retrieval_metrics` key (simulating
         // an older emitter that doesn't know about the field), and
         // confirming the result still deserialises with
