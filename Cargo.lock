@@ -1724,11 +1724,14 @@ dependencies = [
 name = "integration_tests"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "concept_graph",
  "criterion",
  "crypto",
  "evidence_store",
  "permission_service",
+ "sync_engine",
+ "synthesis_pipeline",
  "tempfile",
  "uuid",
 ]
