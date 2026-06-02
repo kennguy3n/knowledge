@@ -47,11 +47,13 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
 use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
-    ConnectorError, ConnectorEvent, ConnectorInstanceId, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::content::{decode_base64, strip_html};
 
 /// Default Gmail REST base URL. Override via
 /// `auth_config_json.gmail_api_base_url` for sandboxes.
@@ -276,6 +278,81 @@ pub struct GraphRemoved {
     /// `reason` (`"changed"` for soft-deleted, `"deleted"` for hard).
     #[serde(default)]
     pub reason: String,
+}
+
+/// Single Microsoft Graph message detail returned by
+/// `GET /me/messages/{id}?$select=subject,body,from,webLink,hasAttachments`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GraphMessageDetail {
+    /// Message subject line.
+    #[serde(default)]
+    pub subject: Option<String>,
+    /// Message body — `contentType` is `"html"` or `"text"`.
+    #[serde(default)]
+    pub body: Option<GraphItemBody>,
+    /// Sender envelope.
+    #[serde(default)]
+    pub from: Option<GraphRecipient>,
+    /// Browser-openable permalink to the message.
+    #[serde(default, rename = "webLink")]
+    pub web_link: Option<String>,
+    /// Whether the message carries attachments — gates the
+    /// follow-up `/attachments` enumeration.
+    #[serde(default, rename = "hasAttachments")]
+    pub has_attachments: bool,
+}
+
+/// Graph `itemBody` complex type (`{contentType, content}`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GraphItemBody {
+    /// `"html"` or `"text"`.
+    #[serde(default, rename = "contentType")]
+    pub content_type: String,
+    /// Raw body content (HTML markup or plain text).
+    #[serde(default)]
+    pub content: String,
+}
+
+/// Graph `recipient` complex type (`{emailAddress: {name, address}}`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GraphRecipient {
+    /// Inner `emailAddress` object.
+    #[serde(default, rename = "emailAddress")]
+    pub email_address: Option<GraphEmailAddress>,
+}
+
+/// Graph `emailAddress` complex type.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GraphEmailAddress {
+    /// SMTP address.
+    #[serde(default)]
+    pub address: String,
+}
+
+/// `GET /me/messages/{id}/attachments` collection (metadata subset).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GraphAttachmentList {
+    /// Attachment metadata entries.
+    #[serde(default)]
+    pub value: Vec<GraphAttachmentMeta>,
+}
+
+/// One Graph attachment's metadata — bodies are intentionally not
+/// fetched (`fetch_content` lists attachments, it does not inline them).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GraphAttachmentMeta {
+    /// Attachment id.
+    #[serde(default)]
+    pub id: String,
+    /// Display filename.
+    #[serde(default)]
+    pub name: String,
+    /// MIME type.
+    #[serde(default, rename = "contentType")]
+    pub content_type: String,
+    /// Size in bytes.
+    #[serde(default)]
+    pub size: Option<u64>,
 }
 
 /// One page of Microsoft Graph `/me/messages/delta`.
@@ -753,6 +830,74 @@ enum SyncMode {
     Incremental,
 }
 
+/// Look up a header value (case-insensitive) in a Gmail
+/// `payload.headers` array.
+fn gmail_header<'a>(payload: &'a serde_json::Value, name: &str) -> Option<&'a str> {
+    payload.get("headers")?.as_array()?.iter().find_map(|h| {
+        let hname = h.get("name")?.as_str()?;
+        hname
+            .eq_ignore_ascii_case(name)
+            .then(|| h.get("value").and_then(serde_json::Value::as_str))
+            .flatten()
+    })
+}
+
+/// Depth-first search a Gmail `payload` tree for the first inline
+/// (non-attachment) part whose `mimeType` matches `target_mime`,
+/// returning its base64url-decoded body bytes.
+fn gmail_find_part_body(payload: &serde_json::Value, target_mime: &str) -> Option<Vec<u8>> {
+    let mime = payload
+        .get("mimeType")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let filename = payload
+        .get("filename")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if mime == target_mime && filename.is_empty() {
+        if let Some(data) = payload
+            .get("body")
+            .and_then(|b| b.get("data"))
+            .and_then(serde_json::Value::as_str)
+        {
+            if let Some(bytes) = decode_base64(data) {
+                return Some(bytes);
+            }
+        }
+    }
+    if let Some(parts) = payload.get("parts").and_then(serde_json::Value::as_array) {
+        for part in parts {
+            if let Some(found) = gmail_find_part_body(part, target_mime) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Recursively collect attachment metadata (parts carrying a
+/// non-empty `filename`) from a Gmail payload tree. Bodies are not
+/// downloaded — only the metadata needed to enumerate attachments.
+fn gmail_collect_attachments(payload: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
+    let filename = payload
+        .get("filename")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !filename.is_empty() {
+        out.push(serde_json::json!({
+            "filename": filename,
+            "mime_type": payload.get("mimeType").and_then(serde_json::Value::as_str).unwrap_or_default(),
+            "size": payload.get("body").and_then(|b| b.get("size")).and_then(serde_json::Value::as_u64),
+            "attachment_id": payload.get("body").and_then(|b| b.get("attachmentId")).and_then(serde_json::Value::as_str),
+        }));
+    }
+    if let Some(parts) = payload.get("parts").and_then(serde_json::Value::as_array) {
+        for part in parts {
+            gmail_collect_attachments(part, out);
+        }
+    }
+}
+
 impl Connector for EmailConnector {
     fn authenticate(&self, config: &ConnectorConfig) -> Result<OAuth2Token> {
         // Dispatch is keyed by `provider` so the substrate can't
@@ -881,6 +1026,154 @@ impl Connector for EmailConnector {
                     events,
                     next_cursor,
                 })
+            }
+        }
+    }
+
+    fn fetch_content(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        document_id: &SourceDocumentId,
+    ) -> Result<FetchedContent> {
+        let provider = EmailProvider::from_config(config)?;
+        // Document ids are `"<provider>:msg:<id>"` (see
+        // [`EmailConnector::document_id`]); strip the prefix to recover
+        // the provider-native message id.
+        let raw = document_id.as_str();
+        let message_id = raw.rsplit_once(":msg:").map_or(raw, |(_, id)| id);
+        if message_id.is_empty() {
+            return Err(ConnectorError::Sync(format!(
+                "email fetch_content: malformed document id {raw:?} (expected `<provider>:msg:<id>`)"
+            )));
+        }
+        let id_enc = percent_encode_path_component(message_id);
+
+        match provider {
+            EmailProvider::Gmail => {
+                let base = self.resolved_gmail_base(config);
+                let user_path = Self::resolved_gmail_user_path(config);
+                let url = format!("{base}/gmail/v1/{user_path}/messages/{id_enc}?format=full");
+                let msg: serde_json::Value = bearer_get_json(
+                    &self.transport,
+                    "email",
+                    "/gmail/v1/{user}/messages/{id}",
+                    &url,
+                    token,
+                    &[],
+                )?;
+                let payload = msg
+                    .get("payload")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let subject = gmail_header(&payload, "Subject")
+                    .unwrap_or_default()
+                    .to_string();
+                let from = gmail_header(&payload, "From")
+                    .unwrap_or_default()
+                    .to_string();
+                let date = gmail_header(&payload, "Date")
+                    .unwrap_or_default()
+                    .to_string();
+
+                // Prefer text/plain; fall back to a stripped text/html
+                // body; finally to the single-part payload body.
+                let body_text = if let Some(bytes) = gmail_find_part_body(&payload, "text/plain") {
+                    String::from_utf8_lossy(&bytes).into_owned()
+                } else if let Some(bytes) = gmail_find_part_body(&payload, "text/html") {
+                    strip_html(&String::from_utf8_lossy(&bytes))
+                } else {
+                    payload
+                        .get("body")
+                        .and_then(|b| b.get("data"))
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(decode_base64)
+                        .map(|b| String::from_utf8_lossy(&b).into_owned())
+                        .unwrap_or_default()
+                };
+
+                let mut attachments: Vec<serde_json::Value> = Vec::new();
+                gmail_collect_attachments(&payload, &mut attachments);
+
+                let source_url = format!("https://mail.google.com/mail/u/0/#all/{message_id}");
+                Ok(FetchedContent::text(body_text, "text/plain")
+                    .with_title(subject)
+                    .with_metadata(serde_json::json!({
+                        "provider": "gmail",
+                        "message_id": message_id,
+                        "from": from,
+                        "date": date,
+                        "attachments": attachments,
+                    }))
+                    .with_source_url(source_url))
+            }
+            EmailProvider::MicrosoftGraph => {
+                let base = self.resolved_graph_base(config);
+                let version = self.resolved_graph_version(config);
+                let url = format!(
+                    "{base}{version}/me/messages/{id_enc}\
+                     ?$select=subject,body,from,webLink,hasAttachments"
+                );
+                let msg: GraphMessageDetail = bearer_get_json(
+                    &self.transport,
+                    "email",
+                    "/me/messages/{id}",
+                    &url,
+                    token,
+                    &[],
+                )?;
+                let subject = msg.subject.unwrap_or_default();
+                let from = msg
+                    .from
+                    .and_then(|f| f.email_address)
+                    .map(|e| e.address)
+                    .unwrap_or_default();
+                let body_text = match msg.body {
+                    Some(b) if b.content_type.eq_ignore_ascii_case("html") => {
+                        strip_html(&b.content)
+                    }
+                    Some(b) => b.content,
+                    None => String::new(),
+                };
+
+                // Attachment metadata is a separate Graph collection;
+                // only fetch it when the message advertises attachments.
+                let mut attachments: Vec<serde_json::Value> = Vec::new();
+                if msg.has_attachments {
+                    let att_url = format!(
+                        "{base}{version}/me/messages/{id_enc}/attachments\
+                         ?$select=id,name,contentType,size"
+                    );
+                    let att: GraphAttachmentList = bearer_get_json(
+                        &self.transport,
+                        "email",
+                        "/me/messages/{id}/attachments",
+                        &att_url,
+                        token,
+                        &[],
+                    )?;
+                    for a in att.value {
+                        attachments.push(serde_json::json!({
+                            "filename": a.name,
+                            "mime_type": a.content_type,
+                            "size": a.size,
+                            "attachment_id": a.id,
+                        }));
+                    }
+                }
+
+                let mut fc = FetchedContent::text(body_text, "text/plain")
+                    .with_title(subject)
+                    .with_metadata(serde_json::json!({
+                        "provider": "msgraph",
+                        "message_id": message_id,
+                        "from": from,
+                        "attachments": attachments,
+                    }));
+                if let Some(link) = msg.web_link.filter(|s| !s.is_empty()) {
+                    fc = fc.with_source_url(link);
+                }
+                Ok(fc)
             }
         }
     }
@@ -1881,5 +2174,209 @@ mod tests {
             EmailConnector::document_id(EmailProvider::MicrosoftGraph, "m1").as_str(),
             "msgraph:msg:m1"
         );
+    }
+
+    // ───────────── fetch_content ─────────────
+
+    /// Minimal base64url (no padding) encoder for test fixtures —
+    /// mirrors what Gmail emits for MIME part bodies. Kept local so
+    /// the crate need not pull in a `base64` dependency.
+    fn b64url(s: &str) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let bytes = s.as_bytes();
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let b0 = chunk[0] as u32;
+            let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+            let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+            let n = (b0 << 16) | (b1 << 8) | b2;
+            out.push(ALPHABET[((n >> 18) & 0x3F) as usize] as char);
+            out.push(ALPHABET[((n >> 12) & 0x3F) as usize] as char);
+            if chunk.len() > 1 {
+                out.push(ALPHABET[((n >> 6) & 0x3F) as usize] as char);
+            }
+            if chunk.len() > 2 {
+                out.push(ALPHABET[(n & 0x3F) as usize] as char);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn fetch_content_gmail_prefers_plain_text_and_lists_attachments() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GMAIL_BASE}/gmail/v1/users/me/messages/g42?format=full"),
+            ok_json(&serde_json::json!({
+                "id": "g42",
+                "payload": {
+                    "mimeType": "multipart/mixed",
+                    "headers": [
+                        { "name": "Subject", "value": "Quarterly numbers" },
+                        { "name": "From", "value": "Ada <ada@example.com>" },
+                        { "name": "Date", "value": "Mon, 2 Jun 2026 10:00:00 +0000" }
+                    ],
+                    "parts": [
+                        {
+                            "mimeType": "multipart/alternative",
+                            "parts": [
+                                { "mimeType": "text/plain", "filename": "", "body": { "data": b64url("Plain body wins.") } },
+                                { "mimeType": "text/html", "filename": "", "body": { "data": b64url("<p>HTML loses</p>") } }
+                            ]
+                        },
+                        {
+                            "mimeType": "application/pdf",
+                            "filename": "report.pdf",
+                            "body": { "size": 2048, "attachmentId": "att-1" }
+                        }
+                    ]
+                }
+            })),
+        );
+        let c = EmailConnector::new(ConnectorInstanceId::new_v4(), transport, gmail_oauth());
+        let tok = c.authenticate(&gmail_cfg()).unwrap();
+        let fc = c
+            .fetch_content(&gmail_cfg(), &tok, &SourceDocumentId::new("gmail:msg:g42"))
+            .unwrap();
+        assert_eq!(String::from_utf8(fc.body).unwrap(), "Plain body wins.");
+        assert_eq!(fc.mime_type, "text/plain");
+        assert_eq!(fc.title.as_deref(), Some("Quarterly numbers"));
+        assert_eq!(
+            fc.metadata["from"],
+            serde_json::json!("Ada <ada@example.com>")
+        );
+        assert_eq!(
+            fc.metadata["attachments"][0]["filename"],
+            serde_json::json!("report.pdf")
+        );
+        assert_eq!(
+            fc.metadata["attachments"][0]["attachment_id"],
+            serde_json::json!("att-1")
+        );
+        assert!(fc.source_url.unwrap().contains("g42"));
+    }
+
+    #[test]
+    fn fetch_content_gmail_falls_back_to_stripped_html() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GMAIL_BASE}/gmail/v1/users/me/messages/g7?format=full"),
+            ok_json(&serde_json::json!({
+                "id": "g7",
+                "payload": {
+                    "mimeType": "text/html",
+                    "headers": [ { "name": "Subject", "value": "HTML only" } ],
+                    "body": { "data": b64url("<p>Hello <strong>world</strong></p>") }
+                }
+            })),
+        );
+        let c = EmailConnector::new(ConnectorInstanceId::new_v4(), transport, gmail_oauth());
+        let tok = c.authenticate(&gmail_cfg()).unwrap();
+        let fc = c
+            .fetch_content(&gmail_cfg(), &tok, &SourceDocumentId::new("gmail:msg:g7"))
+            .unwrap();
+        assert_eq!(String::from_utf8(fc.body).unwrap(), "Hello world");
+    }
+
+    #[test]
+    fn fetch_content_graph_strips_html_and_fetches_attachments() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!(
+                "{GRAPH_BASE}/v1.0/me/messages/m9?$select=subject,body,from,webLink,hasAttachments"
+            ),
+            ok_json(&serde_json::json!({
+                "id": "m9",
+                "subject": "Renewal",
+                "body": { "contentType": "html", "content": "<div>Call <b>Ada</b></div>" },
+                "from": { "emailAddress": { "address": "ada@example.com" } },
+                "webLink": "https://outlook.office.com/mail/m9",
+                "hasAttachments": true
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GRAPH_BASE}/v1.0/me/messages/m9/attachments?$select=id,name,contentType,size"),
+            ok_json(&serde_json::json!({
+                "value": [
+                    { "id": "a1", "name": "deck.pptx", "contentType": "application/vnd.ms-powerpoint", "size": 4096 }
+                ]
+            })),
+        );
+        let c = EmailConnector::new(ConnectorInstanceId::new_v4(), transport, graph_oauth());
+        let tok = c.authenticate(&graph_cfg()).unwrap();
+        let fc = c
+            .fetch_content(&graph_cfg(), &tok, &SourceDocumentId::new("msgraph:msg:m9"))
+            .unwrap();
+        assert_eq!(String::from_utf8(fc.body).unwrap(), "Call Ada");
+        assert_eq!(fc.title.as_deref(), Some("Renewal"));
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://outlook.office.com/mail/m9")
+        );
+        assert_eq!(fc.metadata["from"], serde_json::json!("ada@example.com"));
+        assert_eq!(
+            fc.metadata["attachments"][0]["filename"],
+            serde_json::json!("deck.pptx")
+        );
+    }
+
+    #[test]
+    fn fetch_content_graph_without_attachments_skips_second_call() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!(
+                "{GRAPH_BASE}/v1.0/me/messages/m1?$select=subject,body,from,webLink,hasAttachments"
+            ),
+            ok_json(&serde_json::json!({
+                "id": "m1",
+                "subject": "Plain note",
+                "body": { "contentType": "text", "content": "Just text." },
+                "hasAttachments": false
+            })),
+        );
+        let c = EmailConnector::new(ConnectorInstanceId::new_v4(), transport, graph_oauth());
+        let tok = c.authenticate(&graph_cfg()).unwrap();
+        let fc = c
+            .fetch_content(&graph_cfg(), &tok, &SourceDocumentId::new("msgraph:msg:m1"))
+            .unwrap();
+        assert_eq!(String::from_utf8(fc.body).unwrap(), "Just text.");
+        assert_eq!(fc.metadata["attachments"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn fetch_content_gmail_maps_404_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GMAIL_BASE}/gmail/v1/users/me/messages/missing?format=full"),
+            MockResponse::status(404, b"{}".to_vec()),
+        );
+        let c = EmailConnector::new(ConnectorInstanceId::new_v4(), transport, gmail_oauth());
+        let tok = c.authenticate(&gmail_cfg()).unwrap();
+        let err = c
+            .fetch_content(
+                &gmail_cfg(),
+                &tok,
+                &SourceDocumentId::new("gmail:msg:missing"),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_rejects_malformed_document_id() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = EmailConnector::new(ConnectorInstanceId::new_v4(), transport, gmail_oauth());
+        let tok = c.authenticate(&gmail_cfg()).unwrap();
+        let err = c
+            .fetch_content(&gmail_cfg(), &tok, &SourceDocumentId::new("gmail:msg:"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
     }
 }

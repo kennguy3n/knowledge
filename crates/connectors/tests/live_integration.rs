@@ -1,4 +1,4 @@
-//! Live-integration smoke tests for the 9 production connectors.
+//! Live-integration smoke tests for the 10 production connectors.
 //!
 //! Every other test in this crate uses
 //! [`connector_framework::http::MockHttpTransport`] (or the
@@ -53,10 +53,13 @@
 //! | HubSpot       | `HUBSPOT_TEST_TOKEN`        | —                                       |
 //! | Figma         | `FIGMA_TEST_TOKEN`          | —                                       |
 //! | Email (Gmail) | `EMAIL_TEST_TOKEN`          | `EMAIL_TEST_PROVIDER` (gmail \| graph)  |
+//! | GitHub        | `GITHUB_TEST_TOKEN`         | `GITHUB_TEST_REPO` (owner/repo)         |
 //!
-//! Tests assert `initial_sync` returns at least one
+//! Each test asserts `initial_sync` returns at least one
 //! [`ConnectorEvent`] — a connected sandbox account is expected
-//! to have at least one document / page / message to surface.
+//! to have at least one document / page / message to surface — and
+//! then drives a `fetch_content` round-trip against the first
+//! document id that sync surfaces, asserting a non-empty body.
 
 #![cfg(feature = "live-integration")]
 
@@ -65,6 +68,7 @@ use std::sync::Arc;
 use chrono::{Duration, Utc};
 use connector_framework::config::{AuthKind, ConnectorConfig, ConnectorKind};
 use connector_framework::connector::Connector;
+use connector_framework::event::{ConnectorEvent, SourceDocumentId};
 use connector_framework::http::BlockingHttpTransport;
 use connector_framework::oauth::default_oauth_client;
 use connector_framework::token_vault::{ConnectorInstanceId, OAuth2Token};
@@ -74,6 +78,7 @@ use uuid::Uuid;
 use connectors::confluence::ConfluenceConnector;
 use connectors::email::EmailConnector;
 use connectors::figma::FigmaConnector;
+use connectors::github::GitHubConnector;
 use connectors::google_drive::GoogleDriveConnector;
 use connectors::hubspot::HubSpotConnector;
 use connectors::jira::JiraConnector;
@@ -130,6 +135,41 @@ fn config_for(kind: ConnectorKind, auth: AuthKind) -> ConnectorConfig {
     ConnectorConfig::new(kind, auth, ScopeId::from_uuid(Uuid::new_v4()))
 }
 
+/// Pick the first fetchable document id from a sync result —
+/// `DocumentCreated` / `DocumentUpdated` carry an id that
+/// `fetch_content` can resolve. `DocumentDeleted` / permission
+/// events are skipped.
+fn first_document_id(events: &[ConnectorEvent]) -> Option<SourceDocumentId> {
+    events.iter().find_map(|e| match e {
+        ConnectorEvent::DocumentCreated { document_id, .. }
+        | ConnectorEvent::DocumentUpdated { document_id, .. } => Some(document_id.clone()),
+        _ => None,
+    })
+}
+
+/// Drive a full content round-trip: take the first document
+/// surfaced by `initial_sync` and assert `fetch_content` returns a
+/// non-empty body for it. Shared by every per-provider live test so
+/// the fetch path is exercised against real provider traffic.
+fn assert_fetch_content_roundtrip(
+    connector: &dyn Connector,
+    cfg: &ConnectorConfig,
+    bearer: &OAuth2Token,
+    events: &[ConnectorEvent],
+    label: &str,
+) {
+    let Some(document_id) = first_document_id(events) else {
+        panic!("{label}: initial_sync surfaced no fetchable document to round-trip");
+    };
+    let content = connector
+        .fetch_content(cfg, bearer, &document_id)
+        .unwrap_or_else(|e| panic!("{label} fetch_content round-trip must succeed: {e:?}"));
+    assert!(
+        !content.body.is_empty(),
+        "{label} fetch_content must return a non-empty body for {document_id:?}"
+    );
+}
+
 #[test]
 fn notion_initial_sync_returns_at_least_one_event() {
     let Some(token) = env_or_skip("NOTION_TEST_TOKEN", "notion") else {
@@ -147,6 +187,7 @@ fn notion_initial_sync_returns_at_least_one_event() {
         !result.events.is_empty(),
         "notion sandbox account must surface at least one page/database"
     );
+    assert_fetch_content_roundtrip(&connector, &cfg, &bearer, &result.events, "notion");
 }
 
 #[test]
@@ -170,6 +211,7 @@ fn google_drive_initial_sync_returns_at_least_one_event() {
         !result.events.is_empty(),
         "google drive sandbox account must surface at least one file"
     );
+    assert_fetch_content_roundtrip(&connector, &cfg, &bearer, &result.events, "google_drive");
 }
 
 #[test]
@@ -189,6 +231,7 @@ fn slack_initial_sync_returns_at_least_one_event() {
         !result.events.is_empty(),
         "slack sandbox workspace must surface at least one channel"
     );
+    assert_fetch_content_roundtrip(&connector, &cfg, &bearer, &result.events, "slack");
 }
 
 #[test]
@@ -212,6 +255,7 @@ fn jira_initial_sync_returns_at_least_one_event() {
         !result.events.is_empty(),
         "jira sandbox project must surface at least one issue"
     );
+    assert_fetch_content_roundtrip(&connector, &cfg, &bearer, &result.events, "jira");
 }
 
 #[test]
@@ -235,6 +279,7 @@ fn confluence_initial_sync_returns_at_least_one_event() {
         !result.events.is_empty(),
         "confluence sandbox space must surface at least one page"
     );
+    assert_fetch_content_roundtrip(&connector, &cfg, &bearer, &result.events, "confluence");
 }
 
 #[test]
@@ -254,6 +299,7 @@ fn onedrive_initial_sync_returns_at_least_one_event() {
         !result.events.is_empty(),
         "onedrive sandbox account must surface at least one file"
     );
+    assert_fetch_content_roundtrip(&connector, &cfg, &bearer, &result.events, "onedrive");
 }
 
 #[test]
@@ -273,6 +319,7 @@ fn hubspot_initial_sync_returns_at_least_one_event() {
         !result.events.is_empty(),
         "hubspot sandbox portal must surface at least one contact/company/deal"
     );
+    assert_fetch_content_roundtrip(&connector, &cfg, &bearer, &result.events, "hubspot");
 }
 
 #[test]
@@ -292,6 +339,7 @@ fn figma_initial_sync_returns_at_least_one_event() {
         !result.events.is_empty(),
         "figma sandbox team must surface at least one file"
     );
+    assert_fetch_content_roundtrip(&connector, &cfg, &bearer, &result.events, "figma");
 }
 
 #[test]
@@ -318,4 +366,34 @@ fn email_initial_sync_returns_at_least_one_event() {
         !result.events.is_empty(),
         "email sandbox inbox must surface at least one message"
     );
+    assert_fetch_content_roundtrip(&connector, &cfg, &bearer, &result.events, "email");
+}
+
+#[test]
+fn github_initial_sync_returns_at_least_one_event() {
+    let Some(token) = env_or_skip("GITHUB_TEST_TOKEN", "github") else {
+        return;
+    };
+    // GitHub is repo-scoped: the connector needs an `owner/repo`
+    // slug to list issues against, mirrored through the same env
+    // pattern as the Atlassian connectors' base-url override.
+    let repo = std::env::var("GITHUB_TEST_REPO").unwrap_or_else(|_| {
+        panic!(
+            "GITHUB_TEST_TOKEN is set but GITHUB_TEST_REPO is missing (e.g. octocat/Hello-World)"
+        )
+    });
+    let (transport, oauth) = live_clients();
+    let connector = GitHubConnector::new(ConnectorInstanceId(Uuid::new_v4()), transport, oauth);
+    let mut cfg = config_for(ConnectorKind::GitHub, AuthKind::OAuth2);
+    cfg.auth_config_json = serde_json::json!({ "repository": repo });
+    let bearer = bearer_token(&token, "repo");
+
+    let result = connector
+        .initial_sync(&cfg, &bearer)
+        .expect("github initial_sync against the sandbox repo must succeed");
+    assert!(
+        !result.events.is_empty(),
+        "github sandbox repo must surface at least one issue"
+    );
+    assert_fetch_content_roundtrip(&connector, &cfg, &bearer, &result.events, "github");
 }

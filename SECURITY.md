@@ -54,9 +54,20 @@ co-signing.
 The following are honest gaps; the project is pre-1.0 and they
 are tracked openly:
 
-1. **No live connector traffic.** The connector implementations
-   are fixture parsers — OAuth2 transport, webhook subscription,
-   and incremental delta sync are contract-only at this stage.
+1. **Connector content fetching.** The connector implementations
+   perform live document-content retrieval (`Connector::fetch_content`)
+   in addition to OAuth2 transport, webhook subscription, and
+   incremental delta sync. Content is fetched over the injected
+   `HttpTransport` using the per-instance OAuth2 bearer token; the
+   token is sent only to the provider's resolved API host (or, for
+   provider-issued pre-signed download URLs such as Microsoft Graph's
+   `@microsoft.graph.downloadUrl`, omitted because the credential is
+   already embedded in the URL). Fetched document bodies are treated
+   as sensitive: they are returned to the caller as opaque bytes and
+   are never written to logs, traces, or error messages — connector
+   errors carry only status codes and endpoint identifiers, not
+   response bodies. Bounding and chunking of large bodies before
+   ingest is the runtime's responsibility, not the connector's.
 2. **Host shells are out of scope.** Mobile and desktop UI
    shells live in sibling repositories and are not audited by
    this policy. However, explicit host-shell key handling

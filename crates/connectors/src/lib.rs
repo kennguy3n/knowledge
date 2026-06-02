@@ -45,6 +45,11 @@
 
 #![deny(missing_docs)]
 
+// Crate-internal helpers shared by the connectors' `fetch_content`
+// implementations (raw binary GET, base64 decode, HTML / ADF
+// flattening). Not part of the public API.
+mod content;
+
 // STABLE
 pub mod confluence;
 // STABLE

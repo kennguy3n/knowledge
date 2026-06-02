@@ -27,16 +27,20 @@
 //! `https://api.hubapi.com/oauth/v1/token` exchange. Unit tests
 //! pass `MockHttpTransport` + a fixture OAuth2 exchange.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    bearer_get_json, bearer_post_json, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
-    ConnectorInstanceId, HttpMethod, HttpRequest, HttpTransport, OAuth2CodeExchange, OAuth2Token,
-    Result, SourceDocumentId, SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState,
-    WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpMethod, HttpRequest,
+    HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
+    SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState, WebhookEventTypes,
+    WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::content::strip_html;
 
 /// Default HubSpot REST base URL. Per-instance overrides go through
 /// `auth_config_json.api_base_url`.
@@ -115,6 +119,72 @@ pub struct HubSpotObject {
 
 fn default_object_kind() -> HubSpotObjectKind {
     HubSpotObjectKind::Contact
+}
+
+/// Full single-object response from `GET /crm/v3/objects/{type}/{id}`
+/// — carries the requested `properties` map plus any requested
+/// `associations`.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct HubSpotObjectDetail {
+    #[serde(default)]
+    properties: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    associations: BTreeMap<String, HubSpotAssociationGroup>,
+}
+
+/// One `associations.{type}` group on an object detail response.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct HubSpotAssociationGroup {
+    #[serde(default)]
+    results: Vec<HubSpotAssociationRef>,
+}
+
+/// One associated object reference.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct HubSpotAssociationRef {
+    #[serde(default)]
+    id: String,
+}
+
+/// Render a HubSpot property value (string / number / bool) into a
+/// display string. Returns an empty string for null / nested values.
+fn property_value_to_string(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Derive a human-readable title for a CRM object from its property
+/// map, using the kind-appropriate naming property.
+fn hubspot_title(
+    kind: HubSpotObjectKind,
+    properties: &BTreeMap<String, serde_json::Value>,
+) -> Option<String> {
+    let get = |key: &str| {
+        properties
+            .get(key)
+            .map(property_value_to_string)
+            .filter(|s| !s.is_empty())
+    };
+    match kind {
+        HubSpotObjectKind::Contact => {
+            let parts: Vec<String> = ["firstname", "lastname"]
+                .iter()
+                .filter_map(|k| get(k))
+                .collect();
+            if parts.is_empty() {
+                get("email")
+            } else {
+                Some(parts.join(" "))
+            }
+        }
+        HubSpotObjectKind::Company => get("name"),
+        HubSpotObjectKind::Deal => get("dealname"),
+        HubSpotObjectKind::Note => None,
+    }
 }
 
 /// One page of `/crm/v3/objects/{type}` results.
@@ -623,6 +693,122 @@ impl Connector for HubSpotConnector {
             events,
             next_cursor: watermark.map(|t| t.to_rfc3339()),
         })
+    }
+
+    fn fetch_content(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        document_id: &SourceDocumentId,
+    ) -> Result<FetchedContent> {
+        let base_url = self.resolved_base_url(config);
+        // Document ids are minted as `{kind}:{object_id}` (e.g.
+        // `note:123`, `contact:456`).
+        let raw = document_id.as_str();
+        let (kind_str_part, object_id) = raw.split_once(':').ok_or_else(|| {
+            ConnectorError::Sync(format!(
+                "hubspot fetch_content: malformed document id {raw:?} (expected `kind:id`)"
+            ))
+        })?;
+        let kind = HubSpotObjectKind::from_config_str(kind_str_part).ok_or_else(|| {
+            ConnectorError::Sync(format!(
+                "hubspot fetch_content: unknown object kind {kind_str_part:?} in id {raw:?}"
+            ))
+        })?;
+        let type_seg = kind.as_path_segment();
+        let id_enc = percent_encode_path_component(object_id);
+
+        // Notes carry their body in `hs_note_body` (HTML) and are
+        // associated with the CRM records they annotate, so we request
+        // those associations and surface them. Other object kinds are
+        // rendered from their full property set.
+        let detail: HubSpotObjectDetail = if kind == HubSpotObjectKind::Note {
+            let url = format!(
+                "{base_url}/crm/v3/objects/notes/{id_enc}\
+                 ?properties=hs_note_body&associations=contacts,companies,deals"
+            );
+            bearer_get_json(
+                &self.transport,
+                "hubspot",
+                "/crm/v3/objects/notes/{id}",
+                &url,
+                token,
+                &[],
+            )?
+        } else {
+            let url = format!("{base_url}/crm/v3/objects/{type_seg}/{id_enc}?properties=*");
+            bearer_get_json(
+                &self.transport,
+                "hubspot",
+                "/crm/v3/objects/{type}/{id}",
+                &url,
+                token,
+                &[],
+            )?
+        };
+
+        // Collect association ids per type (for notes).
+        let mut associations: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (assoc_type, group) in &detail.associations {
+            let ids: Vec<String> = group
+                .results
+                .iter()
+                .map(|r| r.id.clone())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !ids.is_empty() {
+                associations.insert(assoc_type.clone(), ids);
+            }
+        }
+
+        let (body, title) = if kind == HubSpotObjectKind::Note {
+            let raw_body = detail
+                .properties
+                .get("hs_note_body")
+                .map(property_value_to_string)
+                .unwrap_or_default();
+            let mut text = strip_html(&raw_body);
+            if !associations.is_empty() {
+                let mut refs: Vec<String> = associations
+                    .iter()
+                    .map(|(t, ids)| format!("{t}: {}", ids.join(", ")))
+                    .collect();
+                refs.sort();
+                if !text.is_empty() {
+                    text.push_str("\n\n");
+                }
+                text.push_str("Associated with — ");
+                text.push_str(&refs.join("; "));
+            }
+            (text, None)
+        } else {
+            // Render every non-empty property as a `key: value` line,
+            // sorted for deterministic output.
+            let mut lines: Vec<String> = Vec::new();
+            for (key, value) in &detail.properties {
+                let rendered = property_value_to_string(value);
+                if !rendered.is_empty() {
+                    lines.push(format!("{key}: {rendered}"));
+                }
+            }
+            let title = hubspot_title(kind, &detail.properties);
+            (lines.join("\n"), title)
+        };
+
+        let mut metadata = serde_json::json!({
+            "provider": "hubspot",
+            "object_kind": kind_str(kind),
+            "object_id": object_id,
+        });
+        if !associations.is_empty() {
+            metadata["associations"] = serde_json::to_value(&associations).unwrap_or_default();
+        }
+
+        let mut fc = FetchedContent::text(body, "text/plain").with_metadata(metadata);
+        if let Some(t) = title.filter(|s| !s.is_empty()) {
+            fc = fc.with_title(t);
+        }
+        Ok(fc)
     }
 
     fn subscribe_webhook(
@@ -1286,5 +1472,118 @@ mod tests {
         assert!(matches!(evs[0], ConnectorEvent::DocumentCreated { .. }));
         assert!(matches!(evs[1], ConnectorEvent::DocumentUpdated { .. }));
         assert!(matches!(evs[2], ConnectorEvent::DocumentDeleted { .. }));
+    }
+
+    // ───────────── fetch_content ─────────────
+
+    #[test]
+    fn fetch_content_renders_contact_properties() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/objects/contacts/501?properties=*",
+            ok_json(&serde_json::json!({
+                "id": "501",
+                "properties": {
+                    "firstname": "Ada",
+                    "lastname": "Lovelace",
+                    "email": "ada@example.com",
+                    "company": "Analytical Engines",
+                    "empty_field": serde_json::Value::Null
+                }
+            })),
+        );
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("contact:501"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("email: ada@example.com"));
+        assert!(body.contains("firstname: Ada"));
+        // Null-valued properties are dropped.
+        assert!(!body.contains("empty_field"));
+        assert_eq!(fc.mime_type, "text/plain");
+        assert_eq!(fc.title.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(fc.metadata["object_kind"], serde_json::json!("contact"));
+        assert_eq!(fc.metadata["object_id"], serde_json::json!("501"));
+    }
+
+    #[test]
+    fn fetch_content_note_strips_html_and_lists_associations() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/objects/notes/77?properties=hs_note_body&associations=contacts,companies,deals",
+            ok_json(&serde_json::json!({
+                "id": "77",
+                "properties": { "hs_note_body": "<p>Called <strong>Ada</strong> re: renewal.</p>" },
+                "associations": {
+                    "contacts": { "results": [ { "id": "501" }, { "id": "502" } ] },
+                    "companies": { "results": [ { "id": "900" } ] }
+                }
+            })),
+        );
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("note:77"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("Called Ada re: renewal."));
+        assert!(body.contains("Associated with —"));
+        assert!(body.contains("contacts: 501, 502"));
+        assert!(body.contains("companies: 900"));
+        assert!(fc.title.is_none());
+        assert_eq!(
+            fc.metadata["associations"]["contacts"],
+            serde_json::json!(["501", "502"])
+        );
+    }
+
+    #[test]
+    fn fetch_content_rejects_malformed_document_id() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("no-delimiter"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_404_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/objects/deals/404?properties=*",
+            MockResponse::status(
+                404,
+                br#"{"status":"error","category":"OBJECT_NOT_FOUND"}"#.to_vec(),
+            ),
+        );
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("deal:404"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_429_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/hubspot/crm/v3/objects/companies/9?properties=*",
+            MockResponse::status(429, b"rate limited".to_vec()),
+        );
+        let c = HubSpotConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("company:9"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
     }
 }

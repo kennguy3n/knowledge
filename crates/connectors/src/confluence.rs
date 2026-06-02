@@ -28,12 +28,14 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    bearer_get_json, bearer_post_json, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
-    ConnectorInstanceId, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId,
+    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::content::strip_html;
 
 /// Default Atlassian Confluence Cloud base URL. Per-instance
 /// overrides go through `auth_config_json.api_base_url` (Confluence
@@ -142,6 +144,28 @@ pub struct ConfluenceContentList {
     /// page, or absent at the end of the list.
     #[serde(default, rename = "_links")]
     pub links: ConfluenceLinks,
+}
+
+/// `GET /wiki/api/v2/pages/{id}/labels` response (subset).
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ConfluenceLabelList {
+    #[serde(default)]
+    results: Vec<ConfluenceLabel>,
+}
+
+/// One Confluence label.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ConfluenceLabel {
+    #[serde(default)]
+    name: String,
+}
+
+/// `GET /wiki/api/v2/spaces/{id}` response (subset) — used to resolve
+/// a page's numeric `spaceId` to its human-readable space key.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ConfluenceSpace {
+    #[serde(default)]
+    key: String,
 }
 
 /// `_links` block on a Confluence v2 list response.
@@ -474,6 +498,120 @@ impl Connector for ConfluenceConnector {
             events,
             next_cursor: watermark.map(|t| t.to_rfc3339()),
         })
+    }
+
+    fn fetch_content(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        document_id: &SourceDocumentId,
+    ) -> Result<FetchedContent> {
+        let base_url = self.resolved_base_url(config);
+        let id = document_id.as_str();
+        let id_enc = percent_encode_path_component(id);
+
+        // 1. Page + storage-format (XHTML) body.
+        let page_url = format!("{base_url}/wiki/api/v2/pages/{id_enc}?body-format=storage");
+        let page: serde_json::Value = bearer_get_json(
+            &self.transport,
+            "confluence",
+            "/wiki/api/v2/pages/{id}",
+            &page_url,
+            token,
+            &[],
+        )?;
+        let title = page
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let storage = page
+            .get("body")
+            .and_then(|b| b.get("storage"))
+            .and_then(|s| s.get("value"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let text = strip_html(storage);
+        // Confluence v2 `webui` links are relative to the `/wiki`
+        // context root; prefix with the base so the citation resolves.
+        let source_url = page
+            .get("_links")
+            .and_then(|l| l.get("webui"))
+            .and_then(serde_json::Value::as_str)
+            .map(|rel| format!("{base_url}{rel}"));
+        let space_id = page.get("spaceId").and_then(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .or_else(|| v.as_i64().map(|n| n.to_string()))
+        });
+
+        // 2. Labels.
+        let labels_url = format!("{base_url}/wiki/api/v2/pages/{id_enc}/labels");
+        let labels: ConfluenceLabelList = bearer_get_json(
+            &self.transport,
+            "confluence",
+            "/wiki/api/v2/pages/{id}/labels",
+            &labels_url,
+            token,
+            &[],
+        )?;
+        let label_names: Vec<String> = labels
+            .results
+            .into_iter()
+            .map(|l| l.name)
+            .filter(|n| !n.is_empty())
+            .collect();
+
+        // 3. Space key — resolve the numeric spaceId when present.
+        let space_key = match &space_id {
+            Some(sid) if !sid.is_empty() => {
+                let space_url = format!(
+                    "{base_url}/wiki/api/v2/spaces/{}",
+                    percent_encode_path_component(sid)
+                );
+                let space: ConfluenceSpace = bearer_get_json(
+                    &self.transport,
+                    "confluence",
+                    "/wiki/api/v2/spaces/{id}",
+                    &space_url,
+                    token,
+                    &[],
+                )?;
+                Some(space.key)
+            }
+            _ => None,
+        };
+
+        // Assemble Markdown body: title heading, body text, labels.
+        let mut md = String::new();
+        if !title.is_empty() {
+            md.push_str("# ");
+            md.push_str(&title);
+            md.push_str("\n\n");
+        }
+        if !text.is_empty() {
+            md.push_str(&text);
+            md.push_str("\n\n");
+        }
+        if !label_names.is_empty() {
+            md.push_str("Labels: ");
+            md.push_str(&label_names.join(", "));
+            md.push('\n');
+        }
+        let body = md.trim_end().to_string();
+
+        let mut fc = FetchedContent::text(body, "text/markdown")
+            .with_title(title)
+            .with_metadata(serde_json::json!({
+                "provider": "confluence",
+                "page_id": id,
+                "space_key": space_key,
+                "labels": label_names,
+            }));
+        if let Some(url) = source_url {
+            fc = fc.with_source_url(url);
+        }
+        Ok(fc)
     }
 
     fn subscribe_webhook(
@@ -990,5 +1128,118 @@ mod tests {
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    // ───────────── fetch_content ─────────────
+
+    #[test]
+    fn fetch_content_strips_storage_xhtml_and_includes_labels_and_space() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/123?body-format=storage",
+            ok_json(&serde_json::json!({
+                "id": "123",
+                "title": "Runbook",
+                "spaceId": 4567,
+                "body": { "storage": {
+                    "representation": "storage",
+                    "value": "<h1>Intro</h1><p>Step <strong>one</strong> &amp; two.</p>"
+                }},
+                "_links": { "webui": "/spaces/OPS/pages/123/Runbook" }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/123/labels",
+            ok_json(&serde_json::json!({
+                "results": [ { "name": "runbook" }, { "name": "oncall" } ]
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/spaces/4567",
+            ok_json(&serde_json::json!({ "id": "4567", "key": "OPS" })),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("123"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("# Runbook"));
+        assert!(body.contains("Step one & two."));
+        assert!(body.contains("Labels: runbook, oncall"));
+        assert_eq!(fc.mime_type, "text/markdown");
+        assert_eq!(fc.title.as_deref(), Some("Runbook"));
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://api.test/confluence/spaces/OPS/pages/123/Runbook")
+        );
+        assert_eq!(fc.metadata["space_key"], serde_json::json!("OPS"));
+        assert_eq!(
+            fc.metadata["labels"],
+            serde_json::json!(["runbook", "oncall"])
+        );
+    }
+
+    #[test]
+    fn fetch_content_handles_page_without_space_or_labels() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/9?body-format=storage",
+            ok_json(&serde_json::json!({
+                "id": "9",
+                "title": "Bare",
+                "body": { "storage": { "value": "<p>Hi</p>" } }
+            })),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/9/labels",
+            ok_json(&serde_json::json!({ "results": [] })),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("9"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert_eq!(body, "# Bare\n\nHi");
+        assert_eq!(fc.metadata["space_key"], serde_json::Value::Null);
+        assert!(fc.source_url.is_none());
+    }
+
+    #[test]
+    fn fetch_content_maps_404_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/404?body-format=storage",
+            MockResponse::status(404, br#"{"errors":[{"status":404}]}"#.to_vec()),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("404"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_429_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/confluence/wiki/api/v2/pages/7?body-format=storage",
+            MockResponse::status(429, b"slow down".to_vec()),
+        );
+        let c = ConfluenceConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("7"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
     }
 }

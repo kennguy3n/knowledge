@@ -36,11 +36,13 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
-    ConnectorError, ConnectorEvent, ConnectorInstanceId, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId, SyncRunResult,
-    SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId,
+    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::content::{bearer_get_raw, response_header, strip_charset};
 
 /// Default Drive REST base URL. Override via
 /// `auth_config_json.api_base_url` for sandboxes / proxies.
@@ -449,6 +451,59 @@ fn change_to_event(ch: &GoogleDriveChange) -> ConnectorEvent {
     }
 }
 
+/// MIME-type prefix for Google Workspace native documents (Docs,
+/// Sheets, Slides, …). These have no byte stream to download — they
+/// must be `export`ed to a concrete format.
+const GOOGLE_APPS_PREFIX: &str = "application/vnd.google-apps.";
+
+/// MIME type we export Google Workspace docs to. The spec pins
+/// `text/plain` for Docs / Sheets / Slides so the substrate ingests a
+/// uniform, embedding-friendly body.
+const EXPORT_MIME: &str = "text/plain";
+
+/// Minimal file metadata used by `fetch_content` to decide between the
+/// `export` path (Workspace docs) and the `alt=media` path (binary
+/// blobs), and to recover a title + citation URL.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct GoogleDriveFileMeta {
+    #[serde(default)]
+    name: String,
+    #[serde(default, rename = "mimeType")]
+    mime_type: String,
+    #[serde(default, rename = "webViewLink")]
+    web_view_link: Option<String>,
+}
+
+/// The set of Google Workspace types we can usefully export to
+/// `text/plain`. Other `application/vnd.google-apps.*` kinds (folder,
+/// form, shortcut, …) carry no exportable body — `fetch_content`
+/// surfaces them as an unfetchable [`ConnectorError::Sync`].
+fn is_exportable_google_doc(mime: &str) -> bool {
+    matches!(
+        mime,
+        "application/vnd.google-apps.document"
+            | "application/vnd.google-apps.spreadsheet"
+            | "application/vnd.google-apps.presentation"
+    )
+}
+
+impl GoogleDriveConnector {
+    /// Optional byte ceiling for binary downloads, read from
+    /// `auth_config_json.max_export_size` (or the camel-case
+    /// `maxExportSize`). When set, `fetch_content` sends a
+    /// `Range: bytes=0-(N-1)` header so a large blob is capped at the
+    /// substrate's configured ingest budget rather than streamed in
+    /// full.
+    fn resolved_max_export_size(config: &ConnectorConfig) -> Option<u64> {
+        config
+            .auth_config_json
+            .get("max_export_size")
+            .or_else(|| config.auth_config_json.get("maxExportSize"))
+            .and_then(serde_json::Value::as_u64)
+            .filter(|n| *n > 0)
+    }
+}
+
 impl Connector for GoogleDriveConnector {
     fn authenticate(&self, config: &ConnectorConfig) -> Result<OAuth2Token> {
         let auth_code = config
@@ -515,6 +570,110 @@ impl Connector for GoogleDriveConnector {
             events,
             next_cursor,
         })
+    }
+
+    fn fetch_content(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        document_id: &SourceDocumentId,
+    ) -> Result<FetchedContent> {
+        let base_url = self.resolved_base_url(config);
+        let id = document_id.as_str();
+        let id_enc = percent_encode_path_component(id);
+
+        // 1. Metadata: decide export-vs-download and recover title /
+        //    citation URL. The `fields` mask keeps the response tiny.
+        let meta_url =
+            format!("{base_url}/drive/v3/files/{id_enc}?fields=id,name,mimeType,webViewLink");
+        let meta: GoogleDriveFileMeta = bearer_get_json(
+            &self.transport,
+            "google_drive",
+            "/drive/v3/files/{id}",
+            &meta_url,
+            token,
+            &[],
+        )?;
+        let source_url = meta
+            .web_view_link
+            .clone()
+            .unwrap_or_else(|| format!("https://drive.google.com/file/d/{id}/view"));
+
+        if meta.mime_type.starts_with(GOOGLE_APPS_PREFIX) {
+            // 2a. Workspace native doc — must be exported, never
+            //     downloaded. Unexportable kinds (folder/form/…) have
+            //     no body to fetch.
+            if !is_exportable_google_doc(&meta.mime_type) {
+                return Err(ConnectorError::Sync(format!(
+                    "google_drive fetch_content: {} ({}) has no exportable body",
+                    id, meta.mime_type
+                )));
+            }
+            let export_url = format!(
+                "{base_url}/drive/v3/files/{id_enc}/export?mimeType={}",
+                percent_encode_path_component(EXPORT_MIME),
+            );
+            let resp = bearer_get_raw(
+                &self.transport,
+                "google_drive",
+                "/drive/v3/files/{id}/export",
+                &export_url,
+                token,
+                &[],
+            )?;
+            let mime = response_header(&resp, "content-type")
+                .map_or(EXPORT_MIME, strip_charset)
+                .to_string();
+            return Ok(FetchedContent::binary(resp.body, mime)
+                .with_title(meta.name)
+                .with_metadata(serde_json::json!({
+                    "provider": "google_drive",
+                    "file_id": id,
+                    "source_mime_type": meta.mime_type,
+                    "exported": true,
+                }))
+                .with_source_url(source_url));
+        }
+
+        // 2b. Binary blob — download the raw bytes. Honour an optional
+        //     byte ceiling via a Range header.
+        let download_url = format!("{base_url}/drive/v3/files/{id_enc}?alt=media");
+        let range_header;
+        let mut extra: Vec<(&str, &str)> = Vec::new();
+        if let Some(max) = Self::resolved_max_export_size(config) {
+            range_header = format!("bytes=0-{}", max.saturating_sub(1));
+            extra.push(("Range", range_header.as_str()));
+        }
+        let resp = bearer_get_raw(
+            &self.transport,
+            "google_drive",
+            "/drive/v3/files/{id}?alt=media",
+            &download_url,
+            token,
+            &extra,
+        )?;
+        let mime = response_header(&resp, "content-type")
+            .map(strip_charset)
+            .filter(|m| !m.is_empty())
+            .map_or_else(
+                || {
+                    if meta.mime_type.is_empty() {
+                        "application/octet-stream".to_string()
+                    } else {
+                        meta.mime_type.clone()
+                    }
+                },
+                str::to_string,
+            );
+        Ok(FetchedContent::binary(resp.body, mime)
+            .with_title(meta.name)
+            .with_metadata(serde_json::json!({
+                "provider": "google_drive",
+                "file_id": id,
+                "source_mime_type": meta.mime_type,
+                "exported": false,
+            }))
+            .with_source_url(source_url))
     }
 
     fn subscribe_webhook(
@@ -1136,5 +1295,189 @@ mod tests {
             .unwrap();
         assert_eq!(evs.len(), 1);
         assert!(matches!(evs[0], ConnectorEvent::DocumentDeleted { .. }));
+    }
+
+    // ───────────── fetch_content ─────────────
+
+    fn raw_response(content_type: &str, body: impl Into<Vec<u8>>) -> MockResponse {
+        MockResponse {
+            status: 200,
+            headers: vec![("content-type".into(), content_type.into())],
+            body: body.into(),
+        }
+    }
+
+    #[test]
+    fn fetch_content_exports_google_doc_to_text() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/google/drive/v3/files/doc-1?fields=id,name,mimeType,webViewLink",
+            MockResponse::ok_json(
+                serde_json::to_vec(&serde_json::json!({
+                    "id": "doc-1",
+                    "name": "Quarterly Plan",
+                    "mimeType": "application/vnd.google-apps.document",
+                    "webViewLink": "https://docs.google.com/document/d/doc-1/edit",
+                }))
+                .unwrap(),
+            ),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/google/drive/v3/files/doc-1/export?mimeType=text%2Fplain",
+            raw_response("text/plain; charset=UTF-8", b"Exported body text".to_vec()),
+        );
+        let c =
+            GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("doc-1"))
+            .unwrap();
+        assert_eq!(fc.mime_type, "text/plain");
+        assert_eq!(fc.body, b"Exported body text");
+        assert_eq!(fc.title.as_deref(), Some("Quarterly Plan"));
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://docs.google.com/document/d/doc-1/edit")
+        );
+        assert_eq!(fc.metadata["exported"], serde_json::json!(true));
+        // Auth header carried on the export GET.
+        let req = transport.recorded().last().cloned().unwrap();
+        assert!(req
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Authorization" && v == "Bearer drive-access"));
+    }
+
+    #[test]
+    fn fetch_content_downloads_binary_via_alt_media() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/google/drive/v3/files/bin-1?fields=id,name,mimeType,webViewLink",
+            MockResponse::ok_json(
+                serde_json::to_vec(&serde_json::json!({
+                    "id": "bin-1",
+                    "name": "diagram.pdf",
+                    "mimeType": "application/pdf",
+                }))
+                .unwrap(),
+            ),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/google/drive/v3/files/bin-1?alt=media",
+            raw_response("application/pdf", vec![0x25, 0x50, 0x44, 0x46]),
+        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("bin-1"))
+            .unwrap();
+        assert_eq!(fc.mime_type, "application/pdf");
+        assert_eq!(fc.body, vec![0x25, 0x50, 0x44, 0x46]);
+        assert_eq!(fc.title.as_deref(), Some("diagram.pdf"));
+        // No webViewLink → falls back to the canonical drive URL.
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://drive.google.com/file/d/bin-1/view")
+        );
+        assert_eq!(fc.metadata["exported"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn fetch_content_applies_range_header_when_max_size_set() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let cfg = ConnectorConfig::new(
+            ConnectorKind::GoogleDrive,
+            AuthKind::OAuth2,
+            ScopeId::new_v4(),
+        )
+        .with_auth_config(serde_json::json!({
+            "authorization_code": "demo-code",
+            "api_base_url": "https://api.test/google",
+            "max_export_size": 1024,
+        }));
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/google/drive/v3/files/bin-2?fields=id,name,mimeType,webViewLink",
+            MockResponse::ok_json(
+                serde_json::to_vec(&serde_json::json!({
+                    "id": "bin-2", "name": "big.bin", "mimeType": "application/octet-stream",
+                }))
+                .unwrap(),
+            ),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/google/drive/v3/files/bin-2?alt=media",
+            raw_response("application/octet-stream", vec![1, 2, 3]),
+        );
+        let c =
+            GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg).unwrap();
+        let _ = c
+            .fetch_content(&cfg, &tok, &SourceDocumentId::new("bin-2"))
+            .unwrap();
+        let req = transport.recorded().last().cloned().unwrap();
+        assert!(req
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Range" && v == "bytes=0-1023"));
+    }
+
+    #[test]
+    fn fetch_content_rejects_unexportable_google_type() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/google/drive/v3/files/folder-1?fields=id,name,mimeType,webViewLink",
+            MockResponse::ok_json(
+                serde_json::to_vec(&serde_json::json!({
+                    "id": "folder-1", "name": "My Folder",
+                    "mimeType": "application/vnd.google-apps.folder",
+                }))
+                .unwrap(),
+            ),
+        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("folder-1"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_404_metadata_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/google/drive/v3/files/gone?fields=id,name,mimeType,webViewLink",
+            MockResponse::status(404, br#"{"error":{"code":404}}"#.to_vec()),
+        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("gone"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_401_to_auth_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/google/drive/v3/files/secret?fields=id,name,mimeType,webViewLink",
+            MockResponse::status(401, br#"{"error":{"code":401}}"#.to_vec()),
+        );
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("secret"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Auth(_)));
     }
 }

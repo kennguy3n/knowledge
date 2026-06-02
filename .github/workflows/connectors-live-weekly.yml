@@ -1,0 +1,70 @@
+name: Weekly Connector Live Integration
+
+# Runs the connectors crate's live-integration harness
+# (`crates/connectors/tests/live_integration.rs`) once a week against
+# real provider sandboxes. This is the live counterpart to the
+# MockHttpTransport unit tests that run on every PR in `ci.yml`.
+#
+# The harness is double-gated (see the test module docs):
+#   1. It only compiles under `--features live-integration`.
+#   2. Each per-provider test self-skips when its `*_TEST_TOKEN`
+#      env var is unset.
+#
+# So this job is safe to run even with no secrets configured — every
+# test simply prints a skip line and passes. Configure the
+# `*_TEST_TOKEN` (and the handful of `*_TEST_BASE_URL` /
+# `*_TEST_REPO` / `EMAIL_TEST_PROVIDER`) repository secrets to opt a
+# provider into real traffic. `workflow_dispatch` lets a maintainer
+# trigger an ad-hoc run from the Actions tab.
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'  # Monday 04:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: connectors-live-weekly-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  live-integration:
+    name: connectors live-integration (gated by secrets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-connectors-live-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-connectors-live-
+      - name: Run live-integration tests (skips providers without secrets)
+        env:
+          NOTION_TEST_TOKEN: ${{ secrets.NOTION_TEST_TOKEN }}
+          GOOGLE_DRIVE_TEST_TOKEN: ${{ secrets.GOOGLE_DRIVE_TEST_TOKEN }}
+          SLACK_TEST_TOKEN: ${{ secrets.SLACK_TEST_TOKEN }}
+          JIRA_TEST_TOKEN: ${{ secrets.JIRA_TEST_TOKEN }}
+          JIRA_TEST_BASE_URL: ${{ secrets.JIRA_TEST_BASE_URL }}
+          CONFLUENCE_TEST_TOKEN: ${{ secrets.CONFLUENCE_TEST_TOKEN }}
+          CONFLUENCE_TEST_BASE_URL: ${{ secrets.CONFLUENCE_TEST_BASE_URL }}
+          ONEDRIVE_TEST_TOKEN: ${{ secrets.ONEDRIVE_TEST_TOKEN }}
+          HUBSPOT_TEST_TOKEN: ${{ secrets.HUBSPOT_TEST_TOKEN }}
+          FIGMA_TEST_TOKEN: ${{ secrets.FIGMA_TEST_TOKEN }}
+          EMAIL_TEST_TOKEN: ${{ secrets.EMAIL_TEST_TOKEN }}
+          EMAIL_TEST_PROVIDER: ${{ secrets.EMAIL_TEST_PROVIDER }}
+          GITHUB_TEST_TOKEN: ${{ secrets.CONNECTOR_GITHUB_TEST_TOKEN }}
+          GITHUB_TEST_REPO: ${{ secrets.CONNECTOR_GITHUB_TEST_REPO }}
+        run: >
+          cargo test -p connectors --features live-integration
+          --test live_integration -- --nocapture

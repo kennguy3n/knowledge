@@ -72,6 +72,20 @@ pub enum ConnectorError {
     /// which call site failed.
     #[error("http transport error: {0}")]
     Transport(String),
+
+    /// A trait method is not implemented for this connector.
+    ///
+    /// Returned by the default
+    /// [`Connector::fetch_content`](crate::connector::Connector::fetch_content)
+    /// implementation so connectors that have not yet wired content
+    /// fetching still compile. The payload names the connector /
+    /// capability that is missing so the runtime can log a precise
+    /// reason rather than a generic failure. Every production
+    /// connector in this workspace overrides the default, so this
+    /// variant should never surface in steady state — treat its
+    /// appearance as a wiring bug rather than a transient error.
+    #[error("operation not implemented: {0}")]
+    Unimplemented(String),
 }
 
 /// Convenience alias.

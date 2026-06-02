@@ -21,14 +21,15 @@
 //! `BlockingHttpTransport` + `OAuth2Client`, tests wire
 //! `MockHttpTransport` + a fixed-token exchange.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
     bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
-    ConnectorError, ConnectorEvent, ConnectorInstanceId, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId, SyncRunResult,
-    SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId,
+    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -71,9 +72,39 @@ pub struct GitHubIssue {
     /// Closed timestamp. `None` when the issue is open.
     #[serde(default)]
     pub closed_at: Option<DateTime<Utc>>,
+    /// Markdown body. Populated on the single-issue detail endpoint
+    /// (and on list responses); `None` when GitHub omits it.
+    #[serde(default)]
+    pub body: Option<String>,
+    /// Author of the issue / PR.
+    #[serde(default)]
+    pub user: Option<GitHubAuthor>,
     /// If present, the issue is actually a pull request.
     #[serde(default)]
     pub pull_request: Option<serde_json::Value>,
+}
+
+/// Author / commenter login envelope (`{login, ...}`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GitHubAuthor {
+    /// GitHub username.
+    #[serde(default)]
+    pub login: String,
+}
+
+/// One comment as returned by
+/// `GET /repos/{owner}/{repo}/issues/{number}/comments`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct GitHubComment {
+    /// Markdown body of the comment.
+    #[serde(default)]
+    pub body: String,
+    /// Comment author.
+    #[serde(default)]
+    pub user: Option<GitHubAuthor>,
+    /// When the comment was posted.
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 /// Response from `POST /repos/{owner}/{repo}/hooks`.
@@ -285,6 +316,42 @@ impl GitHubConnector {
             "github /repos/{repo}/issues exceeded {MAX_LIST_PAGES} pages"
         )))
     }
+
+    /// Walk every comment page for an issue / PR until a short page
+    /// signals the end or [`MAX_LIST_PAGES`] is hit.
+    fn paginate_comments(
+        &self,
+        base_url: &str,
+        repo: &str,
+        number: &str,
+        token: &OAuth2Token,
+    ) -> Result<Vec<GitHubComment>> {
+        let mut all = Vec::<GitHubComment>::new();
+        let extra = Self::extra_headers();
+        for page in 1..=MAX_LIST_PAGES {
+            let url = format!(
+                "{base_url}/repos/{repo}/issues/{number}/comments\
+                 ?per_page={}&page={page}",
+                self.page_size,
+            );
+            let page_comments: Vec<GitHubComment> = bearer_get_json(
+                &self.transport,
+                "github",
+                "/repos/{repo}/issues/{number}/comments",
+                &url,
+                token,
+                &extra,
+            )?;
+            let returned = page_comments.len();
+            all.extend(page_comments);
+            if returned < self.page_size as usize {
+                return Ok(all);
+            }
+        }
+        Err(ConnectorError::Sync(format!(
+            "github /repos/{repo}/issues/{number}/comments exceeded {MAX_LIST_PAGES} pages"
+        )))
+    }
 }
 
 fn issue_to_event(issue: &GitHubIssue) -> ConnectorEvent {
@@ -395,6 +462,85 @@ impl Connector for GitHubConnector {
             events,
             next_cursor: watermark.map(|t| t.to_rfc3339()),
         })
+    }
+
+    fn fetch_content(
+        &self,
+        config: &ConnectorConfig,
+        token: &OAuth2Token,
+        document_id: &SourceDocumentId,
+    ) -> Result<FetchedContent> {
+        let base_url = self.resolved_base_url(config);
+        let repo = Self::resolved_repo(config)?;
+        // Document ids are the bare issue / PR number (see
+        // `issue_to_event`).
+        let number = document_id.as_str();
+        if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(ConnectorError::Sync(format!(
+                "github fetch_content: document id {number:?} is not an issue number"
+            )));
+        }
+        let extra = Self::extra_headers();
+
+        let issue_url = format!("{base_url}/repos/{repo}/issues/{number}");
+        let issue: GitHubIssue = bearer_get_json(
+            &self.transport,
+            "github",
+            "/repos/{repo}/issues/{number}",
+            &issue_url,
+            token,
+            &extra,
+        )?;
+
+        let comments = self.paginate_comments(&base_url, &repo, number, token)?;
+
+        // Assemble a Markdown document: title heading, issue body,
+        // then a comments section attributing each comment to its
+        // author.
+        let mut md = String::new();
+        // Writing to a `String` is infallible, so the `write!`
+        // results are deliberately discarded.
+        let _ = write!(md, "# {} (#{})\n\n", issue.title, issue.number);
+        let author = issue.user.as_ref().map_or("", |u| u.login.as_str());
+        if !author.is_empty() {
+            let _ = write!(md, "_Opened by @{author}_\n\n");
+        }
+        let body = issue.body.as_deref().unwrap_or("").trim();
+        if body.is_empty() {
+            md.push_str("_No description provided._\n");
+        } else {
+            md.push_str(body);
+            md.push('\n');
+        }
+        if !comments.is_empty() {
+            md.push_str("\n## Comments\n");
+            for c in &comments {
+                let login = c.user.as_ref().map_or("", |u| u.login.as_str());
+                let when = c.created_at.map_or_else(String::new, |t| t.to_rfc3339());
+                let _ = write!(md, "\n### @{login} ({when})\n\n");
+                md.push_str(c.body.trim());
+                md.push('\n');
+            }
+        }
+
+        let is_pr = issue.pull_request.is_some();
+        let source_url = if is_pr {
+            format!("https://github.com/{repo}/pull/{number}")
+        } else {
+            format!("https://github.com/{repo}/issues/{number}")
+        };
+
+        Ok(FetchedContent::text(md, "text/markdown")
+            .with_title(issue.title.clone())
+            .with_metadata(serde_json::json!({
+                "repository": repo,
+                "number": issue.number,
+                "state": issue.state,
+                "is_pull_request": is_pr,
+                "author": author,
+                "comment_count": comments.len(),
+            }))
+            .with_source_url(source_url))
     }
 
     fn subscribe_webhook(
@@ -599,6 +745,8 @@ mod tests {
             } else {
                 None
             },
+            body: None,
+            user: None,
             pull_request: None,
         }
     }
@@ -922,5 +1070,140 @@ mod tests {
         let tok = c.authenticate(&bad_cfg).unwrap();
         let err = c.initial_sync(&bad_cfg, &tok).unwrap_err();
         assert!(matches!(err, ConnectorError::Auth(_)));
+    }
+
+    // ───────────── fetch_content ─────────────
+
+    const GH_BASE: &str = "https://api.test/github";
+
+    #[test]
+    fn fetch_content_assembles_issue_body_and_comments() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GH_BASE}/repos/owner/test-repo/issues/12"),
+            MockResponse::ok_json(
+                serde_json::to_vec(&serde_json::json!({
+                    "number": 12,
+                    "id": 999,
+                    "title": "Login flow broken",
+                    "state": "open",
+                    "body": "Steps to reproduce:\n1. Click login",
+                    "user": { "login": "ada" }
+                }))
+                .unwrap(),
+            ),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GH_BASE}/repos/owner/test-repo/issues/12/comments?per_page=100&page=1"),
+            MockResponse::ok_json(
+                serde_json::to_vec(&serde_json::json!([
+                    { "body": "I can repro.", "user": { "login": "grace" }, "created_at": "2026-06-01T10:00:00Z" }
+                ]))
+                .unwrap(),
+            ),
+        );
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("12"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("# Login flow broken (#12)"));
+        assert!(body.contains("_Opened by @ada_"));
+        assert!(body.contains("Steps to reproduce:"));
+        assert!(body.contains("## Comments"));
+        assert!(body.contains("### @grace"));
+        assert!(body.contains("I can repro."));
+        assert_eq!(fc.mime_type, "text/markdown");
+        assert_eq!(fc.title.as_deref(), Some("Login flow broken"));
+        assert_eq!(fc.metadata["comment_count"], serde_json::json!(1));
+        assert_eq!(fc.metadata["is_pull_request"], serde_json::json!(false));
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://github.com/owner/test-repo/issues/12")
+        );
+    }
+
+    #[test]
+    fn fetch_content_handles_empty_body_and_no_comments() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GH_BASE}/repos/owner/test-repo/issues/5"),
+            MockResponse::ok_json(
+                serde_json::to_vec(&serde_json::json!({
+                    "number": 5,
+                    "title": "Empty",
+                    "state": "closed",
+                    "body": serde_json::Value::Null,
+                    "pull_request": { "url": "https://api.test/github/repos/owner/test-repo/pulls/5" }
+                }))
+                .unwrap(),
+            ),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GH_BASE}/repos/owner/test-repo/issues/5/comments?per_page=100&page=1"),
+            MockResponse::ok_json(b"[]".to_vec()),
+        );
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("5"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("_No description provided._"));
+        assert!(!body.contains("## Comments"));
+        // pull_request present → PR permalink + flag.
+        assert_eq!(fc.metadata["is_pull_request"], serde_json::json!(true));
+        assert_eq!(
+            fc.source_url.as_deref(),
+            Some("https://github.com/owner/test-repo/pull/5")
+        );
+    }
+
+    #[test]
+    fn fetch_content_rejects_non_numeric_document_id() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("not-a-number"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_404_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GH_BASE}/repos/owner/test-repo/issues/404"),
+            MockResponse::status(404, b"{\"message\":\"Not Found\"}".to_vec()),
+        );
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("404"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
+    }
+
+    #[test]
+    fn fetch_content_maps_429_to_sync_error() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GH_BASE}/repos/owner/test-repo/issues/7"),
+            MockResponse::status(429, b"rate limited".to_vec()),
+        );
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("7"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)));
     }
 }
