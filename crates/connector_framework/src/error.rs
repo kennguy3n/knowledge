@@ -49,6 +49,11 @@ pub enum ConnectorError {
     #[error("permission denied: subject lacks admin/editor on scope")]
     PermissionDenied,
 
+    /// The `ObjectType` supplied to an attachment operation is not a
+    /// valid scope type (must be `Channel`, `User`, or `Domain`).
+    #[error("unsupported object type for connector attachment")]
+    UnsupportedObjectType,
+
     /// A relation tuple operation failed in the underlying
     /// permission service.
     #[error(transparent)]
