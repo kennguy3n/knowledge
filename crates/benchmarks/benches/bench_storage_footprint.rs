@@ -81,7 +81,7 @@ fn build_and_measure(n: usize) -> (TempDir, PathBuf, u64) {
         // `store` drops here, checkpointing the WAL into the main file.
     }
     let bytes = db_footprint_bytes(&path);
-    let per_msg = bytes / n as u64;
+    let per_msg = bytes / (n as u64);
     eprintln!("STORAGE_FOOTPRINT N={n} file_bytes={bytes} bytes_per_msg={per_msg}");
     (dir, path, bytes)
 }
