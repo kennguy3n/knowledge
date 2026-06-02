@@ -916,6 +916,13 @@ pub struct SynthesisEngineConfig {
     #[serde(default)]
     pub single_tenant: bool,
 
+    /// Per-endpoint requests-per-minute cap for the synthesis
+    /// rate limiter. `None` uses the library default
+    /// ([`synthesis_engine::DEFAULT_MAX_RPM`], 60). Set to
+    /// `Some(n)` for enterprise-negotiated higher caps.
+    #[serde(default)]
+    pub max_requests_per_minute: Option<u64>,
+
     /// Burst capacity for the global rate-shaping token bucket
     /// gating [`crate::synthesis::trigger_server_synthesis`].
     /// `0` falls back to
@@ -1750,6 +1757,7 @@ mod tests {
                 "55555555-5555-5555-5555-555555555555".into(),
             ]),
             single_tenant: false,
+            max_requests_per_minute: Some(120),
             rate_capacity: 16,
             rate_refill_per_sec: 2.5,
         };
@@ -1764,6 +1772,7 @@ mod tests {
             "grammar",
             "scopeBindings",
             "singleTenant",
+            "maxRequestsPerMinute",
             "rateCapacity",
             "rateRefillPerSec",
         ] {
@@ -1802,6 +1811,7 @@ mod tests {
             grammar: None,
             scope_bindings: None,
             single_tenant: false,
+            max_requests_per_minute: None,
             rate_capacity: 0,
             rate_refill_per_sec: 0.0,
         };

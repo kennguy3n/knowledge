@@ -2502,6 +2502,9 @@ fn endpoint_config_from_ffi(cfg: &SynthesisEngineConfig) -> FfiResult<EndpointCo
     if let Some(grammar) = cfg.grammar.as_ref() {
         endpoint = endpoint.with_grammar(grammar.clone());
     }
+    if let Some(rpm) = cfg.max_requests_per_minute {
+        endpoint = endpoint.with_max_requests_per_minute(rpm);
+    }
     Ok(endpoint)
 }
 
@@ -3904,6 +3907,7 @@ mod tests {
             grammar: None,
             scope_bindings: None,
             single_tenant: false,
+            max_requests_per_minute: None,
             rate_capacity: 0,
             rate_refill_per_sec: 0.0,
         };
@@ -3936,6 +3940,7 @@ mod tests {
             grammar: None,
             scope_bindings: None,
             single_tenant: false,
+            max_requests_per_minute: None,
             rate_capacity: 0,
             rate_refill_per_sec: 0.0,
         };
@@ -3960,6 +3965,7 @@ mod tests {
             grammar: None,
             scope_bindings: None,
             single_tenant: false,
+            max_requests_per_minute: None,
             rate_capacity: 0,
             rate_refill_per_sec: 0.0,
         };

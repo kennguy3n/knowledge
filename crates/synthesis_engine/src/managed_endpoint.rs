@@ -1498,25 +1498,27 @@ mod tests {
             "set_config must install a fresh limiter Arc, not mutate the existing one"
         );
 
-        // Reconfigure to remove the explicit cap. The limiter
-        // must fall back to DEFAULT_MAX_RPM for cost protection.
-        let cfg_no_cap =
+        // Reconfigure with a default-cap config (no explicit
+        // with_max_requests_per_minute call). The limiter must
+        // use DEFAULT_MAX_RPM for cost protection.
+        let cfg_default_cap =
             EndpointConfig::new("https://example.test/synth", "TEST_API_KEY", "slm-recap-v1")
                 .with_max_tokens(64)
                 .with_timeout(Duration::from_secs(5))
                 .with_grammar("{root: 'string'}");
-        synth.set_config(cfg_no_cap);
+        synth.set_config(cfg_default_cap);
         let limiter_default = synth
             .rate_limiter()
-            .expect("set_config with None cap must still install DEFAULT_MAX_RPM limiter");
+            .expect("set_config with default cap must install DEFAULT_MAX_RPM limiter");
         assert_eq!(
             limiter_default.max_per_window(),
             super::DEFAULT_MAX_RPM,
-            "set_config(None) must fall back to DEFAULT_MAX_RPM"
+            "default config must use DEFAULT_MAX_RPM"
         );
-        assert!(
-            synth.config().max_requests_per_minute.is_none(),
-            "config must reflect the cleared explicit cap"
+        assert_eq!(
+            synth.config().max_requests_per_minute,
+            Some(super::DEFAULT_MAX_RPM),
+            "config must reflect the default cost-protection cap"
         );
     }
 }

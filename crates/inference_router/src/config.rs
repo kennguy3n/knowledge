@@ -87,6 +87,8 @@ fn detect_total_ram_bytes() -> Option<u64> {
     {
         // sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGE_SIZE)
         // avoids parsing /proc/meminfo and works in containers.
+        // SAFETY: `sysconf` is safe to call with any `_SC_*`
+        // constant; it returns -1 on error (handled below).
         let pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) };
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) };
         if pages > 0 && page_size > 0 {
@@ -102,6 +104,11 @@ fn detect_total_ram_bytes() -> Option<u64> {
         let mut memsize: u64 = 0;
         let mut size = std::mem::size_of::<u64>();
         let name = b"hw.memsize\0";
+        // SAFETY: `memsize` is a properly-aligned, initialized u64;
+        // `size` is its byte length. The pointer casts are valid
+        // because the kernel writes exactly `size_of::<u64>()` bytes
+        // into the output buffer. `name` is a NUL-terminated byte
+        // literal. We pass null for newp/newlen (read-only query).
         let ret = unsafe {
             libc::sysctlbyname(
                 name.as_ptr().cast(),
@@ -148,6 +155,9 @@ fn detect_total_ram_bytes() -> Option<u64> {
             ullAvailVirtual: 0,
             ullAvailExtendedVirtual: 0,
         };
+        // SAFETY: `status` is fully initialized with `dwLength`
+        // set to the struct's size. `GlobalMemoryStatusEx` writes
+        // only within the struct's bounds and returns 0 on failure.
         let ret = unsafe { GlobalMemoryStatusEx(&mut status) };
         if ret != 0 && status.ullTotalPhys > 0 {
             Some(status.ullTotalPhys)
