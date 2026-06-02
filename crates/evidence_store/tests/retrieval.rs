@@ -1127,7 +1127,7 @@ where
 }
 
 // ---------------------------------------------------------------------
-//  — multilingual / cross-lingual embedding-lane invariant.
+// Multilingual / cross-lingual embedding-lane invariant.
 // ---------------------------------------------------------------------
 //
 // The production adapter is wired to XLM-R (`models/xlm-r-base.onnx`,
@@ -1400,8 +1400,8 @@ fn vector_telemetry_cross_lingual_recall_via_rerank() {
     );
 }
 
-///  — verify the vector-telemetry counters move through
-/// the public retriever surface end-to-end. Bumps `live_body_*`
+/// Verify the vector-telemetry counters move through the public
+/// retriever surface end-to-end. Bumps `live_body_*`
 /// rather than `cache_hits_*` because the store ingests the bodies
 /// WITHOUT a wired-in model (`fresh_store` returns a model-less
 /// store), so the retriever's `candidate_embedding` path has to
@@ -1479,8 +1479,8 @@ fn vector_telemetry_counters_move_through_public_retriever() {
     );
 }
 
-///  — counts every call to `model.embed(text)` via
-/// the `MultilingualConceptMockModel` so a pre-embed
+/// Counts every call to `model.embed(text)` via the
+/// `MultilingualConceptMockModel` so a pre-embed
 /// gate that admits a noise-only input would visibly bump this
 /// counter. Used by
 /// `search_hybrid_skips_vector_lane_on_noise_only_query`
@@ -1529,8 +1529,8 @@ impl EmbeddingModel for ArcCountingModel {
     }
 }
 
-///  — a noise-only query (pure punctuation) must NOT
-/// reach the embedding adapter. The pre-embed routing gate in
+/// A noise-only query (pure punctuation) must NOT reach the
+/// embedding adapter. The pre-embed routing gate in
 /// `search_hybrid` short-circuits before `model.embed(query)`
 /// is called, bumping the
 /// `pre_embed_skipped_no_linguistic_content_total` counter
@@ -1686,8 +1686,8 @@ fn search_hybrid_no_model_does_not_consult_routing_gate() {
     }
 }
 
-///  — a body classified as noise-only must NOT
-/// produce an `evidence_embeddings` row. Ingesting a pure-
+/// A body classified as noise-only must NOT produce an
+/// `evidence_embeddings` row. Ingesting a pure-
 /// punctuation body bumps the
 /// `pre_embed_skipped_no_linguistic_content_total` counter
 /// instead of `index_write_embeddings_total`, and a subsequent
@@ -1772,8 +1772,8 @@ fn index_embedding_skips_noise_only_body() {
     );
 }
 
-///  — `rerank_with_embeddings` short-circuits the
-/// whole rerank when called with a noise-only query. The
+/// `rerank_with_embeddings` short-circuits the whole rerank when
+/// called with a noise-only query. The
 /// original candidate ordering is returned unchanged AND no
 /// candidate body is embedded.
 #[test]

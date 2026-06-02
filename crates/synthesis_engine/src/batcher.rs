@@ -174,8 +174,8 @@ impl<C: HttpClient> SynthesisBatcher<C> {
     /// Constructor variant that wires a shared [`RateLimiter`]
     /// onto the wrapped synthesizer before storing it.
     ///
-    /// This is the cost-control hook called out in: a
-    /// single limiter shared across every synthesizer instance
+    /// This is the cost-control hook: a single limiter shared
+    /// across every synthesizer instance
     /// the batcher dispatches through, so a many-scope flush
     /// respects the operator's per-minute cap even when the
     /// batch is "the entire queue at once".

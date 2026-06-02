@@ -464,8 +464,8 @@ fn dispatch_blocking(
         let mut ingested = 0usize;
         for ev in &events {
             if let Some(body) = event_to_evidence_body(ev) {
-                //  — stamp the BCP-47 primary subtag on
-                // each webhook-dispatched event. Same fail-closed
+                // Stamp the BCP-47 primary subtag on each
+                // webhook-dispatched event. Same fail-closed
                 // contract as the connector sync path: a NULL
                 // outcome means "language unknown" (the body
                 // failed detection or is too short / pure

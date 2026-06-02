@@ -1,5 +1,5 @@
 //! Integration tests for the `approved_document_payloads` table
-//! ( / schema v10; reshaped in / schema v12
+//! (schema v10; reshaped in schema v12
 //! to back the payload bytes with the deduplicated `body_store`
 //! table + per-scope CEK wraps in `body_store_key_wraps`).
 //!

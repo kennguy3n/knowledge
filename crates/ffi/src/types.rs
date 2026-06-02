@@ -718,8 +718,8 @@ pub struct SyncSchedulerStatus {
     /// scheduler considers, but instances without an override are
     /// counted only in `total_instance_count`.
     ///
-    /// Was named `scheduled_instance_count` through  round 5;
-    /// renamed in round 6 (ANALYSIS_0003) to disambiguate from
+    /// Was named `scheduled_instance_count` in earlier revisions of
+    /// this FFI surface; later renamed to disambiguate from
     /// `total_instance_count`. A host UI that wants "how many
     /// connectors is the scheduler driving" should read
     /// `total_instance_count`; this field reports the strictly
@@ -917,8 +917,8 @@ pub struct SynthesisEngineConfig {
     pub single_tenant: bool,
 
     /// Burst capacity for the global rate-shaping token bucket
-    /// gating [`crate::synthesis::trigger_server_synthesis`]
-    /// . `0` falls back to
+    /// gating [`crate::synthesis::trigger_server_synthesis`].
+    /// `0` falls back to
     /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY`] (8) —
     /// the same sentinel-zero pattern used by `max_tokens` and
     /// `timeout_ms`. Hosts that want to disable rate-shaping
@@ -930,8 +930,8 @@ pub struct SynthesisEngineConfig {
 
     /// Refill rate (tokens per second) for the global
     /// rate-shaping token bucket gating
-    /// [`crate::synthesis::trigger_server_synthesis`]
-    /// . `0.0` falls back to
+    /// [`crate::synthesis::trigger_server_synthesis`].
+    /// `0.0` falls back to
     /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC`]
     /// (1.0). Fractional values are supported (e.g. `0.5` ==
     /// one token every 2 seconds). Negative values are rejected
@@ -954,7 +954,7 @@ pub struct SynthesisEngineConfig {
 ///
 /// `payload_bytes == 0` and `content_hash_hex.is_empty()` indicate
 /// a tenant-memory ref that has no corresponding evidence-store
-/// payload row. Under  this should only occur transiently
+/// payload row. Under normal operation this should only occur transiently
 /// (e.g. between a host's call to `admit_approved_document` and a
 /// crash before tenant memory was flushed), but the substrate
 /// surfaces it explicitly rather than synthesising fake metadata.
@@ -1296,7 +1296,7 @@ mod tests {
                 "SyncSchedulerStatus JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
-        // Round 6 ANALYSIS_0003 — pin that the two count fields
+        // Pin that the two count fields
         // serialize with the post-rename camelCase keys and that
         // their values come through distinct from each other (so a
         // future refactor that conflates them in code is caught
@@ -1466,9 +1466,9 @@ mod tests {
     }
 
     /// `ConnectorStatus` is the response envelope for
-    /// `crates/napi/src/bindings.rs::js_list_connectors`. Devin
-    /// Review round 5 ANALYSIS_0002 flagged it as the last
-    /// `serde_json`-serialized N-API return type still emitting
+    /// `crates/napi/src/bindings.rs::js_list_connectors`. An earlier
+    /// review flagged it as the last `serde_json`-serialized N-API
+    /// return type still emitting
     /// snake_case keys (every peer — `RefreshReport`,
     /// `SyncReport`, `WebhookServerSummary`,
     /// `SyncSchedulerStatus` — has been migrated). Pin the
@@ -1542,8 +1542,8 @@ mod tests {
         assert_eq!(back, s);
     }
 
-    ///  — `ConnectorHealthRecord` is the new
-    /// single-instance probe envelope returned by
+    /// `ConnectorHealthRecord` is the new single-instance probe
+    /// envelope returned by
     /// [`crate::connector::connector_status`], symmetric with
     /// [`crate::synthesis::synthesis_status`]. Pin the camelCase
     /// invariant on every field of the wire format so a future

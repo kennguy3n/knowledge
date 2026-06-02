@@ -690,7 +690,7 @@ fn cross_lingual_recall_benchmark() {
     let mean_r_at_12: f64 = measurements.iter().map(|m| m.recall_at_12).sum::<f64>() / n;
 
     eprintln!(
-        " cross-lingual recall benchmark (n={n} queries across {c} concepts × {l} languages):",
+        "Cross-lingual recall benchmark (n={n} queries across {c} concepts × {l} languages):",
         c = NUM_CONCEPTS,
         l = NUM_LANGUAGES,
     );

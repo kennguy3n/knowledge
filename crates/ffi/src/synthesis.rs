@@ -1016,8 +1016,7 @@ pub fn replace_approved_document(
 }
 
 /// List approved-document refs admitted to the tenant memory at
-/// `scope_id`, joined with each ref's persisted payload metadata
-///.
+/// `scope_id`, joined with each ref's persisted payload metadata.
 ///
 /// The order matches `TenantMemoryObject.approved_documents`
 /// insertion order. Returns an empty vector for a forgotten scope

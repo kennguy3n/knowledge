@@ -1,5 +1,4 @@
-//! Token-bucket rate limiter for `trigger_server_synthesis`
-//! .
+//! Token-bucket rate limiter for `trigger_server_synthesis`.
 //!
 //! # Why
 //!

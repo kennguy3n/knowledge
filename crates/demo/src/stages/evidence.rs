@@ -86,8 +86,8 @@ pub fn run(
         };
         *by_class.entry(class_tag).or_default() += 1;
 
-        //  — run language detection at the demo's persistent
-        // write boundary so the schema-v13 `language_tag` column is
+        // Run language detection at the demo's persistent write
+        // boundary so the schema-v13 `language_tag` column is
         // populated for inline / body-table rows. Noise-class rows
         // are still routed to the ring buffer by
         // `ingest_with_language` and do not retain the tag (the ring
@@ -177,8 +177,8 @@ pub fn run(
         "all four scope tiers contributed evidence",
         scope_tier_coverage(&ingested) == 4,
     );
-    //  — at least one persisted row has a non-NULL
-    // `language_tag` after detection runs at the demo's write
+    // At least one persisted row has a non-NULL `language_tag`
+    // after detection runs at the demo's write
     // boundary. The synthetic dataset includes plain-English bodies
     // long enough to clear whatlang's reliability threshold, so the
     // detector should emit at least one concrete BCP-47 tag (e.g.

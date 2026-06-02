@@ -510,7 +510,7 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
         ", webhook_servers={webhook_server_count}, \
          webhook_registrations={webhook_registration_count}"
     );
-    //  — surface the background sync scheduler's running
+    // Surface the background sync scheduler's running
     // state. Pure diagnostic: stays `Ok` regardless because most
     // ingest-only hosts (offline CLI batch tools, Electron status
     // panels) never start a scheduler, and treating "no scheduler"

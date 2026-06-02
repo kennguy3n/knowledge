@@ -165,8 +165,8 @@
 //!   inserts are best-effort, body decryption errors are
 //!   demoted to per-row misses, etc.); the goal is to make
 //!   the rotation-rule violation operator-visible without
-//!   adding a new failure mode that didn't exist before
-//!   .
+//!   adding a new failure mode that didn't exist before the
+//!   pre-embedding routing hook landed.
 //!
 //! # Wire-format stability
 //!

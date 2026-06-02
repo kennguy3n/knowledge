@@ -2518,7 +2518,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    //  — Arabic proclitic-aware matcher
+    // Arabic proclitic-aware matcher.
     // -----------------------------------------------------------------
 
     #[test]
@@ -3638,7 +3638,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    //  — Tibetan / Khmer / Myanmar / Lao lexicon tests
+    // Tibetan / Khmer / Myanmar / Lao lexicon tests.
     // -----------------------------------------------------------------
 
     #[test]

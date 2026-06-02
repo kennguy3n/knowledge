@@ -4305,8 +4305,8 @@ mod sync_scheduler_tests {
     }
 }
 
-///  — `connector_status` is the per-instance health
-/// probe symmetric with `synthesis_status`. The surfaces
+/// `connector_status` is the per-instance health probe symmetric
+/// with `synthesis_status`. The surfaces
 /// (`list_connectors`, `sync_scheduler_status`) only expose
 /// fleet-wide views; hosts that want to render a single
 /// connector's health page were forced to fetch both and reassemble

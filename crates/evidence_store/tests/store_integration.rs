@@ -776,17 +776,18 @@ fn fts5_thai_query_returns_hit() {
 }
 
 // ----------------------------------------------------------------------
-//  — Tibetan / Khmer / Myanmar / Lao routing integration tests
+// Tibetan / Khmer / Myanmar / Lao routing integration tests.
 // ----------------------------------------------------------------------
 //
-// introduced `evidence_fts_cjk` (trigram lane) and
-// added `evidence_fts_bigram` (precomputed bigram lane). Both lanes
-// gate writes on `crate::script::contains_cjk_or_thai`, which
-// extended to include four additional Brahmic-family scripts that lack
-// inter-word whitespace: Tibetan (`bo`), Khmer (`km`), Myanmar (`my`),
-// Lao (`lo`). The fixtures below pin the read-path recall AND the
-// write-path table membership for each script via the same dual-lane
-// architecture as the sites — ensuring no regression silently
+// The CJK-aware schema introduced `evidence_fts_cjk` (trigram lane)
+// and added `evidence_fts_bigram` (precomputed bigram lane). Both
+// lanes gate writes on `crate::script::contains_cjk_or_thai`, which
+// was later extended to include four additional Brahmic-family
+// scripts that lack inter-word whitespace: Tibetan (`bo`), Khmer
+// (`km`), Myanmar (`my`), Lao (`lo`). The fixtures below pin the
+// read-path recall AND the write-path table membership for each
+// script via the same dual-lane architecture as the production
+// routing sites — ensuring no regression silently
 // excludes one of the four scripts from one of the two CJK-routed
 // shadow tables.
 
@@ -1110,7 +1111,7 @@ fn fts5_bigram_lane_closes_2char_cjk_recall_floor() {
     // hard 3-codepoint minimum for both indexed substrings and
     // queries, so a 2-char CJK query like `天気` returns ∅
     // through the `evidence_fts_cjk` (trigram) lane even when
-    // the substring is present in the body. added
+    // the substring is present in the body. A later change added
     // a third FTS5 table (`evidence_fts_bigram`) that stores
     // whitespace-separated overlapping 2-codepoint windows under
     // the same `unicode61` tokeniser as `evidence_fts`. The read
@@ -1136,9 +1137,9 @@ fn fts5_bigram_lane_closes_2char_cjk_recall_floor() {
         hits.len(),
         1,
         "2-char CJK query MUST hit via the bigram lane now that \
-         's `evidence_fts_bigram` table exists — the \
-         trigram lane still misses these as documented but the \
-         bigram lane closes the gap"
+         the `evidence_fts_bigram` table exists — the trigram \
+         lane still misses these as documented but the bigram \
+         lane closes the gap"
     );
     // …and the same query 1 char longer still works (this lane
     // crosses the trigram floor so we exercise both branches):
@@ -1148,7 +1149,7 @@ fn fts5_bigram_lane_closes_2char_cjk_recall_floor() {
 
 #[test]
 fn fts5_three_lane_merge_dedupes_mixed_query_across_all_three_tables() {
-    // earlier regression — exercises the
+    // Regression guard from an earlier review — exercises the
     // `merged_fts_search` three-lane fan-out across a single
     // mixed Latin + 2-codepoint CJK query so all three FTS5
     // shadow tables contribute hits that the merge must
@@ -1162,10 +1163,10 @@ fn fts5_three_lane_merge_dedupes_mixed_query_across_all_three_tables() {
     // (precomputed bigrams under unicode61). All three branches
     // therefore return the same row under different ranks; the
     // `merged_fts_search` `MIN(rank)`-by-evidence-id HashMap
-    // contract must collapse them to a single hit. earlier
-    // this test was unrepresentable because the bigram lane did
-    // not exist and the 2-codepoint CJK term `天気` round-tripped
-    // as empty.
+    // contract must collapse them to a single hit. Before the
+    // bigram lane existed, this test was unrepresentable because
+    // the trigram lane could not capture the 2-codepoint CJK term
+    // `天気`, which round-tripped as empty.
     //
     // The companion `fts5_search_dedupes_when_both_tables_match_same_row`
     // test exercises only the two-lane (unicode61 + trigram) merge;
@@ -1636,10 +1637,10 @@ fn lane_weight_precision_hierarchy_holds_at_query_time() {
 }
 
 // ----------------------------------------------------------------------
-//  — Symmetric recall-lane stopword stripping (schema v16)
+// Symmetric recall-lane stopword stripping (schema v16).
 // ----------------------------------------------------------------------
 //
-// strips a small, conservative inventory of per-script
+// Schema v16 strips a small, conservative inventory of per-script
 // function words (Japanese particles, Chinese connectives, Thai
 // prepositions, ...) from BOTH the index-time write path and the
 // query-time read path before the bigram / trigram lanes consume the
@@ -2073,8 +2074,8 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
     // the `queries + skips + silently_swallowed_errors =
     // total_attempts` contract on `crate::fts_telemetry`.
     //
-    // earlier regression note: the
-    // bigram lane parallels the same structural shape — the
+    // Earlier regression note: the bigram lane parallels the same
+    // structural shape — the
     // pure-stopword check runs BEFORE
     // `compute_cjk_bigram_query` so the no-CJK and
     // pure-stopword bigram skip counters are mutually

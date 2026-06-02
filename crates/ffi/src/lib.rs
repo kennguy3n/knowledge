@@ -3017,7 +3017,7 @@ mod tests {
             assert_eq!(
                 bigram_count, 0,
                 "open_store must re-purge evidence_fts_bigram rows for every persisted \
-                 tombstone ( / schema v15 three-table atomicity invariant)"
+                 tombstone (schema v15 three-table atomicity invariant)"
             );
             Ok(())
         })

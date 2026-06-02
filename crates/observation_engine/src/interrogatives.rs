@@ -81,22 +81,21 @@ pub enum InterrogativeMatch {
     /// and/or because the language permits non-initial interrogative
     /// placement.
     Substring,
-    /// strategy for Arabic-script languages whose
-    /// proclitics agglutinate to the host word: tries first-token
+    /// Peel strategy for Arabic-script languages whose proclitics
+    /// agglutinate to the host word: tries first-token
     /// equality, then iteratively peels the recognised Arabic
     /// proclitic prefixes (`و` "and", `ف` "then", `ب` "with",
     /// `ل` "to", and the 2-character definite article `ال` /
     /// `أل` "the") and re-checks equality after each peel. The
     /// preposition `ك` ("like / as") and the future marker `س`
-    /// ("will") were initially in the peel set but were removed
-    /// in  for precision
-    /// reasons. See
+    /// ("will") were initially in the peel set but were later
+    /// removed for precision reasons. See
     /// [`crate::lexicon::MatchStrategy::FirstTokenWithArabicClitics`]
     /// for the full design notes (peel inventory, why `أ`
     /// interrogative hamza is excluded, why `Substring` is
     /// rejected for short Arabic interrogatives).
     FirstTokenWithArabicClitics,
-    /// strategy for Hebrew: tries first-token equality,
+    /// Peel strategy for Hebrew: tries first-token equality,
     /// then iteratively peels the recognised Hebrew proclitic
     /// prefixes (`ו` "and", `ש` "that / which", `מ` "from",
     /// `ל` "to / for", `ב` "in / at / with") and re-checks
@@ -391,7 +390,7 @@ pub fn interrogatives_for(
         // Standard Arabic; dialects use additional forms but
         // these cover MSA news / docs / formal IM.
         //
-        // promoted from
+        // The Arabic matcher was promoted from
         // [`InterrogativeMatch::FirstToken`] to
         // [`InterrogativeMatch::FirstTokenWithArabicClitics`] so
         // the productive Arabic proclitic-prefix forms recover
@@ -1029,8 +1028,8 @@ mod tests {
 
     #[test]
     fn first_token_with_hebrew_clitics_languages_are_hebrew_only_for_now() {
-        // the Hebrew clitic-aware first-token strategy
-        // was introduced specifically for the Hebrew agglutinative-
+        // The Hebrew clitic-aware first-token strategy was
+        // introduced specifically for the Hebrew agglutinative-
         // prefix morphology (ו / ש / מ / ל / ב clitically attaching
         // to the next word). It is NOT a generic "FirstToken with
         // some script-specific prefix peeling" — the peel inventory
@@ -1124,8 +1123,7 @@ mod tests {
         // language's entries.
         for tag in SUPPORTED_PRIMARY_TAGS {
             let (list, strat) = interrogatives_for(tag).unwrap();
-            // Extended by an earlier review: the invariant
-            // applies to every
+            // An earlier review extended the invariant to every
             // strategy whose matcher consults the extractor's
             // alphabetic-only tokeniser — i.e. both bare
             // FirstToken AND FirstTokenWithArabicClitics, which
@@ -1387,8 +1385,8 @@ mod tests {
         // readings only manifest as part of bigrams (`khi nào`,
         // `tại sao`, `vì sao`). The bare forms remain absent so
         // `Khi tôi đến...` / `Tại Hà Nội...` / `Vì tôi bận...`
-        // declaratives do not mis-classify, but added
-        // the bigram entries themselves so `Tại sao bạn buồn?` /
+        // declaratives do not mis-classify, but a later change
+        // added the bigram entries themselves so `Tại sao bạn buồn?` /
         // `Khi nào chúng ta đi?` / `Vì sao trời mưa?` recover
         // their interrogative reading under FirstBigram.
         let (vi_list, strat) = interrogatives_for("vi").unwrap();

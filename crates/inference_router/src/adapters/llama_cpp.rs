@@ -485,8 +485,7 @@ pub use http_client_async::{AsyncHttpLlamaServerClient, AsyncLlamaServerClient};
 
 #[cfg(feature = "async-http-client")]
 mod http_client_async {
-    //!  — async HTTP transport for the llama.cpp loopback
-    //! server.
+    //! Async HTTP transport for the llama.cpp loopback server.
     //!
     //! Mirror of [`super::http_client::HttpLlamaServerClient`] that
     //! drives `reqwest::Client` (non-blocking) under a tokio

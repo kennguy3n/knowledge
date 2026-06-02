@@ -1563,8 +1563,8 @@ mod tests {
     }
 
     // ===================================================================
-    //  — multilingual sentence terminator + question detection
-    // tests. These exercise the new char-based splitter, the per-language
+    // Multilingual sentence terminator + question detection tests.
+    // These exercise the char-based splitter, the per-language
     // interrogative tables, and per-sentence language stamping.
     // ===================================================================
 
@@ -3080,7 +3080,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    //  — Arabic proclitic-aware classification, end-to-end
+    // Arabic proclitic-aware classification, end-to-end.
     // -----------------------------------------------------------------
 
     #[test]

@@ -909,8 +909,8 @@ pub fn sync_connector(handle: RuntimeHandle, instance_id: String) -> FfiResult<S
                 for ev in &run_result.events {
                     if let Some(body) = event_to_evidence_body(ev) {
                         let source_tag = connector_source_tag(snapshot.source_kind);
-                        //  — stamp the BCP-47 primary
-                        // subtag on each ingested connector
+                        // Stamp the BCP-47 primary subtag on
+                        // each ingested connector
                         // event. Connector events serialise as
                         // a small JSON shell (`kind` +
                         // `document_id` + `occurred_at`) today,
