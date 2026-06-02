@@ -34,16 +34,28 @@
 
 #![deny(missing_docs)]
 
+// STABLE
 pub mod config;
+// STABLE
 pub mod error;
+// STABLE
 pub mod lifecycle;
+// STABLE
 pub mod member;
+// STABLE
 pub mod persist;
+// STABLE
 pub mod tenant;
 
+// STABLE
 pub use config::{StorageConfig, SynthesisConfig, TenantConfig, TenantKeyRef};
+// STABLE
 pub use error::{Result, TenantError};
+// STABLE
 pub use lifecycle::TenantStatus;
+// STABLE
 pub use member::{TenantMember, TenantMemberStatus};
+// STABLE
 pub use persist::PersistentTenantRegistry;
+// STABLE
 pub use tenant::{Tenant, TenantId, TenantRegistry};

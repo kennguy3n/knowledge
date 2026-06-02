@@ -60,6 +60,44 @@ cargo deny check
    in-flight smoke run is replaced by the full matrix on the next
    `pull_request` event. Remove the label to switch back.
 
+## Changelog discipline
+
+Any pull request that adds, changes, deprecates, removes, or fixes a
+**public API** item (types, functions, constants, feature flags, or FFI
+entry points marked `// STABLE` or `// UNSTABLE` in `crates/*/src/lib.rs`)
+must include a changelog entry in the PR description. Use the following
+template:
+
+```markdown
+### Changelog
+
+#### Added
+- `crate_name::NewType` — brief description.
+
+#### Changed
+- `crate_name::existing_fn` — what changed and why.
+
+#### Deprecated
+- `crate_name::OldType` — use `NewType` instead.
+
+#### Removed
+- `crate_name::removed_fn` — reason for removal.
+
+#### Fixed
+- `crate_name::buggy_fn` — what was wrong.
+
+#### Security
+- `crate_name::crypto_fn` — security-relevant change.
+```
+
+Omit categories that have no entries. The categories follow
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) conventions.
+
+Items marked `// UNSTABLE` or `#[doc(hidden)]` may change without a
+changelog entry, but a courtesy note in the PR description is
+appreciated. Items marked `// STABLE` **must** have a changelog entry
+for any change.
+
 ## Code style
 
 - Follow the existing conventions in each file; match the
