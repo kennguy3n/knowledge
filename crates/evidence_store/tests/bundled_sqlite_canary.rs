@@ -1,7 +1,7 @@
 //! Canary tests pinning the SQLite version bundled by
 //! `libsqlite3-sys` (via rusqlite's `bundled-sqlcipher-vendored-openssl`
 //! feature) and the FTS5 tokeniser behaviours the multilingual lexical
-//! lane (Phases 1.2 / 1.2.1 / 1.8 / 1.9) depends on.
+//! lane depends on.
 //!
 //! ## Why this file exists
 //!
@@ -12,7 +12,7 @@
 //! (`unicode61`, `trigram`, and a CJK-aware dual-table design); a
 //! point-release of SQLite has, historically, shipped subtle
 //! tokeniser-behaviour fixes that would change recall against the
-//! Phase 2.1 cross-lingual benchmark corpus.
+//! cross-lingual benchmark corpus.
 //!
 //! The existing `fts5_*` tests in `store_integration.rs` and the
 //! `cross_lingual_recall_benchmark.rs` integration test do catch
@@ -28,7 +28,7 @@
 //!
 //! 1. Run the full `evidence_store` test suite — every `fts5_*` test
 //!    must still pass against the new bundled SQLite.
-//! 2. Run `cross_lingual_recall_benchmark.rs` (the Phase 2.1 canary)
+//! 2. Run `cross_lingual_recall_benchmark.rs` (the canary)
 //!    — mean `recall@12 ≥ 0.99` and `hit-rate@{1,3} ≥ 0.95` must hold.
 //! 3. Check the upstream SQLite release notes for changes to the
 //!    `unicode61` and `trigram` tokenisers between the pinned version
@@ -72,7 +72,7 @@ fn bundled_sqlite_version_matches_pin() {
          changed which SQLite the substrate ships with. Before updating the \
          literal in `bundled_sqlite_canary.rs`, follow the steps in the \
          module-level docs of this file: re-run all `fts5_*` tests, re-run \
-         the Phase 2.1 cross-lingual recall benchmark, and audit the \
+         the cross-lingual recall benchmark, and audit the \
          upstream SQLite release notes for unicode61 / trigram tokeniser \
          changes between {EXPECTED_SQLITE_VERSION} and {actual}."
     );
@@ -122,8 +122,7 @@ fn unicode61_tokeniser_emits_expected_tokens_for_canary_corpus() {
     // in production. The `tokenize` clause here mirrors what the
     // substrate's schema emits at `schema.rs:314` and `schema.rs:356`.
     conn.execute_batch(
-        "CREATE VIRTUAL TABLE canary USING fts5(
-            body,
+        "CREATE VIRTUAL TABLE canary USING fts5(body,
             tokenize = 'unicode61 remove_diacritics 2'
         );",
     )
@@ -195,7 +194,7 @@ fn unicode61_tokeniser_emits_expected_tokens_for_canary_corpus() {
 /// Pin the `trigram` tokeniser. The multilingual lexical lane uses
 /// trigram-tokenised tables for the second recall lane on scripts
 /// where unicode61 over-segments (CJK / Thai / Tibetan / Khmer /
-/// Myanmar / Lao, per Phases 1.2 / 1.5). Trigram-tokeniser
+/// Myanmar / Lao). Trigram-tokeniser
 /// behaviour is more sensitive to SQLite point releases than
 /// unicode61's because the trigram tokeniser has shipped multiple
 /// bugfixes in the 3.4x line.
@@ -214,8 +213,7 @@ fn trigram_tokeniser_recalls_substring_for_canary_corpus() {
     conn.execute_batch(
         // Match production exactly: `tokenize = 'trigram'`, no
         // options. See `crates/evidence_store/src/schema.rs:329`.
-        "CREATE VIRTUAL TABLE canary_tri USING fts5(
-            body,
+        "CREATE VIRTUAL TABLE canary_tri USING fts5(body,
             tokenize = 'trigram'
         );",
     )
@@ -284,8 +282,7 @@ fn trigram_tokeniser_silently_accepts_unknown_options() {
     // 4.6.1 to accept the unknown option as a no-op rather than
     // erroring out at CREATE time.
     let result = conn.execute_batch(
-        "CREATE VIRTUAL TABLE canary_tri_unknown USING fts5(
-            body,
+        "CREATE VIRTUAL TABLE canary_tri_unknown USING fts5(body,
             tokenize = 'trigram remove_diacritics 1'
         );",
     );

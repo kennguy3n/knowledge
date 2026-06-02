@@ -30,10 +30,10 @@ use uuid::Uuid;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::phases::runtime::RuntimeState;
-use crate::report::{DemoReport, PhaseReport};
+use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::RuntimeState;
 
-const PHASE_LABEL: &str = "audit";
+const STAGE_LABEL: &str = "audit";
 
 pub fn run(
     dataset: &Dataset,
@@ -42,7 +42,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let start = Instant::now();
-    let mut phase = PhaseReport::new("Stage 12: Audit Service");
+    let mut stage = StageReport::new("Stage 12: Audit Service");
 
     // 1. Append a tenant-lifecycle "demo-run-completed" entry so the
     //    final audit row is the substrate-level provenance of the
@@ -59,7 +59,7 @@ pub fn run(
         .details(json!({
             "event": "demo_run_completed",
             "demo_run_id": demo_run_id,
-            "phase_count": 12,
+            "stage_count": 12,
             "dataset_messages": dataset.messages.len(),
         }))
         .build()
@@ -68,7 +68,7 @@ pub fn run(
 
     let total_entries = state.audit_log.len();
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "audit log accumulated entries from every audit-emitting stage",
         total_entries >= 12,
     );
@@ -82,7 +82,7 @@ pub fn run(
         }
     }
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "audit log assigns strictly monotonic sequence numbers",
         monotonic,
     );
@@ -99,10 +99,10 @@ pub fn run(
     for action in &action_types {
         let q = AuditQuery::new().with_action(*action);
         let n = state.audit_log.query(&q).count();
-        phase.stat(format!("by_action.{}", action.as_str()), n.to_string());
+        stage.stat(format!("by_action.{}", action.as_str()), n.to_string());
     }
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "audit log surfaces at least four distinct action types",
         action_types.len() >= 4,
     );
@@ -117,11 +117,11 @@ pub fn run(
     let scope_match =
         !scope_hits.is_empty() && scope_hits.iter().all(|e| e.scope_id == Some(tenant_scope));
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "scope-filtered query returns only tenant-scope entries",
         scope_match,
     );
-    phase.stat("scope_query.tenant.hits", scope_hits.len().to_string());
+    stage.stat("scope_query.tenant.hits", scope_hits.len().to_string());
     report.add_benchmark(
         "audit.query_by_scope",
         scope_hits.len() as u64,
@@ -136,11 +136,11 @@ pub fn run(
     let promoted_hits: Vec<_> = state.audit_log.query(&promoted_query).collect();
     let promoted_q_elapsed = promoted_q_started.elapsed();
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "action-filtered query returns at least one AgentProposalPromoted entry",
         !promoted_hits.is_empty(),
     );
-    phase.stat(
+    stage.stat(
         "action_query.agent_proposal_promoted.hits",
         promoted_hits.len().to_string(),
     );
@@ -163,22 +163,22 @@ pub fn run(
     let since_hits: Vec<_> = state.audit_log.query(&since_query).collect();
     let time_q_elapsed = time_q_started.elapsed();
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "time-range (since) query reaches the just-appended lifecycle row",
         since_hits.iter().any(|e| e.id == lifecycle_id),
     );
     let until_query = AuditQuery::new().until(lifecycle_ts);
     let until_hits: Vec<_> = state.audit_log.query(&until_query).collect();
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "time-range (until) query covers earlier stages' entries",
         until_hits.len() >= total_entries.saturating_sub(1),
     );
-    phase.stat(
+    stage.stat(
         "time_query.since_lifecycle.hits",
         since_hits.len().to_string(),
     );
-    phase.stat(
+    stage.stat(
         "time_query.until_lifecycle.hits",
         until_hits.len().to_string(),
     );
@@ -216,11 +216,11 @@ pub fn run(
                 Actor::System => false,
             });
         log.record(
-            PHASE_LABEL,
+            STAGE_LABEL,
             "actor-filtered query returns only entries by the chosen actor",
             only_actor,
         );
-        phase.stat(
+        stage.stat(
             format!("actor_query.{kind}.hits"),
             actor_hits.len().to_string(),
         );
@@ -234,7 +234,7 @@ pub fn run(
         // a safety net for future refactors. We still record the
         // assertion so it's surfaced rather than silently skipped.
         log.record(
-            PHASE_LABEL,
+            STAGE_LABEL,
             "audit log contains at least one non-system actor",
             false,
         );
@@ -251,11 +251,11 @@ pub fn run(
     let combined_q_elapsed = combined_q_started.elapsed();
     let combined_id_matches = combined_hits.iter().any(|e| e.id == lifecycle_id);
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "composite query (scope + action + since) recovers the lifecycle row",
         combined_id_matches,
     );
-    phase.stat(
+    stage.stat(
         "composite_query.lifecycle.hits",
         combined_hits.len().to_string(),
     );
@@ -270,31 +270,31 @@ pub fn run(
     //    here is a runtime sanity check that `len()` only grew over
     //    the run.
     log.record(
-        PHASE_LABEL,
+        STAGE_LABEL,
         "audit log is append-only (no entries were removed)",
         state.audit_log.len() >= total_entries,
     );
 
     // ---- Wrap up the stage report. ----
-    phase.stat("audit_log.entries", state.audit_log.len().to_string());
-    phase.stat("audit_log.action_types", action_types.len().to_string());
-    phase.stat("queries.executed", "5".to_string());
-    phase.note(format!(
+    stage.stat("audit_log.entries", state.audit_log.len().to_string());
+    stage.stat("audit_log.action_types", action_types.len().to_string());
+    stage.stat("queries.executed", "5".to_string());
+    stage.note(format!(
         "audit log carries {} entries spanning {} distinct action types",
         state.audit_log.len(),
         action_types.len()
     ));
-    phase.note(format!(
+    stage.note(format!(
         "demo-run-completed lifecycle entry id = {}",
         lifecycle_id.0
     ));
-    phase.note(format!(
+    stage.note(format!(
         "demo run completed at {} UTC",
         Utc::now().to_rfc3339()
     ));
 
-    phase.timing = start.elapsed();
+    stage.timing = start.elapsed();
     report.count("audit.entries", state.audit_log.len() as u64);
     report.count("audit.action_types", action_types.len() as u64);
-    report.add_phase(phase);
+    report.add_stage(stage);
 }

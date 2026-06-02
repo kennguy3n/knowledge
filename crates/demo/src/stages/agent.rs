@@ -13,7 +13,7 @@
 //!    ([`ObservationProposal`], [`ConceptProposal`],
 //!    [`RelationProposal`], [`SummaryProposal`]) into a real
 //!    [`ProposalStore`]. Evidence refs are pulled from the evidence stage's
-//!    [`crate::phases::runtime::IngestedRow`]s, scope ids are taken
+//!    [`crate::stages::runtime::IngestedRow`]s, scope ids are taken
 //!    from the dataset, and the supersedes / contradicts links use
 //!    canonical concept ids minted by the concept-graph stage — every value the
 //!    agent contract carries is sourced from real prior stages.
@@ -54,10 +54,10 @@ use uuid::Uuid;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::phases::runtime::RuntimeState;
-use crate::report::{DemoReport, PhaseReport};
+use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::RuntimeState;
 
-const PHASE: &str = "agent";
+const STAGE: &str = "agent";
 
 pub fn run(
     dataset: &Dataset,
@@ -66,7 +66,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Stage 9: Agent Contract");
+    let mut stage = StageReport::new("Stage 9: Agent Contract");
 
     // -------- Agent identity + scopes ----------------------------
     let agent_uuid = Uuid::new_v4();
@@ -90,7 +90,7 @@ pub fn run(
         .map(|row| EvidenceRef::from_uuid(row.evidence_id.0))
         .collect();
     log.check(
-        PHASE,
+        STAGE,
         "evidence stage surfaced enough evidence rows to back agent proposals",
         evidence_refs.len() >= 2,
     );
@@ -178,7 +178,7 @@ pub fn run(
     let submit_elapsed = submit_started.elapsed();
 
     log.check(
-        PHASE,
+        STAGE,
         "store accepted all four typed proposals",
         store.len() == 4,
     );
@@ -200,12 +200,11 @@ pub fn run(
     );
     let mut clash = duplicate_envelope.clone();
     clash.id = observation_id;
-    let dup_blocked = matches!(
-        store.submit_observation(clash),
+    let dup_blocked = matches!(store.submit_observation(clash),
         Err(LifecycleError::DuplicateProposal(id)) if id == observation_id,
     );
     log.check(
-        PHASE,
+        STAGE,
         "store refuses to overwrite an existing proposal id",
         dup_blocked,
     );
@@ -222,7 +221,7 @@ pub fn run(
         .map(|p| p.corroboration_count)
         .unwrap_or_default();
     log.check(
-        PHASE,
+        STAGE,
         "corroboration count is bumped on each call",
         concept_corroboration == 2,
     );
@@ -234,12 +233,12 @@ pub fn run(
         .review(observation_id, &auto_policy)
         .expect("review observation");
     log.check(
-        PHASE,
+        STAGE,
         "high-confidence observation auto-promotes under permissive policy",
         matches!(observation_decision, ProposalDecision::AutoPromoted),
     );
     log.check(
-        PHASE,
+        STAGE,
         "auto-promoted observation is in Promoted state",
         store.get(observation_id).map(|p| p.state) == Some(ProposalState::Promoted),
     );
@@ -250,7 +249,7 @@ pub fn run(
         .review(concept_id, &auto_policy)
         .expect("review concept");
     log.check(
-        PHASE,
+        STAGE,
         "below-threshold concept needs human review",
         matches!(concept_decision, ProposalDecision::NeedsHumanReview),
     );
@@ -258,7 +257,7 @@ pub fn run(
     // -------- Manual promote of concept --------------------------
     store.promote(concept_id).expect("promote concept");
     log.check(
-        PHASE,
+        STAGE,
         "concept reaches Promoted via manual promote()",
         store.get(concept_id).map(|p| p.state) == Some(ProposalState::Promoted),
     );
@@ -268,7 +267,7 @@ pub fn run(
         .review(relation_id, &auto_policy)
         .expect("review relation");
     log.check(
-        PHASE,
+        STAGE,
         "below-threshold relation needs human review",
         matches!(relation_decision, ProposalDecision::NeedsHumanReview),
     );
@@ -276,7 +275,7 @@ pub fn run(
         .reject(relation_id, "demo: relation declined for review")
         .expect("reject relation");
     log.check(
-        PHASE,
+        STAGE,
         "rejected relation lands in Rejected with explicit reason",
         store.get(relation_id).is_some_and(|p| {
             p.state == ProposalState::Rejected
@@ -290,7 +289,7 @@ pub fn run(
         .review(summary_id, &default_policy)
         .expect("review summary");
     log.check(
-        PHASE,
+        STAGE,
         "default policy admits to review without auto-promoting",
         matches!(summary_decision, ProposalDecision::NeedsHumanReview),
     );
@@ -303,7 +302,7 @@ pub fn run(
         Err(LifecycleError::InvalidTransition { .. })
     );
     log.check(
-        PHASE,
+        STAGE,
         "rejected once-promoted proposal is refused by the state machine",
         cannot_reject_promoted,
     );
@@ -322,17 +321,17 @@ pub fn run(
     let canonical_elapsed = canonical_started.elapsed();
 
     log.check(
-        PHASE,
+        STAGE,
         "canonical observation derives from observation proposal",
         matches!(canonical_observation, CanonicalArtifact::Observation(_)),
     );
     log.check(
-        PHASE,
+        STAGE,
         "canonical concept derives from concept proposal",
         matches!(canonical_concept, CanonicalArtifact::Concept(_)),
     );
     log.check(
-        PHASE,
+        STAGE,
         "canonical summary derives from summary proposal",
         matches!(canonical_summary, CanonicalArtifact::Summary(_)),
     );
@@ -344,7 +343,7 @@ pub fn run(
         .expect("re-promote observation")
         .id();
     log.check(
-        PHASE,
+        STAGE,
         "promote_to_canonical is deterministic across calls",
         observation_id_again == canonical_observation.id(),
     );
@@ -355,7 +354,7 @@ pub fn run(
         Err(LifecycleError::InvalidTransition { .. })
     );
     log.check(
-        PHASE,
+        STAGE,
         "canonical artifact is refused for rejected proposal",
         canonical_rejected_blocked,
     );
@@ -380,12 +379,12 @@ pub fn run(
     let ttl_expired_handled =
         matches!(ttl_outcome, Err(LifecycleError::Expired(id)) if id == ttl_id);
     log.check(
-        PHASE,
+        STAGE,
         "TTL-elapsed proposal is rejected with LifecycleError::Expired",
         ttl_expired_handled,
     );
     log.check(
-        PHASE,
+        STAGE,
         "TTL-elapsed proposal lands in Rejected with reason `ttl_expired`",
         store.get(ttl_id).is_some_and(|p| {
             p.state == ProposalState::Rejected
@@ -443,20 +442,20 @@ pub fn run(
     state.proposals_manually_promoted += 2;
     state.proposals_rejected += total_rejected;
 
-    phase.timing = started.elapsed();
-    phase.stat("proposals_submitted", total_submitted.to_string());
-    phase.stat("proposals_auto_promoted", "1");
-    phase.stat("proposals_manually_promoted", "2");
-    phase.stat("proposals_rejected", total_rejected.to_string());
-    phase.stat(
+    stage.timing = started.elapsed();
+    stage.stat("proposals_submitted", total_submitted.to_string());
+    stage.stat("proposals_auto_promoted", "1");
+    stage.stat("proposals_manually_promoted", "2");
+    stage.stat("proposals_rejected", total_rejected.to_string());
+    stage.stat(
         "canonical_artifacts_derived",
         "3 (observation, concept, summary)",
     );
-    phase.stat(
+    stage.stat(
         "concept_corroboration_count",
         concept_corroboration.to_string(),
     );
-    phase.note(
+    stage.note(
         "AgentProposal lifecycle exercised end-to-end: submission, \
          duplicate-id refusal, corroboration bump, AutoPromotionPolicy \
          match + miss, manual promote/reject, deterministic canonical \
@@ -470,7 +469,7 @@ pub fn run(
         state.proposals_manually_promoted,
     );
     report.count("proposals_rejected", state.proposals_rejected);
-    report.add_phase(phase);
+    report.add_stage(stage);
     report.add_benchmark("agent_proposal_submits", total_submitted, submit_elapsed);
     report.add_benchmark("agent_review_calls", 4, review_elapsed);
     report.add_benchmark("agent_canonical_derivations", 4, canonical_elapsed);

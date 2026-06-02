@@ -317,7 +317,7 @@ pub fn js_trigger_synthesis(handle: BigInt, scope_id: String, trigger: String) -
 }
 
 // ---------------------------------------------------------------------------
-// Server-side synthesis (Phase 7).
+// Server-side synthesis.
 // ---------------------------------------------------------------------------
 
 /// Install the server-side synthesis engine on the runtime.
@@ -339,12 +339,12 @@ pub fn js_trigger_synthesis(handle: BigInt, scope_id: String, trigger: String) -
 ///   deployments where there is no cross-scope allow-list to
 ///   enforce. Multi-tenant production deployments should leave
 ///   this `false` (the default) and provide `scopeBindings`.
-/// * `rateCapacity` (Phase 10 Item 5) is the burst capacity of
+/// * `rateCapacity` is the burst capacity of
 ///   the global token-bucket rate limiter on
 ///   `triggerServerSynthesis`. `0` (the default if the key is
 ///   omitted) falls back to
 ///   [`ffi::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY`] (`8`).
-/// * `rateRefillPerSec` (Phase 10 Item 5) is the token refill
+/// * `rateRefillPerSec` is the token refill
 ///   rate in tokens/second. `0.0` falls back to
 ///   [`ffi::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC`]
 ///   (`1.0`). Fractional values are supported; non-finite or
@@ -383,7 +383,7 @@ pub fn js_configure_synthesis_engine(handle: BigInt, config: serde_json::Value) 
 ///   failures.
 /// * `InvalidArgument` if `scopeId` is not a UUID or `tier` is
 ///   not one of the documented values.
-/// * `Throttled` (Phase 10 Item 5) if the global token-bucket
+/// * `Throttled` if the global token-bucket
 ///   rate limiter rejects the call. The error carries a
 ///   `retryAfterMs` field — the host SHOULD wait that long and
 ///   retry the same call rather than treating this as a
@@ -448,8 +448,8 @@ pub fn js_list_recent_syntheses(handle: BigInt, scope_id: String) -> Result<serd
     })
 }
 
-/// Re-run synthesis on an existing `Complete` window (Phase 10
-/// Item 4). The window transitions back through `Complete →
+/// Re-run synthesis on an existing `Complete` window. The
+/// window transitions back through `Complete →
 /// Pending → InProgress → Complete` (or `→ Failed` on engine
 /// error) on the same `(scope, window_id)` pair; the previous
 /// synthesis object is archived to the history table at its
@@ -500,7 +500,7 @@ pub fn js_replay_synthesis(
 }
 
 /// Enumerate the archived synthesis-object versions for
-/// `synthesisId` (Phase 10 Item 4), newest first. The latest
+/// `synthesisId`, newest first. The latest
 /// version is included as the first entry with
 /// `isLatest = true`. Hosts that need to paginate the history
 /// without a separate `synthesisStatus` round trip should use
@@ -529,7 +529,7 @@ pub fn js_list_synthesis_versions(
 }
 
 // ---------------------------------------------------------------------------
-// Approved documents (Phase 8).
+// Approved documents.
 // ---------------------------------------------------------------------------
 
 /// Admit an approved document onto the tenant memory for `scopeId`
@@ -674,7 +674,7 @@ pub fn js_list_approved_documents(handle: BigInt, scope_id: String) -> Result<se
 }
 
 /// Toggle the post-sync auto-synthesis hook for a connector
-/// instance (Phase 7). Mirrors [`crate::configure_sync_auto_synthesize`].
+/// instance. Mirrors [`crate::configure_sync_auto_synthesize`].
 ///
 /// When `enabled` is `true`, the scheduler dispatches a domain-tier
 /// `triggerServerSynthesis` after every successful sync of this
@@ -851,7 +851,7 @@ pub fn js_list_connectors(handle: BigInt) -> Result<serde_json::Value> {
     })
 }
 
-/// Single-instance connector health probe (Phase 10 Item 3) —
+/// Single-instance connector health probe —
 /// symmetric with [`js_synthesis_status`]. Mirrors
 /// [`crate::connector_status`] and returns a JSON object with the
 /// shape:
@@ -945,7 +945,7 @@ pub fn js_refresh_connector_token(
     })
 }
 
-// ─────────────── OAuth2 client-secret resolver (Phase 4.1) ───────────────
+// ─────────────── OAuth2 client-secret resolver ───────────────
 
 /// Adapter that bridges a JS callback (passed across the N-API
 /// boundary as a [`Function`]) into the substrate's
@@ -1096,8 +1096,7 @@ impl ffi::OAuthClientSecretResolver for JsClientSecretResolver {
                 // friendly with clippy's truncation lint.
                 let timeout_ms_for_log: u64 =
                     self.recv_timeout.as_millis().try_into().unwrap_or(u64::MAX);
-                tracing::warn!(
-                    kind = %kind_for_warn,
+                tracing::warn!(kind = %kind_for_warn,
                     scope_id = %scope_id_for_warn,
                     client_id = %client_id_for_warn,
                     timeout_ms = timeout_ms_for_log,
@@ -1511,8 +1510,7 @@ impl ffi::KeyStorageResolver for JsKeyStorageResolver {
             // `Unavailable` so the host can pattern-match on
             // `Unavailable { subsystem }` vs `NotFound`.
             Ok(Err(e)) => {
-                tracing::warn!(
-                    key_id = %key_id,
+                tracing::warn!(key_id = %key_id,
                     error = %e,
                     "JS key-storage resolver loadKey threw; surfacing as Unavailable",
                 );
@@ -1522,8 +1520,7 @@ impl ffi::KeyStorageResolver for JsKeyStorageResolver {
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 let timeout_ms: u64 = self.recv_timeout.as_millis().try_into().unwrap_or(u64::MAX);
-                tracing::warn!(
-                    key_id = %key_id,
+                tracing::warn!(key_id = %key_id,
                     timeout_ms,
                     "JS key-storage resolver loadKey did not return within timeout",
                 );
@@ -1566,8 +1563,7 @@ impl ffi::KeyStorageResolver for JsKeyStorageResolver {
             // consume the return value.
             Ok(Ok(_)) => Ok(()),
             Ok(Err(e)) => {
-                tracing::warn!(
-                    key_id = %key_id_for_warn,
+                tracing::warn!(key_id = %key_id_for_warn,
                     error = %e,
                     "JS key-storage resolver storeKey threw; surfacing as Unavailable",
                 );
@@ -1577,8 +1573,7 @@ impl ffi::KeyStorageResolver for JsKeyStorageResolver {
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 let timeout_ms: u64 = self.recv_timeout.as_millis().try_into().unwrap_or(u64::MAX);
-                tracing::warn!(
-                    key_id = %key_id_for_warn,
+                tracing::warn!(key_id = %key_id_for_warn,
                     timeout_ms,
                     "JS key-storage resolver storeKey did not return within timeout",
                 );
@@ -1619,8 +1614,7 @@ impl ffi::KeyStorageResolver for JsKeyStorageResolver {
             // just return.
             Ok(Ok(_)) => Ok(()),
             Ok(Err(e)) => {
-                tracing::warn!(
-                    key_id = %key_id_for_warn,
+                tracing::warn!(key_id = %key_id_for_warn,
                     error = %e,
                     "JS key-storage resolver deleteKey threw; surfacing as Unavailable",
                 );
@@ -1630,8 +1624,7 @@ impl ffi::KeyStorageResolver for JsKeyStorageResolver {
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 let timeout_ms: u64 = self.recv_timeout.as_millis().try_into().unwrap_or(u64::MAX);
-                tracing::warn!(
-                    key_id = %key_id_for_warn,
+                tracing::warn!(key_id = %key_id_for_warn,
                     timeout_ms,
                     "JS key-storage resolver deleteKey did not return within timeout",
                 );
@@ -1762,7 +1755,7 @@ pub fn js_open_store_with_resolver(
     Ok(BigInt::from(handle))
 }
 
-// ───────────────────────── Webhook receiver (Phase 5) ─────────────
+// ───────────────────────── Webhook receiver ─────────────
 
 /// Start a webhook receiver server bound to `bindAddr` (parsed as
 /// a `SocketAddr` — `"127.0.0.1:9001"`, `"0.0.0.0:0"` for an
@@ -1894,7 +1887,7 @@ pub fn js_list_webhook_servers(handle: BigInt) -> Result<serde_json::Value> {
     })
 }
 
-/// Start the background sync scheduler (Phase 6).
+/// Start the background sync scheduler.
 ///
 /// Spawns a dedicated OS thread that wakes every
 /// `tickIntervalSecs` seconds, walks the connector instance map,
@@ -1939,7 +1932,7 @@ pub fn js_start_sync_scheduler(
     .map_err(to_js_error)
 }
 
-/// Stop the background sync scheduler (Phase 6).
+/// Stop the background sync scheduler.
 ///
 /// Signals shutdown to the worker thread and synchronously joins
 /// it. Idempotent — calling on a runtime with no scheduler
@@ -1957,7 +1950,7 @@ pub fn js_stop_sync_scheduler(handle: BigInt) -> Result<()> {
 }
 
 /// Override the scheduler's policy for a specific connector
-/// instance (Phase 6). The override takes precedence over the
+/// instance. The override takes precedence over the
 /// defaults supplied at [`js_start_sync_scheduler`] time.
 ///
 /// Idempotent: a second call replaces the prior policy. Also
@@ -1989,7 +1982,7 @@ pub fn js_configure_sync_schedule(
 }
 
 /// Remove the scheduler's per-instance policy override for
-/// `instanceId` (Phase 6). The instance falls back to the
+/// `instanceId`. The instance falls back to the
 /// scheduler's defaults; the accounting state is cleared so a
 /// long-Failing instance gets a fresh chance.
 ///
@@ -2006,7 +1999,7 @@ pub fn js_clear_sync_schedule(handle: BigInt, instance_id: String) -> Result<()>
     crate::clear_sync_schedule(h, instance_id).map_err(to_js_error)
 }
 
-/// Snapshot the scheduler's diagnostic state (Phase 6). Returns a
+/// Snapshot the scheduler's diagnostic state. Returns a
 /// `serde_json::Value` ([`ffi::SyncSchedulerStatus`]) with
 /// camelCase keys so callers can destructure
 /// `{ isRunning, startedAtUnix, defaultIntervalSecs,
@@ -2127,7 +2120,7 @@ mod tests {
         js_init(cfg.into()).expect("valid config should accept");
     }
 
-    // ───── Phase 4.2 — N-API resolver recv-timeout validation ─────
+    // ───── N-API resolver recv-timeout validation ─────
     //
     // The full `JsClientSecretResolver::resolve` path requires a
     // live napi env to construct a `ThreadsafeFunction`, which is

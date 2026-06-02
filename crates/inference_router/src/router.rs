@@ -223,8 +223,7 @@ impl InferenceRouter {
                 let _guard = NotifyOnDrop(&me);
                 let results = me.bootstrap();
                 for (kind, result) in &results {
-                    tracing::info!(
-                        adapter = kind.as_str(),
+                    tracing::info!(adapter = kind.as_str(),
                         probe = ?result,
                         "inference_router adapter probed (background)",
                     );
@@ -312,8 +311,7 @@ impl InferenceRouter {
         // `wait_for_bootstrap` have already unblocked. Logging
         // the join failure is the most we can usefully do.
         if let Err(e) = h.join() {
-            tracing::warn!(
-                error = ?e,
+            tracing::warn!(error = ?e,
                 "inference-router-bootstrap thread panicked during shutdown",
             );
         }
@@ -485,7 +483,7 @@ impl InferenceRouter {
     /// availability (post-`probe`), its `loaded` flag (post-idle-
     /// sweep), and the list of [`InferenceTask`]s it supports.
     ///
-    /// Used by the Phase 6 `ffi::health::health_check` envelope so
+    /// Used by the `ffi::health::health_check` envelope so
     /// platform hosts can render a per-adapter status panel without
     /// having to thread separate accessors for every property.
     /// The result is a snapshot — concurrent dispatches may flip
@@ -1084,7 +1082,7 @@ mod tests {
         }
     }
 
-    /// Regression for the bug Devin Review flagged on commit d5b0a61:
+    /// Regression (commit d5b0a61:
     /// `spawn_bootstrap` (second call) must reset both the
     /// `bootstrapped` atomic *and* the condvar `done` flag, otherwise
     /// `wait_for_bootstrap` short-circuits on the prior bootstrap's
@@ -1172,7 +1170,7 @@ mod tests {
         assert!(router.is_bootstrapped());
     }
 
-    /// Regression for the latent self-join footgun Devin Review
+    /// Regression for the latent self-join footgun
     /// flagged on commit 8c8ed4f: a standalone embedder that
     /// constructs `Arc<InferenceRouter>`, calls `spawn_bootstrap`,
     /// then drops its only `Arc` without joining or waiting MUST

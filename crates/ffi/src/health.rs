@@ -1,4 +1,4 @@
-//! Substrate liveness probe — the Phase 6 `health_check` surface.
+//! Substrate liveness probe — the `health_check` surface.
 //!
 //! Replaces the original `"ok"` string stub on the napi side. Returns
 //! a typed [`HealthStatus`] envelope that platform hosts (Electron
@@ -446,9 +446,9 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     // resolver is registered, because public-client providers
     // (Slack PKCE-only, Notion test mode) work fine without one;
     // the host might also be relying on the
-    // `auth_config_json["client_secret"]` fallback layer (Phase
-    // 4.1 layer 2). Only the `failed > 0 || !http_transport`
-    // conditions remain load-bearing for the subsystem status.
+    // `auth_config_json["client_secret"]` fallback layer. Only the
+    // `failed > 0 || !http_transport` conditions remain
+    // load-bearing for the subsystem status.
     //
     // Under `not(http-client)` the resolver slot is
     // architecturally inert (no `OAuth2Client` is ever
@@ -487,7 +487,7 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
             ", oauth_resolver=unset"
         });
     }
-    // Surface the Phase 5 webhook receiver state: how many servers
+    // Surface the webhook receiver state: how many servers
     // are currently bound + how many `(provider_id, instance_id)`
     // dispatch rows are registered across them. Tells the operator
     // at a glance whether the substrate is configured to receive
@@ -510,7 +510,7 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
         ", webhook_servers={webhook_server_count}, \
          webhook_registrations={webhook_registration_count}"
     );
-    // Phase 6 — surface the background sync scheduler's running
+    // Surface the background sync scheduler's running
     // state. Pure diagnostic: stays `Ok` regardless because most
     // ingest-only hosts (offline CLI batch tools, Electron status
     // panels) never start a scheduler, and treating "no scheduler"
@@ -527,7 +527,7 @@ fn connector_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     }
 }
 
-/// Server-side synthesis subsystem probe (Phase 7).
+/// Server-side synthesis subsystem probe.
 ///
 /// Reports:
 ///
@@ -549,11 +549,12 @@ fn synthesis_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     let total_windows = rt.synthesis_windows.len();
     let domain_count = rt.domain_memory_count();
     let tenant_count = rt.tenant_memory_count();
-    // Post-Phase-10-Item-2 the in-memory shape is nested
-    // (`HashMap<ScopeId, HashMap<WindowId, SynthesisObject>>`), so
-    // `.len()` would report the number of *scopes* with at least one
-    // object rather than the total object count surfaced in the
-    // probe detail. Sum over the per-scope sub-maps via the helper.
+    // The in-memory shape is nested
+    // (`HashMap<ScopeId, HashMap<WindowId, SynthesisObject>>`), so a
+    // bare `.len()` on the outer map would report the number of
+    // *scopes* with at least one object rather than the total object
+    // count surfaced in the probe detail. Sum over the per-scope
+    // sub-maps via the helper instead.
     let synthesis_objects = rt.synthesis_object_count();
     let scope_bindings_configured = rt.synthesis_scope_bindings.is_some();
     let scope_binding_count = rt
@@ -570,11 +571,13 @@ fn synthesis_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
         SubsystemStatus::Ok
     };
 
-    // Phase 10 Item 5: surface the rate-limiter's configured
+    // Surface the rate-limiter's configured
     // posture on the detail string so operators can confirm
     // `configure_synthesis_engine` actually landed the host's
     // rate-shaping values. Same diagnostic-gap rationale as the
-    // `single_tenant=` token added in Phase 9 (Round 3).
+    // `single_tenant=` token below: without these fields the only
+    // way to verify the host's configuration is in-process state
+    // inspection, which the health probe is meant to obviate.
     let rate_capacity = rt.synthesis_rate_limiter.capacity();
     let rate_refill_per_sec = rt.synthesis_rate_limiter.refill_per_sec();
 

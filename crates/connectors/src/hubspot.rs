@@ -451,8 +451,7 @@ impl HubSpotConnector {
             }
             after = Some(next.after);
         }
-        Err(ConnectorError::Sync(format!(
-            "hubspot /crm/v3/objects/{}/search exceeded {MAX_LIST_PAGES} pages without exhausting cursor",
+        Err(ConnectorError::Sync(format!("hubspot /crm/v3/objects/{}/search exceeded {MAX_LIST_PAGES} pages without exhausting cursor",
             kind.as_path_segment()
         )))
     }
@@ -672,8 +671,7 @@ impl Connector for HubSpotConnector {
                 };
                 let Some(id) = resp.id else {
                     self.rollback_partial_webhooks(&base_url, &app_id, token, &registered);
-                    return Err(ConnectorError::Webhook(format!(
-                        "hubspot /webhooks/v3/{app_id}/subscriptions returned no id for {event_type}"
+                    return Err(ConnectorError::Webhook(format!("hubspot /webhooks/v3/{app_id}/subscriptions returned no id for {event_type}"
                     )));
                 };
                 registered.push(id.to_string());

@@ -60,7 +60,7 @@ use crate::managed_endpoint::{
 /// Unattested ──attest()──▶ Attesting ──quote ok──▶ Attested
 ///                                  │
 ///                                  └──quote fail──▶ Unattested
-/// Attested  ──synthesize()──▶ Synthesizing ──ok──▶ Idle ──┐
+/// Attested ──synthesize()──▶ Synthesizing ──ok──▶ Idle ──┐
 ///                                                         ▼
 ///                                                       Attested
 /// Idle / Attested ──ttl expiry──▶ Unattested ──attest()──▶ ...

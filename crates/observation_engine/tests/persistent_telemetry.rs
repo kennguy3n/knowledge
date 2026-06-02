@@ -1,7 +1,7 @@
 //! Integration tests for [`observation_engine::persistent_telemetry`].
 //!
 //! Unit tests in the same module pin the in-memory shape of
-//! [`capture`] / [`delta`].  These integration tests pin the
+//! [`capture`] / [`delta`]. These integration tests pin the
 //! disk-IO contract end-to-end:
 //!
 //! * **Round-trip parity** — `capture` + `write_envelope` +
@@ -99,7 +99,7 @@ fn persisted_json_is_pretty_printed_and_parses_as_value() {
 
 /// An on-disk envelope missing a counter field (e.g. an older
 /// emitter that pre-dates the addition of a new counter)
-/// deserialises with the missing field defaulted to `0`.  This is
+/// deserialises with the missing field defaulted to `0`. This is
 /// the additive-forward-compat rule that
 /// [`RetrievalMetricsSnapshot`] is derived with `#[serde(default)]`
 /// to enforce — the integration test pins it end-to-end through
@@ -147,7 +147,7 @@ fn missing_counter_field_defaults_to_zero_on_read() {
 
 /// An on-disk envelope tagged with a different schema version
 /// surfaces a [`PersistError::SchemaVersionMismatch`] rather than
-/// silently dropping fields.  The error includes both the
+/// silently dropping fields. The error includes both the
 /// expected and the found version so the caller can decide
 /// whether to migrate the on-disk file or fall back to a fresh
 /// capture.
@@ -211,8 +211,8 @@ fn write_to_nonexistent_directory_returns_io_error() {
 /// a half-written file.
 ///
 /// Implementation: spawn N reader threads tight-looping
-/// `read_snapshot` while the main thread runs M writes.  Every
-/// successful read must produce a fully-parsed envelope.  No
+/// `read_snapshot` while the main thread runs M writes. Every
+/// successful read must produce a fully-parsed envelope. No
 /// half-written files allowed.
 #[test]
 fn concurrent_reads_during_writes_never_observe_partial_file() {
@@ -236,7 +236,7 @@ fn concurrent_reads_during_writes_never_observe_partial_file() {
         let path = Arc::clone(&path_arc);
         handles.push(thread::spawn(move || -> Result<(), String> {
             while !stop.load(Ordering::Relaxed) {
-                // Every read must succeed.  A half-written file
+                // Every read must succeed. A half-written file
                 // would surface as PersistError::Json (truncated
                 // JSON) or PersistError::Io.
                 match read_snapshot(&path) {
@@ -251,12 +251,12 @@ fn concurrent_reads_during_writes_never_observe_partial_file() {
                         // target is atomic — a concurrent read
                         // on Linux/macOS should always see
                         // either the prior or the new file and
-                        // never trip this arm.  On Windows
+                        // never trip this arm. On Windows
                         // however, `tempfile::NamedTempFile::
                         // persist` may have to delete the target
                         // before renaming on some filesystems,
                         // which produces a brief `NotFound`
-                        // window.  Tolerate `NotFound` for
+                        // window. Tolerate `NotFound` for
                         // cross-platform robustness; reject
                         // every other error kind (including
                         // truncated-JSON `PersistError::Json`).
@@ -283,7 +283,7 @@ fn concurrent_reads_during_writes_never_observe_partial_file() {
 
 /// `delta` of two on-disk envelopes (one written before some
 /// in-process counter increments, one written after) produces
-/// the obvious per-counter diff.  End-to-end pin of the
+/// the obvious per-counter diff. End-to-end pin of the
 /// "operator dashboard" use case.
 #[test]
 fn delta_between_two_written_envelopes_matches_in_memory_delta() {

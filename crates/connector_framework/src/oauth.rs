@@ -374,8 +374,8 @@ impl<T: HttpTransport> OAuth2Client<T> {
     /// secret (the framework then omits the `client_secret` form
     /// field).
     ///
-    /// **Locking discipline** (load-bearing — see Phase 4.1 review
-    /// finding `BUG_pr-review-job-b54a009cf6d048638e738fc73e9e55c6_0001`):
+    /// **Locking discipline** (load-bearing — see review
+    /// finding):
     /// the read lock on `self.resolver` is held only long enough to
     /// `Arc::clone` the resolver handle out of the slot, then
     /// dropped BEFORE invoking `resolver.resolve(...)`. The N-API
@@ -432,8 +432,8 @@ impl<T: HttpTransport> OAuth2Client<T> {
         // resolver is not registered AND the fallback layer
         // succeeds should not pay for the allocation. `OnceCell`
         // gives us compute-on-first-use with at-most-one allocation
-        // across the whole grant — see Devin Review ANALYSIS_0001
-        // on PR #60 for the rationale.
+        // across the whole grant, so the fast path never pays for
+        // a `scope_id.to_string()` it doesn't use.
         let scope_id_cell: std::cell::OnceCell<String> = std::cell::OnceCell::new();
         let scope_id = || -> &str {
             scope_id_cell
@@ -998,11 +998,9 @@ mod tests {
     #[test]
     fn exchange_code_round_trip() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(
-                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"read_content","token_type":"Bearer"}"#.to_vec(),
+            MockResponse::ok_json(br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"read_content","token_type":"Bearer"}"#.to_vec(),
             ),
         );
         let client = OAuth2Client::new(transport.clone()).with_client_secret("s3cret");
@@ -1279,11 +1277,9 @@ mod tests {
         // the connector runtime) but each copy still lives inside
         // a `SecretToken` so the heap buffer zeroises on drop.
         let cloned = client.clone();
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(
-                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s","token_type":"Bearer"}"#.to_vec(),
+            MockResponse::ok_json(br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s","token_type":"Bearer"}"#.to_vec(),
             ),
         );
         let _ = cloned
@@ -1305,11 +1301,9 @@ mod tests {
     #[test]
     fn client_secret_omitted_from_form_when_unset() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Post,
+        transport.expect(HttpMethod::Post,
             "https://api.notion.com/v1/oauth/token",
-            MockResponse::ok_json(
-                br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s","token_type":"Bearer"}"#.to_vec(),
+            MockResponse::ok_json(br#"{"access_token":"AT","refresh_token":"RT","expires_in":3600,"scope":"s","token_type":"Bearer"}"#.to_vec(),
             ),
         );
         // Build a client with NO secret (the public-client / PKCE
@@ -1343,8 +1337,7 @@ mod tests {
             .expect("public-client refresh should succeed");
         let recorded = transport.recorded();
         let body = String::from_utf8(recorded[1].body.clone()).expect("utf8");
-        assert!(
-            !body.contains("client_secret"),
+        assert!(!body.contains("client_secret"),
             "refresh-grant form body must omit `client_secret` entirely when none configured, got {body}"
         );
         assert!(body.contains("grant_type=refresh_token"));
@@ -1358,13 +1351,12 @@ mod tests {
             ("code", "abc/123 xyz"),
             ("redirect_uri", "https://app.example.com/cb?a=1"),
         ]);
-        assert_eq!(
-            encoded,
+        assert_eq!(encoded,
             "grant_type=authorization_code&code=abc%2F123+xyz&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcb%3Fa%3D1"
         );
     }
 
-    // ───────── Phase 4.1: ClientSecretResolver resolution-ladder tests ─────────
+    // ───────── ClientSecretResolver resolution-ladder tests ─────────
 
     /// Test resolver that records every `(kind, scope_id, client_id)`
     /// tuple it's asked about and returns a preset answer. Mirrors the
@@ -1611,8 +1603,7 @@ mod tests {
             .expect("exchange succeeds");
 
         let body = String::from_utf8(transport.recorded()[0].body.clone()).expect("utf8");
-        assert!(
-            !body.contains("client_secret"),
+        assert!(!body.contains("client_secret"),
             "empty-string resolver answer must omit client_secret entirely, not fall through; got {body}"
         );
     }
@@ -1716,10 +1707,9 @@ mod tests {
         );
     }
 
-    /// Regression test for Phase 4.1 review finding
-    /// `BUG_pr-review-job-b54a009cf6d048638e738fc73e9e55c6_0001`:
-    /// `client_secret_for` must NOT hold the resolver's read lock
-    /// across the `resolve(...)` call, or a concurrent
+    /// Regression test: `client_secret_for` must NOT hold the
+    /// resolver's read lock across the `resolve(...)` call, or a
+    /// concurrent
     /// `set_resolver` from another thread (e.g. the JS event loop
     /// in the N-API path) deadlocks the worker thread.
     ///
@@ -1839,7 +1829,7 @@ mod tests {
         );
     }
 
-    // ───── Phase 4.2 — WARN-once-per-instance dedup tests ─────
+    // ───── WARN-once-per-instance dedup tests ─────
 
     /// Resolver that always returns `None`. Used to drive
     /// `client_secret_for` through the layer-2 / layer-3 fallback
@@ -1951,8 +1941,7 @@ mod tests {
         client.set_resolver(Arc::new(EmptyStringResolver));
         let r = client.client_secret_for(&cfg());
         assert!(r.is_none(), "empty-string resolver short-circuits to None");
-        assert_eq!(
-            client.warned_missing_secret_count(),
+        assert_eq!(client.warned_missing_secret_count(),
             0,
             "explicit empty-string short-circuit is a host-affirmed no-secret choice; the WARN should NOT fire",
         );

@@ -349,8 +349,7 @@ impl ConfluenceConnector {
             pages.extend(resp.results);
             next_path = resp.links.next;
         }
-        Err(ConnectorError::Sync(format!(
-            "confluence /wiki/api/v2/pages exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
+        Err(ConnectorError::Sync(format!("confluence /wiki/api/v2/pages exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
         )))
     }
 }
@@ -787,8 +786,7 @@ mod tests {
         let now = Utc::now();
         let watermark = (now - Duration::minutes(1)).to_rfc3339();
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/confluence/wiki/api/v2/pages?limit=50&sort=-modified-date",
             ok_json(&serde_json::json!({
                 "results": [

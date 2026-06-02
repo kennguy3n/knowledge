@@ -1,4 +1,4 @@
-//! Unified retrieval-telemetry read surface (Phase 2.0).
+//! Unified retrieval-telemetry read surface.
 //!
 //! Three sibling telemetry modules ship with the multilingual stack
 //! today, each tracking a distinct decision point on the retrieval
@@ -6,16 +6,16 @@
 //!
 //! * [`evidence_store::fts_telemetry`] — per-lane FTS5 query / row
 //!   totals, recall-lane structural skips, stopword-strip volumes
-//!   per call site (Phase 1.10).
+//!   per call site.
 //! * [`crate::lexicon_telemetry`] — per-BCP-47 lexicon hits,
 //!   [`MatchStrategy`](crate::MatchStrategy) fires, Arabic / Hebrew
-//!   clitic-peel depth distribution (Phase 1.10).
+//!   clitic-peel depth distribution.
 //! * [`evidence_store::vector_telemetry`] — embedding-call-site
 //!   volumes, `evidence_embeddings` cache outcomes, adapter error
-//!   variants, `model_tag` rotation-rule violations (Phase 1.11).
+//!   variants, `model_tag` rotation-rule violations.
 //!
 //! Operator dashboards need to read all three to assess retrieval
-//! health.  Today that means three separate
+//! health. Today that means three separate
 //! [`snapshot`](crate::lexicon_telemetry::snapshot)-style calls
 //! into three different modules — workable, but the dashboard code
 //! has to know which module owns which counter, which inverts the
@@ -35,12 +35,12 @@
 //!
 //! [`snapshot`] reads three independent process-singletons
 //! sequentially; the three reads are NOT a single linearisation
-//! point.  Under heavy concurrent writes a snapshot may catch the
+//! point. Under heavy concurrent writes a snapshot may catch the
 //! FTS counter post-bump and the vector counter pre-bump for the
-//! same logical operation.  This is the same trade-off documented
+//! same logical operation. This is the same trade-off documented
 //! on [`crate::lexicon_telemetry::snapshot`] and
 //! [`evidence_store::fts_telemetry::snapshot`] — best-effort
-//! observability, not a transactional read.  Dashboards plotting
+//! observability, not a transactional read. Dashboards plotting
 //! rate-of-change handle the sub-second skew via aggregation
 //! windowing; no caller needs the three counters tied to a single
 //! timeline edge.
@@ -50,7 +50,7 @@
 //! The FFI mirror lives in `crates/ffi/src/metrics.rs` as
 //! `RetrievalMetrics` (the `uniffi::Record` / serde derives there
 //! cannot apply here because `observation_engine` does not depend
-//! on either FFI runtime).  The mirror's three sub-fields are
+//! on either FFI runtime). The mirror's three sub-fields are
 //! populated identically to this struct's three fields, and the
 //! FFI snapshot already returns both the flat
 //! `fts_telemetry` / `lexicon_telemetry` / `vector_telemetry`
@@ -71,19 +71,19 @@ use crate::lexicon_telemetry::{self, LexiconTelemetrySnapshot};
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RetrievalMetricsSnapshot {
-    /// FTS5-path telemetry (Phase 1.10) — per-lane query / row totals,
+    /// FTS5-path telemetry — per-lane query / row totals,
     /// recall-lane structural skips, stopword-strip volumes per call
-    /// site.  See [`evidence_store::fts_telemetry`] for the per-field
+    /// site. See [`evidence_store::fts_telemetry`] for the per-field
     /// rationale.
     pub fts: FtsTelemetrySnapshot,
-    /// Lexicon-path telemetry (Phase 1.10) — per-BCP-47 lexicon hits,
+    /// Lexicon-path telemetry — per-BCP-47 lexicon hits,
     /// match-strategy fires, Arabic / Hebrew clitic-peel depth
-    /// distribution.  See [`crate::lexicon_telemetry`] for the
+    /// distribution. See [`crate::lexicon_telemetry`] for the
     /// per-field rationale.
     pub lexicon: LexiconTelemetrySnapshot,
-    /// Vector-path telemetry (Phase 1.11) — embedding-call-site
+    /// Vector-path telemetry — embedding-call-site
     /// volumes, `evidence_embeddings` cache outcomes, adapter error
-    /// variants, `model_tag` rotation-rule violations.  See
+    /// variants, `model_tag` rotation-rule violations. See
     /// [`evidence_store::vector_telemetry`] for the per-field
     /// rationale.
     pub vector: VectorTelemetrySnapshot,
@@ -98,7 +98,7 @@ impl RetrievalMetricsSnapshot {
     /// Note: this counts *lane invocations*, not *user queries* —
     /// a single user query that routes to all three lanes bumps
     /// each lane's counter, so this rollup can exceed the user-query
-    /// volume by up to 3×.  See [`evidence_store::fts_telemetry`]
+    /// volume by up to 3×. See [`evidence_store::fts_telemetry`]
     /// for the per-lane scoping discipline.
     #[must_use]
     pub fn total_fts_lane_queries(&self) -> u64 {
@@ -207,7 +207,7 @@ mod tests {
 
         // Each unified sub-field must lie between the bracketing
         // per-lane reads (monotonic counters; equal under no
-        // concurrent activity).  Lower-bound + upper-bound pattern
+        // concurrent activity). Lower-bound + upper-bound pattern
         // matches the FFI metrics tests for the same race-free
         // reason documented at `ffi/src/metrics.rs:1403-1419`.
         assert!(
@@ -307,7 +307,7 @@ mod tests {
     }
 
     /// Pin [`RetrievalMetricsSnapshot::total_cache_lookups`] = sum
-    /// of all four cache-outcome counters.  Locks the documented
+    /// of all four cache-outcome counters. Locks the documented
     /// "four counters partition every reachable cache-lookup
     /// outcome" invariant from
     /// [`evidence_store::vector_telemetry`].
@@ -328,7 +328,7 @@ mod tests {
 
     /// Pin saturating-addition for the rollup helpers: a snapshot
     /// with `u64::MAX` on one lane must not panic when summed
-    /// (saturates at `u64::MAX`).  Defensive — in practice no
+    /// (saturates at `u64::MAX`). Defensive — in practice no
     /// real deployment would reach `u64::MAX` on any single
     /// counter, but the rollup helpers should never panic.
     #[test]

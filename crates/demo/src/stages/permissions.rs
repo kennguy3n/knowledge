@@ -41,10 +41,10 @@ use uuid::Uuid;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::phases::runtime::RuntimeState;
-use crate::report::{DemoReport, PhaseReport};
+use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::RuntimeState;
 
-const PHASE: &str = "permissions";
+const STAGE: &str = "permissions";
 
 pub fn run(
     dataset: &Dataset,
@@ -53,7 +53,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Stage 6: Permission Service");
+    let mut stage = StageReport::new("Stage 6: Permission Service");
 
     // -------- Namespaces --------------------------------------------
     // Use the substrate's default chain (Owner ⇒ Admin ⇒ Editor ⇒
@@ -574,142 +574,142 @@ pub fn run(
 
     // -------- Assertions --------------------------------------------
     log.check(
-        PHASE,
+        STAGE,
         "alice (owner) reaches Owner on the tenant",
         alice_tenant_owner,
     );
     log.check(
-        PHASE,
+        STAGE,
         "alice reaches Viewer on the channel via the chain",
         alice_channel_viewer,
     );
     log.check(
-        PHASE,
+        STAGE,
         "alice reaches Member on the alternate channel via Owner->...->Member",
         alice_channel_alt_member,
     );
     log.check(
-        PHASE,
+        STAGE,
         "bob (admin) reaches Editor on the domain via tenant#admin rewrite",
         bob_domain_editor,
     );
     log.check(
-        PHASE,
+        STAGE,
         "bob reaches Viewer on the channel via two-hop rewrite + chain",
         bob_channel_viewer,
     );
     log.check(
-        PHASE,
+        STAGE,
         "bob (admin not owner) is denied Owner on the tenant",
         !bob_tenant_owner,
     );
     log.check(
-        PHASE,
+        STAGE,
         "carol (member) reaches Viewer on the channel via two-hop rewrite",
         carol_channel_viewer,
     );
     log.check(
-        PHASE,
+        STAGE,
         "carol does NOT reach Member on the channel (Viewer doesn't imply Member)",
         !carol_channel_member,
     );
     log.check(
-        PHASE,
+        STAGE,
         "carol does NOT reach Editor on the channel",
         !carol_channel_editor,
     );
     log.check(
-        PHASE,
+        STAGE,
         "carol does NOT reach Admin on the tenant",
         !carol_tenant_admin,
     );
     log.check(
-        PHASE,
+        STAGE,
         "dave (channel editor) reaches Member via Editor->Member",
         dave_channel_alt_member,
     );
     log.check(
-        PHASE,
+        STAGE,
         "dave reaches Viewer via Editor->...->Viewer",
         dave_channel_alt_viewer,
     );
     log.check(
-        PHASE,
+        STAGE,
         "dave does NOT reach Admin (Editor doesn't imply Admin)",
         !dave_channel_alt_admin,
     );
     log.check(
-        PHASE,
+        STAGE,
         "dave's editor binding is scope-local (no leak to main channel)",
         !dave_channel_main_viewer,
     );
     log.check(
-        PHASE,
+        STAGE,
         "outsider eve is denied Viewer on tenant",
         !eve_tenant_viewer,
     );
     log.check(
-        PHASE,
+        STAGE,
         "outsider eve is denied Viewer on domain",
         !eve_domain_viewer,
     );
     log.check(
-        PHASE,
+        STAGE,
         "outsider eve is denied Viewer on channel",
         !eve_channel_viewer,
     );
     log.check(
-        PHASE,
+        STAGE,
         "synthesis agent reaches Synthesizer on tenant via upsert",
         agent_tenant_synth,
     );
     log.check(
-        PHASE,
+        STAGE,
         "synthesis agent reaches Editor on its agent object via custom namespace",
         agent_self_editor,
     );
     log.check(
-        PHASE,
+        STAGE,
         "duplicate tuple insert returns DuplicateTuple",
         duplicate_rejected,
     );
     log.check(
-        PHASE,
+        STAGE,
         "removing a phantom tuple returns NotFound",
         phantom_rejected,
     );
-    log.check(PHASE, "first upsert inserts the tuple", upsert_inserted);
+    log.check(STAGE, "first upsert inserts the tuple", upsert_inserted);
     log.check(
-        PHASE,
+        STAGE,
         "second upsert is idempotent (returns false)",
         upsert_idempotent,
     );
     log.check(
-        PHASE,
+        STAGE,
         "scratch tuple grants viewer to eve before removal",
         eve_alt_viewer_before_remove,
     );
     log.check(
-        PHASE,
+        STAGE,
         "removing the scratch tuple revokes eve's access",
         !eve_alt_viewer_after_remove,
     );
 
     // -------- Reporting --------------------------------------------
-    phase.timing = started.elapsed();
-    phase.stat(
+    stage.timing = started.elapsed();
+    stage.stat(
         "namespaces_registered",
         "tenant, domain, channel, agent".to_string(),
     );
-    phase.stat("relation_tuples", store.len().to_string());
-    phase.stat("reachability_checks_total", total_checks.to_string());
-    phase.stat("reachability_checks_allowed", allowed_checks.to_string());
-    phase.stat("reachability_checks_denied", denied_checks.to_string());
-    phase.stat(
+    stage.stat("relation_tuples", store.len().to_string());
+    stage.stat("reachability_checks_total", total_checks.to_string());
+    stage.stat("reachability_checks_allowed", allowed_checks.to_string());
+    stage.stat("reachability_checks_denied", denied_checks.to_string());
+    stage.stat(
         "subjects",
         "alice, bob, carol, dave, eve, synthesis_agent".to_string(),
     );
-    phase.note(
+    stage.note(
         "Tenant→Domain→Channel hierarchy with two userset rewrites \
          (domain#editor⇐tenant#admin, channel#viewer⇐domain#member) and \
          the default Owner⇒Admin⇒Editor⇒Member⇒Viewer namespace chain. \
@@ -722,7 +722,7 @@ pub fn run(
     report.count("permission_checks_total", total_checks);
     report.count("permission_checks_allowed", allowed_checks);
     report.count("permission_checks_denied", denied_checks);
-    report.add_phase(phase);
+    report.add_stage(stage);
     report.add_benchmark(
         "permission_reachability_checks",
         total_checks,

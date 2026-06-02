@@ -77,8 +77,7 @@ impl BlockingHttpClientAdapter {
             .connect_timeout(timeout)
             .build()
             .map_err(|e| {
-                EndpointError::Transport(format!(
-                    "failed to build reqwest blocking client: {e}"
+                EndpointError::Transport(format!("failed to build reqwest blocking client: {e}"
                 ))
             })?;
         Ok(Self {

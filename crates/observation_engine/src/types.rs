@@ -73,7 +73,7 @@ pub struct Observation {
     /// [`MemoryState::Candidate`] for fresh extractions.
     pub memory_state: MemoryState,
     /// BCP-47 primary language subtag for the source text the
-    /// observation was extracted from (Phase 1.3). `None` when the
+    /// observation was extracted from. `None` when the
     /// upstream language detector either declined to classify the
     /// input or marked the result as unreliable. Downstream
     /// consumers (multilingual lexicon registry, per-locale FTS5

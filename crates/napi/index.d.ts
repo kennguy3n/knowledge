@@ -53,7 +53,7 @@ export declare function clearOauthClientSecretResolver(handle: bigint): void
 
 /**
  * Remove the scheduler's per-instance policy override for
- * `instanceId` (Phase 6). The instance falls back to the
+ * `instanceId`. The instance falls back to the
  * scheduler's defaults; the accounting state is cleared so a
  * long-Failing instance gets a fresh chance.
  *
@@ -72,7 +72,7 @@ export declare function closeStore(handle: bigint): void
 
 /**
  * Toggle the post-sync auto-synthesis hook for a connector
- * instance (Phase 7). Mirrors [`crate::configure_sync_auto_synthesize`].
+ * instance. Mirrors [`crate::configure_sync_auto_synthesize`].
  *
  * When `enabled` is `true`, the scheduler dispatches a domain-tier
  * `triggerServerSynthesis` after every successful sync of this
@@ -87,7 +87,7 @@ export declare function configureSyncAutoSynthesize(handle: bigint, instanceId: 
 
 /**
  * Override the scheduler's policy for a specific connector
- * instance (Phase 6). The override takes precedence over the
+ * instance. The override takes precedence over the
  * defaults supplied at [`js_start_sync_scheduler`] time.
  *
  * Idempotent: a second call replaces the prior policy. Also
@@ -124,12 +124,12 @@ export declare function configureSyncSchedule(handle: bigint, instanceId: string
  *   deployments where there is no cross-scope allow-list to
  *   enforce. Multi-tenant production deployments should leave
  *   this `false` (the default) and provide `scopeBindings`.
- * * `rateCapacity` (Phase 10 Item 5) is the burst capacity of
+ * * `rateCapacity` is the burst capacity of
  *   the global token-bucket rate limiter on
  *   `triggerServerSynthesis`. `0` (the default if the key is
  *   omitted) falls back to
  *   [`ffi::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY`] (`8`).
- * * `rateRefillPerSec` (Phase 10 Item 5) is the token refill
+ * * `rateRefillPerSec` is the token refill
  *   rate in tokens/second. `0.0` falls back to
  *   [`ffi::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC`]
  *   (`1.0`). Fractional values are supported; non-finite or
@@ -146,8 +146,8 @@ export declare function configureSyncSchedule(handle: bigint, instanceId: string
 export declare function configureSynthesisEngine(handle: bigint, config: any): void
 
 /**
- * Single-instance connector health probe (Phase 10 Item 3) —
- * symmetric with [`js_synthesis_status`]. Mirrors
+ * Single-instance connector health probe — symmetric with
+ * [`js_synthesis_status`]. Mirrors
  * [`crate::connector_status`] and returns a JSON object with the
  * shape:
  *
@@ -336,7 +336,7 @@ export declare function listRecentSyntheses(handle: bigint, scopeId: string): an
 
 /**
  * Enumerate the archived synthesis-object versions for
- * `synthesisId` (Phase 10 Item 4), newest first. The latest
+ * `synthesisId`, newest first. The latest
  * version is included as the first entry with
  * `isLatest = true`. Hosts that need to paginate the history
  * without a separate `synthesisStatus` round trip should use
@@ -536,8 +536,8 @@ export declare function removeConnector(handle: bigint, instanceId: string): voi
 export declare function replaceApprovedDocument(handle: bigint, scopeId: string, documentId: string, label: string, approver: string, payload: Buffer): any
 
 /**
- * Re-run synthesis on an existing `Complete` window (Phase 10
- * Item 4). The window transitions back through `Complete →
+ * Re-run synthesis on an existing `Complete` window. The
+ * window transitions back through `Complete →
  * Pending → InProgress → Complete` (or `→ Failed` on engine
  * error) on the same `(scope, window_id)` pair; the previous
  * synthesis object is archived to the history table at its
@@ -694,7 +694,7 @@ export declare function setKeyStorageResolver(handle: bigint, resolver: object, 
 export declare function setOauthClientSecretResolver(handle: bigint, resolver: (arg: [string, string, string]) => string | null, timeoutMs?: number | undefined | null): void
 
 /**
- * Start the background sync scheduler (Phase 6).
+ * Start the background sync scheduler.
  *
  * Spawns a dedicated OS thread that wakes every
  * `tickIntervalSecs` seconds, walks the connector instance map,
@@ -743,7 +743,7 @@ export declare function startSyncScheduler(handle: bigint, defaultIntervalSecs: 
 export declare function startWebhookServer(handle: bigint, bindAddr: string): bigint
 
 /**
- * Stop the background sync scheduler (Phase 6).
+ * Stop the background sync scheduler.
  *
  * Signals shutdown to the worker thread and synchronously joins
  * it. Idempotent — calling on a runtime with no scheduler
@@ -780,7 +780,7 @@ export declare function stopWebhookServer(handle: bigint, serverHandle: bigint):
 export declare function syncConnector(handle: bigint, instanceId: string): any
 
 /**
- * Snapshot the scheduler's diagnostic state (Phase 6). Returns a
+ * Snapshot the scheduler's diagnostic state. Returns a
  * `serde_json::Value` ([`ffi::SyncSchedulerStatus`]) with
  * camelCase keys so callers can destructure
  * `{ isRunning, startedAtUnix, defaultIntervalSecs,
@@ -842,7 +842,7 @@ export declare function synthesisStatus(handle: bigint, synthesisId: string): an
  *   failures.
  * * `InvalidArgument` if `scopeId` is not a UUID or `tier` is
  *   not one of the documented values.
- * * `Throttled` (Phase 10 Item 5) if the global token-bucket
+ * * `Throttled` if the global token-bucket
  *   rate limiter rejects the call. The error carries a
  *   `retryAfterMs` field — the host SHOULD wait that long and
  *   retry the same call rather than treating this as a

@@ -1,6 +1,6 @@
-//! Phase 5 — Tokio + axum webhook receiver.
+//! Tokio + axum webhook receiver.
 //!
-//! The pre-Phase-5 substrate had no in-process HTTP server: the
+//! The earlier substrate had no in-process HTTP server: the
 //! deployment pattern was to terminate webhook traffic at a separate
 //! cloud relay (Cloudflare Workers, a small Node forwarder) which
 //! then poked the substrate's IPC channel. That's still supported,
@@ -294,8 +294,7 @@ async fn webhook_handler(
         // (Webhook providers typically only inspect the status code
         // anyway and retry any 5xx.)
         Err(e) => {
-            tracing::warn!(
-                provider_id = %provider_id,
+            tracing::warn!(provider_id = %provider_id,
                 error = %e,
                 "webhook dispatcher failed; returning 502 to provider",
             );

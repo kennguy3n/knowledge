@@ -552,7 +552,7 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
     /// `SynthesisBatcher`).
     pub fn new(cfg: EndpointConfig, client: C) -> Self {
         // Honour the per-endpoint cap declared in the
-        // `EndpointConfig` (added in Item 19) so a freshly-built
+        // `EndpointConfig` so a freshly-built
         // synthesizer respects whatever throttle the caller already
         // pinned in config. Operators that want to disable rate
         // limiting leave `max_requests_per_minute` as `None` and

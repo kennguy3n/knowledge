@@ -237,8 +237,7 @@ impl NotionConnector {
                 // Defence-in-depth: Notion claims has_more=true but
                 // hands back the same cursor — abort instead of
                 // looping forever.
-                return Err(ConnectorError::Sync(
-                    "notion /v1/search returned the same cursor twice; aborting to avoid infinite loop"
+                return Err(ConnectorError::Sync("notion /v1/search returned the same cursor twice; aborting to avoid infinite loop"
                         .into(),
                 ));
             }

@@ -327,8 +327,7 @@ impl GoogleDriveConnector {
             prev_token = Some(next.clone());
             page_token = Some(next);
         }
-        Err(ConnectorError::Sync(format!(
-            "google_drive /drive/v3/files exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
+        Err(ConnectorError::Sync(format!("google_drive /drive/v3/files exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
         )))
     }
 
@@ -370,8 +369,7 @@ impl GoogleDriveConnector {
         let mut prev_token: Option<String> = None;
         let mut new_start_token: Option<String> = None;
         for _ in 0..MAX_LIST_PAGES {
-            let url = format!(
-                "{base_url}/drive/v3/changes?pageToken={}&pageSize={}&includeRemoved=true&fields={}",
+            let url = format!("{base_url}/drive/v3/changes?pageToken={}&pageSize={}&includeRemoved=true&fields={}",
                 percent_encode_path_component(&page_token),
                 self.page_size,
                 percent_encode_path_component(CHANGE_LIST_FIELDS_MASK),
@@ -405,8 +403,7 @@ impl GoogleDriveConnector {
             prev_token = Some(next.clone());
             page_token = next;
         }
-        Err(ConnectorError::Sync(format!(
-            "google_drive /drive/v3/changes exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
+        Err(ConnectorError::Sync(format!("google_drive /drive/v3/changes exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
         )))
     }
 }
@@ -536,8 +533,7 @@ impl Connector for GoogleDriveConnector {
             .get("start_page_token")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                ConnectorError::Webhook(
-                    "google_drive subscribe_webhook: auth_config_json.start_page_token is required \
+                ConnectorError::Webhook("google_drive subscribe_webhook: auth_config_json.start_page_token is required \
                      (call changes.getStartPageToken first)"
                         .into(),
                 )

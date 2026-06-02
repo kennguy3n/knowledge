@@ -1188,11 +1188,9 @@ mod tests {
             ),
         );
         // List page 2 → one more channel.
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.list?exclude_archived=true&limit=200&cursor=PAGE2",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channels": [
                         {"id": "C-B", "name": "design", "is_archived": false},
@@ -1357,11 +1355,9 @@ mod tests {
         // Cursor "1700000200.000000" → should appear in the oldest
         // parameter on the history call (already in Slack's native
         // format — no RFC-3339 round-trip).
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-A&limit=200&oldest=1700000200.000000",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-A",
                     "messages": [{"ts": "1700000300.000000", "type": "message"}],
@@ -1403,11 +1399,9 @@ mod tests {
                 .unwrap(),
             ),
         );
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-A&limit=200&oldest=1700000999.000000",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-A",
                     "messages": [],
@@ -1462,11 +1456,9 @@ mod tests {
             ),
         );
         // 2023-11-14T22:13:20Z → 1700000000.000000
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-A&limit=200&oldest=1700000000.000000",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-A",
                     "messages": [],
@@ -1644,7 +1636,7 @@ mod tests {
         assert_eq!(dt.timestamp_subsec_micros(), 123);
     }
 
-    // ---- channel-list cache (Devin Review finding #3) ----
+    // ---- channel-list cache ----
     //
     // Slack's API has no "channels with activity since X" filter, so
     // every `incremental_sync` would otherwise re-walk
@@ -1764,11 +1756,9 @@ mod tests {
         // mock will fall through to `mock_not_configured` (HTTP 404)
         // and the test fails loudly.
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-CACHED&limit=200&oldest=1700000200.000000",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-CACHED",
                     "messages": [{"ts": "1700000300.000000", "type": "message", "text": "fresh"}],
@@ -1839,11 +1829,9 @@ mod tests {
                 .unwrap(),
             ),
         );
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-NEW&limit=200&oldest=1700000200.000000",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-NEW",
                     "messages": [],
@@ -1910,11 +1898,9 @@ mod tests {
                 .unwrap(),
             ),
         );
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/slack/conversations.history?channel=C-A&limit=200&oldest=1700000200.000000",
-            MockResponse::ok_json(
-                serde_json::to_vec(&json!({
+            MockResponse::ok_json(serde_json::to_vec(&json!({
                     "ok": true,
                     "channel": "C-A",
                     "messages": [],

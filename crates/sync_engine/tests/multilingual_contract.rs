@@ -1,4 +1,4 @@
-//! Phase 2.3 multilingual contract tests for [`sync_engine`].
+//! multilingual contract tests for [`sync_engine`].
 //!
 //! The CRDT machinery in this crate (`AddWinsSet`, `OpLog`,
 //! `SyncEngine`, the [`delta`](sync_engine::delta) wire envelope,

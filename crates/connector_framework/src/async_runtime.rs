@@ -1,4 +1,4 @@
-//! Phase 5 — Tokio async surface for the connector framework.
+//! Tokio async surface for the connector framework.
 //!
 //! The pre-existing [`Connector`](crate::connector::Connector)
 //! trait and [`HttpTransport`](crate::http::HttpTransport) are
@@ -8,7 +8,7 @@
 //! dependency for hosts that didn't need one. See the long-form
 //! rationale in `crate::http::HttpTransport`'s doc comment.
 //!
-//! Phase 5 lifts that constraint *additively*. The substrate is
+//! The async surface lifts that constraint *additively*. The substrate is
 //! moving to a tokio-driven runtime so:
 //!
 //! * the webhook receiver server can serve concurrent provider
@@ -196,7 +196,7 @@ impl<C: Connector + Send + Sync + 'static> BlockingConnectorAdapter<C> {
 
     /// Wrap a sync connector that's already inside an `Arc`. Useful
     /// when the substrate shares the same connector instance across
-    /// both the sync and async paths during the Phase 5 migration.
+    /// both the sync and async paths during the migration.
     #[must_use]
     pub fn from_arc(connector: Arc<C>) -> Self {
         Self { inner: connector }

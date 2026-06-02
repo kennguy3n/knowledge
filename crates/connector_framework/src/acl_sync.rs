@@ -111,7 +111,7 @@ pub struct PermissionMapping {
 impl PermissionMapping {
     /// Construct a default mapping that projects:
     ///
-    /// * `Read  → Viewer`
+    /// * `Read → Viewer`
     /// * `Write → Editor`
     /// * `Admin → Admin`
     ///

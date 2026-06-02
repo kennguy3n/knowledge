@@ -398,8 +398,7 @@ impl PolicyEngine {
             .any(|c| c.sensitivity_class == SensitivityClass::Critical);
         let allow_raw_evidence = policy.allow_raw_evidence && !any_critical;
         if policy.allow_raw_evidence && any_critical {
-            warnings.push(
-                "raw evidence requested but suppressed because the approved set contains a Critical concept"
+            warnings.push("raw evidence requested but suppressed because the approved set contains a Critical concept"
                     .into(),
             );
         }

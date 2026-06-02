@@ -835,10 +835,8 @@ fn schema_migration_v2_to_v3_widens_pk_and_preserves_rows() {
 
         // Full v2 schema (v1 subset + the legacy single-PK
         // evidence_embeddings table).
-        raw.execute_batch(
-            r#"
-            CREATE TABLE evidence (
-                id BLOB PRIMARY KEY, scope_id BLOB NOT NULL,
+        raw.execute_batch(r#"
+            CREATE TABLE evidence (id BLOB PRIMARY KEY, scope_id BLOB NOT NULL,
                 content_hash BLOB NOT NULL, body BLOB, body_ref BLOB,
                 nonce BLOB, source_ref TEXT, acl_pointer TEXT,
                 importance INTEGER NOT NULL, storage_path INTEGER NOT NULL,
@@ -848,26 +846,22 @@ fn schema_migration_v2_to_v3_widens_pk_and_preserves_rows() {
                 ON evidence (scope_id, created_at DESC);
             CREATE INDEX idx_evidence_content_hash
                 ON evidence (content_hash);
-            CREATE TABLE body_store (
-                content_hash BLOB PRIMARY KEY, body BLOB NOT NULL,
+            CREATE TABLE body_store (content_hash BLOB PRIMARY KEY, body BLOB NOT NULL,
                 nonce BLOB NOT NULL, ref_count INTEGER NOT NULL DEFAULT 0
             );
-            CREATE TABLE ring_buffer (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, scope_id BLOB NOT NULL,
+            CREATE TABLE ring_buffer (id INTEGER PRIMARY KEY AUTOINCREMENT, scope_id BLOB NOT NULL,
                 body BLOB NOT NULL, nonce BLOB NOT NULL,
                 payload_size INTEGER NOT NULL, created_at INTEGER NOT NULL
             );
             CREATE INDEX idx_ring_buffer_scope_created
                 ON ring_buffer (scope_id, created_at DESC);
-            CREATE VIRTUAL TABLE evidence_fts USING fts5(
-                content, evidence_id UNINDEXED, scope_id UNINDEXED,
+            CREATE VIRTUAL TABLE evidence_fts USING fts5(content, evidence_id UNINDEXED, scope_id UNINDEXED,
                 tokenize = 'unicode61 remove_diacritics 2'
             );
             -- Legacy v2 evidence_embeddings: single-column PK on
             -- evidence_id. This is the shape the migration must
             -- rewrite.
-            CREATE TABLE evidence_embeddings (
-                evidence_id BLOB PRIMARY KEY,
+            CREATE TABLE evidence_embeddings (evidence_id BLOB PRIMARY KEY,
                 embedding BLOB NOT NULL,
                 model_tag TEXT NOT NULL,
                 created_at INTEGER NOT NULL
@@ -1012,10 +1006,8 @@ fn schema_migration_forward_ports_legacy_v1_database() {
         raw.pragma_update(None, "kdf_iter", 256_000_i64).unwrap();
         // v1 subset: evidence, body_store, ring_buffer, evidence_fts.
         // No evidence_embeddings.
-        raw.execute_batch(
-            r#"
-            CREATE TABLE evidence (
-                id BLOB PRIMARY KEY, scope_id BLOB NOT NULL,
+        raw.execute_batch(r#"
+            CREATE TABLE evidence (id BLOB PRIMARY KEY, scope_id BLOB NOT NULL,
                 content_hash BLOB NOT NULL, body BLOB, body_ref BLOB,
                 nonce BLOB, source_ref TEXT, acl_pointer TEXT,
                 importance INTEGER NOT NULL, storage_path INTEGER NOT NULL,
@@ -1025,19 +1017,16 @@ fn schema_migration_forward_ports_legacy_v1_database() {
                 ON evidence (scope_id, created_at DESC);
             CREATE INDEX idx_evidence_content_hash
                 ON evidence (content_hash);
-            CREATE TABLE body_store (
-                content_hash BLOB PRIMARY KEY, body BLOB NOT NULL,
+            CREATE TABLE body_store (content_hash BLOB PRIMARY KEY, body BLOB NOT NULL,
                 nonce BLOB NOT NULL, ref_count INTEGER NOT NULL DEFAULT 0
             );
-            CREATE TABLE ring_buffer (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, scope_id BLOB NOT NULL,
+            CREATE TABLE ring_buffer (id INTEGER PRIMARY KEY AUTOINCREMENT, scope_id BLOB NOT NULL,
                 body BLOB NOT NULL, nonce BLOB NOT NULL,
                 payload_size INTEGER NOT NULL, created_at INTEGER NOT NULL
             );
             CREATE INDEX idx_ring_buffer_scope_created
                 ON ring_buffer (scope_id, created_at DESC);
-            CREATE VIRTUAL TABLE evidence_fts USING fts5(
-                content, evidence_id UNINDEXED, scope_id UNINDEXED,
+            CREATE VIRTUAL TABLE evidence_fts USING fts5(content, evidence_id UNINDEXED, scope_id UNINDEXED,
                 tokenize = 'unicode61 remove_diacritics 2'
             );
             "#,
@@ -1138,12 +1127,12 @@ where
 }
 
 // ---------------------------------------------------------------------
-// Phase 1.11 — multilingual / cross-lingual embedding-lane invariant.
+// Multilingual / cross-lingual embedding-lane invariant.
 // ---------------------------------------------------------------------
 //
 // The production adapter is wired to XLM-R (`models/xlm-r-base.onnx`,
 // 768d), which was trained on 100 languages over 2.5 TB of
-// CommonCrawl.  XLM-R's defining property is that a query and a
+// CommonCrawl. XLM-R's defining property is that a query and a
 // body do not need to share a script for their embeddings to be
 // semantically clusterable — `"weather forecast"` and `明日の天気予報`
 // land near each other in vector space, while `"weather forecast"`
@@ -1152,10 +1141,10 @@ where
 // This module exercises that architectural invariant with a
 // deterministic mock that simulates the same concept-clustering
 // shape (without dragging the real XLM-R ONNX session into the
-// test harness).  The mock maps multilingual paraphrases of the
+// test harness). The mock maps multilingual paraphrases of the
 // same concept onto the same unit-vector axis, so cosine
 // similarity between paraphrases is 1.0 and similarity between
-// unrelated concepts is 0.0.  Running this against the real
+// unrelated concepts is 0.0. Running this against the real
 // `HybridRetriever` pins the invariant that the retriever does
 // NOT script-segregate the embedding lane (a future refactor
 // that accidentally inserted a "skip embed when query script !=
@@ -1167,10 +1156,10 @@ where
 const MULTILINGUAL_MOCK_DIM: usize = 8;
 
 /// Deterministic mock that simulates XLM-R's cross-lingual
-/// concept-clustering shape.  Each input text is mapped to one of
+/// concept-clustering shape. Each input text is mapped to one of
 /// a small inventory of concept axes; identical concepts produce
 /// identical unit vectors (cos sim = 1.0), different concepts
-/// produce orthogonal unit vectors (cos sim = 0.0).  The mock is
+/// produce orthogonal unit vectors (cos sim = 0.0). The mock is
 /// pure — no randomness, no model artifact — so the test is
 /// reproducible without ORT installed.
 struct MultilingualConceptMockModel;
@@ -1182,7 +1171,7 @@ impl MultilingualConceptMockModel {
     /// from every named concept.
     fn concept_for(text: &str) -> usize {
         // The inputs are intentionally drawn from a tiny fixed
-        // inventory.  We avoid a substring match because we want
+        // inventory. We avoid a substring match because we want
         // to assert the architectural invariant — that the
         // retriever does not segregate by script — without
         // tangling the test in the mock's matching policy.
@@ -1190,7 +1179,7 @@ impl MultilingualConceptMockModel {
         // `clippy::match_same_arms` is silenced deliberately: the
         // whole point of the mock is that cross-script
         // paraphrases collapse onto the *same* concept axis (so
-        // their bodies are identical by design).  Merging the
+        // their bodies are identical by design). Merging the
         // arms with `|` would defeat the visual demonstration of
         // which inputs cluster, which is precisely the property
         // this test is designed to expose to future readers.
@@ -1232,9 +1221,9 @@ impl EmbeddingModel for MultilingualConceptMockModel {
 }
 
 /// Cross-lingual recall via the real [`HybridRetriever::search_hybrid`]
-/// surface.  English query `"weather forecast"`, Japanese body
+/// surface. English query `"weather forecast"`, Japanese body
 /// `明日の天気予報` ("tomorrow's weather forecast"), unrelated
-/// Japanese body `株式市場` ("stock market").  Pins the architectural
+/// Japanese body `株式市場` ("stock market"). Pins the architectural
 /// invariant that the embedding lane does NOT script-segregate —
 /// the cross-script weather paraphrase MUST score above the
 /// same-script unrelated body on `vector_score`, even though
@@ -1262,9 +1251,9 @@ fn vector_telemetry_cross_lingual_recall_via_search_hybrid() {
         .unwrap();
 
     // Vector-only weights: zero out FTS and recency so the
-    // vector_score is the sole tiebreaker.  Cosine between two
+    // vector_score is the sole tiebreaker. Cosine between two
     // identical unit vectors is 1.0; cosine between two
-    // orthogonal unit vectors is 0.0.  The retriever carries
+    // orthogonal unit vectors is 0.0. The retriever carries
     // its own [`EmbeddingModel`] handle (it does NOT inherit
     // the one wired into the store at ingest time), so we wire
     // the same mock in on the retriever for the query-side
@@ -1309,8 +1298,8 @@ fn vector_telemetry_cross_lingual_recall_via_search_hybrid() {
 }
 
 /// Same invariant via [`HybridRetriever::rerank_with_embeddings`]
-/// — the alternative entry point.  French query, Spanish body of
-/// the same concept, English body of a different concept.  Pins
+/// — the alternative entry point. French query, Spanish body of
+/// the same concept, English body of a different concept. Pins
 /// that the rerank path is equally script-agnostic.
 #[test]
 fn vector_telemetry_cross_lingual_recall_via_rerank() {
@@ -1383,27 +1372,26 @@ fn vector_telemetry_cross_lingual_recall_via_rerank() {
         cooking_score = cooking_hit.vector_score,
     );
 
-    // Regression coverage for the Phase-1.11 sweep-1 Bug fix:
+    // Telemetry-instrumentation regression:
     // `rerank_with_embeddings` MUST bump `query_embeddings_total` at
     // least once for the query embed AND `live_body_embeddings_total`
-    // at least once per body it embeds.  Before the fix the
+    // at least once per body it embeds. Before the fix the
     // body-embed call site at `retrieval.rs:296` was silently
     // uninstrumented; this lower-bound assertion would have caught
-    // that.  See PR #110 Devin Review sweep 1.
+    // that.
     //
     // Uses `>= before + N` rather than `== before + N` to stay
     // robust under parallel test execution: other tests in this
     // binary also exercise `MultilingualConceptMockModel` through
     // the public retriever surface and bump the same process-
-    // singleton counters.  See the docstring on
+    // singleton counters. See the docstring on
     // `vector_telemetry::tests` for the architectural rationale.
     let after = evidence_store::vector_telemetry::snapshot();
     assert!(
         after.query_embeddings_total > before.query_embeddings_total,
         "rerank_with_embeddings must move query_embeddings_total upward by at least 1"
     );
-    assert!(
-        after.live_body_embeddings_total
+    assert!(after.live_body_embeddings_total
             >= before
                 .live_body_embeddings_total
                 .saturating_add(bodies.len() as u64),
@@ -1412,8 +1400,8 @@ fn vector_telemetry_cross_lingual_recall_via_rerank() {
     );
 }
 
-/// Phase 1.11 — verify the vector-telemetry counters move through
-/// the public retriever surface end-to-end.  Bumps `live_body_*`
+/// Verify the vector-telemetry counters move through the public
+/// retriever surface end-to-end. Bumps `live_body_*`
 /// rather than `cache_hits_*` because the store ingests the bodies
 /// WITHOUT a wired-in model (`fresh_store` returns a model-less
 /// store), so the retriever's `candidate_embedding` path has to
@@ -1466,7 +1454,7 @@ fn vector_telemetry_counters_move_through_public_retriever() {
         after.query_embeddings_total,
     );
     // Every candidate fell through to the live-body re-embed —
-    // bumps LiveBody at least once.  The retriever inspects
+    // bumps LiveBody at least once. The retriever inspects
     // both rows so the increment is >= 1 (the exact count
     // depends on internal `candidate_embedding` call patterns
     // which are private; we only assert movement).
@@ -1491,11 +1479,11 @@ fn vector_telemetry_counters_move_through_public_retriever() {
     );
 }
 
-/// Phase 1.12 — counts every call to `model.embed(text)` via
-/// the `MultilingualConceptMockModel` so a Phase 1.12 pre-embed
+/// Counts every call to `model.embed(text)` via the
+/// `MultilingualConceptMockModel` so a pre-embed
 /// gate that admits a noise-only input would visibly bump this
-/// counter.  Used by
-/// `phase_1_12_search_hybrid_skips_vector_lane_on_noise_only_query`
+/// counter. Used by
+/// `search_hybrid_skips_vector_lane_on_noise_only_query`
 /// to prove the embedding lane was NOT invoked on the noise
 /// query rather than just invoked-but-returning-noise.
 #[derive(Default)]
@@ -1541,8 +1529,8 @@ impl EmbeddingModel for ArcCountingModel {
     }
 }
 
-/// Phase 1.12 — a noise-only query (pure punctuation) must NOT
-/// reach the embedding adapter.  The pre-embed routing gate in
+/// A noise-only query (pure punctuation) must NOT reach the
+/// embedding adapter. The pre-embed routing gate in
 /// `search_hybrid` short-circuits before `model.embed(query)`
 /// is called, bumping the
 /// `pre_embed_skipped_no_linguistic_content_total` counter
@@ -1550,7 +1538,7 @@ impl EmbeddingModel for ArcCountingModel {
 /// `evidence_store::embedding_routing::EmbeddingRoute::Skip`
 /// branch falls through to FTS+recency-only ranking.
 #[test]
-fn phase_1_12_search_hybrid_skips_vector_lane_on_noise_only_query() {
+fn search_hybrid_skips_vector_lane_on_noise_only_query() {
     use evidence_store::vector_telemetry;
     let model = std::sync::Arc::new(CountingMockModel::default());
     let model_for_retriever = model.clone();
@@ -1576,7 +1564,7 @@ fn phase_1_12_search_hybrid_skips_vector_lane_on_noise_only_query() {
         .with_embedding_model(ArcCountingModel(model_for_retriever), "counting-mock-v1");
 
     // Pure-digit query — pre-embed router classifies as
-    // NoLinguisticContent and skips the vector lane.  Digits
+    // NoLinguisticContent and skips the vector lane. Digits
     // are picked over punctuation (e.g. "!!!") because FTS5's
     // default tokenizer treats `!` as a query-syntax operator
     // and would error out before the vector lane is reached;
@@ -1587,12 +1575,11 @@ fn phase_1_12_search_hybrid_skips_vector_lane_on_noise_only_query() {
     let after = vector_telemetry::snapshot();
     let embeds_after = model.embeds.load(std::sync::atomic::Ordering::Relaxed);
 
-    // The query embed was skipped.  This assertion uses the
+    // The query embed was skipped. This assertion uses the
     // per-instance `model.embeds` counter (NOT the process-
     // singleton `query_embeddings_total`) so a parallel test
     // bumping the singleton counter does NOT race with the
-    // "did NOT fire" assertion.  See Phase 1.11 Sweep 3 for
-    // the prior incident this pattern was added to avoid.
+    // "did NOT fire" assertion.
     assert_eq!(
         embeds_before, embeds_after,
         "noise-only query reached the embedding adapter ({embeds_before} -> {embeds_after} embeds)",
@@ -1608,14 +1595,14 @@ fn phase_1_12_search_hybrid_skips_vector_lane_on_noise_only_query() {
     );
     // The lexical lanes still return the ingested row even when
     // the vector lane is gated off — proves the fail-open
-    // contract.  An empty FTS hit-list for a pure-punctuation
+    // contract. An empty FTS hit-list for a pure-punctuation
     // query is acceptable here because FTS5 has nothing to
     // tokenise from `!!!`; what matters is that we don't crash
     // and the counter bookkeeping is intact.
     let _ = (hits, r1);
 }
 
-/// Phase 1.12 — regression for sweep-1 finding (PR #114):
+/// Regression (PR #114):
 /// when the retriever is configured WITHOUT an embedding model
 /// (FTS+recency-only mode), the pre-embed routing gate must NOT
 /// be consulted — otherwise `pre_embed_admitted_total` would be
@@ -1628,21 +1615,21 @@ fn phase_1_12_search_hybrid_skips_vector_lane_on_noise_only_query() {
 /// `pre_embed_*` counters: those counters are bumped by many
 /// other tests in this binary (any sibling test wiring in an
 /// embedding model and calling `search_hybrid` /
-/// `rerank_with_embeddings` / `ingest`).  A direct
+/// `rerank_with_embeddings` / `ingest`). A direct
 /// `assert_eq!(before, after)` on a process-singleton counter is
-/// the Phase 1.11 Sweep 3 anti-pattern — a parallel sibling
+/// a known anti-pattern — a parallel sibling
 /// bumping the counter between the snapshots produces a false
-/// positive.  Instead we verify the structural fix via two
+/// positive. Instead we verify the structural fix via two
 /// race-free observables: (1) `search_hybrid` does not panic
 /// when no model is wired in, and (2) the FTS lane returns the
 /// row even though the vector lane was not consulted (the
-/// `with_embedding_model(...)` builder was never called).  The
+/// `with_embedding_model(...)` builder was never called). The
 /// gate-inside-model-guard structure is the load-bearing fix;
 /// regressions would be caught by code review + the long-form
 /// rationale comment block in `retrieval.rs::search_hybrid`.
 #[allow(clippy::float_cmp)]
 #[test]
-fn phase_1_12_search_hybrid_no_model_does_not_consult_routing_gate() {
+fn search_hybrid_no_model_does_not_consult_routing_gate() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r1 = store
@@ -1655,13 +1642,13 @@ fn phase_1_12_search_hybrid_no_model_does_not_consult_routing_gate() {
         .unwrap();
 
     // No `.with_embedding_model(...)` — the retriever runs in
-    // FTS+recency-only mode.  This is the bug-trigger
-    // configuration from sweep-1: before the fix, the routing
+    // FTS+recency-only mode. This is the bug-trigger
+    // configuration that motivated the fix: previously, the routing
     // gate fired unconditionally and bumped
     // `pre_embed_admitted_total` even though `model.embed()`
     // was never invoked.
     let retriever = HybridRetriever::new(&store);
-    // Linguistic query.  Two race-free assertions:
+    // Linguistic query. Two race-free assertions:
     let hits = retriever
         .search_hybrid(scope, "weather", 10)
         .expect("search_hybrid must not panic with no model wired in");
@@ -1699,15 +1686,15 @@ fn phase_1_12_search_hybrid_no_model_does_not_consult_routing_gate() {
     }
 }
 
-/// Phase 1.12 — a body classified as noise-only must NOT
-/// produce an `evidence_embeddings` row.  Ingesting a pure-
+/// A body classified as noise-only must NOT produce an
+/// `evidence_embeddings` row. Ingesting a pure-
 /// punctuation body bumps the
 /// `pre_embed_skipped_no_linguistic_content_total` counter
 /// instead of `index_write_embeddings_total`, and a subsequent
 /// `get_embedding_for_model` lookup for that row returns
 /// `None`.
 #[test]
-fn phase_1_12_index_embedding_skips_noise_only_body() {
+fn index_embedding_skips_noise_only_body() {
     use evidence_store::vector_telemetry;
     let model = std::sync::Arc::new(CountingMockModel::default());
 
@@ -1734,7 +1721,7 @@ fn phase_1_12_index_embedding_skips_noise_only_body() {
     let embeds_after = model.embeds.load(std::sync::atomic::Ordering::Relaxed);
 
     // Exactly one embed was invoked — on the signal body, not
-    // on the noise body.  Per-instance counter is race-safe.
+    // on the noise body. Per-instance counter is race-safe.
     assert_eq!(
         embeds_after - embeds_before,
         1,
@@ -1785,12 +1772,12 @@ fn phase_1_12_index_embedding_skips_noise_only_body() {
     );
 }
 
-/// Phase 1.12 — `rerank_with_embeddings` short-circuits the
-/// whole rerank when called with a noise-only query.  The
+/// `rerank_with_embeddings` short-circuits the whole rerank when
+/// called with a noise-only query. The
 /// original candidate ordering is returned unchanged AND no
 /// candidate body is embedded.
 #[test]
-fn phase_1_12_rerank_with_embeddings_short_circuits_on_noise_only_query() {
+fn rerank_with_embeddings_short_circuits_on_noise_only_query() {
     use evidence_store::vector_telemetry;
     let model = std::sync::Arc::new(CountingMockModel::default());
 
@@ -1866,7 +1853,7 @@ fn phase_1_12_rerank_with_embeddings_short_circuits_on_noise_only_query() {
             > before.pre_embed_skipped_no_linguistic_content_total,
         "pre_embed_skipped_no_linguistic_content_total did not move",
     );
-    // The candidate ordering and scores are unchanged.  This
+    // The candidate ordering and scores are unchanged. This
     // is the operational contract: a noise rerank query is a
     // no-op rather than a re-shuffle by zero-score.
     assert_eq!(reranked.len(), candidates.len());

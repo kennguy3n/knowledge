@@ -32,7 +32,9 @@ pub const DEFAULT_RESOLVED_QUESTION_TTL_DAYS: i64 = 30;
 ///
 /// The synthesis SLM is non-deterministic on whitespace and casing —
 /// the same decision may come back as `"Approved policy v3"` on one
-/// run and `"approved  policy v3"` on the next. We collapse all
+/// run and `"approved  policy v3"` on the next (note the double
+/// space — runs of ASCII whitespace are real failure modes of the
+/// model, not just a documentation convention). We collapse all
 /// runs of ASCII whitespace, trim, and lowercase before comparing so
 /// these collapse to one row.
 fn normalise_surface_text(s: &str) -> String {

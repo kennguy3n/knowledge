@@ -116,8 +116,8 @@ pub struct SynthesisWindow {
     /// the FFI `open_store` recovery sweep that wraps it) to detect
     /// `Pending` windows that have outlived the host's expected
     /// dispatch latency — typically because the host crashed mid-
-    /// dispatch between the Phase-1 `flush_synthesis_windows` and
-    /// the Phase-3 `apply_dispatch_outcome` commit, leaving the
+    /// dispatch between the earlier `flush_synthesis_windows` and
+    /// the earlier `apply_dispatch_outcome` commit, leaving the
     /// window stranded in `Pending` on disk with no in-flight
     /// worker. Distinct from [`window_start`] / [`window_end`],
     /// which describe the synthesis *interval* (often backfilled
@@ -377,8 +377,8 @@ impl SynthesisWindowManager {
     ///
     /// Used by the FFI `open_store` recovery sweep to clean up the
     /// state described in the docstring on [`SynthesisWindow::created_at`]:
-    /// `Pending` windows whose Phase-1 flush landed but whose
-    /// Phase-3 commit never did, either because the host crashed
+    /// `Pending` windows whose earlier flush landed but whose
+    /// earlier commit never did, either because the host crashed
     /// mid-dispatch or because the synthesis-apply transaction
     /// failed and the in-process recovery (`apply_dispatch_outcome`'s
     /// `fail_window_on_live_manager` on commit failure) also failed

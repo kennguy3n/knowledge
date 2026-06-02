@@ -1,19 +1,19 @@
-//! Phase 1.8 — FTS5 BM25 weight constants for the three retrieval lanes.
+//! FTS5 BM25 weight constants for the three retrieval lanes.
 //!
 //! The substrate's lexical retrieval funnels every query through
 //! [`crate::store::merged_fts_search`], which fans out over three
 //! FTS5 virtual tables — `evidence_fts` (unicode61, whitespace-
 //! segmented Latin / Cyrillic / Greek / Arabic / Hebrew /
-//! Devanagari / Hangul; Phase 1.1+), `evidence_fts_cjk` (trigram,
-//! CJK / Thai recall lane; Phase 1.2 / v14), and
-//! `evidence_fts_bigram` (precomputed overlapping 2-codepoint
-//! windows for ≤ 2-codepoint CJK / Thai queries; Phase 1.2.1 /
-//! v15). Each lane returns its own BM25 `rank` and the three are
+//! Devanagari / Hangul), `evidence_fts_cjk` (trigram, CJK / Thai
+//! recall lane, schema v14), and `evidence_fts_bigram`
+//! (precomputed overlapping 2-codepoint windows for ≤ 2-codepoint
+//! CJK / Thai queries, schema v15). Each lane returns its own BM25
+//! `rank` and the three are
 //! merged into one `(evidence_id → best_rank)` map by
 //! [`crate::store::merged_fts_search`] before sorting + truncating
 //! to the caller-requested `limit`.
 //!
-//! Phase 1.8 introduces two independent weight layers on top of
+//! introduces two independent weight layers on top of
 //! that merge pipeline:
 //!
 //! 1. **Column weights** (intra-lane) — passed inside each lane's
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn lane_weights_form_strict_precision_hierarchy() {
-        // Phase 1.8 invariant: the three lanes encode a strict
+        // invariant: the three lanes encode a strict
         // precision ordering — unicode61 (whole-word) wins over
         // trigram (3-codepoint windows), which wins over bigram
         // (2-codepoint windows). The lane weights are the
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn lane_weights_are_in_open_unit_interval() {
-        // Phase 1.8 invariant: lane weights live in `(0, 1]` —
+        // invariant: lane weights live in `(0, 1]` —
         // `1.0` for the precision baseline (unicode61), strictly
         // less than `1.0` for recall lanes (trigram, bigram).
         // A weight `≤ 0` would either zero out a lane (rank
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn column_weights_match_single_column_fts5_shape() {
-        // Phase 1.8 invariant: every FTS5 table in the substrate
+        // invariant: every FTS5 table in the substrate
         // currently indexes exactly one column. The column-weight
         // vector length is the integration point for future
         // multi-column FTS5 tables — a length mismatch between
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn column_weights_are_positive_finite_real_numbers() {
-        // Phase 1.8 invariant: column weights are passed verbatim
+        // invariant: column weights are passed verbatim
         // into FTS5's bm25() call. FTS5 silently treats a NaN or
         // negative weight as zero (column drops out of the
         // ranking) — a defensive guard here pins the constants
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn bm25_select_fragment_unicode61_lane() {
-        // Phase 1.8: pin the exact SQL fragment shape so the
+        // pin the exact SQL fragment shape so the
         // call sites in `merged_fts_search` cannot drift from
         // the bm25() argument list FTS5 expects. The fragment
         // is `bm25(<table>, w...)` with `{:?}` formatting on
@@ -316,7 +316,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "requires at least one column weight")]
     fn bm25_select_fragment_panics_on_empty_column_weights() {
-        // Phase 1.8 (sweep 4) defense-in-depth: the empty-slice
+        // defense-in-depth: the empty-slice
         // case would render to `bm25(evidence_fts)` — valid SQL
         // that silently falls back to FTS5's default all-1.0
         // column weights, bypassing the explicit-weight contract
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn bm25_select_fragment_extends_with_extra_columns() {
-        // Phase 1.8 forward-compat: when a future schema bump
+        // forward-compat: when a future schema bump
         // adds a second indexed column (e.g. `title`), grow the
         // column-weight vector and the fragment grows in lockstep.
         // Pin the multi-weight call shape now so the integration
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn apply_lane_weight_preserves_negative_bm25_sign() {
-        // Phase 1.8 invariant: applying a `(0, 1]` lane weight
+        // invariant: applying a `(0, 1]` lane weight
         // to a negative BM25 rank keeps the rank negative
         // (multiplying two non-zero same-sign reals stays in
         // the same sign sector). Pin this so a regression that
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn apply_lane_weight_baseline_is_identity() {
-        // Phase 1.8: the unicode61 lane weight is the precision
+        // the unicode61 lane weight is the precision
         // baseline (1.0), so multiplying a raw rank by it is a
         // no-op. Pin this so a regression that nudges the
         // baseline weight off 1.0 silently shifts the cross-

@@ -1,5 +1,5 @@
-//! Phase 1.9 — per-script stopword inventory for the FTS5 trigram /
-//! bigram recall lanes.
+//! Per-script stopword inventory for the FTS5 trigram / bigram
+//! recall lanes.
 //!
 //! # Architectural rationale
 //!
@@ -357,7 +357,7 @@ pub const ALL_RECALL_LANE_STOPWORDS: &[&str] = &[
 /// trigram / bigram window. For body
 /// `日本のオリンピック` (Japanese: "Japan's Olympics"):
 ///
-/// * Stripping `の` → removal:  body becomes `日本オリンピック`
+/// * Stripping `の` → removal: body becomes `日本オリンピック`
 ///   (8 codepoints). Trigram windows: `日本オ`, `本オリ`, `オリン`,
 ///   ... The first trigram `日本オ` would falsely match
 ///   `日本オーストラリア` ("Japan-Australia") which shares the
@@ -393,7 +393,7 @@ pub fn strip_recall_lane_stopwords(text: &str) -> Cow<'_, str> {
 }
 
 /// Strip recall-lane stopwords AND report how many stopword
-/// instances were replaced.  Same semantics as
+/// instances were replaced. Same semantics as
 /// [`strip_recall_lane_stopwords`] for the returned text — the
 /// only difference is that the second tuple element carries the
 /// strip count so observability call sites can feed it into

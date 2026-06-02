@@ -184,7 +184,7 @@ mod http_client {
     //! inference path. The endpoint shape is the upstream
     //! `llama-server` HTTP API:
     //!
-    //! * `GET  /health`     — liveness; `200 OK` = reachable.
+    //! * `GET /health` — liveness; `200 OK` = reachable.
     //! * `POST /completion` — body `{prompt, grammar, n_predict,
     //!   temperature}`; response `{"content": "<text>", …}`.
     //!
@@ -485,8 +485,7 @@ pub use http_client_async::{AsyncHttpLlamaServerClient, AsyncLlamaServerClient};
 
 #[cfg(feature = "async-http-client")]
 mod http_client_async {
-    //! Phase 5 — async HTTP transport for the llama.cpp loopback
-    //! server.
+    //! Async HTTP transport for the llama.cpp loopback server.
     //!
     //! Mirror of [`super::http_client::HttpLlamaServerClient`] that
     //! drives `reqwest::Client` (non-blocking) under a tokio

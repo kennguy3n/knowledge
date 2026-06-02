@@ -334,7 +334,7 @@ fn fresh_observations_are_candidate_state() {
         .all(|o| o.memory_state == memory_manager::MemoryState::Candidate));
 }
 
-/// Phase 1.10 end-to-end test: confirm the lexicon-telemetry
+/// end-to-end test: confirm the lexicon-telemetry
 /// counters tick through the public extraction surface.
 ///
 /// This is the cross-cutting "do the counters actually tick
@@ -344,7 +344,7 @@ fn fresh_observations_are_candidate_state() {
 /// strategy-fire counter (the exact tags / strategies depend on
 /// which whatlang-detected sentence routes through which
 /// keyword class — that's pinned by the unit tests in
-/// `crates/observation_engine/src/lexicon_telemetry.rs`).  This
+/// `crates/observation_engine/src/lexicon_telemetry.rs`). This
 /// test pins the structural property: the public extractor IS
 /// wired to the telemetry registry.
 ///
@@ -367,7 +367,7 @@ fn lexicon_telemetry_counters_advance_through_public_extractor() {
 
     let after = lexicon_telemetry::snapshot();
 
-    // *Some* lexicon hit must have been recorded.  We don't pin
+    // *Some* lexicon hit must have been recorded. We don't pin
     // a specific tag because that depends on whatlang's
     // per-sentence guess; the structural property is "the
     // public extractor is wired to record_lexicon_hit at least

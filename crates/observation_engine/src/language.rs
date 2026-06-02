@@ -1,4 +1,4 @@
-//! Language detection for observation ingestion (Phase 1.3).
+//! Language detection for observation ingestion.
 //!
 //! The substrate is multilingual (B2C and B2B tenants ingest chat,
 //! mail, docs in dozens of languages). Every downstream consumer
@@ -48,8 +48,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 ///
 /// The inner field is an [`Arc<str>`] rather than a [`String`] so
 /// that [`Clone`] is an O(1) refcount bump rather than a heap
-/// allocation + memcpy of the underlying 2-5 byte tag. The Phase
-/// 1.4 extractor clones the dominant `Option<LanguageTag>` once
+/// allocation + memcpy of the underlying 2-5 byte tag. The
+/// extractor clones the dominant `Option<LanguageTag>` once
 /// per entity-class observation (6+ classes per call: `@mentions`,
 /// capitalised words, URLs, emails, date refs, numeric refs), and
 /// it also clones the per-sentence tag once per sentence in the
@@ -59,8 +59,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// on the strong-count. The public surface — `as_str`, `primary`,
 /// `Display`, `PartialEq`, `Eq`, `Hash`, `Serialize`,
 /// `Deserialize` — is unaffected because [`Arc<str>`] derefs to
-/// [`str`] and inherits its equality / hashing semantics. See
-/// Devin Review finding #ANALYSIS-0002.
+/// [`str`] and inherits its equality / hashing semantics.
 ///
 /// `Deserialize` is implemented by hand (rather than derived as
 /// `#[serde(transparent)]`) so that round-tripping a tag through
@@ -69,7 +68,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// records — enforces the exact same `trim` + lower-case + empty
 /// check that [`LanguageTag::new`] applies. Without this an
 /// adversarial or malformed payload (`"language_tag": ""`,
-/// `"language_tag": "   "`, `"language_tag": "EN-US"`) would
+/// `"language_tag": " "`, `"language_tag": "EN-US"`) would
 /// otherwise materialise as an un-normalised tag and silently
 /// derail the per-locale lexicon / FTS5 tokenizer selection.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -93,8 +92,7 @@ impl Serialize for LanguageTag {
     /// directly removes any dependence on which crate features are
     /// enabled in the dependency graph — the wire form is locked
     /// to the bare JSON string regardless of whether a future
-    /// dependency turns on serde's `rc` feature. See Devin Review
-    /// finding ANALYSIS-0002b.
+    /// dependency turns on serde's `rc` feature.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -320,8 +318,7 @@ mod tests {
 
     #[test]
     fn detects_english() {
-        let det = detect_language(
-            "The migration ships next Friday and we approved the rollout plan in yesterday's review meeting.",
+        let det = detect_language("The migration ships next Friday and we approved the rollout plan in yesterday's review meeting.",
         )
         .expect("english should be reliably detected");
         assert_eq!(det.tag.as_str(), "en");
@@ -355,8 +352,7 @@ mod tests {
 
     #[test]
     fn detects_spanish() {
-        let det = detect_language(
-            "Aprobamos el plan de migración y enviaremos el comunicado a todo el equipo el próximo viernes.",
+        let det = detect_language("Aprobamos el plan de migración y enviaremos el comunicado a todo el equipo el próximo viernes.",
         )
         .expect("spanish should be reliably detected");
         assert_eq!(det.tag.as_str(), "es");
@@ -364,8 +360,7 @@ mod tests {
 
     #[test]
     fn detects_french() {
-        let det = detect_language(
-            "Nous avons décidé de déployer la nouvelle migration vendredi prochain et de présenter les résultats à toute l'équipe.",
+        let det = detect_language("Nous avons décidé de déployer la nouvelle migration vendredi prochain et de présenter les résultats à toute l'équipe.",
         )
         .expect("french should be reliably detected");
         assert_eq!(det.tag.as_str(), "fr");
@@ -373,8 +368,7 @@ mod tests {
 
     #[test]
     fn detects_german() {
-        let det = detect_language(
-            "Wir haben beschlossen, die neue Migration am nächsten Freitag freizugeben und die Ergebnisse dem gesamten Team vorzustellen.",
+        let det = detect_language("Wir haben beschlossen, die neue Migration am nächsten Freitag freizugeben und die Ergebnisse dem gesamten Team vorzustellen.",
         )
         .expect("german should be reliably detected");
         assert_eq!(det.tag.as_str(), "de");
@@ -382,8 +376,7 @@ mod tests {
 
     #[test]
     fn detects_portuguese() {
-        let det = detect_language(
-            "Decidimos lançar a nova migração na próxima sexta-feira e apresentar os resultados a toda a equipe.",
+        let det = detect_language("Decidimos lançar a nova migração na próxima sexta-feira e apresentar os resultados a toda a equipe.",
         )
         .expect("portuguese should be reliably detected");
         assert_eq!(det.tag.as_str(), "pt");
@@ -400,8 +393,7 @@ mod tests {
 
     #[test]
     fn detects_vietnamese() {
-        let det = detect_language(
-            "Chúng tôi đã quyết định triển khai bản di chuyển mới vào thứ Sáu tuần sau và trình bày kết quả cho toàn đội.",
+        let det = detect_language("Chúng tôi đã quyết định triển khai bản di chuyển mới vào thứ Sáu tuần sau và trình bày kết quả cho toàn đội.",
         )
         .expect("vietnamese should be reliably detected");
         assert_eq!(det.tag.as_str(), "vi");
@@ -416,8 +408,7 @@ mod tests {
 
     #[test]
     fn detects_indonesian() {
-        let det = detect_language(
-            "Kami memutuskan untuk meluncurkan migrasi baru pada hari Jumat depan dan menyajikan hasilnya kepada seluruh tim.",
+        let det = detect_language("Kami memutuskan untuk meluncurkan migrasi baru pada hari Jumat depan dan menyajikan hasilnya kepada seluruh tim.",
         )
         .expect("indonesian should be reliably detected");
         assert_eq!(det.tag.as_str(), "id");
@@ -455,7 +446,7 @@ mod tests {
 
     #[test]
     fn clone_shares_allocation_via_arc() {
-        // Devin Review #ANALYSIS-0002: `LanguageTag` clones happen
+        // : `LanguageTag` clones happen
         // in the extractor entity-class loops (~6+ per call) and in
         // the doc pipeline's per-chunk threading. The internal
         // representation was switched from `String` to `Arc<str>`
@@ -472,7 +463,7 @@ mod tests {
             b.as_str().as_ptr(),
             "LanguageTag::clone must share the underlying Arc<str> allocation \
              (got distinct data pointers — Clone is allocating again, which \
-             defeats the Arc<str> refactor for ANALYSIS-0002)"
+             defeats the whole point of the Arc<str> refactor)"
         );
         // Equality + hashing still behave as `str`-based comparison
         // (a fresh-construction "ja" allocates a separate buffer

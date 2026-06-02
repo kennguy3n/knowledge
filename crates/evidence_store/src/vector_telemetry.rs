@@ -1,8 +1,8 @@
 //! Process-singleton observability counters for the multilingual
-//! embedding / vector-retrieval path (Phase 1.11).
+//! embedding / vector-retrieval path.
 //!
-//! Phases 1.3 – 1.10 closed the multilingual gaps on the lexical
-//! ([`crate::fts_telemetry`]) and classifier
+//! The multilingual rollout closed the multilingual gaps on the
+//! lexical ([`crate::fts_telemetry`]) and classifier
 //! ([`observation_engine::lexicon_telemetry`]) lanes — but the
 //! third leg of [`crate::retrieval::HybridRetriever`]'s fan-in,
 //! the semantic-vector lane, was running blind: zero metrics on
@@ -123,10 +123,10 @@
 //!     kernel error, tokenizer issue, dimension mismatch
 //!     between runtime output and `OnnxModelConfig::dimension`).
 //!
-//! * **Pre-embedding routing decisions (Phase 1.12)** — three
+//! * **Pre-embedding routing decisions** — three
 //!   sibling counters covering the disposition of every call to
 //!   [`crate::embedding_routing::classify_for_embedding`] on a
-//!   production code path.  The pre-embed router short-circuits
+//!   production code path. The pre-embed router short-circuits
 //!   ONNX invocations on text with no linguistic content (pure
 //!   punctuation / pure emoji / pure digits / pure whitespace);
 //!   the counters let operators see what fraction of calls the
@@ -136,17 +136,17 @@
 //!     trigram-detectable linguistic content; the call site
 //!     proceeded to `model.embed(text)`.
 //!   * [`Counters::pre_embed_skipped_empty_after_trim_total`] —
-//!     input was empty after `str::trim`.  Usually signals an
+//!     input was empty after `str::trim`. Usually signals an
 //!     upstream extraction bug rather than legitimate noise;
 //!     operators may want to alert on a non-trivial fraction.
 //!   * [`Counters::pre_embed_skipped_no_linguistic_content_total`]
 //!     — input was non-empty after trim but [`whatlang::detect`]
 //!     could not extract any trigram-detectable linguistic
-//!     content.  Pure punctuation / pure emoji / pure digits /
+//!     content. Pure punctuation / pure emoji / pure digits /
 //!     pure-symbol input all land here.
 //!
 //!   The three are mutually exclusive — every routing call
-//!   bumps exactly one.  Summing the three gives the total
+//!   bumps exactly one. Summing the three gives the total
 //!   number of call sites that consulted the router; dividing
 //!   `pre_embed_admitted_total` by that sum is the ONNX-call
 //!   admission rate.
@@ -165,8 +165,8 @@
 //!   inserts are best-effort, body decryption errors are
 //!   demoted to per-row misses, etc.); the goal is to make
 //!   the rotation-rule violation operator-visible without
-//!   adding a new failure mode that didn't exist before
-//!   Phase 1.11.
+//!   adding a new failure mode that didn't exist before the
+//!   pre-embedding routing hook landed.
 //!
 //! # Wire-format stability
 //!
@@ -231,7 +231,7 @@ pub(crate) struct Counters {
     // ─── model_tag rotation invariant ──────────────────────────
     pub(crate) model_tag_dimension_violations_total: AtomicU64,
 
-    // ─── Pre-embedding routing decisions (Phase 1.12) ──────────
+    // ─── Pre-embedding routing decisions ──────────
     pub(crate) pre_embed_admitted_total: AtomicU64,
     pub(crate) pre_embed_skipped_empty_after_trim_total: AtomicU64,
     pub(crate) pre_embed_skipped_no_linguistic_content_total: AtomicU64,
@@ -324,7 +324,7 @@ pub enum CacheOutcome {
 }
 
 /// Record the disposition of a single call to
-/// [`crate::embedding_routing::classify_for_embedding`].  Bumps
+/// [`crate::embedding_routing::classify_for_embedding`]. Bumps
 /// exactly one of the three `pre_embed_*_total` counters in
 /// [`Counters`].
 ///
@@ -489,8 +489,7 @@ pub fn record_observed_dimension(model_tag: &str, dim: usize) {
             counters()
                 .model_tag_dimension_violations_total
                 .fetch_add(1, Ordering::Relaxed);
-            tracing::warn!(
-                model_tag,
+            tracing::warn!(model_tag,
                 first_observed_dim = seen,
                 conflicting_dim = dim,
                 "vector_telemetry: model_tag rotation rule violated — a single model_tag must map to a single output dimension; bump the tag on any model change"
@@ -557,17 +556,17 @@ pub struct VectorTelemetrySnapshot {
     /// than the first observation — a rotation-rule violation.
     pub model_tag_dimension_violations_total: u64,
     /// Pre-embedding router admitted the input — the call site
-    /// proceeded to invoke `model.embed(text)`.  See
+    /// proceeded to invoke `model.embed(text)`. See
     /// [`crate::embedding_routing::classify_for_embedding`] for
     /// the routing rationale.
     pub pre_embed_admitted_total: u64,
     /// Pre-embedding router diverted the call site because the
-    /// input was empty after `str::trim`.  Usually an upstream
+    /// input was empty after `str::trim`. Usually an upstream
     /// extraction bug.
     pub pre_embed_skipped_empty_after_trim_total: u64,
     /// Pre-embedding router diverted the call site because the
     /// input was non-empty after trim but [`whatlang::detect`]
-    /// found no trigram-detectable linguistic content.  Pure
+    /// found no trigram-detectable linguistic content. Pure
     /// punctuation / pure emoji / pure digits / pure-symbol
     /// input all land here.
     pub pre_embed_skipped_no_linguistic_content_total: u64,
@@ -794,8 +793,7 @@ mod tests {
         record_observed_dimension("", 768);
         record_observed_dimension("", 384); // would be a violation if not skipped
         let map = observed_tag_dims().lock().expect("observed_tag_dims lock");
-        assert!(
-            !map.contains_key(""),
+        assert!(!map.contains_key(""),
             "Empty model_tag must NOT be inserted into the OBSERVED_TAG_DIMS registry (would have allowed a future re-observation to bump the violation counter); registry currently has {} keys",
             map.len()
         );

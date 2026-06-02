@@ -1,4 +1,4 @@
-//! Opt-in tracing subscriber initialisation for platform hosts (Phase 6).
+//! Opt-in tracing subscriber initialisation for platform hosts.
 //!
 //! The substrate emits `tracing::{warn, debug, info}!` calls from
 //! ~7 crates (`evidence_store`, `connector_framework`, `ffi`,
@@ -41,9 +41,9 @@
 //! The most useful directives in practice:
 //!
 //! ```text
-//! info                                          # global default
-//! ffi=debug,evidence_store=debug                # FFI boundary + storage
-//! inference_router=debug,connector_framework=info  # SLM + connectors
+//! info # global default
+//! ffi=debug,evidence_store=debug # FFI boundary + storage
+//! inference_router=debug,connector_framework=info # SLM + connectors
 //! ```
 //!
 //! # Feature gating

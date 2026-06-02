@@ -544,7 +544,7 @@ impl MlsGroup {
         commit: &MlsCommit,
         verifier: &V,
     ) -> Result<(), CryptoError> {
-        // ---- Phase 1: validate (read-only against `self`) ----
+        // ---- Step 1: validate (read-only against `self`) ----
         if commit.group_id != self.group_id {
             return Err(CryptoError::ProvenanceSerialisation(
                 "commit group_id mismatch",
@@ -610,7 +610,7 @@ impl MlsGroup {
             }
         }
 
-        // ---- Phase 2: derive new state (fallible, but still no
+        // ---- Step 2: derive new state (fallible, but still no
         // mutations to `self`) ----
         //
         // `ratchet_epoch` returns both outputs wrapped in `Zeroizing`,
@@ -623,7 +623,7 @@ impl MlsGroup {
         // its own parameter copy on drop.
         let new_schedule = derive_schedule(self.group_id, new_epoch, epoch_secret)?;
 
-        // ---- Phase 3: commit. From this point on no operation may
+        // ---- Step 3: commit. From this point on no operation may
         // fail — every mutation below is infallible. ----
         match &commit.operation {
             CommitOperation::Create { .. } => unreachable!("Create rejected above"),
@@ -677,8 +677,7 @@ impl MlsGroup {
                 "added member is not in the current roster",
             ))?;
         if is_placeholder_hybrid_pk(&leaf.init_key) {
-            return Err(CryptoError::ProvenanceSerialisation(
-                "added member's init_key is a placeholder; install_leaf with the real key package first",
+            return Err(CryptoError::ProvenanceSerialisation("added member's init_key is a placeholder; install_leaf with the real key package first",
             ));
         }
 
@@ -1157,10 +1156,8 @@ mod tests {
         // NOTE: we deliberately skip `install_leaf` so the new
         // member's stored leaf is still the placeholder.
         let err = group.build_welcome(new_id).unwrap_err();
-        assert!(matches!(
-            err,
-            CryptoError::ProvenanceSerialisation(
-                "added member's init_key is a placeholder; install_leaf with the real key package first"
+        assert!(matches!(err,
+            CryptoError::ProvenanceSerialisation("added member's init_key is a placeholder; install_leaf with the real key package first"
             )
         ));
     }

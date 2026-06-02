@@ -58,10 +58,10 @@ use tempfile::TempDir;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::{Dataset, NamedScope, ScopeTier};
-use crate::phases::runtime::RuntimeState;
-use crate::report::{DemoReport, PhaseReport};
+use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::RuntimeState;
 
-const PHASE: &str = "concept_graph";
+const STAGE: &str = "concept_graph";
 
 /// Canonical concept anchors that this stage seeds into the persistent
 /// graph. Picked so they cover every scope tier and resolve to terms
@@ -172,7 +172,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Stage 4: Concept Graph");
+    let mut stage = StageReport::new("Stage 4: Concept Graph");
 
     // -- Open an encrypted, persistent concept graph in a fresh temp dir.
     let temp = TempDir::new().expect("tempdir for concept graph");
@@ -610,7 +610,7 @@ pub fn run(
         .count() as u64;
 
     log.check(
-        PHASE,
+        STAGE,
         "concept graph carries seven typed relation tags",
         typed_edge_count
             .keys()
@@ -620,91 +620,91 @@ pub fn run(
             == 7,
     );
     log.check(
-        PHASE,
+        STAGE,
         "supersession recorded the predecessor as Superseded",
         total_superseded >= 1
             && supersession.state_transitions.get(&engine_pred_id).copied()
                 == Some(NodeState::Superseded),
     );
     log.check(
-        PHASE,
+        STAGE,
         "promotion flipped Candidate -> Canonical (no-op safe)",
         promotion.affected.contains_node(candidate_id),
     );
     log.check(
-        PHASE,
+        STAGE,
         "contradiction marked at least two nodes",
         contradiction_propagated && total_contradicted >= 2,
     );
     log.check(
-        PHASE,
+        STAGE,
         "edge removal recorded a removed_edges entry",
         edge_removed_observed,
     );
     log.check(
-        PHASE,
+        STAGE,
         "explore_from produced a non-empty view from the tenant root",
         !tenant_view.nodes.is_empty(),
     );
     log.check(
-        PHASE,
+        STAGE,
         "subgraph_for_scope returned per-scope nodes for every scope",
         subgraph_total_nodes > 0 && subgraph_views == scopes.len() as u64,
     );
     log.check(
-        PHASE,
+        STAGE,
         "every dataset scope rehydrated at least one node",
         rehydrated_per_scope.iter().all(|(_, n, _)| *n > 0),
     );
     log.check(
-        PHASE,
+        STAGE,
         "neighborhood walk surfaced at least one neighbour",
         neighborhood_view.nodes.len() >= 2,
     );
     log.check(
-        PHASE,
+        STAGE,
         "search_nodes located the seeded 'atlas' concept",
         !search_results.is_empty(),
     );
     log.check(
-        PHASE,
+        STAGE,
         "PersistentConceptGraph rehydration matches persisted counts",
         rehydrated_total_nodes as u64 == persisted_node_count
             && rehydrated_total_edges as u64 == persisted_edge_count,
     );
     log.check(
-        PHASE,
+        STAGE,
         "removed_edges from EdgeRemoved propagation == 1",
         removal.removed_edges.len() == 1,
     );
 
-    phase.timing = started.elapsed();
-    phase.stat("canonical_seeds", canonical_seed_count.to_string());
-    phase.stat("scope_local_clusters", scope_local_clusters.to_string());
-    phase.stat(
+    stage.timing = started.elapsed();
+    stage.stat("canonical_seeds", canonical_seed_count.to_string());
+    stage.stat("scope_local_clusters", scope_local_clusters.to_string());
+    stage.stat(
         "scope_local_extra_nodes",
         scope_local_node_count.to_string(),
     );
-    phase.stat(
+    stage.stat(
         "scope_local_extra_edges",
         scope_local_edge_count.to_string(),
     );
-    phase.stat("persisted_nodes_baseline", persisted_node_count.to_string());
-    phase.stat("persisted_edges_baseline", persisted_edge_count.to_string());
-    phase.stat("total_nodes_in_memory", in_memory_node_count.to_string());
-    phase.stat("total_edges_in_memory", in_memory_edge_count.to_string());
-    phase.stat("rehydrated_node_total", rehydrated_total_nodes.to_string());
-    phase.stat("rehydrated_edge_total", rehydrated_total_edges.to_string());
+    stage.stat("persisted_nodes_baseline", persisted_node_count.to_string());
+    stage.stat("persisted_edges_baseline", persisted_edge_count.to_string());
+    stage.stat("total_nodes_in_memory", in_memory_node_count.to_string());
+    stage.stat("total_edges_in_memory", in_memory_edge_count.to_string());
+    stage.stat("rehydrated_node_total", rehydrated_total_nodes.to_string());
+    stage.stat("rehydrated_edge_total", rehydrated_total_edges.to_string());
     for (label, n, e) in &rehydrated_per_scope {
-        phase.stat(format!("rehydrated:{label}:nodes"), n.to_string());
-        phase.stat(format!("rehydrated:{label}:edges"), e.to_string());
+        stage.stat(format!("rehydrated:{label}:nodes"), n.to_string());
+        stage.stat(format!("rehydrated:{label}:edges"), e.to_string());
     }
-    phase.stat(
+    stage.stat(
         "canonical_after_supersede",
         total_canonical_after_supersede.to_string(),
     );
-    phase.stat("superseded_total", total_superseded.to_string());
-    phase.stat("contradicted_total", total_contradicted.to_string());
+    stage.stat("superseded_total", total_superseded.to_string());
+    stage.stat("contradicted_total", total_contradicted.to_string());
     for rel in [
         RelationType::IsA,
         RelationType::PartOf,
@@ -714,23 +714,23 @@ pub fn run(
         RelationType::DerivedFrom,
         RelationType::AssignedTo,
     ] {
-        phase.stat(
+        stage.stat(
             format!("edges:{}", rel.as_str()),
             typed_edge_count.get(&rel).copied().unwrap_or(0).to_string(),
         );
     }
-    phase.stat("subgraph_views", subgraph_views.to_string());
-    phase.stat("subgraph_total_nodes", subgraph_total_nodes.to_string());
-    phase.stat(
+    stage.stat("subgraph_views", subgraph_views.to_string());
+    stage.stat("subgraph_total_nodes", subgraph_total_nodes.to_string());
+    stage.stat(
         "neighborhood_node_count",
         neighborhood_view.nodes.len().to_string(),
     );
-    phase.stat("search_results", search_results.len().to_string());
-    phase.note(
+    stage.stat("search_results", search_results.len().to_string());
+    stage.note(
         "PersistentConceptGraph (SQLCipher) + IncrementalUpdateEngine + \
          all 7 RelationTypes + visualization façade.",
     );
-    phase.note(
+    stage.note(
         "Substrate-level canonical concepts persisted in tenant scope; \
          per-scope intra-scope IsA clusters added so every dataset \
          scope's load_scope round-trip is non-empty and \
@@ -742,7 +742,7 @@ pub fn run(
     report.count("concept_edges_total", in_memory_edge_count);
     report.count("concept_superseded_total", total_superseded);
     report.count("concept_contradicted_total", total_contradicted);
-    report.add_phase(phase);
+    report.add_stage(stage);
     report.add_benchmark("concept_graph_propagations", bench_ops, bench_total);
 
     state.graph_temp = Some(temp);

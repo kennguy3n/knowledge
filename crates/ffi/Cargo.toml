@@ -90,9 +90,9 @@ memory_manager = { path = "../memory_manager" }
 # in production no matter how many messages flow through — the
 # detection plumbing on `ObservationPipeline` only fires on the
 # memory-extraction path, not on the substrate's persistent ingest
-# write. Phase 1.1 (multilingual lexicon registry) reads this column
-# on every retrieval to pick a per-locale lexicon, so the column has
-# to be populated at ingest, not after the fact.
+# write. The multilingual lexicon registry reads this column on every
+# retrieval to pick a per-locale lexicon, so the column has to be
+# populated at ingest, not after the fact.
 observation_engine = { path = "../observation_engine" }
 synthesis_engine = { path = "../synthesis_engine" }
 synthesis_pipeline = { path = "../synthesis_pipeline" }
@@ -108,7 +108,7 @@ uniffi = { workspace = true }
 uuid = { workspace = true }
 zeroize = { workspace = true }
 
-# Phase 5 webhook receiver wiring — the FFI surface owns the tokio
+# Webhook receiver wiring — the FFI surface owns the tokio
 # runtime that drives the framework-layer `WebhookServer` (axum) per
 # server instance, builds the `Arc<dyn WebhookDispatcher>` that fans
 # `POST /webhooks/{provider_id}` into the in-memory connector

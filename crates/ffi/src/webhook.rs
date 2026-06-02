@@ -1,4 +1,4 @@
-//! Webhook-receiver FFI surface (Phase 5).
+//! Webhook-receiver FFI surface.
 //!
 //! Per `ARCHITECTURE.md` §4.3 and the `connector_framework::webhook_server`
 //! module docs, the substrate ships its own in-process HTTP receiver
@@ -361,7 +361,7 @@ fn dispatch_blocking(
     provider_id: &str,
     body: &[u8],
 ) -> Result<usize, ConnectorError> {
-    // ── Phase 1: snapshot — locked ────────────────────────────────
+    // ── Step 1: snapshot — locked ────────────────────────────────
     //
     // Pull the connector, scope, and kind out of the runtime map and
     // drop the mutex before crossing the unbounded-cost
@@ -382,7 +382,7 @@ fn dispatch_blocking(
         };
         // Refuse to dispatch for a scope the host already forgot.
         // Same defense-in-depth pattern as
-        // `crate::sync_connector` Phase 1.
+        // `crate::sync_connector` Step 1.
         if rt.is_scope_forgotten(inst.config.scope_id) {
             return Err(FfiError::NotFound {
                 kind: "scope".into(),
@@ -397,8 +397,7 @@ fn dispatch_blocking(
             // at a half-removed instance — surface as a `502`-mapped
             // `Transport` error so the upstream retries, and emit
             // a tracing warn so the drift is observable.
-            tracing::warn!(
-                instance = %instance_id,
+            tracing::warn!(instance = %instance_id,
                 "webhook dispatch found connector_instance without matching connector Arc"
             );
             return Err(FfiError::Connector {
@@ -430,7 +429,7 @@ fn dispatch_blocking(
         }
     };
 
-    // ── Phase 2: dispatch — UNLOCKED ──────────────────────────────
+    // ── Step 2: dispatch — UNLOCKED ──────────────────────────────
     //
     // Run the connector's webhook handler. Any error here surfaces
     // unchanged into the framework's error mapper (`Webhook` → 400,
@@ -438,11 +437,11 @@ fn dispatch_blocking(
     // calls on the same runtime keep running.
     let events = connector.handle_webhook_event(body)?;
 
-    // ── Phase 3: persist — locked ─────────────────────────────────
+    // ── Step 3: persist — locked ─────────────────────────────────
     //
     // Re-acquire the runtime mutex and ingest each event into the
     // encrypted evidence store. Re-validate the scope first (the
-    // host may have called `forget_scope` while phase 2 was in
+    // host may have called `forget_scope` while step 2 was in
     // flight); ingest the events under the source-tag contract the
     // sync path uses. Failures here are substrate-side faults → 502.
     let persisted = with_runtime(handle, |rt| {
@@ -454,8 +453,7 @@ fn dispatch_blocking(
             // counter still increments. Aliasing this to a 400
             // would re-trigger upstream redelivery for data that's
             // cryptographically unrecoverable anyway.
-            tracing::info!(
-                instance = %instance_id,
+            tracing::info!(instance = %instance_id,
                 scope = %scope,
                 "webhook payload dropped: scope was forgotten between dispatch phases"
             );
@@ -466,8 +464,8 @@ fn dispatch_blocking(
         let mut ingested = 0usize;
         for ev in &events {
             if let Some(body) = event_to_evidence_body(ev) {
-                // Phase 1.3 — stamp the BCP-47 primary subtag on
-                // each webhook-dispatched event. Same fail-closed
+                // Stamp the BCP-47 primary subtag on each
+                // webhook-dispatched event. Same fail-closed
                 // contract as the connector sync path: a NULL
                 // outcome means "language unknown" (the body
                 // failed detection or is too short / pure
@@ -531,7 +529,7 @@ pub(crate) struct RunningWebhookServer {
 impl RunningWebhookServer {
     /// Number of currently-registered `(provider_id, instance_id)`
     /// rows on this server's [`FfiWebhookRouter`]. Exposed for the
-    /// Phase 6 connector health probe (`crates/ffi/src/health.rs`)
+    /// connector health probe (`crates/ffi/src/health.rs`)
     /// so the operator can see at a glance how much of the
     /// configured webhook surface is bound.
     pub(crate) fn router_registration_count(&self) -> usize {

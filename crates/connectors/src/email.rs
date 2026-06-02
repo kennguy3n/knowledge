@@ -1527,8 +1527,7 @@ mod tests {
     #[test]
     fn graph_initial_sync_walks_delta_and_advances_watermark() {
         let transport = MockHttpTransport::new();
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             graph_delta_url(),
             ok_json(&serde_json::json!({
                 "value": [

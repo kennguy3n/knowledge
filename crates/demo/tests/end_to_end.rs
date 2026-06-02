@@ -7,7 +7,7 @@
 //! 2. every assertion logged by the demo passed (no `FAIL` rows in
 //!    `results/demo_results.md`),
 //! 3. the results file is written and contains all the expected
-//!    sections (per-phase headings, summary statistics, benchmarks),
+//!    sections (per-stage headings, summary statistics, benchmarks),
 //! 4. timing data is present and parseable, and
 //! 5. the assertion count matches between the stdout summary line and
 //!    the in-file count.

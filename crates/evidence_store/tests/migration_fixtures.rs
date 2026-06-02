@@ -565,9 +565,9 @@ fn v14_migration_is_idempotent_on_already_populated_database() {
 
 #[test]
 fn v14_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
-    // Regression test for sweep-2 Devin Review ANALYSIS-0004
-    // (`migrate_v14_backfill_evidence_fts_cjk` previously loaded
-    // the entire `evidence_fts` table into a single `Vec`). The
+    // Memory-pressure regression test:
+    // `migrate_v14_backfill_evidence_fts_cjk` previously loaded
+    // the entire `evidence_fts` table into a single `Vec`. The
     // fix paginates the read in chunks of `MIGRATION_CHUNK_SIZE`
     // (1_000 rows). This test seeds `MIGRATION_CHUNK_SIZE + 500`
     // (1_500) distinct CJK rows directly into `evidence_fts` to
@@ -789,10 +789,10 @@ fn opens_v14_database_and_upgrades_to_current_with_evidence_fts_bigram_backfille
         "v14 -> v15 backfill must re-insert the CJK row into evidence_fts_bigram"
     );
 
-    // Defensive content-column inspection (closes sweep-2
-    // finding #6: prior assertion only verified row count). The
-    // backfilled `content` column must hold the precomputed-bigram
-    // string emitted by `crate::bigram::compute_cjk_bigrams` over
+    // Defensive content-column inspection (the prior assertion
+    // only verified row count). The backfilled `content` column
+    // must hold the precomputed-bigram string emitted by
+    // `crate::bigram::compute_cjk_bigrams` over
     // the original CJK body — not the raw body, and not an empty
     // string. Pinning a sample of expected bigrams catches a
     // future regression where the migration accidentally writes
@@ -1004,12 +1004,12 @@ fn v15_migration_streams_backfill_across_multiple_chunks_without_data_loss() {
 }
 
 // ----------------------------------------------------------------------
-// Phase 1.9 / schema v16 — Symmetric stopword stripping migration
+// schema v16 — Symmetric stopword stripping migration
 // ----------------------------------------------------------------------
 //
 // The v16 migration deletes every row from `evidence_fts_cjk` and
 // `evidence_fts_bigram` (the two recall-lane shadow tables) and
-// rewrites them from `evidence_fts.content` with the Phase 1.9
+// rewrites them from `evidence_fts.content` with the
 // stopword strip applied. Re-running the migration twice produces
 // the same final state (idempotency-by-reconstruction).
 
@@ -1020,11 +1020,11 @@ fn opens_v15_database_and_upgrades_to_current_with_recall_lanes_re_stripped() {
     // verbatim), then re-stamp `user_version = 15` to put the
     // database in a pre-v16 shape on disk. The v16 migration
     // must re-tokenise the bigram + trigram lanes with the
-    // Phase 1.9 stopword strip applied.
+    // stopword strip applied.
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("evidence.db");
     let scope = ScopeId::new_v4();
-    // Body contains the genitive particle `の` — a Phase 1.9
+    // Body contains the genitive particle `の` — a
     // stopword — so the post-migration bigram content must not
     // contain `日本` adjacent to `の` (the stopword is replaced
     // with a single ASCII space and the lane filters whitespace
@@ -1058,7 +1058,7 @@ fn opens_v15_database_and_upgrades_to_current_with_recall_lanes_re_stripped() {
         // `evidence_fts.content` with the strip applied.
         conn.execute_batch("DELETE FROM evidence_fts_bigram;")
             .expect("delete pre-v16 bigram seeds");
-        // Re-insert with the pre-Phase-1.9 (unstripped) bigram
+        // Re-insert with the earlier (unstripped) bigram
         // form so we can prove the migration overwrites it. The
         // pre-v16 form contained the `の` particle in the
         // computed bigrams (e.g. `日本`, `本の`, `のオ`, ...).

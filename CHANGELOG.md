@@ -215,59 +215,47 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Changed — Dependencies
 
-- Documented and Dependabot-filtered three MSRV-gated dependency
+- Documented and Dependabot-filtered the MSRV-gated dependency
   pins so the review queue no longer cycles unmergeable PRs:
-  `rusqlite` (`0.32.x` line; `>=0.37` requires Rust 1.94+ via
+  `rusqlite` (`0.36.x` line; `>=0.37` requires Rust 1.94+ via
   `libsqlite3-sys 0.36+`'s adoption of the stable `cfg_select!`
   macro), `aws-nitro-enclaves-nsm-api` (`0.4.x` line; `>=0.5`
-  sets `rust-version = 1.92`), and `criterion` (`0.7.x` line —
-  already pinned but lacked a Dependabot ignore; `>=0.8`
-  requires Rust 1.86). Each pin now has (a) a multi-paragraph
-  explanation in the relevant `Cargo.toml` block citing the
-  upstream MSRV and the workspace `MSRV (1.85.0)` CI gate, and
-  (b) a `versions:` block in `.github/dependabot.yml` that
+  sets `rust-version = 1.92`), and `criterion` (`0.7.x` line;
+  `>=0.8` requires Rust 1.86). Each pin has (a) an inline
+  rationale next to its `version = "…"` declaration in the
+  relevant `Cargo.toml`, and (b) a `versions:` block in
+  [`.github/dependabot.yml`](.github/dependabot.yml) that
   filters out only the gated range so patch / intermediate
-  bumps still surface. The three currently open Dependabot PRs
-  for these deps (`#76` / `#87` / `#88`) are closed with a link
-  to this policy. The ignore blocks will be deleted in the same
-  PR that bumps the workspace MSRV forward.
-- Bumped `rusqlite` from `0.32.1` to `0.36.0` (workspace pin),
-  superseding the original entry above. `0.36.x` is the new
-  MSRV ceiling — `>=0.37` (via `libsqlite3-sys >=0.36`) requires
-  Rust 1.94+ for the stable `cfg_select!` macro. The Dependabot
-  ignore in `.github/dependabot.yml` was tightened from
-  `versions: [">=0.33"]` to `versions: [">=0.37"]` so 0.33–0.36
-  patches now surface. The workspace `Cargo.toml` block on
-  `rusqlite` and the inline rationale in
-  `docs/MULTILINGUAL_DEPENDENCY_AUDIT.md` were updated to
-  reflect the new ceiling. **Bundled SQLite transition** as a
+  bumps still surface. The cross-cutting summary lives in
+  [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md). The
+  ignore blocks will be deleted in the same PR that bumps the
+  workspace MSRV forward.
+- Bumped `rusqlite` from `0.32.1` to `0.36.0` (workspace pin).
+  `0.36.x` is the new MSRV ceiling — `>=0.37` (via
+  `libsqlite3-sys >=0.36`) requires Rust 1.94+ for the stable
+  `cfg_select!` macro. **Bundled SQLite transition** as a
   side-effect of `libsqlite3-sys 0.30.1 → 0.34.0`: the
   SQLCipher-vendored SQLite moved from `3.45.3` (April 2024,
   SQLCipher 4.6.0 fork) to `3.46.1` (August 2024, SQLCipher
   4.6.1 fork). The upstream SQLite FTS5 changelog between
   these versions has no documented changes to `unicode61` or
-  `trigram` default-config behaviour (3.46 added a `trigram`
-  bugfix for `case_sensitive=0` + `remove_diacritics=2` which
-  the substrate doesn't use; production schema is bare
-  `tokenize = 'trigram'` and `tokenize = 'unicode61
-  remove_diacritics 2'`). A new canary test suite
-  (`crates/evidence_store/tests/bundled_sqlite_canary.rs`,
-  5 tests) now pins the bundled SQLite version, the
-  `sqlite_source_id()` timestamp, and the recall behaviour of
-  both tokenisers against a multi-script corpus; any future
-  rusqlite / libsqlite3-sys bump that moves the bundle will
-  fail those literal assertions and force a deliberate
-  maintainer ack via the audit procedure documented in the
-  canary file's module-level docs. Closes #98 (Dependabot's
-  unmergeable pre-MSRV-policy PR for the same bump). The PR's
-  zero `.rs` file changes are intentional: the substrate's
-  rusqlite API surface (`SqliteFailure` tuple variant,
-  `ffi::Error::new`, `pragma_update` with `i64` / `&str` args,
-  `Connection::open_with_flags_and_vfs`) is source-compatible
-  across `0.33 → 0.36`; the only intermediate breaking changes
-  documented in the rusqlite changelog (VTab API rework,
-  reentrant `Connection::call_loadable_extension` signature)
-  don't intersect with anything the substrate calls.
+  `trigram` default-config behaviour. A new canary test suite
+  (`crates/evidence_store/tests/bundled_sqlite_canary.rs`) now
+  pins the bundled SQLite version, the `sqlite_source_id()`
+  timestamp, and the recall behaviour of both tokenisers
+  against a multi-script corpus; any future rusqlite /
+  libsqlite3-sys bump that moves the bundle will fail those
+  literal assertions and force a deliberate maintainer ack via
+  the audit procedure documented in the canary's module-level
+  docs. The bump requires no `.rs` file changes — the
+  substrate's rusqlite API surface (`SqliteFailure` tuple
+  variant, `ffi::Error::new`, `pragma_update` with `i64` /
+  `&str` args, `Connection::open` / `Connection::open_in_memory`)
+  is source-compatible across the `0.33 → 0.36` range; the
+  intermediate breaking changes documented in the rusqlite
+  changelog (VTab API rework, reentrant
+  `Connection::call_loadable_extension` signature) don't
+  intersect with anything the substrate calls.
 - Bumped `axum` from `0.7` to `0.8` (workspace pin). Axum 0.8
   changed the router path-pattern syntax: a leading `:` on a
   segment now panics at registration time

@@ -78,7 +78,7 @@ where
         // Detect the *dominant* (whole-input) language for the
         // row-level metadata. The per-sentence language tag that
         // gets stamped onto each observation is computed by the
-        // extractor itself (Phase 1.4) — it runs `detect_language`
+        // extractor itself — it runs `detect_language`
         // per sentence and falls back to the dominant language
         // when whatlang refuses to classify a short sentence. We
         // therefore *do not* re-stamp observations with the
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn run_with_language_preserves_per_sentence_stamps_in_bilingual_input() {
-        // Phase 1.4 contract: the pipeline runs `detect_language`
+        // contract: the pipeline runs `detect_language`
         // on the WHOLE input to set the row-level `language`
         // field, but it MUST NOT overwrite the per-sentence
         // language tags the extractor already attached to each

@@ -32,7 +32,7 @@
 //!   the op log to a SQLCipher database (per-scope AEAD on the
 //!   payload column, following the `concept_graph` pattern).
 //!
-//! # Multilingual contract (Phase 2.3 audit)
+//! # Multilingual contract
 //!
 //! `SyncEngine<T>` is parameterised over an arbitrary
 //! `T: Eq + Hash + Clone` element type, so the CRDT machinery in
@@ -436,8 +436,7 @@ where
                     // metric pipelines) can alert on a rising
                     // failure rate rather than discover the
                     // unbounded op-log growth at the next OOM.
-                    tracing::warn!(
-                        target: "sync_engine::auto_compact",
+                    tracing::warn!(target: "sync_engine::auto_compact",
                         op_log_len = self.log.ops.len(),
                         threshold = threshold,
                         error = %err,

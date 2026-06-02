@@ -1,4 +1,4 @@
-//! Phase 5 — async reqwest-backed HTTP transport.
+//! Async reqwest-backed HTTP transport.
 //!
 //! Mirror of [`BlockingHttpTransport`](crate::http::BlockingHttpTransport)
 //! that drives the request loop with `tokio::time::sleep` instead of

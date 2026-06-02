@@ -16,10 +16,10 @@
 //! 2. **Send an attestation request.** [`api::Request::Attestation`]
 //!    carries three optional `ByteBuf`s — `user_data`, `nonce`,
 //!    `public_key`. We pin:
-//!      * `user_data`  → the caller-supplied `enclave_image` bytes
+//!      * `user_data` → the caller-supplied `enclave_image` bytes
 //!        (so consumers can verify the workload identity the call
 //!        was made for).
-//!      * `nonce`      → the caller-supplied `nonce` (so the report
+//!      * `nonce` → the caller-supplied `nonce` (so the report
 //!        is freshness-bound).
 //!      * `public_key` → empty; the synthesizer's signing key is
 //!        bound separately by [`crypto::attestation::bind_synthesizer_key`].
@@ -32,15 +32,15 @@
 //! 4. **Decode the AttestationDocument.** The payload is itself
 //!    CBOR-encoded and follows the schema documented in AWS's
 //!    [Nitro Enclaves Application Programming Reference][nitro-ref]:
-//!      * `module_id`  : `String`
-//!      * `digest`     : `String` (the hashing algorithm name)
-//!      * `timestamp`  : `u64`    (UTC millis since UNIX epoch)
-//!      * `pcrs`       : `Map<u32, Bytes>` (PCR index → digest)
-//!      * `certificate`: `Bytes`  (leaf certificate)
-//!      * `cabundle`   : `Vec<Bytes>` (CA chain back to AWS root)
+//!      * `module_id` : `String`
+//!      * `digest` : `String` (the hashing algorithm name)
+//!      * `timestamp` : `u64` (UTC millis since UNIX epoch)
+//!      * `pcrs` : `Map<u32, Bytes>` (PCR index → digest)
+//!      * `certificate`: `Bytes` (leaf certificate)
+//!      * `cabundle` : `Vec<Bytes>` (CA chain back to AWS root)
 //!      * `public_key` : `Option<Bytes>` (echo of request input)
-//!      * `user_data`  : `Option<Bytes>` (echo)
-//!      * `nonce`      : `Option<Bytes>` (echo)
+//!      * `user_data` : `Option<Bytes>` (echo)
+//!      * `nonce` : `Option<Bytes>` (echo)
 //!
 //!    We pull **PCR0** (the enclave image measurement) and use its
 //!    bytes as the report's `measurement`. PCR0 is exactly 32 bytes
@@ -48,12 +48,12 @@
 //!    firmware, which is the
 //!    [`ContentHash`](crypto::ContentHash) width.
 //! 5. **Build the [`AttestationReport`].**
-//!      * `platform`    → [`TeePlatform::NitroEnclaves`]
+//!      * `platform` → [`TeePlatform::NitroEnclaves`]
 //!      * `measurement` → PCR0 bytes (panic if the device returns a
 //!        shape we cannot parse — same reasoning as step 1)
 //!      * `report_data` → the caller-supplied `nonce` (the freshness
 //!        token consumers need to bind their session)
-//!      * `signature`   → the **full COSE_Sign1 document** bytes.
+//!      * `signature` → the **full COSE_Sign1 document** bytes.
 //!        Verifiers that need to re-validate the chain re-parse
 //!        this with their own COSE library and walk back to the AWS
 //!        Nitro Enclaves root CA. We deliberately do **not** pull
@@ -182,11 +182,9 @@ impl TeeRuntime for NitroTeeRuntime {
 
         let document_bytes: Vec<u8> = match response {
             Response::Attestation { document } => document,
-            Response::Error(err) => panic!(
-                "nitro-tee: NSM returned ErrorCode {err:?} for Attestation request"
+            Response::Error(err) => panic!("nitro-tee: NSM returned ErrorCode {err:?} for Attestation request"
             ),
-            other => panic!(
-                "nitro-tee: NSM returned unexpected response variant {other:?} for Attestation request"
+            other => panic!("nitro-tee: NSM returned unexpected response variant {other:?} for Attestation request"
             ),
         };
 
@@ -247,12 +245,10 @@ pub(crate) fn parse_pcr0_from_attestation_document(document_bytes: &[u8]) -> Vec
         CborValue::Array(arr) => arr,
         CborValue::Tag(18, inner) => match *inner {
             CborValue::Array(arr) => arr,
-            other => panic!(
-                "nitro-tee: COSE_Sign1_Tagged (CBOR tag 18) inner value was not a CBOR array; got {other:?}"
+            other => panic!("nitro-tee: COSE_Sign1_Tagged (CBOR tag 18) inner value was not a CBOR array; got {other:?}"
             ),
         },
-        other => panic!(
-            "nitro-tee: COSE_Sign1 envelope was neither a bare CBOR array nor a CBOR tag 18 (COSE_Sign1_Tagged); got {other:?}"
+        other => panic!("nitro-tee: COSE_Sign1 envelope was neither a bare CBOR array nor a CBOR tag 18 (COSE_Sign1_Tagged); got {other:?}"
         ),
     };
     assert!(

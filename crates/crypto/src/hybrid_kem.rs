@@ -9,10 +9,10 @@
 //!
 //! ```text
 //! shared_secret = HKDF-SHA256(
-//!     ikm   = X25519_dh || MLKEM768_ss,
-//!     salt  = "knowledge-hybrid-kem-v1",
-//!     info  = "x25519+mlkem768",
-//!     L     = 32,
+//!     ikm = X25519_dh || MLKEM768_ss,
+//!     salt = "knowledge-hybrid-kem-v1",
+//!     info = "x25519+mlkem768",
+//!     L = 32,
 //! )
 //! ```
 //!

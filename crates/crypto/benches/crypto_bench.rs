@@ -17,7 +17,7 @@
 //!
 //! ```bash
 //! cargo bench -p crypto
-//! cargo bench -p crypto -- aead          # filter by name
+//! cargo bench -p crypto -- aead # filter by name
 //! ```
 //!
 //! HTML reports land in `target/criterion/`.

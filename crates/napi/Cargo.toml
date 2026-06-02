@@ -47,7 +47,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 # Used by the `JsClientSecretResolver` adapter to emit a WARN log
 # when the JS resolver callback exceeds the configured recv timeout
-# (defense-in-depth diagnostic — see Phase 4.2 in CHANGELOG.md).
+# (defense-in-depth diagnostic for the connector resolver bridge).
 tracing = { workspace = true }
 uuid = { workspace = true }
 

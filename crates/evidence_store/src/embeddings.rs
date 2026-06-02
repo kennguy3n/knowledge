@@ -67,7 +67,7 @@
 //! path rather than being scored as if it had been produced by
 //! the active model (see
 //! [`crate::store::EvidenceStore::get_embedding_for_model`]).
-//! Phase 1.11 added runtime telemetry around this rule:
+//! Runtime telemetry was added around this rule:
 //! [`crate::vector_telemetry::record_observed_dimension`] is
 //! called every time an [`EmbeddingModel`] is wired in and every
 //! time `index_embedding` writes a fresh vector. A same-tag /

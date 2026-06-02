@@ -18,7 +18,7 @@
 //! 3. A round-trippable [`NapiError`] mapped from [`ffi::FfiError`]
 //!    so the Electron host gets a stable JSON envelope.
 //!
-//! Phase 4 — the [`#[napi]`] proc-macros are live. The cdylib that
+//! The [`#[napi]`] proc-macros are live. The cdylib that
 //! `napi build` produces is loaded by Node via `require('./*.node')`.
 //! The [`bindings`] module is the JS-facing surface; the freestanding
 //! `pub fn`s in this file remain the canonical Rust-facing API so
@@ -328,7 +328,7 @@ pub fn core_version() -> String {
 }
 
 /// Full health envelope sourced from the substrate's metrics +
-/// tracing layer (Phase 6).
+/// tracing layer.
 ///
 /// `handle` is optional:
 /// * `None` (or [`RuntimeHandle::NONE`]) returns a bridge-only
@@ -622,7 +622,7 @@ pub fn open_store_with_resolver(
         .map_err(NapiError::from)
 }
 
-// ───────────────────────── Webhook receiver (Phase 5) ─────────────
+// ───────────────────────── Webhook receiver ─────────────────────
 
 /// Start a webhook receiver server bound to `bind_addr` (parsed as
 /// a `SocketAddr`). Mirrors [`ffi::start_webhook_server`].
@@ -700,7 +700,7 @@ pub fn list_webhook_servers(handle: NapiHandle) -> NapiResult<Vec<ffi::WebhookSe
     ffi::list_webhook_servers(RuntimeHandle(handle)).map_err(NapiError::from)
 }
 
-/// Start the background sync scheduler (Phase 6).
+/// Start the background sync scheduler.
 ///
 /// Spawns a dedicated OS thread that wakes every
 /// `tick_interval_secs` and dispatches [`ffi::sync_connector`] for
@@ -725,7 +725,7 @@ pub fn start_sync_scheduler(
     .map_err(NapiError::from)
 }
 
-/// Stop the background sync scheduler (Phase 6).
+/// Stop the background sync scheduler.
 ///
 /// Idempotent — calling this on a runtime with no scheduler running
 /// returns `Ok(())`. Mirrors [`ffi::stop_sync_scheduler`].
@@ -738,7 +738,7 @@ pub fn stop_sync_scheduler(handle: NapiHandle) -> NapiResult<()> {
 }
 
 /// Override the scheduler's policy for a specific connector
-/// instance (Phase 6). Mirrors [`ffi::configure_sync_schedule`].
+/// instance. Mirrors [`ffi::configure_sync_schedule`].
 ///
 /// # Errors
 ///
@@ -759,7 +759,7 @@ pub fn configure_sync_schedule(
 }
 
 /// Remove the per-instance scheduler policy override for
-/// `instance_id` (Phase 6). Mirrors [`ffi::clear_sync_schedule`].
+/// `instance_id`. Mirrors [`ffi::clear_sync_schedule`].
 ///
 /// # Errors
 ///
@@ -768,7 +768,7 @@ pub fn clear_sync_schedule(handle: NapiHandle, instance_id: String) -> NapiResul
     ffi::clear_sync_schedule(RuntimeHandle(handle), instance_id).map_err(NapiError::from)
 }
 
-/// Snapshot the scheduler's diagnostic state (Phase 6). Mirrors
+/// Snapshot the scheduler's diagnostic state. Mirrors
 /// [`ffi::sync_scheduler_status`].
 ///
 /// # Errors
@@ -779,7 +779,7 @@ pub fn sync_scheduler_status(handle: NapiHandle) -> NapiResult<ffi::SyncSchedule
 }
 
 /// Toggle the post-sync auto-synthesis hook for a connector
-/// instance (Phase 7). Mirrors [`ffi::configure_sync_auto_synthesize`].
+/// instance. Mirrors [`ffi::configure_sync_auto_synthesize`].
 ///
 /// # Errors
 ///
@@ -794,8 +794,8 @@ pub fn configure_sync_auto_synthesize(
         .map_err(NapiError::from)
 }
 
-/// Install the server-side synthesis engine on the runtime
-/// (Phase 7). Mirrors [`ffi::configure_synthesis_engine`].
+/// Install the server-side synthesis engine on the runtime.
+/// Mirrors [`ffi::configure_synthesis_engine`].
 ///
 /// # Errors
 ///
@@ -809,7 +809,7 @@ pub fn configure_synthesis_engine(
     ffi::configure_synthesis_engine(RuntimeHandle(handle), config).map_err(NapiError::from)
 }
 
-/// Dispatch a server-side synthesis run (Phase 7). Mirrors
+/// Dispatch a server-side synthesis run. Mirrors
 /// [`ffi::trigger_server_synthesis`]. Returns the UUID of the
 /// newly-opened synthesis window.
 ///
@@ -825,7 +825,7 @@ pub fn trigger_server_synthesis(
     ffi::trigger_server_synthesis(RuntimeHandle(handle), scope_id, tier).map_err(NapiError::from)
 }
 
-/// Look up the lifecycle state of a synthesis window (Phase 7).
+/// Look up the lifecycle state of a synthesis window.
 /// Mirrors [`ffi::synthesis_status`].
 ///
 /// # Errors
@@ -838,7 +838,7 @@ pub fn synthesis_status(
     ffi::synthesis_status(RuntimeHandle(handle), synthesis_id).map_err(NapiError::from)
 }
 
-/// Enumerate recent synthesis windows for a scope (Phase 7).
+/// Enumerate recent synthesis windows for a scope.
 /// Mirrors [`ffi::list_recent_syntheses`].
 ///
 /// # Errors
@@ -851,8 +851,8 @@ pub fn list_recent_syntheses(
     ffi::list_recent_syntheses(RuntimeHandle(handle), scope_id).map_err(NapiError::from)
 }
 
-/// Re-run synthesis on an existing `Complete` window (Phase 10
-/// Item 4). Mirrors [`ffi::replay_synthesis`]. The window is
+/// Re-run synthesis on an existing `Complete` window.
+/// Mirrors [`ffi::replay_synthesis`]. The window is
 /// re-driven through `Complete → Pending → InProgress →
 /// Complete` (or `→ Failed`) on the same `(scope, window_id)`
 /// pair; the prior synthesis object is archived to the history
@@ -885,7 +885,7 @@ pub fn list_synthesis_versions(
 }
 
 /// Admit an approved document onto a tenant memory and persist the
-/// AEAD-encrypted payload alongside (Phase 8). Mirrors
+/// AEAD-encrypted payload alongside. Mirrors
 /// [`ffi::admit_approved_document`].
 ///
 /// # Errors
@@ -903,7 +903,7 @@ pub fn admit_approved_document(
 }
 
 /// Replace the payload + metadata of an existing approved document
-/// while keeping its document id stable (Phase 9). Mirrors
+/// while keeping its document id stable. Mirrors
 /// [`ffi::replace_approved_document`].
 ///
 /// # Errors
@@ -929,7 +929,7 @@ pub fn replace_approved_document(
 }
 
 /// Revoke a previously-admitted approved document and purge the
-/// AEAD-encrypted payload row (Phase 8). Mirrors
+/// AEAD-encrypted payload row. Mirrors
 /// [`ffi::revoke_approved_document`].
 ///
 /// # Errors
@@ -945,7 +945,7 @@ pub fn revoke_approved_document(
 }
 
 /// List approved documents admitted onto a tenant memory along
-/// with their persisted payload metadata (Phase 8). Mirrors
+/// with their persisted payload metadata. Mirrors
 /// [`ffi::list_approved_documents`].
 ///
 /// # Errors

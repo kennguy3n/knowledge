@@ -1,15 +1,15 @@
-//! Phase 2.1 — Cross-lingual recall benchmark suite.
+//! Cross-lingual recall benchmark suite.
 //!
-//! The multilingual stack (Phases 1.1, 1.3–1.11) wired XLM-R into
-//! the vector lane and validated cross-lingual semantic clustering
-//! with three integration tests (English ↔ Japanese weather, French
-//! ↔ Spanish weather, English ↔ Spanish via rerank).  Those tests
-//! pin the *minimal* invariant — that the embedding lane is not
+//! The multilingual stack wires XLM-R into the vector lane and
+//! validates cross-lingual semantic clustering with three
+//! integration tests (English ↔ Japanese weather, French ↔ Spanish
+//! weather, English ↔ Spanish via rerank). Those tests pin the
+//! *minimal* invariant — that the embedding lane is not
 //! script-segregated — but they don't measure the *quality* of the
 //! cross-lingual clustering at any meaningful scale.
 //!
-//! Phase 2.1 lifts those three spot-checks into a fixture-driven
-//! benchmark suite:
+//! This benchmark suite lifts those three spot-checks into a
+//! fixture-driven measurement:
 //!
 //! * **Concept inventory** — 10 named knowledge concepts (weather,
 //!   finance, cooking, sports, technology, travel, music, health,
@@ -32,16 +32,16 @@
 //!     documents (all 12 same-concept paraphrases) that appear
 //!     in the top-k results: `|relevant ∩ top_k| / |relevant|`.
 //!     Useful for `k = |relevant set| = 12` (the "did we recover
-//!     the full cross-lingual cluster" invariant).  By definition,
+//!     the full cross-lingual cluster" invariant). By definition,
 //!     `recall@k` is bounded by `k / |relevant|` for any
 //!     ranker — e.g. `recall@1 ≤ 1/12 ≈ 0.0833` even for a
 //!     perfect ranker, since you can only put one document in
 //!     the top slot.
 //!
 //!   * **`hit-rate@k`** — `1.0` if `top_k` contains *any*
-//!     relevant document, else `0.0`.  Useful for `k = 1, 3`
+//!     relevant document, else `0.0`. Useful for `k = 1, 3`
 //!     (the "is the top result actually about the query’s
-//!     concept" invariant).  With the deterministic mock below
+//!     concept" invariant). With the deterministic mock below
 //!     all 12 same-concept paraphrases tie at vector-score
 //!     `1.0` so `hit-rate@1` is `1.0` for every query.
 //!
@@ -53,21 +53,21 @@
 //!   top but misses the rest would score perfect `hit-rate@1`
 //!   and terrible `recall@12`).
 //!
-//! ## What this benchmark catches that the Phase 1.11 spot-checks miss
+//! ## What this benchmark catches that ad-hoc spot-checks miss
 //!
 //! 1. **Per-language-pair regressions** — a future change that
 //!    breaks cross-lingual clustering for one specific direction
 //!    (e.g. `ar → he` after a tokeniser tweak) would still pass
-//!    the three Phase 1.11 spot-checks but would drop the
+//!    the three ad-hoc spot-checks but would drop the
 //!    `recall@k` for that one row of the matrix below the pinned
 //!    floor.
 //! 2. **Asymmetric recall** — XLM-R has known asymmetries
 //!    (an Arabic query → English body recall is not necessarily
-//!    equal to the reverse).  The benchmark walks both directions
+//!    equal to the reverse). The benchmark walks both directions
 //!    of every language pair, so any asymmetric regression is
 //!    captured.
 //! 3. **Model-swap validation** — the benchmark is fixture-driven
-//!    and model-agnostic.  When the deployed XLM-R is swapped for
+//!    and model-agnostic. When the deployed XLM-R is swapped for
 //!    a different multilingual embedding (e5-multilingual,
 //!    multilingual-MiniLM, LaBSE, etc.), running this benchmark
 //!    against the real adapter (with `models/<new>.onnx` plumbed
@@ -79,11 +79,11 @@
 //!
 //! The real XLM-R adapter requires the ONNX runtime + the
 //! `models/xlm-r-base.onnx` artifact (~1.1 GB) — not part of the
-//! standard CI image.  The mock below simulates XLM-R's defining
+//! standard CI image. The mock below simulates XLM-R's defining
 //! property (cross-lingual semantic clustering) by mapping every
 //! concept to its own orthogonal unit-vector axis, so cosine
 //! similarity between paraphrases of the same concept is exactly
-//! `1.0` and between unrelated concepts is exactly `0.0`.  The
+//! `1.0` and between unrelated concepts is exactly `0.0`. The
 //! benchmark logic (corpus shape, query fixture, recall@k driver)
 //! is the same whether the embedding model is the mock here or
 //! the real XLM-R adapter loaded by an operator — the mock just
@@ -95,7 +95,7 @@
 //! it projects cosine `[-1.0, 1.0]` into a retrieval-friendly
 //! `[0.0, 1.0]` `vector_score` via
 //! [`evidence_store::embeddings::similarity_to_score`] —
-//! `f64::midpoint(cos, 1.0).clamp(0.0, 1.0)`.  So under the mock:
+//! `f64::midpoint(cos, 1.0).clamp(0.0, 1.0)`. So under the mock:
 //!
 //! * same-concept paraphrases (cos sim = 1.0) → `vector_score = 1.0`
 //! * unrelated concepts (cos sim = 0.0) → `vector_score = 0.5`
@@ -105,7 +105,7 @@
 //! on the rank order — same-concept docs (score 1.0) > unrelated
 //! docs (score 0.5) — not on the absolute score magnitudes, so the
 //! 0.5 score floor for unrelated concepts is by-design and does not
-//! perturb the recall measurement.  A real model producing, say,
+//! perturb the recall measurement. A real model producing, say,
 //! `cos = 0.6` for same-concept pairs would yield `vector_score =
 //! 0.8`, still well above the 0.5 unrelated-concept floor —
 //! ranking-correct, just with a narrower score gap than the mock.
@@ -141,7 +141,7 @@ use tempfile::tempdir;
 // Fixture: concept inventory.
 // ---------------------------------------------------------------------
 
-/// Named concept axes for the benchmark.  Each axis maps every
+/// Named concept axes for the benchmark. Each axis maps every
 /// language's paraphrase of the same concept to one orthogonal unit
 /// vector in the mock embedding space — so the mock's cosine
 /// similarity between same-concept docs is `1.0` and between
@@ -150,7 +150,7 @@ use tempfile::tempdir;
 /// Concepts are chosen from common knowledge domains where
 /// language-agnostic clustering is the expected behaviour of any
 /// multilingual embedding model trained on a broad CommonCrawl-style
-/// corpus.  The inventory deliberately spans abstract / concrete /
+/// corpus. The inventory deliberately spans abstract / concrete /
 /// activity / state categories so any model bias toward one
 /// category (e.g. concrete-noun clustering only) would show up as
 /// an asymmetric regression on the concepts it doesn't cluster
@@ -186,7 +186,7 @@ const CATCH_ALL_AXIS: usize = NUM_CONCEPTS;
 // Fixture: 10 concepts × 12 languages = 120-entry corpus.
 // ---------------------------------------------------------------------
 //
-// Each row pins (concept, BCP-47 lang tag, paraphrase text).  The
+// Each row pins (concept, BCP-47 lang tag, paraphrase text). The
 // language inventory covers the four script families the
 // multilingual stack supports — Latin (en/es/fr/de/vi), CJK
 // (ja/zh/ko), RTL (ar/he), Indic / SEA (hi/th) — so per-language-pair
@@ -212,7 +212,7 @@ struct CorpusEntry {
 ///
 /// The paraphrase choices favour high-frequency, idiomatic
 /// phrasings that the real XLM-R was demonstrably trained on
-/// (CommonCrawl text snippets).  Single-token concepts are avoided
+/// (CommonCrawl text snippets). Single-token concepts are avoided
 /// where a multi-word phrasing is more natural (e.g. Spanish
 /// "pronóstico del tiempo" rather than just "tiempo" — the latter
 /// is ambiguous with "time").
@@ -337,7 +337,7 @@ const CORPUS: &[CorpusEntry] = &[
     // university") rather than the Han-character-identical `公立大学`
     // form used in Japanese — otherwise the two cells would collide
     // on the same `&'static str` and the corpus dedup invariant
-    // in `phase_2_1_corpus_shape_invariants` would fire.  Both
+    // in `corpus_shape_invariants` would fire. Both
     // forms map to the same Education concept axis, so this does
     // not perturb the recall measurement.
     CorpusEntry { concept: Concept::Education, lang: "zh", text: "公办大学" },
@@ -370,14 +370,14 @@ const CORPUS: &[CorpusEntry] = &[
 // Mock embedding model — orthogonal-axis concept clustering.
 // ---------------------------------------------------------------------
 
-/// Concept-axis lookup for the mock embedding model.  Identical
+/// Concept-axis lookup for the mock embedding model. Identical
 /// concepts produce identical unit vectors (cos sim = 1.0); different
 /// concepts produce orthogonal unit vectors (cos sim = 0.0); unknown
 /// inputs land on the catch-all axis (also orthogonal to every
 /// named concept).
 ///
 /// The lookup is a linear scan over [`CORPUS`] — fine at 120 entries
-/// and avoids the build-up overhead of a `HashMap` static.  Called
+/// and avoids the build-up overhead of a `HashMap` static. Called
 /// once per `embed` call (one per `search_hybrid` query + one per
 /// candidate body), so even with full corpus traversal the
 /// per-benchmark scan cost is `O(CORPUS.len()^2) ≈ 14_400 entries`,
@@ -394,7 +394,7 @@ fn concept_axis_for(text: &str) -> usize {
 /// Deterministic mock that simulates a real multilingual embedding
 /// model's signature property — same-concept paraphrases cluster
 /// onto the same vector-space axis, unrelated concepts land on
-/// orthogonal axes.  Used in place of the real XLM-R ONNX adapter
+/// orthogonal axes. Used in place of the real XLM-R ONNX adapter
 /// so the benchmark runs without the `models/xlm-r-base.onnx`
 /// artifact and without the ONNX runtime in CI.
 ///
@@ -429,7 +429,7 @@ const MASTER_KEY: [u8; 32] = [0xC7; 32];
 
 /// Open a fresh in-memory-equivalent (tempdir-backed) `EvidenceStore`
 /// with the [`BenchmarkMockModel`] wired in for both ingest-side
-/// and query-side embeddings.  Returned tempdir keeps the SQLCipher
+/// and query-side embeddings. Returned tempdir keeps the SQLCipher
 /// file alive for the lifetime of the test.
 fn open_benchmark_store() -> (tempfile::TempDir, EvidenceStore) {
     let dir = tempdir().expect("tempdir");
@@ -465,10 +465,10 @@ fn ingest_corpus(
 
 /// Recall@k for a single query — the standard IR definition.
 ///
-/// `|relevant ∩ top_k| / |relevant|`.  The relevant set is every
+/// `|relevant ∩ top_k| / |relevant|`. The relevant set is every
 /// corpus document that shares the query's concept (12 documents,
 /// since the corpus is dense at `NUM_LANGUAGES` paraphrases per
-/// concept).  With a perfect embedding model `recall@12` should be
+/// concept). With a perfect embedding model `recall@12` should be
 /// `1.0`; smaller `k` is bounded by `k / |relevant| = k / 12`
 /// even for a perfect ranker (you can only put `k` docs in the
 /// top-k slot), so the assertions below pin `recall@12` for the
@@ -499,7 +499,7 @@ fn recall_at_k(
 /// occupied by any same-concept doc" invariant.
 ///
 /// Returns `1.0` if `top_k` contains at least one document of
-/// `expected_concept`, else `0.0`.  This is the right metric for
+/// `expected_concept`, else `0.0`. This is the right metric for
 /// `k = 1, 3` because `recall@k` is structurally capped at
 /// `k / |relevant|` for these small `k` values (e.g.
 /// `recall@1 ≤ 1/12 ≈ 0.0833` for ANY ranker on this corpus),
@@ -521,7 +521,7 @@ fn hit_rate_at_k(
     }
 }
 
-/// Per-query measurement row.  Captured for diagnostic printing
+/// Per-query measurement row. Captured for diagnostic printing
 /// when an assertion fails — at debug time the operator sees
 /// exactly which (query_lang, concept) cell missed its recall@k
 /// or hit-rate@k floor, not just an aggregate number.
@@ -529,7 +529,7 @@ fn hit_rate_at_k(
 /// `#[allow(dead_code)]` on the diagnostic-only fields
 /// (`query_lang`, `query_text`) is required because they are read
 /// only through the [`Debug`] derive (`{:#?}` in the
-/// `per_query_failures` panic message).  Rust's dead-code analysis
+/// `per_query_failures` panic message). Rust's dead-code analysis
 /// explicitly ignores derived `Debug` impls when deciding which
 /// fields count as "used" — the compiler warning text says so
 /// directly — so the allow is the documented escape hatch for
@@ -549,26 +549,26 @@ struct QueryMeasurement {
 // The benchmark suite.
 // ---------------------------------------------------------------------
 
-/// Floor for `recall@12` aggregated across all 120 queries.  The
+/// Floor for `recall@12` aggregated across all 120 queries. The
 /// mock model produces exactly `1.0` for every (concept, lang) cell,
 /// so `0.99` leaves headroom for future concept additions that may
-/// have one or two edge cases without tripping the gate.  When the
+/// have one or two edge cases without tripping the gate. When the
 /// benchmark is run against a real multilingual model (XLM-R or a
 /// successor), this floor should be re-tuned to reflect the real
 /// model's measured recall (likely `0.85`–`0.95` depending on the
 /// model and the language pair distribution).
 const MEAN_RECALL_AT_12_FLOOR: f64 = 0.99;
 
-/// Per-query floor for `recall@12` — the strictest invariant.  With
+/// Per-query floor for `recall@12` — the strictest invariant. With
 /// the mock model this is exactly `1.0`; the `0.95` floor catches
 /// any future code change that degrades recall by more than one
 /// document for any (concept, lang) cell.
 const PER_QUERY_RECALL_AT_12_FLOOR: f64 = 0.95;
 
 /// Per-query floor for `hit-rate@1` — "the top result is a
-/// same-concept doc" invariant.  With the mock model this is
+/// same-concept doc" invariant. With the mock model this is
 /// exactly `1.0` for every query (any of the 12 tied paraphrases
-/// satisfies it).  A real model might occasionally promote a
+/// satisfies it). A real model might occasionally promote a
 /// closely-related concept to the top-1 spot, but the floor is
 /// pinned tight at `0.95` here because under the mock there is
 /// no excuse for any miss — if the benchmark is later run with
@@ -577,13 +577,13 @@ const PER_QUERY_RECALL_AT_12_FLOOR: f64 = 0.95;
 const PER_QUERY_HIT_RATE_AT_1_FLOOR: f64 = 0.95;
 
 /// Per-query floor for `hit-rate@3` — "at least one of the top-3
-/// results is a same-concept doc" invariant.  Strictly looser
+/// results is a same-concept doc" invariant. Strictly looser
 /// than hit-rate@1 (any miss on hit-rate@3 is also a miss on
 /// hit-rate@1), but the floor is pinned at the same `0.95` value
 /// because the mock makes both exactly `1.0`.
 const PER_QUERY_HIT_RATE_AT_3_FLOOR: f64 = 0.95;
 
-/// The Phase 2.1 cross-lingual recall benchmark.  Walks every
+/// The cross-lingual recall benchmark. Walks every
 /// (query_lang × concept) cell of the 120-entry corpus, computes
 /// `hit-rate@{1, 3}` (via [`hit_rate_at_k`]) and `recall@12`
 /// (via [`recall_at_k`]) per query, asserts both the per-query
@@ -596,20 +596,20 @@ const PER_QUERY_HIT_RATE_AT_3_FLOOR: f64 = 0.95;
 /// this corpus — useless as gates.  `hit-rate@k` (any relevant in
 /// top-k) is the gate that catches a top-result regression, and
 /// `recall@12` (k = `|relevant set|`) is the gate that catches a
-/// full-set regression.  See module-level docs for the full
+/// full-set regression. See module-level docs for the full
 /// rationale.
 ///
 /// With the [`BenchmarkMockModel`] this test runs in well under one
 /// second on a stock CI machine (12 × 10 = 120 queries × 120-row
 /// `search_hybrid` calls each = ~14_400 retrieval operations, all
 /// against an in-memory SQLCipher store and a pure-Rust mock
-/// embedder).  Replacing the mock with the real XLM-R adapter
+/// embedder). Replacing the mock with the real XLM-R adapter
 /// (one-line swap in [`open_benchmark_store`]) makes this a
 /// human-driven benchmark that an operator runs locally with the
 /// model artifact + ONNX runtime present, with the same assertions
 /// pinning the same invariants.
 #[test]
-fn phase_2_1_cross_lingual_recall_benchmark() {
+fn cross_lingual_recall_benchmark() {
     let (_dir, mut store) = open_benchmark_store();
     let scope = ScopeId::new_v4();
 
@@ -619,10 +619,10 @@ fn phase_2_1_cross_lingual_recall_benchmark() {
 
     // The retriever carries its own `EmbeddingModel` handle —
     // wire the same mock in so query-side embeddings land on the
-    // same axis as the ingest-side embeddings.  Vector-only
+    // same axis as the ingest-side embeddings. Vector-only
     // weights so the recall measurement is on the embedding
     // pipeline (FTS5 doesn't share script with most queries, so
-    // it would contribute mostly noise; the Phase 1.10 FTS5
+    // it would contribute mostly noise; the FTS5
     // lane weights are exercised by their own tests).
     let retriever = HybridRetriever::new(&store)
         .with_embedding_model(BenchmarkMockModel, "benchmark-mock-v1")
@@ -641,7 +641,7 @@ fn phase_2_1_cross_lingual_recall_benchmark() {
     // recall measurement isolates embedding quality, not the
     // candidate-sizing logic), we pass `limit = CORPUS.len()` and
     // then slice the returned top-N for the recall@k measurements
-    // below.  This shape is exactly what an operator would do to
+    // below. This shape is exactly what an operator would do to
     // benchmark recall on a small fixture: request a result set
     // big enough to cover the relevant universe, then compute
     // recall@k as the fraction of relevant docs in the top-k.
@@ -690,7 +690,7 @@ fn phase_2_1_cross_lingual_recall_benchmark() {
     let mean_r_at_12: f64 = measurements.iter().map(|m| m.recall_at_12).sum::<f64>() / n;
 
     eprintln!(
-        "Phase 2.1 cross-lingual recall benchmark (n={n} queries across {c} concepts × {l} languages):",
+        "Cross-lingual recall benchmark (n={n} queries across {c} concepts × {l} languages):",
         c = NUM_CONCEPTS,
         l = NUM_LANGUAGES,
     );
@@ -733,8 +733,7 @@ fn phase_2_1_cross_lingual_recall_benchmark() {
     }
     for (concept, (sum, count)) in &per_concept_mean {
         let mean = sum / *count as f64;
-        assert!(
-            mean >= MEAN_RECALL_AT_12_FLOOR,
+        assert!(mean >= MEAN_RECALL_AT_12_FLOOR,
             "concept {concept:?} mean recall@12 = {mean:.4} fell below floor {MEAN_RECALL_AT_12_FLOOR:.4} \
              (over {count} queries)"
         );
@@ -743,11 +742,11 @@ fn phase_2_1_cross_lingual_recall_benchmark() {
 
 /// Sanity check on the corpus shape itself — guards against a
 /// future contributor accidentally removing a row, duplicating a
-/// row, or breaking the (concept × language) density.  Run as a
+/// row, or breaking the (concept × language) density. Run as a
 /// separate test so a fixture-level regression surfaces as its
 /// own failure rather than as a confusing recall-floor breach.
 #[test]
-fn phase_2_1_corpus_shape_invariants() {
+fn corpus_shape_invariants() {
     assert_eq!(
         CORPUS.len(),
         NUM_CONCEPTS * NUM_LANGUAGES,
@@ -799,7 +798,7 @@ fn phase_2_1_corpus_shape_invariants() {
 /// different concept's axis would break the recall benchmark in
 /// non-obvious ways).
 #[test]
-fn phase_2_1_mock_model_concept_axis_invariants() {
+fn mock_model_concept_axis_invariants() {
     let model = BenchmarkMockModel;
 
     // Every corpus entry's text must embed onto its concept's axis,

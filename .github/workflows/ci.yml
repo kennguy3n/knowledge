@@ -370,7 +370,7 @@ jobs:
   test-http-client-isolated:
     name: test (http-client feature, isolated)
     runs-on: ubuntu-latest
-    # Phase 10e: exercise the `http-client` feature on the two
+    # Exercise the `http-client` feature on the two
     # network-aware crates *without* the rest of `--all-features`.
     # Catches the class of bug where `connector_framework` /
     # `inference_router` compile only because some OTHER feature
@@ -469,7 +469,7 @@ jobs:
   # `cross-ios` job pattern (macOS runner, aarch64-apple-ios
   # target) but goes further: invokes `crates/ffi/scripts/build_ios.sh`,
   # which calls `cargo swift package` to produce the same artefacts the
-  # Phase 1 release pipeline (and the platform host repo) consume.
+  # release pipeline (and the platform host repo) consume.
   # Uploaded as a workflow artefact so reviewers can download and
   # smoke-test the generated framework without running the build
   # locally.

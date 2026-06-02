@@ -47,8 +47,7 @@ fuzz_target!(|data: &[u8]| {
     // Decrypt must recover the original plaintext.
     let recovered = decrypt_aead(&key, &nonce, &ciphertext, aad)
         .expect("decrypt must succeed on freshly-encrypted ciphertext");
-    assert_eq!(
-        recovered, plaintext,
+    assert_eq!(recovered, plaintext,
         "round-trip plaintext mismatch"
     );
 
@@ -56,8 +55,7 @@ fuzz_target!(|data: &[u8]| {
     if !ciphertext.is_empty() {
         let mut tampered = ciphertext.clone();
         tampered[0] ^= 0x01;
-        assert!(
-            decrypt_aead(&key, &nonce, &tampered, aad).is_err(),
+        assert!(decrypt_aead(&key, &nonce, &tampered, aad).is_err(),
             "tampered ciphertext must fail authentication"
         );
     }

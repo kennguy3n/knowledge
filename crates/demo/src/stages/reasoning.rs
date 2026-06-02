@@ -50,10 +50,10 @@ use reasoning_engine::{
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::phases::runtime::RuntimeState;
-use crate::report::{DemoReport, PhaseReport};
+use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::RuntimeState;
 
-const PHASE: &str = "reasoning";
+const STAGE: &str = "reasoning";
 
 pub fn run(
     dataset: &Dataset,
@@ -62,7 +62,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Stage 10: Reasoning Engine");
+    let mut stage = StageReport::new("Stage 10: Reasoning Engine");
 
     let db_path = state
         .graph_db_path
@@ -169,7 +169,7 @@ pub fn run(
     let bench_contradiction_scan = bench_started.elapsed();
 
     log.check(
-        PHASE,
+        STAGE,
         "ContradictionDetector flagged the seeded opposing pair",
         edges.iter().any(|e| {
             (e.left == left_id && e.right == right_id) || (e.left == right_id && e.right == left_id)
@@ -206,12 +206,12 @@ pub fn run(
             .get(edge.id)
             .expect("adjudication record present after resolve");
         log.check(
-            PHASE,
+            STAGE,
             "adjudication state advanced to Resolved",
             matches!(record.state, AdjudicationState::Resolved),
         );
         log.check(
-            PHASE,
+            STAGE,
             "adjudication outcome marked the left side as winner",
             matches!(record.outcome, Some(AdjudicationOutcome::Winner { .. })),
         );
@@ -249,7 +249,7 @@ pub fn run(
         explore_paths = explore.paths.len() as u64;
         explore_visited = explore.visited.len() as u64;
         log.check(
-            PHASE,
+            STAGE,
             "exploratory traversal stayed within max_hops budget",
             explore.trace.hops_taken <= budget.max_hops,
         );
@@ -265,7 +265,7 @@ pub fn run(
         );
         targeted_hits = targeted.paths.len() as u64;
         log.check(
-            PHASE,
+            STAGE,
             "targeted traversal reached the seeded contradiction concept",
             !targeted.paths.is_empty(),
         );
@@ -351,7 +351,7 @@ pub fn run(
     let bench_got = bench_started.elapsed();
 
     log.check(
-        PHASE,
+        STAGE,
         "GoT executor produced a Conclusion-ending best path",
         got_result
             .best_path
@@ -359,7 +359,7 @@ pub fn run(
             .is_some_and(|t| matches!(t.thought_type, ThoughtType::Conclusion)),
     );
     log.check(
-        PHASE,
+        STAGE,
         "GoT executor stayed within budget (no exhaustion)",
         !got_result.budget_exhausted,
     );
@@ -368,7 +368,7 @@ pub fn run(
     let mut memory = WorkflowMemory::new();
     let trace_id = executor.record_trace(&mut memory, &got_query, &got_result);
     log.check(
-        PHASE,
+        STAGE,
         "GoT trace persisted into WorkflowMemory",
         memory.get_trace(trace_id).is_ok(),
     );
@@ -385,17 +385,17 @@ pub fn run(
     let bench_communities = bench_started.elapsed();
 
     log.check(
-        PHASE,
+        STAGE,
         "CommunityDetector returned at least one canonical cluster",
         !leaves.is_empty(),
     );
     log.check(
-        PHASE,
+        STAGE,
         "CommunityHierarchy levels start with the leaves at level 0",
         hierarchy.level_count() >= 1,
     );
     log.check(
-        PHASE,
+        STAGE,
         "CommunitySummaryGenerator produced summaries for every community",
         summaries.len() == hierarchy.communities.len() && !summaries.is_empty(),
     );
@@ -427,7 +427,7 @@ pub fn run(
     );
     let bench_route = bench_started.elapsed();
     log.check(
-        PHASE,
+        STAGE,
         "CommunityQueryRouter returned at least one visible summary",
         !routed.is_empty(),
     );
@@ -444,7 +444,7 @@ pub fn run(
         4,
     );
     log.check(
-        PHASE,
+        STAGE,
         "CommunityQueryRouter excludes communities for a user with no grants",
         stranger_routed.is_empty(),
     );
@@ -490,12 +490,12 @@ pub fn run(
     let bench_execute = bench_started.elapsed();
 
     log.check(
-        PHASE,
+        STAGE,
         "QueryPlanner produced a non-empty fallback chain for every query",
         plans.iter().all(|p| !p.steps.is_empty()),
     );
     log.check(
-        PHASE,
+        STAGE,
         "QueryPlanner.execute stopped at the first Success in every chain",
         executions.iter().all(|e| {
             e.succeeded() && e.attempts.last().map(|(_, o)| *o) == Some(StepOutcome::Success)
@@ -515,7 +515,7 @@ pub fn run(
         ))
         .scope(tenant_scope)
         .details(serde_json::json!({
-            "phase": PHASE,
+            "stage": STAGE,
             "contradictions_resolved": resolved,
             "communities_detected": leaves.len(),
             "got_best_path_confidence": got_result.confidence,
@@ -527,21 +527,21 @@ pub fn run(
     // ---------------------------------------------------------------
     // Bookkeeping.
     // ---------------------------------------------------------------
-    phase.timing = started.elapsed();
-    phase.stat("contradictions_flagged", edges.len().to_string());
-    phase.stat("contradictions_resolved", resolved.to_string());
-    phase.stat("explore_paths", explore_paths.to_string());
-    phase.stat("explore_visited", explore_visited.to_string());
-    phase.stat("targeted_hits", targeted_hits.to_string());
-    phase.stat("got_thoughts", got_result.reasoning_trace.len().to_string());
-    phase.stat("got_paths", got_result.all_paths.len().to_string());
-    phase.stat("got_confidence", format!("{:.3}", got_result.confidence));
-    phase.stat("communities_detected", leaves.len().to_string());
-    phase.stat("community_levels", hierarchy.level_count().to_string());
-    phase.stat("community_summaries", summaries.len().to_string());
-    phase.stat("routed_summaries", routed.len().to_string());
-    phase.stat("plans_generated", plans.len().to_string());
-    phase.stat(
+    stage.timing = started.elapsed();
+    stage.stat("contradictions_flagged", edges.len().to_string());
+    stage.stat("contradictions_resolved", resolved.to_string());
+    stage.stat("explore_paths", explore_paths.to_string());
+    stage.stat("explore_visited", explore_visited.to_string());
+    stage.stat("targeted_hits", targeted_hits.to_string());
+    stage.stat("got_thoughts", got_result.reasoning_trace.len().to_string());
+    stage.stat("got_paths", got_result.all_paths.len().to_string());
+    stage.stat("got_confidence", format!("{:.3}", got_result.confidence));
+    stage.stat("communities_detected", leaves.len().to_string());
+    stage.stat("community_levels", hierarchy.level_count().to_string());
+    stage.stat("community_summaries", summaries.len().to_string());
+    stage.stat("routed_summaries", routed.len().to_string());
+    stage.stat("plans_generated", plans.len().to_string());
+    stage.stat(
         "plan_execute_succeeded",
         executions
             .iter()
@@ -581,7 +581,7 @@ pub fn run(
         bench_execute,
     );
 
-    report.phases.push(phase);
+    report.add_stage(stage);
 }
 
 fn build_namespace_registry() -> NamespaceRegistry {

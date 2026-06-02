@@ -57,7 +57,7 @@
 ///   replays this table into the in-process [`DekRegistry`] on
 ///   every `open_store` so post-restart calls for forgotten epochs
 ///   continue to short-circuit. Purely additive.
-/// - v9 (Phase 3 connector persistence): added `connector_instances`
+/// - v9 (connector persistence): added `connector_instances`
 ///   for AEAD-encrypted per-instance `(ConnectorConfig, SyncState)`
 ///   blobs and `connector_tokens` for AEAD-encrypted per-instance
 ///   `OAuth2Token` bundles. Both encrypted under the same per-scope
@@ -69,7 +69,7 @@
 ///   single-instance-per-(scope, kind) contract at the DB layer
 ///   (defense-in-depth against future regressions of the runtime-
 ///   side check). Purely additive.
-/// - v10 (Phase 8 approved-document payloads): added
+/// - v10 (approved-document payloads): added
 ///   `approved_document_payloads` for per-(tenant scope, document)
 ///   AEAD-encrypted opaque payload bytes attached to a previously
 ///   admitted `ApprovedDocumentRef`. Encrypted under the per-scope
@@ -83,7 +83,7 @@
 ///   payload. `forget(scope)` deletes the rows by `scope_id`; even
 ///   if that delete fails, the scope-DEK destruction step makes the
 ///   ciphertext unrecoverable. Purely additive.
-/// - v11 (Phase 10 Item 4 — synthesis replay history): added
+/// - v11 (synthesis replay history): added
 ///   `synthesis_object_versions` to record the full prior-version
 ///   history of a synthesised window. The current `synthesis_objects`
 ///   blob (one row per scope under `memory_objects(kind =
@@ -101,8 +101,8 @@
 ///   simply have no version history rows yet, matching the
 ///   pre-Item-4 contract where every synthesis output overwrote
 ///   the prior one with no recoverable trail.
-/// - v12 (Phase 10 Item 6 — body-store dedup for approved-document
-///   payloads): the `approved_document_payloads` table loses its
+/// - v12 (body-store dedup for approved-document payloads):
+///   the `approved_document_payloads` table loses its
 ///   inline `nonce` + `payload` columns and becomes metadata-only.
 ///   The plaintext bytes now live in the shared content-hash-
 ///   deduplicated `body_store` table, encrypted under a random
@@ -118,7 +118,7 @@
 ///   `ALTER TABLE ... DROP COLUMN` calls are implemented in
 ///   `migrate_approved_doc_payloads_to_body_store` (a post-bootstrap
 ///   step run from `open` after the scope-DEK cache is hydrated).
-/// - v13 (Phase 1.3 — multilingual ingestion): added the optional
+/// - v13 (multilingual ingestion): added the optional
 ///   `language_tag` column to the `evidence` table. The column
 ///   stores the BCP-47 primary subtag detected on the row's
 ///   plaintext body by
@@ -136,7 +136,7 @@
 ///   `ALTER TABLE ADD COLUMN` does not run the append-only
 ///   triggers (DDL bypasses row triggers), so the addition is
 ///   safe against the existing `evidence_no_update` trigger.
-/// - v14 (Phase 1.2 — CJK-aware FTS5 tokeniser): added the
+/// - v14 (CJK-aware FTS5 tokeniser): added the
 ///   `evidence_fts_cjk` virtual table indexed with FTS5's built-in
 ///   `trigram` tokeniser. The pre-v14 `evidence_fts` table
 ///   (`tokenize='unicode61 remove_diacritics 2'`) returns zero hits
@@ -163,10 +163,10 @@
 ///   a hard 3-codepoint minimum for both indexed substrings and
 ///   query strings — 2-character CJK queries like `天気` return ∅
 ///   even when the substring is present in the indexed text.
-///   Schema v15 (Phase 1.2.1) closes that gap via a precomputed-
-///   bigram lane in a parallel `evidence_fts_bigram` table; see
+///   Schema v15 closes that gap via a precomputed-bigram lane
+///   in a parallel `evidence_fts_bigram` table; see
 ///   the v15 history entry below.
-/// - v15 (Phase 1.2.1 — CJK / Thai bigram recall lane): added
+/// - v15 (CJK / Thai bigram recall lane): added
 ///   the `evidence_fts_bigram` virtual table that stores
 ///   whitespace-separated overlapping 2-codepoint windows of the
 ///   CJK / Thai portion of each body under the same
@@ -193,7 +193,7 @@
 ///   migration's pattern. Forget / purge / rebuild now touch
 ///   all three FTS shadow tables in the same transaction so
 ///   they cannot drift apart under crash recovery.
-/// - v16 (Phase 1.9 — symmetric recall-lane stopword stripping):
+/// - v16 (symmetric recall-lane stopword stripping):
 ///   the unicode61 baseline lane is left untouched (BM25 idf
 ///   already discounts high-frequency particles for whitespace-
 ///   tokenised scripts), but the trigram and bigram lanes now
@@ -305,7 +305,7 @@ CREATE INDEX IF NOT EXISTS idx_ring_buffer_scope_created
 -- Devanagari, Hangul) including any Latin terms embedded inside a
 -- CJK or Thai document. CJK Han / Hiragana / Katakana / Thai
 -- substrings are routed *additionally* into `evidence_fts_cjk`
--- below (Phase 1.2 / v14) — `unicode61` produces no tokens for
+-- below (schema v14) — `unicode61` produces no tokens for
 -- those codepoints because it classifies them as separators.
 CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(
     content,
@@ -314,7 +314,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(
     tokenize    = 'unicode61 remove_diacritics 2'
 );
 
--- v14 (Phase 1.2): trigram-tokenised FTS5 index used for CJK and
+-- v14: trigram-tokenised FTS5 index used for CJK and
 -- Thai content where the `unicode61` tokeniser of `evidence_fts`
 -- emits zero tokens. The write path inserts a row here *in
 -- addition to* `evidence_fts` whenever the body contains any
@@ -329,7 +329,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_cjk USING fts5(
     tokenize    = 'trigram'
 );
 
--- v15 (Phase 1.2.1): CJK / Thai bigram recall lane. The `content`
+-- v15: CJK / Thai bigram recall lane. The `content`
 -- column stores a whitespace-separated string of overlapping
 -- 2-codepoint windows over the CJK / Thai portion of the body
 -- (computed by `crate::bigram::compute_cjk_bigrams`); the
@@ -463,11 +463,11 @@ CREATE TABLE IF NOT EXISTS epoch_tombstones (
     PRIMARY KEY (scope_id, epoch_id)
 );
 
--- v9 (Phase 3) — persisted connector instances.
+-- v9 — persisted connector instances.
 -- Each row stores one connector's `(ConnectorConfig, SyncState)`
 -- pair as a single AEAD-encrypted JSON blob under the per-scope DEK.
 -- The blob is upserted on `create_connector` (initial state) and on
--- every `sync_connector` Phase 3 (advancing the `SyncState` cursor /
+-- every `sync_connector` call (advancing the `SyncState` cursor /
 -- status). The `kind` column is denormalised out of the encrypted
 -- payload so the unique index below can pin the single-instance-per-
 -- `(scope_id, kind)` contract at the DB layer without first having
@@ -493,7 +493,7 @@ CREATE TABLE IF NOT EXISTS connector_instances (
 CREATE INDEX IF NOT EXISTS idx_connector_instances_scope
     ON connector_instances (scope_id);
 
--- Defense-in-depth: the Phase 2 runtime check in `create_connector`
+-- Defense-in-depth: the runtime check in `create_connector`
 -- rejects duplicates with `ConnectorError::DuplicateConnector` under
 -- the per-handle mutex (see `crates/ffi/src/connector.rs`). This
 -- unique index pins the same contract at the database layer so a
@@ -504,7 +504,7 @@ CREATE INDEX IF NOT EXISTS idx_connector_instances_scope
 CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_instances_scope_kind
     ON connector_instances (scope_id, kind);
 
--- v9 (Phase 3) — persisted OAuth2 token bundles.
+-- v9 — persisted OAuth2 token bundles.
 -- Held in a separate table from `connector_instances` because the
 -- token lifecycle is independent: created by `authenticate_connector`,
 -- mutated by future background-refresh flows, and dropped by
@@ -529,8 +529,8 @@ CREATE TABLE IF NOT EXISTS connector_tokens (
 CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
     ON connector_tokens (scope_id);
 
--- v10 (Phase 8) — opaque approved-document payloads.
--- v12 (Phase 10 Item 6) — content-hash dedup via `body_store`.
+-- v10 — opaque approved-document payloads.
+-- v12 — content-hash dedup via `body_store`.
 --
 -- Each row attaches metadata to an `ApprovedDocumentRef` previously
 -- admitted onto a `TenantMemoryObject`. The ref lives inside the
@@ -539,8 +539,8 @@ CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
 -- the actual plaintext bytes stored in the deduplicated `body_store`
 -- table. The payload bytes themselves are AEAD-encrypted under a
 -- random per-row CEK that is wrapped under each referencing scope's
--- DEK in `body_store_key_wraps`, identical to how Phase 5
--- (WS1) handles the evidence body-table content.
+-- DEK in `body_store_key_wraps`, identical to how the evidence
+-- body-table content is handled.
 --
 -- The pre-v12 schema carried inline `nonce` + `payload` columns
 -- here, encrypted directly under the scope DEK with AAD binding
@@ -580,7 +580,7 @@ CREATE TABLE IF NOT EXISTS approved_document_payloads (
     PRIMARY KEY (scope_id, document_id)
 );
 
--- Per-window synthesis-object version history (Phase 10 Item 4).
+-- Per-window synthesis-object version history.
 --
 -- The live `synthesis_objects` blob (keyed by `memory_objects.kind
 -- = 'synthesis_object'`, one row per scope) carries only the

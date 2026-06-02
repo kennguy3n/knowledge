@@ -45,10 +45,10 @@ use uuid::Uuid;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::phases::runtime::RuntimeState;
-use crate::report::{DemoReport, PhaseReport};
+use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::RuntimeState;
 
-const PHASE: &str = "export";
+const STAGE: &str = "export";
 
 pub fn run(
     dataset: &Dataset,
@@ -57,7 +57,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Stage 8: Export Plane");
+    let mut stage = StageReport::new("Stage 8: Export Plane");
 
     // -------- Re-open the persistent concept graph -----------------
     //
@@ -83,7 +83,7 @@ pub fn run(
     let canonical_ids: Vec<Uuid> = state.canonical_concept_ids.clone();
     let canonical_total = canonical_ids.len();
     log.check(
-        PHASE,
+        STAGE,
         "concept-graph stage surfaced at least 3 canonical concepts to export",
         canonical_total >= 3,
     );
@@ -113,18 +113,18 @@ pub fn run(
     let registered_count = controls.concepts().count();
 
     log.check(
-        PHASE,
+        STAGE,
         "registry contains a control row for every approved canonical concept",
         registered_count == registered_ids.len(),
     );
     log.check(
-        PHASE,
+        STAGE,
         "deny-by-default: at least one canonical concept has no control row",
         unregistered_id.is_some(),
     );
     if let Some(id) = unregistered_id {
         log.check(
-            PHASE,
+            STAGE,
             "registry rejects the un-registered canonical concept",
             !controls.allows_concept(id, Uuid::nil(), Uuid::nil(), chrono::Utc::now()),
         );
@@ -193,7 +193,7 @@ pub fn run(
     let approval_count = approved_concept_ids.len();
 
     log.check(
-        PHASE,
+        STAGE,
         "approval workflow accepted every registered canonical concept",
         approval_count == registered_ids.len(),
     );
@@ -214,7 +214,7 @@ pub fn run(
         false
     };
     log.check(
-        PHASE,
+        STAGE,
         "duplicate approval is rejected by the workflow",
         duplicate_blocked,
     );
@@ -247,12 +247,12 @@ pub fn run(
     let profile_concept_count = profile.concepts.len() as u64;
 
     log.check(
-        PHASE,
+        STAGE,
         "profile carries every approved concept",
         profile.concepts.len() == approval_count,
     );
     log.check(
-        PHASE,
+        STAGE,
         "profile carries a non-empty constraint set",
         !profile.constraints.is_empty(),
     );
@@ -270,17 +270,17 @@ pub fn run(
     let rejected_by_engine = decision.rejected.len() as u64;
 
     log.check(
-        PHASE,
+        STAGE,
         "policy engine approves every concept under the demo policy",
         approved_by_engine == profile_concept_count,
     );
     log.check(
-        PHASE,
+        STAGE,
         "policy engine rejects no concept under the demo policy",
         rejected_by_engine == 0,
     );
     log.check(
-        PHASE,
+        STAGE,
         "policy engine refuses raw evidence by default",
         !decision.allow_raw_evidence,
     );
@@ -296,12 +296,12 @@ pub fn run(
     .expect("render ConceptsOnly view");
     let concepts_only_elapsed = render_started.elapsed();
     log.check(
-        PHASE,
+        STAGE,
         "ConceptsOnly view surfaces every approved concept",
         concepts_only.content.concepts().len() as u64 == approved_by_engine,
     );
     log.check(
-        PHASE,
+        STAGE,
         "ConceptsOnly view exposes no summaries or evidence pack",
         concepts_only.content.summaries().is_empty()
             && concepts_only.content.evidence_pack().is_none(),
@@ -325,12 +325,12 @@ pub fn run(
     .expect("render WithSummaries view");
     let with_summaries_elapsed = with_summaries_started.elapsed();
     log.check(
-        PHASE,
+        STAGE,
         "WithSummaries view exposes the supplied summary",
         with_summaries.content.summaries().len() == 1,
     );
     log.check(
-        PHASE,
+        STAGE,
         "WithSummaries view still surfaces the full approved concept set",
         with_summaries.content.concepts().len() as u64 == approved_by_engine,
     );
@@ -356,7 +356,7 @@ pub fn run(
         Err(ExportViewError::RawEvidenceNotAuthorised)
     );
     log.check(
-        PHASE,
+        STAGE,
         "WithEvidencePack is rejected when policy disallows raw evidence",
         evidence_blocked,
     );
@@ -367,17 +367,17 @@ pub fn run(
     let simulation = simulator.simulate(&profile);
     let simulate_elapsed = simulate_started.elapsed();
     log.check(
-        PHASE,
+        STAGE,
         "simulator's included-concept set matches the engine's approved set",
         simulation.included_concepts.len() as u64 == approved_by_engine,
     );
     log.check(
-        PHASE,
+        STAGE,
         "simulator surfaces the registered exportable summary",
         simulation.included_summaries.contains(&summary_id),
     );
     log.check(
-        PHASE,
+        STAGE,
         "simulator excludes the non-exportable summary",
         simulation
             .excluded_summaries
@@ -385,12 +385,12 @@ pub fn run(
             .any(|ex| ex.entity_id == blocked_summary_id),
     );
     log.check(
-        PHASE,
+        STAGE,
         "simulator estimate is non-trivial when concepts are included",
         simulation.total_export_size_estimate > 0,
     );
     log.check(
-        PHASE,
+        STAGE,
         "simulator does not authorise raw-evidence emission under the demo policy",
         !simulation.would_include_evidence,
     );
@@ -426,37 +426,37 @@ pub fn run(
     state.export_views_rendered += 2; // ConceptsOnly + WithSummaries
     state.export_simulations_run += 1;
 
-    phase.timing = started.elapsed();
-    phase.stat("canonical_concepts_total", canonical_total.to_string());
-    phase.stat("controls_registered", registered_count.to_string());
-    phase.stat("approvals_minted", approval_count.to_string());
-    phase.stat("engine_approved_concepts", approved_by_engine.to_string());
-    phase.stat("engine_rejected_concepts", rejected_by_engine.to_string());
-    phase.stat(
+    stage.timing = started.elapsed();
+    stage.stat("canonical_concepts_total", canonical_total.to_string());
+    stage.stat("controls_registered", registered_count.to_string());
+    stage.stat("approvals_minted", approval_count.to_string());
+    stage.stat("engine_approved_concepts", approved_by_engine.to_string());
+    stage.stat("engine_rejected_concepts", rejected_by_engine.to_string());
+    stage.stat(
         "view_concepts_only_concepts",
         concepts_only.content.concepts().len().to_string(),
     );
-    phase.stat(
+    stage.stat(
         "view_with_summaries_summaries",
         with_summaries.content.summaries().len().to_string(),
     );
-    phase.stat(
+    stage.stat(
         "simulator_included_concepts",
         simulation.included_concepts.len().to_string(),
     );
-    phase.stat(
+    stage.stat(
         "simulator_excluded_concepts",
         simulation.excluded_concepts.len().to_string(),
     );
-    phase.stat(
+    stage.stat(
         "simulator_included_summaries",
         simulation.included_summaries.len().to_string(),
     );
-    phase.stat(
+    stage.stat(
         "simulator_size_estimate_bytes",
         simulation.total_export_size_estimate.to_string(),
     );
-    phase.note(
+    stage.note(
         "Deny-by-default ExportControlRegistry + PolicyEngine + PolicySimulator + \
          ConceptApprovalWorkflow + ExportView render pipeline driven by the concept-graph stage's \
          canonical concepts.",
@@ -466,7 +466,7 @@ pub fn run(
     report.count("export_concepts_approved", state.export_concepts_approved);
     report.count("export_views_rendered", state.export_views_rendered);
     report.count("export_simulations_run", state.export_simulations_run);
-    report.add_phase(phase);
+    report.add_stage(stage);
     report.add_benchmark(
         "export_registry_inserts",
         registered_count as u64,

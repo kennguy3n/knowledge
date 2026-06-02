@@ -1,5 +1,5 @@
 //! Integration tests for the `approved_document_payloads` table
-//! (Phase 8 / schema v10; reshaped in Phase 10 Item 6 / schema v12
+//! (schema v10; reshaped in schema v12
 //! to back the payload bytes with the deduplicated `body_store`
 //! table + per-scope CEK wraps in `body_store_key_wraps`).
 //!
@@ -250,7 +250,7 @@ fn approved_doc_payload_body_cipher_tampering_fails_aead() {
     // Pre-v12 this property was enforced per-row in
     // `approved_document_payloads` via `approved_doc_payload_aad`;
     // post-v12 it moves to the shared body table where the same
-    // AAD discipline applies to every Phase-5 body row.
+    // AAD discipline applies to every earlier body row.
     let (_dir, store) = fresh_store();
     let scope = ScopeId::new_v4();
     let doc = uuid::Uuid::new_v4();

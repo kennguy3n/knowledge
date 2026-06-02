@@ -77,7 +77,7 @@ pub struct EvidenceRow {
     /// Unix epoch seconds at ingest.
     pub created_at: i64,
     /// BCP-47 primary language subtag detected on the plaintext
-    /// body at ingest time (schema v13, Phase 1.3). `None` when
+    /// body at ingest time (schema v13). `None` when
     /// the row was ingested via the legacy
     /// [`EvidenceStore::ingest`] shim, when the language detector
     /// declined to classify, or when the row predates schema v13.
@@ -250,15 +250,15 @@ impl EvidenceStore {
         // Schema migration. Read the existing `user_version` BEFORE
         // running the bootstrap SQL so we can detect three states:
         //
-        //   * `user_version == 0`  → fresh database, run the full
+        //   * `user_version == 0` → fresh database, run the full
         //                            bootstrap and stamp the version.
-        //   * `user_version <  SCHEMA_VERSION` → legacy database; the
+        //   * `user_version < SCHEMA_VERSION` → legacy database; the
         //                            additive `CREATE * IF NOT EXISTS`
         //                            statements in [`SCHEMA_SQL`]
         //                            forward-port the schema, and any
         //                            version-specific deltas are
         //                            applied by [`apply_migration`].
-        //   * `user_version >  SCHEMA_VERSION` → database written by a
+        //   * `user_version > SCHEMA_VERSION` → database written by a
         //                            newer build; refuse to open
         //                            rather than corrupt it.
         //
@@ -347,7 +347,7 @@ impl EvidenceStore {
             store.backfill_legacy_body_wraps()?;
         }
 
-        // v11→v12 (Phase 10 Item 6) — move every existing inline
+        // v11→v12 — move every existing inline
         // approved-document payload ciphertext into the deduplicated
         // `body_store` table, then drop the legacy `nonce` + `payload`
         // columns from `approved_document_payloads`. This is
@@ -427,7 +427,7 @@ impl EvidenceStore {
     }
 
     /// Same contract as [`Self::ingest`], but additionally stamps
-    /// the row's `language_tag` column (schema v13, Phase 1.3) with
+    /// the row's `language_tag` column (schema v13) with
     /// a BCP-47 primary subtag.
     ///
     /// The substrate's ingest path runs
@@ -783,7 +783,7 @@ impl EvidenceStore {
             "INSERT INTO evidence_fts (content, evidence_id, scope_id) VALUES (?1, ?2, ?3)",
             params![text, evidence_id_bytes, scope_id_bytes],
         )?;
-        // Phase 1.2 / schema v14: rows whose body contains any CJK
+        // schema v14: rows whose body contains any CJK
         // Han / Hiragana / Katakana / Thai codepoint *additionally*
         // go into `evidence_fts_cjk` (trigram). `unicode61` emits
         // zero tokens for those codepoints, so without this branch
@@ -794,7 +794,7 @@ impl EvidenceStore {
         // table. See `crate::script::contains_cjk_or_thai` for the
         // codepoint membership rationale.
         if crate::script::contains_cjk_or_thai(text) {
-            // Phase 1.9 / schema v16: strip recall-lane stopwords
+            // schema v16: strip recall-lane stopwords
             // (Japanese / Chinese / Thai / Tibetan / Khmer /
             // Myanmar / Lao function words) BEFORE the trigram and
             // bigram lanes index the body. Stripping replaces each
@@ -818,7 +818,7 @@ impl EvidenceStore {
             // produce the bridging trigram that the unstripped
             // side still expects). See [`crate::fts_stopwords`]
             // for the symmetric-stripping rationale.
-            // Counted variant feeds the Phase 1.10 index-write
+            // Counted variant feeds the index-write
             // stopword strip telemetry — `strip_count` is the
             // number of stopword instances replaced.
             let (stripped, strip_count) =
@@ -832,7 +832,7 @@ impl EvidenceStore {
                  VALUES (?1, ?2, ?3)",
                 params![stripped.as_ref(), evidence_id_bytes, scope_id_bytes],
             )?;
-            // Phase 1.2.1 / schema v15: rows that route to
+            // schema v15: rows that route to
             // `evidence_fts_cjk` *additionally* go into
             // `evidence_fts_bigram`, which stores the
             // whitespace-separated overlapping 2-codepoint
@@ -906,7 +906,7 @@ impl EvidenceStore {
         if text.is_empty() {
             return;
         }
-        // Phase 1.12 pre-embedding routing gate.  A body
+        // pre-embedding routing gate. A body
         // classified as noise-only (pure punctuation / emoji /
         // digits / whitespace) is still indexed via FTS5 by the
         // caller — we just skip writing a vector row for it.
@@ -959,8 +959,7 @@ impl EvidenceStore {
                 created_at,
             ],
         ) {
-            tracing::debug!(
-                evidence_id = %evidence_id.as_uuid(),
+            tracing::debug!(evidence_id = %evidence_id.as_uuid(),
                 model_tag,
                 error = %err,
                 "evidence_embeddings INSERT swallowed; the row is still recoverable via FTS + the retriever re-embed fallback",
@@ -1037,8 +1036,7 @@ impl EvidenceStore {
                     created_at,
                 ],
             ) {
-                tracing::debug!(
-                    evidence_id = %evidence_id.as_uuid(),
+                tracing::debug!(evidence_id = %evidence_id.as_uuid(),
                     model_tag,
                     error = %err,
                     "evidence_embeddings dedup-copy INSERT swallowed; the row is still recoverable via FTS + the retriever re-embed fallback",
@@ -1271,18 +1269,18 @@ impl EvidenceStore {
     /// pre-process per FTS5's syntax (e.g. quote phrases). The result
     /// is the matching evidence ids ordered by FTS5 rank.
     ///
-    /// As of schema v15 (Phase 1.2.1) the search fans out across
+    /// As of schema v15 the search fans out across
     /// **three** lexical indexes and de-duplicates on `evidence_id`,
     /// taking the best (smallest, since FTS5 rank is negative-and-
     /// smaller-is-better) of whichever ranks the row appears under:
     ///
     /// * `evidence_fts` (unicode61, schema v1) — universal lane for
     ///   whitespace / punctuation-segmented scripts.
-    /// * `evidence_fts_cjk` (trigram, schema v14, Phase 1.2) — CJK /
+    /// * `evidence_fts_cjk` (trigram, schema v14) — CJK /
     ///   Thai substring lane for queries of ≥ 3 codepoints (FTS5's
     ///   built-in trigram tokeniser cannot serve shorter queries).
     /// * `evidence_fts_bigram` (precomputed bigrams under
-    ///   `unicode61`, schema v15, Phase 1.2.1) — CJK / Thai recall
+    ///   `unicode61`, schema v15) — CJK / Thai recall
     ///   lane for **2-codepoint** queries like `天気` (Japanese
     ///   "weather") that the trigram lane cannot serve. Bigrams are
     ///   computed at write time over the CJK / Thai portion of the
@@ -1335,12 +1333,12 @@ impl EvidenceStore {
     ///   is **purely additive recall** on the same contract as the
     ///   trigram branch. Queries with fewer than 2 CJK / Thai
     ///   codepoints round-trip as empty bigram matches, so adding
-    ///   the branch never changes the result set of a pre-Phase-1.2.1
+    ///   the branch never changes the result set of an earlier
     ///   pure-Latin query.
     ///
     /// Concretely, a 2-codepoint CJK query like `天気` — which the
     /// v14 trigram lane could not serve — now returns matches via
-    /// the bigram lane (Phase 1.2.1 closes the documented Phase 1.2
+    /// the bigram lane (closing the documented 2-codepoint recall
     /// floor). A mixed query like `"to OR 良い天気"` still returns
     /// the `unicode61` hit on `to` even though the trigram branch
     /// rejects the 2-char `to` token, AND additionally picks up CJK
@@ -1367,7 +1365,7 @@ impl EvidenceStore {
 
     /// Test-only variant of [`Self::search_fts`] that exposes the
     /// post-lane-weighting BM25 rank for every returned row, so
-    /// Phase 1.8 integration tests can pin the cross-lane
+    /// integration tests can pin the cross-lane
     /// precision-vs-recall hierarchy at the rank-arithmetic level
     /// (and not just at the recall-preservation level that
     /// [`Self::search_fts`] would surface).
@@ -1379,7 +1377,7 @@ impl EvidenceStore {
     /// [`crate::fts_weights::EVIDENCE_FTS_BIGRAM_LANE_WEIGHT`].
     /// This is the integration-test counterpart to the unit-test
     /// pinning in [`crate::fts_weights::tests`] and the SQL-
-    /// shape pinning in [`phase_1_8_lane_sql_tests`].
+    /// shape pinning in [`lane_sql_tests`].
     ///
     /// Only available with the `test-support` feature (or in unit
     /// tests of this crate). The public surface remains the
@@ -1445,9 +1443,7 @@ impl EvidenceStore {
             }
             // Delete the oldest row by created_at, then by id as a
             // tiebreaker.
-            let rows_changed = tx.execute(
-                "DELETE FROM ring_buffer WHERE id = (
-                     SELECT id FROM ring_buffer ORDER BY created_at ASC, id ASC LIMIT 1
+            let rows_changed = tx.execute("DELETE FROM ring_buffer WHERE id = (SELECT id FROM ring_buffer ORDER BY created_at ASC, id ASC LIMIT 1
                  )",
                 [],
             )?;
@@ -1993,8 +1989,8 @@ impl EvidenceStore {
     }
 
     /// Test-only helper that surgically reshapes
-    /// `approved_document_payloads` back to its pre-v12 (Phase 8 /
-    /// v10) inline layout and writes a single legacy-shape row.
+    /// `approved_document_payloads` back to its pre-v12 (v10)
+    /// inline layout and writes a single legacy-shape row.
     ///
     /// The post-bootstrap migration
     /// [`Self::migrate_approved_doc_payloads_to_body_store`] runs
@@ -2216,7 +2212,7 @@ impl EvidenceStore {
     /// fails to decrypt.
     ///
     /// Upserts: calling this with the same `instance_id` overwrites the
-    /// previous blob (used by `sync_connector` Phase 3 to advance the
+    /// previous blob (used by `sync_connector` to advance the
     /// stored `SyncState` cursor).
     pub fn save_connector_instance(
         &self,
@@ -2315,8 +2311,7 @@ impl EvidenceStore {
             let instance_id = match slice_to_uuid(&instance_bytes) {
                 Ok(id) => id,
                 Err(e) => {
-                    tracing::warn!(
-                        instance_bytes_len = instance_bytes.len(),
+                    tracing::warn!(instance_bytes_len = instance_bytes.len(),
                         error = %e,
                         "connector_instances row has malformed instance_id; skipping",
                     );
@@ -2326,8 +2321,7 @@ impl EvidenceStore {
             let scope_id = match slice_to_uuid(&scope_bytes) {
                 Ok(id) => ScopeId::from_uuid(id),
                 Err(e) => {
-                    tracing::warn!(
-                        instance = %instance_id,
+                    tracing::warn!(instance = %instance_id,
                         scope_bytes_len = scope_bytes.len(),
                         error = %e,
                         "connector_instances row has malformed scope_id; skipping",
@@ -2336,8 +2330,7 @@ impl EvidenceStore {
                 }
             };
             if nonce_bytes.len() != AEAD_NONCE_LEN {
-                tracing::warn!(
-                    instance = %instance_id,
+                tracing::warn!(instance = %instance_id,
                     "connector_instances row has malformed nonce; skipping",
                 );
                 continue;
@@ -2347,8 +2340,7 @@ impl EvidenceStore {
             let key = match self.scope_key(scope_id) {
                 Ok(k) => k,
                 Err(e) => {
-                    tracing::warn!(
-                        instance = %instance_id,
+                    tracing::warn!(instance = %instance_id,
                         scope = %scope_id.as_uuid(),
                         error = %e,
                         "connector_instances scope key unavailable; skipping row",
@@ -2360,8 +2352,7 @@ impl EvidenceStore {
             match decrypt_aead(&key, &nonce, &ciphertext, &aad) {
                 Ok(plaintext) => out.push((instance_id, scope_id, kind_tag, plaintext)),
                 Err(e) => {
-                    tracing::warn!(
-                        instance = %instance_id,
+                    tracing::warn!(instance = %instance_id,
                         scope = %scope_id.as_uuid(),
                         error = %e,
                         "connector_instances row failed to decrypt; skipping",
@@ -2461,8 +2452,7 @@ impl EvidenceStore {
             let instance_id = match slice_to_uuid(&instance_bytes) {
                 Ok(id) => id,
                 Err(e) => {
-                    tracing::warn!(
-                        instance_bytes_len = instance_bytes.len(),
+                    tracing::warn!(instance_bytes_len = instance_bytes.len(),
                         error = %e,
                         "connector_tokens row has malformed instance_id; skipping",
                     );
@@ -2472,8 +2462,7 @@ impl EvidenceStore {
             let scope_id = match slice_to_uuid(&scope_bytes) {
                 Ok(id) => ScopeId::from_uuid(id),
                 Err(e) => {
-                    tracing::warn!(
-                        instance = %instance_id,
+                    tracing::warn!(instance = %instance_id,
                         scope_bytes_len = scope_bytes.len(),
                         error = %e,
                         "connector_tokens row has malformed scope_id; skipping",
@@ -2482,8 +2471,7 @@ impl EvidenceStore {
                 }
             };
             if nonce_bytes.len() != AEAD_NONCE_LEN {
-                tracing::warn!(
-                    instance = %instance_id,
+                tracing::warn!(instance = %instance_id,
                     "connector_tokens row has malformed nonce; skipping",
                 );
                 continue;
@@ -2493,8 +2481,7 @@ impl EvidenceStore {
             let key = match self.scope_key(scope_id) {
                 Ok(k) => k,
                 Err(e) => {
-                    tracing::warn!(
-                        instance = %instance_id,
+                    tracing::warn!(instance = %instance_id,
                         scope = %scope_id.as_uuid(),
                         error = %e,
                         "connector_tokens scope key unavailable; skipping row",
@@ -2506,8 +2493,7 @@ impl EvidenceStore {
             match decrypt_aead(&key, &nonce, &ciphertext, &aad) {
                 Ok(plaintext) => out.push((instance_id, scope_id, plaintext)),
                 Err(e) => {
-                    tracing::warn!(
-                        instance = %instance_id,
+                    tracing::warn!(instance = %instance_id,
                         scope = %scope_id.as_uuid(),
                         error = %e,
                         "connector_tokens row failed to decrypt; skipping",
@@ -2518,8 +2504,8 @@ impl EvidenceStore {
         Ok(out)
     }
 
-    // ───────────── Approved-document payloads (v10 / Phase 8;
-    //               v12 / Phase 10 Item 6: body-store dedup) ──────────
+    // ───────────── Approved-document payloads (v10 / ;
+    //               v12 / : body-store dedup) ──────────
     //
     // Tenant memory carries the *reference* (id / label / approver /
     // approved_at) for every admitted approved document, but the
@@ -2564,7 +2550,7 @@ impl EvidenceStore {
     /// Upsert an opaque approved-document payload for
     /// `(scope_id, document_id)`.
     ///
-    /// As of v12 (Phase 10 Item 6) the plaintext is stored in the
+    /// As of v12 the plaintext is stored in the
     /// content-hash-deduplicated `body_store` table — admitting the
     /// same content into N tenant scopes costs one body row + N
     /// per-scope CEK wraps in `body_store_key_wraps` instead of N
@@ -2823,7 +2809,7 @@ impl EvidenceStore {
     /// Load the plaintext payload bytes for `(scope_id, document_id)`.
     /// Returns `None` if no metadata row exists.
     ///
-    /// As of v12 (Phase 10 Item 6) the read path joins
+    /// As of v12 the read path joins
     /// `approved_document_payloads` (metadata: content_hash, size,
     /// updated_at) against the deduplicated `body_store` table via
     /// the per-scope CEK wrap in `body_store_key_wraps`. Returns
@@ -3032,16 +3018,14 @@ impl EvidenceStore {
         for row in rows {
             let (scope_bytes, doc_bytes) = row?;
             let Ok(scope_id) = uuid::Uuid::from_slice(&scope_bytes) else {
-                tracing::warn!(
-                    scope_bytes_len = scope_bytes.len(),
+                tracing::warn!(scope_bytes_len = scope_bytes.len(),
                     "list_all_approved_document_payload_keys: skipping row with non-UUID scope_id; \
                      orphan sweep will leave this row untouched (manual purge required to recover)",
                 );
                 continue;
             };
             let Ok(doc_id) = uuid::Uuid::from_slice(&doc_bytes) else {
-                tracing::warn!(
-                    scope = %scope_id,
+                tracing::warn!(scope = %scope_id,
                     doc_bytes_len = doc_bytes.len(),
                     "list_all_approved_document_payload_keys: skipping row with non-UUID document_id; \
                      orphan sweep will leave this row untouched (manual purge required to recover)",
@@ -3053,7 +3037,7 @@ impl EvidenceStore {
         Ok(result)
     }
 
-    // ────────── synthesis_object_versions (Phase 10 Item 4) ──────────
+    // ────────── synthesis_object_versions ──────────
     //
     // The live `synthesis_objects` blob (memory_objects row keyed by
     // `kind = 'synthesis_object'`) carries only the latest version
@@ -3319,8 +3303,7 @@ impl EvidenceStore {
                 continue;
             };
             let Ok(window_id) = uuid::Uuid::from_slice(&window_bytes) else {
-                tracing::warn!(
-                    scope = %scope_id,
+                tracing::warn!(scope = %scope_id,
                     window_bytes_len = window_bytes.len(),
                     "list_all_synthesis_object_version_window_keys: skipping row with \
                      non-UUID window_id; orphan sweep will leave this row untouched \
@@ -3353,7 +3336,7 @@ impl EvidenceStore {
     ///   contains a CJK Han / Hiragana / Katakana / Thai
     ///   codepoint, regardless of AEAD key.
     /// * `evidence_fts_bigram` — the v15 precomputed-bigram
-    ///   recall lane (Phase 1.2.1). Same property as the trigram
+    ///   recall lane. Same property as the trigram
     ///   shadow: the table's `content` column retains the
     ///   whitespace-separated overlapping 2-codepoint windows
     ///   derived from the plaintext body for any row whose body
@@ -3483,13 +3466,13 @@ impl EvidenceStore {
         // cap. `SQLITE_MAX_VARIABLE_NUMBER` is 999 on the default
         // build; we stay well under it.
         //
-        // Per Phase 1.2 / schema v14, `evidence_fts_cjk` (trigram-
+        // Per / schema v14, `evidence_fts_cjk` (trigram-
         // tokenised CJK / Thai index) is purged alongside the
         // primary `evidence_fts` (unicode61) in the same
         // transaction so the two indexes can never drift apart
         // under crash-recovery, and so a forgotten scope leaves
         // zero plaintext tokens in either FTS shadow table after
-        // the subsequent `REBUILD`. Phase 1.2.1 / schema v15
+        // the subsequent `REBUILD`. / schema v15
         // extends the same invariant to `evidence_fts_bigram`
         // (precomputed-bigram recall lane) — the three FTS
         // shadow tables are purged together inside the same
@@ -3649,7 +3632,7 @@ impl EvidenceStore {
     }
 
     /// v4→v5 backfill: re-encrypt body-table rows that were written
-    /// under the old scope-independent body_store_key.  For each
+    /// under the old scope-independent body_store_key. For each
     /// orphaned content_hash (in body_store but not in
     /// body_store_key_wraps), derive the legacy key, decrypt, generate
     /// a fresh CEK, re-encrypt, update the row, then create a wrap
@@ -3759,7 +3742,7 @@ impl EvidenceStore {
         Ok(())
     }
 
-    /// v11→v12 migration (Phase 10 Item 6) — move every existing
+    /// v11→v12 migration — move every existing
     /// inline approved-document payload ciphertext into the
     /// deduplicated `body_store` table and drop the legacy `nonce` +
     /// `payload` columns from `approved_document_payloads`.
@@ -3841,8 +3824,7 @@ impl EvidenceStore {
         let tx = self.conn.unchecked_transaction()?;
         for row in &legacy_rows {
             if row.nonce_bytes.len() != AEAD_NONCE_LEN {
-                tracing::warn!(
-                    scope = %row.scope_id.as_uuid(),
+                tracing::warn!(scope = %row.scope_id.as_uuid(),
                     document_id = %row.document_id,
                     "v11→v12 migration: approved_document_payloads row has malformed nonce; \
                      skipping (row will be visible as orphan metadata at next open_store)",
@@ -3850,8 +3832,7 @@ impl EvidenceStore {
                 continue;
             }
             if row.content_hash_bytes.len() != crypto::CONTENT_HASH_LEN {
-                tracing::warn!(
-                    scope = %row.scope_id.as_uuid(),
+                tracing::warn!(scope = %row.scope_id.as_uuid(),
                     document_id = %row.document_id,
                     "v11→v12 migration: approved_document_payloads row has malformed \
                      content_hash; skipping (row will be visible as orphan metadata at \
@@ -3870,8 +3851,7 @@ impl EvidenceStore {
             let plaintext = match decrypt_aead(&scope_key, &nonce, &row.ciphertext, &aad) {
                 Ok(pt) => pt,
                 Err(e) => {
-                    tracing::warn!(
-                        scope = %row.scope_id.as_uuid(),
+                    tracing::warn!(scope = %row.scope_id.as_uuid(),
                         document_id = %row.document_id,
                         error = %e,
                         "v11→v12 migration: approved_document_payloads row failed to \
@@ -3888,8 +3868,7 @@ impl EvidenceStore {
             // Recompute and verify before admitting.
             let computed = content_hash(&plaintext);
             if computed != stored_hash {
-                tracing::warn!(
-                    scope = %row.scope_id.as_uuid(),
+                tracing::warn!(scope = %row.scope_id.as_uuid(),
                     document_id = %row.document_id,
                     "v11→v12 migration: approved_document_payloads row has stored content_hash \
                      that does not match the decrypted plaintext; skipping (row will be \
@@ -4161,14 +4140,14 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // v8: add `epoch_tombstones`. Purely additive; handled
         // by SCHEMA_SQL's `CREATE TABLE IF NOT EXISTS`.
         8 => Ok(()),
-        // v9 (Phase 3): add `connector_instances` + `connector_tokens`.
+        // v9: add `connector_instances` + `connector_tokens`.
         // Purely additive; handled by SCHEMA_SQL's
         // `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`
         // (the unique index on `(scope_id, kind)` is part of that
         // bootstrap, so a fresh-DB open and a v8→v9 upgrade both end
         // up with the same shape).
         9 => Ok(()),
-        // v10 (Phase 8): add `approved_document_payloads`. Purely
+        // v10: add `approved_document_payloads`. Purely
         // additive; handled by SCHEMA_SQL's
         // `CREATE TABLE IF NOT EXISTS`. No separate covering index
         // is created: the composite PK `(scope_id, document_id)`
@@ -4178,9 +4157,9 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // Pre-v10 databases simply do not have any approved-document
         // payload rows yet, which matches the "tenant memory carries
         // refs but the substrate never persisted payloads" state
-        // that Phase 7 shipped.
+        // that shipped.
         10 => Ok(()),
-        // v11 (Phase 10 Item 4): add `synthesis_object_versions`
+        // v11 : add `synthesis_object_versions`
         // and the supplemental `idx_synthesis_object_versions_scope`
         // index. Purely additive; both are handled by SCHEMA_SQL's
         // `CREATE TABLE / INDEX IF NOT EXISTS` so a v10 -> v11
@@ -4189,7 +4168,7 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // matches the pre-Item-4 contract where every synthesis
         // output overwrote the prior one with no recoverable trail.
         11 => Ok(()),
-        // v12 (Phase 10 Item 6): destructive shape change to
+        // v12 : destructive shape change to
         // `approved_document_payloads` — drop the inline `nonce` +
         // `payload` columns and route the bytes through the
         // deduplicated `body_store` table. The actual data move +
@@ -4210,7 +4189,7 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // skips the post-bootstrap step because the legacy columns
         // never exist.
         12 => Ok(()),
-        // v13 (Phase 1.3 — multilingual ingestion): add the
+        // v13 (multilingual ingestion): add the
         // optional `language_tag` column to the `evidence` table
         // so the BCP-47 primary subtag detected on the row's
         // plaintext body at ingest time can flow through to the
@@ -4225,7 +4204,7 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // EXISTS`; only the v12 -> v13 upgrade path needs the
         // explicit ALTER.
         13 => migrate_v13_add_evidence_language_tag(conn),
-        // v14 (Phase 1.2 — CJK-aware FTS5 tokeniser): add the
+        // v14 (CJK-aware FTS5 tokeniser): add the
         // `evidence_fts_cjk` virtual table and backfill it from the
         // pre-existing `evidence_fts.content` rows whose plaintext
         // body contains any CJK Han / Hiragana / Katakana / Thai
@@ -4238,7 +4217,7 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // re-running the migration on an already-populated v14
         // database is a no-op rather than producing duplicate rows.
         14 => migrate_v14_backfill_evidence_fts_cjk(conn),
-        // v15 (Phase 1.2.1 — CJK / Thai bigram recall lane): add the
+        // v15 (CJK / Thai bigram recall lane): add the
         // `evidence_fts_bigram` virtual table and backfill it from
         // the pre-existing `evidence_fts.content` rows whose
         // plaintext body routes CJK / Thai. The
@@ -4251,7 +4230,7 @@ fn apply_migration(conn: &Connection, target: i32) -> Result<()> {
         // re-running the migration on an already-populated v15
         // database is a no-op rather than producing duplicate rows.
         15 => migrate_v15_backfill_evidence_fts_bigram(conn),
-        // v16 (Phase 1.9 — symmetric recall-lane stopword
+        // v16 (symmetric recall-lane stopword
         // stripping): re-tokenise every existing `evidence_fts_cjk`
         // and `evidence_fts_bigram` row from the source
         // `evidence_fts.content` column with
@@ -4302,8 +4281,7 @@ fn migrate_v13_add_evidence_language_tag(conn: &Connection) -> Result<()> {
 /// Chunk size for [`migrate_v14_backfill_evidence_fts_cjk`]'s
 /// streaming read of `evidence_fts`. Bounded so peak migration
 /// memory is O(chunk * row_size) regardless of how many evidence
-/// rows the user has accumulated (sweep-2 Devin Review
-/// ANALYSIS-0004).
+/// rows the user has accumulated.
 const V14_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 
 /// v13 -> v14 additive migration: backfill `evidence_fts_cjk` from
@@ -4354,8 +4332,7 @@ const V14_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 /// Memory bound: the backfill iterates `evidence_fts` in
 /// rowid-ordered chunks of [`V14_MIGRATION_CHUNK_SIZE`] rows, so
 /// peak memory is O(chunk * row_size) rather than O(total_rows *
-/// row_size). This was the architectural fix for sweep-2 Devin
-/// Review ANALYSIS-0004 — on a large pre-v14 database the
+/// row_size). On a large pre-v14 database the original
 /// "materialise everything into a single `Vec`" version would
 /// have allocated proportional to the entire body corpus, which
 /// is unbounded on desktop substrates and a real OOM risk during
@@ -4377,8 +4354,8 @@ fn migrate_v14_backfill_evidence_fts_cjk(conn: &Connection) -> Result<()> {
     // whole `evidence_fts` table into a single `Vec`. This bounds
     // peak migration memory to O(chunk * row_size) regardless of
     // how many evidence rows the user has accumulated, addressing
-    // sweep-2 Devin Review ANALYSIS-0004 (memory pressure during
-    // one-time v13→v14 migration on large databases).
+    // a memory-pressure concern raised during the one-time
+    // v13→v14 migration on large databases.
     //
     // We page on the FTS5 virtual table's implicit `rowid` rather
     // than `evidence_id` so the chunking is independent of how
@@ -4471,8 +4448,8 @@ const V15_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 /// maintains row-count metadata in
 /// `evidence_fts_bigram_docsize`.
 ///
-/// Reachability of partial-population states (sweep-2 inline
-/// 3331173175 contract for future migration authors). The
+/// Reachability of partial-population states is the contract
+/// future migration authors must preserve. The
 /// `COUNT(*) > 0` guard is *deliberately coarse*: it treats
 /// "any rows" as "migration already ran". This is sound for
 /// every reachable code path because every site that deletes
@@ -4503,7 +4480,7 @@ const V15_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 /// ([`crate::bigram::compute_cjk_bigrams`]) is non-empty. The
 /// secondary non-empty gate matches the write path's gate so
 /// the migration produces exactly the same set of rows the
-/// write path would have written had Phase 1.2.1 been active
+/// write path would have written had been active
 /// from day one. The pre-existing `evidence_fts` /
 /// `evidence_fts_cjk` rows themselves are untouched.
 ///
@@ -4651,7 +4628,7 @@ const V16_MIGRATION_CHUNK_SIZE: i64 = 1_000;
 /// precomputed bigram string of the *stripped* content is
 /// non-empty. The two-stage gate matches the write path exactly
 /// so the migration produces precisely the set of rows the write
-/// path would have written had Phase 1.9 been active from day
+/// path would have written had been active from day
 /// one.
 ///
 /// Crash-safety: the rewrite runs inside an explicit
@@ -4734,10 +4711,10 @@ fn migrate_v16_strip_recall_lane_stopwords(conn: &Connection) -> Result<()> {
                 continue;
             }
             // Apply the same stopword strip the write path uses
-            // post-Phase-1.9 so the recall-lane indexes here are
+            // earlier so the recall-lane indexes here are
             // identical to what a fresh-DB ingest of the same
-            // bodies would produce.  Counted variant feeds the
-            // Phase 1.10 v16-migration stopword strip telemetry.
+            // bodies would produce. Counted variant feeds the
+            // v16-migration stopword strip telemetry.
             let (stripped, strip_count) =
                 crate::fts_stopwords::strip_recall_lane_stopwords_counted(&content);
             crate::fts_telemetry::record_stopwords_stripped(
@@ -4834,8 +4811,7 @@ fn migrate_evidence_embeddings_to_composite_pk(conn: &Connection) -> Result<()> 
             // in the sequence rolls back to the v2 shape.
             let tx = conn.unchecked_transaction()?;
             tx.execute_batch(
-                "CREATE TABLE evidence_embeddings_v3 (
-                     evidence_id     BLOB    NOT NULL,
+                "CREATE TABLE evidence_embeddings_v3 (evidence_id     BLOB    NOT NULL,
                      embedding       BLOB    NOT NULL,
                      model_tag       TEXT    NOT NULL,
                      created_at      INTEGER NOT NULL,
@@ -4887,7 +4863,7 @@ fn random_cek() -> AeadKey {
 }
 
 /// Wrap (encrypt) a CEK under `wrapper_key` with a freshly drawn
-/// nonce.  AAD binds the content hash so a wrap cannot be re-labelled
+/// nonce. AAD binds the content hash so a wrap cannot be re-labelled
 /// across bodies.
 fn wrap_cek(
     wrapper_key: &AeadKey,
@@ -5064,13 +5040,13 @@ pub(crate) fn clamp_limit_to_sqlite(n: usize) -> i64 {
 /// `pub(crate)` so [`crate::retrieval::HybridRetriever::search_fts`]
 /// can reuse the same merge logic (both call sites need identical
 /// dedupe + error-containment semantics; diverging implementations
-/// would silently drift apart and was one of the failure modes the
-/// sweep-2 Devin Review BUG-0001 finding flagged).
+/// would silently drift apart, which is
+/// a latent failure mode).
 ///
 /// The function is named `merged_fts_search` rather than
 /// `dual_/triple_fts_search` so the public-crate-internal name
 /// stays stable as the schema grows additional tokeniser branches
-/// over future phases.
+/// over future schema bumps.
 pub(crate) fn merged_fts_search(
     conn: &Connection,
     scope_id: ScopeId,
@@ -5084,7 +5060,7 @@ pub(crate) fn merged_fts_search(
     let scope_uuid = scope_id.as_uuid();
     let scope_bytes = scope_uuid.as_bytes().as_slice();
 
-    // Phase 1.9 / schema v16: the trigram and bigram recall lanes
+    // schema v16: the trigram and bigram recall lanes
     // are queried against stopword-stripped indexed content (see
     // [`EvidenceStore::index_fts`]). The query side must apply the
     // same strip so that tokenisation is symmetric — without it a
@@ -5099,9 +5075,9 @@ pub(crate) fn merged_fts_search(
     // [`crate::fts_stopwords`] for the symmetric-stripping
     // rationale and [`crate::schema::SCHEMA_VERSION`] v16 for the
     // index-time migration.
-    // Counted variant feeds the Phase 1.10 query-time stopword
+    // Counted variant feeds the query-time stopword
     // strip telemetry — `strip_count` is the number of stopword
-    // instances replaced.  See [`crate::fts_telemetry`] for the
+    // instances replaced. See [`crate::fts_telemetry`] for the
     // counter semantics.
     let (stripped_query, strip_count) =
         crate::fts_stopwords::strip_recall_lane_stopwords_counted(query);
@@ -5158,7 +5134,7 @@ pub(crate) fn merged_fts_search(
             row_count += 1;
         }
         // Telemetry: record the lane invocation + raw row count
-        // (pre-merge, pre-truncate, pre-rank-comparison).  Counts
+        // (pre-merge, pre-truncate, pre-rank-comparison). Counts
         // the rows the lane *contributed* to the merge, not the
         // rows that survived the final cross-lane sort+truncate.
         crate::fts_telemetry::record_lane_query(crate::fts_telemetry::Lane::Unicode61, row_count);
@@ -5174,9 +5150,9 @@ pub(crate) fn merged_fts_search(
     // empty contribution. We only consume the `Ok` arm, so the
     // unicode61 branch remains the sole source of truth for
     // query validity even if `evidence_fts_cjk` ever returned a
-    // corrupted UUID (e.g. external database tampering). This is
-    // the long-form fix for sweep-3 Devin Review INFO-0001 —
-    // moving the UUID parse inside the swallow-scope means the
+    // corrupted UUID (e.g. external database tampering). The
+    // architectural fix moved the
+    // UUID parse inside the swallow-scope; that means the
     // doc-comment's "errors swallowed" contract holds without
     // any post-closure exception.
     //
@@ -5184,10 +5160,10 @@ pub(crate) fn merged_fts_search(
     // caller never has to re-parse a `Vec<u8>` — and so the only
     // post-closure code is the `MIN(rank)` merge, which is
     // infallible.
-    // Phase 1.9: skip the trigram branch entirely when the
+    // skip the trigram branch entirely when the
     // stopword-stripped query collapses to whitespace-only — for
     // example a query of pure particles like `のはがを` strips to
-    // `    `. Feeding an all-whitespace MATCH operand to FTS5 is
+    // ` `. Feeding an all-whitespace MATCH operand to FTS5 is
     // undefined across SQLite versions (3.45 errors with
     // "fts5: syntax error near \"\"", 3.46+ returns zero rows
     // silently) and either outcome is pure waste — the trigram
@@ -5196,7 +5172,7 @@ pub(crate) fn merged_fts_search(
     // codepoint scan because the strip output's whitespace is
     // exactly the ASCII spaces we inserted at strip sites.
     //
-    // Phase 1.10 sweep 1 (BUG-0001 fix): the skip-check is
+    // Skip-check architectural fix: the skip-check is
     // hoisted OUT of the closure so the skip-counter and
     // lane-query-counter branches are mutually exclusive by
     // construction — matches the bigram lane's `if let Some / else`
@@ -5206,7 +5182,7 @@ pub(crate) fn merged_fts_search(
     // `record_lane_query(CjkTrigram, 0)` for the very query that
     // had just bumped `record_lane_skip(CjkTrigramPureStopwordQuery)`.
     // That violated the `queries + skips = total_attempts`
-    // invariant documented on [`crate::fts_telemetry`].  The
+    // invariant documented on [`crate::fts_telemetry`]. The
     // current shape makes that invariant a structural property
     // of the surrounding `if / else`, not a logical one buried
     // inside the closure.
@@ -5218,15 +5194,15 @@ pub(crate) fn merged_fts_search(
     // FTS5 `trigram` tokeniser windows ALL 3-codepoint sequences
     // in the body — including any Latin substrings embedded in a
     // CJK body (e.g. `日本のiPhone発表` produces trigrams `iPh`,
-    // `Pho`, `hon`, `one`).  A Latin-only query like `iPhone`
+    // `Pho`, `hon`, `one`). A Latin-only query like `iPhone`
     // therefore CAN match Latin substrings stored in the CJK-only
     // table, contributing additional weighted rank for the merge.
     // Operators reading `cjk_trigram_lane_rows_total /
     // cjk_trigram_lane_queries_total` will observe lower precision
     // on Latin-dominant workloads — that signal is intentional and
-    // not a bug.  See sweep-3 (commit `4aaccba`) which tried to
-    // structurally skip Latin queries here and was reverted in
-    // sweep 4 once the trigram tokeniser's cross-script behaviour
+    // not a bug. An earlier commit (`4aaccba`) tried to
+    // structurally skip Latin queries here and was reverted
+    // once the trigram tokeniser's cross-script behaviour
     // was correctly identified.
     if stripped_query.as_ref().trim().is_empty() {
         // Telemetry: pure-stopword query collapsed to empty
@@ -5239,7 +5215,7 @@ pub(crate) fn merged_fts_search(
         let trigram_attempt: rusqlite::Result<Vec<(EvidenceId, f64)>> = (|| {
             // `prepare_cached` — see Branch 1 comment for rationale.
             //
-            // Phase 1.9: the bound query parameter is
+            // the bound query parameter is
             // `stripped_query.as_ref()` — NOT the raw `query` — so
             // the FTS5 trigram MATCH runs against the same
             // stopword-stripped content the index was written with
@@ -5272,7 +5248,7 @@ pub(crate) fn merged_fts_search(
             Ok(out)
         })();
         if let Ok(trigram_rows) = trigram_attempt {
-            // Phase 1.8: apply the trigram lane's inter-lane weight
+            // apply the trigram lane's inter-lane weight
             // (`EVIDENCE_FTS_CJK_LANE_WEIGHT`, < 1.0) before merging
             // so the trigram lane's precision penalty propagates into
             // the cross-lane min-rank comparison. See
@@ -5283,11 +5259,11 @@ pub(crate) fn merged_fts_search(
                 merge_min_rank(&mut best_rank, id, rank * EVIDENCE_FTS_CJK_LANE_WEIGHT);
             }
             // Telemetry: record the lane invocation + contributed
-            // row count.  The skip branch above is structurally
+            // row count. The skip branch above is structurally
             // mutually exclusive with this arm (see the doc
             // comment on the outer `if / else`), so the
             // `queries + skips = total_attempts` contract holds
-            // by construction.  An `Err` outcome of the
+            // by construction. An `Err` outcome of the
             // swallow-scope is silently dropped (same
             // architectural rule as the doc-comment "errors
             // swallowed" contract); the telemetry counter is
@@ -5324,8 +5300,8 @@ pub(crate) fn merged_fts_search(
     // The same "every error path in the closure, post-retrieval
     // UUID parse inside the swallow scope" pattern from Branch
     // 2 applies here — see the trigram branch comment for the
-    // architectural rationale (sweep-3 Devin Review INFO-0001).
-    // Phase 1.9: feed `compute_cjk_bigram_query` the stopword-
+    // architectural rationale.
+    // feed `compute_cjk_bigram_query` the stopword-
     // stripped query (not the raw `query`) so the bigram windows
     // it generates are computed over the same character set that
     // the index-time write path windowed for storage. This is the
@@ -5339,7 +5315,7 @@ pub(crate) fn merged_fts_search(
     // bigram is requested by the query whenever it would be
     // produced by the body).
     //
-    // Phase 1.10 sweep 2 (ANALYSIS-0004 fix): the bigram lane's
+    // Skip-taxonomy architectural fix: the bigram lane's
     // skip taxonomy now matches the trigram lane's structural
     // shape — the pure-stopword check runs BEFORE
     // `compute_cjk_bigram_query` so a CJK pure-stopword query
@@ -5347,7 +5323,7 @@ pub(crate) fn merged_fts_search(
     // semantic) rather than `BigramNoCjkQuery` (technically
     // accurate but operationally misleading, since the query
     // DID start as CJK and only became no-CJK as a side effect
-    // of stripping).  The two bigram skip variants are therefore
+    // of stripping). The two bigram skip variants are therefore
     // mutually exclusive by construction: a pure-stopword query
     // exits at the first branch; a non-CJK / Latin-only query
     // proceeds past the empty-check and exits at the second.
@@ -5356,7 +5332,7 @@ pub(crate) fn merged_fts_search(
         // after stripping — the bigram lane is declined here
         // (NOT via `BigramNoCjkQuery`) so operators can tell a
         // genuinely non-CJK query path from a CJK-input-but-
-        // pure-particles path.  Parallels the trigram-lane
+        // pure-particles path. Parallels the trigram-lane
         // pure-stopword branch above.
         crate::fts_telemetry::record_lane_skip(
             crate::fts_telemetry::SkipReason::BigramPureStopwordQuery,
@@ -5391,7 +5367,7 @@ pub(crate) fn merged_fts_search(
             Ok(out)
         })();
         if let Ok(bigram_rows) = bigram_attempt {
-            // Phase 1.8: apply the bigram lane's inter-lane weight
+            // apply the bigram lane's inter-lane weight
             // (`EVIDENCE_FTS_BIGRAM_LANE_WEIGHT`, < trigram's <
             // 1.0) before merging — the bigram lane is the
             // highest-recall and lowest-precision lane so its
@@ -5406,7 +5382,7 @@ pub(crate) fn merged_fts_search(
         // Telemetry: stripped query was non-empty but had no
         // adjacent-CJK codepoint pair (e.g. a Latin-only query
         // or a CJK query with all isolated codepoints separated
-        // by non-CJK characters).  This is the "expected" skip
+        // by non-CJK characters). This is the "expected" skip
         // path for the bigram lane on non-CJK traffic — it is
         // structurally distinct from `BigramPureStopwordQuery`
         // because operators inspecting the ratio
@@ -5433,8 +5409,7 @@ pub(crate) fn merged_fts_search(
     // the resulting order is also stable across process restarts
     // (UUIDs are persisted, hash seeds are not).
     //
-    // This is the long-form fix for sweep-4 Devin Review INFO-0004
-    // — pinning the result order so that downstream tests and
+    // The pinned result order ensures downstream tests and
     // any caller that does NOT re-score (e.g. the raw `search_fts`
     // public surface) sees identical output across runs for the
     // same input.
@@ -5469,11 +5444,11 @@ pub(crate) fn merged_fts_search(
 /// `f64` so this codepath is unreachable in production today, but
 /// pinning the merge to `f64::min` removes the trap entirely and
 /// aligns with the defensive `partial_cmp().unwrap_or(Equal)` used
-/// in the sort comparator at `merged_fts_search` (sweep-4 INFO-0004)
+/// in the sort comparator at `merged_fts_search`
 /// — both halves of the merge pipeline now treat NaN identically
 /// instead of skewing in opposite directions.
 ///
-/// This is the long-form fix for sweep-5 Devin Review INFO-0002.
+/// This is the long-form fix.
 fn merge_min_rank(best_rank: &mut HashMap<EvidenceId, f64>, id: EvidenceId, rank: f64) {
     best_rank
         .entry(id)
@@ -5483,7 +5458,7 @@ fn merge_min_rank(best_rank: &mut HashMap<EvidenceId, f64>, id: EvidenceId, rank
         .or_insert(rank);
 }
 
-/// Phase 1.8: cached SQL string for the unicode61 lane's MATCH
+/// cached SQL string for the unicode61 lane's MATCH
 /// query in [`merged_fts_search`]. The `bm25(<table>, w...)`
 /// fragment is built once at first use via
 /// [`crate::fts_weights::bm25_select_fragment`] so a future
@@ -5510,8 +5485,7 @@ fn unicode61_lane_sql() -> &'static str {
             // and reading the SELECT-list column `weighted_rank`
             // are numerically equivalent. When a future schema
             // tunes column weights off `1.0`, the FTS5 rank
-            // configuration (`INSERT INTO evidence_fts(
-            // evidence_fts, rank) VALUES('rank', 'bm25(w1, w2)')`)
+            // configuration (`INSERT INTO evidence_fts(// evidence_fts, rank) VALUES('rank', 'bm25(w1, w2)')`)
             // re-configures the built-in `rank` to use the
             // matching weights and preserves the optimisation —
             // see `EVIDENCE_FTS_*_COLUMN_WEIGHTS` doc-comments.
@@ -5523,7 +5497,7 @@ fn unicode61_lane_sql() -> &'static str {
     })
 }
 
-/// Phase 1.8: cached SQL string for the trigram lane's MATCH
+/// cached SQL string for the trigram lane's MATCH
 /// query. Same shape as [`unicode61_lane_sql`] but against
 /// `evidence_fts_cjk` and with the trigram-lane column-weight
 /// vector. See [`unicode61_lane_sql`] for the caching rationale.
@@ -5543,7 +5517,7 @@ fn trigram_lane_sql() -> &'static str {
     })
 }
 
-/// Phase 1.8: cached SQL string for the bigram lane's MATCH
+/// cached SQL string for the bigram lane's MATCH
 /// query. Same shape as [`unicode61_lane_sql`] but against
 /// `evidence_fts_bigram` and with the bigram-lane column-weight
 /// vector. See [`unicode61_lane_sql`] for the caching rationale.
@@ -5614,7 +5588,7 @@ const _: () = {
 
 #[cfg(test)]
 mod merge_min_rank_tests {
-    //! Sweep-5 INFO-0002 regression — pin the IEEE 754 NaN behaviour
+    //! earlier regression — pin the IEEE 754 NaN behaviour
     //! of [`merge_min_rank`]. Production FTS5 BM25 rank is always a
     //! finite negative `f64`, so this codepath is unreachable today;
     //! the tests exist to guard against a future contributor "simplifying"
@@ -5683,8 +5657,8 @@ mod merge_min_rank_tests {
 }
 
 #[cfg(test)]
-mod phase_1_8_lane_sql_tests {
-    //! Phase 1.8: pin the exact SQL emitted by
+mod lane_sql_tests {
+    //! pin the exact SQL emitted by
     //! [`super::unicode61_lane_sql`] / [`super::trigram_lane_sql`]
     //! / [`super::bigram_lane_sql`] so a refactor of either
     //! [`crate::fts_weights::bm25_select_fragment`] or the SELECT
@@ -5789,7 +5763,7 @@ mod phase_1_8_lane_sql_tests {
 
     #[test]
     fn lane_sql_helpers_are_idempotent_across_calls() {
-        // Phase 1.8: the OnceLock caching contract — every call
+        // the OnceLock caching contract — every call
         // returns the same `&'static str` pointer (not just an
         // equal string), so a future contributor cannot
         // accidentally swap in a `format!()` that pays the

@@ -1,10 +1,11 @@
 //! Process-singleton observability counters for the multilingual
-//! lexicon path (Phase 1.10).
+//! lexicon path.
 //!
-//! Phases 1.1 – 1.7 introduced per-script [`crate::lexicon::
-//! LanguageLexicon`]s, [`crate::lexicon::MatchStrategy`] variants
-//! (including the Arabic / Hebrew clitic-aware peelers), and
-//! per-sentence language detection — but the substrate ran them
+//! The multilingual rollout introduced per-script
+//! [`crate::lexicon::LanguageLexicon`]s,
+//! [`crate::lexicon::MatchStrategy`] variants (including the
+//! Arabic / Hebrew clitic-aware peelers), and per-sentence
+//! language detection — but originally the substrate ran them
 //! all "blind", with no way to ask *which* lexicons were hitting
 //! on real corpora, *which* match strategies were firing, and how
 //! deep the proclitic peelers were going. This module closes that
@@ -41,8 +42,8 @@
 //!   `hits_en` increments (3 class checks + 5 stop-word checks).
 //!   Operators inferring "documents classified" from `hits_*`
 //!   should divide by their measured calls-per-document ratio
-//!   rather than reading the counter directly. Phase 1.10
-//!   sweep 2 (ANALYSIS-0003) added this clarification — the
+//!   rather than reading the counter directly.
+//!   this clarification was added — the
 //!   counter semantics itself are by design (counting calls is
 //!   what makes the ratio `strategy_fires / hits_*` a useful
 //!   "how-often-does-each-resolved-lexicon-actually-classify"
@@ -101,7 +102,7 @@ use std::sync::OnceLock;
 
 use crate::lexicon::MatchStrategy;
 
-/// Process-singleton bag of atomic counters.  Internal — callers
+/// Process-singleton bag of atomic counters. Internal — callers
 /// touch the counters via [`record_lexicon_hit`] /
 /// [`record_match_strategy_fire`] / [`record_arabic_peel_depth`] /
 /// [`record_hebrew_peel_depth`] and read via [`snapshot`].
@@ -178,7 +179,7 @@ pub(crate) struct Counters {
 
 static COUNTERS: OnceLock<Counters> = OnceLock::new();
 
-/// Borrow the process-singleton counter block.  Internal — call
+/// Borrow the process-singleton counter block. Internal — call
 /// [`snapshot`] for a read-out or one of the `record_*` helpers
 /// for an increment.
 #[inline]
@@ -186,7 +187,7 @@ fn counters() -> &'static Counters {
     COUNTERS.get_or_init(Counters::default)
 }
 
-/// Record a lexicon resolution.  Increments the `hits_<tag>`
+/// Record a lexicon resolution. Increments the `hits_<tag>`
 /// counter matching `resolved_primary_tag`; if `requested` was
 /// `Some(t)` but `t != resolved_primary_tag`, also increments
 /// [`Counters::unknown_tag_fallbacks_total`].
@@ -194,9 +195,9 @@ fn counters() -> &'static Counters {
 /// `resolved_primary_tag` is the `primary_tag` of the
 /// [`crate::lexicon::LanguageLexicon`] that
 /// [`crate::lexicon::LexiconRegistry::lexicon_for_or_english`]
-/// returned.  Unrecognised tags are silently ignored — i.e. a
+/// returned. Unrecognised tags are silently ignored — i.e. a
 /// future lexicon added to the registry without a counter field
-/// here is a no-op increment, not a panic.  The
+/// here is a no-op increment, not a panic. The
 /// [`tag_counters_cover_all_supported_tags`] test pins this
 /// invariant.
 #[inline]
@@ -224,9 +225,9 @@ pub fn record_lexicon_hit(requested: Option<&str>, resolved_primary_tag: &str) {
         "th" => &c.hits_th,
         "vi" => &c.hits_vi,
         "zh" => &c.hits_zh,
-        // Unknown resolved tag — silently skip.  A future lexicon
+        // Unknown resolved tag — silently skip. A future lexicon
         // added without extending this match arm is a no-op
-        // increment.  The companion test
+        // increment. The companion test
         // `tag_counters_cover_all_supported_tags` flags any
         // SUPPORTED_LEXICON_TAGS entry missing here.
         _ => return,
@@ -234,9 +235,9 @@ pub fn record_lexicon_hit(requested: Option<&str>, resolved_primary_tag: &str) {
     counter.fetch_add(1, Ordering::Relaxed);
 
     // Detect fallback: input was Some(t) but resolved to a
-    // different tag.  This is the canonical "unknown tag →
+    // different tag. This is the canonical "unknown tag →
     // English fallback" case (e.g. requested "xx" → resolved
-    // "en").  We do NOT count `None` input as a fallback — that
+    // "en"). We do NOT count `None` input as a fallback — that
     // path is the explicit "no language detected" case which
     // unambiguously routes to English by design, not a fallback
     // from a failed lookup.
@@ -248,7 +249,7 @@ pub fn record_lexicon_hit(requested: Option<&str>, resolved_primary_tag: &str) {
     }
 }
 
-/// Record a [`crate::lexicon::table_matches`] invocation.  Bumps
+/// Record a [`crate::lexicon::table_matches`] invocation. Bumps
 /// exactly one of the five `strategy_*` counters per the
 /// `strategy` argument.
 #[inline]
@@ -270,10 +271,10 @@ pub fn record_match_strategy_fire(strategy: MatchStrategy) {
 ///
 /// `MatchedAtDepth(0)` is incremented when the first
 /// alphabetic token matched a table entry *without* any peel
-/// (i.e. the bare token was already a hit).  `MatchedAtDepth(N)`
+/// (i.e. the bare token was already a hit). `MatchedAtDepth(N)`
 /// for N in 1..=`PEEL_BUDGET` is incremented when the table
 /// entry was found *after* N successive peels of one proclitic
-/// each.  `BudgetExhausted` is incremented when the peel budget
+/// each. `BudgetExhausted` is incremented when the peel budget
 /// was consumed without finding a match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeelOutcome {
@@ -284,10 +285,10 @@ pub enum PeelOutcome {
 }
 
 /// Bump the Arabic peel-depth histogram bucket matching
-/// `outcome`.  Bucket selection mirrors the constants on
+/// `outcome`. Bucket selection mirrors the constants on
 /// [`crate::lexicon::MatchStrategy::FirstTokenWithArabicClitics`]
 /// (`ARABIC_PROCLITIC_PEEL_BUDGET` = 3, so the valid match-depth
-/// values are 0..=3).  A `MatchedAtDepth(d)` with `d > 3` is
+/// values are 0..=3). A `MatchedAtDepth(d)` with `d > 3` is
 /// clamped to bucket 3 — the matcher never reports a depth
 /// outside its own budget, but the clamp keeps the counter
 /// defensive against future budget changes.
@@ -305,7 +306,7 @@ pub fn record_arabic_peel_depth(outcome: PeelOutcome) {
 }
 
 /// Bump the Hebrew peel-depth histogram bucket matching
-/// `outcome`.  Mirror of [`record_arabic_peel_depth`] — see that
+/// `outcome`. Mirror of [`record_arabic_peel_depth`] — see that
 /// function for the bucketing semantics.
 #[inline]
 pub fn record_hebrew_peel_depth(outcome: PeelOutcome) {
@@ -327,7 +328,7 @@ pub fn record_hebrew_peel_depth(outcome: PeelOutcome) {
 /// in `crates/ffi/src/metrics.rs` (with `uniffi::Record` /
 /// `napi::ObjectFinalize` derives that this plain Rust struct
 /// cannot pick up because `observation_engine` doesn't depend on
-/// either FFI runtime).  Adding a new counter to [`Counters`]
+/// either FFI runtime). Adding a new counter to [`Counters`]
 /// requires (1) extending this struct's field list, (2) extending
 /// the [`snapshot`] function's load list, and (3) extending the
 /// FFI-mirror struct in `crates/ffi/src/metrics.rs` with the
@@ -342,7 +343,7 @@ pub struct LexiconTelemetrySnapshot {
     pub hits_bo: u64,
     /// Resolved-lexicon hits for `de`.
     pub hits_de: u64,
-    /// Resolved-lexicon hits for `en`.  Includes the
+    /// Resolved-lexicon hits for `en`. Includes the
     /// unknown-tag → English fallback path (see
     /// [`unknown_tag_fallbacks_total`](Self::unknown_tag_fallbacks_total)).
     pub hits_en: u64,
@@ -383,7 +384,7 @@ pub struct LexiconTelemetrySnapshot {
     /// Times an input primary_tag was `Some(t)` but no lexicon
     /// was configured for `t`, so
     /// [`crate::lexicon::LexiconRegistry::lexicon_for_or_english`]
-    /// fell back to the English lexicon.  The matching `hits_en`
+    /// fell back to the English lexicon. The matching `hits_en`
     /// counter ALSO fires for these cases, so
     /// `unknown_tag_fallbacks_total <= hits_en` always holds.
     pub unknown_tag_fallbacks_total: u64,
@@ -420,7 +421,7 @@ pub struct LexiconTelemetrySnapshot {
 }
 
 /// Return a wire-flat snapshot of every lexicon-telemetry
-/// counter.  Reads each [`AtomicU64`] with [`Ordering::Relaxed`]
+/// counter. Reads each [`AtomicU64`] with [`Ordering::Relaxed`]
 /// — see the module docs for why that's sufficient.
 #[must_use]
 pub fn snapshot() -> LexiconTelemetrySnapshot {
@@ -477,7 +478,7 @@ mod tests {
 
     /// Pin the invariant that every BCP-47 tag in
     /// [`SUPPORTED_LEXICON_TAGS`] has a `hits_<tag>` counter in
-    /// this module.  A future contributor adding a new lexicon
+    /// this module. A future contributor adding a new lexicon
     /// to the registry will fail this test if they forget to
     /// extend [`Counters`] / [`LexiconTelemetrySnapshot`] /
     /// [`record_lexicon_hit`].
@@ -521,7 +522,7 @@ mod tests {
             })
             .collect();
 
-        // Drive one increment for every supported tag.  The
+        // Drive one increment for every supported tag. The
         // resolved_primary_tag and requested args match, so no
         // unknown-tag fallback should fire.
         for (tag, _) in &baseline_by_tag {
@@ -643,7 +644,7 @@ mod tests {
         );
     }
 
-    /// Pin the Arabic peel-depth bucket selection.  The 4 match
+    /// Pin the Arabic peel-depth bucket selection. The 4 match
     /// depths (0..=3) all go to distinct counters; depth values
     /// outside the valid range clamp to the depth-3 bucket.
     #[test]
@@ -679,7 +680,7 @@ mod tests {
         );
     }
 
-    /// Pin the Hebrew peel-depth bucket selection.  Mirror of
+    /// Pin the Hebrew peel-depth bucket selection. Mirror of
     /// the Arabic test.
     #[test]
     fn hebrew_peel_depth_bucket_selection() {

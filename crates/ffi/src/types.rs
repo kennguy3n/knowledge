@@ -80,7 +80,7 @@ pub struct EvidenceRecord {
     /// Unix epoch (seconds) when the row was ingested.
     pub created_at: i64,
     /// BCP-47 primary language subtag detected on the plaintext
-    /// body at ingest time (schema v13, Phase 1.3). `None` when
+    /// body at ingest time (schema v13). `None` when
     /// the row was ingested via the legacy
     /// `EvidenceStore::ingest()` shim, when the language detector
     /// declined to classify (empty / pure-punctuation / pure-emoji
@@ -207,7 +207,7 @@ pub struct FfiKeypair {
 /// only emits Swift / Kotlin types reachable from `#[uniffi::export]`
 /// functions; deriving `Record` on a type that no exported function
 /// consumes registers metadata that the bindgen quietly drops, which
-/// is the kind of dead contract Devin Review flagged on PR #52
+/// is the kind of dead contract (PR #52)
 /// (`crates/ffi/src/types.rs:186`). The derive is intentionally
 /// deferred until a `sign(handle, data) -> FfiResult<FfiSignature>` /
 /// `verify(handle, sig, data) -> FfiResult<bool>` FFI pair lands;
@@ -355,7 +355,7 @@ pub struct ConnectorStatus {
 }
 
 /// Wire-flat result returned by [`super::connector_status`]
-/// (Phase 10 Item 3 — single-instance health probe symmetric with
+/// (single-instance health probe symmetric with
 /// [`super::synthesis_status`]).
 ///
 /// Bundles three independent slices of per-connector state that
@@ -668,7 +668,7 @@ pub struct WebhookServerSummary {
 }
 
 /// Wire-flat diagnostic snapshot returned by
-/// [`super::sync_scheduler_status`] (Phase 6).
+/// [`super::sync_scheduler_status`].
 ///
 /// Reports the background scheduler's running state, configuration
 /// echo, and per-counter totals so hosts can render a "Sync
@@ -718,8 +718,8 @@ pub struct SyncSchedulerStatus {
     /// scheduler considers, but instances without an override are
     /// counted only in `total_instance_count`.
     ///
-    /// Was named `scheduled_instance_count` through Phase 6 round 5;
-    /// renamed in round 6 (ANALYSIS_0003) to disambiguate from
+    /// Was named `scheduled_instance_count` in earlier revisions of
+    /// this FFI surface; later renamed to disambiguate from
     /// `total_instance_count`. A host UI that wants "how many
     /// connectors is the scheduler driving" should read
     /// `total_instance_count`; this field reports the strictly
@@ -917,8 +917,8 @@ pub struct SynthesisEngineConfig {
     pub single_tenant: bool,
 
     /// Burst capacity for the global rate-shaping token bucket
-    /// gating [`crate::synthesis::trigger_server_synthesis`]
-    /// (Phase 10 Item 5). `0` falls back to
+    /// gating [`crate::synthesis::trigger_server_synthesis`].
+    /// `0` falls back to
     /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY`] (8) —
     /// the same sentinel-zero pattern used by `max_tokens` and
     /// `timeout_ms`. Hosts that want to disable rate-shaping
@@ -930,8 +930,8 @@ pub struct SynthesisEngineConfig {
 
     /// Refill rate (tokens per second) for the global
     /// rate-shaping token bucket gating
-    /// [`crate::synthesis::trigger_server_synthesis`]
-    /// (Phase 10 Item 5). `0.0` falls back to
+    /// [`crate::synthesis::trigger_server_synthesis`].
+    /// `0.0` falls back to
     /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC`]
     /// (1.0). Fractional values are supported (e.g. `0.5` ==
     /// one token every 2 seconds). Negative values are rejected
@@ -954,7 +954,7 @@ pub struct SynthesisEngineConfig {
 ///
 /// `payload_bytes == 0` and `content_hash_hex.is_empty()` indicate
 /// a tenant-memory ref that has no corresponding evidence-store
-/// payload row. Under Phase 8 this should only occur transiently
+/// payload row. Under normal operation this should only occur transiently
 /// (e.g. between a host's call to `admit_approved_document` and a
 /// crash before tenant memory was flushed), but the substrate
 /// surfaces it explicitly rather than synthesising fake metadata.
@@ -1051,7 +1051,7 @@ mod tests {
         assert_eq!(r, back);
     }
 
-    /// Schema-v13 backward-compat (Phase 1.3): an
+    /// Schema-v13 backward-compat: an
     /// `EvidenceRecord` JSON blob emitted by a pre-v13 host
     /// bridge — i.e. one that doesn't know about the
     /// `language_tag` key — must still deserialise. The
@@ -1230,7 +1230,7 @@ mod tests {
     /// Pin the JSON wire format `crates/napi/src/bindings.rs::
     /// js_sync_scheduler_status` documents — every key MUST be the
     /// camelCase form documented in the rustdoc (`isRunning`,
-    /// `startedAtUnix`, …). The bug surfaced by Devin Review round 3
+    /// `startedAtUnix`, …). The regression
     /// was that the doc promised camelCase but the type derived
     /// `Serialize` without `rename_all`, producing snake_case keys
     /// that would surface as `undefined` when destructured by a JS
@@ -1296,18 +1296,16 @@ mod tests {
                 "SyncSchedulerStatus JSON must NOT contain snake_case key `{snake}`; got {v}"
             );
         }
-        // Round 6 ANALYSIS_0003 — pin that the two count fields
+        // Pin that the two count fields
         // serialize with the post-rename camelCase keys and that
         // their values come through distinct from each other (so a
         // future refactor that conflates them in code is caught
         // here, not by a host reporting wrong telemetry).
-        assert_eq!(
-            obj.get("policyOverrideCount").and_then(serde_json::Value::as_u64),
+        assert_eq!(obj.get("policyOverrideCount").and_then(serde_json::Value::as_u64),
             Some(3),
             "policyOverrideCount must serialize as the configured value, distinct from totalInstanceCount"
         );
-        assert_eq!(
-            obj.get("totalInstanceCount").and_then(serde_json::Value::as_u64),
+        assert_eq!(obj.get("totalInstanceCount").and_then(serde_json::Value::as_u64),
             Some(11),
             "totalInstanceCount must serialize as the configured value, distinct from policyOverrideCount"
         );
@@ -1317,7 +1315,7 @@ mod tests {
         assert_eq!(back, status);
     }
 
-    /// Phase 5's `WebhookServerSummary` had the same latent wire
+    /// `WebhookServerSummary` had the same latent wire
     /// format mismatch (doc at `crates/napi/src/bindings.rs::
     /// js_list_webhook_servers` documents camelCase but the type
     /// originally derived `Serialize` without `rename_all`). Pin the
@@ -1371,7 +1369,7 @@ mod tests {
     /// `RefreshReport` is the response envelope for
     /// `crates/napi/src/bindings.rs::js_refresh_connector_token`,
     /// whose rustdoc documents `{ instanceId, refreshed, expiresAt,
-    /// refreshedAt }` (camelCase). Devin Review round 4 flagged the
+    /// refreshedAt }` (camelCase). A later review flagged the
     /// type as still serializing snake_case keys despite the doc
     /// claim; the rename now aligns the wire format with the doc.
     /// Pin the camelCase invariant so future drift between doc and
@@ -1468,9 +1466,9 @@ mod tests {
     }
 
     /// `ConnectorStatus` is the response envelope for
-    /// `crates/napi/src/bindings.rs::js_list_connectors`. Devin
-    /// Review round 5 ANALYSIS_0002 flagged it as the last
-    /// `serde_json`-serialized N-API return type still emitting
+    /// `crates/napi/src/bindings.rs::js_list_connectors`. An earlier
+    /// review flagged it as the last `serde_json`-serialized N-API
+    /// return type still emitting
     /// snake_case keys (every peer — `RefreshReport`,
     /// `SyncReport`, `WebhookServerSummary`,
     /// `SyncSchedulerStatus` — has been migrated). Pin the
@@ -1544,8 +1542,8 @@ mod tests {
         assert_eq!(back, s);
     }
 
-    /// Phase 10 Item 3 — `ConnectorHealthRecord` is the new
-    /// single-instance probe envelope returned by
+    /// `ConnectorHealthRecord` is the new single-instance probe
+    /// envelope returned by
     /// [`crate::connector::connector_status`], symmetric with
     /// [`crate::synthesis::synthesis_status`]. Pin the camelCase
     /// invariant on every field of the wire format so a future

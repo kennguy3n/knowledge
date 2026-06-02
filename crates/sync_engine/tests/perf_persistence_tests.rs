@@ -79,8 +79,7 @@ fn cached_state_is_orders_of_magnitude_faster_than_replay() {
     // CI noise doesn't flake; in practice the ratio is far higher
     // because the cache is O(live elements) while replay is
     // O(total ops).
-    assert!(
-        cached_avg.as_secs_f64() * 5.0 < replay_avg.as_secs_f64(),
+    assert!(cached_avg.as_secs_f64() * 5.0 < replay_avg.as_secs_f64(),
         "cached state() ({cached_avg:?}) should be \u{2265}5\u{00d7} faster than a full replay ({replay_avg:?})"
     );
 }

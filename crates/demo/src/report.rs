@@ -9,14 +9,14 @@ use chrono::{DateTime, Utc};
 use crate::assertions::{AssertionLog, AssertionRecord};
 
 #[derive(Debug, Clone)]
-pub struct PhaseReport {
+pub struct StageReport {
     pub name: String,
     pub timing: Duration,
     pub stats: Vec<(String, String)>,
     pub notes: Vec<String>,
 }
 
-impl PhaseReport {
+impl StageReport {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -61,7 +61,7 @@ pub struct DemoReport {
     pub started_at: Option<DateTime<Utc>>,
     pub total_wall_clock: Duration,
     pub dataset_size: usize,
-    pub phases: Vec<PhaseReport>,
+    pub stages: Vec<StageReport>,
     pub benchmarks: Vec<BenchmarkRow>,
     pub summary_counts: BTreeMap<String, u64>,
     pub assertion_records: Vec<AssertionRecord>,
@@ -77,8 +77,8 @@ impl DemoReport {
         }
     }
 
-    pub fn add_phase(&mut self, phase: PhaseReport) {
-        self.phases.push(phase);
+    pub fn add_stage(&mut self, stage: StageReport) {
+        self.stages.push(stage);
     }
 
     pub fn add_benchmark(&mut self, label: impl Into<String>, n: u64, total: Duration) {
@@ -130,21 +130,21 @@ impl DemoReport {
         out.push('\n');
 
         out.push_str("## Stages\n\n");
-        for phase in &self.phases {
+        for stage in &self.stages {
             let _ = writeln!(
                 out,
                 "### {} ({})\n",
-                phase.name,
-                format_duration(phase.timing)
+                stage.name,
+                format_duration(stage.timing)
             );
-            if !phase.stats.is_empty() {
+            if !stage.stats.is_empty() {
                 out.push_str("| Stat | Value |\n|---|---|\n");
-                for (k, v) in &phase.stats {
+                for (k, v) in &stage.stats {
                     let _ = writeln!(out, "| {k} | {v} |");
                 }
                 out.push('\n');
             }
-            for note in &phase.notes {
+            for note in &stage.notes {
                 let _ = writeln!(out, "- {note}");
             }
             out.push('\n');
@@ -165,14 +165,14 @@ impl DemoReport {
         out.push('\n');
 
         out.push_str("## Assertions\n\n");
-        out.push_str("| Phase | Assertion | Status | Detail |\n|---|---|---|---|\n");
+        out.push_str("| Stage | Assertion | Status | Detail |\n|---|---|---|---|\n");
         for r in &self.assertion_records {
             let status = if r.passed { "PASS" } else { "FAIL" };
             let detail = r.detail.clone().unwrap_or_default();
             let _ = writeln!(
                 out,
                 "| {} | {} | {} | {} |",
-                r.phase,
+                r.stage,
                 escape_md_pipe(&r.label),
                 status,
                 escape_md_pipe(&detail),

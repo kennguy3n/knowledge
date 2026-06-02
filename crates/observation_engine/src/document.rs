@@ -248,10 +248,9 @@ pub struct DocumentExtractionResult {
     ///
     /// Surfaces the chunk-level tag for downstream consumers that
     /// want a coarse per-chunk language without re-running
-    /// detection — addresses Devin Review finding
-    /// #ANALYSIS-0001b (consistency with
+    /// detection — addresses consistency with
     /// [`crate::pipeline::ObservationPipeline::run_with_language`])
-    /// and the earlier #ANALYSIS-0002 finding that the doc
+    /// and the requirement that the doc
     /// pipeline didn't surface a chunk-level language for chunks
     /// that produced no observations.
     pub chunk_languages: Vec<Option<LanguageTag>>,
@@ -321,7 +320,7 @@ where
         let mut observations = Vec::new();
         let mut citations = HashMap::new();
         let mut dropped = 0_usize;
-        // Phase 1.4 (Devin Review #ANALYSIS-0001b): pre-compute the
+        // Pre-compute the
         // per-chunk dominant language at the doc-pipeline level so
         // that (a) we can pass it through
         // `extract_with_dominant_language` to the extractor
@@ -351,14 +350,14 @@ where
             if extracted.is_empty() {
                 continue;
             }
-            // Phase 1.4: the lexicon extractor now stamps
+            // the lexicon extractor now stamps
             // per-sentence language tags inside each chunk (CJK
             // `。`, Arabic `؟`, Devanagari `।` etc. are recognised
             // by `split_sentences_with_terminator`, and
             // `detect_language` runs per sentence with the
             // chunk-level dominant tag as the fallback). The
             // resulting observations carry tighter language stamps
-            // than the chunk-level single tag we used in Phase 1.3
+            // than the chunk-level single tag we used in
             // — so we *do not* overwrite them here. The previous
             // `obs.language_tag.clone_from(&chunk_language)` would
             // have clobbered, for instance, a Japanese sentence's
@@ -566,7 +565,7 @@ mod tests {
 
     #[test]
     fn document_pipeline_preserves_per_sentence_language_tags_in_chunk() {
-        // Phase 1.4 contract: the document pipeline must NOT
+        // contract: the document pipeline must NOT
         // overwrite per-sentence language tags with the
         // chunk-level dominant tag. A document chunk containing
         // bilingual prose should yield observations with
@@ -620,7 +619,7 @@ mod tests {
 
     #[test]
     fn document_pipeline_surfaces_per_chunk_language() {
-        // Devin Review #ANALYSIS-0001b: the doc pipeline should
+        // Regression coverage: the doc pipeline should
         // surface the chunk-level dominant language on its result
         // for downstream consumers that want a coarse per-chunk
         // tag without re-running detection. The vector should be

@@ -203,14 +203,14 @@ pub fn ingest_message(
                 });
             }
             rt.ensure_scope_registered(scope)?;
-            // Phase 1.3 — run language detection at the production
+            // Run language detection at the production
             // write boundary so every persistent row stamps a
             // BCP-47 primary subtag onto the `language_tag` column
             // (schema v13). `detect_language` is fail-closed: empty
             // / pure-punctuation / pure-emoji / unreliable-short
             // input returns `None` and the column stays NULL,
             // which is the correct "language unknown" state for
-            // downstream consumers (the Phase 1.1 lexicon registry
+            // downstream consumers (the lexicon registry
             // reads this column on every retrieval). Detection
             // runs unconditionally — including on the noise path
             // that gets routed to the ring buffer by
@@ -420,8 +420,8 @@ pub fn get_evidence(handle: RuntimeHandle, evidence_id: String) -> FfiResult<Evi
                     .map_or(SourceKind::Other, parse_source_kind),
                 created_at: row.created_at,
                 // Forward the BCP-47 primary subtag the substrate
-                // stamped on the row at ingest (schema v13, Phase
-                // 1.3). NULL stays NULL across the bridge so host
+                // stamped on the row at ingest (schema v13). NULL
+                // stays NULL across the bridge so host
                 // shells can distinguish "no detection" from a
                 // concrete tag like `"en"`. `row` is owned and not
                 // borrowed after this expression, and `source_ref`'s
@@ -717,7 +717,7 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
 ///    payloads cannot be recovered post-forget.
 /// 4. Persisted memory blob deletion so forgotten-scope memory
 ///    state does not survive the next `open_store`.
-/// 5. **(Phase 8)** Persisted approved-document payload row
+/// 5. Persisted approved-document payload row
 ///    deletion (`approved_document_payloads` table). Best-effort
 ///    — failure logs WARN and accumulates the error; the payload
 ///    ciphertext is sealed under the scope DEK that step 1 just
@@ -752,8 +752,7 @@ pub fn forget_scope(handle: RuntimeHandle, scope_id: String) -> FfiResult<()> {
 /// honest.
 fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> FfiResult<()> {
     // Defense in depth against the synthesis-windows sentinel
-    // collision (Devin Review ANALYSIS_0001):
-    // `parse_scope_id` already rejects the nil UUID at the host
+    // collision: `parse_scope_id` already rejects the nil UUID at the host
     // boundary, but internal callers (tests, future refactors)
     // can still synthesise a `ScopeId` directly. Forgetting the
     // sentinel scope would call `delete_memory_blobs_for_scope`
@@ -840,8 +839,8 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         first_error.get_or_insert(err);
     }
 
-    // 5. Phase 8 / Phase 10 Item 6: delete persisted approved-
-    //     document metadata rows for the scope. As of v12 these are
+    // 5. Delete persisted approved-document metadata rows for the
+    //     scope. As of v12 these are
     //     metadata-only — the actual payload bytes live in
     //     `body_store` and the per-scope CEK wrap (already destroyed
     //     in step 3 by `purge_body_key_wraps_for_scope`, which also
@@ -881,7 +880,7 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
         }
     }
 
-    // 5b. Phase-10-Item-4: delete archived synthesis-object version
+    // 5b. earlier: delete archived synthesis-object version
     //     rows for the scope. The ciphertext was sealed under the
     //     scope DEK that step 1 destroyed, so even if this SQL
     //     DELETE fails the bytes are cryptographically
@@ -943,11 +942,11 @@ fn forget_scope_state(rt: &mut crate::runtime::FfiRuntime, scope: ScopeId) -> Ff
     // entries which is bounded by 2 × active scopes (Domain +
     // Tenant tiers) so the cost stays linear in the live runtime.
     rt.synthesis_cooldowns.retain(|(s, _), _| *s != scope);
-    // Phase-10-Item-2 nested shape: drop the whole sub-map for the
-    // forgotten scope in one O(1) outer-map removal. Before the
-    // refactor we walked every window id owned by the scope and
-    // removed each from the flat map; now the scope's entire object
-    // set is a single value addressable by `scope`. Window ids stay
+    // Drop the whole sub-map for the forgotten scope in one O(1)
+    // outer-map removal. An earlier nested shape walked every window
+    // id owned by the scope and removed each from the flat map; the
+    // current shape addresses the scope's entire object set as a
+    // single value keyed by `scope`. Window ids stay
     // globally unique so no other scope's objects can be caught by
     // this — but as a defense-in-depth measure (and to match the
     // documented invariant in the runtime's `synthesis_objects`
@@ -1314,26 +1313,26 @@ pub const SYNTHESIS_EVIDENCE_WINDOW: usize = 50;
 ///
 /// # Lost-work race with `close_store`
 ///
-/// Because Phase 2 runs without the per-handle mutex, a host that
+/// Because runs without the per-handle mutex, a host that
 /// calls [`close_store`](crate::close_store) **concurrently** with
-/// `trigger_synthesis` can land its close between Phase 2 and Phase 3:
+/// `trigger_synthesis` can land its close between and Step 3:
 ///
-/// * Phase 1 captures the [`Arc<InferenceRouter>`] and drops the
+/// * captures the [`Arc<InferenceRouter>`] and drops the
 ///   mutex.
-/// * Phase 2 issues the SLM dispatch. The host calls
+/// * issues the SLM dispatch. The host calls
 ///   [`close_store`](crate::close_store) on a different thread, which
 ///   removes the handle from the registry and (after the drain loop
 ///   completes — see the docs on
 ///   [`close_store`](crate::close_store)) drops the runtime.
-/// * Phase 2 returns successfully with a parsed [`SummaryBundle`].
-/// * Phase 3's [`with_runtime`] re-lookup fails with
+/// * returns successfully with a parsed [`SummaryBundle`].
+/// * Step 3's [`with_runtime`] re-lookup fails with
 ///   [`FfiError::Unavailable`] because the handle is no longer in
 ///   the registry.
 ///
 /// In that scenario the SLM did real work (and burned real wall
 /// clock / GPU time) but the recap is **discarded** — the host
 /// observes `Unavailable` even though synthesis "happened". This is
-/// a *safe* race — Phase 3 is the only phase that writes to the
+/// a *safe* race is the only phase that writes to the
 /// store, so no partial state is ever persisted — and the
 /// alternative (holding the mutex across the multi-second SLM
 /// dispatch) would freeze every other FFI call on the handle.
@@ -1349,7 +1348,7 @@ fn synthesize_scope(
 ) -> FfiResult<String> {
     use inference_router::{InferenceTask, RouterError, SummaryBundle};
 
-    // ─────────────────── Phase 1: gather (locked) ───────────────────
+    // ─────────────────── Step 1: gather (locked) ───────────────────
     //
     // Returns the prompt to dispatch plus an owned `Arc` clone of the
     // router so the unlocked phase below can operate without re-entering
@@ -1443,7 +1442,7 @@ fn synthesize_scope(
         Ok((rt.inference_router_arc(), prompt))
     })?;
 
-    // ───────────────── Phase 2: dispatch (UNLOCKED) ─────────────────
+    // ───────────────── Step 2: dispatch (UNLOCKED) ─────────────────
     //
     // The per-handle `FfiRuntime` mutex is released for the duration of
     // these calls so concurrent `ingest_message` / `query` /
@@ -1488,7 +1487,7 @@ fn synthesize_scope(
             message: format!("synthesis: malformed SummaryBundle JSON: {e}"),
         })?;
 
-    // ─────────────────── Phase 3: apply (locked) ────────────────────
+    // ─────────────────── Step 3: apply (locked) ────────────────────
     //
     // Re-acquire the mutex. We must re-check `is_scope_forgotten` here
     // because another thread may have called `forget_scope` while the
@@ -1687,7 +1686,7 @@ pub fn decrypt(
 /// Originally this helper lived only in `lib.rs`; `connector.rs`
 /// duplicated it with a near-identical implementation (different
 /// error-message format, equivalent semantics). The two copies
-/// drifted under Devin Review which flagged the duplication — they
+/// drifted into duplication — they
 /// were consolidated here so a future change to scope-id validation
 /// touches exactly one site. `pub(crate)` visibility intentionally
 /// keeps it out of the FFI surface (UniFFI/N-API hosts call the
@@ -1972,7 +1971,7 @@ impl runtime::FfiRuntime {
             },
         )?;
         // Refresh the metrics tombstone gauge to match the post-
-        // destroy registry size. The Phase 6 health envelope reads
+        // destroy registry size. The health envelope reads
         // this gauge on every `health_check` call.
         metrics::set_tombstone_count(self.registry().tombstones().count() as u64);
         Ok(())
@@ -2005,7 +2004,7 @@ mod tests {
         close_store(handle).expect("close_store");
     }
 
-    /// Regression test for Devin Review ANALYSIS_0001: the nil
+    /// Regression test for : the nil
     /// UUID is reserved as the substrate's synthesis-windows
     /// sentinel scope, so `parse_scope_id` MUST refuse it at the
     /// FFI boundary. Without this check, a host that passes
@@ -2298,8 +2297,7 @@ mod tests {
         .expect("ingest seed evidence");
         let err = trigger_synthesis(h, scope, SynthesisTrigger::ManualUserAction).unwrap_err();
         assert!(
-            matches!(
-                err,
+            matches!(err,
                 FfiError::Unavailable { ref subsystem } if subsystem.starts_with("synthesis")
             ),
             "expected Unavailable {{ subsystem: synthesis* }}, got {err:?}"
@@ -2624,8 +2622,7 @@ mod tests {
         }
         let after_synth =
             runtime::with_runtime(h, |rt| Ok(rt.channel_memories.len())).expect("len after synth");
-        assert_eq!(
-            before_synth, after_synth,
+        assert_eq!(before_synth, after_synth,
             "trigger_synthesis must not allocate channel memory when returning a pre-dispatch error"
         );
         teardown(h);
@@ -2757,16 +2754,14 @@ mod tests {
             let raw_term_count: i64 = rt
                 .store()
                 .raw_conn()
-                .query_row(
-                    "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1 AND scope_id = ?2",
+                .query_row("SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1 AND scope_id = ?2",
                     rusqlite::params![PHRASE, scope.as_uuid().as_bytes().as_slice()],
                     |row| row.get(0),
                 )
                 .map_err(|e| FfiError::Evidence {
                     message: e.to_string(),
                 })?;
-            assert_eq!(
-                raw_term_count, 1,
+            assert_eq!(raw_term_count, 1,
                 "pre-condition: FTS row must survive a tombstone-only forget so the test exercises the re-purge"
             );
             Ok(())
@@ -2785,16 +2780,14 @@ mod tests {
             let raw_term_count: i64 = rt
                 .store()
                 .raw_conn()
-                .query_row(
-                    "SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1 AND scope_id = ?2",
+                .query_row("SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH ?1 AND scope_id = ?2",
                     rusqlite::params![PHRASE, scope.as_uuid().as_bytes().as_slice()],
                     |row| row.get(0),
                 )
                 .map_err(|e| FfiError::Evidence {
                     message: e.to_string(),
                 })?;
-            assert_eq!(
-                raw_term_count, 0,
+            assert_eq!(raw_term_count, 0,
                 "open_store must re-purge FTS rows for every persisted tombstone"
             );
             Ok(())
@@ -2819,7 +2812,7 @@ mod tests {
     /// with a body that contains CJK Han / Hiragana / Katakana
     /// codepoints so the row is also written to
     /// `evidence_fts_cjk` (the trigram-tokenised companion
-    /// introduced in Phase 1.2 / schema v14). The Latin-only test
+    /// schema v14). The Latin-only test
     /// above cannot exercise this code path because `unicode61`
     /// produces tokens for Latin but `script::contains_cjk_or_thai`
     /// returns false, so the row is never inserted into
@@ -2831,7 +2824,7 @@ mod tests {
     /// `evidence_fts_cjk` rows must survive the tombstone-only
     /// pre-reopen state (pre-condition), and both must be empty
     /// after the next `open_store` runs the re-purge. Closes the
-    /// coverage gap flagged by sweep-3 Devin Review INFO-0002.
+    /// coverage gap.
     #[test]
     fn open_store_repurges_evidence_fts_cjk_for_persisted_tombstones() {
         // The body intentionally contains a long CJK substring so
@@ -2928,7 +2921,7 @@ mod tests {
                 .map_err(|e| FfiError::Evidence {
                     message: e.to_string(),
                 })?;
-            // Phase 1.2.1 / schema v15: the bigram shadow also
+            // schema v15: the bigram shadow also
             // holds a row for CJK bodies (precomputed-bigram
             // recall lane for 2-codepoint queries). Pre-condition
             // sanity-checks that the re-purge has a non-empty
@@ -2958,7 +2951,7 @@ mod tests {
                 bigram_count, 1,
                 "pre-condition: evidence_fts_bigram must still hold the row for the tombstoned \
                  CJK scope so the test exercises the three-table re-purge introduced in \
-                 Phase 1.2.1 / schema v15"
+                  / schema v15"
             );
             Ok(())
         })
@@ -2972,8 +2965,8 @@ mod tests {
         // All THREE FTS5 shadow tables must be empty for the
         // forgotten scope after the re-purge. Asserting on the
         // bigram table is what's new here vs the dual-table
-        // sweep-3 sibling test — the three-table atomic transaction
-        // invariant introduced in Phase 1.2.1 / schema v15 is what
+        // sibling test — the three-table atomic transaction
+        // invariant / schema v15 is what
         // this regression guards.
         runtime::with_runtime(h2, |rt| {
             let scope = parse_scope_id(&scope_str)?;
@@ -3019,12 +3012,12 @@ mod tests {
             assert_eq!(
                 trigram_count, 0,
                 "open_store must re-purge evidence_fts_cjk rows for every persisted tombstone \
-                 (sweep-3 Devin Review INFO-0002 regression guard)"
+                 (regression guard)"
             );
             assert_eq!(
                 bigram_count, 0,
                 "open_store must re-purge evidence_fts_bigram rows for every persisted \
-                 tombstone (Phase 1.2.1 / schema v15 three-table atomicity invariant)"
+                 tombstone (schema v15 three-table atomicity invariant)"
             );
             Ok(())
         })

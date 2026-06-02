@@ -40,10 +40,10 @@ use synthesis_pipeline::{
 
 use crate::assertions::AssertionLog;
 use crate::dataset::{Dataset, ScopeTier};
-use crate::phases::runtime::RuntimeState;
-use crate::report::{DemoReport, PhaseReport};
+use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::RuntimeState;
 
-const PHASE: &str = "synthesis";
+const STAGE: &str = "synthesis";
 
 pub fn run(
     dataset: &Dataset,
@@ -52,7 +52,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Stage 5: Synthesis Pipeline");
+    let mut stage = StageReport::new("Stage 5: Synthesis Pipeline");
 
     let now = Utc::now();
     let mut windows = SynthesisWindowManager::new();
@@ -288,7 +288,7 @@ pub fn run(
 
     // ------- Assertions --------------------------------------------
     log.check(
-        PHASE,
+        STAGE,
         "every channel scope produced one ChannelRecap synthesis object",
         channel_object_count == channel_scopes.len() as u64
             && channel_recap_objects
@@ -296,62 +296,62 @@ pub fn run(
                 .all(|o| o.object_type == SynthesisObjectType::ChannelRecap),
     );
     log.check(
-        PHASE,
+        STAGE,
         "channel publish/consume AEAD round-trip succeeded for every recap",
         channel_pub_consume_failures == 0,
     );
     log.check(
-        PHASE,
+        STAGE,
         "domain synthesizer emitted a DomainSummary object",
         domain_result.object.object_type == SynthesisObjectType::DomainSummary,
     );
     log.check(
-        PHASE,
+        STAGE,
         "domain summary AEAD round-trip preserved the object",
         domain_decrypted == domain_result.object,
     );
     log.check(
-        PHASE,
+        STAGE,
         "tenant synthesizer emitted a TenantSummary object",
         tenant_result.object.object_type == SynthesisObjectType::TenantSummary,
     );
     log.check(
-        PHASE,
+        STAGE,
         "tenant summary AEAD round-trip preserved the object",
         tenant_decrypted == tenant_result.object,
     );
     log.check(
-        PHASE,
+        STAGE,
         "domain window finished in Complete state",
         domain_window_status == WindowStatus::Complete,
     );
     log.check(
-        PHASE,
+        STAGE,
         "tenant window finished in Complete state",
         tenant_window_status == WindowStatus::Complete,
     );
     log.check(
-        PHASE,
+        STAGE,
         "raw ChannelMemoryObject is rejected as a domain input",
         raw_channel_rejected,
     );
     log.check(
-        PHASE,
+        STAGE,
         "channel-recap object is rejected as a tenant input",
         stray_channel_rejected,
     );
     log.check(
-        PHASE,
+        STAGE,
         "channel-tier window cannot consume a DomainSynthesisInput",
         smuggle_rejected,
     );
     log.check(
-        PHASE,
+        STAGE,
         "off-scope handle is rejected even with the matching tier tag",
         off_scope_rejected,
     );
     log.check(
-        PHASE,
+        STAGE,
         "SynthesisWindow rejects zero-duration intervals",
         zero_window_rejected,
     );
@@ -396,25 +396,25 @@ pub fn run(
         .expect("tenant synthesis audit entry");
     state.audit_log.append(tenant_audit);
 
-    phase.timing = started.elapsed();
-    phase.stat("channel_recaps", channel_object_count.to_string());
-    phase.stat(
+    stage.timing = started.elapsed();
+    stage.stat("channel_recaps", channel_object_count.to_string());
+    stage.stat(
         "channel_pub_consume_failures",
         channel_pub_consume_failures.to_string(),
     );
-    phase.stat(
+    stage.stat(
         "domain_summary_payload_bytes",
         domain_result.object.payload.len().to_string(),
     );
-    phase.stat(
+    stage.stat(
         "tenant_summary_payload_bytes",
         tenant_result.object.payload.len().to_string(),
     );
-    phase.stat(
+    stage.stat(
         "scope_tiers_exercised",
         "user, channel, domain, tenant".to_string(),
     );
-    phase.stat(
+    stage.stat(
         "scope_total_messages",
         state
             .ingested_rows
@@ -423,11 +423,11 @@ pub fn run(
             .count()
             .to_string(),
     );
-    phase.stat("windows_complete", total_complete.to_string());
-    phase.stat("windows_pending", total_pending.to_string());
-    phase.stat("windows_in_progress", total_in_progress.to_string());
-    phase.stat("windows_failed", total_failed.to_string());
-    phase.note(
+    stage.stat("windows_complete", total_complete.to_string());
+    stage.stat("windows_pending", total_pending.to_string());
+    stage.stat("windows_in_progress", total_in_progress.to_string());
+    stage.stat("windows_failed", total_failed.to_string());
+    stage.note(
         "Channel (NoOpSynthesizer) -> Domain (ManagedEndpointSynthesizer) -> \
          Tenant (ManagedEndpointSynthesizer) with AEAD publish/consume + \
          four hierarchy-enforcement negative tests.",
@@ -437,7 +437,7 @@ pub fn run(
     report.count("domain_summary_objects", 1);
     report.count("tenant_summary_objects", 1);
     report.count("synthesis_hierarchy_rejections", 4);
-    report.add_phase(phase);
+    report.add_stage(stage);
     report.add_benchmark(
         "synthesis_channel_tier",
         channel_object_count,

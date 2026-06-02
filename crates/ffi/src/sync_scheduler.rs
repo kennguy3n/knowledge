@@ -1,7 +1,8 @@
-//! Background sync scheduler FFI surface (Phase 6).
+//! Background sync scheduler FFI surface.
 //!
-//! Per `ARCHITECTURE.md` §4.4 and the open backlog from Phase 5, the
-//! substrate ships its own in-process scheduler so connectors poll
+//! Per `ARCHITECTURE.md` §4.4 and the open backlog from the
+//! initial connector-framework rollout, the substrate ships its
+//! own in-process scheduler so connectors poll
 //! their upstream providers on a configurable cadence without
 //! requiring the host to drive every [`crate::sync_connector`] call
 //! itself. The scheduler walks the per-runtime
@@ -42,8 +43,8 @@
 //! only for the *snapshot* (pick due instances) and *result-record*
 //! (update consecutive_failures + next_attempt_at) phases. The
 //! actual `sync_connector` call runs UNLOCKED — the entry point
-//! itself walks the substrate's own three-phase discipline (Phase 1
-//! snapshot, Phase 2 HTTP, Phase 3 result) so any deadlock here
+//! itself walks the substrate's own three-phase discipline (Step 1
+//! snapshot, Step 2 HTTP, Step 3 result) so any deadlock here
 //! would also have caused one for host-driven syncs.
 //!
 //! **4. `close_store` pre-drain.** `close_store` consumes the
@@ -541,7 +542,7 @@ pub fn start_sync_scheduler(
 #[uniffi::export]
 pub fn stop_sync_scheduler(handle: RuntimeHandle) -> FfiResult<()> {
     metrics::instrument(metrics::inc_stop_sync_scheduler, || {
-        // Phase 1 (locked): take the scheduler out of the runtime
+        // Step 1 (locked): take the scheduler out of the runtime
         // slot. Releases the runtime mutex before the join so any
         // in-flight tick — which is itself blocked on the runtime
         // mutex inside `with_runtime` — can complete and drop the
@@ -549,7 +550,7 @@ pub fn stop_sync_scheduler(handle: RuntimeHandle) -> FfiResult<()> {
         let scheduler = with_runtime(handle, |rt| -> FfiResult<Option<RunningSyncScheduler>> {
             Ok(rt.sync_scheduler.take())
         })?;
-        // Phase 2 (unlocked): synchronously join the worker. May
+        // Step 2 (unlocked): synchronously join the worker. May
         // take up to `tick_interval` (the worker's recv_timeout)
         // to surface the shutdown signal.
         if let Some(s) = scheduler {
@@ -795,7 +796,7 @@ pub fn clear_sync_schedule(handle: RuntimeHandle, instance_id: String) -> FfiRes
             state.accounting.remove(&instance);
             // Preserve the `auto_synthesize` flag so a clear /
             // re-cadence cycle does not silently disable
-            // post-sync synthesis.  If the flag was false (or
+            // post-sync synthesis. If the flag was false (or
             // never set), the remove above already restored
             // pure-defaults semantics.
             if prior_auto_synth {
@@ -906,7 +907,7 @@ pub(crate) fn scheduler_health_detail(rt: &crate::runtime::FfiRuntime) -> &'stat
 // ──────────── Per-instance scheduler-state probe ───────────────
 
 /// Snapshot of one connector instance's scheduler-side state for
-/// the Phase 10 Item 3 [`crate::connector::connector_status`]
+/// the [`crate::connector::connector_status`]
 /// surface. Bundled into a single record so the caller can build
 /// the wire-flat `ConnectorHealthRecord` without holding the
 /// scheduler-state mutex across the rest of the assembly logic.
@@ -1092,11 +1093,11 @@ fn run_scheduler_loop(
 /// # Timestamp discipline (load-bearing — read before refactoring)
 ///
 /// `now = Utc::now()` is captured ONCE at tick start and used
-/// only for the Phase 1 due-instance check. Phase 3 captures a
+/// only for the Step 1 due-instance check. Step 3 captures a
 /// FRESH `dispatch_completed_at = Utc::now()` after each
 /// `sync_connector` call returns and uses that for the
 /// `next_attempt_at` arithmetic. Reusing the tick-start `now`
-/// for Phase 3 would (a) schedule retries in the past whenever
+/// for Step 3 would (a) schedule retries in the past whenever
 /// the backoff delay is shorter than the cumulative dispatch
 /// time of preceding instances in the same tick — defeating
 /// exponential backoff entirely — and (b) synchronise every
@@ -1110,14 +1111,14 @@ fn run_scheduler_loop(
 /// scheduler state mutex simultaneously. The acquisition pattern
 /// in this function is:
 ///
-/// 1. Acquire runtime mutex via [`with_runtime`] (Phase 1
+/// 1. Acquire runtime mutex via [`with_runtime`] (Step 1
 ///    snapshot). Drop it on closure return.
 /// 2. Acquire scheduler state mutex (read policies + accounting).
-///    Drop it before Phase 2.
-/// 3. Phase 2 dispatch: NO locks held — `sync_connector`
+///    Drop it before Step 2.
+/// 3. dispatch: NO locks held — `sync_connector`
 ///    re-acquires the runtime mutex on its own, observing the
 ///    substrate's published three-phase discipline.
-/// 4. Phase 3 result-record: re-acquire the scheduler state
+/// 4. result-record: re-acquire the scheduler state
 ///    mutex briefly to update accounting. Drop it before exit.
 ///
 /// The FFI surface (`configure_sync_schedule`, `clear_sync_schedule`,
@@ -1143,7 +1144,7 @@ fn run_one_tick(
 ) {
     let now = Utc::now();
 
-    // ─── Phase 1: snapshot due instances (locked) ─────────────
+    // ─── Step 1: snapshot due instances (locked) ─────────────
     let due_instances: Vec<ConnectorInstanceId> = {
         // Re-entering `with_runtime` from the scheduler thread is
         // exactly the contract the FFI surface requires of every
@@ -1231,12 +1232,12 @@ fn run_one_tick(
         due
     };
 
-    // ─── Phase 2: dispatch each due instance (unlocked) ───────
+    // ─── Step 2: dispatch each due instance (unlocked) ───────
     //
     // Each `sync_connector` call walks the substrate's three-phase
     // discipline itself; the scheduler is just another client.
     //
-    // Phase 3 below uses a FRESH `Utc::now()` captured AFTER each
+    // Step 3 below uses a FRESH `Utc::now()` captured AFTER each
     // dispatch returns — NOT the tick-start `now`. With small
     // intervals and slow upstream providers (e.g. 1 s `sync_interval`
     // against a 10 s dispatch) reusing the tick-start `now` would
@@ -1255,7 +1256,7 @@ fn run_one_tick(
         metrics::inc_sync_scheduler_dispatch_attempted();
         let result = crate::sync_connector(handle, instance_id.0.to_string());
         let dispatch_completed_at = Utc::now();
-        // ─── Phase 3: record result (locked) ─────────────────
+        // ─── Step 3: record result (locked) ─────────────────
         let mut s = match state.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -1300,8 +1301,7 @@ fn run_one_tick(
                         + chrono::Duration::from_std(delay)
                             .unwrap_or_else(|_| chrono::Duration::seconds(0)),
                 );
-                debug!(
-                    handle = handle.0,
+                debug!(handle = handle.0,
                     instance = %instance_id.0,
                     consecutive_failures = entry.consecutive_failures,
                     delay_secs = delay.as_secs(),
@@ -1360,16 +1360,14 @@ fn maybe_dispatch_auto_synthesis(handle: RuntimeHandle, instance_id: ConnectorIn
         crate::types::SynthesisTierKind::Domain,
     ) {
         Ok(window_id) => {
-            debug!(
-                instance = %instance_id.0,
+            debug!(instance = %instance_id.0,
                 scope = %scope.as_uuid(),
                 window = %window_id,
                 "scheduler: post-sync auto-synthesis dispatched",
             );
         }
         Err(err) => {
-            debug!(
-                instance = %instance_id.0,
+            debug!(instance = %instance_id.0,
                 scope = %scope.as_uuid(),
                 error = %err,
                 "scheduler: post-sync auto-synthesis skipped (best-effort)",

@@ -22,9 +22,9 @@ onnx-runtime = ["dep:ort", "dep:tokenizers"]
 # crate's top-level doc comment (`src/lib.rs` `# Test-only types`
 # section); the summary here is just a catalogue:
 #   * `EvidenceStore::search_fts_with_weighted_ranks_for_tests`
-#     (Phase 1.8) — exposes the cross-lane merged BM25 ranks (after
-#     lane-weight application) so the lane-weight precision
-#     hierarchy can be asserted from outside the crate.
+#     — exposes the cross-lane merged BM25 ranks (after lane-weight
+#     application) so the lane-weight precision hierarchy can be
+#     asserted from outside the crate.
 #   * `EvidenceStore::inject_with_transaction_failure_for_tests` /
 #     `take_injected_with_transaction_failure` — lets tests force
 #     `EvidenceStore::with_transaction` to fail on its next call so
@@ -33,7 +33,7 @@ onnx-runtime = ["dep:ort", "dep:tokenizers"]
 #     real SQLCipher I/O error.
 #   * `EvidenceStore::write_legacy_approved_doc_payload_for_tests`
 #     — surgically reshapes `approved_document_payloads` back to
-#     its pre-v12 (Phase 8 / v10) inline layout so the v12-onwards
+#     its pre-v12 (schema v10) inline layout so the v12-onwards
 #     re-migration code path has a controllable starting state.
 # Gated `cfg(any(test, feature = "test-support"))` so production
 # builds never compile the hooks nor pay the runtime cost of
@@ -54,15 +54,14 @@ tracing = { workspace = true }
 zeroize = { workspace = true }
 rand = { workspace = true }
 rand_core = { workspace = true }
-# Pure-Rust trigram-based language detector used by Phase 1.12's
-# pre-embedding routing hook (`embedding_routing.rs`) to short-
-# circuit ONNX invocations on text with no linguistic content
-# (pure punctuation / emoji / digits / whitespace).  The
-# substrate already pulls `whatlang` in via `observation_engine`
-# for the per-sentence detection used by the classifier; making
-# it a direct dep here lets the embedding lane reuse the same
-# detector primitive without an upstream-direction crate
-# dependency on `observation_engine`.
+# Pure-Rust trigram-based language detector used by the pre-
+# embedding routing hook (`embedding_routing.rs`) to short-circuit
+# ONNX invocations on text with no linguistic content (pure
+# punctuation / emoji / digits / whitespace). The substrate already
+# pulls `whatlang` in via `observation_engine` for per-sentence
+# detection; making it a direct dep here lets the embedding lane
+# reuse the same detector primitive without an upstream-direction
+# crate dependency on `observation_engine`.
 whatlang = { workspace = true }
 
 # Optional ONNX Runtime backend (enabled via `onnx-runtime` feature).
@@ -79,16 +78,15 @@ whatlang = { workspace = true }
 # `rc.10` therefore also requires a workspace MSRV bump to `≥1.88`
 # (the same threshold the `napi_addon` crate already requires).
 #
-# Phase 2.4 freshness audit confirmed `rc.10` (MSRV `1.81`) is the
-# latest version that fits the workspace MSRV gate. See
-# `docs/MULTILINGUAL_DEPENDENCY_AUDIT.md` for the per-dep audit log.
+# `rc.10` (MSRV `1.81`) is the latest version that fits the
+# workspace MSRV gate. See `docs/DEPENDENCIES.md` for the
+# MSRV-gated pin policy and future-bump checklist.
 ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["load-dynamic", "ndarray"] }
 # `fancy-regex` is the pure-Rust regex backend; the default `onig`
 # backend pulls in a C library (libonig) that isn't part of CI.
-# Phase 2.4 freshness audit: on `0.23.1`, the latest published
-# version of the `0.23.x` line; upstream declares no MSRV, fits the
-# workspace `1.85` floor cleanly. See
-# `docs/MULTILINGUAL_DEPENDENCY_AUDIT.md`.
+# On `0.23.1`, the latest published version of the `0.23.x` line;
+# upstream declares no MSRV, fits the workspace `1.85` floor
+# cleanly. See `docs/DEPENDENCIES.md`.
 tokenizers = { version = "0.23", optional = true, default-features = false, features = ["fancy-regex"] }
 
 [dev-dependencies]

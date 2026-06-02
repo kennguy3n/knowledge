@@ -812,8 +812,7 @@ mod tests {
         let sim = PolicySimulator::new(&policy, &registry);
         let result = sim.simulate(&profile);
 
-        assert_eq!(
-            result.included_concepts,
+        assert_eq!(result.included_concepts,
             vec![concept_id],
             "concept registered with scope_bound=[scope_a] must be admitted when held by a profile rooted at scope_b — simulator must use the concept's own scope (matching ConceptApprovalWorkflow::approve_for_export)"
         );

@@ -361,7 +361,7 @@ pub struct FfiRuntime {
     /// See [`Self::http_transport`] for the soft-fail rationale.
     #[cfg(feature = "http-client")]
     pub(crate) oauth_client: Option<Arc<OAuth2Client<BlockingHttpTransport>>>,
-    /// Running webhook receiver servers (Phase 5).
+    /// Running webhook receiver servers.
     ///
     /// Each entry is one independently-running tokio runtime +
     /// axum server hosted on a dedicated OS thread; the
@@ -390,7 +390,7 @@ pub struct FfiRuntime {
     /// [`with_runtime`].
     pub(crate) webhook_servers:
         HashMap<crate::types::WebhookServerHandle, crate::webhook::RunningWebhookServer>,
-    /// Singleton background sync scheduler (Phase 6).
+    /// Singleton background sync scheduler.
     ///
     /// Exactly one [`crate::sync_scheduler::RunningSyncScheduler`]
     /// per runtime; [`crate::start_sync_scheduler`] populates this
@@ -470,7 +470,7 @@ pub struct FfiRuntime {
     /// object. The on-disk shape under the
     /// [`SYNTHESIS_OBJECT_KIND`] tag has always been per-scope
     /// (one row per scope, payload = JSON-serialised
-    /// `Vec<SynthesisObject>`); Phase 10 Item 2 brought the
+    /// `Vec<SynthesisObject>`); brought the
     /// in-memory shape into alignment so the per-dispatch clone
     /// in [`crate::synthesis::apply_dispatch_outcome`] only
     /// touches the scope being updated. Before the refactor,
@@ -509,9 +509,8 @@ pub struct FfiRuntime {
     pub(crate) synthesis_single_tenant: bool,
 
     /// Global token-bucket rate limiter gating
-    /// [`crate::synthesis::trigger_server_synthesis`]
-    /// (Phase 10 Item 5). Created at `open_store` with the
-    /// defaults from
+    /// [`crate::synthesis::trigger_server_synthesis`].
+    /// Created at `open_store` with the defaults from
     /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_CAPACITY`] and
     /// [`crate::synthesis::DEFAULT_TRIGGER_RATE_REFILL_PER_SEC`];
     /// reconfigured by
@@ -583,8 +582,8 @@ pub(crate) const SYNTHESIS_OBJECT_KIND: &str = "synthesis_object";
 /// dispatch (full tenant memory, large LLM, slow disk) measured in
 /// pipeline benchmarks completes in tens of seconds, so a window
 /// `Pending` for an hour almost certainly belongs to a prior host run
-/// that crashed mid-dispatch (e.g. between the Phase-1 flush and the
-/// Phase-3 commit in `apply_dispatch_outcome`) or whose Phase-3
+/// that crashed mid-dispatch (e.g. between the earlier flush and the
+/// earlier commit in `apply_dispatch_outcome`) or whose earlier
 /// commit failure left the in-memory recovery flush stranded.
 ///
 /// Tuned conservatively because the cost of leaving a stuck window
@@ -668,7 +667,7 @@ impl FfiRuntime {
     }
 
     /// Borrow the per-user master key. Kept `pub(crate)` so callers
-    /// cannot leak it across the FFI boundary. Read by the Phase 6
+    /// cannot leak it across the FFI boundary. Read by the
     /// health probe to verify the master key is non-zero (an
     /// all-zero key signals an uninitialised runtime).
     pub(crate) fn master_key(&self) -> &MasterKey {
@@ -706,13 +705,13 @@ impl FfiRuntime {
     }
 
     /// Number of distinct scopes with a rehydrated
-    /// [`UserMemoryObject`]. Used by the Phase 6 health probe.
+    /// [`UserMemoryObject`]. Used by the health probe.
     pub(crate) fn user_memory_count(&self) -> usize {
         self.user_memories.len()
     }
 
     /// Number of distinct scopes with a rehydrated
-    /// [`ChannelMemoryObject`]. Used by the Phase 6 health probe.
+    /// [`ChannelMemoryObject`]. Used by the health probe.
     pub(crate) fn channel_memory_count(&self) -> usize {
         self.channel_memories.len()
     }
@@ -801,7 +800,7 @@ impl FfiRuntime {
 
     /// Borrow (or allocate) the per-scope tenant memory.
     ///
-    /// Test-only fixture helper. Phase 9 transactional
+    /// Test-only fixture helper. transactional
     /// `apply_dispatch_outcome` builds post-synthesis state on
     /// owned clones rather than mutating the live map in-place;
     /// production callers go through [`Self::tenant_memory`] +
@@ -833,7 +832,7 @@ impl FfiRuntime {
     /// [`Self::save_channel_memory`] invariant (no in-memory
     /// allocation on disk-save failure).
     ///
-    /// Test-only fixture helper post-Phase-9: production callers
+    /// Test-only fixture helper earlier: production callers
     /// now bundle the synthesis-object / domain-memory / window
     /// writes under the SQLCipher transaction managed by
     /// `apply_dispatch_outcome`. Retained because integration
@@ -904,7 +903,7 @@ impl FfiRuntime {
     /// window retention cap enforced via
     /// [`Self::prune_completed_windows`].
     ///
-    /// Test-only fixture helper post-Phase-9 (see
+    /// Test-only fixture helper earlier (see
     /// [`Self::save_domain_memory`] for the rationale).
     #[cfg(test)]
     pub(crate) fn save_synthesis_object(
@@ -921,7 +920,7 @@ impl FfiRuntime {
         // a serialisation or SQLCipher failure leaves both disk and
         // in-memory state untouched.
         //
-        // Post-Phase-10-Item-2 the in-memory shape is
+        // earlier the in-memory shape is
         // already per-scope, so we read straight off the
         // matching sub-map (empty if this is the first object
         // for `scope`) and chain the new owned-but-not-yet-
@@ -968,7 +967,7 @@ impl FfiRuntime {
     /// entirely (e.g. because the scope was forgotten),
     /// `delete_memory_blobs_for_scope` covers that path.
     ///
-    /// Test-only fixture helper post-Phase-9 (production callers
+    /// Test-only fixture helper earlier (production callers
     /// inline the equivalent serialise + `save_memory_blob_in_tx`
     /// inside the transactional `apply_dispatch_outcome`).
     #[cfg(test)]
@@ -997,7 +996,7 @@ impl FfiRuntime {
     /// pruned window ids so the caller can also evict any
     /// associated [`synthesis_pipeline::SynthesisObject`] rows.
     ///
-    /// Test-only fixture helper post-Phase-9 — production callers
+    /// Test-only fixture helper earlier — production callers
     /// invoke [`crate::synthesis::prune_completed_windows_on`]
     /// directly on the cloned manager / objects-map inside the
     /// transactional `apply_dispatch_outcome` so the prune
@@ -1044,7 +1043,7 @@ impl FfiRuntime {
     /// globally unique but the runtime no longer maintains a flat
     /// reverse index.
     ///
-    /// Test-only after the Phase-10 Item 2 refactor: every
+    /// Test-only after the earlier refactor: every
     /// production caller (the dispatch path, the status surface,
     /// the cooldown short-circuit) already knows the owning scope
     /// and takes the O(1) [`Self::synthesis_object_in`] route. The
@@ -1585,8 +1584,7 @@ fn open_store_inner(
             store.evict_cached_scope_key(*scope);
             // Best-effort: delete the dangling wrapped DEK from disk.
             if let Err(e) = store.delete_scope_dek_row(*scope) {
-                tracing::warn!(
-                    scope = %scope.as_uuid(),
+                tracing::warn!(scope = %scope.as_uuid(),
                     error = %e,
                     "failed to clean up dangling scope_deks row; will retry on next open_store"
                 );
@@ -1617,8 +1615,7 @@ fn open_store_inner(
                     user_memories.insert(scope, umo);
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        scope = %scope.as_uuid(),
+                    tracing::warn!(scope = %scope.as_uuid(),
                         error = %e,
                         "failed to deserialize user_memory blob; blob dropped"
                     );
@@ -1626,8 +1623,7 @@ fn open_store_inner(
             },
             Ok(None) => {}
             Err(e) => {
-                tracing::warn!(
-                    scope = %scope.as_uuid(),
+                tracing::warn!(scope = %scope.as_uuid(),
                     error = %e,
                     "failed to load user_memory blob; skipping"
                 );
@@ -1652,8 +1648,7 @@ fn open_store_inner(
                     channel_memories.insert(scope, cmo);
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        scope = %scope.as_uuid(),
+                    tracing::warn!(scope = %scope.as_uuid(),
                         error = %e,
                         "failed to deserialize channel_memory blob; blob dropped"
                     );
@@ -1661,8 +1656,7 @@ fn open_store_inner(
             },
             Ok(None) => {}
             Err(e) => {
-                tracing::warn!(
-                    scope = %scope.as_uuid(),
+                tracing::warn!(scope = %scope.as_uuid(),
                     error = %e,
                     "failed to load channel_memory blob; skipping"
                 );
@@ -1691,8 +1685,7 @@ fn open_store_inner(
                     domain_memories.insert(scope, dmo);
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        scope = %scope.as_uuid(),
+                    tracing::warn!(scope = %scope.as_uuid(),
                         error = %e,
                         "failed to deserialize domain_memory blob; blob dropped"
                     );
@@ -1700,8 +1693,7 @@ fn open_store_inner(
             },
             Ok(None) => {}
             Err(e) => {
-                tracing::warn!(
-                    scope = %scope.as_uuid(),
+                tracing::warn!(scope = %scope.as_uuid(),
                     error = %e,
                     "failed to load domain_memory blob; skipping"
                 );
@@ -1727,8 +1719,7 @@ fn open_store_inner(
                     tenant_memories.insert(scope, tmo);
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        scope = %scope.as_uuid(),
+                    tracing::warn!(scope = %scope.as_uuid(),
                         error = %e,
                         "failed to deserialize tenant_memory blob; blob dropped"
                     );
@@ -1736,8 +1727,7 @@ fn open_store_inner(
             },
             Ok(None) => {}
             Err(e) => {
-                tracing::warn!(
-                    scope = %scope.as_uuid(),
+                tracing::warn!(scope = %scope.as_uuid(),
                     error = %e,
                     "failed to load tenant_memory blob; skipping"
                 );
@@ -1757,8 +1747,7 @@ fn open_store_inner(
             match serde_json::from_slice::<synthesis_pipeline::SynthesisWindowManager>(&blob) {
                 Ok(mgr) => mgr,
                 Err(e) => {
-                    tracing::warn!(
-                        error = %e,
+                    tracing::warn!(error = %e,
                         "failed to deserialize synthesis_windows blob; dropping and starting fresh"
                     );
                     synthesis_pipeline::SynthesisWindowManager::new()
@@ -1767,8 +1756,7 @@ fn open_store_inner(
         }
         Ok(None) => synthesis_pipeline::SynthesisWindowManager::new(),
         Err(e) => {
-            tracing::warn!(
-                error = %e,
+            tracing::warn!(error = %e,
                 "failed to load synthesis_windows blob; starting fresh"
             );
             synthesis_pipeline::SynthesisWindowManager::new()
@@ -1829,8 +1817,7 @@ fn open_store_inner(
                     SYNTHESIS_WINDOWS_KIND,
                     &bytes,
                 ) {
-                    tracing::warn!(
-                        error = %e,
+                    tracing::warn!(error = %e,
                         "open_store: rewrite of cleaned synthesis_windows blob failed; on-disk \
                          blob still references forgotten scopes (next open_store will retry the \
                          purge)",
@@ -1838,8 +1825,7 @@ fn open_store_inner(
                 }
             }
             Err(e) => {
-                tracing::warn!(
-                    error = %e,
+                tracing::warn!(error = %e,
                     "open_store: could not serialise cleaned synthesis_windows blob; on-disk \
                      blob still references forgotten scopes (next open_store will retry the \
                      purge)",
@@ -1848,16 +1834,16 @@ fn open_store_inner(
         }
     }
 
-    // Stuck-Pending recovery sweep (Phase 10 Item 1). After the
+    // Stuck-Pending recovery sweep . After the
     // tombstone purge has had its say, walk the rehydrated manager
     // for `Pending` windows older than
     // [`STUCK_PENDING_THRESHOLD_SECS`] and transition them to
     // `Failed`. This closes two related crash-safety gaps:
     //
-    //   * **Host-crashed mid-dispatch**: the Phase-1
+    //   * **Host-crashed mid-dispatch**: the earlier
     //     `flush_synthesis_windows` call inside
     //     `trigger_server_synthesis` lands a `Pending` window on
-    //     disk, but the host process is killed before the Phase-3
+    //     disk, but the host process is killed before the earlier
     //     `apply_dispatch_outcome` commit transitions it to
     //     `Complete` / `Failed`. On the next `open_store` the
     //     window rehydrates as `Pending` and would otherwise stay
@@ -1881,12 +1867,12 @@ fn open_store_inner(
     // chain that live dispatchers use.
     //
     // Windows with `created_at: None` (blobs persisted before the
-    // field was added in Phase 10) are conservatively left alone —
+    // field was) are conservatively left alone —
     // we cannot prove their age without a creation timestamp.
     // Subsequent `trigger_server_synthesis` calls on those scopes
     // will re-fail the windows via the live `mark_in_progress` /
     // `mark_failed` path; or the host can explicitly forget the
-    // scope to drop them. Once the Phase-10 fleet has been alive
+    // scope to drop them. Once the earlier fleet has been alive
     // for at least one `STUCK_PENDING_THRESHOLD_SECS` window, all
     // legitimate `Pending` windows carry `created_at: Some(...)`
     // by construction (every `SynthesisWindow::new` stamps it),
@@ -1917,8 +1903,7 @@ fn open_store_inner(
                     SYNTHESIS_WINDOWS_KIND,
                     &bytes,
                 ) {
-                    tracing::warn!(
-                        error = %e,
+                    tracing::warn!(error = %e,
                         recovered = swept_window_ids.len(),
                         "open_store: flush of stuck-Pending sweep result failed; on-disk blob \
                          still references Pending windows (next open_store will retry the sweep \
@@ -1927,8 +1912,7 @@ fn open_store_inner(
                 }
             }
             Err(e) => {
-                tracing::warn!(
-                    error = %e,
+                tracing::warn!(error = %e,
                     recovered = swept_window_ids.len(),
                     "open_store: could not serialise swept synthesis_windows blob; on-disk blob \
                      still references Pending windows (next open_store will retry the sweep + \
@@ -1940,7 +1924,7 @@ fn open_store_inner(
 
     // Rehydrate per-scope synthesis objects. Each scope's row holds
     // a JSON-serialised `Vec<SynthesisObject>`; the in-memory shape
-    // (post-Phase-10-Item-2) mirrors that nesting so per-dispatch
+    // (earlier) mirrors that nesting so per-dispatch
     // clones in `apply_dispatch_outcome` only touch the scope being
     // updated.
     let mut synthesis_objects: HashMap<
@@ -1973,8 +1957,7 @@ fn open_store_inner(
                             // owning scope under a different
                             // key.
                             if obj.scope_id != scope {
-                                tracing::warn!(
-                                    row_scope = %scope.as_uuid(),
+                                tracing::warn!(row_scope = %scope.as_uuid(),
                                     object_scope = %obj.scope_id.as_uuid(),
                                     window = %obj.window_id.as_uuid(),
                                     "synthesis_object blob carries an object whose \
@@ -1986,8 +1969,7 @@ fn open_store_inner(
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            scope = %scope.as_uuid(),
+                        tracing::warn!(scope = %scope.as_uuid(),
                             error = %e,
                             "failed to deserialize synthesis_object blob; blob dropped"
                         );
@@ -1996,8 +1978,7 @@ fn open_store_inner(
             }
             Ok(None) => {}
             Err(e) => {
-                tracing::warn!(
-                    scope = %scope.as_uuid(),
+                tracing::warn!(scope = %scope.as_uuid(),
                     error = %e,
                     "failed to load synthesis_object blob; skipping"
                 );
@@ -2007,11 +1988,11 @@ fn open_store_inner(
 
     // Orphan-aware rehydration cleanup. The `synthesis_objects`
     // blob and the `synthesis_windows` blob are persisted under
-    // separate `memory_objects` rows. The Phase-9 transactional
+    // separate `memory_objects` rows. The earlier transactional
     // `apply_dispatch_outcome` bundles both writes under one
     // SQLCipher transaction so the success path can no longer
     // diverge them, but two scenarios still benefit from this
-    // sweep: (1) databases that pre-date Phase-9 may carry
+    // sweep: (1) databases that pre-date earlier may carry
     // divergence accumulated under the older autocommit flushes;
     // (2) the failure-path `flush_synthesis_windows` calls in
     // `apply_dispatch_outcome` and `fail_window_on_live_manager`
@@ -2070,8 +2051,7 @@ fn open_store_inner(
             match serde_json::to_vec(&per_scope) {
                 Ok(bytes) => {
                     if let Err(e) = store.save_memory_blob(*scope, SYNTHESIS_OBJECT_KIND, &bytes) {
-                        tracing::warn!(
-                            scope = %scope.as_uuid(),
+                        tracing::warn!(scope = %scope.as_uuid(),
                             error = %e,
                             "open_store: rewrite of cleaned synthesis_object blob failed; \
                              on-disk blob still references orphan window ids (next open_store \
@@ -2080,8 +2060,7 @@ fn open_store_inner(
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        scope = %scope.as_uuid(),
+                    tracing::warn!(scope = %scope.as_uuid(),
                         error = %e,
                         "open_store: could not serialise cleaned synthesis_object blob; \
                          on-disk blob still references orphan window ids (next open_store \
@@ -2147,8 +2126,7 @@ fn open_store_inner(
                         match store.delete_approved_document_payload(*scope_id, *doc_id) {
                             Ok(n) => deleted += n,
                             Err(e) => {
-                                tracing::warn!(
-                                    scope = %scope_id.as_uuid(),
+                                tracing::warn!(scope = %scope_id.as_uuid(),
                                     doc_id = %doc_id,
                                     error = %e,
                                     "open_store: failed to delete orphan approved-document \
@@ -2166,8 +2144,7 @@ fn open_store_inner(
                 }
             }
             Err(e) => {
-                tracing::warn!(
-                    error = %e,
+                tracing::warn!(error = %e,
                     "open_store: could not list approved-document payload keys for orphan \
                      sweep; skipping (next open_store will retry)",
                 );
@@ -2175,7 +2152,7 @@ fn open_store_inner(
         }
     }
 
-    // ─── Synthesis-object version orphan sweep (Phase-10-Item-4) ──
+    // ─── Synthesis-object version orphan sweep (earlier) ──
     //
     // Symmetric to the approved-doc payload sweep above. The
     // `synthesis_object_versions` history table accumulates rows
@@ -2233,8 +2210,7 @@ fn open_store_inner(
                         {
                             Ok(n) => deleted += n,
                             Err(e) => {
-                                tracing::warn!(
-                                    scope = %scope_id.as_uuid(),
+                                tracing::warn!(scope = %scope_id.as_uuid(),
                                     window = %window_uuid,
                                     error = %e,
                                     "open_store: failed to delete orphan synthesis-object \
@@ -2253,8 +2229,7 @@ fn open_store_inner(
                 }
             }
             Err(e) => {
-                tracing::warn!(
-                    error = %e,
+                tracing::warn!(error = %e,
                     "open_store: could not list synthesis-object version keys for orphan \
                      sweep; skipping (next open_store will retry)",
                 );
@@ -2331,8 +2306,7 @@ fn open_store_inner(
             (Some(transport_arc), Some(oauth))
         }
         Err(err) => {
-            tracing::warn!(
-                error = %err,
+            tracing::warn!(error = %err,
                 "open_store: BlockingHttpTransport construction failed; \
                  connector subsystem disabled for this runtime (connector calls \
                  will surface FfiError::Unavailable {{ subsystem: \"connector-http-client\" }})",
@@ -2553,8 +2527,7 @@ pub fn close_store(handle: RuntimeHandle) -> FfiResult<()> {
             // application phase's flush would lose the
             // window-status update.
             if let Err(err) = rt_guard.flush_synthesis_windows() {
-                tracing::warn!(
-                    handle = handle.0,
+                tracing::warn!(handle = handle.0,
                     error = ?err,
                     "close_store: flush_synthesis_windows failed; in-memory window state may not be persisted",
                 );
@@ -2700,8 +2673,7 @@ pub(crate) fn build_inference_router(config: RouterConfig) -> InferenceRouter {
                 )));
             }
             Err(err) => {
-                tracing::warn!(
-                    error = %err,
+                tracing::warn!(error = %err,
                     "failed to construct HttpLlamaServerClient; llama.cpp adapter disabled",
                 );
             }

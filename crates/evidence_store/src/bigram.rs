@@ -1,19 +1,20 @@
 //! CJK / Thai bigram precomputation used by the schema v15 FTS5
-//! bigram lane (Phase 1.2.1 — custom bigram tokeniser).
+//! bigram lane (custom bigram tokeniser).
 //!
-//! Phase 1.2 added the [`crate::script::contains_cjk_or_thai`]
-//! routing predicate and a trigram-tokenised companion table
-//! `evidence_fts_cjk`. SQLite FTS5's built-in `trigram` tokeniser
-//! requires query terms to be **at least three codepoints** — a
-//! 2-codepoint CJK query like `天気` (Japanese "weather") returns
-//! `Ok(vec![])` because the tokeniser produces no trigrams for the
-//! query side and rejects the MATCH with an empty result set (or
-//! a swallowed error on some SQLite builds). Phase 1.2 documented
-//! this as a known limitation and noted "a future phase can
-//! register a Rust-side custom FTS5 bigram tokeniser via the
-//! `fts5_api` FFI to close that gap".
+//! The earlier multilingual rollout added the
+//! [`crate::script::contains_cjk_or_thai`] routing predicate and a
+//! trigram-tokenised companion table `evidence_fts_cjk`. SQLite
+//! FTS5's built-in `trigram` tokeniser requires query terms to be
+//! **at least three codepoints** — a 2-codepoint CJK query like
+//! `天気` (Japanese "weather") returns `Ok(vec![])` because the
+//! tokeniser produces no trigrams for the query side and rejects
+//! the MATCH with an empty result set (or a swallowed error on
+//! some SQLite builds). The trigram lane documented this as a
+//! known limitation and noted "a future iteration can register a
+//! Rust-side custom FTS5 bigram tokeniser via the `fts5_api` FFI
+//! to close that gap".
 //!
-//! Phase 1.2.1 implements that gap-closing recall lane **without
+//! This module implements that gap-closing recall lane **without
 //! reaching for `fts5_api`** — the idiomatic SQLite approach is
 //! to pre-compute overlapping 2-codepoint windows over the
 //! CJK / Thai portion of the body at write time and store the
@@ -24,7 +25,7 @@
 //! `"天気 気予 予報"` tokenises as the three independent tokens
 //! `天気`, `気予`, `予報`. A 2-codepoint query `天気` then matches
 //! every row whose bigram-precomputed body contains the token
-//! `天気` — exactly the recall lane Phase 1.2 deferred.
+//! `天気` — exactly the recall lane deferred.
 //!
 //! Why precomputed bigrams instead of a custom FTS5 tokeniser:
 //!
@@ -38,10 +39,10 @@
 //!   for the cryptographic-forgetting guarantee (REBUILD must
 //!   wipe residual plaintext tokens from a purged scope).
 //! * Tokeniser swaps are FTS5 table options, not column changes,
-//!   so the bigram lane is additive in the same shape Phase 1.2
-//!   used for the trigram lane — purge / rebuild / search all
-//!   fan out across the new table without any restructure of
-//!   the existing two.
+//!   so the bigram lane is additive in the same shape used by
+//!   the trigram lane — purge / rebuild / search all fan out
+//!   across the new table without any restructure of the
+//!   existing two.
 //!
 //! The bigram column is purely additive recall. The unicode61
 //! `evidence_fts` table remains the source of truth for query

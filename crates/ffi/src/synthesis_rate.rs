@@ -1,9 +1,8 @@
-//! Token-bucket rate limiter for `trigger_server_synthesis`
-//! (Phase 10 Item 5).
+//! Token-bucket rate limiter for `trigger_server_synthesis`.
 //!
 //! # Why
 //!
-//! The Phase-7 [`crate::synthesis::PER_SCOPE_COOLDOWN_SECS`]
+//! The earlier [`crate::synthesis::PER_SCOPE_COOLDOWN_SECS`]
 //! cap throttles repeated dispatch on a single `(scope, tier)`
 //! pair, but a host that fans out across many scopes
 //! concurrently can still exhaust the engine. This bucket adds

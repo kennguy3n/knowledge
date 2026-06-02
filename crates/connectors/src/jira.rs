@@ -585,8 +585,7 @@ mod tests {
     fn initial_sync_emits_created_events_and_watermark_cursor() {
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
             ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-1", now, now)],
@@ -609,16 +608,14 @@ mod tests {
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
         // First page: 2 issues, total=3 — must request page 2.
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
             ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-1", now, now), issue("PROJ-2", now, now)],
                 "startAt": 0, "maxResults": 50, "total": 3,
             })),
         );
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=2&maxResults=50&fields=summary,created,updated,status",
             ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-3", now, now)],
@@ -636,8 +633,7 @@ mod tests {
     fn initial_sync_stops_when_total_is_satisfied_without_extra_round_trip() {
         let transport = Arc::new(MockHttpTransport::new());
         let now = Utc::now();
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
             ok_json(&serde_json::json!({
                 "issues": [issue("PROJ-1", now, now)],
@@ -657,10 +653,8 @@ mod tests {
         let now = Utc::now();
         let cursor = (now - Duration::hours(1)).to_rfc3339();
         let expected_jql = format!("updated >= '{cursor}' ORDER BY updated ASC");
-        transport.expect(
-            HttpMethod::Get,
-            format!(
-                "https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
+        transport.expect(HttpMethod::Get,
+            format!("https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
                 percent_encode_path_component(&expected_jql)
             ),
             ok_json(&serde_json::json!({
@@ -697,10 +691,8 @@ mod tests {
         // as cursor) and one strictly newer. Only the newer must
         // be emitted, and the watermark must advance to it.
         let newer = now;
-        transport.expect(
-            HttpMethod::Get,
-            format!(
-                "https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
+        transport.expect(HttpMethod::Get,
+            format!("https://api.test/jira/rest/api/3/search?jql={}&startAt=0&maxResults=50&fields=summary,created,updated,status",
                 percent_encode_path_component(&expected_jql)
             ),
             ok_json(&serde_json::json!({
@@ -739,8 +731,7 @@ mod tests {
     #[test]
     fn initial_sync_maps_401_to_auth_error() {
         let transport = Arc::new(MockHttpTransport::new());
-        transport.expect(
-            HttpMethod::Get,
+        transport.expect(HttpMethod::Get,
             "https://api.test/jira/rest/api/3/search?jql=ORDER%20BY%20created%20ASC&startAt=0&maxResults=50&fields=summary,created,updated,status",
             MockResponse::status(401, b"unauthorized".to_vec()),
         );

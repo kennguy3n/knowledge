@@ -39,10 +39,10 @@ use uuid::Uuid;
 
 use crate::assertions::AssertionLog;
 use crate::dataset::Dataset;
-use crate::phases::runtime::RuntimeState;
-use crate::report::{DemoReport, PhaseReport};
+use crate::report::{DemoReport, StageReport};
+use crate::stages::runtime::RuntimeState;
 
-const PHASE: &str = "crypto";
+const STAGE: &str = "crypto";
 
 pub fn run(
     dataset: &Dataset,
@@ -51,7 +51,7 @@ pub fn run(
     log: &mut AssertionLog,
 ) {
     let started = Instant::now();
-    let mut phase = PhaseReport::new("Stage 7: Crypto");
+    let mut stage = StageReport::new("Stage 7: Crypto");
 
     // -------- Provenance signing -----------------------------------
     let signer_key: [u8; TEST_SIGNER_KEY_LEN] = {
@@ -379,126 +379,126 @@ pub fn run(
 
     // -------- Assertions ------------------------------------------
     log.check(
-        PHASE,
+        STAGE,
         "every signed bundle verifies under its own key",
         verify_total > 0 && verify_total == verify_pass,
     );
     log.check(
-        PHASE,
+        STAGE,
         "wrong-key verification fails for every signed bundle",
         wrong_key_failures == verify_total && verify_total > 0,
     );
     log.check(
-        PHASE,
+        STAGE,
         "tampered-entity-id bundles fail verification",
         tampered_failures == verify_total && verify_total > 0,
     );
     log.check(
-        PHASE,
+        STAGE,
         "hybrid KEM encap/decap produces matching shared secrets",
         kem_match,
     );
     log.check(
-        PHASE,
+        STAGE,
         "hybrid KEM shared secret length is 32 bytes (AEAD_KEY_LEN)",
         kem_secret_len == AEAD_KEY_LEN,
     );
     log.check(
-        PHASE,
+        STAGE,
         "wrong recipient secret cannot recover the hybrid shared secret",
         kem_isolation,
     );
     log.check(
-        PHASE,
+        STAGE,
         "AEAD encrypt/decrypt round-trips cleanly with bound AAD",
         aead_round_trip_ok,
     );
-    log.check(PHASE, "AEAD wrong key is rejected", aead_wrong_key_rejected);
-    log.check(PHASE, "AEAD wrong AAD is rejected", aead_wrong_aad_rejected);
+    log.check(STAGE, "AEAD wrong key is rejected", aead_wrong_key_rejected);
+    log.check(STAGE, "AEAD wrong AAD is rejected", aead_wrong_aad_rejected);
     log.check(
-        PHASE,
+        STAGE,
         "AEAD tampered ciphertext is rejected",
         aead_tampered_rejected,
     );
     log.check(
-        PHASE,
+        STAGE,
         "scope DEK decrypts payload before destroy",
         pre_destroy_decrypt,
     );
     log.check(
-        PHASE,
+        STAGE,
         "scope DEK is dropped from the registry after destroy",
         !live_after_destroy,
     );
     log.check(
-        PHASE,
+        STAGE,
         "scope is forgotten after destroy_scope_dek",
         scope_forgotten,
     );
     log.check(
-        PHASE,
+        STAGE,
         "destroy_scope_dek emitted at least one KeyDestructionEvent",
         destroyed_count >= 1,
     );
     log.check(
-        PHASE,
+        STAGE,
         "decrypt with a zeroed key is rejected (forgetting holds)",
         zeroed_key_rejected,
     );
-    log.check(PHASE, "destroy_scope_dek is idempotent", destroy_idempotent);
+    log.check(STAGE, "destroy_scope_dek is idempotent", destroy_idempotent);
     log.check(
-        PHASE,
+        STAGE,
         "alternate scope started with two epoch DEKs",
         epoch_count_before == 2,
     );
     log.check(
-        PHASE,
+        STAGE,
         "destroy_epoch_dek emits at least one event",
         destroyed_epoch_zero_recorded,
     );
-    log.check(PHASE, "destroyed epoch's DEK is gone", !live_epoch_zero);
-    log.check(PHASE, "live epoch's DEK still resolves", live_epoch_one);
+    log.check(STAGE, "destroyed epoch's DEK is gone", !live_epoch_zero);
+    log.check(STAGE, "live epoch's DEK still resolves", live_epoch_one);
     log.check(
-        PHASE,
+        STAGE,
         "tombstone is set for the destroyed epoch",
         epoch_zero_forgotten,
     );
     log.check(
-        PHASE,
+        STAGE,
         "single-epoch destroy does NOT mark the whole scope forgotten",
         !scope_forgotten_via_single_epoch,
     );
     log.check(
-        PHASE,
+        STAGE,
         "epoch manager force_rotate advances the current epoch",
         force_progressed,
     );
     log.check(
-        PHASE,
+        STAGE,
         "epoch manager size trigger advances the current epoch",
         size_progressed,
     );
     log.check(
-        PHASE,
+        STAGE,
         "epoch manager lists every historical epoch",
         listed_at_least_three,
     );
 
     // -------- Reporting --------------------------------------------
-    phase.timing = started.elapsed();
-    phase.stat("provenance_bundles_signed", signed_total.to_string());
-    phase.stat("provenance_verifications_passed", verify_pass.to_string());
-    phase.stat("aead_round_trips", "1".to_string());
-    phase.stat("hybrid_kem_round_trips", "1".to_string());
-    phase.stat("scope_deks_destroyed", destroyed_count.to_string());
-    phase.stat("scopes_forgotten", state.scopes_forgotten.to_string());
-    phase.stat("epoch_dek_tombstones", "1".to_string());
-    phase.stat(
+    stage.timing = started.elapsed();
+    stage.stat("provenance_bundles_signed", signed_total.to_string());
+    stage.stat("provenance_verifications_passed", verify_pass.to_string());
+    stage.stat("aead_round_trips", "1".to_string());
+    stage.stat("hybrid_kem_round_trips", "1".to_string());
+    stage.stat("scope_deks_destroyed", destroyed_count.to_string());
+    stage.stat("scopes_forgotten", state.scopes_forgotten.to_string());
+    stage.stat("epoch_dek_tombstones", "1".to_string());
+    stage.stat(
         "current_epoch_after_rotations",
         after_size_rotate.0.to_string(),
     );
-    phase.stat("epochs_listed_for_scope", total_epochs_listed.to_string());
-    phase.note(
+    stage.stat("epochs_listed_for_scope", total_epochs_listed.to_string());
+    stage.note(
         "Exercises TestSigner provenance round-trips (positive + \
          wrong-key + tampered), hybrid X25519+ML-KEM-768 encap/decap \
          (positive + wrong-recipient), XChaCha20-Poly1305 AEAD \
@@ -513,7 +513,7 @@ pub fn run(
     report.count("hybrid_kem_round_trips", 1);
     report.count("scopes_forgotten", state.scopes_forgotten);
     report.count("epoch_rotations", state.epoch_rotations);
-    report.add_phase(phase);
+    report.add_stage(stage);
 
     let prov_count = signed_total.max(1);
     report.add_benchmark("provenance_sign_then_verify", prov_count, prov_elapsed);

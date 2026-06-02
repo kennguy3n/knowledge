@@ -1,4 +1,4 @@
-//! Server-side synthesis FFI entry points (Phase 7).
+//! Server-side synthesis FFI entry points.
 //!
 //! Exposes four entry points to platform hosts:
 //!
@@ -18,11 +18,11 @@
 //!
 //! # Architectural contracts
 //!
-//! * **Three-phase locking.** The dispatch (Phase 2) runs **without**
+//! * **Three-phase locking.** The dispatch runs **without**
 //!   the per-handle [`crate::FfiRuntime`] mutex so concurrent FFI
 //!   calls on the same handle are not blocked behind the
 //!   (potentially multi-second) HTTPS call to the managed endpoint.
-//!   The engine is stored as `Arc<dyn SynthesisEngine>` so Phase 1
+//!   The engine is stored as `Arc<dyn SynthesisEngine>` so Step 1
 //!   can clone the trait object out of the mutex.
 //! * **Per-(scope, tier) cooldown.** A successful dispatch records
 //!   `synthesis_cooldowns[(scope, tier)] = Utc::now()`. A
@@ -148,7 +148,7 @@ pub const MAX_APPROVED_DOCUMENT_METADATA_BYTES: usize = 1024;
 
 /// Default burst capacity for the global
 /// [`crate::synthesis_rate::TokenBucket`] gating
-/// [`trigger_server_synthesis`] (Phase 10 Item 5). Picked at 8
+/// [`trigger_server_synthesis`] . Picked at 8
 /// to allow a small fan-out across scopes without throttling
 /// the steady-state case while still bounding pathological
 /// bursts; hosts can override by setting
@@ -157,7 +157,7 @@ pub const DEFAULT_TRIGGER_RATE_CAPACITY: u32 = 8;
 
 /// Default refill rate (tokens per second) for the global
 /// [`crate::synthesis_rate::TokenBucket`] gating
-/// [`trigger_server_synthesis`] (Phase 10 Item 5). Picked at
+/// [`trigger_server_synthesis`] . Picked at
 /// 1.0 — one dispatch per second steady-state, matching the
 /// upper end of realistic engine throughput while leaving the
 /// per-scope [`PER_SCOPE_COOLDOWN_SECS`] (300 s) as the
@@ -352,14 +352,12 @@ pub fn trigger_server_synthesis(
 ) -> FfiResult<String> {
     metrics::instrument(metrics::inc_trigger_server_synthesis, || {
         let scope = crate::parse_scope_id(&scope_id)?;
-        tracing::info!(
-            scope = %scope.as_uuid(),
+        tracing::info!(scope = %scope.as_uuid(),
             tier = tier.as_str(),
             "trigger_server_synthesis: dispatching",
         );
         dispatch_server_synthesis(handle, scope, tier).map_err(|err| {
-            tracing::warn!(
-                scope = %scope.as_uuid(),
+            tracing::warn!(scope = %scope.as_uuid(),
                 tier = tier.as_str(),
                 error = ?err,
                 "trigger_server_synthesis: failed",
@@ -435,8 +433,7 @@ pub fn list_recent_syntheses(
     })
 }
 
-/// Re-run server-side synthesis on an existing `Complete` window
-/// (Phase 10 Item 4).
+/// Re-run server-side synthesis on an existing `Complete` window.
 ///
 /// The same hierarchy gather, engine dispatch, and crash-safe
 /// apply pipeline that powers
@@ -505,14 +502,12 @@ pub fn replay_synthesis(
     metrics::instrument(metrics::inc_replay_synthesis, || {
         let scope = crate::parse_scope_id(&scope_id)?;
         let window_id = parse_window_id(&synthesis_id)?;
-        tracing::info!(
-            scope = %scope.as_uuid(),
+        tracing::info!(scope = %scope.as_uuid(),
             window = %window_id.as_uuid(),
             "replay_synthesis: dispatching",
         );
         replay_synthesis_inner(handle, scope, window_id).map_err(|err| {
-            tracing::warn!(
-                scope = %scope.as_uuid(),
+            tracing::warn!(scope = %scope.as_uuid(),
                 window = %window_id.as_uuid(),
                 error = ?err,
                 "replay_synthesis: failed",
@@ -523,7 +518,7 @@ pub fn replay_synthesis(
 }
 
 /// Enumerate the archived synthesis-object versions for
-/// `synthesis_id` (Phase 10 Item 4), newest first. The current
+/// `synthesis_id` , newest first. The current
 /// latest version (the one surfaced via
 /// [`synthesis_status`]) is included as the first entry with
 /// `is_latest = true`. Older versions are read from the
@@ -622,7 +617,7 @@ pub fn list_synthesis_versions(
 }
 
 /// Admit an approved official document onto the tenant memory at
-/// `scope_id` (Phase 8).
+/// `scope_id`.
 ///
 /// The substrate stores the AEAD-encrypted payload bytes in
 /// `evidence_store::approved_document_payloads` under the per-scope
@@ -720,7 +715,7 @@ pub fn admit_approved_document(
             //   * `list_approved_documents` joins on the tenant-memory
             //     ref list, so an orphan row is filtered out.
             //   * `forget_scope_state` on this scope purges it.
-            //   * The Phase-9 `open_store` orphan sweep diffs
+            //   * The earlier `open_store` orphan sweep diffs
             //     `list_all_approved_document_payload_keys()` against
             //     the rehydrated tenant-memory ref set and deletes the
             //     stragglers on the next restart, even without an
@@ -758,8 +753,7 @@ pub fn admit_approved_document(
                 .unwrap_or_else(|| memory_manager::TenantMemoryObject::new(scope));
             tmo.admit_approved_document(reference);
             rt.save_tenant_memory(scope, tmo)?;
-            tracing::info!(
-                scope = %scope.as_uuid(),
+            tracing::info!(scope = %scope.as_uuid(),
                 document_id = %doc_id,
                 payload_bytes,
                 "admit_approved_document: persisted payload + tenant ref",
@@ -769,13 +763,13 @@ pub fn admit_approved_document(
     })
 }
 
-/// Revoke a previously admitted approved document (Phase 8).
+/// Revoke a previously admitted approved document.
 ///
 /// Removes both the tenant-memory ref and the persisted payload
 /// row. The tenant memory blob is re-flushed so the revocation
 /// survives a restart. Tenant synthesis windows opened *after* this
 /// call will not see the revoked document; in-flight windows are
-/// unaffected (the Phase-1 gather snapshot captured the input
+/// unaffected (the earlier gather snapshot captured the input
 /// before the revocation).
 ///
 /// Idempotent on a fully revoked document: a second call returns
@@ -838,8 +832,7 @@ pub fn revoke_approved_document(
                 .map_err(|e| FfiError::Evidence {
                     message: format!("delete_approved_document_payload failed: {e}"),
                 })?;
-            tracing::info!(
-                scope = %scope.as_uuid(),
+            tracing::info!(scope = %scope.as_uuid(),
                 document_id = %doc_uuid,
                 rows_deleted = deleted,
                 "revoke_approved_document: removed tenant ref and payload row",
@@ -850,7 +843,7 @@ pub fn revoke_approved_document(
 }
 
 /// Replace the payload (and optionally the label / approver) of a
-/// previously admitted approved document (Phase 9).
+/// previously admitted approved document.
 ///
 /// The document id remains stable — callers need not revoke and
 /// re-admit to update a document's content. A fresh `approved_at`
@@ -1012,8 +1005,7 @@ pub fn replace_approved_document(
             // into the live runtime map. HashMap insert is
             // infallible so no rollback path is needed here.
             rt.tenant_memories.insert(scope, tmo_after);
-            tracing::info!(
-                scope = %scope.as_uuid(),
+            tracing::info!(scope = %scope.as_uuid(),
                 document_id = %doc_uuid,
                 payload_bytes,
                 "replace_approved_document: replaced payload + updated tenant ref",
@@ -1024,8 +1016,7 @@ pub fn replace_approved_document(
 }
 
 /// List approved-document refs admitted to the tenant memory at
-/// `scope_id`, joined with each ref's persisted payload metadata
-/// (Phase 8).
+/// `scope_id`, joined with each ref's persisted payload metadata.
 ///
 /// The order matches `TenantMemoryObject.approved_documents`
 /// insertion order. Returns an empty vector for a forgotten scope
@@ -1033,7 +1024,7 @@ pub fn replace_approved_document(
 /// treat both cases the same as "nothing admitted".
 ///
 /// Refs without a persisted payload row (e.g. legacy refs created
-/// before the Phase 8 admission path, or a payload row that was
+/// before the admission path, or a payload row that was
 /// purged out-of-band) are still surfaced with
 /// `payload_bytes = 0` and `content_hash_hex = ""` so the host can
 /// detect and act on the gap rather than silently dropping the
@@ -1097,14 +1088,14 @@ pub fn list_approved_documents(
 
 // ─────────────────────── Implementation details ───────────────────────
 
-/// Snapshot captured while the runtime mutex is held (Phase 1) and
-/// then consumed during the unlocked dispatch (Phase 2) and the
-/// post-dispatch apply (Phase 3).
+/// Snapshot captured while the runtime mutex is held and
+/// then consumed during the unlocked dispatch and the
+/// post-dispatch apply.
 ///
 /// `windows_clone` is a deep copy of the live
 /// [`SynthesisWindowManager`] taken under the mutex; the engine
-/// validates `handle.window_id` against it during Phase 2 (unlocked).
-/// Phase 3 replays the Pending → InProgress → Complete transitions on
+/// validates `handle.window_id` against it during (unlocked).
+/// replays the Pending → InProgress → Complete transitions on
 /// the live manager so the substrate's persisted state ends up
 /// identical to what the engine observed.
 struct DomainDispatchPlan {
@@ -1134,23 +1125,22 @@ fn dispatch_server_synthesis(
     scope: ScopeId,
     tier: SynthesisTierKind,
 ) -> FfiResult<String> {
-    // ─────────────── Phase 1: gather (locked) ───────────────
+    // ─────────────── Step 1: gather (locked) ───────────────
     //
     // Validate the scope, check the cooldown window, gather the
     // hierarchy input (channel outputs for domain, domain outputs
     // for tenant), open a `Pending` window, clone the engine `Arc`
     // out of the mutex, and return the resulting plan. The
-    // synthesis window stays in `Pending` after Phase 1; Phase 2
-    // (unlocked) issues the HTTP call; Phase 3 (locked) marks the
+    // synthesis window stays in `Pending` after Step 1; Step 2
+    // (unlocked) issues the HTTP call; (locked) marks the
     // window `Complete` / `Failed` based on the dispatch outcome.
     let plan = with_runtime(handle, |rt| build_dispatch_plan(rt, scope, tier))?;
 
     // Cooldown short-circuit returns the cached window id without
-    // entering Phase 2.
+    // entering Step 2.
     let (engine, window_handle, dispatch_result) = match plan {
         DispatchPlan::Cooldown(window_id) => {
-            tracing::info!(
-                scope = %scope.as_uuid(),
+            tracing::info!(scope = %scope.as_uuid(),
                 window = %window_id.as_uuid(),
                 cooldown_secs = PER_SCOPE_COOLDOWN_SECS,
                 "trigger_server_synthesis: returning cached window (cooldown)",
@@ -1164,12 +1154,12 @@ fn dispatch_server_synthesis(
                 input,
                 mut windows_clone,
             } = plan;
-            // ─────────── Phase 2: dispatch (UNLOCKED) ───────────
+            // ─────────── Step 2: dispatch (UNLOCKED) ───────────
             //
             // The engine validates `handle.window_id` against
             // `windows_clone` (the snapshot we took under the
             // mutex) and transitions its window state. We do not
-            // persist `windows_clone` — Phase 3 replays the
+            // persist `windows_clone` replays the
             // Pending → InProgress → Complete transitions on the
             // live manager.
             let outcome = engine.synthesize_domain(&mut windows_clone, window_handle, input);
@@ -1190,11 +1180,11 @@ fn dispatch_server_synthesis(
     // unlocked dispatch and the runtime still owns its own clone.
     drop(engine);
 
-    // ─────────────── Phase 3: apply (locked) ───────────────
+    // ─────────────── Step 3: apply (locked) ───────────────
     apply_dispatch_outcome(handle, scope, tier, window_handle, dispatch_result)
 }
 
-/// Phase 1 body. Holds the runtime mutex.
+/// body. Holds the runtime mutex.
 fn build_dispatch_plan(
     rt: &mut FfiRuntime,
     scope: ScopeId,
@@ -1237,8 +1227,7 @@ fn build_dispatch_plan(
             // window is a bookkeeping bug rather than a host-
             // visible failure — fall through and dispatch a fresh
             // run.
-            tracing::warn!(
-                scope = %scope.as_uuid(),
+            tracing::warn!(scope = %scope.as_uuid(),
                 tier = tier.as_str(),
                 "trigger_server_synthesis: cooldown stamp present but no matching-tier \
                  Complete window; dispatching fresh run",
@@ -1246,7 +1235,7 @@ fn build_dispatch_plan(
         }
     }
 
-    // Global rate-shaping gate (Phase 10 Item 5). Consumes one
+    // Global rate-shaping gate . Consumes one
     // token from the FFI-wide token bucket — distinct from and
     // complementary to the per-(scope, tier) cooldown above. The
     // cooldown stops the SAME tenant from hammering the engine
@@ -1258,8 +1247,7 @@ fn build_dispatch_plan(
     // engine work it isn't actually performing.
     if let Err(retry_after_ms) = rt.synthesis_rate_limiter.try_acquire(Utc::now()) {
         metrics::inc_trigger_server_synthesis_throttled();
-        tracing::warn!(
-            scope = %scope.as_uuid(),
+        tracing::warn!(scope = %scope.as_uuid(),
             tier = tier.as_str(),
             retry_after_ms,
             "trigger_server_synthesis: rate-limited, returning Throttled",
@@ -1293,11 +1281,11 @@ fn build_dispatch_plan(
                     message: format!("open_tiered_window failed: {e}"),
                 })?;
             // Persist the freshly opened window so its `Pending`
-            // status survives a crash between Phase 1 and Phase 3.
+            // status survives a crash between and Step 3.
             rt.flush_synthesis_windows()?;
             // Take a snapshot of the live manager AFTER the open so
             // the cloned manager sees the new window in `Pending`.
-            // The unlocked Phase 2 mutates this clone — Phase 3
+            // The unlocked mutates this clone
             // replays the transitions on the live manager.
             let windows_clone = rt.synthesis_windows.clone();
             Ok(DispatchPlan::Domain(DomainDispatchPlan {
@@ -1313,7 +1301,7 @@ fn build_dispatch_plan(
                 id: scope.as_uuid().to_string(),
             })?;
             let domain_outputs = gather_domain_outputs(rt, tenant);
-            // Phase 8: materialise approved-document payloads from
+            // materialise approved-document payloads from
             // the evidence store for every ref admitted onto the
             // tenant memory. This runs under the gather lock so the
             // payload bundle is a consistent point-in-time view of
@@ -1323,7 +1311,7 @@ fn build_dispatch_plan(
             // for the runtime mutex before mutating either side.
             //
             // A ref without a corresponding payload row (e.g. a host
-            // that admitted a ref via the legacy pre-Phase-8 path,
+            // that admitted a ref via the legacy earlier path,
             // or a payload row that was purged out-of-band) is
             // skipped with a `warn!` so the gap is observable on the
             // dispatch path rather than silently feeding an empty
@@ -1341,8 +1329,7 @@ fn build_dispatch_plan(
                 .len()
                 .saturating_sub(MAX_APPROVED_DOCUMENTS_PER_DISPATCH);
             if dropped_count > 0 {
-                tracing::warn!(
-                    scope = %scope.as_uuid(),
+                tracing::warn!(scope = %scope.as_uuid(),
                     total_refs = refs_sorted.len(),
                     cap = MAX_APPROVED_DOCUMENTS_PER_DISPATCH,
                     dropped = dropped_count,
@@ -1387,7 +1374,7 @@ enum MemoryAfter {
     Tenant(memory_manager::TenantMemoryObject),
 }
 
-/// Phase 3 body. Holds the runtime mutex.
+/// body. Holds the runtime mutex.
 fn apply_dispatch_outcome(
     handle: RuntimeHandle,
     scope: ScopeId,
@@ -1403,8 +1390,7 @@ fn apply_dispatch_outcome(
         // window) so there is no state to apply — surface
         // `Unavailable` and discard the recap.
         if rt.is_scope_forgotten(scope) {
-            tracing::warn!(
-                scope = %scope.as_uuid(),
+            tracing::warn!(scope = %scope.as_uuid(),
                 window = %window_handle.window_id.as_uuid(),
                 "trigger_server_synthesis: scope forgotten during dispatch; discarding recap",
             );
@@ -1417,8 +1403,7 @@ fn apply_dispatch_outcome(
             // narrower per-window mutation (a host that called
             // `remove_windows_for_scope` or similar between
             // phases).
-            tracing::warn!(
-                scope = %scope.as_uuid(),
+            tracing::warn!(scope = %scope.as_uuid(),
                 window = %window_handle.window_id.as_uuid(),
                 "trigger_server_synthesis: window vanished during dispatch; discarding recap",
             );
@@ -1433,8 +1418,7 @@ fn apply_dispatch_outcome(
                 // and diagnostic enumeration can see the outcome.
                 fail_window_on_live_manager(rt, window_handle.window_id, "dispatch_error");
                 if let Err(e) = rt.flush_synthesis_windows() {
-                    tracing::warn!(
-                        error = ?e,
+                    tracing::warn!(error = ?e,
                         "post-failure flush_synthesis_windows failed",
                     );
                 }
@@ -1517,7 +1501,7 @@ fn apply_dispatch_outcome(
                 let recap_text = String::from_utf8(object.payload.clone())
                     .unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned());
 
-                // Phase-10-Item-4 versioning. If a prior synthesis
+                // earlier versioning. If a prior synthesis
                 // object exists for `(scope, window_id)` — which is
                 // the case on every `replay_synthesis` call and is
                 // *not* the case on a fresh `trigger_server_synthesis`
@@ -1598,7 +1582,7 @@ fn apply_dispatch_outcome(
                 //    write reflects the final post-prune state in
                 //    one shot.
                 //
-                //    Phase-10-Item-2 change: the runtime stores
+                //    earlier change: the runtime stores
                 //    synthesis objects nested by scope
                 //    (`HashMap<ScopeId, HashMap<WindowId, _>>`), so
                 //    the clone here only carries the dispatching
@@ -1714,7 +1698,7 @@ fn apply_dispatch_outcome(
                         crate::runtime::SYNTHESIS_WINDOWS_KIND,
                         &windows_json,
                     )?;
-                    // Phase-10-Item-4 archive + cap enforcement.
+                    // earlier archive + cap enforcement.
                     // The archive write only fires when a prior
                     // object existed (i.e. a replay). Eviction of
                     // the oldest archive row was computed
@@ -1745,7 +1729,7 @@ fn apply_dispatch_outcome(
                     }
                     Ok(())
                 }) {
-                    // Tx commit failure recovery (Phase 10 Item 1).
+                    // Tx commit failure recovery .
                     // The transaction rolled back so every blob row
                     // is in its pre-dispatch shape; the live
                     // in-memory maps were intentionally not mutated
@@ -1753,7 +1737,7 @@ fn apply_dispatch_outcome(
                     // only piece of mutable state that did move
                     // forward is the on-disk window manager flushed
                     // at the start of `trigger_server_synthesis`
-                    // (Phase 1), which still has this window
+                    //, which still has this window
                     // marked `Pending`. Without explicit recovery
                     // the host would never see a failure signal
                     // for this window — `synthesis_status` would
@@ -1765,20 +1749,18 @@ fn apply_dispatch_outcome(
                     // reflects the failure. The flush itself is
                     // best-effort: if it fails too, the
                     // `open_store` stuck-Pending recovery sweep
-                    // (Phase 10 Item 1) will catch the window on
+                    // will catch the window on
                     // the next start.
                     fail_window_on_live_manager(rt, window_handle.window_id, "tx_commit_failed");
                     if let Err(flush_err) = rt.flush_synthesis_windows() {
-                        tracing::warn!(
-                            error = ?flush_err,
+                        tracing::warn!(error = ?flush_err,
                             tx_error = %tx_err,
                             window = %window_handle.window_id.as_uuid(),
                             "apply_dispatch_outcome: post-tx-failure flush failed; window will \
                              be reconciled by next open_store stuck-Pending sweep",
                         );
                     } else {
-                        tracing::warn!(
-                            tx_error = %tx_err,
+                        tracing::warn!(tx_error = %tx_err,
                             window = %window_handle.window_id.as_uuid(),
                             "apply_dispatch_outcome: tx commit failed; window transitioned to \
                              Failed via in-process recovery",
@@ -1832,8 +1814,7 @@ fn apply_dispatch_outcome(
                 rt.synthesis_cooldowns
                     .insert((scope, object_tier), Utc::now());
                 if !pruned_ids.is_empty() {
-                    tracing::debug!(
-                        scope = %scope.as_uuid(),
+                    tracing::debug!(scope = %scope.as_uuid(),
                         pruned = pruned_ids.len(),
                         "trigger_server_synthesis: pruned completed windows beyond retention cap",
                     );
@@ -1844,7 +1825,7 @@ fn apply_dispatch_outcome(
     })
 }
 
-/// Phase 1 plan for [`replay_synthesis_inner`]. Mirrors
+/// plan for [`replay_synthesis_inner`]. Mirrors
 /// [`DispatchPlan`] but the window handle re-uses the existing
 /// `(scope, window_id)` rather than opening a fresh one — the
 /// replay walks the *same* window through
@@ -1858,14 +1839,14 @@ enum ReplayPlan {
 /// [`dispatch_server_synthesis`]'s three-phase
 /// gather/dispatch/apply structure but with two key differences:
 ///
-/// 1. Phase 1 reads the existing window instead of opening a new
+/// 1. reads the existing window instead of opening a new
 ///    one. The window must be in `Complete` state — Pending,
 ///    InProgress, and Failed all surface `Conflict`. The
 ///    `Complete → Pending` transition is persisted before the
-///    unlocked Phase 2 dispatch so a crash mid-replay rehydrates
+///    unlocked dispatch so a crash mid-replay rehydrates
 ///    as Pending (the host can either trigger fresh synthesis or
 ///    rely on the stuck-Pending sweep to mark it Failed).
-/// 2. Phase 3 archives the prior synthesis object inside the
+/// 2. archives the prior synthesis object inside the
 ///    same SQLCipher tx that lands the new one. The bump from
 ///    `prior.version` to `prior.version + 1` is computed under
 ///    the runtime mutex; the eviction-of-oldest decision is
@@ -1880,7 +1861,7 @@ fn replay_synthesis_inner(
     scope: ScopeId,
     window_id: WindowId,
 ) -> FfiResult<SynthesisStatusRecord> {
-    // ─────────────── Phase 1: gather (locked) ───────────────
+    // ─────────────── Step 1: gather (locked) ───────────────
     let plan = with_runtime(handle, |rt| build_replay_plan(rt, scope, window_id))?;
     let (engine, window_handle, tier, dispatch_result) = match plan {
         ReplayPlan::Domain(p) => {
@@ -1890,7 +1871,7 @@ fn replay_synthesis_inner(
                 input,
                 mut windows_clone,
             } = p;
-            // ─────────── Phase 2: dispatch (UNLOCKED) ───────────
+            // ─────────── Step 2: dispatch (UNLOCKED) ───────────
             let outcome = engine.synthesize_domain(&mut windows_clone, window_handle, input);
             (
                 engine,
@@ -1917,7 +1898,7 @@ fn replay_synthesis_inner(
     };
     drop(engine);
 
-    // ─────────────── Phase 3: apply (locked) ───────────────
+    // ─────────────── Step 3: apply (locked) ───────────────
     // Re-uses `apply_dispatch_outcome` because the archive
     // pathway is symmetric: every apply that sees a pre-existing
     // synthesis object for `(scope, window_id)` archives the
@@ -1943,11 +1924,11 @@ fn replay_synthesis_inner(
     })
 }
 
-/// Phase 1 body for replay. Holds the runtime mutex. Validates
+/// body for replay. Holds the runtime mutex. Validates
 /// the window is `Complete`, infers the tier from the existing
 /// `TieredWindowHandle`, gathers the appropriate hierarchy
 /// input, flips the window to `Pending` (persisted), and clones
-/// the engine `Arc` and window manager for the unlocked Phase 2.
+/// the engine `Arc` and window manager for the unlocked Step 2.
 fn build_replay_plan(
     rt: &mut FfiRuntime,
     scope: ScopeId,
@@ -2067,8 +2048,7 @@ fn build_replay_plan(
                 .len()
                 .saturating_sub(MAX_APPROVED_DOCUMENTS_PER_DISPATCH);
             if dropped_count > 0 {
-                tracing::warn!(
-                    scope = %scope.as_uuid(),
+                tracing::warn!(scope = %scope.as_uuid(),
                     total_refs = refs_sorted.len(),
                     cap = MAX_APPROVED_DOCUMENTS_PER_DISPATCH,
                     dropped = dropped_count,
@@ -2110,8 +2090,7 @@ fn window_scope_tier_to_synthesis_tier(t: WindowScopeTier) -> SynthesisTierKind 
 fn enforce_scope_binding(rt: &FfiRuntime, scope: ScopeId) -> FfiResult<()> {
     match rt.synthesis_scope_bindings.as_deref() {
         None => {
-            tracing::warn!(
-                scope = %scope.as_uuid(),
+            tracing::warn!(scope = %scope.as_uuid(),
                 "trigger_server_synthesis: no scope-binding allow-list configured; \
                  production deployments SHOULD enable scope_bindings or wrap the engine \
                  in a TeeWorker",
@@ -2149,8 +2128,7 @@ fn gather_channel_outputs(
             match ChannelOutput::from_channel_object(object) {
                 Ok(o) => outputs.push(o),
                 Err(e) => {
-                    tracing::warn!(
-                        channel = %channel_scope.as_uuid(),
+                    tracing::warn!(channel = %channel_scope.as_uuid(),
                         error = ?e,
                         "skipping channel output that failed hierarchy validation",
                     );
@@ -2176,8 +2154,7 @@ fn gather_channel_outputs(
             match ChannelOutput::from_channel_object(synthesised) {
                 Ok(o) => outputs.push(o),
                 Err(e) => {
-                    tracing::warn!(
-                        channel = %channel_scope.as_uuid(),
+                    tracing::warn!(channel = %channel_scope.as_uuid(),
                         error = ?e,
                         "synthesised ChannelRecap rejected by hierarchy validator",
                     );
@@ -2190,7 +2167,7 @@ fn gather_channel_outputs(
 
 /// Decrypt every approved-document payload referenced by
 /// `refs_sorted` and bundle each into an [`ApprovedDocument`] for
-/// the tenant-synthesis input (Phase 8).
+/// the tenant-synthesis input.
 ///
 /// Refs without a persisted payload row are skipped with a
 /// `warn!` so the gap is observable on the dispatch path rather
@@ -2218,8 +2195,7 @@ fn materialise_approved_documents(
             }
             Ok(None) => {
                 missing_payloads += 1;
-                tracing::warn!(
-                    scope = %scope.as_uuid(),
+                tracing::warn!(scope = %scope.as_uuid(),
                     document_id = %r.id,
                     label = %r.label,
                     "tenant synthesis: approved-document ref has no persisted payload; \
@@ -2239,8 +2215,7 @@ fn materialise_approved_documents(
         }
     }
     if missing_payloads > 0 {
-        tracing::warn!(
-            scope = %scope.as_uuid(),
+        tracing::warn!(scope = %scope.as_uuid(),
             refs_total = refs_sorted.len(),
             payloads_attached = approved_documents.len(),
             missing_payloads,
@@ -2265,8 +2240,7 @@ fn gather_domain_outputs(
             match DomainOutput::from_domain_object(object) {
                 Ok(o) => outputs.push(o),
                 Err(e) => {
-                    tracing::warn!(
-                        domain = %domain_scope.as_uuid(),
+                    tracing::warn!(domain = %domain_scope.as_uuid(),
                         error = ?e,
                         "skipping domain output that failed hierarchy validation",
                     );
@@ -2289,8 +2263,7 @@ fn gather_domain_outputs(
             match DomainOutput::from_domain_object(object) {
                 Ok(o) => outputs.push(o),
                 Err(e) => {
-                    tracing::warn!(
-                        domain = %domain_scope.as_uuid(),
+                    tracing::warn!(domain = %domain_scope.as_uuid(),
                         error = ?e,
                         "synthesised DomainSummary rejected by hierarchy validator",
                     );
@@ -2351,7 +2324,7 @@ fn newest_object_for_scope_of_type(
     kind: SynthesisObjectType,
 ) -> Option<SynthesisObject> {
     // The runtime's `synthesis_objects` is nested by scope
-    // (Phase-10 Item 2). Read off the per-scope sub-map directly so
+    // (earlier). Read off the per-scope sub-map directly so
     // we walk only the objects owned by `scope` rather than every
     // tenant's per-scope sub-map.
     rt.synthesis_objects_for_scope(scope)?
@@ -2363,7 +2336,7 @@ fn newest_object_for_scope_of_type(
 
 /// Transition the live `SynthesisWindowManager` window into `Failed`.
 ///
-/// Phase 2 mutates a cloned manager so on the live manager the window
+/// mutates a cloned manager so on the live manager the window
 /// is still in `Pending`. `mark_failed` only accepts the
 /// `InProgress → Failed` transition, so we replay the
 /// `Pending → InProgress → Failed` chain here. Both steps are
@@ -2375,16 +2348,14 @@ fn newest_object_for_scope_of_type(
 /// also log on refusal so an operator can correlate stuck windows.
 fn fail_window_on_live_manager(rt: &mut FfiRuntime, window_id: WindowId, reason: &str) {
     if let Err(e) = rt.synthesis_windows.mark_in_progress(window_id) {
-        tracing::warn!(
-            window = %window_id.as_uuid(),
+        tracing::warn!(window = %window_id.as_uuid(),
             error = ?e,
             reason,
             "fail_window_on_live_manager: mark_in_progress refused",
         );
     }
     if let Err(e) = rt.synthesis_windows.mark_failed(window_id) {
-        tracing::warn!(
-            window = %window_id.as_uuid(),
+        tracing::warn!(window = %window_id.as_uuid(),
             error = ?e,
             reason,
             "fail_window_on_live_manager: mark_failed refused; window left in current status",
@@ -2450,7 +2421,7 @@ fn encode_content_hash_hex(hash: &crypto::ContentHash) -> String {
     out
 }
 
-/// Validate a Phase-8 approved-document metadata field
+/// Validate an earlier approved-document metadata field
 /// (`label` or `approver`). Shared by `admit_approved_document`
 /// and `replace_approved_document` so the error messages MUST NOT
 /// hardcode an entry-point name; the field name plus the observed
@@ -2544,7 +2515,7 @@ fn window_to_record(
     // `window.scope_id` is the owning scope, so the per-scope
     // accessor is exact (no need to walk other tenants' sub-maps).
     //
-    // Phase-10-Item-4: also surface the live object's `version`
+    // earlier: also surface the live object's `version`
     // stamp so hosts can detect that a previously cached recap is
     // stale relative to a `replay_synthesis` that landed since
     // their last poll.
@@ -2601,7 +2572,7 @@ fn window_to_record(
 
 #[cfg(test)]
 mod tests {
-    //! FFI-level tests for the Phase 7 server-side synthesis surface.
+    //! FFI-level tests for the server-side synthesis surface.
     //!
     //! These tests open a real temp-dir-backed evidence store, install
     //! a deterministic [`ManagedEndpointSynthesizer`] (from the
@@ -3060,7 +3031,7 @@ mod tests {
         teardown(handle);
     }
 
-    // ─────────── Phase 10 Item 5: rate-shaping gate ──────────────
+    // ─────────── rate-shaping gate ──────────────
 
     /// End-to-end test for the global token-bucket rate limiter:
     /// configure a tight bucket (capacity 2, near-zero refill
@@ -3293,7 +3264,7 @@ mod tests {
         // be gone.
         let path = dir.path().join("evidence.db");
         let (remaining_in_memory, oldest_pre_existing) = with_runtime(handle, |rt| {
-            // Per-scope sub-map post-Phase-10-Item-2: the
+            // Per-scope sub-map earlier: the
             // dispatching scope owns every relevant object.
             let remaining: Vec<synthesis_pipeline::WindowId> = rt
                 .synthesis_objects_for_scope(scope)
@@ -3336,7 +3307,7 @@ mod tests {
         assert!(
             !resurrected.contains(&oldest_pre_existing),
             "pruned object must NOT resurrect from disk on open_store \
-             (BUG_0002 regression)",
+             (earlier regression)",
         );
         // Belt and braces: no rehydrated object should have a
         // window_id that is unknown to the rehydrated window
@@ -3410,8 +3381,7 @@ mod tests {
         teardown(handle);
     }
 
-    /// Regression test for BUG_0001 + ANALYSIS_0004 (Devin Review on
-    /// commit 6456b6f): the `SynthesisWindowManager` is persisted
+    /// Regression test on /// commit 6456b6f: the `SynthesisWindowManager` is persisted
     /// under a single sentinel scope, so its on-disk blob contains
     /// windows for every scope mixed together. When
     /// `forget_scope_state`'s post-prune `flush_synthesis_windows`
@@ -3433,7 +3403,7 @@ mod tests {
         install_test_engine(handle);
         let scope = seed_domain_with_two_channels(handle);
 
-        // Phase 1: trigger a synthesis so a window lands on disk
+        // trigger a synthesis so a window lands on disk
         // under the sentinel-scope blob.
         let win = trigger_server_synthesis(
             handle,
@@ -3444,7 +3414,7 @@ mod tests {
         let win_id =
             synthesis_pipeline::WindowId::from_uuid(win.parse::<Uuid>().expect("uuid parse"));
 
-        // Phase 2: write the scope tombstone directly to the
+        // write the scope tombstone directly to the
         // `forgotten_scopes` table, bypassing `forget_scope_state`.
         // This is the exact corruption shape produced when
         // `forget_scope_state`'s post-cleanup
@@ -3459,7 +3429,7 @@ mod tests {
         })
         .expect("with_runtime");
 
-        // Phase 3: close + reopen the store. The rehydration
+        // close + reopen the store. The rehydration
         // cleanup must drop the orphan window.
         let path = dir.path().join("evidence.db");
         teardown(handle);
@@ -3470,12 +3440,12 @@ mod tests {
         with_runtime(handle2, |rt| {
             assert!(
                 rt.synthesis_windows.get(win_id).is_none(),
-                "BUG_0001 regression: window for tombstoned scope must NOT resurrect on \
+                "earlier regression: window for tombstoned scope must NOT resurrect on \
                  open_store via the rehydrated SynthesisWindowManager",
             );
             assert!(
                 rt.synthesis_windows.windows_for(scope).is_empty(),
-                "ANALYSIS_0004 regression: no orphan windows for the tombstoned scope may \
+                "earlier regression: no orphan windows for the tombstoned scope may \
                  survive the open_store rehydration cleanup",
             );
             // Belt-and-braces: the synthesis_objects map must
@@ -3485,8 +3455,8 @@ mod tests {
             // synthesis_object rows, so this is a sanity check
             // on the two paths staying in sync.
             //
-            // Post-Phase-10-Item-2 the runtime stores objects in
-            // per-scope sub-maps; `synthesis_object_by_window` is
+            // The runtime stores objects in per-scope sub-maps;
+            // `synthesis_object_by_window` is
             // the cross-scope lookup that walks every bucket, so
             // it's the right tool for asserting "no inner map
             // contains this window".
@@ -3518,7 +3488,7 @@ mod tests {
         teardown(handle3);
     }
 
-    /// ANALYSIS_0006 regression: orphan synthesis objects (whose
+    /// earlier regression: orphan synthesis objects (whose
     /// `window_id` no longer corresponds to any tracked window) must
     /// be purged at `open_store` time AND the divergent on-disk blob
     /// must be rewritten so subsequent opens don't pay the cleanup
@@ -3537,7 +3507,7 @@ mod tests {
         install_test_engine(handle);
         let scope = seed_domain_with_two_channels(handle);
 
-        // Phase 1: real synthesis dispatch — windows + objects
+        // real synthesis dispatch — windows + objects
         // both land on disk under the per-scope synthesis-object
         // row.
         let win = trigger_server_synthesis(
@@ -3549,7 +3519,7 @@ mod tests {
         let win_id =
             synthesis_pipeline::WindowId::from_uuid(win.parse::<Uuid>().expect("uuid parse"));
 
-        // Phase 2: simulate the divergent-flush failure mode. The
+        // simulate the divergent-flush failure mode. The
         // happy path flushes both blobs after a successful synth;
         // we mutate only the in-memory windows manager and flush
         // windows-only so the on-disk state looks exactly like what
@@ -3561,7 +3531,7 @@ mod tests {
         })
         .expect("flush windows-only");
 
-        // Phase 3: close + reopen. Orphan-aware cleanup must drop
+        // close + reopen. Orphan-aware cleanup must drop
         // the synthesis object from the rehydrated map.
         let path = dir.path().join("evidence.db");
         teardown(handle);
@@ -3572,7 +3542,7 @@ mod tests {
         with_runtime(handle2, |rt| {
             assert!(
                 rt.synthesis_object_by_window(win_id).is_none(),
-                "ANALYSIS_0006 regression: orphan synthesis_object whose window_id is not in \
+                "earlier regression: orphan synthesis_object whose window_id is not in \
                  the rehydrated SynthesisWindowManager must be purged at open_store time",
             );
             assert!(
@@ -3583,7 +3553,7 @@ mod tests {
         })
         .expect("inspect post-reopen state");
 
-        // Phase 4: reopen again — the cleanup must have rewritten
+        // reopen again — the cleanup must have rewritten
         // the on-disk synthesis-object blob, so the second reopen
         // observes the same post-cleanup state. If the rewrite
         // failed silently this assertion holds anyway (the orphan
@@ -3605,7 +3575,7 @@ mod tests {
         teardown(handle3);
     }
 
-    /// Phase-10 Item 2 regression: dispatching synthesis on one
+    /// earlier regression: dispatching synthesis on one
     /// scope must NEVER touch another scope's per-scope sub-map in
     /// the nested `synthesis_objects` shape, AND every accessor on
     /// the runtime must report values consistent with the nested
@@ -3613,7 +3583,7 @@ mod tests {
     /// (`apply_dispatch_outcome` only clones the dispatching
     /// scope's sub-map) by exercising two unrelated scopes and
     /// asserting cross-tenant isolation along with each of the
-    /// helpers added in this phase.
+    /// per-scope accessor helpers.
     #[test]
     fn synthesis_objects_per_scope_isolation_and_accessors() {
         let (handle, dir) = fresh_store();
@@ -3698,7 +3668,7 @@ mod tests {
         teardown(handle2);
     }
 
-    /// ANALYSIS_0007 regression: synthesis status records for
+    /// earlier regression: synthesis status records for
     /// windows that have NOT reached `Complete` status must still
     /// report the correct tier, derived from the persisted
     /// `SynthesisWindow::tier` field. Before the fix, only
@@ -3734,7 +3704,7 @@ mod tests {
         assert_eq!(record.status, "pending");
         assert_eq!(
             record.tier, "domain",
-            "ANALYSIS_0007 regression: Pending windows must surface the persisted tier",
+            "earlier regression: Pending windows must surface the persisted tier",
         );
         assert!(record.object_id.is_none());
 
@@ -3764,7 +3734,7 @@ mod tests {
         assert_eq!(tenant_record.status, "in_progress");
         assert_eq!(
             tenant_record.tier, "tenant",
-            "ANALYSIS_0007 regression: InProgress windows must surface the persisted tier",
+            "earlier regression: InProgress windows must surface the persisted tier",
         );
         teardown(handle);
     }
@@ -3805,7 +3775,7 @@ mod tests {
     }
 
     /// Always-failing test engine that returns `EngineError::Engine`
-    /// from both tier dispatchers. Used to drive the Phase 3 failure
+    /// from both tier dispatchers. Used to drive the failure
     /// path so we can verify the live `SynthesisWindowManager` ends
     /// up in `Failed` (not stuck in `Pending`).
     struct FailingTestEngine;
@@ -3831,8 +3801,8 @@ mod tests {
     #[test]
     fn failing_engine_transitions_window_to_failed_not_pending() {
         // Regression test for the `mark_failed`-on-`Pending` bug.
-        // Phase 2 mutates a cloned manager, so on the live manager
-        // the window is still `Pending` when Phase 3 runs. The fix
+        // mutates a cloned manager, so on the live manager
+        // the window is still `Pending` when runs. The fix
         // replays `Pending → InProgress → Failed` so the live window
         // ends up `Failed`, surfacing the failure to operators and
         // letting future retention sweeps reason about the window.
@@ -3854,7 +3824,7 @@ mod tests {
         .expect_err("failing engine should bubble Synthesis error");
         assert!(matches!(err, FfiError::Synthesis { .. }));
 
-        // The Phase-1 window must have transitioned to Failed (not
+        // The earlier window must have transitioned to Failed (not
         // be stuck in Pending). It's also the only window on the
         // scope, so `list_recent_syntheses` returns exactly one row.
         let rows = list_recent_syntheses(handle, scope.as_uuid().to_string()).expect("list");
@@ -3896,7 +3866,7 @@ mod tests {
                     b"recap".to_vec(),
                     Uuid::nil(),
                 );
-                // Phase-10-Item-2 nested shape: insert under the
+                // earlier nested shape: insert under the
                 // owning scope's sub-map (creating it on demand).
                 rt.synthesis_objects
                     .entry(scope)
@@ -4000,7 +3970,7 @@ mod tests {
         assert!(endpoint.timeout.is_none());
     }
 
-    // ─────────── Phase 10 Item 5: rate-limiter validation ────────
+    // ─────────── rate-limiter validation ────────
 
     /// Zero values must fall back to the published defaults.
     #[test]
@@ -4058,7 +4028,7 @@ mod tests {
         }
     }
 
-    // ───────────────── Phase 8: approved-document payloads ────────
+    // ───────────────── Approved-document payloads ────────
 
     /// Happy path: admitting an approved document persists the
     /// AEAD payload row, returns a populated
@@ -4253,7 +4223,7 @@ mod tests {
     }
 
     /// Tenant synthesis materialises the per-tenant payload bundle
-    /// from the evidence store under the Phase-1 gather lock. The
+    /// from the evidence store under the earlier gather lock. The
     /// stub `ManagedEndpointSynthesizer` concatenates
     /// `doc:<payload>` for every supplied [`ApprovedDocument`], so we
     /// can assert the payload bytes appear verbatim in the resulting
@@ -4295,8 +4265,7 @@ mod tests {
         })
         .expect("with_runtime");
         let payload_str = String::from_utf8_lossy(&synth_payload);
-        assert!(
-            payload_str.contains("doc:OFFICIAL CHARTER payload bytes"),
+        assert!(payload_str.contains("doc:OFFICIAL CHARTER payload bytes"),
             "stub-synthesised payload must include the approved-document bytes; got: {payload_str:?}",
         );
 
@@ -4436,7 +4405,7 @@ mod tests {
         teardown(handle);
     }
 
-    // ────────── Phase 9: approved-document orphan sweep ──────────────
+    // ────────── Approved-document orphan sweep ──────────────
 
     /// Approved-document payload rows whose `(scope_id, document_id)`
     /// is not in any rehydrated `TenantMemoryObject.approved_documents`
@@ -4513,7 +4482,7 @@ mod tests {
         teardown(handle2);
     }
 
-    // ────────── Phase 9: health-probe single-tenant posture ─────────
+    // ────────── Health-probe single-tenant posture ─────────
 
     /// When `synthesis_single_tenant` is false (default), the health
     /// probe reports `Degraded` for an engine-configured runtime with
@@ -4570,7 +4539,7 @@ mod tests {
         teardown(handle);
     }
 
-    // ────────── Phase 9: replace_approved_document ──────────────────
+    // ────────── Replace_approved_document ──────────────────
 
     /// Happy path: replace updates the payload, label, approver, and
     /// approved_at on an existing document. The document id remains
@@ -4792,9 +4761,9 @@ mod tests {
         teardown(handle);
     }
 
-    // ─────────── apply_dispatch_outcome tx-failure recovery (Phase 10 Item 1) ─────────
+    // ─────────── apply_dispatch_outcome tx-failure recovery ─────────
 
-    /// When the Phase-3 `with_transaction` commit fails, the
+    /// When the earlier `with_transaction` commit fails, the
     /// per-window recovery path inside `apply_dispatch_outcome` must
     /// (a) surface the error, (b) transition the window to `Failed`
     /// on the live manager, and (c) flush the manager so the on-
@@ -4809,8 +4778,8 @@ mod tests {
         let scope_str = scope.as_uuid().to_string();
 
         // Arm the one-shot failure on the next `with_transaction`
-        // call — that will be Phase-3's apply commit (Phase 1 flush
-        // uses `save_memory_blob` autocommit; Phase 2 dispatch does
+        // call — that will be the apply commit (the synthesis
+        // flush uses `save_memory_blob` autocommit; dispatch does
         // not touch the store).
         with_runtime(handle, |rt| {
             rt.store()

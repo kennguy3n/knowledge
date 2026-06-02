@@ -87,7 +87,7 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
     assert_eq!(record.body, body);
     assert_eq!(record.source, SourceKind::Slack);
     assert_eq!(record.scope_id, scope);
-    // Phase 1.3 / schema v13: `ingest_message` runs
+    // schema v13: `ingest_message` runs
     // `observation_engine::detect_language` on the plaintext
     // body at the production write boundary. The body here
     // embeds the synthetic FTS5 marker token
@@ -114,8 +114,7 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
     // specific whatlang reliability decision for a
     // synthetic-token corpus that may drift across crate
     // versions.
-    assert_eq!(
-        record.language_tag, None,
+    assert_eq!(record.language_tag, None,
         "synthetic-token English body is correctly classified as unreliable; language_tag must stay NULL"
     );
 
@@ -134,7 +133,7 @@ fn evidence_surface_round_trips_via_real_sqlcipher() {
     close_store(h).expect("close_store");
 }
 
-/// Phase 1.3 / schema v13 — `ingest_message` MUST stamp
+/// schema v13 — `ingest_message` MUST stamp
 /// `Some("en")` onto a reliably-English plaintext body. The
 /// surface-coverage test above uses a synthetic FTS5 marker token
 /// that whatlang refuses to classify; this is the dedicated
@@ -165,8 +164,7 @@ fn ingest_message_stamps_language_tag_for_plain_english_body() {
 
     let record = get_evidence(h, evidence_id).expect("get_evidence");
     assert_eq!(record.body, body);
-    assert_eq!(
-        record.language_tag.as_deref(),
+    assert_eq!(record.language_tag.as_deref(),
         Some("en"),
         "ingest_message FFI path must stamp language_tag = Some(\"en\") for plain English plaintext"
     );
@@ -174,7 +172,7 @@ fn ingest_message_stamps_language_tag_for_plain_english_body() {
     close_store(h).expect("close_store");
 }
 
-/// Phase 1.3 / schema v13 — the FFI ingest write path MUST stamp
+/// schema v13 — the FFI ingest write path MUST stamp
 /// the detected BCP-47 primary subtag onto **non-Latin** scripts
 /// too, not just Latin English. This pins the contract with a
 /// Japanese sentence; whatlang's trigram model classifies it
@@ -215,11 +213,11 @@ fn ingest_message_stamps_language_tag_for_japanese_body() {
     close_store(h).expect("close_store");
 }
 
-/// Phase 1.3 / schema v13 — `detect_language` is fail-closed: when
+/// schema v13 — `detect_language` is fail-closed: when
 /// the input is too short, pure punctuation / pure emoji, or
 /// otherwise unreliable on whatlang's internal heuristic, it
 /// returns `None` and the column stays NULL. This is the correct
-/// "language unknown" outcome — downstream consumers (Phase 1.1
+/// "language unknown" outcome — downstream consumers (
 /// lexicon registry) treat NULL as "fall back to scope-default
 /// locale" rather than guessing. Pinning this avoids a future
 /// "helpful" change that silently substitutes `"en"` as a default
@@ -645,7 +643,7 @@ fn evidence_round_trip_via_wire_types() {
         body: "a sample evidence body with unicode: 한글 / café".into(),
         source: SourceKind::Slack,
         created_at: 1_700_000_000,
-        // Schema v13 (Phase 1.3): the bridge MUST surface the
+        // Schema v13: the bridge MUST surface the
         // detected BCP-47 tag end-to-end so host shells don't
         // re-run detection on the read side. NULL stays NULL.
         language_tag: Some("ko".into()),
@@ -733,7 +731,7 @@ fn source_kind_variants_all_round_trip() {
 }
 
 /// `health_check` over a freshly-opened runtime must include the
-/// new `connector` subsystem entry. Phase 2 wires the connector
+/// new `connector` subsystem entry. wires the connector
 /// framework into the substrate and `CONTRIBUTING.md` §4 mandates a
 /// matching `health_check` probe per subsystem — this test pins
 /// that wiring contract so a future regression that drops the probe
@@ -763,7 +761,7 @@ fn health_check_envelope_includes_connector_subsystem() {
     assert!(detail.contains("total=0"), "detail={detail}");
     assert!(detail.contains("authenticated=0"), "detail={detail}");
     assert!(detail.contains("failed=0"), "detail={detail}");
-    // Phase 4.1: the probe also surfaces the
+    // the probe also surfaces the
     // `ClientSecretResolver` registration state alongside the
     // per-status counts. A fresh runtime has no resolver wired up,
     // so the host should see `oauth_resolver=unset` — this is the
@@ -772,8 +770,8 @@ fn health_check_envelope_includes_connector_subsystem() {
     #[cfg(feature = "http-client")]
     assert!(detail.contains("oauth_resolver=unset"), "detail={detail}");
 
-    // Sanity-check the probe ordering — the Phase 2 wiring appends
-    // `connector` after the four Phase 1 subsystems, and Phase 7
+    // Sanity-check the probe ordering — the wiring appends
+    // `connector` after the four subsystems, and
     // appends `synthesis_engine` after that. A host rendering
     // subsystems in array order therefore sees the tiles in this
     // exact order. The array order is part of the host UI contract
@@ -819,7 +817,7 @@ fn health_check_envelope_includes_connector_subsystem() {
 /// Gated on `http-client` because `create_connector` requires a
 /// live `BlockingHttpTransport` — without the feature every
 /// connector lifecycle call returns `FfiError::Unavailable`, which
-/// is the surface this test is *not* exercising. The Phase 2 CI
+/// is the surface this test is *not* exercising. The CI
 /// workflow builds + tests this crate with `--all-features` so the
 /// gate keeps the unit test deterministic on every developer's
 /// local `cargo test` while still being exercised by the
@@ -885,7 +883,7 @@ fn forget_scope_purges_connectors_bound_to_the_forgotten_scope() {
 /// `forget(evidence_id)` resolves the row to its scope and MUST run
 /// the *exact same* cryptographic-forgetting sequence as
 /// `forget_scope(scope_uuid)` — including the connector lifecycle
-/// purge. This pins the bug surfaced by Devin Review on PR #54:
+/// purge. Regression (PR #54):
 /// before the fix, `forget()` left `ConnectorInstance` rows, live
 /// `Arc<dyn Connector>` handles, and cached OAuth2 tokens behind
 /// for the forgotten scope, while `forget_scope()` cleaned them up
@@ -973,7 +971,7 @@ fn forget_by_evidence_id_also_purges_connectors_bound_to_the_resolved_scope() {
 /// `ConnectorError::Auth("…auth_config_json.authorization_code is
 /// required")` if the key is missing.
 ///
-/// This pins the round-4 Devin Review bug on PR #54: the FFI
+/// Regression (PR #54): the FFI
 /// previously spliced the code under `"auth_code"`, which would
 /// cause every host `authenticate_connector` call to surface
 /// `auth_config_json.authorization_code is required` even when the
@@ -1144,9 +1142,9 @@ fn synthesis_trigger_variants_all_round_trip() {
     }
 }
 
-// ─────────────────── Phase 3 connector persistence ──────────────────
+// ─────────────────── connector persistence ──────────────────
 //
-// These tests pin the **Phase 3 contract**: the connector lifecycle
+// These tests pin the ** contract**: the connector lifecycle
 // state (instances + sync state + OAuth2 tokens) is durable across
 // `close_store` / `open_store` and respects the cryptographic
 // forgetting contract (forgotten scopes never resurrect).
@@ -1702,7 +1700,7 @@ fn sync_state_advance_persists_across_close_store_reopen() {
 /// `OAuth2Token` JSON survives bit-for-bit. We drive the test
 /// through the evidence-store API directly (rather than via
 /// `authenticate_connector`) because the FFI surface requires a
-/// live OAuth2 provider for the Phase 2 exchange — the *persistence*
+/// live OAuth2 provider for the exchange — the *persistence*
 /// contract is the same regardless of how the token was acquired,
 /// so testing the evidence-store round-trip pins the at-rest
 /// encryption + AAD-binding behaviour without standing up a fake
@@ -1769,8 +1767,7 @@ fn oauth_token_persists_across_close_store_reopen() {
     assert_eq!(*loaded_instance, instance_uuid);
     assert_eq!(*loaded_scope, scope_id);
     let decoded: OAuth2Token = serde_json::from_slice(loaded_plain).expect("decode token");
-    assert_eq!(
-        decoded, original,
+    assert_eq!(decoded, original,
         "loaded OAuth2Token must equal what was persisted (access + refresh + expiry + scope + token_type)",
     );
 
@@ -2007,10 +2004,10 @@ fn save_connector_instance_propagates_secondary_unique_violation() {
     assert_eq!(loaded_kind.as_str(), kind_tag);
 }
 
-// ───────────── Phase 4: OAuth2 token refresh via FFI ─────────────
+// ───────────── OAuth2 token refresh via FFI ─────────────
 //
-// Phase 4 wires `refresh_connector_token` and the auto-refresh path
-// inside `sync_connector` through the FFI surface. The substrate-side
+// This block wires `refresh_connector_token` and the auto-refresh
+// path inside `sync_connector` through the FFI surface. The substrate-side
 // primitives (`OAuth2Client::refresh_with_config`,
 // `ConfiguredRefresher`, `OAuth2TokenVault::refresh_if_expiring`)
 // are exhaustively unit-tested at the connector_framework level;
@@ -2044,7 +2041,7 @@ use std::sync::{
 #[cfg(feature = "http-client")]
 use std::thread::JoinHandle;
 
-/// Tiny single-connection HTTP/1.1 server used by the Phase 4
+/// Tiny single-connection HTTP/1.1 server used by the
 /// integration tests to back the connector's OAuth2 token endpoint.
 ///
 /// Scope is deliberately minimal: each call to
@@ -2054,7 +2051,7 @@ use std::thread::JoinHandle;
 /// back `HTTP/1.1 200 OK` with `Content-Type: application/json`.
 ///
 /// Lives in the integration-test file (not the test-support crate)
-/// because Phase 4 is the first test surface that needs it; if a
+/// because this is the first test surface that needs it; if a
 /// future test wants the same plumbing the helper graduates to a
 /// shared module.
 #[cfg(feature = "http-client")]
@@ -2103,8 +2100,7 @@ impl OAuthTestServer {
                         g.push(captured_body);
                     }
                     counter.fetch_add(1, AtomicOrdering::SeqCst);
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                         body.len(),
                         body,
                     );
@@ -2126,7 +2122,7 @@ impl OAuthTestServer {
     /// the 64 KiB safety bound.
     ///
     /// Previously a single 4 KiB `stream.read` was sufficient for
-    /// every Phase 4 / 4.1 test fixture (OAuth2 form bodies over
+    /// every / 4.1 test fixture (OAuth2 form bodies over
     /// localhost loopback never fragment in practice), but the
     /// single-read pattern silently truncates if a future test
     /// adds a larger payload OR if the network path ever changes
@@ -2134,8 +2130,8 @@ impl OAuthTestServer {
     /// hyper-v vNIC, container bridges with low MTU). The read
     /// loop is the correctness-preserving way to capture an
     /// arbitrary HTTP/1.1 message and matches how production
-    /// servers consume a request — see the discussion in Phase 4.1
-    /// Devin Review (`ANALYSIS_0005` on commit b29bc3c).
+    /// servers consume a request — see the discussion in
+    /// commit b29bc3c.
     ///
     /// Parsing strategy:
     ///
@@ -2166,7 +2162,7 @@ impl OAuthTestServer {
         // exchange while keeping a failing test diagnosable rather
         // than hung. Ignored if the platform doesn't support the
         // call (we only ever run on tier-1 targets in CI, all of
-        // which do). See Devin Review ANALYSIS_0003 on PR #60.
+        // which do). on PR #60.
         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
         let mut buf = [0u8; 4096];
         let mut accumulated: Vec<u8> = Vec::with_capacity(4096);
@@ -2273,7 +2269,7 @@ impl OAuthTestServer {
     }
 
     /// Snapshot the captured form bodies (one per accepted request,
-    /// in FIFO order). Used by Phase 4.1 tests to assert that the
+    /// in FIFO order). Used by tests to assert that the
     /// `client_secret=` form field is — or isn't — included in the
     /// POST body the substrate sent.
     fn request_bodies(&self) -> Vec<String> {
@@ -2293,7 +2289,7 @@ impl Drop for OAuthTestServer {
     }
 }
 
-// ───── Phase 4.2 — OAuthTestServer read-loop self-tests ─────
+// ───── OAuthTestServer read-loop self-tests ─────
 
 /// Pin the OAuthTestServer's multi-read loop against TCP
 /// fragmentation: write the HTTP/1.1 request in TWO segments with
@@ -2665,9 +2661,9 @@ fn refresh_connector_token_short_circuits_when_no_refresh_token_stored() {
     drop(dir);
 }
 
-// ───────────────── Phase 4.1: client_secret resolver tests ─────────────────
+// ───────────────── client_secret resolver tests ─────────────────
 
-/// Helper resolver used by the Phase 4.1 tests. Holds a closure that
+/// Helper resolver used by the tests. Holds a closure that
 /// produces the secret on demand and a counter so tests can assert
 /// on the number of times the resolver was consulted.
 #[cfg(feature = "http-client")]
@@ -2706,7 +2702,7 @@ impl ffi::OAuthClientSecretResolver for TestResolver {
 
 /// Set up an instance + initial token row in SQLCipher with the
 /// supplied `auth_config_json` blob and return the path + master key
-/// bytes + scope + instance ids. Centralised so the four Phase 4.1
+/// bytes + scope + instance ids. Centralised so the four
 /// resolver tests stay focused on the resolver-resolution behaviour
 /// rather than the persistence boilerplate.
 #[cfg(feature = "http-client")]
@@ -2774,7 +2770,7 @@ fn seed_oauth_refresh_fixture(
     (path, master_key_bytes, scope, instance, dir)
 }
 
-/// Phase 4.1 layer 1: when a resolver returns `Some(secret)`, that
+/// layer 1: when a resolver returns `Some(secret)`, that
 /// secret is what appears in the OAuth2 `refresh_token` POST body's
 /// `client_secret=` form field — taking precedence over the
 /// `auth_config_json["client_secret"]` value AND short-circuiting the
@@ -2838,7 +2834,7 @@ fn client_secret_resolver_layer_1_wins_over_auth_config_json() {
     drop(dir);
 }
 
-/// Phase 4.1 layer 2: when no resolver is registered, the
+/// layer 2: when no resolver is registered, the
 /// substrate falls through to `auth_config_json["client_secret"]`
 /// and includes it as the form field on the refresh POST. Pins the
 /// test / single-tenant dev host path.
@@ -2883,7 +2879,7 @@ fn client_secret_resolver_layer_2_auth_config_json_when_no_resolver() {
     drop(dir);
 }
 
-/// Phase 4.1 layer 2b: when a resolver IS registered but returns
+/// layer 2b: when a resolver IS registered but returns
 /// `None`, the framework falls through to the
 /// `auth_config_json["client_secret"]` layer instead of omitting
 /// the form field. Pins the multi-tenant "secret not yet loaded
@@ -2940,7 +2936,7 @@ fn client_secret_resolver_layer_2_when_resolver_returns_none() {
     drop(dir);
 }
 
-/// Phase 4.1 layer 3: when no resolver is registered AND
+/// layer 3: when no resolver is registered AND
 /// `auth_config_json["client_secret"]` is absent, the substrate
 /// MUST NOT include a `client_secret=` form field at all. Public-
 /// client / PKCE-only providers accept this (Slack legacy);
@@ -2987,7 +2983,7 @@ fn client_secret_resolver_layer_3_omits_form_field_when_no_secret_available() {
     drop(dir);
 }
 
-/// Phase 4.1 lifecycle: registering a resolver, then clearing it,
+/// lifecycle: registering a resolver, then clearing it,
 /// must restore the auth_config_json fallback semantics. Pins the
 /// `clear_oauth_client_secret_resolver` FFI function's contract.
 #[cfg(feature = "http-client")]
@@ -3048,7 +3044,7 @@ fn client_secret_resolver_clear_restores_fallback() {
     drop(dir);
 }
 
-/// Phase 4.1 negative path: `set_oauth_client_secret_resolver` on a
+/// negative path: `set_oauth_client_secret_resolver` on a
 /// runtime that never had an OAuth2 client built (only happens on
 /// `--no-default-features` builds where `http-client` is off) must
 /// surface `Unavailable { subsystem: "connector-http-client" }`. We
@@ -3076,7 +3072,7 @@ fn client_secret_resolver_set_and_clear_are_idempotent() {
     close_store(h).expect("close_store");
 }
 
-/// Phase 4.1 health-probe wiring: the `connector` subsystem must
+/// health-probe wiring: the `connector` subsystem must
 /// flip its `oauth_resolver=` field from `unset` to `registered`
 /// after a successful `set_oauth_client_secret_resolver` call, and
 /// back to `unset` after `clear_oauth_client_secret_resolver`.
@@ -3142,7 +3138,7 @@ fn health_probe_surfaces_oauth_resolver_registration_state() {
     close_store(h).expect("close_store");
 }
 
-/// Phase 4.1 helper: hex-encode `bytes` as a lowercase string.
+/// helper: hex-encode `bytes` as a lowercase string.
 /// Mirrors the encoding used by `open_store(master_key_hex)`.
 #[cfg(feature = "http-client")]
 fn hex_encode(bytes: &[u8]) -> String {
@@ -3154,11 +3150,11 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-// ───────────────────── Phase 5: webhook receiver ─────────────────
+// ───────────────────── webhook receiver ─────────────────
 
 #[cfg(feature = "http-client")]
 mod webhook {
-    //! Integration tests for the Phase 5 webhook-receiver FFI
+    //! Integration tests for the webhook-receiver FFI
     //! surface. Each test stands up a temp-dir SQLCipher store,
     //! binds an axum server on `127.0.0.1:0` (ephemeral port), and
     //! exercises the FFI surface end-to-end through real HTTP
@@ -3721,11 +3717,11 @@ mod webhook {
     }
 }
 
-// ───────────────────── Phase 6: background sync scheduler ─────────
+// ───────────────────── background sync scheduler ─────────
 
 #[cfg(feature = "http-client")]
 mod sync_scheduler_tests {
-    //! Integration tests for the Phase 6 background sync scheduler
+    //! Integration tests for the background sync scheduler
     //! FFI surface. Each test stands up a temp-dir SQLCipher store
     //! and exercises the scheduler entry points end-to-end. The
     //! scheduler thread is a real `std::thread` — we drive it on
@@ -4251,9 +4247,9 @@ mod sync_scheduler_tests {
         close_store(h).expect("close_store");
     }
 
-    /// Phase 9: `clear_sync_schedule` must preserve the
+    /// `clear_sync_schedule` must preserve the
     /// `auto_synthesize` flag set via
-    /// `configure_sync_auto_synthesize`. Without the Phase 9 fix
+    /// `configure_sync_auto_synthesize`. Without the fix
     /// the flag was lost on clear, silently disabling post-sync
     /// synthesis.
     #[test]
@@ -4309,8 +4305,8 @@ mod sync_scheduler_tests {
     }
 }
 
-/// Phase 10 Item 3 — `connector_status` is the per-instance health
-/// probe symmetric with `synthesis_status`. The Phase 6 surfaces
+/// `connector_status` is the per-instance health probe symmetric
+/// with `synthesis_status`. The surfaces
 /// (`list_connectors`, `sync_scheduler_status`) only expose
 /// fleet-wide views; hosts that want to render a single
 /// connector's health page were forced to fetch both and reassemble
@@ -4334,7 +4330,7 @@ mod sync_scheduler_tests {
 /// 4. Error cases — bad UUID, missing instance, forgotten scope.
 ///
 /// Gated on `http-client` because `create_connector` requires the
-/// real `BlockingHttpTransport`. The Phase 2 CI workflow builds
+/// real `BlockingHttpTransport`. The CI workflow builds
 /// with `--all-features` so this test still runs in CI; local
 /// `cargo test` developers see it skip the way the rest of the
 /// connector-lifecycle tests do.
@@ -4405,7 +4401,7 @@ mod connector_status_tests {
         // surface the scheduler defaults; configure_sync_schedule
         // must flip those fields to the override; clear_sync_schedule
         // must revert them to defaults (and DROP `auto_synthesize`
-        // unless it was previously set — same Phase-9 contract as
+        // unless it was previously set — same earlier contract as
         // `configure_sync_auto_synthesize`).
         let (h, _dir) = fresh_store();
         let scope = "00000000-0000-0000-0000-00000000c002".to_string();
@@ -4463,8 +4459,7 @@ mod connector_status_tests {
         // Unknown instance (well-formed UUID, just not registered).
         let err = connector_status(h, "00000000-0000-0000-0000-00000000beef".into())
             .expect_err("unknown instance must reject as NotFound");
-        assert!(matches!(
-            err,
+        assert!(matches!(err,
             FfiError::NotFound { ref kind, .. } if kind == "connector_instance"
         ));
 
@@ -4490,8 +4485,7 @@ mod connector_status_tests {
         // test.)
         let err = connector_status(h, instance.clone())
             .expect_err("probing a purged connector must reject");
-        assert!(matches!(
-            err,
+        assert!(matches!(err,
             FfiError::NotFound { ref kind, .. } if kind == "connector_instance"
         ));
 

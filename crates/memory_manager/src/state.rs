@@ -10,14 +10,14 @@ use serde::{Deserialize, Serialize};
 ///
 /// ```text
 /// [*] -> Candidate
-/// Candidate    -> Reinforced  (retrieval / corroboration)
-/// Candidate    -> Archived    (low retention score)
-/// Reinforced   -> Consolidated (cross-source corroboration)
-/// Consolidated -> Canonical    (human / policy approval)
-/// Canonical    -> Superseded   (newer canonical claim)
-/// Canonical    -> Deleted      (explicit forget / key destruction)
-/// Superseded   -> Archived     (TTL elapsed)
-/// Archived     -> Deleted      (scope key destroyed)
+/// Candidate -> Reinforced (retrieval / corroboration)
+/// Candidate -> Archived (low retention score)
+/// Reinforced -> Consolidated (cross-source corroboration)
+/// Consolidated -> Canonical (human / policy approval)
+/// Canonical -> Superseded (newer canonical claim)
+/// Canonical -> Deleted (explicit forget / key destruction)
+/// Superseded -> Archived (TTL elapsed)
+/// Archived -> Deleted (scope key destroyed)
 /// ```
 ///
 /// Every other transition is rejected by [`MemoryStateMachine`] —

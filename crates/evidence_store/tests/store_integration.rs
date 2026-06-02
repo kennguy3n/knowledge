@@ -38,13 +38,13 @@ fn schema_creates_required_tables() {
     let fts: i64 = conn
         .query_row("SELECT COUNT(*) FROM evidence_fts", [], |r| r.get(0))
         .unwrap();
-    // Phase 1.2 / schema v14: trigram-tokenised companion FTS5
+    // schema v14: trigram-tokenised companion FTS5
     // table for CJK / Thai content. Bootstrapped alongside
     // `evidence_fts` by `SCHEMA_SQL`.
     let fts_cjk: i64 = conn
         .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
         .unwrap();
-    // Phase 1.2.1 / schema v15: precomputed-bigram FTS5 table for
+    // schema v15: precomputed-bigram FTS5 table for
     // 2-codepoint CJK / Thai recall. Bootstrapped alongside
     // `evidence_fts` and `evidence_fts_cjk` by `SCHEMA_SQL`.
     let fts_bigram: i64 = conn
@@ -89,7 +89,7 @@ fn ingest_inline_path_for_small_useful_message() {
 
 #[test]
 fn ingest_with_language_tag_round_trips_inline() {
-    // Phase 1.3 / schema v13: the inline-path ingest API stamps the
+    // schema v13: the inline-path ingest API stamps the
     // optional BCP-47 primary subtag onto the row's `language_tag`
     // column and `EvidenceStore::get` round-trips it back through
     // `EvidenceRow::language_tag`.
@@ -113,7 +113,7 @@ fn ingest_with_language_tag_round_trips_inline() {
 
 #[test]
 fn ingest_with_language_tag_round_trips_body_table() {
-    // Phase 1.3 / schema v13: the body-table-path ingest API stamps
+    // schema v13: the body-table-path ingest API stamps
     // the BCP-47 subtag onto the row's `language_tag` column, even
     // when the same body content is dedup-shared across scopes
     // (the language stamp lives on the per-scope `evidence` row, not
@@ -712,7 +712,7 @@ fn with_transaction_rolls_back_on_err() {
 }
 
 // ============================================================
-// Phase 1.2 / schema v14 — CJK-aware FTS5 tokeniser tests.
+// schema v14 — CJK-aware FTS5 tokeniser tests.
 //
 // Pre-v14 the substrate's only lexical index used the FTS5
 // `unicode61 remove_diacritics 2` tokeniser, which classifies CJK
@@ -776,17 +776,18 @@ fn fts5_thai_query_returns_hit() {
 }
 
 // ----------------------------------------------------------------------
-// Phase 1.5 — Tibetan / Khmer / Myanmar / Lao routing integration tests
+// Tibetan / Khmer / Myanmar / Lao routing integration tests.
 // ----------------------------------------------------------------------
 //
-// Phase 1.2 introduced `evidence_fts_cjk` (trigram lane) and Phase 1.2.1
-// added `evidence_fts_bigram` (precomputed bigram lane). Both lanes
-// gate writes on `crate::script::contains_cjk_or_thai`, which Phase 1.5
-// extended to include four additional Brahmic-family scripts that lack
-// inter-word whitespace: Tibetan (`bo`), Khmer (`km`), Myanmar (`my`),
-// Lao (`lo`). The fixtures below pin the read-path recall AND the
-// write-path table membership for each script via the same dual-lane
-// architecture as the Phase 1.2 sites — ensuring no regression silently
+// The CJK-aware schema introduced `evidence_fts_cjk` (trigram lane)
+// and added `evidence_fts_bigram` (precomputed bigram lane). Both
+// lanes gate writes on `crate::script::contains_cjk_or_thai`, which
+// was later extended to include four additional Brahmic-family
+// scripts that lack inter-word whitespace: Tibetan (`bo`), Khmer
+// (`km`), Myanmar (`my`), Lao (`lo`). The fixtures below pin the
+// read-path recall AND the write-path table membership for each
+// script via the same dual-lane architecture as the production
+// routing sites — ensuring no regression silently
 // excludes one of the four scripts from one of the two CJK-routed
 // shadow tables.
 
@@ -814,7 +815,7 @@ fn fts5_tibetan_query_returns_hit_via_trigram_lane() {
     assert_eq!(hits[0], r.evidence_id);
 
     // Pin the write-path invariant: the body must also land in
-    // `evidence_fts_bigram` (Phase 1.2.1) so a future 2-codepoint
+    // `evidence_fts_bigram` so a future 2-codepoint
     // Tibetan query can find it.
     let bigram_rows: i64 = store
         .raw_conn()
@@ -894,7 +895,7 @@ fn fts5_myanmar_query_returns_hit_via_trigram_lane() {
 fn fts5_lao_query_returns_hit_via_trigram_lane() {
     // ວຽງຈັນ — "Vientiane", capital of Laos. Lao script
     // (U+0E80..=U+0EFF) is contiguous with Thai under the
-    // single Phase 1.5 routing arm `'\u{0E00}'..='\u{0FFF}'`.
+    // single routing arm `'\u{0E00}'..='\u{0FFF}'`.
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
     let r = store
@@ -924,13 +925,13 @@ fn fts5_lao_query_returns_hit_via_trigram_lane() {
 }
 
 #[test]
-fn fts5_phase_1_5_pure_devanagari_body_routes_only_to_unicode61() {
+fn fts5_pure_devanagari_body_routes_only_to_unicode61() {
     // Negative-space pin: Devanagari (Hindi, U+0900..=U+097F)
-    // is deliberately NOT in the Phase 1.5 routing predicate
+    // is deliberately NOT in the routing predicate
     // — the unicode61 tokeniser classifies Devanagari letters
     // as letters and so already segments Hindi correctly,
     // so adding a redundant trigram row would inflate the CJK
-    // index without recall benefit. The Phase 1.1 Hindi
+    // index without recall benefit. The Hindi
     // lexicon uses Substring matching at the observation
     // engine layer (not the FTS5 layer) to compensate for
     // virama-induced intra-word splits.
@@ -1017,7 +1018,7 @@ fn fts5_cjk_routing_is_body_derived_not_language_tag_derived() {
     // A row ingested without any language tag still gets routed
     // into the CJK FTS table iff its body contains CJK / Thai
     // codepoints — the write path keys off body content, not the
-    // (Phase 1.3) `language_tag` column. This is what makes the
+    // `language_tag` column. This is what makes the
     // CJK index robust to a NULL or mis-detected language tag.
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
@@ -1050,7 +1051,7 @@ fn fts5_cjk_routing_is_body_derived_not_language_tag_derived() {
         .query_row("SELECT COUNT(*) FROM evidence_fts_cjk", [], |r| r.get(0))
         .unwrap();
     assert_eq!(cjk_rows, 1);
-    // Phase 1.2.1 / schema v15: the same body also lands in
+    // schema v15: the same body also lands in
     // evidence_fts_bigram so 2-codepoint CJK queries hit it.
     let bigram_rows: i64 = store
         .raw_conn()
@@ -1086,7 +1087,7 @@ fn fts5_pure_latin_does_not_consume_cjk_table_storage() {
         cjk_rows, 0,
         "pure-Latin body must not be written to evidence_fts_cjk"
     );
-    // Phase 1.2.1 / schema v15: pure-Latin bodies likewise stay
+    // schema v15: pure-Latin bodies likewise stay
     // out of `evidence_fts_bigram` — the bigram lane is gated on
     // `crate::script::contains_cjk_or_thai` identically to the
     // trigram lane, so this assertion pins the storage-cost
@@ -1103,14 +1104,14 @@ fn fts5_pure_latin_does_not_consume_cjk_table_storage() {
 
 #[test]
 fn fts5_bigram_lane_closes_2char_cjk_recall_floor() {
-    // Phase 1.2.1 (schema v15) regression — pins the bigram-lane
+    // Bigram lane (schema v15) regression — pins the bigram-lane
     // gap-closure for 2-codepoint CJK queries.
     //
     // Background: SQLite's built-in `trigram` tokeniser has a
     // hard 3-codepoint minimum for both indexed substrings and
     // queries, so a 2-char CJK query like `天気` returns ∅
     // through the `evidence_fts_cjk` (trigram) lane even when
-    // the substring is present in the body. Phase 1.2.1 added
+    // the substring is present in the body. A later change added
     // a third FTS5 table (`evidence_fts_bigram`) that stores
     // whitespace-separated overlapping 2-codepoint windows under
     // the same `unicode61` tokeniser as `evidence_fts`. The read
@@ -1136,9 +1137,9 @@ fn fts5_bigram_lane_closes_2char_cjk_recall_floor() {
         hits.len(),
         1,
         "2-char CJK query MUST hit via the bigram lane now that \
-         Phase 1.2.1's `evidence_fts_bigram` table exists — the \
-         trigram lane still misses these as documented but the \
-         bigram lane closes the gap"
+         the `evidence_fts_bigram` table exists — the trigram \
+         lane still misses these as documented but the bigram \
+         lane closes the gap"
     );
     // …and the same query 1 char longer still works (this lane
     // crosses the trigram floor so we exercise both branches):
@@ -1148,7 +1149,7 @@ fn fts5_bigram_lane_closes_2char_cjk_recall_floor() {
 
 #[test]
 fn fts5_three_lane_merge_dedupes_mixed_query_across_all_three_tables() {
-    // Sweep-2 finding #7 regression — exercises the
+    // Regression guard — exercises the
     // `merged_fts_search` three-lane fan-out across a single
     // mixed Latin + 2-codepoint CJK query so all three FTS5
     // shadow tables contribute hits that the merge must
@@ -1162,10 +1163,10 @@ fn fts5_three_lane_merge_dedupes_mixed_query_across_all_three_tables() {
     // (precomputed bigrams under unicode61). All three branches
     // therefore return the same row under different ranks; the
     // `merged_fts_search` `MIN(rank)`-by-evidence-id HashMap
-    // contract must collapse them to a single hit. Pre-Phase-1.2.1
-    // this test was unrepresentable because the bigram lane did
-    // not exist and the 2-codepoint CJK term `天気` round-tripped
-    // as empty.
+    // contract must collapse them to a single hit. Before the
+    // bigram lane existed, this test was unrepresentable because
+    // the trigram lane could not capture the 2-codepoint CJK term
+    // `天気`, which round-tripped as empty.
     //
     // The companion `fts5_search_dedupes_when_both_tables_match_same_row`
     // test exercises only the two-lane (unicode61 + trigram) merge;
@@ -1206,9 +1207,9 @@ fn fts5_three_lane_merge_dedupes_mixed_query_across_all_three_tables() {
     // lanes to a hit on the same evidence_id. FTS5 boolean OR
     // syntax `term1 OR term2 OR term3`:
     //
-    //  * `launch`     → unicode61 (`evidence_fts`)
-    //  * `良い天気`     → trigram  (`evidence_fts_cjk`)
-    //  * `天気`        → bigram   (`evidence_fts_bigram`)
+    //  * `launch` → unicode61 (`evidence_fts`)
+    //  * `良い天気` → trigram (`evidence_fts_cjk`)
+    //  * `天気` → bigram (`evidence_fts_bigram`)
     //
     // The merge contract collapses them to a single hit on the
     // shared evidence_id. If any lane's prepared statement were
@@ -1276,7 +1277,7 @@ fn fts5_search_dedupes_when_both_tables_match_same_row() {
 
 #[test]
 fn fts5_unicode61_query_succeeds_even_when_trigram_branch_rejects_shape() {
-    // Sweep-2 BUG-0001 regression. The SQLite trigram tokeniser docs
+    // earlier regression. The SQLite trigram tokeniser docs
     // <https://www.sqlite.org/fts5.html#the_trigram_tokenizer> say
     // that trigram returns an *error* (not an empty result set)
     // when given any of:
@@ -1334,8 +1335,7 @@ fn fts5_unicode61_query_succeeds_even_when_trigram_branch_rejects_shape() {
 
     // Case 4: column filter — trigram rejects column filters per docs.
     let r4 = store.search_fts(scope, "{content} : launch", 10).unwrap();
-    assert_eq!(
-        r4.len(),
+    assert_eq!(r4.len(),
         1,
         "column-filter matches in unicode61 MUST return the row even when trigram rejects column filters"
     );
@@ -1356,7 +1356,7 @@ fn fts5_unicode61_query_succeeds_even_when_trigram_branch_rejects_shape() {
 
 #[test]
 fn fts5_dual_search_orders_tied_ranks_deterministically_by_evidence_id() {
-    // Sweep-4 INFO-0004 regression — verifies that `merged_fts_search`
+    // earlier regression — verifies that `merged_fts_search`
     // emits a deterministic ordering for rows whose FTS5 rank
     // compares as equal. Pre-fix the `HashMap`-then-`sort_by(rank)`
     // pipeline produced run-to-run ordering jitter for ties because
@@ -1418,7 +1418,7 @@ fn fts5_dual_search_orders_tied_ranks_deterministically_by_evidence_id() {
 
 #[test]
 fn fts5_trigram_branch_error_is_silently_swallowed_so_unicode61_results_survive() {
-    // Sweep-2 BUG-0001 regression — directly proves the error
+    // earlier regression — directly proves the error
     // containment path. We inject a guaranteed trigram failure by
     // DROPing the `evidence_fts_cjk` table out from under the
     // search, then verify the `unicode61` branch's results still
@@ -1465,11 +1465,11 @@ fn fts5_trigram_branch_error_is_silently_swallowed_so_unicode61_results_survive(
 }
 
 // ============================================================================
-// Phase 1.8: FTS5 BM25 weight integration tests.
+// FTS5 BM25 weight integration tests.
 //
 // The unit tests in `evidence_store::fts_weights::tests` pin the weight
 // constants and the SQL fragment shape; the unit tests in
-// `evidence_store::store::phase_1_8_lane_sql_tests` pin the cached lane SQL.
+// `evidence_store::store::lane_sql_tests` pin the cached lane SQL.
 // These integration tests close the loop by exercising the full
 // ingest → search round-trip with the test-only
 // `search_fts_with_weighted_ranks_for_tests` surface so the cross-lane
@@ -1477,8 +1477,8 @@ fn fts5_trigram_branch_error_is_silently_swallowed_so_unicode61_results_survive(
 // ============================================================================
 
 #[test]
-fn phase_1_8_bigram_lane_ranks_are_weighted_below_raw_bm25_baseline() {
-    // Phase 1.8 invariant: a 2-codepoint CJK query routes exclusively
+fn bigram_lane_ranks_are_weighted_below_raw_bm25_baseline() {
+    // invariant: a 2-codepoint CJK query routes exclusively
     // through the bigram lane (the unicode61 lane emits no tokens for
     // CJK, the trigram lane's 3-codepoint floor swallows 2-char
     // queries). The post-merge rank must therefore equal the raw FTS5
@@ -1526,8 +1526,8 @@ fn phase_1_8_bigram_lane_ranks_are_weighted_below_raw_bm25_baseline() {
 }
 
 #[test]
-fn phase_1_8_unicode61_lane_ranks_are_identity_weighted_against_baseline() {
-    // Phase 1.8 invariant: the unicode61 lane is the precision
+fn unicode61_lane_ranks_are_identity_weighted_against_baseline() {
+    // invariant: the unicode61 lane is the precision
     // baseline at weight 1.0, so a pure-Latin query that routes
     // exclusively through `evidence_fts` must produce ranks
     // numerically identical to the raw FTS5 BM25 ranks (the
@@ -1571,8 +1571,8 @@ fn phase_1_8_unicode61_lane_ranks_are_identity_weighted_against_baseline() {
 }
 
 #[test]
-fn phase_1_8_trigram_lane_ranks_are_weighted_below_unicode61_baseline() {
-    // Phase 1.8 invariant: a 3-codepoint CJK query routes through
+fn trigram_lane_ranks_are_weighted_below_unicode61_baseline() {
+    // invariant: a 3-codepoint CJK query routes through
     // both the trigram lane (single trigram window) and the bigram
     // lane (two bigram windows). The per-row MIN-merge picks the
     // best (most negative) weighted score across lanes. Verify the
@@ -1604,8 +1604,8 @@ fn phase_1_8_trigram_lane_ranks_are_weighted_below_unicode61_baseline() {
 }
 
 #[test]
-fn phase_1_8_lane_weight_precision_hierarchy_holds_at_query_time() {
-    // Phase 1.8 invariant: when the SAME row hits via multiple
+fn lane_weight_precision_hierarchy_holds_at_query_time() {
+    // invariant: when the SAME row hits via multiple
     // lanes, the unicode61 lane's `* 1.0` multiply produces a more-
     // negative rank than the trigram lane's `* 0.85` would for the
     // same raw FTS5 BM25 score, which in turn is more-negative
@@ -1637,10 +1637,10 @@ fn phase_1_8_lane_weight_precision_hierarchy_holds_at_query_time() {
 }
 
 // ----------------------------------------------------------------------
-// Phase 1.9 — Symmetric recall-lane stopword stripping (schema v16)
+// Symmetric recall-lane stopword stripping (schema v16).
 // ----------------------------------------------------------------------
 //
-// Phase 1.9 strips a small, conservative inventory of per-script
+// Schema v16 strips a small, conservative inventory of per-script
 // function words (Japanese particles, Chinese connectives, Thai
 // prepositions, ...) from BOTH the index-time write path and the
 // query-time read path before the bigram / trigram lanes consume the
@@ -1671,7 +1671,7 @@ fn phase_1_8_lane_weight_precision_hierarchy_holds_at_query_time() {
 //      the deliberate-exclusion rationale).
 
 #[test]
-fn fts5_phase_1_9_japanese_stopword_query_matches_indexed_stopword_body() {
+fn fts5_japanese_stopword_query_matches_indexed_stopword_body() {
     // Body and query both contain the same genitive particle `の`.
     // Both sides strip identically, so the bigram-lane windows on
     // both sides reduce to `日本 オリンピック` and the match must
@@ -1692,7 +1692,7 @@ fn fts5_phase_1_9_japanese_stopword_query_matches_indexed_stopword_body() {
 }
 
 #[test]
-fn fts5_phase_1_9_japanese_stopword_in_body_only_still_matches_clean_query() {
+fn fts5_japanese_stopword_in_body_only_still_matches_clean_query() {
     // Body has the genitive particle `の`; query does not. The
     // body's stored bigram windows (after stripping) are
     // `日本 オリンピック` (with a space at the strip site). The
@@ -1721,7 +1721,7 @@ fn fts5_phase_1_9_japanese_stopword_in_body_only_still_matches_clean_query() {
 }
 
 #[test]
-fn fts5_phase_1_9_japanese_stopword_in_query_only_still_matches_clean_body() {
+fn fts5_japanese_stopword_in_query_only_still_matches_clean_body() {
     // The reverse of the previous test. Body has no stopword;
     // query includes `の`. After symmetric stripping both reduce
     // to the same lane-tokenisable form.
@@ -1745,7 +1745,7 @@ fn fts5_phase_1_9_japanese_stopword_in_query_only_still_matches_clean_body() {
 }
 
 #[test]
-fn fts5_phase_1_9_pure_stopword_query_yields_no_hit_against_content_body() {
+fn fts5_pure_stopword_query_yields_no_hit_against_content_body() {
     // A query consisting entirely of stopword particles strips to
     // pure whitespace, which the lane SQL detects and short-
     // circuits to an empty result for. This is correct: pure
@@ -1768,7 +1768,7 @@ fn fts5_phase_1_9_pure_stopword_query_yields_no_hit_against_content_body() {
 }
 
 #[test]
-fn fts5_phase_1_9_chinese_de_particle_symmetric_round_trip() {
+fn fts5_chinese_de_particle_symmetric_round_trip() {
     // Body contains the genitive `的`; query contains the same.
     // The bigram lane windows after stripping must align.
     let (_dir, mut store) = fresh_store();
@@ -1797,7 +1797,7 @@ fn fts5_phase_1_9_chinese_de_particle_symmetric_round_trip() {
 }
 
 #[test]
-fn fts5_phase_1_9_thai_preposition_kong_symmetric_round_trip() {
+fn fts5_thai_preposition_kong_symmetric_round_trip() {
     // Body contains the preposition `ของ` ("of"); query contains
     // the same. Both sides strip identically.
     let (_dir, mut store) = fresh_store();
@@ -1827,7 +1827,7 @@ fn fts5_phase_1_9_thai_preposition_kong_symmetric_round_trip() {
 }
 
 #[test]
-fn fts5_phase_1_9_does_not_strip_content_bearing_time_deictic_wannii() {
+fn fts5_does_not_strip_content_bearing_time_deictic_wannii() {
     // Pin the deliberate-exclusion contract: `วันนี้` ("today")
     // is **NOT** in STOPWORDS_TH because it's a content-bearing
     // temporal expression. A body containing `วันนี้` must hit a
@@ -1842,19 +1842,19 @@ fn fts5_phase_1_9_does_not_strip_content_bearing_time_deictic_wannii() {
     assert_eq!(
         hits.len(),
         1,
-        "content-bearing `วันนี้` must NOT be stripped by Phase 1.9",
+        "content-bearing `วันนี้` must NOT be stripped by the per-script stopword filter",
     );
     assert_eq!(hits[0], r.evidence_id);
 }
 
 #[test]
-fn fts5_phase_1_9_unicode61_lane_unstripped_for_latin_content() {
-    // The Phase 1.9 strip only applies to the trigram and bigram
+fn fts5_unicode61_lane_unstripped_for_latin_content() {
+    // The strip only applies to the trigram and bigram
     // lanes (`evidence_fts_cjk` and `evidence_fts_bigram`). The
     // unicode61 source-of-truth lane (`evidence_fts.content`)
     // never sees the strip, so Latin queries against Latin
-    // bodies must continue to work exactly as in Phase 1.2's
-    // baseline — no spurious "stopwords" are removed from
+    // bodies must continue to work exactly as in the
+    // pre-stopword baseline — no spurious "stopwords" are removed from
     // English-language content.
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();
@@ -1870,12 +1870,12 @@ fn fts5_phase_1_9_unicode61_lane_unstripped_for_latin_content() {
     assert_eq!(
         hits.len(),
         1,
-        "Latin (unicode61) lane must not be touched by Phase 1.9",
+        "Latin (unicode61) lane must not be touched by the per-script stopword filter",
     );
     assert_eq!(hits[0], r.evidence_id);
 }
 
-/// End-to-end integration test for the Phase 1.10 FTS-telemetry
+/// End-to-end integration test for the FTS-telemetry
 /// counters: ingest a CJK body, run a search across all three
 /// recall lanes, and confirm each counter category advances.
 ///
@@ -1886,10 +1886,10 @@ fn fts5_phase_1_9_unicode61_lane_unstripped_for_latin_content() {
 ///
 /// Counters exercised:
 ///   - `index_write_stopwords_stripped_total` (ingest path: の)
-///   - `query_time_stopwords_stripped_total`  (query path: の)
-///   - `unicode61_lane_queries_total`          (always)
-///   - `cjk_trigram_lane_queries_total`        (CJK body present)
-///   - `bigram_lane_queries_total`             (CJK body present)
+///   - `query_time_stopwords_stripped_total` (query path: の)
+///   - `unicode61_lane_queries_total` (always)
+///   - `cjk_trigram_lane_queries_total` (CJK body present)
+///   - `bigram_lane_queries_total` (CJK body present)
 ///
 /// We use lower-bound (`>`) assertions because other tests in
 /// the same binary touch the same process-singleton counters,
@@ -1908,7 +1908,7 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
     // Japanese body containing two stopwords ("の" particle ×2):
     // forces the index-time stopword strip path to bump for the
     // trigram + bigram lanes (the unicode61 lane preserves the
-    // body verbatim).  The body has enough CJK codepoints (>=3)
+    // body verbatim). The body has enough CJK codepoints (>=3)
     // to route to both trigram and bigram lanes.
     let body = "今日は会議の議事録の確認を行いました";
     let res = store
@@ -1970,7 +1970,7 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
     );
 }
 
-/// Skip-counter end-to-end test.  Sister of
+/// Skip-counter end-to-end test. Sister of
 /// `fts_telemetry_counters_advance_for_cjk_query_end_to_end`
 /// that exercises the three *skip* counters.
 ///
@@ -1982,21 +1982,21 @@ fn fts_telemetry_counters_advance_for_cjk_query_end_to_end() {
 ///   (pure-stopword Japanese input like "の の の").
 /// - `bigram_lane_skips_pure_stopword_query_total` advances on
 ///   the same pure-stopword input as the trigram skip above —
-///   Phase 1.10 sweep 2 (ANALYSIS-0004) added this variant so
+///   this variant was added so
 ///   the bigram lane can distinguish "Latin-only query, lane
 ///   correctly declined" from "CJK query annihilated by
-///   stopword stripping".  Before the sweep-2 restructure, the
-///   pure-stopword case incorrectly bumped
+///   stopword stripping". Before the earlier skip-taxonomy
+///   restructure, the pure-stopword case incorrectly bumped
 ///   `bigram_lane_skips_no_cjk_query_total`.
 ///
 /// Note: a Latin-only query does NOT structurally skip the
 /// trigram lane — the FTS5 `trigram` tokeniser windows Latin
 /// substrings embedded in CJK bodies, so Latin queries can
-/// legitimately match.  On Latin-only seed data the trigram
+/// legitimately match. On Latin-only seed data the trigram
 /// lane simply runs a MATCH that returns zero rows (bumping
 /// `cjk_trigram_lane_queries_total`, not a skip counter).
-/// Phase 1.10 sweep 3 (commit `4aaccba`) tried to skip Latin
-/// queries on the trigram lane and was reverted in sweep 4 —
+/// An earlier commit (`4aaccba`) tried to skip Latin
+/// queries on the trigram lane and was later reverted —
 /// see the doc comment on `crate::fts_telemetry` and the
 /// trigram branch in `crate::store::merged_fts_search` for the
 /// cross-script rationale.
@@ -2020,13 +2020,13 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
 
     // (1) Latin-only query → bigram lane structurally declines
     // (`compute_cjk_bigram_query` returns `None` because no
-    // adjacent CJK codepoint pair exists in the query).  The
+    // adjacent CJK codepoint pair exists in the query). The
     // trigram lane does NOT structurally decline a Latin-only
     // query — it runs a MATCH against `evidence_fts_cjk` which
     // returns zero rows on this Latin-only seed (the body
     // wasn't routed into the CJK-only table to begin with) and
-    // bumps `cjk_trigram_lane_queries_total`.  This shape was
-    // the pre-sweep-3 behaviour; sweep 4 reverted the sweep-3
+    // bumps `cjk_trigram_lane_queries_total`. This shape was
+    // the earlier behaviour; a subsequent change reverted the
     // structural skip after the trigram tokeniser's cross-
     // script behaviour was correctly identified.
     let _ = store.search_fts(scope, "Latin body", 10).unwrap();
@@ -2041,8 +2041,8 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
     // (2) Pure-stopword Japanese query → trigram lane collapses
     // to empty after the query-time strip and short-circuits,
     // AND the bigram lane records its sibling pure-stopword
-    // skip (sweep-2 ANALYSIS-0004 fix) instead of routing the
-    // pure-stopword case into the no-CJK counter.
+    // skip (per the skip-taxonomy restructure) instead of
+    // routing the pure-stopword case into the no-CJK counter.
     let _ = store.search_fts(scope, "の の の", 10).unwrap();
 
     let after_stop = fts_telemetry::snapshot();
@@ -2055,66 +2055,67 @@ fn fts_telemetry_skip_counters_advance_for_structural_skips() {
         after_stop.bigram_lane_skips_pure_stopword_query_total
             > after_latin.bigram_lane_skips_pure_stopword_query_total,
         "bigram pure-stopword-query skip counter did not advance on a stripped-to-empty CJK query \
-         — sweep-2 ANALYSIS-0004 regressed (pure-stopword case routed to BigramNoCjkQuery instead)"
+         — the skip-taxonomy restructure regressed (pure-stopword case routed to BigramNoCjkQuery instead)"
     );
-    // BUG-0001 regression note (Phase 1.10 sweep 1): with the
+    // earlier regression note: with the
     // structural `if stripped_query.trim().is_empty() { skip }
     // else { closure; if let Ok { record_lane_query } }` shape
     // in `merged_fts_search`, a pure-stopword query like the
     // one above bumps *only* the skip counter — never the
     // query counter — because the two branches are mutually
-    // exclusive by construction.  We deliberately do NOT pin
+    // exclusive by construction. We deliberately do NOT pin
     // this via a runtime assertion on the query counter:
     // sibling tests in this binary run in parallel and bump
     // the same process-singleton counter, so any
     // `assert_eq!(after_stop.query, after_latin.query)` would
-    // race.  The regression-resistance lives in the structural
+    // race. The regression-resistance lives in the structural
     // if/else, not in this test — see the doc comment on the
     // trigram branch in `crate::store::merged_fts_search` and
     // the `queries + skips + silently_swallowed_errors =
     // total_attempts` contract on `crate::fts_telemetry`.
     //
-    // ANALYSIS-0004 regression note (Phase 1.10 sweep 2): the
-    // bigram lane parallels the same structural shape — the
+    // Earlier regression note: the bigram lane parallels the same
+    // structural shape — the
     // pure-stopword check runs BEFORE
     // `compute_cjk_bigram_query` so the no-CJK and
     // pure-stopword bigram skip counters are mutually
-    // exclusive by construction.  We do not pin
+    // exclusive by construction. We do not pin
     // `bigram_lane_skips_no_cjk_query_total` not-advancing on
     // step (2) for the same parallel-tests race reason.
 }
 
 /// Architectural-reality regression test for the trigram
-/// tokeniser's cross-script behaviour.  Pins the fact that a
+/// tokeniser's cross-script behaviour. Pins the fact that a
 /// Latin-only query MUST be able to match a CJK body containing
 /// an embedded Latin substring via the `evidence_fts_cjk`
 /// (trigram) lane — because the FTS5 `trigram` tokeniser windows
 /// ALL overlapping 3-codepoint sequences in the indexed body,
 /// not just CJK ones.
 ///
-/// Background: Phase 1.10 sweep 3 (commit `4aaccba`) added a
+/// Background: an earlier commit (`4aaccba`) added a
 /// structural skip on the trigram lane for Latin-only queries
 /// under the false premise that `evidence_fts_cjk` "cannot
-/// contain a matching row" for such queries.  Sweep 4 reverted
-/// that change after Devin Review correctly identified that the
+/// contain a matching row" for such queries. A later commit
+/// reverted that change after a subsequent fix correctly
+/// identified that the
 /// trigram tokeniser DOES index Latin substrings inside CJK
 /// bodies, so the structural skip was a recall risk dressed as a
-/// perf optimisation.  This test locks the correct behaviour
+/// perf optimisation. This test locks the correct behaviour
 /// in place — a future re-optimisation attempt that re-adds the
 /// Latin-only skip will fail here loudly.
 ///
 /// Mechanism: ingest `日本のiPhone発表` (mixed Japanese + Latin)
-/// and query for `iPhone` (Latin only).  The CJK body routes
+/// and query for `iPhone` (Latin only). The CJK body routes
 /// into `evidence_fts_cjk` (because `contains_cjk_or_thai` is
 /// true on the body), and the FTS5 trigram tokeniser stores the
-/// Latin trigrams `iPh`, `Pho`, `hon`, `one`.  The Latin query
+/// Latin trigrams `iPh`, `Pho`, `hon`, `one`. The Latin query
 /// tokenises to the same trigrams and matches.
 ///
 /// Unicode61 lane note: the unicode61 lane also matches this
 /// query (Latin tokens are preserved verbatim in `evidence_fts`),
 /// so end-to-end recall is independently guaranteed via that
-/// lane.  This test asserts the trigram lane *also* matches,
-/// which is what the sweep-3 commit silently broke.
+/// lane. This test asserts the trigram lane *also* matches,
+/// which is what the reverted commit silently broke.
 #[test]
 fn fts_telemetry_trigram_lane_matches_latin_in_cjk_body() {
     use evidence_store::fts_telemetry;
@@ -2122,7 +2123,7 @@ fn fts_telemetry_trigram_lane_matches_latin_in_cjk_body() {
     let scope = ScopeId::new_v4();
 
     // Mixed-script body: Japanese particles + Latin product
-    // name.  Routes into `evidence_fts_cjk` because the body
+    // name. Routes into `evidence_fts_cjk` because the body
     // contains CJK codepoints, and the trigram tokeniser indexes
     // the embedded Latin substring `iPhone` as overlapping
     // 3-codepoint windows alongside the CJK trigrams.
@@ -2133,7 +2134,7 @@ fn fts_telemetry_trigram_lane_matches_latin_in_cjk_body() {
 
     let before = fts_telemetry::snapshot();
 
-    // Latin-only query.  Must match the body — both the
+    // Latin-only query. Must match the body — both the
     // unicode61 lane (Latin tokens preserved) and the trigram
     // lane (Latin trigrams windowed inside the CJK body) will
     // contribute.
@@ -2142,20 +2143,20 @@ fn fts_telemetry_trigram_lane_matches_latin_in_cjk_body() {
         hits.contains(&res.evidence_id),
         "Latin-only query failed to match a CJK body containing the Latin substring \
          — the trigram lane MUST window Latin trigrams inside CJK bodies \
-         (see fts_telemetry module doc and the sweep-4 revert of commit 4aaccba)"
+         (see fts_telemetry module doc and the revert of commit 4aaccba)"
     );
 
     let after = fts_telemetry::snapshot();
 
     // The trigram lane MUST be invoked (no structural skip on
-    // Latin queries) — this is the key sweep-4 regression
-    // guard.  If a future commit re-adds the Latin-only
+    // Latin queries) — this is the key regression guard
+    // from the revert. If a future commit re-adds the Latin-only
     // structural skip, the trigram query counter will not
     // advance and this assertion fails.
     assert!(
         after.cjk_trigram_lane_queries_total > before.cjk_trigram_lane_queries_total,
         "trigram lane query counter did not advance on Latin-only query against CJK body \
-         — sweep-3 FLAG-0001 must remain reverted (the trigram lane is NOT structurally \
+         — the Latin-only structural skip must remain reverted (the trigram lane is NOT structurally \
          declined for Latin queries; see fts_telemetry module doc for the cross-script \
          tokeniser rationale)"
     );
