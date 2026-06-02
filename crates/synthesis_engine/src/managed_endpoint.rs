@@ -69,6 +69,12 @@ pub const DEFAULT_MAX_TOKENS: u32 = 1024;
 /// higher throughput should set the field explicitly.
 pub const DEFAULT_MAX_RPM: u64 = 60;
 
+/// Serde default for [`EndpointConfig::max_requests_per_minute`].
+#[allow(clippy::unnecessary_wraps)] // Signature required by serde(default = "...").
+fn default_max_rpm_option() -> Option<u64> {
+    Some(DEFAULT_MAX_RPM)
+}
+
 /// Connection metadata for the remote SLM / LLM endpoint.
 ///
 /// `api_key_ref` is intentionally a *reference* (e.g. an
@@ -101,11 +107,11 @@ pub struct EndpointConfig {
     /// [`crate::rate_limiter::RateLimiter`] from
     /// [`Self::effective_max_requests_per_minute`] at construction
     /// time and rejects further requests once the per-minute cap is
-    /// hit. When `None`, a conservative default of
-    /// [`DEFAULT_MAX_RPM`] (60) is applied for cost protection.
-    /// Set explicitly to override — e.g. a higher value for
-    /// enterprise-negotiated rate limits.
-    #[serde(default)]
+    /// hit. Defaults to `Some(DEFAULT_MAX_RPM)` (60) for cost
+    /// protection. Override with a higher value for enterprise-
+    /// negotiated rate limits, or set to `None` to disable rate
+    /// limiting entirely.
+    #[serde(default = "default_max_rpm_option")]
     pub max_requests_per_minute: Option<u64>,
 }
 
@@ -123,7 +129,7 @@ impl EndpointConfig {
             max_tokens: None,
             timeout: None,
             default_grammar: None,
-            max_requests_per_minute: None,
+            max_requests_per_minute: Some(DEFAULT_MAX_RPM),
         }
     }
 
@@ -161,12 +167,13 @@ impl EndpointConfig {
         self.timeout.unwrap_or(DEFAULT_TIMEOUT)
     }
 
-    /// Effective per-minute request cap honouring [`DEFAULT_MAX_RPM`].
+    /// Effective per-minute request cap.
     ///
-    /// Returns the explicit cap if set, otherwise falls back to
-    /// [`DEFAULT_MAX_RPM`] (60) for cost protection.
-    pub fn effective_max_requests_per_minute(&self) -> u64 {
-        self.max_requests_per_minute.unwrap_or(DEFAULT_MAX_RPM)
+    /// Returns `Some(cap)` when rate limiting is active, `None`
+    /// when explicitly disabled. The default constructor sets
+    /// `Some(DEFAULT_MAX_RPM)` (60) for cost protection.
+    pub fn effective_max_requests_per_minute(&self) -> Option<u64> {
+        self.max_requests_per_minute
     }
 }
 
@@ -562,18 +569,16 @@ pub struct HttpManagedEndpointSynthesizer<C: HttpClient> {
 impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
     /// Construct a fresh synthesizer.
     ///
-    /// A rate limiter is always installed using the effective RPM
-    /// cap from [`EndpointConfig::effective_max_requests_per_minute`]
-    /// (which falls back to [`DEFAULT_MAX_RPM`] when
-    /// `max_requests_per_minute` is `None`). This provides
-    /// cost-protection by default. Callers that need to disable
-    /// rate limiting entirely should use
-    /// [`Self::with_shared_rate_limiter`] with a high-cap limiter
-    /// or override with [`Self::with_rate_limit`].
+    /// A rate limiter is installed based on
+    /// [`EndpointConfig::effective_max_requests_per_minute`].
+    /// When the field is `Some(n)`, a limiter capped at `n` RPM is
+    /// installed; when `None`, no limiter is installed (unlimited
+    /// throughput). The default `EndpointConfig` sets
+    /// `Some(DEFAULT_MAX_RPM)` (60) for cost protection.
     pub fn new(cfg: EndpointConfig, client: C) -> Self {
-        let rate_limiter = Some(std::sync::Arc::new(crate::rate_limiter::RateLimiter::new(
-            cfg.effective_max_requests_per_minute(),
-        )));
+        let rate_limiter = cfg
+            .effective_max_requests_per_minute()
+            .map(|rpm| std::sync::Arc::new(crate::rate_limiter::RateLimiter::new(rpm)));
         Self {
             cfg,
             client,
@@ -637,9 +642,9 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
     /// synth = synth.with_shared_rate_limiter(shared_limiter);
     /// ```
     pub fn set_config(&mut self, cfg: EndpointConfig) {
-        self.rate_limiter = Some(std::sync::Arc::new(crate::rate_limiter::RateLimiter::new(
-            cfg.effective_max_requests_per_minute(),
-        )));
+        self.rate_limiter = cfg
+            .effective_max_requests_per_minute()
+            .map(|rpm| std::sync::Arc::new(crate::rate_limiter::RateLimiter::new(rpm)));
         self.cfg = cfg;
     }
 

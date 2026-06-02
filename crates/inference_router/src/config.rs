@@ -76,59 +76,84 @@ impl DeviceTier {
 
 /// Attempt to read total physical RAM in bytes from the OS.
 ///
+/// Uses direct syscalls / kernel interfaces — no subprocess is
+/// spawned, making this safe for sandboxed environments and fast
+/// enough for hot-path construction.
+///
 /// Returns `None` on unsupported platforms or if the query fails.
+#[allow(unsafe_code)] // FFI calls to libc / kernel32 — trivially safe.
 fn detect_total_ram_bytes() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
-        // Parse /proc/meminfo for MemTotal.
-        let contents = std::fs::read_to_string("/proc/meminfo").ok()?;
-        for line in contents.lines() {
-            if let Some(rest) = line.strip_prefix("MemTotal:") {
-                let trimmed = rest.trim();
-                // Format: "<number> kB"
-                let kb_str = trimmed
-                    .strip_suffix("kB")
-                    .or_else(|| trimmed.strip_suffix("KB"))?
-                    .trim();
-                let kb: u64 = kb_str.parse().ok()?;
-                return Some(kb * 1024);
-            }
+        // sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGE_SIZE)
+        // avoids parsing /proc/meminfo and works in containers.
+        let pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) };
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) };
+        if pages > 0 && page_size > 0 {
+            Some(u64::try_from(pages).ok()? * u64::try_from(page_size).ok()?)
+        } else {
+            None
         }
-        None
     }
     #[cfg(target_os = "macos")]
     {
-        // Use sysctl hw.memsize.
-        use std::process::Command;
-        let output = Command::new("sysctl")
-            .args(["-n", "hw.memsize"])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
+        // sysctlbyname("hw.memsize") returns a u64 directly — no
+        // subprocess required.
+        let mut memsize: u64 = 0;
+        let mut size = std::mem::size_of::<u64>();
+        let name = b"hw.memsize\0";
+        let ret = unsafe {
+            libc::sysctlbyname(
+                name.as_ptr().cast(),
+                (&mut memsize as *mut u64).cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if ret == 0 && memsize > 0 {
+            Some(memsize)
+        } else {
+            None
         }
-        let s = String::from_utf8(output.stdout).ok()?;
-        s.trim().parse::<u64>().ok()
     }
     #[cfg(target_os = "windows")]
     {
-        // Use wmic to query total physical memory.
-        use std::process::Command;
-        let output = Command::new("wmic")
-            .args(["computersystem", "get", "TotalPhysicalMemory"])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
+        // GlobalMemoryStatusEx — available since Windows XP, no
+        // deprecated `wmic` subprocess.
+        #[repr(C)]
+        #[allow(non_snake_case)]
+        struct MEMORYSTATUSEX {
+            dwLength: u32,
+            dwMemoryLoad: u32,
+            ullTotalPhys: u64,
+            ullAvailPhys: u64,
+            ullTotalPageFile: u64,
+            ullAvailPageFile: u64,
+            ullTotalVirtual: u64,
+            ullAvailVirtual: u64,
+            ullAvailExtendedVirtual: u64,
         }
-        let s = String::from_utf8(output.stdout).ok()?;
-        for line in s.lines().skip(1) {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() {
-                return trimmed.parse::<u64>().ok();
-            }
+        extern "system" {
+            fn GlobalMemoryStatusEx(lpBuffer: *mut MEMORYSTATUSEX) -> i32;
         }
-        None
+        let mut status = MEMORYSTATUSEX {
+            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+            dwMemoryLoad: 0,
+            ullTotalPhys: 0,
+            ullAvailPhys: 0,
+            ullTotalPageFile: 0,
+            ullAvailPageFile: 0,
+            ullTotalVirtual: 0,
+            ullAvailVirtual: 0,
+            ullAvailExtendedVirtual: 0,
+        };
+        let ret = unsafe { GlobalMemoryStatusEx(&mut status) };
+        if ret != 0 && status.ullTotalPhys > 0 {
+            Some(status.ullTotalPhys)
+        } else {
+            None
+        }
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
