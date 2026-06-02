@@ -1,144 +1,223 @@
 # Compliance Mapping
 
-This document maps the Knowledge substrate's technical capabilities to
-major compliance frameworks. Each entry references the implementing code
-so auditors and reviewers can trace the control directly.
+This document maps the substrate's technical capabilities to the
+controls expected by **GDPR**, **SOC 2**, and **HIPAA**. It is a
+*substrate-side* mapping: the substrate is an embeddable Rust library,
+not a hosted service, so several controls are explicitly the
+responsibility of the **host application** that links it. Those are
+called out as **Requires host integration** rather than glossed over.
 
-> **Scope.** Only the Rust workspace in this repository is covered.
-> Host-shell applications (iOS, Android, macOS, Windows, Electron) and
-> production deployment infrastructure live in sibling repositories and
-> are out of scope.
+Every code reference below was verified against the tree at the time
+of writing; line numbers are approximate and may drift as the code
+evolves, but the cited symbol names are stable.
 
----
-
-## 1. GDPR
-
-### 1.1 Right to Erasure (Art. 17)
-
-| Requirement | Substrate implementation |
-|---|---|
-| Delete all personal data on request | **Cryptographic forgetting** via DEK destruction. `ffi::forget_scope` (`crates/ffi/src/lib.rs`) and the shared `forget_scope_state` helper destroy the per-scope Data Encryption Key, record a durable tombstone in `forgotten_scopes`, purge FTS5 indexes, body-key wraps, memory blobs, connector state, approved-document payloads, synthesis history, and scope-DEK rows. Once the DEK is destroyed, all ciphertext encrypted under it is cryptographically unrecoverable — even if the on-disk rows remain. |
-| Erasure must be verifiable | The `forgotten_scopes` tombstone table (`crates/evidence_store/src/schema.rs` v4) persists the scope UUID and `forgotten_at` timestamp. On next `open_store`, tombstones are replayed into the in-memory `DekRegistry` so the scope remains inaccessible across restarts. |
-| Erasure applies to derived data | `forget_scope_state` tears down memory objects (working memory, channel/domain/tenant synthesis windows), connector instances, connector tokens, approved-document payloads, and synthesis version history — not just raw evidence. |
-
-**Code references:**
-- `crates/ffi/src/lib.rs` — `forget_scope`, `forget_scope_state`
-- `crates/evidence_store/src/store.rs` — `record_forgotten_scope`, `purge_fts_for_scope`, `purge_body_key_wraps_for_scope`
-- `crates/crypto/src/forgetting.rs` — `destroy_scope_dek`, `DekRegistry`
-
-### 1.2 Data Portability (Art. 20)
-
-| Requirement | Substrate implementation |
-|---|---|
-| Export personal data in structured, machine-readable format | The `export_plane` crate (`crates/export_plane/`) provides portable concept profiles (`PortableConceptProfile`) with a policy engine (`PolicyEngine`) that evaluates export constraints and sensitivity ceilings before releasing data. |
-| Right to transmit to another controller | `ExportPolicy` supports configurable constraints and sensitivity classes. The `PolicySimulator` (`crates/export_plane/src/simulator.rs`) allows dry-run evaluation of export decisions. |
-
-**Code references:**
-- `crates/export_plane/src/profile.rs` — `PortableConceptProfile`, `ApprovedConcept`
-- `crates/export_plane/src/policy.rs` — `ExportPolicy`, `PolicyEngine`, `ExportDecision`
-- `crates/export_plane/src/simulator.rs` — `PolicySimulator`
-
-### 1.3 Consent / Lawful Basis (Art. 6–7)
-
-| Requirement | Substrate implementation |
-|---|---|
-| Process only with valid legal basis | The `agent_contract` crate (`crates/agent_contract/`) enforces a **proposal-only model**: agents cannot directly write to the evidence store. Every agent output (observation, concept, relation, summary) must pass through `AgentProposal` → `validate_proposal` → `ProposalStore` lifecycle before it becomes a `CanonicalArtifact`. |
-| Consent withdrawal | Proposals can be rejected (`ProposalDecision`); the lifecycle state machine (`ProposalState`) tracks pending → approved → canonical transitions. Combined with `forget_scope` for full data removal on consent withdrawal. |
-
-**Code references:**
-- `crates/agent_contract/src/lib.rs` — `AgentProposal`, `ProposalKind`
-- `crates/agent_contract/src/schema.rs` — `validate_proposal`, `ProposalValidationError`
-- `crates/agent_contract/src/lifecycle.rs` — `ProposalState`, `ProposalStore`, `AutoPromotionPolicy`
-
-### 1.4 Data Minimisation (Art. 5(1)(c))
-
-| Requirement | Substrate implementation |
-|---|---|
-| Collect only what is necessary | **Decay state machine** in `memory_manager` (`crates/memory_manager/`) implements automatic memory decay: `Candidate → Reinforced → Decaying → Archived`. Unreinforced memories decay and are eventually archived or purged. Retention scoring (`crates/memory_manager/src/retention.rs`) determines which memories survive each sweep. |
-| Time-limited retention | **Noise ring buffer** in `evidence_store` (`crates/evidence_store/src/store.rs`): low-importance evidence (noise class) is written to a size-capped ring buffer with FIFO eviction. Once the buffer exceeds `ring_buffer_max_bytes` (default 5 MiB), oldest entries are deleted. Evicted ciphertext is unrecoverable because the rows are physically deleted. |
-| Privacy by design | The `privacy_strip` module (`crates/memory_manager/src/privacy_strip.rs`) enforces a privacy-strip invariant on all memory operations. |
-
-**Code references:**
-- `crates/memory_manager/src/decay.rs` — decay state machine
-- `crates/memory_manager/src/retention.rs` — retention scoring
-- `crates/memory_manager/src/transitions.rs` — state transitions
-- `crates/evidence_store/src/store.rs` — `ring_buffer_insert`, `ring_buffer_max_bytes`
-- `crates/memory_manager/src/privacy_strip.rs` — privacy-strip invariant
+See also: [`SECURITY.md`](../SECURITY.md) (threat model, audit scope,
+disclosure) and [`docs/SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md)
+(dependency policy, SBOM, CI gates).
 
 ---
 
-## 2. SOC 2 Readiness
+## GDPR
 
-The following maps the SOC 2 Trust Services Criteria (CC1–CC9) to
-substrate capabilities. Status reflects the substrate layer only — the
-host application and deployment infrastructure contribute additional
-controls.
+The substrate is designed so that a host can satisfy the
+data-subject rights in GDPR Chapter 3 without bolting on a separate
+deletion or export pipeline.
 
-| Control | Description | Status | Substrate capability |
-|---|---|---|---|
-| **CC1** | Control Environment | Partially Implemented | `deny.toml` enforces license + advisory policy. `unsafe_code = "deny"` workspace-wide with per-crate `forbid` on `crypto`. CI gates (fmt, clippy, audit, deny, MSRV, unsafe-code allowlist scan) enforce code quality. CODEOWNERS (if configured) restricts merge authority. |
-| **CC2** | Communication & Information | Partially Implemented | `SECURITY.md` documents threat model, audit posture, RNG rationale. `docs/HOST_KEY_HANDLING.md` provides per-platform key guidance. This `COMPLIANCE.md` maps controls. |
-| **CC3** | Risk Assessment | Requires Host Integration | The substrate's threat model (`SECURITY.md`) identifies risks. Formal risk assessment processes (risk registers, periodic reviews) require host-organisation policy. |
-| **CC4** | Monitoring Activities | Partially Implemented | `audit_service` crate (`crates/audit_service/`) provides append-only audit logging with per-scope queries. `tracing` instrumentation throughout the substrate. Metrics counters on FFI operations (`crates/ffi/src/metrics.rs`). Host integration needed for alerting and SIEM forwarding. |
-| **CC5** | Control Activities | Implemented | `permission_service` crate (`crates/permission_service/`) implements Zanzibar-style access control with reachability checks, secondary indexes, and audit-log integration for every grant/revoke. Agent contract proposal-only model prevents unauthorised writes. |
-| **CC6** | Logical & Physical Access | Partially Implemented | SQLCipher encryption at rest with per-scope DEKs. Hybrid PQC key exchange (X25519 + ML-KEM-768). `KeyStorage` trait enforces hardware-backed key material on supported platforms. Physical access controls require host integration. |
-| **CC7** | System Operations | Partially Implemented | Schema migrations are versioned and forward-only (`crates/evidence_store/src/schema.rs`). CI pipeline enforces build, test, lint, security checks on every PR. Operational monitoring (uptime, incident response) requires host integration. |
-| **CC8** | Change Management | Implemented | Branch protection, CI gates (fmt, clippy, test, audit, deny, unsafe-code scan, MSRV), SBOM generation (CycloneDX). All changes go through PR review. |
-| **CC9** | Risk Mitigation | Partially Implemented | Cryptographic forgetting mitigates data-breach impact. PQC posture mitigates harvest-now-decrypt-later. Ring-buffer eviction limits noise-class data retention. Full risk mitigation program requires host-organisation policy. |
+### Right to erasure (Art. 17) — cryptographic forgetting
+
+The substrate implements erasure as **key destruction**, not row
+deletion: every evidence body is encrypted under a per-scope Data
+Encryption Key (DEK), so destroying that key renders all ciphertext
+for the scope permanently unrecoverable in the process and on disk.
+
+- **FFI entry point:** `ffi::forget_scope`
+  ([`crates/ffi/src/lib.rs:694`](../crates/ffi/src/lib.rs)) →
+  `forget_scope_state`
+  ([`crates/ffi/src/lib.rs:777`](../crates/ffi/src/lib.rs)). The
+  documented teardown is a 9-step sequence whose **load-bearing**
+  step 1 is in-memory DEK destruction plus an on-disk tombstone
+  (atomic via `FfiRuntime::forget_scope` → `TombstoneStore`); steps
+  2–9 are best-effort secondary cleanups that the tombstone already
+  makes unreachable through the public read path.
+- **Key destruction:** `crypto::forgetting::destroy_scope_dek`
+  ([`crates/crypto/src/forgetting.rs:427`](../crates/crypto/src/forgetting.rs))
+  and the per-epoch `destroy_epoch_dek`
+  ([`crates/crypto/src/forgetting.rs:508`](../crates/crypto/src/forgetting.rs)),
+  which emit `KeyDestructionEvent`s for the audit trail.
+- **Plaintext-index purge:** the FTS5 secondary index holds
+  tokenised plaintext independent of the DEK, so erasure also purges
+  it via `EvidenceStore::purge_fts_for_scope`
+  ([`crates/evidence_store/src/store.rs:3398`](../crates/evidence_store/src/store.rs)).
+- **Durability across crashes:** the erasure tombstone is persisted
+  by `EvidenceStore::record_forgotten_scope`
+  ([`crates/evidence_store/src/store.rs:1574`](../crates/evidence_store/src/store.rs))
+  and replayed on re-open via `load_forgotten_scopes`
+  ([`crates/evidence_store/src/store.rs:1608`](../crates/evidence_store/src/store.rs)),
+  so a forget interrupted mid-purge still completes after restart.
+  This is pinned by
+  `crates/evidence_store/tests/recovery_hardening.rs`
+  (`interrupted_forget_is_completed_by_tombstone_replay_on_reopen`).
+
+**Status: Implemented.** Caveat: if the host filesystem retains
+pre-image snapshots *beneath* the SQLCipher layer, that residue is a
+host-OS concern outside the substrate's control (see
+[`SECURITY.md`](../SECURITY.md) threat model).
+
+### Right to data portability (Art. 20) — export plane
+
+Structured, host-readable export of a subject's approved knowledge is
+produced by the `export_plane` crate:
+
+- `export_plane::PortableConceptProfile`
+  ([`crates/export_plane/src/profile.rs:142`](../crates/export_plane/src/profile.rs))
+  — the portable, serialisable concept profile.
+- `export_plane::EvidencePack`
+  ([`crates/export_plane/src/profile.rs:230`](../crates/export_plane/src/profile.rs))
+  and `export_plane::ExportView`
+  ([`crates/export_plane/src/profile.rs:323`](../crates/export_plane/src/profile.rs))
+  — the materialised export view and its evidence bundle.
+- Export is policy-gated by `export_plane::PolicyEngine`
+  ([`crates/export_plane/src/lib.rs:46`](../crates/export_plane/src/lib.rs))
+  so an export cannot leak data the requester is not entitled to.
+
+**Status: Implemented** (substrate produces the portable structure;
+the host serialises and transmits it).
+
+### Lawfulness / consent (Art. 6, 7) — proposal-only agent contract
+
+Agents never read-modify-write canonical state. They submit
+*proposals* that a human or policy must promote, which gives the host
+an explicit consent/authorisation checkpoint:
+
+- `agent_contract::ProposalState`
+  ([`crates/agent_contract/src/lifecycle.rs:42`](../crates/agent_contract/src/lifecycle.rs))
+  is a strict lifecycle — `Proposed → UnderReview → Promoted |
+  Rejected`, with `Promoted`/`Rejected` terminal.
+- Submissions are write-only via `ProposalStore::submit_observation`
+  / `submit_concept` / `submit_relation` / `submit_summary`
+  ([`crates/agent_contract/src/lifecycle.rs:441`](../crates/agent_contract/src/lifecycle.rs)
+  onward).
+
+**Status: Implemented** (substrate enforces the proposal-only
+contract; **the promotion authority/UX is host integration**).
+
+### Data minimisation & storage limitation (Art. 5(1)(c),(e))
+
+Two mechanisms bound how much data is retained and for how long:
+
+- **Decay state machine:** `memory_manager::MemoryState`
+  ([`crates/memory_manager/src/state.rs:26`](../crates/memory_manager/src/state.rs))
+  decays `Candidate` objects below
+  `DEFAULT_CANDIDATE_ARCHIVE_THRESHOLD = 0.15`
+  ([`crates/memory_manager/src/decay.rs:20`](../crates/memory_manager/src/decay.rs))
+  to `Archived`, and ages `Superseded` objects out after
+  `DEFAULT_SUPERSEDED_TTL_DAYS = 90`
+  ([`crates/memory_manager/src/decay.rs:25`](../crates/memory_manager/src/decay.rs)),
+  via `decay_sweep`
+  ([`crates/memory_manager/src/decay.rs:53`](../crates/memory_manager/src/decay.rs)).
+- **Noise ring buffer:** low-value (`Noise`-class) messages never
+  enter durable evidence; they land in a FIFO-evicted ring buffer
+  capped at `DEFAULT_RING_BUFFER_MAX_BYTES = 5 MiB`
+  ([`crates/evidence_store/src/store.rs:31`](../crates/evidence_store/src/store.rs))
+  via `EvidenceStore::ring_buffer_insert`
+  ([`crates/evidence_store/src/store.rs:1403`](../crates/evidence_store/src/store.rs)).
+  Eviction is pinned by
+  `crates/evidence_store/tests/recovery_hardening.rs`
+  (`ring_buffer_evicts_oldest_first_and_keeps_insertion_order`).
+
+**Status: Implemented.**
 
 ---
 
-## 3. HIPAA Considerations
+## SOC 2 — Trust Services Criteria readiness (CC1–CC9)
 
-The Knowledge substrate provides technical safeguards relevant to HIPAA
-compliance when deployed in a healthcare context. A Business Associate
-Agreement (BAA) is required before processing Protected Health
-Information (PHI).
+The Common Criteria are organisation-level controls; a library cannot
+satisfy them alone. The table records what the substrate *provides*
+toward each, and what the host/organisation must still supply.
 
-### 3.1 Encryption at Rest (§ 164.312(a)(2)(iv))
+| Criterion | Substrate capability | Status |
+| --------- | -------------------- | ------ |
+| **CC1** Control environment | Security-critical surfaces are gated by `CODEOWNERS` (crypto, ffi, napi, evidence_store, SECURITY.md → `@kennguy3n`); see [`docs/SUPPLY_CHAIN.md`](SUPPLY_CHAIN.md). | Partially — org governance is host. |
+| **CC2** Communication & information | Documented threat model and disclosure process in [`SECURITY.md`](../SECURITY.md); machine-readable SBOM published in CI. | Implemented (substrate scope). |
+| **CC3** Risk assessment | Property-based + adversarial test suites (`crates/crypto/tests/proptest_audit.rs`, `crates/permission_service/tests/adversarial_tests.rs`) and the new `security_hardening.rs` / `recovery_hardening.rs` suites. | Partially — org-level risk program is host. |
+| **CC4** Monitoring | Metrics surface (`ffi::metrics::snapshot` / `MetricsSnapshot`) and the append-only audit log (`audit_service`). | Partially — aggregation/alerting is host. |
+| **CC5** Control activities | Permission checks (`permission_service::check_permission`, [`crates/permission_service/src/check.rs:81`](../crates/permission_service/src/check.rs)) on every lookup. | Implemented (substrate scope). |
+| **CC6** Logical & physical access | Encryption at rest (SQLCipher + XChaCha20-Poly1305), hardware-backed master-key storage via `crypto::KeyStorage`, Zanzibar-style authorisation. | Partially — physical access & key custody are host. |
+| **CC7** System operations | Cryptographic forgetting, crash-recovery via tombstone replay, schema migrations with integrity tests (`recovery_hardening.rs`). | Implemented (substrate scope). |
+| **CC8** Change management | `cargo-audit` + `cargo-deny` + SBOM CI gates (`.github/workflows/ci.yml`); CODEOWNERS review. | Implemented (substrate scope). |
+| **CC9** Risk mitigation | Supply-chain policy (`deny.toml`), harvest-now-decrypt-later PQ posture (hybrid X25519 + ML-KEM-768). | Requires host integration for vendor/BCP. |
 
-| Requirement | Substrate implementation |
-|---|---|
-| Encrypt ePHI at rest | **SQLCipher** page-level AES-256 encryption on the evidence store database. Per-scope evidence bodies are additionally encrypted with **XChaCha20-Poly1305 AEAD** under per-scope, per-epoch keys derived via HKDF-SHA256 from the user master key. |
-| Key management | Master key stored via platform hardware-backed `KeyStorage` (iOS Keychain, Android Keystore, Windows DPAPI/TPM, macOS Secure Enclave). Per-scope DEKs randomly generated from OS RNG and AEAD-wrapped under a master-derived wrapping key (`scope_deks` table, schema v6). |
+---
 
-**Code references:**
-- `crates/evidence_store/src/store.rs` — SQLCipher `PRAGMA key`, `encrypt_aead` on ingest
-- `crates/crypto/src/aead.rs` — XChaCha20-Poly1305 AEAD
-- `crates/crypto/src/kdf.rs` — HKDF-SHA256 key derivation
-- `crates/crypto/src/key_storage.rs` — `KeyStorage` trait
+## HIPAA — Security Rule (45 CFR §164.312) technical safeguards
 
-### 3.2 Audit Trail (§ 164.312(b))
+The substrate provides building blocks for a Covered Entity or
+Business Associate; it does not itself constitute a compliant system.
 
-| Requirement | Substrate implementation |
-|---|---|
-| Record access to ePHI | `audit_service` crate (`crates/audit_service/`) provides an append-only, encrypted audit log. Every permission grant/revoke is logged. Entries are queryable by scope, action type, actor, and time range. |
-| Tamper-evident logging | Audit entries are assigned monotonically increasing sequence numbers. The `PersistentAuditLog` (`crates/audit_service/src/persist.rs`) stores entries in an encrypted SQLCipher database. |
+### Encryption at rest — §164.312(a)(2)(iv), (e)(2)(ii)
 
-**Code references:**
-- `crates/audit_service/src/log.rs` — `AuditLog`, `AuditEntry`, `AuditQuery`
-- `crates/audit_service/src/persist.rs` — `PersistentAuditLog`
-- `crates/audit_service/src/entry.rs` — `AuditEntry`, `AuditActionType`
+- The SQLCipher database is keyed by an HKDF-derived page key
+  (`EvidenceStore::open`,
+  [`crates/evidence_store/src/store.rs:222`](../crates/evidence_store/src/store.rs);
+  `cipher_page_size`/`kdf_iter` pragmas at
+  [`crates/evidence_store/src/store.rs:235`](../crates/evidence_store/src/store.rs)).
+- Evidence bodies, ring-buffer entries, and wrapped DEKs are sealed
+  with XChaCha20-Poly1305 (`crypto::encrypt_aead`,
+  [`crates/crypto/src/aead.rs:39`](../crates/crypto/src/aead.rs)).
+- Secret key material is wiped on drop — `HybridSecretKey` derives
+  `Zeroize` with `#[zeroize(drop)]`
+  ([`crates/crypto/src/hybrid_kem.rs:67`](../crates/crypto/src/hybrid_kem.rs)),
+  pinned by `crates/crypto/tests/security_hardening.rs`
+  (`hybrid_secret_key_zeroize_wipes_every_secret_byte`).
 
-### 3.3 Access Controls (§ 164.312(a)(1))
+**Status: Implemented** (substrate scope).
 
-| Requirement | Substrate implementation |
-|---|---|
-| Unique user identification | `ScopeId` (UUID v4) uniquely identifies each data scope. `permission_service` uses typed tuples (`crates/permission_service/src/tuple.rs`) with subject/relation/object triples. |
-| Role-based access | Zanzibar-style reachability checks in `permission_service` (`crates/permission_service/src/check.rs`). Relations include `Owner`, `Viewer`, `Synthesizer`, `Proposer` with defined inheritance chains. |
-| Emergency access | Not implemented at the substrate level — requires host integration. |
+### Audit controls — §164.312(b)
 
-**Code references:**
-- `crates/permission_service/src/check.rs` — reachability check
-- `crates/permission_service/src/store.rs` — tuple store
-- `crates/permission_service/src/namespace.rs` — namespace definitions
+- `audit_service::AuditActionType`
+  ([`crates/audit_service/src/entry.rs:28`](../crates/audit_service/src/entry.rs))
+  includes a `KeyDestruction` action
+  ([`crates/audit_service/src/entry.rs:50`](../crates/audit_service/src/entry.rs)),
+  so cryptographic-forgetting events are first-class audit records.
+- Entries are appended via the in-memory log
+  ([`crates/audit_service/src/log.rs:156`](../crates/audit_service/src/log.rs))
+  and the durable persistence layer
+  ([`crates/audit_service/src/persist.rs:201`](../crates/audit_service/src/persist.rs)).
 
-### 3.4 BAA Requirement
+**Status: Implemented** (substrate records events; **log shipping /
+retention / tamper-evidence at rest are host integration**).
 
-> **Note:** Deploying the Knowledge substrate in a HIPAA-covered context
-> requires a Business Associate Agreement (BAA) between the data
-> controller (covered entity) and the entity operating the substrate.
-> The substrate provides the technical safeguards documented above, but
-> administrative and physical safeguards (workforce training, facility
-> access controls, disaster recovery) are the responsibility of the
-> operating organisation and must be addressed in the BAA.
+### Access controls — §164.312(a)(1), (d)
+
+- Every authorisation decision is a Zanzibar-style reachability query
+  via `permission_service::check_permission`
+  ([`crates/permission_service/src/check.rs:81`](../crates/permission_service/src/check.rs)).
+- Person/entity authentication and session management are
+  **host-owned** — the substrate consumes an already-authenticated
+  identity.
+
+**Status: Partially — authorisation Implemented; authentication
+Requires host integration.**
+
+### Business Associate Agreement (BAA) note
+
+The substrate ships as source/library and stores no PHI off-device on
+its own. A Covered Entity embedding it remains responsible for
+executing BAAs with any downstream processor (e.g. cloud sync targets
+the *host* wires up) and for the administrative/physical safeguards
+(§164.308, §164.310) that fall outside the substrate's technical
+boundary.
+
+---
+
+## Summary of host responsibilities
+
+The following controls are **not** satisfiable by the substrate alone
+and must be implemented by the embedding host application:
+
+- User authentication, session lifecycle, and consent UX.
+- Master-key custody in a hardware-backed store (see
+  [`SECURITY.md`](../SECURITY.md) "Key storage").
+- Audit-log shipping, retention, and tamper-evident archival.
+- Organisation-level governance, vendor management, and BCP/DR.
+- Transmission security for any off-device sync the host enables.

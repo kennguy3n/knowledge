@@ -607,6 +607,50 @@ jobs:
       - run: cargo install cargo-deny --locked
       - run: cargo deny check
 
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    # Generate a CycloneDX Software Bill of Materials for the whole
+    # workspace and publish it as a build artifact, so every commit
+    # has an auditable, machine-readable dependency manifest. See
+    # docs/SUPPLY_CHAIN.md for how the SBOM fits the supply-chain
+    # policy alongside the `audit` and `deny` gates above.
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+          key: ${{ runner.os }}-sbom-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-sbom-
+      # Skip the install when a cache hit already restored the binary
+      # into ~/.cargo/bin (cargo install errors rather than overwrite).
+      - name: Install cargo-cyclonedx (skip when cache provided it)
+        run: |
+          if command -v cargo-cyclonedx >/dev/null 2>&1; then
+            echo "cargo-cyclonedx already on PATH at $(command -v cargo-cyclonedx); skipping install."
+          else
+            cargo install cargo-cyclonedx --locked
+          fi
+      # Emit one <crate>.cdx.json per workspace member alongside each
+      # crate's Cargo.toml, then collect them into a single directory
+      # for upload.
+      - name: Generate CycloneDX SBOM
+        run: |
+          cargo cyclonedx --all --format json
+          mkdir -p sbom
+          find crates -name '*.cdx.json' -exec cp --parents {} sbom/ \;
+          ls -R sbom
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: knowledge-sbom-cyclonedx
+          path: sbom/**/*.cdx.json
+          if-no-files-found: error
+
   fuzz:
     name: cargo-fuzz (crypto, short)
     runs-on: ubuntu-latest

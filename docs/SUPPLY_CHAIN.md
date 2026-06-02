@@ -1,167 +1,204 @@
-# Supply Chain Security
+# Supply-Chain Security
 
-This document describes the Knowledge substrate's dependency management
-policy, audit gates, and SBOM generation pipeline.
+This document describes how the workspace controls its dependency
+supply chain: the `cargo-deny` policy, the direct dependencies and why
+each is present, the CI gates that enforce the policy on every commit,
+and the `CODEOWNERS` review requirement for security-critical crates.
 
----
-
-## 1. `deny.toml` Policy
-
-The workspace uses [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny)
-with the configuration in [`deny.toml`](/deny.toml) (schema v2):
-
-### Advisories (`[advisories]`)
-
-- **`version = 2`** — modern strict handling.
-- **`yanked = "deny"`** — any yanked crate in the lockfile fails CI.
-- **`ignore = []`** — no advisory exceptions. CI fails the moment a
-  new advisory matches a transitive dependency.
-
-### Licenses (`[licenses]`)
-
-Accepted SPDX identifiers:
-
-| License | Notes |
-|---|---|
-| `MIT` | Permissive |
-| `Apache-2.0` | Permissive |
-| `BSD-2-Clause` | Permissive |
-| `BSD-3-Clause` | Permissive |
-| `ISC` | Permissive |
-| `MPL-2.0` | File-level copyleft; used by UniFFI. Linking does not taint the workspace. |
-| `Unicode-3.0` | Unicode data files |
-| `Unicode-DFS-2016` | Unicode data files |
-| `Zlib` | Permissive |
-| `CDLA-Permissive-2.0` | Used by `webpki-roots` for the Mozilla CA bundle. No copyleft. |
-
-Any license outside this allow-list fails the build.
-
-### Bans (`[bans]`)
-
-- **`multiple-versions = "warn"`** — warns on duplicate crate versions
-  in the dependency graph but does not fail CI. This is intentional
-  because `rand_core 0.6` / `rand 0.10` and `digest 0.10` / `digest 0.11`
-  coexist by design (see workspace `Cargo.toml` comments).
-
-### Sources (`[sources]`)
-
-- **`unknown-registry = "deny"`** — only crates.io is accepted.
-- **`unknown-git = "deny"`** — no git dependencies from unknown sources.
+See also: [`SECURITY.md`](../SECURITY.md) and
+[`docs/COMPLIANCE.md`](COMPLIANCE.md) (SOC 2 CC8/CC9, change
+management).
 
 ---
 
-## 2. Direct Dependencies
+## `deny.toml` policy
 
-Extracted from the workspace `Cargo.toml` `[workspace.dependencies]`:
+The policy lives in [`deny.toml`](../deny.toml) at the workspace root
+and is enforced by `cargo deny check` (see CI gates below). It uses
+cargo-deny's modern `version = 2` schema.
 
-| Crate | Version | License | Purpose |
-|---|---|---|---|
-| `thiserror` | 2 | MIT / Apache-2.0 | Derive macro for `std::error::Error` |
-| `uuid` | 1 | MIT / Apache-2.0 | UUID v4/v5 generation and serde |
-| `blake3` | 1 | MIT / Apache-2.0 | BLAKE3 content hashing |
-| `chacha20poly1305` | 0.10 | MIT / Apache-2.0 | XChaCha20-Poly1305 AEAD |
-| `hkdf` | 0.13 | MIT / Apache-2.0 | HKDF-SHA256 key derivation |
-| `hmac` | 0.13 | MIT / Apache-2.0 | HMAC-SHA256 (provenance signing) |
-| `sha2` | 0.11 | MIT / Apache-2.0 | SHA-256 (HKDF, HMAC) |
-| `zeroize` | 1 | MIT / Apache-2.0 | Secure memory zeroing with derive |
-| `rand_core` | 0.6 | MIT / Apache-2.0 | OS RNG trait for PQ-crypto crates |
-| `rand` | 0.10 | MIT / Apache-2.0 | Random number generation |
-| `x25519-dalek` | 2 | BSD-3-Clause | X25519 Diffie-Hellman |
-| `ml-kem` | 0.2 | MIT / Apache-2.0 | ML-KEM-768 post-quantum KEM |
-| `ml-dsa` | 0.1.0 | MIT / Apache-2.0 | ML-DSA-65 post-quantum signatures |
-| `pqcrypto-sphincsplus` | 0.7 | MIT / Apache-2.0 | SPHINCS+-SHAKE-128f-simple signatures |
-| `pqcrypto-traits` | 0.3 | MIT / Apache-2.0 | Shared PQ signature trait surface |
-| `rusqlite` | 0.36 | MIT | SQLCipher-backed storage |
-| `chrono` | 0.4 | MIT / Apache-2.0 | Date/time handling |
-| `libc` | 0.2 | MIT / Apache-2.0 | System FFI types |
-| `serde` | 1 | MIT / Apache-2.0 | Serialization framework |
-| `serde_json` | 1 | MIT / Apache-2.0 | JSON serialization |
-| `whatlang` | 0.18 | MIT | Language detection |
-| `unicode-normalization` | 0.1 | MIT / Apache-2.0 | Unicode NFC normalization |
-| `reqwest` | 0.12 | MIT / Apache-2.0 | HTTP client (gated behind features) |
-| `tokio` | 1 | MIT | Async runtime (gated behind features) |
-| `async-trait` | 0.1 | MIT / Apache-2.0 | Async fn in traits |
-| `axum` | 0.8 | MIT | HTTP framework for webhook receiver |
-| `tower` | 0.5 | MIT | Middleware ecosystem |
-| `hyper` | 1 | MIT | HTTP/1 implementation |
-| `hyper-util` | 0.1 | MIT | Hyper utilities |
-| `tracing` | 0.1 | MIT | Structured logging facade |
-| `tracing-subscriber` | 0.3 | MIT | Tracing subscriber (optional) |
-| `uniffi` | 0.31 | MPL-2.0 | UniFFI bindings for iOS/Android |
+### Advisories — no known vulnerabilities, no yanked crates
 
-**Dev-only dependencies** (not shipped in production):
+```toml
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+```
 
-| Crate | Version | Purpose |
-|---|---|---|
-| `tempfile` | 3 | Temporary directories for tests |
-| `proptest` | 1 | Property-based testing |
-| `criterion` | 0.7 | Benchmarking harness |
+- Any crate in `Cargo.lock` with a matching RustSec advisory fails the
+  build (the `version = 2` default).
+- **Yanked** releases are treated as a hard failure, not a warning —
+  a yank almost always signals a known-bad release.
+- `ignore = []` is intentionally empty: the moment a new advisory
+  matches a shipped crate, CI fails. Exceptions must be added as
+  explicit, version-pinned entries and reviewed.
+
+### Licenses — permissive allow-list, no copyleft surprises
+
+```toml
+[licenses]
+version = 2
+allow = [
+    "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC",
+    "MPL-2.0", "Unicode-3.0", "Unicode-DFS-2016", "Zlib",
+    "CDLA-Permissive-2.0",
+]
+```
+
+Any license **outside** this allow-list fails the build (the
+`version = 2` default), so a transitive dependency under **GPL/AGPL or
+any other strong-copyleft license cannot enter the tree** without an
+explicit, reviewed policy change.
+
+Two entries carry deliberate rationale (documented inline in
+`deny.toml`):
+
+- **`MPL-2.0`** — file-level copyleft only. The UniFFI crate family
+  (`uniffi`, `uniffi_bindgen`, `uniffi_core`, …) is MPL-2.0 and is a
+  core dependency of the FFI substrate (Swift/Kotlin bindings).
+  Linking does not taint the workspace.
+- **`CDLA-Permissive-2.0`** — the Community Data License Agreement
+  used by Mozilla's trusted-CA bundle in `webpki-roots`, pulled in
+  transitively via `hyper-rustls → reqwest` when the `http-client`
+  feature is active. No copyleft/share-alike clause.
+
+### Bans & sources
+
+```toml
+[bans]
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+```
+
+- **`multiple-versions = "warn"`** surfaces duplicate-version drift
+  (e.g. two majors of the same crate) without failing the build. For
+  the security-critical crates the duplicate-free expectation is
+  enforced by review (see CODEOWNERS) rather than a hard ban, so a
+  benign transitive duplicate elsewhere does not block unrelated work.
+- **`unknown-registry`/`unknown-git = "deny"`** — every dependency
+  must come from crates.io (or an explicitly allow-listed source). A
+  crate pulled from an arbitrary git URL or private registry fails the
+  build.
 
 ---
 
-## 3. CI Security Gates
+## Direct dependencies
 
-The following CI jobs enforce supply-chain security on every PR and push:
+Direct (first-party-declared) dependencies are centralised in the
+root `Cargo.toml` under `[workspace.dependencies]` so every crate
+shares one version and feature set. Licenses below are the SPDX
+expressions resolved by `cargo deny`; every one resolves into the
+allow-list above. The machine-readable source of truth is the
+CycloneDX SBOM (see below).
 
-### `cargo audit` (job: `audit`)
+### Cryptography
+
+| Crate | License | Purpose |
+| ----- | ------- | ------- |
+| `blake3` | CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception | Content hashing (resolves under Apache-2.0). |
+| `chacha20poly1305` | Apache-2.0 OR MIT | XChaCha20-Poly1305 AEAD for evidence/ring-buffer/DEK sealing. |
+| `hkdf`, `hmac`, `sha2` | MIT OR Apache-2.0 | HKDF-SHA256 key derivation and the hybrid-KEM combiner. |
+| `x25519-dalek` | BSD-3-Clause | Classical half of the hybrid KEM. |
+| `ml-kem` | Apache-2.0 OR MIT | ML-KEM-768 (post-quantum) half of the hybrid KEM. |
+| `ml-dsa` | Apache-2.0 OR MIT | ML-DSA-65 provenance signatures. |
+| `pqcrypto-sphincsplus`, `pqcrypto-traits` | MIT OR Apache-2.0 | SPHINCS+ archival co-signing. |
+| `zeroize` | Apache-2.0 OR MIT | Wipe-on-drop for secret key material. |
+| `rand`, `rand_core` | MIT OR Apache-2.0 | OS-RNG access (`SysRng` / `rand_core::OsRng`). |
+
+### Storage & data
+
+| Crate | License | Purpose |
+| ----- | ------- | ------- |
+| `rusqlite` | MIT | SQLCipher-backed encrypted store (bundled SQLCipher + vendored OpenSSL), FTS5, blobs. |
+| `chrono` | MIT OR Apache-2.0 | Timestamps for decay TTLs, tombstones, audit entries. |
+| `uuid` | Apache-2.0 OR MIT | Scope/evidence identifiers (v4/v5). |
+| `serde`, `serde_json` | MIT OR Apache-2.0 | Serialisation for export plane, proposals, config. |
+| `whatlang`, `unicode-normalization` | MIT / MIT OR Apache-2.0 | Language detection + normalisation for the multilingual lexicon. |
+
+### Runtime, FFI & networking
+
+| Crate | License | Purpose |
+| ----- | ------- | ------- |
+| `uniffi` | MPL-2.0 | Swift/Kotlin binding generation for the FFI surface. |
+| `tokio`, `async-trait` | MIT / MIT OR Apache-2.0 | Async runtime for the service crates. |
+| `reqwest` | MIT OR Apache-2.0 | HTTP client (rustls-TLS) behind the optional `http-client` feature. |
+| `axum`, `tower`, `hyper`, `hyper-util` | MIT | HTTP server scaffolding for the service crates. |
+| `tracing`, `tracing-subscriber` | MIT | Structured diagnostics. |
+| `thiserror` | MIT OR Apache-2.0 | Error enums across crates. |
+| `libc` | MIT OR Apache-2.0 | Low-level platform glue. |
+
+### Dev / test only
+
+| Crate | License | Purpose |
+| ----- | ------- | ------- |
+| `tempfile` | MIT OR Apache-2.0 | Throwaway databases in integration tests. |
+| `proptest` | MIT OR Apache-2.0 | Property-based crypto/permission tests. |
+| `criterion` | Apache-2.0 OR MIT | Benchmark harness (`benches/`). |
+
+---
+
+## CI gates
+
+All gates run on every push / pull request via
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+
+### `cargo-audit` (job `audit`)
 
 ```yaml
 - run: cargo install cargo-audit --locked
 - run: cargo audit
 ```
 
-Checks all transitive dependencies against the
-[RustSec Advisory Database](https://rustsec.org/). Fails on any known
-vulnerability.
+Scans `Cargo.lock` against the RustSec Advisory Database and fails on
+any known vulnerability.
 
-### `cargo deny` (job: `deny`)
+### `cargo-deny` (job `deny`)
 
 ```yaml
 - run: cargo install cargo-deny --locked
 - run: cargo deny check
 ```
 
-Enforces the `deny.toml` policy: license allow-list, advisory checks,
-yanked-crate rejection, source restrictions.
+Enforces the full `deny.toml` policy above: advisories, license
+allow-list, bans, and source allow-list.
 
-### SBOM generation (job: `sbom`)
+### SBOM (job `sbom`)
 
 ```yaml
-- run: cargo install cargo-cyclonedx --locked
-- run: cargo cyclonedx --all
+- run: cargo install cargo-cyclonedx --locked   # skipped on cache hit
+- run: cargo cyclonedx --all --format json
+# collects crates/**/*.cdx.json into sbom/ and uploads them
 ```
 
-Produces CycloneDX JSON SBOMs for every workspace crate. Uploaded as
-a CI artefact (`sbom/*.cdx.json`).
-
-### `unsafe_code` enforcement (job: `unsafe-code-guard`)
-
-Two-pronged guard:
-
-1. **Source scan:** `rg` scans every tracked `*.rs` file outside the
-   napi allowlist for `#[allow(unsafe_code)]` attributes (including
-   `cfg_attr`-gated forms). New relaxations fail CI.
-2. **Cargo.toml pin:** Asserts that the workspace root declares
-   `unsafe_code = "deny"` and `crates/crypto/Cargo.toml` declares
-   `unsafe_code = "forbid"`. Downgrades fail CI.
+Generates a **CycloneDX** Software Bill of Materials — one
+`<crate>.cdx.json` per workspace member — and uploads them as the
+`knowledge-sbom-cyclonedx` build artifact. Every commit therefore has
+an auditable, machine-readable dependency manifest attached to its CI
+run, which is the source of truth for the license/version data
+summarised in this document.
 
 ---
 
-## 4. CODEOWNERS Enforcement
+## CODEOWNERS enforcement
 
-The `.github/CODEOWNERS` file requires explicit review for changes to
-security-sensitive crates:
+[`CODEOWNERS`](../CODEOWNERS) requires explicit review from
+`@kennguy3n` on every change to the security-critical surfaces. The
+file deliberately has **no catch-all** entry, so the codeowner
+contract never silently expands to crates the maintainers have not
+opted into:
 
-| Path | Owner |
-|---|---|
-| `/crates/crypto/` | `@kennguy3n` |
-| `/crates/ffi/` | `@kennguy3n` |
-| `/crates/napi/` | `@kennguy3n` |
-| `/crates/evidence_store/` | `@kennguy3n` |
-| `/SECURITY.md` | `@kennguy3n` |
+| Path | Why it is gated |
+| ---- | --------------- |
+| `/crates/crypto/` | Hybrid KEM, HKDF, AEAD, zeroize discipline, signatures. |
+| `/crates/ffi/`, `/crates/napi/` | The public contract against host platforms (Swift/Kotlin/Node). |
+| `/crates/evidence_store/` | Encrypted storage, FTS5, cryptographic forgetting, migrations. |
+| `/SECURITY.md` | Threat model, audit scope, disclosure process. |
 
-Combined with branch protection rules requiring at least one approving
-review from a CODEOWNER, this ensures that changes to the cryptography
-stack, the FFI surface, the durable storage layer, and the security
-policy document cannot land without explicit review from the designated
-maintainer.
+Combined with the advisory/license/SBOM gates, this means a change
+that touches cryptography, the FFI boundary, or data-at-rest cannot
+merge without (a) a green supply-chain gate and (b) review by the
+security codeowner.
