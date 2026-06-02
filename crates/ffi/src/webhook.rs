@@ -424,7 +424,7 @@ fn dispatch_blocking(
             // `ConnectorError` discriminant; we use `Transport`
             // because the "substrate-side fault" semantics match.
             return Err(ConnectorError::Transport(format!(
-                "webhook dispatch phase-1 snapshot failed: {other}"
+                "webhook dispatch Step 1 snapshot failed: {other}"
             )));
         }
     };

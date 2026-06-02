@@ -1288,7 +1288,7 @@ fn fts5_unicode61_query_succeeds_even_when_trigram_branch_rejects_shape() {
     //
     // The fanned-out search (`evidence_fts` merged with
     // `evidence_fts_cjk`) splits the query across both branches.
-    // The architectural invariant the post-bug-0001 fix pins is:
+    // The architectural invariant pinned by `search_fts` is:
     // **a syntactically valid `unicode61` query never breaks
     // `search_fts` just because the same query happens to be a
     // shape that `trigram` rejects per the docs.** The trigram
