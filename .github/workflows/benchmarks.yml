@@ -53,6 +53,9 @@ jobs:
         run: cargo bench -p benchmarks
 
       - name: Run legacy micro-benchmark suites
+        # Independent of the production suite — run even if it failed so
+        # both sets of results are produced and archived in one run.
+        if: always()
         run: cargo bench -p integration_tests
 
       - name: Collect Criterion JSON estimates
