@@ -125,6 +125,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 
 # Tests
 tempfile = "3"
+proptest = "1"
 
 # Benchmarks. Pinned to `0.7` because criterion `0.8.0` raised its MSRV
 # to `1.86` (`criterion@0.8.2 requires rustc 1.86`), which would break

@@ -41,6 +41,7 @@ rand = { workspace = true }
 blake3 = { workspace = true }
 serde_json = { workspace = true }
 criterion = { workspace = true }
+proptest = { workspace = true }
 # Self-referential dev-dep: enables the `test-support` feature when
 # compiling integration tests under `tests/`. Cargo's `cfg(test)` flag
 # is only set on the test binary, NOT on the library it links against,

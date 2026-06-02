@@ -59,7 +59,10 @@ are tracked openly:
    and incremental delta sync are contract-only at this stage.
 2. **Host shells are out of scope.** Mobile and desktop UI
    shells live in sibling repositories and are not audited by
-   this policy.
+   this policy. However, explicit host-shell key handling
+   guidance — including per-platform code examples (iOS, Android,
+   macOS, Windows) and a threat model for master-key leakage — is
+   now provided in [`docs/HOST_KEY_HANDLING.md`](docs/HOST_KEY_HANDLING.md).
 
 ## Third-party audit
 
@@ -85,6 +88,56 @@ Candidate audit firms: NCC Group, Trail of Bits, Cure53. Audit
 artefacts (engagement letter, scoping memo, reports, remediation
 log) will be published alongside the corresponding release in
 this repository once an engagement begins.
+
+### Audit preparation — property-based and adversarial tests
+
+To reduce the surface area an auditor must verify manually, the
+following test suites have been added:
+
+**`crates/crypto/tests/proptest_audit.rs`** — property-based tests
+(via `proptest`) exercising:
+
+- Hybrid KEM round-trip: `hybrid_keypair` → `hybrid_kem_encap` →
+  `hybrid_kem_decap` yields matching shared secrets for every
+  generated keypair.
+- Distinct-recipient isolation: encapsulating to two different
+  public keys produces different shared secrets.
+- ML-DSA-65 signature round-trip: `sign` → `verify` succeeds
+  for arbitrary `ProvenanceBundle` inputs; tampered bundles fail.
+- SPHINCS+-SHAKE-128f-simple signature round-trip: same
+  sign/verify/tamper discipline as ML-DSA-65.
+- AEAD boundary inputs: empty plaintext, large plaintext (up to
+  64 KiB), wrong-key rejection, tampered-ciphertext rejection,
+  and full round-trip with arbitrary key/nonce/plaintext/AAD.
+- `ZeroizeOnDrop` structural verification: `HybridSecretKey`
+  derives `Zeroize` with `#[zeroize(drop)]`.
+
+**`crates/permission_service/tests/adversarial_tests.rs`** —
+adversarial tests exercising:
+
+- Privilege escalation: indirect userset-rewrite paths cannot
+  grant relations above what is explicitly assigned; orthogonal
+  relations (`Synthesizer`, `Proposer`) do not cross-contaminate
+  with the inheritance chain.
+- Cycle detection: self-loops, 2-node cycles, and 3-node cycles
+  terminate without hanging; cycles that *do* contain a valid
+  grant still return `true`.
+- Performance: deep chains (500 hops), wide fan-outs (1 000
+  tuples), and combined deep+wide graphs (50 × 10) complete
+  within bounded time without stack overflow.
+
+These test suites run in CI (`cargo test --all --all-features`)
+and are designed to be re-run by an auditor with `proptest`'s
+seed-replay capability for full reproducibility.
+
+### Host key handling
+
+Per-platform guidance for securely storing and passing the master
+key across the FFI boundary is documented in
+[`docs/HOST_KEY_HANDLING.md`](docs/HOST_KEY_HANDLING.md). It
+covers iOS Keychain, Android Keystore, macOS Secure Enclave,
+Windows DPAPI + TPM 2.0, anti-patterns, and the first-run
+provisioning flow.
 
 ### Random number generation
 
