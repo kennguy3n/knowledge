@@ -727,10 +727,7 @@ mod tests {
         let transport = MockHttpTransport::new();
         let base = "https://api.test/github";
         let repo = "owner/test-repo";
-        let url = format!(
-            "{base}/repos/{}/hooks",
-            percent_encode_path_component(repo)
-        );
+        let url = format!("{base}/repos/{}/hooks", percent_encode_path_component(repo));
 
         transport.expect(
             HttpMethod::Post,

@@ -293,51 +293,61 @@ fn all_connectors_authenticate_via_mock_oauth() {
         "provider": "gmail",
     });
 
-    let connectors: Vec<(Box<dyn Connector>, serde_json::Value)> = vec![
+    let connectors: Vec<(Box<dyn Connector>, serde_json::Value, ConnectorKind)> = vec![
         (
             Box::new(GitHubConnector::new(inst, make_transport(), oauth())),
             auth_json.clone(),
+            ConnectorKind::GitHub,
         ),
         (
             Box::new(JiraConnector::new(inst, make_transport(), oauth())),
             auth_json.clone(),
+            ConnectorKind::Jira,
         ),
         (
             Box::new(NotionConnector::new(inst, make_transport(), oauth())),
             auth_json.clone(),
+            ConnectorKind::Notion,
         ),
         (
             Box::new(GoogleDriveConnector::new(inst, make_transport(), oauth())),
             auth_json.clone(),
+            ConnectorKind::GoogleDrive,
         ),
         (
             Box::new(OneDriveConnector::new(inst, make_transport(), oauth())),
             auth_json.clone(),
+            ConnectorKind::OneDrive,
         ),
         (
             Box::new(ConfluenceConnector::new(inst, make_transport(), oauth())),
             auth_json.clone(),
+            ConnectorKind::Confluence,
         ),
         (
             Box::new(FigmaConnector::new(inst, make_transport(), oauth())),
             auth_json.clone(),
+            ConnectorKind::Figma,
         ),
         (
             Box::new(HubSpotConnector::new(inst, make_transport(), oauth())),
             auth_json.clone(),
+            ConnectorKind::HubSpot,
         ),
         (
             Box::new(SlackConnector::new(inst, make_transport(), oauth())),
             auth_json.clone(),
+            ConnectorKind::Slack,
         ),
         (
             Box::new(EmailConnector::new(inst, make_transport(), oauth())),
             email_auth_json,
+            ConnectorKind::Email,
         ),
     ];
 
-    for (connector, config_json) in &connectors {
-        let cfg = ConnectorConfig::new(ConnectorKind::GitHub, AuthKind::OAuth2, scope)
+    for (connector, config_json, kind) in &connectors {
+        let cfg = ConnectorConfig::new(*kind, AuthKind::OAuth2, scope)
             .with_auth_config(config_json.clone());
         let tok = connector.authenticate(&cfg).unwrap();
         assert_eq!(tok.access_token.expose(), "test-access");
