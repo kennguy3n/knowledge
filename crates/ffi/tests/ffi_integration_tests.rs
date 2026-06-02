@@ -1165,7 +1165,7 @@ fn synthesis_trigger_variants_all_round_trip() {
 
 #[cfg(feature = "http-client")]
 const PERSISTENCE_CONNECTOR_CFG: &str = r#"{
-    "client_id": "phase3-persist-client",
+    "client_id": "persist-tests-client",
     "redirect_uri": "https://example.invalid/oauth/callback",
     "token_url": "https://example.invalid/oauth/token"
 }"#;
@@ -2438,7 +2438,7 @@ fn refresh_connector_token_round_trips_and_persists_across_close_store_reopen() 
         scope,
     )
     .with_auth_config(serde_json::json!({
-        "client_id": "phase4-client",
+        "client_id": "oauth-tests-client",
         "client_secret": "s3cret",
         "redirect_uri": "https://example.invalid/oauth/callback",
         "token_url": token_url,
@@ -2593,7 +2593,7 @@ fn refresh_connector_token_short_circuits_when_no_refresh_token_stored() {
         scope,
     )
     .with_auth_config(serde_json::json!({
-        "client_id": "phase4-slack-legacy",
+        "client_id": "slack-legacy-client",
         "redirect_uri": "https://example.invalid/oauth/callback",
         "token_url": token_url,
     }));
@@ -2789,7 +2789,7 @@ fn client_secret_resolver_layer_1_wins_over_auth_config_json() {
     let token_url = format!("{}/oauth/token", server.base_url());
     let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
         serde_json::json!({
-            "client_id": "phase4_1-client",
+            "client_id": "oauth-refresh-client",
             "client_secret": "FALLBACK-SECRET-NOT-SENT",
             "redirect_uri": "https://example.invalid/oauth/callback",
             "token_url": token_url,
@@ -2850,7 +2850,7 @@ fn client_secret_resolver_layer_2_auth_config_json_when_no_resolver() {
     let token_url = format!("{}/oauth/token", server.base_url());
     let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
         serde_json::json!({
-            "client_id": "phase4_1-client",
+            "client_id": "oauth-refresh-client",
             "client_secret": "AUTH-CONFIG-SECRET",
             "redirect_uri": "https://example.invalid/oauth/callback",
             "token_url": token_url,
@@ -2896,7 +2896,7 @@ fn client_secret_resolver_layer_2_when_resolver_returns_none() {
     let token_url = format!("{}/oauth/token", server.base_url());
     let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
         serde_json::json!({
-            "client_id": "phase4_1-client",
+            "client_id": "oauth-refresh-client",
             "client_secret": "FALLBACK-SECRET",
             "redirect_uri": "https://example.invalid/oauth/callback",
             "token_url": token_url,
@@ -2955,7 +2955,7 @@ fn client_secret_resolver_layer_3_omits_form_field_when_no_secret_available() {
     let token_url = format!("{}/oauth/token", server.base_url());
     let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
         serde_json::json!({
-            "client_id": "phase4_1-public-client",
+            "client_id": "oauth-public-client",
             "redirect_uri": "https://example.invalid/oauth/callback",
             "token_url": token_url,
         }),
@@ -3003,7 +3003,7 @@ fn client_secret_resolver_clear_restores_fallback() {
     let token_url = format!("{}/oauth/token", server.base_url());
     let (path, master_key_bytes, _scope, instance, dir) = seed_oauth_refresh_fixture(
         serde_json::json!({
-            "client_id": "phase4_1-client",
+            "client_id": "oauth-refresh-client",
             "client_secret": "RESTORED-FALLBACK",
             "redirect_uri": "https://example.invalid/oauth/callback",
             "token_url": token_url,
@@ -3178,11 +3178,11 @@ mod webhook {
     /// instance in the runtime's `connector_instances` map for the
     /// webhook dispatcher to resolve).
     const SLACK_CONNECTOR_CFG: &str = r#"{
-        "client_id": "phase5-webhook-client",
+        "client_id": "webhook-tests-client",
         "redirect_uri": "https://example.invalid/oauth/callback",
         "token_url": "https://example.invalid/oauth/token",
         "auth_url": "https://example.invalid/oauth/authorize",
-        "signing_secret": "phase5-webhook-signing-secret"
+        "signing_secret": "webhook-tests-signing-secret"
     }"#;
 
     /// Tiny synchronous HTTP/1.1 client. Avoids pulling reqwest's
@@ -3305,7 +3305,7 @@ mod webhook {
         // Slack URL-verification envelope: handle_webhook_event
         // returns Ok(Vec::new()) on this, so the dispatcher's
         // 200-OK counter ticks but no evidence is ingested.
-        let body = br#"{"type":"url_verification","challenge":"phase5-challenge"}"#;
+        let body = br#"{"type":"url_verification","challenge":"webhook-tests-challenge"}"#;
         let (code, _resp) = http_post(&addr, "/webhooks/slack", body);
         assert_eq!(code, 200, "url_verification must dispatch with 200");
 
