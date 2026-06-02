@@ -51,7 +51,7 @@ All numbers in the results tables below were collected on this VM:
 | Arch | x86_64 |
 | Toolchain | rustc 1.95.0 (workspace MSRV is 1.85.0) |
 | Criterion | 0.7 |
-| Profile | `bench` (release optimisation, debug-assertions off) |
+| Profile | `bench` (release optimisation, debug-assertions **on** — see `[profile.bench]` in `Cargo.toml`) |
 
 Absolute numbers are hardware-dependent; the durable value is in
 **relative** comparison across commits/releases (see
