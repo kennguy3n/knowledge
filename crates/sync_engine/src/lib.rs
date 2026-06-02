@@ -545,7 +545,7 @@ where
                 max_delta_bytes,
             } => {
                 let growth = self.log.ops.len().saturating_sub(self.compact_baseline);
-                if growth < MIN_ADAPTIVE_GROWTH {
+                if growth <= MIN_ADAPTIVE_GROWTH {
                     false
                 } else {
                     // Count tombstone ops (Remove + Supersede) in

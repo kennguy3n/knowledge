@@ -97,12 +97,14 @@ pub struct EndpointConfig {
     #[serde(default)]
     pub default_grammar: Option<String>,
     /// Cost-control cap on requests per minute against this
-    /// endpoint. When `Some`, [`HttpManagedEndpointSynthesizer`]
-    /// builds a [`crate::rate_limiter::RateLimiter`] from the value
-    /// at construction time and rejects further requests once the
-    /// per-minute cap is hit. When `None`, no rate limiting is
-    /// applied at the synthesizer layer (a wrapping
-    /// `SynthesisBatcher` may still enforce its own cap).
+    /// endpoint. [`HttpManagedEndpointSynthesizer`] builds a
+    /// [`crate::rate_limiter::RateLimiter`] from
+    /// [`Self::effective_max_requests_per_minute`] at construction
+    /// time and rejects further requests once the per-minute cap is
+    /// hit. When `None`, a conservative default of
+    /// [`DEFAULT_MAX_RPM`] (60) is applied for cost protection.
+    /// Set explicitly to override — e.g. a higher value for
+    /// enterprise-negotiated rate limits.
     #[serde(default)]
     pub max_requests_per_minute: Option<u64>,
 }

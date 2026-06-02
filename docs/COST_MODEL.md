@@ -209,8 +209,11 @@ storage representation).
 
 Every cost lever above maps to a config field that is read at
 runtime — operators can pin a tighter cap any time and the cost
-ceiling drops accordingly. There are no implicit minimums
-embedded in the substrate.
+ceiling drops accordingly. Where a field is left unset, the
+substrate applies a conservative default (e.g.
+`DEFAULT_MAX_RPM = 60` for synthesis endpoints) so that an
+unconfigured deployment has bounded cost by default. See
+[`docs/TUNABLES.md`](TUNABLES.md) for the full list of defaults.
 
 The [`crates/synthesis_engine/`](../crates/synthesis_engine/) and
 [`crates/connector_framework/`](../crates/connector_framework/)
