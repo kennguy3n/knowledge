@@ -1,8 +1,12 @@
-# Benchmark workflow — runs Criterion benchmarks on tagged releases
-# and archives the HTML reports as CI artifacts.
+# Benchmark workflow — runs the Criterion benchmark suites and
+# archives the HTML reports + JSON estimates as CI artifacts.
 #
-# Trigger: push of `v*` tags (same as release.yml).
-# Purpose: establish a performance baseline per release so regressions
+# Triggers:
+#   * push of `v*` tags (per-release baseline, same as release.yml),
+#   * a weekly schedule (Mondays 06:00 UTC) so performance drift is
+#     caught between releases,
+#   * manual dispatch.
+# Purpose: establish a performance baseline over time so regressions
 # are visible across the version history.
 name: Benchmarks
 
@@ -10,6 +14,10 @@ on:
   push:
     tags:
       - "v*"
+  schedule:
+    # Mondays at 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -41,12 +49,41 @@ jobs:
             ${{ runner.os }}-bench-
             ${{ runner.os }}-cargo-
 
-      - name: Run benchmarks
+      - name: Run production benchmark suite
+        run: cargo bench -p benchmarks
+
+      - name: Run legacy micro-benchmark suites
+        # Independent of the production suite — run even if it failed so
+        # both sets of results are produced and archived in one run.
+        if: always()
         run: cargo bench -p integration_tests
 
+      - name: Collect Criterion JSON estimates
+        if: always()
+        run: |
+          mkdir -p criterion-json
+          # Preserve the directory layout so each (group, bench) keeps
+          # its own estimates.json / sample.json for later comparison.
+          if [ -d target/criterion ]; then
+            find target/criterion \( -name 'estimates.json' -o -name 'sample.json' -o -name 'benchmark.json' \) \
+              -exec cp --parents {} criterion-json/ \;
+          fi
+
       - name: Upload Criterion HTML reports
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: criterion-reports-${{ github.ref_name }}
+          # Suffix with run id so weekly/dispatch runs on `main` (where
+          # github.ref_name is always "main") stay distinguishable for
+          # historical regression comparison.
+          name: criterion-reports-${{ github.ref_name }}-${{ github.run_id }}
           path: target/criterion/
+          retention-days: 90
+
+      - name: Upload Criterion JSON estimates
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-json-${{ github.ref_name }}-${{ github.run_id }}
+          path: criterion-json/
           retention-days: 90
