@@ -36,6 +36,9 @@ evidence_store = { path = "../evidence_store" }
 observation_engine = { path = "../observation_engine", features = ["test-support"] }
 concept_graph = { path = "../concept_graph" }
 permission_service = { path = "../permission_service" }
+sync_engine = { path = "../sync_engine" }
+synthesis_pipeline = { path = "../synthesis_pipeline", features = ["test-support"] }
+chrono = { workspace = true }
 # Criterion drives the multi-scope load bench under `benches/`. The
 # workspace dependency carries the shared `html_reports` feature so
 # the bench's `target/criterion/report/index.html` artefact is
@@ -48,6 +51,22 @@ harness = false
 
 [[bench]]
 name = "observation_throughput"
+harness = false
+
+[[bench]]
+name = "graph_bench"
+harness = false
+
+[[bench]]
+name = "sync_bench"
+harness = false
+
+[[bench]]
+name = "permission_bench"
+harness = false
+
+[[bench]]
+name = "synthesis_bench"
 harness = false
 
 [lints]

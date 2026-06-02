@@ -1,0 +1,52 @@
+# Benchmark workflow — runs Criterion benchmarks on tagged releases
+# and archives the HTML reports as CI artifacts.
+#
+# Trigger: push of `v*` tags (same as release.yml).
+# Purpose: establish a performance baseline per release so regressions
+# are visible across the version history.
+name: Benchmarks
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  bench:
+    name: Run Criterion benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-
+            ${{ runner.os }}-cargo-
+
+      - name: Run benchmarks
+        run: cargo bench -p integration_tests
+
+      - name: Upload Criterion HTML reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-reports-${{ github.ref_name }}
+          path: target/criterion/
+          retention-days: 90
