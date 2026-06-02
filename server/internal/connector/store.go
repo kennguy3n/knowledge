@@ -23,6 +23,13 @@ type registration struct {
 	CreatedAt     time.Time     `json:"created_at"`
 }
 
+// oauthStateTTL bounds how long a pending OAuth2 authorization may sit
+// before it is considered abandoned. Browser round-trips complete in
+// seconds; ten minutes is a generous ceiling that still prevents the
+// pending-state map from growing without bound when users start an
+// authorize flow and never return.
+const oauthStateTTL = 10 * time.Minute
+
 // oauthState is a pending OAuth2 authorization, keyed by CSRF state.
 type oauthState struct {
 	InstanceID string
@@ -75,11 +82,17 @@ func (s *store) delete(id string) {
 func (s *store) putState(state, instanceID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Opportunistically evict expired pending states so abandoned
+	// OAuth flows cannot accumulate unbounded. putState runs once per
+	// authorize initiation, so this stays cheap.
+	s.pruneExpiredStatesLocked(time.Now().UTC())
 	s.states[state] = oauthState{InstanceID: instanceID, CreatedAt: time.Now().UTC()}
 }
 
 // takeState consumes a pending OAuth state, returning the associated
-// instance id. The state is single-use and removed on lookup.
+// instance id. The state is single-use and removed on lookup. A state
+// older than [oauthStateTTL] is treated as expired: it is removed and
+// reported as absent so a stale callback cannot complete a flow.
 func (s *store) takeState(state string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -88,5 +101,18 @@ func (s *store) takeState(state string) (string, bool) {
 		return "", false
 	}
 	delete(s.states, state)
+	if time.Since(st.CreatedAt) > oauthStateTTL {
+		return "", false
+	}
 	return st.InstanceID, true
+}
+
+// pruneExpiredStatesLocked removes every pending OAuth state older than
+// [oauthStateTTL]. The caller must hold s.mu for writing.
+func (s *store) pruneExpiredStatesLocked(now time.Time) {
+	for k, st := range s.states {
+		if now.Sub(st.CreatedAt) > oauthStateTTL {
+			delete(s.states, k)
+		}
+	}
 }

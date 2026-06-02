@@ -156,12 +156,31 @@ func TestSyncOnce(t *testing.T) {
 		fetchRaw: json.RawMessage(`{"body":"data"}`),
 	}
 	s := newSvc(sub)
+	s.store.put(registration{InstanceID: "inst-1", Kind: "GoogleDrive", ScopeID: scopeUUID})
 	rep, res, err := s.syncOnce(context.Background(), "inst-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rep.EventsIngested != 1 || res.Ingested != 1 {
 		t.Fatalf("rep=%+v res=%+v", rep, res)
+	}
+}
+
+func TestSyncOnceMissingRegistration(t *testing.T) {
+	t.Parallel()
+	report := `{"instanceId":"inst-1","mode":"incremental","eventsTotal":1,"eventsIngested":1,"ingestedEvidenceIds":["r1"]}`
+	sub := &fakeSub{
+		syncRaw:  json.RawMessage(report),
+		fetchRaw: json.RawMessage(`{"body":"data"}`),
+	}
+	s := newSvc(sub)
+	// No registration for inst-1: syncOnce must error rather than
+	// fall back to the connector instance id as the ingest scope.
+	if _, _, err := s.syncOnce(context.Background(), "inst-1"); err == nil {
+		t.Fatal("expected error for missing registration")
+	}
+	if sub.ingestCalls != 0 {
+		t.Fatalf("ingest should not run without a scope; calls = %d", sub.ingestCalls)
 	}
 }
 
@@ -221,6 +240,33 @@ func TestOAuthStartUnknownKind(t *testing.T) {
 		"/x/oauth/start?client_id=c&redirect_uri=https://cb", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for unknown kind, got %d", rec.Code)
+	}
+}
+
+func TestOAuthStateTTLExpiry(t *testing.T) {
+	t.Parallel()
+	st := newStore()
+
+	// A fresh state is single-use and resolves.
+	st.putState("fresh", "inst-fresh")
+	if id, ok := st.takeState("fresh"); !ok || id != "inst-fresh" {
+		t.Fatalf("fresh state: id=%q ok=%v", id, ok)
+	}
+
+	// An expired state resolves as absent and is removed.
+	st.states["stale"] = oauthState{InstanceID: "inst-stale", CreatedAt: time.Now().Add(-2 * oauthStateTTL)}
+	if _, ok := st.takeState("stale"); ok {
+		t.Fatal("expired state should not resolve")
+	}
+
+	// putState prunes abandoned states so the map cannot grow unbounded.
+	st.states["abandoned"] = oauthState{InstanceID: "inst-old", CreatedAt: time.Now().Add(-2 * oauthStateTTL)}
+	st.putState("new", "inst-new")
+	if _, ok := st.states["abandoned"]; ok {
+		t.Fatal("putState should have pruned the abandoned state")
+	}
+	if len(st.states) != 1 {
+		t.Fatalf("expected only the new state to remain, got %d", len(st.states))
 	}
 }
 

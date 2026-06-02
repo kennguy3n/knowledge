@@ -483,7 +483,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = config.bind_addr;
     let config = std::sync::Arc::new(config);
 
-    let handle = open_runtime(&config)?;
+    // `open_runtime` may build and drop a short-lived Tokio runtime
+    // while rehydrating the store. Doing that on this `#[tokio::main]`
+    // worker thread trips tokio's "cannot drop a runtime within an
+    // async context" guard, which would panic before the server ever
+    // binds. Open on a dedicated thread with no ambient runtime; the
+    // returned handle indexes a global registry, so it stays valid
+    // back on the async thread.
+    let open_cfg = std::sync::Arc::clone(&config);
+    let handle = std::thread::spawn(move || open_runtime(&open_cfg))
+        .join()
+        .map_err(|_| "substrate_server: store-open thread panicked")??;
     tracing::info!(%bind_addr, "substrate_server: evidence store opened, binding loopback");
 
     let state = AppState::new(handle, config);

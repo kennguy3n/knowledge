@@ -203,14 +203,16 @@ func (s *Service) syncOnce(ctx context.Context, instanceID string) (syncReport, 
 	if err := json.Unmarshal(raw, &report); err != nil {
 		return syncReport{}, PipelineResult{}, httpx.Internal("connector: decode sync report")
 	}
+	// The registration carries the evidence scope this connector
+	// ingests into. If it is missing we must not fall back to the
+	// connector instance id as the scope — that would ingest evidence
+	// under a bogus scope and silently corrupt the data model. Fail
+	// loudly instead so the caller (or scheduler) can surface it.
 	reg, ok := s.store.get(instanceID)
-	scope := report.InstanceID
-	kind := ""
-	if ok {
-		scope = reg.ScopeID
-		kind = reg.Kind
+	if !ok {
+		return report, PipelineResult{}, httpx.Internal("connector: no registration for instance; cannot resolve ingest scope")
 	}
-	result, err := s.runPipeline(ctx, instanceID, scope, kind, report.IngestedEvidenceIDs)
+	result, err := s.runPipeline(ctx, instanceID, reg.ScopeID, reg.Kind, report.IngestedEvidenceIDs)
 	if err != nil {
 		return report, PipelineResult{}, err
 	}
