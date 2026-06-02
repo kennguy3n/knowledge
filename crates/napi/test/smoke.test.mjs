@@ -282,8 +282,8 @@ test('coreVersion() matches the workspace Cargo.toml version', () => {
 });
 
 test('healthCheck() with no handle returns a bridge-only envelope', () => {
-  // Phase 6 surface: `healthCheck()` returns a typed envelope, not
-  // the legacy `"ok"` string. Without a handle the substrate skips
+  // `healthCheck()` returns a typed envelope, not the legacy
+  // `"ok"` string. Without a handle the substrate skips
   // the per-runtime subsystem probes and returns just the bridge
   // entry — useful for the desktop status panel's bootstrap check
   // before `openStore`.
