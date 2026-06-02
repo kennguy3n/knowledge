@@ -121,7 +121,7 @@ pqcrypto-traits = "0.3"
 # in `.github/workflows/ci.yml` (which pins the toolchain via
 # `dtolnay/rust-toolchain@1.85.0`). The matching Dependabot ignore
 # lives in `.github/dependabot.yml`.
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl", "blob"] }
+rusqlite = { version = "0.36", features = ["bundled-sqlcipher-vendored-openssl", "blob"] }
 
 # Time
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
