@@ -2290,7 +2290,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "crypto",
- "proptest",
  "rand 0.10.1",
  "rand_core 0.6.4",
  "rusqlite",
