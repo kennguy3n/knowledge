@@ -3,7 +3,7 @@
 //! **Important:** This is a *statistical* check, not a formal timing
 //! analysis. It measures wall-clock variance of `encrypt_aead` across
 //! 1 000 runs with different plaintexts of the same length and asserts
-//! the coefficient of variation (CoV = σ / μ) stays below 5%.
+//! the coefficient of variation (CoV = σ / μ) stays below 15%.
 //!
 //! A passing result provides *evidence* of constant-time behaviour at
 //! the Rust/OS level but does NOT constitute a formal guarantee.
