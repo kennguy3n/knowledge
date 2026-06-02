@@ -126,9 +126,11 @@ pub const DEFAULT_TOMBSTONE_RATIO_THRESHOLD: f64 = 0.3;
 /// Default maximum delta payload size (in bytes) for
 /// [`CompactionPolicy::Adaptive`]. When the estimated serialized
 /// size of ops accumulated since the last compaction exceeds this,
-/// compaction triggers. 1 MiB is sized to keep CRDT delta exchanges
-/// within a single mobile-friendly network round-trip.
-pub const DEFAULT_MAX_DELTA_BYTES: usize = 1_048_576;
+/// compaction triggers. 4 MiB keeps delta exchanges manageable
+/// while ensuring the byte-size check doesn't subsume the
+/// tombstone-ratio heuristic at the `MIN_ADAPTIVE_GROWTH` floor
+/// (`10_000 × 256 = 2.56 MiB < 4 MiB`).
+pub const DEFAULT_MAX_DELTA_BYTES: usize = 4_194_304;
 
 /// Estimated average serialized byte size per op, used by
 /// [`CompactionPolicy::Adaptive`] to approximate delta payload
@@ -150,7 +152,7 @@ const MIN_ADAPTIVE_GROWTH: usize = DEFAULT_COMPACT_THRESHOLD;
 /// [`CompactionPolicy::Adaptive`] with sensible defaults) and never
 /// worry about tuning compaction manually.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum CompactionPolicy {
     /// Compact after a fixed number of ops accumulate since the
     /// last compaction — the legacy behaviour.

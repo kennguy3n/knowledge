@@ -10,9 +10,9 @@ Every configurable threshold in the Knowledge substrate library, its default val
 
 | Tunable | Constant / Field | Default | What it controls | When to override |
 |---------|-----------------|---------|------------------|-----------------|
-| Compaction policy | `CompactionPolicy` (enum) | `Adaptive { tombstone_ratio_threshold: 0.3, max_delta_bytes: 1_048_576 }` | Governs when the CRDT op-log is automatically compacted to bound memory and delta-sync payload size. | Switch to `Fixed(n)` for deterministic compaction cadence, or `Disabled` when compaction is managed externally (e.g. by a background job). |
+| Compaction policy | `CompactionPolicy` (enum) | `Adaptive { tombstone_ratio_threshold: 0.3, max_delta_bytes: 4_194_304 }` | Governs when the CRDT op-log is automatically compacted to bound memory and delta-sync payload size. | Switch to `Fixed(n)` for deterministic compaction cadence, or `Disabled` when compaction is managed externally (e.g. by a background job). |
 | Tombstone ratio threshold | `DEFAULT_TOMBSTONE_RATIO_THRESHOLD` | `0.3` | In `Adaptive` mode, compaction triggers when the ratio of `Remove`/`Supersede` ops in the growth window exceeds this value. | Lower (e.g. 0.2) for write-heavy workloads with frequent deletes; raise (e.g. 0.5) to reduce compaction frequency on read-heavy deployments. |
-| Max delta bytes | `DEFAULT_MAX_DELTA_BYTES` | `1_048_576` (1 MiB) | In `Adaptive` mode, compaction triggers when the estimated serialized size of accumulated ops exceeds this byte count. | Increase on high-bandwidth links (e.g. desktop-to-desktop LAN sync); decrease on constrained mobile connections. |
+| Max delta bytes | `DEFAULT_MAX_DELTA_BYTES` | `4_194_304` (4 MiB) | In `Adaptive` mode, compaction triggers when the estimated serialized size of accumulated ops exceeds this byte count. | Increase on high-bandwidth links (e.g. desktop-to-desktop LAN sync); decrease on constrained mobile connections. |
 | Fixed compaction threshold | `DEFAULT_COMPACT_THRESHOLD` | `10_000` ops | Legacy fixed threshold — compact after N ops accumulate since last compaction. Used by `CompactionPolicy::Fixed`. | Lower for memory-constrained devices; raise for servers with ample RAM that benefit from longer op history. |
 | Estimated bytes per op | `ESTIMATED_BYTES_PER_OP` (internal) | `256` | Heuristic multiplier for estimating delta payload size without serialization. | Not directly configurable — an implementation detail. |
 
@@ -37,7 +37,7 @@ Every configurable threshold in the Knowledge substrate library, its default val
 | Low-tier RAM threshold | `LOW_TIER_RAM_THRESHOLD` | `2 GiB` | Devices with less than this RAM are classified as `Low`. | Lower if your SLM model fits in less than 2 GiB; raise if the workload requires more headroom. |
 | High-tier RAM threshold | `HIGH_TIER_RAM_THRESHOLD` | `8 GiB` | Devices with at least this RAM are classified as `High`. | Lower if your SLM is small enough to run on 4 GiB devices; raise for very large models. |
 | Idle unload timeout | `IDLE_UNLOAD_TIMEOUT_SECS` | `60s` | Time after which an idle adapter is unloaded from memory. | Increase for "always-warm" deployments where cold-start latency matters; decrease on memory-constrained devices. |
-| Warm-up prompt | `WARM_UP_PROMPT` | `"Hello"` | Prompt sent to newly-loaded adapters to prime the KV cache. | Override with a domain-specific prompt for better first-request latency on production workloads. |
+| Warm-up prompt | `WARM_UP_PROMPT` | `"knowledge substrate boot probe"` | Prompt sent to newly-loaded adapters to prime the KV cache. | Override with a domain-specific prompt for better first-request latency on production workloads. |
 
 ---
 
