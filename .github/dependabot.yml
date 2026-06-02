@@ -63,6 +63,18 @@ updates:
       # workspace `Cargo.toml` for the full rationale.
       - dependency-name: "criterion"
         versions: [">=0.8"]
+      # ort >=2.0.0-rc.11 has two independent blockers:
+      #   1. Upstream `onnxruntime` exposes a Xilinx Vitis AI
+      #      execution-provider field that references an `OrtApi`
+      #      member that does not exist in the bundled API surface,
+      #      so `cargo build --all-features` fails to compile.
+      #      Upstream has not yet published a fixed `rc.13`.
+      #   2. `rc.11` / `rc.12` both set `rust-version = "1.88"`,
+      #      above the workspace's `MSRV (1.85.0)` floor.
+      # See the comment block immediately above the `ort = ` line in
+      # `crates/evidence_store/Cargo.toml` for the full rationale.
+      - dependency-name: "ort"
+        versions: [">=2.0.0-rc.11"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
