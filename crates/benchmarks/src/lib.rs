@@ -10,6 +10,7 @@
 //! `evidence_store` because the public [`MockEmbeddingModel`]
 //! implements [`evidence_store::embeddings::EmbeddingModel`] for the
 //! hybrid-retrieval semantic lane.
+#![deny(missing_docs)]
 
 use evidence_store::embeddings::{EmbeddingError, EmbeddingModel, EmbeddingProbe, Result};
 use evidence_store::ImportanceClass;
