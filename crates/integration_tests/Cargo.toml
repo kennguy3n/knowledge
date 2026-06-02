@@ -13,9 +13,8 @@ publish = false
 # Each file under `tests/` is its own cargo integration-test binary —
 # Cargo's standard layout — so they can be filtered individually with
 # `cargo test -p integration_tests --test ingest_to_query`. The
-# `src/lib.rs` is a deliberately empty crate root just to satisfy
-# Cargo's "tests/ requires a parent crate" rule; the real test code
-# lives under `tests/`.
+# `src/lib.rs` exports shared test helpers (`test_helpers` module);
+# the per-scenario test code lives under `tests/`.
 
 [lib]
 path = "src/lib.rs"
