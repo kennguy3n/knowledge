@@ -51,6 +51,7 @@ pub mod confluence;
 pub mod email;
 // STABLE
 pub mod figma;
+// UNSTABLE
 pub mod github;
 // STABLE
 pub mod google_drive;
@@ -71,6 +72,7 @@ pub use confluence::ConfluenceConnector;
 pub use email::EmailConnector;
 // STABLE
 pub use figma::FigmaConnector;
+// UNSTABLE
 pub use github::GitHubConnector;
 // STABLE
 pub use google_drive::GoogleDriveConnector;

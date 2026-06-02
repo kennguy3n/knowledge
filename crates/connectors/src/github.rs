@@ -348,7 +348,7 @@ impl Connector for GitHubConnector {
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+            next_cursor: watermark.map(|t| t.to_rfc3339()),
         })
     }
 
@@ -393,7 +393,7 @@ impl Connector for GitHubConnector {
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+            next_cursor: watermark.map(|t| t.to_rfc3339()),
         })
     }
 
