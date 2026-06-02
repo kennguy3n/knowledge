@@ -180,7 +180,7 @@ fn golden_dataset() -> GoldenDataset {
         ),
         tc(
             "korean-fact",
-            "새로운 시스템은 다음 주 월요일부터 가동될 예정입니다。",
+            "새로운 시스템은 다음 주 월요일부터 가동될 예정입니다.",
             vec![exp(fact, "새로운 시스템")],
         ),
         tc(
