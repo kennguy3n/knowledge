@@ -3,7 +3,7 @@
 //!
 //! Per `docs/DESIGN.md` §10.2 and `ARCHITECTURE.md` §4.1, the substrate
 //! ingests evidence from external systems through the
-//! [`connector_framework`] trait. This crate ships nine concrete
+//! [`connector_framework`] trait. This crate ships ten concrete
 //! connectors against the most common B2B sources:
 //!
 //! * [`google_drive::GoogleDriveConnector`] — Google Drive API v3
@@ -25,6 +25,8 @@
 //! * [`email::EmailConnector`] — Gmail API (`messages.list` + Cloud
 //!   Pub/Sub push) and Microsoft Graph (`/me/messages` +
 //!   `/subscriptions`) under a shared `EmailProvider` enum.
+//! * [`github::GitHubConnector`] — GitHub REST API v3
+//!   (`/repos/{owner}/{repo}/issues`, repository webhooks).
 //!
 //! Each connector models the vendor's REST contract as plain serde
 //! types and issues real HTTP requests through an injected
@@ -50,6 +52,7 @@ pub mod email;
 // STABLE
 pub mod figma;
 // STABLE
+pub mod github;
 pub mod google_drive;
 // STABLE
 pub mod hubspot;
@@ -69,6 +72,7 @@ pub use email::EmailConnector;
 // STABLE
 pub use figma::FigmaConnector;
 // STABLE
+pub use github::GitHubConnector;
 pub use google_drive::GoogleDriveConnector;
 // STABLE
 pub use hubspot::HubSpotConnector;
