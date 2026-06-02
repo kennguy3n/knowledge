@@ -55,8 +55,8 @@ fn add_wins_over_concurrent_remove() {
     engine_a.remove("x".into());
     engine_b.add("x".into());
 
-    // Exchange deltas. Each receiver passes the sender's last-seen
-    // local clock so only new ops from the sender are transmitted.
+    // Exchange deltas. Each sender encodes from its own pre-mutation
+    // clock so only the new concurrent ops are included.
     let delta_a = encode_delta_since(engine_a.op_log(), clock_a_local).unwrap();
     let delta_b = encode_delta_since(engine_b.op_log(), clock_b_local).unwrap();
 

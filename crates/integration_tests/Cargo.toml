@@ -44,7 +44,6 @@ sync_engine = { path = "../sync_engine" }
 agent_contract = { path = "../agent_contract" }
 audit_service = { path = "../audit_service" }
 permission_service = { path = "../permission_service" }
-serde_json = { workspace = true }
 # Criterion drives the multi-scope load bench under `benches/`. The
 # workspace dependency carries the shared `html_reports` feature so
 # the bench's `target/criterion/report/index.html` artefact is

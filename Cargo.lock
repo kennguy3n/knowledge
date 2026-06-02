@@ -1735,7 +1735,6 @@ dependencies = [
  "memory_manager",
  "observation_engine",
  "permission_service",
- "serde_json",
  "sync_engine",
  "synthesis_pipeline",
  "tempfile",
