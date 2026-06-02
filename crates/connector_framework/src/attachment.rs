@@ -1,8 +1,8 @@
-//! Channel-scoped connector attachments.
+//! Scope-typed connector attachments.
 //!
 //! Per `docs/DESIGN.md` §10.2 (point 4) every connector instance is
-//! attached to exactly one substrate scope (channel / domain). The
-//! attachment binding is the source of truth for:
+//! attached to exactly one substrate scope (channel / domain / user).
+//! The attachment binding is the source of truth for:
 //!
 //! * Which scope an inbound observation should inherit (per
 //!   `ARCHITECTURE.md` §5.2).
@@ -11,9 +11,9 @@
 //! * Whether a caller is permitted to attach / detach a connector
 //!   on the scope (we require `admin` or `editor` on the scope).
 //!
-//! The registry is intentionally keyed on `(scope_id,
+//! The registry is intentionally keyed on `(scope_id, object_type,
 //! connector_kind)` so the substrate can enforce *one connector per
-//! source per scope* — a Notion connector and a Google Drive
+//! source per scope per type* — a Notion connector and a Google Drive
 //! connector can coexist on the same channel, but two Notion
 //! connectors on the same channel cannot.
 
@@ -65,32 +65,52 @@ pub struct ConnectorAttachment {
     /// registry can enforce uniqueness without round-tripping
     /// through the connector instance.
     pub kind: ConnectorKind,
-    /// Substrate scope (channel / domain) the connector is bound to.
+    /// Substrate scope (channel / domain / user) the connector is bound to.
     pub scope_id: ScopeId,
+    /// Permission-model object type for this scope (e.g. `Channel`,
+    /// `User`, `Domain`).  Stored so that `detach` uses the same
+    /// authorization context that `attach` established.
+    #[serde(default = "default_object_type")]
+    pub object_type: ObjectType,
     /// Wall-clock attachment time.
     pub attached_at: DateTime<Utc>,
 }
 
+/// Legacy default: pre-existing attachments were always channel-scoped.
+fn default_object_type() -> ObjectType {
+    ObjectType::Channel
+}
+
 impl ConnectorAttachment {
     /// Construct a fresh attachment.
-    pub fn new(connector: ConnectorInstanceId, kind: ConnectorKind, scope_id: ScopeId) -> Self {
+    pub fn new(
+        connector: ConnectorInstanceId,
+        kind: ConnectorKind,
+        scope_id: ScopeId,
+        object_type: ObjectType,
+    ) -> Self {
         Self {
             id: AttachmentId::new_v4(),
             connector,
             kind,
             scope_id,
+            object_type,
             attached_at: Utc::now(),
         }
     }
 }
 
+/// Scope-style object types accepted by attachment operations.
+const SCOPE_OBJECT_TYPES: [ObjectType; 3] =
+    [ObjectType::Channel, ObjectType::User, ObjectType::Domain];
+
 /// Registry of [`ConnectorAttachment`]s.
 ///
-/// Keyed on `(scope_id, connector_kind)` to enforce uniqueness;
-/// also indexed by `connector_id` for fast detach.
+/// Keyed on `(scope_id, object_type, connector_kind)` to enforce
+/// uniqueness; also indexed by `connector_id` for fast detach.
 #[derive(Debug, Clone, Default)]
 pub struct AttachmentRegistry {
-    by_scope_kind: HashMap<(ScopeId, ConnectorKind), ConnectorAttachment>,
+    by_scope_kind: HashMap<(ScopeId, ObjectType, ConnectorKind), ConnectorAttachment>,
     by_connector: HashMap<ConnectorInstanceId, ConnectorAttachment>,
 }
 
@@ -115,13 +135,15 @@ impl AttachmentRegistry {
         self.by_connector.get(&connector)
     }
 
-    /// Look up the attachment bound to `(scope, kind)`, if any.
+    /// Look up the attachment bound to `(scope, object_type, kind)`,
+    /// if any.
     pub fn get_by_scope_kind(
         &self,
         scope_id: ScopeId,
+        object_type: ObjectType,
         kind: ConnectorKind,
     ) -> Option<&ConnectorAttachment> {
-        self.by_scope_kind.get(&(scope_id, kind))
+        self.by_scope_kind.get(&(scope_id, object_type, kind))
     }
 
     /// All attachments on a given scope.
@@ -137,37 +159,49 @@ impl AttachmentRegistry {
     /// constraint.
     ///
     /// `subject` is the user attempting the operation; the call
-    /// requires the subject to hold `admin` or `editor` on the
-    /// scope (modelled as a `Channel` object — domain attachments
-    /// can use the same code path with a `Domain` object type by
-    /// constructing a domain-typed [`ObjectRef`] before this call).
+    /// requires the subject to hold `editor` on the scope (or any
+    /// relation that implies `editor`, such as `admin` or `owner`).
+    /// `object_type` must be a scope-style type (`Channel`, `User`,
+    /// or `Domain`); other variants are rejected with
+    /// [`ConnectorError::UnsupportedObjectType`].
+    #[allow(clippy::too_many_arguments)]
     pub fn attach(
         &mut self,
         connector: ConnectorInstanceId,
         kind: ConnectorKind,
         scope_id: ScopeId,
+        object_type: ObjectType,
         store: &TupleStore,
         namespaces: &NamespaceRegistry,
         subject: SubjectRef,
     ) -> Result<&ConnectorAttachment> {
-        require_admin_or_editor(scope_id, store, namespaces, subject)?;
+        if !SCOPE_OBJECT_TYPES.contains(&object_type) {
+            return Err(ConnectorError::UnsupportedObjectType);
+        }
+        require_editor(scope_id, object_type, store, namespaces, subject)?;
 
         if self.by_connector.contains_key(&connector) {
             return Err(ConnectorError::DuplicateAttachment);
         }
-        if self.by_scope_kind.contains_key(&(scope_id, kind)) {
+        if self
+            .by_scope_kind
+            .contains_key(&(scope_id, object_type, kind))
+        {
             return Err(ConnectorError::DuplicateAttachment);
         }
 
-        let attachment = ConnectorAttachment::new(connector, kind, scope_id);
+        let attachment = ConnectorAttachment::new(connector, kind, scope_id, object_type);
         self.by_scope_kind
-            .insert((scope_id, kind), attachment.clone());
+            .insert((scope_id, object_type, kind), attachment.clone());
         self.by_connector.insert(connector, attachment);
         Ok(self.by_connector.get(&connector).expect("just inserted"))
     }
 
     /// Detach a connector. Requires the same permission as
-    /// [`Self::attach`].
+    /// [`Self::attach`] — the `object_type` stored on the
+    /// attachment at attach-time is used for the authorization
+    /// check so callers cannot bypass it by supplying a different
+    /// type.
     pub fn detach(
         &mut self,
         connector: ConnectorInstanceId,
@@ -181,9 +215,10 @@ impl AttachmentRegistry {
             .ok_or(ConnectorError::AttachmentNotFound)?;
         let scope = existing.scope_id;
         let kind = existing.kind;
-        require_admin_or_editor(scope, store, namespaces, subject)?;
+        let ot = existing.object_type;
+        require_editor(scope, ot, store, namespaces, subject)?;
 
-        self.by_scope_kind.remove(&(scope, kind));
+        self.by_scope_kind.remove(&(scope, ot, kind));
         Ok(self.by_connector.remove(&connector).expect("checked above"))
     }
 
@@ -198,16 +233,17 @@ impl AttachmentRegistry {
     }
 }
 
-fn require_admin_or_editor(
+fn require_editor(
     scope_id: ScopeId,
+    object_type: ObjectType,
     store: &TupleStore,
     namespaces: &NamespaceRegistry,
     subject: SubjectRef,
 ) -> Result<()> {
-    let object = ObjectRef::new(ObjectType::Channel, scope_id.as_uuid());
-    let allowed = check_permission(store, namespaces, object, Relation::Admin, subject)
-        || check_permission(store, namespaces, object, Relation::Editor, subject);
-    if allowed {
+    let object = ObjectRef::new(object_type, scope_id.as_uuid());
+    // The inheritance chain `Owner ⇒ Admin ⇒ Editor` means a single
+    // check for `Editor` also covers `Admin` and `Owner`.
+    if check_permission(store, namespaces, object, Relation::Editor, subject) {
         Ok(())
     } else {
         Err(ConnectorError::PermissionDenied)
@@ -223,15 +259,27 @@ mod tests {
         (TupleStore::new(), NamespaceRegistry::with_defaults())
     }
 
-    fn grant(store: &mut TupleStore, scope: ScopeId, relation: Relation, user: Uuid) {
+    fn grant_on(
+        store: &mut TupleStore,
+        object_type: ObjectType,
+        scope: ScopeId,
+        relation: Relation,
+        user: Uuid,
+    ) {
         store
             .insert(RelationTuple::new(
-                ObjectRef::new(ObjectType::Channel, scope.as_uuid()),
+                ObjectRef::new(object_type, scope.as_uuid()),
                 relation,
                 SubjectRef::direct(SubjectType::User, user),
             ))
             .unwrap();
     }
+
+    fn grant(store: &mut TupleStore, scope: ScopeId, relation: Relation, user: Uuid) {
+        grant_on(store, ObjectType::Channel, scope, relation, user);
+    }
+
+    // ---- channel-scoped (existing behaviour) ----
 
     #[test]
     fn attach_succeeds_with_editor_relation() {
@@ -247,6 +295,7 @@ mod tests {
                 connector,
                 ConnectorKind::Notion,
                 scope,
+                ObjectType::Channel,
                 &store,
                 &ns,
                 SubjectRef::direct(SubjectType::User, user),
@@ -270,6 +319,7 @@ mod tests {
                 ConnectorInstanceId::new_v4(),
                 ConnectorKind::Notion,
                 scope,
+                ObjectType::Channel,
                 &store,
                 &ns,
                 SubjectRef::direct(SubjectType::User, user),
@@ -289,6 +339,7 @@ mod tests {
                 ConnectorInstanceId::new_v4(),
                 ConnectorKind::Jira,
                 scope,
+                ObjectType::Channel,
                 &store,
                 &ns,
                 SubjectRef::direct(SubjectType::User, user),
@@ -308,6 +359,7 @@ mod tests {
             ConnectorInstanceId::new_v4(),
             ConnectorKind::GoogleDrive,
             scope,
+            ObjectType::Channel,
             &store,
             &ns,
             SubjectRef::direct(SubjectType::User, user),
@@ -327,6 +379,7 @@ mod tests {
             ConnectorInstanceId::new_v4(),
             ConnectorKind::Notion,
             scope,
+            ObjectType::Channel,
             &store,
             &ns,
             subject,
@@ -337,6 +390,7 @@ mod tests {
                 ConnectorInstanceId::new_v4(),
                 ConnectorKind::Notion,
                 scope,
+                ObjectType::Channel,
                 &store,
                 &ns,
                 subject,
@@ -357,6 +411,7 @@ mod tests {
             ConnectorInstanceId::new_v4(),
             ConnectorKind::Notion,
             scope,
+            ObjectType::Channel,
             &store,
             &ns,
             subject,
@@ -366,6 +421,7 @@ mod tests {
             ConnectorInstanceId::new_v4(),
             ConnectorKind::Jira,
             scope,
+            ObjectType::Channel,
             &store,
             &ns,
             subject,
@@ -383,8 +439,16 @@ mod tests {
         let mut reg = AttachmentRegistry::new();
         let subject = SubjectRef::direct(SubjectType::User, user);
         let connector = ConnectorInstanceId::new_v4();
-        reg.attach(connector, ConnectorKind::Slack, scope, &store, &ns, subject)
-            .unwrap();
+        reg.attach(
+            connector,
+            ConnectorKind::Slack,
+            scope,
+            ObjectType::Channel,
+            &store,
+            &ns,
+            subject,
+        )
+        .unwrap();
         let removed = reg.detach(connector, &store, &ns, subject).unwrap();
         assert_eq!(removed.connector, connector);
         assert!(reg.is_empty());
@@ -418,6 +482,7 @@ mod tests {
             connector,
             ConnectorKind::OneDrive,
             scope,
+            ObjectType::Channel,
             &store,
             &ns,
             SubjectRef::direct(SubjectType::User, user),
@@ -431,5 +496,212 @@ mod tests {
         let reg = AttachmentRegistry::new();
         let err = reg.scope_for(ConnectorInstanceId::new_v4()).unwrap_err();
         assert!(matches!(err, ConnectorError::AttachmentNotFound));
+    }
+
+    // ---- user-scoped connector tests ----
+
+    #[test]
+    fn user_scoped_attach_succeeds_with_editor() {
+        let (mut store, ns) = fresh();
+        let scope = ScopeId::new_v4();
+        let user = Uuid::new_v4();
+        grant_on(&mut store, ObjectType::User, scope, Relation::Editor, user);
+
+        let mut reg = AttachmentRegistry::new();
+        let connector = ConnectorInstanceId::new_v4();
+        let attachment = reg
+            .attach(
+                connector,
+                ConnectorKind::GoogleDrive,
+                scope,
+                ObjectType::User,
+                &store,
+                &ns,
+                SubjectRef::direct(SubjectType::User, user),
+            )
+            .unwrap();
+        assert_eq!(attachment.scope_id, scope);
+    }
+
+    #[test]
+    fn user_scoped_attach_denied_for_member() {
+        let (mut store, ns) = fresh();
+        let scope = ScopeId::new_v4();
+        let user = Uuid::new_v4();
+        grant_on(&mut store, ObjectType::User, scope, Relation::Member, user);
+
+        let mut reg = AttachmentRegistry::new();
+        let err = reg
+            .attach(
+                ConnectorInstanceId::new_v4(),
+                ConnectorKind::Notion,
+                scope,
+                ObjectType::User,
+                &store,
+                &ns,
+                SubjectRef::direct(SubjectType::User, user),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::PermissionDenied));
+    }
+
+    #[test]
+    fn user_scoped_detach_succeeds() {
+        let (mut store, ns) = fresh();
+        let scope = ScopeId::new_v4();
+        let user = Uuid::new_v4();
+        grant_on(&mut store, ObjectType::User, scope, Relation::Admin, user);
+
+        let mut reg = AttachmentRegistry::new();
+        let subject = SubjectRef::direct(SubjectType::User, user);
+        let connector = ConnectorInstanceId::new_v4();
+        reg.attach(
+            connector,
+            ConnectorKind::Slack,
+            scope,
+            ObjectType::User,
+            &store,
+            &ns,
+            subject,
+        )
+        .unwrap();
+        let removed = reg.detach(connector, &store, &ns, subject).unwrap();
+        assert_eq!(removed.connector, connector);
+        assert!(reg.is_empty());
+    }
+
+    // ---- domain-scoped connector tests ----
+
+    #[test]
+    fn domain_scoped_attach_succeeds_with_admin() {
+        let (mut store, ns) = fresh();
+        let scope = ScopeId::new_v4();
+        let user = Uuid::new_v4();
+        grant_on(&mut store, ObjectType::Domain, scope, Relation::Admin, user);
+
+        let mut reg = AttachmentRegistry::new();
+        let connector = ConnectorInstanceId::new_v4();
+        let attachment = reg
+            .attach(
+                connector,
+                ConnectorKind::Jira,
+                scope,
+                ObjectType::Domain,
+                &store,
+                &ns,
+                SubjectRef::direct(SubjectType::User, user),
+            )
+            .unwrap();
+        assert_eq!(attachment.scope_id, scope);
+    }
+
+    #[test]
+    fn domain_scoped_attach_denied_for_viewer() {
+        let (mut store, ns) = fresh();
+        let scope = ScopeId::new_v4();
+        let user = Uuid::new_v4();
+        grant_on(
+            &mut store,
+            ObjectType::Domain,
+            scope,
+            Relation::Viewer,
+            user,
+        );
+
+        let mut reg = AttachmentRegistry::new();
+        let err = reg
+            .attach(
+                ConnectorInstanceId::new_v4(),
+                ConnectorKind::Confluence,
+                scope,
+                ObjectType::Domain,
+                &store,
+                &ns,
+                SubjectRef::direct(SubjectType::User, user),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::PermissionDenied));
+    }
+
+    #[test]
+    fn domain_scoped_detach_succeeds() {
+        let (mut store, ns) = fresh();
+        let scope = ScopeId::new_v4();
+        let user = Uuid::new_v4();
+        grant_on(
+            &mut store,
+            ObjectType::Domain,
+            scope,
+            Relation::Editor,
+            user,
+        );
+
+        let mut reg = AttachmentRegistry::new();
+        let subject = SubjectRef::direct(SubjectType::User, user);
+        let connector = ConnectorInstanceId::new_v4();
+        reg.attach(
+            connector,
+            ConnectorKind::GitHub,
+            scope,
+            ObjectType::Domain,
+            &store,
+            &ns,
+            subject,
+        )
+        .unwrap();
+        let removed = reg.detach(connector, &store, &ns, subject).unwrap();
+        assert_eq!(removed.connector, connector);
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn wrong_object_type_denies_even_with_grant() {
+        let (mut store, ns) = fresh();
+        let scope = ScopeId::new_v4();
+        let user = Uuid::new_v4();
+        // Grant on Channel, but attempt attach as User scope.
+        grant_on(
+            &mut store,
+            ObjectType::Channel,
+            scope,
+            Relation::Admin,
+            user,
+        );
+
+        let mut reg = AttachmentRegistry::new();
+        let err = reg
+            .attach(
+                ConnectorInstanceId::new_v4(),
+                ConnectorKind::Notion,
+                scope,
+                ObjectType::User,
+                &store,
+                &ns,
+                SubjectRef::direct(SubjectType::User, user),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::PermissionDenied));
+    }
+
+    #[test]
+    fn unsupported_object_type_rejected() {
+        let (mut store, ns) = fresh();
+        let scope = ScopeId::new_v4();
+        let user = Uuid::new_v4();
+        grant_on(&mut store, ObjectType::Device, scope, Relation::Admin, user);
+
+        let mut reg = AttachmentRegistry::new();
+        let err = reg
+            .attach(
+                ConnectorInstanceId::new_v4(),
+                ConnectorKind::Notion,
+                scope,
+                ObjectType::Device,
+                &store,
+                &ns,
+                SubjectRef::direct(SubjectType::User, user),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::UnsupportedObjectType));
     }
 }

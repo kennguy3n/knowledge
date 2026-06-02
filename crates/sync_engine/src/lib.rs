@@ -96,10 +96,15 @@
 
 #![deny(missing_docs)]
 
+// STABLE
 pub mod crdt;
+// STABLE
 pub mod delta;
+// STABLE
 pub mod error;
+// STABLE
 pub mod op_log;
+// STABLE
 pub mod persist;
 
 use std::cell::RefCell;
@@ -108,8 +113,11 @@ use std::hash::Hash;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+// STABLE
 pub use crdt::AddWinsSet;
+// STABLE
 pub use error::{Result, SyncError};
+// STABLE
 pub use op_log::{merge_logs, OpLog, SyncOp, SyncOpKind};
 
 /// Default auto-compaction threshold for [`SyncEngine`]. Devices

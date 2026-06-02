@@ -37,17 +37,23 @@
 
 #![deny(missing_docs)]
 
+// STABLE
 pub mod lifecycle;
+// STABLE
 pub mod proposal;
+// STABLE
 pub mod schema;
 
+// STABLE
 pub use lifecycle::{
     AutoPromotionPolicy, CanonicalArtifact, CanonicalConcept, CanonicalObservation,
     CanonicalRelation, CanonicalSummary, ProposalDecision, ProposalState, ProposalStore,
     StoredProposal,
 };
+// STABLE
 pub use proposal::{
     AgentIdentity, AgentProposal, ConceptProposal, ObservationProposal, ProposalKind,
     RelationProposal, RelationType, SummaryProposal,
 };
+// STABLE
 pub use schema::{validate_proposal, ProposalValidationError};

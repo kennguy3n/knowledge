@@ -34,34 +34,50 @@
 #[cfg(all(feature = "test-support", not(debug_assertions)))]
 compile_error!("test-support must not be enabled in release builds");
 
+// UNSTABLE — elected-device protocol; API may change.
 pub mod election;
+// STABLE
 pub mod error;
+// STABLE
 pub mod hierarchy;
+// STABLE
 pub mod object;
+// STABLE
 pub mod pipeline;
+// STABLE
 pub mod publish;
+// STABLE
 pub mod schema;
+// STABLE
 pub mod window;
 
+// UNSTABLE — elected-device protocol; API may change.
 pub use election::{
     DeviceTier, ElectionCandidate, SynthesizerElection, SynthesizerRole, DEFAULT_BATTERY_FLOOR,
     DEFAULT_HEARTBEAT_TTL_SECS,
 };
+// STABLE
 pub use error::{PipelineError, Result};
+// STABLE
 pub use hierarchy::{
     build_domain_summary_object, build_tenant_summary_object, open_domain_window,
     open_tenant_window, ApprovedDocument, ChannelOutput, DomainOutput, DomainSynthesisInput,
     HierarchyEnforcedWindowManager, TenantSynthesisInput, TieredWindowHandle, WindowScopeTier,
 };
+// STABLE
 pub use object::{
     default_synthesis_object_version, ObjectId, SynthesisObject, SynthesisObjectType,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use pipeline::NoOpSynthesizer;
+// STABLE
 pub use pipeline::{LlamaCppSynthesizer, SynthesisInputs, SynthesisPipeline};
+// STABLE
 pub use publish::{consume_synthesis_object, publish_synthesis_object, EncryptedSynthesisObject};
+// STABLE
 pub use schema::{
     EntityList, EntityRecord, EntityType, ImportanceTag, ImportanceTagClass, ObservationRow,
     ObservationRowKind, SummaryBundle,
 };
+// STABLE
 pub use window::{SynthesisWindow, SynthesisWindowManager, WindowId, WindowStatus};
