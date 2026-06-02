@@ -74,28 +74,33 @@ impl DeviceTier {
     }
 }
 
-/// Attempt to read total physical RAM in bytes from the OS.
+/// Attempt to read total *available* RAM in bytes from the OS.
 ///
 /// Uses direct syscalls / kernel interfaces — no subprocess is
 /// spawned, making this safe for sandboxed environments and fast
-/// enough for hot-path construction.
+/// enough for hot-path construction. On Linux, the result is
+/// cgroup-aware: if a memory limit is set (Docker, Kubernetes,
+/// systemd), the returned value is `min(host_ram, cgroup_limit)`.
 ///
 /// Returns `None` on unsupported platforms or if the query fails.
 #[allow(unsafe_code)] // FFI calls to libc / kernel32 — trivially safe.
 fn detect_total_ram_bytes() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
-        // sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGE_SIZE)
-        // avoids parsing /proc/meminfo and works in containers.
         // SAFETY: `sysconf` is safe to call with any `_SC_*`
         // constant; it returns -1 on error (handled below).
         let pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) };
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) };
-        if pages > 0 && page_size > 0 {
-            Some(u64::try_from(pages).ok()? * u64::try_from(page_size).ok()?)
+        let host_bytes = if pages > 0 && page_size > 0 {
+            u64::try_from(pages).ok()? * u64::try_from(page_size).ok()?
         } else {
-            None
-        }
+            return None;
+        };
+        // In containers, sysconf reports the *host* RAM, not the
+        // cgroup limit. Read the cgroup memory cap and take the
+        // minimum so we respect container budgets.
+        let cgroup_limit = cgroup_memory_limit_bytes();
+        Some(cgroup_limit.map_or(host_bytes, |limit| limit.min(host_bytes)))
     }
     #[cfg(target_os = "macos")]
     {
@@ -169,6 +174,38 @@ fn detect_total_ram_bytes() -> Option<u64> {
     {
         None
     }
+}
+
+/// Read the cgroup memory limit, trying cgroup v2 first, then v1.
+///
+/// Returns `None` when not running in a cgroup or if the limit is
+/// "max" (unbounded).
+#[cfg(target_os = "linux")]
+fn cgroup_memory_limit_bytes() -> Option<u64> {
+    // cgroup v2: /sys/fs/cgroup/memory.max ("max" = unbounded)
+    if let Ok(contents) = std::fs::read_to_string("/sys/fs/cgroup/memory.max") {
+        let trimmed = contents.trim();
+        if trimmed != "max" {
+            if let Ok(limit) = trimmed.parse::<u64>() {
+                return Some(limit);
+            }
+        }
+        return None;
+    }
+    // cgroup v1: /sys/fs/cgroup/memory/memory.limit_in_bytes
+    // A very large value (close to i64::MAX or page-aligned) means
+    // "no limit set", which we treat as None.
+    if let Ok(contents) = std::fs::read_to_string("/sys/fs/cgroup/memory/memory.limit_in_bytes") {
+        if let Ok(limit) = contents.trim().parse::<u64>() {
+            // The kernel reports PAGE_ALIGN(i64::MAX) when no limit
+            // is set — on a 4 KiB-page system that's 0x7FFF_FFFF_FFFF_F000.
+            // Treat anything above 2^62 as "effectively unlimited".
+            if limit < (1u64 << 62) {
+                return Some(limit);
+            }
+        }
+    }
+    None
 }
 
 /// Router configuration. Held by [`crate::InferenceRouter`] and
