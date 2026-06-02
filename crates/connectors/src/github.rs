@@ -119,6 +119,10 @@ pub struct GitHubWebhookPayload {
     /// Repository object (present on most events).
     #[serde(default)]
     pub repository: Option<GitHubRepo>,
+    /// Changes object (for `member` `edited` events — contains
+    /// `permission.to` with the new collaborator role).
+    #[serde(default)]
+    pub changes: Option<serde_json::Value>,
 }
 
 /// Minimal member info from a `member` webhook event.
@@ -289,16 +293,9 @@ fn issue_to_event(issue: &GitHubIssue) -> ConnectorEvent {
         .or(issue.updated_at)
         .unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(issue.number.to_string());
-    if issue.state == "closed" {
-        ConnectorEvent::DocumentDeleted {
-            document_id: id,
-            occurred_at: issue.closed_at.unwrap_or(occurred_at),
-        }
-    } else {
-        ConnectorEvent::DocumentCreated {
-            document_id: id,
-            occurred_at,
-        }
+    ConnectorEvent::DocumentCreated {
+        document_id: id,
+        occurred_at,
     }
 }
 
@@ -308,16 +305,9 @@ fn issue_to_sync_event(issue: &GitHubIssue) -> ConnectorEvent {
         .or(issue.created_at)
         .unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(issue.number.to_string());
-    if issue.state == "closed" {
-        ConnectorEvent::DocumentDeleted {
-            document_id: id,
-            occurred_at: issue.closed_at.unwrap_or(occurred_at),
-        }
-    } else {
-        ConnectorEvent::DocumentUpdated {
-            document_id: id,
-            occurred_at,
-        }
+    ConnectorEvent::DocumentUpdated {
+        document_id: id,
+        occurred_at,
     }
 }
 
@@ -358,7 +348,7 @@ impl Connector for GitHubConnector {
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: watermark.map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
         })
     }
 
@@ -384,6 +374,13 @@ impl Connector for GitHubConnector {
             // `updated_at` exactly equals the cursor is returned
             // every run. Skip it client-side to deduplicate.
             let when = issue.updated_at.or(issue.created_at);
+            if when.is_none() {
+                tracing::warn!(
+                    issue_number = issue.number,
+                    "github incremental_sync: issue has no updated_at or created_at; \
+                     skipping dedup"
+                );
+            }
             if let (Some(prev), Some(t)) = (prior_watermark, when) {
                 if t <= prev {
                     continue;
@@ -396,7 +393,7 @@ impl Connector for GitHubConnector {
         }
         Ok(SyncRunResult {
             events,
-            next_cursor: watermark.map(|t| t.to_rfc3339()),
+            next_cursor: watermark.map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
         })
     }
 
@@ -454,6 +451,16 @@ impl Connector for GitHubConnector {
         Ok(subscription)
     }
 
+    /// Parse a GitHub webhook payload and emit [`ConnectorEvent`]s.
+    ///
+    /// **Inlining contract**: the caller must inject the value of the
+    /// `X-GitHub-Event` HTTP header into the JSON body as
+    /// `"event_type"` before calling this method.  GitHub does *not*
+    /// include the event type in the JSON payload itself — it is
+    /// delivered exclusively via the HTTP header.  The webhook server
+    /// layer (see `webhook_server.rs`) is responsible for performing
+    /// this inlining; if the raw GitHub payload is passed without
+    /// inlining, all events will fall through to the error branch.
     fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
         let p: GitHubWebhookPayload = serde_json::from_slice(body)?;
         let event = match p.event_type.as_str() {
@@ -504,8 +511,7 @@ impl Connector for GitHubConnector {
             }
             "push" => {
                 let doc_ref = p.push_ref.unwrap_or_else(|| "refs/heads/main".into());
-                let sha = p.after.unwrap_or_default();
-                let id = SourceDocumentId::new(format!("push:{doc_ref}:{sha}"));
+                let id = SourceDocumentId::new(format!("push:{doc_ref}"));
                 ConnectorEvent::DocumentUpdated {
                     document_id: id,
                     occurred_at: Utc::now(),
@@ -516,14 +522,22 @@ impl Connector for GitHubConnector {
                     .member
                     .ok_or_else(|| ConnectorError::Webhook("missing member body".into()))?;
                 let repo_name = p.repository.map(|r| r.full_name).unwrap_or_default();
+                let new_level = if p.action.as_str() == "removed" {
+                    None
+                } else {
+                    let role = p
+                        .changes
+                        .as_ref()
+                        .and_then(|c| c.get("permission"))
+                        .and_then(|perm| perm.get("to"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("write");
+                    parse_role(role)
+                };
                 ConnectorEvent::PermissionChanged {
                     document_id: SourceDocumentId::new(repo_name),
                     user_id: SourceUserId::new(member.login),
-                    new_level: if p.action.as_str() == "removed" {
-                        None
-                    } else {
-                        parse_role("write")
-                    },
+                    new_level,
                     occurred_at: Utc::now(),
                 }
             }
@@ -665,7 +679,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_sync_emits_deleted_for_closed_issues() {
+    fn initial_sync_emits_created_for_closed_issues() {
         let transport = MockHttpTransport::new();
         let now = Utc::now();
         let base = "https://api.test/github";
@@ -680,7 +694,7 @@ mod tests {
         assert_eq!(res.events.len(), 1);
         assert!(matches!(
             res.events[0],
-            ConnectorEvent::DocumentDeleted { .. }
+            ConnectorEvent::DocumentCreated { .. }
         ));
     }
 
@@ -861,6 +875,38 @@ mod tests {
         let evs = c.handle_webhook_event(&body).unwrap();
         assert_eq!(evs.len(), 1);
         assert!(matches!(evs[0], ConnectorEvent::PermissionChanged { .. }));
+    }
+
+    #[test]
+    fn handle_member_edited_event_extracts_permission() {
+        let transport = MockHttpTransport::new();
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), Arc::new(transport), oauth());
+        let payload = serde_json::json!({
+            "event_type": "member",
+            "action": "edited",
+            "member": {
+                "login": "octocat",
+                "id": 1,
+            },
+            "repository": {
+                "full_name": "owner/repo",
+                "id": 100,
+            },
+            "changes": {
+                "permission": {
+                    "to": "admin"
+                }
+            }
+        });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let evs = c.handle_webhook_event(&body).unwrap();
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            ConnectorEvent::PermissionChanged { new_level, .. } => {
+                assert_eq!(*new_level, Some(SourcePermissionLevel::Admin));
+            }
+            other => panic!("expected PermissionChanged, got {other:?}"),
+        }
     }
 
     #[test]

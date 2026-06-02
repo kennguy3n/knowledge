@@ -102,14 +102,10 @@ fn github_full_sync_cycle() {
     let res = c.initial_sync(&cfg, &tok).unwrap();
     assert_eq!(res.events.len(), 2);
     assert!(res.next_cursor.is_some());
-    assert!(matches!(
-        res.events[0],
-        ConnectorEvent::DocumentCreated { .. }
-    ));
-    assert!(matches!(
-        res.events[1],
-        ConnectorEvent::DocumentDeleted { .. }
-    ));
+    assert!(res
+        .events
+        .iter()
+        .all(|e| matches!(e, ConnectorEvent::DocumentCreated { .. })));
 
     // Step 3: incremental_sync (new transport for fresh expectations).
     let transport2 = MockHttpTransport::new();
