@@ -47,7 +47,7 @@ repository = "https://github.com/kennguy3n/knowledge"
 
 [workspace.dependencies]
 # Errors
-thiserror = "1"
+thiserror = "2"
 
 # IDs
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
