@@ -1946,29 +1946,128 @@ const ID_LEXICON: LanguageLexicon = LanguageLexicon {
     stop_words: &["ini", "itu", "kemarin", "besok"],
 };
 
-/// Malay (`ms`). Currently aliases the Indonesian lexicon;
-/// see the doc on [`ID_LEXICON`] for the rationale and the
-/// earlier follow-up. Kept as a distinct constant so that
-/// when we differentiate the two in , the change is
-/// observable in this file rather than via an `alias` map.
+/// Malay (`ms`).
+///
+/// Indonesian (`id`) and Malay (`ms`) share a large common core,
+/// and `whatlang` has no Malay classifier — it detects Malay text
+/// as [`whatlang::Lang::Ind`], which
+/// [`crate::language::whatlang_lang_to_bcp47`] maps to `"id"`.
+/// Auto-detected Malay therefore routes through [`ID_LEXICON`]; the
+/// `ms` lexicon below is reachable only when a caller supplies the
+/// `ms` tag explicitly (e.g. an FFI / connector pipeline that knows
+/// the source locale).
+///
+/// This lexicon is **differentiated** from Indonesian rather than a
+/// straight alias: it keeps the shared Malay/Indonesian decision and
+/// task vocabulary but adds the register-specific Malay forms that
+/// diverge from Indonesian — `diluluskan` ("approved", Indonesian
+/// `disahkan`/`disetujui`), `dipersetujui` ("agreed"), `ditetapkan`
+/// ("determined / set"), the deadline collocation `tarikh akhir`
+/// (Indonesian `tenggat waktu`), and the standard-Malay time
+/// stop-words `semalam` ("yesterday") / `esok` ("tomorrow")
+/// (Indonesian `kemarin` / `besok`). Strategies mirror Indonesian:
+/// `Substring` for decision / task (so multi-word entries like
+/// `tarikh akhir` match), `FirstBigram` for imperative verbs.
 const MS_LEXICON: LanguageLexicon = LanguageLexicon {
     primary_tag: "ms",
     display_name: "Malay",
-    decision_keywords: ID_LEXICON.decision_keywords,
-    decision_strategy: ID_LEXICON.decision_strategy,
-    task_keywords: ID_LEXICON.task_keywords,
-    task_strategy: ID_LEXICON.task_strategy,
-    task_imperative_verbs: ID_LEXICON.task_imperative_verbs,
-    task_imperative_strategy: ID_LEXICON.task_imperative_strategy,
-    stop_words: ID_LEXICON.stop_words,
+    decision_keywords: &[
+        "keputusan",
+        "memutuskan",
+        "diluluskan",
+        "dipersetujui",
+        "ditetapkan",
+        "ditandatangani",
+        "ditolak",
+    ],
+    decision_strategy: MatchStrategy::Substring,
+    task_keywords: &["tugas", "perlu", "selesaikan", "tarikh akhir", "tolong"],
+    task_strategy: MatchStrategy::Substring,
+    task_imperative_verbs: &[
+        "hantar",
+        "jadualkan",
+        "semak",
+        "terbitkan",
+        "perbaiki",
+        "laksanakan",
+        "siapkan",
+        "kemas kini",
+    ],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
+    stop_words: &["ini", "itu", "semalam", "esok"],
+};
+
+/// Tagalog / Filipino (`tl`).
+///
+/// Latin script with whitespace word boundaries, so the keyword
+/// classes use [`MatchStrategy::Substring`] for decision / task
+/// (mirroring the Romance and Indonesian lexicons) and
+/// [`MatchStrategy::FirstBigram`] for the sentence-initial
+/// imperative verbs. `whatlang` ships a Tagalog classifier
+/// ([`whatlang::Lang::Tgl`] → `"tl"`), so Tagalog is reachable via
+/// auto-detection as well as explicit tagging.
+///
+/// Decision verbs are the `-in` / `na-` aspect forms
+/// (`napagpasyahan` "was decided", `inaprubahan` "was approved",
+/// `tinanggap` "was accepted", `tinanggihan` "was rejected") plus
+/// the noun `desisyon` ("decision"). Task class keeps the English
+/// loanword `deadline` (in everyday Filipino office use) alongside
+/// native `gawain` ("task"), `kailangan` ("need / must"), `tapusin`
+/// ("finish it"), and the polite-request word `pakiusap`
+/// ("please").
+///
+/// Deliberately omitted from the task class: the bare polite
+/// proclitic `paki-` ("please" prefix). Under `Substring` matching
+/// a bare `paki` would fire on common non-request words such as
+/// `pakikipag-` ("inter-/social-") and `pakinabang` ("benefit"),
+/// so only the free-standing `pakiusap` is listed — the same
+/// precision-vs-recall trade-off documented for the Indonesian /
+/// Romance high-frequency function words elsewhere in this module.
+const TL_LEXICON: LanguageLexicon = LanguageLexicon {
+    primary_tag: "tl",
+    display_name: "Tagalog",
+    decision_keywords: &[
+        "desisyon",
+        "napagpasyahan",
+        "inaprubahan",
+        "tinanggap",
+        "pinagtibay",
+        "nilagdaan",
+        "tinanggihan",
+    ],
+    decision_strategy: MatchStrategy::Substring,
+    task_keywords: &["gawain", "kailangan", "tapusin", "deadline", "pakiusap"],
+    task_strategy: MatchStrategy::Substring,
+    task_imperative_verbs: &[
+        "gawin",
+        "ipadala",
+        "suriin",
+        "ayusin",
+        "ihanda",
+        "repasuhin",
+        "ilathala",
+    ],
+    task_imperative_strategy: MatchStrategy::FirstBigram,
+    stop_words: &["ito", "iyan", "iyon", "ngayon", "kahapon", "bukas"],
 };
 
 /// Hindi (`hi`).
 ///
 /// Devanagari script. Decision verbs cover both
 /// `निर्णय` ("decision" — noun) and `तय` / `सहमत` (verb
-/// past-participles). Task class includes `कृपया`
-/// ("please") which is the canonical polite-request opener.
+/// past-participles). `मंजूर` ("approved / sanctioned") is the
+/// colloquial counterpart to the more formal `अनुमोदित`. Task
+/// class includes `कृपया` ("please") which is the canonical
+/// polite-request opener, plus the multi-word `समय सीमा`
+/// ("deadline") matched as a substring.
+///
+/// Deliberately omitted from the task class: the bare verb
+/// `करना` ("to do"). It is one of the highest-frequency Hindi
+/// verbs (`काम करना`, `यह करना है`, `पसंद करना`, …) and under
+/// `Substring` matching would mis-classify a large fraction of
+/// declaratives as tasks — the same precision-vs-recall
+/// trade-off documented for the Romance / Indonesian
+/// high-frequency function words elsewhere in this module.
 const HI_LEXICON: LanguageLexicon = LanguageLexicon {
     primary_tag: "hi",
     display_name: "Hindi",
@@ -1979,11 +2078,12 @@ const HI_LEXICON: LanguageLexicon = LanguageLexicon {
         "स्वीकृत",
         "अनुमोदित",
         "अनुमोदन",
+        "मंजूर",
         "हस्ताक्षरित",
         "अस्वीकृत",
     ],
     decision_strategy: MatchStrategy::Substring,
-    task_keywords: &["कार्य", "कृपया", "अनुरोध", "अनुवर्ती", "टू डू"],
+    task_keywords: &["कार्य", "कृपया", "अनुरोध", "अनुवर्ती", "समय सीमा", "टू डू"],
     task_strategy: MatchStrategy::Substring,
     task_imperative_verbs: &[
         "लिखें",
@@ -2345,20 +2445,22 @@ const LO_LEXICON: LanguageLexicon = LanguageLexicon {
 ///   keyword bundle per language for the substrate's
 ///   built-in decision / task / imperative pipelines.
 ///
-/// 20 languages ship today — the 12-language
-/// base target (en/ja/ko/zh/es/fr/de/pt/ar/vi/th/id) plus four
-/// add-ons (`it`, `ru`, `hi`, `ms`) that already have
-/// interrogative tables, plus four script-coverage add-ons
+/// 23 languages ship today — the 12-language
+/// base target (en/ja/ko/zh/es/fr/de/pt/ar/vi/th/id) plus the
+/// Hebrew (`he`) add-on, four further add-ons
+/// (`it`, `ru`, `hi`, `ms`) that already have
+/// interrogative tables, four script-coverage add-ons
 /// (`bo`, `km`, `my`, `lo`) that close the
 /// FTS5-tokeniser-blind / no-whitespace-word-boundary script
-/// gap. The interrogative-table-vs-LexiconRegistry coverage
+/// gap, and the Tagalog / Filipino (`tl`) add-on. The
+/// interrogative-table-vs-LexiconRegistry coverage
 /// invariant test
 /// ([`crate::interrogatives::SUPPORTED_PRIMARY_TAGS`]) holds
 /// for every language listed here.
 pub const BUILTIN_LEXICONS: &[LanguageLexicon] = &[
     AR_LEXICON, BO_LEXICON, DE_LEXICON, EN_LEXICON, ES_LEXICON, FR_LEXICON, HE_LEXICON, HI_LEXICON,
     ID_LEXICON, IT_LEXICON, JA_LEXICON, KM_LEXICON, KO_LEXICON, LO_LEXICON, MS_LEXICON, MY_LEXICON,
-    PT_LEXICON, RU_LEXICON, TH_LEXICON, VI_LEXICON, ZH_LEXICON,
+    PT_LEXICON, RU_LEXICON, TH_LEXICON, TL_LEXICON, VI_LEXICON, ZH_LEXICON,
 ];
 
 /// All BCP-47 primary tags shipped in the built-in
@@ -2367,7 +2469,7 @@ pub const BUILTIN_LEXICONS: &[LanguageLexicon] = &[
 /// design (one is the test invariant for the other).
 pub const SUPPORTED_LEXICON_TAGS: &[&str] = &[
     "ar", "bo", "de", "en", "es", "fr", "he", "hi", "id", "it", "ja", "km", "ko", "lo", "ms", "my",
-    "pt", "ru", "th", "vi", "zh",
+    "pt", "ru", "th", "tl", "vi", "zh",
 ];
 
 /// Return a reference to the process-wide built-in
@@ -3609,18 +3711,69 @@ mod tests {
     }
 
     #[test]
-    fn malay_and_indonesian_lexicons_are_identical() {
-        // Documented design choice (see ID_LEXICON doc): until
-        // differentiates them, ms aliases id. Pin so
-        // accidental drift fails the test rather than silently
-        // diverging the two lexicons.
+    fn malay_is_differentiated_from_indonesian() {
+        // Malay (`ms`) shares a common core with Indonesian (`id`)
+        // but is no longer a straight alias — it carries the
+        // register-specific Malay forms that diverge from
+        // Indonesian (see the MS_LEXICON doc). Pin both the shared
+        // anchor (`keputusan` "decision" is common to both) and the
+        // Malay-only divergences so accidental drift in either
+        // direction fails the test.
         let reg = default_registry();
         let id = reg.lexicon_for("id").unwrap();
         let ms = reg.lexicon_for("ms").unwrap();
-        assert_eq!(id.decision_keywords, ms.decision_keywords);
-        assert_eq!(id.task_keywords, ms.task_keywords);
-        assert_eq!(id.task_imperative_verbs, ms.task_imperative_verbs);
-        assert_eq!(id.stop_words, ms.stop_words);
+
+        // Shared anchor: the canonical decision noun appears in both.
+        assert!(id.decision_keywords.contains(&"keputusan"));
+        assert!(ms.decision_keywords.contains(&"keputusan"));
+
+        // Malay-specific decision verbs that Indonesian does NOT use.
+        for malay_only in ["diluluskan", "dipersetujui", "ditetapkan"] {
+            assert!(
+                ms.decision_keywords.contains(&malay_only),
+                "malay decision keywords must contain Malay-specific {malay_only:?}"
+            );
+            assert!(
+                !id.decision_keywords.contains(&malay_only),
+                "indonesian decision keywords must NOT contain Malay-specific {malay_only:?}"
+            );
+        }
+
+        // Malay deadline collocation + Malay time stop-words diverge.
+        assert!(ms.task_keywords.contains(&"tarikh akhir"));
+        assert!(!id.task_keywords.contains(&"tarikh akhir"));
+        assert!(ms.stop_words.contains(&"semalam"));
+        assert!(ms.stop_words.contains(&"esok"));
+
+        // The two lexicons are genuinely different objects now.
+        assert_ne!(id.decision_keywords, ms.decision_keywords);
+        assert_ne!(id.task_keywords, ms.task_keywords);
+    }
+
+    #[test]
+    fn tagalog_lexicon_is_configured_with_expected_keywords() {
+        // Tagalog / Filipino (`tl`) is Latin-script with whitespace
+        // word boundaries, so decision / task use Substring and the
+        // sentence-initial imperative verbs use FirstBigram.
+        let reg = default_registry();
+        let tl = reg.lexicon_for("tl").expect("tagalog configured");
+        assert_eq!(tl.primary_tag, "tl");
+        assert_eq!(tl.display_name, "Tagalog");
+        assert_eq!(tl.decision_strategy, MatchStrategy::Substring);
+        assert_eq!(tl.task_strategy, MatchStrategy::Substring);
+        assert_eq!(tl.task_imperative_strategy, MatchStrategy::FirstBigram);
+        for decision in ["desisyon", "napagpasyahan", "inaprubahan", "tinanggap"] {
+            assert!(
+                tl.decision_keywords.contains(&decision),
+                "tagalog decision keywords must contain {decision:?}"
+            );
+        }
+        for task in ["gawain", "kailangan", "tapusin", "deadline"] {
+            assert!(
+                tl.task_keywords.contains(&task),
+                "tagalog task keywords must contain {task:?}"
+            );
+        }
     }
 
     #[test]

@@ -532,6 +532,53 @@ breakdown.
 
 ---
 
+## Multilingual support
+
+The observation engine is lexicon-first and language-aware: it
+detects the dominant language of each message, selects the
+matching lexicon (decision / task keywords, imperative verbs,
+stop-words) and interrogative table, and stamps the BCP-47
+primary subtag onto every observation. Bonsai-1.7B synthesis is
+multilingual and emits output in the source language. The
+following 15 languages are validated end-to-end:
+
+| BCP-47 | Language | Script | Detection | Notes |
+|---|---|---|---|---|
+| `en` | English | Latin | `en` | Baseline; default fallback lexicon. |
+| `zh` | Chinese | Han | `zh` | Substring keyword matching — no word boundaries. |
+| `es` | Spanish | Latin | `es` | Decision class covers masculine/feminine participle pairs (e.g. `aprobado` / `aprobada`). |
+| `hi` | Hindi | Devanagari | `hi` | Decision class includes `मंजूर` (approved); deadline `समय सीमा` matched as a substring. |
+| `fr` | French | Latin | `fr` | Same precision/recall trade-off as the other Romance lexicons. |
+| `ar` | Arabic | Arabic | `ar` | First-token matching peels proclitic clitics (e.g. `و` / `ال`). |
+| `th` | Thai | Thai | `th` | Substring matching — Thai has no inter-word spaces, so entity extraction is substring-based. |
+| `vi` | Vietnamese | Latin (diacritics) | `vi` | Bigram-aware imperative matching for two-syllable verbs. |
+| `ms` | Malay | Latin | `id` | `whatlang` has no Malay classifier; Malay detects as Indonesian. The dedicated `ms` lexicon (`diluluskan`, `tarikh akhir`, …) is reachable via an explicit `ms` tag. |
+| `tl` | Tagalog / Filipino | Latin | `tl` | Decision verbs are `-in`/`na-` aspect forms; the English loanword `deadline` is kept in the task class. |
+| `de` | German | Latin | `de` | — |
+| `pt` | Portuguese | Latin | `pt` | — |
+| `ja` | Japanese | Kana + Kanji | `ja` | Substring matching — no word boundaries. |
+| `ko` | Korean | Hangul | `ko` | Substring matching. |
+| `ru` | Russian | Cyrillic | `ru` | — |
+
+Two suites pin this coverage:
+
+- **Pipeline** —
+  `crates/observation_engine/tests/multilingual_pipeline.rs`
+  runs a realistic decision / task / question message per
+  language through `default_pipeline`, asserting correct
+  detection, correct (non-English-fallback) lexicon selection,
+  and the absence of English-keyword false positives.
+- **Live model** —
+  `crates/inference_router/tests/multilingual_bonsai.rs` drives
+  the real `LlamaCppAdapter` against a live `llama-server`
+  serving Bonsai-1.7B (summary, entity, importance, concept
+  tasks). Gated behind the `live-integration` feature and the
+  `LLAMA_SERVER_BINARY` env var; it skips gracefully when no
+  model checkpoint is available, so the default build stays
+  hermetic.
+
+---
+
 ## Where to read more
 
 - [docs/DESIGN.md](./docs/DESIGN.md) — product thesis,

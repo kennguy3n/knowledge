@@ -139,6 +139,7 @@ pub(crate) struct Counters {
     pub(crate) hits_pt: AtomicU64,
     pub(crate) hits_ru: AtomicU64,
     pub(crate) hits_th: AtomicU64,
+    pub(crate) hits_tl: AtomicU64,
     pub(crate) hits_vi: AtomicU64,
     pub(crate) hits_zh: AtomicU64,
     /// Times an input primary_tag was `Some(t)` but no lexicon
@@ -223,6 +224,7 @@ pub fn record_lexicon_hit(requested: Option<&str>, resolved_primary_tag: &str) {
         "pt" => &c.hits_pt,
         "ru" => &c.hits_ru,
         "th" => &c.hits_th,
+        "tl" => &c.hits_tl,
         "vi" => &c.hits_vi,
         "zh" => &c.hits_zh,
         // Unknown resolved tag — silently skip. A future lexicon
@@ -377,6 +379,8 @@ pub struct LexiconTelemetrySnapshot {
     pub hits_ru: u64,
     /// Resolved-lexicon hits for `th`.
     pub hits_th: u64,
+    /// Resolved-lexicon hits for `tl`.
+    pub hits_tl: u64,
     /// Resolved-lexicon hits for `vi`.
     pub hits_vi: u64,
     /// Resolved-lexicon hits for `zh`.
@@ -446,6 +450,7 @@ pub fn snapshot() -> LexiconTelemetrySnapshot {
         hits_pt: c.hits_pt.load(Ordering::Relaxed),
         hits_ru: c.hits_ru.load(Ordering::Relaxed),
         hits_th: c.hits_th.load(Ordering::Relaxed),
+        hits_tl: c.hits_tl.load(Ordering::Relaxed),
         hits_vi: c.hits_vi.load(Ordering::Relaxed),
         hits_zh: c.hits_zh.load(Ordering::Relaxed),
         unknown_tag_fallbacks_total: c.unknown_tag_fallbacks_total.load(Ordering::Relaxed),
@@ -510,6 +515,7 @@ mod tests {
                     "pt" => baseline.hits_pt,
                     "ru" => baseline.hits_ru,
                     "th" => baseline.hits_th,
+                    "tl" => baseline.hits_tl,
                     "vi" => baseline.hits_vi,
                     "zh" => baseline.hits_zh,
                     other => panic!(
@@ -551,6 +557,7 @@ mod tests {
                 "pt" => after.hits_pt,
                 "ru" => after.hits_ru,
                 "th" => after.hits_th,
+                "tl" => after.hits_tl,
                 "vi" => after.hits_vi,
                 "zh" => after.hits_zh,
                 _ => unreachable!("baseline match already exhausted"),
