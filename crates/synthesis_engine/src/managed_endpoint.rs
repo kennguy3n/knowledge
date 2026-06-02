@@ -61,6 +61,20 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// unset. Sized to fit a domain-summary recap comfortably.
 pub const DEFAULT_MAX_TOKENS: u32 = 1024;
 
+/// Default per-minute request cap applied when
+/// [`EndpointConfig::max_requests_per_minute`] is left unset.
+/// Provides conservative cost protection out of the box so
+/// consuming products don't accidentally run up an unbounded bill
+/// against the upstream inference provider. Products that need
+/// higher throughput should set the field explicitly.
+pub const DEFAULT_MAX_RPM: u64 = 60;
+
+/// Serde default for [`EndpointConfig::max_requests_per_minute`].
+#[allow(clippy::unnecessary_wraps)] // Signature required by serde(default = "...").
+fn default_max_rpm_option() -> Option<u64> {
+    Some(DEFAULT_MAX_RPM)
+}
+
 /// Connection metadata for the remote SLM / LLM endpoint.
 ///
 /// `api_key_ref` is intentionally a *reference* (e.g. an
@@ -89,13 +103,15 @@ pub struct EndpointConfig {
     #[serde(default)]
     pub default_grammar: Option<String>,
     /// Cost-control cap on requests per minute against this
-    /// endpoint. When `Some`, [`HttpManagedEndpointSynthesizer`]
-    /// builds a [`crate::rate_limiter::RateLimiter`] from the value
-    /// at construction time and rejects further requests once the
-    /// per-minute cap is hit. When `None`, no rate limiting is
-    /// applied at the synthesizer layer (a wrapping
-    /// `SynthesisBatcher` may still enforce its own cap).
-    #[serde(default)]
+    /// endpoint. [`HttpManagedEndpointSynthesizer`] builds a
+    /// [`crate::rate_limiter::RateLimiter`] from
+    /// [`Self::effective_max_requests_per_minute`] at construction
+    /// time and rejects further requests once the per-minute cap is
+    /// hit. Defaults to `Some(DEFAULT_MAX_RPM)` (60) for cost
+    /// protection. Override with a higher value for enterprise-
+    /// negotiated rate limits, or set to `None` to disable rate
+    /// limiting entirely.
+    #[serde(default = "default_max_rpm_option")]
     pub max_requests_per_minute: Option<u64>,
 }
 
@@ -113,7 +129,7 @@ impl EndpointConfig {
             max_tokens: None,
             timeout: None,
             default_grammar: None,
-            max_requests_per_minute: None,
+            max_requests_per_minute: Some(DEFAULT_MAX_RPM),
         }
     }
 
@@ -149,6 +165,15 @@ impl EndpointConfig {
     /// Effective timeout honouring [`DEFAULT_TIMEOUT`].
     pub fn effective_timeout(&self) -> Duration {
         self.timeout.unwrap_or(DEFAULT_TIMEOUT)
+    }
+
+    /// Effective per-minute request cap.
+    ///
+    /// Returns `Some(cap)` when rate limiting is active, `None`
+    /// when explicitly disabled. The default constructor sets
+    /// `Some(DEFAULT_MAX_RPM)` (60) for cost protection.
+    pub fn effective_max_requests_per_minute(&self) -> Option<u64> {
+        self.max_requests_per_minute
     }
 }
 
@@ -544,22 +569,16 @@ pub struct HttpManagedEndpointSynthesizer<C: HttpClient> {
 impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
     /// Construct a fresh synthesizer.
     ///
-    /// The synthesizer is created **without** rate limiting; wire
-    /// one in with [`Self::with_rate_limit`] or attach an existing
-    /// limiter via [`Self::with_shared_rate_limiter`]. The default
-    /// `None` state preserves backwards compatibility for callers
-    /// that already enforce throttling at a higher level (e.g.
-    /// `SynthesisBatcher`).
+    /// A rate limiter is installed based on
+    /// [`EndpointConfig::effective_max_requests_per_minute`].
+    /// When the field is `Some(n)`, a limiter capped at `n` RPM is
+    /// installed; when `None`, no limiter is installed (unlimited
+    /// throughput). The default `EndpointConfig` sets
+    /// `Some(DEFAULT_MAX_RPM)` (60) for cost protection.
     pub fn new(cfg: EndpointConfig, client: C) -> Self {
-        // Honour the per-endpoint cap declared in the
-        // `EndpointConfig` so a freshly-built
-        // synthesizer respects whatever throttle the caller already
-        // pinned in config. Operators that want to disable rate
-        // limiting leave `max_requests_per_minute` as `None` and
-        // the synthesizer's limiter slot stays `None`.
         let rate_limiter = cfg
-            .max_requests_per_minute
-            .map(|cap| std::sync::Arc::new(crate::rate_limiter::RateLimiter::new(cap)));
+            .effective_max_requests_per_minute()
+            .map(|rpm| std::sync::Arc::new(crate::rate_limiter::RateLimiter::new(rpm)));
         Self {
             cfg,
             client,
@@ -611,19 +630,8 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
     /// Replace the active config.
     ///
     /// The synthesizer's rate limiter slot is **re-derived** from
-    /// `cfg.max_requests_per_minute` to keep [`Self::config`] and
-    /// [`Self::rate_limiter`] in lockstep — otherwise a caller
-    /// could observe a config that says "100 rpm" while the
-    /// limiter is still enforcing an old 10 rpm cap (or vice
-    /// versa). The semantics mirror [`Self::new`]:
-    ///
-    /// * `cfg.max_requests_per_minute = Some(n)` → install a
-    ///   fresh, *unshared* [`RateLimiter`] with cap `n`. Any
-    ///   previously-attached limiter (config-derived **or**
-    ///   shared via [`Self::with_shared_rate_limiter`]) is
-    ///   replaced.
-    /// * `cfg.max_requests_per_minute = None` → clear the limiter
-    ///   slot. The synthesizer now dispatches without throttling.
+    /// the effective RPM cap to keep [`Self::config`] and
+    /// [`Self::rate_limiter`] in lockstep.
     ///
     /// Callers that want to reconfigure non-rate-limit fields
     /// while keeping a shared limiter in place should re-attach
@@ -634,12 +642,9 @@ impl<C: HttpClient> HttpManagedEndpointSynthesizer<C> {
     /// synth = synth.with_shared_rate_limiter(shared_limiter);
     /// ```
     pub fn set_config(&mut self, cfg: EndpointConfig) {
-        // Re-derive the limiter from the *new* config so the two
-        // public observables (`config()` and `rate_limiter()`)
-        // never disagree.
         self.rate_limiter = cfg
-            .max_requests_per_minute
-            .map(|cap| std::sync::Arc::new(crate::rate_limiter::RateLimiter::new(cap)));
+            .effective_max_requests_per_minute()
+            .map(|rpm| std::sync::Arc::new(crate::rate_limiter::RateLimiter::new(rpm)));
         self.cfg = cfg;
     }
 
@@ -1388,16 +1393,19 @@ mod tests {
             .expect("denied window must still be in the `Pending` lifecycle state");
     }
 
-    /// Constructing a synthesizer **without** `with_rate_limit`
-    /// (and with `EndpointConfig::max_requests_per_minute = None`)
-    /// must keep the limiter slot empty so callers can opt out
-    /// without paying the lock overhead on every dispatch.
+    /// Constructing a synthesizer without an explicit
+    /// `max_requests_per_minute` must still install a limiter
+    /// at [`DEFAULT_MAX_RPM`] for cost protection.
     #[test]
-    fn rate_limit_is_opt_in() {
+    fn rate_limit_defaults_to_default_max_rpm() {
         let synth = HttpManagedEndpointSynthesizer::new(cfg(), MockHttpClient::echo());
-        assert!(
-            synth.rate_limiter().is_none(),
-            "default synthesizer must have no rate limiter attached"
+        let limiter = synth
+            .rate_limiter()
+            .expect("default synthesizer must have a rate limiter at DEFAULT_MAX_RPM");
+        assert_eq!(
+            limiter.max_per_window(),
+            super::DEFAULT_MAX_RPM,
+            "default limiter cap must be DEFAULT_MAX_RPM"
         );
     }
 
@@ -1430,11 +1438,15 @@ mod tests {
     /// cap silently.
     #[test]
     fn set_config_re_derives_rate_limiter() {
-        // Start with NO rate limit so `rate_limiter()` is `None`.
+        // Start with the default rate limit (DEFAULT_MAX_RPM).
         let mut synth = HttpManagedEndpointSynthesizer::new(cfg(), MockHttpClient::echo());
-        assert!(
-            synth.rate_limiter().is_none(),
-            "precondition: default cfg has no rate limiter"
+        assert_eq!(
+            synth
+                .rate_limiter()
+                .expect("default has limiter")
+                .max_per_window(),
+            super::DEFAULT_MAX_RPM,
+            "precondition: default cfg has DEFAULT_MAX_RPM limiter"
         );
 
         // Reconfigure to add a 42 rpm cap. The limiter must
@@ -1486,21 +1498,27 @@ mod tests {
             "set_config must install a fresh limiter Arc, not mutate the existing one"
         );
 
-        // Reconfigure to remove the cap. The limiter slot must
-        // clear so dispatch falls back to "no throttling".
-        let cfg_no_cap =
+        // Reconfigure with a default-cap config (no explicit
+        // with_max_requests_per_minute call). The limiter must
+        // use DEFAULT_MAX_RPM for cost protection.
+        let cfg_default_cap =
             EndpointConfig::new("https://example.test/synth", "TEST_API_KEY", "slm-recap-v1")
                 .with_max_tokens(64)
                 .with_timeout(Duration::from_secs(5))
                 .with_grammar("{root: 'string'}");
-        synth.set_config(cfg_no_cap);
-        assert!(
-            synth.rate_limiter().is_none(),
-            "set_config(None) must clear the limiter slot"
+        synth.set_config(cfg_default_cap);
+        let limiter_default = synth
+            .rate_limiter()
+            .expect("set_config with default cap must install DEFAULT_MAX_RPM limiter");
+        assert_eq!(
+            limiter_default.max_per_window(),
+            super::DEFAULT_MAX_RPM,
+            "default config must use DEFAULT_MAX_RPM"
         );
-        assert!(
-            synth.config().max_requests_per_minute.is_none(),
-            "config must reflect the cleared cap"
+        assert_eq!(
+            synth.config().max_requests_per_minute,
+            Some(super::DEFAULT_MAX_RPM),
+            "config must reflect the default cost-protection cap"
         );
     }
 }

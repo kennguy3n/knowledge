@@ -39,6 +39,7 @@ test-support = []
 [dependencies]
 crypto = { path = "../crypto" }
 chrono = { workspace = true }
+libc = { workspace = true }
 reqwest = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }

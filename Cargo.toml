@@ -131,6 +131,9 @@ rusqlite = { version = "0.36", features = ["bundled-sqlcipher-vendored-openssl",
 # Time
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 
+# System / FFI
+libc = "0.2"
+
 # Tests
 tempfile = "3"
 proptest = "1"

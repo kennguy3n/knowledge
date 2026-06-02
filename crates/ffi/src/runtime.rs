@@ -2626,8 +2626,9 @@ pub(crate) fn router_config_from_env() -> RouterConfig {
             "low" => DeviceTier::Low,
             "high" => DeviceTier::High,
             // Default and the explicit "medium" both land here so a
-            // typo in the env var degrades to the documented default
-            // rather than a silent device-tier downgrade.
+            // typo in the env var degrades to Medium (the conservative
+            // middle ground) rather than triggering a potentially
+            // expensive auto-detection or accidental High tier.
             _ => DeviceTier::Medium,
         };
     }
