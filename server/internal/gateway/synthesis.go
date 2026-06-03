@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/kennguy3n/knowledge/server/internal/httpx"
+	"github.com/kennguy3n/knowledge/server/internal/metrics"
 	"github.com/kennguy3n/knowledge/server/internal/substrate"
 	"github.com/kennguy3n/knowledge/server/internal/validate"
 )
@@ -39,9 +40,11 @@ func (h *handlers) triggerSynthesis(w http.ResponseWriter, r *http.Request) {
 		Trigger: trigger,
 	})
 	if err != nil {
+		metrics.ErrorsTotal.WithLabelValues("synthesis").Inc()
 		httpx.WriteError(w, err)
 		return
 	}
+	metrics.SynthesisTriggerTotal.Inc()
 	writeRaw(w, http.StatusAccepted, raw)
 }
 

@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/kennguy3n/knowledge/server/internal/httpx"
+	"github.com/kennguy3n/knowledge/server/internal/metrics"
 	"github.com/kennguy3n/knowledge/server/internal/substrate"
 	"github.com/kennguy3n/knowledge/server/internal/validate"
 )
@@ -375,8 +376,10 @@ func (s *Service) syncOnce(ctx context.Context, instanceID string) (syncReport, 
 	}
 	result, err := s.runPipeline(ctx, instanceID, reg.ScopeID, reg.Kind, report.IngestedEvidenceIDs)
 	if err != nil {
+		metrics.ConnectorSyncFailure.WithLabelValues(reg.Kind).Inc()
 		return report, PipelineResult{}, err
 	}
+	metrics.ConnectorSyncSuccess.WithLabelValues(reg.Kind).Inc()
 	return report, result, nil
 }
 

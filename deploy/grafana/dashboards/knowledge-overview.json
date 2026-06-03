@@ -175,18 +175,18 @@
       }
     },
     {
-      "title": "Postgres Pool Stats",
+      "title": "Gateway Request Totals",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
       "targets": [
         {
-          "expr": "knowledge_gateway_requests_total",
-          "legendFormat": "total requests ({{ method }} {{ route }})",
+          "expr": "sum by (method, route) (rate(knowledge_gateway_requests_total[5m]))",
+          "legendFormat": "{{ method }} {{ route }}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "short" },
+        "defaults": { "unit": "reqps" },
         "overrides": []
       }
     }
