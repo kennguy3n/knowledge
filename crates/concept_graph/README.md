@@ -4,7 +4,7 @@ Sparse typed concept graph for the Knowledge substrate.
 
 ## Purpose
 
-Implements the semantic plane described in `ARCHITECTURE.md` §2.1
+Implements the semantic plane described in `docs/technical/architecture.md` §2.1
 and `docs/technical/design.md` §3.3. The concept graph stores typed nodes
 (concepts) and typed edges (relations like `is_a`, `part_of`,
 `supersedes`, `contradicts`) with scope awareness. Used by the
