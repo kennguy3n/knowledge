@@ -10,9 +10,12 @@ integration surface.
 Knowledge is a privacy-first continual knowledge and context
 substrate. It serves a consumer surface (B2C) and an enterprise
 surface (B2B) over the same memory model. See
-[README.md](../README.md) for an overview and
+[README.md](../README.md) for an overview,
 [ARCHITECTURE.md](../ARCHITECTURE.md) for the implementation
-architecture that realises this document.
+architecture that realises this document,
+[API_REFERENCE.md](API_REFERENCE.md) for the Go gateway REST
+surface, and [QUICKSTART.md](QUICKSTART.md) for deployment
+instructions.
 
 ---
 
@@ -281,27 +284,34 @@ relies on directly.
   channel / domain summary generation, concept synthesis,
   contradiction adjudication.
 
-**Validated languages (15).** Bonsai-1.7B synthesis and the
+**Validated languages (22).** Bonsai-1.7B synthesis and the
 lexicon-first observation pipeline are validated across the
-following 15 languages:
+following 22 languages:
 
 | BCP-47 | Language | Script | Auto-detected as |
 |---|---|---|---|
-| `en` | English | Latin | `en` |
-| `zh` | Chinese | Han | `zh` |
-| `es` | Spanish | Latin | `es` |
-| `hi` | Hindi | Devanagari | `hi` |
-| `fr` | French | Latin | `fr` |
 | `ar` | Arabic | Arabic | `ar` |
-| `th` | Thai | Thai | `th` |
-| `vi` | Vietnamese | Latin (diacritics) | `vi` |
-| `ms` | Malay | Latin | `id` (see note) |
-| `tl` | Tagalog / Filipino | Latin | `tl` |
+| `bo` | Tibetan | Tibetan | `bo` |
 | `de` | German | Latin | `de` |
-| `pt` | Portuguese | Latin | `pt` |
+| `en` | English | Latin | `en` |
+| `es` | Spanish | Latin | `es` |
+| `fr` | French | Latin | `fr` |
+| `he` | Hebrew | Hebrew | `he` |
+| `hi` | Hindi | Devanagari | `hi` |
+| `id` | Indonesian | Latin | `id` |
+| `it` | Italian | Latin | `it` |
 | `ja` | Japanese | Kana + Kanji | `ja` |
+| `km` | Khmer | Khmer | `km` |
 | `ko` | Korean | Hangul | `ko` |
+| `lo` | Lao | Lao | `lo` |
+| `ms` | Malay | Latin | `id` (see note) |
+| `my` | Burmese | Myanmar | `my` |
+| `pt` | Portuguese | Latin | `pt` |
 | `ru` | Russian | Cyrillic | `ru` |
+| `th` | Thai | Thai | `th` |
+| `tl` | Tagalog / Filipino | Latin | `tl` |
+| `vi` | Vietnamese | Latin (diacritics) | `vi` |
+| `zh` | Chinese | Han | `zh` |
 
 Each language ships a lexicon (decision / task keywords,
 imperative verbs, stop-words) and an interrogative table; see
@@ -329,8 +339,8 @@ two share a large common core). The dedicated `ms` lexicon —
 with register-specific forms such as `diluluskan` and the
 deadline collocation `tarikh akhir` — is reachable when a caller
 supplies the `ms` tag explicitly (e.g. a connector that knows
-the source locale). Per-language quality notes are tabulated in
-the README's "Multilingual support" section.
+the source locale). The validated language matrix is listed in the
+README and the per-language lexicon tables live in this document above.
 
 ### 5.2 XLM-R for embeddings and classification
 

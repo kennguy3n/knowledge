@@ -45,9 +45,9 @@ cargo deny check
    the branch before requesting review if the history is noisy.
 3. **Run the full quality gate locally** (fmt + clippy + test +
    audit + deny) before opening the pull request.
-4. **Update the README's status section** when you add, remove,
-   or change a public FFI function so the "wired" / "contract-only"
-   lists stay accurate.
+4. **Update ARCHITECTURE.md §2.3 "Cross-platform FFI"** when you add,
+   remove, or change a public FFI function so the wired surface
+   documentation stays accurate.
 5. **Do not commit secrets**, `.env` files, fixture credentials,
    or local override configs.
 6. **Request the full N-API cross-platform matrix when you need

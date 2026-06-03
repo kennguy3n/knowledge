@@ -285,21 +285,38 @@ auditable and citable.
 
 ## 4. Server architecture
 
-The server surface runs the connector pipeline, the cross-tenant
-synthesis service, the permission graph, and the export plane.
+The server surface is implemented as a Go API gateway
+(`server/cmd/gateway`) that proxies evidence/synthesis operations to
+the Rust substrate server (`crates/substrate_server`) via HTTP
+loopback, and directly serves tenant, connector, permission, export,
+and audit operations against Postgres.
 
-### 4.1 Go services
+### 4.1 Go gateway (implemented — `server/`)
 
-| Service | Responsibility |
-|---|---|
-| **API Gateway** | OAuth2 token verification, rate-limiting, fan-out to internal services, NDJSON / SSE streaming |
-| **Connector Service** | Drive / OneDrive / Notion / Jira / Confluence / Figma / HubSpot / Slack / Email connectors; OAuth2 token refresh; webhook subscription; incremental delta sync |
-| **Permission Service** | Zanzibar-style relation graph: tuples, namespace configs, reachability checks, ACL sync from connectors |
-| **Tenant Service** | Tenant lifecycle, per-tenant encryption keys, storage configuration, member provisioning (SCIM v2) |
-| **Export Service** | Portable concept profile rendering, summary view rendering, evidence pack rendering with policy enforcement |
-| **Audit Service** | Append-only audit log of canonical promotions, exports, agent proposals, policy changes |
+The gateway binary (`server/cmd/gateway/main.go`) wires:
 
-### 4.2 Rust services
+| Service | Package | Responsibility |
+|---|---|---|
+| **API Gateway** | `internal/gateway` | Bearer / JWT auth, per-IP + per-tenant rate limiting (token bucket), CORS, Prometheus metrics, SSE streaming for synthesis status, request-id propagation |
+| **Connector Service** | `internal/connector` | 9 stable + 1 unstable providers (Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email, GitHub _[unstable]_); OAuth2 token refresh; webhook subscription; incremental delta sync; real document-content fetching; persistent connector registrations (Postgres) |
+| **Permission Service** | `internal/permission` | Zanzibar-style relation graph: grant/revoke/check tuples via substrate loopback; SCIM v2 user/group provisioning (in-memory directory — not persisted across restarts) joined to tuple store |
+| **Tenant Service** | `internal/tenant` | Tenant CRUD, config update, key rotation, member lifecycle (invite/activate/suspend/remove) |
+| **Export Service** | `internal/export` | Portable concept profile rendering with policy enforcement and audit integration |
+| **Audit Service** | `internal/audit` | Append-only audit log; NATS JetStream consumer; configurable per-tenant retention |
+
+Configuration is 12-factor (env vars); see
+[docs/API_REFERENCE.md](docs/API_REFERENCE.md) for the full config
+table and endpoint documentation.
+
+### 4.2 Rust substrate server (`crates/substrate_server`)
+
+The substrate server exposes the Rust shared core over HTTP
+(default `:9090`) for the Go gateway to consume via loopback.
+Operations: `ingest`, `query`, `get_evidence`, `list_memories`,
+`forget_scope`, `trigger_synthesis`, `synthesis_status`,
+`recent_syntheses`, `health`.
+
+### 4.3 Rust services (server-scope)
 
 | Service | Responsibility |
 |---|---|
@@ -307,41 +324,39 @@ synthesis service, the permission graph, and the export plane.
 | **Crypto Service** | Provenance signing, hybrid KEM operations, MLS commit / welcome handling at server scope |
 | **Vector Store Service** | Embedding upserts and ANN retrieval over `pgvector`; routes hybrid (BM25 + vector + recency) queries |
 
-### 4.3 Storage
+### 4.4 Storage
 
 | Store | Use |
 |---|---|
-| **PostgreSQL** | Relational store: nodes, edges, provenance bundles, observations, scopes, relations, audit log |
+| **PostgreSQL** | Tenant/connector/audit persistence, SCIM membership, relation tuples (Go gateway); nodes, edges, provenance bundles, observations (Rust substrate) |
 | **pgvector** | Embedding index (XLM-R + optional MobileCLIP for media) co-located with PostgreSQL for transactional consistency |
-| **NATS JetStream** | Async event bus: connector events, synthesis-window triggers, audit events, agent proposals |
+| **NATS JetStream** | Async event bus: audit events (consumer + retention), synthesis-window triggers, connector events |
 | **MinIO / S3** | Object storage: encrypted bodies, weight files, manifest snapshots |
 
-### 4.4 Service topology
+### 4.5 Service topology
 
 ```mermaid
 flowchart LR
-    GW["API Gateway"]
+    GW["API Gateway\n(Go :8080)"]
+    SUB["Substrate Server\n(Rust :9090)"]
     CS["Connector Service"]
-    SS["Synthesis Service"]
     PS["Permission Service"]
     TS["Tenant Service"]
     XS["Export Service"]
     AS["Audit Service"]
-    PG[("PostgreSQL\n+ pgvector")]
+    PG[("PostgreSQL")]
     NJ[("NATS JetStream")]
-    OBJ[("MinIO / S3")]
+    GW -->|HTTP loopback| SUB
     GW --> CS
-    GW --> SS
     GW --> PS
     GW --> TS
     GW --> XS
+    GW --> AS
     CS --> PG
-    CS --> OBJ
-    SS --> PG
-    SS --> NJ
-    PS --> PG
+    CS --> SUB
     TS --> PG
-    XS --> PG
+    PS -->|via substrate| SUB
+    XS --> SUB
     AS --> PG
     AS --> NJ
 ```

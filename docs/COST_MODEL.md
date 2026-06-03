@@ -121,6 +121,28 @@ list price).
 
 ---
 
+## Measured performance backing these estimates
+
+The following numbers are from the production Criterion benchmark
+suite (`crates/benchmarks/`); see [BENCHMARKS.md](BENCHMARKS.md)
+for the full methodology and reference hardware.
+
+| Workload | Measured throughput | Cost implication |
+|---|---|---|
+| Evidence ingest | ~1,043 msgs/sec (100K corpus) | Single substrate instance handles 90M msgs/day |
+| FTS phrase query | p50 13.56 ms (100K rows) | Sub-15ms retrieval without external search infra |
+| Hybrid retrieval | 9.70 ms (10K rows, FTS + semantic + recency) | On-device hybrid is fast enough for real-time UX |
+| Synthesis pipeline | 8.14 µs (machinery only, excl. LLM) | Pipeline overhead is negligible vs. SLM latency |
+| AEAD encrypt 64 KB | 80.4 µs (778 MiB/s) | Encryption is not a cost bottleneck |
+| Decay sweep | 5.26 ms / 100K objects (19M rows/sec) | Daily sweep covers even large tenants in <1s |
+| Storage per message | 612 bytes (at 500K scale) | 500K messages ≈ 292 MB on-device |
+| Connector sync | ~6,750 docs/sec (mock transport) | 10K-doc delta sync completes in <2s |
+
+These numbers confirm the cost model's core claim: the on-device
+substrate handles realistic workloads without server-side compute.
+
+---
+
 ## Competitive comparison
 
 The substrate ships every component on-device by default. Every
