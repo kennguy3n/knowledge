@@ -31,10 +31,6 @@ onnx-runtime = ["dep:ort", "dep:tokenizers"]
 #     callers (e.g. `apply_dispatch_outcome`'s commit path) can be
 #     exercised against a synthetic disk-write failure without a
 #     real SQLCipher I/O error.
-#   * `EvidenceStore::write_legacy_approved_doc_payload_for_tests`
-#     — surgically reshapes `approved_document_payloads` back to
-#     its pre-v12 (schema v10) inline layout so the v12-onwards
-#     re-migration code path has a controllable starting state.
 # Gated `cfg(any(test, feature = "test-support"))` so production
 # builds never compile the hooks nor pay the runtime cost of
 # checking the injection slot on every `with_transaction` call.
