@@ -168,33 +168,61 @@ func (s *Service) scimReplaceUser(w http.ResponseWriter, r *http.Request) {
 		scimError(w, http.StatusBadRequest, "invalid SCIM User payload")
 		return
 	}
-	s.dir.mu.Lock()
-	defer s.dir.mu.Unlock()
-	u, ok := s.dir.users[id]
+	s.dir.mu.RLock()
+	prev, ok := s.dir.users[id]
+	s.dir.mu.RUnlock()
 	if !ok {
 		scimError(w, http.StatusNotFound, "user not found")
 		return
 	}
+	next := prev
 	if in.UserName != "" {
-		u.UserName = in.UserName
+		next.UserName = in.UserName
 	}
-	u.Active = in.Active
-	u.Emails = in.Emails
-	u.Meta.LastModified = time.Now().UTC()
-	s.dir.users[id] = u
-	httpx.WriteJSON(w, http.StatusOK, u)
+	next.Active = in.Active
+	next.Emails = in.Emails
+	next.Meta.LastModified = time.Now().UTC()
+	// An active-state flip adds or removes this user's membership tuples
+	// across every group it belongs to. Reconcile the substrate before
+	// committing the directory change so the two never diverge.
+	if prev.Active != next.Active {
+		if err := s.applyTupleOps(r.Context(), s.userActiveToggleOps(id, next.Active)); err != nil {
+			scimError(w, http.StatusInternalServerError, "failed to reconcile membership tuples")
+			return
+		}
+	}
+	s.dir.mu.Lock()
+	s.dir.users[id] = next
+	s.dir.mu.Unlock()
+	httpx.WriteJSON(w, http.StatusOK, next)
 }
 
 func (s *Service) scimDeleteUser(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	s.dir.mu.Lock()
+	s.dir.mu.RLock()
 	_, ok := s.dir.users[id]
-	delete(s.dir.users, id)
-	s.dir.mu.Unlock()
+	s.dir.mu.RUnlock()
 	if !ok {
 		scimError(w, http.StatusNotFound, "user not found")
 		return
 	}
+	// Drop the user's membership tuples before deleting it, so a removed
+	// user leaves no dangling group-derived authorization behind.
+	if err := s.applyTupleOps(r.Context(), s.userRemovalOps(id)); err != nil {
+		scimError(w, http.StatusInternalServerError, "failed to reconcile membership tuples")
+		return
+	}
+	s.dir.mu.Lock()
+	delete(s.dir.users, id)
+	// Strip the deleted user from every group's member list to keep the
+	// directory consistent with the now-removed tuples.
+	for gid, g := range s.dir.groups {
+		if members, changed := removeMemberValue(g.Members, id); changed {
+			g.Members = members
+			s.dir.groups[gid] = g
+		}
+	}
+	s.dir.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -217,6 +245,12 @@ func (s *Service) scimCreateGroup(w http.ResponseWriter, r *http.Request) {
 		DisplayName: in.DisplayName,
 		Members:     in.Members,
 		Meta:        scimMeta{ResourceType: "Group", Created: now, LastModified: now},
+	}
+	// Join the new membership to the tuple store before recording the
+	// group, so a group is only persisted once its tuples exist.
+	if err := s.applyTupleOps(r.Context(), s.groupReconcileOps(g.ID, nil, g.Members)); err != nil {
+		scimError(w, http.StatusInternalServerError, "failed to sync group membership tuples")
+		return
 	}
 	s.dir.mu.Lock()
 	s.dir.groups[g.ID] = g
@@ -257,31 +291,47 @@ func (s *Service) scimReplaceGroup(w http.ResponseWriter, r *http.Request) {
 		scimError(w, http.StatusBadRequest, "invalid SCIM Group payload")
 		return
 	}
-	s.dir.mu.Lock()
-	defer s.dir.mu.Unlock()
+	s.dir.mu.RLock()
 	g, ok := s.dir.groups[id]
+	s.dir.mu.RUnlock()
 	if !ok {
 		scimError(w, http.StatusNotFound, "group not found")
 		return
 	}
+	next := g
 	if in.DisplayName != "" {
-		g.DisplayName = in.DisplayName
+		next.DisplayName = in.DisplayName
 	}
-	g.Members = in.Members
-	g.Meta.LastModified = time.Now().UTC()
-	s.dir.groups[id] = g
-	httpx.WriteJSON(w, http.StatusOK, g)
+	next.Members = in.Members
+	next.Meta.LastModified = time.Now().UTC()
+	// Reconcile the membership delta (grant added, revoke removed) before
+	// committing, so the directory and tuple store stay in lock-step.
+	if err := s.applyTupleOps(r.Context(), s.groupReconcileOps(id, g.Members, next.Members)); err != nil {
+		scimError(w, http.StatusInternalServerError, "failed to sync group membership tuples")
+		return
+	}
+	s.dir.mu.Lock()
+	s.dir.groups[id] = next
+	s.dir.mu.Unlock()
+	httpx.WriteJSON(w, http.StatusOK, next)
 }
 
 func (s *Service) scimDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	s.dir.mu.Lock()
-	_, ok := s.dir.groups[id]
-	delete(s.dir.groups, id)
-	s.dir.mu.Unlock()
+	s.dir.mu.RLock()
+	g, ok := s.dir.groups[id]
+	s.dir.mu.RUnlock()
 	if !ok {
 		scimError(w, http.StatusNotFound, "group not found")
 		return
 	}
+	// Revoke all of the group's membership tuples before removing it.
+	if err := s.applyTupleOps(r.Context(), s.groupReconcileOps(id, g.Members, nil)); err != nil {
+		scimError(w, http.StatusInternalServerError, "failed to sync group membership tuples")
+		return
+	}
+	s.dir.mu.Lock()
+	delete(s.dir.groups, id)
+	s.dir.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }

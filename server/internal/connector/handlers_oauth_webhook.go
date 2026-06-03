@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 
 	"github.com/kennguy3n/knowledge/server/internal/httpx"
 	"github.com/kennguy3n/knowledge/server/internal/middleware"
@@ -90,7 +91,14 @@ func (s *Service) handleWebhookRegister(w http.ResponseWriter, r *http.Request) 
 	}
 	reg.WebhookURL = s.publicBaseURL + "/api/v1/connectors/" + id + "/webhook"
 	reg.WebhookActive = true
-	s.store.put(reg)
+	// Persist the webhook activation so it survives a restart; otherwise
+	// inbound provider callbacks would 404 after the gateway recycles.
+	if err := s.saveRegistration(r.Context(), reg); err != nil {
+		s.log.Error("connector: persist webhook registration",
+			zap.String("instance_id", id), zap.Error(err))
+		httpx.WriteError(w, httpx.Internal("connector: persist webhook registration"))
+		return
+	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{
 		"webhook_url": reg.WebhookURL,
 	})

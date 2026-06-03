@@ -26,6 +26,8 @@ type fakeSub struct {
 	ingestErr   error
 	statusRaw   json.RawMessage
 	authRaw     json.RawMessage
+	listRaw     json.RawMessage
+	listErr     error
 	removeErr   error
 	ingestCalls int
 	synthCalls  int
@@ -44,7 +46,13 @@ func (f *fakeSub) CreateConnector(context.Context, substrate.CreateConnectorRequ
 	return substrate.IDResponse{ID: id}, f.createErr
 }
 func (f *fakeSub) ListConnectors(context.Context) (json.RawMessage, error) {
-	return json.RawMessage(`[]`), nil
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	if f.listRaw == nil {
+		return json.RawMessage(`[]`), nil
+	}
+	return f.listRaw, nil
 }
 func (f *fakeSub) AuthenticateConnector(context.Context, string, substrate.AuthenticateRequest) (json.RawMessage, error) {
 	if f.authRaw == nil {

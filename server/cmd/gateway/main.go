@@ -58,6 +58,7 @@ func run() error {
 	var (
 		tenantStore tenant.Store
 		auditStore  audit.Store
+		connRegs    connector.RegistrationStore
 		pool        *pgxpool.Pool
 	)
 	if cfg.DatabaseURL != "" {
@@ -68,28 +69,39 @@ func run() error {
 		defer pool.Close()
 		tps := tenant.NewPostgresStore(pool)
 		aps := audit.NewPostgresStore(pool)
+		crs := connector.NewPostgresRegistrationStore(pool)
 		if err := tps.Migrate(ctx); err != nil {
 			return err
 		}
 		if err := aps.Migrate(ctx); err != nil {
 			return err
 		}
-		tenantStore, auditStore = tps, aps
+		if err := crs.Migrate(ctx); err != nil {
+			return err
+		}
+		tenantStore, auditStore, connRegs = tps, aps, crs
 		ready["postgres"] = true
 	} else {
 		tenantStore = tenant.NewMemoryStore()
 		auditStore = audit.NewMemoryStore()
+		connRegs = connector.NewNoopRegistrationStore()
 		log.Warn("KNOWLEDGE_DATABASE_URL unset; using in-memory stores (development only)")
 	}
 
 	auditSvc := audit.New(auditStore)
 	tenantSvc := tenant.New(tenantStore, sub)
-	permSvc := permission.New(sub)
+	permSvc := permission.New(sub).WithLogger(log)
 	exportSvc := export.New(sub, auditSvc)
 	connSvc := connector.New(sub, log, connector.Options{
-		PublicBaseURL: cfg.PublicBaseURL,
-		SyncInterval:  cfg.SyncInterval,
+		PublicBaseURL:     cfg.PublicBaseURL,
+		SyncInterval:      cfg.SyncInterval,
+		RegistrationStore: connRegs,
 	})
+	// Restore connector schedules/scopes persisted by a prior process and
+	// reconcile them against the substrate before serving traffic.
+	if err := connSvc.Rehydrate(ctx); err != nil {
+		return err
+	}
 	connSvc.Start(ctx)
 	defer connSvc.Stop()
 
