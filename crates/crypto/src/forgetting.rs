@@ -1,6 +1,6 @@
 //! Cryptographic forgetting + policy-driven epoch rotation.
 //!
-//! Per `docs/DESIGN.md` §3.6, the substrate must
+//! Per `docs/technical/design.md` §3.6, the substrate must
 //! be able to **destroy** the data-encryption key (DEK) for a scope or
 //! a single epoch. Once a DEK is destroyed, every ciphertext encrypted
 //! under that key becomes permanently undecryptable — that is the
@@ -108,7 +108,7 @@ impl EpochId {
 /// zeroize-on-drop and an explicit [`Self::destroy`] hook that wipes
 /// the key bytes.
 ///
-/// The same key material is referenced as `K_scope` in `docs/DESIGN.md`
+/// The same key material is referenced as `K_scope` in `docs/technical/design.md`
 /// §3.1.
 #[derive(Clone)]
 pub struct ScopeDek {

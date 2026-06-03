@@ -49,13 +49,10 @@
 //!   `*の*`) never enter the index in the first place — they cannot
 //!   contribute to false-positive precision dilution.
 //!
-//! Symmetric stripping requires a schema bump: every existing
-//! `evidence_fts_cjk` / `evidence_fts_bigram` row predates the
-//! stripping rule and contains stopword-spanning windows. The v15 ->
-//! v16 migration re-tokenises the affected rows from the
-//! `evidence_fts` source-of-truth column (which retains the full
-//! plaintext for the unicode61 lane). See
-//! [`crate::store::migrate_v16_strip_stopwords_from_recall_lanes`].
+//! Stripping is applied uniformly at write time: every
+//! `evidence_fts_cjk` / `evidence_fts_bigram` row is tokenised from
+//! the already-stripped form, while the `evidence_fts` unicode61 lane
+//! retains the full plaintext as the source of truth for rebuilds.
 //!
 //! # Per-script inventory
 //!

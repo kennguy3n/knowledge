@@ -1,7 +1,22 @@
-# Operator Guide
+# Deployment Guide
 
-This guide covers deploying, monitoring, and operating the Knowledge
-stack in production.
+This guide covers deploying the Knowledge stack in production: the
+topology, prerequisites, configuration, and a go-live checklist. For
+day-2 operations see the companion docs:
+[monitoring](monitoring.md), [scaling](scaling.md),
+[backup & recovery](backup-recovery.md),
+[troubleshooting](troubleshooting.md), and the
+[incident runbook](runbook.md).
+
+## Production deployment checklist
+
+- [ ] Generate a strong `KNOWLEDGE_MASTER_KEY` (`openssl rand -hex 32`) and store it in a secret manager — see [key-management.md](../security/key-management.md).
+- [ ] Set `KNOWLEDGE_API_KEY` and/or `KNOWLEDGE_JWT_SECRET` (auth is disabled when empty).
+- [ ] Terminate TLS at a reverse proxy in front of the gateway.
+- [ ] Remove `ports:` mappings for Postgres/NATS/MinIO so they are not publicly reachable.
+- [ ] Change all default credentials (Postgres, MinIO, Grafana).
+- [ ] Wire [monitoring](monitoring.md) and load the alert rules.
+- [ ] Validate a [backup & recovery](backup-recovery.md) drill.
 
 ## Architecture overview
 
@@ -115,152 +130,24 @@ variables:
 | `GF_ADMIN_USER`     | `admin` |
 | `GF_ADMIN_PASSWORD` | `admin` |
 
-## Monitoring
+## Monitoring & alerting
 
-### Grafana
-
-Open `http://localhost:3000` (default credentials: `admin`/`admin`).
-The provisioned **Knowledge Overview** dashboard includes:
-
-| Panel                        | What it shows                                |
-|------------------------------|----------------------------------------------|
-| Ingest Rate                  | `rate(knowledge_ingest_total[5m])`           |
-| Query Rate + Latency         | Query ops/s and p50/p95/p99 latency          |
-| Synthesis Trigger/Success    | Trigger, success, and throttle rates         |
-| Connector Sync by Provider   | Per-provider success/failure rates           |
-| Error Breakdown by Kind      | Error rates by `kind` label                  |
-| Subsystem Health             | Up/down status for each subsystem            |
-| Memory / CPU                 | Go process RSS and CPU usage                 |
-| Postgres Pool Stats          | Request throughput by route                  |
-
-### Prometheus
-
-Prometheus is available at `http://localhost:9091`. It scrapes:
-
-- **knowledge-gateway** (`:8080/metrics`) — Go process + gateway counters
-- **knowledge-substrate** (`:9090/internal/metrics`) — Rust FFI counters
-
-### Metric names
-
-Gateway (Go):
-- `knowledge_gateway_requests_total{method,route,status}`
-- `knowledge_gateway_request_duration_seconds{method,route}`
-- `knowledge_tenant_requests_total{tenant_id}`
-- `knowledge_connector_sync_success_total{provider}`
-- `knowledge_connector_sync_failure_total{provider}`
-- `knowledge_synthesis_trigger_total`
-- `knowledge_synthesis_success_total`
-- `knowledge_synthesis_throttle_total`
-- `knowledge_ingest_total`
-- `knowledge_query_total`
-- `knowledge_errors_total{kind}`
-- `knowledge_subsystem_status{name}`
-
-Substrate (Rust) — auto-generated from `ffi::MetricsSnapshot`:
-- `knowledge_ingest_total`, `knowledge_query_total`, `knowledge_errors_total{by_kind}`, etc.
-
-## Alerts
-
-Alerts are defined in `deploy/prometheus/alerts.yml`:
-
-| Alert                          | Condition                            | Severity |
-|--------------------------------|--------------------------------------|----------|
-| `KnowledgeHighErrorRate`       | >5% error rate for 5 minutes         | warning  |
-| `KnowledgeSubsystemDown`      | Health gauge == 0 for 2 minutes      | critical |
-| `KnowledgeSynthesisBacklog`   | Pending syntheses stuck 30 minutes   | warning  |
-| `KnowledgeConnectorFailing`   | 3+ consecutive provider failures     | warning  |
-| `KnowledgeHighLatency`        | p99 latency >500ms for 5 minutes     | warning  |
-| `KnowledgeDiskPressure`       | Volume usage >80% for 5 minutes      | warning  |
+Grafana dashboards, the Prometheus metric catalogue, the health
+endpoint, and the alert rules are documented in
+[monitoring.md](monitoring.md). When an alert fires, follow the
+[incident runbook](runbook.md).
 
 ## Troubleshooting
 
-### Gateway returns 502 / connection refused
+Common startup and runtime issues (502s, bad master key, migration
+failures, JetStream, high memory, connector failures) are covered in
+[troubleshooting.md](troubleshooting.md).
 
-The substrate_server is not ready yet. Check:
-```bash
-docker compose -f deploy/docker-compose.yml logs knowledge-substrate
-```
-Common causes: missing `KNOWLEDGE_MASTER_KEY`, bad store path
-permissions.
+## Backup & recovery
 
-### Substrate fails to start with "bad master key"
-
-The `KNOWLEDGE_MASTER_KEY` must be exactly 64 lowercase/uppercase hex
-characters. Generate a fresh one:
-```bash
-openssl rand -hex 32
-```
-
-### Postgres migrations fail
-
-The gateway auto-migrates on startup. If it fails:
-1. Check Postgres is reachable: `docker exec -it <pg_container> psql -U knowledge`
-2. Check the pgvector extension: `SELECT * FROM pg_extension WHERE extname = 'vector';`
-
-### NATS JetStream not available
-
-Verify JetStream is enabled by hitting the monitoring endpoint:
-```bash
-curl http://localhost:8222/jsz
-```
-
-### High memory usage
-
-- The llama-server loads the full GGUF model into RAM. Reduce
-  `--ctx-size` or use a smaller quantisation.
-- The substrate_server's SQLCipher cache size defaults are tuned for
-  moderate workloads; set `PRAGMA cache_size` via the master key
-  config if needed.
-
-### Alert: KnowledgeSubsystemDown
-
-A subsystem health gauge dropped to 0. Check the gateway `/health`
-endpoint:
-```bash
-curl -s http://localhost:8080/health | jq .
-```
-This returns per-subsystem status. The affected subsystem's logs will
-have the root cause.
-
-### Alert: KnowledgeConnectorFailing
-
-A connector provider has failed 3+ times consecutively. Check:
-```bash
-curl -s -H "Authorization: Bearer $KNOWLEDGE_API_KEY" \
-  http://localhost:8080/api/v1/connectors | jq '.[] | {id, kind, status}'
-```
-Common causes: expired OAuth tokens, rate limiting by the upstream
-provider, network issues.
-
-## Backup
-
-### Postgres
-
-```bash
-# Full dump (run from host or a sidecar with pg_dump):
-docker exec <pg_container> pg_dump -U knowledge knowledge > backup.sql
-
-# Restore:
-docker exec -i <pg_container> psql -U knowledge knowledge < backup.sql
-```
-
-### MinIO
-
-```bash
-# Sync the knowledge bucket to a local directory:
-mc alias set local http://localhost:9000 minioadmin minioadmin
-mc mirror local/knowledge ./minio-backup/
-```
-
-### SQLCipher (substrate)
-
-The substrate database is a single SQLCipher file on the
-`substrate-data` volume. To back up:
-```bash
-docker cp <substrate_container>:/data/substrate.db ./substrate-backup.db
-```
-The backup is encrypted at rest; the `KNOWLEDGE_MASTER_KEY` is
-required to open it.
+Backup strategies for Postgres, MinIO, and the SQLCipher substrate,
+plus key escrow and disaster-recovery drills, live in
+[backup-recovery.md](backup-recovery.md).
 
 ## Upgrade
 
@@ -285,24 +172,9 @@ required to open it.
 
 ## Scaling
 
-### Horizontal scaling
-
-- **Gateway**: Run multiple gateway instances behind a load balancer.
-  All instances share the same Postgres and NATS cluster. Session
-  affinity is not required.
-- **Substrate**: Each substrate instance maintains its own local
-  SQLCipher store. Scale vertically (more CPU/RAM) rather than
-  horizontally. For multi-node deployments, each node gets its own
-  substrate instance.
-
-### Vertical tuning
-
-- **Postgres**: Increase `shared_buffers`, `work_mem`, and
-  `max_connections` in `postgresql.conf` for higher concurrency.
-- **NATS**: Increase the JetStream storage limit with `--store_dir`
-  and `--max_mem`.
-- **Gateway**: Tune `KNOWLEDGE_RATE_IP_RPS` and
-  `KNOWLEDGE_RATE_TENANT_RPS` based on expected traffic.
+Horizontal scaling of the gateway, vertical tuning of the substrate and
+stateful tier, and multi-region considerations are covered in
+[scaling.md](scaling.md).
 
 ## Security
 

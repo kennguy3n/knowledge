@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// One inference task served by the router. Each task has a stable
 /// string tag, a prompt template, and a GBNF grammar constraint.
 ///
-/// Per `ARCHITECTURE.md` §3 the substrate routes the following tasks
+/// Per `docs/technical/architecture.md` §3 the substrate routes the following tasks
 /// through the SLM:
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

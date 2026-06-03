@@ -48,7 +48,7 @@
 //! `payload` carries the canonical [`crate::Tenant`] struct under a
 //! per-store AEAD key. `tenant_members` is plaintext because the
 //! member taxonomy (user id, role, status) is already exposed in
-//! the permission graph by design (`docs/DESIGN.md` §7.1). The
+//! the permission graph by design (`docs/technical/design.md` §7.1). The
 //! tenant **config** table is plaintext JSON because the substrate's
 //! threat model treats config (storage caps, synthesis cadence,
 //! managed-endpoint URLs) as non-secret — the actual secret is the

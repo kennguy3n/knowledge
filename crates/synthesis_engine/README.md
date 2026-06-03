@@ -28,6 +28,6 @@ objects via managed AI endpoints, with optional TEE attestation.
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §2.1 — Synthesis engine.
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §2.1 — Synthesis engine.
 - [synthesis_pipeline](../synthesis_pipeline/) — Window management and publication.
-- [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.
+- [docs/getting-started/for-developers.md](../../docs/getting-started/for-developers.md) — Consumer integration guide.

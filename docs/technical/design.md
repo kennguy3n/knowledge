@@ -10,11 +10,11 @@ integration surface.
 Knowledge is a privacy-first continual knowledge and context
 substrate. It serves a consumer surface (B2C) and an enterprise
 surface (B2B) over the same memory model. See
-[README.md](../README.md) for an overview,
-[ARCHITECTURE.md](../ARCHITECTURE.md) for the implementation
+[README.md](../../README.md) for an overview,
+[architecture.md](architecture.md) for the implementation
 architecture that realises this document,
-[API_REFERENCE.md](API_REFERENCE.md) for the Go gateway REST
-surface, and [QUICKSTART.md](QUICKSTART.md) for deployment
+[api-reference.md](api-reference.md) for the Go gateway REST
+surface, and [QUICKSTART.md](../QUICKSTART.md) for deployment
 instructions.
 
 ---
@@ -143,7 +143,7 @@ ring buffer that overwrites on rollover.
 
 For the concrete routing thresholds, table layout, key-wrap
 schema, FTS5 purge semantics, and tombstone replay path, see
-[ARCHITECTURE.md §2.2](../ARCHITECTURE.md#22-local-store).
+[architecture.md §2.2](architecture.md#22-local-store).
 
 ### 3.2 Observation plane
 
@@ -613,7 +613,7 @@ harvest-now-decrypt-later threat model. Post-quantum
 cryptography is the default; classical primitives are kept only
 in hybrid mode for transition compatibility. For the concrete
 primitive inventory and key layout, see
-[ARCHITECTURE.md §8](../ARCHITECTURE.md#8-post-quantum-crypto-layer).
+[architecture.md §8](architecture.md#8-post-quantum-crypto-layer).
 
 ### 9.1 Primitives
 
@@ -757,8 +757,8 @@ earns its cost.
 
 ## Cross-references
 
-- [README.md](../README.md) — overview, surfaces, hierarchy, tech stack
-- [ARCHITECTURE.md](../ARCHITECTURE.md) — system design, modules, data flow, crypto layer
-- [docs/PLATFORMS.md](./PLATFORMS.md) — device-tuning and per-platform integration notes
+- [README.md](../../README.md) — overview, surfaces, hierarchy, tech stack
+- [architecture.md](architecture.md) — system design, modules, data flow, crypto layer
+- [platforms.md](platforms.md) — device-tuning and per-platform integration notes
 - [`kennguy3n/slm-chat-demo`](https://github.com/kennguy3n/slm-chat-demo) — reference implementation for on-device model selection and device tiering
 - [`kennguy3n/llama.cpp@prism`](https://github.com/kennguy3n/llama.cpp/tree/prism) — modified llama.cpp inference runtime

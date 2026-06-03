@@ -69,10 +69,10 @@ shared CRDT relay.
 ¹ At list-price $0.001 / synthesis on a 7B SLM in a Nitro Enclave,
 ~60 syntheses/user/month (≈ 2 / day domain, 1 / day tenant).
 Rate-limited by [`HttpManagedEndpointSynthesizer`'s
-`RateLimiter`](../crates/synthesis_engine/src/rate_limiter.rs) so
+`RateLimiter`](../../crates/synthesis_engine/src/rate_limiter.rs) so
 a runaway client cannot exceed the per-tenant cap operators
 configure; sequential dispatch via
-[`SynthesisBatcher`](../crates/synthesis_engine/src/batcher.rs)
+[`SynthesisBatcher`](../../crates/synthesis_engine/src/batcher.rs)
 keeps a many-scope flush inside the per-minute budget.
 
 ² CloudFront egress at $0.085 / GB × ~120 MB / user / month of
@@ -113,7 +113,7 @@ user / month at $0.001 / call.
 
 ² Per-tenant aggregate API-call volume against the 9 connectors,
 divided by 10 K avg seats per tenant. Capped by
-[`ProviderRateLimiter`](../crates/connector_framework/src/provider_rate_limiter.rs)
+[`ProviderRateLimiter`](../../crates/connector_framework/src/provider_rate_limiter.rs)
 to stay inside each provider's per-app quota — at the default
 50 req/s / provider host budget that costs ≤ $0.40 / user / month
 of compute (one EC2 m7g.large per ~10 K active polling tasks at
@@ -124,7 +124,7 @@ list price).
 ## Measured performance backing these estimates
 
 The following numbers are from the production Criterion benchmark
-suite (`crates/benchmarks/`); see [BENCHMARKS.md](BENCHMARKS.md)
+suite (`crates/benchmarks/`); see [benchmarks.md](../technical/benchmarks.md)
 for the full methodology and reference hardware.
 
 | Workload | Measured throughput | Cost implication |
@@ -175,22 +175,22 @@ The default channel-recap and domain-summary tier runs entirely
 on-device through `inference_router`'s llama.cpp / MLX
 back-ends. Promoting a workload to the managed synthesis
 endpoint is opt-in per [`SynthesisWindowManager`'s
-`tier` parameter](../crates/synthesis_pipeline/src/windows.rs) —
+`tier` parameter](../../crates/synthesis_pipeline/src/window.rs) —
 operators can keep the entire workload on-device and pay $0 if
 the on-device model meets quality bars for their user
 population.
 
 ### Server-side synthesis (paid)
 
-[`HttpManagedEndpointSynthesizer`](../crates/synthesis_engine/src/managed_endpoint.rs)
+[`HttpManagedEndpointSynthesizer`](../../crates/synthesis_engine/src/managed_endpoint.rs)
 is gated by:
 
-1. [`RateLimiter`](../crates/synthesis_engine/src/rate_limiter.rs)
+1. [`RateLimiter`](../../crates/synthesis_engine/src/rate_limiter.rs)
    — operator-pinned per-minute cap, billed window-aligned.
-2. [`SynthesisBatcher`](../crates/synthesis_engine/src/batcher.rs)
+2. [`SynthesisBatcher`](../../crates/synthesis_engine/src/batcher.rs)
    — serialises bursts through one shared limiter so a
    many-scope flush stays inside the cap.
-3. [`EndpointConfig::max_tokens`](../crates/synthesis_engine/src/managed_endpoint.rs)
+3. [`EndpointConfig::max_tokens`](../../crates/synthesis_engine/src/managed_endpoint.rs)
    — hard cap on response tokens per call; the default 1 024
    tokens covers a domain-summary recap comfortably.
 
@@ -203,10 +203,10 @@ behaviour.
 
 Each connector instance polls on a tunable interval (default 5
 min for Slack, 15 min for Notion, 60 min for Google Drive). Per
-[`crates/connector_framework/src/sync.rs`](../crates/connector_framework/src/sync.rs)
+[`crates/connector_framework/src/sync.rs`](../../crates/connector_framework/src/sync.rs)
 the substrate pulls only the delta since the last successful
 sync; per
-[`crates/connector_framework/src/provider_rate_limiter.rs`](../crates/connector_framework/src/provider_rate_limiter.rs)
+[`crates/connector_framework/src/provider_rate_limiter.rs`](../../crates/connector_framework/src/provider_rate_limiter.rs)
 the aggregate outbound QPS against any one provider host is
 capped by a token bucket so even an aggressive interval cannot
 exceed the provider's per-tenant quota. Operators tune the
@@ -215,9 +215,9 @@ compute cost.
 
 ### CRDT delta size
 
-[`SyncEngine`](../crates/sync_engine/src/lib.rs)'s `AddWinsSet`
+[`SyncEngine`](../../crates/sync_engine/src/lib.rs)'s `AddWinsSet`
 tombstones grow monotonically until compacted; the new
-[`compact_threshold`](../crates/sync_engine/src/lib.rs) hook
+[`compact_threshold`](../../crates/sync_engine/src/lib.rs) hook
 (default 10 000 ops) auto-compacts so the steady-state delta
 payload stays bounded. The bound directly controls per-user CDN
 egress: at 120 MB / user / month for an actively-synced
@@ -235,10 +235,10 @@ ceiling drops accordingly. Where a field is left unset, the
 substrate applies a conservative default (e.g.
 `DEFAULT_MAX_RPM = 60` for synthesis endpoints) so that an
 unconfigured deployment has bounded cost by default. See
-[`docs/TUNABLES.md`](TUNABLES.md) for the full list of defaults.
+[`configuration.md`](configuration.md) for the full list of defaults.
 
-The [`crates/synthesis_engine/`](../crates/synthesis_engine/) and
-[`crates/connector_framework/`](../crates/connector_framework/)
+The [`crates/synthesis_engine/`](../../crates/synthesis_engine/) and
+[`crates/connector_framework/`](../../crates/connector_framework/)
 test suites both exercise the rate-limiter and batcher paths so
 a future regression that "always dispatches one extra request"
 would surface as a test failure before it reached the cost

@@ -1,6 +1,6 @@
 //! Stage 9 — Agent Contract.
 //!
-//! Per `docs/DESIGN.md` §7.3 and `ARCHITECTURE.md` §6, software agents
+//! Per `docs/technical/design.md` §7.3 and `docs/technical/architecture.md` §6, software agents
 //! never write canonical memory directly — they go through a
 //! proposal-only API that mints typed [`AgentProposal`]s and pushes
 //! them through the lifecycle state machine

@@ -32,7 +32,7 @@
 //! Cross-references:
 //!
 //! * Hierarchy contract: `synthesis_pipeline::hierarchy`.
-//! * Module map: `ARCHITECTURE.md` §2.1 (`synthesis_engine`).
+//! * Module map: `docs/technical/architecture.md` §2.1 (`synthesis_engine`).
 
 use std::sync::{
     atomic::{AtomicU64, Ordering},

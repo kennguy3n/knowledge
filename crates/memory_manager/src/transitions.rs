@@ -1,4 +1,4 @@
-//! The decay state machine from `ARCHITECTURE.md` §7.
+//! The decay state machine from `docs/technical/architecture.md` §7.
 //!
 //! Every transition is an explicit method on [`MemoryStateMachine`].
 //! Each method validates the current state of the supplied

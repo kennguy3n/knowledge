@@ -1,5 +1,5 @@
 # Knowledge stack — docker compose deployment.
-# See docs/OPERATOR_GUIDE.md for configuration and operational docs.
+# See docs/operator/deployment-guide.md for configuration and operational docs.
 
 services:
   # ────────────────── Core services ──────────────────────────────────

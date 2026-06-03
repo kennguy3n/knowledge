@@ -3,7 +3,7 @@
 //! Exercises every public surface of the concept graph:
 //!
 //! * Typed nodes ([`ConceptNode`]) and the seven typed relations from
-//!   `docs/DESIGN.md` §3.3 (`IsA`, `PartOf`, `DecidedBy`, `Supersedes`,
+//!   `docs/technical/design.md` §3.3 (`IsA`, `PartOf`, `DecidedBy`, `Supersedes`,
 //!   `Contradicts`, `DerivedFrom`, `AssignedTo`).
 //! * Encrypted persistence via [`PersistentConceptGraph`] (SQLCipher
 //!   round-trip via `add_node` / `add_edge` / `supersede_node` and

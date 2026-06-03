@@ -1,6 +1,6 @@
 //! Synthesis-hierarchy enforcement.
 //!
-//! Per `docs/DESIGN.md` §6.3 the substrate has three rules about what
+//! Per `docs/technical/design.md` §6.3 the substrate has three rules about what
 //! each synthesis tier may consume:
 //!
 //! 1. **Channel synthesis** consumes raw evidence (messages /
@@ -113,7 +113,7 @@ impl DomainOutput {
 
 /// Input bundle for a domain-scope synthesis run.
 ///
-/// Per `docs/DESIGN.md` §6.3 rule 2, domain synthesis consumes channel
+/// Per `docs/technical/design.md` §6.3 rule 2, domain synthesis consumes channel
 /// outputs only. The [`Self::new`] constructor takes a domain
 /// [`DomainMemoryObject`] (which carries the registered channel
 /// scopes) and a slice of [`ChannelOutput`]s; it rejects any output
@@ -194,7 +194,7 @@ impl ApprovedDocument {
 
 /// Input bundle for a tenant-scope synthesis run.
 ///
-/// Per `docs/DESIGN.md` §6.3 rule 3, tenant synthesis consumes domain
+/// Per `docs/technical/design.md` §6.3 rule 3, tenant synthesis consumes domain
 /// objects + approved official docs. The [`Self::new`] constructor
 /// takes a [`TenantMemoryObject`] (which carries the registered
 /// domain scopes and the admitted approved-document refs) and slices

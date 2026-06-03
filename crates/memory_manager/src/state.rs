@@ -1,4 +1,4 @@
-//! The seven memory states from `ARCHITECTURE.md` §7 / `docs/DESIGN.md`
+//! The seven memory states from `docs/technical/architecture.md` §7 / `docs/technical/design.md`
 //! §4.1.
 
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// The seven states a memory object can occupy as it moves through
 /// the decay state machine.
 ///
-/// Per `ARCHITECTURE.md` §7 / `docs/DESIGN.md` §4.1:
+/// Per `docs/technical/architecture.md` §7 / `docs/technical/design.md` §4.1:
 ///
 /// ```text
 /// [*] -> Candidate
@@ -44,7 +44,7 @@ pub enum MemoryState {
     /// longer reachable from retrieval but the row still exists.
     Archived,
     /// The scope DEK has been destroyed; the object is unrecoverable
-    /// (`docs/DESIGN.md` §4.4 — cryptographic forgetting).
+    /// (`docs/technical/design.md` §4.4 — cryptographic forgetting).
     Deleted,
 }
 

@@ -13,12 +13,10 @@
 //!
 //! ## Cross-references
 //!
-//! * `docs/DESIGN.md` §3.2 — observation extractor responsibilities.
-//! * `docs/MULTILINGUAL.md` (the multilingual `LexiconRegistry`
-//!   spec) — this table is the precursor / minimal viable
-//!   version; once the registry lands, the `LexiconRegistry`
-//!   should subsume this map alongside the decision / task
-//!   keyword lists.
+//! * `docs/technical/design.md` §3.2 — observation extractor responsibilities.
+//! * [`crate::lexicon`] — the multilingual `LexiconRegistry` that
+//!   carries the per-language decision / task / interrogative
+//!   keyword lists this table feeds into.
 //!
 //! ## Matching strategy
 //!
@@ -320,8 +318,7 @@ pub fn interrogatives_for(
         // initial case and rely on `?`/`?` terminator for the
         // sentence-final case.
         //
-        // Updated (closing the deferred earlier-review finding):
-        // Vietnamese now uses FirstBigram so the high-frequency
+        // Vietnamese uses FirstBigram so the high-frequency
         // leading prepositions
         // / conjunctions `tại` / `khi` / `vì` recover their
         // interrogative readings via the two-token collocations

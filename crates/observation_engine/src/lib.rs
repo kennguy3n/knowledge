@@ -1,7 +1,7 @@
 //! `observation_engine` — lexicon-first extraction of structured
 //! observations from raw evidence text.
 //!
-//! Per `docs/DESIGN.md` §3.2 / `ARCHITECTURE.md` §2.1, the observation
+//! Per `docs/technical/design.md` §3.2 / `docs/technical/architecture.md` §2.1, the observation
 //! engine turns raw text into a small number of typed observations
 //! (entities, facts, tasks, decisions, claims). The baseline is a
 //! **lexicon extractor** — regex / keyword / capitalised-word
@@ -10,10 +10,10 @@
 //!
 //! Cross-references:
 //!
-//! * Lexicon-first approach: `docs/DESIGN.md` §3.2 (cheap classifiers
+//! * Lexicon-first approach: `docs/technical/design.md` §3.2 (cheap classifiers
 //!   first, only candidates that clear the cheap classifier go to
 //!   more expensive stages).
-//! * Observation deliverables: `docs/DESIGN.md` §3.2.
+//! * Observation deliverables: `docs/technical/design.md` §3.2.
 //!
 //! # Test-only types (`test-support` feature)
 //!

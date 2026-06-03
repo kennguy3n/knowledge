@@ -1,6 +1,6 @@
 //! Graph-of-Thought (GoT) reasoning over the concept graph.
 //!
-//! Per `docs/DESIGN.md` §11.1 ("multi-step reasoning"), the
+//! Per `docs/technical/design.md` §11.1 ("multi-step reasoning"), the
 //! substrate's reasoning plane explores a directed
 //! graph of *thoughts* — hypotheses, evidence, conclusions,
 //! questions, refinements — connected by typed edges (`Supports`,

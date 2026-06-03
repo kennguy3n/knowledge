@@ -180,7 +180,7 @@ serde_json = "1"
 # script presence rather than the language tag, which is the right
 # architecture independently and not a workaround we need to lift.
 #
-# On the latest published version; see `docs/DEPENDENCIES.md` for
+# On the latest published version; see `docs/security/dependency-policy.md` for
 # the MSRV policy and the future-bump checklist.
 whatlang = "0.18"
 
@@ -188,7 +188,7 @@ whatlang = "0.18"
 # extractor to handle NFD-decomposed input (e.g. `qué` as
 # `q u e \u{0301}`) so accented interrogatives match the NFC-composed
 # table entries. Pure Rust, no_std-compatible, MIT. On the latest
-# published version; see `docs/DEPENDENCIES.md`.
+# published version; see `docs/security/dependency-policy.md`.
 unicode-normalization = "0.1"
 
 # HTTP client. The blocking client is used by the synchronous

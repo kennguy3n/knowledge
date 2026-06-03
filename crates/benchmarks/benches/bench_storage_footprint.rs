@@ -11,7 +11,7 @@
 //! `STORAGE_FOOTPRINT N=… file_bytes=… bytes_per_msg=…`, and the
 //! Criterion-timed operation is the cheap `metadata().len()` read so
 //! the harness still produces a stable report. Read the printed
-//! lines (or `docs/BENCHMARKS.md`) for the footprint table.
+//! lines (or `docs/technical/benchmarks.md`) for the footprint table.
 //!
 //! Run with:
 //!

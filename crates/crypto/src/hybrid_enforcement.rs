@@ -1,6 +1,6 @@
 //! Hybrid classical + post-quantum policy enforcement.
 //!
-//! Per `docs/DESIGN.md` §9, every key exchange in
+//! Per `docs/technical/design.md` §9, every key exchange in
 //! the substrate must run a hybrid X25519 + ML-KEM-768 construction.
 //! Operators control the cut-over with a [`HybridMode`]:
 //!

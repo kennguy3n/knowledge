@@ -1,6 +1,6 @@
 //! Stage 10 — Reasoning Engine.
 //!
-//! Per `docs/DESIGN.md` §11.1, this stage exercises the substrate's
+//! Per `docs/technical/design.md` §11.1, this stage exercises the substrate's
 //! reasoning plane on top of the concept graph that the concept-graph
 //! stage persisted. It runs every public surface that
 //! Part 1 §10 of the demo prompt calls out:

@@ -5,234 +5,29 @@
 //! the spec). Only the `body_store.ref_count` column and the
 //! `ring_buffer` table are mutable.
 
-/// Schema version stamped into `PRAGMA user_version`. Bumped on every
-/// breaking schema change.
+/// Schema version stamped into `PRAGMA user_version`. Knowledge ships
+/// a single initial schema, so this is `1`. The bootstrap in
+/// [`SCHEMA_SQL`] creates the full on-disk shape directly via
+/// idempotent `CREATE * IF NOT EXISTS` statements; there is no
+/// migration ladder. The constant is still read on `open` so a
+/// database written by a future, higher-versioned build is refused
+/// rather than silently downgraded.
 ///
-/// History:
-/// - v1: initial evidence / body_store / ring_buffer / evidence_fts.
-/// - v2: added `evidence_embeddings` for the on-device ONNX
-///   embedding cache used by the hybrid retriever's semantic-vector
-///   lane.
-/// - v3: widened the `evidence_embeddings`
-///   primary key from `evidence_id` alone to the composite
-///   `(evidence_id, model_tag)`. This lets multiple cached vectors
-///   coexist for the same evidence row when the embedding model is
-///   swapped — a model upgrade keeps the old rows warm for any
-///   retriever still running under the previous tag instead of
-///   destroying them via `INSERT OR REPLACE`. The upgrade is
-///   destructive (cannot be expressed with `CREATE * IF NOT EXISTS`)
-///   so the migration is implemented in `apply_migration(3)`.
-/// - v4: added `forgotten_scopes` tombstone table
-///   so cryptographic-forgetting tombstones survive process restarts
-///   — the in-memory `DekRegistry` is rebuilt from this table on
-///   `open_store`. Purely additive.
-/// - v5 (WS1): added `body_store_key_wraps` for per-scope CEK
-///   wrapping of deduplicated body-table rows. Bodies in
-///   `body_store` are now encrypted under a random per-row Content
-///   Encryption Key (CEK); each scope that references the body
-///   wraps the CEK under its per-scope AEAD key. `forget()` deletes
-///   wraps for the forgotten scope; when no wraps remain the body
-///   is cryptographically unrecoverable. Purely additive.
-/// - v6 (C2): added `scope_deks` for independently generated scope
-///   Data Encryption Keys. Each scope key is now randomly generated
-///   from the OS RNG (`rand::rngs::SysRng`, see `SECURITY.md`
-///   §"Random number generation") rather than HKDF-derived from
-///   the master key. The DEK is AEAD-wrapped under a master-derived
-///   wrapping key and
-///   stored in this table. `forget()` deletes the row, making the
-///   scope key truly unrecoverable even if the master key is
-///   compromised. Purely additive.
-/// - v7 (C10): added `memory_objects` for persisted per-scope
-///   memory state. Each scope's `UserMemoryObject` (or
-///   `ChannelMemoryObject`) is JSON-serialized and AEAD-encrypted
-///   under the scope key, so memory state survives process
-///   restarts. Mutations (pin, unpin, decay_sweep) flush the
-///   updated state to this table. Purely additive.
-/// - v8: added `epoch_tombstones` for per-`(scope, epoch)`
-///   cryptographic-forgetting tombstones. The existing
-///   `forgotten_scopes` table is scope-grain only; epoch DEK
-///   destruction — emitted by
-///   [`crypto::forgetting::destroy_epoch_dek`] — was previously
-///   in-memory only and lost across restarts. The substrate now
-///   replays this table into the in-process [`DekRegistry`] on
-///   every `open_store` so post-restart calls for forgotten epochs
-///   continue to short-circuit. Purely additive.
-/// - v9 (connector persistence): added `connector_instances`
-///   for AEAD-encrypted per-instance `(ConnectorConfig, SyncState)`
-///   blobs and `connector_tokens` for AEAD-encrypted per-instance
-///   `OAuth2Token` bundles. Both encrypted under the same per-scope
-///   DEK that protects `memory_objects` and `body_store_key_wraps`,
-///   so `forget(scope)`'s destruction of the scope DEK makes both
-///   tables' ciphertexts cryptographically unrecoverable even if the
-///   row deletion races against the DEK delete. A unique index on
-///   `connector_instances(scope_id, kind)` pins the
-///   single-instance-per-(scope, kind) contract at the DB layer
-///   (defense-in-depth against future regressions of the runtime-
-///   side check). Purely additive.
-/// - v10 (approved-document payloads): added
-///   `approved_document_payloads` for per-(tenant scope, document)
-///   AEAD-encrypted opaque payload bytes attached to a previously
-///   admitted `ApprovedDocumentRef`. Encrypted under the per-scope
-///   DEK with AAD binding both `scope_id` and `document_id`, so a
-///   ciphertext relocated to a different row fails to decrypt and
-///   surfaces a structured error rather than silently feeding a
-///   wrong-document payload into tenant synthesis. A `content_hash`
-///   column (BLAKE3 of the plaintext, matching the `crypto::content_hash`
-///   used elsewhere in the substrate) and a `size_bytes` column
-///   support fast metadata listing without touching the AEAD
-///   payload. `forget(scope)` deletes the rows by `scope_id`; even
-///   if that delete fails, the scope-DEK destruction step makes the
-///   ciphertext unrecoverable. Purely additive.
-/// - v11 (synthesis replay history): added
-///   `synthesis_object_versions` to record the full prior-version
-///   history of a synthesised window. The current `synthesis_objects`
-///   blob (one row per scope under `memory_objects(kind =
-///   'synthesis_object')`) still carries only the latest version of
-///   each window's object — the new history table holds every prior
-///   version one row at a time keyed by
-///   `(scope_id, window_id, version)`. Each row is AEAD-encrypted
-///   under the same per-scope DEK with AAD binding all three
-///   columns, so a ciphertext relocated to a different row fails
-///   to decrypt rather than silently feeding the wrong-version
-///   payload to a host that called `list_synthesis_versions`.
-///   `forget(scope)` deletes the rows by `scope_id`; even if the
-///   delete fails, the scope-DEK destruction step makes the
-///   ciphertext unrecoverable. Purely additive — pre-v11 databases
-///   simply have no version history rows yet, matching the
-///   pre-Item-4 contract where every synthesis output overwrote
-///   the prior one with no recoverable trail.
-/// - v12 (body-store dedup for approved-document payloads):
-///   the `approved_document_payloads` table loses its
-///   inline `nonce` + `payload` columns and becomes metadata-only.
-///   The plaintext bytes now live in the shared content-hash-
-///   deduplicated `body_store` table, encrypted under a random
-///   per-row CEK that is wrapped under each referencing scope's DEK
-///   via the existing `body_store_key_wraps` machinery. Admitting
-///   the same content into N tenant scopes therefore costs one
-///   `body_store` row + N wraps instead of N inline ciphertexts,
-///   and `forget(scope)` drops the scope's wrap (the existing
-///   `purge_body_key_wraps_for_scope` path then GCs the body row
-///   when its `ref_count` reaches zero). The migration is
-///   destructive (cannot be expressed with `CREATE * IF NOT EXISTS`)
-///   so the v11 -> v12 data move and the subsequent
-///   `ALTER TABLE ... DROP COLUMN` calls are implemented in
-///   `migrate_approved_doc_payloads_to_body_store` (a post-bootstrap
-///   step run from `open` after the scope-DEK cache is hydrated).
-/// - v13 (multilingual ingestion): added the optional
-///   `language_tag` column to the `evidence` table. The column
-///   stores the BCP-47 primary subtag detected on the row's
-///   plaintext body by
-///   [`observation_engine::detect_language`] when the row was
-///   ingested via
-///   [`crate::store::EvidenceStore::ingest_with_language`]; rows
-///   ingested through the legacy [`crate::store::EvidenceStore::ingest`]
-///   shim or by pre-v13 builds carry `NULL` and downstream
-///   consumers (multilingual lexicon registry, per-locale FTS5
-///   tokenizer) MUST treat the absence as "unknown" rather than
-///   substitute a default. Purely additive — a v12 -> v13
-///   upgrade just runs `ALTER TABLE evidence ADD COLUMN
-///   language_tag TEXT`; pre-existing rows keep their original
-///   shape and retroactively read as `NULL`. SQLite's
-///   `ALTER TABLE ADD COLUMN` does not run the append-only
-///   triggers (DDL bypasses row triggers), so the addition is
-///   safe against the existing `evidence_no_update` trigger.
-/// - v14 (CJK-aware FTS5 tokeniser): added the
-///   `evidence_fts_cjk` virtual table indexed with FTS5's built-in
-///   `trigram` tokeniser. The pre-v14 `evidence_fts` table
-///   (`tokenize='unicode61 remove_diacritics 2'`) returns zero hits
-///   for any pure-CJK or pure-Thai query because `unicode61`
-///   classifies CJK Han / Hiragana / Katakana / Thai codepoints as
-///   non-letter separators and never emits a token; the substrate
-///   was effectively script-blind for those languages. The new
-///   `evidence_fts_cjk` table indexes overlapping 3-codepoint
-///   windows of the same plaintext, so queries of ≥3 CJK / Thai
-///   characters now hit. Both tables coexist: the write path
-///   routes per-row by body-script content (every row goes into
-///   `evidence_fts` as before; rows whose body contains any CJK or
-///   Thai codepoint *additionally* go into `evidence_fts_cjk`) and
-///   the read path UNIONs both. The v13 -> v14 migration
-///   (`migrate_v14_backfill_evidence_fts_cjk`) replays
-///   `evidence_fts.content` row-by-row into the new table for
-///   pre-existing CJK / Thai content. The table itself is
-///   bootstrapped by `SCHEMA_SQL`'s `CREATE VIRTUAL TABLE IF NOT
-///   EXISTS` (idempotent — a fresh v14 database picks it up
-///   directly; a v13 -> v14 upgrade hits the same statement and
-///   then walks the backfill).
-///
-///   Known limitation: SQLite's built-in `trigram` tokeniser has
-///   a hard 3-codepoint minimum for both indexed substrings and
-///   query strings — 2-character CJK queries like `天気` return ∅
-///   even when the substring is present in the indexed text.
-///   Schema v15 closes that gap via a precomputed-bigram lane
-///   in a parallel `evidence_fts_bigram` table; see
-///   the v15 history entry below.
-/// - v15 (CJK / Thai bigram recall lane): added
-///   the `evidence_fts_bigram` virtual table that stores
-///   whitespace-separated overlapping 2-codepoint windows of the
-///   CJK / Thai portion of each body under the same
-///   `unicode61 remove_diacritics 2` tokeniser as `evidence_fts`.
-///   The write path computes the bigram string via
-///   [`crate::bigram::compute_cjk_bigrams`] and INSERTs it
-///   alongside the v14 trigram INSERT iff
-///   [`crate::script::contains_cjk_or_thai`] is true for the
-///   body; the read path runs a third independent prepared
-///   statement against `evidence_fts_bigram` with the query
-///   bigram-tokenised via [`crate::bigram::compute_cjk_bigram_query`]
-///   and merges its results into the existing
-///   `MIN(rank)`-by-`evidence_id` HashMap. The bigram lane is
-///   the gap-closer for 2-codepoint CJK queries like `天気`
-///   that the v14 trigram lane cannot serve because of FTS5's
-///   3-codepoint trigram minimum. Like the trigram lane it is
-///   purely additive recall: errors are swallowed and the
-///   unicode61 branch remains the source of truth for query
-///   validity. The v14 -> v15 migration
-///   ([`crate::store::migrate_v15_backfill_evidence_fts_bigram`])
-///   replays `evidence_fts.content` row-by-row through the same
-///   bigram pre-tokeniser the write path uses, chunked on
-///   `evidence_fts.rowid` for bounded memory matching the v14
-///   migration's pattern. Forget / purge / rebuild now touch
-///   all three FTS shadow tables in the same transaction so
-///   they cannot drift apart under crash recovery.
-/// - v16 (symmetric recall-lane stopword stripping):
-///   the unicode61 baseline lane is left untouched (BM25 idf
-///   already discounts high-frequency particles for whitespace-
-///   tokenised scripts), but the trigram and bigram lanes now
-///   apply [`crate::fts_stopwords::strip_recall_lane_stopwords`]
-///   to BOTH the body at index time AND the query at read time.
-///   Stripping replaces each script-aware stopword (Japanese `の`
-///   / `です`, Chinese `的` / `了`, Thai `และ` / `ของ`,
-///   Tibetan / Khmer / Myanmar / Lao function-word cognates) with
-///   a single ASCII space. (Thai content-bearing time deictics
-///   `วันนี้` / `พรุ่งนี้` / `เมื่อวาน` and demonstratives
-///   `นี้` / `นั้น` are **deliberately excluded** from the
-///   inventory — see [`crate::fts_stopwords::STOPWORDS_TH`]'s
-///   doc comment for the per-entry rationale.) The trigram /
-///   bigram tokenisers treat whitespace as a hard separator so
-///   the spurious "particle trigram" / "particle bigram" windows
-///   the substrate produced at v15 (e.g. `今日のオ` matching `今日の鬼` for the unrelated
-///   semantic `今日の鬼ヶ島` story) are eliminated. Symmetric
-///   stripping is required: index-only stripping would mean a
-///   query `今日のオリンピック` (stripped to `今日 オリンピック`)
-///   would no longer match a body containing the original phrase,
-///   because the body's stored trigrams would miss the `日のオ`
-///   bridge window the query no longer generates. Korean Hangul
-///   is **deliberately excluded** from the stripping inventory —
-///   the unicode61 baseline lane already segments Korean cleanly
-///   at the eojeol boundary, and substring-based stripping would
-///   false-positive on common content words like `도시` ("city",
-///   starts with the particle codepoint `도`) and `은행` ("bank",
-///   starts with `은`). The v15 -> v16 migration
-///   ([`crate::store::migrate_v16_strip_recall_lane_stopwords`])
-///   re-tokenises every existing `evidence_fts_cjk` and
-///   `evidence_fts_bigram` row from the source
-///   `evidence_fts.content` column with the strip applied,
-///   chunked on `evidence_fts.rowid` for bounded memory matching
-///   the v14 / v15 migrations' pattern. The migration is
-///   idempotent by reconstruction (re-running it produces the
-///   same shape as a single run), so the crash-after-commit-
-///   before-version-stamp recovery path is safe without any
-///   inner sentinel check.
-pub const SCHEMA_VERSION: i32 = 16;
+/// The initial schema covers the full device-side substrate:
+/// - Append-only `evidence` plus the deduplicated `body_store`,
+///   `ring_buffer`, and the `evidence_fts` / `evidence_fts_cjk` /
+///   `evidence_fts_bigram` full-text lanes (unicode61 baseline plus
+///   CJK/Thai trigram and bigram recall lanes with symmetric
+///   stopword stripping).
+/// - `evidence_embeddings` (composite `(evidence_id, model_tag)` key)
+///   for the on-device embedding cache.
+/// - Cryptographic-forgetting state: `forgotten_scopes`,
+///   `epoch_tombstones`, `scope_deks`, and `body_store_key_wraps`.
+/// - Persisted per-scope state: `memory_objects`,
+///   `synthesis_object_versions`, `approved_document_payloads`
+///   (metadata-only; bytes live in `body_store`), and the connector
+///   tables `connector_instances` / `connector_tokens`.
+pub const SCHEMA_VERSION: i32 = 1;
 
 /// Schema bootstrap statements executed inside a transaction at
 /// `EvidenceStore::open`.
@@ -251,10 +46,10 @@ CREATE TABLE IF NOT EXISTS evidence (
     importance      INTEGER NOT NULL,
     storage_path    INTEGER NOT NULL,
     created_at      INTEGER NOT NULL,
-    -- v13: BCP-47 primary language subtag detected on the
+    -- BCP-47 primary language subtag detected on the
     -- plaintext body by `observation_engine::detect_language`.
     -- NULL when the detector either declined to classify or was
-    -- bypassed (e.g. pre-v13 ingest paths, embedded binary blobs).
+    -- bypassed (e.g. unclassified ingest paths, embedded binary blobs).
     language_tag    TEXT
 );
 
@@ -300,12 +95,12 @@ CREATE INDEX IF NOT EXISTS idx_ring_buffer_scope_created
 
 -- FTS5 index over plaintext content for non-noise rows. Tokenizer is
 -- the substrate canonical 'unicode61 remove_diacritics 2'
--- (ARCHITECTURE.md §2.2). This table catches all whitespace-
+-- (docs/technical/architecture.md §2.2). This table catches all whitespace-
 -- segmented scripts (Latin, Cyrillic, Greek, Arabic, Hebrew,
 -- Devanagari, Hangul) including any Latin terms embedded inside a
 -- CJK or Thai document. CJK Han / Hiragana / Katakana / Thai
--- substrings are routed *additionally* into `evidence_fts_cjk`
--- below (schema v14) — `unicode61` produces no tokens for
+-- substrings are routed *additionally* into the `evidence_fts_cjk`
+-- trigram lane below — `unicode61` produces no tokens for
 -- those codepoints because it classifies them as separators.
 CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(
     content,
@@ -314,7 +109,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(
     tokenize    = 'unicode61 remove_diacritics 2'
 );
 
--- v14: trigram-tokenised FTS5 index used for CJK and
+-- Trigram-tokenised FTS5 index used for CJK and
 -- Thai content where the `unicode61` tokeniser of `evidence_fts`
 -- emits zero tokens. The write path inserts a row here *in
 -- addition to* `evidence_fts` whenever the body contains any
@@ -329,7 +124,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_cjk USING fts5(
     tokenize    = 'trigram'
 );
 
--- v15: CJK / Thai bigram recall lane. The `content`
+-- CJK / Thai bigram recall lane. The `content`
 -- column stores a whitespace-separated string of overlapping
 -- 2-codepoint windows over the CJK / Thai portion of the body
 -- (computed by `crate::bigram::compute_cjk_bigrams`); the
@@ -342,7 +137,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_cjk USING fts5(
 -- with the query bigram-tokenised by
 -- `crate::bigram::compute_cjk_bigram_query`, merging into the
 -- same `MIN(rank)`-by-`evidence_id` HashMap as the other two
--- branches. This closes the v14 trigram lane's
+-- branches. This closes the trigram lane's
 -- "≥ 3 codepoint query" floor so 2-codepoint CJK queries like
 -- `天気` (Japanese "weather") return real recall instead of an
 -- empty result set. Forget / purge / rebuild paths touch this
@@ -364,12 +159,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_bigram USING fts5(
 --
 -- The primary key is the composite (`evidence_id`, `model_tag`) so a
 -- single evidence row can have multiple cached vectors — one per
--- model the store has been wired into. This is the v3 shape (
--- follow-up); the destructive v2 -> v3 migration that rewrites a
--- pre-existing single-PK table into this shape lives in
--- `apply_migration` in `store.rs`. For an already-v3 database this
--- statement is a no-op via `IF NOT EXISTS`; for a fresh database it
--- creates the v3 shape directly.
+-- model the store has been wired into.
 CREATE TABLE IF NOT EXISTS evidence_embeddings (
     evidence_id     BLOB    NOT NULL,
     embedding       BLOB    NOT NULL,
@@ -387,7 +177,7 @@ CREATE TABLE IF NOT EXISTS evidence_embeddings (
 --
 -- This table is the *only* mutable store of forgetting state. The
 -- `evidence` table itself is append-only — destroying the per-scope
--- DEK (the unit of forgetting in `docs/DESIGN.md` §3.1) makes its
+-- DEK (the unit of forgetting in `docs/technical/design.md` §3.1) makes its
 -- bodies unrecoverable; the tombstone here makes that decision
 -- durable across process restarts. Re-inserts for an already-
 -- forgotten scope are no-ops by way of `INSERT OR IGNORE`.
@@ -396,7 +186,7 @@ CREATE TABLE IF NOT EXISTS forgotten_scopes (
     forgotten_at    INTEGER NOT NULL
 );
 
--- v5 (WS1) — per-scope CEK wraps for deduplicated body-table rows.
+-- Per-scope CEK wraps for deduplicated body-table rows.
 -- Each row wraps the random Content Encryption Key (CEK) of a body_store
 -- row under the per-scope AEAD key so that `forget()` can destroy a
 -- scope's access to shared bodies without affecting other scopes.
@@ -416,7 +206,7 @@ CREATE TABLE IF NOT EXISTS body_store_key_wraps (
 CREATE INDEX IF NOT EXISTS idx_body_wraps_scope
     ON body_store_key_wraps (scope_id);
 
--- v6 (C2) — independently generated per-scope DEKs.
+-- Independently generated per-scope DEKs.
 -- Each scope's AEAD key is generated from the OS RNG (rand-0.10's
 -- `SysRng`; see SECURITY.md §"Random number generation"), not
 -- HKDF-derived from the master key. The raw DEK is AEAD-wrapped
@@ -432,7 +222,7 @@ CREATE TABLE IF NOT EXISTS scope_deks (
     created_at      INTEGER NOT NULL
 );
 
--- v7 (C10) — encrypted per-scope memory objects.
+-- Encrypted per-scope memory objects.
 -- Each row stores a scope's memory objects (user or channel)
 -- as a single AEAD-encrypted JSON blob. The `kind` column
 -- discriminates between user_memory and channel_memory.
@@ -446,7 +236,7 @@ CREATE TABLE IF NOT EXISTS memory_objects (
     PRIMARY KEY (scope_id, kind)
 );
 
--- v8 — per-(scope, epoch) cryptographic-forgetting tombstones.
+-- Per-(scope, epoch) cryptographic-forgetting tombstones.
 -- Each row records that the runtime destroyed the epoch DEK for
 -- `(scope_id, epoch_id)` at `forgotten_at` (Unix epoch seconds).
 -- Scope-wide forgetting still goes through `forgotten_scopes`;
@@ -463,7 +253,7 @@ CREATE TABLE IF NOT EXISTS epoch_tombstones (
     PRIMARY KEY (scope_id, epoch_id)
 );
 
--- v9 — persisted connector instances.
+-- Persisted connector instances.
 -- Each row stores one connector's `(ConnectorConfig, SyncState)`
 -- pair as a single AEAD-encrypted JSON blob under the per-scope DEK.
 -- The blob is upserted on `create_connector` (initial state) and on
@@ -504,7 +294,7 @@ CREATE INDEX IF NOT EXISTS idx_connector_instances_scope
 CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_instances_scope_kind
     ON connector_instances (scope_id, kind);
 
--- v9 — persisted OAuth2 token bundles.
+-- Persisted OAuth2 token bundles.
 -- Held in a separate table from `connector_instances` because the
 -- token lifecycle is independent: created by `authenticate_connector`,
 -- mutated by future background-refresh flows, and dropped by
@@ -529,8 +319,8 @@ CREATE TABLE IF NOT EXISTS connector_tokens (
 CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
     ON connector_tokens (scope_id);
 
--- v10 — opaque approved-document payloads.
--- v12 — content-hash dedup via `body_store`.
+-- Opaque approved-document payloads with content-hash dedup via
+-- `body_store`.
 --
 -- Each row attaches metadata to an `ApprovedDocumentRef` previously
 -- admitted onto a `TenantMemoryObject`. The ref lives inside the
@@ -542,16 +332,11 @@ CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
 -- DEK in `body_store_key_wraps`, identical to how the evidence
 -- body-table content is handled.
 --
--- The pre-v12 schema carried inline `nonce` + `payload` columns
--- here, encrypted directly under the scope DEK with AAD binding
--- (scope_id, document_id). That layout could not deduplicate the
--- same content across multiple tenant scopes: admitting the same
--- 1 MiB onboarding doc into N tenants cost N copies of the
--- ciphertext. The v12 layout costs one `body_store` row + N wraps.
--- The destructive v11 -> v12 migration (decrypt every legacy row,
--- admit the plaintext via `body_store`, then ALTER TABLE DROP COLUMN)
--- lives in `migrate_approved_doc_payloads_to_body_store` in
--- `store.rs`.
+-- Storing payloads through `body_store` (rather than inline `nonce` +
+-- `payload` columns encrypted directly under the scope DEK)
+-- deduplicates the same content across multiple tenant scopes:
+-- admitting the same 1 MiB onboarding doc into N tenants costs one
+-- `body_store` row + N wraps rather than N copies of the ciphertext.
 --
 -- Selective read still applies: the metadata-only row is cheap to
 -- list (no AEAD), and the actual payload bytes are only decrypted

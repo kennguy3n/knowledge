@@ -1,6 +1,6 @@
 //! GraphRAG-style community detection and summarisation.
 //!
-//! Per `docs/DESIGN.md` §11.1 (reasoning plane), the substrate
+//! Per `docs/technical/design.md` §11.1 (reasoning plane), the substrate
 //! detects clusters ("communities") in the
 //! sparse concept graph and pre-computes a structured summary for
 //! each one. Subsequent queries are routed through a
@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 /// Object type used to model a [`ScopeId`] in the permission graph.
 /// Scopes inhabit `Channel` because channels are the smallest
-/// subject-bearing scope in `docs/DESIGN.md` §7.1.
+/// subject-bearing scope in `docs/technical/design.md` §7.1.
 const SCOPE_OBJECT_TYPE: ObjectType = ObjectType::Channel;
 /// Relation required to read a community summary.
 const VIEW_RELATION: Relation = Relation::Viewer;

@@ -4,7 +4,7 @@ This document collects the on-device tuning behaviour of the
 Knowledge substrate (storage, memory, battery, network) and the
 per-platform integration notes for iOS, Android, macOS, and
 Windows. For the system-level architecture see
-[`ARCHITECTURE.md`](../ARCHITECTURE.md).
+[`architecture.md`](architecture.md).
 
 ## Device Optimization
 

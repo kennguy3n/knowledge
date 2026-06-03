@@ -5,7 +5,7 @@
 //! [`crate::check::check_permission`] and friends. Every successful
 //! mutation on this wrapper is mirrored to a SQLCipher database that
 //! reuses the substrate's per-user master key pattern (see
-//! `ARCHITECTURE.md` §2.2): the page-encryption key is derived via
+//! `docs/technical/architecture.md` §2.2): the page-encryption key is derived via
 //! HKDF context `b"sqlcipher:permissions:v1"`, and any sensitive
 //! plaintext is encrypted under a per-store AEAD key
 //! (`permission_tuple:v1`).
@@ -38,7 +38,7 @@
 //! the ciphertext so the indexed queries (`check`, reverse-lookup)
 //! do not have to decrypt every row at read time. The taxonomy
 //! exposed in plaintext is the same one already documented in
-//! `docs/DESIGN.md` §7.1, so this does not leak more than the
+//! `docs/technical/design.md` §7.1, so this does not leak more than the
 //! schema already does.
 
 use std::path::Path;
@@ -460,7 +460,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 // The plaintext columns are reduced to short tags so they don't
 // leak more than the permission taxonomy already documented in
-// `docs/DESIGN.md` §7.1.
+// `docs/technical/design.md` §7.1.
 impl ObjectType {
     /// Parse the stable tag emitted by [`ObjectType::as_str`].
     pub(crate) fn from_tag(s: &str) -> Option<Self> {

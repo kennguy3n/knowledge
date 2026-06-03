@@ -2,8 +2,8 @@
 //!
 //! Builds a Zanzibar-style relation graph for the
 //! tenant → domain → channel hierarchy used in earlier stages and
-//! exercises [`check_permission`] against it. Per `docs/DESIGN.md` §7.1
-//! and `ARCHITECTURE.md` §6, every access decision in the substrate
+//! exercises [`check_permission`] against it. Per `docs/technical/design.md` §7.1
+//! and `docs/technical/architecture.md` §6, every access decision in the substrate
 //! is a reachability query over a graph of relation tuples; this
 //! stage plants the graph and runs the queries.
 //!

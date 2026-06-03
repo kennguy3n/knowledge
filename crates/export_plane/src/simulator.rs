@@ -1,6 +1,6 @@
 //! Policy simulator — read-only preview of an export.
 //!
-//! Per `docs/DESIGN.md` §3.5 the export plane MUST allow operators to
+//! Per `docs/technical/design.md` §3.5 the export plane MUST allow operators to
 //! preview what an export *would* contain without rendering an
 //! actual [`crate::profile::ExportView`]. The simulator combines a
 //! [`crate::policy::ExportPolicy`], an

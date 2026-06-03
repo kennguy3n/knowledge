@@ -31,6 +31,6 @@ highest-priority available adapter.
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §3 — Inference layer.
-- [docs/DESIGN.md](../../docs/DESIGN.md) §6 — On-device model strategy.
-- [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §3 — Inference layer.
+- [docs/technical/design.md](../../docs/technical/design.md) §6 — On-device model strategy.
+- [docs/getting-started/for-developers.md](../../docs/getting-started/for-developers.md) — Consumer integration guide.

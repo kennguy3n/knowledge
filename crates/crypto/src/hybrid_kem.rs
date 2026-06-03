@@ -1,6 +1,6 @@
 //! Hybrid X25519 + ML-KEM-768 key encapsulation.
 //!
-//! Per `ARCHITECTURE.md` §8.2 and `docs/DESIGN.md` §9, every new key
+//! Per `docs/technical/architecture.md` §8.2 and `docs/technical/design.md` §9, every new key
 //! exchange in the substrate runs a hybrid X25519 + ML-KEM-768
 //! construction so the session secret stays classically secure as long
 //! as either primitive is unbroken.

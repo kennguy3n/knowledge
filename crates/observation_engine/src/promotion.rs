@@ -1,7 +1,7 @@
 //! Channel-scoped promotion policy — should an extracted observation
 //! actually be promoted into channel memory?
 //!
-//! Per `docs/DESIGN.md` §4 / §6.2: not every
+//! Per `docs/technical/design.md` §4 / §6.2: not every
 //! observation extracted from raw evidence belongs in channel
 //! memory. The promotion policy gates promotion on:
 //!

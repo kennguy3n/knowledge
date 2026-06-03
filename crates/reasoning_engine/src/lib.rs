@@ -1,7 +1,7 @@
 //! `reasoning_engine` — reasoning surface for the Knowledge
 //! substrate.
 //!
-//! Per `docs/DESIGN.md` §11.1, the reasoning
+//! Per `docs/technical/design.md` §11.1, the reasoning
 //! engine layers four capabilities on top of the concept graph:
 //!
 //! * Contradiction and drift detection — `[contradiction]` /
@@ -15,7 +15,7 @@
 //!   abstracting them into reusable patterns — [`workflow`].
 //!
 //! These modules are independently usable but compose into the
-//! reasoning plane described in `docs/DESIGN.md` §3.4.
+//! reasoning plane described in `docs/technical/design.md` §3.4.
 
 #![deny(missing_docs)]
 

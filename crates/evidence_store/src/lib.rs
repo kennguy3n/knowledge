@@ -2,7 +2,7 @@
 //! store for the Knowledge substrate.
 //!
 //! This crate implements the **evidence plane** described in
-//! `docs/DESIGN.md` §3.1 and `ARCHITECTURE.md` §2.1 / §2.2:
+//! `docs/technical/design.md` §3.1 and `docs/technical/architecture.md` §2.1 / §2.2:
 //!
 //! * Append-only encrypted ingestion of message / file / chunk bodies.
 //! * Content-hash deduplication (BLAKE3) with a size-threshold routing
@@ -40,14 +40,8 @@
 //!   SQLCipher I/O error. Paired with a private
 //!   `take_injected_with_transaction_failure` consumer so the
 //!   injection fires exactly once.
-//! * `EvidenceStore::write_legacy_approved_doc_payload_for_tests` —
-//!   surgically reshapes `approved_document_payloads` back to its
-//!   pre-v12 (v10) inline layout and writes a single
-//!   legacy-shape row so the v12-onwards re-migration code path
-//!   has a controllable starting state. The next
-//!   `EvidenceStore::open` silently re-migrates the row.
 //!
-//! The three hooks above are referenced as plain code spans rather
+//! The two hooks above are referenced as plain code spans rather
 //! than intra-doc links because their `pub` symbols are themselves
 //! gated behind `cfg(any(test, feature = "test-support"))`, so the
 //! links would be unresolved under default-features `cargo doc`.

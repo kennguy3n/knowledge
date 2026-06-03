@@ -1,11 +1,11 @@
 //! Scope-typed connector attachments.
 //!
-//! Per `docs/DESIGN.md` §10.2 (point 4) every connector instance is
+//! Per `docs/technical/design.md` §10.2 (point 4) every connector instance is
 //! attached to exactly one substrate scope (channel / domain / user).
 //! The attachment binding is the source of truth for:
 //!
 //! * Which scope an inbound observation should inherit (per
-//!   `ARCHITECTURE.md` §5.2).
+//!   `docs/technical/architecture.md` §5.2).
 //! * Whether a scope already has a connector for a particular
 //!   `(source_kind)` and should reject a duplicate attachment.
 //! * Whether a caller is permitted to attach / detach a connector

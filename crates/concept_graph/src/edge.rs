@@ -36,7 +36,7 @@ impl std::fmt::Display for EdgeId {
     }
 }
 
-/// The seven typed relations from `docs/DESIGN.md` §3.3.
+/// The seven typed relations from `docs/technical/design.md` §3.3.
 ///
 /// Every edge in the concept graph carries one of these tags. The
 /// graph is intentionally sparse — most observations never enter the

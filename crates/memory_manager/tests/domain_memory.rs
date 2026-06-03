@@ -1,6 +1,6 @@
 //! Integration tests for [`DomainMemoryObject`].
 //!
-//! Per `docs/DESIGN.md` §6.2, the domain memory
+//! Per `docs/technical/design.md` §6.2, the domain memory
 //! object covers:
 //!
 //! * CRUD over workstreams / dependencies / risks / procedures.

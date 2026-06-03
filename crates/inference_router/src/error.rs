@@ -7,7 +7,7 @@ use thiserror::Error;
 pub enum RouterError {
     /// No adapter is available for the requested task. The substrate
     /// is expected to handle this by falling back to a deterministic
-    /// classifier (lexicon, encoder-only) per `ARCHITECTURE.md` §3.
+    /// classifier (lexicon, encoder-only) per `docs/technical/architecture.md` §3.
     #[error("no inference adapter is available for task `{task}`")]
     Unavailable {
         /// The stable string tag for the task that could not be served.
@@ -25,7 +25,7 @@ pub enum RouterError {
     },
     /// The underlying SLM call failed (network, timeout, model error,
     /// JSON-grammar violation). The substrate should fall back to the
-    /// classifier ladder per `docs/DESIGN.md` §6.
+    /// classifier ladder per `docs/technical/design.md` §6.
     #[error("inference call failed: {0}")]
     InferenceFailure(String),
     /// The adapter has not been probed yet — the router refuses to

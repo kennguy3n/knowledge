@@ -42,7 +42,7 @@ pub enum PipelineError {
     #[error("synthesis object serialisation failed: {0}")]
     Serialisation(&'static str),
 
-    /// A synthesis-hierarchy rule was violated (`docs/DESIGN.md` §6.3 —
+    /// A synthesis-hierarchy rule was violated (`docs/technical/design.md` §6.3 —
     /// e.g. a domain window was offered raw evidence, or a tenant
     /// window was offered a channel object).
     #[error("synthesis hierarchy violation: {0}")]
@@ -54,7 +54,7 @@ pub enum PipelineError {
     /// adapter failure, grammar violation surfacing as a JSON
     /// parse error, …). The substrate is expected to fall back to
     /// the deterministic [`crate::pipeline::NoOpSynthesizer`] when
-    /// this fires, per `ARCHITECTURE.md` §3.
+    /// this fires, per `docs/technical/architecture.md` §3.
     #[error("on-device synthesis failed: {0}")]
     SynthesisFailed(String),
 }

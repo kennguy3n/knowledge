@@ -136,7 +136,7 @@ pub enum MatchStrategy {
     /// a false-positive on short interrogatives (`كمن` ➜ `من`,
     /// `سما` ➜ `ما`) AND a worse false-positive on the imperative
     /// path (`سأرسل` "I will send" ➜ `أرسل` imperative table
-    /// entry) — both excluded after a follow-up; see the inventory
+    /// entry) — both excluded; see the inventory
     /// comment on [`ARABIC_PROCLITIC_PREFIXES`].
     FirstToken,
     /// Either the first alphabetic token OR the space-joined
@@ -183,7 +183,7 @@ pub enum MatchStrategy {
     /// proclitic on top of `ال`).
     ///
     /// **Why not peel `ك` "like/as" and `س` "will" (later removed
-    /// from the peel set)?** A follow-up precision audit noted that both
+    /// from the peel set)?** A precision audit noted that both
     /// could collide with short interrogatives (`كمن` peels `ك`
     /// to surface `من` "who"; `سما` peels `س` to surface `ما`
     /// "what"), and an internal audit then surfaced a far more

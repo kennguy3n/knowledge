@@ -1,6 +1,6 @@
 //! Confidential-compute (TEE) worker.
 //!
-//! Per `docs/DESIGN.md` §10 ("Confidential synthesis") and `ARCHITECTURE.md`
+//! Per `docs/technical/design.md` §10 ("Confidential synthesis") and `docs/technical/architecture.md`
 //! §3.3 ("Server-side synthesis"), tenant-tier and domain-tier
 //! synthesis runs in a Trusted Execution Environment so the operator
 //! cannot read plaintext evidence even with full host access. This

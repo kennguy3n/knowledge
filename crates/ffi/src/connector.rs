@@ -1,6 +1,6 @@
 //! Connector management FFI surface.
 //!
-//! Per `docs/DESIGN.md` §10.2 and `ARCHITECTURE.md` §4.1, the
+//! Per `docs/technical/design.md` §10.2 and `docs/technical/architecture.md` §4.1, the
 //! substrate ingests evidence from external systems through the
 //! [`connector_framework::Connector`] trait. Each connector is
 //! a real HTTP client (Google Drive REST v3, Notion API,
@@ -1761,7 +1761,7 @@ fn build_connector(
         ConnectorKind::GitHub | ConnectorKind::GenericWebhook => {
             // ships the nine listed connector implementations
             // in `crates/connectors/`. GitHub and the generic webhook
-            // connector are described in `docs/DESIGN.md` §10.2 but
+            // connector are described in `docs/technical/design.md` §10.2 but
             // do not have concrete implementors yet.
             return Err(FfiError::Unimplemented {
                 method: format!("create_connector(kind={})", kind.as_str()),

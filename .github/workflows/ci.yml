@@ -613,7 +613,7 @@ jobs:
     # Generate a CycloneDX Software Bill of Materials for the whole
     # workspace and publish it as a build artifact, so every commit
     # has an auditable, machine-readable dependency manifest. See
-    # docs/SUPPLY_CHAIN.md for how the SBOM fits the supply-chain
+    # docs/security/supply-chain.md for how the SBOM fits the supply-chain
     # policy alongside the `audit` and `deny` gates above.
     steps:
       - uses: actions/checkout@v6

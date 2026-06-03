@@ -1,6 +1,6 @@
 //! Relation tuples — the unit of authorisation data.
 //!
-//! Per `ARCHITECTURE.md` §6, a relation tuple binds a (typed) object,
+//! Per `docs/technical/architecture.md` §6, a relation tuple binds a (typed) object,
 //! a relation, and a (typed) subject — optionally itself rewritten
 //! through a relation:
 //!
@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Object types per `ARCHITECTURE.md` §6 / `docs/DESIGN.md` §7.1.
+/// Object types per `docs/technical/architecture.md` §6 / `docs/technical/design.md` §7.1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectType {
@@ -61,8 +61,8 @@ impl ObjectType {
 /// substrate's automated synthesizers.
 pub type SubjectType = ObjectType;
 
-/// The relations the substrate distinguishes per `ARCHITECTURE.md`
-/// §6 / `docs/DESIGN.md` §7.1. The default inheritance chain (see
+/// The relations the substrate distinguishes per `docs/technical/architecture.md`
+/// §6 / `docs/technical/design.md` §7.1. The default inheritance chain (see
 /// [`crate::namespace`]) is:
 ///
 /// `Owner ⇒ Admin ⇒ Editor ⇒ Member ⇒ Viewer`
