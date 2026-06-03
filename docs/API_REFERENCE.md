@@ -21,6 +21,12 @@ All `/api/v1/*` routes require one of:
 When both are configured, the gateway checks the static key first;
 if it does not match, it falls through to JWT validation.
 
+> **⚠️ Dev-mode bypass:** When both `KNOWLEDGE_API_KEY` and
+> `KNOWLEDGE_JWT_SECRET` are unset (empty), the gateway treats every
+> request as an authenticated service principal — all endpoints are
+> accessible without credentials. This is intended for local development
+> only. **Never deploy to production with both secrets unset.**
+
 Unauthenticated endpoints: `GET /health`, `GET /metrics`.
 
 ---
@@ -54,23 +60,22 @@ Configuration:
 
 ## Error format
 
-All errors return a JSON body:
+All errors return a flat JSON body (no wrapping `error` object):
 
 ```json
 {
-  "error": {
-    "code": 400,
-    "source": "gateway",
-    "message": "scope_id must be a UUID"
-  }
+  "kind": "BadRequest",
+  "message": "scope_id must be a UUID"
 }
 ```
 
 | Field | Type | Description |
 |---|---|---|
-| `code` | int | HTTP status code |
-| `source` | string | Component that generated the error |
-| `message` | string | Human-readable detail |
+| `kind` | string | Stable machine-readable error tag (`BadRequest`, `Unauthorized`, `Forbidden`, `NotFound`, `RateLimited`, `Internal`) |
+| `message` | string | Human-readable detail (no PII) |
+
+The HTTP status code is conveyed via the response status line, not in the
+body (the struct carries it internally as `json:"-"`).
 
 ---
 
@@ -278,21 +283,29 @@ curl -N http://localhost:8080/api/v1/synthesis/11111111-1111-1111-1111-111111111
   -H "Accept: text/event-stream"
 ```
 
-The server polls the substrate every 1 second and emits SSE frames:
+The server polls the substrate every 1 second and emits named SSE
+events. All frames include an `event:` type line — clients must use
+`addEventListener('status', ...)` / `addEventListener('done', ...)` rather
+than the default `onmessage` handler:
 
 ```
+event: status
 data: {"status":"running","progress":0.5}
 
+event: status
 data: {"status":"complete","result":{...}}
+
+event: done
+data: {"complete":true}
 
 ```
 
 The stream closes when a terminal state is reached or after 300 polls
-(5 minutes). Error frames use `event: error`:
+(5 minutes). On substrate errors:
 
 ```
 event: error
-data: {"error":{"code":502,"source":"substrate","message":"..."}}
+data: {"message":"status unavailable"}
 
 ```
 
