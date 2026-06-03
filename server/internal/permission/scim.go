@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/kennguy3n/knowledge/server/internal/httpx"
 )
@@ -62,8 +63,12 @@ type listResponse struct {
 	Resources    []any    `json:"Resources"`
 }
 
-// directory is the in-memory SCIM store. Identity provisioning is kept
-// distinct from authorization tuples (which live in the substrate).
+// directory is the in-memory SCIM cache. Identity provisioning is kept
+// distinct from authorization tuples (which live in the substrate). It is
+// kept durable by a [DirectoryStore]: every write handler persists
+// through the store before committing this cache (write-through), and the
+// cache is rehydrated from the store at startup, so the directory and the
+// substrate tuples stay in lock-step across restarts.
 type directory struct {
 	mu     sync.RWMutex
 	users  map[string]User
@@ -129,6 +134,14 @@ func (s *Service) scimCreateUser(w http.ResponseWriter, r *http.Request) {
 			scimError(w, http.StatusConflict, "userName already exists")
 			return
 		}
+	}
+	// Persist through the durable store before committing the cache, so a
+	// successful create survives a restart.
+	if err := s.dirStore.SaveUser(r.Context(), u); err != nil {
+		s.dir.mu.Unlock()
+		s.log.Error("scim: persist user on create", zap.Error(err))
+		scimError(w, http.StatusInternalServerError, "failed to persist user")
+		return
 	}
 	s.dir.users[u.ID] = u
 	s.dir.mu.Unlock()
@@ -203,6 +216,17 @@ func (s *Service) scimReplaceUser(w http.ResponseWriter, r *http.Request) {
 		scimError(w, http.StatusConflict, "user was deleted concurrently")
 		return
 	}
+	if err := s.dirStore.SaveUser(r.Context(), next); err != nil {
+		s.dir.mu.Unlock()
+		// Persist failed: fully reverse the applied toggle so the substrate
+		// matches the unchanged directory. rollbackTupleOps (not
+		// compensateGrants) is required because a deactivation toggle is a
+		// set of revokes, which compensateGrants would leave gone.
+		s.rollbackTupleOps(r.Context(), toggleOps)
+		s.log.Error("scim: persist user on replace", zap.Error(err))
+		scimError(w, http.StatusInternalServerError, "failed to persist user")
+		return
+	}
 	s.dir.users[id] = next
 	s.dir.mu.Unlock()
 	httpx.WriteJSON(w, http.StatusOK, next)
@@ -219,19 +243,39 @@ func (s *Service) scimDeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	// Drop the user's membership tuples before deleting it, so a removed
 	// user leaves no dangling group-derived authorization behind.
-	if err := s.applyTupleOps(r.Context(), s.userRemovalOps(id)); err != nil {
+	removalOps := s.userRemovalOps(id)
+	if err := s.applyTupleOps(r.Context(), removalOps); err != nil {
 		scimError(w, http.StatusInternalServerError, "failed to reconcile membership tuples")
 		return
 	}
+	now := time.Now().UTC()
 	s.dir.mu.Lock()
+	// Compute the groups the user is stripped from without mutating the
+	// cache yet, so the durable delete + member-list rewrite commits as one
+	// transaction before the cache is updated. Bump last_modified so the
+	// timestamp reflects the membership change.
+	var updated []Group
+	for _, g := range s.dir.groups {
+		if members, changed := removeMemberValue(g.Members, id); changed {
+			g.Members = members
+			g.Meta.LastModified = now
+			updated = append(updated, g)
+		}
+	}
+	if err := s.dirStore.DeleteUser(r.Context(), id, updated); err != nil {
+		s.dir.mu.Unlock()
+		// Persist failed: re-grant the membership tuples revoked above so the
+		// substrate stays consistent with the still-present user.
+		s.rollbackTupleOps(r.Context(), removalOps)
+		s.log.Error("scim: persist user delete", zap.Error(err))
+		scimError(w, http.StatusInternalServerError, "failed to persist user deletion")
+		return
+	}
 	delete(s.dir.users, id)
 	// Strip the deleted user from every group's member list to keep the
 	// directory consistent with the now-removed tuples.
-	for gid, g := range s.dir.groups {
-		if members, changed := removeMemberValue(g.Members, id); changed {
-			g.Members = members
-			s.dir.groups[gid] = g
-		}
+	for _, g := range updated {
+		s.dir.groups[g.ID] = g
 	}
 	s.dir.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
@@ -259,11 +303,20 @@ func (s *Service) scimCreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	// Join the new membership to the tuple store before recording the
 	// group, so a group is only persisted once its tuples exist.
-	if err := s.applyTupleOps(r.Context(), s.groupReconcileOps(g.ID, nil, g.Members)); err != nil {
+	ops := s.groupReconcileOps(g.ID, nil, g.Members)
+	if err := s.applyTupleOps(r.Context(), ops); err != nil {
 		scimError(w, http.StatusInternalServerError, "failed to sync group membership tuples")
 		return
 	}
 	s.dir.mu.Lock()
+	if err := s.dirStore.SaveGroup(r.Context(), g); err != nil {
+		s.dir.mu.Unlock()
+		// Persist failed: fully reverse the membership grants applied above.
+		s.rollbackTupleOps(r.Context(), ops)
+		s.log.Error("scim: persist group on create", zap.Error(err))
+		scimError(w, http.StatusInternalServerError, "failed to persist group")
+		return
+	}
 	s.dir.groups[g.ID] = g
 	s.dir.mu.Unlock()
 	httpx.WriteJSON(w, http.StatusCreated, g)
@@ -332,6 +385,17 @@ func (s *Service) scimReplaceGroup(w http.ResponseWriter, r *http.Request) {
 		scimError(w, http.StatusConflict, "group was deleted concurrently")
 		return
 	}
+	if err := s.dirStore.SaveGroup(r.Context(), next); err != nil {
+		s.dir.mu.Unlock()
+		// Persist failed: fully reverse the reconciliation so the substrate
+		// matches the unchanged group. rollbackTupleOps (not compensateGrants)
+		// is required because removed members produce revokes that
+		// compensateGrants would leave gone.
+		s.rollbackTupleOps(r.Context(), ops)
+		s.log.Error("scim: persist group on replace", zap.Error(err))
+		scimError(w, http.StatusInternalServerError, "failed to persist group")
+		return
+	}
 	s.dir.groups[id] = next
 	s.dir.mu.Unlock()
 	httpx.WriteJSON(w, http.StatusOK, next)
@@ -347,11 +411,21 @@ func (s *Service) scimDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Revoke all of the group's membership tuples before removing it.
-	if err := s.applyTupleOps(r.Context(), s.groupReconcileOps(id, g.Members, nil)); err != nil {
+	ops := s.groupReconcileOps(id, g.Members, nil)
+	if err := s.applyTupleOps(r.Context(), ops); err != nil {
 		scimError(w, http.StatusInternalServerError, "failed to sync group membership tuples")
 		return
 	}
 	s.dir.mu.Lock()
+	if err := s.dirStore.DeleteGroup(r.Context(), id); err != nil {
+		s.dir.mu.Unlock()
+		// Persist failed: re-grant the membership tuples revoked above so the
+		// substrate stays consistent with the still-present group.
+		s.rollbackTupleOps(r.Context(), ops)
+		s.log.Error("scim: persist group delete", zap.Error(err))
+		scimError(w, http.StatusInternalServerError, "failed to persist group deletion")
+		return
+	}
 	delete(s.dir.groups, id)
 	s.dir.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)

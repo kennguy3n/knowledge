@@ -59,6 +59,7 @@ func run() error {
 		tenantStore tenant.Store
 		auditStore  audit.Store
 		connRegs    connector.RegistrationStore
+		dirStore    permission.DirectoryStore
 		pool        *pgxpool.Pool
 	)
 	if cfg.DatabaseURL != "" {
@@ -70,6 +71,7 @@ func run() error {
 		tps := tenant.NewPostgresStore(pool)
 		aps := audit.NewPostgresStore(pool)
 		crs := connector.NewPostgresRegistrationStore(pool)
+		drs := permission.NewPostgresDirectoryStore(pool)
 		if err := tps.Migrate(ctx); err != nil {
 			return err
 		}
@@ -79,18 +81,28 @@ func run() error {
 		if err := crs.Migrate(ctx); err != nil {
 			return err
 		}
-		tenantStore, auditStore, connRegs = tps, aps, crs
+		if err := drs.Migrate(ctx); err != nil {
+			return err
+		}
+		tenantStore, auditStore, connRegs, dirStore = tps, aps, crs, drs
 		ready["postgres"] = true
 	} else {
 		tenantStore = tenant.NewMemoryStore()
 		auditStore = audit.NewMemoryStore()
 		connRegs = connector.NewNoopRegistrationStore()
+		dirStore = permission.NewNoopDirectoryStore()
 		log.Warn("KNOWLEDGE_DATABASE_URL unset; using in-memory stores (development only)")
 	}
 
 	auditSvc := audit.New(auditStore)
 	tenantSvc := tenant.New(tenantStore, sub)
-	permSvc := permission.New(sub).WithLogger(log)
+	permSvc := permission.New(sub).WithLogger(log).WithDirectoryStore(dirStore)
+	// Restore SCIM users/groups persisted by a prior process so the
+	// directory survives a restart and stays in lock-step with the
+	// substrate membership tuples.
+	if err := permSvc.Rehydrate(ctx); err != nil {
+		return err
+	}
 	exportSvc := export.New(sub, auditSvc)
 	connSvc := connector.New(sub, log, connector.Options{
 		PublicBaseURL:     cfg.PublicBaseURL,
