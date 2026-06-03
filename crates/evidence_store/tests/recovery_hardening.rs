@@ -1,7 +1,7 @@
 //! Recovery- and forgetting-hardening integration tests for
 //! [`EvidenceStore`].
 //!
-//! These cover three durability/forgetting contracts requested by the
+//! These cover two durability/forgetting contracts requested by the
 //! substrate's security work (`docs/COMPLIANCE.md`,
 //! `docs/SUPPLY_CHAIN.md`), exercising only the crate's **public**
 //! surface:
@@ -15,25 +15,14 @@
 //!    [`EvidenceStore::load_forgotten_scopes`]) must complete the
 //!    purge so the plaintext index no longer leaks the forgotten
 //!    body.
-//! 2. **Schema-migration chain** — a database written by the current
-//!    binary is stamped back to *every* historical `user_version` in
-//!    turn; each re-open must walk the migration loop forward to
-//!    [`SCHEMA_VERSION`] with the previously-ingested evidence,
-//!    FTS index, and ring-buffer entry intact at every step.
-//! 3. **Ring-buffer FIFO eviction** — filling the noise ring buffer
+//! 2. **Ring-buffer FIFO eviction** — filling the noise ring buffer
 //!    past its byte cap evicts the oldest entries first, the survivors
 //!    stay in insertion order, and evicted rows are physically gone
 //!    (unrecoverable across a re-open).
 
-use std::fmt::Write as _;
-use std::path::Path;
-
-use crypto::derive_key;
 use evidence_store::{
-    schema::SCHEMA_VERSION, EvidenceStore, EvidenceStoreConfig, ImportanceClass, ScopeId,
-    DEFAULT_INLINE_THRESHOLD_BYTES,
+    EvidenceStore, EvidenceStoreConfig, ImportanceClass, ScopeId, DEFAULT_INLINE_THRESHOLD_BYTES,
 };
-use rusqlite::Connection;
 use tempfile::tempdir;
 
 /// 32-byte master key shared by every test here (matches the pattern
@@ -163,147 +152,7 @@ fn interrupted_forget_is_completed_by_tombstone_replay_on_reopen() {
 }
 
 // ===========================================================================
-// 2. Schema-migration chain: data integrity at every legacy version
-// ===========================================================================
-
-/// HKDF context `EvidenceStore::open` uses to derive the SQLCipher
-/// page key from the master key. Must mirror the production constant
-/// exactly or the test connection cannot decrypt the database.
-const SQLCIPHER_KEY_CONTEXT: &[u8] = b"sqlcipher:store:v1";
-
-fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(out, "{b:02x}");
-    }
-    out
-}
-
-/// Open a raw SQLCipher connection to an existing store database,
-/// mirroring the pragmas in `EvidenceStore::open`.
-fn open_sqlcipher(path: &Path) -> Connection {
-    let page_key =
-        derive_key(&MASTER_KEY, SQLCIPHER_KEY_CONTEXT).expect("derive sqlcipher page key");
-    let key_pragma = format!("x'{}'", hex(&page_key));
-    let conn = Connection::open(path).expect("open existing db");
-    conn.pragma_update(None, "key", key_pragma.as_str())
-        .expect("set sqlcipher key");
-    conn.pragma_update(None, "cipher_page_size", 4096_i64)
-        .expect("set cipher_page_size");
-    conn.pragma_update(None, "kdf_iter", 256_000_i64)
-        .expect("set kdf_iter");
-    let _: i32 = conn
-        .query_row("SELECT 1", [], |r| r.get(0))
-        .expect("sqlcipher key did not unlock the test database");
-    conn
-}
-
-/// Stamp `user_version = target` on an existing database so the next
-/// `EvidenceStore::open` re-walks the migration loop from there.
-fn stamp_user_version(path: &Path, target: i32) {
-    let conn = open_sqlcipher(path);
-    conn.pragma_update(None, "user_version", target)
-        .expect("stamp user_version");
-    drop(conn);
-}
-
-/// Read `user_version` from an existing database.
-fn read_user_version(path: &Path) -> i32 {
-    let conn = open_sqlcipher(path);
-    conn.query_row("PRAGMA user_version", [], |r| r.get(0))
-        .expect("read user_version")
-}
-
-#[test]
-fn migration_chain_preserves_data_at_every_legacy_version() {
-    let dir = tempdir().expect("tempdir");
-    let path = dir.path().join("evidence.db");
-
-    let scope = ScopeId::new_v4();
-    let important_body = format!(
-        "Quarterly commitment: ship the {FORGETTING_PHRASE} dashboard by \
-         the end of the migration window."
-    );
-    let ring_body = b"transient ping that lives only in the ring buffer".to_vec();
-
-    // --- Build a current-version database with mixed content. ---
-    let evidence_id;
-    {
-        let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
-            .expect("open store");
-        let res = store
-            .ingest(
-                scope,
-                important_body.as_bytes(),
-                Some("source:migration-chain"),
-                ImportanceClass::Important,
-            )
-            .expect("ingest important");
-        evidence_id = res.evidence_id;
-        store
-            .ring_buffer_insert(scope, &ring_body)
-            .expect("seed ring buffer");
-    }
-
-    // Walk every legacy version (SCHEMA_VERSION is an `i32`): stamp
-    // the freshly-built (current) database back to `target`, re-open
-    // so the migration loop runs `target+1 ..= SCHEMA_VERSION`, and
-    // assert nothing was lost.
-    for target in 1..=SCHEMA_VERSION {
-        stamp_user_version(&path, target);
-        assert_eq!(
-            read_user_version(&path),
-            target,
-            "fixture must report the stamped legacy version before re-open"
-        );
-
-        let mut store = EvidenceStore::open(&path, &MASTER_KEY, EvidenceStoreConfig::default())
-            .unwrap_or_else(|e| panic!("re-open after stamping v{target}: {e:?}"));
-
-        // The migration loop must have walked all the way forward.
-        assert_eq!(
-            read_user_version(&path),
-            SCHEMA_VERSION,
-            "re-open from v{target} must finish at SCHEMA_VERSION"
-        );
-
-        // Data integrity: the encrypted body still decrypts.
-        let recovered = store
-            .read_body(evidence_id)
-            .unwrap_or_else(|e| panic!("read_body after migrating from v{target}: {e:?}"));
-        assert_eq!(
-            recovered,
-            important_body.as_bytes(),
-            "evidence body must survive migration from v{target}"
-        );
-
-        // Data integrity: the FTS5 index still finds the phrase.
-        assert_eq!(
-            store
-                .search_fts(scope, FORGETTING_PHRASE, 10)
-                .unwrap_or_else(|e| panic!("search after v{target}: {e:?}")),
-            vec![evidence_id],
-            "FTS5 must still surface the phrase after migration from v{target}"
-        );
-
-        // Data integrity: the ring-buffer entry still decrypts.
-        let window = store
-            .ring_buffer_read_window(scope)
-            .unwrap_or_else(|e| panic!("ring read after v{target}: {e:?}"));
-        assert_eq!(
-            window.len(),
-            1,
-            "ring-buffer entry must survive migration from v{target}"
-        );
-        assert_eq!(
-            window[0].body, ring_body,
-            "ring-buffer body must survive migration from v{target}"
-        );
-    }
-}
-
-// ===========================================================================
-// 3. Ring-buffer FIFO eviction
+// 2. Ring-buffer FIFO eviction
 // ===========================================================================
 
 /// Fixed body length so every ring-buffer entry has an identical

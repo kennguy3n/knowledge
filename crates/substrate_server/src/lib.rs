@@ -232,10 +232,10 @@ async fn connector_status(
     Ok(Json(status))
 }
 
-/// `POST /connector/fetch_content` — Session B owns the real
-/// `fetch_content` trait method + endpoint. Until that lands this
-/// returns `501 Not Implemented` so the Go connector pipeline can
-/// treat the feature as "not yet available" and fall back to a mock.
+/// `POST /connector/fetch_content` — the provider content-fetch
+/// trait method is not wired into this server build, so the endpoint
+/// returns `501 Not Implemented`. The Go connector pipeline treats
+/// the feature as "not yet available" and falls back to a mock.
 async fn fetch_content(Json(_req): Json<FetchContentRequest>) -> ApiError {
     ApiError(FfiError::Unimplemented {
         method: "fetch_content".to_string(),

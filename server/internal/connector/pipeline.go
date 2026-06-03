@@ -25,8 +25,8 @@ type substrateAPI interface {
 }
 
 // fetchedContent is the expected shape of a `POST /connector/fetch_content`
-// reply (added by Session B). Fields are decoded leniently so the
-// pipeline tolerates a partially-specified upstream.
+// reply. Fields are decoded leniently so the pipeline tolerates a
+// partially-specified upstream.
 type fetchedContent struct {
 	Body       string `json:"body"`
 	Source     string `json:"source"`
@@ -50,7 +50,7 @@ type PipelineResult struct {
 // the evidence store, and triggers observation extraction once any
 // content was ingested. A 501 from fetch_content marks the feature
 // unavailable and short-circuits without error so callers still
-// succeed while Session B's endpoint is unmerged.
+// succeed while the content-fetch endpoint is unavailable.
 func (s *Service) runPipeline(ctx context.Context, instanceID, scopeID, kind string, refs []string) (PipelineResult, error) {
 	var res PipelineResult
 	for i, ref := range refs {

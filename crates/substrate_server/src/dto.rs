@@ -99,9 +99,9 @@ pub struct AuthenticateRequest {
     pub auth_code: String,
 }
 
-/// `POST /connector/fetch_content` body. Session B owns the real
-/// implementation; this server returns `501 Not Implemented` until
-/// that lands, so the field set is intentionally permissive.
+/// `POST /connector/fetch_content` body. The content-fetch endpoint
+/// returns `501 Not Implemented` on this build, so the field set is
+/// intentionally permissive.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FetchContentRequest {
     /// UUID-string connector instance id.
