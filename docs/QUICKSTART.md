@@ -217,18 +217,23 @@ curl -s -X POST $API/permission/grant \
 
 Supported connectors (all with real document-content fetching):
 
-| Provider | Config keys |
-|---|---|
-| Google Drive | `service_account_json` or OAuth2 |
-| OneDrive / SharePoint | OAuth2 (Microsoft Graph) |
-| Notion | `workspace_id`, OAuth2 |
-| Jira | `site_url`, OAuth2 |
-| Confluence | `site_url`, OAuth2 |
-| Figma | `team_id`, OAuth2 |
-| HubSpot | OAuth2 |
-| Slack | `team_id`, OAuth2 |
-| Email (IMAP) | `host`, `port`, credentials |
-| GitHub _(unstable)_ | OAuth2 |
+| Provider | Auth | Gateway `/oauth/start` |
+|---|---|:---:|
+| Google Drive | `service_account_json` or OAuth2 | Yes |
+| OneDrive / SharePoint | OAuth2 (Microsoft Graph) | Yes |
+| Notion | `workspace_id`, OAuth2 | Yes |
+| Jira | `site_url`, OAuth2 | Yes |
+| Confluence | `site_url`, OAuth2 | Yes |
+| Figma | `team_id`, OAuth2 | — ¹ |
+| HubSpot | OAuth2 | — ¹ |
+| Slack | `team_id`, OAuth2 | Yes |
+| Email (IMAP) | `host`, `port`, credentials | N/A |
+| GitHub _(unstable)_ | OAuth2 | Yes |
+
+¹ Figma and HubSpot use OAuth2 via the Rust connector framework but
+are not yet registered in the Go gateway's built-in OAuth flow starter.
+Use `POST /api/v1/connectors/{id}/authenticate` with a pre-obtained
+authorization code instead.
 
 Each connector performs:
 - OAuth2 token management and refresh

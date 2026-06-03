@@ -38,9 +38,7 @@ Two layers, applied in order:
 Rate-limited responses return `429 Too Many Requests` with:
 
 ```http
-Retry-After: <seconds>
-X-RateLimit-Limit: <budget>
-X-RateLimit-Remaining: 0
+Retry-After: 1
 ```
 
 Configuration:
@@ -49,8 +47,8 @@ Configuration:
 |---|---|---|
 | `KNOWLEDGE_RATE_IP_RPS` | 50 | Per-IP refill rate |
 | `KNOWLEDGE_RATE_TENANT_RPS` | 200 | Per-tenant refill rate |
-| `KNOWLEDGE_RATE_BURST` | 100 | Token bucket burst allowance |
-| `KNOWLEDGE_TRUSTED_PROXIES` | (empty) | Comma-separated CIDRs for XFF trust |
+| `KNOWLEDGE_RATE_BURST` | 100 | Shared burst allowance (applies to both per-IP and per-tenant buckets) |
+| `KNOWLEDGE_TRUSTED_PROXIES` | (empty) | Comma-separated CIDRs/IPs; when empty, XFF is ignored and rate limiter keys on transport peer |
 
 ---
 
@@ -616,10 +614,10 @@ Prometheus exposition (unauthenticated). Exports:
 | `KNOWLEDGE_SUBSTRATE_URL` | `http://127.0.0.1:9090` | Substrate server loopback URL |
 | `KNOWLEDGE_DATABASE_URL` | (empty) | Postgres DSN; empty uses in-memory stores |
 | `KNOWLEDGE_NATS_URL` | (empty) | NATS JetStream URL; empty disables audit consumer |
-| `KNOWLEDGE_RATE_IP_RPS` | 50 | Per-IP request rate |
-| `KNOWLEDGE_RATE_TENANT_RPS` | 200 | Per-tenant request rate |
-| `KNOWLEDGE_RATE_BURST` | 100 | Burst allowance |
+| `KNOWLEDGE_RATE_IP_RPS` | 50 | Per-IP refill rate (req/s) |
+| `KNOWLEDGE_RATE_TENANT_RPS` | 200 | Per-tenant refill rate (req/s) |
+| `KNOWLEDGE_RATE_BURST` | 100 | Shared burst allowance (both buckets) |
 | `KNOWLEDGE_CORS_ORIGINS` | (empty) | Comma-separated CORS allow-list; empty allows `*` |
-| `KNOWLEDGE_TRUSTED_PROXIES` | (empty) | CIDR list for X-Forwarded-For trust |
+| `KNOWLEDGE_TRUSTED_PROXIES` | (empty) | CIDRs/IPs; empty ignores XFF (keys on transport peer) |
 | `KNOWLEDGE_SYNC_INTERVAL` | 15m | Default connector sync cadence |
 | `KNOWLEDGE_PUBLIC_BASE_URL` | `http://127.0.0.1:8080` | Public URL for OAuth redirect/webhook callbacks |
