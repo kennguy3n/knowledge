@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/kennguy3n/knowledge/server/internal/httpx"
+	"github.com/kennguy3n/knowledge/server/internal/metrics"
 )
 
 // health probes downstream subsystems and reports an aggregate status.
@@ -18,8 +19,10 @@ func (h *handlers) health(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		subsystems["substrate"] = "down"
 		overall = "degraded"
+		metrics.SubsystemStatus.WithLabelValues("substrate").Set(0)
 	} else {
 		subsystems["substrate"] = "ok"
+		metrics.SubsystemStatus.WithLabelValues("substrate").Set(1)
 		if len(raw) > 0 {
 			subsystems["substrate_detail"] = string(raw)
 		}
@@ -27,8 +30,13 @@ func (h *handlers) health(w http.ResponseWriter, r *http.Request) {
 	for name, ready := range h.ready {
 		if ready {
 			subsystems[name] = "ok"
+			metrics.SubsystemStatus.WithLabelValues(name).Set(1)
 		} else {
 			subsystems[name] = "disabled"
+			// Do not publish a gauge for disabled subsystems — gauge 0
+			// is indistinguishable from "down" and would trigger
+			// KnowledgeSubsystemDown. Omitting the time series means
+			// the alert expression has nothing to match.
 		}
 	}
 

@@ -1,0 +1,193 @@
+# Knowledge stack — docker compose deployment.
+# See docs/OPERATOR_GUIDE.md for configuration and operational docs.
+
+services:
+  # ────────────────── Core services ──────────────────────────────────
+
+  knowledge-gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.gateway
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    environment:
+      KNOWLEDGE_GATEWAY_ADDR: ":8080"
+      KNOWLEDGE_SUBSTRATE_URL: "http://knowledge-substrate:9090"
+      KNOWLEDGE_DATABASE_URL: "postgres://${POSTGRES_USER:-knowledge}:${POSTGRES_PASSWORD:-knowledge}@postgres:5432/${POSTGRES_DB:-knowledge}?sslmode=disable"
+      KNOWLEDGE_NATS_URL: "nats://nats:4222"
+      KNOWLEDGE_API_KEY: "${KNOWLEDGE_API_KEY:-}"
+      KNOWLEDGE_JWT_SECRET: "${KNOWLEDGE_JWT_SECRET:-}"
+      KNOWLEDGE_RATE_IP_RPS: "${KNOWLEDGE_RATE_IP_RPS:-50}"
+      KNOWLEDGE_RATE_TENANT_RPS: "${KNOWLEDGE_RATE_TENANT_RPS:-200}"
+      KNOWLEDGE_RATE_BURST: "${KNOWLEDGE_RATE_BURST:-100}"
+      KNOWLEDGE_CORS_ORIGINS: "${KNOWLEDGE_CORS_ORIGINS:-}"
+      KNOWLEDGE_SYNC_INTERVAL: "${KNOWLEDGE_SYNC_INTERVAL:-15m}"
+      KNOWLEDGE_PUBLIC_BASE_URL: "${KNOWLEDGE_PUBLIC_BASE_URL:-http://localhost:8080}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      knowledge-substrate:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  knowledge-substrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.substrate
+    environment:
+      KNOWLEDGE_SUBSTRATE_ADDR: "0.0.0.0:9090"
+      KNOWLEDGE_STORE_PATH: "/data/substrate.db"
+      KNOWLEDGE_MASTER_KEY: "${KNOWLEDGE_MASTER_KEY}"
+    volumes:
+      - substrate-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/internal/metrics || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # ────────────────── Infrastructure ─────────────────────────────────
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-knowledge}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-knowledge}"
+      POSTGRES_DB: "${POSTGRES_DB:-knowledge}"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-knowledge}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  nats:
+    image: nats:latest
+    command: ["-js", "-sd", "/data/nats"]
+    volumes:
+      - nats-data:/data/nats
+    ports:
+      - "${NATS_PORT:-4222}:4222"
+      - "${NATS_MONITOR_PORT:-8222}:8222"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+    volumes:
+      - minio-data:/data
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-minioadmin};
+      mc mb --ignore-existing local/$${MINIO_BUCKET:-knowledge};
+      exit 0;
+      "
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+      MINIO_BUCKET: "${MINIO_BUCKET:-knowledge}"
+
+  llama-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.llama-server
+    volumes:
+      - "${LLAMA_MODEL_DIR:-./models}:/models:ro"
+    ports:
+      - "${LLAMA_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  # ────────────────── Observability ──────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9091}:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GF_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GF_ADMIN_PASSWORD:-admin}"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  nats-data:
+  minio-data:
+  substrate-data:
+  prometheus-data:
+  grafana-data:

@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/kennguy3n/knowledge/server/internal/httpx"
+	"github.com/kennguy3n/knowledge/server/internal/metrics"
 	"github.com/kennguy3n/knowledge/server/internal/substrate"
 	"github.com/kennguy3n/knowledge/server/internal/validate"
 )
@@ -356,27 +357,29 @@ type syncReport struct {
 
 // syncOnce runs a single sync and the follow-on content pipeline.
 func (s *Service) syncOnce(ctx context.Context, instanceID string) (syncReport, PipelineResult, error) {
+	// Look up registration first so reg.Kind is available for failure
+	// metrics on every error path (SyncConnector, Unmarshal, pipeline).
+	reg, ok := s.store.get(instanceID)
+	if !ok {
+		metrics.ConnectorSyncFailure.WithLabelValues("unknown").Inc()
+		return syncReport{}, PipelineResult{}, httpx.Internal("connector: no registration for instance; cannot resolve ingest scope")
+	}
 	raw, err := s.sub.SyncConnector(ctx, instanceID)
 	if err != nil {
+		metrics.ConnectorSyncFailure.WithLabelValues(reg.Kind).Inc()
 		return syncReport{}, PipelineResult{}, err
 	}
 	var report syncReport
 	if err := json.Unmarshal(raw, &report); err != nil {
+		metrics.ConnectorSyncFailure.WithLabelValues(reg.Kind).Inc()
 		return syncReport{}, PipelineResult{}, httpx.Internal("connector: decode sync report")
-	}
-	// The registration carries the evidence scope this connector
-	// ingests into. If it is missing we must not fall back to the
-	// connector instance id as the scope — that would ingest evidence
-	// under a bogus scope and silently corrupt the data model. Fail
-	// loudly instead so the caller (or scheduler) can surface it.
-	reg, ok := s.store.get(instanceID)
-	if !ok {
-		return report, PipelineResult{}, httpx.Internal("connector: no registration for instance; cannot resolve ingest scope")
 	}
 	result, err := s.runPipeline(ctx, instanceID, reg.ScopeID, reg.Kind, report.IngestedEvidenceIDs)
 	if err != nil {
+		metrics.ConnectorSyncFailure.WithLabelValues(reg.Kind).Inc()
 		return report, PipelineResult{}, err
 	}
+	metrics.ConnectorSyncSuccess.WithLabelValues(reg.Kind).Inc()
 	return report, result, nil
 }
 

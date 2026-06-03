@@ -1,0 +1,30 @@
+# Multi-stage build for the Rust substrate_server.
+# ── builder ──────────────────────────────────────────────────────────
+FROM rust:1.85 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config libssl-dev libsqlcipher-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN cargo build --release --bin substrate_server \
+    && strip /src/target/release/substrate_server
+
+# ── runtime ──────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl3 libsqlcipher0 ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --system --create-home --shell /usr/sbin/nologin knowledge
+RUN mkdir -p /data && chown knowledge:knowledge /data
+USER knowledge
+
+COPY --from=builder /src/target/release/substrate_server /usr/local/bin/substrate_server
+
+EXPOSE 9090
+ENTRYPOINT ["substrate_server"]

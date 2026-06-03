@@ -2,16 +2,74 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/kennguy3n/knowledge/server/internal/httpx"
+	"github.com/kennguy3n/knowledge/server/internal/metrics"
 	"github.com/kennguy3n/knowledge/server/internal/substrate"
 	"github.com/kennguy3n/knowledge/server/internal/validate"
 )
+
+// synthesisDedup deduplicates SynthesisSuccessTotal increments so the
+// counter fires at most once per synthesis ID. It uses a time-windowed
+// double-buffer: two maps alternate every reapInterval, so each entry
+// lives for 1–2 intervals before being garbage-collected. This bounds
+// memory to at most 2× the number of unique completions per interval.
+var synthesisDedup = newSynthesisDedup(10 * time.Minute)
+
+type synthDedup struct {
+	mu      sync.Mutex
+	current map[string]struct{}
+	prev    map[string]struct{}
+}
+
+func newSynthesisDedup(interval time.Duration) *synthDedup {
+	sd := &synthDedup{
+		current: make(map[string]struct{}),
+		prev:    make(map[string]struct{}),
+	}
+	go sd.reapLoop(interval)
+	return sd
+}
+
+func (sd *synthDedup) reapLoop(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		sd.mu.Lock()
+		sd.prev = sd.current
+		sd.current = make(map[string]struct{})
+		sd.mu.Unlock()
+	}
+}
+
+// seen reports whether id was already counted (and marks it if not).
+func (sd *synthDedup) seen(id string) bool {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	if _, ok := sd.current[id]; ok {
+		return true
+	}
+	if _, ok := sd.prev[id]; ok {
+		return true
+	}
+	sd.current[id] = struct{}{}
+	return false
+}
+
+// countSynthesisSuccess increments SynthesisSuccessTotal at most once
+// per synthesis ID within the dedup window.
+func countSynthesisSuccess(id string) {
+	if !synthesisDedup.seen(id) {
+		metrics.SynthesisSuccessTotal.Inc()
+	}
+}
 
 // triggerRequest is the public body of POST /api/v1/synthesis/trigger.
 type triggerRequest struct {
@@ -39,9 +97,16 @@ func (h *handlers) triggerSynthesis(w http.ResponseWriter, r *http.Request) {
 		Trigger: trigger,
 	})
 	if err != nil {
+		var apiErr *httpx.Error
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusTooManyRequests {
+			metrics.SynthesisThrottleTotal.Inc()
+		} else {
+			metrics.ErrorsTotal.WithLabelValues("synthesis").Inc()
+		}
 		httpx.WriteError(w, err)
 		return
 	}
+	metrics.SynthesisTriggerTotal.Inc()
 	writeRaw(w, http.StatusAccepted, raw)
 }
 
@@ -78,6 +143,9 @@ func (h *handlers) synthesisStatus(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpx.WriteError(w, err)
 		return
+	}
+	if isSuccessStatus(raw) {
+		countSynthesisSuccess(id)
 	}
 	writeRaw(w, http.StatusOK, raw)
 }
@@ -125,6 +193,9 @@ func (h *handlers) streamSynthesis(w http.ResponseWriter, r *http.Request, id st
 		}
 		writeSSE(w, flusher, "status", raw)
 		if isTerminalStatus(raw) {
+			if isSuccessStatus(raw) {
+				countSynthesisSuccess(id)
+			}
 			writeSSE(w, flusher, "done", json.RawMessage(`{"complete":true}`))
 			return
 		}
@@ -161,19 +232,42 @@ func writeSSEComment(w http.ResponseWriter, f http.Flusher, text string) {
 	f.Flush()
 }
 
+// synthesisProbe extracts Status/State from a synthesis status doc.
+type synthesisProbe struct {
+	Status string `json:"status"`
+	State  string `json:"state"`
+}
+
+func parseSynthesisStatus(raw json.RawMessage) (synthesisProbe, bool) {
+	var p synthesisProbe
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return p, false
+	}
+	return p, true
+}
+
 // isTerminalStatus reports whether a synthesis status document
 // represents a completed or failed run.
 func isTerminalStatus(raw json.RawMessage) bool {
-	var probe struct {
-		Status string `json:"status"`
-		State  string `json:"state"`
-	}
-	if err := json.Unmarshal(raw, &probe); err != nil {
+	p, ok := parseSynthesisStatus(raw)
+	if !ok {
 		return true // undecodable: stop streaming rather than loop forever
 	}
-	// Join with a separator so a keyword can never form across the
-	// Status/State boundary (e.g. "incom" + "plete").
-	s := strings.ToLower(probe.Status + " " + probe.State)
+	s := strings.ToLower(p.Status + " " + p.State)
 	return strings.Contains(s, "complete") || strings.Contains(s, "fail") ||
 		strings.Contains(s, "done") || strings.Contains(s, "error")
+}
+
+// isSuccessStatus reports whether a synthesis status document
+// represents a successful completion (not a failure).
+func isSuccessStatus(raw json.RawMessage) bool {
+	p, ok := parseSynthesisStatus(raw)
+	if !ok {
+		return false
+	}
+	s := strings.ToLower(p.Status + " " + p.State)
+	if strings.Contains(s, "fail") || strings.Contains(s, "error") {
+		return false
+	}
+	return strings.Contains(s, "complete") || strings.Contains(s, "done")
 }

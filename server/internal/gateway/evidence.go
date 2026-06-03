@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/kennguy3n/knowledge/server/internal/httpx"
+	"github.com/kennguy3n/knowledge/server/internal/metrics"
 	"github.com/kennguy3n/knowledge/server/internal/substrate"
 	"github.com/kennguy3n/knowledge/server/internal/validate"
 )
@@ -50,9 +51,11 @@ func (h *handlers) ingest(w http.ResponseWriter, r *http.Request) {
 		Importance: importance,
 	})
 	if err != nil {
+		metrics.ErrorsTotal.WithLabelValues("ingest").Inc()
 		httpx.WriteError(w, err)
 		return
 	}
+	metrics.IngestTotal.Inc()
 	httpx.WriteJSON(w, http.StatusCreated, id)
 }
 
@@ -88,9 +91,11 @@ func (h *handlers) query(w http.ResponseWriter, r *http.Request) {
 		Limit:     limit,
 	})
 	if err != nil {
+		metrics.ErrorsTotal.WithLabelValues("query").Inc()
 		httpx.WriteError(w, err)
 		return
 	}
+	metrics.QueryTotal.Inc()
 	writeRaw(w, http.StatusOK, raw)
 }
 
