@@ -41,5 +41,5 @@ state directly.
 ## Links
 
 - [ARCHITECTURE.md](../../docs/technical/architecture.md) §2.5, §8 — Crypto layer.
-- [docs/DESIGN.md](../../docs/DESIGN.md) §5 — Post-quantum cryptography.
-- [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.
+- [docs/technical/design.md](../../docs/technical/design.md) §5 — Post-quantum cryptography.
+- [docs/getting-started/for-developers.md](../../docs/getting-started/for-developers.md) — Consumer integration guide.

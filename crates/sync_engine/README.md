@@ -32,5 +32,5 @@ let delta = engine.delta_since(0);
 
 ## Links
 
-- [docs/DESIGN.md](../../docs/DESIGN.md) §3.2 — Delta sync.
-- [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.
+- [docs/technical/design.md](../../docs/technical/design.md) §3.2 — Delta sync.
+- [docs/getting-started/for-developers.md](../../docs/getting-started/for-developers.md) — Consumer integration guide.

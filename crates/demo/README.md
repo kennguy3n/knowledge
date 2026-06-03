@@ -27,4 +27,4 @@ cargo run -p demo --release
 ## Links
 
 - [README.md](../../README.md) §Quick start — Demo section.
-- [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.
+- [docs/getting-started/for-developers.md](../../docs/getting-started/for-developers.md) — Consumer integration guide.

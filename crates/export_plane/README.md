@@ -5,7 +5,7 @@ the Knowledge substrate.
 
 ## Purpose
 
-Per `docs/DESIGN.md` §3.5, the export plane provides a narrow,
+Per `docs/technical/design.md` §3.5, the export plane provides a narrow,
 policy-gated interface for moving curated knowledge out of the
 substrate into external surfaces (LLM tools, downstream apps,
 integration partners). Never re-emits raw evidence by default.
@@ -33,5 +33,5 @@ let decision = engine.evaluate(&request)?;
 ## Links
 
 - [ARCHITECTURE.md](../../docs/technical/architecture.md) §4.1 — Export service.
-- [docs/DESIGN.md](../../docs/DESIGN.md) §3.5 — Export plane.
-- [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.
+- [docs/technical/design.md](../../docs/technical/design.md) §3.5 — Export plane.
+- [docs/getting-started/for-developers.md](../../docs/getting-started/for-developers.md) — Consumer integration guide.

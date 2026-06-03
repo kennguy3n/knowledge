@@ -51,14 +51,13 @@
 //! Calling any other function first returns
 //! [`FfiError::Unavailable { subsystem: "evidence_store" }`].
 //!
-//! # Known simplifications
+//! # Known limitations
 //!
-//! These are deliberate to keep the unblocker PR small. Each one is
-//! a clean follow-up:
+//! These are deliberate constraints of the current FFI surface:
 //! * **Ingest hardcodes `ImportanceClass::Important`.** The
 //!   evidence store supports `Important` / `Useful` / `Noise` (with
 //!   different storage routing, including the noise ring buffer);
-//!   exposing that knob through the FFI surface is a follow-up.
+//!   the FFI surface does not yet expose that knob.
 //! * **`query` forwards `query_text` verbatim to SQLite FTS5.**
 //!   FTS5 has its own query grammar (`AND` / `OR` / `NOT` / `NEAR` /
 //!   column filters). Hosts that want to treat user input as an

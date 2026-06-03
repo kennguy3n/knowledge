@@ -1052,10 +1052,9 @@ fn run_server_thread(
 /// framework forces a compile-time update here.
 ///
 /// Currently consumed by the in-module test that pins exhaustive
-/// coverage of [`KNOWN_PROVIDER_IDS`]; kept `pub(crate)` so an
-/// upcoming "auto-register on `create_connector`" follow-up can
-/// derive the slug from the `ConnectorKind` without duplicating the
-/// match arm.
+/// coverage of [`KNOWN_PROVIDER_IDS`]; kept `pub(crate)` so
+/// auto-registration on `create_connector` can derive the slug from
+/// the `ConnectorKind` without duplicating the match arm.
 #[allow(dead_code)]
 pub(crate) fn provider_id_for_kind(kind: ConnectorKind) -> &'static str {
     match kind {

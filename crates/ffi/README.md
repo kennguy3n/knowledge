@@ -29,5 +29,5 @@ generated Swift (iOS) and Kotlin (Android) bindings.
 ## Links
 
 - [ARCHITECTURE.md](../../docs/technical/architecture.md) §3 — Platform integration plane.
-- [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.
+- [docs/getting-started/for-developers.md](../../docs/getting-started/for-developers.md) — Consumer integration guide.
 - [napi](../napi/) — Sibling N-API surface for desktop (Electron).

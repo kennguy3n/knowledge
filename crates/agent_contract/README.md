@@ -4,7 +4,7 @@ Agent proposal-only write contract for the Knowledge substrate.
 
 ## Purpose
 
-Per `docs/DESIGN.md` §7.3, software agents (LLM-driven workflows,
+Per `docs/technical/design.md` §7.3, software agents (LLM-driven workflows,
 integrations, AI employees) **never** write canonical memory directly.
 Instead they speak to the substrate through a proposal-only API.
 Promotion to canonical requires explicit human action or a matching
@@ -42,5 +42,5 @@ validate_proposal(&proposal)?;
 ## Links
 
 - [ARCHITECTURE.md](../../docs/technical/architecture.md) §6 — Permission model (`proposer` relation).
-- [docs/DESIGN.md](../../docs/DESIGN.md) §7.3 — Agent write contract.
-- [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.
+- [docs/technical/design.md](../../docs/technical/design.md) §7.3 — Agent write contract.
+- [docs/getting-started/for-developers.md](../../docs/getting-started/for-developers.md) — Consumer integration guide.

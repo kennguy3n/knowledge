@@ -212,7 +212,7 @@ pub trait OnnxRuntime: Send + Sync {
 }
 
 /// XLM-R ONNX adapter — currently a skeleton; the production
-/// implementation lives behind a feature flag in a follow-up PR.
+/// implementation is gated behind a feature flag.
 pub struct OnnxEmbeddingAdapter {
     config: OnnxModelConfig,
     runtime: Box<dyn OnnxRuntime>,

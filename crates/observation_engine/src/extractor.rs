@@ -3032,8 +3032,7 @@ mod tests {
             entities_ascii, entities_typographic,
             "French Aujourd\u{2019}hui (typographic U+2019) must produce the same \
              entity set as Aujourd'hui (ASCII U+0027) after typographic-apostrophe \
-             folding in extract_capitalised_words \
-             (per a follow-up review)"
+             folding in extract_capitalised_words"
         );
         assert!(
             entities_typographic.iter().any(|e| e == "Paris"),

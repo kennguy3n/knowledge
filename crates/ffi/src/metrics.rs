@@ -998,7 +998,7 @@ pub struct FtsTelemetry {
     /// query like `の の の` bumps this counter and NOT the
     /// no-CJK counter. See the upstream
     /// `evidence_store::fts_telemetry::SkipReason` doc for the
-    /// taxonomic rationale (added in a follow-up).
+    /// taxonomic rationale.
     #[serde(default)]
     pub bigram_lane_skips_pure_stopword_query_total: u64,
     /// Times the CJK bigram lane was skipped because the

@@ -34,5 +34,5 @@ injected `HttpTransport`.
 ## Links
 
 - [connector_framework](../connector_framework/) — Framework crate.
-- [docs/DESIGN.md](../../docs/DESIGN.md) §10.2 — Connector contract.
-- [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.
+- [docs/technical/design.md](../../docs/technical/design.md) §10.2 — Connector contract.
+- [docs/getting-started/for-developers.md](../../docs/getting-started/for-developers.md) — Consumer integration guide.

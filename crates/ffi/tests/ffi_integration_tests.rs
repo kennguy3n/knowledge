@@ -346,7 +346,7 @@ fn crypto_surface_round_trips_via_scope_aead() {
     let (h, _dir) = fresh_store();
 
     let scope = uuid::Uuid::new_v4().to_string();
-    // Ingesting a message registers the scope DEK (v6 schema) so
+    // Ingesting a message registers the scope DEK so
     // encrypt/decrypt can find the per-scope key.
     let _ = ingest_message(
         h,
@@ -367,7 +367,7 @@ fn crypto_surface_round_trips_via_scope_aead() {
     assert_eq!(recovered, plaintext);
 
     // Wrong scope must reject — with independently-generated DEKs
-    // (v6 schema) the unregistered scope has no DEK, so this returns
+    // the unregistered scope has no DEK, so this returns
     // `NotFound { kind: "scope" }` rather than `Crypto`.
     let other_scope = uuid::Uuid::new_v4().to_string();
     let err = decrypt(h, other_scope, ciphertext).unwrap_err();

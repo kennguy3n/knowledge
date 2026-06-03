@@ -159,12 +159,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_bigram USING fts5(
 --
 -- The primary key is the composite (`evidence_id`, `model_tag`) so a
 -- single evidence row can have multiple cached vectors — one per
--- model the store has been wired into. This is the v3 shape (
--- follow-up); the destructive v2 -> v3 migration that rewrites a
--- pre-existing single-PK table into this shape lives in
--- `apply_migration` in `store.rs`. For an already-v3 database this
--- statement is a no-op via `IF NOT EXISTS`; for a fresh database it
--- creates the v3 shape directly.
+-- model the store has been wired into.
 CREATE TABLE IF NOT EXISTS evidence_embeddings (
     evidence_id     BLOB    NOT NULL,
     embedding       BLOB    NOT NULL,
@@ -337,16 +332,11 @@ CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
 -- DEK in `body_store_key_wraps`, identical to how the evidence
 -- body-table content is handled.
 --
--- The pre-v12 schema carried inline `nonce` + `payload` columns
--- here, encrypted directly under the scope DEK with AAD binding
--- (scope_id, document_id). That layout could not deduplicate the
--- same content across multiple tenant scopes: admitting the same
--- 1 MiB onboarding doc into N tenants cost N copies of the
--- ciphertext. The v12 layout costs one `body_store` row + N wraps.
--- The destructive v11 -> v12 migration (decrypt every legacy row,
--- admit the plaintext via `body_store`, then ALTER TABLE DROP COLUMN)
--- lives in `migrate_approved_doc_payloads_to_body_store` in
--- `store.rs`.
+-- Storing payloads through `body_store` (rather than inline `nonce` +
+-- `payload` columns encrypted directly under the scope DEK)
+-- deduplicates the same content across multiple tenant scopes:
+-- admitting the same 1 MiB onboarding doc into N tenants costs one
+-- `body_store` row + N wraps rather than N copies of the ciphertext.
 --
 -- Selective read still applies: the metadata-only row is cheap to
 -- list (no AEAD), and the actual payload bytes are only decrypted

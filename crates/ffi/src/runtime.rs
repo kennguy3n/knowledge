@@ -1475,7 +1475,7 @@ fn open_store_inner(
             .expect("None tombstone-store cannot fail");
     }
 
-    // Replay per-epoch tombstones (v8 schema). The
+    // Replay per-epoch tombstones. The
     // `forgotten_scopes` table above only carries scope-grain
     // forgetting; individual epoch DEK destructions (emitted by
     // `crypto::forgetting::destroy_epoch_dek`) live in
@@ -1596,7 +1596,7 @@ fn open_store_inner(
     }
 
     // Rehydrate persisted user memories from the encrypted
-    // `memory_objects` table (v7 schema). Tombstoned scopes are
+    // `memory_objects` table. Tombstoned scopes are
     // skipped — their memory blobs should have been deleted by
     // `forget()`.
     let mut user_memories = HashMap::new();

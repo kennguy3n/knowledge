@@ -27,4 +27,4 @@ cargo run -p uniffi-bindgen -- generate \
 ## Links
 
 - [ffi](../ffi/) — The UniFFI surface crate.
-- [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Platform build instructions.
+- [docs/getting-started/for-developers.md](../../docs/getting-started/for-developers.md) — Platform build instructions.

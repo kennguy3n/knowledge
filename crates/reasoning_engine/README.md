@@ -23,6 +23,6 @@ and drift detection, multi-hop typed-edge traversal, query planning
 
 ## Links
 
-- [docs/DESIGN.md](../../docs/DESIGN.md) §11.1 — Reasoning engine.
-- [docs/DESIGN.md](../../docs/DESIGN.md) §3.4 — Reasoning plane.
-- [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.
+- [docs/technical/design.md](../../docs/technical/design.md) §11.1 — Reasoning engine.
+- [docs/technical/design.md](../../docs/technical/design.md) §3.4 — Reasoning plane.
+- [docs/getting-started/for-developers.md](../../docs/getting-started/for-developers.md) — Consumer integration guide.

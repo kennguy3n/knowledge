@@ -3591,7 +3591,7 @@ impl EvidenceStore {
     /// BLOB has a length that is not a multiple of 4 (i.e. the row was
     /// corrupted or written by a future schema).
     ///
-    /// Under the v3 composite primary key (`evidence_id`, `model_tag`)
+    /// Under the composite primary key (`evidence_id`, `model_tag`)
     /// multiple rows can exist for the same `evidence_id` (one per
     /// model the row has ever been embedded under). This method picks
     /// the most recently inserted such row (highest `created_at`) so
@@ -3701,7 +3701,7 @@ fn random_cek() -> AeadKey {
     // panics on OS RNG failure — the correct posture, because a
     // substrate that cannot draw entropy cannot wrap content safely.
     // See SECURITY.md §"Random number generation" for the broader
-    // policy and the migration-history note.
+    // policy.
     use rand::rngs::SysRng;
     use rand::TryRng;
     let mut key = [0u8; AEAD_KEY_LEN];
@@ -3911,8 +3911,7 @@ pub(crate) fn merged_fts_search(
     // Latin / Cyrillic / Greek / Arabic / Hebrew / Devanagari /
     // Hangul terms embedded inside a CJK body. See
     // [`crate::fts_stopwords`] for the symmetric-stripping
-    // rationale and [`crate::schema::SCHEMA_VERSION`] v16 for the
-    // index-time migration.
+    // rationale.
     // Counted variant feeds the query-time stopword
     // strip telemetry — `strip_count` is the number of stopword
     // instances replaced. See [`crate::fts_telemetry`] for the

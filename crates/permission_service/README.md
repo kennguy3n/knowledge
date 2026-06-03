@@ -32,5 +32,5 @@ assert!(check_permission(&store, &namespace, obj, Relation::Viewer, subject));
 ## Links
 
 - [ARCHITECTURE.md](../../docs/technical/architecture.md) §6 — Permission model.
-- [docs/DESIGN.md](../../docs/DESIGN.md) §7.1 — Permission model.
-- [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.
+- [docs/technical/design.md](../../docs/technical/design.md) §7.1 — Permission model.
+- [docs/getting-started/for-developers.md](../../docs/getting-started/for-developers.md) — Consumer integration guide.
