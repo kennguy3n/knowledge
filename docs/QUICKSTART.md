@@ -3,6 +3,19 @@
 Three copy-pasteable deployment modes: on-device only, hybrid SME,
 and enterprise full stack.
 
+## Which path is mine?
+
+| You are... | Start with | Why |
+|---|---|---|
+| **Building a B2C app** (e.g. a private chat app like KChat) | [Mode 1: On-device](#mode-1-on-device-only) | Each user's data stays on their device; $0 marginal cost, works offline. |
+| **An SME operator** connecting SaaS tools (Notion, Slack, Drive) | [Mode 2: Hybrid SME](#mode-2-hybrid-sme-go-gateway--connectors) | A light gateway feeds connector data in; synthesis stays on-device or in a TEE. |
+| **Deploying for an enterprise** (multi-tenant B2B) | [Mode 3: Enterprise](#mode-3-enterprise-full-stack-multi-tenant-all-connectors) | Tenant isolation, SCIM, Zanzibar permissions, audit, all connectors. |
+
+Not sure? See
+[deployment scenarios](product/deployment-scenarios.md) for a decision
+tree, and the [getting-started guides](getting-started/) for role-based
+onboarding.
+
 ---
 
 ## Prerequisites (all modes)
@@ -40,6 +53,13 @@ The demo exercises the full substrate pipeline:
 8. Demonstrates cryptographic forgetting (DEK destruction)
 
 Output: `results/demo_results.md`
+
+**Expected outcome:** the demo completes without errors and the report
+shows ingested evidence, extracted observations, a populated concept
+graph, a synthesized summary, and a forgotten scope whose bytes are
+unrecoverable. **What's next:** embed the substrate in your app via the
+[developer guide](getting-started/for-developers.md) and the
+platform-specific [integration guides](guides/).
 
 ### Wiring a real SLM (optional)
 
@@ -139,6 +159,13 @@ curl -s -X POST $API/synthesis/trigger \
 curl -N "$API/synthesis/<syn-id>/status?stream=true" \
   -H "$KEY" -H "Accept: text/event-stream"
 ```
+
+**Expected outcome:** the connector sync ingests real document bodies,
+queries return connector-sourced content, and synthesis produces a
+scope summary. **What's next:** harden the deployment with the
+[operator getting-started guide](getting-started/for-operators.md),
+[configuration reference](operator/configuration.md), and
+[monitoring guide](operator/monitoring.md).
 
 ---
 
@@ -258,6 +285,14 @@ curl -s -X POST $API/export/profile \
 curl -s "$API/audit?tenant_id=tenant-acme&limit=50" -H "$KEY"
 ```
 
+**Expected outcome:** tenants are isolated, SCIM-provisioned users can
+only reach scopes granted via permission tuples, exports render, and
+every privileged action lands in the audit log. **What's next:** review
+the [deployment guide](operator/deployment-guide.md),
+[scaling guide](operator/scaling.md), and
+[backup & recovery](operator/backup-recovery.md) before going to
+production.
+
 ---
 
 ## Verification
@@ -280,7 +315,7 @@ cd server && go test -race -count=1 ./...
 
 ## Next steps
 
-- [API_REFERENCE.md](API_REFERENCE.md) — full endpoint documentation
-- [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) — embedding the substrate in your product
-- [COST_MODEL.md](COST_MODEL.md) — production cost estimates
-- [../ARCHITECTURE.md](../ARCHITECTURE.md) — system architecture and data flow
+- [technical/api-reference.md](technical/api-reference.md) — full endpoint documentation
+- [guides/](guides/) — embedding the substrate in your product (iOS, Android, Electron)
+- [operator/cost-model.md](operator/cost-model.md) — production cost estimates
+- [technical/architecture.md](technical/architecture.md) — system architecture and data flow

@@ -2,8 +2,8 @@
 
 ## Reporting a vulnerability
 
-If you discover a security vulnerability in this project, please
-report it responsibly. **Do not open a public GitHub issue.**
+If you discover a security vulnerability in this project, please report
+it responsibly. **Do not open a public GitHub issue.**
 
 Send an email to **ken@uney.com** with:
 
@@ -11,314 +11,172 @@ Send an email to **ken@uney.com** with:
 - Reproduction steps; a proof of concept is appreciated.
 - Any suggested mitigation or fix.
 
-We will acknowledge receipt within 72 hours and aim to share a
-fix or mitigation plan within 14 days, depending on severity.
+We will acknowledge receipt within 72 hours and aim to share a fix or
+mitigation plan within 14 days, depending on severity. Please give us a
+reasonable window to ship a fix before any public disclosure.
+
+## Supported versions
+
+Security fixes are released against the latest minor version line.
+
+| Version | Supported |
+|---|---|
+| 1.0.x | Yes |
+| < 1.0 | No (pre-release; upgrade to 1.0) |
 
 ## Scope
 
-This policy covers the Rust workspace in this repository: every
-crate under `crates/`, the CI pipeline, and the build artifacts
-they produce (UniFFI `.xcframework`, JNI `.so`, N-API addon).
+This policy covers the Rust workspace in this repository — every crate
+under `crates/`, the CI pipeline, and the build artifacts they produce
+(UniFFI `.xcframework`, JNI `.so`, N-API addon) — and the Go API
+gateway (`server/`).
 
-It also covers the Go API gateway (`server/`) which is part of
-this repository. It does **not** cover the host UI shells or
-production deployment infrastructure — those live in other
-repositories and have their own disclosure policies.
+It does **not** cover the host UI shells or production deployment
+infrastructure, which live in other repositories and have their own
+disclosure policies.
 
 ## Threat model
 
-The substrate protects user data at rest on a personal device.
-The threat model assumes:
+The substrate protects user data at rest on a personal device. The
+threat model assumes:
 
 - The host OS provides process isolation and filesystem-level
   encryption.
-- An attacker who obtains a copy of the encrypted SQLCipher
-  database does **not** have the master key.
-- An attacker who compromises the running process has full
-  access to decrypted data in memory. Defence-in-depth measures
-  (zeroize-on-drop, scope-bound keys) shrink the exposure window
-  but do not eliminate it.
-- The cryptographic forgetting guarantee (key destruction) is
-  honoured by the substrate; if the host filesystem retains old
-  snapshots beneath the SQLCipher layer, that is a host-OS
-  issue outside the substrate's control.
+- An attacker who obtains a copy of the encrypted SQLCipher database
+  does **not** have the master key.
+- An attacker who compromises the running process has full access to
+  decrypted data in memory. Defence-in-depth measures (zeroize-on-drop,
+  scope-bound keys) shrink the exposure window but do not eliminate it.
+- The cryptographic forgetting guarantee (key destruction) is honoured
+  by the substrate; if the host filesystem retains old snapshots
+  beneath the SQLCipher layer, that is a host-OS issue outside the
+  substrate's control.
 
-The substrate adopts a **harvest-now-decrypt-later** posture:
-new key exchanges run a hybrid X25519 + ML-KEM-768 (Kyber)
-construction so future quantum adversaries cannot recover
-session secrets from harvested ciphertext. Signatures use
-ML-DSA-65 (Dilithium); SPHINCS+ is reserved for archival
+The substrate adopts a **harvest-now, decrypt-later** posture: key
+exchanges run a hybrid X25519 + ML-KEM-768 construction so future
+quantum adversaries cannot recover session secrets from harvested
+ciphertext. Signatures use ML-DSA-65; SPHINCS+ is reserved for archival
 co-signing.
 
-## Known security limitations
+## Security design summary
 
-The following are honest gaps; the project is pre-1.0 and they
-are tracked openly:
+- **Encryption at rest** — SQLCipher (AES-256) protects the evidence
+  database; bodies are additionally encrypted under per-row content
+  encryption keys wrapped per scope.
+- **Post-quantum cryptography** — hybrid X25519 + ML-KEM-768 (FIPS 203)
+  key encapsulation with HKDF-SHA-256 derivation and
+  XChaCha20-Poly1305 AEAD; ML-DSA-65 (FIPS 204) signatures on synthesis
+  provenance, with SPHINCS+-SHAKE-128f co-signatures for stateless
+  long-term verifiability.
+- **Cryptographic forgetting** — scope teardown destroys the per-scope
+  DEK, purges FTS5 plaintext, and rewrites pages so a vacuumed database
+  carries no recoverable bytes. This is key destruction, not
+  soft-delete.
+- **Permissions** — a Zanzibar-style relation graph with reachability
+  checks enforces per-scope isolation; the agent contract is
+  proposal-only, so agents can never write canonical state.
+- **Provenance** — every synthesis output is signed so its origin can
+  be verified after the fact.
 
-1. **Connector content fetching.** The connector implementations
-   perform live document-content retrieval (`Connector::fetch_content`)
-   in addition to OAuth2 transport, webhook subscription, and
-   incremental delta sync. Content is fetched over the injected
-   `HttpTransport` using the per-instance OAuth2 bearer token; the
-   token is sent only to the provider's resolved API host (or, for
-   provider-issued pre-signed download URLs such as Microsoft Graph's
-   `@microsoft.graph.downloadUrl`, omitted because the credential is
-   already embedded in the URL). Fetched document bodies are treated
-   as sensitive: they are returned to the caller as opaque bytes and
-   are never written to logs, traces, or error messages — connector
-   errors carry only status codes and endpoint identifiers, not
-   response bodies. Bounding and chunking of large bodies before
-   ingest is the runtime's responsibility, not the connector's.
-2. **Host shells are out of scope.** Mobile and desktop UI
-   shells live in sibling repositories and are not audited by
-   this policy. However, explicit host-shell key handling
-   guidance — including per-platform code examples (iOS, Android,
-   macOS, Windows) and a threat model for master-key leakage — is
-   now provided in [`docs/HOST_KEY_HANDLING.md`](docs/HOST_KEY_HANDLING.md).
+For the full technical treatment see the
+[security docs](docs/security/) — the
+[threat model](docs/security/threat-model.md),
+[key management](docs/security/key-management.md),
+[supply chain](docs/security/supply-chain.md),
+[Electron hardening](docs/security/electron-hardening.md), and
+[dependency policy](docs/security/dependency-policy.md) — and the
+[crypto design](docs/technical/crypto-spec.md).
+
+## Random number generation
+
+All cryptographic randomness in the substrate is sourced from the
+operating system's secure RNG (`getrandom(2)` on Linux, `getentropy(3)`
+on macOS, `BCryptGenRandom` on Windows, the kernel CSPRNG on
+iOS / Android). Two classes of bytes are generated this way:
+
+| Generated bytes | Source |
+|---|---|
+| Long-lived keys (master keys, scope DEKs, ML-KEM/X25519 key pairs, ML-DSA signing keys) | OS RNG |
+| Per-encryption AEAD nonces (XChaCha20-Poly1305) | OS RNG |
+
+The substrate deliberately uses the OS RNG (not a userspace CSPRNG) at
+every production callsite so that "every cryptographic byte comes from
+the OS RNG" is verifiable by grepping the workspace once, rather than
+reasoning per-callsite about reseed cadence. A substrate that cannot
+draw OS entropy panics rather than continuing — there is no safe
+"retry later" for a missing entropy pool. Test-only helpers use a
+userspace generator for convenience and are not reachable from any FFI
+surface.
+
+## Key storage
+
+The substrate consumes a 32-byte master key as opaque bytes — see
+[`crypto::MasterKey`](crates/crypto/src/kdf.rs). The *storage* of that
+key is host-specific and must be hardware-backed wherever the platform
+supports it:
+
+| Platform | Backing store |
+|---|---|
+| iOS / macOS | Keychain (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`) |
+| Android | Keystore / StrongBox (Pixel 6+) |
+| Windows | DPAPI; TPM via `NCryptOpenStorageProvider` on Win 11+ |
+| Linux desktop | `libsecret` (SecretService) where available |
+| Server / TEE | Nitro / SEV-SNP sealed memory |
+
+Host shells register an implementation of
+[`crypto::KeyStorage`](crates/crypto/src/key_storage.rs) and the
+matching FFI callback
+[`ffi::KeyStorageResolver`](crates/ffi/src/key_storage.rs) at startup.
+Hardware-backed hosts must use `ffi::open_store_with_resolver`, which
+takes an opaque `key_id` and pulls the hex from
+Keychain / Keystore / DPAPI / TEE on demand, so the master key never
+enters the host's address space as a long-lived plaintext string and is
+zeroized on `close_store`. For per-platform code examples and the
+first-run provisioning flow, see
+[docs/security/key-management.md](docs/security/key-management.md).
+
+## Security testing
+
+Cryptographic and permission invariants are exercised by property-based
+and adversarial test suites that run in CI
+(`cargo test --all --all-features`) and are designed to be re-run by an
+auditor:
+
+- `crates/crypto/tests/` — hybrid KEM round-trip and distinct-recipient
+  isolation, ML-DSA-65 and SPHINCS+ sign/verify/tamper, AEAD boundary
+  and wrong-key rejection, ML-KEM-768 size and implicit-rejection
+  invariants, scope-DEK rotation / forward secrecy, and zeroize
+  verification.
+- `crates/permission_service/tests/` — privilege-escalation resistance,
+  cycle detection, and bounded performance on deep/wide relation
+  graphs.
+- `crates/evidence_store/tests/recovery_hardening.rs` — crash-recovery
+  via tombstone replay and ring-buffer FIFO eviction.
+
+## Known limitations
+
+These are honest gaps, tracked openly:
+
+1. **In-process memory exposure.** An attacker who compromises the
+   running host process can read decrypted data in memory. Scope-bound
+   keys and zeroize-on-drop shrink the window but do not eliminate it.
+2. **Host shells are out of scope.** Mobile and desktop UI shells live
+   in sibling repositories and are not audited by this policy.
+   Per-platform key-handling guidance is provided in
+   [docs/security/key-management.md](docs/security/key-management.md).
+3. **GitHub connector is unstable.** The GitHub connector is shipped as
+   unstable and should not be relied on for production data flows yet.
 
 ## Compliance and supply chain
 
 The substrate's capabilities are mapped to **GDPR**, **SOC 2**
 (CC1–CC9), and **HIPAA** technical safeguards in
-[`docs/COMPLIANCE.md`](docs/COMPLIANCE.md). That mapping cites the
-concrete code paths behind each control — cryptographic forgetting
-(`ffi::forget_scope`), data portability (`export_plane`), the
-proposal-only agent contract, the decay state machine, and the
-noise ring buffer — and is explicit about which controls are the
-responsibility of the embedding host rather than the substrate.
+[docs/operator/compliance.md](docs/operator/compliance.md), citing the
+concrete code paths behind each control.
 
 The dependency supply chain is governed by
-[`docs/SUPPLY_CHAIN.md`](docs/SUPPLY_CHAIN.md): the `deny.toml`
-policy (no known advisories, no yanked crates, permissive
-license allow-list with no strong copyleft, crates.io-only
-sources), the direct-dependency inventory, and the
-`cargo-audit` / `cargo-deny` CI gates. A **CycloneDX SBOM** is
-generated for every workspace member on each CI run by the
-`sbom` job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
-and published as the `knowledge-sbom-cyclonedx` artifact, giving
-every commit an auditable, machine-readable dependency manifest.
-
-## Third-party audit
-
-The project has not yet undergone an independent security audit.
-As of 2026-Q2 no engagement has begun; the maintainers intend to
-commission an external review before the first stable (1.0)
-release, once the connector transport layer (see limitation 1
-above) graduates from fixture parsers to live traffic. The
-planned audit scope covers:
-
-- `crates/crypto/` — hybrid KEM combiner (X25519 + ML-KEM-768),
-  HKDF key derivation, XChaCha20-Poly1305 AEAD usage, zeroize
-  discipline, ML-DSA-65 provenance signatures, SPHINCS+
-  co-signing, and the `KeyStorage` trait surface that bounds
-  hardware-backed key material (Keychain / Keystore / DPAPI /
-  TEE) so the audit's threat model can include the host-shell
-  storage boundary without re-deriving it from scratch.
-- `crates/evidence_store/` — cryptographic forgetting via DEK
-  destruction, FTS5 plaintext purge on tombstone, ring-buffer
-  eviction, schema migrations (v1 → current).
-- `crates/permission_service/` — Zanzibar-style reachability
-  check, including the secondary-index path used on every
-  permission lookup, and the audit-log integration that records
-  every grant / revoke.
-
-Candidate audit firms: NCC Group, Trail of Bits, Cure53. Audit
-artefacts (engagement letter, scoping memo, reports, remediation
-log) will be published alongside the corresponding release in
-this repository once an engagement begins.
-
-### Audit preparation — property-based and adversarial tests
-
-To reduce the surface area an auditor must verify manually, the
-following test suites have been added:
-
-**`crates/crypto/tests/proptest_audit.rs`** — property-based tests
-(via `proptest`) exercising:
-
-- Hybrid KEM round-trip: `hybrid_keypair` → `hybrid_kem_encap` →
-  `hybrid_kem_decap` yields matching shared secrets for every
-  generated keypair.
-- Distinct-recipient isolation: encapsulating to two different
-  public keys produces different shared secrets.
-- ML-DSA-65 signature round-trip: `sign` → `verify` succeeds
-  for arbitrary `ProvenanceBundle` inputs; tampered bundles fail.
-- SPHINCS+-SHAKE-128f-simple signature round-trip: same
-  sign/verify/tamper discipline as ML-DSA-65.
-- AEAD boundary inputs: empty plaintext, large plaintext (up to
-  64 KiB), wrong-key rejection, tampered-ciphertext rejection,
-  and full round-trip with arbitrary key/nonce/plaintext/AAD.
-- `ZeroizeOnDrop` structural verification: `HybridSecretKey`
-  derives `Zeroize` with `#[zeroize(drop)]`.
-
-**`crates/permission_service/tests/adversarial_tests.rs`** —
-adversarial tests exercising:
-
-- Privilege escalation: indirect userset-rewrite paths cannot
-  grant relations above what is explicitly assigned; orthogonal
-  relations (`Synthesizer`, `Proposer`) do not cross-contaminate
-  with the inheritance chain.
-- Cycle detection: self-loops, 2-node cycles, and 3-node cycles
-  terminate without hanging; cycles that *do* contain a valid
-  grant still return `true`.
-- Performance: deep chains (500 hops), wide fan-outs (1 000
-  tuples), and combined deep+wide graphs (50 × 10) complete
-  within bounded time without stack overflow.
-
-Additional security-hardening suites extend this coverage:
-`crates/crypto/tests/security_hardening.rs` (ML-KEM-768 size and
-implicit-rejection invariants, scope-DEK rotation / forward
-secrecy, AEAD timing data-independence, zeroize verification) and
-`crates/evidence_store/tests/recovery_hardening.rs` (crash-recovery
-via tombstone replay, the full schema-migration chain, and
-ring-buffer FIFO eviction).
-
-These test suites run in CI (`cargo test --all --all-features`)
-and are designed to be re-run by an auditor. The AEAD and
-signature tests use `proptest`'s seed-replay for full
-reproducibility; the KEM tests use OS-RNG internally and are
-therefore non-deterministic (run N times rather than replayed
-from a seed).
-
-### Host key handling
-
-Per-platform guidance for securely storing and passing the master
-key across the FFI boundary is documented in
-[`docs/HOST_KEY_HANDLING.md`](docs/HOST_KEY_HANDLING.md). It
-covers iOS Keychain, Android Keystore, macOS Secure Enclave,
-Windows DPAPI + TPM 2.0, anti-patterns, and the first-run
-provisioning flow.
-
-### Random number generation
-
-All cryptographic randomness in the substrate is sourced from the
-operating system's secure RNG (`getrandom(2)` on Linux,
-`getentropy(3)` on macOS, `BCryptGenRandom` on Windows, the kernel
-CSPRNG on iOS / Android). Concretely, two classes of bytes are
-generated:
-
-| Generated bytes | Source | Sites |
-| --------------- | ------ | ----- |
-| Long-lived keys (master keys, scope DEKs, ML-KEM/X25519 key pairs, ML-DSA signing keys) | OS RNG | `crypto/{kem,hybrid_kem,kdf}.rs`, `evidence_store::store::random_dek` |
-| Per-encryption AEAD nonces (XChaCha20-Poly1305) | OS RNG | every `random_nonce()` in `audit_service`, `concept_graph`, `evidence_store`, `ffi`, `permission_service`, `sync_engine`, `synthesis_pipeline`, `tenant_service` |
-
-The OS RNG is reached through two import surfaces in the workspace,
-both backed by the same `getrandom`-family syscall:
-
-* Workspace crates that consume the `rand 0.10` API import
-  `rand::rngs::SysRng` (the rand-0.10 rename of the older `OsRng`).
-  `SysRng` impls `rand::TryRng` — the fallible RNG trait — and
-  every callsite uses `.try_fill_bytes(...).expect("OS RNG failure")`.
-* PQ-crypto callsites (`x25519-dalek 2`, `ml-kem 0.2`) consume the
-  `rand_core 0.6` trait surface, which still exposes `OsRng` under
-  the `rand_core` namespace. Those callsites (`crypto/{kem,hybrid_kem}.rs`)
-  keep importing `rand_core::OsRng` because the PQ-crypto crates'
-  trait bounds are pinned to `rand_core 0.6` and cannot consume a
-  rand-0.10 `SysRng`. The two surfaces are kept side-by-side
-  intentionally; see the `[workspace.dependencies]` comment in the
-  workspace `Cargo.toml` for the full rationale.
-
-Userspace CSPRNGs (e.g. `rand::ThreadRng`, a ChaCha12 generator
-periodically reseeded from the OS pool) are also cryptographically
-suitable for nonce generation, but the substrate deliberately
-chooses the OS RNG at every production callsite for three reasons:
-
-1. **Uniform audit story.** A future independent audit (planned per
-   the "Third-party audit" section above) can verify "every
-   cryptographic byte comes from the OS RNG" by `grep`-ing the
-   workspace once for `SysRng` / `rand_core::OsRng`, rather than
-   reasoning per-callsite about whether `ThreadRng`'s reseed cadence
-   is adequate for that particular nonce counter / collision budget.
-2. **No userspace state to protect.** The OS RNG carries no
-   per-process state that needs to be defended against
-   fork-without-exec, memory-disclosure side channels, or
-   uninitialised-thread-local races.
-3. **Negligible cost on the hot path.** The hottest production
-   site (per-row evidence inserts in `evidence_store::store`) is
-   bottlenecked by SQLCipher AES-256 + disk I/O, so the
-   sub-microsecond `getrandom` syscall per row is unmeasurable
-   against the millisecond-scale write.
-
-`#[cfg(test)]` and integration-test helpers
-(`fresh_key()` / `fresh_nonce()` in `synthesis_pipeline/tests/`,
-`publish::tests::fresh_key`) use `rand::rng()` (`ThreadRng`) for
-convenience — it impls the infallible `rand::Rng` trait (the
-rand-0.10 rename of `RngCore`), so test code doesn't have to
-thread the fallible `try_fill_bytes(...).expect(...)` shape
-through helpers. This is intentional and does not affect the
-production posture — the test-only helpers are not reachable
-from any FFI surface and the substrate's own production code
-never imports them.
-
-Under the hood, rand 0.10 keeps the OS RNG as a fallible-only
-backend: `SysRng` impls `TryRng` (formerly `TryRngCore`), so
-every production callsite must reach for `try_fill_bytes(...)`
-and handle a hypothetical `Result` failure. The substrate panics
-via `.expect("OS RNG failure")` rather than propagating the
-error, because a substrate that cannot draw OS entropy cannot
-continue safely. The `Result` would have to be propagated to
-the FFI boundary without any sensible recovery path on the host
-side anyway — there is no "retry later" for a missing entropy
-pool.
-
-For anyone auditing the migration history: prior to the rand-0.10
-bump the same posture was expressed via the
-`OsRng.unwrap_err().fill_bytes(...)` adapter (rand 0.9, which had
-renamed `OsRng` to a fallible-only type). The current
-`SysRng.try_fill_bytes(...).expect(...)` form is semantically
-identical — both panic on OS RNG failure — but is one less
-adapter layer and surfaces the panic message `"OS RNG failure"`
-rather than the rand-internal `UnwrapErr` panic format.
-
-### Key storage
-
-The substrate consumes a 32-byte master key as opaque bytes — see
-[`crypto::MasterKey`](crates/crypto/src/kdf.rs). The *storage* of
-that key is host-specific and must be hardware-backed wherever
-the platform supports it:
-
-| Platform        | Backing store                                              |
-| --------------- | ---------------------------------------------------------- |
-| iOS / macOS     | Keychain (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`)  |
-| Android         | Keystore / StrongBox (Pixel 6+)                            |
-| Windows         | DPAPI; TPM via `NCryptOpenStorageProvider` on Win 11+      |
-| Linux desktop   | `libsecret` (SecretService) where available                |
-| Server / TEE    | Nitro / SEV-SNP sealed memory                              |
-
-Host shells register an implementation of
-[`crypto::KeyStorage`](crates/crypto/src/key_storage.rs) and the
-matching FFI callback
-[`ffi::KeyStorageResolver`](crates/ffi/src/key_storage.rs) at
-startup. Two cold-boot entry points are supported:
-
-* [`ffi::open_store`](crates/ffi/src/runtime.rs) takes the
-  32-byte master key as a 64-char hex string directly. Hosts
-  that hold the key in-process (e.g. a desktop with a
-  passphrase-derived key) can use this path; the master key
-  is zeroized when [`ffi::close_store`] tears the runtime
-  down.
-
-* [`ffi::open_store_with_resolver`](crates/ffi/src/runtime.rs)
-  takes a `key_id` opaque to the substrate and looks up the
-  hex via the host-registered
-  [`ffi::KeyStorageResolver::load_key`]. The resolver is
-  stashed on the returned runtime so subsequent operations
-  (key rotation, future migration paths) reach the same
-  backing store without a second
-  [`ffi::set_key_storage_resolver`] call. **This is the path
-  hardware-backed hosts must use** — the master key never
-  enters the host's address space as a long-lived plaintext
-  string; the resolver pulls it from Keychain / Keystore /
-  DPAPI / TEE on demand, the substrate consumes it, and it is
-  zeroized on `close_store`.
-
-The resolver registration is therefore no longer a
-forward-compatibility plumbing hook — it is the substrate-side
-consumer that hardware-backed hosts hit on every cold boot, and
-the `open_store_with_resolver_total` metric counter exposes how
-many cold boots went through the resolver-driven path vs the
-direct-hex path.
-
-## Supported versions
-
-The project is pre-1.0 and does not yet have a stable release.
-All security fixes target the `main` branch.
+[docs/security/supply-chain.md](docs/security/supply-chain.md) and the
+`deny.toml` policy (no known advisories, no yanked crates, permissive
+license allow-list, crates.io-only sources). A **CycloneDX SBOM** is
+generated for every workspace member on each CI run and published as the
+`knowledge-sbom-cyclonedx` artifact.
