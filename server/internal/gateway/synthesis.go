@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -13,6 +14,21 @@ import (
 	"github.com/kennguy3n/knowledge/server/internal/substrate"
 	"github.com/kennguy3n/knowledge/server/internal/validate"
 )
+
+// synthesisSuccessCounted tracks synthesis IDs that have already been
+// counted as successful so the counter increments exactly once per
+// synthesis regardless of how many status polls or SSE streams observe
+// the terminal state. Entries are inserted on first success observation
+// and periodically reaped to bound memory.
+var synthesisSuccessCounted sync.Map // map[string]struct{}
+
+// countSynthesisSuccess increments SynthesisSuccessTotal at most once
+// per synthesis ID.
+func countSynthesisSuccess(id string) {
+	if _, loaded := synthesisSuccessCounted.LoadOrStore(id, struct{}{}); !loaded {
+		metrics.SynthesisSuccessTotal.Inc()
+	}
+}
 
 // triggerRequest is the public body of POST /api/v1/synthesis/trigger.
 type triggerRequest struct {
@@ -83,7 +99,7 @@ func (h *handlers) synthesisStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isSuccessStatus(raw) {
-		metrics.SynthesisSuccessTotal.Inc()
+		countSynthesisSuccess(id)
 	}
 	writeRaw(w, http.StatusOK, raw)
 }
@@ -132,7 +148,7 @@ func (h *handlers) streamSynthesis(w http.ResponseWriter, r *http.Request, id st
 		writeSSE(w, flusher, "status", raw)
 		if isTerminalStatus(raw) {
 			if isSuccessStatus(raw) {
-				metrics.SynthesisSuccessTotal.Inc()
+				countSynthesisSuccess(id)
 			}
 			writeSSE(w, flusher, "done", json.RawMessage(`{"complete":true}`))
 			return

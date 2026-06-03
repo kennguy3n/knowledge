@@ -33,7 +33,10 @@ func (h *handlers) health(w http.ResponseWriter, r *http.Request) {
 			metrics.SubsystemStatus.WithLabelValues(name).Set(1)
 		} else {
 			subsystems[name] = "disabled"
-			metrics.SubsystemStatus.WithLabelValues(name).Set(0)
+			// Do not publish a gauge for disabled subsystems — gauge 0
+			// is indistinguishable from "down" and would trigger
+			// KnowledgeSubsystemDown. Omitting the time series means
+			// the alert expression has nothing to match.
 		}
 	}
 
