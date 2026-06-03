@@ -1,0 +1,43 @@
+# Multi-stage build for the llama-server (PrismML fork serving
+# Bonsai-1.7B GGUF). Build time is ~15–30 min on a 4-core machine.
+#
+# The model weight file is expected to be mounted at runtime via a
+# Docker volume or bind-mount at /models/bonsai-1.7b.gguf. The init
+# container or operator downloads the GGUF before first boot (see
+# docker-compose.yml and docs/OPERATOR_GUIDE.md).
+#
+# ── builder ──────────────────────────────────────────────────────────
+FROM ubuntu:22.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN git clone --branch prism --depth 1 \
+    https://github.com/kennguy3n/llama.cpp.git .
+
+RUN cmake -B build -DLLAMA_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --target llama-server -j"$(nproc)"
+
+# ── runtime ──────────────────────────────────────────────────────────
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --system --create-home --shell /usr/sbin/nologin llama
+USER llama
+
+COPY --from=builder /src/build/bin/llama-server /usr/local/bin/llama-server
+
+RUN mkdir -p /models
+
+EXPOSE 8081
+ENTRYPOINT ["llama-server", \
+    "--model", "/models/bonsai-1.7b.gguf", \
+    "--host", "0.0.0.0", \
+    "--port", "8081", \
+    "--ctx-size", "2048", \
+    "--n-gpu-layers", "0"]

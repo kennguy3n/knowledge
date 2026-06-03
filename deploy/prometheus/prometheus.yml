@@ -1,0 +1,25 @@
+# Prometheus scrape configuration for the knowledge stack.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # Go API gateway — exposes /metrics on port 8080.
+  - job_name: knowledge-gateway
+    static_configs:
+      - targets:
+          - knowledge-gateway:8080
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Rust substrate_server — exposes /internal/metrics on port 9090.
+  - job_name: knowledge-substrate
+    static_configs:
+      - targets:
+          - knowledge-substrate:9090
+    metrics_path: /internal/metrics
+    scrape_interval: 10s
