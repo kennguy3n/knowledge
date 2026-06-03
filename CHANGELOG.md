@@ -85,6 +85,15 @@ $0/user/month at any scale.
 - Supply-chain controls: `cargo-audit`, `cargo-deny`, `cargo-fuzz`,
   and a CycloneDX SBOM in CI.
 
+### Schema baseline
+
+- The on-device evidence store ships a single initial schema, stamped
+  `PRAGMA user_version = 1`. 1.0 carries **no migration path** from the
+  pre-release internal iterations: databases created by pre-1.0 builds
+  are not supported and must be recreated from source data. Opening a
+  pre-release database fails fast with a schema error rather than
+  attempting an in-place upgrade.
+
 ### Performance
 
 Measured on reference hardware (AMD EPYC 7763, 8 vCPU, 31 GiB). See

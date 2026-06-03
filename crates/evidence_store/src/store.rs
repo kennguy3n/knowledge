@@ -259,16 +259,22 @@ impl EvidenceStore {
         //                                         the bootstrap and
         //                                         stamp the version.
         //   * `user_version == SCHEMA_VERSION` → already current.
-        //   * `user_version > SCHEMA_VERSION`  → database written by a
-        //                                         newer build; refuse
-        //                                         to open rather than
-        //                                         corrupt it.
+        //   * `user_version > SCHEMA_VERSION`  → either a newer build or
+        //                                         a pre-release internal
+        //                                         database (which used
+        //                                         higher version stamps);
+        //                                         refuse to open rather
+        //                                         than corrupt it. 1.0
+        //                                         ships no upgrade path.
         let detected_version: i32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap_or(0);
         if detected_version > SCHEMA_VERSION {
             return Err(EvidenceError::Schema(
-                "evidence_store database was written by a newer schema version",
+                "evidence_store database has an unsupported schema version: it was \
+                 written either by a newer build or by a pre-release internal build, \
+                 neither of which has an upgrade path to the 1.0 baseline; recreate \
+                 the database from source data",
             ));
         }
 
@@ -293,11 +299,11 @@ impl EvidenceStore {
         // post-open prepared statements.
         store.preflight()?;
 
-        // v6 (C2): hydrate the in-memory scope-key cache from the
-        // durable `scope_deks` table. Scopes registered after v6
-        // have their DEKs stored wrapped here; loading them on open
-        // means `scope_key()` finds the independently-generated key
-        // in cache rather than falling back to HKDF derivation.
+        // Hydrate the in-memory scope-key cache from the durable
+        // `scope_deks` table. Scopes that have an independently
+        // generated DEK store it wrapped here; loading them on open
+        // means `scope_key()` finds that key in cache rather than
+        // falling back to HKDF derivation.
         {
             let deks = store.load_scope_deks()?;
             let mut cache = store.scope_keys.write().unwrap();

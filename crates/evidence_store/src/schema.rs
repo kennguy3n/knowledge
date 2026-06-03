@@ -46,10 +46,10 @@ CREATE TABLE IF NOT EXISTS evidence (
     importance      INTEGER NOT NULL,
     storage_path    INTEGER NOT NULL,
     created_at      INTEGER NOT NULL,
-    -- v13: BCP-47 primary language subtag detected on the
+    -- BCP-47 primary language subtag detected on the
     -- plaintext body by `observation_engine::detect_language`.
     -- NULL when the detector either declined to classify or was
-    -- bypassed (e.g. pre-v13 ingest paths, embedded binary blobs).
+    -- bypassed (e.g. unclassified ingest paths, embedded binary blobs).
     language_tag    TEXT
 );
 
@@ -99,8 +99,8 @@ CREATE INDEX IF NOT EXISTS idx_ring_buffer_scope_created
 -- segmented scripts (Latin, Cyrillic, Greek, Arabic, Hebrew,
 -- Devanagari, Hangul) including any Latin terms embedded inside a
 -- CJK or Thai document. CJK Han / Hiragana / Katakana / Thai
--- substrings are routed *additionally* into `evidence_fts_cjk`
--- below (schema v14) — `unicode61` produces no tokens for
+-- substrings are routed *additionally* into the `evidence_fts_cjk`
+-- trigram lane below — `unicode61` produces no tokens for
 -- those codepoints because it classifies them as separators.
 CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(
     content,
@@ -109,7 +109,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(
     tokenize    = 'unicode61 remove_diacritics 2'
 );
 
--- v14: trigram-tokenised FTS5 index used for CJK and
+-- Trigram-tokenised FTS5 index used for CJK and
 -- Thai content where the `unicode61` tokeniser of `evidence_fts`
 -- emits zero tokens. The write path inserts a row here *in
 -- addition to* `evidence_fts` whenever the body contains any
@@ -124,7 +124,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_cjk USING fts5(
     tokenize    = 'trigram'
 );
 
--- v15: CJK / Thai bigram recall lane. The `content`
+-- CJK / Thai bigram recall lane. The `content`
 -- column stores a whitespace-separated string of overlapping
 -- 2-codepoint windows over the CJK / Thai portion of the body
 -- (computed by `crate::bigram::compute_cjk_bigrams`); the
@@ -137,7 +137,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts_cjk USING fts5(
 -- with the query bigram-tokenised by
 -- `crate::bigram::compute_cjk_bigram_query`, merging into the
 -- same `MIN(rank)`-by-`evidence_id` HashMap as the other two
--- branches. This closes the v14 trigram lane's
+-- branches. This closes the trigram lane's
 -- "≥ 3 codepoint query" floor so 2-codepoint CJK queries like
 -- `天気` (Japanese "weather") return real recall instead of an
 -- empty result set. Forget / purge / rebuild paths touch this
@@ -186,7 +186,7 @@ CREATE TABLE IF NOT EXISTS forgotten_scopes (
     forgotten_at    INTEGER NOT NULL
 );
 
--- v5 (WS1) — per-scope CEK wraps for deduplicated body-table rows.
+-- Per-scope CEK wraps for deduplicated body-table rows.
 -- Each row wraps the random Content Encryption Key (CEK) of a body_store
 -- row under the per-scope AEAD key so that `forget()` can destroy a
 -- scope's access to shared bodies without affecting other scopes.
@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS body_store_key_wraps (
 CREATE INDEX IF NOT EXISTS idx_body_wraps_scope
     ON body_store_key_wraps (scope_id);
 
--- v6 (C2) — independently generated per-scope DEKs.
+-- Independently generated per-scope DEKs.
 -- Each scope's AEAD key is generated from the OS RNG (rand-0.10's
 -- `SysRng`; see SECURITY.md §"Random number generation"), not
 -- HKDF-derived from the master key. The raw DEK is AEAD-wrapped
@@ -222,7 +222,7 @@ CREATE TABLE IF NOT EXISTS scope_deks (
     created_at      INTEGER NOT NULL
 );
 
--- v7 (C10) — encrypted per-scope memory objects.
+-- Encrypted per-scope memory objects.
 -- Each row stores a scope's memory objects (user or channel)
 -- as a single AEAD-encrypted JSON blob. The `kind` column
 -- discriminates between user_memory and channel_memory.
@@ -236,7 +236,7 @@ CREATE TABLE IF NOT EXISTS memory_objects (
     PRIMARY KEY (scope_id, kind)
 );
 
--- v8 — per-(scope, epoch) cryptographic-forgetting tombstones.
+-- Per-(scope, epoch) cryptographic-forgetting tombstones.
 -- Each row records that the runtime destroyed the epoch DEK for
 -- `(scope_id, epoch_id)` at `forgotten_at` (Unix epoch seconds).
 -- Scope-wide forgetting still goes through `forgotten_scopes`;
@@ -253,7 +253,7 @@ CREATE TABLE IF NOT EXISTS epoch_tombstones (
     PRIMARY KEY (scope_id, epoch_id)
 );
 
--- v9 — persisted connector instances.
+-- Persisted connector instances.
 -- Each row stores one connector's `(ConnectorConfig, SyncState)`
 -- pair as a single AEAD-encrypted JSON blob under the per-scope DEK.
 -- The blob is upserted on `create_connector` (initial state) and on
@@ -294,7 +294,7 @@ CREATE INDEX IF NOT EXISTS idx_connector_instances_scope
 CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_instances_scope_kind
     ON connector_instances (scope_id, kind);
 
--- v9 — persisted OAuth2 token bundles.
+-- Persisted OAuth2 token bundles.
 -- Held in a separate table from `connector_instances` because the
 -- token lifecycle is independent: created by `authenticate_connector`,
 -- mutated by future background-refresh flows, and dropped by
@@ -319,8 +319,8 @@ CREATE TABLE IF NOT EXISTS connector_tokens (
 CREATE INDEX IF NOT EXISTS idx_connector_tokens_scope
     ON connector_tokens (scope_id);
 
--- v10 — opaque approved-document payloads.
--- v12 — content-hash dedup via `body_store`.
+-- Opaque approved-document payloads with content-hash dedup via
+-- `body_store`.
 --
 -- Each row attaches metadata to an `ApprovedDocumentRef` previously
 -- admitted onto a `TenantMemoryObject`. The ref lives inside the
