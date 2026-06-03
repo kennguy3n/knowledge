@@ -128,6 +128,9 @@ func (h *handlers) streamSynthesis(w http.ResponseWriter, r *http.Request, id st
 		}
 		writeSSE(w, flusher, "status", raw)
 		if isTerminalStatus(raw) {
+			if isSuccessStatus(raw) {
+				metrics.SynthesisSuccessTotal.Inc()
+			}
 			writeSSE(w, flusher, "done", json.RawMessage(`{"complete":true}`))
 			return
 		}
@@ -164,19 +167,42 @@ func writeSSEComment(w http.ResponseWriter, f http.Flusher, text string) {
 	f.Flush()
 }
 
+// synthesisProbe extracts Status/State from a synthesis status doc.
+type synthesisProbe struct {
+	Status string `json:"status"`
+	State  string `json:"state"`
+}
+
+func parseSynthesisStatus(raw json.RawMessage) (synthesisProbe, bool) {
+	var p synthesisProbe
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return p, false
+	}
+	return p, true
+}
+
 // isTerminalStatus reports whether a synthesis status document
 // represents a completed or failed run.
 func isTerminalStatus(raw json.RawMessage) bool {
-	var probe struct {
-		Status string `json:"status"`
-		State  string `json:"state"`
-	}
-	if err := json.Unmarshal(raw, &probe); err != nil {
+	p, ok := parseSynthesisStatus(raw)
+	if !ok {
 		return true // undecodable: stop streaming rather than loop forever
 	}
-	// Join with a separator so a keyword can never form across the
-	// Status/State boundary (e.g. "incom" + "plete").
-	s := strings.ToLower(probe.Status + " " + probe.State)
+	s := strings.ToLower(p.Status + " " + p.State)
 	return strings.Contains(s, "complete") || strings.Contains(s, "fail") ||
 		strings.Contains(s, "done") || strings.Contains(s, "error")
+}
+
+// isSuccessStatus reports whether a synthesis status document
+// represents a successful completion (not a failure).
+func isSuccessStatus(raw json.RawMessage) bool {
+	p, ok := parseSynthesisStatus(raw)
+	if !ok {
+		return false
+	}
+	s := strings.ToLower(p.Status + " " + p.State)
+	if strings.Contains(s, "fail") || strings.Contains(s, "error") {
+		return false
+	}
+	return strings.Contains(s, "complete") || strings.Contains(s, "done")
 }
