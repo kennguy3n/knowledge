@@ -26,14 +26,54 @@ type checker interface {
 
 // Service implements tuple grant/revoke/check and SCIM provisioning.
 type Service struct {
-	sub checker
-	dir *directory
-	log *zap.Logger
+	sub      checker
+	dir      *directory
+	dirStore DirectoryStore
+	log      *zap.Logger
 }
 
 // New constructs a permission Service over the given substrate client.
+// The SCIM directory defaults to the non-durable noop store; supply a
+// durable backend with [Service.WithDirectoryStore] to survive restarts.
 func New(sub checker) *Service {
-	return &Service{sub: sub, dir: newDirectory(), log: zap.NewNop()}
+	return &Service{sub: sub, dir: newDirectory(), dirStore: NewNoopDirectoryStore(), log: zap.NewNop()}
+}
+
+// WithDirectoryStore sets the durable SCIM directory backend and returns
+// the service for chaining. A nil store is ignored (the noop store is
+// kept). Pair with [Service.Rehydrate] at startup to restore the
+// directory persisted by a prior process.
+func (s *Service) WithDirectoryStore(ds DirectoryStore) *Service {
+	if ds != nil {
+		s.dirStore = ds
+	}
+	return s
+}
+
+// Rehydrate reloads the SCIM directory from the durable store into the
+// in-memory cache. It is called once at startup, before serving traffic,
+// so users and groups provisioned by a prior process survive a restart
+// and stay in lock-step with the substrate membership tuples.
+func (s *Service) Rehydrate(ctx context.Context) error {
+	users, err := s.dirStore.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	groups, err := s.dirStore.ListGroups(ctx)
+	if err != nil {
+		return err
+	}
+	s.dir.mu.Lock()
+	for _, u := range users {
+		s.dir.users[u.ID] = u
+	}
+	for _, g := range groups {
+		s.dir.groups[g.ID] = g
+	}
+	s.dir.mu.Unlock()
+	s.log.Info("scim directory rehydrated",
+		zap.Int("users", len(users)), zap.Int("groups", len(groups)))
+	return nil
 }
 
 // WithLogger sets the logger used for best-effort diagnostics (e.g.
