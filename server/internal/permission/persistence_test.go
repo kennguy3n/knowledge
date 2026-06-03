@@ -184,6 +184,83 @@ func TestCreateGroupPersistFailureCompensatesTuples(t *testing.T) {
 	}
 }
 
+// TestDeleteUserPersistFailureRestoresTuples verifies the revoked
+// membership tuples are re-granted when the durable delete fails, so the
+// substrate stays consistent with the still-present user.
+func TestDeleteUserPersistFailureRestoresTuples(t *testing.T) {
+	t.Parallel()
+	ds := newMemDirStore()
+	fc := &seqChecker{}
+	h := svcWithDir(fc, ds).SCIMRoutes()
+
+	uid := createUser(t, h, "erin")
+	createGroup(t, h, `{"displayName":"eng","members":[{"value":"`+uid+`"}]}`) // grant #1
+	ds.delUErr = errors.New("db down")
+
+	rec := scimDo(t, h, http.MethodDelete, "/Users/"+uid, "")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("delete code = %d, want 500", rec.Code)
+	}
+	// One revoke (removal) then one compensating re-grant => 2 grants total.
+	if len(fc.revoked) != 1 {
+		t.Fatalf("revoked = %d, want 1", len(fc.revoked))
+	}
+	if len(fc.granted) != 2 {
+		t.Fatalf("granted = %d, want 2 (initial + compensating re-grant)", len(fc.granted))
+	}
+}
+
+// TestDeleteGroupPersistFailureRestoresTuples verifies the revoked
+// membership tuples are re-granted when the durable group delete fails.
+func TestDeleteGroupPersistFailureRestoresTuples(t *testing.T) {
+	t.Parallel()
+	ds := newMemDirStore()
+	fc := &seqChecker{}
+	h := svcWithDir(fc, ds).SCIMRoutes()
+
+	gid := createGroup(t, h, `{"displayName":"eng","members":[{"value":"`+memberA+`"}]}`) // grant #1
+	ds.delGErr = errors.New("db down")
+
+	rec := scimDo(t, h, http.MethodDelete, "/Groups/"+gid, "")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("delete code = %d, want 500", rec.Code)
+	}
+	if len(fc.revoked) != 1 {
+		t.Fatalf("revoked = %d, want 1", len(fc.revoked))
+	}
+	if len(fc.granted) != 2 {
+		t.Fatalf("granted = %d, want 2 (initial + compensating re-grant)", len(fc.granted))
+	}
+}
+
+// TestReplaceUserDeactivatePersistFailureRestoresTuples verifies that a
+// deactivation toggle (a set of revokes) is fully restored when the
+// durable write fails — compensateGrants alone would leave it gone.
+func TestReplaceUserDeactivatePersistFailureRestoresTuples(t *testing.T) {
+	t.Parallel()
+	ds := newMemDirStore()
+	fc := &seqChecker{}
+	h := svcWithDir(fc, ds).SCIMRoutes()
+
+	uid := createUser(t, h, "frank")
+	createGroup(t, h, `{"displayName":"eng","members":[{"value":"`+uid+`"}]}`) // grant #1
+	ds.saveUErr = errors.New("db down")
+
+	body := `{"userName":"frank","active":false}`
+	rec := scimDo(t, h, http.MethodPut, "/Users/"+uid, body)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("replace code = %d, want 500", rec.Code)
+	}
+	// Deactivation revokes the membership tuple (#1 revoke); the persist
+	// failure must re-grant it (#2 grant total).
+	if len(fc.revoked) != 1 {
+		t.Fatalf("revoked = %d, want 1", len(fc.revoked))
+	}
+	if len(fc.granted) != 2 {
+		t.Fatalf("granted = %d, want 2 (initial + restored toggle)", len(fc.granted))
+	}
+}
+
 func TestDeleteUserPersistsRemoval(t *testing.T) {
 	t.Parallel()
 	ds := newMemDirStore()

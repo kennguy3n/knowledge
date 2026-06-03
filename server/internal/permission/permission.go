@@ -53,7 +53,9 @@ func (s *Service) WithDirectoryStore(ds DirectoryStore) *Service {
 // Rehydrate reloads the SCIM directory from the durable store into the
 // in-memory cache. It is called once at startup, before serving traffic,
 // so users and groups provisioned by a prior process survive a restart
-// and stay in lock-step with the substrate membership tuples.
+// and stay in lock-step with the substrate membership tuples. The cache
+// is cleared first so the reload is a faithful replica of the store
+// (and so a repeat call cannot leave behind entries deleted upstream).
 func (s *Service) Rehydrate(ctx context.Context) error {
 	users, err := s.dirStore.ListUsers(ctx)
 	if err != nil {
@@ -64,6 +66,8 @@ func (s *Service) Rehydrate(ctx context.Context) error {
 		return err
 	}
 	s.dir.mu.Lock()
+	clear(s.dir.users)
+	clear(s.dir.groups)
 	for _, u := range users {
 		s.dir.users[u.ID] = u
 	}

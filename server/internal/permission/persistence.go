@@ -153,7 +153,8 @@ func (p *PostgresDirectoryStore) DeleteUser(ctx context.Context, userID string, 
 			return fmt.Errorf("permission: marshal group members: %w", err)
 		}
 		if _, err := tx.Exec(ctx,
-			`UPDATE scim_groups SET members = $2 WHERE id = $1`, g.ID, members); err != nil {
+			`UPDATE scim_groups SET members = $2, last_modified = $3 WHERE id = $1`,
+			g.ID, members, g.Meta.LastModified); err != nil {
 			return fmt.Errorf("permission: update scim group members: %w", err)
 		}
 	}
