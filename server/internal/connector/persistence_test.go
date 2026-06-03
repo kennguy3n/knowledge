@@ -95,7 +95,8 @@ func TestCreateFailsWhenPersistenceFails(t *testing.T) {
 	t.Parallel()
 	regs := newMemRegStore()
 	regs.saveErr = errors.New("db down")
-	s := svcWithRegs(&fakeSub{createID: "inst-1"}, regs)
+	sub := &fakeSub{createID: "inst-1"}
+	s := svcWithRegs(sub, regs)
 	h := s.Routes()
 
 	body := `{"kind":"GoogleDrive","scope_id":"` + scopeUUID + `"}`
@@ -108,6 +109,11 @@ func TestCreateFailsWhenPersistenceFails(t *testing.T) {
 	// linger in the cache where it would be served then lost on restart.
 	if _, ok := s.store.get("inst-1"); ok {
 		t.Fatal("registration cached despite persistence failure")
+	}
+	// The substrate connector created moments earlier must be rolled back
+	// so a transient DB failure leaves no orphaned, unschedulable connector.
+	if sub.removeCalls != 1 {
+		t.Fatalf("expected substrate connector rollback (1 RemoveConnector), got %d", sub.removeCalls)
 	}
 }
 
@@ -216,6 +222,28 @@ func TestRehydrateKeepsAllWhenSubstrateUnavailable(t *testing.T) {
 	}
 	if !regs.has("a") || !regs.has("b") {
 		t.Fatal("registrations must not be pruned when substrate is unavailable")
+	}
+}
+
+func TestRehydrateSkipsPruneOnEmptySubstrateList(t *testing.T) {
+	t.Parallel()
+	regs := newMemRegStore()
+	regs.regs["a"] = registration{InstanceID: "a", Kind: "GoogleDrive", ScopeID: scopeUUID, SyncInterval: time.Minute}
+	regs.regs["b"] = registration{InstanceID: "b", Kind: "GoogleDrive", ScopeID: scopeUUID, SyncInterval: time.Minute}
+	// Substrate returns a successful but EMPTY list while registrations
+	// exist. This more likely means a not-yet-ready (or transiently wiped)
+	// substrate than a genuine "all connectors deleted", so pruning must
+	// be skipped rather than dropping every schedule.
+	s := svcWithRegs(&fakeSub{listRaw: json.RawMessage(`[]`)}, regs)
+
+	if err := s.Rehydrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.sched.Count() != 2 {
+		t.Fatalf("expected both schedules retained on empty list, got %d", s.sched.Count())
+	}
+	if !regs.has("a") || !regs.has("b") {
+		t.Fatal("registrations must not be pruned on an empty substrate list")
 	}
 }
 

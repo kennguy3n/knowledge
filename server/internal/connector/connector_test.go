@@ -32,6 +32,7 @@ type fakeSub struct {
 	ingestCalls int
 	synthCalls  int
 	fetchCalls  int
+	removeCalls int
 	// syncGate, when non-nil, blocks SyncConnector until the channel is
 	// closed or receives a value. Used to pin a webhook-triggered sync
 	// in-flight so the concurrency semaphore can be exercised.
@@ -66,7 +67,10 @@ func (f *fakeSub) SyncConnector(context.Context, string) (json.RawMessage, error
 	}
 	return f.syncRaw, f.syncErr
 }
-func (f *fakeSub) RemoveConnector(context.Context, string) error { return f.removeErr }
+func (f *fakeSub) RemoveConnector(context.Context, string) error {
+	f.removeCalls++
+	return f.removeErr
+}
 func (f *fakeSub) ConnectorStatus(context.Context, string) (json.RawMessage, error) {
 	if f.statusRaw == nil {
 		return json.RawMessage(`{"state":"idle"}`), nil

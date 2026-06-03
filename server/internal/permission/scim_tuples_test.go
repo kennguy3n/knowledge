@@ -256,6 +256,116 @@ func TestSCIMNonUUIDMembersIgnored(t *testing.T) {
 	}
 }
 
+// hookChecker records tuple ops and runs an optional one-shot hook just
+// before the next grant, used to deterministically inject a concurrent
+// directory mutation into the unlocked tuple-reconciliation window.
+type hookChecker struct {
+	granted, revoked []substrate.RelationTuple
+	beforeGrant      func()
+}
+
+func (h *hookChecker) PermissionGrant(_ context.Context, t substrate.RelationTuple) error {
+	if h.beforeGrant != nil {
+		fn := h.beforeGrant
+		h.beforeGrant = nil
+		fn()
+	}
+	h.granted = append(h.granted, t)
+	return nil
+}
+
+func (h *hookChecker) PermissionRevoke(_ context.Context, t substrate.RelationTuple) error {
+	h.revoked = append(h.revoked, t)
+	return nil
+}
+
+func (h *hookChecker) PermissionCheck(_ context.Context, _ substrate.RelationTuple) (bool, error) {
+	return false, nil
+}
+
+func TestSCIMReplaceGroupConcurrentDeleteDoesNotResurrect(t *testing.T) {
+	t.Parallel()
+	fc := &hookChecker{}
+	s := New(fc)
+	h := s.SCIMRoutes()
+
+	gid := createGroup(t, h, `{"displayName":"eng","members":[{"value":"`+memberA+`"}]}`)
+	// Simulate a concurrent delete landing while the replace reconciles
+	// tuples outside the directory lock: delete the group just before the
+	// (added-member) grant is applied.
+	fc.beforeGrant = func() {
+		s.dir.mu.Lock()
+		delete(s.dir.groups, gid)
+		s.dir.mu.Unlock()
+	}
+
+	rec := scimDo(t, h, http.MethodPut, "/Groups/"+gid,
+		`{"displayName":"eng","members":[{"value":"`+memberA+`"},{"value":"`+memberB+`"}]}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409 when group deleted concurrently, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	// The deleted group must not be resurrected.
+	s.dir.mu.RLock()
+	_, ok := s.dir.groups[gid]
+	s.dir.mu.RUnlock()
+	if ok {
+		t.Fatal("group was resurrected by the racing replace")
+	}
+	// The grant applied during the race window must be compensated.
+	found := false
+	for _, rv := range fc.revoked {
+		if rv.Object.ObjectID == gid && rv.Subject.SubjectID == memberB {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("added-member grant was not compensated; revoked=%+v", fc.revoked)
+	}
+}
+
+func TestSCIMReplaceUserConcurrentDeleteDoesNotResurrect(t *testing.T) {
+	t.Parallel()
+	fc := &hookChecker{}
+	s := New(fc)
+	h := s.SCIMRoutes()
+
+	uid := createUser(t, h, "alice@example.com")
+	createGroup(t, h, `{"displayName":"eng","members":[{"value":"`+uid+`"}]}`)
+	// Deactivate so a later reactivation issues a grant we can race.
+	if rec := scimDo(t, h, http.MethodPut, "/Users/"+uid,
+		`{"userName":"alice@example.com","active":false}`); rec.Code != http.StatusOK {
+		t.Fatalf("deactivate code = %d", rec.Code)
+	}
+	// Delete the user just before the reactivation grant is applied.
+	fc.beforeGrant = func() {
+		s.dir.mu.Lock()
+		delete(s.dir.users, uid)
+		s.dir.mu.Unlock()
+	}
+
+	rec := scimDo(t, h, http.MethodPut, "/Users/"+uid,
+		`{"userName":"alice@example.com","active":true}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409 when user deleted concurrently, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	s.dir.mu.RLock()
+	_, ok := s.dir.users[uid]
+	s.dir.mu.RUnlock()
+	if ok {
+		t.Fatal("user was resurrected by the racing replace")
+	}
+	// The reactivation grant must be compensated (revoked).
+	found := false
+	for _, rv := range fc.revoked {
+		if rv.Subject.SubjectID == uid {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("reactivation grant was not compensated; revoked=%+v", fc.revoked)
+	}
+}
+
 func TestSCIMGroupCreateTupleFailureRollsBack(t *testing.T) {
 	t.Parallel()
 	// Fail the 2nd grant; the 1st grant must be rolled back (revoked) and

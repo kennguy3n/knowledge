@@ -139,9 +139,20 @@ func (s *Service) Rehydrate(ctx context.Context) error {
 		return err
 	}
 	live, liveErr := s.liveConnectorIDs(ctx)
-	if liveErr != nil {
+	switch {
+	case liveErr != nil:
 		s.log.Warn("connector rehydrate: substrate list unavailable; skipping reconciliation",
 			zap.Error(liveErr))
+		live = nil
+	case len(regs) > 0 && len(live) == 0:
+		// A successful but empty list while we hold persisted
+		// registrations is more likely a not-yet-ready substrate (or a
+		// transient wipe) than a genuine "every connector was deleted".
+		// Pruning here would drop every schedule on a false signal, so
+		// skip reconciliation and let a later boot reconcile once the
+		// substrate reports a non-empty authoritative list.
+		s.log.Warn("connector rehydrate: substrate reported zero connectors but registrations exist; skipping prune",
+			zap.Int("registrations", len(regs)))
 		live = nil
 	}
 	var restored, pruned int
@@ -254,10 +265,16 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// Persist before caching/scheduling: a registration the gateway
 	// cannot durably record must not be silently accepted, or it would
-	// vanish on restart while the substrate connector lingers.
+	// vanish on restart while the substrate connector lingers. If
+	// persistence fails, roll the substrate connector back so a transient
+	// DB blip does not leave an orphaned, unschedulable connector behind.
 	if err := s.saveRegistration(r.Context(), reg); err != nil {
-		s.log.Error("connector: persist registration",
+		s.log.Error("connector: persist registration; rolling back substrate connector",
 			zap.String("instance_id", reg.InstanceID), zap.Error(err))
+		if rerr := s.sub.RemoveConnector(r.Context(), id.ID); rerr != nil {
+			s.log.Error("connector: rollback substrate connector after persist failure",
+				zap.String("instance_id", reg.InstanceID), zap.Error(rerr))
+		}
 		httpx.WriteError(w, httpx.Internal("connector: persist registration"))
 		return
 	}

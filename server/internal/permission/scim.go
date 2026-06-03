@@ -185,13 +185,24 @@ func (s *Service) scimReplaceUser(w http.ResponseWriter, r *http.Request) {
 	// An active-state flip adds or removes this user's membership tuples
 	// across every group it belongs to. Reconcile the substrate before
 	// committing the directory change so the two never diverge.
+	var toggleOps []tupleOp
 	if prev.Active != next.Active {
-		if err := s.applyTupleOps(r.Context(), s.userActiveToggleOps(id, next.Active)); err != nil {
+		toggleOps = s.userActiveToggleOps(id, next.Active)
+		if err := s.applyTupleOps(r.Context(), toggleOps); err != nil {
 			scimError(w, http.StatusInternalServerError, "failed to reconcile membership tuples")
 			return
 		}
 	}
 	s.dir.mu.Lock()
+	// Re-check existence under the write lock: a concurrent delete may have
+	// removed the user while we reconciled tuples outside the lock. Writing
+	// unconditionally would resurrect a deprovisioned user.
+	if _, ok := s.dir.users[id]; !ok {
+		s.dir.mu.Unlock()
+		s.compensateGrants(r.Context(), toggleOps)
+		scimError(w, http.StatusConflict, "user was deleted concurrently")
+		return
+	}
 	s.dir.users[id] = next
 	s.dir.mu.Unlock()
 	httpx.WriteJSON(w, http.StatusOK, next)
@@ -306,11 +317,21 @@ func (s *Service) scimReplaceGroup(w http.ResponseWriter, r *http.Request) {
 	next.Meta.LastModified = time.Now().UTC()
 	// Reconcile the membership delta (grant added, revoke removed) before
 	// committing, so the directory and tuple store stay in lock-step.
-	if err := s.applyTupleOps(r.Context(), s.groupReconcileOps(id, g.Members, next.Members)); err != nil {
+	ops := s.groupReconcileOps(id, g.Members, next.Members)
+	if err := s.applyTupleOps(r.Context(), ops); err != nil {
 		scimError(w, http.StatusInternalServerError, "failed to sync group membership tuples")
 		return
 	}
 	s.dir.mu.Lock()
+	// Re-check existence under the write lock: a concurrent delete may have
+	// removed the group while we reconciled tuples outside the lock.
+	// Writing unconditionally would resurrect a deleted group.
+	if _, ok := s.dir.groups[id]; !ok {
+		s.dir.mu.Unlock()
+		s.compensateGrants(r.Context(), ops)
+		scimError(w, http.StatusConflict, "group was deleted concurrently")
+		return
+	}
 	s.dir.groups[id] = next
 	s.dir.mu.Unlock()
 	httpx.WriteJSON(w, http.StatusOK, next)

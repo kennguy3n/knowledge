@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS connector_registrations (
 // an integer nanosecond count so it round-trips through [time.Duration]
 // without precision loss.
 func (p *PostgresRegistrationStore) Save(ctx context.Context, r registration) error {
+	// created_at is intentionally omitted from the DO UPDATE set: an
+	// upsert must preserve the original creation timestamp rather than
+	// reset it to the re-save time.
 	const q = `INSERT INTO connector_registrations
         (instance_id, kind, scope_id, webhook_url, webhook_active, sync_interval_ns, created_at)
         VALUES ($1,$2,$3,$4,$5,$6,$7)

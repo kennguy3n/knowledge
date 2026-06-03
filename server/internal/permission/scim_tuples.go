@@ -3,10 +3,10 @@ package permission
 import (
 	"context"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/kennguy3n/knowledge/server/internal/substrate"
-	"github.com/kennguy3n/knowledge/server/internal/validate"
 )
 
 // SCIM membership → tuple mapping policy.
@@ -49,12 +49,22 @@ func groupMemberTuple(groupID, userID string) substrate.RelationTuple {
 	}
 }
 
+// validUserID reports whether a SCIM member value can name a substrate
+// subject. Substrate subjects are UUID-keyed, so a member is mappable
+// iff its value parses as a UUID. This is deliberately a user-id check
+// in its own right (not borrowed from scope-id validation) so it stays
+// correct if scope ids ever gain extra constraints.
+func validUserID(value string) bool {
+	_, err := uuid.Parse(value)
+	return err == nil
+}
+
 // mappableMemberIDs returns the deduplicated set of member values that
 // can name a substrate subject (i.e. are valid user ids).
 func mappableMemberIDs(members []groupMember) map[string]struct{} {
 	out := make(map[string]struct{}, len(members))
 	for _, m := range members {
-		if _, err := validate.ScopeID(m.Value); err == nil {
+		if validUserID(m.Value) {
 			out[m.Value] = struct{}{}
 		}
 	}
@@ -88,6 +98,24 @@ func (s *Service) runTupleOp(ctx context.Context, op tupleOp) error {
 		return s.sub.PermissionGrant(ctx, op.tuple)
 	}
 	return s.sub.PermissionRevoke(ctx, op.tuple)
+}
+
+// compensateGrants best-effort revokes every tuple that the given ops
+// granted. It undoes a reconciliation whose target resource was found to
+// have been concurrently deleted: tuples we added are removed, while
+// tuples we revoked are intentionally left gone. Failures are logged.
+func (s *Service) compensateGrants(ctx context.Context, ops []tupleOp) {
+	for _, op := range ops {
+		if !op.grant {
+			continue
+		}
+		if err := s.sub.PermissionRevoke(ctx, op.tuple); err != nil {
+			s.log.Warn("scim: compensating revoke failed",
+				zap.String("object_id", op.tuple.Object.ObjectID),
+				zap.String("subject_id", op.tuple.Subject.SubjectID),
+				zap.Error(err))
+		}
+	}
 }
 
 func (s *Service) rollbackTupleOps(ctx context.Context, applied []tupleOp) {
