@@ -20,7 +20,8 @@ This policy covers the Rust workspace in this repository: every
 crate under `crates/`, the CI pipeline, and the build artifacts
 they produce (UniFFI `.xcframework`, JNI `.so`, N-API addon).
 
-It does **not** cover the Go gateway, the host UI shells, or
+It also covers the Go API gateway (`server/`) which is part of
+this repository. It does **not** cover the host UI shells or
 production deployment infrastructure — those live in other
 repositories and have their own disclosure policies.
 

@@ -249,16 +249,74 @@ connector_framework = { path = "…", features = ["async-runtime", "async-http-c
 
 ---
 
-## 6. Further reading
+## 6. Go server integration path
+
+For server-side deployments (connector-driven ingestion, multi-tenant
+synthesis, SCIM provisioning), the Go gateway (`server/cmd/gateway`)
+provides a REST API over the Rust substrate:
+
+```
+┌─────────────┐     HTTP      ┌──────────────────┐     HTTP       ┌────────────────┐
+│ Your App    │ ───────────── │ Go Gateway :8080 │ ──loopback──── │ Substrate :9090│
+│ (any lang)  │   REST/JSON   │  (auth, rate-    │   (internal)   │  (Rust core)   │
+└─────────────┘               │   limit, CORS)   │                └────────────────┘
+                              └──────────────────┘
+```
+
+This path is ideal when:
+
+- You are building a web application / backend service (not a
+  native mobile/desktop app).
+- You need multi-tenant isolation with JWT auth.
+- You want connector-driven ingestion from SaaS tools (Notion,
+  Drive, Slack, etc.) with OAuth2 managed server-side.
+- You want per-IP and per-tenant rate limiting out of the box.
+
+### Quick integration
+
+```bash
+# 1. Start substrate + gateway (see docs/QUICKSTART.md Mode 2)
+cargo run -p substrate_server --release &
+cd server && KNOWLEDGE_API_KEY=my-key go run ./cmd/gateway &
+
+# 2. From your app, call the REST API
+curl -X POST http://localhost:8080/api/v1/ingest \
+  -H "Authorization: Bearer my-key" \
+  -H "Content-Type: application/json" \
+  -d '{"scope_id":"...","body":"...","importance":"Important"}'
+```
+
+See [API_REFERENCE.md](API_REFERENCE.md) for the full endpoint
+documentation, authentication details, and SSE streaming format.
+
+### Connector integration (real content fetching)
+
+All 10 connectors now perform **real document-content fetching** —
+not just metadata sync. When a connector syncs, it:
+
+1. Discovers new/changed documents via the provider's delta API
+2. Fetches the full document body (respecting provider rate limits)
+3. Ingests the content into the substrate evidence store
+4. Emits `DocumentCreated` / `DocumentUpdated` events
+
+Supported providers: Google Drive, OneDrive, Notion, Jira,
+Confluence, Figma, HubSpot, Slack, Email, Salesforce.
+
+---
+
+## 7. Further reading
 
 - [README.md](../README.md) — project overview and quick start.
 - [ARCHITECTURE.md](../ARCHITECTURE.md) — component map, data flow,
   permission model, crypto layer.
-- [docs/DESIGN.md](./DESIGN.md) — product thesis, strategic
-  principles, memory model.
-- [docs/PLATFORMS.md](./PLATFORMS.md) — per-platform tuning notes.
-- [docs/COST_MODEL.md](./COST_MODEL.md) — per-user cost breakdown.
-- [docs/DEPENDENCY_POLICY.md](./DEPENDENCY_POLICY.md) — MSRV, pinning
+- [API_REFERENCE.md](./API_REFERENCE.md) — Go gateway REST endpoints.
+- [QUICKSTART.md](./QUICKSTART.md) — three deployment modes.
+- [DESIGN.md](./DESIGN.md) — product thesis, strategic principles,
+  memory model.
+- [PLATFORMS.md](./PLATFORMS.md) — per-platform tuning notes.
+- [COST_MODEL.md](./COST_MODEL.md) — per-user cost breakdown.
+- [BENCHMARKS.md](./BENCHMARKS.md) — performance measurements.
+- [DEPENDENCY_POLICY.md](./DEPENDENCY_POLICY.md) — MSRV, pinning
   rationale, Dependabot config.
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — build, test, lint, PR flow.
 - [SECURITY.md](../SECURITY.md) — responsible disclosure.

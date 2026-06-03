@@ -334,6 +334,77 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   which DOES import `rand_core::OsRng` directly to pass to
   `ml-kem 0.2` / `x25519-dalek 2`.
 
+### Added — Go API gateway (Session A)
+
+- Full Go HTTP gateway in `server/` with Chi router, wiring the
+  Rust substrate via HTTP loopback over FFI (`crates/substrate_server`).
+- Endpoints: evidence ingest/query/get, memory listing, scope
+  forgetting, synthesis trigger/status/recent, connectors CRUD +
+  OAuth2 + sync + webhooks, tenant CRUD + config + key rotation +
+  member lifecycle, Zanzibar permission grant/revoke/check, SCIM v2
+  user/group provisioning, export profile rendering, audit log query.
+- Dual-layer rate limiting: per-IP (pre-auth) and per-tenant
+  (post-auth) token buckets with configurable RPS and burst.
+- Bearer token + JWT authentication middleware.
+- SSE streaming for synthesis status polling with bounded lifetime.
+- Prometheus metrics (`/metrics`) and subsystem health check
+  (`/health`).
+- In-memory fallback stores when `KNOWLEDGE_DATABASE_URL` is unset
+  (zero-dep local development).
+- NATS JetStream audit consumer with configurable per-tenant retention.
+- 12-factor configuration via environment variables (see
+  `docs/API_REFERENCE.md`).
+
+### Added — Connector content fetching (Session B)
+
+- `fetch_content` method on the `Connector` trait
+  (`crates/connector_framework/src/connector.rs`) — connectors now
+  fetch real document bodies, not just metadata events.
+- `FetchedContent` type carrying body bytes, MIME type, title,
+  source URL, and provider-specific metadata.
+- Implemented for all 10 connectors: Google Drive, OneDrive, Notion,
+  Jira, Confluence, Figma, HubSpot, Slack, Email, Salesforce.
+- Go gateway connector service wires `fetch_content` into the sync
+  pipeline — each delta page triggers content fetching and evidence
+  ingestion.
+
+### Added — Multilingual lexicons (Session C)
+
+- 7 new language lexicons: Hindi (`hi`), Malay (`ms`), Tagalog
+  (`tl`), Hebrew (`he`), Indonesian (`id`), Italian (`it`),
+  Tibetan (`bo`), Khmer (`km`), Lao (`lo`), Burmese (`my`).
+- `LexiconRegistry` now covers 22 BCP-47 primary subtags (was 12).
+- Per-language decision / task keywords, imperative verbs, stop-words,
+  and interrogative tables validated via
+  `multilingual_pipeline.rs` test suite.
+- Tashkeel-tolerant Arabic normalisation in `normalize_for_lookup`.
+- Bonsai-1.7B validation for synthesis + extraction across all 22
+  languages (`multilingual_bonsai.rs`, gated by `live-integration`).
+
+### Added — Benchmark suite (Session D)
+
+- `crates/benchmarks/` Criterion.rs production benchmark suite:
+  ingest throughput, FTS query (exact/phrase/boolean/prefix), hybrid
+  retrieval, synthesis e2e, storage footprint, decay sweep,
+  concept-graph traversal, crypto operations (AEAD + post-quantum
+  KEM/sign), connector sync throughput, storage read-through/scan.
+- `docs/BENCHMARKS.md` documenting methodology, reference hardware,
+  and all measured results.
+- `.github/workflows/benchmarks.yml` for CI-triggered benchmark runs.
+
+### Added — Security tests and compliance (Session F)
+
+- Comprehensive `crypto` crate test coverage: hybrid KEM round-trip,
+  ML-DSA-65 sign/verify, key derivation, AEAD nonce uniqueness,
+  and cryptographic forgetting (DEK destruction).
+- `evidence_store` security tests: scope isolation, encrypted-at-rest
+  verification, forgetting produces unrecoverable ciphertext.
+- `docs/COMPLIANCE.md`: GDPR / SOC 2 / HIPAA control mapping with
+  concrete code citations (cryptographic forgetting, data portability,
+  proposal-only agents, audit trail).
+- `docs/SUPPLY_CHAIN.md`: dependency policy, CycloneDX SBOM
+  generation per commit, `cargo-deny` + `cargo-audit` gates.
+
 <!--
   No tagged release exists yet, so the Keep-a-Changelog
   `compare/v<last>...HEAD` link cannot resolve. Until the first tag
