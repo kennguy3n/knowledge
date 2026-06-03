@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --system --create-home --shell /usr/sbin/nologin knowledge
+RUN mkdir -p /data && chown knowledge:knowledge /data
 USER knowledge
 
 COPY --from=builder /src/target/release/substrate_server /usr/local/bin/substrate_server
