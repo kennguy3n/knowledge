@@ -30,25 +30,20 @@ groups:
             Subsystem {{ $labels.name }} has been reporting unhealthy
             for 2 minutes.
 
-      # Synthesis backlog: pending syntheses stuck for 30m.
+      # Synthesis backlog: triggers happening but no successes for 30m.
       - alert: KnowledgeSynthesisBacklog
         expr: |
-          (
-            sum(knowledge_synthesis_trigger_total)
-            - sum(knowledge_synthesis_success_total)
-          ) > 0
+          rate(knowledge_synthesis_trigger_total[30m]) > 0
           and
-          (
-            sum(rate(knowledge_synthesis_success_total[30m])) == 0
-          )
+          rate(knowledge_synthesis_success_total[30m]) == 0
         for: 30m
         labels:
           severity: warning
         annotations:
           summary: "Synthesis backlog stalled for 30 minutes"
           description: >-
-            There are pending syntheses but no completions in the last
-            30 minutes.
+            Synthesis triggers are occurring but no completions have
+            been observed in the last 30 minutes.
 
       # Connector failing: 3+ consecutive sync failures.
       - alert: KnowledgeConnectorFailing
@@ -66,10 +61,12 @@ groups:
             failures with no successes in the last 15 minutes.
 
       # High latency: p99 query latency >500ms for 5m.
+      # Excludes SSE synthesis streaming routes whose connections
+      # stay open for the duration of the synthesis run.
       - alert: KnowledgeHighLatency
         expr: |
           histogram_quantile(0.99,
-            sum(rate(knowledge_gateway_request_duration_seconds_bucket[5m])) by (le)
+            sum(rate(knowledge_gateway_request_duration_seconds_bucket{route!~"/api/v1/synthesis/.+/status"}[5m])) by (le)
           ) > 0.5
         for: 5m
         labels:

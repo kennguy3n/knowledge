@@ -82,6 +82,9 @@ func (h *handlers) synthesisStatus(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, err)
 		return
 	}
+	if isSuccessStatus(raw) {
+		metrics.SynthesisSuccessTotal.Inc()
+	}
 	writeRaw(w, http.StatusOK, raw)
 }
 
