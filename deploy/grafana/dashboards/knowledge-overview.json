@@ -154,12 +154,12 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
       "targets": [
         {
-          "expr": "process_resident_memory_bytes{job=\"knowledge-gateway\"}",
+          "expr": "process_resident_memory_bytes{job=\"knowledge-gateway-observability\"}",
           "legendFormat": "RSS",
           "refId": "A"
         },
         {
-          "expr": "rate(process_cpu_seconds_total{job=\"knowledge-gateway\"}[5m])",
+          "expr": "rate(process_cpu_seconds_total{job=\"knowledge-gateway-observability\"}[5m])",
           "legendFormat": "CPU cores",
           "refId": "B"
         }

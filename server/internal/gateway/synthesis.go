@@ -100,8 +100,9 @@ func (h *handlers) triggerSynthesis(w http.ResponseWriter, r *http.Request) {
 		var apiErr *httpx.Error
 		if errors.As(err, &apiErr) && apiErr.Status == http.StatusTooManyRequests {
 			metrics.SynthesisThrottleTotal.Inc()
+		} else {
+			metrics.ErrorsTotal.WithLabelValues("synthesis").Inc()
 		}
-		metrics.ErrorsTotal.WithLabelValues("synthesis").Inc()
 		httpx.WriteError(w, err)
 		return
 	}
