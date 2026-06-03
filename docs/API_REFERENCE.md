@@ -324,9 +324,9 @@ curl -X POST http://localhost:8080/api/v1/connectors \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "provider": "notion",
+    "kind": "Notion",
     "scope_id": "11111111-1111-1111-1111-111111111111",
-    "config": {}
+    "config_json": "{}"
   }'
 ```
 
@@ -472,9 +472,9 @@ curl -X POST http://localhost:8080/api/v1/permission/grant \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "subject": "user:alice",
+    "subject": {"subject_type": "user", "subject_id": "22222222-2222-2222-2222-222222222222"},
     "relation": "viewer",
-    "object": "scope:11111111-1111-1111-1111-111111111111"
+    "object": {"object_type": "scope", "object_id": "11111111-1111-1111-1111-111111111111"}
   }'
 ```
 
@@ -496,9 +496,9 @@ curl -X POST http://localhost:8080/api/v1/permission/check \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "subject": "user:alice",
+    "subject": {"subject_type": "user", "subject_id": "22222222-2222-2222-2222-222222222222"},
     "relation": "viewer",
-    "object": "scope:11111111-1111-1111-1111-111111111111"
+    "object": {"object_type": "scope", "object_id": "11111111-1111-1111-1111-111111111111"}
   }'
 ```
 

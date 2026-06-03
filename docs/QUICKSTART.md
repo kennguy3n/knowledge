@@ -110,9 +110,9 @@ KEY="Authorization: Bearer my-dev-key"
 curl -s -X POST $API/connectors \
   -H "$KEY" -H "Content-Type: application/json" \
   -d '{
-    "provider": "notion",
+    "kind": "Notion",
     "scope_id": "22222222-2222-2222-2222-222222222222",
-    "config": {"workspace_id": "your-notion-workspace-id"}
+    "config_json": "{\"workspace_id\": \"your-notion-workspace-id\"}"
   }'
 
 # Start OAuth flow (returns redirect URL)
@@ -207,9 +207,9 @@ curl -s -X POST $API/scim/v2/Users \
 curl -s -X POST $API/permission/grant \
   -H "$KEY" -H "Content-Type: application/json" \
   -d '{
-    "subject": "user:alice",
+    "subject": {"subject_type": "user", "subject_id": "33333333-3333-3333-3333-333333333334"},
     "relation": "editor",
-    "object": "scope:33333333-3333-3333-3333-333333333333"
+    "object": {"object_type": "scope", "object_id": "33333333-3333-3333-3333-333333333333"}
   }'
 ```
 
