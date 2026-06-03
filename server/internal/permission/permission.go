@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 
 	"github.com/kennguy3n/knowledge/server/internal/httpx"
 	"github.com/kennguy3n/knowledge/server/internal/middleware"
@@ -27,11 +28,22 @@ type checker interface {
 type Service struct {
 	sub checker
 	dir *directory
+	log *zap.Logger
 }
 
 // New constructs a permission Service over the given substrate client.
 func New(sub checker) *Service {
-	return &Service{sub: sub, dir: newDirectory()}
+	return &Service{sub: sub, dir: newDirectory(), log: zap.NewNop()}
+}
+
+// WithLogger sets the logger used for best-effort diagnostics (e.g.
+// SCIM tuple-reconciliation rollback failures) and returns the service
+// for chaining. A nil logger is ignored.
+func (s *Service) WithLogger(l *zap.Logger) *Service {
+	if l != nil {
+		s.log = l
+	}
+	return s
 }
 
 // Routes returns a chi router exposing the tuple grant/revoke/check
