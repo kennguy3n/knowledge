@@ -105,8 +105,9 @@ func NewRouter(d Deps) http.Handler {
 		if d.Auth != nil {
 			r.Use(d.Auth.Middleware)
 		}
-		// Per-tenant rate limiting runs *after* auth: it keys on the
-		// resolved tenant from the request context.
+		// Per-tenant observability + rate limiting run *after* auth: they
+		// key on the resolved tenant from the request context.
+		r.Use(metrics.TenantMiddleware)
 		if d.RateLimiter != nil {
 			r.Use(d.RateLimiter.PerTenantMiddleware)
 		}

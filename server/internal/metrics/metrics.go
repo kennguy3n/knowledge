@@ -155,9 +155,8 @@ func Handler() http.Handler {
 }
 
 // Middleware records request count and latency keyed by method and the
-// matched chi route pattern (low cardinality, never raw paths). It
-// also increments per-tenant counters when a tenant ID is present in
-// the request context.
+// matched chi route pattern (low cardinality, never raw paths). Mount
+// this in the global middleware chain (before auth is fine).
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -171,7 +170,16 @@ func Middleware(next http.Handler) http.Handler {
 		statusStr := strconv.Itoa(rec.status)
 		RequestsTotal.WithLabelValues(r.Method, route, statusStr).Inc()
 		RequestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
+	})
+}
 
+// TenantMiddleware increments per-tenant request counters using the
+// authenticated tenant ID from the request context. Mount this AFTER
+// the auth middleware so the context already contains the resolved
+// tenant identity.
+func TenantMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
 		if tid := getTenantID(r.Context()); tid != "" {
 			TenantRequestsTotal.WithLabelValues(tid).Inc()
 		}

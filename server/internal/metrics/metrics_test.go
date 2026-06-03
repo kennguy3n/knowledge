@@ -108,14 +108,11 @@ func matchLabels(pairs []*dto.LabelPair, want map[string]string) bool {
 	return true
 }
 
-func TestMiddleware_IncrementsCounters(t *testing.T) {
-	// Reset relevant counters.
+func TestMiddleware_IncrementsRequestCounters(t *testing.T) {
 	metrics.RequestsTotal.Reset()
 	metrics.RequestDuration.Reset()
-	metrics.TenantRequestsTotal.Reset()
 
 	r := chi.NewRouter()
-	r.Use(injectTenant("t-123"))
 	r.Use(metrics.Middleware)
 	r.Get("/test", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -129,7 +126,6 @@ func TestMiddleware_IncrementsCounters(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	// Request counter incremented.
 	val := gatherLabeledCounter(t, "knowledge_gateway_requests_total", map[string]string{
 		"method": "GET",
 		"status": "200",
@@ -137,8 +133,31 @@ func TestMiddleware_IncrementsCounters(t *testing.T) {
 	if val < 1 {
 		t.Errorf("expected requests_total >= 1, got %f", val)
 	}
+}
 
-	// Tenant counter incremented.
+func TestTenantMiddleware_IncrementsAfterAuth(t *testing.T) {
+	metrics.TenantRequestsTotal.Reset()
+
+	// Production ordering: Middleware (global) → auth (sets tenant) →
+	// TenantMiddleware (reads tenant). Here injectTenant simulates auth.
+	r := chi.NewRouter()
+	r.Use(metrics.Middleware)
+	r.Route("/api", func(sub chi.Router) {
+		sub.Use(injectTenant("t-123"))
+		sub.Use(metrics.TenantMiddleware)
+		sub.Get("/test", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
 	tval := gatherLabeledCounter(t, "knowledge_tenant_requests_total", map[string]string{
 		"tenant_id": "t-123",
 	})
@@ -224,10 +243,10 @@ func TestRegistry_ContainsGoProcessMetrics(t *testing.T) {
 	}
 }
 
-func TestMiddleware_NoTenantInContext(t *testing.T) {
+func TestTenantMiddleware_NoTenantInContext(t *testing.T) {
 	metrics.TenantRequestsTotal.Reset()
 	r := chi.NewRouter()
-	r.Use(metrics.Middleware)
+	r.Use(metrics.TenantMiddleware)
 	r.Get("/notenant", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
