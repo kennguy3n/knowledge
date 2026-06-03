@@ -1,6 +1,7 @@
 package metrics_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,32 @@ import (
 
 	"github.com/kennguy3n/knowledge/server/internal/metrics"
 )
+
+// ctxKey is an unexported context key type for test tenant injection.
+type ctxKey int
+
+const keyTestTenant ctxKey = 0
+
+func testTenantID(ctx context.Context) string {
+	if v, ok := ctx.Value(keyTestTenant).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// injectTenant is test middleware that stores a tenant ID in the context.
+func injectTenant(tid string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := context.WithValue(r.Context(), keyTestTenant, tid)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+func init() {
+	metrics.SetTenantIDFunc(testTenantID)
+}
 
 func gatherCounter(t *testing.T, name string) float64 {
 	t.Helper()
@@ -88,13 +115,13 @@ func TestMiddleware_IncrementsCounters(t *testing.T) {
 	metrics.TenantRequestsTotal.Reset()
 
 	r := chi.NewRouter()
+	r.Use(injectTenant("t-123"))
 	r.Use(metrics.Middleware)
 	r.Get("/test", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("X-Tenant-ID", "t-123")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -197,9 +224,8 @@ func TestRegistry_ContainsGoProcessMetrics(t *testing.T) {
 	}
 }
 
-func TestMiddleware_NoTenantHeader(t *testing.T) {
+func TestMiddleware_NoTenantInContext(t *testing.T) {
 	metrics.TenantRequestsTotal.Reset()
-
 	r := chi.NewRouter()
 	r.Use(metrics.Middleware)
 	r.Get("/notenant", func(w http.ResponseWriter, _ *http.Request) {

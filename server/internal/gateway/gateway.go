@@ -16,6 +16,7 @@ import (
 	"github.com/kennguy3n/knowledge/server/internal/audit"
 	"github.com/kennguy3n/knowledge/server/internal/connector"
 	"github.com/kennguy3n/knowledge/server/internal/export"
+	"github.com/kennguy3n/knowledge/server/internal/metrics"
 	"github.com/kennguy3n/knowledge/server/internal/middleware"
 	"github.com/kennguy3n/knowledge/server/internal/permission"
 	"github.com/kennguy3n/knowledge/server/internal/substrate"
@@ -75,15 +76,23 @@ func NewRouter(d Deps) http.Handler {
 	h := &handlers{sub: d.Substrate, log: d.Log, ready: d.Ready}
 	m := newMetrics()
 
+	// Wire the authenticated-tenant resolver into the observability
+	// metrics package so per-tenant counters use the post-auth
+	// identity instead of raw headers (bounded cardinality).
+	metrics.SetTenantIDFunc(middleware.TenantID)
+
 	r := chi.NewRouter()
 	r.Use(middleware.InjectRequestID)
 	r.Use(middleware.Recover(d.Log))
 	r.Use(m.middleware)
+	r.Use(metrics.Middleware)
 	r.Use(middleware.CORS(d.CORSOrigins))
 
 	// Unauthenticated operational endpoints.
 	r.Get("/health", h.health)
 	r.Method(http.MethodGet, "/metrics", m.handler())
+	// Observability metrics (knowledge_* prefix).
+	r.Method(http.MethodGet, "/metrics/knowledge", metrics.Handler())
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.BodyLimit)

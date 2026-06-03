@@ -8,8 +8,10 @@
 package metrics
 
 import (
+	"context"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -17,6 +19,25 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// tenantIDFunc holds the resolver set via SetTenantIDFunc. It is read
+// concurrently by the middleware; atomic.Value makes that race-free.
+var tenantIDFunc atomic.Value // stores func(context.Context) string
+
+// SetTenantIDFunc registers the function that extracts the
+// authenticated tenant ID from a request context. It is safe to call
+// from multiple goroutines — only the first call takes effect.
+func SetTenantIDFunc(fn func(context.Context) string) {
+	tenantIDFunc.CompareAndSwap(nil, fn)
+}
+
+// getTenantID invokes the registered resolver, if any.
+func getTenantID(ctx context.Context) string {
+	if fn, ok := tenantIDFunc.Load().(func(context.Context) string); ok && fn != nil {
+		return fn(ctx)
+	}
+	return ""
+}
 
 // Registry is the dedicated Prometheus registry for gateway metrics.
 // Exposed so tests can assert on metric values without touching the
@@ -151,7 +172,7 @@ func Middleware(next http.Handler) http.Handler {
 		RequestsTotal.WithLabelValues(r.Method, route, statusStr).Inc()
 		RequestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
 
-		if tid := r.Header.Get("X-Tenant-ID"); tid != "" {
+		if tid := getTenantID(r.Context()); tid != "" {
 			TenantRequestsTotal.WithLabelValues(tid).Inc()
 		}
 	})

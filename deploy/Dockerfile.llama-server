@@ -24,15 +24,14 @@ RUN cmake -B build -DLLAMA_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release \
 FROM ubuntu:22.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgomp1 ca-certificates \
+    libgomp1 ca-certificates wget \
     && rm -rf /var/lib/apt/lists/*
 
+RUN mkdir -p /models
 RUN useradd --system --create-home --shell /usr/sbin/nologin llama
 USER llama
 
 COPY --from=builder /src/build/bin/llama-server /usr/local/bin/llama-server
-
-RUN mkdir -p /models
 
 EXPOSE 8081
 ENTRYPOINT ["llama-server", \
