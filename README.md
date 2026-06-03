@@ -107,6 +107,8 @@ Documentation is organized by audience:
 - **[Guides](docs/guides/)** — step-by-step integration and tutorials.
 - **[Security](docs/security/)** — threat model, key management,
   supply chain, Electron hardening, and dependency policy.
+- **[Blog](blog/00-series-index.md)** — the "Building Knowledge" series:
+  the design, production operations, and real-world deployments.
 
 ## Community & Support
 
