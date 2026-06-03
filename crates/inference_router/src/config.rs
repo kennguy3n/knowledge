@@ -23,7 +23,7 @@ pub const HIGH_TIER_RAM_THRESHOLD: u64 = 8 * 1024 * 1024 * 1024;
 
 /// Device tier — drives which adapters / tasks are admitted.
 ///
-/// Per `ARCHITECTURE.md` §3 a `Low`-tier device runs only the
+/// Per `docs/technical/architecture.md` §3 a `Low`-tier device runs only the
 /// encoder-only [`crate::FallbackAdapter`]; `Medium` adds llama.cpp
 /// classification; `High` enables full SLM synthesis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

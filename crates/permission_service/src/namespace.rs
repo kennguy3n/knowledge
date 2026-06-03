@@ -1,7 +1,7 @@
 //! Namespace configurations — the per-object-type relation
 //! inheritance chain.
 //!
-//! Per `ARCHITECTURE.md` §6, namespace configs encode userset
+//! Per `docs/technical/architecture.md` §6, namespace configs encode userset
 //! rewrites of the form *"if `subject` has relation `parent` to
 //! `object`, then it also has relation `child` to `object`"*. The
 //! default substrate config wires:

@@ -202,7 +202,7 @@ impl ConceptGraph {
     /// Mark `predecessor` as superseded by `successor` and add an
     /// explicit `predecessor -[supersedes]-> successor` edge.
     ///
-    /// Per `docs/DESIGN.md` §4: "supersession preferred over deletion".
+    /// Per `docs/technical/design.md` §4: "supersession preferred over deletion".
     /// The predecessor is preserved with its `superseded_by` pointer
     /// set so audit and contradiction tracking can find it.
     pub fn supersede_node(&mut self, predecessor: NodeId, successor: NodeId) -> Result<EdgeId> {

@@ -1,6 +1,6 @@
 //! `sync_engine` — CRDT-based delta sync of synthesis objects.
 //!
-//! Per `docs/DESIGN.md` §3.2: every replica
+//! Per `docs/technical/design.md` §3.2: every replica
 //! holds an [`AddWinsSet`] of synthesis-object ids per scope, plus an
 //! append-only [`OpLog`] of [`SyncOp`] entries. Replicas exchange
 //! their op logs out-of-band; [`merge_logs`] / [`OpLog::merge`]
@@ -90,9 +90,9 @@
 //!
 //! Cross-references:
 //!
-//! * `docs/DESIGN.md` §3.2 — CRDT delta protocol
-//! * `ARCHITECTURE.md` §2.1 — sync engine module
-//! * `docs/DESIGN.md` §3.2 — CRDT delta protocol (deliverables)
+//! * `docs/technical/design.md` §3.2 — CRDT delta protocol
+//! * `docs/technical/architecture.md` §2.1 — sync engine module
+//! * `docs/technical/design.md` §3.2 — CRDT delta protocol (deliverables)
 
 #![deny(missing_docs)]
 
@@ -257,7 +257,7 @@ pub struct CrdtDelta {
 /// The doubled storage (live state ≈ live Adds in the log) is
 /// intentional: it lets the receiver simultaneously satisfy the
 /// dedup invariant *and* the bootstrap-without-replay invariant
-/// promised in `docs/DESIGN.md` §3.2.
+/// promised in `docs/technical/design.md` §3.2.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(
     serialize = "T: Serialize + Eq + Hash + Clone",

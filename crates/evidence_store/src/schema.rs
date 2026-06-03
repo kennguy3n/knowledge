@@ -95,7 +95,7 @@ CREATE INDEX IF NOT EXISTS idx_ring_buffer_scope_created
 
 -- FTS5 index over plaintext content for non-noise rows. Tokenizer is
 -- the substrate canonical 'unicode61 remove_diacritics 2'
--- (ARCHITECTURE.md §2.2). This table catches all whitespace-
+-- (docs/technical/architecture.md §2.2). This table catches all whitespace-
 -- segmented scripts (Latin, Cyrillic, Greek, Arabic, Hebrew,
 -- Devanagari, Hangul) including any Latin terms embedded inside a
 -- CJK or Thai document. CJK Han / Hiragana / Katakana / Thai
@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS evidence_embeddings (
 --
 -- This table is the *only* mutable store of forgetting state. The
 -- `evidence` table itself is append-only — destroying the per-scope
--- DEK (the unit of forgetting in `docs/DESIGN.md` §3.1) makes its
+-- DEK (the unit of forgetting in `docs/technical/design.md` §3.1) makes its
 -- bodies unrecoverable; the tombstone here makes that decision
 -- durable across process restarts. Re-inserts for an already-
 -- forgotten scope are no-ops by way of `INSERT OR IGNORE`.

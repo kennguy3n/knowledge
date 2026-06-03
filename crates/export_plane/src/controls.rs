@@ -1,6 +1,6 @@
 //! Per-concept / per-summary / per-workflow export controls.
 //!
-//! Per `docs/DESIGN.md` §3.5, each substrate object that is *eligible*
+//! Per `docs/technical/design.md` §3.5, each substrate object that is *eligible*
 //! for export carries an explicit, opt-in control row in this
 //! registry. The registry enforces deny-by-default: a concept,
 //! summary, or workflow that has no entry in the registry is *not*

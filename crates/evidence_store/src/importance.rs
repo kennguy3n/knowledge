@@ -1,6 +1,6 @@
 //! Lexicon-only importance classifier (baseline fallback).
 //!
-//! Per `docs/DESIGN.md` §4.3 and `ARCHITECTURE.md` §3.3 the substrate has
+//! Per `docs/technical/design.md` §4.3 and `docs/technical/architecture.md` §3.3 the substrate has
 //! four importance classes: **Critical**, **Important**, **Useful**,
 //! **Noise**. The full pipeline classifies via XLM-R + Bonsai-1.7B; this
 //! module provides the lexicon-only fallback that runs even when the
@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The four importance classes (per `docs/DESIGN.md` §4.3).
+/// The four importance classes (per `docs/technical/design.md` §4.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ImportanceClass {
     /// Tenant policy, regulatory rules, signed decisions. No passive

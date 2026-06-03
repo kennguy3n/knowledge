@@ -1,7 +1,7 @@
 //! `knowledge_ffi` — UniFFI surface for iOS / Android platform bindings.
 //!
-//! Per `ARCHITECTURE.md` §3 ("Platform integration plane") and
-//! `docs/DESIGN.md` §2 ("On-device runtime"), the knowledge substrate
+//! Per `docs/technical/architecture.md` §3 ("Platform integration plane") and
+//! `docs/technical/design.md` §2 ("On-device runtime"), the knowledge substrate
 //! ships as a Rust core with two foreign-language adapters:
 //!
 //! * **UniFFI** (this crate) — Swift on iOS, Kotlin on Android.

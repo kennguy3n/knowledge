@@ -1,6 +1,6 @@
 //! `audit_service` — append-only audit log for the Knowledge substrate.
 //!
-//! Per `ARCHITECTURE.md` §4.1, the audit service records an
+//! Per `docs/technical/architecture.md` §4.1, the audit service records an
 //! **append-only audit log of canonical promotions, exports, agent
 //! proposals, policy changes**, plus tenant-lifecycle events
 //! (provisioning, deletion, key destruction).

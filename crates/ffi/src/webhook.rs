@@ -1,6 +1,6 @@
 //! Webhook-receiver FFI surface.
 //!
-//! Per `ARCHITECTURE.md` §4.3 and the `connector_framework::webhook_server`
+//! Per `docs/technical/architecture.md` §4.3 and the `connector_framework::webhook_server`
 //! module docs, the substrate ships its own in-process HTTP receiver
 //! so providers (Slack `events_api`, Notion webhooks, Atlassian
 //! Connect, …) can POST directly to the substrate without an

@@ -33,5 +33,5 @@ log.append(entry);
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §4.1 — Audit service.
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §4.1 — Audit service.
 - [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.

@@ -1,6 +1,6 @@
 //! Proposal lifecycle state machine.
 //!
-//! Per `docs/DESIGN.md` §7.3, every agent proposal moves through this
+//! Per `docs/technical/design.md` §7.3, every agent proposal moves through this
 //! state machine before it can affect canonical memory:
 //!
 //! ```text

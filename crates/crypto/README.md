@@ -40,6 +40,6 @@ state directly.
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §2.5, §8 — Crypto layer.
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §2.5, §8 — Crypto layer.
 - [docs/DESIGN.md](../../docs/DESIGN.md) §5 — Post-quantum cryptography.
 - [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.

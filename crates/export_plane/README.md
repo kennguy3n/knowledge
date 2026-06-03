@@ -32,6 +32,6 @@ let decision = engine.evaluate(&request)?;
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §4.1 — Export service.
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §4.1 — Export service.
 - [docs/DESIGN.md](../../docs/DESIGN.md) §3.5 — Export plane.
 - [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.

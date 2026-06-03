@@ -1,7 +1,7 @@
 //! `tenant_service` — tenant lifecycle and member-provisioning data
 //! model.
 //!
-//! Per `ARCHITECTURE.md` §4.1, the tenant service owns:
+//! Per `docs/technical/architecture.md` §4.1, the tenant service owns:
 //!
 //! * **Tenant lifecycle.** A [`Tenant`] moves through
 //!   `Active → Suspended → Deleted`. Deletion records a reference to
@@ -30,7 +30,7 @@
 //!   (`tenant_row:v1`). Member rows and configs are stored in
 //!   plaintext because the substrate's threat model already
 //!   exposes that taxonomy via the permission graph (see
-//!   `docs/DESIGN.md` §7.1).
+//!   `docs/technical/design.md` §7.1).
 
 #![deny(missing_docs)]
 

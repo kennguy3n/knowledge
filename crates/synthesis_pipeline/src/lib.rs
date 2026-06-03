@@ -1,7 +1,7 @@
 //! `synthesis_pipeline` — channel / domain / tenant synthesis windows
 //! and the encrypted synthesis-object publication contract.
 //!
-//! Per `ARCHITECTURE.md` §2.1, the synthesis pipeline owns:
+//! Per `docs/technical/architecture.md` §2.1, the synthesis pipeline owns:
 //!
 //! * **Synthesis windows** — per-scope `(start, end)` pairs the
 //!   synthesizer aggregates over (`Pending` / `InProgress` /
@@ -26,8 +26,8 @@
 //!
 //! Cross-references:
 //!
-//! * Module map: `ARCHITECTURE.md` §2.1.
-//! * Synthesis hierarchy: `docs/DESIGN.md` §6.
+//! * Module map: `docs/technical/architecture.md` §2.1.
+//! * Synthesis hierarchy: `docs/technical/design.md` §6.
 
 #![deny(missing_docs)]
 

@@ -26,7 +26,7 @@ use crate::importance::ImportanceClass;
 use crate::routing::{route_storage_with_threshold, StoragePath, DEFAULT_INLINE_THRESHOLD_BYTES};
 use crate::schema::{SCHEMA_SQL, SCHEMA_VERSION};
 
-/// Default ring-buffer size cap (`docs/DESIGN.md` §3.1, `ARCHITECTURE.md`
+/// Default ring-buffer size cap (`docs/technical/design.md` §3.1, `docs/technical/architecture.md`
 /// §9.1).
 pub const DEFAULT_RING_BUFFER_MAX_BYTES: usize = 5 * 1024 * 1024;
 
@@ -194,7 +194,7 @@ impl EvidenceStore {
     ///
     /// `master_key` is the per-user master key from which the
     /// SQLCipher page key and every per-scope AEAD key is HKDF-derived.
-    /// Per `ARCHITECTURE.md` §2.2, in a real deployment the master key
+    /// Per `docs/technical/architecture.md` §2.2, in a real deployment the master key
     /// is itself unwrapped by the hybrid X25519 + ML-KEM-768 KEM at
     /// boot.
     pub fn open<P: AsRef<Path>>(
@@ -218,7 +218,7 @@ impl EvidenceStore {
 
         // Derive the SQLCipher page-encryption key from the master
         // key. This is the deterministic HKDF wrap-around — see
-        // ARCHITECTURE.md §2.2.
+        // docs/technical/architecture.md §2.2.
         let mut page_key = derive_key(master_key, b"sqlcipher:store:v1")?;
         // `Zeroizing<String>` zeroes the heap-allocated bytes when
         // dropped — without this wrapper the hex-encoded SQLCipher
@@ -351,7 +351,7 @@ impl EvidenceStore {
 
     /// Append-only ingest a fresh evidence row.
     ///
-    /// Per `docs/DESIGN.md` §3.1 / §4.3:
+    /// Per `docs/technical/design.md` §3.1 / §4.3:
     ///
     /// * If `importance == Noise`, the body is written to the ring
     ///   buffer and **no** evidence row is created.

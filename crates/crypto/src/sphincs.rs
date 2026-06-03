@@ -8,7 +8,7 @@
 //! together they form an AND-combiner whose security floor only
 //! falls if **both** primitives are broken.
 //!
-//! Per `docs/DESIGN.md` §9.1 ("Post-quantum signatures"), the substrate
+//! Per `docs/technical/design.md` §9.1 ("Post-quantum signatures"), the substrate
 //! ships **two** quantum-resistant signers side-by-side:
 //!
 //! 1. **ML-DSA-65** ([`crate::signer_backend::MlDsa65Signer`]) — the
@@ -33,7 +33,7 @@
 //! * **Signature size.** 17,088 bytes per signature — large but
 //!   bounded and predictable. Use SPHINCS+ only on the archival
 //!   [`CoSigner`] path, not on per-synthesis provenance (which uses
-//!   ML-DSA-65's ~3.3 kB signatures). See `ARCHITECTURE.md` §8.1 for
+//!   ML-DSA-65's ~3.3 kB signatures). See `docs/technical/architecture.md` §8.1 for
 //!   the policy.
 //! * **Key sizes.** Public key 32 B, secret key 64 B (the PQClean
 //!   `SK.seed ‖ SK.prf ‖ PK.seed ‖ PK.root` layout).

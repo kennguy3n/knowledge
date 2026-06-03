@@ -1,6 +1,6 @@
 //! BLAKE3 content hashing.
 //!
-//! Per `ARCHITECTURE.md` §2.5 / §8 and `docs/DESIGN.md` §3.1, BLAKE3 is the
+//! Per `docs/technical/architecture.md` §2.5 / §8 and `docs/technical/design.md` §3.1, BLAKE3 is the
 //! single content-hash function used across the substrate (evidence
 //! bodies, cold-segment framing, dedup keys).
 

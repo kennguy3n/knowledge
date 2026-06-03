@@ -23,5 +23,5 @@ permission roles).
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §4.1 — Tenant service.
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §4.1 — Tenant service.
 - [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.

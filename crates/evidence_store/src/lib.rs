@@ -2,7 +2,7 @@
 //! store for the Knowledge substrate.
 //!
 //! This crate implements the **evidence plane** described in
-//! `docs/DESIGN.md` §3.1 and `ARCHITECTURE.md` §2.1 / §2.2:
+//! `docs/technical/design.md` §3.1 and `docs/technical/architecture.md` §2.1 / §2.2:
 //!
 //! * Append-only encrypted ingestion of message / file / chunk bodies.
 //! * Content-hash deduplication (BLAKE3) with a size-threshold routing

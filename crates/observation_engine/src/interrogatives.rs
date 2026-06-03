@@ -13,7 +13,7 @@
 //!
 //! ## Cross-references
 //!
-//! * `docs/DESIGN.md` §3.2 — observation extractor responsibilities.
+//! * `docs/technical/design.md` §3.2 — observation extractor responsibilities.
 //! * `docs/MULTILINGUAL.md` (the multilingual `LexiconRegistry`
 //!   spec) — this table is the precursor / minimal viable
 //!   version; once the registry lands, the `LexiconRegistry`

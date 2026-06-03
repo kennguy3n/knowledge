@@ -1,6 +1,6 @@
 //! Slack connector — Slack Web API + Events API.
 //!
-//! Per `docs/DESIGN.md` §10.1 the substrate ingests Slack messages
+//! Per `docs/technical/design.md` §10.1 the substrate ingests Slack messages
 //! and file shares as observation evidence. Slack ships **two**
 //! integration surfaces:
 //!

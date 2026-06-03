@@ -79,14 +79,14 @@ whatlang = { workspace = true }
 # (the same threshold the `napi_addon` crate already requires).
 #
 # `rc.10` (MSRV `1.81`) is the latest version that fits the
-# workspace MSRV gate. See `docs/DEPENDENCIES.md` for the
+# workspace MSRV gate. See `docs/security/dependency-policy.md` for the
 # MSRV-gated pin policy and future-bump checklist.
 ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["load-dynamic", "ndarray"] }
 # `fancy-regex` is the pure-Rust regex backend; the default `onig`
 # backend pulls in a C library (libonig) that isn't part of CI.
 # On `0.23.1`, the latest published version of the `0.23.x` line;
 # upstream declares no MSRV, fits the workspace `1.85` floor
-# cleanly. See `docs/DEPENDENCIES.md`.
+# cleanly. See `docs/security/dependency-policy.md`.
 tokenizers = { version = "0.23", optional = true, default-features = false, features = ["fancy-regex"] }
 
 [dev-dependencies]

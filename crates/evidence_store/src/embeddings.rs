@@ -1,6 +1,6 @@
 //! XLM-R embedding adapter.
 //!
-//! Per `docs/DESIGN.md` §3.2: "XLM-R embeddings via shared ONNX artifact". This
+//! Per `docs/technical/design.md` §3.2: "XLM-R embeddings via shared ONNX artifact". This
 //! module provides a trait-based skeleton so the production substrate
 //! can run XLM-R via ONNX Runtime on macOS / iOS / Android without
 //! the rest of the crate caring about runtime details. Tests run

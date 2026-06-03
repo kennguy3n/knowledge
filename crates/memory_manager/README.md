@@ -28,6 +28,6 @@ the privacy-strip invariant — every synthesis output must carry a
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §2.1, §7 — Memory manager, decay state machine.
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §2.1, §7 — Memory manager, decay state machine.
 - [docs/DESIGN.md](../../docs/DESIGN.md) §4 — Memory model.
 - [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.

@@ -1,7 +1,7 @@
 //! Comprehensive tests for the decay state machine.
 //!
 //! Covers every valid transition and a representative selection of
-//! invalid transitions per `ARCHITECTURE.md` §7.
+//! invalid transitions per `docs/technical/architecture.md` §7.
 
 use evidence_store::ScopeId;
 use memory_manager::{

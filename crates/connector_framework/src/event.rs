@@ -55,7 +55,7 @@ impl std::fmt::Display for SourceUserId {
 
 /// One change event from a connector / webhook.
 ///
-/// Per `docs/DESIGN.md` §10.2 connectors emit `(document, action,
+/// Per `docs/technical/design.md` §10.2 connectors emit `(document, action,
 /// permission)` deltas; this enum is the substrate's normalised
 /// shape for those deltas.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,7 +102,7 @@ pub enum ConnectorEvent {
 ///
 /// A [`ConnectorEvent`] only carries the source-side *identifier* of a
 /// document — it deliberately stays a small `(document, action,
-/// permission)` delta (per `docs/DESIGN.md` §10.2) so the sync loop can
+/// permission)` delta (per `docs/technical/design.md` §10.2) so the sync loop can
 /// move millions of change notifications cheaply. When the runtime
 /// decides a document is worth ingesting, it calls `fetch_content` to
 /// pull the actual bytes; `FetchedContent` is the normalised shape that

@@ -5,15 +5,15 @@ supply chain: the `cargo-deny` policy, the direct dependencies and why
 each is present, the CI gates that enforce the policy on every commit,
 and the `CODEOWNERS` review requirement for security-critical crates.
 
-See also: [`SECURITY.md`](../SECURITY.md) and
-[`docs/COMPLIANCE.md`](COMPLIANCE.md) (SOC 2 CC8/CC9, change
+See also: [`SECURITY.md`](../../SECURITY.md) and
+[`compliance.md`](../operator/compliance.md) (SOC 2 CC8/CC9, change
 management).
 
 ---
 
 ## `deny.toml` policy
 
-The policy lives in [`deny.toml`](../deny.toml) at the workspace root
+The policy lives in [`deny.toml`](../../deny.toml) at the workspace root
 and is enforced by `cargo deny check` (see CI gates below). It uses
 cargo-deny's modern `version = 2` schema.
 
@@ -144,7 +144,7 @@ CycloneDX SBOM (see below).
 ## CI gates
 
 All gates run on every push / pull request via
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
 
 ### `cargo-audit` (job `audit`)
 
@@ -185,7 +185,7 @@ summarised in this document.
 
 ## CODEOWNERS enforcement
 
-[`CODEOWNERS`](../CODEOWNERS) requires explicit review from
+[`CODEOWNERS`](../../.github/CODEOWNERS) requires explicit review from
 `@kennguy3n` on every change to the security-critical surfaces. The
 file deliberately has **no catch-all** entry, so the codeowner
 contract never silently expands to crates the maintainers have not

@@ -37,6 +37,6 @@ sibling `connectors` crate.
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §4.1 — Connector service.
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §4.1 — Connector service.
 - [docs/DESIGN.md](../../docs/DESIGN.md) §10.2 — Connector contract.
 - [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.

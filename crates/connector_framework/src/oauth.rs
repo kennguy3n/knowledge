@@ -12,7 +12,7 @@
 //!
 //! The OAuth2 endpoint URL and `client_id` / `redirect_uri` are
 //! read out of [`crate::config::ConnectorConfig::auth_config_json`]
-//! (a flexible JSON blob — see `docs/DESIGN.md` §10.2). The
+//! (a flexible JSON blob — see `docs/technical/design.md` §10.2). The
 //! `client_secret` is resolved per-grant through a three-layer
 //! fallback ladder, in priority order:
 //!

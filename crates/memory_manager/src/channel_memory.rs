@@ -1,6 +1,6 @@
 //! Channel Memory Object — the per-channel synthesis-output home.
 //!
-//! Per `docs/DESIGN.md` §6.2: "channel memory =
+//! Per `docs/technical/design.md` §6.2: "channel memory =
 //! recap, decisions, open questions, active tasks". Each channel has
 //! a single [`ChannelMemoryObject`] that the synthesis pipeline
 //! updates on every window. Decisions, open questions, and active
@@ -48,7 +48,7 @@ fn normalise_surface_text(s: &str) -> String {
 /// from a generic memory object.
 ///
 /// A decision is just a [`MemoryObject`] in `Important` /
-/// `Critical` sensitivity (per `docs/DESIGN.md` §4.3 — "decisions are
+/// `Critical` sensitivity (per `docs/technical/design.md` §4.3 — "decisions are
 /// critical"). The wrapper buys two things:
 ///
 /// 1. A type-level annotation that `add_decision` takes decisions,

@@ -407,7 +407,7 @@ export function deleteMasterKey(): void {
 | Storing the master key in `UserDefaults` / `SharedPreferences` (cleartext) | **Critical** — readable by any app with root or backup access | Use Keychain / Keystore as shown above |
 | Passing the master key as a CLI argument or environment variable | **High** — visible in `/proc/pid/cmdline`, process listing, shell history | Use `open_store_with_resolver` instead of `open_store` with a hex string |
 | Hardcoding a master key in source code | **Critical** — anyone with the binary or source has the key | Generate at first run, store in platform secure store |
-| Using `localStorage` or IndexedDB in Electron renderer | **Critical** — XSS → full key exfiltration; see `docs/ELECTRON_SECURITY.md` | Use the main-process `KeyStorageResolver` via IPC |
+| Using `localStorage` or IndexedDB in Electron renderer | **Critical** — XSS → full key exfiltration; see `electron-hardening.md` | Use the main-process `KeyStorageResolver` via IPC |
 | Logging the master key (even at `debug` level) | **High** — log aggregation pipelines may persist the key indefinitely | Never log key material; the substrate's own code gates key-related tracing behind `#[cfg(test)]` |
 | Skipping biometric/PIN gates on mobile | **High** — any process running as the same user can read the Keychain/Keystore entry | Set `setUserAuthenticationRequired` / `.biometryCurrentSet` |
 | Syncing the key via iCloud Keychain or Google Backup | **High** — the key is replicated to cloud infrastructure outside the user's device | Use `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` / `setIsStrongBoxBacked(true)` |
@@ -456,6 +456,6 @@ data loss.
   cross-language callback trait and registration API.
 - `crates/crypto/src/kdf.rs` — `MasterKey`, `MASTER_KEY_LEN`,
   `derive_key`.
-- `docs/ELECTRON_SECURITY.md` — Electron renderer-process
+- `electron-hardening.md` — Electron renderer-process
   threat model (IPC allowlist, CSP, `contextIsolation`).
 - `SECURITY.md` — project-wide security policy and audit scope.

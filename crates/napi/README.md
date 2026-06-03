@@ -39,6 +39,6 @@ The `bindings` module exposes `camelCase` JS names mirroring the
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §3 — Platform integration plane.
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §3 — Platform integration plane.
 - [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.
 - [ffi](../ffi/) — Sibling UniFFI surface for mobile.

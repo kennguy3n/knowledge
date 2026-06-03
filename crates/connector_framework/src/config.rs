@@ -8,7 +8,7 @@ use crate::sync::SyncState;
 use crate::token_vault::ConnectorInstanceId;
 
 /// The well-known source kinds the connector framework supports
-/// (per `docs/DESIGN.md` §10.2). Kept as an enum so attachments and
+/// (per `docs/technical/design.md` §10.2). Kept as an enum so attachments and
 /// citations can route by source without parsing free-form strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

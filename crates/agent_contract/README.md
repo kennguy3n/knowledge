@@ -41,6 +41,6 @@ validate_proposal(&proposal)?;
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §6 — Permission model (`proposer` relation).
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §6 — Permission model (`proposer` relation).
 - [docs/DESIGN.md](../../docs/DESIGN.md) §7.3 — Agent write contract.
 - [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.

@@ -1,6 +1,6 @@
 //! Background sync scheduler FFI surface.
 //!
-//! Per `ARCHITECTURE.md` §4.4 and the open backlog from the
+//! Per `docs/technical/architecture.md` §4.4 and the open backlog from the
 //! initial connector-framework rollout, the substrate ships its
 //! own in-process scheduler so connectors poll
 //! their upstream providers on a configurable cadence without

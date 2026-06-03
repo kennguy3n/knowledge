@@ -2,7 +2,7 @@
 //! Knowledge substrate.
 //!
 //! This crate implements the high-level cryptographic API consumed by the
-//! rest of the Rust shared core (see `ARCHITECTURE.md` §2.5 and §8). It
+//! rest of the Rust shared core (see `docs/technical/architecture.md` §2.5 and §8). It
 //! deliberately exposes a small, opinionated surface so that the rest of
 //! the substrate never touches raw cryptographic state directly.
 //!

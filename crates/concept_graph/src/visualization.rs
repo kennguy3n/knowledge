@@ -1,6 +1,6 @@
 //! Concept graph visualization query API (Kanvas).
 //!
-//! Per `docs/DESIGN.md` §10.2, the substrate
+//! Per `docs/technical/design.md` §10.2, the substrate
 //! ships a "Kanvas-style" exploration model on top of the concept
 //! graph: graphs of nodes with typed edges that the front-end can
 //! render with scope-aware filtering. This module provides the
@@ -26,9 +26,9 @@
 //!
 //! Cross-references:
 //!
-//! * Module map: `ARCHITECTURE.md` §2.1.
-//! * Visualization deliverables: `docs/DESIGN.md` §10.2.
-//! * Permission model: `docs/DESIGN.md` §7.1 and the
+//! * Module map: `docs/technical/architecture.md` §2.1.
+//! * Visualization deliverables: `docs/technical/design.md` §10.2.
+//! * Permission model: `docs/technical/design.md` §7.1 and the
 //!   `permission_service` crate.
 
 use std::collections::{BTreeSet, HashSet, VecDeque};

@@ -2,8 +2,8 @@
 //! [`EvidenceStore`].
 //!
 //! These cover two durability/forgetting contracts requested by the
-//! substrate's security work (`docs/COMPLIANCE.md`,
-//! `docs/SUPPLY_CHAIN.md`), exercising only the crate's **public**
+//! substrate's security work (`docs/operator/compliance.md`,
+//! `docs/security/supply-chain.md`), exercising only the crate's **public**
 //! surface:
 //!
 //! 1. **Crash-recovery of an interrupted forget** — a forget that

@@ -17,7 +17,7 @@
 //! println!("{report}");
 //! ```
 //!
-//! See `docs/OBSERVATION_EVAL.md` for a full guide on extending
+//! See `docs/technical/extraction-quality.md` for a full guide on extending
 //! the golden dataset.
 
 use std::collections::HashMap;

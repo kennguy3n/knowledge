@@ -1,7 +1,7 @@
 //! `concept_graph` — sparse typed concept graph for the Knowledge
 //! substrate.
 //!
-//! Per `ARCHITECTURE.md` §2.1 and `docs/DESIGN.md` §3.3, the semantic
+//! Per `docs/technical/architecture.md` §2.1 and `docs/technical/design.md` §3.3, the semantic
 //! plane is a *sparse* concept graph with typed relations
 //! (`is_a`, `part_of`, `decided_by`, `supersedes`, `contradicts`,
 //! `derived_from`, `assigned_to`, …). Scope-aware: each node / edge
@@ -17,8 +17,8 @@
 //!
 //! Cross-references:
 //!
-//! * Module map: `ARCHITECTURE.md` §2.1.
-//! * Typed relations: `docs/DESIGN.md` §3.3.
+//! * Module map: `docs/technical/architecture.md` §2.1.
+//! * Typed relations: `docs/technical/design.md` §3.3.
 
 #![deny(missing_docs)]
 

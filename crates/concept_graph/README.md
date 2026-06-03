@@ -35,6 +35,6 @@ graph.add_edge(ConceptEdge::new(n1, n2, RelationType::IsA));
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §2.1 — Module map.
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §2.1 — Module map.
 - [docs/DESIGN.md](../../docs/DESIGN.md) §3.3 — Typed relations.
 - [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.

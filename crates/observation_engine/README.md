@@ -24,6 +24,6 @@ the cheap first stage before XLM-R + SLM-assisted extraction.
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §2.1 — Module map.
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §2.1 — Module map.
 - [docs/DESIGN.md](../../docs/DESIGN.md) §3.2 — Observation plane.
 - [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.

@@ -32,7 +32,7 @@ impl std::fmt::Display for EvidenceId {
 
 /// Identifier for a scope (channel / domain / tenant memory object).
 ///
-/// Per `docs/DESIGN.md` §3.1 every storage path is keyed by a
+/// Per `docs/technical/design.md` §3.1 every storage path is keyed by a
 /// `(scope_id, epoch)` pair; the scope id is the unit of
 /// cryptographic forgetting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

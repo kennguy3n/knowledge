@@ -42,6 +42,6 @@ let results = store.query("hello", 10)?;
 
 ## Links
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) §2.1, §2.2 — Evidence plane.
+- [ARCHITECTURE.md](../../docs/technical/architecture.md) §2.1, §2.2 — Evidence plane.
 - [docs/DESIGN.md](../../docs/DESIGN.md) §3.1 — Evidence plane design.
 - [docs/INTEGRATION_GUIDE.md](../../docs/INTEGRATION_GUIDE.md) — Consumer integration guide.

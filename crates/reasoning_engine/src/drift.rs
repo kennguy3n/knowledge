@@ -1,6 +1,6 @@
 //! Drift detection for canonical concepts.
 //!
-//! Per `docs/DESIGN.md` §11.1, *drift* fires when the evidence base
+//! Per `docs/technical/design.md` §11.1, *drift* fires when the evidence base
 //! supporting a canonical claim changes — the underlying evidence
 //! is superseded, removed, or weakened — even if no opposing
 //! claim has been promoted yet. The detector is intentionally

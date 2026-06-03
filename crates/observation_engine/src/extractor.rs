@@ -157,7 +157,7 @@ pub trait ObservationExtractor {
     }
 }
 
-/// Lexicon extractor (`docs/DESIGN.md` §3.2 first pass).
+/// Lexicon extractor (`docs/technical/design.md` §3.2 first pass).
 ///
 /// keyword tables come from a
 /// [`LexiconRegistry`] indexed by BCP-47 primary subtag, so

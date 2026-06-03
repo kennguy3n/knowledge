@@ -1,7 +1,7 @@
 //! Integration test that pins the cryptographic-forgetting contract
 //! for the FTS5 secondary index.
 //!
-//! Per `docs/DESIGN.md` §3.1, the
+//! Per `docs/technical/design.md` §3.1, the
 //! substrate promises that "the scope id is the unit of cryptographic
 //! forgetting." The **bodies** of every evidence row are encrypted
 //! under a scope-derived AEAD key (`scope:{uuid}:body:v1`), so

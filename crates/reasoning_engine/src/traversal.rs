@@ -1,6 +1,6 @@
 //! Multi-hop typed-edge traversal over the concept graph.
 //!
-//! Per `docs/DESIGN.md` §11.1, the reasoning
+//! Per `docs/technical/design.md` §11.1, the reasoning
 //! engine traverses the sparse typed concept graph with explicit
 //! budgets so the cost of any one query is bounded. Two modes
 //! are supported:

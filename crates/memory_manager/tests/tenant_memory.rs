@@ -1,6 +1,6 @@
 //! Integration tests for [`TenantMemoryObject`].
 //!
-//! Per `docs/DESIGN.md` §4.3, tenant / institutional memory has "no
+//! Per `docs/technical/design.md` §4.3, tenant / institutional memory has "no
 //! ordinary decay — only explicit deprecation". The tests below
 //! exercise that invariant: items default to `Critical`, the global
 //! decay sweep is a no-op for `Critical` rows, and the only path off
@@ -153,7 +153,7 @@ fn global_decay_sweep_is_a_noop_on_critical_items() {
     assert_eq!(
         report.candidates_archived, 0,
         "tenant-memory items must never be archived by passive decay; \
-         only explicit deprecation is allowed (docs/DESIGN.md §4.3)"
+         only explicit deprecation is allowed (docs/technical/design.md §4.3)"
     );
     assert_eq!(report.superseded_archived, 0);
     for o in objs {
