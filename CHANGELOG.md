@@ -370,10 +370,10 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added — Multilingual lexicons (Session C)
 
-- 7 new language lexicons: Hindi (`hi`), Malay (`ms`), Tagalog
-  (`tl`), Hebrew (`he`), Indonesian (`id`), Italian (`it`),
-  Tibetan (`bo`), Khmer (`km`), Lao (`lo`), Burmese (`my`).
-- `LexiconRegistry` now covers 22 BCP-47 primary subtags (was 12).
+- 7 new language lexicons: Hebrew (`he`), Indonesian (`id`),
+  Italian (`it`), Tibetan (`bo`), Khmer (`km`), Lao (`lo`),
+  Burmese (`my`).
+- `LexiconRegistry` now covers 22 BCP-47 primary subtags (was 15).
 - Per-language decision / task keywords, imperative verbs, stop-words,
   and interrogative tables validated via
   `multilingual_pipeline.rs` test suite.
