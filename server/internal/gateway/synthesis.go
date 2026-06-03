@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -96,6 +97,10 @@ func (h *handlers) triggerSynthesis(w http.ResponseWriter, r *http.Request) {
 		Trigger: trigger,
 	})
 	if err != nil {
+		var apiErr *httpx.Error
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusTooManyRequests {
+			metrics.SynthesisThrottleTotal.Inc()
+		}
 		metrics.ErrorsTotal.WithLabelValues("synthesis").Inc()
 		httpx.WriteError(w, err)
 		return

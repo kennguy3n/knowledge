@@ -11,6 +11,8 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -154,9 +156,23 @@ func Handler() http.Handler {
 	return promhttp.HandlerFor(Registry, promhttp.HandlerOpts{})
 }
 
+// sseRoutePrefix identifies SSE synthesis streaming routes whose
+// connections stay open for the entire synthesis run (up to 300 s).
+// These are excluded from the latency histogram so they do not inflate
+// p99 alerts, but they are still counted in RequestsTotal.
+const sseRoutePrefix = "/api/v1/synthesis/"
+
+// isSSERoute reports whether a chi route pattern is an SSE-capable
+// synthesis status endpoint (e.g. "/api/v1/synthesis/{id}/status").
+func isSSERoute(route string) bool {
+	return strings.HasPrefix(route, sseRoutePrefix) && strings.HasSuffix(route, "/status")
+}
+
 // Middleware records request count and latency keyed by method and the
 // matched chi route pattern (low cardinality, never raw paths). Mount
 // this in the global middleware chain (before auth is fine).
+// SSE synthesis streaming routes are excluded from the latency
+// histogram to prevent long-lived connections from inflating p99.
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -169,19 +185,48 @@ func Middleware(next http.Handler) http.Handler {
 		}
 		statusStr := strconv.Itoa(rec.status)
 		RequestsTotal.WithLabelValues(r.Method, route, statusStr).Inc()
-		RequestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
+		if !isSSERoute(route) {
+			RequestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
+		}
 	})
+}
+
+// maxTenantLabels caps the number of distinct tenant_id label values to
+// prevent Prometheus cardinality explosion if the tenant population
+// grows unexpectedly large.
+const maxTenantLabels = 2000
+
+var (
+	knownTenants   = make(map[string]struct{})
+	knownTenantsMu sync.Mutex
+)
+
+// tenantLabelAllowed returns true if the tenant ID should be tracked.
+// Once maxTenantLabels distinct IDs have been seen, new IDs are
+// recorded under the synthetic "overflow" label.
+func tenantLabelAllowed(tid string) string {
+	knownTenantsMu.Lock()
+	defer knownTenantsMu.Unlock()
+	if _, ok := knownTenants[tid]; ok {
+		return tid
+	}
+	if len(knownTenants) >= maxTenantLabels {
+		return "overflow"
+	}
+	knownTenants[tid] = struct{}{}
+	return tid
 }
 
 // TenantMiddleware increments per-tenant request counters using the
 // authenticated tenant ID from the request context. Mount this AFTER
 // the auth middleware so the context already contains the resolved
-// tenant identity.
+// tenant identity. Cardinality is capped at maxTenantLabels distinct
+// tenant IDs; excess tenants are bucketed under "overflow".
 func TenantMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)
 		if tid := getTenantID(r.Context()); tid != "" {
-			TenantRequestsTotal.WithLabelValues(tid).Inc()
+			TenantRequestsTotal.WithLabelValues(tenantLabelAllowed(tid)).Inc()
 		}
 	})
 }

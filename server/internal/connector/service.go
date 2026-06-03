@@ -361,6 +361,7 @@ func (s *Service) syncOnce(ctx context.Context, instanceID string) (syncReport, 
 	// metrics on every error path (SyncConnector, Unmarshal, pipeline).
 	reg, ok := s.store.get(instanceID)
 	if !ok {
+		metrics.ConnectorSyncFailure.WithLabelValues("unknown").Inc()
 		return syncReport{}, PipelineResult{}, httpx.Internal("connector: no registration for instance; cannot resolve ingest scope")
 	}
 	raw, err := s.sub.SyncConnector(ctx, instanceID)
