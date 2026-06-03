@@ -363,7 +363,7 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - `FetchedContent` type carrying body bytes, MIME type, title,
   source URL, and provider-specific metadata.
 - Implemented for all 10 connectors: Google Drive, OneDrive, Notion,
-  Jira, Confluence, Figma, HubSpot, Slack, Email, Salesforce.
+  Jira, Confluence, Figma, HubSpot, Slack, Email, GitHub (unstable).
 - Go gateway connector service wires `fetch_content` into the sync
   pipeline — each delta page triggers content fetching and evidence
   ingestion.

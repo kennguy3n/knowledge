@@ -228,7 +228,7 @@ Supported connectors (all with real document-content fetching):
 | HubSpot | OAuth2 |
 | Slack | `team_id`, OAuth2 |
 | Email (IMAP) | `host`, `port`, credentials |
-| Salesforce | OAuth2 |
+| GitHub _(unstable)_ | OAuth2 |
 
 Each connector performs:
 - OAuth2 token management and refresh

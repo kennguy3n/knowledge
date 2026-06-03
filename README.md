@@ -140,7 +140,7 @@ For the full module map, service topology, and data-flow diagrams, see
 | `crypto` | Hybrid PQC (X25519+ML-KEM-768), ML-DSA-65, SPHINCS+, XChaCha20 |
 | `inference_router` | On-device SLM dispatch (MLX → llama.cpp → fallback) |
 | `connector_framework` | OAuth2 transport, webhook, incremental delta sync |
-| `connectors` | 10 providers: Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email, Salesforce |
+| `connectors` | 9 stable + 1 unstable: Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email, GitHub _(unstable)_ |
 | `permission_service` | Zanzibar-style relation graph with reachability checks |
 | `tenant_service` | Tenant lifecycle, per-tenant keys, member provisioning |
 | `audit_service` | Append-only audit log |
@@ -248,4 +248,4 @@ Report vulnerabilities to **ken@uney.com** (see [SECURITY.md](SECURITY.md)).
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+See [LICENSE-APACHE](LICENSE-APACHE) and [LICENSE-MIT](LICENSE-MIT) for details.

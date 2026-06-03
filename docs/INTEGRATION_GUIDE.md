@@ -300,7 +300,7 @@ not just metadata sync. When a connector syncs, it:
 4. Emits `DocumentCreated` / `DocumentUpdated` events
 
 Supported providers: Google Drive, OneDrive, Notion, Jira,
-Confluence, Figma, HubSpot, Slack, Email, Salesforce.
+Confluence, Figma, HubSpot, Slack, Email, GitHub (unstable).
 
 ---
 
