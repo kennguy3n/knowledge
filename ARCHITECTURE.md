@@ -353,8 +353,10 @@ flowchart LR
     GW --> XS
     GW --> AS
     CS --> PG
+    CS --> SUB
     TS --> PG
     PS -->|via substrate| SUB
+    XS --> SUB
     AS --> PG
     AS --> NJ
 ```
