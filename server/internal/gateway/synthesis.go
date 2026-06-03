@@ -15,17 +15,57 @@ import (
 	"github.com/kennguy3n/knowledge/server/internal/validate"
 )
 
-// synthesisSuccessCounted tracks synthesis IDs that have already been
-// counted as successful so the counter increments exactly once per
-// synthesis regardless of how many status polls or SSE streams observe
-// the terminal state. Entries are inserted on first success observation
-// and periodically reaped to bound memory.
-var synthesisSuccessCounted sync.Map // map[string]struct{}
+// synthesisDedup deduplicates SynthesisSuccessTotal increments so the
+// counter fires at most once per synthesis ID. It uses a time-windowed
+// double-buffer: two maps alternate every reapInterval, so each entry
+// lives for 1–2 intervals before being garbage-collected. This bounds
+// memory to at most 2× the number of unique completions per interval.
+var synthesisDedup = newSynthesisDedup(10 * time.Minute)
+
+type synthDedup struct {
+	mu      sync.Mutex
+	current map[string]struct{}
+	prev    map[string]struct{}
+}
+
+func newSynthesisDedup(interval time.Duration) *synthDedup {
+	sd := &synthDedup{
+		current: make(map[string]struct{}),
+		prev:    make(map[string]struct{}),
+	}
+	go sd.reapLoop(interval)
+	return sd
+}
+
+func (sd *synthDedup) reapLoop(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		sd.mu.Lock()
+		sd.prev = sd.current
+		sd.current = make(map[string]struct{})
+		sd.mu.Unlock()
+	}
+}
+
+// seen reports whether id was already counted (and marks it if not).
+func (sd *synthDedup) seen(id string) bool {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	if _, ok := sd.current[id]; ok {
+		return true
+	}
+	if _, ok := sd.prev[id]; ok {
+		return true
+	}
+	sd.current[id] = struct{}{}
+	return false
+}
 
 // countSynthesisSuccess increments SynthesisSuccessTotal at most once
-// per synthesis ID.
+// per synthesis ID within the dedup window.
 func countSynthesisSuccess(id string) {
-	if _, loaded := synthesisSuccessCounted.LoadOrStore(id, struct{}{}); !loaded {
+	if !synthesisDedup.seen(id) {
 		metrics.SynthesisSuccessTotal.Inc()
 	}
 }
