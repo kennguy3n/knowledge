@@ -519,16 +519,16 @@ Standard SCIM v2 endpoints for user/group provisioning, mounted at
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/scim/v2/Users` | Create user |
-| `GET` | `/scim/v2/Users` | List users |
-| `GET` | `/scim/v2/Users/{id}` | Get user |
-| `PUT` | `/scim/v2/Users/{id}` | Replace user |
-| `DELETE` | `/scim/v2/Users/{id}` | Delete user |
-| `POST` | `/scim/v2/Groups` | Create group |
-| `GET` | `/scim/v2/Groups` | List groups |
-| `GET` | `/scim/v2/Groups/{id}` | Get group |
-| `PUT` | `/scim/v2/Groups/{id}` | Replace group |
-| `DELETE` | `/scim/v2/Groups/{id}` | Delete group |
+| `POST` | `/api/v1/scim/v2/Users` | Create user |
+| `GET` | `/api/v1/scim/v2/Users` | List users |
+| `GET` | `/api/v1/scim/v2/Users/{id}` | Get user |
+| `PUT` | `/api/v1/scim/v2/Users/{id}` | Replace user |
+| `DELETE` | `/api/v1/scim/v2/Users/{id}` | Delete user |
+| `POST` | `/api/v1/scim/v2/Groups` | Create group |
+| `GET` | `/api/v1/scim/v2/Groups` | List groups |
+| `GET` | `/api/v1/scim/v2/Groups/{id}` | Get group |
+| `PUT` | `/api/v1/scim/v2/Groups/{id}` | Replace group |
+| `DELETE` | `/api/v1/scim/v2/Groups/{id}` | Delete group |
 
 SCIM membership changes are joined to the Zanzibar tuple store
 automatically, so group membership is reflected in permission checks.
