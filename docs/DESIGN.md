@@ -339,8 +339,8 @@ two share a large common core). The dedicated `ms` lexicon —
 with register-specific forms such as `diluluskan` and the
 deadline collocation `tarikh akhir` — is reachable when a caller
 supplies the `ms` tag explicitly (e.g. a connector that knows
-the source locale). Per-language quality notes are tabulated in
-the README's "Multilingual support" section.
+the source locale). The validated language matrix is listed in the
+README and the per-language lexicon tables live in this document above.
 
 ### 5.2 XLM-R for embeddings and classification
 
