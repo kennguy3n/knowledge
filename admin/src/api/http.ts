@@ -71,13 +71,42 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
   return qs ? `${url}?${qs}` : url;
 }
 
+/** Authorization header for the stored bearer token, if any. */
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/**
+ * Fetch a `text/plain` resource (e.g. the Prometheus metrics exposition)
+ * through the same base-URL and auth handling as {@link request}. The
+ * JSON `request<T>` helper cannot be reused because it parses the body;
+ * this shares the URL building and bearer-token logic so cross-origin
+ * (`VITE_GATEWAY_BASE_URL`) and authenticated deployments work.
+ */
+export async function requestText(
+  path: string,
+  opts: Pick<RequestOptions, 'query' | 'signal'> = {},
+): Promise<string> {
+  const res = await fetch(buildUrl(path, opts.query), {
+    headers: { Accept: 'text/plain', ...authHeaders() },
+    signal: opts.signal,
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new ApiError(res.status, `${res.status} ${res.statusText}`, text);
+  }
+  return text;
+}
+
 export async function request<T>(
   path: string,
   opts: RequestOptions = {},
 ): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
-  const token = getToken();
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...authHeaders(),
+  };
 
   let body: string | undefined;
   if (opts.body !== undefined) {

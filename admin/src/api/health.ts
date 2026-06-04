@@ -1,4 +1,4 @@
-import { request } from './http';
+import { request, requestText } from './http';
 import type { GatewayHealth } from './types';
 
 /** `GET /health` — gateway aggregate health (unauthenticated). */
@@ -9,17 +9,14 @@ export function getHealth(signal?: AbortSignal): Promise<GatewayHealth> {
 /**
  * `GET /metrics/knowledge` — Prometheus text exposition of the
  * `knowledge_*` counters/gauges. Returned as raw text; the Dashboard
- * parses a handful of well-known series for headline tiles.
+ * parses a handful of well-known series for headline tiles. Goes through
+ * {@link requestText} so it honours `VITE_GATEWAY_BASE_URL` and the
+ * bearer token like every other client call.
  */
-export async function getKnowledgeMetricsText(
+export function getKnowledgeMetricsText(
   signal?: AbortSignal,
 ): Promise<string> {
-  const res = await fetch('/metrics/knowledge', {
-    headers: { Accept: 'text/plain' },
-    signal,
-  });
-  if (!res.ok) throw new Error(`metrics: ${res.status} ${res.statusText}`);
-  return res.text();
+  return requestText('/metrics/knowledge', { signal });
 }
 
 /** A single parsed Prometheus sample (labels collapsed to a string). */

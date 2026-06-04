@@ -24,14 +24,16 @@ export default function Tenants() {
   const [connectorLimit, setConnectorLimit] = useState(10);
   const [retentionDays, setRetentionDays] = useState(365);
 
-  async function run(key: string, fn: () => Promise<unknown>) {
+  async function run(key: string, fn: () => Promise<unknown>): Promise<boolean> {
     setBusy(key);
     setActionError(undefined);
     try {
       await fn();
       list.reload();
+      return true;
     } catch (err) {
       setActionError(err instanceof Error ? err : new Error(String(err)));
+      return false;
     } finally {
       setBusy(undefined);
     }
@@ -48,8 +50,11 @@ export default function Tenants() {
           retention_days: retentionDays,
         },
       }),
-    );
-    setName('');
+    ).then((ok) => {
+      // Only clear the form once the tenant is actually created, so a
+      // failed request preserves the operator's input.
+      if (ok) setName('');
+    });
   }
 
   return (

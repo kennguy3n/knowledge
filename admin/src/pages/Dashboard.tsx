@@ -11,6 +11,7 @@ import {
   Card,
   ErrorBanner,
   JsonBlock,
+  Notice,
   PageHeader,
   Spinner,
   StatusBadge,
@@ -86,6 +87,12 @@ export default function Dashboard() {
       />
 
       <ErrorBanner error={health.error} />
+      {metrics.error && (
+        <Notice>
+          Headline metrics unavailable: {metrics.error.message}. Health and
+          subsystem status below are unaffected.
+        </Notice>
+      )}
 
       <div className="tiles">
         <Tile
