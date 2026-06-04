@@ -403,25 +403,35 @@ impl Connector for ServiceNowConnector {
     }
 
     fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
-        // Accept the documented `{ "records": [...] }` envelope, a
-        // bare array, or a single record object — Business Rules can
-        // be authored to emit any of the three.
-        let records: Vec<ServiceNowWebhookRecord> = if let Ok(payload) =
-            serde_json::from_slice::<ServiceNowWebhookPayload>(body)
-        {
-            if payload.records.is_empty() {
-                if let Ok(batch) = serde_json::from_slice::<Vec<ServiceNowWebhookRecord>>(body) {
-                    batch
-                } else {
-                    vec![serde_json::from_slice::<ServiceNowWebhookRecord>(body)?]
-                }
-            } else {
+        // A Business Rule may emit the documented `{ "records": [...] }`
+        // envelope, a bare array of records, or a single record object.
+        // Parse the body once into a generic value and dispatch on its
+        // shape, rather than speculatively deserialising it into several
+        // concrete types in sequence.
+        let value: serde_json::Value = serde_json::from_slice(body).map_err(|e| {
+            ConnectorError::Webhook(format!("invalid servicenow webhook body: {e}"))
+        })?;
+        let records: Vec<ServiceNowWebhookRecord> = match value {
+            serde_json::Value::Object(map) if map.contains_key("records") => {
+                let payload: ServiceNowWebhookPayload =
+                    serde_json::from_value(serde_json::Value::Object(map)).map_err(|e| {
+                        ConnectorError::Webhook(format!("invalid servicenow records envelope: {e}"))
+                    })?;
                 payload.records
             }
-        } else if let Ok(batch) = serde_json::from_slice::<Vec<ServiceNowWebhookRecord>>(body) {
-            batch
-        } else {
-            vec![serde_json::from_slice::<ServiceNowWebhookRecord>(body)?]
+            value @ serde_json::Value::Array(_) => serde_json::from_value(value).map_err(|e| {
+                ConnectorError::Webhook(format!("invalid servicenow webhook batch: {e}"))
+            })?,
+            value @ serde_json::Value::Object(_) => {
+                vec![serde_json::from_value(value).map_err(|e| {
+                    ConnectorError::Webhook(format!("invalid servicenow webhook record: {e}"))
+                })?]
+            }
+            _ => {
+                return Err(ConnectorError::Webhook(
+                    "servicenow webhook body must be an object or array".into(),
+                ))
+            }
         };
         if records.is_empty() {
             return Err(ConnectorError::Webhook(

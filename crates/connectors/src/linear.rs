@@ -246,20 +246,22 @@ impl LinearConnector {
         &self,
         url: &str,
         token: &OAuth2Token,
-        filter: Option<&str>,
+        filter: Option<serde_json::Value>,
     ) -> Result<Vec<LinearIssue>> {
-        let query = format!(
-            "query Issues($first: Int!, $after: String) {{ issues(first: $first, after: $after{}) {{ nodes {{ id title description url createdAt updatedAt }} pageInfo {{ hasNextPage endCursor }} }} }}",
-            filter.map(|f| format!(", {f}")).unwrap_or_default()
-        );
+        // `$filter` is declared as the schema's `IssueFilter` type and
+        // bound through GraphQL variables. When no filter applies we
+        // pass `null`, which Linear treats as "no filter".
+        let query = "query Issues($first: Int!, $after: String, $filter: IssueFilter) { issues(first: $first, after: $after, filter: $filter) { nodes { id title description url createdAt updatedAt } pageInfo { hasNextPage endCursor } } }";
+        let filter = filter.unwrap_or(serde_json::Value::Null);
         let mut nodes = Vec::<LinearIssue>::new();
         let mut after: Option<String> = None;
         for _ in 0..MAX_PAGES {
             let variables = serde_json::json!({
                 "first": self.page_size,
                 "after": after,
+                "filter": filter,
             });
-            let data: IssuesData = self.graphql(url, token, &query, &variables, "issues")?;
+            let data: IssuesData = self.graphql(url, token, query, &variables, "issues")?;
             nodes.extend(data.issues.nodes);
             if data.issues.page_info.has_next_page {
                 match data.issues.page_info.end_cursor {
@@ -335,9 +337,8 @@ impl Connector for LinearConnector {
         let prior: Option<DateTime<Utc>> = state.cursor.as_deref().and_then(parse_rfc3339);
         // Linear's `updatedAt` filter is a strict `gt`, so the prior
         // watermark row is excluded — no client-side dedup needed.
-        let filter =
-            prior.map(|t| format!("filter: {{ updatedAt: {{ gt: \"{}\" }} }}", t.to_rfc3339()));
-        let issues = self.paginate_issues(&url, token, filter.as_deref())?;
+        let filter = prior.map(|t| serde_json::json!({ "updatedAt": { "gt": t.to_rfc3339() } }));
+        let issues = self.paginate_issues(&url, token, filter)?;
         let mut events = Vec::with_capacity(issues.len());
         let mut watermark = prior;
         for issue in &issues {

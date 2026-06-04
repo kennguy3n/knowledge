@@ -19,10 +19,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    bearer_get_json, bearer_post_json, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
-    ConnectorInstanceId, FetchedContent, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result,
-    SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret,
-    WebhookSubscription,
+    bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -289,7 +289,8 @@ impl Connector for ZendeskConnector {
     ) -> Result<FetchedContent> {
         let base_url = self.resolved_base_url(config);
         let id = document_id.as_str();
-        let url = format!("{base_url}/api/v2/tickets/{id}.json");
+        let id_enc = percent_encode_path_component(id);
+        let url = format!("{base_url}/api/v2/tickets/{id_enc}.json");
         let resp: ZendeskTicketResponse = bearer_get_json(
             &self.transport,
             "zendesk",
