@@ -3,6 +3,8 @@ import type {
   AuthenticateConnectorRequest,
   ConnectorStatus,
   CreateConnectorRequest,
+  OAuthStartParams,
+  OAuthStartResponse,
 } from './types';
 
 const BASE = '/api/v1/connectors';
@@ -56,12 +58,39 @@ export function deleteConnector(id: string): Promise<void> {
 }
 
 /**
- * Begin the OAuth authorization flow for a connector. The gateway
- * exposes `GET /api/v1/connectors/{id}/oauth/start` which redirects to
- * the provider; the admin opens it in a new tab. Prefixed with
- * `gatewayBaseUrl()` so cross-origin (`VITE_GATEWAY_BASE_URL`)
- * deployments open the gateway, not the SPA's own origin.
+ * `GET /api/v1/connectors/{id}/oauth/start` — begin the OAuth flow.
+ *
+ * This is an authenticated JSON endpoint (not a redirect): it requires
+ * `client_id`/`redirect_uri` query params and returns the provider
+ * `authorize_url` plus a CSRF `state`. It must be called through the
+ * authenticated client so it carries the bearer token (a bare
+ * `window.open` of this path 401s when the gateway has auth enabled, and
+ * would only ever receive JSON rather than a redirect). The caller then
+ * navigates the browser to `authorize_url` — the provider's own origin,
+ * which needs no gateway token.
  */
-export function oauthStartUrl(id: string): string {
-  return `${gatewayBaseUrl()}/api/v1/connectors/${encodeURIComponent(id)}/oauth/start`;
+export function startOAuth(
+  id: string,
+  params: OAuthStartParams,
+  signal?: AbortSignal,
+): Promise<OAuthStartResponse> {
+  return request<OAuthStartResponse>(
+    `${BASE}/${encodeURIComponent(id)}/oauth/start`,
+    {
+      query: { client_id: params.client_id, redirect_uri: params.redirect_uri },
+      signal,
+    },
+  );
+}
+
+/**
+ * Absolute URL of the gateway's OAuth callback
+ * (`GET /api/v1/connectors/oauth/callback`), used as the default
+ * `redirect_uri`. Honours `VITE_GATEWAY_BASE_URL`; falls back to the
+ * SPA's own origin in same-origin deployments where the base is empty
+ * (the nginx image reverse-proxies the gateway on that origin).
+ */
+export function oauthCallbackUrl(): string {
+  const base = gatewayBaseUrl() || window.location.origin;
+  return `${base}/api/v1/connectors/oauth/callback`;
 }

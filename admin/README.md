@@ -85,3 +85,10 @@ no JWT secret, it runs in dev-mode and accepts unauthenticated requests.
   contracts.
 - There is no list endpoint for a single connector's full config; the
   table renders the substrate `ConnectorStatus` projection.
+- **Connector re-auth** calls `GET /{id}/oauth/start`, which is an
+  authenticated JSON endpoint returning `{ authorize_url, state }` (not a
+  redirect) and requires `client_id` + `redirect_uri` query params. The
+  panel prompts for the provider `client_id` and defaults `redirect_uri`
+  to the gateway callback (`/api/v1/connectors/oauth/callback`), then
+  opens the returned `authorize_url`. The request goes through the
+  authenticated client so it works when the gateway has auth enabled.

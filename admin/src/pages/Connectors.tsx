@@ -48,6 +48,36 @@ export default function Connectors() {
     }
   }
 
+  // Re-authenticate a connector: the OAuth start endpoint is an
+  // authenticated JSON call (it needs the bearer token and the provider
+  // client_id / redirect_uri), so we can't just window.open its URL.
+  // Open the tab synchronously inside the click gesture (so it isn't
+  // popup-blocked), fetch the provider authorize_url through the client,
+  // then point the tab at it.
+  function onReauth(c: ConnectorStatus) {
+    const clientId = window
+      .prompt(
+        `OAuth client_id for the ${c.kind} provider app (used to build the authorization URL):`,
+      )
+      ?.trim();
+    if (!clientId) return;
+    const popup = window.open('about:blank', '_blank');
+    if (popup) popup.opener = null;
+    void run(`reauth-${c.instanceId}`, async () => {
+      try {
+        const res = await connectorsApi.startOAuth(c.instanceId, {
+          client_id: clientId,
+          redirect_uri: connectorsApi.oauthCallbackUrl(),
+        });
+        if (popup) popup.location.href = res.authorize_url;
+        else window.open(res.authorize_url, '_blank', 'noopener');
+      } catch (err) {
+        popup?.close();
+        throw err;
+      }
+    });
+  }
+
   function onCreate(e: React.FormEvent) {
     e.preventDefault();
     void run('create', () =>
@@ -139,13 +169,7 @@ export default function Connectors() {
                       connectorsApi.syncConnector(c.instanceId),
                     )
                   }
-                  onReauth={() =>
-                    window.open(
-                      connectorsApi.oauthStartUrl(c.instanceId),
-                      '_blank',
-                      'noopener',
-                    )
-                  }
+                  onReauth={() => onReauth(c)}
                   onDelete={() => {
                     if (
                       window.confirm(

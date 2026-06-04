@@ -101,6 +101,23 @@ export interface AuthenticateConnectorRequest {
   auth_code: string;
 }
 
+/** Query params for `GET /api/v1/connectors/{id}/oauth/start`. */
+export interface OAuthStartParams {
+  client_id: string;
+  redirect_uri: string;
+}
+
+/**
+ * Response of `GET /api/v1/connectors/{id}/oauth/start`
+ * (server/internal/connector/handlers_oauth_webhook.go handleOAuthStart):
+ * the provider authorization URL the browser should be sent to, plus the
+ * single-use CSRF state the gateway will validate on callback.
+ */
+export interface OAuthStartResponse {
+  authorize_url: string;
+  state: string;
+}
+
 // ── Tenants ─────────────────────────────────────────────────────────
 
 export type SynthesisTier = 'basic' | 'standard' | 'premium';
