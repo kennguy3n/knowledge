@@ -102,6 +102,12 @@ docker compose \
   up -d   # no --build: images are pulled, not compiled
 ```
 
+> **Requires Docker Compose v2.24+.** The override uses the `!reset null`
+> tag to drop the inherited `build:` block; older Compose versions fail to
+> parse it with a cryptic YAML tag error. Check with `docker compose version`.
+> On an older Compose, either upgrade or delete the two `build:` lines from
+> the override file instead of using `!reset`.
+
 The `llama-server` image is **not** published (it is a large, optional
 on-device inference component); build it locally if needed, or omit it.
 
