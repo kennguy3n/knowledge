@@ -60,10 +60,20 @@ services:
     volumes:
       - substrate-data:/data
     depends_on:
-      # Wait for the model to finish loading so the bootstrap adapter
-      # probe finds the sidecar reachable on first synthesis.
+      # Start the sidecar first for ordering, but only gate on the
+      # container having STARTED — not on its health. The llama.cpp
+      # adapter probes `/health` live on every dispatch (see
+      # `LlamaCppAdapter::is_available`), so synthesis self-heals the
+      # moment the model finishes loading; there is no need to block the
+      # substrate's boot on it. Gating on `service_healthy` here would
+      # be a footgun: `llama-server` only reports healthy once a model
+      # is loaded from `${LLAMA_MODEL_DIR:-./models}`, so a deployment
+      # without a model would never start the substrate (and, since the
+      # gateway depends on the substrate, the whole stack). With
+      # `service_started` the stack always comes up and synthesis simply
+      # returns `Unavailable` until a model + healthy sidecar exist.
       llama-server:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9090/internal/metrics || exit 1"]
       interval: 10s

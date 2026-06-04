@@ -173,7 +173,7 @@ fn normalise_url(s: &str) -> String {
 }
 
 #[cfg(feature = "http-client")]
-pub use http_client::{HttpLlamaServerClient, ENV_LLAMA_SERVER_URL};
+pub use http_client::HttpLlamaServerClient;
 
 #[cfg(feature = "http-client")]
 mod http_client {
@@ -244,7 +244,11 @@ mod http_client {
     /// `llama-server` sidecar into the substrate's synthesis path
     /// without any host-side glue code. The deploy compose file sets
     /// this to `http://llama-server:8081` on the substrate service.
-    pub const ENV_LLAMA_SERVER_URL: &str = "KNOWLEDGE_LLAMA_SERVER_URL";
+    ///
+    /// Kept module-private (consumed only by
+    /// [`HttpLlamaServerClient::from_env`]); hosts wire the sidecar by
+    /// setting the variable, not by reading this symbol.
+    const ENV_LLAMA_SERVER_URL: &str = "KNOWLEDGE_LLAMA_SERVER_URL";
 
     impl HttpLlamaServerClient {
         /// Build a client targeting the loopback `llama-server` at
@@ -289,17 +293,35 @@ mod http_client {
         /// Propagates the [`Self::new`] client-builder error when the
         /// variable is set but construction fails.
         pub fn from_env() -> Result<Option<Self>, String> {
-            match std::env::var(ENV_LLAMA_SERVER_URL) {
-                Ok(raw) => {
-                    let url = raw.trim();
+            // `std::env::var` errors on both unset and non-UTF-8; `.ok()`
+            // collapses both to `None` ("no sidecar"). The parsing /
+            // construction logic lives in `from_env_value` so it can be
+            // unit-tested without mutating the process-global environment.
+            Self::from_env_value(std::env::var(ENV_LLAMA_SERVER_URL).ok().as_deref())
+        }
+
+        /// Core of [`Self::from_env`], split out so the discovery logic
+        /// can be unit-tested without touching the process-global
+        /// environment. `std::env::set_var` / `remove_var` are not
+        /// thread-safe (and are `unsafe` from the 2024 edition), so the
+        /// test drives this pure function with explicit inputs instead.
+        ///
+        /// `raw` is the raw value of [`ENV_LLAMA_SERVER_URL`] — `None`
+        /// when the variable is unset (or non-UTF-8). A `Some` value is
+        /// trimmed; an empty / whitespace-only string yields `Ok(None)`
+        /// so a stray newline in a compose `environment:` entry does not
+        /// produce an unreachable URL.
+        fn from_env_value(raw: Option<&str>) -> Result<Option<Self>, String> {
+            match raw {
+                Some(s) => {
+                    let url = s.trim();
                     if url.is_empty() {
                         Ok(None)
                     } else {
                         Self::new(url).map(Some)
                     }
                 }
-                // Unset (or non-UTF-8) — treat as "no sidecar".
-                Err(_) => Ok(None),
+                None => Ok(None),
             }
         }
 
@@ -457,43 +479,51 @@ mod http_client {
         }
 
         #[test]
-        fn from_env_discovers_set_url_and_clears_when_unset() {
-            // Single test owns the process-global env var (no other
-            // test in this crate reads `KNOWLEDGE_LLAMA_SERVER_URL`),
-            // so set → assert → restore within one test keeps it
-            // hermetic without a shared lock.
-            let prev = std::env::var(ENV_LLAMA_SERVER_URL).ok();
+        fn from_env_value_discovers_url_and_ignores_blank() {
+            // Exercises the discovery logic directly with explicit
+            // inputs — no `std::env::set_var` / `remove_var`, so this is
+            // sound under parallel test execution (those calls are not
+            // thread-safe and are `unsafe` from the 2024 edition).
 
-            // Unset → no sidecar.
-            std::env::remove_var(ENV_LLAMA_SERVER_URL);
+            // Unset (or non-UTF-8) → no sidecar.
             assert!(
-                HttpLlamaServerClient::from_env()
-                    .expect("from_env must not error when unset")
+                HttpLlamaServerClient::from_env_value(None)
+                    .expect("unset must not error")
                     .is_none(),
-                "unset env var must yield no client"
+                "absent value must yield no client"
             );
 
             // Empty / whitespace-only → no sidecar (trimmed).
-            std::env::set_var(ENV_LLAMA_SERVER_URL, "   ");
-            assert!(
-                HttpLlamaServerClient::from_env()
-                    .expect("from_env must not error on empty")
-                    .is_none(),
-                "whitespace-only env var must yield no client"
-            );
+            for blank in ["", "   ", "\n\t "] {
+                assert!(
+                    HttpLlamaServerClient::from_env_value(Some(blank))
+                        .expect("blank must not error")
+                        .is_none(),
+                    "blank value {blank:?} must yield no client"
+                );
+            }
 
             // Set + surrounding whitespace → trimmed, normalised URL.
-            std::env::set_var(ENV_LLAMA_SERVER_URL, "  http://llama-server:8081/  ");
-            let client = HttpLlamaServerClient::from_env()
-                .expect("from_env must not error on a valid URL")
-                .expect("a non-empty URL must yield a client");
+            let client =
+                HttpLlamaServerClient::from_env_value(Some("  http://llama-server:8081/  "))
+                    .expect("a valid URL must not error")
+                    .expect("a non-empty URL must yield a client");
             assert_eq!(client.server_url(), "http://llama-server:8081");
+        }
 
-            // Restore prior state so we don't leak into sibling tests.
-            match prev {
-                Some(v) => std::env::set_var(ENV_LLAMA_SERVER_URL, v),
-                None => std::env::remove_var(ENV_LLAMA_SERVER_URL),
-            }
+        #[test]
+        fn from_env_reads_process_environment() {
+            // Thin wrapper coverage: `from_env` must agree with
+            // `from_env_value` for whatever the process env currently
+            // holds. Read-only (`std::env::var`), so no mutation / no
+            // thread-safety hazard.
+            let expected = HttpLlamaServerClient::from_env_value(
+                std::env::var(ENV_LLAMA_SERVER_URL).ok().as_deref(),
+            )
+            .map(|opt| opt.map(|c| c.server_url().to_string()));
+            let actual = HttpLlamaServerClient::from_env()
+                .map(|opt| opt.map(|c| c.server_url().to_string()));
+            assert_eq!(actual, expected);
         }
     }
 }
