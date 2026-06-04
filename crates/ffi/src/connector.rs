@@ -1716,8 +1716,11 @@ fn build_connector(
 ) -> FfiResult<Arc<dyn Connector>> {
     use connector_framework::{HttpTransport, OAuth2CodeExchange};
     use connectors::{
-        ConfluenceConnector, EmailConnector, FigmaConnector, GoogleDriveConnector,
-        HubSpotConnector, JiraConnector, NotionConnector, OneDriveConnector, SlackConnector,
+        BoxConnector, ConfluenceConnector, DiscordConnector, DropboxConnector, EmailConnector,
+        FigmaConnector, GoogleCalendarConnector, GoogleDocsConnector, GoogleDriveConnector,
+        GoogleMeetConnector, GoogleSheetsConnector, HubSpotConnector, JiraConnector,
+        NotionConnector, OneDriveConnector, SharePointConnector, SlackConnector, TeamsConnector,
+        ZoomConnector,
     };
     // If the per-runtime transport failed to build at
     // `open_store` time the connector subsystem is disabled —
@@ -1758,6 +1761,34 @@ fn build_connector(
         }
         ConnectorKind::Slack => Arc::new(SlackConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Email => Arc::new(EmailConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Dropbox => {
+            Arc::new(DropboxConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Box => Arc::new(BoxConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::SharePoint => {
+            Arc::new(SharePointConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Teams => Arc::new(TeamsConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Discord => {
+            Arc::new(DiscordConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Zoom => Arc::new(ZoomConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::GoogleCalendar => Arc::new(GoogleCalendarConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::GoogleDocs => {
+            Arc::new(GoogleDocsConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::GoogleSheets => Arc::new(GoogleSheetsConnector::new(
+            instance,
+            transport,
+            oauth_client,
+        )),
+        ConnectorKind::GoogleMeet => {
+            Arc::new(GoogleMeetConnector::new(instance, transport, oauth_client))
+        }
         ConnectorKind::GitHub | ConnectorKind::GenericWebhook => {
             // ships the nine listed connector implementations
             // in `crates/connectors/`. GitHub and the generic webhook
@@ -1829,8 +1860,14 @@ pub(crate) fn event_to_evidence_body(event: &ConnectorEvent) -> Option<String> {
 /// keep working without parsing.
 pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
     match kind {
-        ConnectorKind::GoogleDrive => "GoogleWorkspace",
-        ConnectorKind::OneDrive => "MicrosoftGraph",
+        ConnectorKind::GoogleDrive
+        | ConnectorKind::GoogleCalendar
+        | ConnectorKind::GoogleDocs
+        | ConnectorKind::GoogleSheets
+        | ConnectorKind::GoogleMeet => "GoogleWorkspace",
+        ConnectorKind::OneDrive | ConnectorKind::SharePoint | ConnectorKind::Teams => {
+            "MicrosoftGraph"
+        }
         ConnectorKind::Notion => "Notion",
         ConnectorKind::Jira | ConnectorKind::Confluence => "Atlassian",
         ConnectorKind::GitHub => "GitHub",
@@ -1838,6 +1875,10 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::Figma => "Figma",
         ConnectorKind::HubSpot => "HubSpot",
         ConnectorKind::Email => "Email",
+        ConnectorKind::Dropbox => "Dropbox",
+        ConnectorKind::Box => "Box",
+        ConnectorKind::Discord => "Discord",
+        ConnectorKind::Zoom => "Zoom",
         ConnectorKind::GenericWebhook => "GenericWebhook",
     }
 }
@@ -2125,6 +2166,16 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::Figma => ConnectorKind::Figma,
         ConnectorKindTag::HubSpot => ConnectorKind::HubSpot,
         ConnectorKindTag::Email => ConnectorKind::Email,
+        ConnectorKindTag::Dropbox => ConnectorKind::Dropbox,
+        ConnectorKindTag::Box => ConnectorKind::Box,
+        ConnectorKindTag::SharePoint => ConnectorKind::SharePoint,
+        ConnectorKindTag::Teams => ConnectorKind::Teams,
+        ConnectorKindTag::Discord => ConnectorKind::Discord,
+        ConnectorKindTag::Zoom => ConnectorKind::Zoom,
+        ConnectorKindTag::GoogleCalendar => ConnectorKind::GoogleCalendar,
+        ConnectorKindTag::GoogleDocs => ConnectorKind::GoogleDocs,
+        ConnectorKindTag::GoogleSheets => ConnectorKind::GoogleSheets,
+        ConnectorKindTag::GoogleMeet => ConnectorKind::GoogleMeet,
         ConnectorKindTag::GenericWebhook => ConnectorKind::GenericWebhook,
     }
 }
@@ -2141,6 +2192,16 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::Figma => ConnectorKindTag::Figma,
         ConnectorKind::HubSpot => ConnectorKindTag::HubSpot,
         ConnectorKind::Email => ConnectorKindTag::Email,
+        ConnectorKind::Dropbox => ConnectorKindTag::Dropbox,
+        ConnectorKind::Box => ConnectorKindTag::Box,
+        ConnectorKind::SharePoint => ConnectorKindTag::SharePoint,
+        ConnectorKind::Teams => ConnectorKindTag::Teams,
+        ConnectorKind::Discord => ConnectorKindTag::Discord,
+        ConnectorKind::Zoom => ConnectorKindTag::Zoom,
+        ConnectorKind::GoogleCalendar => ConnectorKindTag::GoogleCalendar,
+        ConnectorKind::GoogleDocs => ConnectorKindTag::GoogleDocs,
+        ConnectorKind::GoogleSheets => ConnectorKindTag::GoogleSheets,
+        ConnectorKind::GoogleMeet => ConnectorKindTag::GoogleMeet,
         ConnectorKind::GenericWebhook => ConnectorKindTag::GenericWebhook,
     }
 }
@@ -2213,6 +2274,16 @@ mod tests {
             ConnectorKindTag::Figma,
             ConnectorKindTag::HubSpot,
             ConnectorKindTag::Email,
+            ConnectorKindTag::Dropbox,
+            ConnectorKindTag::Box,
+            ConnectorKindTag::SharePoint,
+            ConnectorKindTag::Teams,
+            ConnectorKindTag::Discord,
+            ConnectorKindTag::Zoom,
+            ConnectorKindTag::GoogleCalendar,
+            ConnectorKindTag::GoogleDocs,
+            ConnectorKindTag::GoogleSheets,
+            ConnectorKindTag::GoogleMeet,
             ConnectorKindTag::GenericWebhook,
         ];
         for tag in all {
@@ -2264,6 +2335,16 @@ mod tests {
             ConnectorKind::Figma,
             ConnectorKind::HubSpot,
             ConnectorKind::Email,
+            ConnectorKind::Dropbox,
+            ConnectorKind::Box,
+            ConnectorKind::SharePoint,
+            ConnectorKind::Teams,
+            ConnectorKind::Discord,
+            ConnectorKind::Zoom,
+            ConnectorKind::GoogleCalendar,
+            ConnectorKind::GoogleDocs,
+            ConnectorKind::GoogleSheets,
+            ConnectorKind::GoogleMeet,
             ConnectorKind::GenericWebhook,
         ] {
             // Stability assertion: the tag must not be empty and

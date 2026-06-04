@@ -270,6 +270,26 @@ pub enum ConnectorKindTag {
     HubSpot,
     /// Email — Gmail or Microsoft Graph mailboxes.
     Email,
+    /// Dropbox — cloud file storage.
+    Dropbox,
+    /// Box — cloud content management.
+    Box,
+    /// Microsoft SharePoint — document libraries.
+    SharePoint,
+    /// Microsoft Teams — channel messages.
+    Teams,
+    /// Discord — channel messages.
+    Discord,
+    /// Zoom — cloud recordings + meetings.
+    Zoom,
+    /// Google Calendar — events.
+    GoogleCalendar,
+    /// Google Docs — documents.
+    GoogleDocs,
+    /// Google Sheets — spreadsheets.
+    GoogleSheets,
+    /// Google Meet — conference records + transcripts.
+    GoogleMeet,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,

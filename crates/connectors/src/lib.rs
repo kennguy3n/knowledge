@@ -51,7 +51,13 @@
 mod content;
 
 // STABLE
+pub mod box_connector;
+// STABLE
 pub mod confluence;
+// STABLE
+pub mod discord;
+// STABLE
+pub mod dropbox;
 // STABLE
 pub mod email;
 // STABLE
@@ -59,7 +65,15 @@ pub mod figma;
 // UNSTABLE
 pub mod github;
 // STABLE
+pub mod google_calendar;
+// STABLE
+pub mod google_docs;
+// STABLE
 pub mod google_drive;
+// STABLE
+pub mod google_meet;
+// STABLE
+pub mod google_sheets;
 // STABLE
 pub mod hubspot;
 // STABLE
@@ -69,10 +83,22 @@ pub mod notion;
 // STABLE
 pub mod onedrive;
 // STABLE
+pub mod sharepoint;
+// STABLE
 pub mod slack;
+// STABLE
+pub mod teams;
+// STABLE
+pub mod zoom;
 
 // STABLE
+pub use box_connector::BoxConnector;
+// STABLE
 pub use confluence::ConfluenceConnector;
+// STABLE
+pub use discord::DiscordConnector;
+// STABLE
+pub use dropbox::DropboxConnector;
 // STABLE
 pub use email::EmailConnector;
 // STABLE
@@ -80,7 +106,15 @@ pub use figma::FigmaConnector;
 // UNSTABLE
 pub use github::GitHubConnector;
 // STABLE
+pub use google_calendar::GoogleCalendarConnector;
+// STABLE
+pub use google_docs::GoogleDocsConnector;
+// STABLE
 pub use google_drive::GoogleDriveConnector;
+// STABLE
+pub use google_meet::GoogleMeetConnector;
+// STABLE
+pub use google_sheets::GoogleSheetsConnector;
 // STABLE
 pub use hubspot::HubSpotConnector;
 // STABLE
@@ -90,4 +124,10 @@ pub use notion::NotionConnector;
 // STABLE
 pub use onedrive::OneDriveConnector;
 // STABLE
+pub use sharepoint::SharePointConnector;
+// STABLE
 pub use slack::SlackConnector;
+// STABLE
+pub use teams::TeamsConnector;
+// STABLE
+pub use zoom::ZoomConnector;
