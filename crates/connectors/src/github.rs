@@ -26,11 +26,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    bearer_post_json, classify_failure, percent_encode_path_component, Connector, ConnectorConfig,
-    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpResponse,
-    HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
+    ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpResponse, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId,
+    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -270,26 +269,50 @@ impl GitHubConnector {
             })
     }
 
-    /// GitHub API version + User-Agent headers required by the API.
-    /// Used by the `subscribe_webhook` POST path (the GET paths build
-    /// the same headers via [`Self::github_get`]).
-    fn extra_headers() -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("X-GitHub-Api-Version", GITHUB_API_VERSION),
-            ("User-Agent", "knowledge-substrate"),
-        ]
-    }
-
-    /// Build a bearer-authenticated GET carrying the headers GitHub
-    /// requires on every REST call: the `X-GitHub-Api-Version` pin,
-    /// a `User-Agent` (GitHub rejects requests without one), and the
-    /// recommended `Accept: application/vnd.github+json`.
-    fn github_get(url: &str, token: &OAuth2Token) -> HttpRequest {
-        HttpRequest::get(url)
-            .with_bearer(token.access_token.expose())
+    /// Apply the headers GitHub requires on every REST call: bearer
+    /// auth, the `X-GitHub-Api-Version` pin, a `User-Agent` (GitHub
+    /// rejects requests without one), and the recommended
+    /// `Accept: application/vnd.github+json`. Shared by the GET and
+    /// POST builders so every GitHub request — including the
+    /// `subscribe_webhook` POST — sends an identical header set.
+    fn with_github_headers(req: HttpRequest, token: &OAuth2Token) -> HttpRequest {
+        req.with_bearer(token.access_token.expose())
             .with_header("Accept", "application/vnd.github+json")
             .with_header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .with_header("User-Agent", "knowledge-substrate")
+    }
+
+    /// Build a bearer-authenticated GET carrying the standard GitHub
+    /// headers (see [`Self::with_github_headers`]).
+    fn github_get(url: &str, token: &OAuth2Token) -> HttpRequest {
+        Self::with_github_headers(HttpRequest::get(url), token)
+    }
+
+    /// Execute a POST with a JSON body, classifying failures with
+    /// GitHub's rate-limit semantics (see [`classify_github_failure`])
+    /// so a rate-limited POST (e.g. webhook creation hitting the
+    /// secondary limit) is surfaced as a retriable
+    /// [`ConnectorError::Sync`] rather than mis-mapped to
+    /// [`ConnectorError::Auth`] by the generic classifier.
+    fn github_post_json<B: Serialize, R: DeserializeOwned>(
+        &self,
+        endpoint: &str,
+        url: &str,
+        token: &OAuth2Token,
+        body: &B,
+    ) -> Result<R> {
+        let body_bytes = serde_json::to_vec(body).map_err(|e| {
+            ConnectorError::Sync(format!(
+                "github {endpoint} request JSON serialise failed: {e}"
+            ))
+        })?;
+        let req = Self::with_github_headers(HttpRequest::post(url, body_bytes), token)
+            .with_header("Content-Type", "application/json");
+        let resp = self.transport.execute(req)?;
+        if !resp.is_success() {
+            return Err(classify_github_failure(endpoint, &resp));
+        }
+        parse_github_json(endpoint, &resp.body)
     }
 
     /// Execute a GET and parse a JSON body, classifying failures with
@@ -765,16 +788,8 @@ impl Connector for GitHubConnector {
                 "insecure_ssl": "0"
             }
         });
-        let extra = Self::extra_headers();
-        let resp: GitHubWebhookCreateResponse = bearer_post_json(
-            &self.transport,
-            "github",
-            "/repos/hooks",
-            &url,
-            token,
-            &extra,
-            &body,
-        )?;
+        let resp: GitHubWebhookCreateResponse =
+            self.github_post_json("/repos/hooks", &url, token, &body)?;
         let hook_id = resp.id.ok_or_else(|| {
             ConnectorError::Webhook("github /repos/hooks returned no webhook id".into())
         })?;
@@ -1682,6 +1697,54 @@ mod tests {
         let tok = c.authenticate(&cfg()).unwrap();
         let err = c
             .fetch_content(&cfg(), &tok, &SourceDocumentId::new("8"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Auth(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn subscribe_webhook_maps_rate_limited_403_to_sync_not_auth() {
+        // The webhook-creation POST must share the GET paths'
+        // rate-limit semantics: a 403 carrying `X-RateLimit-Remaining: 0`
+        // is a retriable Sync error, not an Auth failure that would
+        // wrongly prompt re-authorisation.
+        let transport = MockHttpTransport::new();
+        transport.expect(
+            HttpMethod::Post,
+            format!("{GH_BASE}/repos/owner/test-repo/hooks"),
+            MockResponse {
+                status: 403,
+                headers: vec![
+                    ("x-ratelimit-remaining".into(), "0".into()),
+                    ("x-ratelimit-reset".into(), "1700000000".into()),
+                ],
+                body: br#"{"message":"API rate limit exceeded"}"#.to_vec(),
+            },
+        );
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .subscribe_webhook(&cfg(), &tok, "https://substrate.example/webhook")
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn subscribe_webhook_plain_403_still_maps_to_auth() {
+        // A bare 403 on webhook creation (e.g. the token lacks the
+        // `admin:repo_hook` scope) is a genuine permission failure and
+        // must still surface as Auth.
+        let transport = MockHttpTransport::new();
+        transport.expect(
+            HttpMethod::Post,
+            format!("{GH_BASE}/repos/owner/test-repo/hooks"),
+            MockResponse::status(403, br#"{"message":"Forbidden"}"#.to_vec()),
+        );
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .subscribe_webhook(&cfg(), &tok, "https://substrate.example/webhook")
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Auth(_)), "got {err:?}");
     }
