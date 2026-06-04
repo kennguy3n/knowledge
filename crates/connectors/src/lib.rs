@@ -69,7 +69,27 @@ pub mod notion;
 // STABLE
 pub mod onedrive;
 // STABLE
+pub mod asana;
+// STABLE
+pub mod clickup;
+// STABLE
+pub mod freshdesk;
+// STABLE
+pub mod intercom;
+// STABLE
+pub mod linear;
+// STABLE
+pub mod monday;
+// STABLE
+pub mod pipedrive;
+// STABLE
+pub mod salesforce;
+// STABLE
+pub mod servicenow;
+// STABLE
 pub mod slack;
+// STABLE
+pub mod zendesk;
 
 // STABLE
 pub use confluence::ConfluenceConnector;
@@ -90,4 +110,24 @@ pub use notion::NotionConnector;
 // STABLE
 pub use onedrive::OneDriveConnector;
 // STABLE
+pub use asana::AsanaConnector;
+// STABLE
+pub use clickup::ClickUpConnector;
+// STABLE
+pub use freshdesk::FreshdeskConnector;
+// STABLE
+pub use intercom::IntercomConnector;
+// STABLE
+pub use linear::LinearConnector;
+// STABLE
+pub use monday::MondayConnector;
+// STABLE
+pub use pipedrive::PipedriveConnector;
+// STABLE
+pub use salesforce::SalesforceConnector;
+// STABLE
+pub use servicenow::ServiceNowConnector;
+// STABLE
 pub use slack::SlackConnector;
+// STABLE
+pub use zendesk::ZendeskConnector;

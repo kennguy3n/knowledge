@@ -1716,8 +1716,11 @@ fn build_connector(
 ) -> FfiResult<Arc<dyn Connector>> {
     use connector_framework::{HttpTransport, OAuth2CodeExchange};
     use connectors::{
-        ConfluenceConnector, EmailConnector, FigmaConnector, GoogleDriveConnector,
-        HubSpotConnector, JiraConnector, NotionConnector, OneDriveConnector, SlackConnector,
+        AsanaConnector, ClickUpConnector, ConfluenceConnector, EmailConnector, FigmaConnector,
+        FreshdeskConnector, GoogleDriveConnector, HubSpotConnector, IntercomConnector,
+        JiraConnector, LinearConnector, MondayConnector, NotionConnector, OneDriveConnector,
+        PipedriveConnector, SalesforceConnector, ServiceNowConnector, SlackConnector,
+        ZendeskConnector,
     };
     // If the per-runtime transport failed to build at
     // `open_store` time the connector subsystem is disabled —
@@ -1758,6 +1761,30 @@ fn build_connector(
         }
         ConnectorKind::Slack => Arc::new(SlackConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Email => Arc::new(EmailConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Salesforce => {
+            Arc::new(SalesforceConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::ServiceNow => {
+            Arc::new(ServiceNowConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Zendesk => {
+            Arc::new(ZendeskConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Linear => Arc::new(LinearConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Asana => Arc::new(AsanaConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Monday => Arc::new(MondayConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::ClickUp => {
+            Arc::new(ClickUpConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Freshdesk => {
+            Arc::new(FreshdeskConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Intercom => {
+            Arc::new(IntercomConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Pipedrive => {
+            Arc::new(PipedriveConnector::new(instance, transport, oauth_client))
+        }
         ConnectorKind::GitHub | ConnectorKind::GenericWebhook => {
             // ships the nine listed connector implementations
             // in `crates/connectors/`. GitHub and the generic webhook
@@ -1838,6 +1865,16 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::Figma => "Figma",
         ConnectorKind::HubSpot => "HubSpot",
         ConnectorKind::Email => "Email",
+        ConnectorKind::Salesforce => "Salesforce",
+        ConnectorKind::ServiceNow => "ServiceNow",
+        ConnectorKind::Zendesk => "Zendesk",
+        ConnectorKind::Linear => "Linear",
+        ConnectorKind::Asana => "Asana",
+        ConnectorKind::Monday => "Monday",
+        ConnectorKind::ClickUp => "ClickUp",
+        ConnectorKind::Freshdesk => "Freshdesk",
+        ConnectorKind::Intercom => "Intercom",
+        ConnectorKind::Pipedrive => "Pipedrive",
         ConnectorKind::GenericWebhook => "GenericWebhook",
     }
 }
@@ -2125,6 +2162,16 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::Figma => ConnectorKind::Figma,
         ConnectorKindTag::HubSpot => ConnectorKind::HubSpot,
         ConnectorKindTag::Email => ConnectorKind::Email,
+        ConnectorKindTag::Salesforce => ConnectorKind::Salesforce,
+        ConnectorKindTag::ServiceNow => ConnectorKind::ServiceNow,
+        ConnectorKindTag::Zendesk => ConnectorKind::Zendesk,
+        ConnectorKindTag::Linear => ConnectorKind::Linear,
+        ConnectorKindTag::Asana => ConnectorKind::Asana,
+        ConnectorKindTag::Monday => ConnectorKind::Monday,
+        ConnectorKindTag::ClickUp => ConnectorKind::ClickUp,
+        ConnectorKindTag::Freshdesk => ConnectorKind::Freshdesk,
+        ConnectorKindTag::Intercom => ConnectorKind::Intercom,
+        ConnectorKindTag::Pipedrive => ConnectorKind::Pipedrive,
         ConnectorKindTag::GenericWebhook => ConnectorKind::GenericWebhook,
     }
 }
@@ -2141,6 +2188,16 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::Figma => ConnectorKindTag::Figma,
         ConnectorKind::HubSpot => ConnectorKindTag::HubSpot,
         ConnectorKind::Email => ConnectorKindTag::Email,
+        ConnectorKind::Salesforce => ConnectorKindTag::Salesforce,
+        ConnectorKind::ServiceNow => ConnectorKindTag::ServiceNow,
+        ConnectorKind::Zendesk => ConnectorKindTag::Zendesk,
+        ConnectorKind::Linear => ConnectorKindTag::Linear,
+        ConnectorKind::Asana => ConnectorKindTag::Asana,
+        ConnectorKind::Monday => ConnectorKindTag::Monday,
+        ConnectorKind::ClickUp => ConnectorKindTag::ClickUp,
+        ConnectorKind::Freshdesk => ConnectorKindTag::Freshdesk,
+        ConnectorKind::Intercom => ConnectorKindTag::Intercom,
+        ConnectorKind::Pipedrive => ConnectorKindTag::Pipedrive,
         ConnectorKind::GenericWebhook => ConnectorKindTag::GenericWebhook,
     }
 }
@@ -2213,6 +2270,16 @@ mod tests {
             ConnectorKindTag::Figma,
             ConnectorKindTag::HubSpot,
             ConnectorKindTag::Email,
+            ConnectorKindTag::Salesforce,
+            ConnectorKindTag::ServiceNow,
+            ConnectorKindTag::Zendesk,
+            ConnectorKindTag::Linear,
+            ConnectorKindTag::Asana,
+            ConnectorKindTag::Monday,
+            ConnectorKindTag::ClickUp,
+            ConnectorKindTag::Freshdesk,
+            ConnectorKindTag::Intercom,
+            ConnectorKindTag::Pipedrive,
             ConnectorKindTag::GenericWebhook,
         ];
         for tag in all {
@@ -2264,6 +2331,16 @@ mod tests {
             ConnectorKind::Figma,
             ConnectorKind::HubSpot,
             ConnectorKind::Email,
+            ConnectorKind::Salesforce,
+            ConnectorKind::ServiceNow,
+            ConnectorKind::Zendesk,
+            ConnectorKind::Linear,
+            ConnectorKind::Asana,
+            ConnectorKind::Monday,
+            ConnectorKind::ClickUp,
+            ConnectorKind::Freshdesk,
+            ConnectorKind::Intercom,
+            ConnectorKind::Pipedrive,
             ConnectorKind::GenericWebhook,
         ] {
             // Stability assertion: the tag must not be empty and
