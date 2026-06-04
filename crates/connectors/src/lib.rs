@@ -73,13 +73,13 @@
 // flattening). Not part of the public API.
 mod content;
 
-// STABLE
+// UNSTABLE
 pub mod airtable;
-// STABLE
+// UNSTABLE
 pub mod bitbucket;
 // STABLE
 pub mod confluence;
-// STABLE
+// UNSTABLE
 pub mod docusign;
 // STABLE
 pub mod email;
@@ -87,7 +87,7 @@ pub mod email;
 pub mod figma;
 // UNSTABLE
 pub mod github;
-// STABLE
+// UNSTABLE
 pub mod gitlab;
 // STABLE
 pub mod google_drive;
@@ -95,32 +95,32 @@ pub mod google_drive;
 pub mod hubspot;
 // STABLE
 pub mod jira;
-// STABLE
+// UNSTABLE
 pub mod miro;
 // STABLE
 pub mod notion;
 // STABLE
 pub mod onedrive;
-// STABLE
+// UNSTABLE
 pub mod quickbooks;
-// STABLE
+// UNSTABLE
 pub mod shopify;
 // STABLE
 pub mod slack;
-// STABLE
+// UNSTABLE
 pub mod stripe;
-// STABLE
+// UNSTABLE
 pub mod trello;
-// STABLE
+// UNSTABLE
 pub mod xero;
 
-// STABLE
+// UNSTABLE
 pub use airtable::AirtableConnector;
-// STABLE
+// UNSTABLE
 pub use bitbucket::BitbucketConnector;
 // STABLE
 pub use confluence::ConfluenceConnector;
-// STABLE
+// UNSTABLE
 pub use docusign::DocuSignConnector;
 // STABLE
 pub use email::EmailConnector;
@@ -128,7 +128,7 @@ pub use email::EmailConnector;
 pub use figma::FigmaConnector;
 // UNSTABLE
 pub use github::GitHubConnector;
-// STABLE
+// UNSTABLE
 pub use gitlab::GitLabConnector;
 // STABLE
 pub use google_drive::GoogleDriveConnector;
@@ -136,21 +136,21 @@ pub use google_drive::GoogleDriveConnector;
 pub use hubspot::HubSpotConnector;
 // STABLE
 pub use jira::JiraConnector;
-// STABLE
+// UNSTABLE
 pub use miro::MiroConnector;
 // STABLE
 pub use notion::NotionConnector;
 // STABLE
 pub use onedrive::OneDriveConnector;
-// STABLE
+// UNSTABLE
 pub use quickbooks::QuickBooksConnector;
-// STABLE
+// UNSTABLE
 pub use shopify::ShopifyConnector;
 // STABLE
 pub use slack::SlackConnector;
-// STABLE
+// UNSTABLE
 pub use stripe::StripeConnector;
-// STABLE
+// UNSTABLE
 pub use trello::TrelloConnector;
-// STABLE
+// UNSTABLE
 pub use xero::XeroConnector;
