@@ -173,7 +173,7 @@ fn normalise_url(s: &str) -> String {
 }
 
 #[cfg(feature = "http-client")]
-pub use http_client::HttpLlamaServerClient;
+pub use http_client::{HttpLlamaServerClient, ENV_LLAMA_SERVER_URL};
 
 #[cfg(feature = "http-client")]
 mod http_client {
@@ -237,6 +237,15 @@ mod http_client {
         probe_client: reqwest::blocking::Client,
     }
 
+    /// Environment variable used to auto-discover the llama.cpp
+    /// loopback sidecar. When set to a non-empty URL,
+    /// [`HttpLlamaServerClient::from_env`] builds a client pointing at
+    /// it, letting a `docker compose` / desktop deployment wire the
+    /// `llama-server` sidecar into the substrate's synthesis path
+    /// without any host-side glue code. The deploy compose file sets
+    /// this to `http://llama-server:8081` on the substrate service.
+    pub const ENV_LLAMA_SERVER_URL: &str = "KNOWLEDGE_LLAMA_SERVER_URL";
+
     impl HttpLlamaServerClient {
         /// Build a client targeting the loopback `llama-server` at
         /// `server_url` (e.g. `http://127.0.0.1:8080`). Trailing
@@ -256,6 +265,42 @@ mod http_client {
                 Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
                 Duration::from_secs(DEFAULT_HTTP_PROBE_TIMEOUT_SECS),
             )
+        }
+
+        /// Auto-discover a llama.cpp sidecar from the
+        /// [`ENV_LLAMA_SERVER_URL`] environment variable.
+        ///
+        /// Returns:
+        /// * `Ok(None)` when the variable is unset or empty — no
+        ///   sidecar is configured, so the caller should fall back to
+        ///   its configured `server_url` (or skip the adapter).
+        /// * `Ok(Some(client))` when the variable holds a non-empty
+        ///   URL and the client builds successfully.
+        /// * `Err` when the variable is set but the underlying
+        ///   [`reqwest::blocking::Client`] builder rejects the
+        ///   configuration.
+        ///
+        /// Leading / trailing whitespace is trimmed before use so a
+        /// stray newline in a compose `environment:` entry does not
+        /// produce an unreachable URL.
+        ///
+        /// # Errors
+        ///
+        /// Propagates the [`Self::new`] client-builder error when the
+        /// variable is set but construction fails.
+        pub fn from_env() -> Result<Option<Self>, String> {
+            match std::env::var(ENV_LLAMA_SERVER_URL) {
+                Ok(raw) => {
+                    let url = raw.trim();
+                    if url.is_empty() {
+                        Ok(None)
+                    } else {
+                        Self::new(url).map(Some)
+                    }
+                }
+                // Unset (or non-UTF-8) — treat as "no sidecar".
+                Err(_) => Ok(None),
+            }
         }
 
         /// Build a client with a custom `/completion` request
@@ -409,6 +454,46 @@ mod http_client {
             )
             .expect("client should build");
             assert!(!c.ping());
+        }
+
+        #[test]
+        fn from_env_discovers_set_url_and_clears_when_unset() {
+            // Single test owns the process-global env var (no other
+            // test in this crate reads `KNOWLEDGE_LLAMA_SERVER_URL`),
+            // so set → assert → restore within one test keeps it
+            // hermetic without a shared lock.
+            let prev = std::env::var(ENV_LLAMA_SERVER_URL).ok();
+
+            // Unset → no sidecar.
+            std::env::remove_var(ENV_LLAMA_SERVER_URL);
+            assert!(
+                HttpLlamaServerClient::from_env()
+                    .expect("from_env must not error when unset")
+                    .is_none(),
+                "unset env var must yield no client"
+            );
+
+            // Empty / whitespace-only → no sidecar (trimmed).
+            std::env::set_var(ENV_LLAMA_SERVER_URL, "   ");
+            assert!(
+                HttpLlamaServerClient::from_env()
+                    .expect("from_env must not error on empty")
+                    .is_none(),
+                "whitespace-only env var must yield no client"
+            );
+
+            // Set + surrounding whitespace → trimmed, normalised URL.
+            std::env::set_var(ENV_LLAMA_SERVER_URL, "  http://llama-server:8081/  ");
+            let client = HttpLlamaServerClient::from_env()
+                .expect("from_env must not error on a valid URL")
+                .expect("a non-empty URL must yield a client");
+            assert_eq!(client.server_url(), "http://llama-server:8081");
+
+            // Restore prior state so we don't leak into sibling tests.
+            match prev {
+                Some(v) => std::env::set_var(ENV_LLAMA_SERVER_URL, v),
+                None => std::env::remove_var(ENV_LLAMA_SERVER_URL),
+            }
         }
     }
 }

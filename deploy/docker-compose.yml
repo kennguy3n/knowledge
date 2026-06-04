@@ -46,8 +46,24 @@ services:
       KNOWLEDGE_SUBSTRATE_ADDR: "0.0.0.0:9090"
       KNOWLEDGE_STORE_PATH: "/data/substrate.db"
       KNOWLEDGE_MASTER_KEY: "${KNOWLEDGE_MASTER_KEY}"
+      # Auto-discover the llama.cpp sidecar so `trigger_synthesis`
+      # dispatches the on-device SLM out of the box. The substrate
+      # reads this at boot (see `HttpLlamaServerClient::from_env`) and
+      # points the llama.cpp InferenceRouter adapter at the sidecar.
+      KNOWLEDGE_LLAMA_SERVER_URL: "http://llama-server:8081"
+      # Synthesis (`SynthSummary`) is only served at the `high` device
+      # tier; pin it here so a server deployment supports synthesis
+      # regardless of the container's detected RAM (which would
+      # otherwise auto-detect to `medium` under a cgroup memory limit
+      # and silently disable synthesis). Override per-host if needed.
+      KNOWLEDGE_SLM_DEVICE_TIER: "${KNOWLEDGE_SLM_DEVICE_TIER:-high}"
     volumes:
       - substrate-data:/data
+    depends_on:
+      # Wait for the model to finish loading so the bootstrap adapter
+      # probe finds the sidecar reachable on first synthesis.
+      llama-server:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9090/internal/metrics || exit 1"]
       interval: 10s
