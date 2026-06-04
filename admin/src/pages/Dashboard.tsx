@@ -155,8 +155,10 @@ export default function Dashboard() {
       <Card title="Raw health document">
         {health.data ? (
           <JsonBlock value={health.data} />
-        ) : (
+        ) : health.loading ? (
           <Spinner />
+        ) : (
+          <p className="muted">No health document — the request failed.</p>
         )}
       </Card>
     </div>

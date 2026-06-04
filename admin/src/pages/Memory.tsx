@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { memoriesApi } from '../api';
 import type { MemoryFilter, MemoryRecord } from '../api';
+import { parsePositiveInt } from '../lib/parse';
 import {
   Card,
   ErrorBanner,
@@ -22,7 +23,7 @@ const FILTERS: { value: '' | MemoryFilter; label: string }[] = [
 export default function Memory() {
   const [scopeId, setScopeId] = useState('');
   const [filter, setFilter] = useState<'' | MemoryFilter>('');
-  const [limit, setLimit] = useState(50);
+  const [limit, setLimit] = useState<number | undefined>(50);
   const [rows, setRows] = useState<MemoryRecord[] | undefined>();
   const [error, setError] = useState<Error | undefined>();
   const [loading, setLoading] = useState(false);
@@ -86,8 +87,8 @@ export default function Memory() {
               <input
                 type="number"
                 min={1}
-                value={limit}
-                onChange={(e) => setLimit(Number(e.target.value))}
+                value={limit ?? ''}
+                onChange={(e) => setLimit(parsePositiveInt(e.target.value))}
               />
             </div>
             <div className="field row-fixed">

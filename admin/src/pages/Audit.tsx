@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { auditApi } from '../api';
 import type { AuditEvent, AuditQuery } from '../api';
+import { parsePositiveInt } from '../lib/parse';
 import {
   Card,
   ErrorBanner,
@@ -107,8 +108,8 @@ export default function Audit() {
               <input
                 type="number"
                 min={1}
-                value={q.limit ?? 100}
-                onChange={(e) => set('limit', Number(e.target.value))}
+                value={q.limit ?? ''}
+                onChange={(e) => set('limit', parsePositiveInt(e.target.value))}
               />
             </div>
             <div className="field row-fixed">
