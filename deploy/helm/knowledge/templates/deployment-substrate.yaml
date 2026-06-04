@@ -17,7 +17,9 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # Roll the substrate when its config or the secret content changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-substrate.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- with .Values.substrate.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -42,7 +44,7 @@ spec:
               containerPort: {{ .Values.substrate.service.port }}
           envFrom:
             - configMapRef:
-                name: {{ include "knowledge.fullname" . }}-config
+                name: {{ include "knowledge.substrate.fullname" . }}-config
           env:
             - name: KNOWLEDGE_MASTER_KEY
               valueFrom:

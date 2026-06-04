@@ -15,8 +15,9 @@ spec:
   template:
     metadata:
       annotations:
-        # Roll the gateway when config/secret content changes.
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # Roll the gateway when its config or the secret content changes.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-gateway.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- with .Values.gateway.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -41,7 +42,7 @@ spec:
               containerPort: {{ .Values.gateway.service.port }}
           envFrom:
             - configMapRef:
-                name: {{ include "knowledge.fullname" . }}-config
+                name: {{ include "knowledge.gateway.fullname" . }}-config
           env:
             # Optional auth secrets — `optional: true` so they may be
             # absent from the Secret (auth simply stays disabled).
