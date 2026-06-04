@@ -28,9 +28,10 @@ export default function Settings() {
   }
 
   async function onForget() {
+    const scope = forgetScope.trim();
     if (
       !window.confirm(
-        `Cryptographically forget scope ${forgetScope}? This destroys the scope's encryption key and is IRREVERSIBLE.`,
+        `Cryptographically forget scope ${scope}? This destroys the scope's encryption key and is IRREVERSIBLE.`,
       )
     ) {
       return;
@@ -39,7 +40,7 @@ export default function Settings() {
     setForgetError(undefined);
     setForgetDone(false);
     try {
-      await memoriesApi.forgetScope(forgetScope.trim());
+      await memoriesApi.forgetScope(scope);
       setForgetDone(true);
       setForgetScope('');
     } catch (err) {
