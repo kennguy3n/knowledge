@@ -353,9 +353,14 @@ impl GitHubConnector {
     }
 
     /// Walk every issues-list page, following the `Link: rel="next"`
-    /// header GitHub returns. When a response carries no `Link` header
-    /// at all (e.g. a proxy stripped it), fall back to the
-    /// short-page heuristic with manual `page=N` increments.
+    /// header GitHub returns. Manual `page=N` walking is used only as a
+    /// fallback for servers that emit no `Link` header on *any* page
+    /// (e.g. a proxy strips them wholesale): once any page has carried
+    /// a `Link` header (`seen_link`), the absence of `next` is the
+    /// authoritative end of the collection. Switching to manual walking
+    /// mid-run would be unsound — after following opaque `Link` cursors
+    /// the connector no longer knows its numeric page and would
+    /// re-fetch (and duplicate) a page it already saw.
     /// [`MAX_LIST_PAGES`] bounds the walk against a mis-shaped server.
     fn paginate_issues(
         &self,
@@ -367,6 +372,7 @@ impl GitHubConnector {
         let mut all_issues = Vec::<GitHubIssue>::new();
         let mut next_url = Some(self.issues_page_url(base_url, repo, since, 1));
         let mut manual_page: u32 = 1;
+        let mut seen_link = false;
         for _ in 0..MAX_LIST_PAGES {
             let Some(url) = next_url.take() else {
                 return Ok(all_issues);
@@ -374,14 +380,10 @@ impl GitHubConnector {
             let page: GitHubPage<Vec<GitHubIssue>> =
                 self.github_get_page("/repos/issues", &url, token)?;
             let returned = page.items.len();
-            // Prefer the `Link: rel="next"` URL; a `Link` header
-            // without `next` is an authoritative "last page"; only
-            // fall back to manual `page=N` walking when the server
-            // emitted no `Link` header at all and the page came back
-            // full.
+            seen_link |= page.link_present;
             next_url = if let Some(next) = page.next_url {
                 Some(next)
-            } else if page.link_present {
+            } else if seen_link {
                 None
             } else if returned >= self.page_size as usize {
                 manual_page = manual_page.saturating_add(1);
@@ -397,8 +399,10 @@ impl GitHubConnector {
     }
 
     /// Walk every comment page for an issue / PR, following the
-    /// `Link: rel="next"` header and falling back to manual page
-    /// increments when no `Link` header is present.
+    /// `Link: rel="next"` header. As in [`Self::paginate_issues`],
+    /// manual `page=N` walking is only a fallback for servers that emit
+    /// no `Link` header on any page; once a `Link` header has been seen
+    /// the absence of `next` ends the walk.
     fn paginate_comments(
         &self,
         base_url: &str,
@@ -415,6 +419,7 @@ impl GitHubConnector {
         let mut all = Vec::<GitHubComment>::new();
         let mut next_url = Some(comments_url(1));
         let mut manual_page: u32 = 1;
+        let mut seen_link = false;
         for _ in 0..MAX_LIST_PAGES {
             let Some(url) = next_url.take() else {
                 return Ok(all);
@@ -422,10 +427,11 @@ impl GitHubConnector {
             let page: GitHubPage<Vec<GitHubComment>> =
                 self.github_get_page("/repos/issues/comments", &url, token)?;
             let returned = page.items.len();
+            seen_link |= page.link_present;
             all.extend(page.items);
             next_url = if let Some(next) = page.next_url {
                 Some(next)
-            } else if page.link_present {
+            } else if seen_link {
                 None
             } else if returned >= self.page_size as usize {
                 manual_page = manual_page.saturating_add(1);
@@ -1573,6 +1579,63 @@ mod tests {
         // would fail — so a clean 2-event result proves it stopped.
         let res = c.initial_sync(&cfg(), &tok).unwrap();
         assert_eq!(res.events.len(), 2);
+    }
+
+    #[test]
+    fn link_then_stripped_link_page_does_not_manual_refetch() {
+        // Mixed mode: page 1 carries `Link: rel="next"` → page 2, but
+        // page 2 comes back FULL with no `Link` header (e.g. a proxy
+        // stripped it on that one response). The connector must treat
+        // the run as Link-paginated and stop — NOT fall back to manual
+        // `page=N` walking, which (after following an opaque cursor)
+        // would re-fetch a numeric page and duplicate items.
+        let transport = MockHttpTransport::new();
+        let now = Utc::now();
+        let base = "https://api.test/github";
+        let repo = "owner/test-repo";
+        let page_size = 2u32;
+
+        let page1_url = format!(
+            "{base}/repos/{repo}/issues?state=all&sort=updated&direction=asc\
+             &per_page={page_size}&page=1",
+        );
+        // Opaque cursor URL — deliberately NOT the canonical `page=2`
+        // URL the manual fallback would reconstruct.
+        let page2_url = format!("{base}/repos/{repo}/issues?cursor=opaque&page=2");
+        transport.expect(
+            HttpMethod::Get,
+            page1_url,
+            ok_json_with_link(
+                serde_json::to_vec(&[
+                    issue(1, "open", now - Duration::hours(3)),
+                    issue(2, "open", now - Duration::hours(2)),
+                ])
+                .unwrap(),
+                &format!("<{page2_url}>; rel=\"next\""),
+            ),
+        );
+        // Page 2 is full (== page_size) AND has no Link header.
+        transport.expect(
+            HttpMethod::Get,
+            page2_url,
+            MockResponse::ok_json(
+                serde_json::to_vec(&[
+                    issue(3, "open", now - Duration::hours(1)),
+                    issue(4, "open", now),
+                ])
+                .unwrap(),
+            ),
+        );
+
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth())
+            .with_page_size(page_size);
+        let tok = c.authenticate(&cfg()).unwrap();
+        // With the bug, the connector would manual-walk to the canonical
+        // (unregistered) `page=2` URL → synthetic 404 → Err. A clean
+        // 4-event result proves it stopped after the two real pages.
+        let res = c.initial_sync(&cfg(), &tok).unwrap();
+        assert_eq!(res.events.len(), 4);
     }
 
     // ───────────── rate-limit classification ─────────────
