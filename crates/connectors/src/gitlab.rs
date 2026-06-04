@@ -93,6 +93,10 @@ pub struct GitLabIssueAttributes {
     /// Global issue id.
     #[serde(default)]
     pub id: i64,
+    /// Per-project issue number (`iid`) — the id used to address the
+    /// project-scoped issue endpoint.
+    #[serde(default)]
+    pub iid: i64,
     /// Lifecycle action (`open`, `update`, `close`, `reopen`).
     #[serde(default)]
     pub action: Option<String>,
@@ -222,7 +226,10 @@ impl GitLabConnector {
 
 fn issue_to_event(i: &GitLabIssue, kind: &str) -> ConnectorEvent {
     let occurred_at = i.updated_at.or(i.created_at).unwrap_or_else(Utc::now);
-    let id = SourceDocumentId::new(i.id.to_string());
+    // `fetch_content` addresses the project-scoped issue endpoint by
+    // per-project `iid`, so emit the `iid` as the document id (the
+    // global `id` would 404 / resolve the wrong issue there).
+    let id = SourceDocumentId::new(i.iid.to_string());
     match kind {
         "create" => ConnectorEvent::DocumentCreated {
             document_id: id,
@@ -425,13 +432,13 @@ impl Connector for GitLabConnector {
         let attrs = hook.object_attributes.ok_or_else(|| {
             ConnectorError::Webhook("gitlab webhook missing object_attributes".into())
         })?;
-        if attrs.id == 0 {
+        if attrs.iid == 0 {
             return Err(ConnectorError::Webhook(
-                "gitlab webhook missing issue id".into(),
+                "gitlab webhook missing issue iid".into(),
             ));
         }
         let occurred_at = attrs.updated_at.unwrap_or_else(Utc::now);
-        let id = SourceDocumentId::new(attrs.id.to_string());
+        let id = SourceDocumentId::new(attrs.iid.to_string());
         let event = match attrs.action.as_deref() {
             Some("open") => ConnectorEvent::DocumentCreated {
                 document_id: id,
@@ -548,8 +555,8 @@ mod tests {
             HttpMethod::Get,
             format!("https://api.test/gitlab/api/v4/projects/42/issues?per_page=50&page=1&order_by=updated_at&sort=asc&updated_after={}", percent_encode_path_component(prior)),
             ok_json(&serde_json::json!([
-                issue(1, 1, "2024-01-01T00:00:00Z"),
-                issue(2, 2, "2024-02-01T00:00:00Z"),
+                issue(10, 1, "2024-01-01T00:00:00Z"),
+                issue(20, 2, "2024-02-01T00:00:00Z"),
             ])),
         );
         let c = GitLabConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
@@ -558,6 +565,8 @@ mod tests {
         state.cursor = Some(prior.to_string());
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert_eq!(res.events.len(), 1);
+        // The per-project `iid` (2), not the global `id` (20), is the
+        // document id `fetch_content` later resolves.
         assert_eq!(res.events[0].document_id().as_str(), "2");
     }
 
@@ -612,12 +621,14 @@ mod tests {
         let c = GitLabConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let body = serde_json::json!({
             "object_kind": "issue",
-            "object_attributes": { "id": 9, "action": "open", "updated_at": "2024-03-01T00:00:00Z" }
+            "object_attributes": { "id": 900, "iid": 9, "action": "open", "updated_at": "2024-03-01T00:00:00Z" }
         });
         let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap();
         assert!(matches!(evs[0], ConnectorEvent::DocumentCreated { .. }));
+        // Document id is the per-project `iid` (9), not global `id` (900).
+        assert_eq!(evs[0].document_id().as_str(), "9");
     }
 
     #[test]
@@ -626,7 +637,7 @@ mod tests {
         let c = GitLabConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let body = serde_json::json!({
             "object_kind": "issue",
-            "object_attributes": { "id": 9, "action": "close" }
+            "object_attributes": { "id": 900, "iid": 9, "action": "close" }
         });
         let evs = c
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())

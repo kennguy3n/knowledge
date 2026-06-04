@@ -468,9 +468,11 @@ impl Connector for BitbucketConnector {
                 "bitbucket webhook missing pullrequest id".into(),
             ));
         }
+        // A declined/rejected PR is not removed — it still exists and is
+        // viewable, only its state changed — so it maps to an update, not
+        // a delete. Bitbucket never delivers a hard-delete event for PRs.
         let kind = match payload.event_key.as_deref() {
             Some("pullrequest:created") => "create",
-            Some("pullrequest:rejected") => "delete",
             _ => "update",
         };
         Ok(vec![pr_to_event(&pr, kind)])
@@ -656,10 +658,12 @@ mod tests {
                 .unwrap()[0],
             ConnectorEvent::DocumentCreated { .. }
         ));
+        // A rejected (declined) PR still exists and is viewable, so it is a
+        // content/state update — not a deletion.
         assert!(matches!(
             c.handle_webhook_event(&serde_json::to_vec(&rejected).unwrap())
                 .unwrap()[0],
-            ConnectorEvent::DocumentDeleted { .. }
+            ConnectorEvent::DocumentUpdated { .. }
         ));
     }
 

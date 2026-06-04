@@ -2326,6 +2326,16 @@ mod tests {
             ConnectorKind::Figma,
             ConnectorKind::HubSpot,
             ConnectorKind::Email,
+            ConnectorKind::QuickBooks,
+            ConnectorKind::Xero,
+            ConnectorKind::Stripe,
+            ConnectorKind::Shopify,
+            ConnectorKind::Airtable,
+            ConnectorKind::GitLab,
+            ConnectorKind::Bitbucket,
+            ConnectorKind::Trello,
+            ConnectorKind::Miro,
+            ConnectorKind::DocuSign,
             ConnectorKind::GenericWebhook,
         ] {
             // Stability assertion: the tag must not be empty and
