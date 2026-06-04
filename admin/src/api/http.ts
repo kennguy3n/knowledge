@@ -14,8 +14,12 @@
 // is read from localStorage so an operator can paste it in via the
 // Settings page; it is never bundled into the image.
 
-const BASE_URL: string =
-  (import.meta.env.VITE_GATEWAY_BASE_URL as string | undefined) ?? '';
+// Trailing slashes are trimmed so a misconfigured base such as
+// `https://gateway.example.com/` does not produce double-slash URLs
+// (`…com//api/v1/…`) when concatenated with the leading-slash paths.
+const BASE_URL: string = (
+  (import.meta.env.VITE_GATEWAY_BASE_URL as string | undefined) ?? ''
+).replace(/\/+$/, '');
 
 const TOKEN_STORAGE_KEY = 'knowledge.admin.token';
 
