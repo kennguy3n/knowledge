@@ -135,6 +135,7 @@ list):
 
 | Value                                  | Default                                   | Purpose                                   |
 |----------------------------------------|-------------------------------------------|-------------------------------------------|
+| `gateway.image.repository` / `substrate.image.repository` | `ghcr.io/kennguy3n/knowledge-*` | Image repos — **override when deploying from a fork's registry.** |
 | `gateway.image.tag` / `substrate.image.tag` | chart `appVersion`                   | Pin the published image tag.              |
 | `gateway.replicaCount`                 | `2`                                       | Static gateway replicas (when HPA is off).|
 | `autoscaling.enabled`                  | `false`                                   | Enable the gateway HPA.                   |
@@ -154,7 +155,17 @@ Production notes:
 - **Secrets** — prefer `secrets.existingSecret` (a Secret you manage out
   of band) over `secrets.masterKey` so the key never lands in
   values/CI logs. The chart rejects a `masterKey` that is not 64 hex
-  characters.
+  characters. Note that with `existingSecret` the chart no longer owns the
+  Secret, so rotating it does **not** auto-restart the pods (the
+  `checksum/secret` annotation only tracks the chart-managed Secret) — use
+  a controller like [stakater/Reloader](https://github.com/stakater/Reloader),
+  or `kubectl rollout restart` the deployments after rotating.
+- **Image registry** — the chart defaults to the upstream
+  `ghcr.io/kennguy3n/knowledge-*` images. If you publish from a fork (the
+  `docker-publish.yml` workflow pushes to *your* `ghcr.io/<owner>`
+  namespace), override `gateway.image.repository` and
+  `substrate.image.repository` to match. The same applies to the
+  `docker-compose.images.yml` overlay.
 - **Substrate is single-replica** — it owns the SQLCipher file on a
   `ReadWriteOnce` volume and must not be scaled horizontally; only the
   gateway is autoscaled.
