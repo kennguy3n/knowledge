@@ -3155,6 +3155,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
+ "connector_framework",
  "crypto",
  "evidence_store",
  "export_plane",

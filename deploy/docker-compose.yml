@@ -1,10 +1,25 @@
 # Knowledge stack — docker compose deployment.
 # See docs/operator/deployment-guide.md for configuration and operational docs.
+#
+# Each first-party service declares BOTH `build:` and `image:`. The
+# `image:` value names the published artifact (defaulting to the
+# `ghcr.io` images produced by `.github/workflows/release.yml` on a
+# `v*` tag); the `build:` block stays so a source checkout can still
+# `docker compose build` locally. To run pre-built images instead of
+# building, pin a released tag and pull:
+#
+#   KNOWLEDGE_IMAGE_TAG=v1.0.0 docker compose pull && \
+#   KNOWLEDGE_IMAGE_TAG=v1.0.0 docker compose up -d
+#
+# `docker compose up` (without `pull`) still builds from source when
+# the named image is absent locally, so the default workflow is
+# unchanged. See docs/operator/upgrading.md for the version policy.
 
 services:
   # ────────────────── Core services ──────────────────────────────────
 
   knowledge-gateway:
+    image: "${KNOWLEDGE_GATEWAY_IMAGE:-ghcr.io/kennguy3n/knowledge/gateway:${KNOWLEDGE_IMAGE_TAG:-latest}}"
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
@@ -39,6 +54,7 @@ services:
     restart: unless-stopped
 
   knowledge-substrate:
+    image: "${KNOWLEDGE_SUBSTRATE_IMAGE:-ghcr.io/kennguy3n/knowledge/substrate:${KNOWLEDGE_IMAGE_TAG:-latest}}"
     build:
       context: ..
       dockerfile: deploy/Dockerfile.substrate
@@ -129,6 +145,7 @@ services:
       MINIO_BUCKET: "${MINIO_BUCKET:-knowledge}"
 
   llama-server:
+    image: "${KNOWLEDGE_LLAMA_IMAGE:-ghcr.io/kennguy3n/knowledge/llama-server:${KNOWLEDGE_IMAGE_TAG:-latest}}"
     build:
       context: ..
       dockerfile: deploy/Dockerfile.llama-server

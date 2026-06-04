@@ -75,6 +75,10 @@ pub struct ServerConfig {
     /// Filesystem path of the SQLCipher-backed permission-tuple store.
     /// Permission grants are mirrored here so they survive a restart.
     pub permissions_path: String,
+    /// Opt-in release-update-check configuration. Disabled by default;
+    /// the `/internal/update_check` endpoint never touches the network
+    /// unless this is enabled via [`crate::update_check::ENV_ENABLED`].
+    pub update_check: crate::update_check::UpdateCheckConfig,
 }
 
 /// Decode a 64-hex-char string into a 32-byte [`MasterKey`]. The bytes
@@ -113,6 +117,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("bind_addr", &self.bind_addr)
             .field("store_path", &self.store_path)
             .field("permissions_path", &self.permissions_path)
+            .field("update_check", &self.update_check)
             .field("master_key_hex", &"<redacted>")
             .finish()
     }
@@ -165,6 +170,7 @@ impl ServerConfig {
             store_path,
             master_key_hex,
             permissions_path,
+            update_check: crate::update_check::UpdateCheckConfig::from_env(),
         })
     }
 }
@@ -210,6 +216,7 @@ mod tests {
             store_path: "/tmp/x.db".into(),
             master_key_hex: Zeroizing::new("a".repeat(MASTER_KEY_HEX_LEN)),
             permissions_path: "/tmp/permissions.db".into(),
+            update_check: crate::update_check::UpdateCheckConfig::default(),
         };
         let rendered = format!("{cfg:?}");
         assert!(rendered.contains("<redacted>"));
