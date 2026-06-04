@@ -26,11 +26,13 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    bearer_get_json, bearer_post_json, percent_encode_path_component, Connector, ConnectorConfig,
-    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport,
-    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SourcePermissionLevel, SourceUserId,
-    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    bearer_post_json, classify_failure, percent_encode_path_component, Connector, ConnectorConfig,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpResponse,
+    HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
+    SourcePermissionLevel, SourceUserId, SyncRunResult, SyncState, WebhookEventTypes,
+    WebhookSecret, WebhookSubscription,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 /// Default GitHub REST API base URL. Override via
@@ -269,6 +271,8 @@ impl GitHubConnector {
     }
 
     /// GitHub API version + User-Agent headers required by the API.
+    /// Used by the `subscribe_webhook` POST path (the GET paths build
+    /// the same headers via [`Self::github_get`]).
     fn extra_headers() -> Vec<(&'static str, &'static str)> {
         vec![
             ("X-GitHub-Api-Version", GITHUB_API_VERSION),
@@ -276,9 +280,83 @@ impl GitHubConnector {
         ]
     }
 
-    /// Walk every issues-list page until either the returned page is
-    /// smaller than `page_size` (signalling the final page) or
-    /// [`MAX_LIST_PAGES`] is hit.
+    /// Build a bearer-authenticated GET carrying the headers GitHub
+    /// requires on every REST call: the `X-GitHub-Api-Version` pin,
+    /// a `User-Agent` (GitHub rejects requests without one), and the
+    /// recommended `Accept: application/vnd.github+json`.
+    fn github_get(url: &str, token: &OAuth2Token) -> HttpRequest {
+        HttpRequest::get(url)
+            .with_bearer(token.access_token.expose())
+            .with_header("Accept", "application/vnd.github+json")
+            .with_header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+            .with_header("User-Agent", "knowledge-substrate")
+    }
+
+    /// Execute a GET and parse a JSON body, classifying failures with
+    /// GitHub's rate-limit semantics (see [`classify_github_failure`]).
+    fn github_get_json<R: DeserializeOwned>(
+        &self,
+        endpoint: &str,
+        url: &str,
+        token: &OAuth2Token,
+    ) -> Result<R> {
+        let resp = self.transport.execute(Self::github_get(url, token))?;
+        if !resp.is_success() {
+            return Err(classify_github_failure(endpoint, &resp));
+        }
+        parse_github_json(endpoint, &resp.body)
+    }
+
+    /// Execute a GET that returns one page of a paginated collection,
+    /// returning the decoded page alongside the `rel="next"` URL parsed
+    /// from the response `Link` header (GitHub's canonical pagination
+    /// mechanism).
+    fn github_get_page<R: DeserializeOwned>(
+        &self,
+        endpoint: &str,
+        url: &str,
+        token: &OAuth2Token,
+    ) -> Result<GitHubPage<R>> {
+        let resp = self.transport.execute(Self::github_get(url, token))?;
+        if !resp.is_success() {
+            return Err(classify_github_failure(endpoint, &resp));
+        }
+        let link_present = resp.header("link").is_some();
+        let next_url = parse_link_next(resp.header("link"));
+        let items = parse_github_json::<R>(endpoint, &resp.body)?;
+        Ok(GitHubPage {
+            items,
+            next_url,
+            link_present,
+        })
+    }
+
+    /// Construct the `page=N` `…/issues` list URL — used for the first
+    /// request and for the no-`Link`-header fallback path.
+    fn issues_page_url(
+        &self,
+        base_url: &str,
+        repo: &str,
+        since: Option<&str>,
+        page: u32,
+    ) -> String {
+        let mut url = format!(
+            "{base_url}/repos/{repo}/issues?state=all&sort=updated&direction=asc\
+             &per_page={}&page={page}",
+            self.page_size,
+        );
+        if let Some(s) = since {
+            url.push_str("&since=");
+            url.push_str(&percent_encode_path_component(s));
+        }
+        url
+    }
+
+    /// Walk every issues-list page, following the `Link: rel="next"`
+    /// header GitHub returns. When a response carries no `Link` header
+    /// at all (e.g. a proxy stripped it), fall back to the
+    /// short-page heuristic with manual `page=N` increments.
+    /// [`MAX_LIST_PAGES`] bounds the walk against a mis-shaped server.
     fn paginate_issues(
         &self,
         base_url: &str,
@@ -287,38 +365,40 @@ impl GitHubConnector {
         since: Option<&str>,
     ) -> Result<Vec<GitHubIssue>> {
         let mut all_issues = Vec::<GitHubIssue>::new();
-        let extra = Self::extra_headers();
-        for page in 1..=MAX_LIST_PAGES {
-            let mut url = format!(
-                "{base_url}/repos/{repo}/issues?state=all&sort=updated&direction=asc\
-                 &per_page={}&page={page}",
-                self.page_size,
-            );
-            if let Some(s) = since {
-                url.push_str("&since=");
-                url.push_str(&percent_encode_path_component(s));
-            }
-            let page_issues: Vec<GitHubIssue> = bearer_get_json(
-                &self.transport,
-                "github",
-                "/repos/issues",
-                &url,
-                token,
-                &extra,
-            )?;
-            let returned = page_issues.len();
-            all_issues.extend(page_issues);
-            if returned < self.page_size as usize {
+        let mut next_url = Some(self.issues_page_url(base_url, repo, since, 1));
+        let mut manual_page: u32 = 1;
+        for _ in 0..MAX_LIST_PAGES {
+            let Some(url) = next_url.take() else {
                 return Ok(all_issues);
-            }
+            };
+            let page: GitHubPage<Vec<GitHubIssue>> =
+                self.github_get_page("/repos/issues", &url, token)?;
+            let returned = page.items.len();
+            // Prefer the `Link: rel="next"` URL; a `Link` header
+            // without `next` is an authoritative "last page"; only
+            // fall back to manual `page=N` walking when the server
+            // emitted no `Link` header at all and the page came back
+            // full.
+            next_url = if let Some(next) = page.next_url {
+                Some(next)
+            } else if page.link_present {
+                None
+            } else if returned >= self.page_size as usize {
+                manual_page = manual_page.saturating_add(1);
+                Some(self.issues_page_url(base_url, repo, since, manual_page))
+            } else {
+                None
+            };
+            all_issues.extend(page.items);
         }
         Err(ConnectorError::Sync(format!(
             "github /repos/{repo}/issues exceeded {MAX_LIST_PAGES} pages"
         )))
     }
 
-    /// Walk every comment page for an issue / PR until a short page
-    /// signals the end or [`MAX_LIST_PAGES`] is hit.
+    /// Walk every comment page for an issue / PR, following the
+    /// `Link: rel="next"` header and falling back to manual page
+    /// increments when no `Link` header is present.
     fn paginate_comments(
         &self,
         base_url: &str,
@@ -326,32 +406,127 @@ impl GitHubConnector {
         number: &str,
         token: &OAuth2Token,
     ) -> Result<Vec<GitHubComment>> {
-        let mut all = Vec::<GitHubComment>::new();
-        let extra = Self::extra_headers();
-        for page in 1..=MAX_LIST_PAGES {
-            let url = format!(
-                "{base_url}/repos/{repo}/issues/{number}/comments\
-                 ?per_page={}&page={page}",
+        let comments_url = |page: u32| {
+            format!(
+                "{base_url}/repos/{repo}/issues/{number}/comments?per_page={}&page={page}",
                 self.page_size,
-            );
-            let page_comments: Vec<GitHubComment> = bearer_get_json(
-                &self.transport,
-                "github",
-                "/repos/{repo}/issues/{number}/comments",
-                &url,
-                token,
-                &extra,
-            )?;
-            let returned = page_comments.len();
-            all.extend(page_comments);
-            if returned < self.page_size as usize {
+            )
+        };
+        let mut all = Vec::<GitHubComment>::new();
+        let mut next_url = Some(comments_url(1));
+        let mut manual_page: u32 = 1;
+        for _ in 0..MAX_LIST_PAGES {
+            let Some(url) = next_url.take() else {
                 return Ok(all);
-            }
+            };
+            let page: GitHubPage<Vec<GitHubComment>> =
+                self.github_get_page("/repos/issues/comments", &url, token)?;
+            let returned = page.items.len();
+            all.extend(page.items);
+            next_url = if let Some(next) = page.next_url {
+                Some(next)
+            } else if page.link_present {
+                None
+            } else if returned >= self.page_size as usize {
+                manual_page = manual_page.saturating_add(1);
+                Some(comments_url(manual_page))
+            } else {
+                None
+            };
         }
         Err(ConnectorError::Sync(format!(
             "github /repos/{repo}/issues/{number}/comments exceeded {MAX_LIST_PAGES} pages"
         )))
     }
+}
+
+/// One page of a paginated GitHub collection plus the pagination
+/// metadata parsed from the response `Link` header.
+struct GitHubPage<R> {
+    /// Decoded items on this page.
+    items: R,
+    /// The `rel="next"` URL from the `Link` header, if present.
+    next_url: Option<String>,
+    /// Whether the response carried a `Link` header at all. A `Link`
+    /// header without a `next` relation authoritatively marks the
+    /// final page; the absence of any `Link` header means the server
+    /// did not paginate via `Link` and the caller must fall back to
+    /// the short-page heuristic.
+    link_present: bool,
+}
+
+/// Parse a JSON GitHub response body into `R`, mapping a decode
+/// failure to a retriable [`ConnectorError::Sync`] with a bounded
+/// body prefix for diagnostics.
+fn parse_github_json<R: DeserializeOwned>(endpoint: &str, body: &[u8]) -> Result<R> {
+    serde_json::from_slice::<R>(body).map_err(|e| {
+        ConnectorError::Sync(format!(
+            "github {endpoint} JSON parse failed: {e} (body prefix: {})",
+            String::from_utf8_lossy(&body[..body.len().min(256)])
+        ))
+    })
+}
+
+/// Extract the `rel="next"` URL from an RFC 8288 `Link` header.
+///
+/// GitHub returns pagination cursors as e.g.
+/// `<https://api.github.com/...?page=2>; rel="next", <...?page=9>; rel="last"`.
+/// Malformed segments are skipped rather than aborting the parse so a
+/// single bad entry can't strand pagination on page 1.
+fn parse_link_next(link_header: Option<&str>) -> Option<String> {
+    let header = link_header?;
+    for part in header.split(',') {
+        let part = part.trim();
+        let mut segs = part.split(';');
+        let Some(url_seg) = segs.next() else {
+            continue;
+        };
+        let url_seg = url_seg.trim();
+        let Some(url) = url_seg.strip_prefix('<').and_then(|u| u.strip_suffix('>')) else {
+            continue;
+        };
+        for param in segs {
+            let param = param.trim();
+            if let Some(rel) = param.strip_prefix("rel=") {
+                let rel = rel.trim().trim_matches('"');
+                if rel.split_whitespace().any(|r| r == "next") {
+                    return Some(url.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Classify a non-2xx GitHub response, honouring GitHub's rate-limit
+/// semantics.
+///
+/// GitHub signals rate-limit exhaustion with **403** (primary limit)
+/// or **429** (secondary limit) plus `X-RateLimit-Remaining: 0` and/or
+/// a `Retry-After` header — *not* the 401/403-means-bad-credentials
+/// shape the generic [`classify_failure`] assumes. Left to the generic
+/// classifier a rate-limited 403 maps to [`ConnectorError::Auth`],
+/// which would wrongly trigger a re-authorisation prompt instead of a
+/// retry. Detect the rate-limit shape and surface it as a retriable
+/// [`ConnectorError::Sync`] (the transport already honours
+/// `Retry-After` on its own retry loop; this keeps the *connector-run*
+/// classification correct when retries are exhausted).
+fn classify_github_failure(endpoint: &str, resp: &HttpResponse) -> ConnectorError {
+    let remaining_zero = resp
+        .header("x-ratelimit-remaining")
+        .is_some_and(|v| v.trim() == "0");
+    let retry_after = resp.retry_after_seconds();
+    let is_rate_limited =
+        matches!(resp.status, 403 | 429) && (remaining_zero || retry_after.is_some());
+    if is_rate_limited {
+        let reset = resp.header("x-ratelimit-reset").unwrap_or("unknown");
+        return ConnectorError::Sync(format!(
+            "github {endpoint} rate limited (status {}, x-ratelimit-remaining=0={remaining_zero}, \
+             x-ratelimit-reset={reset}, retry-after={retry_after:?}); sync will be retried",
+            resp.status,
+        ));
+    }
+    classify_failure("github", endpoint, resp)
 }
 
 fn issue_to_event(issue: &GitHubIssue) -> ConnectorEvent {
@@ -501,17 +676,9 @@ impl Connector for GitHubConnector {
                 "github fetch_content: document id {number:?} is not an issue number"
             )));
         }
-        let extra = Self::extra_headers();
-
         let issue_url = format!("{base_url}/repos/{repo}/issues/{number}");
-        let issue: GitHubIssue = bearer_get_json(
-            &self.transport,
-            "github",
-            "/repos/{repo}/issues/{number}",
-            &issue_url,
-            token,
-            &extra,
-        )?;
+        let issue: GitHubIssue =
+            self.github_get_json("/repos/issues/{number}", &issue_url, token)?;
 
         let comments = self.paginate_comments(&base_url, &repo, number, token)?;
 
@@ -1291,5 +1458,227 @@ mod tests {
             fc.source_url.as_deref(),
             Some("https://github.acme.com/owner/test-repo/issues/3")
         );
+    }
+
+    // ───────────── Link-header pagination ─────────────
+
+    /// Build a 200 OK JSON response carrying a `Link` header.
+    fn ok_json_with_link(body: Vec<u8>, link: &str) -> MockResponse {
+        let mut r = MockResponse::ok_json(body);
+        r.headers.push(("Link".into(), link.into()));
+        r
+    }
+
+    #[test]
+    fn parse_link_next_extracts_next_url() {
+        let h = "<https://api.github.com/repositories/1/issues?page=2>; rel=\"next\", \
+                 <https://api.github.com/repositories/1/issues?page=9>; rel=\"last\"";
+        assert_eq!(
+            parse_link_next(Some(h)),
+            Some("https://api.github.com/repositories/1/issues?page=2".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_link_next_none_when_no_next_rel_or_absent() {
+        let h = "<https://api.github.com/repositories/1/issues?page=9>; rel=\"last\", \
+                 <https://api.github.com/repositories/1/issues?page=1>; rel=\"first\"";
+        assert_eq!(parse_link_next(Some(h)), None);
+        assert_eq!(parse_link_next(None), None);
+    }
+
+    #[test]
+    fn parse_link_next_skips_malformed_segments() {
+        // A malformed leading segment must not strand pagination on
+        // page 1 — the parser skips it and finds the real `next`.
+        let h = "garbage-without-brackets, <https://api.example/issues?page=3>; rel=\"next\"";
+        assert_eq!(
+            parse_link_next(Some(h)),
+            Some("https://api.example/issues?page=3".to_string())
+        );
+    }
+
+    #[test]
+    fn initial_sync_follows_link_header_pagination() {
+        let transport = MockHttpTransport::new();
+        let now = Utc::now();
+        let base = "https://api.test/github";
+        let repo = "owner/test-repo";
+
+        let page1_url = format!(
+            "{base}/repos/{repo}/issues?state=all&sort=updated&direction=asc\
+             &per_page={DEFAULT_PAGE_SIZE}&page=1",
+        );
+        // The `next` URL is opaque to the connector — it must follow it
+        // verbatim rather than reconstruct `page=2` itself. Note page 1
+        // returns FEWER than `page_size` results yet still advances,
+        // proving the Link header (not the short-page heuristic) drives
+        // pagination.
+        let page2_url = format!("{base}/repos/{repo}/issues?page=2&cursor=opaque");
+        transport.expect(
+            HttpMethod::Get,
+            page1_url,
+            ok_json_with_link(
+                serde_json::to_vec(&[issue(1, "open", now - Duration::hours(2))]).unwrap(),
+                &format!("<{page2_url}>; rel=\"next\""),
+            ),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            page2_url,
+            MockResponse::ok_json(serde_json::to_vec(&[issue(2, "open", now)]).unwrap()),
+        );
+
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let res = c.initial_sync(&cfg(), &tok).unwrap();
+        assert_eq!(res.events.len(), 2, "both pages must be walked");
+    }
+
+    #[test]
+    fn link_header_without_next_stops_even_on_full_page() {
+        // A `Link` header that has `prev`/`first` but no `next` is the
+        // authoritative last page — we must NOT fall back to manual
+        // page walking even when the page is completely full.
+        let transport = MockHttpTransport::new();
+        let now = Utc::now();
+        let base = "https://api.test/github";
+        let repo = "owner/test-repo";
+        let page_size = 2u32;
+
+        let page1_url = format!(
+            "{base}/repos/{repo}/issues?state=all&sort=updated&direction=asc\
+             &per_page={page_size}&page=1",
+        );
+        transport.expect(
+            HttpMethod::Get,
+            page1_url,
+            ok_json_with_link(
+                serde_json::to_vec(&[
+                    issue(1, "open", now - Duration::hours(2)),
+                    issue(2, "open", now),
+                ])
+                .unwrap(),
+                "<https://api.test/github/repos/owner/test-repo/issues?page=1>; rel=\"first\"",
+            ),
+        );
+
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth())
+            .with_page_size(page_size);
+        let tok = c.authenticate(&cfg()).unwrap();
+        // If the connector wrongly fell back to manual `page=2` walking,
+        // the mock would 404 on the unregistered URL and the JSON parse
+        // would fail — so a clean 2-event result proves it stopped.
+        let res = c.initial_sync(&cfg(), &tok).unwrap();
+        assert_eq!(res.events.len(), 2);
+    }
+
+    // ───────────── rate-limit classification ─────────────
+
+    #[test]
+    fn fetch_content_maps_rate_limited_403_to_sync_not_auth() {
+        // GitHub's PRIMARY rate limit returns HTTP 403 with
+        // `X-RateLimit-Remaining: 0`. The generic classifier maps 403 →
+        // Auth (a re-auth prompt); for a rate limit that is wrong — it
+        // must be a retriable Sync error.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GH_BASE}/repos/owner/test-repo/issues/9"),
+            MockResponse {
+                status: 403,
+                headers: vec![
+                    ("x-ratelimit-remaining".into(), "0".into()),
+                    ("x-ratelimit-reset".into(), "1700000000".into()),
+                ],
+                body: br#"{"message":"API rate limit exceeded"}"#.to_vec(),
+            },
+        );
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("9"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Sync(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn fetch_content_plain_403_still_maps_to_auth() {
+        // A 403 WITHOUT rate-limit markers is a genuine permission
+        // failure and must still surface as Auth so the host
+        // re-authorises rather than silently retrying forever.
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GH_BASE}/repos/owner/test-repo/issues/8"),
+            MockResponse::status(403, br#"{"message":"Forbidden"}"#.to_vec()),
+        );
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let err = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("8"))
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Auth(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn classify_github_failure_secondary_limit_429_with_retry_after_is_sync() {
+        let resp = HttpResponse {
+            status: 429,
+            headers: vec![("retry-after".into(), "30".into())],
+            body: br#"{"message":"secondary rate limit"}"#.to_vec(),
+        };
+        let err = classify_github_failure("/repos/issues", &resp);
+        assert!(matches!(err, ConnectorError::Sync(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn comments_pagination_follows_link_header() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GH_BASE}/repos/owner/test-repo/issues/12"),
+            MockResponse::ok_json(
+                serde_json::to_vec(&serde_json::json!({
+                    "number": 12, "id": 999, "title": "Paged", "state": "open",
+                    "body": "b", "user": { "login": "ada" }
+                }))
+                .unwrap(),
+            ),
+        );
+        let comments_p2 =
+            format!("{GH_BASE}/repos/owner/test-repo/issues/12/comments?page=2&cursor=x");
+        transport.expect(
+            HttpMethod::Get,
+            format!("{GH_BASE}/repos/owner/test-repo/issues/12/comments?per_page=100&page=1"),
+            ok_json_with_link(
+                serde_json::to_vec(&serde_json::json!([
+                    { "body": "first", "user": { "login": "g" }, "created_at": "2026-06-01T10:00:00Z" }
+                ]))
+                .unwrap(),
+                &format!("<{comments_p2}>; rel=\"next\""),
+            ),
+        );
+        transport.expect(
+            HttpMethod::Get,
+            comments_p2,
+            MockResponse::ok_json(
+                serde_json::to_vec(&serde_json::json!([
+                    { "body": "second", "user": { "login": "h" }, "created_at": "2026-06-02T10:00:00Z" }
+                ]))
+                .unwrap(),
+            ),
+        );
+        let c = GitHubConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let fc = c
+            .fetch_content(&cfg(), &tok, &SourceDocumentId::new("12"))
+            .unwrap();
+        let body = String::from_utf8(fc.body).unwrap();
+        assert!(body.contains("first"), "page 1 comment missing");
+        assert!(body.contains("second"), "page 2 comment missing");
+        assert_eq!(fc.metadata["comment_count"], serde_json::json!(2));
     }
 }

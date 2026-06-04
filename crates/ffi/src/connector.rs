@@ -1716,7 +1716,7 @@ fn build_connector(
 ) -> FfiResult<Arc<dyn Connector>> {
     use connector_framework::{HttpTransport, OAuth2CodeExchange};
     use connectors::{
-        ConfluenceConnector, EmailConnector, FigmaConnector, GoogleDriveConnector,
+        ConfluenceConnector, EmailConnector, FigmaConnector, GitHubConnector, GoogleDriveConnector,
         HubSpotConnector, JiraConnector, NotionConnector, OneDriveConnector, SlackConnector,
     };
     // If the per-runtime transport failed to build at
@@ -1758,11 +1758,11 @@ fn build_connector(
         }
         ConnectorKind::Slack => Arc::new(SlackConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Email => Arc::new(EmailConnector::new(instance, transport, oauth_client)),
-        ConnectorKind::GitHub | ConnectorKind::GenericWebhook => {
-            // ships the nine listed connector implementations
-            // in `crates/connectors/`. GitHub and the generic webhook
-            // connector are described in `docs/technical/design.md` §10.2 but
-            // do not have concrete implementors yet.
+        ConnectorKind::GitHub => Arc::new(GitHubConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::GenericWebhook => {
+            // The generic webhook connector is described in
+            // `docs/technical/design.md` §10.2 but does not have a
+            // concrete implementor yet.
             return Err(FfiError::Unimplemented {
                 method: format!("create_connector(kind={})", kind.as_str()),
             });
