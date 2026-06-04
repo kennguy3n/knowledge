@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { gatewayBaseUrl, getToken, setToken } from '../api';
 import { memoriesApi } from '../api';
 import {
@@ -11,6 +11,8 @@ import {
 export default function Settings() {
   const [token, setTokenState] = useState(getToken());
   const [saved, setSaved] = useState(false);
+  const savedTimer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(savedTimer.current), []);
 
   const [forgetScope, setForgetScope] = useState('');
   const [forgetError, setForgetError] = useState<Error | undefined>();
@@ -21,7 +23,8 @@ export default function Settings() {
     e.preventDefault();
     setToken(token.trim());
     setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSaved(false), 2000);
   }
 
   async function onForget() {

@@ -1,4 +1,4 @@
-import { request } from './http';
+import { gatewayBaseUrl, request } from './http';
 import type {
   AuthenticateConnectorRequest,
   ConnectorStatus,
@@ -58,8 +58,10 @@ export function deleteConnector(id: string): Promise<void> {
 /**
  * Begin the OAuth authorization flow for a connector. The gateway
  * exposes `GET /api/v1/connectors/{id}/oauth/start` which redirects to
- * the provider; the admin opens it in a new tab.
+ * the provider; the admin opens it in a new tab. Prefixed with
+ * `gatewayBaseUrl()` so cross-origin (`VITE_GATEWAY_BASE_URL`)
+ * deployments open the gateway, not the SPA's own origin.
  */
 export function oauthStartUrl(id: string): string {
-  return `/api/v1/connectors/${encodeURIComponent(id)}/oauth/start`;
+  return `${gatewayBaseUrl()}/api/v1/connectors/${encodeURIComponent(id)}/oauth/start`;
 }
