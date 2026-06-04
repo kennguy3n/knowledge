@@ -344,8 +344,9 @@ impl GitHubConnector {
         if !resp.is_success() {
             return Err(classify_github_failure(endpoint, &resp));
         }
-        let link_present = resp.header("link").is_some();
-        let next_url = parse_link_next(resp.header("link"));
+        let link_header = resp.header("link");
+        let link_present = link_header.is_some();
+        let next_url = parse_link_next(link_header);
         let items = parse_github_json::<R>(endpoint, &resp.body)?;
         Ok(GitHubPage {
             items,
