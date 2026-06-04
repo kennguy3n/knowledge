@@ -70,6 +70,26 @@ pub mod notion;
 pub mod onedrive;
 // STABLE
 pub mod slack;
+// STABLE
+pub mod stripe;
+// STABLE
+pub mod airtable;
+// STABLE
+pub mod bitbucket;
+// STABLE
+pub mod docusign;
+// STABLE
+pub mod gitlab;
+// STABLE
+pub mod miro;
+// STABLE
+pub mod quickbooks;
+// STABLE
+pub mod shopify;
+// STABLE
+pub mod trello;
+// STABLE
+pub mod xero;
 
 // STABLE
 pub use confluence::ConfluenceConnector;
@@ -91,3 +111,23 @@ pub use notion::NotionConnector;
 pub use onedrive::OneDriveConnector;
 // STABLE
 pub use slack::SlackConnector;
+// STABLE
+pub use stripe::StripeConnector;
+// STABLE
+pub use airtable::AirtableConnector;
+// STABLE
+pub use bitbucket::BitbucketConnector;
+// STABLE
+pub use docusign::DocuSignConnector;
+// STABLE
+pub use gitlab::GitLabConnector;
+// STABLE
+pub use miro::MiroConnector;
+// STABLE
+pub use quickbooks::QuickBooksConnector;
+// STABLE
+pub use shopify::ShopifyConnector;
+// STABLE
+pub use trello::TrelloConnector;
+// STABLE
+pub use xero::XeroConnector;

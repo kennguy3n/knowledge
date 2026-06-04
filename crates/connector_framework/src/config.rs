@@ -34,6 +34,26 @@ pub enum ConnectorKind {
     /// Email — Gmail / Microsoft Graph (provider variant carried in
     /// the connector's `auth_config_json`).
     Email,
+    /// Intuit QuickBooks Online.
+    QuickBooks,
+    /// Xero accounting.
+    Xero,
+    /// Stripe payments.
+    Stripe,
+    /// Shopify storefront / admin.
+    Shopify,
+    /// Airtable bases.
+    Airtable,
+    /// GitLab projects / issues.
+    GitLab,
+    /// Bitbucket repositories / pull requests.
+    Bitbucket,
+    /// Trello boards / cards.
+    Trello,
+    /// Miro boards.
+    Miro,
+    /// DocuSign envelopes.
+    DocuSign,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -53,6 +73,16 @@ impl ConnectorKind {
             Self::Figma => "figma",
             Self::HubSpot => "hubspot",
             Self::Email => "email",
+            Self::QuickBooks => "quickbooks",
+            Self::Xero => "xero",
+            Self::Stripe => "stripe",
+            Self::Shopify => "shopify",
+            Self::Airtable => "airtable",
+            Self::GitLab => "gitlab",
+            Self::Bitbucket => "bitbucket",
+            Self::Trello => "trello",
+            Self::Miro => "miro",
+            Self::DocuSign => "docusign",
             Self::GenericWebhook => "generic_webhook",
         }
     }

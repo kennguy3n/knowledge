@@ -1716,8 +1716,10 @@ fn build_connector(
 ) -> FfiResult<Arc<dyn Connector>> {
     use connector_framework::{HttpTransport, OAuth2CodeExchange};
     use connectors::{
-        ConfluenceConnector, EmailConnector, FigmaConnector, GoogleDriveConnector,
-        HubSpotConnector, JiraConnector, NotionConnector, OneDriveConnector, SlackConnector,
+        AirtableConnector, BitbucketConnector, ConfluenceConnector, DocuSignConnector,
+        EmailConnector, FigmaConnector, GitLabConnector, GoogleDriveConnector, HubSpotConnector,
+        JiraConnector, MiroConnector, NotionConnector, OneDriveConnector, QuickBooksConnector,
+        ShopifyConnector, SlackConnector, StripeConnector, TrelloConnector, XeroConnector,
     };
     // If the per-runtime transport failed to build at
     // `open_store` time the connector subsystem is disabled —
@@ -1758,6 +1760,26 @@ fn build_connector(
         }
         ConnectorKind::Slack => Arc::new(SlackConnector::new(instance, transport, oauth_client)),
         ConnectorKind::Email => Arc::new(EmailConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::QuickBooks => {
+            Arc::new(QuickBooksConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Xero => Arc::new(XeroConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Stripe => Arc::new(StripeConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Shopify => {
+            Arc::new(ShopifyConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Airtable => {
+            Arc::new(AirtableConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::GitLab => Arc::new(GitLabConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Bitbucket => {
+            Arc::new(BitbucketConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Trello => Arc::new(TrelloConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Miro => Arc::new(MiroConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::DocuSign => {
+            Arc::new(DocuSignConnector::new(instance, transport, oauth_client))
+        }
         ConnectorKind::GitHub | ConnectorKind::GenericWebhook => {
             // ships the nine listed connector implementations
             // in `crates/connectors/`. GitHub and the generic webhook
@@ -1838,6 +1860,16 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::Figma => "Figma",
         ConnectorKind::HubSpot => "HubSpot",
         ConnectorKind::Email => "Email",
+        ConnectorKind::QuickBooks => "QuickBooks",
+        ConnectorKind::Xero => "Xero",
+        ConnectorKind::Stripe => "Stripe",
+        ConnectorKind::Shopify => "Shopify",
+        ConnectorKind::Airtable => "Airtable",
+        ConnectorKind::GitLab => "GitLab",
+        ConnectorKind::Bitbucket => "Bitbucket",
+        ConnectorKind::Trello => "Trello",
+        ConnectorKind::Miro => "Miro",
+        ConnectorKind::DocuSign => "DocuSign",
         ConnectorKind::GenericWebhook => "GenericWebhook",
     }
 }
@@ -2125,6 +2157,16 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::Figma => ConnectorKind::Figma,
         ConnectorKindTag::HubSpot => ConnectorKind::HubSpot,
         ConnectorKindTag::Email => ConnectorKind::Email,
+        ConnectorKindTag::QuickBooks => ConnectorKind::QuickBooks,
+        ConnectorKindTag::Xero => ConnectorKind::Xero,
+        ConnectorKindTag::Stripe => ConnectorKind::Stripe,
+        ConnectorKindTag::Shopify => ConnectorKind::Shopify,
+        ConnectorKindTag::Airtable => ConnectorKind::Airtable,
+        ConnectorKindTag::GitLab => ConnectorKind::GitLab,
+        ConnectorKindTag::Bitbucket => ConnectorKind::Bitbucket,
+        ConnectorKindTag::Trello => ConnectorKind::Trello,
+        ConnectorKindTag::Miro => ConnectorKind::Miro,
+        ConnectorKindTag::DocuSign => ConnectorKind::DocuSign,
         ConnectorKindTag::GenericWebhook => ConnectorKind::GenericWebhook,
     }
 }
@@ -2141,6 +2183,16 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::Figma => ConnectorKindTag::Figma,
         ConnectorKind::HubSpot => ConnectorKindTag::HubSpot,
         ConnectorKind::Email => ConnectorKindTag::Email,
+        ConnectorKind::QuickBooks => ConnectorKindTag::QuickBooks,
+        ConnectorKind::Xero => ConnectorKindTag::Xero,
+        ConnectorKind::Stripe => ConnectorKindTag::Stripe,
+        ConnectorKind::Shopify => ConnectorKindTag::Shopify,
+        ConnectorKind::Airtable => ConnectorKindTag::Airtable,
+        ConnectorKind::GitLab => ConnectorKindTag::GitLab,
+        ConnectorKind::Bitbucket => ConnectorKindTag::Bitbucket,
+        ConnectorKind::Trello => ConnectorKindTag::Trello,
+        ConnectorKind::Miro => ConnectorKindTag::Miro,
+        ConnectorKind::DocuSign => ConnectorKindTag::DocuSign,
         ConnectorKind::GenericWebhook => ConnectorKindTag::GenericWebhook,
     }
 }
@@ -2213,6 +2265,16 @@ mod tests {
             ConnectorKindTag::Figma,
             ConnectorKindTag::HubSpot,
             ConnectorKindTag::Email,
+            ConnectorKindTag::QuickBooks,
+            ConnectorKindTag::Xero,
+            ConnectorKindTag::Stripe,
+            ConnectorKindTag::Shopify,
+            ConnectorKindTag::Airtable,
+            ConnectorKindTag::GitLab,
+            ConnectorKindTag::Bitbucket,
+            ConnectorKindTag::Trello,
+            ConnectorKindTag::Miro,
+            ConnectorKindTag::DocuSign,
             ConnectorKindTag::GenericWebhook,
         ];
         for tag in all {

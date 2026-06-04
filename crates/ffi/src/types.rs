@@ -270,6 +270,26 @@ pub enum ConnectorKindTag {
     HubSpot,
     /// Email — Gmail or Microsoft Graph mailboxes.
     Email,
+    /// Intuit QuickBooks Online — accounting entities.
+    QuickBooks,
+    /// Xero — accounting invoices + contacts.
+    Xero,
+    /// Stripe — customers + charges.
+    Stripe,
+    /// Shopify — storefront orders.
+    Shopify,
+    /// Airtable — base records.
+    Airtable,
+    /// GitLab — projects + issues.
+    GitLab,
+    /// Bitbucket — repositories + pull requests.
+    Bitbucket,
+    /// Trello — boards + cards.
+    Trello,
+    /// Miro — boards + items.
+    Miro,
+    /// DocuSign — envelopes.
+    DocuSign,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,
