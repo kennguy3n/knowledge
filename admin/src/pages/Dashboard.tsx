@@ -1,6 +1,11 @@
 import { useMemo } from 'react';
 import { healthApi } from '../api';
-import type { GatewayHealth, SubstrateHealth, SubsystemHealth } from '../api';
+import type {
+  AdapterReport,
+  GatewayHealth,
+  SubstrateHealth,
+  SubsystemHealth,
+} from '../api';
 import { useAsync } from '../hooks/useAsync';
 import {
   Card,
@@ -151,10 +156,14 @@ export default function Dashboard() {
   );
 }
 
+function adapterStatus(a: AdapterReport): string {
+  if (!a.available) return 'unavailable';
+  return a.loaded ? 'ok' : 'degraded';
+}
+
 function AdapterTable({ subsystems }: { subsystems?: SubsystemHealth[] }) {
   const router = subsystems?.find((s) => s.name === 'inference_router');
-  const adapters = (router as { adapters?: { name?: string; status?: string }[] } | undefined)
-    ?.adapters;
+  const adapters = router?.adapters;
   if (!adapters || adapters.length === 0) {
     return <p className="muted">No per-adapter report available.</p>;
   }
@@ -164,15 +173,19 @@ function AdapterTable({ subsystems }: { subsystems?: SubsystemHealth[] }) {
         <tr>
           <th>Adapter</th>
           <th>Status</th>
+          <th>Loaded</th>
+          <th>Supports</th>
         </tr>
       </thead>
       <tbody>
-        {adapters.map((a, i) => (
-          <tr key={a.name ?? i}>
-            <td className="mono">{a.name ?? '—'}</td>
+        {adapters.map((a) => (
+          <tr key={a.kind}>
+            <td className="mono">{a.kind}</td>
             <td>
-              <StatusBadge status={a.status ?? 'unknown'} />
+              <StatusBadge status={adapterStatus(a)} />
             </td>
+            <td>{a.loaded ? 'yes' : 'no'}</td>
+            <td className="muted">{a.supports.join(', ') || '—'}</td>
           </tr>
         ))}
       </tbody>

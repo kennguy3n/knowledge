@@ -22,6 +22,21 @@ export interface SubsystemHealth {
   name: string;
   status: SubsystemStatus;
   detail?: string | null;
+  /** Per-adapter report; only populated for the `inference_router`. */
+  adapters?: AdapterReport[] | null;
+}
+
+/**
+ * One inference adapter's state (crates/ffi/src/health.rs AdapterReport).
+ * `available` means the adapter is reachable/usable; `loaded` whether
+ * its model weights are resident; `supports` the inference ops it can
+ * service.
+ */
+export interface AdapterReport {
+  kind: string;
+  available: boolean;
+  loaded: boolean;
+  supports: string[];
 }
 
 /** Substrate `GET /health` detail (crates/ffi/src/health.rs HealthStatus). */
