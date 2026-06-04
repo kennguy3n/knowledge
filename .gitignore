@@ -28,6 +28,11 @@ results/
 # Node / N-API addon build artefacts (crates/napi/)
 crates/napi/node_modules/
 crates/napi/*.node
+
+# Admin SPA (admin/) build + dependency artefacts.
+admin/node_modules/
+admin/dist/
+admin/*.tsbuildinfo
 # The auto-generated index.js / index.d.ts ARE tracked — they are
 # part of the JS-facing API surface, and CI verifies they don't
 # drift from the Rust-side bindings (see the `napi-build` job in
