@@ -1,0 +1,153 @@
+# Default values for the knowledge chart.
+# Mirrors the docker-compose topology: a horizontally-scalable Go gateway
+# in front of a single stateful Rust substrate backed by a PersistentVolume
+# for the SQLCipher database.
+
+# -- Override the chart name used in resource names (defaults to .Chart.Name).
+nameOverride: ""
+# -- Override the full release name used in resource names.
+fullnameOverride: ""
+
+# Image pull secrets applied to both deployments (for private registries).
+imagePullSecrets: []
+# - name: ghcr-pull
+
+# ─────────────────────────── Gateway (Go) ───────────────────────────
+gateway:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/kennguy3n/knowledge-gateway
+    # Defaults to the chart's appVersion when left empty.
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  # Extra environment variables (list of name/value or name/valueFrom maps).
+  extraEnv: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ───────────────────────── Substrate (Rust) ─────────────────────────
+# The substrate owns the SQLCipher database, so it is single-replica and
+# pinned to its PersistentVolume. Do NOT scale it horizontally.
+substrate:
+  image:
+    repository: ghcr.io/kennguy3n/knowledge-substrate
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    port: 9090
+  # Absolute path of the SQLCipher database inside the PVC mount.
+  storePath: /data/substrate.db
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+  persistence:
+    enabled: true
+    # Reuse an existing PVC instead of creating one (leave empty to create).
+    existingClaim: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+    # Empty uses the cluster default StorageClass; set to "-" to disable
+    # dynamic provisioning and bind a pre-provisioned PV.
+    storageClass: ""
+  extraEnv: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ──────────────────────── Non-secret config ─────────────────────────
+# Rendered into a ConfigMap and injected into the gateway. See
+# docs/operator/deployment-guide.md for the full variable reference.
+config:
+  rateIpRps: 50
+  rateTenantRps: 200
+  rateBurst: 100
+  # Comma-separated CORS allow-list; empty means "*".
+  corsOrigins: ""
+  syncInterval: 15m
+  # Externally reachable base URL (OAuth callbacks); set to your Ingress host.
+  publicBaseUrl: "http://localhost:8080"
+  # External Postgres DSN. Empty keeps the gateway on its in-memory store
+  # (fine for evaluation, NOT for production).
+  databaseUrl: ""
+  # External NATS JetStream URL. Empty disables the audit pipeline.
+  natsUrl: ""
+
+# ───────────────────────────── Secrets ──────────────────────────────
+# masterKey is REQUIRED for the substrate to start. Generate with
+# `openssl rand -hex 32`. Prefer `existingSecret` in production and keep
+# the value out of values.yaml / version control.
+secrets:
+  # Render a Secret from the values below. Set false when using existingSecret.
+  create: true
+  # Name of a pre-existing Secret holding KNOWLEDGE_MASTER_KEY (and
+  # optionally KNOWLEDGE_API_KEY / KNOWLEDGE_JWT_SECRET). Takes precedence.
+  existingSecret: ""
+  # 64-hex-char SQLCipher master key. MUST be set before install.
+  masterKey: ""
+  # Optional static bearer token for admin/service calls (empty disables).
+  apiKey: ""
+  # Optional HMAC secret for tenant JWT validation (empty disables).
+  jwtSecret: ""
+
+# ─────────────────────────── Autoscaling ────────────────────────────
+# HPA for the gateway only (the substrate is stateful and single-replica).
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  # Set to enable memory-based scaling (null disables it).
+  targetMemoryUtilizationPercentage: null
+
+# ───────────────────────────── Ingress ──────────────────────────────
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: knowledge.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # - secretName: knowledge-tls
+  #   hosts:
+  #     - knowledge.local
+
+# ──────────────────────── Pod / SA settings ─────────────────────────
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Applied to both pods. Kept conservative so the published images run
+# unmodified: the gateway uses a distroless base (root) and the substrate
+# runs as a named (non-numeric) system user, so `runAsNonRoot` is left
+# unset to avoid the kubelet "cannot verify non-root user" rejection.
+# Tighten these once the images ship a numeric non-root UID.
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL

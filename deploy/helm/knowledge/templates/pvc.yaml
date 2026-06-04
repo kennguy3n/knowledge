@@ -1,0 +1,26 @@
+{{- if and .Values.substrate.persistence.enabled (not .Values.substrate.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "knowledge.substrate.pvcName" . }}
+  labels:
+    {{- include "knowledge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: substrate
+  annotations:
+    # Keep the SQLCipher data even if the release is uninstalled — losing
+    # the volume means losing the only copy of the encrypted store.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.substrate.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.substrate.persistence.size | quote }}
+  {{- if .Values.substrate.persistence.storageClass }}
+  {{- if eq "-" .Values.substrate.persistence.storageClass }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.substrate.persistence.storageClass | quote }}
+  {{- end }}
+  {{- end }}
+{{- end }}
