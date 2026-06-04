@@ -51,3 +51,14 @@ resource "aws_iam_role_policy_attachment" "node_ecr" {
   role       = aws_iam_role.node.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
+
+# The EBS CSI driver runs on the nodes and, absent IRSA, uses the node
+# instance role to call ec2:CreateVolume/AttachVolume/etc. Without this
+# policy the substrate's PersistentVolumeClaim stays Pending and the pod
+# never starts. Production should move this to an IRSA-scoped role (see
+# README hardening checklist) so the broad EC2 permissions don't sit on
+# every node.
+resource "aws_iam_role_policy_attachment" "node_ebs_csi" {
+  role       = aws_iam_role.node.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}

@@ -10,7 +10,8 @@
 - An EKS control plane (`aws_eks_cluster`).
 - A managed node group (`aws_eks_node_group`).
 - The control-plane and node IAM roles with the AWS-managed policies EKS
-  requires.
+  requires, plus `AmazonEBSCSIDriverPolicy` on the node role so the CSI
+  driver can provision volumes (baseline; see hardening note on IRSA).
 - The `aws-ebs-csi-driver` add-on, so the substrate's
   `PersistentVolumeClaim` binds to a gp3 EBS volume (block storage with
   the locking semantics SQLCipher needs — the reason this module uses
@@ -53,6 +54,9 @@ helm install knowledge ../../helm/knowledge \
 
 - [ ] Restrict the public API endpoint or make it private.
 - [ ] Add cluster logging (`enabled_cluster_log_types`).
-- [ ] Use IRSA for the EBS CSI driver instead of node-attached policy.
+- [ ] Move the EBS CSI driver to an IRSA-scoped role. The baseline
+      attaches `AmazonEBSCSIDriverPolicy` to the *node* role (so PVCs bind
+      out of the box); IRSA keeps those EC2 permissions off every node and
+      scopes them to the driver's service account instead.
 - [ ] Manage `master_key` in AWS Secrets Manager and mount via the chart.
 - [ ] Pin add-on and AMI versions.

@@ -61,12 +61,17 @@ resource "aws_eks_node_group" "default" {
 }
 
 # EBS CSI driver — required for the substrate's PersistentVolumeClaim to
-# bind to a gp3 volume. Installed as a managed add-on.
+# bind to a gp3 volume. Installed as a managed add-on. It authenticates
+# with the node role, which carries AmazonEBSCSIDriverPolicy (see iam.tf);
+# depend on that attachment so volume provisioning works on first apply.
 resource "aws_eks_addon" "ebs_csi" {
   cluster_name = aws_eks_cluster.this.name
   addon_name   = "aws-ebs-csi-driver"
 
-  depends_on = [aws_eks_node_group.default]
+  depends_on = [
+    aws_eks_node_group.default,
+    aws_iam_role_policy_attachment.node_ebs_csi,
+  ]
 
   tags = local.tags
 }
