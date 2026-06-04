@@ -298,7 +298,7 @@ The gateway binary (`server/cmd/gateway/main.go`) wires:
 | Service | Package | Responsibility |
 |---|---|---|
 | **API Gateway** | `internal/gateway` | Bearer / JWT auth, per-IP + per-tenant rate limiting (token bucket), CORS, Prometheus metrics, SSE streaming for synthesis status, request-id propagation |
-| **Connector Service** | `internal/connector` | 9 stable + 1 unstable providers (Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email, GitHub _[unstable]_); OAuth2 token refresh; webhook subscription; incremental delta sync; real document-content fetching; persistent connector registrations (Postgres) |
+| **Connector Service** | `internal/connector` | 10 stable providers (Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot, Slack, Email, GitHub); OAuth2 token refresh; webhook subscription; incremental delta sync; real document-content fetching; persistent connector registrations (Postgres) |
 | **Permission Service** | `internal/permission` | Zanzibar-style relation graph: grant/revoke/check tuples via substrate loopback; SCIM v2 user/group provisioning (in-memory directory — not persisted across restarts) joined to tuple store |
 | **Tenant Service** | `internal/tenant` | Tenant CRUD, config update, key rotation, member lifecycle (invite/activate/suspend/remove) |
 | **Export Service** | `internal/export` | Portable concept profile rendering with policy enforcement and audit integration |

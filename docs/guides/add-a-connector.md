@@ -67,9 +67,10 @@ losing the cursor.
 
 ## Maturity expectations
 
-New connectors typically land as **unstable** (like the current GitHub
-connector) until the provider integration has soaked. Note the status in
-the [roadmap](../product/roadmap.md).
+New connectors typically land as **unstable** until the provider
+integration has soaked, then graduate to stable once the trait impl and
+test coverage match the existing connectors. Note the status in the
+[roadmap](../product/roadmap.md).
 
 ## Further reading
 

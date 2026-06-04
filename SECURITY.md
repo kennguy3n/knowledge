@@ -164,9 +164,7 @@ These are honest gaps, tracked openly:
    in sibling repositories and are not audited by this policy.
    Per-platform key-handling guidance is provided in
    [docs/security/key-management.md](docs/security/key-management.md).
-3. **GitHub connector is unstable.** The GitHub connector is shipped as
-   unstable and should not be relied on for production data flows yet.
-4. **No pre-release upgrade path.** 1.0 ships a single initial evidence
+3. **No pre-release upgrade path.** 1.0 ships a single initial evidence
    store schema (`user_version = 1`) with no migration from pre-release
    internal iterations. A pre-1.0 database opens to a schema error and
    must be recreated; there is no in-place upgrade.
