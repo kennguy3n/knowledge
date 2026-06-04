@@ -1781,10 +1781,10 @@ fn build_connector(
             Arc::new(DocuSignConnector::new(instance, transport, oauth_client))
         }
         ConnectorKind::GitHub | ConnectorKind::GenericWebhook => {
-            // ships the nine listed connector implementations
-            // in `crates/connectors/`. GitHub and the generic webhook
+            // The factory builds every connector implemented in
+            // `crates/connectors/`. GitHub and the generic webhook
             // connector are described in `docs/technical/design.md` §10.2 but
-            // do not have concrete implementors yet.
+            // are not wired here as buildable kinds yet.
             return Err(FfiError::Unimplemented {
                 method: format!("create_connector(kind={})", kind.as_str()),
             });

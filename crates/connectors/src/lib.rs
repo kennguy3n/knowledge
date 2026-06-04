@@ -3,7 +3,7 @@
 //!
 //! Per `docs/technical/design.md` §10.2 and `docs/technical/architecture.md` §4.1, the substrate
 //! ingests evidence from external systems through the
-//! [`connector_framework`] trait. This crate ships ten concrete
+//! [`connector_framework`] trait. This crate ships twenty concrete
 //! connectors against the most common B2B sources:
 //!
 //! * [`google_drive::GoogleDriveConnector`] — Google Drive API v3
@@ -28,6 +28,29 @@
 //! * [`github::GitHubConnector`] — GitHub REST API v3
 //!   (`/repos/{owner}/{repo}/issues`, repository webhooks).
 //!
+//! Batch 3 adds ten business & developer-tool sources:
+//!
+//! * [`quickbooks::QuickBooksConnector`] — QuickBooks Online Accounting
+//!   API (`/v3/company/{id}/query`, portal-configured webhooks).
+//! * [`xero::XeroConnector`] — Xero Accounting API (`/api.xro/2.0/...`,
+//!   `If-Modified-Since` incremental, portal-configured webhooks).
+//! * [`stripe::StripeConnector`] — Stripe REST (`/v1/customers`,
+//!   `starting_after` pagination, `/v1/webhook_endpoints`).
+//! * [`shopify::ShopifyConnector`] — Shopify Admin REST
+//!   (`/admin/api/.../orders.json`, `since_id` pagination, webhooks).
+//! * [`airtable::AirtableConnector`] — Airtable REST (`/v0/{baseId}/{table}`,
+//!   `offset` pagination, base webhooks).
+//! * [`gitlab::GitLabConnector`] — GitLab REST v4 (`/projects/{id}/issues`,
+//!   `updated_after` incremental, project hooks).
+//! * [`bitbucket::BitbucketConnector`] — Bitbucket REST 2.0
+//!   (`/repositories/{ws}/{repo}/pullrequests`, repo webhooks).
+//! * [`trello::TrelloConnector`] — Trello REST (`/1/boards/{id}/cards`,
+//!   key+token auth, webhooks).
+//! * [`miro::MiroConnector`] — Miro REST v2 (`/v2/boards`, `/items`,
+//!   board-subscription webhooks).
+//! * [`docusign::DocuSignConnector`] — DocuSign eSignature REST
+//!   (`/restapi/v2.1/accounts/{id}/envelopes`, Connect webhooks).
+//!
 //! Each connector models the vendor's REST contract as plain serde
 //! types and issues real HTTP requests through an injected
 //! [`connector_framework::HttpTransport`] — production wires the
@@ -51,7 +74,13 @@
 mod content;
 
 // STABLE
+pub mod airtable;
+// STABLE
+pub mod bitbucket;
+// STABLE
 pub mod confluence;
+// STABLE
+pub mod docusign;
 // STABLE
 pub mod email;
 // STABLE
@@ -59,40 +88,40 @@ pub mod figma;
 // UNSTABLE
 pub mod github;
 // STABLE
+pub mod gitlab;
+// STABLE
 pub mod google_drive;
 // STABLE
 pub mod hubspot;
 // STABLE
 pub mod jira;
 // STABLE
+pub mod miro;
+// STABLE
 pub mod notion;
 // STABLE
 pub mod onedrive;
 // STABLE
-pub mod slack;
-// STABLE
-pub mod stripe;
-// STABLE
-pub mod airtable;
-// STABLE
-pub mod bitbucket;
-// STABLE
-pub mod docusign;
-// STABLE
-pub mod gitlab;
-// STABLE
-pub mod miro;
-// STABLE
 pub mod quickbooks;
 // STABLE
 pub mod shopify;
+// STABLE
+pub mod slack;
+// STABLE
+pub mod stripe;
 // STABLE
 pub mod trello;
 // STABLE
 pub mod xero;
 
 // STABLE
+pub use airtable::AirtableConnector;
+// STABLE
+pub use bitbucket::BitbucketConnector;
+// STABLE
 pub use confluence::ConfluenceConnector;
+// STABLE
+pub use docusign::DocuSignConnector;
 // STABLE
 pub use email::EmailConnector;
 // STABLE
@@ -100,33 +129,27 @@ pub use figma::FigmaConnector;
 // UNSTABLE
 pub use github::GitHubConnector;
 // STABLE
+pub use gitlab::GitLabConnector;
+// STABLE
 pub use google_drive::GoogleDriveConnector;
 // STABLE
 pub use hubspot::HubSpotConnector;
 // STABLE
 pub use jira::JiraConnector;
 // STABLE
+pub use miro::MiroConnector;
+// STABLE
 pub use notion::NotionConnector;
 // STABLE
 pub use onedrive::OneDriveConnector;
 // STABLE
-pub use slack::SlackConnector;
-// STABLE
-pub use stripe::StripeConnector;
-// STABLE
-pub use airtable::AirtableConnector;
-// STABLE
-pub use bitbucket::BitbucketConnector;
-// STABLE
-pub use docusign::DocuSignConnector;
-// STABLE
-pub use gitlab::GitLabConnector;
-// STABLE
-pub use miro::MiroConnector;
-// STABLE
 pub use quickbooks::QuickBooksConnector;
 // STABLE
 pub use shopify::ShopifyConnector;
+// STABLE
+pub use slack::SlackConnector;
+// STABLE
+pub use stripe::StripeConnector;
 // STABLE
 pub use trello::TrelloConnector;
 // STABLE
