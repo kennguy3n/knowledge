@@ -2271,7 +2271,10 @@ fn open_store_inner(
         }
     }
 
-    let router_config = router_config_from_env();
+    // Reuse the tier resolved at the top of `open_store_inner` (shared
+    // with the evidence store's low-memory decision) instead of
+    // re-probing system RAM here.
+    let router_config = router_config_from_env(device_tier);
     let inference_router = Arc::new(build_inference_router(router_config));
     // Lazy-load: `open_store` no longer probes adapters here. The
     // probe pings a model runtime (the `http-client`-backed llama.cpp
@@ -2668,14 +2671,28 @@ pub(crate) fn device_tier_from_env() -> inference_router::DeviceTier {
 }
 
 /// Read a [`RouterConfig`] from the well-known `KNOWLEDGE_SLM_*`
-/// environment variables, falling back to [`RouterConfig::default`]
-/// for any variable that is absent or malformed.
+/// environment variables, falling back to the
+/// [`inference_router::DEFAULT_SERVER_URL`] /
+/// [`inference_router::DEFAULT_MODEL_PATH`] defaults for any variable
+/// that is absent or malformed.
+///
+/// The `device_tier` is supplied by the caller (already resolved via
+/// [`device_tier_from_env`]) rather than re-resolved here, so the
+/// evidence store's low-memory decision and the router config share a
+/// single classification — structurally, not just by coincidence — and
+/// the syscall-backed RAM auto-detection isn't run a second time per
+/// `open_store`. [`RouterConfig::with_tier`] skips the probe that
+/// `RouterConfig::default` would otherwise perform.
 ///
 /// Exposed at `pub(crate)` so the FFI surface can call it from
 /// `open_store` and the unit tests can exercise the env-parsing
 /// branches.
-pub(crate) fn router_config_from_env() -> RouterConfig {
-    let mut cfg = RouterConfig::default();
+pub(crate) fn router_config_from_env(device_tier: inference_router::DeviceTier) -> RouterConfig {
+    let mut cfg = RouterConfig::with_tier(
+        inference_router::DEFAULT_SERVER_URL,
+        inference_router::DEFAULT_MODEL_PATH,
+        device_tier,
+    );
     if let Ok(url) = std::env::var(ENV_SLM_SERVER_URL) {
         if !url.is_empty() {
             cfg.server_url = url;
@@ -2686,10 +2703,7 @@ pub(crate) fn router_config_from_env() -> RouterConfig {
             cfg.model_path = path;
         }
     }
-    // Apply the resolved tier through the builder so the Low-tier
-    // memory profile (empty warm-up, immediate idle-unload) is applied
-    // consistently with the store's low-memory mode.
-    cfg.with_device_tier(device_tier_from_env())
+    cfg
 }
 
 /// Build an [`InferenceRouter`] from `config`.

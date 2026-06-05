@@ -44,7 +44,10 @@ pub use adapters::{
     LlamaCppAdapter, LlamaServerClient, MlxAdapter, MlxGenerateFn,
 };
 // STABLE
-pub use config::{DeviceTier, RouterConfig, IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PROMPT};
+pub use config::{
+    DeviceTier, RouterConfig, DEFAULT_MODEL_PATH, DEFAULT_SERVER_URL, IDLE_UNLOAD_TIMEOUT_SECS,
+    WARM_UP_PROMPT,
+};
 // STABLE
 pub use error::RouterError;
 // STABLE

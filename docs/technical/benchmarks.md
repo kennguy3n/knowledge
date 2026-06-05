@@ -359,8 +359,13 @@ router — including the histogram record — measures:
 | synthesis dispatch (High tier) | ~411 ns |
 
 This is the **instrumentation + plumbing floor**; the histogram bucket
-boundaries (`LATENCY_BUCKETS_SECONDS`, 1 ms … 10 s) are sized for real
-model latencies that are orders of magnitude larger.
+boundaries (`LATENCY_BUCKETS_SECONDS`, 1 ms … 60 s) are sized for real
+model latencies that are orders of magnitude larger. The tail extends to
+60 s because cold on-device synthesis (weight paging + prompt prefill on
+a budget phone/laptop) routinely exceeds 10 s; quantiles falling beyond
+the top finite bound are clamped to it (standard Prometheus
+`histogram_quantile` behaviour), so the wide tail keeps cold-start p95
+observable instead of pinned at the ceiling.
 
 ### Model latency by tier — TBM-on-device
 

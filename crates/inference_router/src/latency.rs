@@ -25,12 +25,22 @@ use std::time::Duration;
 /// Tuned to span the substrate's two timed paths:
 ///
 /// * **SLM dispatch** — sub-millisecond encoder-only classification
-///   (fallback adapter) through multi-second cold llama.cpp synthesis.
+///   (fallback adapter) through tens-of-seconds cold llama.cpp
+///   synthesis.
 /// * **store open** — single-digit-millisecond opens on a small
 ///   database through hundreds-of-milliseconds opens that replay a
 ///   large tombstone / rehydration backlog.
+///
+/// The fine-grained sub-second boundaries keep good resolution for the
+/// store-open path and warm classification. The tail extends to 60 s
+/// because cold first-token latency for an on-device SLM on a budget
+/// phone/laptop routinely runs well past 10 s (weight paging + prompt
+/// prefill); without those upper buckets
+/// [`LatencyHistogram::quantile`] would clamp every cold p95 to the top
+/// finite bound and hide the very regressions this metric exists to
+/// catch. Samples beyond 60 s land in the `+Inf` overflow bucket.
 pub const LATENCY_BUCKETS_SECONDS: &[f64] = &[
-    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 30.0, 60.0,
 ];
 
 /// A fixed-bucket latency histogram.
@@ -227,13 +237,17 @@ mod tests {
     #[test]
     fn overflow_bucket_catches_large_samples() {
         let mut h = LatencyHistogram::new();
-        h.record_seconds(42.0);
+        // A sample beyond the largest finite bound lands in `+Inf`.
+        let beyond = LATENCY_BUCKETS_SECONDS.last().copied().unwrap() * 2.0;
+        h.record_seconds(beyond);
         let buckets = h.cumulative_buckets();
         let (le, cumulative) = *buckets.last().unwrap();
         assert!(le.is_infinite());
         assert_eq!(cumulative, 1);
-        // p95 clamps to the largest finite bound (10.0).
-        assert_eq!(h.quantile(0.95), Some(10.0));
+        // p95 clamps to the largest finite bound — there is no upper
+        // edge to interpolate toward inside the `+Inf` bucket. Asserted
+        // against the const so this stays correct as buckets evolve.
+        assert_eq!(h.quantile(0.95), LATENCY_BUCKETS_SECONDS.last().copied());
     }
 
     #[test]

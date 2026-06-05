@@ -11,6 +11,14 @@ pub const WARM_UP_PROMPT: &str = "knowledge substrate boot probe";
 /// [`crate::InferenceRouter::sweep_idle_adapters`].
 pub const IDLE_UNLOAD_TIMEOUT_SECS: u64 = 60;
 
+/// Default loopback URL of the bundled llama.cpp server, used when no
+/// `KNOWLEDGE_SLM_SERVER_URL` override is supplied.
+pub const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8081";
+
+/// Default on-disk path of the SLM model artifact, used when no
+/// `KNOWLEDGE_SLM_MODEL_PATH` override is supplied.
+pub const DEFAULT_MODEL_PATH: &str = "/var/lib/knowledge/slm.gguf";
+
 /// RAM threshold (in bytes) below which the device is classified
 /// as [`DeviceTier::Low`]. 2 GiB is chosen because SLM inference
 /// models typically require >2 GiB of working memory.
@@ -234,8 +242,27 @@ impl RouterConfig {
     ///
     /// The device tier is auto-detected from available system RAM
     /// via [`DeviceTier::auto_detect`]. Use
-    /// [`Self::with_device_tier`] to override.
+    /// [`Self::with_device_tier`] to override, or [`Self::with_tier`]
+    /// to supply the tier at construction without the RAM probe.
     pub fn new(server_url: impl Into<String>, model_path: impl Into<String>) -> Self {
+        Self::with_tier(server_url, model_path, DeviceTier::auto_detect())
+    }
+
+    /// Construct a config for an already-resolved [`DeviceTier`],
+    /// skipping the RAM probe [`Self::new`] performs.
+    ///
+    /// Callers that have already classified the device use this so the
+    /// tier is resolved exactly once. The FFI runtime is the motivating
+    /// case: it classifies the device a single time and feeds the same
+    /// [`DeviceTier`] to both the evidence store's low-memory decision
+    /// and this router config, so the two subsystems cannot disagree
+    /// and the (syscall-backed) auto-detection isn't run twice per
+    /// `open_store`.
+    pub fn with_tier(
+        server_url: impl Into<String>,
+        model_path: impl Into<String>,
+        tier: DeviceTier,
+    ) -> Self {
         Self {
             server_url: server_url.into(),
             model_path: model_path.into(),
@@ -243,7 +270,7 @@ impl RouterConfig {
             warm_up_prompt: WARM_UP_PROMPT.into(),
             device_tier: DeviceTier::Medium,
         }
-        .with_device_tier(DeviceTier::auto_detect())
+        .with_device_tier(tier)
     }
 
     /// Override the device tier, applying the tier's memory profile.
@@ -301,7 +328,7 @@ impl RouterConfig {
 
 impl Default for RouterConfig {
     fn default() -> Self {
-        Self::new("http://127.0.0.1:8081", "/var/lib/knowledge/slm.gguf")
+        Self::new(DEFAULT_SERVER_URL, DEFAULT_MODEL_PATH)
     }
 }
 
