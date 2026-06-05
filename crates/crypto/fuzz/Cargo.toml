@@ -29,3 +29,18 @@ doc = false
 name = "fuzz_sphincs_sign_verify"
 path = "fuzz_targets/fuzz_sphincs_sign_verify.rs"
 doc = false
+
+[[bin]]
+name = "fuzz_hybrid_kem_roundtrip"
+path = "fuzz_targets/fuzz_hybrid_kem_roundtrip.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_mldsa_sign_verify"
+path = "fuzz_targets/fuzz_mldsa_sign_verify.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_forgetting_destroy"
+path = "fuzz_targets/fuzz_forgetting_destroy.rs"
+doc = false

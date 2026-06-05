@@ -1,3 +1,6 @@
+{{- /* Fail fast if no master key source is configured (covers the
+       secrets.create=false path where secret.yaml does not render). */}}
+{{- include "knowledge.validateMasterKey" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
