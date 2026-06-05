@@ -257,17 +257,29 @@ impl AmazonAeConnector {
         percent_encode_path_component(s)
     }
 
-    /// Build the canonical query string from already-sorted pairs.
+    /// Build the canonical query string from `pairs`.
+    ///
+    /// SigV4 requires the query parameters sorted by (encoded) key, then
+    /// value. Rather than trusting callers to pre-sort, this sorts
+    /// internally as a safety net — mirroring how `sigv4_authorization`
+    /// sorts the canonical headers — so adding a query parameter out of
+    /// order can never silently invalidate the signature.
     fn canonical_query(pairs: &[(String, String)]) -> String {
-        pairs
+        let mut encoded: Vec<(String, String)> = pairs
             .iter()
-            .map(|(k, v)| format!("{}={}", Self::query_encode(k), Self::query_encode(v)))
+            .map(|(k, v)| (Self::query_encode(k), Self::query_encode(v)))
+            .collect();
+        encoded.sort();
+        encoded
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
             .collect::<Vec<_>>()
             .join("&")
     }
 
     /// Issue a signed SP-API GET against `canonical_uri` + `pairs`
-    /// (which must already be sorted by key) and parse the JSON body.
+    /// (sorted into canonical order by [`Self::canonical_query`]) and
+    /// parse the JSON body.
     fn signed_get<R: DeserializeOwned>(
         &self,
         ctx: &SpApiContext<'_>,

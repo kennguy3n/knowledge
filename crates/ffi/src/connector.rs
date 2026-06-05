@@ -2586,7 +2586,7 @@ mod tests {
 
     #[test]
     fn source_tag_is_stable_for_every_kind() {
-        for kind in [
+        let all_kinds = [
             ConnectorKind::GoogleDrive,
             ConnectorKind::OneDrive,
             ConnectorKind::Notion,
@@ -2627,8 +2627,20 @@ mod tests {
             ConnectorKind::Freshdesk,
             ConnectorKind::Intercom,
             ConnectorKind::Pipedrive,
+            // GCC / Middle East connectors
+            ConnectorKind::Careem,
+            ConnectorKind::Talabat,
+            ConnectorKind::Noon,
+            ConnectorKind::AmazonAE,
+            ConnectorKind::Tabby,
+            ConnectorKind::Foodics,
+            ConnectorKind::Zoho,
+            ConnectorKind::Bayt,
+            ConnectorKind::Fetchr,
+            ConnectorKind::Payfort,
             ConnectorKind::GenericWebhook,
-        ] {
+        ];
+        for kind in all_kinds {
             // Stability assertion: the tag must not be empty and
             // must round-trip as ASCII so the evidence store's
             // FTS5 column doesn't have to deal with unicode.
@@ -2636,6 +2648,10 @@ mod tests {
             assert!(!tag.is_empty());
             assert!(tag.is_ascii());
         }
+        // Bump this count when adding a `ConnectorKind` so a new variant
+        // can't silently skip the per-tag stability assertions above
+        // (mirrors `kind_translation_round_trips` and `webhook.rs`).
+        assert_eq!(all_kinds.len(), 51);
     }
 
     #[test]
