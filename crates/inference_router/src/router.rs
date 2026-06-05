@@ -407,7 +407,10 @@ impl InferenceRouter {
     /// The warm-up text comes from [`RouterConfig::warm_up_prompt`].
     pub fn warm_up(&self) -> Option<AdapterKind> {
         for (idx, adapter) in self.adapters.iter().enumerate() {
-            if !adapter.is_available() {
+            // Skip unavailable adapters, and adapters that gain nothing
+            // from a warm-up no-op (e.g. a remote, pay-per-request
+            // managed endpoint with no local weights to page in).
+            if !adapter.is_available() || !adapter.benefits_from_warm_up() {
                 continue;
             }
             let res = adapter.generate("tag_importance", self.config.warm_up_prompt.as_str(), "");
@@ -558,6 +561,7 @@ mod tests {
         supported: Vec<InferenceTask>,
         response: Mutex<Result<String, RouterError>>,
         calls: AtomicUsize,
+        warmable: bool,
     }
 
     impl MockAdapter {
@@ -573,7 +577,15 @@ mod tests {
                 supported,
                 response: Mutex::new(response),
                 calls: AtomicUsize::new(0),
+                warmable: true,
             }
+        }
+
+        /// Model a remote adapter that gains nothing from warm-up
+        /// (e.g. the managed-cloud endpoint).
+        fn no_warm_up(mut self) -> Self {
+            self.warmable = false;
+            self
         }
     }
 
@@ -596,6 +608,10 @@ mod tests {
 
         fn supports(&self, task: InferenceTask) -> bool {
             self.supported.contains(&task)
+        }
+
+        fn benefits_from_warm_up(&self) -> bool {
+            self.warmable
         }
 
         fn generate(
@@ -835,6 +851,50 @@ mod tests {
         assert_eq!(kind, AdapterKind::LlamaCpp);
         assert!(router.is_warmed());
         assert!(router.is_adapter_loaded(AdapterKind::LlamaCpp));
+    }
+
+    #[test]
+    fn warm_up_skips_adapters_that_do_not_benefit() {
+        // A remote managed-cloud-style adapter sits ahead of llama.cpp
+        // but gains nothing from warm-up; warm_up must skip it (so no
+        // billable no-op request is sent) and warm the local adapter.
+        let managed = MockAdapter::new(
+            AdapterKind::ManagedCloud,
+            true,
+            vec![InferenceTask::SynthSummary],
+            Ok("managed".into()),
+        )
+        .no_warm_up();
+        let llama = MockAdapter::new(
+            AdapterKind::LlamaCpp,
+            true,
+            vec![InferenceTask::TagImportance, InferenceTask::SynthSummary],
+            Ok("warmup".into()),
+        );
+        let router = router_with(vec![Box::new(managed), Box::new(llama)]);
+        router.bootstrap();
+        let kind = router.warm_up().expect("warm-up ok");
+        assert_eq!(kind, AdapterKind::LlamaCpp);
+        assert!(!router.is_adapter_loaded(AdapterKind::ManagedCloud));
+        assert!(router.is_adapter_loaded(AdapterKind::LlamaCpp));
+    }
+
+    #[test]
+    fn warm_up_is_noop_when_only_non_warmable_adapter_available() {
+        // The managed-cloud adapter is the only one available. Warm-up
+        // must not touch it: no request, no `warmed` flag, no load.
+        let managed = MockAdapter::new(
+            AdapterKind::ManagedCloud,
+            true,
+            vec![InferenceTask::SynthSummary],
+            Ok("managed".into()),
+        )
+        .no_warm_up();
+        let router = router_with(vec![Box::new(managed)]);
+        router.bootstrap();
+        assert!(router.warm_up().is_none());
+        assert!(!router.is_warmed());
+        assert!(!router.is_adapter_loaded(AdapterKind::ManagedCloud));
     }
 
     #[test]

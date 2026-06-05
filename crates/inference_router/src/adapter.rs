@@ -70,6 +70,15 @@ pub trait InferenceAdapter: Send + Sync {
     /// rejected by the [`crate::FallbackAdapter`].
     fn supports(&self, task: InferenceTask) -> bool;
 
+    /// `true` iff a [`crate::InferenceRouter::warm_up`] no-op request
+    /// pages something useful in for this adapter. Local backends
+    /// (MLX, llama.cpp) keep the default `true`; remote adapters that
+    /// bill per request (e.g. managed cloud) return `false` so warm-up
+    /// never spends money priming weights that live off-device.
+    fn benefits_from_warm_up(&self) -> bool {
+        true
+    }
+
     /// Run the inference. `task_tag` is the stable string tag for
     /// metrics; `prompt` is the fully-rendered prompt; `grammar` is
     /// the GBNF grammar (empty string when no grammar is required).

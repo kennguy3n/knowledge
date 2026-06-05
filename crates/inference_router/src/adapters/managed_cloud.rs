@@ -103,6 +103,13 @@ impl InferenceAdapter for ManagedCloudAdapter {
         task.is_synthesis()
     }
 
+    fn benefits_from_warm_up(&self) -> bool {
+        // The model lives on a remote, pay-per-request endpoint: there
+        // is nothing local to page in, so a warm-up no-op would just
+        // bill the operator for zero latency benefit. Skip it.
+        false
+    }
+
     fn generate(&self, task_tag: &str, prompt: &str, grammar: &str) -> Result<String, RouterError> {
         if !self.is_available() {
             return Err(RouterError::Unavailable {
@@ -232,6 +239,14 @@ mod tests {
         assert!(!adapter.supports(InferenceTask::TagImportance));
         assert!(!adapter.supports(InferenceTask::ExtractEntities));
         assert!(!adapter.supports(InferenceTask::PromoteObservation));
+    }
+
+    #[test]
+    fn opts_out_of_warm_up() {
+        // The endpoint is remote and billed per request, so warm-up
+        // (which only pages in local weights) must skip this adapter.
+        let adapter = ManagedCloudAdapter::new(Box::new(MockManagedInferenceClient::ok("{}")));
+        assert!(!adapter.benefits_from_warm_up());
     }
 
     #[test]
