@@ -69,14 +69,14 @@ losing the cursor.
 
 A connector is **stable** once its trait implementation and test
 coverage match the existing connectors and it has run cleanly against
-the live provider; the 40 built-in connectors meet that bar. A
+the live provider; the 70 built-in connectors meet that bar. A
 connector still soaking against a live API may instead land as
 **unstable** as an honest signal to operators until it graduates.
 Either way, note the status in the [roadmap](../product/roadmap.md).
 
 ## Built-in connectors
 
-Knowledge ships **40 stable built-in connectors** — see the
+Knowledge ships **70 stable built-in connectors** — see the
 [connector maturity table](../product/roadmap.md#connector-maturity)
 for the full list. A built-in connector is a first-party module in the
 `connectors` crate that is also registered as a `ConnectorKind`. Adding

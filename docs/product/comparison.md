@@ -14,11 +14,13 @@ for some products and the wrong one for others.
 | Where data lives | On user's device (or your in-region infra) | Microsoft cloud | Vendor cloud | Notion cloud | Vendor cloud (vectors) |
 | Marginal cost/user | ~$0 on-device | Per-seat license | Per-seat license | Per-seat add-on | Per-usage (vectors/queries) |
 | List price (reported) | $0/user (self-hosted) | ~$30/user/mo | ~$10–15/user/mo | ~$10/user/mo add-on | Usage-based (vectors/queries) |
-| Connectors | 40 stable | M365 + Graph-connected sources | 100+ enterprise sources | Notion + limited integrations | None (BYO embeddings) |
+| Connectors | 70 stable | M365 + Graph-connected sources | 100+ enterprise sources | Notion + limited integrations | None (BYO embeddings) |
 | Works offline | Yes | No | No | No | No |
 | Post-quantum crypto | Yes (ML-KEM-768, ML-DSA-65) | No (classical TLS) | No | No | No |
 | Cryptographic forgetting | Yes (key destruction) | Soft delete | Soft delete | Soft delete | Vector delete |
 | Multilingual extraction | 22 languages on-device | Cloud models | Cloud models | Cloud models | BYO embeddings |
+| End-user UI | Yes (reference web UI you can ship) | Yes (product) | Yes (product) | Yes (product) | No (BYO) |
+| High availability | Yes (self-hosted active-passive failover) | Managed (vendor SLA) | Managed (vendor SLA) | Managed (vendor SLA) | Managed (vendor SLA) |
 | You embed it | Yes (substrate) | No (product) | No (product) | No (product) | Yes (vector DB) |
 
 ## How to read this

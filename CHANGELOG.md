@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-05
+
+This release adds substrate high availability, an end-user reference web
+UI, a bundled on-device SLM, 60 new connectors (70 stable total),
+security-audit preparation, one-command setup, and performance hardening.
+
 ### Added
 
 - **Substrate high availability (active-passive failover).** The
@@ -35,30 +41,62 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   connection after each applied segment so replicated pages become
   visible.
 
-- **30 new connectors.** The connector catalog grows from 10 to 40
-  providers, all shipping as **stable** with full `Connector` trait
-  implementations and unit coverage:
-  - *Productivity & CRM* — Salesforce, ServiceNow, Zendesk, Linear,
+- **60 new connectors — the catalog now spans 70 stable providers**
+  (up from 10 in 1.0.0). All ship as **stable** with full `Connector`
+  trait implementations and `MockHttpTransport` unit coverage:
+  - *Productivity & CRM (10)* — Salesforce, ServiceNow, Zendesk, Linear,
     Asana, Monday, ClickUp, Freshdesk, Intercom, Pipedrive.
-  - *Cloud storage & communication* — Dropbox, Box, SharePoint, Teams,
-    Discord, Zoom, Google Calendar, Google Docs, Google Sheets,
+  - *Cloud storage & communication (10)* — Dropbox, Box, SharePoint,
+    Teams, Discord, Zoom, Google Calendar, Google Docs, Google Sheets,
     Google Meet.
-  - *Business & developer tools* — QuickBooks, Xero, Stripe, Shopify,
-    Airtable, GitLab, Bitbucket, Trello, Miro, DocuSign.
-- **10 Asia-Pacific (Singapore / Thailand / SEA) connectors**, all
-  shipping as **stable** with full `Connector` trait implementations
-  and `MockHttpTransport` unit coverage: LINE, Grab, Gojek, Talenox,
-  Odoo (SEA), Fastwork, TrueMoney, SCB Easy, PromptPay, Tokopedia.
-- **10 new GCC / Middle East connectors.** The connector catalog grows
-  from 40 to 50 providers, all shipping as **stable** with full
-  `Connector` trait implementations and `MockHttpTransport` unit
-  coverage: Careem, Talabat, Noon, Amazon.ae (SP-API), Tabby, Foodics,
-  Zoho, Bayt, Fetchr, and PayFort (Amazon Payment Services). Adds a
-  crate-internal `signing` module providing the HMAC-SHA256, SHA-256,
-  and AWS Signature v4 primitives these providers' auth schemes require.
+  - *Business & developer tools (10)* — QuickBooks, Xero, Stripe,
+    Shopify, Airtable, GitLab, Bitbucket, Trello, Miro, DocuSign.
+  - *Vietnam (10)* — Zalo, VNPay, MoMo, Tiki, Shopee VN, Lazada VN,
+    Viettel Post, KiotViet, Sapo, Base.vn.
+  - *Singapore / Thailand / SEA (10)* — LINE, Grab, Gojek, Talenox,
+    Odoo (SEA), Fastwork, TrueMoney, SCB Easy, PromptPay, Tokopedia.
+  - *GCC / Middle East (10)* — Careem, Talabat, Noon, Amazon.ae
+    (SP-API), Tabby, Foodics, Zoho, Bayt, Fetchr, PayFort (Amazon
+    Payment Services).
+
+  Adds a crate-internal `signing` module providing the HMAC-SHA256,
+  SHA-256, and AWS Signature v4 primitives several of these providers'
+  auth schemes require.
 - **Browser-based admin dashboard** (`admin/`) — a React + Vite SPA served
   on `:3001` for managing connectors, tenants, synthesis runs, the memory
   browser, and the audit log without the CLI or PromQL.
+- **End-user reference web UI** (`apps/knowledge-ui/`) — a Next.js 14
+  (App Router) chat / search / memory app served on `:3002`, wired into
+  `deploy/docker-compose.yml`. It is the consumer-facing counterpart to
+  `admin/`: a thin, fully client-side client over the gateway REST
+  surface that lets end users chat with a scope, run hybrid search,
+  browse synthesized memory and its decay state, stream synthesis
+  progress over SSE, and cryptographically forget a conversation.
+  Shipped as a static export behind nginx with a same-origin reverse
+  proxy to the gateway.
+- **Bundled SLM model.** The published `llama-server` image now bakes the
+  Bonsai-1.7B GGUF in at `/models/bonsai-1.7b.gguf` (see
+  `deploy/Dockerfile.llama-server`), so `docker compose up` has
+  server-side synthesis working with **zero manual model download**.
+  Operators can still override it by bind-mounting a different GGUF over
+  that path. `scripts/download-models.sh` remains for native local /
+  on-device dev (GGUF, MLX, ONNX), with SHA-256 verification against
+  `deploy/model-artifacts/SHA256SUMS`.
+- **Performance hardening.** A low-memory mode for constrained ("low"
+  device tier) hosts (`EvidenceStoreConfig::low_memory`, which shrinks
+  the SQLCipher page cache to `LOW_MEMORY_PAGE_CACHE_KIB`); per-device
+  profile benchmark suites (`crates/benchmarks/benches/device_profile/`
+  for low/medium/high tiers); and two new substrate latency histograms,
+  `knowledge_open_store_duration_seconds` and the per-`(task, adapter)`
+  `knowledge_slm_dispatch_duration_seconds`.
+- **Security-audit preparation.** Audit-readiness docs
+  (`docs/security/audit-scope.md`, `audit-guide.md`,
+  `finding-template.md`, `key-rotation.md`); hardened default
+  credentials (`.env.example` ships **no** default passwords —
+  `docker compose` refuses to start until Postgres / MinIO / Grafana
+  passwords are set); and a `cargo-fuzz` harness for the crypto
+  primitives (`crates/crypto/fuzz/`: AEAD, HKDF, hybrid-KEM, ML-DSA,
+  SPHINCS+, and cryptographic-forgetting round-trips).
 - **Pre-built container images & Helm chart.** Multi-arch images publish
   to GHCR/Docker Hub on tagged releases; `deploy/docker-compose.images.yml`
   runs the stack with no local build, and `deploy/helm/knowledge` plus
@@ -120,8 +158,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   `fetch_content`, RFC 8288 `Link`-header pagination, and GitHub-aware
   rate-limit classification on both GET and POST paths) and is wired into
   the FFI `build_connector` factory, so hosts can instantiate
-  `ConnectorKind::GitHub`. With the 30 connectors added this release, the
-  catalog is now **40 stable** (was 9 stable + 1 unstable in 1.0.0).
+  `ConnectorKind::GitHub`. With the 60 connectors added this release, the
+  catalog is now **70 stable** (was 9 stable + 1 unstable in 1.0.0).
 - **`evidence_store::EvidenceError`** gains a `KeyRotation(String)` variant
   describing master-key rotation failures (destination already exists,
   integrity-verification mismatch). Downstream code that matches this enum
@@ -129,22 +167,32 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Fixed
 
-- **Vietnam connectors auth header by token provenance** —
+- **Vietnam + Thailand connectors auth header by token provenance** —
   `connectors::VNPayConnector`, `connectors::SapoConnector`,
-  `connectors::TikiConnector`, `connectors::ViettelPostConnector` and
-  `connectors::TrueMoneyConnector` now pick the request auth header
-  from the token's provenance (recorded in `OAuth2Token::token_type`,
-  mirroring the Discord connector and the earlier Gojek/Odoo fix): a
-  static credential (API key / access token / session token) is sent
-  in the provider-native header (`X-Api-Key` / `X-Sapo-Access-Token` /
-  `tiki-api-key` / `Token` / `X-API-Key`), while a token minted by the
-  OAuth2 code-exchange fallback is sent as `Authorization: Bearer`.
-  Previously an OAuth-issued token was sent in the provider-native
-  header, which would be rejected by an endpoint expecting a bearer
-  token. For Tiki and TrueMoney the separate HMAC signature
-  (`sign`/`timestamp` query pair and `X-Timestamp`/`X-Signature`
+  `connectors::TikiConnector`, `connectors::ViettelPostConnector`
+  (Vietnam) and `connectors::TrueMoneyConnector` (Thailand) now pick the
+  request auth header from the token's provenance (recorded in
+  `OAuth2Token::token_type`, mirroring the Discord connector and the
+  earlier Gojek/Odoo fix): a static credential (API key / access token /
+  session token) is sent in the provider-native header (`X-Api-Key` /
+  `X-Sapo-Access-Token` / `tiki-api-key` / `Token` / `X-API-Key`), while
+  a token minted by the OAuth2 code-exchange fallback is sent as
+  `Authorization: Bearer`. Previously an OAuth-issued token was sent in
+  the provider-native header, which would be rejected by an endpoint
+  expecting a bearer token. For Tiki and TrueMoney the separate HMAC
+  signature (`sign`/`timestamp` query pair and `X-Timestamp`/`X-Signature`
   headers respectively), keyed by the merchant secret, is unchanged
   and still applied to every request.
+- **`connectors::GojekConnector` / `connectors::OdooSeaConnector` auth
+  header by token provenance** — both connectors now pick the request
+  auth header from the token's provenance (recorded in
+  `OAuth2Token::token_type`, mirroring the Discord connector): a static
+  credential (API key / session token) is sent in the provider-native
+  header (`X-Gojek-Api-Key` / `X-Openerp-Session-Id`), while a token
+  minted by the OAuth2 code-exchange fallback is sent as
+  `Authorization: Bearer`. Previously an OAuth-issued token was sent in
+  the provider-native header, which would be rejected by an endpoint
+  expecting a bearer token.
 - **`connectors::GitHubConnector` pagination** — `paginate_issues` /
   `paginate_comments` no longer fall back to manual `page=N` walking after
   following an opaque `Link` cursor, which could re-fetch and duplicate a
@@ -258,4 +306,6 @@ full suite and methodology.
 - Storage per message (at 500K): 612 bytes.
 - Connector sync (10K docs): ~6,750 docs/sec.
 
+[Unreleased]: https://github.com/kennguy3n/knowledge/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/kennguy3n/knowledge/releases/tag/v1.1.0
 [1.0.0]: https://github.com/kennguy3n/knowledge/releases/tag/v1.0.0

@@ -8,6 +8,12 @@
 //! injected [`OAuth2CodeExchange`] when a rotating
 //! authorization-code grant is configured instead.
 //!
+//! Requests pick their auth header from the token's provenance
+//! (recorded in [`OAuth2Token::token_type`], following the same
+//! convention as the Discord connector): a static API key is sent in
+//! the provider-native `X-Gojek-Api-Key` header, while an
+//! OAuth-issued access token is sent as `Authorization: Bearer`.
+//!
 //! * `initial_sync` / `incremental_sync` page `/v1/orders`
 //!   (`limit` / `offset`), tracking the maximum `updated_at` as an
 //!   RFC-3339 watermark; incremental runs add `modified_since` and
@@ -33,6 +39,10 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_API_BASE_URL: &str = "https://api.gojek.com";
 /// Default scope recorded on the synthesised API-key token.
 pub const DEFAULT_SCOPE: &str = "orders";
+/// `OAuth2Token::token_type` marker for a static API-key credential.
+/// Distinguishes the API-key auth path (provider-native
+/// `X-Gojek-Api-Key` header) from an OAuth-issued bearer token.
+pub const API_KEY_TOKEN_TYPE: &str = "ApiKey";
 /// Page size for order listing (`limit`).
 pub const DEFAULT_PAGE_SIZE: u32 = 100;
 /// Safety ceiling on the number of pages a single sync walks.
@@ -135,9 +145,10 @@ impl GojekConnector {
         url: &str,
         token: &OAuth2Token,
     ) -> Result<R> {
-        let req = HttpRequest::get(url)
-            .with_header("Accept", "application/json")
-            .with_header("X-Gojek-Api-Key", token.access_token.expose());
+        let req = apply_auth(
+            HttpRequest::get(url).with_header("Accept", "application/json"),
+            token,
+        );
         let resp = self.transport.execute(req)?;
         if !resp.is_success() {
             return Err(classify_failure("gojek", endpoint, &resp));
@@ -180,6 +191,27 @@ impl GojekConnector {
     }
 }
 
+/// Attach the auth header matching the token's provenance: a static
+/// API-key token (tagged [`API_KEY_TOKEN_TYPE`] in `authenticate`)
+/// goes in the provider-native `X-Gojek-Api-Key` header, while an
+/// OAuth-issued token is sent as `Authorization: <scheme> <token>`
+/// (scheme from `token_type`, defaulting to `Bearer`).
+fn apply_auth(req: HttpRequest, token: &OAuth2Token) -> HttpRequest {
+    if token.token_type == API_KEY_TOKEN_TYPE {
+        req.with_header("X-Gojek-Api-Key", token.access_token.expose())
+    } else {
+        let scheme = if token.token_type.is_empty() {
+            "Bearer"
+        } else {
+            token.token_type.as_str()
+        };
+        req.with_header(
+            "Authorization",
+            format!("{scheme} {}", token.access_token.expose()),
+        )
+    }
+}
+
 fn parse_rfc3339(s: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .ok()
@@ -208,11 +240,13 @@ impl Connector for GojekConnector {
             .get("api_key")
             .and_then(serde_json::Value::as_str)
         {
-            return Ok(OAuth2Token::new_without_refresh(
+            let mut token = OAuth2Token::new_without_refresh(
                 api_key,
                 Utc::now() + chrono::Duration::days(365),
                 DEFAULT_SCOPE,
-            ));
+            );
+            token.token_type = API_KEY_TOKEN_TYPE.to_string();
+            return Ok(token);
         }
         let auth_code = config
             .auth_config_json
@@ -404,6 +438,15 @@ mod tests {
             }))
     }
 
+    fn cfg_oauth() -> ConnectorConfig {
+        ConnectorConfig::new(ConnectorKind::Gojek, AuthKind::OAuth2, ScopeId::new_v4())
+            .with_auth_config(serde_json::json!({
+                "authorization_code": "auth-code",
+                "api_base_url": "https://api.test/gojek",
+                "webhook_secret": "gojek-secret",
+            }))
+    }
+
     fn ok_json(value: &serde_json::Value) -> MockResponse {
         MockResponse::ok_json(serde_json::to_vec(value).unwrap())
     }
@@ -415,6 +458,44 @@ mod tests {
         let token = c.authenticate(&cfg()).unwrap();
         assert_eq!(token.access_token.expose(), "gojek-key");
         assert!(token.refresh_token.is_none());
+        assert_eq!(token.token_type, API_KEY_TOKEN_TYPE);
+    }
+
+    #[test]
+    fn authenticate_falls_back_to_oauth_code() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = GojekConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let token = c.authenticate(&cfg_oauth()).unwrap();
+        // OAuth-issued token keeps the bearer token_type, not the
+        // API-key marker, so requests use `Authorization: Bearer`.
+        assert_eq!(token.access_token.expose(), "unused");
+        assert_eq!(token.token_type, "Bearer");
+    }
+
+    #[test]
+    fn oauth_token_is_sent_as_bearer_header() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/gojek/v1/orders?limit=2&offset=0",
+            ok_json(&serde_json::json!({
+                "data": [ {"id": "o-1", "updated_at": "2024-01-01T00:00:00Z"} ]
+            })),
+        );
+        let c = GojekConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth())
+            .with_page_size(2);
+        let tok = c.authenticate(&cfg_oauth()).unwrap();
+        let res = c.initial_sync(&cfg_oauth(), &tok).unwrap();
+        assert_eq!(res.events.len(), 1);
+        let recorded = transport.recorded();
+        assert!(recorded[0]
+            .headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("authorization") && v == "Bearer unused"));
+        assert!(!recorded[0]
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("x-gojek-api-key")));
     }
 
     #[test]

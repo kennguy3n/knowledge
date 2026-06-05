@@ -10,7 +10,7 @@ and is implemented by the `connector_framework` crate
 ## One connector per source system
 
 Every external system the substrate ingests from sits behind one
-`Connector` instance. The framework ships the boundary; each of the 40
+`Connector` instance. The framework ships the boundary; each of the 70
 built-in providers is its own implementation (see the
 [connector maturity table](../product/roadmap.md#connector-maturity)
 for the full list).
@@ -65,7 +65,7 @@ source system.
 
 ## Connector maturity
 
-All 40 built-in connectors are **stable**. New contributed connectors
+All 70 built-in connectors are **stable**. New contributed connectors
 land **unstable** and graduate once they have soaked against the live
 API. See [../product/roadmap.md](../product/roadmap.md#connector-maturity)
 for the full status table.

@@ -22,14 +22,20 @@ cryptography, and can forget — cryptographically, not by soft-delete.
   attacks.
 - **Multilingual** — extraction works across 22 languages out of the
   box, with per-sentence language detection.
-- **40 stable connectors** — pull knowledge from where it already lives,
+- **70 stable connectors** — pull knowledge from where it already lives,
   across file stores, docs/wikis, CRM and support, project tracking,
   chat and meetings, developer tools, design, and finance (Google Drive,
-  Notion, Slack, Salesforce, Jira, GitHub, Stripe, and more). See the
-  [connector roadmap](docs/product/roadmap.md#connector-maturity).
+  Notion, Slack, Salesforce, Jira, GitHub, Stripe, and more), plus 30
+  region-focused sources across Vietnam, Singapore/Thailand/SEA, and the
+  GCC/Middle East (Zalo, VNPay, MoMo, LINE, Grab, Careem, Talabat, …).
+  See the [connector roadmap](docs/product/roadmap.md#connector-maturity).
 - **Browser-based admin** — manage connectors, tenants, synthesis, and
   audit from a web dashboard at `localhost:3001`, no CLI or PromQL
   required.
+- **End-user reference UI** — a Next.js chat/search/memory app
+  (`apps/knowledge-ui/`, served on `localhost:3002`) your users — not
+  just operators — can open to chat with a scope, run hybrid search,
+  browse decaying memory, and cryptographically forget a conversation.
 - **Works offline** — the full pipeline (ingest → extract → remember →
   synthesize) runs with no network connection.
 
@@ -67,6 +73,30 @@ This drives a synthetic multi-scope dataset through every substrate API
 and writes a reconciled report to `results/demo_results.md`. See the
 **[Quick Start guide](docs/QUICKSTART.md)** for the full walkthrough
 across all three deployment modes.
+
+## One-command install
+
+For a fresh host, the installer takes you from zero to a running stack —
+it checks Docker + the Compose plugin, generates strong secrets into
+`.env`, asks whether to enable on-device synthesis, pulls the published
+images, waits for the gateway to report healthy, and prints the URLs to
+open:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kennguy3n/knowledge/main/scripts/install.sh | bash
+```
+
+On Windows, run the PowerShell installer instead:
+
+```powershell
+irm https://raw.githubusercontent.com/kennguy3n/knowledge/main/scripts/install.ps1 | iex
+```
+
+The bundled `llama-server` image ships the **Bonsai-1.7B** model baked
+in, so on-device synthesis works with no manual model download. See the
+[deployment guide](docs/operator/deployment-guide.md#one-command-installer)
+for the installer's flags (`KNOWLEDGE_ASSUME_YES`,
+`KNOWLEDGE_SLM_DEVICE_TIER`, …).
 
 ## Quick deploy with Docker
 
@@ -110,6 +140,15 @@ starting points for EKS/GKE.
 See **[deployment scenarios](docs/product/deployment-scenarios.md)** for
 a decision tree, and the **[cost model](docs/operator/cost-model.md)**
 for the per-user economics of each mode.
+
+**High availability.** For the hybrid/enterprise tiers, the substrate
+supports **active-passive failover**: a primary ships its SQLCipher WAL
+frames to one or more read-only standbys over NATS JetStream, with leader
+election via a NATS key-value lease. A standby promotes itself when the
+primary's lease expires. Enable it with `KNOWLEDGE_SUBSTRATE_ROLE` /
+`KNOWLEDGE_REPLICATION_NATS_URL` (or `substrate.ha.enabled=true` in Helm,
+which renders a StatefulSet). See the
+[deployment guide](docs/operator/deployment-guide.md#high-availability-active-passive-failover).
 
 ## Performance
 

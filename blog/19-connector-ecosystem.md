@@ -1,10 +1,12 @@
-# 40 Connectors: Connecting Knowledge to Every Tool Your Team Uses
+# 70 Connectors: Connecting Knowledge to Every Tool Your Team Uses
 
-> **TL;DR:** Knowledge now ships **40 stable connectors** across CRM,
-> cloud storage, communication, finance, and developer tools. They all
-> sit behind one `Connector` contract, so the substrate ingests,
-> deduplicates, and permission-scopes content from every source the
-> same way — add a provider and the entire pipeline lights up for it.
+> **TL;DR:** Knowledge now ships **70 stable connectors** across CRM,
+> cloud storage, communication, finance, developer tools, and 30
+> region-focused platforms across Vietnam, Singapore/Thailand/SEA, and
+> the GCC/Middle East. They all sit behind one `Connector` contract, so
+> the substrate ingests, deduplicates, and permission-scopes content
+> from every source the same way — add a provider and the entire
+> pipeline lights up for it.
 
 ## The Business Problem
 
@@ -24,7 +26,7 @@ goal of the connector layer is the opposite: make adding a source a
 *configuration* decision, not an engineering project, and carry the
 source's permissions along with its data.
 
-## One contract, forty sources
+## One contract, seventy sources
 
 Every connector implements the same `Connector` trait from the
 `connector_framework` crate, covering four concerns:
@@ -47,7 +49,7 @@ for it.
 
 ## The catalog
 
-All 40 connectors are **stable** — each meets the trait-impl and
+All 70 connectors are **stable** — each meets the trait-impl and
 test-coverage bar and is safe to build on, grouped here by domain:
 
 - **Core / original** — Google Drive, OneDrive, Notion, Jira,
@@ -59,6 +61,12 @@ test-coverage bar and is safe to build on, grouped here by domain:
   Google Meet.
 - **Business & developer tools** — QuickBooks, Xero, Stripe, Shopify,
   Airtable, GitLab, Bitbucket, Trello, Miro, DocuSign.
+- **Vietnam** — Zalo, VNPay, MoMo, Tiki, Shopee VN, Lazada VN,
+  Viettel Post, KiotViet, Sapo, Base.vn.
+- **Singapore / Thailand / SEA** — LINE, Grab, Gojek, Talenox,
+  Odoo (SEA), Fastwork, TrueMoney, SCB Easy, PromptPay, Tokopedia.
+- **GCC / Middle East** — Careem, Talabat, Noon, Amazon.ae, Tabby,
+  Foodics, Zoho, Bayt, Fetchr, PayFort.
 
 ## How a connector earns "stable"
 
@@ -91,6 +99,8 @@ permissions intact and at $0 marginal cost per user.
 
 - [Connector Architecture](06-connector-architecture.md) — the design of
   the `Connector` contract this catalog is built on.
+- [30 Connectors for Vietnam, SEA & the GCC](21-asia-gcc-connectors.md) —
+  the regional catalog, data residency, and multilingual extraction.
 - [add-a-connector.md](../docs/guides/add-a-connector.md) — write your
   own connector for a source we don't ship.
 - [Managing Knowledge Without a DevOps Team](20-admin-without-ops.md) —
