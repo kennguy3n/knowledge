@@ -1,19 +1,33 @@
-# Minimal tag-triggered release workflow.
+# Tag-triggered release pipeline.
 #
-# Triggers on tags matching `v*` (the substrate's SemVer scheme).
-# Runs the full `--all-features` test matrix one more time on the
-# tagged commit so a release never ships a build that failed CI on
-# main, then publishes a GitHub Release whose body is auto-
-# generated from the merged-PR list since the previous tag.
+# Triggers on tags matching `v*` (the substrate's SemVer scheme) and
+# produces a single GitHub Release that bundles:
 #
-# Platform artifacts (the iOS xcframework, the JNI .so bundles,
-# the N-API addon for Electron) are NOT built here yet. The
-# matrix jobs that produce them live in `ci.yml` and can be
-# promoted to release artifacts in a follow-up patch by adding a
-# matrix step that uploads its build output via the
-# `softprops/action-gh-release` `files:` input. This release
-# workflow is intentionally minimal so the very first tagged
-# release does not block on cross-compilation infrastructure.
+#   1. A re-run of the `--all-features` test matrix on the tagged
+#      commit, so a release never ships a build that failed CI.
+#   2. Stripped release binaries for the workspace's deployable bin
+#      target (`substrate_server`) for Linux x86_64 + aarch64,
+#      uploaded as `.tar.gz` archives with SHA-256 checksums.
+#   3. Multi-arch Docker images for the substrate, the Go gateway and
+#      the llama-server, pushed to GHCR and tagged with the release
+#      version + `latest`.
+#   4. A packaged Helm chart (`helm package`) attached to the Release —
+#      but ONLY when a chart actually exists in the tree (see the
+#      `helm` job's guard). This keeps the workflow self-contained and
+#      valid before Workstream 6's chart lands.
+#
+# ── Assumed dependency on Workstream 6 ───────────────────────────────
+# Workstream 6 owns the canonical `docker-publish.yml` and the Helm
+# chart. To avoid duplicating image-build logic, the `docker` job here
+# builds straight from the existing `deploy/Dockerfile.*` files (one
+# native-runner job per architecture, merged into a multi-arch manifest
+# by `docker-manifest`) and only ever pushes the immutable `:vX.Y.Z`
+# tag plus `:X.Y` and `:latest`. The `helm` job is a no-op until
+# `deploy/helm/` (or `deploy/charts/`)
+# exists, so this file is safe to merge first and stays correct once
+# the chart arrives. See docs/operator/upgrading.md for the operator
+# view of these artifacts.
+
 name: Release
 
 on:
@@ -21,31 +35,30 @@ on:
     tags:
       - "v*"
 
-# `contents: write` is required so `softprops/action-gh-release` can
-# create the release object. No other tokens are needed because the
-# workflow does not push to crates.io, npm, or any other registry.
+# `contents: write` lets `softprops/action-gh-release` create the
+# Release object and upload artifacts; `packages: write` lets the
+# `docker` job push images to GHCR. No registry tokens (crates.io /
+# npm) are needed.
 permissions:
   contents: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
-  release:
-    name: Test and publish GitHub Release
+  # ───────────────────── 1. Verify the tagged commit ────────────────
+  verify:
+    name: Test (all features) on the tagged commit
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the tagged commit
         uses: actions/checkout@v6
         with:
-          # Fetch full history so action-gh-release can compute the
-          # "since last tag" commit range for its auto-generated
-          # release notes.
           fetch-depth: 0
 
       - name: Install the pinned Rust toolchain
-        # Match `dtolnay/rust-toolchain@stable` used by ci.yml so
-        # the release path uses the same compiler the merge gate
-        # has already exercised. The `ci.yml` MSRV job at 1.85.0
-        # covers the lower bound; here we use stable to also
-        # surface upstream regressions before they ship.
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache the cargo registry, git index, and target/
@@ -60,27 +73,325 @@ jobs:
             ${{ runner.os }}-cargo-release-
             ${{ runner.os }}-cargo-
 
-      # No `apt-get install libsqlite3-dev / libssl-dev / pkg-config`
-      # step: the workspace pins `rusqlite` with the
-      # `bundled-sqlcipher-vendored-openssl` feature (see the root
-      # `Cargo.toml`), which vendors both SQLCipher and OpenSSL and
-      # links statically. `ci.yml` runs the same `cargo test
-      # --all --all-features` matrix on every PR without those
-      # system packages installed, so a tag build never needs them
-      # either. Keeping the step out avoids confusing future
-      # readers about whether SQLCipher is system-linked here.
-
+      # No system SQLCipher / OpenSSL packages: the workspace pins
+      # `rusqlite` with `bundled-sqlcipher-vendored-openssl`, which
+      # vendors + statically links both. `ci.yml` runs the same matrix
+      # without those packages, so a tag build never needs them either.
       - name: cargo test --all-features
         run: cargo test --all-features --workspace
 
-      - name: Publish GitHub Release with auto-generated notes
+  # ───────────────────── 2. Build release binaries ─────────────────
+  binaries:
+    name: Build ${{ matrix.target }} binaries
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache the cargo registry, git index, and target/
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-bin-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bin-${{ matrix.target }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Build substrate_server (release)
+        # `--features http-client` links the reqwest-backed transport so
+        # connectors and the update-check endpoint actually reach
+        # upstream; without it the shipped binary returns
+        # `FfiError::Unavailable` for every connector call. The crate's
+        # Cargo.toml documents this as the production build flag.
+        #
+        # `-p substrate_server` scopes feature resolution to this package
+        # alone. Without it, a workspace-root build unifies every member's
+        # features onto the shared `crypto` build — and `demo` depends on
+        # `crypto`'s `test-support` feature as a *normal* dependency, which
+        # then trips crypto's `compile_error!("test-support must not be
+        # enabled in release builds")`. `ci.yml` sidesteps the same trap
+        # with `--workspace --exclude demo`; a single-binary build wants
+        # `-p` instead.
+        run: cargo build --release --locked -p substrate_server --features http-client --bin substrate_server --target ${{ matrix.target }}
+
+      - name: Package the binary + checksum
+        id: package
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          stage="substrate_server-${version}-${{ matrix.target }}"
+          mkdir -p "dist/${stage}"
+          bin="target/${{ matrix.target }}/release/substrate_server"
+          strip "${bin}" || true
+          cp "${bin}" "dist/${stage}/"
+          cp README.md LICENSE* "dist/${stage}/" 2>/dev/null || true
+          tar -C dist -czf "dist/${stage}.tar.gz" "${stage}"
+          (cd dist && sha256sum "${stage}.tar.gz" > "${stage}.tar.gz.sha256")
+          echo "archive=dist/${stage}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "checksum=dist/${stage}.tar.gz.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload binary artifacts to the workflow run
+        uses: actions/upload-artifact@v7
+        with:
+          name: substrate_server-${{ matrix.target }}
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.checksum }}
+          if-no-files-found: error
+
+  # ───────────────────── 3. Publish Docker images ──────────────────
+  # Built multi-arch (linux/amd64 + linux/arm64) on NATIVE runners — no
+  # QEMU emulation, which would make the Rust substrate build painfully
+  # slow. Each (image, platform) pair is pushed by digest with no tag;
+  # the `docker-manifest` job then stitches the per-arch digests into a
+  # single tagged manifest list. This is the canonical buildx pattern.
+  docker:
+    name: Build ${{ matrix.image }} (${{ matrix.platform }})
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [substrate, gateway, llama-server]
+        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - image: substrate
+            dockerfile: deploy/Dockerfile.substrate
+          - image: gateway
+            dockerfile: deploy/Dockerfile.gateway
+          - image: llama-server
+            dockerfile: deploy/Dockerfile.llama-server
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive the (lowercased) image ref + platform pair
+        id: prep
+        run: |
+          set -euo pipefail
+          # GHCR rejects uppercase in the repository path, so lowercase it.
+          repo_lc="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          echo "image_ref=ghcr.io/${repo_lc}/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+          # `linux/amd64` → `linux-amd64` for a filesystem/artifact-safe name.
+          echo "pair=${platform//\//-}" >> "$GITHUB_OUTPUT"
+        env:
+          platform: ${{ matrix.platform }}
+
+      - name: Derive OCI labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.prep.outputs.image_ref }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ steps.prep.outputs.pair }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ steps.prep.outputs.pair }}
+          outputs: type=image,name=${{ steps.prep.outputs.image_ref }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export the pushed digest as an artifact
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest='${{ steps.build.outputs.digest }}'
+          # Empty file named for the bare digest; the merge job globs these.
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.image }}-${{ steps.prep.outputs.pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ─────────────── 3b. Merge per-arch digests into a manifest ───────
+  docker-manifest:
+    name: Publish ${{ matrix.image }} manifest
+    needs: docker
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [substrate, gateway, llama-server]
+    steps:
+      - name: Download this image's per-arch digests
+        uses: actions/download-artifact@v7
+        with:
+          path: /tmp/digests
+          pattern: digest-${{ matrix.image }}-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive the (lowercased) image ref
+        id: prep
+        run: |
+          set -euo pipefail
+          repo_lc="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          echo "image_ref=ghcr.io/${repo_lc}/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.prep.outputs.image_ref }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Create + push the multi-arch manifest list
+        working-directory: /tmp/digests
+        run: |
+          set -euo pipefail
+          image_ref='${{ steps.prep.outputs.image_ref }}'
+          # metadata-action exposes the resolved tags as JSON in this env
+          # var; turn each into a `-t <tag>` flag.
+          tag_args="$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+          # Word-splitting of both the tag flags and the digest list is
+          # intentional here.
+          # shellcheck disable=SC2086,SC2046
+          docker buildx imagetools create $tag_args \
+            $(printf "${image_ref}@sha256:%s " *)
+
+      - name: Inspect the published manifest
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect '${{ steps.prep.outputs.image_ref }}:latest'
+
+  # ───────────────────── 4. Package the Helm chart ─────────────────
+  helm:
+    name: Package Helm chart (if present)
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      packaged: ${{ steps.pack.outputs.packaged }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Locate a chart
+        id: locate
+        run: |
+          set -euo pipefail
+          chart_dir=""
+          for cand in deploy/helm deploy/charts charts; do
+            if [ -f "${cand}/Chart.yaml" ]; then chart_dir="${cand}"; break; fi
+            # One level of nesting (e.g. deploy/helm/knowledge/Chart.yaml).
+            found="$(find "${cand}" -maxdepth 2 -name Chart.yaml 2>/dev/null | head -n1 || true)"
+            if [ -n "${found}" ]; then chart_dir="$(dirname "${found}")"; break; fi
+          done
+          if [ -z "${chart_dir}" ]; then
+            echo "No Helm chart found; skipping packaging (Workstream 6 owns the chart)."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Found chart at ${chart_dir}"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "chart_dir=${chart_dir}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Helm
+        if: steps.locate.outputs.found == 'true'
+        uses: azure/setup-helm@v4
+
+      - name: Package the chart
+        id: pack
+        if: steps.locate.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          helm package "${{ steps.locate.outputs.chart_dir }}" \
+            --version "${version}" --app-version "${version}" \
+            --destination dist
+          echo "packaged=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the packaged chart
+        if: steps.pack.outputs.packaged == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: helm-chart
+          path: dist/*.tgz
+          if-no-files-found: error
+
+  # ───────────────────── 5. Create the GitHub Release ──────────────
+  release:
+    name: Create GitHub Release
+    needs: [binaries, docker-manifest, helm]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download the release-asset artifacts
+        # Match the `upload-artifact@v7` major used by the binaries/docker
+        # jobs (and ci.yml) — the upload/download pair must share a major
+        # for artifact-format compatibility.
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          # Only the binary + chart artifacts become Release assets. The
+          # `docker` job's `digest-*` artifacts (1-day retention, used only
+          # by `docker-manifest`) would otherwise be downloaded and ignored.
+          pattern: "{substrate_server-*,helm-chart}"
+
+      - name: Publish the Release with auto-generated notes
         uses: softprops/action-gh-release@v3
         with:
-          # `generate_release_notes: true` makes GitHub assemble the
-          # release body from the merged-PR list between this tag
-          # and the previous one. The repo's PR template gives that
-          # auto-generated body its high-signal shape.
+          # `generate_release_notes: true` assembles the body from the
+          # merged-PR list between this tag and the previous one; the
+          # repo PR template gives that body its shape.
           generate_release_notes: true
-          # Leave `files:` empty for now — platform artifacts will
-          # be added when the cross-compile jobs are promoted out
-          # of ci.yml.
+          # Attach every binary archive, checksum, and (if present) the
+          # packaged Helm chart. Docker images live in GHCR, not as
+          # Release assets, so they are referenced — not duplicated —
+          # here (see docs/operator/upgrading.md).
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.tar.gz.sha256
+            artifacts/**/*.tgz

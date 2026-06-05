@@ -1,10 +1,32 @@
 # Knowledge stack — docker compose deployment.
 # See docs/operator/deployment-guide.md for configuration and operational docs.
+#
+# Each first-party service declares BOTH `build:` and `image:`. The
+# `image:` value names the published artifact (defaulting to the
+# `ghcr.io` images produced by `.github/workflows/release.yml` on a
+# `v*` tag); the `build:` block stays so a source checkout can still
+# `docker compose build` locally. To run pre-built images instead of
+# building, pin a released tag and pull:
+#
+#   KNOWLEDGE_IMAGE_TAG=v1.0.0 docker compose pull && \
+#   KNOWLEDGE_IMAGE_TAG=v1.0.0 docker compose up -d
+#
+# `docker compose up` (without `pull`) still builds from source when
+# the named image is absent locally, so the default workflow is
+# unchanged. See docs/operator/upgrading.md for the version policy.
+#
+# REQUIREMENT: the `image:` values use nested defaults
+# (`${IMAGE:-…:${TAG:-latest}}`), which need Docker Compose v2.20.0+
+# (the version that added nested variable interpolation). On older
+# Compose the inner `${…}` is taken literally and the pull will fail
+# with a malformed reference. Check with `docker compose version`;
+# v2.20.0 shipped with Docker Engine 24.0.6 (Sept 2023).
 
 services:
   # ────────────────── Core services ──────────────────────────────────
 
   knowledge-gateway:
+    image: "${KNOWLEDGE_GATEWAY_IMAGE:-ghcr.io/kennguy3n/knowledge/gateway:${KNOWLEDGE_IMAGE_TAG:-latest}}"
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
@@ -39,6 +61,7 @@ services:
     restart: unless-stopped
 
   knowledge-substrate:
+    image: "${KNOWLEDGE_SUBSTRATE_IMAGE:-ghcr.io/kennguy3n/knowledge/substrate:${KNOWLEDGE_IMAGE_TAG:-latest}}"
     build:
       context: ..
       dockerfile: deploy/Dockerfile.substrate
@@ -80,6 +103,29 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    restart: unless-stopped
+
+  # ────────────────── Admin web UI ───────────────────────────────────
+
+  admin:
+    build:
+      context: ../admin
+      dockerfile: Dockerfile
+    # The nginx image serves the SPA on 3001 and reverse-proxies the
+    # gateway API surface (/api, /health, /metrics) to the
+    # knowledge-gateway service on the compose network, so the SPA can
+    # call the gateway same-origin without CORS configuration.
+    ports:
+      - "${ADMIN_PORT:-3001}:3001"
+    depends_on:
+      knowledge-gateway:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/ >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
   # ────────────────── Infrastructure ─────────────────────────────────
@@ -155,6 +201,7 @@ services:
       MINIO_BUCKET: "${MINIO_BUCKET:-knowledge}"
 
   llama-server:
+    image: "${KNOWLEDGE_LLAMA_IMAGE:-ghcr.io/kennguy3n/knowledge/llama-server:${KNOWLEDGE_IMAGE_TAG:-latest}}"
     build:
       context: ..
       dockerfile: deploy/Dockerfile.llama-server

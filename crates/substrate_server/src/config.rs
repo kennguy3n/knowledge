@@ -75,6 +75,10 @@ pub struct ServerConfig {
     /// Filesystem path of the SQLCipher-backed permission-tuple store.
     /// Permission grants are mirrored here so they survive a restart.
     pub permissions_path: String,
+    /// Opt-in release-update-check configuration. Disabled by default;
+    /// the `/internal/update_check` endpoint never touches the network
+    /// unless this is enabled via [`crate::update_check::ENV_ENABLED`].
+    pub update_check: crate::update_check::UpdateCheckConfig,
 }
 
 /// Decode a 64-hex-char string into a 32-byte [`MasterKey`]. The bytes
@@ -113,6 +117,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("bind_addr", &self.bind_addr)
             .field("store_path", &self.store_path)
             .field("permissions_path", &self.permissions_path)
+            .field("update_check", &self.update_check)
             .field("master_key_hex", &"<redacted>")
             .finish()
     }
@@ -165,13 +170,25 @@ impl ServerConfig {
             store_path,
             master_key_hex,
             permissions_path,
+            update_check: crate::update_check::UpdateCheckConfig::from_env(),
         })
     }
 }
 
-/// Read an environment variable, returning `None` when it is unset or
-/// set to the empty string (so an explicit empty value is treated the
-/// same as "unset" for the purpose of default substitution).
+/// Read an environment variable, returning `None` only when it is
+/// unset or the empty string. A non-empty but whitespace-only value is
+/// **passed through unchanged** so it reaches the relevant validator
+/// and surfaces an actionable error (a stray-whitespace `bind_addr`
+/// fails [`ConfigError::BadBindAddr`] rather than silently falling back
+/// to the default, and a whitespace master key fails
+/// [`ConfigError::BadMasterKey`] rather than masquerading as unset).
+///
+/// This intentionally differs from [`crate::update_check`]'s
+/// same-named helper, which *does* treat whitespace-only as blank:
+/// there the value only selects between an override and a hard-coded
+/// default (no validator downstream), so leniency is harmless, whereas
+/// here verbatim pass-through preserves diagnostics for a
+/// misconfigured deployment.
 fn non_empty_env(key: &str) -> Option<String> {
     match std::env::var(key) {
         Ok(v) if !v.is_empty() => Some(v),
@@ -210,6 +227,7 @@ mod tests {
             store_path: "/tmp/x.db".into(),
             master_key_hex: Zeroizing::new("a".repeat(MASTER_KEY_HEX_LEN)),
             permissions_path: "/tmp/permissions.db".into(),
+            update_check: crate::update_check::UpdateCheckConfig::default(),
         };
         let rendered = format!("{cfg:?}");
         assert!(rendered.contains("<redacted>"));
