@@ -121,6 +121,18 @@ impl<B: WalBus + 'static, L: LeaseStore + 'static> FailoverCoordinator<B, L> {
                         "switching store to journal_mode=WAL for primary role: {e}"
                     ))
                 })?;
+                // `PRAGMA journal_mode = WAL` returns the *resulting* mode, and
+                // SQLite silently leaves the mode unchanged (returning the old
+                // one) when it cannot switch — e.g. an open transaction on the
+                // connection. Treat anything but `wal` as a hard failure rather
+                // than letting a "primary" run in rollback mode where it never
+                // produces a `-wal` and silently ships nothing.
+                if mode != "wal" {
+                    return Err(ReplError::Misconfigured(format!(
+                        "PRAGMA journal_mode=WAL returned '{mode}' instead of 'wal'; \
+                         the primary cannot ship WAL frames without WAL mode"
+                    )));
+                }
                 tracing::info!(journal_mode = %mode, "failover: store switched to WAL for primary");
             }
             Role::Standby => {
@@ -129,6 +141,15 @@ impl<B: WalBus + 'static, L: LeaseStore + 'static> FailoverCoordinator<B, L> {
                         "switching store to rollback journal for standby role: {e}"
                     ))
                 })?;
+                // Symmetric guard: a standby left in WAL mode would read its own
+                // (never-written) `-wal` and never see the raw-spliced pages, so
+                // refuse to serve rather than return stale reads.
+                if mode == "wal" {
+                    return Err(ReplError::Misconfigured(format!(
+                        "PRAGMA journal_mode=DELETE returned '{mode}'; the standby \
+                         cannot serve correct reads in WAL mode"
+                    )));
+                }
                 tracing::info!(journal_mode = %mode, "failover: store switched to rollback journal for standby");
             }
             Role::Disabled => {}
