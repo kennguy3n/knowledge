@@ -31,6 +31,7 @@
 //! Wiring contract mirrors the other connectors: the constructor takes
 //! an `Arc<dyn HttpTransport>` and an `Arc<dyn OAuth2CodeExchange>`.
 
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
@@ -166,17 +167,23 @@ impl DiscordConnector {
     }
 }
 
-/// Compare two Discord snowflake id strings, returning the larger.
-/// Snowflakes are 64-bit, monotonically increasing with time; parse
-/// numerically and fall back to length-then-lexicographic order for
-/// any non-numeric id so the cursor never regresses.
+/// Order two Discord snowflake id strings chronologically.
+///
+/// Snowflakes are 64-bit, monotonically increasing with time. Compare
+/// numerically when both parse, and fall back to length-then-
+/// lexicographic order for any non-numeric id so ordering stays total
+/// and never regresses. A plain `str::cmp` would misorder ids of
+/// differing digit-length (e.g. `"9"` vs `"10"`).
+fn snowflake_cmp(a: &str, b: &str) -> Ordering {
+    match (a.parse::<u64>(), b.parse::<u64>()) {
+        (Ok(na), Ok(nb)) => na.cmp(&nb),
+        _ => (a.len(), a).cmp(&(b.len(), b)),
+    }
+}
+
+/// Return the larger (newer) of two snowflakes per [`snowflake_cmp`].
 fn max_snowflake(a: String, b: &str) -> String {
-    let by_num = a.parse::<u64>().ok().zip(b.parse::<u64>().ok());
-    let keep_b = match by_num {
-        Some((na, nb)) => nb > na,
-        None => (b.len(), b) > (a.len(), a.as_str()),
-    };
-    if keep_b {
+    if snowflake_cmp(b, &a) == Ordering::Greater {
         b.to_string()
     } else {
         a
@@ -340,8 +347,9 @@ impl Connector for DiscordConnector {
                 break;
             }
             // With `after`, Discord still sorts newest-first; sort
-            // ascending so we page forward deterministically.
-            page.sort_by(|a, b| a.id.cmp(&b.id));
+            // ascending (numerically, by snowflake) so we page forward
+            // deterministically and `page.last()` is the newest id.
+            page.sort_by(|a, b| snowflake_cmp(&a.id, &b.id));
             let got = page.len();
             for msg in &page {
                 events.push(message_event(msg));
@@ -706,5 +714,19 @@ mod tests {
         assert_eq!(max_snowflake("100".into(), "99"), "100");
         assert_eq!(max_snowflake("99".into(), "100"), "100");
         assert_eq!(max_snowflake("100".into(), "100"), "100");
+    }
+
+    #[test]
+    fn snowflake_cmp_orders_numerically_not_lexically() {
+        // "9" < "10" numerically, even though "9" > "10" lexically.
+        assert_eq!(snowflake_cmp("9", "10"), Ordering::Less);
+        assert_eq!(snowflake_cmp("10", "9"), Ordering::Greater);
+        assert_eq!(snowflake_cmp("100", "100"), Ordering::Equal);
+
+        // A page sorted by `snowflake_cmp` puts the newest id last, so
+        // the `after` cursor advances correctly across digit-lengths.
+        let mut ids = ["10", "9", "100", "11"];
+        ids.sort_by(|a, b| snowflake_cmp(a, b));
+        assert_eq!(ids, ["9", "10", "11", "100"]);
     }
 }

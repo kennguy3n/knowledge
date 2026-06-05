@@ -34,8 +34,9 @@ use connector_framework::{
 use serde::Deserialize;
 
 use crate::google_drive::{
-    GoogleDriveChange, GoogleDriveChangeList, GoogleDriveFile, GoogleDriveFileList,
-    GoogleDrivePushNotification, GoogleDriveStartPageToken, GoogleDriveWatchResponse,
+    drive_push_notification_to_events, GoogleDriveChange, GoogleDriveChangeList, GoogleDriveFile,
+    GoogleDriveFileList, GoogleDrivePushNotification, GoogleDriveStartPageToken,
+    GoogleDriveWatchResponse,
 };
 
 /// Default Drive REST base URL (discovery + change feed).
@@ -537,29 +538,16 @@ impl Connector for GoogleSheetsConnector {
     }
 
     fn handle_webhook_event(&self, body: &[u8]) -> Result<Vec<ConnectorEvent>> {
-        let push: GoogleDrivePushNotification = serde_json::from_slice(body)?;
-        let occurred_at = push.occurred_at.unwrap_or_else(Utc::now);
-        let document_id = SourceDocumentId::new(push.resource_id);
-        let event = match push.resource_state.as_str() {
-            "add" | "create" => ConnectorEvent::DocumentCreated {
-                document_id,
-                occurred_at,
-            },
-            "update" | "change" => ConnectorEvent::DocumentUpdated {
-                document_id,
-                occurred_at,
-            },
-            "remove" | "trash" => ConnectorEvent::DocumentDeleted {
-                document_id,
-                occurred_at,
-            },
-            other => {
-                return Err(ConnectorError::Webhook(format!(
-                    "unknown drive resource state: {other}"
-                )))
-            }
-        };
-        Ok(vec![event])
+        // Sheets reuse Drive's `changes.watch` push channel, so the
+        // notification envelope and its `X-Goog-Resource-State` semantics
+        // (including the `sync` handshake and `permission_change`) are
+        // shared with the Drive connector.
+        let push: GoogleDrivePushNotification = serde_json::from_slice(body).map_err(|e| {
+            ConnectorError::Webhook(format!(
+                "google_sheets webhook: malformed notification body: {e}"
+            ))
+        })?;
+        drive_push_notification_to_events(push)
     }
 }
 
@@ -762,5 +750,47 @@ mod tests {
             .unwrap();
         assert_eq!(evs.len(), 1);
         assert!(matches!(evs[0], ConnectorEvent::DocumentDeleted { .. }));
+    }
+
+    #[test]
+    fn webhook_sync_handshake_is_acked_with_no_events() {
+        // Google's channel-creation `sync` notification must be accepted
+        // (2xx / empty), not rejected, or Google may drop the channel.
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = GoogleSheetsConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let evs = c
+            .handle_webhook_event(br#"{"resourceId":"chan","resourceState":"sync"}"#)
+            .unwrap();
+        assert!(evs.is_empty());
+    }
+
+    #[test]
+    fn webhook_maps_permission_change() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = GoogleSheetsConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let evs = c
+            .handle_webhook_event(br#"{"resourceId":"s1","resourceState":"permission_change"}"#)
+            .unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(evs[0], ConnectorEvent::PermissionChanged { .. }));
+    }
+
+    #[test]
+    fn webhook_unknown_state_errors() {
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = GoogleSheetsConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let err = c
+            .handle_webhook_event(br#"{"resourceId":"s1","resourceState":"bogus"}"#)
+            .unwrap_err();
+        assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    #[test]
+    fn webhook_malformed_body_is_webhook_error() {
+        // A body we cannot parse is a 400 (stop redelivering), not a 502.
+        let transport = Arc::new(MockHttpTransport::new());
+        let c = GoogleSheetsConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let err = c.handle_webhook_event(b"not json").unwrap_err();
+        assert!(matches!(err, ConnectorError::Webhook(_)));
     }
 }

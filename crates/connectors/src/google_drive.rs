@@ -419,6 +419,54 @@ fn parse_role(role: &str) -> Option<SourcePermissionLevel> {
     }
 }
 
+/// Map a single Google Drive push notification into connector events.
+///
+/// Shared by every Drive-backed connector (Drive, Docs, Sheets) so the
+/// `X-Goog-Resource-State` handling stays in one place. Notably:
+///
+/// * The `sync` state is the verification handshake Google sends right
+///   after `changes.watch` creates a channel. It carries no change and
+///   MUST be acknowledged with a 2xx — rejecting it (HTTP 400) signals a
+///   broken endpoint and can make Google deactivate the channel — so it
+///   yields an empty event list rather than an error.
+/// * `permission_change` maps to [`ConnectorEvent::PermissionChanged`].
+/// * Any genuinely unknown state is a [`ConnectorError::Webhook`] (400),
+///   telling Google to stop redelivering a body we cannot interpret.
+pub fn drive_push_notification_to_events(
+    push: GoogleDrivePushNotification,
+) -> Result<Vec<ConnectorEvent>> {
+    let occurred_at = push.occurred_at.unwrap_or_else(Utc::now);
+    let document_id = SourceDocumentId::new(push.resource_id);
+    let event = match push.resource_state.as_str() {
+        // Channel-creation handshake: no change to report, just ACK.
+        "sync" => return Ok(Vec::new()),
+        "add" | "create" => ConnectorEvent::DocumentCreated {
+            document_id,
+            occurred_at,
+        },
+        "update" | "change" => ConnectorEvent::DocumentUpdated {
+            document_id,
+            occurred_at,
+        },
+        "remove" | "trash" => ConnectorEvent::DocumentDeleted {
+            document_id,
+            occurred_at,
+        },
+        "permission_change" => ConnectorEvent::PermissionChanged {
+            document_id,
+            user_id: SourceUserId::new(push.user_id.unwrap_or_default()),
+            new_level: push.new_role.as_deref().and_then(parse_role),
+            occurred_at,
+        },
+        other => {
+            return Err(ConnectorError::Webhook(format!(
+                "unknown drive resource state: {other}"
+            )))
+        }
+    };
+    Ok(vec![event])
+}
+
 fn file_to_created_event(f: &GoogleDriveFile) -> ConnectorEvent {
     let occurred_at = f.created_time.or(f.modified_time).unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(f.id.clone());
@@ -763,34 +811,7 @@ impl Connector for GoogleDriveConnector {
         // Google Drive push notifications carry a single change
         // per HTTP POST — the channel API does not batch.
         let push: GoogleDrivePushNotification = serde_json::from_slice(body)?;
-        let occurred_at = push.occurred_at.unwrap_or_else(Utc::now);
-        let document_id = SourceDocumentId::new(push.resource_id);
-        let event = match push.resource_state.as_str() {
-            "add" | "create" => ConnectorEvent::DocumentCreated {
-                document_id,
-                occurred_at,
-            },
-            "update" | "change" => ConnectorEvent::DocumentUpdated {
-                document_id,
-                occurred_at,
-            },
-            "remove" | "trash" => ConnectorEvent::DocumentDeleted {
-                document_id,
-                occurred_at,
-            },
-            "permission_change" => ConnectorEvent::PermissionChanged {
-                document_id,
-                user_id: SourceUserId::new(push.user_id.unwrap_or_default()),
-                new_level: push.new_role.as_deref().and_then(parse_role),
-                occurred_at,
-            },
-            other => {
-                return Err(ConnectorError::Webhook(format!(
-                    "unknown drive resource state: {other}"
-                )))
-            }
-        };
-        Ok(vec![event])
+        drive_push_notification_to_events(push)
     }
 }
 
@@ -1269,6 +1290,20 @@ mod tests {
             .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Webhook(_)));
+    }
+
+    #[test]
+    fn webhook_sync_handshake_is_acked_with_no_events() {
+        // Google's channel-creation `sync` notification must be accepted
+        // (2xx / empty), not rejected, or Google may drop the channel.
+        let transport = MockHttpTransport::new();
+        let transport: Arc<dyn HttpTransport> = Arc::new(transport);
+        let body = serde_json::json!({"resourceId": "chan", "resourceState": "sync"});
+        let c = GoogleDriveConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let evs = c
+            .handle_webhook_event(&serde_json::to_vec(&body).unwrap())
+            .unwrap();
+        assert!(evs.is_empty());
     }
 
     #[test]

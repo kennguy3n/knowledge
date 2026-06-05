@@ -372,6 +372,10 @@ impl Connector for TeamsConnector {
             &[],
         )?;
         let body = msg.body.unwrap_or_default();
+        // Graph `chatMessage` bodies are either `html` or `text` — never
+        // markdown. The html path is stripped to plain text, and the text
+        // path is already plain text, so both are `text/plain` (matching
+        // the other message connectors: Discord, Slack, Email).
         let text = if body.content_type.eq_ignore_ascii_case("html") {
             strip_html(&body.content)
         } else {
@@ -381,7 +385,7 @@ impl Connector for TeamsConnector {
             .subject
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| format!("Teams message {id}"));
-        let fc = FetchedContent::text(text, "text/markdown")
+        let fc = FetchedContent::text(text, "text/plain")
             .with_title(title)
             .with_metadata(serde_json::json!({
                 "provider": "teams",
