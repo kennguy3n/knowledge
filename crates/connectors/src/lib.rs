@@ -3,7 +3,7 @@
 //!
 //! Per `docs/technical/design.md` §10.2 and `docs/technical/architecture.md` §4.1, the substrate
 //! ingests evidence from external systems through the
-//! [`connector_framework`] trait. This crate ships twenty concrete
+//! [`connector_framework`] trait. This crate ships thirty concrete
 //! connectors against the most common B2B sources:
 //!
 //! * [`google_drive::GoogleDriveConnector`] — Google Drive API v3
@@ -27,6 +27,24 @@
 //!   `/subscriptions`) under a shared `EmailProvider` enum.
 //! * [`github::GitHubConnector`] — GitHub REST API v3
 //!   (`/repos/{owner}/{repo}/issues`, repository webhooks).
+//! * [`salesforce::SalesforceConnector`] — Salesforce REST API v59
+//!   (SOQL `/query`, sObjects).
+//! * [`servicenow::ServiceNowConnector`] — ServiceNow Table API
+//!   (`/api/now/table/{table}`).
+//! * [`zendesk::ZendeskConnector`] — Zendesk Support API
+//!   (`/api/v2/tickets`, incremental exports).
+//! * [`linear::LinearConnector`] — Linear GraphQL API (`/graphql`).
+//! * [`asana::AsanaConnector`] — Asana REST (`/api/1.0/tasks`,
+//!   `/projects`, webhooks).
+//! * [`monday::MondayConnector`] — Monday.com GraphQL (`/v2`).
+//! * [`clickup::ClickUpConnector`] — ClickUp REST v2
+//!   (`/api/v2/team/.../task`, webhooks).
+//! * [`freshdesk::FreshdeskConnector`] — Freshdesk REST v2
+//!   (`/api/v2/tickets`).
+//! * [`intercom::IntercomConnector`] — Intercom REST (`/conversations`,
+//!   `/contacts`, webhooks).
+//! * [`pipedrive::PipedriveConnector`] — Pipedrive REST v1
+//!   (`/v1/deals`, `/v1/persons`, webhooks).
 //!
 //! Batch 3 adds ten business & developer-tool sources:
 //!
@@ -78,6 +96,10 @@ pub mod airtable;
 // UNSTABLE
 pub mod bitbucket;
 // STABLE
+pub mod asana;
+// STABLE
+pub mod clickup;
+// STABLE
 pub mod confluence;
 // UNSTABLE
 pub mod docusign;
@@ -85,6 +107,8 @@ pub mod docusign;
 pub mod email;
 // STABLE
 pub mod figma;
+// STABLE
+pub mod freshdesk;
 // STABLE
 pub mod github;
 // UNSTABLE
@@ -94,9 +118,15 @@ pub mod google_drive;
 // STABLE
 pub mod hubspot;
 // STABLE
+pub mod intercom;
+// STABLE
 pub mod jira;
 // UNSTABLE
 pub mod miro;
+// STABLE
+pub mod linear;
+// STABLE
+pub mod monday;
 // STABLE
 pub mod notion;
 // STABLE
@@ -106,6 +136,12 @@ pub mod quickbooks;
 // UNSTABLE
 pub mod shopify;
 // STABLE
+pub mod pipedrive;
+// STABLE
+pub mod salesforce;
+// STABLE
+pub mod servicenow;
+// STABLE
 pub mod slack;
 // UNSTABLE
 pub mod stripe;
@@ -113,11 +149,17 @@ pub mod stripe;
 pub mod trello;
 // UNSTABLE
 pub mod xero;
+// STABLE
+pub mod zendesk;
 
 // UNSTABLE
 pub use airtable::AirtableConnector;
 // UNSTABLE
 pub use bitbucket::BitbucketConnector;
+// STABLE
+pub use asana::AsanaConnector;
+// STABLE
+pub use clickup::ClickUpConnector;
 // STABLE
 pub use confluence::ConfluenceConnector;
 // UNSTABLE
@@ -127,6 +169,8 @@ pub use email::EmailConnector;
 // STABLE
 pub use figma::FigmaConnector;
 // STABLE
+pub use freshdesk::FreshdeskConnector;
+// STABLE
 pub use github::GitHubConnector;
 // UNSTABLE
 pub use gitlab::GitLabConnector;
@@ -135,9 +179,15 @@ pub use google_drive::GoogleDriveConnector;
 // STABLE
 pub use hubspot::HubSpotConnector;
 // STABLE
+pub use intercom::IntercomConnector;
+// STABLE
 pub use jira::JiraConnector;
 // UNSTABLE
 pub use miro::MiroConnector;
+// STABLE
+pub use linear::LinearConnector;
+// STABLE
+pub use monday::MondayConnector;
 // STABLE
 pub use notion::NotionConnector;
 // STABLE
@@ -147,6 +197,12 @@ pub use quickbooks::QuickBooksConnector;
 // UNSTABLE
 pub use shopify::ShopifyConnector;
 // STABLE
+pub use pipedrive::PipedriveConnector;
+// STABLE
+pub use salesforce::SalesforceConnector;
+// STABLE
+pub use servicenow::ServiceNowConnector;
+// STABLE
 pub use slack::SlackConnector;
 // UNSTABLE
 pub use stripe::StripeConnector;
@@ -154,3 +210,5 @@ pub use stripe::StripeConnector;
 pub use trello::TrelloConnector;
 // UNSTABLE
 pub use xero::XeroConnector;
+// STABLE
+pub use zendesk::ZendeskConnector;

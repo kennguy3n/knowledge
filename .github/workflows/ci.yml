@@ -62,9 +62,20 @@ jobs:
     # a single `#![allow(unsafe_code)]`. This job pins the set of
     # crates that are permitted to use that escape hatch: if a new
     # `allow(unsafe_code)` (inner or outer attribute) appears
-    # anywhere outside `crates/napi/`, the job fails and forces the
-    # author to justify the relaxation in review instead of slipping
-    # it past the workspace-level guarantee.
+    # anywhere outside the allowlisted paths below, the job fails and
+    # forces the author to justify the relaxation in review instead
+    # of slipping it past the workspace-level guarantee.
+    #
+    # Allowlisted paths (see `ALLOWED_PATHS_RE` in the scan step):
+    #   * `crates/napi/`                          — napi-derive
+    #     proc-macro expansion in `crates/napi/src/bindings.rs`.
+    #   * `crates/inference_router/src/config.rs`  — direct libc /
+    #     Win32 syscalls (`sysconf`, `sysctlbyname`,
+    #     `GlobalMemoryStatusEx`) for cgroup-aware RAM detection in
+    #     `detect_total_ram_bytes`. No subprocess is spawned and each
+    #     call site carries a `// SAFETY:` proof; the `unsafe` is
+    #     unavoidable FFI, so the file is granted a narrow exception
+    #     rather than relaxing the workspace floor.
     steps:
       - uses: actions/checkout@v6
       - name: Install ripgrep
@@ -87,11 +98,33 @@ jobs:
             sudo apt-get install -y -qq ripgrep
           fi
           rg --version
-      - name: Find unsafe_code allows outside the napi allowlist
+      - name: Find unsafe_code allows outside the allowlist
         run: |
-          # Allowlisted paths. Edit this list (and the doc above)
-          # when a new crate is consciously granted an exception.
-          ALLOWED_PREFIX='^crates/napi/'
+          # Allowlist of paths permitted to relax `unsafe_code`, as a
+          # single `grep -E` alternation. Edit this list (and the doc
+          # above) when a new path is consciously granted an exception.
+          #
+          # Each alternative is an anchored regex fragment, NOT a bare
+          # string — choose the anchoring deliberately:
+          #   * a trailing-slash, unanchored-end fragment matches a
+          #     whole subtree (directory prefix), e.g. `^crates/napi/`;
+          #   * a `\.rs$`-anchored fragment matches one exact file,
+          #     e.g. `crates/inference_router/src/config\.rs$`.
+          # Prefer the narrowest form that covers the real exception
+          # (a single file over a whole crate) so the guard keeps
+          # firing on every other source.
+          #
+          # Current entries:
+          #   * `^crates/napi/` (subtree) — napi-derive proc-macro
+          #     expansion (`crates/napi/src/bindings.rs`).
+          #   * `crates/inference_router/src/config\.rs$` (one file) —
+          #     syscall FFI for cgroup-aware RAM detection
+          #     (`detect_total_ram_bytes`): libc `sysconf` /
+          #     `sysctlbyname` + Win32 `GlobalMemoryStatusEx`, each
+          #     guarded by a `// SAFETY:` proof, no subprocess. Scoped
+          #     to the single file so any other `inference_router`
+          #     source still trips the guard.
+          ALLOWED_PATHS_RE='^(crates/napi/|crates/inference_router/src/config\.rs$)'
 
           # Catch every attribute form that relaxes `unsafe_code`,
           # including ones wrapped in `cfg_attr` AND ones broken
@@ -144,7 +177,7 @@ jobs:
           # workflow file itself (this very job) and the workspace
           # `Cargo.toml` lint table are protected by branch
           # protection + code review, not by this scanner; a
-          # reviewer editing `ALLOWED_PREFIX` or removing this job
+          # reviewer editing `ALLOWED_PATHS_RE` or removing this job
           # has to be caught by a human reviewing the diff. That is
           # intentional — this guard is a defense-in-depth check on
           # the actual source tree, not a self-protecting CI
@@ -157,9 +190,9 @@ jobs:
           # will fail with a `command not found` (exit 127) instead
           # of silently passing.
           mapfile -t scan_files < <(git ls-files -- '*.rs' \
-            | grep -vE "${ALLOWED_PREFIX}" || true)
+            | grep -vE "${ALLOWED_PATHS_RE}" || true)
           if [ "${#scan_files[@]}" -eq 0 ]; then
-            echo 'No tracked *.rs files outside the napi allowlist; skipping scan.'
+            echo 'No tracked *.rs files outside the unsafe-code allowlist; skipping scan.'
             matches=''
           else
             # `rg` exits 0 on match found, 1 on no match, 2+ on error.
@@ -178,7 +211,7 @@ jobs:
           fi
 
           if [ -n "${matches}" ]; then
-            echo '::error::A new `allow(unsafe_code)` (including `cfg_attr`-gated forms) was introduced outside the napi allowlist:'
+            echo '::error::A new `allow(unsafe_code)` (including `cfg_attr`-gated forms) was introduced outside the unsafe-code allowlist:'
             echo "${matches}"
             echo
             echo 'The workspace `Cargo.toml` sets `unsafe_code = "deny"` so that the'
@@ -189,7 +222,7 @@ jobs:
             exit 1
           fi
 
-          echo 'No stray allow(unsafe_code) attributes found outside crates/napi/.'
+          echo 'No stray allow(unsafe_code) attributes found outside the unsafe-code allowlist.'
       - name: Pin Cargo.toml unsafe_code policy
         # Companion check to the *.rs scan above. The Rust attribute
         # scan only catches someone *adding* `#[allow(unsafe_code)]`
