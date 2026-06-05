@@ -25,10 +25,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    classify_failure, percent_encode_form_component, percent_encode_path_component, Connector,
-    ConnectorConfig, ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent,
-    HttpRequest, HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId,
-    SyncRunResult, SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
+    ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
+    OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
+    WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -198,7 +198,7 @@ impl SapoConnector {
     ) -> Result<Vec<SapoOrder>> {
         let mut out = Vec::<SapoOrder>::new();
         let filter = updated_from.map_or_else(String::new, |ts| {
-            format!("&updated_at_min={}", percent_encode_form_component(ts))
+            format!("&updated_at_min={}", percent_encode_path_component(ts))
         });
         for page in 1..=MAX_LIST_PAGES {
             let url = format!(

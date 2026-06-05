@@ -2466,6 +2466,17 @@ mod tests {
             ConnectorKindTag::Freshdesk,
             ConnectorKindTag::Intercom,
             ConnectorKindTag::Pipedrive,
+            // Vietnam connectors (WS5).
+            ConnectorKindTag::Zalo,
+            ConnectorKindTag::VNPay,
+            ConnectorKindTag::MoMo,
+            ConnectorKindTag::Tiki,
+            ConnectorKindTag::ShopeeVN,
+            ConnectorKindTag::LazadaVN,
+            ConnectorKindTag::ViettelPost,
+            ConnectorKindTag::KiotViet,
+            ConnectorKindTag::Sapo,
+            ConnectorKindTag::BaseVN,
             ConnectorKindTag::GenericWebhook,
         ];
         for tag in all {

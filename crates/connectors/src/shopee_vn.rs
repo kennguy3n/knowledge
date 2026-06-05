@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    classify_failure, percent_encode_form_component, Connector, ConnectorConfig, ConnectorError,
+    classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
     WebhookEventTypes, WebhookSecret, WebhookSubscription,
@@ -244,7 +244,7 @@ impl ShopeeVNConnector {
         format!(
             "partner_id={}&timestamp={ts}&access_token={}&shop_id={}&sign={sign}",
             auth.partner_id,
-            percent_encode_form_component(access),
+            percent_encode_path_component(access),
             auth.shop_id,
         )
     }
@@ -274,7 +274,7 @@ impl ShopeeVNConnector {
         let path = "/api/v2/order/get_order_list";
         let mut out = Vec::<ShopeeOrder>::new();
         let filter = updated_from.map_or_else(String::new, |ts| {
-            format!("&update_time_from={}", percent_encode_form_component(ts))
+            format!("&update_time_from={}", percent_encode_path_component(ts))
         });
         for page in 1..=MAX_LIST_PAGES {
             let common = Self::signed_common(auth, path, token);
@@ -403,7 +403,7 @@ impl Connector for ShopeeVNConnector {
         let ordersn = document_id.as_str();
         let url = format!(
             "{base_url}{path}?{common}&order_sn_list={}",
-            percent_encode_form_component(ordersn)
+            percent_encode_path_component(ordersn)
         );
         let resp: ShopeeOrderDetailResponse = self.api_get(path, &url)?;
         let order = resp.response.order_list.into_iter().next().ok_or_else(|| {

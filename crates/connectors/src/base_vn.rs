@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    classify_failure, percent_encode_form_component, Connector, ConnectorConfig, ConnectorError,
+    classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
     WebhookEventTypes, WebhookSecret, WebhookSubscription,
@@ -185,7 +185,7 @@ impl BaseVNConnector {
     ) -> Result<Vec<BaseTask>> {
         let mut out = Vec::<BaseTask>::new();
         let filter = since.map_or_else(String::new, |ts| {
-            format!("&since={}", percent_encode_form_component(ts))
+            format!("&since={}", percent_encode_path_component(ts))
         });
         for page in 1..=MAX_LIST_PAGES {
             let url = format!(
@@ -305,7 +305,7 @@ impl Connector for BaseVNConnector {
     ) -> Result<FetchedContent> {
         let base_url = self.resolved_base_url(config);
         let id = document_id.as_str();
-        let id_enc = percent_encode_form_component(id);
+        let id_enc = percent_encode_path_component(id);
         let url = format!("{base_url}/publicapi/v2/task/get?id={id_enc}");
         let resp: BaseTaskResponse = self.api_get("/publicapi/v2/task/get", &url, token)?;
         let task = resp.task;

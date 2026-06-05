@@ -27,10 +27,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    bearer_get_json, percent_encode_form_component, percent_encode_path_component, Connector,
-    ConnectorConfig, ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent,
-    HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult,
-    SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
+    bearer_get_json, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
+    ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpTransport, OAuth2CodeExchange,
+    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes,
+    WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -163,7 +163,7 @@ impl MoMoConnector {
     ) -> Result<Vec<MoMoTransaction>> {
         let mut out = Vec::<MoMoTransaction>::new();
         let filter = updated_from.map_or_else(String::new, |ts| {
-            format!("&fromUpdatedAt={}", percent_encode_form_component(ts))
+            format!("&fromUpdatedAt={}", percent_encode_path_component(ts))
         });
         for page in 1..=MAX_LIST_PAGES {
             let url = format!(

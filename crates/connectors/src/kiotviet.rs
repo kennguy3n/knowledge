@@ -30,11 +30,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    bearer_get_json, classify_failure, percent_encode_form_component,
-    percent_encode_path_component, Connector, ConnectorConfig, ConnectorError, ConnectorEvent,
-    ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport, OAuth2CodeExchange,
-    OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState, WebhookEventTypes,
-    WebhookSecret, WebhookSubscription,
+    bearer_get_json, classify_failure, percent_encode_path_component, Connector, ConnectorConfig,
+    ConnectorError, ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest,
+    HttpTransport, OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult,
+    SyncState, WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -196,7 +195,7 @@ impl KiotVietConnector {
     ) -> Result<Vec<KiotInvoice>> {
         let mut out = Vec::<KiotInvoice>::new();
         let filter = modified_from.map_or_else(String::new, |ts| {
-            format!("&lastModifiedFrom={}", percent_encode_form_component(ts))
+            format!("&lastModifiedFrom={}", percent_encode_path_component(ts))
         });
         for page in 0..MAX_LIST_PAGES {
             let current_item = page * self.page_size as usize;

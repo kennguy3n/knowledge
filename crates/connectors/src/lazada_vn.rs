@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_framework::{
-    classify_failure, percent_encode_form_component, Connector, ConnectorConfig, ConnectorError,
+    classify_failure, percent_encode_path_component, Connector, ConnectorConfig, ConnectorError,
     ConnectorEvent, ConnectorInstanceId, FetchedContent, HttpRequest, HttpTransport,
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
     WebhookEventTypes, WebhookSecret, WebhookSubscription,
@@ -258,7 +258,7 @@ impl LazadaVNConnector {
         let sign = Self::sign_request(&auth.app_secret, path, &params);
         let mut query = String::new();
         for (k, v) in &params {
-            let _ = write!(query, "{k}={}&", percent_encode_form_component(v));
+            let _ = write!(query, "{k}={}&", percent_encode_path_component(v));
         }
         let _ = write!(query, "sign={sign}");
         query
