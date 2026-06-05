@@ -1716,17 +1716,19 @@ fn build_connector(
 ) -> FfiResult<Arc<dyn Connector>> {
     use connector_framework::{HttpTransport, OAuth2CodeExchange};
     use connectors::{
-        AirtableConnector, AsanaConnector, BaseVNConnector, BitbucketConnector, BoxConnector,
-        ClickUpConnector, ConfluenceConnector, DiscordConnector, DocuSignConnector,
-        DropboxConnector, EmailConnector, FigmaConnector, FreshdeskConnector, GitHubConnector,
-        GitLabConnector, GoogleCalendarConnector, GoogleDocsConnector, GoogleDriveConnector,
-        GoogleMeetConnector, GoogleSheetsConnector, HubSpotConnector, IntercomConnector,
-        JiraConnector, KiotVietConnector, LazadaVNConnector, LinearConnector, MiroConnector,
-        MoMoConnector, MondayConnector, NotionConnector, OneDriveConnector, PipedriveConnector,
-        QuickBooksConnector, SalesforceConnector, SapoConnector, ServiceNowConnector,
-        SharePointConnector, ShopeeVNConnector, ShopifyConnector, SlackConnector, StripeConnector,
-        TeamsConnector, TikiConnector, TrelloConnector, VNPayConnector, ViettelPostConnector,
-        XeroConnector, ZaloConnector, ZendeskConnector, ZoomConnector,
+        AirtableConnector, AmazonAeConnector, AsanaConnector, BaseVNConnector, BaytConnector,
+        BitbucketConnector, BoxConnector, CareemConnector, ClickUpConnector, ConfluenceConnector,
+        DiscordConnector, DocuSignConnector, DropboxConnector, EmailConnector, FetchrConnector,
+        FigmaConnector, FoodicsConnector, FreshdeskConnector, GitHubConnector, GitLabConnector,
+        GoogleCalendarConnector, GoogleDocsConnector, GoogleDriveConnector, GoogleMeetConnector,
+        GoogleSheetsConnector, HubSpotConnector, IntercomConnector, JiraConnector,
+        KiotVietConnector, LazadaVNConnector, LinearConnector, MiroConnector, MoMoConnector,
+        MondayConnector, NoonConnector, NotionConnector, OneDriveConnector, PayfortConnector,
+        PipedriveConnector, QuickBooksConnector, SalesforceConnector, SapoConnector,
+        ServiceNowConnector, SharePointConnector, ShopeeVNConnector, ShopifyConnector,
+        SlackConnector, StripeConnector, TabbyConnector, TalabatConnector, TeamsConnector,
+        TikiConnector, TrelloConnector, VNPayConnector, ViettelPostConnector, XeroConnector,
+        ZaloConnector, ZendeskConnector, ZohoConnector, ZoomConnector,
     };
     // If the per-runtime transport failed to build at
     // `open_store` time the connector subsystem is disabled —
@@ -1859,6 +1861,25 @@ fn build_connector(
         }
         ConnectorKind::Sapo => Arc::new(SapoConnector::new(instance, transport, oauth_client)),
         ConnectorKind::BaseVN => Arc::new(BaseVNConnector::new(instance, transport, oauth_client)),
+        // GCC / Middle East connectors
+        ConnectorKind::Careem => Arc::new(CareemConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Talabat => {
+            Arc::new(TalabatConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Noon => Arc::new(NoonConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::AmazonAE => {
+            Arc::new(AmazonAeConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Tabby => Arc::new(TabbyConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Foodics => {
+            Arc::new(FoodicsConnector::new(instance, transport, oauth_client))
+        }
+        ConnectorKind::Zoho => Arc::new(ZohoConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Bayt => Arc::new(BaytConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Fetchr => Arc::new(FetchrConnector::new(instance, transport, oauth_client)),
+        ConnectorKind::Payfort => {
+            Arc::new(PayfortConnector::new(instance, transport, oauth_client))
+        }
         ConnectorKind::GenericWebhook => {
             // The generic webhook connector is described in
             // `docs/technical/design.md` §10.2 but does not have a
@@ -1979,6 +2000,17 @@ pub(crate) fn connector_source_tag(kind: ConnectorKind) -> &'static str {
         ConnectorKind::KiotViet => "KiotViet",
         ConnectorKind::Sapo => "Sapo",
         ConnectorKind::BaseVN => "BaseVN",
+        // GCC / Middle East connectors
+        ConnectorKind::Careem => "Careem",
+        ConnectorKind::Talabat => "Talabat",
+        ConnectorKind::Noon => "Noon",
+        ConnectorKind::AmazonAE => "AmazonAE",
+        ConnectorKind::Tabby => "Tabby",
+        ConnectorKind::Foodics => "Foodics",
+        ConnectorKind::Zoho => "Zoho",
+        ConnectorKind::Bayt => "Bayt",
+        ConnectorKind::Fetchr => "Fetchr",
+        ConnectorKind::Payfort => "Payfort",
         ConnectorKind::GenericWebhook => "GenericWebhook",
     }
 }
@@ -2307,6 +2339,17 @@ fn connector_kind_to_framework(tag: ConnectorKindTag) -> ConnectorKind {
         ConnectorKindTag::KiotViet => ConnectorKind::KiotViet,
         ConnectorKindTag::Sapo => ConnectorKind::Sapo,
         ConnectorKindTag::BaseVN => ConnectorKind::BaseVN,
+        // GCC / Middle East connectors
+        ConnectorKindTag::Careem => ConnectorKind::Careem,
+        ConnectorKindTag::Talabat => ConnectorKind::Talabat,
+        ConnectorKindTag::Noon => ConnectorKind::Noon,
+        ConnectorKindTag::AmazonAE => ConnectorKind::AmazonAE,
+        ConnectorKindTag::Tabby => ConnectorKind::Tabby,
+        ConnectorKindTag::Foodics => ConnectorKind::Foodics,
+        ConnectorKindTag::Zoho => ConnectorKind::Zoho,
+        ConnectorKindTag::Bayt => ConnectorKind::Bayt,
+        ConnectorKindTag::Fetchr => ConnectorKind::Fetchr,
+        ConnectorKindTag::Payfort => ConnectorKind::Payfort,
         ConnectorKindTag::GenericWebhook => ConnectorKind::GenericWebhook,
     }
 }
@@ -2364,6 +2407,17 @@ fn framework_kind_to_ffi(kind: ConnectorKind) -> ConnectorKindTag {
         ConnectorKind::KiotViet => ConnectorKindTag::KiotViet,
         ConnectorKind::Sapo => ConnectorKindTag::Sapo,
         ConnectorKind::BaseVN => ConnectorKindTag::BaseVN,
+        // GCC / Middle East connectors
+        ConnectorKind::Careem => ConnectorKindTag::Careem,
+        ConnectorKind::Talabat => ConnectorKindTag::Talabat,
+        ConnectorKind::Noon => ConnectorKindTag::Noon,
+        ConnectorKind::AmazonAE => ConnectorKindTag::AmazonAE,
+        ConnectorKind::Tabby => ConnectorKindTag::Tabby,
+        ConnectorKind::Foodics => ConnectorKindTag::Foodics,
+        ConnectorKind::Zoho => ConnectorKindTag::Zoho,
+        ConnectorKind::Bayt => ConnectorKindTag::Bayt,
+        ConnectorKind::Fetchr => ConnectorKindTag::Fetchr,
+        ConnectorKind::Payfort => ConnectorKindTag::Payfort,
         ConnectorKind::GenericWebhook => ConnectorKindTag::GenericWebhook,
     }
 }
