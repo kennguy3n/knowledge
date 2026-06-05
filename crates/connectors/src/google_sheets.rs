@@ -34,9 +34,9 @@ use connector_framework::{
 use serde::Deserialize;
 
 use crate::google_drive::{
-    drive_push_notification_to_events, GoogleDriveChange, GoogleDriveChangeList, GoogleDriveFile,
-    GoogleDriveFileList, GoogleDrivePushNotification, GoogleDriveStartPageToken,
-    GoogleDriveWatchResponse,
+    change_to_event, drive_fetch_start_page_token, drive_paginate_changes, drive_paginate_files,
+    drive_push_notification_to_events, file_to_created_event, GoogleDriveChange,
+    GoogleDrivePushNotification, GoogleDriveWatchResponse,
 };
 
 /// Default Drive REST base URL (discovery + change feed).
@@ -51,18 +51,9 @@ pub const SHEET_MIME_TYPE: &str = "application/vnd.google-apps.spreadsheet";
 /// Default page size for `files.list` / `changes.list`.
 pub const DEFAULT_PAGE_SIZE: u32 = 100;
 
-/// Safety ceiling on number of pages a single sync will walk.
-pub const MAX_LIST_PAGES: usize = 10_000;
-
 /// Field mask requesting just enough grid data to render text.
 const GRID_FIELDS_MASK: &str =
     "properties.title,sheets(properties(title),data(rowData(values(formattedValue))))";
-
-const FILE_LIST_FIELDS_MASK: &str =
-    "nextPageToken,files(id,name,mimeType,trashed,modifiedTime,createdTime)";
-
-const CHANGE_LIST_FIELDS_MASK: &str = "nextPageToken,newStartPageToken,\
-     changes(fileId,kind,removed,time,file(id,name,mimeType,trashed,modifiedTime,createdTime))";
 
 /// One cell within a Sheets grid.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -230,127 +221,6 @@ impl GoogleSheetsConnector {
                 std::string::ToString::to_string,
             )
     }
-
-    fn paginate_files(
-        &self,
-        base_url: &str,
-        token: &OAuth2Token,
-        q: &str,
-    ) -> Result<Vec<GoogleDriveFile>> {
-        let mut files = Vec::<GoogleDriveFile>::new();
-        let mut page_token: Option<String> = None;
-        let mut prev_token: Option<String> = None;
-        for _ in 0..MAX_LIST_PAGES {
-            let mut url = format!(
-                "{base_url}/drive/v3/files?pageSize={}&q={}&fields={}",
-                self.page_size,
-                percent_encode_path_component(q),
-                percent_encode_path_component(FILE_LIST_FIELDS_MASK),
-            );
-            if let Some(tok) = page_token.as_deref() {
-                url.push_str("&pageToken=");
-                url.push_str(&percent_encode_path_component(tok));
-            }
-            let resp: GoogleDriveFileList = bearer_get_json(
-                &self.transport,
-                "google_sheets",
-                "/drive/v3/files",
-                &url,
-                token,
-                &[],
-            )?;
-            let returned = resp.files.len();
-            files.extend(resp.files);
-            let Some(next) = resp.next_page_token else {
-                return Ok(files);
-            };
-            if prev_token.as_deref() == Some(next.as_str()) || returned == 0 {
-                return Ok(files);
-            }
-            prev_token = Some(next.clone());
-            page_token = Some(next);
-        }
-        Err(ConnectorError::Sync(format!(
-            "google_sheets /drive/v3/files exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
-        )))
-    }
-
-    fn fetch_start_page_token(
-        &self,
-        base_url: &str,
-        token: &OAuth2Token,
-    ) -> Result<Option<String>> {
-        let url = format!("{base_url}/drive/v3/changes/startPageToken");
-        let resp: GoogleDriveStartPageToken = bearer_get_json(
-            &self.transport,
-            "google_sheets",
-            "/drive/v3/changes/startPageToken",
-            &url,
-            token,
-            &[],
-        )?;
-        Ok(resp.start_page_token)
-    }
-
-    fn paginate_changes(
-        &self,
-        base_url: &str,
-        token: &OAuth2Token,
-        start_token: &str,
-    ) -> Result<(Vec<GoogleDriveChange>, Option<String>)> {
-        let mut changes = Vec::<GoogleDriveChange>::new();
-        let mut page_token = start_token.to_string();
-        let mut prev_token: Option<String> = None;
-        let mut new_start_token: Option<String> = None;
-        for _ in 0..MAX_LIST_PAGES {
-            let url = format!(
-                "{base_url}/drive/v3/changes?pageToken={}&pageSize={}&includeRemoved=true&fields={}",
-                percent_encode_path_component(&page_token),
-                self.page_size,
-                percent_encode_path_component(CHANGE_LIST_FIELDS_MASK),
-            );
-            let resp: GoogleDriveChangeList = bearer_get_json(
-                &self.transport,
-                "google_sheets",
-                "/drive/v3/changes",
-                &url,
-                token,
-                &[],
-            )?;
-            let returned = resp.changes.len();
-            changes.extend(resp.changes);
-            if resp.new_start_page_token.is_some() {
-                new_start_token = resp.new_start_page_token;
-            }
-            let Some(next) = resp.next_page_token else {
-                return Ok((changes, new_start_token));
-            };
-            if prev_token.as_deref() == Some(next.as_str()) || returned == 0 {
-                return Ok((changes, new_start_token));
-            }
-            prev_token = Some(next.clone());
-            page_token = next;
-        }
-        Err(ConnectorError::Sync(format!(
-            "google_sheets /drive/v3/changes exceeded {MAX_LIST_PAGES} pages without exhausting cursor"
-        )))
-    }
-}
-
-fn file_to_created_event(f: &GoogleDriveFile) -> ConnectorEvent {
-    let occurred_at = f.created_time.or(f.modified_time).unwrap_or_else(Utc::now);
-    let id = SourceDocumentId::new(f.id.clone());
-    if f.trashed {
-        ConnectorEvent::DocumentDeleted {
-            document_id: id,
-            occurred_at,
-        }
-    } else {
-        ConnectorEvent::DocumentCreated {
-            document_id: id,
-            occurred_at,
-        }
-    }
 }
 
 /// Keep only changes that concern a Google Sheet (or a removal).
@@ -361,22 +231,6 @@ fn change_concerns_sheet(ch: &GoogleDriveChange) -> bool {
     ch.file
         .as_ref()
         .is_some_and(|f| f.mime_type == SHEET_MIME_TYPE)
-}
-
-fn change_to_event(ch: &GoogleDriveChange) -> ConnectorEvent {
-    let occurred_at = ch.time.unwrap_or_else(Utc::now);
-    let id = SourceDocumentId::new(ch.file_id.clone());
-    if ch.removed || ch.file.as_ref().is_some_and(|f| f.trashed) {
-        ConnectorEvent::DocumentDeleted {
-            document_id: id,
-            occurred_at,
-        }
-    } else {
-        ConnectorEvent::DocumentUpdated {
-            document_id: id,
-            occurred_at,
-        }
-    }
 }
 
 impl Connector for GoogleSheetsConnector {
@@ -397,9 +251,17 @@ impl Connector for GoogleSheetsConnector {
     fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
         let q = Self::resolved_query(config);
-        let files = self.paginate_files(&base_url, token, &q)?;
+        let files = drive_paginate_files(
+            &self.transport,
+            "google_sheets",
+            &base_url,
+            self.page_size,
+            token,
+            &q,
+        )?;
         let events: Vec<ConnectorEvent> = files.iter().map(file_to_created_event).collect();
-        let next_cursor = self.fetch_start_page_token(&base_url, token)?;
+        let next_cursor =
+            drive_fetch_start_page_token(&self.transport, "google_sheets", &base_url, token)?;
         Ok(SyncRunResult {
             events,
             next_cursor,
@@ -420,7 +282,14 @@ impl Connector for GoogleSheetsConnector {
                     .into(),
             )
         })?;
-        let (changes, new_start) = self.paginate_changes(&base_url, token, start_token)?;
+        let (changes, new_start) = drive_paginate_changes(
+            &self.transport,
+            "google_sheets",
+            &base_url,
+            self.page_size,
+            token,
+            start_token,
+        )?;
         let events: Vec<ConnectorEvent> = changes
             .iter()
             .filter(|c| change_concerns_sheet(c))
@@ -554,6 +423,7 @@ impl Connector for GoogleSheetsConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::google_drive::{CHANGE_LIST_FIELDS_MASK, FILE_LIST_FIELDS_MASK};
     use chrono::Duration;
     use connector_framework::{
         AuthKind, ConnectorKind, HttpMethod, MockHttpTransport, MockResponse,

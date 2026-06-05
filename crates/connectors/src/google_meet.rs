@@ -38,6 +38,8 @@ use connector_framework::{
 };
 use serde::Deserialize;
 
+use crate::timestamp_cursor;
+
 /// Default Meet REST base URL. Override via
 /// `auth_config_json.api_base_url`.
 pub const DEFAULT_API_BASE_URL: &str = "https://meet.googleapis.com";
@@ -303,14 +305,6 @@ fn record_event(record: &ConferenceRecord) -> ConnectorEvent {
     }
 }
 
-/// Latest `endTime` (falling back to `startTime`) across records.
-fn latest_end(records: &[ConferenceRecord]) -> Option<DateTime<Utc>> {
-    records
-        .iter()
-        .filter_map(|r| r.end_time.or(r.start_time))
-        .max()
-}
-
 /// A Workspace Events conference notification.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct MeetEvent {
@@ -379,7 +373,15 @@ impl Connector for GoogleMeetConnector {
     fn initial_sync(&self, config: &ConnectorConfig, token: &OAuth2Token) -> Result<SyncRunResult> {
         let base_url = self.resolved_base_url(config);
         let records = self.paginate_records(&base_url, token, "")?;
-        let next_cursor = latest_end(&records).map(|d| d.to_rfc3339());
+        // Seed the cursor with the latest end time AND the resource
+        // names at that instant, so the first incremental run neither
+        // re-emits the boundary conference nor skips a later conference
+        // sharing its exact sub-second timestamp.
+        let next_cursor = timestamp_cursor::seed(
+            records
+                .iter()
+                .filter_map(|r| r.end_time.or(r.start_time).map(|t| (t, r.name.as_str()))),
+        );
         let events: Vec<ConnectorEvent> = records.iter().map(record_event).collect();
         Ok(SyncRunResult {
             events,
@@ -401,24 +403,31 @@ impl Connector for GoogleMeetConnector {
                     .into(),
             )
         })?;
-        let watermark = DateTime::parse_from_rfc3339(cursor)
-            .map(|dt| dt.with_timezone(&Utc))
-            .map_err(|e| {
-                ConnectorError::Sync(format!("google_meet incremental_sync: invalid cursor: {e}"))
-            })?;
+        let cursor = timestamp_cursor::decode(cursor).map_err(|e| {
+            ConnectorError::Sync(format!("google_meet incremental_sync: invalid cursor: {e}"))
+        })?;
         // Meet's list filter binds on `start_time`; request records that
-        // started at/after the watermark, then drop any whose end time
-        // is at or before it to avoid re-emitting the boundary record.
-        let filter = format!("start_time>=\"{}\"", watermark.to_rfc3339());
+        // started at/after the watermark, then drop anything already
+        // emitted. A record exactly at the watermark instant is kept
+        // only if its resource name was not emitted before — this
+        // catches a second conference sharing the same sub-second
+        // end time that a strict `>` cursor would skip forever.
+        let filter = format!("start_time>=\"{}\"", cursor.watermark.to_rfc3339());
         let extra = format!("&filter={}", percent_encode_path_component(&filter));
         let records: Vec<ConferenceRecord> = self
             .paginate_records(&base_url, token, &extra)?
             .into_iter()
-            .filter(|r| r.end_time.or(r.start_time).is_none_or(|t| t > watermark))
+            .filter(|r| match r.end_time.or(r.start_time) {
+                Some(t) => cursor.is_new(t, &r.name),
+                None => true,
+            })
             .collect();
-        let next_cursor = latest_end(&records)
-            .map(|d| d.to_rfc3339())
-            .or_else(|| Some(cursor.to_string()));
+        let next_cursor = Some(timestamp_cursor::encode(
+            &cursor,
+            records
+                .iter()
+                .filter_map(|r| r.end_time.or(r.start_time).map(|t| (t, r.name.as_str()))),
+        ));
         let events: Vec<ConnectorEvent> = records.iter().map(record_event).collect();
         Ok(SyncRunResult {
             events,
@@ -590,7 +599,13 @@ mod tests {
             .events
             .iter()
             .all(|e| matches!(e, ConnectorEvent::DocumentCreated { .. })));
-        assert_eq!(res.next_cursor.as_deref(), Some(t2.to_rfc3339().as_str()));
+        // Cursor is seeded with the boundary instant AND the resource
+        // name at that instant so the first incremental run can de-dup
+        // ties.
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some(format!("{}|conferenceRecords/b", t2.to_rfc3339()).as_str())
+        );
     }
 
     #[test]
@@ -641,12 +656,60 @@ mod tests {
         let c = GoogleMeetConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(watermark.to_rfc3339());
+        // Cursor records that "old" was already emitted at the boundary
+        // instant, so it is suppressed while "new" comes through.
+        state.cursor = Some(format!("{}|conferenceRecords/old", watermark.to_rfc3339()));
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert_eq!(res.events.len(), 1);
         assert_eq!(
             res.events[0].document_id().as_str(),
             "conferenceRecords/new"
+        );
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some(format!("{}|conferenceRecords/new", newer.to_rfc3339()).as_str())
+        );
+    }
+
+    #[test]
+    fn incremental_sync_emits_tie_conference_not_yet_seen() {
+        // Two conferences share the EXACT same endTime. The first run
+        // emitted only "a"; "b" appears later at the same instant. A
+        // strict `>` cursor would drop "b" forever — here it is emitted
+        // exactly once and then suppressed.
+        let transport = Arc::new(MockHttpTransport::new());
+        let boundary = Utc::now() - Duration::hours(2);
+        let filter = format!("start_time>=\"{}\"", boundary.to_rfc3339());
+        let url = format!(
+            "https://api.test/meet/v2/conferenceRecords?pageSize=100&filter={}",
+            percent_encode_path_component(&filter)
+        );
+        transport.expect(
+            HttpMethod::Get,
+            url,
+            ok_json(&serde_json::json!({
+                "conferenceRecords": [
+                    { "name": "conferenceRecords/a", "endTime": boundary },
+                    { "name": "conferenceRecords/b", "endTime": boundary },
+                ]
+            })),
+        );
+        let c = GoogleMeetConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some(format!("{}|conferenceRecords/a", boundary.to_rfc3339()));
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        assert_eq!(res.events.len(), 1);
+        assert_eq!(res.events[0].document_id().as_str(), "conferenceRecords/b");
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some(
+                format!(
+                    "{}|conferenceRecords/a,conferenceRecords/b",
+                    boundary.to_rfc3339()
+                )
+                .as_str()
+            )
         );
     }
 

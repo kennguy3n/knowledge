@@ -36,6 +36,8 @@ use connector_framework::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::timestamp_cursor;
+
 /// Default Zoom REST base URL. Override via
 /// `auth_config_json.api_base_url`.
 pub const DEFAULT_API_BASE_URL: &str = "https://api.zoom.us/v2";
@@ -224,11 +226,6 @@ fn meeting_event(meeting: &RecordingMeeting) -> ConnectorEvent {
     }
 }
 
-/// Track the latest `start_time` across meetings for the cursor.
-fn latest_start(meetings: &[RecordingMeeting]) -> Option<DateTime<Utc>> {
-    meetings.iter().filter_map(|m| m.start_time).max()
-}
-
 /// A Zoom webhook event envelope.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct ZoomEvent {
@@ -325,7 +322,15 @@ impl Connector for ZoomConnector {
             .map(|d| format!("&from={}", percent_encode_path_component(d)))
             .unwrap_or_default();
         let meetings = self.paginate_recordings(config, token, &from)?;
-        let next_cursor = latest_start(&meetings).map(|d| d.to_rfc3339());
+        // Seed the cursor with the latest start_time AND the UUIDs at
+        // that instant, so the first incremental run neither re-emits
+        // the boundary recording nor skips a later recording sharing
+        // its exact sub-second timestamp.
+        let next_cursor = timestamp_cursor::seed(
+            meetings
+                .iter()
+                .filter_map(|m| m.start_time.map(|t| (t, m.uuid.as_str()))),
+        );
         let events: Vec<ConnectorEvent> = meetings.iter().map(meeting_event).collect();
         Ok(SyncRunResult {
             events,
@@ -346,26 +351,33 @@ impl Connector for ZoomConnector {
                     .into(),
             )
         })?;
-        let watermark = DateTime::parse_from_rfc3339(cursor)
-            .map(|dt| dt.with_timezone(&Utc))
-            .map_err(|e| {
-                ConnectorError::Sync(format!(
-                    "zoom incremental_sync: invalid cursor timestamp: {e}"
-                ))
-            })?;
+        let cursor = timestamp_cursor::decode(cursor).map_err(|e| {
+            ConnectorError::Sync(format!(
+                "zoom incremental_sync: invalid cursor timestamp: {e}"
+            ))
+        })?;
         // Zoom's recordings list filters by calendar date (`from`), so
-        // re-request from the watermark's day and drop anything at or
-        // before the exact watermark instant to avoid re-emitting it.
-        let from = watermark.format("%Y-%m-%d").to_string();
+        // re-request from the watermark's day and drop anything already
+        // emitted. A record exactly at the watermark instant is kept
+        // only if its UUID was not emitted before — this catches a
+        // second recording sharing the same sub-second start_time that
+        // a strict `>` cursor would skip forever.
+        let from = cursor.watermark.format("%Y-%m-%d").to_string();
         let extra = format!("&from={from}");
         let meetings: Vec<RecordingMeeting> = self
             .paginate_recordings(config, token, &extra)?
             .into_iter()
-            .filter(|m| m.start_time.is_none_or(|t| t > watermark))
+            .filter(|m| match m.start_time {
+                Some(t) => cursor.is_new(t, &m.uuid),
+                None => true,
+            })
             .collect();
-        let next_cursor = latest_start(&meetings)
-            .map(|d| d.to_rfc3339())
-            .or_else(|| Some(cursor.to_string()));
+        let next_cursor = Some(timestamp_cursor::encode(
+            &cursor,
+            meetings
+                .iter()
+                .filter_map(|m| m.start_time.map(|t| (t, m.uuid.as_str()))),
+        ));
         let events: Vec<ConnectorEvent> = meetings.iter().map(meeting_event).collect();
         Ok(SyncRunResult {
             events,
@@ -550,7 +562,12 @@ mod tests {
             .events
             .iter()
             .all(|e| matches!(e, ConnectorEvent::DocumentCreated { .. })));
-        assert_eq!(res.next_cursor.as_deref(), Some(t2.to_rfc3339().as_str()));
+        // Cursor is seeded with the boundary instant AND the UUID at
+        // that instant so the first incremental run can de-dup ties.
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some(format!("{}|u2", t2.to_rfc3339()).as_str())
+        );
     }
 
     #[test]
@@ -599,10 +616,50 @@ mod tests {
         let c = ZoomConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let mut state = SyncState::new(c.instance);
-        state.cursor = Some(watermark.to_rfc3339());
+        // Cursor records that "old" was already emitted at the boundary
+        // instant, so it is suppressed while "new" comes through.
+        state.cursor = Some(format!("{}|old", watermark.to_rfc3339()));
         let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
         assert_eq!(res.events.len(), 1);
         assert_eq!(res.events[0].document_id().as_str(), "new");
+        // Watermark advances to the newer record and records its UUID.
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some(format!("{}|new", newer.to_rfc3339()).as_str())
+        );
+    }
+
+    #[test]
+    fn incremental_sync_emits_tie_recording_not_yet_seen() {
+        // Two recordings share the EXACT same start_time. The first run
+        // emitted only "a"; "b" appears later at the same instant. A
+        // strict `>` cursor would drop "b" forever — here it is emitted
+        // exactly once and then suppressed.
+        let transport = Arc::new(MockHttpTransport::new());
+        let boundary = Utc::now() - Duration::hours(2);
+        let from = boundary.format("%Y-%m-%d").to_string();
+        transport.expect(
+            HttpMethod::Get,
+            format!("https://api.test/zoom/users/me/recordings?page_size=100&from={from}"),
+            ok_json(&serde_json::json!({
+                "meetings": [
+                    { "uuid": "a", "topic": "a", "start_time": boundary },
+                    { "uuid": "b", "topic": "b", "start_time": boundary },
+                ],
+                "next_page_token": ""
+            })),
+        );
+        let c = ZoomConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let tok = c.authenticate(&cfg()).unwrap();
+        let mut state = SyncState::new(c.instance);
+        state.cursor = Some(format!("{}|a", boundary.to_rfc3339()));
+        let res = c.incremental_sync(&cfg(), &tok, &state).unwrap();
+        assert_eq!(res.events.len(), 1);
+        assert_eq!(res.events[0].document_id().as_str(), "b");
+        assert_eq!(
+            res.next_cursor.as_deref(),
+            Some(format!("{}|a,b", boundary.to_rfc3339()).as_str())
+        );
     }
 
     #[test]
