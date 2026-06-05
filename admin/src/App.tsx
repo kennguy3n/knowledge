@@ -85,6 +85,10 @@ function FirstRunGate() {
     [shouldProbe],
   );
 
+  // Re-checking `shouldProbe` here (not just `list.data`) is load-bearing:
+  // if the wizard gets dismissed while a stale `list.data` from an earlier
+  // probe is still cached by `useAsync`, this guard keeps us from
+  // redirecting on data we should no longer act on.
   if (shouldProbe && list.data && list.data.length === 0) {
     return <Navigate to="/welcome" replace />;
   }

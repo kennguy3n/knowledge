@@ -216,10 +216,15 @@ KNOWLEDGE_VERSION=__TAG__
     Replace('__GFPW__',   $gfPw).
     Replace('__TAG__',    $tag)
 
-  # Write UTF-8 without BOM so Docker Compose parses the file cleanly.
+  # Create the file empty and lock it down *before* the secrets land in
+  # it, so there is never a window where a populated .env is readable by
+  # other local users (mirrors the bash installer creating the file under
+  # `umask 077`). Re-writing content into the existing file truncates it
+  # in place and preserves the restrictive ACL / mode set above.
   $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-  [System.IO.File]::WriteAllText($envFile, ($content -replace "`r`n", "`n"), $utf8NoBom)
+  [System.IO.File]::WriteAllText($envFile, '', $utf8NoBom)
   Protect-SecretFile $envFile
+  [System.IO.File]::WriteAllText($envFile, ($content -replace "`r`n", "`n"), $utf8NoBom)
   Write-Ok "Wrote $envFile"
 }
 
