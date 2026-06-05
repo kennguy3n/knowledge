@@ -22,9 +22,13 @@
 //!   `vnp_TxnRef`.
 //!
 //! VNPay authenticates merchant API calls with an `X-Api-Key` header
-//! (not a bearer `Authorization`), so requests go through the injected
-//! [`HttpTransport`] directly. `authenticate` wraps the configured
-//! `api_key` into a long-lived synthetic token.
+//! when a static API key is configured, falling back to the injected
+//! [`OAuth2CodeExchange`] when only an authorization-code grant is
+//! available. Requests pick their auth header from the token's
+//! provenance (recorded in [`OAuth2Token::token_type`], following the
+//! same convention as the Discord connector): a static API key is
+//! sent in the provider-native `X-Api-Key` header, while an
+//! OAuth-issued access token is sent as `Authorization: Bearer`.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -50,6 +54,10 @@ pub const MAX_LIST_PAGES: usize = 10_000;
 
 /// Scope recorded on a token synthesised from a configured API key.
 const DEFAULT_SCOPE: &str = "merchant.transactions.read";
+/// `OAuth2Token::token_type` marker for a static API-key credential.
+/// Distinguishes the API-key auth path (provider-native `X-Api-Key`
+/// header) from an OAuth-issued bearer token.
+pub const API_KEY_TOKEN_TYPE: &str = "ApiKey";
 
 /// One VNPay merchant transaction (subset of fields ingested).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -164,9 +172,10 @@ impl VNPayConnector {
         url: &str,
         token: &OAuth2Token,
     ) -> Result<R> {
-        let req = HttpRequest::get(url)
-            .with_header("Accept", "application/json")
-            .with_header("X-Api-Key", token.access_token.expose());
+        let req = apply_auth(
+            HttpRequest::get(url).with_header("Accept", "application/json"),
+            token,
+        );
         let resp = self.transport.execute(req)?;
         if !resp.is_success() {
             return Err(classify_failure("vnpay", endpoint, &resp));
@@ -211,6 +220,27 @@ impl VNPayConnector {
     }
 }
 
+/// Attach the auth header matching the token's provenance: a static
+/// API-key token (tagged [`API_KEY_TOKEN_TYPE`] in `authenticate`)
+/// goes in the provider-native `X-Api-Key` header, while an
+/// OAuth-issued token is sent as `Authorization: <scheme> <token>`
+/// (scheme from `token_type`, defaulting to `Bearer`).
+fn apply_auth(req: HttpRequest, token: &OAuth2Token) -> HttpRequest {
+    if token.token_type == API_KEY_TOKEN_TYPE {
+        req.with_header("X-Api-Key", token.access_token.expose())
+    } else {
+        let scheme = if token.token_type.is_empty() {
+            "Bearer"
+        } else {
+            token.token_type.as_str()
+        };
+        req.with_header(
+            "Authorization",
+            format!("{scheme} {}", token.access_token.expose()),
+        )
+    }
+}
+
 fn txn_to_event(t: &VNPayTransaction, created: bool) -> ConnectorEvent {
     let occurred_at = t.updated_at.unwrap_or_else(Utc::now);
     let id = SourceDocumentId::new(t.txn_ref.clone());
@@ -235,11 +265,13 @@ impl Connector for VNPayConnector {
             .or_else(|| config.auth_config_json.get("access_token"))
             .and_then(serde_json::Value::as_str)
         {
-            return Ok(OAuth2Token::new_without_refresh(
+            let mut token = OAuth2Token::new_without_refresh(
                 key,
                 Utc::now() + chrono::Duration::days(3650),
                 DEFAULT_SCOPE,
-            ));
+            );
+            token.token_type = API_KEY_TOKEN_TYPE.to_string();
+            return Ok(token);
         }
         let auth_code = config
             .auth_config_json
@@ -429,6 +461,15 @@ mod tests {
         })
     }
 
+    fn cfg_oauth() -> ConnectorConfig {
+        ConnectorConfig::new(ConnectorKind::VNPay, AuthKind::OAuth2, ScopeId::new_v4())
+            .with_auth_config(serde_json::json!({
+                "authorization_code": "auth-code",
+                "api_base_url": "https://api.test/vnpay",
+                "hash_secret": "vnp-hash-secret",
+            }))
+    }
+
     fn ok_json(value: &serde_json::Value) -> MockResponse {
         MockResponse::ok_json(serde_json::to_vec(value).unwrap())
     }
@@ -442,6 +483,44 @@ mod tests {
         );
         let tok = c.authenticate(&cfg()).unwrap();
         assert_eq!(tok.access_token.expose(), "vnp_key_123");
+        assert_eq!(tok.token_type, API_KEY_TOKEN_TYPE);
+    }
+
+    #[test]
+    fn authenticate_falls_back_to_oauth_code() {
+        let c = VNPayConnector::new(
+            ConnectorInstanceId::new_v4(),
+            Arc::new(MockHttpTransport::new()),
+            oauth(),
+        );
+        let tok = c.authenticate(&cfg_oauth()).unwrap();
+        // OAuth-issued token keeps the bearer token_type, not the
+        // API-key marker, so requests use `Authorization: Bearer`.
+        assert_eq!(tok.access_token.expose(), "unused");
+        assert_eq!(tok.token_type, "Bearer");
+    }
+
+    #[test]
+    fn oauth_token_is_sent_as_bearer_header() {
+        let transport = Arc::new(MockHttpTransport::new());
+        transport.expect(
+            HttpMethod::Get,
+            "https://api.test/vnpay/merchant/v1/transactions?page=1&limit=50",
+            ok_json(&serde_json::json!({ "data": [txn("T1", "2024-01-01T00:00:00Z")] })),
+        );
+        let c = VNPayConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
+        let tok = c.authenticate(&cfg_oauth()).unwrap();
+        let res = c.initial_sync(&cfg_oauth(), &tok).unwrap();
+        assert_eq!(res.events.len(), 1);
+        let recorded = transport.recorded();
+        assert!(recorded[0]
+            .headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("authorization") && v == "Bearer unused"));
+        assert!(!recorded[0]
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("x-api-key")));
     }
 
     #[test]

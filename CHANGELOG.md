@@ -129,6 +129,22 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Fixed
 
+- **Vietnam connectors auth header by token provenance** —
+  `connectors::VNPayConnector`, `connectors::SapoConnector`,
+  `connectors::TikiConnector`, `connectors::ViettelPostConnector` and
+  `connectors::TrueMoneyConnector` now pick the request auth header
+  from the token's provenance (recorded in `OAuth2Token::token_type`,
+  mirroring the Discord connector and the earlier Gojek/Odoo fix): a
+  static credential (API key / access token / session token) is sent
+  in the provider-native header (`X-Api-Key` / `X-Sapo-Access-Token` /
+  `tiki-api-key` / `Token` / `X-API-Key`), while a token minted by the
+  OAuth2 code-exchange fallback is sent as `Authorization: Bearer`.
+  Previously an OAuth-issued token was sent in the provider-native
+  header, which would be rejected by an endpoint expecting a bearer
+  token. For Tiki and TrueMoney the separate HMAC signature
+  (`sign`/`timestamp` query pair and `X-Timestamp`/`X-Signature`
+  headers respectively), keyed by the merchant secret, is unchanged
+  and still applied to every request.
 - **`connectors::GitHubConnector` pagination** — `paginate_issues` /
   `paginate_comments` no longer fall back to manual `page=N` walking after
   following an opaque `Link` cursor, which could re-fetch and duplicate a
