@@ -5,6 +5,8 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [1.1.0] - 2026-06-05
 
 This release adds substrate high availability, an end-user reference web
@@ -272,5 +274,6 @@ full suite and methodology.
 - Storage per message (at 500K): 612 bytes.
 - Connector sync (10K docs): ~6,750 docs/sec.
 
+[Unreleased]: https://github.com/kennguy3n/knowledge/compare/v1.1.0...HEAD
 [1.1.0]: https://github.com/kennguy3n/knowledge/releases/tag/v1.1.0
 [1.0.0]: https://github.com/kennguy3n/knowledge/releases/tag/v1.0.0
