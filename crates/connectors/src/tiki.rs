@@ -342,12 +342,12 @@ impl Connector for TikiConnector {
         let secret = Self::signing_secret(config)?;
         let id = document_id.as_str();
         let id_enc = percent_encode_path_component(id);
-        let path = "/integration/v2/orders";
-        let suffix = Self::signed_suffix(&secret, path);
-        let url = format!(
-            "{base_url}{path}/{id_enc}?{}",
-            suffix.trim_start_matches('&')
-        );
+        // Sign the *actual* request path (including the id segment); Tiki
+        // recomputes the HMAC over the path it receives, so signing the
+        // bare collection path would fail signature validation.
+        let path = format!("/integration/v2/orders/{id_enc}");
+        let suffix = Self::signed_suffix(&secret, &path);
+        let url = format!("{base_url}{path}?{}", suffix.trim_start_matches('&'));
         let order: TikiOrder = self.api_get("/integration/v2/orders/{id}", &url, token)?;
 
         let title = format!("Order {}", order.code);
@@ -565,7 +565,7 @@ mod tests {
     fn fetch_content_renders_summary() {
         let transport = Arc::new(MockHttpTransport::new());
         transport.with_default_response(ok_json(&order("OD1", "2024-01-01T00:00:00Z")));
-        let c = TikiConnector::new(ConnectorInstanceId::new_v4(), transport, oauth());
+        let c = TikiConnector::new(ConnectorInstanceId::new_v4(), transport.clone(), oauth());
         let tok = c.authenticate(&cfg()).unwrap();
         let content = c
             .fetch_content(&cfg(), &tok, &SourceDocumentId::new("OD1"))
@@ -574,6 +574,21 @@ mod tests {
         assert!(String::from_utf8(content.body)
             .unwrap()
             .contains("**Status:** complete"));
+        // The signature must be computed over the *actual* request path,
+        // which includes the order-id segment.
+        let rec = &transport.recorded()[0];
+        assert!(rec.url.contains("/integration/v2/orders/OD1?"));
+        assert!(rec.url.contains("&sign="));
+        let expected_path = "/integration/v2/orders/OD1";
+        let ts: i64 = rec
+            .url
+            .split("timestamp=")
+            .nth(1)
+            .and_then(|s| s.split('&').next())
+            .and_then(|s| s.parse().ok())
+            .expect("timestamp present");
+        let expected_sign = TikiConnector::sign_request("tiki-secret", expected_path, ts);
+        assert!(rec.url.contains(&format!("&sign={expected_sign}")));
     }
 
     #[test]
