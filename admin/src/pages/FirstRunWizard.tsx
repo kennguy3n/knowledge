@@ -46,6 +46,11 @@ export default function FirstRunWizard() {
 
   function pickKind(k: ConnectorKind) {
     setKind(k);
+    // Drop any connector created for a previously-picked kind: the
+    // instanceId reuse below is only meant to retry OAuth for the *same*
+    // kind, so a fresh selection must start a new connector rather than
+    // authorizing the stale instance under the wrong kind.
+    setInstanceId(null);
     setError(undefined);
     setStep(3);
   }

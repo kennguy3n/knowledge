@@ -113,6 +113,33 @@ function Test-Docker {
   Write-Ok 'Docker and Compose plugin detected'
 }
 
+# Lock the secrets file down to its owner, mirroring the bash installer's
+# `umask 077`. On Windows this disables ACL inheritance and grants full
+# control to the current user only; on pwsh/Unix it chmods the file 600.
+# Best-effort: a failure here is warned but never aborts the install, since
+# the secrets are already written and this is defense-in-depth.
+function Protect-SecretFile([string]$path) {
+  $onWindows = if ($PSVersionTable.PSVersion.Major -ge 6) { $IsWindows } else { $true }
+  try {
+    if ($onWindows) {
+      $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+      $acl = New-Object System.Security.AccessControl.FileSecurity
+      $acl.SetOwner($user)
+      # Disable inheritance and drop inherited ACEs so the file is not
+      # exposed by a permissive parent directory.
+      $acl.SetAccessRuleProtection($true, $false)
+      $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $user, 'FullControl', 'Allow')
+      $acl.AddAccessRule($rule)
+      [System.IO.File]::SetAccessControl($path, $acl)
+    } else {
+      & chmod 600 $path
+    }
+  } catch {
+    Write-Warn "could not restrict permissions on ${path}: $($_.Exception.Message)"
+  }
+}
+
 # -- .env generation ---------------------------------------------------
 function Write-EnvFile([string]$envFile, [string]$tier, [string]$tagOverride) {
   if (Test-Path $envFile) {
@@ -192,6 +219,7 @@ KNOWLEDGE_VERSION=__TAG__
   # Write UTF-8 without BOM so Docker Compose parses the file cleanly.
   $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
   [System.IO.File]::WriteAllText($envFile, ($content -replace "`r`n", "`n"), $utf8NoBom)
+  Protect-SecretFile $envFile
   Write-Ok "Wrote $envFile"
 }
 
