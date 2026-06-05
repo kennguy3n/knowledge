@@ -357,6 +357,23 @@ fn memory_manager_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth 
 ///   task (classification-only ladder — `trigger_synthesis` will
 ///   return `Unavailable`).
 /// * `Ok` otherwise.
+///
+/// # Lazy-bootstrap interaction
+///
+/// `open_store` no longer probes adapters at boot (the probe is a
+/// `GET /health` with a multi-second timeout, deferred to the first
+/// `trigger_synthesis` via `InferenceRouter::ensure_bootstrap_started`).
+/// Until that first synthesis dispatch the router is *not bootstrapped*,
+/// so `adapter_states()` reports every adapter as `available: false` and
+/// this subsystem reads `Unavailable` (with `slm_latency: None`). This
+/// is the intended trade — ingest/query-only hosts never pay the probe
+/// cost — but it is a behavioural change from the eager-probe era: a
+/// host that gates UI (e.g. a "Synthesize" affordance) on the health
+/// envelope's adapter availability will see a false-negative until
+/// synthesis is first triggered. Such hosts should treat
+/// `Unavailable`-before-first-synthesis as "not yet probed" rather than
+/// "permanently unsupported", or call `trigger_synthesis` to force the
+/// probe before reading availability.
 fn inference_router_subsystem(rt: &crate::runtime::FfiRuntime) -> SubsystemHealth {
     use inference_router::InferenceTask;
 

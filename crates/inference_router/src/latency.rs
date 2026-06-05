@@ -173,12 +173,10 @@ impl LatencyHistogram {
                 } else {
                     LATENCY_BUCKETS_SECONDS[i - 1]
                 };
+                // The loop guard above requires `bucket_count > 0`, so
+                // the interpolation divisor is always non-zero here.
                 let within = rank - cumulative_before as f64;
-                let fraction = if bucket_count == 0 {
-                    0.0
-                } else {
-                    within / bucket_count as f64
-                };
+                let fraction = within / bucket_count as f64;
                 return Some(lower + (upper - lower) * fraction);
             }
             cumulative_before = cumulative_after;

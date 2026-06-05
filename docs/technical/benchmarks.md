@@ -399,6 +399,16 @@ longer blocks on a (possibly absent) model sidecar. The
 `knowledge_open_store_duration_seconds` histogram records the completed
 open latency (success path only).
 
+> **Operator note — health-check availability is lazy too.** Because
+> adapters are not probed until the first synthesis dispatch, the FFI
+> `health_check` reports the `inference_router` subsystem as
+> `Unavailable` (and SLM latency as absent) until `trigger_synthesis`
+> is first called. Hosts that gate UI on adapter availability should
+> treat this as "not yet probed" rather than "permanently
+> unsupported", or trigger a synthesis to force the probe. See the
+> doc comment on `inference_router_subsystem` in
+> [`crates/ffi/src/health.rs`](../../crates/ffi/src/health.rs).
+
 ### `open_store` latency — measured-in-CI
 
 | Scenario | Latency |
