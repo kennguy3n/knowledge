@@ -10,9 +10,10 @@ and is implemented by the `connector_framework` crate
 ## One connector per source system
 
 Every external system the substrate ingests from sits behind one
-`Connector` instance. The framework ships the boundary; each provider
-(Google Drive, OneDrive, Notion, Jira, Confluence, Figma, HubSpot,
-Slack, Email, GitHub) is its own implementation.
+`Connector` instance. The framework ships the boundary; each of the 40
+built-in providers is its own implementation (see the
+[connector maturity table](../product/roadmap.md#connector-maturity)
+for the full list).
 
 ## Authentication (OAuth2)
 
