@@ -16,7 +16,10 @@ const TIERS: SynthesisTier[] = ['basic', 'standard', 'premium'];
 export default function Tenants() {
   const list = useAsync((signal) => tenantsApi.listTenants(signal), []);
   const [actionError, setActionError] = useState<Error | undefined>();
-  const [busy, setBusy] = useState<string | undefined>();
+  // Track every in-flight action by key so concurrent operations on
+  // different rows each keep their own button disabled (a single string
+  // key would let a later action re-enable an earlier in-flight one).
+  const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
   const [selected, setSelected] = useState<string | undefined>();
 
   const [name, setName] = useState('');
@@ -25,7 +28,7 @@ export default function Tenants() {
   const [retentionDays, setRetentionDays] = useState(365);
 
   async function run(key: string, fn: () => Promise<unknown>): Promise<boolean> {
-    setBusy(key);
+    setBusy((prev) => new Set(prev).add(key));
     setActionError(undefined);
     try {
       await fn();
@@ -35,7 +38,11 @@ export default function Tenants() {
       setActionError(err instanceof Error ? err : new Error(String(err)));
       return false;
     } finally {
-      setBusy(undefined);
+      setBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
     }
   }
 
@@ -115,8 +122,12 @@ export default function Tenants() {
               />
             </div>
           </div>
-          <button className="btn-primary" type="submit" disabled={busy === 'create'}>
-            {busy === 'create' ? 'Creating…' : 'Create tenant'}
+          <button
+            className="btn-primary"
+            type="submit"
+            disabled={busy.has('create')}
+          >
+            {busy.has('create') ? 'Creating…' : 'Create tenant'}
           </button>
         </form>
       </Card>
@@ -180,7 +191,7 @@ function TenantRow({
   onDelete,
 }: {
   t: Tenant;
-  busy: string | undefined;
+  busy: ReadonlySet<string>;
   selected: boolean;
   onToggle: () => void;
   onRotate: () => void;
@@ -204,14 +215,14 @@ function TenantRow({
           <button
             className="btn-sm row-fixed"
             onClick={onRotate}
-            disabled={busy === `rotate-${t.id}`}
+            disabled={busy.has(`rotate-${t.id}`)}
           >
             Rotate key
           </button>
           <button
             className="btn-sm btn-danger row-fixed"
             onClick={onDelete}
-            disabled={busy === `delete-${t.id}`}
+            disabled={busy.has(`delete-${t.id}`)}
           >
             Delete
           </button>

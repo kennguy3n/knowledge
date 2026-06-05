@@ -28,7 +28,10 @@ const KINDS: ConnectorKind[] = [
 export default function Connectors() {
   const list = useAsync((signal) => connectorsApi.listConnectors(signal), []);
   const [actionError, setActionError] = useState<Error | undefined>();
-  const [busy, setBusy] = useState<string | undefined>();
+  // Track every in-flight action by key so concurrent operations on
+  // different rows each keep their own button disabled (a single string
+  // key would let a later action re-enable an earlier in-flight one).
+  const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
 
   // Create form.
   const [kind, setKind] = useState<string>('google_drive');
@@ -36,7 +39,7 @@ export default function Connectors() {
   const [configJson, setConfigJson] = useState('{}');
 
   async function run(key: string, fn: () => Promise<unknown>) {
-    setBusy(key);
+    setBusy((prev) => new Set(prev).add(key));
     setActionError(undefined);
     try {
       await fn();
@@ -44,7 +47,11 @@ export default function Connectors() {
     } catch (err) {
       setActionError(err instanceof Error ? err : new Error(String(err)));
     } finally {
-      setBusy(undefined);
+      setBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
     }
   }
 
@@ -134,8 +141,12 @@ export default function Connectors() {
               rows={3}
             />
           </div>
-          <button className="btn-primary" type="submit" disabled={busy === 'create'}>
-            {busy === 'create' ? 'Creating…' : 'Create connector'}
+          <button
+            className="btn-primary"
+            type="submit"
+            disabled={busy.has('create')}
+          >
+            {busy.has('create') ? 'Creating…' : 'Create connector'}
           </button>
         </form>
       </Card>
@@ -199,7 +210,7 @@ function ConnectorRow({
   onDelete,
 }: {
   c: ConnectorStatus;
-  busy: string | undefined;
+  busy: ReadonlySet<string>;
   onSync: () => void;
   onReauth: () => void;
   onDelete: () => void;
@@ -224,7 +235,7 @@ function ConnectorRow({
           <button
             className="btn-sm row-fixed"
             onClick={onSync}
-            disabled={busy === `sync-${c.instanceId}`}
+            disabled={busy.has(`sync-${c.instanceId}`)}
           >
             Sync
           </button>
@@ -234,7 +245,7 @@ function ConnectorRow({
           <button
             className="btn-sm btn-danger row-fixed"
             onClick={onDelete}
-            disabled={busy === `delete-${c.instanceId}`}
+            disabled={busy.has(`delete-${c.instanceId}`)}
           >
             Delete
           </button>
