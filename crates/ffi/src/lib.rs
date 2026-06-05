@@ -2140,9 +2140,15 @@ mod tests {
     fn store_journal_mode_is_rollback_not_wal() {
         let (h, _dir) = fresh_store();
         let mode = store_journal_mode(h).expect("journal_mode");
-        assert_ne!(mode, "wal", "standby raw applies require a rollback-journal mode");
+        assert_ne!(
+            mode, "wal",
+            "standby raw applies require a rollback-journal mode"
+        );
         assert!(
-            matches!(mode.as_str(), "delete" | "truncate" | "persist" | "memory" | "off"),
+            matches!(
+                mode.as_str(),
+                "delete" | "truncate" | "persist" | "memory" | "off"
+            ),
             "unexpected journal mode {mode:?}",
         );
         teardown(h);

@@ -97,6 +97,15 @@ services:
       # already in this stack.
       KNOWLEDGE_SUBSTRATE_ROLE: "${KNOWLEDGE_SUBSTRATE_ROLE:-disabled}"
       KNOWLEDGE_REPLICATION_NATS_URL: "${KNOWLEDGE_REPLICATION_NATS_URL:-nats://nats:4222}"
+      # Optional managed-cloud synthesis. When KNOWLEDGE_MANAGED_INFERENCE_URL
+      # is set, the substrate wires a ManagedCloudAdapter (see
+      # `build_inference_router`) that routes synthesis to an external
+      # OpenAI-compatible endpoint (OpenAI / Groq / Together / Ollama / …)
+      # instead of the self-hosted llama-server. Left empty by default, so
+      # the adapter stays disabled and synthesis uses the local SLM.
+      KNOWLEDGE_MANAGED_INFERENCE_URL: "${KNOWLEDGE_MANAGED_INFERENCE_URL:-}"
+      KNOWLEDGE_MANAGED_INFERENCE_KEY: "${KNOWLEDGE_MANAGED_INFERENCE_KEY:-}"
+      KNOWLEDGE_MANAGED_INFERENCE_MODEL: "${KNOWLEDGE_MANAGED_INFERENCE_MODEL:-gpt-4o-mini}"
     volumes:
       - substrate-data:/data
     depends_on:

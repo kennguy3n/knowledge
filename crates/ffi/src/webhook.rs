@@ -1098,6 +1098,17 @@ pub(crate) fn provider_id_for_kind(kind: ConnectorKind) -> &'static str {
         ConnectorKind::Freshdesk => "freshdesk",
         ConnectorKind::Intercom => "intercom",
         ConnectorKind::Pipedrive => "pipedrive",
+        // Singapore/Thailand/SEA connectors
+        ConnectorKind::Line => "line",
+        ConnectorKind::Grab => "grab",
+        ConnectorKind::Gojek => "gojek",
+        ConnectorKind::Talenox => "talenox",
+        ConnectorKind::OdooSea => "odoosea",
+        ConnectorKind::Fastwork => "fastwork",
+        ConnectorKind::TrueMoney => "truemoney",
+        ConnectorKind::ScbEasy => "scbeasy",
+        ConnectorKind::PromptPay => "promptpay",
+        ConnectorKind::Tokopedia => "tokopedia",
         // Vietnam connectors (WS5).
         ConnectorKind::Zalo => "zalo",
         ConnectorKind::VNPay => "vnpay",
@@ -1109,6 +1120,17 @@ pub(crate) fn provider_id_for_kind(kind: ConnectorKind) -> &'static str {
         ConnectorKind::KiotViet => "kiotviet",
         ConnectorKind::Sapo => "sapo",
         ConnectorKind::BaseVN => "basevn",
+        // GCC / Middle East connectors
+        ConnectorKind::Careem => "careem",
+        ConnectorKind::Talabat => "talabat",
+        ConnectorKind::Noon => "noon",
+        ConnectorKind::AmazonAE => "amazonae",
+        ConnectorKind::Tabby => "tabby",
+        ConnectorKind::Foodics => "foodics",
+        ConnectorKind::Zoho => "zoho",
+        ConnectorKind::Bayt => "bayt",
+        ConnectorKind::Fetchr => "fetchr",
+        ConnectorKind::Payfort => "payfort",
         ConnectorKind::GenericWebhook => "genericwebhook",
     }
 }
@@ -1156,6 +1178,17 @@ const KNOWN_PROVIDER_IDS: &[&str] = &[
     "freshdesk",
     "intercom",
     "pipedrive",
+    // Singapore/Thailand/SEA connectors
+    "line",
+    "grab",
+    "gojek",
+    "talenox",
+    "odoosea",
+    "fastwork",
+    "truemoney",
+    "scbeasy",
+    "promptpay",
+    "tokopedia",
     // Vietnam connectors (WS5).
     "zalo",
     "vnpay",
@@ -1167,6 +1200,17 @@ const KNOWN_PROVIDER_IDS: &[&str] = &[
     "kiotviet",
     "sapo",
     "basevn",
+    // GCC / Middle East connectors
+    "careem",
+    "talabat",
+    "noon",
+    "amazonae",
+    "tabby",
+    "foodics",
+    "zoho",
+    "bayt",
+    "fetchr",
+    "payfort",
     "genericwebhook",
 ];
 
@@ -1239,6 +1283,17 @@ mod tests {
             ConnectorKind::Freshdesk,
             ConnectorKind::Intercom,
             ConnectorKind::Pipedrive,
+            // Singapore/Thailand/SEA connectors
+            ConnectorKind::Line,
+            ConnectorKind::Grab,
+            ConnectorKind::Gojek,
+            ConnectorKind::Talenox,
+            ConnectorKind::OdooSea,
+            ConnectorKind::Fastwork,
+            ConnectorKind::TrueMoney,
+            ConnectorKind::ScbEasy,
+            ConnectorKind::PromptPay,
+            ConnectorKind::Tokopedia,
             // Vietnam connectors (WS5).
             ConnectorKind::Zalo,
             ConnectorKind::VNPay,
@@ -1250,6 +1305,17 @@ mod tests {
             ConnectorKind::KiotViet,
             ConnectorKind::Sapo,
             ConnectorKind::BaseVN,
+            // GCC / Middle East connectors
+            ConnectorKind::Careem,
+            ConnectorKind::Talabat,
+            ConnectorKind::Noon,
+            ConnectorKind::AmazonAE,
+            ConnectorKind::Tabby,
+            ConnectorKind::Foodics,
+            ConnectorKind::Zoho,
+            ConnectorKind::Bayt,
+            ConnectorKind::Fetchr,
+            ConnectorKind::Payfort,
             ConnectorKind::GenericWebhook,
         ];
         for k in all_kinds {

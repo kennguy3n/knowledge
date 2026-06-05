@@ -1,14 +1,16 @@
 //! Shared HMAC-SHA256 request-signing helpers for the Vietnam
-//! marketplace connectors (Tiki, Shopee, Lazada).
+//! marketplace connectors (Tiki, Shopee, Lazada) and the Thai
+//! TrueMoney connector.
 //!
-//! All three providers authenticate Open-Platform calls by signing a
+//! The Vietnam providers authenticate Open-Platform calls by signing a
 //! provider-specific base string with the partner/app secret and
 //! sending the lowercase hex digest as a `sign` parameter. The exact
 //! base-string layout differs per provider — Shopee concatenates
 //! `partner_id + path + timestamp + access_token + shop_id`, Lazada
-//! sorts the request parameters and concatenates `key+value` pairs —
-//! so each connector builds its own base string and calls
-//! [`hmac_sha256_hex`] here for the digest.
+//! sorts the request parameters and concatenates `key+value` pairs.
+//! TrueMoney instead signs `METHOD\nURL\nTIMESTAMP` and carries the
+//! digest in an `X-Signature` header. So each connector builds its own
+//! base string and calls [`hmac_sha256_hex`] here for the digest.
 //!
 //! This lives in the `connectors` crate rather than
 //! `connector_framework` because request signing is connector-

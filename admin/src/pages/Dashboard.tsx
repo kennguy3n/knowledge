@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { healthApi } from '../api';
+import { Link } from 'react-router-dom';
+import { connectorsApi, healthApi } from '../api';
 import type {
   AdapterReport,
   GatewayHealth,
@@ -60,6 +61,17 @@ export default function Dashboard() {
     (signal) => healthApi.getKnowledgeMetricsText(signal),
     [],
   );
+  const connectors = useAsync(
+    (signal) => connectorsApi.listConnectors(signal),
+    [],
+  );
+
+  // Nudge operators who haven't finished onboarding. Only shown once
+  // we positively know the count (a failed list leaves data undefined
+  // and hides the card rather than misreporting "0 connectors").
+  const connectorCount = connectors.data?.length;
+  const showGettingStarted =
+    connectorCount !== undefined && connectorCount < 3;
 
   const subsystems = useMemo(
     () => flattenSubsystems(health.data),
@@ -92,6 +104,21 @@ export default function Dashboard() {
           Headline metrics unavailable: {metrics.error.message}. Health and
           subsystem status below are unaffected.
         </Notice>
+      )}
+
+      {showGettingStarted && (
+        <Card title="Getting started">
+          <p className="muted" style={{ marginTop: 0 }}>
+            {connectorCount === 0
+              ? 'No connectors are configured yet — Knowledge has nothing to ingest.'
+              : `Only ${connectorCount} connector${connectorCount === 1 ? '' : 's'} configured. Connect a few sources to get the most out of synthesis.`}{' '}
+            The setup wizard walks you through connecting a source in about
+            a minute.
+          </p>
+          <Link className="btn btn-primary" to="/welcome">
+            Open setup wizard
+          </Link>
+        </Card>
       )}
 
       <div className="tiles">

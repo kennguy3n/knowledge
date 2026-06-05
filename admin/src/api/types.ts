@@ -96,6 +96,18 @@ export interface CreateConnectorRequest {
   config_json?: string;
 }
 
+/**
+ * Response of `POST /api/v1/connectors` (HTTP 201) — the persisted
+ * registration (server/internal/connector/store.go `registration`).
+ * The wizard needs `instance_id` to start the OAuth flow for the
+ * connector it just created. Other fields are present but unused here.
+ */
+export interface CreateConnectorResponse {
+  instance_id: string;
+  kind: string;
+  scope_id: string;
+}
+
 /** Body for `POST /api/v1/connectors/{id}/authenticate`. */
 export interface AuthenticateConnectorRequest {
   auth_code: string;

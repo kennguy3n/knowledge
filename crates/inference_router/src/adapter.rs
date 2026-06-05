@@ -16,6 +16,9 @@ pub enum AdapterKind {
     Mlx,
     /// llama.cpp loopback HTTP server.
     LlamaCpp,
+    /// External OpenAI-compatible managed-cloud endpoint (synthesis
+    /// without a self-hosted SLM).
+    ManagedCloud,
     /// Encoder-only fallback. No SLM; classification only.
     Fallback,
     /// Mock adapter for tests.
@@ -28,6 +31,7 @@ impl AdapterKind {
         match self {
             Self::Mlx => "mlx",
             Self::LlamaCpp => "llama_cpp",
+            Self::ManagedCloud => "managed_cloud",
             Self::Fallback => "fallback",
             Self::Mock => "mock",
         }
@@ -66,6 +70,15 @@ pub trait InferenceAdapter: Send + Sync {
     /// rejected by the [`crate::FallbackAdapter`].
     fn supports(&self, task: InferenceTask) -> bool;
 
+    /// `true` iff a [`crate::InferenceRouter::warm_up`] no-op request
+    /// pages something useful in for this adapter. Local backends
+    /// (MLX, llama.cpp) keep the default `true`; remote adapters that
+    /// bill per request (e.g. managed cloud) return `false` so warm-up
+    /// never spends money priming weights that live off-device.
+    fn benefits_from_warm_up(&self) -> bool {
+        true
+    }
+
     /// Run the inference. `task_tag` is the stable string tag for
     /// metrics; `prompt` is the fully-rendered prompt; `grammar` is
     /// the GBNF grammar (empty string when no grammar is required).
@@ -84,6 +97,7 @@ mod tests {
     fn adapter_kind_strings_are_stable() {
         assert_eq!(AdapterKind::Mlx.as_str(), "mlx");
         assert_eq!(AdapterKind::LlamaCpp.as_str(), "llama_cpp");
+        assert_eq!(AdapterKind::ManagedCloud.as_str(), "managed_cloud");
         assert_eq!(AdapterKind::Fallback.as_str(), "fallback");
         assert_eq!(AdapterKind::Mock.as_str(), "mock");
     }

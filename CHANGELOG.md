@@ -39,6 +39,17 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
     Google Meet.
   - *Business & developer tools* — QuickBooks, Xero, Stripe, Shopify,
     Airtable, GitLab, Bitbucket, Trello, Miro, DocuSign.
+- **10 Asia-Pacific (Singapore / Thailand / SEA) connectors**, all
+  shipping as **stable** with full `Connector` trait implementations
+  and `MockHttpTransport` unit coverage: LINE, Grab, Gojek, Talenox,
+  Odoo (SEA), Fastwork, TrueMoney, SCB Easy, PromptPay, Tokopedia.
+- **10 new GCC / Middle East connectors.** The connector catalog grows
+  from 40 to 50 providers, all shipping as **stable** with full
+  `Connector` trait implementations and `MockHttpTransport` unit
+  coverage: Careem, Talabat, Noon, Amazon.ae (SP-API), Tabby, Foodics,
+  Zoho, Bayt, Fetchr, and PayFort (Amazon Payment Services). Adds a
+  crate-internal `signing` module providing the HMAC-SHA256, SHA-256,
+  and AWS Signature v4 primitives these providers' auth schemes require.
 - **Browser-based admin dashboard** (`admin/`) — a React + Vite SPA served
   on `:3001` for managing connectors, tenants, synthesis runs, the memory
   browser, and the audit log without the CLI or PromQL.
@@ -50,6 +61,36 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - **Release & auto-update automation** — a tag-triggered release workflow
   (binaries, images, Helm chart) and an optional substrate update-check
   endpoint that compares the running version against the latest release.
+- **Managed-cloud synthesis adapter.** `inference_router` gains a
+  `ManagedCloudAdapter` that drives synthesis through an external
+  OpenAI-compatible `/v1/chat/completions` endpoint (OpenAI, Groq,
+  Together, a local Ollama, …) instead of a self-hosted `llama-server`.
+  It sits between llama.cpp and the fallback in the priority chain
+  (`MLX → llama.cpp → ManagedCloud → Fallback`), serves synthesis on any
+  device tier (the compute is remote), and applies the same structured
+  output constraint via the API's `response_format`. Wired into
+  `build_inference_router` and auto-discovered from
+  `KNOWLEDGE_MANAGED_INFERENCE_URL` / `_KEY` / `_MODEL` (default model
+  `gpt-4o-mini`). New **stable** public API: the `AdapterKind::ManagedCloud`
+  variant and the `http-client`-gated `HttpManagedInferenceClient`
+  re-export. Adding the enum variant is a semver-breaking change for
+  downstream code that matches `AdapterKind` exhaustively. The STABLE
+  `InferenceAdapter` trait also gains a `benefits_from_warm_up` method
+  (default `true`, so existing implementors are source-compatible) that
+  lets an adapter opt out of `InferenceRouter::warm_up`;
+  `ManagedCloudAdapter` returns `false` so warm-up never sends a billable
+  no-op to a remote, pay-per-request endpoint with no local weights to
+  page in.
+- **One-command installers.** `scripts/install.sh` (bash) and
+  `scripts/install.ps1` (PowerShell) take an SME from zero to a running
+  stack: they check Docker + the Compose plugin, generate per-deployment
+  secrets into `.env` (mode 600, never overwriting an existing file),
+  prompt for on-device synthesis, start the published-image stack, wait
+  for the gateway to report healthy, and print the URLs to open.
+- **Admin first-run wizard.** The `admin/` dashboard shows a guided
+  wizard (welcome → pick a source → OAuth → first sync) on a fresh
+  deployment with no connectors, plus a Getting Started card on the
+  Dashboard while fewer than three connectors are configured.
 - **Offline master-key rotation.** New STABLE API for re-keying a
   deployed substrate without re-encrypting evidence bodies:
   `evidence_store::EvidenceStore::rotate_master_key` plus the

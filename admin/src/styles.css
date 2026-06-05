@@ -380,3 +380,85 @@ textarea:focus {
   font-size: 11px;
   font-weight: 600;
 }
+
+/* Anchors styled as buttons (e.g. react-router Links). */
+a.btn,
+a.btn-primary {
+  display: inline-block;
+  text-decoration: none;
+}
+
+/* ── First-run wizard ─────────────────────────────────────────────── */
+
+.wizard-steps {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.wizard-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.wizard-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--bg-elev-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.wizard-step-active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.wizard-step-active .wizard-step-num {
+  background: var(--accent);
+  color: #fff;
+}
+
+.wizard-step-done {
+  color: var(--text);
+}
+
+.wizard-step-done .wizard-step-num {
+  background: var(--ok);
+  color: #0f1419;
+}
+
+.kind-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.kind-tile {
+  padding: 14px 12px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.kind-tile-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.wizard-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
