@@ -67,10 +67,12 @@ losing the cursor.
 
 ## Maturity expectations
 
-New connectors typically land as **unstable** until the provider
-integration has soaked, then graduate to stable once the trait impl and
-test coverage match the existing connectors. Note the status in the
-[roadmap](../product/roadmap.md).
+A connector is **stable** once its trait implementation and test
+coverage match the existing connectors and it has run cleanly against
+the live provider; the 40 built-in connectors meet that bar. A
+connector still soaking against a live API may instead land as
+**unstable** as an honest signal to operators until it graduates.
+Either way, note the status in the [roadmap](../product/roadmap.md).
 
 ## Built-in connectors
 
@@ -83,7 +85,8 @@ one means wiring it in five places, not two:
 1. `crates/connector_framework/src/config.rs` — add the `ConnectorKind`
    variant (and its `as_str()` arm).
 2. `crates/connectors/src/lib.rs` — add `pub mod` / `pub use` with a
-   `// STABLE` or `// UNSTABLE` marker (new connectors start unstable).
+   `// STABLE` or `// UNSTABLE` marker (use `// UNSTABLE` while a new
+   connector is still soaking against the live provider).
 3. `crates/ffi/src/types.rs` — add the matching `ConnectorKindTag`.
 4. `crates/ffi/src/connector.rs` — wire the `build_connector` factory,
    `connector_source_tag`, and the two enum-translation matches.
