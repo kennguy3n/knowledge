@@ -242,11 +242,19 @@ pub fn rotate(
     }
 
     // Evidence store: move original aside, then move rotated copy in.
-    rename(
+    // A failure here leaves the live files untouched but would orphan
+    // both `.rotating` temp copies, so clean them up to satisfy the
+    // documented "partial temp files are cleaned up" contract and keep a
+    // retry clear of the stale-temp guard.
+    if let Err(e) = rename(
         &paths.store_path,
         &evidence_backup,
         "back up evidence store",
-    )?;
+    ) {
+        let _ = fs::remove_file(&evidence_tmp);
+        let _ = fs::remove_file(&permissions_tmp);
+        return Err(e);
+    }
     if let Err(e) = rename(
         &evidence_tmp,
         &paths.store_path,
@@ -262,32 +270,30 @@ pub fn rotate(
         return Err(e);
     }
 
-    // Permission store: same dance. If it fails, roll back BOTH stores
-    // so the deployment stays consistent under the old key.
-    let permissions_existed = paths.permissions_path.exists();
-    if permissions_existed {
-        if let Err(e) = rename(
-            &paths.permissions_path,
-            &permissions_backup,
-            "back up permission store",
-        ) {
-            rollback_evidence(paths, &evidence_backup, &evidence_tmp);
-            let _ = fs::remove_file(&permissions_tmp);
-            return Err(e);
-        }
+    // Permission store: same dance. Phase 1 opened (and therefore
+    // created, if absent) the permission store, so the live file always
+    // exists here and is unconditionally backed up. If either step
+    // fails, roll back BOTH stores so the deployment stays consistent
+    // under the old key.
+    if let Err(e) = rename(
+        &paths.permissions_path,
+        &permissions_backup,
+        "back up permission store",
+    ) {
+        rollback_evidence(paths, &evidence_backup, &evidence_tmp);
+        let _ = fs::remove_file(&permissions_tmp);
+        return Err(e);
     }
     if let Err(e) = rename(
         &permissions_tmp,
         &paths.permissions_path,
         "install rotated permission store",
     ) {
-        if permissions_existed {
-            rollback_rename(
-                &permissions_backup,
-                &paths.permissions_path,
-                "restore permission store",
-            );
-        }
+        rollback_rename(
+            &permissions_backup,
+            &paths.permissions_path,
+            "restore permission store",
+        );
         rollback_evidence(paths, &evidence_backup, &evidence_tmp);
         return Err(e);
     }
