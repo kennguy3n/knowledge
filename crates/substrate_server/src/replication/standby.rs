@@ -34,6 +34,16 @@
 //! its page cache on the next read transaction via the change counter
 //! the primary stamps into page 1. The handle-less path is used only by
 //! unit tests, which exercise the file materialisation in isolation.
+//!
+//! The change-counter cache invalidation only works while the read
+//! connection is in a *rollback-journal* mode (in WAL mode SQLite would
+//! read its own `-wal` sidecar, which replication never touches). The
+//! store's open path uses SQLite's rollback-journal default, and
+//! [`super::spawn`] asserts this at startup for standby-capable nodes —
+//! refusing to boot with [`ReplError::Misconfigured`](super::ReplError)
+//! if the connection ever reports `journal_mode=wal` — so a future
+//! switch in that (shared) open path fails fast instead of silently
+//! serving stale reads.
 
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::Arc;

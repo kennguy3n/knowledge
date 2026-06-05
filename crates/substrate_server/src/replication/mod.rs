@@ -998,6 +998,35 @@ pub async fn spawn(
         return Ok(None);
     }
 
+    // A node that can serve reads as a standby (`Standby`, or `Auto`
+    // before it wins the lease) splices raw WAL pages into the database
+    // file underneath the open SQLCipher connection and relies on the
+    // page-1 change counter to invalidate that connection's cache. That
+    // only works while the read connection is in a rollback-journal
+    // mode: in WAL mode SQLite would read from its own `-wal` sidecar —
+    // which replication never writes — and serve stale pages until a
+    // checkpoint. Assert the invariant at startup so a future switch to
+    // `journal_mode=WAL` in the (shared, out-of-module) store open path
+    // fails fast here instead of silently corrupting standby reads.
+    if matches!(
+        config.mode,
+        ReplicationMode::Standby | ReplicationMode::Auto
+    ) {
+        if let Some(handle) = db_handle {
+            let mode = ffi::store_journal_mode(handle)
+                .map_err(|e| ReplError::Transport(format!("reading store journal mode: {e}")))?;
+            if mode == "wal" {
+                return Err(ReplError::Misconfigured(format!(
+                    "evidence store opened in `journal_mode=wal`, but standby WAL replay requires \
+                     a rollback-journal mode ({:?}): raw page applies would be invisible to the \
+                     read connection until a checkpoint, serving stale reads",
+                    config.mode
+                )));
+            }
+            tracing::debug!(journal_mode = %mode, mode = ?config.mode, "replication: verified rollback-journal store mode for standby reads");
+        }
+    }
+
     #[cfg(feature = "replication-nats")]
     {
         if config.nats_url.is_some() {
@@ -1342,5 +1371,40 @@ mod tests {
         // Cleanly stop the spawned coordinator.
         tx.send(true).expect("signal shutdown");
         handle.await.expect("coordinator joins");
+    }
+
+    // With a real open store handle, a standby-capable node verifies the
+    // read connection's journal mode at startup. A freshly opened store
+    // is in a rollback-journal mode, so spawn must succeed; the coverage
+    // here is the journal-mode probe path (the rejection branch fires
+    // only if `evidence_store` ever opens in WAL mode).
+    #[tokio::test]
+    async fn spawn_auto_accepts_rollback_journal_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("evidence.db");
+        let path_str = path.to_string_lossy().into_owned();
+        // `open_store` builds and drops a short-lived Tokio runtime while
+        // rehydrating the store, which trips tokio's "cannot drop a
+        // runtime within an async context" guard if called on this test's
+        // worker thread (the same reason `lib.rs` opens on a dedicated
+        // thread). Open/close off the async runtime.
+        let handle = std::thread::spawn(move || ffi::open_store(path_str, "a5".repeat(32)))
+            .join()
+            .expect("open thread")
+            .expect("open_store");
+
+        let config = in_process_config("auto");
+        let shared = Arc::new(ReplicationShared::enabled(config.initial_role()));
+        let (tx, rx) = watch::channel(false);
+        let join = spawn(config, shared, rx, Some(handle))
+            .await
+            .expect("rollback-journal store passes the standby journal-mode check")
+            .expect("auto spawns a coordinator task");
+        tx.send(true).expect("signal shutdown");
+        join.await.expect("coordinator joins");
+        std::thread::spawn(move || ffi::close_store(handle))
+            .join()
+            .expect("close thread")
+            .expect("close_store");
     }
 }
