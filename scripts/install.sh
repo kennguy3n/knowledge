@@ -150,7 +150,7 @@ KNOWLEDGE_MANAGED_INFERENCE_MODEL=gpt-4o-mini
 # gateway off-host.
 KNOWLEDGE_API_KEY=
 KNOWLEDGE_JWT_SECRET=
-KNOWLEDGE_PUBLIC_BASE_URL=http://localhost:\${GATEWAY_PORT:-8080}
+KNOWLEDGE_PUBLIC_BASE_URL=http://localhost:8080
 
 # ── Postgres ─────────────────────────────────────────────────────────
 POSTGRES_USER=knowledge
