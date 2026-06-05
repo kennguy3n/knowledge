@@ -96,6 +96,11 @@ mod content;
 // Google Meet). Not part of the public API.
 mod timestamp_cursor;
 
+// Crate-internal HMAC-SHA256 request-signing helper shared by the
+// Vietnam marketplace connectors (Tiki, Shopee, Lazada). Not part of
+// the public API.
+mod sign;
+
 // STABLE
 pub mod airtable;
 // STABLE
@@ -177,6 +182,28 @@ pub mod zendesk;
 // STABLE
 pub mod zoom;
 
+// Vietnam connectors (WS5) — Asia market expansion.
+// STABLE
+pub mod base_vn;
+// STABLE
+pub mod kiotviet;
+// STABLE
+pub mod lazada_vn;
+// STABLE
+pub mod momo;
+// STABLE
+pub mod sapo;
+// STABLE
+pub mod shopee_vn;
+// STABLE
+pub mod tiki;
+// STABLE
+pub mod viettel_post;
+// STABLE
+pub mod vnpay;
+// STABLE
+pub mod zalo;
+
 // STABLE
 pub use airtable::AirtableConnector;
 // STABLE
@@ -257,3 +284,25 @@ pub use xero::XeroConnector;
 pub use zendesk::ZendeskConnector;
 // STABLE
 pub use zoom::ZoomConnector;
+
+// Vietnam connectors (WS5) — Asia market expansion.
+// STABLE
+pub use base_vn::BaseVNConnector;
+// STABLE
+pub use kiotviet::KiotVietConnector;
+// STABLE
+pub use lazada_vn::LazadaVNConnector;
+// STABLE
+pub use momo::MoMoConnector;
+// STABLE
+pub use sapo::SapoConnector;
+// STABLE
+pub use shopee_vn::ShopeeVNConnector;
+// STABLE
+pub use tiki::TikiConnector;
+// STABLE
+pub use viettel_post::ViettelPostConnector;
+// STABLE
+pub use vnpay::VNPayConnector;
+// STABLE
+pub use zalo::ZaloConnector;

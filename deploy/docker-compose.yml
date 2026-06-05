@@ -125,7 +125,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      # WS8 lazy-load: `open_store` no longer probes the llama.cpp
+      # adapter at boot (the probe is a `GET /health` with a multi-second
+      # timeout, deferred to the first synthesis request — see
+      # `InferenceRouter::ensure_bootstrap_started`). With the probe off
+      # the boot path, startup is dominated by process/runtime init plus
+      # the store open, which measures ~13 ms cold / ~3 ms warm in CI
+      # (Linux x86-64 VM; see docs/technical/benchmarks.md "Startup").
+      # The old 20s budget existed to absorb that eager probe, so drop it
+      # to 5s — still ~300x the measured open and a generous cushion for
+      # binary load + Axum bind. `retries: 5` @ `interval: 10s` adds a
+      # further 50s of post-start grace regardless.
+      start_period: 5s
     restart: unless-stopped
 
   # ────────────────── Substrate standby (WS2 — opt-in HA) ────────────
@@ -189,6 +200,29 @@ services:
         condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3001/ >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ────────────────── End-user web UI ────────────────────────────────
+
+  knowledge-ui:
+    build:
+      context: ../apps/knowledge-ui
+      dockerfile: Dockerfile
+    # The nginx image serves the static Next.js export on 3002 and
+    # reverse-proxies the gateway API surface (/api, /health, /metrics)
+    # to the knowledge-gateway service on the compose network, so the UI
+    # calls the gateway same-origin without CORS configuration.
+    ports:
+      - "${UI_PORT:-3002}:3002"
+    depends_on:
+      knowledge-gateway:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3002/ >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 5

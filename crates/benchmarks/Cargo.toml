@@ -40,6 +40,13 @@ permission_service = { path = "../permission_service" }
 # + a fixed OAuth exchange — no network calls.
 connector_framework = { path = "../connector_framework", features = ["test-support"] }
 connectors = { path = "../connectors" }
+# Device-profile benches (`benches/device_profile/`) drive the
+# inference router's classification / synthesis dispatch through the
+# in-process `MockLlamaServerClient` (no `http-client` feature, no
+# network) so they measure router + adapter + latency-instrumentation
+# overhead deterministically. Real model-inference latency is
+# to-be-measured-on-device (see docs/technical/benchmarks.md).
+inference_router = { path = "../inference_router" }
 
 [[bench]]
 name = "bench_ingest_throughput"
@@ -83,6 +90,26 @@ harness = false
 
 [[bench]]
 name = "bench_permission_check"
+harness = false
+
+# Device-profile suite (WS8 8a) — one harness per RAM tier. Files live
+# under `benches/device_profile/` so the tier benches are grouped
+# apart from the hot-path suites above; the explicit `path` is
+# required because the name no longer matches the default
+# `benches/<name>.rs` location.
+[[bench]]
+name = "device_profile_low_tier"
+path = "benches/device_profile/low_tier.rs"
+harness = false
+
+[[bench]]
+name = "device_profile_medium_tier"
+path = "benches/device_profile/medium_tier.rs"
+harness = false
+
+[[bench]]
+name = "device_profile_high_tier"
+path = "benches/device_profile/high_tier.rs"
 harness = false
 
 [lints]

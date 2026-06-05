@@ -57,6 +57,50 @@ fn schema_creates_required_tables() {
 }
 
 #[test]
+fn low_memory_mode_applies_bounded_page_cache_and_disables_mmap() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("evidence.db");
+    let cfg = EvidenceStoreConfig {
+        low_memory: true,
+        ..Default::default()
+    };
+    let store = EvidenceStore::open(&path, &MASTER_KEY, cfg).expect("open store");
+    let conn = store.raw_conn();
+
+    // `cache_size` is reported back as the negative KiB budget we set
+    // (SQLite preserves the sign when the value was supplied as a KiB
+    // budget rather than a page count).
+    let cache_size: i64 = conn
+        .query_row("PRAGMA cache_size", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        cache_size, -512,
+        "low_memory must pin the SQLCipher page cache to 512 KiB"
+    );
+
+    // mmap is disabled so the file is paged through the bounded cache.
+    let mmap_size: i64 = conn
+        .query_row("PRAGMA mmap_size", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mmap_size, 0, "low_memory must disable the mmap window");
+}
+
+#[test]
+fn default_mode_leaves_mmap_pragma_at_sqlite_default() {
+    // Guard the converse: the default profile must NOT force mmap off,
+    // so we don't silently regress throughput on unconstrained hosts.
+    let (_dir, store) = fresh_store();
+    let conn = store.raw_conn();
+    let cache_size: i64 = conn
+        .query_row("PRAGMA cache_size", [], |r| r.get(0))
+        .unwrap();
+    assert_ne!(
+        cache_size, -512,
+        "default profile must not apply the low-memory page-cache budget"
+    );
+}
+
+#[test]
 fn ingest_inline_path_for_small_useful_message() {
     let (_dir, mut store) = fresh_store();
     let scope = ScopeId::new_v4();

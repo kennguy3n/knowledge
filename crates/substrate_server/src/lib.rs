@@ -491,11 +491,27 @@ async fn health(State(st): State<AppState>) -> ApiResult<Json<serde_json::Value>
 }
 
 /// `GET /internal/metrics` — Prometheus text exposition built from
-/// `ffi::metrics::snapshot()`, with the replication gauges appended.
+/// `ffi::metrics::snapshot()`, with the replication gauges and the
+/// substrate's latency histograms (`knowledge_open_store_duration_seconds`
+/// and the per-`(task, adapter)` `knowledge_slm_dispatch_duration_seconds`)
+/// appended.
 async fn internal_metrics(State(st): State<AppState>) -> impl IntoResponse {
     let snapshot = ffi::metrics_snapshot();
     let mut body = metrics::render(&snapshot);
     body.push_str(&metrics::render_replication(&st.replication.snapshot()));
+
+    // Append the latency histograms. The SLM dispatch histogram is
+    // per-runtime (it lives on the runtime's inference router), so it
+    // needs the handle; the open-store histogram is process-global. A
+    // closed/unknown handle just yields no SLM series rather than
+    // failing the scrape.
+    let handle = st.handle;
+    let open_store = ffi::open_store_duration_histogram();
+    let slm = blocking(move || ffi::slm_dispatch_histograms(handle))
+        .await
+        .unwrap_or_default();
+    body.push_str(&metrics::render_histograms(&open_store, &slm));
+
     (
         [(
             header::CONTENT_TYPE,
