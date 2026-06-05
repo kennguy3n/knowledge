@@ -290,6 +290,26 @@ pub enum ConnectorKindTag {
     GoogleSheets,
     /// Google Meet — conference records + transcripts.
     GoogleMeet,
+    /// Salesforce — CRM cases + records.
+    Salesforce,
+    /// ServiceNow — ITSM incidents + records.
+    ServiceNow,
+    /// Zendesk — support tickets.
+    Zendesk,
+    /// Linear — issues.
+    Linear,
+    /// Asana — tasks.
+    Asana,
+    /// Monday.com — board items.
+    Monday,
+    /// ClickUp — tasks.
+    ClickUp,
+    /// Freshdesk — support tickets.
+    Freshdesk,
+    /// Intercom — conversations.
+    Intercom,
+    /// Pipedrive — deals.
+    Pipedrive,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,
