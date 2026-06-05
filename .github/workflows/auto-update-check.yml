@@ -102,11 +102,15 @@ jobs:
           cat "${report}" >> "$GITHUB_STEP_SUMMARY"
 
           # Stash the body for the issue step (multiline output via a
-          # heredoc-delimited GITHUB_OUTPUT value).
+          # heredoc-delimited GITHUB_OUTPUT value). The delimiter is
+          # randomized per run so a line of cargo output can never
+          # collide with it and truncate the value — GitHub's documented
+          # recommendation for multiline outputs.
+          delim="REPORT_EOF_$(openssl rand -hex 16)"
           {
-            echo "body<<__REPORT_EOF__"
+            echo "body<<${delim}"
             cat "${report}"
-            echo "__REPORT_EOF__"
+            echo "${delim}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Open or update the tracking issue

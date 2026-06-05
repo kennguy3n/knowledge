@@ -143,9 +143,16 @@ impl UpdateCheckConfig {
             enabled: std::env::var(ENV_ENABLED)
                 .ok()
                 .is_some_and(|v| is_truthy(&v)),
-            repo: non_empty_env(ENV_REPO).unwrap_or(defaults.repo),
+            // Both feed directly into `latest_release_url`, so trim
+            // surrounding whitespace: a stray-space override like
+            // " owner/name " would otherwise produce a URL with embedded
+            // spaces and a confusing transport error rather than a clean
+            // lookup.
+            repo: non_empty_env(ENV_REPO)
+                .map(|s| s.trim().to_string())
+                .unwrap_or(defaults.repo),
             api_base_url: non_empty_env(ENV_API_BASE)
-                .map(|s| s.trim_end_matches('/').to_string())
+                .map(|s| s.trim().trim_end_matches('/').to_string())
                 .unwrap_or(defaults.api_base_url),
             current_version: defaults.current_version,
         }
