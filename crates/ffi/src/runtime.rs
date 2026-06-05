@@ -2645,13 +2645,16 @@ pub(crate) fn router_config_from_env() -> RouterConfig {
 ///    and registers a real generate callback at boot. Always
 ///    listed first so when the runtime *is* linked the router
 ///    prefers on-device hardware acceleration.
-/// 2. **llama.cpp** — loopback HTTP server. Only constructed when
-///    the `http-client` feature is enabled (the real
-///    [`HttpLlamaServerClient`] is gated behind that feature so the
-///    substrate's default `cargo build` stays free of network deps).
-///    When the feature is off, the slot is skipped — the fallback
-///    adapter then handles classification tasks and synthesis
-///    surfaces as `Unavailable`.
+/// 2. **llama.cpp** — loopback HTTP server. Constructed whenever the
+///    reqwest-backed [`HttpLlamaServerClient`] transport is compiled
+///    in (the `http_client_wired` cfg: every non-mobile target by
+///    default, or any target with the `http-client` feature). The
+///    sidecar URL is auto-discovered from `KNOWLEDGE_LLAMA_SERVER_URL`,
+///    falling back to [`RouterConfig::server_url`]. Mobile
+///    (`staticlib` / `cdylib`) builds skip this slot to stay free of
+///    the HTTP/TLS client stack; the fallback adapter then handles
+///    classification tasks and synthesis surfaces as `Unavailable`
+///    until the MLX runtime is linked.
 /// 3. **Fallback** — encoder-only classifier. Always available;
 ///    serves classification tasks (`TagImportance`,
 ///    `ExtractEntities`, `PromoteObservation`) when MLX and
@@ -2664,26 +2667,49 @@ pub(crate) fn build_inference_router(config: RouterConfig) -> InferenceRouter {
     let mut adapters: Vec<Box<dyn InferenceAdapter>> = Vec::with_capacity(3);
     adapters.push(Box::new(MlxAdapter::new(config.clone())));
 
-    #[cfg(feature = "http-client")]
+    #[cfg(http_client_wired)]
     {
-        match inference_router::HttpLlamaServerClient::new(config.server_url.clone()) {
-            Ok(client) => {
-                adapters.push(Box::new(LlamaCppAdapter::new(
-                    config.clone(),
-                    Box::new(client),
-                )));
+        // Auto-discover the llama.cpp sidecar. Prefer an explicit
+        // `KNOWLEDGE_LLAMA_SERVER_URL` (the deploy compose file sets
+        // this on the substrate service to point at the
+        // `llama-server` sidecar); fall back to the router config's
+        // `server_url` (sourced from `KNOWLEDGE_SLM_SERVER_URL` or the
+        // loopback default) so existing single-host setups keep
+        // working without the new variable. A failure to build the
+        // client degrades only the llama.cpp slot — MLX / fallback
+        // stay wired — so the store still opens.
+        let client = match inference_router::HttpLlamaServerClient::from_env() {
+            Ok(Some(client)) => Some(client),
+            Ok(None) => {
+                match inference_router::HttpLlamaServerClient::new(config.server_url.clone()) {
+                    Ok(client) => Some(client),
+                    Err(err) => {
+                        tracing::warn!(error = %err,
+                            "failed to construct HttpLlamaServerClient from config server_url; llama.cpp adapter disabled",
+                        );
+                        None
+                    }
+                }
             }
             Err(err) => {
                 tracing::warn!(error = %err,
-                    "failed to construct HttpLlamaServerClient; llama.cpp adapter disabled",
+                    "failed to construct HttpLlamaServerClient from KNOWLEDGE_LLAMA_SERVER_URL; llama.cpp adapter disabled",
                 );
+                None
             }
+        };
+        if let Some(client) = client {
+            adapters.push(Box::new(LlamaCppAdapter::new(
+                config.clone(),
+                Box::new(client),
+            )));
         }
     }
     // Suppress unused-import warning for LlamaCppAdapter on builds
-    // without the http-client feature — the adapter type is still
-    // referenced via the slot above but only at conditional code.
-    #[cfg(not(feature = "http-client"))]
+    // where the llama.cpp slot is cfg'd out (mobile `staticlib` /
+    // `cdylib` without the `http-client` feature) — the adapter type
+    // is still referenced above, but only inside conditional code.
+    #[cfg(not(http_client_wired))]
     {
         let _ = std::marker::PhantomData::<LlamaCppAdapter>;
     }
@@ -2712,6 +2738,54 @@ mod tests {
     fn parse_master_key_hex_rejects_non_hex_input() {
         let err = parse_master_key_hex(&"zz".repeat(32)).unwrap_err();
         assert!(matches!(err, FfiError::InvalidId { .. }));
+    }
+
+    #[test]
+    fn build_inference_router_wires_llama_adapter_by_default() {
+        // The router always lists MLX first and Fallback last; the
+        // llama.cpp slot sits between them only when the HTTP
+        // transport is compiled in (`http_client_wired`).
+        let router = build_inference_router(RouterConfig::default());
+        let kinds: Vec<inference_router::AdapterKind> = router
+            .adapter_states()
+            .into_iter()
+            .map(|s| s.kind)
+            .collect();
+
+        assert_eq!(
+            kinds.first(),
+            Some(&inference_router::AdapterKind::Mlx),
+            "MLX must be the highest-priority adapter, got {kinds:?}"
+        );
+        assert_eq!(
+            kinds.last(),
+            Some(&inference_router::AdapterKind::Fallback),
+            "Fallback must be the lowest-priority adapter, got {kinds:?}"
+        );
+
+        // On server / desktop / hybrid builds (this host test build,
+        // and every `--features http-client` build) the reqwest-backed
+        // llama.cpp adapter is wired in by default so `trigger_synthesis`
+        // dispatches the on-device SLM out of the box once a sidecar is
+        // reachable.
+        #[cfg(http_client_wired)]
+        {
+            assert!(
+                kinds.contains(&inference_router::AdapterKind::LlamaCpp),
+                "llama.cpp adapter must be wired on http_client_wired builds, got {kinds:?}"
+            );
+            assert_eq!(kinds.len(), 3, "expected MLX + llama.cpp + Fallback");
+        }
+        // Mobile UniFFI staticlib / cdylib builds omit the HTTP/TLS
+        // client stack; synthesis is served by MLX instead.
+        #[cfg(not(http_client_wired))]
+        {
+            assert!(
+                !kinds.contains(&inference_router::AdapterKind::LlamaCpp),
+                "llama.cpp adapter must NOT be wired on mobile builds, got {kinds:?}"
+            );
+            assert_eq!(kinds.len(), 2, "expected MLX + Fallback only");
+        }
     }
 
     #[test]
