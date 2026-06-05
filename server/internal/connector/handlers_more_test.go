@@ -15,7 +15,7 @@ func TestHandleListAuthSyncStatus(t *testing.T) {
 	report := `{"instanceId":"inst-1","mode":"incremental","ingestedEvidenceIds":[]}`
 	sub := &fakeSub{syncRaw: json.RawMessage(report)}
 	s := newSvc(sub)
-	s.store.put(registration{InstanceID: "inst-1", Kind: "GoogleDrive", ScopeID: scopeUUID})
+	s.store.put(registration{InstanceID: "inst-1", Kind: "google_drive", ScopeID: scopeUUID})
 	h := s.Routes()
 
 	if rec := req(h, http.MethodGet, "/", ""); rec.Code != http.StatusOK {
@@ -35,7 +35,7 @@ func TestHandleListAuthSyncStatus(t *testing.T) {
 func TestOAuthStartMissingParams(t *testing.T) {
 	t.Parallel()
 	s := newSvc(&fakeSub{})
-	s.store.put(registration{InstanceID: "inst-1", Kind: "GoogleDrive", ScopeID: scopeUUID})
+	s.store.put(registration{InstanceID: "inst-1", Kind: "google_drive", ScopeID: scopeUUID})
 	h := s.Routes()
 	if rec := req(h, http.MethodGet, "/inst-1/oauth/start", ""); rec.Code != http.StatusBadRequest {
 		t.Fatalf("missing params code = %d", rec.Code)

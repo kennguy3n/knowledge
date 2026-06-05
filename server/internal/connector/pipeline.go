@@ -78,7 +78,7 @@ func (s *Service) runPipeline(ctx context.Context, instanceID, scopeID, kind str
 		}
 		source := fc.Source
 		if source == "" {
-			source = kind
+			source = sourceKindForConnector(kind)
 		}
 		importance := fc.Importance
 		if importance == "" {
@@ -104,6 +104,43 @@ func (s *Service) runPipeline(ctx context.Context, instanceID, scopeID, kind str
 		}
 	}
 	return res, nil
+}
+
+// sourceKindForConnector maps a connector kind (the snake_case
+// ConnectorKindTag the SPA/substrate speak) to the coarse SourceKind tag
+// the substrate's IngestRequest deserializes (`ffi::SourceKind`, which is
+// PascalCase with only the variants below). It's the fallback source for
+// fetched content that doesn't declare its own.
+//
+// SourceKind is deliberately coarser than the full connector-kind
+// taxonomy — kinds without a dedicated transport variant (e.g. notion,
+// git_hub, figma) collapse to "Other" so ingestion always deserializes
+// rather than 400-ing on an unknown tag. (The evidence store keeps a
+// finer opaque tag in its source_ref column via Rust's
+// connector_source_tag; that's a different column with no enum
+// constraint, so it is intentionally not reused here.)
+//
+// Note: this fallback only matters once fetch_content is implemented —
+// today it returns 501 and runPipeline short-circuits before reaching
+// the ingest path. Passing reg.Kind verbatim (snake_case) would have
+// failed SourceKind deserialization for every kind once that lands.
+func sourceKindForConnector(kind string) string {
+	switch kind {
+	case "google_drive":
+		return "GoogleWorkspace"
+	case "one_drive":
+		return "MicrosoftGraph"
+	case "slack":
+		return "Slack"
+	case "jira", "confluence":
+		return "Atlassian"
+	case "hub_spot":
+		return "HubSpot"
+	case "email":
+		return "Email"
+	default:
+		return "Other"
+	}
 }
 
 // isNotImplemented reports whether err is an upstream HTTP 501.

@@ -77,7 +77,7 @@ func TestCreatePersistsRegistration(t *testing.T) {
 	s := svcWithRegs(&fakeSub{createID: "inst-1"}, regs)
 	h := s.Routes()
 
-	body := `{"kind":"GoogleDrive","scope_id":"` + scopeUUID + `"}`
+	body := `{"kind":"google_drive","scope_id":"` + scopeUUID + `"}`
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
 	if rec.Code != http.StatusCreated {
@@ -99,7 +99,7 @@ func TestCreateFailsWhenPersistenceFails(t *testing.T) {
 	s := svcWithRegs(sub, regs)
 	h := s.Routes()
 
-	body := `{"kind":"GoogleDrive","scope_id":"` + scopeUUID + `"}`
+	body := `{"kind":"google_drive","scope_id":"` + scopeUUID + `"}`
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
 	if rec.Code != http.StatusInternalServerError {
@@ -122,7 +122,7 @@ func TestRemoveDeletesPersistedRegistration(t *testing.T) {
 	regs := newMemRegStore()
 	s := svcWithRegs(&fakeSub{}, regs)
 	if err := s.saveRegistration(context.Background(),
-		registration{InstanceID: "inst-1", Kind: "GoogleDrive", ScopeID: scopeUUID}); err != nil {
+		registration{InstanceID: "inst-1", Kind: "google_drive", ScopeID: scopeUUID}); err != nil {
 		t.Fatal(err)
 	}
 	h := s.Routes()
@@ -141,7 +141,7 @@ func TestWebhookRegisterPersists(t *testing.T) {
 	regs := newMemRegStore()
 	s := svcWithRegs(&fakeSub{}, regs)
 	if err := s.saveRegistration(context.Background(),
-		registration{InstanceID: "inst-1", Kind: "GoogleDrive", ScopeID: scopeUUID}); err != nil {
+		registration{InstanceID: "inst-1", Kind: "google_drive", ScopeID: scopeUUID}); err != nil {
 		t.Fatal(err)
 	}
 	h := s.Routes()
@@ -161,7 +161,7 @@ func TestRehydrateRestoresSchedules(t *testing.T) {
 	regs := newMemRegStore()
 	for _, id := range []string{"inst-1", "inst-2"} {
 		regs.regs[id] = registration{
-			InstanceID: id, Kind: "GoogleDrive", ScopeID: scopeUUID,
+			InstanceID: id, Kind: "google_drive", ScopeID: scopeUUID,
 			SyncInterval: time.Minute, CreatedAt: time.Now().UTC(),
 		}
 	}
@@ -185,8 +185,8 @@ func TestRehydrateRestoresSchedules(t *testing.T) {
 func TestRehydratePrunesStaleRegistrations(t *testing.T) {
 	t.Parallel()
 	regs := newMemRegStore()
-	regs.regs["live"] = registration{InstanceID: "live", Kind: "GoogleDrive", ScopeID: scopeUUID, SyncInterval: time.Minute}
-	regs.regs["gone"] = registration{InstanceID: "gone", Kind: "GoogleDrive", ScopeID: scopeUUID, SyncInterval: time.Minute}
+	regs.regs["live"] = registration{InstanceID: "live", Kind: "google_drive", ScopeID: scopeUUID, SyncInterval: time.Minute}
+	regs.regs["gone"] = registration{InstanceID: "gone", Kind: "google_drive", ScopeID: scopeUUID, SyncInterval: time.Minute}
 	// Substrate only knows about "live"; "gone" was deleted while down.
 	live, _ := json.Marshal([]map[string]string{{"instanceId": "live"}})
 	s := svcWithRegs(&fakeSub{listRaw: live}, regs)
@@ -208,8 +208,8 @@ func TestRehydratePrunesStaleRegistrations(t *testing.T) {
 func TestRehydrateKeepsAllWhenSubstrateUnavailable(t *testing.T) {
 	t.Parallel()
 	regs := newMemRegStore()
-	regs.regs["a"] = registration{InstanceID: "a", Kind: "GoogleDrive", ScopeID: scopeUUID, SyncInterval: time.Minute}
-	regs.regs["b"] = registration{InstanceID: "b", Kind: "GoogleDrive", ScopeID: scopeUUID, SyncInterval: time.Minute}
+	regs.regs["a"] = registration{InstanceID: "a", Kind: "google_drive", ScopeID: scopeUUID, SyncInterval: time.Minute}
+	regs.regs["b"] = registration{InstanceID: "b", Kind: "google_drive", ScopeID: scopeUUID, SyncInterval: time.Minute}
 	// Substrate loopback is down: reconciliation must be skipped, not
 	// treated as "no connectors exist" (which would drop every schedule).
 	s := svcWithRegs(&fakeSub{listErr: errors.New("loopback down")}, regs)
@@ -228,8 +228,8 @@ func TestRehydrateKeepsAllWhenSubstrateUnavailable(t *testing.T) {
 func TestRehydrateSkipsPruneOnEmptySubstrateList(t *testing.T) {
 	t.Parallel()
 	regs := newMemRegStore()
-	regs.regs["a"] = registration{InstanceID: "a", Kind: "GoogleDrive", ScopeID: scopeUUID, SyncInterval: time.Minute}
-	regs.regs["b"] = registration{InstanceID: "b", Kind: "GoogleDrive", ScopeID: scopeUUID, SyncInterval: time.Minute}
+	regs.regs["a"] = registration{InstanceID: "a", Kind: "google_drive", ScopeID: scopeUUID, SyncInterval: time.Minute}
+	regs.regs["b"] = registration{InstanceID: "b", Kind: "google_drive", ScopeID: scopeUUID, SyncInterval: time.Minute}
 	// Substrate returns a successful but EMPTY list while registrations
 	// exist. This more likely means a not-yet-ready (or transiently wiped)
 	// substrate than a genuine "all connectors deleted", so pruning must
@@ -252,7 +252,7 @@ func TestRehydrateDefaultsZeroInterval(t *testing.T) {
 	regs := newMemRegStore()
 	// A registration persisted without a sync interval (e.g. legacy row)
 	// must fall back to the service default rather than scheduling at 0.
-	regs.regs["x"] = registration{InstanceID: "x", Kind: "GoogleDrive", ScopeID: scopeUUID}
+	regs.regs["x"] = registration{InstanceID: "x", Kind: "google_drive", ScopeID: scopeUUID}
 	live, _ := json.Marshal([]map[string]string{{"instanceId": "x"}})
 	s := svcWithRegs(&fakeSub{listRaw: live}, regs)
 
