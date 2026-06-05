@@ -116,6 +116,16 @@ pub(crate) struct Metrics {
     // struct so accidental shadowings on future fields still surface.
     #[allow(clippy::struct_field_names)]
     pub(crate) metrics_snapshot_total: AtomicU64,
+    /// Total `open_store_duration_histogram` reads. Like
+    /// [`Self::metrics_snapshot_total`] this counts diagnostic
+    /// read-outs (one per Prometheus scrape of the open-store latency
+    /// histogram), so a runaway value flags an over-eager scraper.
+    pub(crate) open_store_duration_histogram_total: AtomicU64,
+    /// Total `slm_dispatch_histograms` calls initiated. Counts
+    /// handle-keyed reads of the per-`(task, adapter)` SLM
+    /// dispatch-latency histograms (one per Prometheus scrape that
+    /// includes the SLM series).
+    pub(crate) slm_dispatch_histograms_total: AtomicU64,
     /// Total `create_connector` calls initiated.
     pub(crate) create_connector_total: AtomicU64,
     /// Total `authenticate_connector` calls initiated.
@@ -432,8 +442,16 @@ impl HistogramView {
 /// monotone histogram — [`LatencyHistogram::record`] only does
 /// sequential scalar/bucket increments, so a poisoned guard cannot
 /// expose a torn distribution.
+///
+/// Bumps `open_store_duration_histogram_total` first — this is an
+/// infallible reader, so it follows the direct-`inc` pattern of
+/// [`snapshot`] rather than routing through [`instrument`] (there is
+/// no `FfiResult` to thread through). The snapshot value therefore
+/// lags its own counter by exactly one read, as documented on the
+/// field.
 #[must_use]
 pub fn open_store_duration_histogram() -> HistogramView {
+    inc_open_store_duration_histogram();
     let hist = open_store_duration()
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -473,22 +491,30 @@ pub struct SlmDispatchHistogram {
 ///
 /// Forwards [`FfiError::Unavailable`] when `handle` is unknown or has
 /// been closed, matching every other handle-keyed FFI entry point.
+///
+/// Wrapped in [`instrument`] like every other fallible handle-keyed
+/// entry point: bumps `slm_dispatch_histograms_total` and routes the
+/// `Unavailable` error through `inc_error`, so this diagnostic reader
+/// shows up in the substrate's own call-count telemetry alongside
+/// `metrics_snapshot` and `health_check`.
 pub fn slm_dispatch_histograms(
     handle: crate::runtime::RuntimeHandle,
 ) -> crate::error::FfiResult<Vec<SlmDispatchHistogram>> {
-    crate::runtime::with_runtime(handle, |rt| {
-        Ok(rt
-            .inference_router
-            .dispatch_latencies()
-            .into_iter()
-            .map(|d| SlmDispatchHistogram {
-                task: d.task.tag().to_string(),
-                adapter: d.adapter.as_str().to_string(),
-                buckets: d.buckets,
-                sum_seconds: d.sum_seconds,
-                count: d.count,
-            })
-            .collect())
+    instrument(inc_slm_dispatch_histograms, || {
+        crate::runtime::with_runtime(handle, |rt| {
+            Ok(rt
+                .inference_router
+                .dispatch_latencies()
+                .into_iter()
+                .map(|d| SlmDispatchHistogram {
+                    task: d.task.tag().to_string(),
+                    adapter: d.adapter.as_str().to_string(),
+                    buckets: d.buckets,
+                    sum_seconds: d.sum_seconds,
+                    count: d.count,
+                })
+                .collect())
+        })
     })
 }
 
@@ -529,6 +555,8 @@ counter_inc!(pub(crate) fn inc_decrypt => decrypt_total);
 counter_inc!(pub(crate) fn inc_generate_keypair => generate_keypair_total);
 counter_inc!(pub(crate) fn inc_escape_fts_query => escape_fts_query_total);
 counter_inc!(pub(crate) fn inc_metrics_snapshot => metrics_snapshot_total);
+counter_inc!(pub(crate) fn inc_open_store_duration_histogram => open_store_duration_histogram_total);
+counter_inc!(pub(crate) fn inc_slm_dispatch_histograms => slm_dispatch_histograms_total);
 counter_inc!(pub(crate) fn inc_health_check => health_check_total);
 counter_inc!(pub(crate) fn inc_create_connector => create_connector_total);
 counter_inc!(pub(crate) fn inc_authenticate_connector => authenticate_connector_total);
@@ -695,6 +723,13 @@ pub struct MetricsSnapshot {
     // emitter's snapshot still round-trips through a newer reader.
     #[serde(default)]
     pub metrics_snapshot_total: u64,
+    /// Total `open_store_duration_histogram` diagnostic reads. Like
+    /// `metrics_snapshot_total`, this lags its own counter by one read.
+    #[serde(default)]
+    pub open_store_duration_histogram_total: u64,
+    /// Total `slm_dispatch_histograms` diagnostic reads.
+    #[serde(default)]
+    pub slm_dispatch_histograms_total: u64,
     /// Total `create_connector` calls initiated.
     #[serde(default)]
     pub create_connector_total: u64,
@@ -1392,6 +1427,10 @@ pub fn snapshot() -> MetricsSnapshot {
         generate_keypair_total: m.generate_keypair_total.load(Ordering::Relaxed),
         escape_fts_query_total: m.escape_fts_query_total.load(Ordering::Relaxed),
         metrics_snapshot_total: m.metrics_snapshot_total.load(Ordering::Relaxed),
+        open_store_duration_histogram_total: m
+            .open_store_duration_histogram_total
+            .load(Ordering::Relaxed),
+        slm_dispatch_histograms_total: m.slm_dispatch_histograms_total.load(Ordering::Relaxed),
         create_connector_total: m.create_connector_total.load(Ordering::Relaxed),
         authenticate_connector_total: m.authenticate_connector_total.load(Ordering::Relaxed),
         sync_connector_total: m.sync_connector_total.load(Ordering::Relaxed),
