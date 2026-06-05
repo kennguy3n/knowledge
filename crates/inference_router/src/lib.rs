@@ -26,6 +26,8 @@ pub mod config;
 // STABLE
 pub mod error;
 // STABLE
+pub mod latency;
+// STABLE
 pub mod router;
 // STABLE
 pub mod task;
@@ -42,10 +44,15 @@ pub use adapters::{
     LlamaCppAdapter, LlamaServerClient, MlxAdapter, MlxGenerateFn,
 };
 // STABLE
-pub use config::{DeviceTier, RouterConfig, IDLE_UNLOAD_TIMEOUT_SECS, WARM_UP_PROMPT};
+pub use config::{
+    DeviceTier, RouterConfig, DEFAULT_MODEL_PATH, DEFAULT_SERVER_URL, IDLE_UNLOAD_TIMEOUT_SECS,
+    WARM_UP_PROMPT,
+};
 // STABLE
 pub use error::RouterError;
 // STABLE
-pub use router::{AdapterState, InferenceRouter};
+pub use latency::{LatencyHistogram, LATENCY_BUCKETS_SECONDS};
+// STABLE
+pub use router::{AdapterState, DispatchLatency, InferenceRouter};
 // STABLE
 pub use task::{InferenceTask, SummaryBundle, TaskTag};

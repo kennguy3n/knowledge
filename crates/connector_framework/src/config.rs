@@ -136,6 +136,27 @@ pub enum ConnectorKind {
     Sapo,
     /// Base.vn — Vietnamese enterprise collaboration suite (HR, CRM, project).
     BaseVN,
+    // GCC / Middle East connectors
+    /// Careem Business — UAE super-app (orders / drivers / analytics).
+    Careem,
+    /// Talabat Partner — GCC food delivery (orders / restaurants).
+    Talabat,
+    /// Noon Seller Center — UAE/Saudi e-commerce (orders / products).
+    Noon,
+    /// Amazon.ae — UAE marketplace via Amazon Selling-Partner API.
+    AmazonAE,
+    /// Tabby Merchant — UAE/Saudi BNPL (payments / settlements).
+    Tabby,
+    /// Foodics — Saudi/GCC restaurant management (POS / menu).
+    Foodics,
+    /// Zoho CRM/Books — GCC SME CRM (contacts / deals / invoices).
+    Zoho,
+    /// Bayt.com — Middle East job board (postings / applications).
+    Bayt,
+    /// Fetchr — UAE last-mile logistics (shipments / tracking).
+    Fetchr,
+    /// Amazon Payment Services (PayFort) — payments / settlements.
+    Payfort,
     /// Generic webhook-only connector — no provider-specific
     /// behaviour beyond `subscribe_webhook`.
     GenericWebhook,
@@ -207,6 +228,17 @@ impl ConnectorKind {
             Self::KiotViet => "kiotviet",
             Self::Sapo => "sapo",
             Self::BaseVN => "base_vn",
+            // GCC / Middle East connectors
+            Self::Careem => "careem",
+            Self::Talabat => "talabat",
+            Self::Noon => "noon",
+            Self::AmazonAE => "amazon_ae",
+            Self::Tabby => "tabby",
+            Self::Foodics => "foodics",
+            Self::Zoho => "zoho",
+            Self::Bayt => "bayt",
+            Self::Fetchr => "fetchr",
+            Self::Payfort => "payfort",
             Self::GenericWebhook => "generic_webhook",
         }
     }

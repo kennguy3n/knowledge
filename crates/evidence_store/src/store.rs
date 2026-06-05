@@ -36,6 +36,17 @@ pub const DEFAULT_RING_BUFFER_MAX_BYTES: usize = 5 * 1024 * 1024;
 /// statement compiles even on builds that lower the cap.
 const DELETE_BATCH: usize = 256;
 
+/// SQLCipher page-cache size, in KiB, applied when
+/// [`EvidenceStoreConfig::low_memory`] is set.
+///
+/// Passed to `PRAGMA cache_size` as a negative value, which SQLite
+/// interprets as a hard KiB budget rather than a page count. SQLite's
+/// default is ~2 MiB (`cache_size = -2000`); the low-memory profile
+/// shrinks that to 512 KiB to bound the per-connection page-cache
+/// footprint on 2 GiB-class devices, trading a higher page-fault rate
+/// (more re-reads from the encrypted file) for a smaller resident set.
+pub const LOW_MEMORY_PAGE_CACHE_KIB: i64 = 512;
+
 /// Configuration for [`EvidenceStore::open`].
 #[derive(Debug, Clone)]
 pub struct EvidenceStoreConfig {
@@ -46,6 +57,23 @@ pub struct EvidenceStoreConfig {
     /// Hard cap on the ring buffer. When exceeded, oldest entries are
     /// FIFO-evicted on insert.
     pub ring_buffer_max_bytes: usize,
+    /// Low-memory mode for constrained ("low" device tier) hosts.
+    ///
+    /// When `true`, [`EvidenceStore::open`] shrinks the SQLCipher
+    /// page cache to [`LOW_MEMORY_PAGE_CACHE_KIB`] and disables the
+    /// memory-mapped I/O window (`PRAGMA mmap_size = 0`), bounding the
+    /// per-connection resident set at the cost of more page faults on
+    /// the encrypted file. Defaults to `false` (SQLite defaults).
+    ///
+    /// Two related knobs from the original low-memory plan are
+    /// deliberately *not* implemented because they have no counterpart
+    /// in this schema: the FTS5 virtual tables in
+    /// [`crate::schema::SCHEMA_SQL`] declare no `prefix=` columns, so
+    /// there are no prefix indexes to disable; and body-table dedup is
+    /// resolved entirely in SQL via the `body_store.ref_count` column
+    /// (there is no in-memory dedup cache to bound). The page-cache /
+    /// mmap reduction is therefore the load-bearing memory lever.
+    pub low_memory: bool,
 }
 
 impl Default for EvidenceStoreConfig {
@@ -53,6 +81,7 @@ impl Default for EvidenceStoreConfig {
         Self {
             inline_threshold_bytes: DEFAULT_INLINE_THRESHOLD_BYTES,
             ring_buffer_max_bytes: DEFAULT_RING_BUFFER_MAX_BYTES,
+            low_memory: false,
         }
     }
 }
@@ -262,6 +291,20 @@ impl EvidenceStore {
         conn.pragma_update(None, "kdf_iter", 256_000_i64)?;
         // Foreign keys are off by default; we don't use FK constraints
         // (body_ref is a soft pointer with manual ref_count book-keeping).
+
+        // Low-memory profile for constrained ("low" device tier)
+        // hosts. Applied after the cipher PRAGMAs so the page key is
+        // already established (`cache_size` operates on the decrypted
+        // page cache). A negative `cache_size` is a KiB budget, not a
+        // page count; `mmap_size = 0` disables the memory-mapped read
+        // window so the file is paged through the bounded cache rather
+        // than mapped wholesale into the address space. Both trade
+        // throughput for a smaller resident set — see
+        // [`EvidenceStoreConfig::low_memory`].
+        if config.low_memory {
+            conn.pragma_update(None, "cache_size", -LOW_MEMORY_PAGE_CACHE_KIB)?;
+            conn.pragma_update(None, "mmap_size", 0_i64)?;
+        }
 
         // Verify the key works — issuing any SELECT before the schema
         // exists will surface a "file is not a database" if the key is

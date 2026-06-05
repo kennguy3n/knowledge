@@ -51,9 +51,10 @@
 //! health check).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, OnceLock, PoisonError};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use inference_router::LatencyHistogram;
 use serde::{Deserialize, Serialize};
 
 use crate::error::FfiError;
@@ -115,6 +116,16 @@ pub(crate) struct Metrics {
     // struct so accidental shadowings on future fields still surface.
     #[allow(clippy::struct_field_names)]
     pub(crate) metrics_snapshot_total: AtomicU64,
+    /// Total `open_store_duration_histogram` reads. Like
+    /// [`Self::metrics_snapshot_total`] this counts diagnostic
+    /// read-outs (one per Prometheus scrape of the open-store latency
+    /// histogram), so a runaway value flags an over-eager scraper.
+    pub(crate) open_store_duration_histogram_total: AtomicU64,
+    /// Total `slm_dispatch_histograms` calls initiated. Counts
+    /// handle-keyed reads of the per-`(task, adapter)` SLM
+    /// dispatch-latency histograms (one per Prometheus scrape that
+    /// includes the SLM series).
+    pub(crate) slm_dispatch_histograms_total: AtomicU64,
     /// Total `create_connector` calls initiated.
     pub(crate) create_connector_total: AtomicU64,
     /// Total `authenticate_connector` calls initiated.
@@ -357,6 +368,156 @@ pub fn prime() {
     let _ = metrics();
 }
 
+// ─── Latency histograms (open_store duration) ───────────────────────
+//
+// `open_store` wall-clock duration is tracked in a process-global
+// fixed-bucket histogram (rather than a counter on the `Metrics`
+// block) so the substrate's Prometheus surface can expose the full
+// `knowledge_open_store_duration_seconds` `_bucket` / `_sum` / `_count`
+// series — a single counter cannot carry a latency distribution. The
+// histogram is process-global (not per-runtime) because it measures
+// the cost of *constructing* a runtime, which has no handle yet.
+
+/// Process-global histogram of `open_store` /
+/// `open_store_with_resolver` wall-clock durations, backing the
+/// `knowledge_open_store_duration_seconds` Prometheus histogram.
+static OPEN_STORE_DURATION: OnceLock<Mutex<LatencyHistogram>> = OnceLock::new();
+
+fn open_store_duration() -> &'static Mutex<LatencyHistogram> {
+    OPEN_STORE_DURATION.get_or_init(|| Mutex::new(LatencyHistogram::new()))
+}
+
+/// Record one `open_store` wall-clock duration into the global
+/// `knowledge_open_store_duration_seconds` histogram.
+///
+/// Called once per successful `open_store` / `open_store_with_resolver`
+/// from [`crate::runtime`]. A poisoned lock (a prior panic while
+/// recording) is silently ignored — a dropped diagnostic sample must
+/// never escalate into an `open_store` failure.
+pub(crate) fn record_open_store_duration(elapsed: Duration) {
+    if let Ok(mut hist) = open_store_duration().lock() {
+        hist.record(elapsed);
+    }
+}
+
+/// Wire-flat snapshot of a fixed-bucket latency histogram for
+/// Prometheus text exposition.
+///
+/// Returned by [`open_store_duration_histogram`] and embedded in the
+/// per-`(task, adapter)` [`SlmDispatchHistogram`] entries. Carries the
+/// cumulative `(le_seconds, count)` buckets (Prometheus `_bucket`
+/// shape, including the trailing `+Inf` bucket), the running `_sum` in
+/// seconds, and the total `_count`.
+#[derive(Debug, Clone)]
+pub struct HistogramView {
+    /// Cumulative `(le_seconds, count)` buckets including `+Inf`.
+    pub buckets: Vec<(f64, u64)>,
+    /// Running sum of observed durations in seconds.
+    pub sum_seconds: f64,
+    /// Total number of observed samples.
+    pub count: u64,
+}
+
+impl HistogramView {
+    fn from_hist(hist: &LatencyHistogram) -> Self {
+        Self {
+            buckets: hist.cumulative_buckets(),
+            sum_seconds: hist.sum_seconds(),
+            count: hist.count(),
+        }
+    }
+}
+
+/// Snapshot the global `knowledge_open_store_duration_seconds`
+/// histogram for Prometheus exposition.
+///
+/// Returns an empty histogram (zero samples) before the first
+/// `open_store` call.
+///
+/// A poisoned lock is recovered (via [`PoisonError::into_inner`])
+/// rather than panicked on, symmetric with the graceful handling in
+/// [`record_open_store_duration`]: this readout backs a Prometheus
+/// scrape, so a single poisoned recording must not turn every
+/// subsequent scrape into a panic. The recovered data is still a
+/// monotone histogram — [`LatencyHistogram::record`] only does
+/// sequential scalar/bucket increments, so a poisoned guard cannot
+/// expose a torn distribution.
+///
+/// Bumps `open_store_duration_histogram_total` first — this is an
+/// infallible reader, so it follows the direct-`inc` pattern of
+/// [`snapshot`] rather than routing through [`instrument`] (there is
+/// no `FfiResult` to thread through). The snapshot value therefore
+/// lags its own counter by exactly one read, as documented on the
+/// field.
+#[must_use]
+pub fn open_store_duration_histogram() -> HistogramView {
+    inc_open_store_duration_histogram();
+    let hist = open_store_duration()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    HistogramView::from_hist(&hist)
+}
+
+/// Wire-flat snapshot of one `(task, adapter)` SLM dispatch-latency
+/// histogram, for the `knowledge_slm_dispatch_duration_seconds`
+/// Prometheus series.
+///
+/// Mirrors [`inference_router::DispatchLatency`] but with the task and
+/// adapter pre-rendered to their stable string tags so the substrate
+/// server can render the exposition without depending on
+/// `inference_router` directly.
+#[derive(Debug, Clone)]
+pub struct SlmDispatchHistogram {
+    /// Stable task tag (the `task` label).
+    pub task: String,
+    /// Stable adapter tag (the `adapter` label).
+    pub adapter: String,
+    /// Cumulative `(le_seconds, count)` buckets including `+Inf`.
+    pub buckets: Vec<(f64, u64)>,
+    /// Running sum of observed dispatch durations in seconds.
+    pub sum_seconds: f64,
+    /// Total dispatches recorded for this `(task, adapter)` pair.
+    pub count: u64,
+}
+
+/// Snapshot every per-`(task, adapter)` SLM dispatch-latency histogram
+/// recorded by the runtime behind `handle`.
+///
+/// Backs the `knowledge_slm_dispatch_duration_seconds` Prometheus
+/// series. Returned in the router's stable sort order (task tag, then
+/// adapter tag).
+///
+/// # Errors
+///
+/// Forwards [`FfiError::Unavailable`] when `handle` is unknown or has
+/// been closed, matching every other handle-keyed FFI entry point.
+///
+/// Wrapped in [`instrument`] like every other fallible handle-keyed
+/// entry point: bumps `slm_dispatch_histograms_total` and routes the
+/// `Unavailable` error through `inc_error`, so this diagnostic reader
+/// shows up in the substrate's own call-count telemetry alongside
+/// `metrics_snapshot` and `health_check`.
+pub fn slm_dispatch_histograms(
+    handle: crate::runtime::RuntimeHandle,
+) -> crate::error::FfiResult<Vec<SlmDispatchHistogram>> {
+    instrument(inc_slm_dispatch_histograms, || {
+        crate::runtime::with_runtime(handle, |rt| {
+            Ok(rt
+                .inference_router
+                .dispatch_latencies()
+                .into_iter()
+                .map(|d| SlmDispatchHistogram {
+                    task: d.task.tag().to_string(),
+                    adapter: d.adapter.as_str().to_string(),
+                    buckets: d.buckets,
+                    sum_seconds: d.sum_seconds,
+                    count: d.count,
+                })
+                .collect())
+        })
+    })
+}
+
 // ─── Counter helpers ────────────────────────────────────────────────
 //
 // Each public entry point in `crate::*` calls one of these
@@ -394,6 +555,8 @@ counter_inc!(pub(crate) fn inc_decrypt => decrypt_total);
 counter_inc!(pub(crate) fn inc_generate_keypair => generate_keypair_total);
 counter_inc!(pub(crate) fn inc_escape_fts_query => escape_fts_query_total);
 counter_inc!(pub(crate) fn inc_metrics_snapshot => metrics_snapshot_total);
+counter_inc!(pub(crate) fn inc_open_store_duration_histogram => open_store_duration_histogram_total);
+counter_inc!(pub(crate) fn inc_slm_dispatch_histograms => slm_dispatch_histograms_total);
 counter_inc!(pub(crate) fn inc_health_check => health_check_total);
 counter_inc!(pub(crate) fn inc_create_connector => create_connector_total);
 counter_inc!(pub(crate) fn inc_authenticate_connector => authenticate_connector_total);
@@ -560,6 +723,13 @@ pub struct MetricsSnapshot {
     // emitter's snapshot still round-trips through a newer reader.
     #[serde(default)]
     pub metrics_snapshot_total: u64,
+    /// Total `open_store_duration_histogram` diagnostic reads. Like
+    /// `metrics_snapshot_total`, this lags its own counter by one read.
+    #[serde(default)]
+    pub open_store_duration_histogram_total: u64,
+    /// Total `slm_dispatch_histograms` diagnostic reads.
+    #[serde(default)]
+    pub slm_dispatch_histograms_total: u64,
     /// Total `create_connector` calls initiated.
     #[serde(default)]
     pub create_connector_total: u64,
@@ -1257,6 +1427,10 @@ pub fn snapshot() -> MetricsSnapshot {
         generate_keypair_total: m.generate_keypair_total.load(Ordering::Relaxed),
         escape_fts_query_total: m.escape_fts_query_total.load(Ordering::Relaxed),
         metrics_snapshot_total: m.metrics_snapshot_total.load(Ordering::Relaxed),
+        open_store_duration_histogram_total: m
+            .open_store_duration_histogram_total
+            .load(Ordering::Relaxed),
+        slm_dispatch_histograms_total: m.slm_dispatch_histograms_total.load(Ordering::Relaxed),
         create_connector_total: m.create_connector_total.load(Ordering::Relaxed),
         authenticate_connector_total: m.authenticate_connector_total.load(Ordering::Relaxed),
         sync_connector_total: m.sync_connector_total.load(Ordering::Relaxed),

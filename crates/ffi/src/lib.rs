@@ -134,12 +134,17 @@ pub use connector::{
 // STABLE
 pub use error::{FfiError, FfiResult};
 // STABLE
-pub use health::{health_check, AdapterReport, HealthStatus, SubsystemHealth, SubsystemStatus};
+pub use health::{
+    health_check, AdapterReport, HealthStatus, SlmLatencyReport, SubsystemHealth, SubsystemStatus,
+};
 // STABLE
 pub use key_storage::{clear_key_storage_resolver, set_key_storage_resolver, KeyStorageResolver};
 // UNSTABLE — internal metrics; signatures may change.
 #[doc(hidden)]
-pub use metrics::{snapshot as metrics_snapshot, ErrorCounters, MetricsSnapshot};
+pub use metrics::{
+    open_store_duration_histogram, slm_dispatch_histograms, snapshot as metrics_snapshot,
+    ErrorCounters, HistogramView, MetricsSnapshot, SlmDispatchHistogram,
+};
 // STABLE
 pub use runtime::{close_store, open_store, open_store_with_resolver, RuntimeHandle};
 // STABLE
@@ -1472,11 +1477,14 @@ fn synthesize_scope(
     // `get_channel_memory` on the same handle can run in parallel with
     // the (potentially multi-second) SLM dispatch.
     //
-    // `open_store` spawns the adapter probe on a background thread to
-    // keep the open path itself non-blocking; wait here until the
-    // bootstrap finishes so a host that calls `trigger_synthesis`
-    // immediately after `open_store` does not race the probe. The wait
-    // is a no-op once probing has completed.
+    // `open_store` no longer probes adapters eagerly (lazy-load: the
+    // probe is deferred until the first synthesis request to keep the
+    // open path — and ingest/query-only hosts — off the probe cost).
+    // Kick the background probe off here the first time, then wait for
+    // it to finish so a host that calls `trigger_synthesis` does not
+    // race the probe. Both calls are no-ops once probing has started /
+    // completed on a prior synthesis.
+    router.ensure_bootstrap_started();
     router.wait_for_bootstrap();
     let raw = router
         .dispatch(InferenceTask::SynthSummary, &prompt)

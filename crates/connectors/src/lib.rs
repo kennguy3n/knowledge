@@ -124,6 +124,12 @@ mod timestamp_cursor;
 // the public API.
 mod sign;
 
+// Crate-internal request-signing primitives (HMAC-SHA256, SHA-256,
+// AWS Signature v4) shared by the GCC / Middle East connectors whose
+// auth goes beyond a bearer token (Noon, PayFort, Amazon.ae). Not part
+// of the public API.
+mod signing;
+
 // STABLE
 pub mod airtable;
 // STABLE
@@ -249,6 +255,28 @@ pub mod vnpay;
 // STABLE
 pub mod zalo;
 
+// GCC / Middle East connectors
+// STABLE
+pub mod amazon_ae;
+// STABLE
+pub mod bayt;
+// STABLE
+pub mod careem;
+// STABLE
+pub mod fetchr;
+// STABLE
+pub mod foodics;
+// STABLE
+pub mod noon;
+// STABLE
+pub mod payfort;
+// STABLE
+pub mod tabby;
+// STABLE
+pub mod talabat;
+// STABLE
+pub mod zoho_me;
+
 // STABLE
 pub use airtable::AirtableConnector;
 // STABLE
@@ -373,3 +401,25 @@ pub use viettel_post::ViettelPostConnector;
 pub use vnpay::VNPayConnector;
 // STABLE
 pub use zalo::ZaloConnector;
+
+// GCC / Middle East connectors
+// STABLE
+pub use amazon_ae::AmazonAeConnector;
+// STABLE
+pub use bayt::BaytConnector;
+// STABLE
+pub use careem::CareemConnector;
+// STABLE
+pub use fetchr::FetchrConnector;
+// STABLE
+pub use foodics::FoodicsConnector;
+// STABLE
+pub use noon::NoonConnector;
+// STABLE
+pub use payfort::PayfortConnector;
+// STABLE
+pub use tabby::TabbyConnector;
+// STABLE
+pub use talabat::TalabatConnector;
+// STABLE
+pub use zoho_me::ZohoConnector;

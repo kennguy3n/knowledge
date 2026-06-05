@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   shipping as **stable** with full `Connector` trait implementations
   and `MockHttpTransport` unit coverage: LINE, Grab, Gojek, Talenox,
   Odoo (SEA), Fastwork, TrueMoney, SCB Easy, PromptPay, Tokopedia.
+- **10 new GCC / Middle East connectors.** The connector catalog grows
+  from 40 to 50 providers, all shipping as **stable** with full
+  `Connector` trait implementations and `MockHttpTransport` unit
+  coverage: Careem, Talabat, Noon, Amazon.ae (SP-API), Tabby, Foodics,
+  Zoho, Bayt, Fetchr, and PayFort (Amazon Payment Services). Adds a
+  crate-internal `signing` module providing the HMAC-SHA256, SHA-256,
+  and AWS Signature v4 primitives these providers' auth schemes require.
 - **Browser-based admin dashboard** (`admin/`) — a React + Vite SPA served
   on `:3001` for managing connectors, tenants, synthesis runs, the memory
   browser, and the audit log without the CLI or PromQL.

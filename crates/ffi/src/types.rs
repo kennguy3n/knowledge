@@ -372,6 +372,27 @@ pub enum ConnectorKindTag {
     Sapo,
     /// Base.vn — tasks + requests + HR records.
     BaseVN,
+    // GCC / Middle East connectors
+    /// Careem Business — UAE super-app.
+    Careem,
+    /// Talabat Partner — GCC food delivery.
+    Talabat,
+    /// Noon Seller Center — UAE/Saudi e-commerce.
+    Noon,
+    /// Amazon.ae — UAE marketplace via Amazon SP-API.
+    AmazonAE,
+    /// Tabby Merchant — UAE/Saudi BNPL.
+    Tabby,
+    /// Foodics — Saudi/GCC restaurant management.
+    Foodics,
+    /// Zoho CRM/Books — GCC SME CRM.
+    Zoho,
+    /// Bayt.com — Middle East job board.
+    Bayt,
+    /// Fetchr — UAE last-mile logistics.
+    Fetchr,
+    /// Amazon Payment Services (PayFort) — payments.
+    Payfort,
     /// Generic webhook receiver — opaque-payload connector for
     /// providers that aren't first-class supported.
     GenericWebhook,
