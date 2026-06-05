@@ -3,7 +3,7 @@
 //!
 //! Per `docs/technical/design.md` §10.2 and `docs/technical/architecture.md` §4.1, the substrate
 //! ingests evidence from external systems through the
-//! [`connector_framework`] trait. This crate ships forty concrete
+//! [`connector_framework`] trait. This crate ships sixty concrete
 //! connectors against the most common B2B sources:
 //!
 //! * [`google_drive::GoogleDriveConnector`] — Google Drive API v3
@@ -74,7 +74,7 @@
 //! * [`line::LineConnector`] — LINE Messaging API (rich menus +
 //!   webhook-delivered messages).
 //! * [`grab::GrabConnector`] — Grab for Business API (orders,
-//!   `page_token` pagination, OAuth2).
+//!   `page_size`/`page_index` pagination, OAuth2).
 //! * [`gojek::GojekConnector`] — GoTo/Gojek Partner API (orders,
 //!   API-key header auth).
 //! * [`talenox::TalenoxConnector`] — Talenox HR/payroll (employees,

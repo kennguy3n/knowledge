@@ -20,7 +20,6 @@
 //!   `subscribe_webhook` records a polling-only subscription.
 //! * `handle_webhook_event` parses the delivered payload.
 
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -30,12 +29,10 @@ use connector_framework::{
     OAuth2CodeExchange, OAuth2Token, Result, SourceDocumentId, SyncRunResult, SyncState,
     WebhookEventTypes, WebhookSecret, WebhookSubscription,
 };
-use hmac::{Hmac, KeyInit, Mac};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 
-type HmacSha256 = Hmac<Sha256>;
+use crate::sign::hmac_sha256_hex;
 
 /// Default TrueMoney Business API base URL.
 pub const DEFAULT_API_BASE_URL: &str = "https://api.truemoney.com";
@@ -74,15 +71,6 @@ struct TrueMoneyWebhookEvent {
     transaction_id: serde_json::Value,
     #[serde(default)]
     event: String,
-}
-
-/// Hex-encode a byte slice (lowercase).
-fn to_hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(out, "{b:02x}");
-    }
-    out
 }
 
 /// TrueMoney Business connector.
@@ -163,12 +151,15 @@ impl TrueMoneyConnector {
     }
 
     /// Compute the lowercase-hex HMAC-SHA256 signature over
-    /// `METHOD\nURL\nTIMESTAMP`.
+    /// `METHOD\nURL\nTIMESTAMP`, delegating the digest/hex-encoding to
+    /// the shared [`crate::sign::hmac_sha256_hex`] helper. TrueMoney's
+    /// canonical string differs from the Vietnam marketplace base
+    /// strings, so only the primitive is shared, not the layout.
     fn sign(secret: &str, method: &str, url: &str, timestamp: i64) -> String {
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-            .expect("HMAC-SHA256 accepts a key of any length");
-        mac.update(format!("{method}\n{url}\n{timestamp}").as_bytes());
-        to_hex(&mac.finalize().into_bytes())
+        hmac_sha256_hex(
+            secret.as_bytes(),
+            format!("{method}\n{url}\n{timestamp}").as_bytes(),
+        )
     }
 
     fn signed_get<R: DeserializeOwned>(
