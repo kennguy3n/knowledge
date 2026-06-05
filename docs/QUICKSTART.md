@@ -63,16 +63,30 @@ platform-specific [integration guides](guides/).
 
 ### Wiring a real SLM (optional)
 
-To run actual inference instead of the fallback synthesizer:
+By default the demo uses the NoOp fallback synthesizer. To run **actual**
+inference there are two paths:
 
-```bash
-# Set env vars pointing to your llama-server binary and model
-export LLAMA_SERVER_BINARY=/path/to/llama-server
-export LLAMA_SERVER_MODEL=/path/to/bonsai-1.7b-q4_k_m.gguf
+- **Docker / Compose / Helm — automatic.** The published `llama-server`
+  image ships the Bonsai-1.7B GGUF baked in and the substrate is wired to
+  it out of the box, so synthesis just works (see the
+  [deployment guide](operator/deployment-guide.md)). Nothing to download.
 
-# The integration test drives a real synthesis through the router
-cargo test -p integration_tests -- --ignored llama_server
-```
+- **Native local dev.** Fetch the model artifacts (GGUF, MLX, ONNX) with
+  the helper script, then point the integration test at the GGUF:
+
+  ```bash
+  # Downloads artifacts into deploy/models/ with SHA-256 verification.
+  ./scripts/download-models.sh
+
+  export LLAMA_SERVER_BINARY=/path/to/llama-server
+  export LLAMA_SERVER_MODEL=deploy/models/bonsai-1.7b.gguf
+
+  # The integration test drives a real synthesis through the router.
+  cargo test -p integration_tests -- --ignored llama_server
+  ```
+
+  See [`deploy/model-artifacts/README.md`](../deploy/model-artifacts/README.md)
+  for what each artifact is and where it lives.
 
 ---
 

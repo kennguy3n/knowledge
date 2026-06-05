@@ -45,7 +45,8 @@ day-2 operations see the companion docs:
 
 - Docker Engine ≥ 24 with Compose v2
 - At least 4 GB RAM (8 GB recommended with llama-server)
-- The Bonsai-1.7B GGUF model file (for llama-server)
+- *(Optional)* a custom GGUF model file, only if you want to override the
+  Bonsai-1.7B weights that ship baked into the `llama-server` image
 
 ### Quick start
 
@@ -55,33 +56,42 @@ cp .env.example .env
 # Generate a master key:
 openssl rand -hex 32  # paste into KNOWLEDGE_MASTER_KEY
 
-# 2. (Optional) Place the model file for llama-server.
-mkdir -p deploy/models
-# Download or copy bonsai-1.7b.gguf into deploy/models/
-
-# 3. Start the stack.
+# 2. Start the stack. The llama-server image ships the Bonsai-1.7B GGUF
+#    baked in, so synthesis works out of the box — no model download.
 make up
 # Or: docker compose -f deploy/docker-compose.yml up --build -d
 ```
 
+> **Overriding the bundled model.** To serve a different GGUF, bind-mount
+> it over the baked-in path by uncommenting the `volumes:` override on the
+> `llama-server` service in `deploy/docker-compose.yml`:
+>
+> ```yaml
+>     volumes:
+>       - "/path/to/custom-model.gguf:/models/bonsai-1.7b.gguf:ro"
+> ```
+
 ### Deploy with pre-built images
 
-Tagged releases publish multi-arch (amd64/arm64) `gateway` and
-`substrate` images to GHCR via the
+Tagged releases publish multi-arch (amd64/arm64) `gateway`, `substrate`,
+and `llama-server` images to GHCR via the
 [`Publish images`](../../.github/workflows/docker-publish.yml) workflow,
 so SMEs can deploy with `docker pull` + `docker compose up` and **no
-local build**.
+local build**. The `llama-server` image ships the Bonsai-1.7B GGUF baked
+in, so synthesis works without a separate model download.
 
 ```bash
 # Pull the published images (replace 0.1.0 with the release tag).
 export KNOWLEDGE_VERSION=0.1.0
 docker pull ghcr.io/kennguy3n/knowledge-gateway:${KNOWLEDGE_VERSION}
 docker pull ghcr.io/kennguy3n/knowledge-substrate:${KNOWLEDGE_VERSION}
+docker pull ghcr.io/kennguy3n/knowledge-llama-server:${KNOWLEDGE_VERSION}
 ```
 
 To run the compose stack against the pre-built images instead of
-building locally, point the two core services at the published tags with
-a compose override file:
+building locally, point the services at the published tags with a compose
+override file (this is exactly
+[`deploy/docker-compose.images.yml`](../../deploy/docker-compose.images.yml)):
 
 ```yaml
 # deploy/docker-compose.images.yml
@@ -91,6 +101,9 @@ services:
     build: !reset null
   knowledge-substrate:
     image: ghcr.io/kennguy3n/knowledge-substrate:${KNOWLEDGE_VERSION:-latest}
+    build: !reset null
+  llama-server:
+    image: ghcr.io/kennguy3n/knowledge-llama-server:${KNOWLEDGE_VERSION:-latest}
     build: !reset null
 ```
 
@@ -108,8 +121,9 @@ docker compose \
 > On an older Compose, either upgrade or delete the two `build:` lines from
 > the override file instead of using `!reset`.
 
-The `llama-server` image is **not** published (it is a large, optional
-on-device inference component); build it locally if needed, or omit it.
+The `llama-server` image is large (it compiles llama.cpp from source and
+bakes in the GGUF weights), but it **is** published like the others, so
+operators do not need to build it locally or supply a model file.
 
 Images are also pushed to Docker Hub when the repository defines the
 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets — substitute
@@ -120,7 +134,12 @@ Images are also pushed to Docker Hub when the repository defines the
 A Helm chart at [`deploy/helm/knowledge`](../../deploy/helm/knowledge)
 mirrors the compose topology: a horizontally-scalable gateway Deployment
 in front of a single stateful substrate Deployment backed by a
-`PersistentVolumeClaim` for the SQLCipher database.
+`PersistentVolumeClaim` for the SQLCipher database, plus a single-replica
+`llama-server` Deployment (the SLM sidecar, with the Bonsai-1.7B GGUF
+baked into its image). When `llamaServer.enabled` is true (the default),
+the substrate is wired to the sidecar automatically, so synthesis works
+out of the box; set it to `false` to deploy without server-side
+synthesis.
 
 ```bash
 # Generate and pass the SQLCipher master key (required).
@@ -140,6 +159,8 @@ list):
 | `gateway.replicaCount`                 | `2`                                       | Static gateway replicas (when HPA is off).|
 | `autoscaling.enabled`                  | `false`                                   | Enable the gateway HPA.                   |
 | `substrate.persistence.size`           | `10Gi`                                    | SQLCipher volume size.                    |
+| `llamaServer.enabled`                  | `true`                                    | Deploy the SLM sidecar (Bonsai-1.7B baked in) and wire the substrate to it. |
+| `llamaServer.image.repository`         | `ghcr.io/kennguy3n/knowledge-llama-server`| SLM image repo — override for a fork's registry. |
 | `substrate.persistence.storageClass`   | `""` (cluster default)                    | Block-storage class for the substrate PVC.|
 | `config.databaseUrl`                   | `""`                                      | External Postgres DSN (else in-memory).   |
 | `config.natsUrl`                       | `""`                                      | External NATS URL (else audit disabled).  |
@@ -195,7 +216,7 @@ afterwards. See each module's README for inputs and hardening notes.
 | postgres             | `pgvector/pgvector:pg16`         | 5432  | Relational store + pgvector          |
 | nats                 | `nats:latest`                    | 4222  | JetStream event bus                  |
 | minio                | `minio/minio:latest`             | 9000  | S3-compatible object store           |
-| llama-server         | `deploy/Dockerfile.llama-server` | 8081  | On-device SLM inference              |
+| llama-server         | `deploy/Dockerfile.llama-server` | 8081  | On-device SLM inference (Bonsai-1.7B GGUF baked in) |
 | prometheus           | `prom/prometheus:latest`         | 9091  | Metrics collection                   |
 | grafana              | `grafana/grafana:latest`         | 3000  | Dashboards and alerting              |
 | admin                | `admin/Dockerfile` (nginx)       | 3001  | Browser-based admin dashboard        |

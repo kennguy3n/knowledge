@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["crates/crypto/fuzz"]
+exclude = ["crates/crypto/fuzz", "crates/evidence_store/fuzz"]
 members = [
     "crates/agent_contract",
     "crates/audit_service",

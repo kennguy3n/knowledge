@@ -1,3 +1,9 @@
+{{- /* Fail fast if no master key source is configured (covers the
+       secrets.create=false path where secret.yaml does not render).
+       Evaluated unconditionally so the check also fires in HA mode,
+       where this template renders nothing (the StatefulSet replaces the
+       Deployment below). */}}
+{{- include "knowledge.validateMasterKey" . }}
 {{- if not .Values.substrate.ha.enabled }}
 apiVersion: apps/v1
 kind: Deployment

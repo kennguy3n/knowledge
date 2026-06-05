@@ -84,9 +84,10 @@ Knowledge is honest about what it does **not** defend against:
   guarantees.
 - **A malicious host application.** The substrate trusts the app that
   embeds it; a hostile host can misuse the API surface.
-- **No third-party audit yet.** As of 1.0 the design has not undergone an
-  external security audit. Treat the guarantees as design intent backed
-  by tests, not audited claims.
+- **Third-party audit planned.** Scope and auditor onboarding docs are
+  available at [audit-scope.md](audit-scope.md) and
+  [audit-guide.md](audit-guide.md). Treat the guarantees as design
+  intent backed by tests until the audit report is published.
 
 ## Defense in depth
 
