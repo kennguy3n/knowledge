@@ -27,7 +27,13 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   single Deployment when `substrate.ha.enabled=true`, docker-compose
   ships a commented-out standby service, and monitoring adds a
   replication-lag dashboard panel plus a `KnowledgeReplicationLagHigh`
-  alert.
+  alert. The journal mode is role-asymmetric: a primary runs in
+  `journal_mode=WAL` (auto-checkpoint disabled) so SQLite produces the
+  `-wal` the shipper drains, while a standby stays in a rollback-journal
+  mode so its raw page splicing stays coherent; `auto`-mode nodes switch
+  modes on promotion/demotion, and the standby re-opens its read
+  connection after each applied segment so replicated pages become
+  visible.
 
 - **30 new connectors.** The connector catalog grows from 10 to 40
   providers, all shipping as **stable** with full `Connector` trait

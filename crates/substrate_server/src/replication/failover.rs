@@ -95,6 +95,47 @@ impl<B: WalBus + 'static, L: LeaseStore + 'static> FailoverCoordinator<B, L> {
         }
     }
 
+    /// Put the open store connection into the journal mode the given
+    /// role requires, *before* its task starts touching the file.
+    ///
+    /// A primary must run `journal_mode=WAL` so SQLite produces the
+    /// `-wal` sidecar the shipper drains; a standby (and any
+    /// rollback-served role) must run a rollback-journal mode so its raw
+    /// page splicing is visible to the read connection via the page-1
+    /// change counter. In `auto` mode the role flips at runtime, so the
+    /// mode is switched on every transition. A no-op when no real store
+    /// handle is attached (unit tests).
+    ///
+    /// # Errors
+    ///
+    /// [`ReplError::Misconfigured`] if the pragma switch fails — better
+    /// to abort the transition loudly than ship/serve in the wrong mode.
+    fn set_store_journal_for(&self, role: Role) -> ReplResult<()> {
+        let Some(handle) = self.db_handle else {
+            return Ok(());
+        };
+        match role {
+            Role::Primary => {
+                let mode = ffi::store_set_journal_wal(handle).map_err(|e| {
+                    ReplError::Misconfigured(format!(
+                        "switching store to journal_mode=WAL for primary role: {e}"
+                    ))
+                })?;
+                tracing::info!(journal_mode = %mode, "failover: store switched to WAL for primary");
+            }
+            Role::Standby => {
+                let mode = ffi::store_set_journal_rollback(handle).map_err(|e| {
+                    ReplError::Misconfigured(format!(
+                        "switching store to rollback journal for standby role: {e}"
+                    ))
+                })?;
+                tracing::info!(journal_mode = %mode, "failover: store switched to rollback journal for standby");
+            }
+            Role::Disabled => {}
+        }
+        Ok(())
+    }
+
     /// Spawn the background task for `role`, returning its handle. A
     /// [`Role::Disabled`] role spawns nothing.
     fn spawn_role(&self, role: Role) -> Option<RoleTask> {
@@ -105,7 +146,8 @@ impl<B: WalBus + 'static, L: LeaseStore + 'static> FailoverCoordinator<B, L> {
                     Arc::clone(&self.bus),
                     Arc::clone(&self.shared),
                     self.config.clone(),
-                );
+                )
+                .with_db_handle(self.db_handle);
                 tokio::spawn(primary.run(stop_rx))
             }
             Role::Standby => {
@@ -147,6 +189,17 @@ impl<B: WalBus + 'static, L: LeaseStore + 'static> FailoverCoordinator<B, L> {
 
     /// Run a single fixed-role loop until shutdown.
     async fn run_static(self, role: Role, mut shutdown: watch::Receiver<bool>) {
+        if let Err(e) = self.set_store_journal_for(role) {
+            // A static primary that cannot enter WAL would ship nothing;
+            // surface it loudly and idle (reads still work) rather than
+            // silently pretending to replicate.
+            tracing::error!(
+                error = %e, ?role,
+                "failover: could not set store journal mode for static role; replication task not started"
+            );
+            let _ = shutdown.changed().await;
+            return;
+        }
         let task = self.spawn_role(role);
         let _ = shutdown.changed().await;
         if let Some(task) = task {
@@ -157,8 +210,15 @@ impl<B: WalBus + 'static, L: LeaseStore + 'static> FailoverCoordinator<B, L> {
     /// Run the auto-failover election loop.
     async fn run_auto(self, shutdown: &mut watch::Receiver<bool>) {
         // Start pessimistically as a standby; promotion happens only on
-        // winning the lease below.
+        // winning the lease below. The store opens in rollback-journal
+        // mode (verified by `super::spawn`), which is exactly what a
+        // standby needs, so this is effectively a no-op at boot — but we
+        // assert it explicitly so the standby loop never starts against a
+        // WAL-mode connection.
         self.shared.set_role(Role::Standby);
+        if let Err(e) = self.set_store_journal_for(Role::Standby) {
+            tracing::error!(error = %e, "failover: could not confirm rollback journal at auto startup");
+        }
         let mut current = self.spawn_role(Role::Standby);
         let mut current_role = Role::Standby;
 
@@ -187,12 +247,36 @@ impl<B: WalBus + 'static, L: LeaseStore + 'static> FailoverCoordinator<B, L> {
                             from = ?current_role, to = ?want, epoch = self.shared.epoch(),
                             "failover: role transition"
                         );
+                        // Stop the old task first so nothing touches the
+                        // store file while we switch its journal mode,
+                        // then flip the mode for the new role *before*
+                        // spawning its task (a primary needs WAL in place
+                        // before it drains; a demoted standby needs the
+                        // WAL checkpointed back to rollback before it
+                        // splices pages again).
                         if let Some(task) = current.take() {
                             task.shutdown().await;
                         }
-                        self.shared.set_role(want);
-                        current = self.spawn_role(want);
-                        current_role = want;
+                        let effective = match self.set_store_journal_for(want) {
+                            Ok(()) => want,
+                            Err(e) => {
+                                // Could not enter the target mode. Fall
+                                // back to standby (forcing rollback) so we
+                                // serve correct reads and gate writes
+                                // rather than ship/serve in the wrong
+                                // mode; the next tick re-attempts the
+                                // promotion while we still hold the lease.
+                                tracing::error!(
+                                    error = %e, attempted = ?want,
+                                    "failover: journal-mode switch failed; falling back to standby"
+                                );
+                                let _ = self.set_store_journal_for(Role::Standby);
+                                Role::Standby
+                            }
+                        };
+                        self.shared.set_role(effective);
+                        current = self.spawn_role(effective);
+                        current_role = effective;
                     }
                 }
                 res = shutdown.changed() => {

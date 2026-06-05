@@ -193,18 +193,29 @@ use rand::TryRng;
 
 use runtime::with_runtime;
 
-/// Run `apply` while holding this store handle's runtime lock.
+/// Run `apply` while holding this store handle's runtime lock, then
+/// re-open the connection so the spliced changes become visible.
 ///
 /// Every other FFI entry point ([`ingest_message`], [`query`], …)
 /// serialises on the same per-handle mutex via `with_runtime`, so a
 /// closure invoked here cannot overlap any in-flight SQLite read or
 /// write on the same connection. The standby replicator uses this to
 /// splice raw WAL page images into the database file *underneath* an
-/// open SQLCipher connection without racing a reader: the store runs
-/// in rollback-journal mode, so SQLite consults the main database file
-/// for every page, and it discards its page cache on the next read
-/// transaction because the primary stamps an incremented change
-/// counter into the page-1 image the standby applies.
+/// open SQLCipher connection without racing a reader.
+///
+/// SQLite normally notices an external write to the file via the
+/// page-1 change counter and drops its page cache on the next read
+/// transaction. That mechanism is **unavailable** here: the primary
+/// runs in `journal_mode=WAL` (so it produces the `-wal` the shipper
+/// reads), and WAL mode freezes the legacy page-1 change counter for
+/// the life of the WAL — the shipped frames usually do not even
+/// include page 1. The standby's long-lived read connection would
+/// therefore keep serving its stale cached pages forever. To close
+/// that gap, this helper re-opens the connection after `apply`
+/// returns ([`EvidenceStore::reopen_connection`]), forcing the next
+/// read to fault every page back in from the freshly spliced file.
+/// The re-open uses a raw key blob (no PBKDF2), so it is cheap enough
+/// to run after each applied segment.
 ///
 /// `apply` must not call back into any FFI function on the same
 /// `handle` — it already holds the lock, so re-entry would deadlock.
@@ -213,9 +224,19 @@ use runtime::with_runtime;
 /// # Errors
 ///
 /// [`FfiError::Unavailable`] if [`open_store`] has not been called for
-/// `handle`. The closure's own return value is passed through verbatim.
+/// `handle`, or [`FfiError::Evidence`] if re-opening the connection
+/// fails after the splice. The closure's own return value is otherwise
+/// passed through verbatim.
 pub fn with_store_file_locked<R>(handle: RuntimeHandle, apply: impl FnOnce() -> R) -> FfiResult<R> {
-    with_runtime(handle, |_rt| Ok(apply()))
+    with_runtime(handle, |rt| {
+        let out = apply();
+        rt.store_mut()
+            .reopen_connection()
+            .map_err(|e| FfiError::Evidence {
+                message: format!("re-opening store connection after WAL splice: {e}"),
+            })?;
+        Ok(out)
+    })
 }
 
 /// Report the SQLite journal mode of this store handle's open
@@ -223,14 +244,13 @@ pub fn with_store_file_locked<R>(handle: RuntimeHandle, apply: impl FnOnce() -> 
 ///
 /// The standby replicator uses this to assert at startup that the
 /// read-serving connection is in a *rollback-journal* mode. Its raw WAL
-/// page splicing (see [`with_store_file_locked`]) relies on SQLite
-/// consulting the main database file for every page and dropping its
-/// cache via the page-1 change counter — behaviour that only holds
-/// outside WAL mode. If [`evidence_store`]'s open path ever switched to
-/// `journal_mode=WAL`, those raw writes would land in the main file
-/// while readers consulted a `-wal` the replicator never touches,
-/// silently serving stale reads; surfacing the mode lets the caller
-/// fail fast instead.
+/// page splicing (see [`with_store_file_locked`]) writes page images
+/// straight into the main database file; a standby connection in WAL
+/// mode would instead consult its own `-wal` sidecar — which
+/// replication never writes — and serve stale pages until a checkpoint,
+/// even after the post-splice connection re-open. Surfacing the mode
+/// lets the caller fail fast if the standby's open path ever switched
+/// to `journal_mode=WAL`.
 ///
 /// # Errors
 ///
@@ -246,6 +266,152 @@ pub fn store_journal_mode(handle: RuntimeHandle) -> FfiResult<String> {
                 message: format!("reading journal_mode: {e}"),
             })?;
         Ok(mode.to_ascii_lowercase())
+    })
+}
+
+/// Report the SQLCipher page size (`PRAGMA cipher_page_size`) of this
+/// store handle's open connection.
+///
+/// The standby replicator splices raw WAL page images straight into the
+/// database file at `(page_number - 1) * page_size`, so it is bound to
+/// the store's on-disk page geometry. Surfacing the cipher page size
+/// lets the standby assert that each shipped segment's `page_size`
+/// matches the local store before writing, so a future change to
+/// `cipher_page_size` aborts with a clear error instead of silently
+/// writing misaligned pages.
+///
+/// # Errors
+///
+/// [`FfiError::Unavailable`] if [`open_store`] has not been called for
+/// `handle`, or [`FfiError::Evidence`] if the pragma query fails.
+pub fn store_cipher_page_size(handle: RuntimeHandle) -> FfiResult<u32> {
+    with_runtime(handle, |rt| {
+        // SQLCipher returns `cipher_page_size` as TEXT (unlike SQLite's
+        // own integer pragmas), so read it as a string and parse it.
+        let raw: String = rt
+            .store
+            .raw_conn()
+            .pragma_query_value(None, "cipher_page_size", |row| row.get(0))
+            .map_err(|e| FfiError::Evidence {
+                message: format!("reading cipher_page_size: {e}"),
+            })?;
+        raw.trim().parse::<u32>().map_err(|_| FfiError::Evidence {
+            message: format!("implausible cipher_page_size {raw:?}"),
+        })
+    })
+}
+
+/// Switch this store handle's connection into `journal_mode=WAL` and
+/// disable SQLite's automatic checkpointing.
+///
+/// A node acting as **primary** must run in WAL mode so SQLite produces
+/// the `-wal` sidecar the replication shipper reads frames from — in the
+/// default rollback-journal mode no `-wal` is ever created and the
+/// shipper would publish nothing. Auto-checkpointing is turned off
+/// (`wal_autocheckpoint=0`) because an automatic checkpoint folds
+/// committed frames back into the main database and truncates the
+/// `-wal` out from under the shipper, which would silently drop frames
+/// that were never shipped. The shipper itself drives checkpoints (via
+/// [`drain_wal`]) so it only ever truncates frames it has already read.
+///
+/// Returns the resulting journal mode, lower-cased (expected: `"wal"`).
+///
+/// # Errors
+///
+/// [`FfiError::Unavailable`] if [`open_store`] has not been called for
+/// `handle`, or [`FfiError::Evidence`] if a pragma fails.
+pub fn store_set_journal_wal(handle: RuntimeHandle) -> FfiResult<String> {
+    with_runtime(handle, |rt| {
+        let conn = rt.store.raw_conn();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+            .map_err(|e| FfiError::Evidence {
+                message: format!("setting journal_mode=WAL: {e}"),
+            })?;
+        conn.pragma_update(None, "wal_autocheckpoint", 0_i64)
+            .map_err(|e| FfiError::Evidence {
+                message: format!("disabling wal_autocheckpoint: {e}"),
+            })?;
+        Ok(mode.to_ascii_lowercase())
+    })
+}
+
+/// Checkpoint and switch this store handle's connection back to a
+/// rollback-journal mode (`journal_mode=DELETE`).
+///
+/// Used when an auto-mode node is **demoted** from primary to standby:
+/// any frames still in the `-wal` are folded into the main database and
+/// the `-wal`/`-shm` sidecars are removed (`wal_checkpoint(TRUNCATE)`),
+/// then the connection leaves WAL mode so the standby's raw page
+/// splicing + page-1 change-counter cache invalidation works again (it
+/// only holds outside WAL mode — see [`with_store_file_locked`]).
+///
+/// Returns the resulting journal mode, lower-cased.
+///
+/// # Errors
+///
+/// [`FfiError::Unavailable`] if [`open_store`] has not been called for
+/// `handle`, or [`FfiError::Evidence`] if a pragma fails.
+pub fn store_set_journal_rollback(handle: RuntimeHandle) -> FfiResult<String> {
+    with_runtime(handle, |rt| {
+        let conn = rt.store.raw_conn();
+        // Fold any outstanding WAL frames into the main file and drop
+        // the sidecars before leaving WAL mode. Ignore the returned
+        // (busy, log, checkpointed) row — on a primary about to stop
+        // there are no competing readers, and any residual frames are
+        // re-derived from the bus by the standby regardless.
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|e| FfiError::Evidence {
+                message: format!("checkpointing WAL: {e}"),
+            })?;
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode = DELETE", [], |row| row.get(0))
+            .map_err(|e| FfiError::Evidence {
+                message: format!("setting journal_mode=DELETE: {e}"),
+            })?;
+        Ok(mode.to_ascii_lowercase())
+    })
+}
+
+/// Atomically read the `-wal` sidecar at `wal_path` and checkpoint it.
+///
+/// Runs under the store handle's runtime lock so no FFI write (every
+/// `ingest_*` serialises on the same mutex) can append frames between
+/// the read and the checkpoint. The whole `-wal` is read into memory,
+/// then `wal_checkpoint(TRUNCATE)` folds those exact frames into the
+/// main database and resets the sidecar — so every committed frame is
+/// captured for shipping before it is truncated, and the `-wal` cannot
+/// grow without bound. The returned bytes are the WAL generation the
+/// caller must ship; the next write begins a fresh generation (new
+/// salts) which the shipper re-ships from frame zero.
+///
+/// A missing `-wal` (no writes yet, or already drained) yields an empty
+/// vector and performs no checkpoint.
+///
+/// # Errors
+///
+/// [`FfiError::Unavailable`] if [`open_store`] has not been called for
+/// `handle`, or [`FfiError::Evidence`] if the read or checkpoint fails.
+pub fn drain_wal(handle: RuntimeHandle, wal_path: &str) -> FfiResult<Vec<u8>> {
+    with_runtime(handle, |rt| {
+        let bytes = match std::fs::read(wal_path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => {
+                return Err(FfiError::Evidence {
+                    message: format!("reading WAL sidecar {wal_path}: {e}"),
+                });
+            }
+        };
+        if !bytes.is_empty() {
+            rt.store
+                .raw_conn()
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .map_err(|e| FfiError::Evidence {
+                    message: format!("checkpointing WAL after drain: {e}"),
+                })?;
+        }
+        Ok(bytes)
     })
 }
 

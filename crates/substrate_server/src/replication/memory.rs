@@ -251,13 +251,29 @@ mod tests {
     #[tokio::test]
     async fn lease_steal_after_expiry_bumps_epoch() {
         let store = InMemoryLeaseStore::new();
-        // Acquire with a zero TTL so it is immediately expired.
-        let a = store
-            .acquire("node-a", Duration::from_millis(0))
-            .await
-            .unwrap();
+        // Acquire with a short but non-zero TTL, then sleep past it so the
+        // lease is *genuinely* expired by wall-clock time. (An earlier
+        // version used a zero TTL, which only expires by virtue of the
+        // strict `expires_at_ms > now` comparison resolving within the
+        // same millisecond — it would silently break if that comparison
+        // were ever relaxed to `>=`. Waiting out a real TTL exercises the
+        // steal path regardless of the boundary semantics.)
+        let ttl = Duration::from_millis(20);
+        let a = store.acquire("node-a", ttl).await.unwrap();
         assert_eq!(a.epoch, 1);
-        assert!(store.current().await.unwrap().is_none());
+        assert_eq!(a.holder, "node-a");
+        // While still inside the TTL the lease is held and not stealable.
+        assert_eq!(
+            store.current().await.unwrap().map(|l| l.holder),
+            Some("node-a".to_string()),
+            "lease must be live before its TTL elapses"
+        );
+
+        tokio::time::sleep(ttl + Duration::from_millis(30)).await;
+        assert!(
+            store.current().await.unwrap().is_none(),
+            "lease must read as vacant once its TTL has elapsed"
+        );
 
         let b = store
             .acquire("node-b", Duration::from_secs(30))

@@ -6,8 +6,9 @@
 //! WAL journal mode, and every committed transaction appends frames to
 //! the `-wal` sidecar file. This module reads those frames, packages
 //! the new ones into [`WalSegment`]s, and ships them over a transport
-//! ([`WalBus`]) to one or more standbys, which replay them into a local
-//! shadow WAL and serve read-only queries. On primary failure a standby
+//! ([`WalBus`]) to one or more standbys, which splice the page images
+//! directly into a local copy of the database file and serve read-only
+//! queries from it (see [`standby`]). On primary failure a standby
 //! wins the [`LeaseStore`] lease and promotes itself (see
 //! [`failover`]).
 //!
@@ -91,6 +92,11 @@ pub const WAL_MAGIC_LE: u32 = 0x377f_0682;
 pub const WAL_MAGIC_BE: u32 = 0x377f_0683;
 /// `KWL1` — wire magic prefixing an encoded [`WalSegment`].
 const SEGMENT_MAGIC: &[u8; 4] = b"KWL1";
+/// SQLCipher page size the evidence store opens with (the SQLCipher 4.x
+/// default, set explicitly in `evidence_store`). Standby page splicing
+/// computes file offsets from this; [`spawn`] asserts the open store
+/// matches it so replicated pages can never land at the wrong offset.
+const EXPECTED_CIPHER_PAGE_SIZE: u32 = 4096;
 
 /// Byte order used to interpret 32-bit words while checksumming, as
 /// selected by the WAL header magic.
@@ -1000,14 +1006,26 @@ pub async fn spawn(
 
     // A node that can serve reads as a standby (`Standby`, or `Auto`
     // before it wins the lease) splices raw WAL pages into the database
-    // file underneath the open SQLCipher connection and relies on the
-    // page-1 change counter to invalidate that connection's cache. That
-    // only works while the read connection is in a rollback-journal
+    // file underneath the open SQLCipher connection, then re-opens that
+    // connection so the next read faults the spliced pages back in (see
+    // `standby` module docs — the WAL-mode primary freezes the page-1
+    // change counter, so SQLite's own cache invalidation cannot be
+    // relied on). The re-open only surfaces the spliced *main-file*
+    // pages while the standby's own connection is in a rollback-journal
     // mode: in WAL mode SQLite would read from its own `-wal` sidecar —
     // which replication never writes — and serve stale pages until a
-    // checkpoint. Assert the invariant at startup so a future switch to
-    // `journal_mode=WAL` in the (shared, out-of-module) store open path
-    // fails fast here instead of silently corrupting standby reads.
+    // checkpoint.
+    //
+    // The store opens in rollback-journal mode (SQLite's default — the
+    // evidence store sets only SQLCipher pragmas), which is exactly what
+    // a standby needs at startup. A node only ever enters `journal_mode=
+    // WAL` *after* this point, when the failover coordinator promotes it
+    // to primary (`set_store_journal_for(Role::Primary)`), and it is
+    // switched back to rollback on demotion before any standby task runs
+    // again. Assert the startup invariant here so a future change that
+    // made the (shared, out-of-module) open path default to WAL fails
+    // fast instead of silently corrupting standby reads before the first
+    // election.
     if matches!(
         config.mode,
         ReplicationMode::Standby | ReplicationMode::Auto
@@ -1024,6 +1042,31 @@ pub async fn spawn(
                 )));
             }
             tracing::debug!(journal_mode = %mode, mode = ?config.mode, "replication: verified rollback-journal store mode for standby reads");
+
+            // The standby splices shipped page images into the database
+            // file at byte offset `(page_number - 1) * page_size`, where
+            // `page_size` comes from the WAL segment header the primary
+            // stamps from *its* page size. If the standby's own store were
+            // opened with a different `cipher_page_size`, every spliced
+            // page would land at the wrong offset and silently corrupt the
+            // file. Both sides default to the SQLCipher 4.x 4096-byte page
+            // (set explicitly in `evidence_store`), so assert it here so a
+            // future change to that shared open path fails fast instead of
+            // misaligning replicated pages.
+            let page_size = ffi::store_cipher_page_size(handle).map_err(|e| {
+                ReplError::Transport(format!("reading store cipher_page_size: {e}"))
+            })?;
+            if page_size != EXPECTED_CIPHER_PAGE_SIZE {
+                return Err(ReplError::Misconfigured(format!(
+                    "evidence store opened with cipher_page_size={page_size}, but WAL replay \
+                     assumes {EXPECTED_CIPHER_PAGE_SIZE}-byte pages: spliced page images would \
+                     land at the wrong file offset and corrupt the standby database"
+                )));
+            }
+            tracing::debug!(
+                cipher_page_size = page_size,
+                "replication: verified cipher_page_size for standby page splicing"
+            );
         }
     }
 

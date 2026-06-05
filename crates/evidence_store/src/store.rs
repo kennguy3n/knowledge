@@ -270,50 +270,7 @@ impl EvidenceStore {
         }
 
         let path: PathBuf = path.as_ref().to_path_buf();
-        let conn = Connection::open(&path)?;
-
-        // Derive the SQLCipher page-encryption key from the master
-        // key. This is the deterministic HKDF wrap-around — see
-        // docs/technical/architecture.md §2.2. `Zeroizing<String>`
-        // zeroes the heap-allocated bytes when dropped — without this
-        // wrapper the hex-encoded SQLCipher page key would linger in
-        // freed heap memory after `String`'s default `Drop`. The same
-        // wrap is applied to the `format!("x'…'")` SQL pragma value
-        // below.
-        let key_hex: Zeroizing<String> = page_key_hex(master_key)?;
-
-        // Apply SQLCipher PRAGMAs. `cipher_page_size = 4096` and
-        // `kdf_iter = 256000` are the SQLCipher 4.x defaults; we set
-        // them explicitly so the schema is portable across versions.
-        let key_pragma: Zeroizing<String> = Zeroizing::new(format!("x'{}'", &*key_hex));
-        conn.pragma_update(None, "key", key_pragma.as_str())?;
-        conn.pragma_update(None, "cipher_page_size", 4096_i64)?;
-        conn.pragma_update(None, "kdf_iter", 256_000_i64)?;
-        // Foreign keys are off by default; we don't use FK constraints
-        // (body_ref is a soft pointer with manual ref_count book-keeping).
-
-        // Low-memory profile for constrained ("low" device tier)
-        // hosts. Applied after the cipher PRAGMAs so the page key is
-        // already established (`cache_size` operates on the decrypted
-        // page cache). A negative `cache_size` is a KiB budget, not a
-        // page count; `mmap_size = 0` disables the memory-mapped read
-        // window so the file is paged through the bounded cache rather
-        // than mapped wholesale into the address space. Both trade
-        // throughput for a smaller resident set — see
-        // [`EvidenceStoreConfig::low_memory`].
-        if config.low_memory {
-            conn.pragma_update(None, "cache_size", -LOW_MEMORY_PAGE_CACHE_KIB)?;
-            conn.pragma_update(None, "mmap_size", 0_i64)?;
-        }
-
-        // Verify the key works — issuing any SELECT before the schema
-        // exists will surface a "file is not a database" if the key is
-        // wrong.
-        {
-            let _: i32 = conn
-                .query_row("SELECT 1", [], |row| row.get(0))
-                .map_err(|_| EvidenceError::Schema("SQLCipher key did not unlock the database"))?;
-        }
+        let conn = open_keyed_connection(&path, master_key, &config)?;
 
         // Schema initialization. Knowledge ships a single initial
         // schema (v1): the idempotent `CREATE * IF NOT EXISTS`
@@ -1581,6 +1538,46 @@ impl EvidenceStore {
     /// for tests verifying append-only behaviour through raw SQL).
     pub fn raw_conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Re-open the underlying SQLCipher connection in place, discarding
+    /// the current connection's in-memory page cache.
+    ///
+    /// This is required by the standby replicator, which splices raw
+    /// WAL page images straight into the database file underneath this
+    /// open connection (see `ffi::with_store_file_locked`). SQLite's
+    /// usual mechanism for noticing such an external write is the
+    /// page-1 change counter — but a WAL-mode *primary* never updates
+    /// that counter (it is frozen for the life of the WAL and the
+    /// shipped frames rarely even include page 1), so the standby's
+    /// long-lived read connection would keep serving its stale cached
+    /// pages indefinitely. Re-opening the connection forces the next
+    /// read to fault every page back in from the (freshly spliced)
+    /// file. Because the page key is supplied as a raw 32-byte blob,
+    /// this skips PBKDF2 and is cheap enough to do after each applied
+    /// segment.
+    ///
+    /// The on-disk schema already exists, so no bootstrap or recovery
+    /// sweep is performed — only the keyed connection is rebuilt. The
+    /// scope-key cache is derived from the master key (not the
+    /// connection) and is left intact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvidenceError`] if the database path cannot be
+    /// recovered from the current connection, or if re-opening or
+    /// re-keying the connection fails.
+    pub fn reopen_connection(&mut self) -> Result<()> {
+        let path = self
+            .conn
+            .path()
+            .map(PathBuf::from)
+            .ok_or(EvidenceError::Schema(
+                "cannot re-open connection: store has no on-disk path",
+            ))?;
+        let fresh = open_keyed_connection(&path, &self.master_key, &self.config)?;
+        self.conn = fresh;
+        Ok(())
     }
 
     /// Record a durable cryptographic-forgetting tombstone for
@@ -4722,12 +4719,69 @@ fn slice_to_uuid(bytes: &[u8]) -> Result<Uuid> {
     Ok(Uuid::from_bytes(arr))
 }
 
-/// Derive the SQLCipher page-encryption key from `master_key` and
-/// return it hex-encoded, ready to splice into a `PRAGMA key`/`rekey`
-/// `x'…'` literal. The returned [`Zeroizing<String>`] wipes the hex on
-/// drop so the page key never lingers in freed heap memory. This is
-/// the single source of truth for the page-key derivation, shared by
-/// [`EvidenceStore::open`] and [`EvidenceStore::rotate_master_key`].
+/// Open a SQLCipher connection at `path`, apply the page-encryption
+/// key and cipher PRAGMAs, and verify the key unlocks the database.
+///
+/// This is the connection-establishment half of [`EvidenceStore::open`]
+/// with no schema bootstrap or recovery sweeps, so it is also safe to
+/// call to *re-open* the connection for an already-initialised database
+/// (see [`EvidenceStore::reopen_connection`]).
+fn open_keyed_connection(
+    path: &Path,
+    master_key: &MasterKey,
+    config: &EvidenceStoreConfig,
+) -> Result<Connection> {
+    let conn = Connection::open(path)?;
+
+    // Derive the SQLCipher page-encryption key from the master
+    // key. This is the deterministic HKDF wrap-around — see
+    // docs/technical/architecture.md §2.2. `Zeroizing<String>`
+    // zeroes the heap-allocated bytes when dropped — without this
+    // wrapper the hex-encoded SQLCipher page key would linger in
+    // freed heap memory after `String`'s default `Drop`. The same
+    // wrap is applied to the `format!("x'…'")` SQL pragma value
+    // below.
+    let key_hex: Zeroizing<String> = page_key_hex(master_key)?;
+
+    // Apply SQLCipher PRAGMAs. `cipher_page_size = 4096` and
+    // `kdf_iter = 256000` are the SQLCipher 4.x defaults; we set
+    // them explicitly so the schema is portable across versions.
+    // The key is supplied as a 64-hex-char (32-byte) raw-key blob, so
+    // SQLCipher uses it directly and skips PBKDF2 — re-opening the
+    // connection is therefore cheap (no key derivation).
+    let key_pragma: Zeroizing<String> = Zeroizing::new(format!("x'{}'", &*key_hex));
+    conn.pragma_update(None, "key", key_pragma.as_str())?;
+    conn.pragma_update(None, "cipher_page_size", 4096_i64)?;
+    conn.pragma_update(None, "kdf_iter", 256_000_i64)?;
+    // Foreign keys are off by default; we don't use FK constraints
+    // (body_ref is a soft pointer with manual ref_count book-keeping).
+
+    // Low-memory profile for constrained ("low" device tier)
+    // hosts. Applied after the cipher PRAGMAs so the page key is
+    // already established (`cache_size` operates on the decrypted
+    // page cache). A negative `cache_size` is a KiB budget, not a
+    // page count; `mmap_size = 0` disables the memory-mapped read
+    // window so the file is paged through the bounded cache rather
+    // than mapped wholesale into the address space. Both trade
+    // throughput for a smaller resident set — see
+    // [`EvidenceStoreConfig::low_memory`].
+    if config.low_memory {
+        conn.pragma_update(None, "cache_size", -LOW_MEMORY_PAGE_CACHE_KIB)?;
+        conn.pragma_update(None, "mmap_size", 0_i64)?;
+    }
+
+    // Verify the key works — issuing any SELECT before the schema
+    // exists will surface a "file is not a database" if the key is
+    // wrong.
+    {
+        let _: i32 = conn
+            .query_row("SELECT 1", [], |row| row.get(0))
+            .map_err(|_| EvidenceError::Schema("SQLCipher key did not unlock the database"))?;
+    }
+
+    Ok(conn)
+}
+
 fn page_key_hex(master_key: &MasterKey) -> Result<Zeroizing<String>> {
     let mut page_key = derive_key(master_key, b"sqlcipher:store:v1")?;
     let hex = Zeroizing::new(hex_encode(&page_key));
