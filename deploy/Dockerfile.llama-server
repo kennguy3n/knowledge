@@ -25,11 +25,19 @@ RUN cmake -B build -DLLAMA_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release \
 # ── model-fetcher ────────────────────────────────────────────────────
 # Download the Bonsai-1.7B GGUF from a public release artifact so the
 # weights ship inside the image. Override the source with the MODEL_URL
-# build-arg to bake a different GGUF at build time.
+# build-arg to bake a different GGUF at build time. Set MODEL_SHA256 to a
+# 64-hex digest to verify the download (recommended in CI / when pointing
+# MODEL_URL at a non-default mirror); leave it empty to skip verification.
 FROM ubuntu:22.04 AS model-fetcher
 RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && rm -rf /var/lib/apt/lists/*
 ARG MODEL_URL=https://huggingface.co/kennguy3n/bonsai-1.7b-gguf/resolve/main/bonsai-1.7b-Q1_0_g128.gguf
-RUN wget -q -O /bonsai-1.7b.gguf "$MODEL_URL"
+ARG MODEL_SHA256=
+RUN wget -q -O /bonsai-1.7b.gguf "$MODEL_URL" \
+    && if [ -n "$MODEL_SHA256" ]; then \
+         echo "$MODEL_SHA256  /bonsai-1.7b.gguf" | sha256sum -c -; \
+       else \
+         echo "MODEL_SHA256 not set; skipping model checksum verification"; \
+       fi
 
 # ── runtime ──────────────────────────────────────────────────────────
 FROM ubuntu:22.04

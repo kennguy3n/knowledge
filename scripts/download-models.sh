@@ -50,7 +50,11 @@ ARTIFACTS=(
 )
 
 usage() {
-  sed -n '3,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  # Print the leading doc-comment block: every line from the first doc
+  # line (3) up to the first non-comment line, with the leading "# "
+  # stripped. Deriving the end from the comment structure (rather than a
+  # hard-coded line number) keeps --help correct as the header changes.
+  awk 'NR < 3 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"
 }
 
 log() { printf '==> %s\n' "$*"; }
@@ -151,6 +155,10 @@ for entry in "${ARTIFACTS[@]}"; do
     warn "$name checksum MISMATCH"
     warn "  expected: $expected"
     warn "  actual:   $actual"
+    # A verified-wrong artifact is untrustworthy: remove it so it is never
+    # consumed and a plain re-run re-downloads it (instead of skipping the
+    # download because the corrupt file is still present).
+    rm -f "$out"
     failures=$((failures + 1))
   fi
 done
