@@ -60,6 +60,11 @@ app.kubernetes.io/component: gateway
 app.kubernetes.io/component: substrate
 {{- end }}
 
+{{- define "knowledge.ui.selectorLabels" -}}
+{{ include "knowledge.selectorLabels" . }}
+app.kubernetes.io/component: ui
+{{- end }}
+
 {{/*
 Resource names.
 */}}
@@ -69,6 +74,10 @@ Resource names.
 
 {{- define "knowledge.substrate.fullname" -}}
 {{- printf "%s-substrate" (include "knowledge.fullname" .) }}
+{{- end }}
+
+{{- define "knowledge.ui.fullname" -}}
+{{- printf "%s-ui" (include "knowledge.fullname" .) }}
 {{- end }}
 
 {{/*
@@ -115,5 +124,10 @@ the root context (".") so .Chart.AppVersion is in scope.
 
 {{- define "knowledge.substrate.image" -}}
 {{- $img := .Values.substrate.image -}}
+{{- printf "%s:%s" $img.repository ($img.tag | default .Chart.AppVersion) -}}
+{{- end }}
+
+{{- define "knowledge.ui.image" -}}
+{{- $img := .Values.ui.image -}}
 {{- printf "%s:%s" $img.repository ($img.tag | default .Chart.AppVersion) -}}
 {{- end }}
